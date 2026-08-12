@@ -5663,11 +5663,22 @@ impl PhysicsWorld {
             player_handle.top_out_retry_cooldown -= 1;
         }
         let allow_top_out_attempt = player_handle.top_out_retry_cooldown == 0;
+        let validation_queries = self.player_movement_queries(dispatcher, movement_filter);
 
         // Flat climbing: when the player overlaps a climbable surface (ladder)
         // and pushes toward it, redirect that input to vertical movement and
         // suppress the gravity pass for this frame (see `climb_redirect`).
-        let climb_movement = if player_handle.jump_velocity.is_some() {
+        // A rising jump remains an ordinary ballistic arc. Once it is falling,
+        // however, a real into-face ladder contact may take ownership of the
+        // frame: Dark permits players to jump onto ladders, and suppressing the
+        // grip query for the entire lifetime of `jump_velocity` made that
+        // handoff impossible. `step_player_movement` still has to produce
+        // signed vertical climb progress before the arc is cancelled below.
+        let can_acquire_airborne_climb = player_handle
+            .jump_velocity
+            .is_some_and(|velocity| velocity <= 0.0);
+        let climb_movement = if player_handle.jump_velocity.is_some() && !can_acquire_airborne_climb
+        {
             None
         } else {
             let climb_filter = QueryFilter::new()
@@ -5712,7 +5723,7 @@ impl PhysicsWorld {
                 // off-center: it tilts away from the face, which under-reads
                 // the into-ladder push the grip test and climb speed use.)
                 let mut nearest: Option<(f32, Vector<Real>, Real)> = None;
-                for (_handle, collider) in queries.intersect_shape(character_pos, &inflated) {
+                for (handle, collider) in queries.intersect_shape(character_pos, &inflated) {
                     let contact = rapier3d::parry::query::contact(
                         &character_pos,
                         character_shape.as_ref(),
@@ -5728,7 +5739,23 @@ impl PhysicsWorld {
                         // (or under) the surface - that's standing, not climbing.
                         if toward_norm > 0.5 && nearest.is_none_or(|(d, _, _)| contact.dist < d) {
                             let toward = toward_h / toward_norm;
-                            nearest = Some((contact.dist, toward, collider.compute_aabb().maxs.y));
+                            // The inflated overlap is only a reach query. On an
+                            // airborne first contact, a solid wall between the
+                            // capsule and the ladder must not grant a grip
+                            // through geometry. Grounded climbing retains its
+                            // established contact semantics.
+                            let unobstructed = !can_acquire_airborne_climb || {
+                                let max_toi = capsule.radius + contact.dist.max(0.0) + 1.0e-3;
+                                let ray =
+                                    Ray::new(Point::from(character_pos.translation.vector), toward);
+                                validation_queries
+                                    .cast_ray(&ray, max_toi, true)
+                                    .is_some_and(|(first, _)| first == handle)
+                            };
+                            if unobstructed {
+                                nearest =
+                                    Some((contact.dist, toward, collider.compute_aabb().maxs.y));
+                            }
                         }
                     }
                 }
@@ -5769,9 +5796,10 @@ impl PhysicsWorld {
                 })
             })
         };
-        let attempted_top_out = climb_movement
-            .as_ref()
-            .is_some_and(|(_, top_out, _)| allow_top_out_attempt && top_out.is_some());
+        let attempted_top_out = !can_acquire_airborne_climb
+            && climb_movement
+                .as_ref()
+                .is_some_and(|(_, top_out, _)| allow_top_out_attempt && top_out.is_some());
         // The climb cast collides with everything the walk does EXCEPT the
         // climbable surfaces themselves - see `ClimbPass`. Membership is checked
         // by predicate rather than by group filter because a ladder is also an
@@ -5866,7 +5894,17 @@ impl PhysicsWorld {
                         airborne_vertical,
                         climb_movement.map(|(movement, top_out, retained)| ClimbPass {
                             movement,
-                            top_out,
+                            // An airborne first contact has not acquired the
+                            // ladder until this pass makes signed vertical
+                            // progress. Suppress the zero-progress near-top
+                            // cap/stall path for this one handoff frame; after
+                            // real acquisition cancels the arc, the next frame
+                            // may plan a normal top-out.
+                            top_out: if can_acquire_airborne_climb {
+                                None
+                            } else {
+                                top_out
+                            },
                             retained,
                             allow_top_out_attempt,
                             is_crouched: player_handle.is_crouched,
@@ -5887,6 +5925,7 @@ impl PhysicsWorld {
         }
         let was_top_out = player_handle.top_out.is_some();
         let next_retained_climb = player_movement.retained_climb;
+        let acquired_airborne_climb = can_acquire_airborne_climb && next_retained_climb.is_some();
         player_handle.top_out = player_movement.top_out;
         player_handle.slope_displacement = player_movement.slope_displacement;
         let is_top_out = player_handle.top_out.is_some();
@@ -5925,6 +5964,10 @@ impl PhysicsWorld {
         };
 
         if is_top_out {
+            player_handle.jump_velocity = None;
+            player_handle.climb_jump_velocity = None;
+            player_handle.is_grounded = false;
+        } else if acquired_airborne_climb {
             player_handle.jump_velocity = None;
             player_handle.climb_jump_velocity = None;
             player_handle.is_grounded = false;
@@ -10240,6 +10283,307 @@ mod tests {
     /// direction the residual lateral term steers the player sideways along
     /// the wall while climbing; the contact face normal keeps the climb
     /// straight (with center-delta the ascent itself also collapses here).
+    #[test]
+    fn descending_jump_acquires_a_climbable_with_matching_input() {
+        let mut world = PhysicsWorld::new();
+        let floor = ColliderBuilder::trimesh(
+            vec![
+                point![-10.0, 0.0, -10.0],
+                point![10.0, 0.0, -10.0],
+                point![10.0, 0.0, 10.0],
+                point![-10.0, 0.0, 10.0],
+            ],
+            vec![[0u32, 1, 2], [0, 2, 3]],
+        )
+        .expect("floor trimesh")
+        .build();
+        world.add_collider(EntityId::from_inner(2200).unwrap(), floor);
+        // The player's center is x=-1.0 and the ladder's west face is x=-0.35:
+        // after subtracting the standing radius, the 0.33wu surface gap is
+        // inside the ordinary 0.4wu climb reach without overlapping it.
+        world.add_kinematic(
+            EntityId::from_inner(2201).unwrap(),
+            vec3(-0.3, 10.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.1, 20.0, 2.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(-1.0, 1.5, 0.0), EntityId::from_inner(2202).unwrap());
+        step(&mut world, &mut player, 30);
+
+        // Launch straight up without an into-ladder input, then wait until the
+        // ordinary ballistic arc is descending while still within reach.
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            true,
+            &mut player,
+        );
+        for _ in 0..90 {
+            world.update_with_facing_and_jump(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+                false,
+                &mut player,
+            );
+            if player.jump_velocity.is_some_and(|velocity| velocity < -0.1) {
+                break;
+            }
+        }
+        assert!(
+            player.jump_velocity.is_some_and(|velocity| velocity < -0.1),
+            "fixture must reach a genuine descending ordinary jump"
+        );
+
+        let before = world.get_player_translation(&player);
+        world.update_with_facing_and_jump(
+            Vector3::new(0.1, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            false,
+            &mut player,
+        );
+
+        assert!(
+            player.jump_velocity.is_none(),
+            "a qualifying airborne grip must cancel the ballistic arc"
+        );
+        assert!(
+            player.retained_climb.is_some(),
+            "the successful frame must retain the real climb contact"
+        );
+        world.update_with_facing_and_jump(
+            Vector3::new(0.1, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            false,
+            &mut player,
+        );
+        let after = world.get_player_translation(&player);
+        assert!(
+            after.y > before.y,
+            "matching into-face input must begin controlled ascent instead of continuing the fall: {before:?} -> {after:?}"
+        );
+    }
+
+    /// Airborne acquisition keeps the same authored grip boundaries as an
+    /// ordinary floor approach: the surface must be climbable, the input must
+    /// point substantially into its face, and no solid may stand between the
+    /// capsule and the ladder. Rising jumps remain ballistic so merely taking
+    /// off beside a ladder cannot erase an ordinary jump arc.
+    #[test]
+    fn airborne_ladder_acquisition_rejects_invalid_surfaces_and_input() {
+        let run = |group: CollisionGroup, desired: Vector3<f32>, blocker: bool| {
+            let mut world = PhysicsWorld::new();
+            let floor = ColliderBuilder::trimesh(
+                vec![
+                    point![-10.0, 0.0, -10.0],
+                    point![10.0, 0.0, -10.0],
+                    point![10.0, 0.0, 10.0],
+                    point![-10.0, 0.0, 10.0],
+                ],
+                vec![[0u32, 1, 2], [0, 2, 3]],
+            )
+            .expect("floor trimesh")
+            .build();
+            world.add_collider(EntityId::from_inner(2210).unwrap(), floor);
+            world.add_kinematic(
+                EntityId::from_inner(2211).unwrap(),
+                vec3(-0.3, 10.0, 0.0),
+                identity_quat(),
+                Vector3::new(0.0, 0.0, 0.0),
+                vec3(0.1, 20.0, 2.0),
+                group,
+                false,
+            );
+            if blocker {
+                world.add_kinematic(
+                    EntityId::from_inner(2212).unwrap(),
+                    vec3(-0.55, 10.0, 0.0),
+                    identity_quat(),
+                    Vector3::new(0.0, 0.0, 0.0),
+                    vec3(0.04, 20.0, 2.0),
+                    CollisionGroup::entity(),
+                    false,
+                );
+            }
+            let mut player =
+                world.create_player(vec3(-1.05, 1.5, 0.0), EntityId::from_inner(2213).unwrap());
+            step(&mut world, &mut player, 30);
+            world.update_with_facing_and_jump(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::new(1.0, 0.0, 0.0),
+                true,
+                &mut player,
+            );
+            for _ in 0..90 {
+                world.update_with_facing_and_jump(
+                    Vector3::new(0.0, 0.0, 0.0),
+                    Vector3::new(1.0, 0.0, 0.0),
+                    false,
+                    &mut player,
+                );
+                if player.jump_velocity.is_some_and(|velocity| velocity < -0.1) {
+                    break;
+                }
+            }
+            assert!(player.jump_velocity.is_some_and(|velocity| velocity < 0.0));
+            world.update_with_facing_and_jump(
+                desired,
+                Vector3::new(1.0, 0.0, 0.0),
+                false,
+                &mut player,
+            );
+            (player.jump_velocity, player.retained_climb)
+        };
+
+        for (label, group, desired, blocker) in [
+            (
+                "plain wall",
+                CollisionGroup::entity(),
+                Vector3::new(0.1, 0.0, 0.0),
+                false,
+            ),
+            (
+                "away input",
+                CollisionGroup::climbable_entity(),
+                Vector3::new(-0.1, 0.0, 0.0),
+                false,
+            ),
+            (
+                "grazing input",
+                CollisionGroup::climbable_entity(),
+                Vector3::new(0.02, 0.0, 0.1),
+                false,
+            ),
+            (
+                "intervening blocker",
+                CollisionGroup::climbable_entity(),
+                Vector3::new(0.1, 0.0, 0.0),
+                true,
+            ),
+        ] {
+            let (jump_velocity, retained) = run(group, desired, blocker);
+            assert!(
+                jump_velocity.is_some(),
+                "{label} must leave the ordinary fall active"
+            );
+            assert!(
+                retained.is_none(),
+                "{label} must not manufacture a ladder grip"
+            );
+        }
+
+        // Rising beside the same valid ladder remains an ordinary jump until
+        // the apex; acquisition is specifically the descending handoff.
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(2220).unwrap(),
+            vec3(-0.3, 10.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.1, 20.0, 2.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(-1.0, 1.5, 0.0), EntityId::from_inner(2221).unwrap());
+        player.is_grounded = true;
+        world.update_with_facing_and_jump(
+            Vector3::new(0.1, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            true,
+            &mut player,
+        );
+        assert!(player.jump_velocity.is_some_and(|velocity| velocity > 0.0));
+        assert!(player.retained_climb.is_none());
+    }
+
+    /// Reaching the top of a ladder is not itself proof that a falling player
+    /// acquired it. The ordinary climb pass also retains contact when a
+    /// near-top attempt is intentionally stalled, so the first airborne frame
+    /// must require real signed ascent before cancelling the ballistic arc.
+    #[test]
+    fn blocked_near_top_airborne_contact_remains_a_fall() {
+        let (mut world, mut player) = flat_jump_world();
+
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        for _ in 0..90 {
+            world.update_with_facing_and_jump(
+                Vector3::new(0.0, 0.0, 0.0),
+                Vector3::unit_x(),
+                false,
+                &mut player,
+            );
+            if player.jump_velocity.is_some_and(|velocity| velocity < -0.1) {
+                break;
+            }
+        }
+        assert!(player.jump_velocity.is_some_and(|velocity| velocity < -0.1));
+        let descending = world.get_player_translation(&player);
+
+        // The short climbable is genuinely in horizontal reach and ends beside
+        // the current pose, which would authorize the ordinary near-top stall.
+        // A separate live entity ceiling clears the current capsule but blocks
+        // the first upward climb step.
+        world.add_kinematic(
+            EntityId::from_inner(2222).unwrap(),
+            vec3(0.7, descending.y - 1.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.1, 2.1, 2.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        world.add_kinematic(
+            EntityId::from_inner(2223).unwrap(),
+            vec3(0.0, descending.y + PLAYER_HALF_HEIGHT + 0.06, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(4.0, 0.08, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+
+        let velocity_before = player.jump_velocity.expect("descending arc");
+        world.update_with_facing_and_jump(
+            Vector3::new(0.1, 0.0, 0.0),
+            Vector3::unit_x(),
+            false,
+            &mut player,
+        );
+        let after = world.get_player_translation(&player);
+        assert!(
+            player
+                .jump_velocity
+                .is_some_and(|velocity| velocity < velocity_before),
+            "a blocked first climb step must preserve and advance the fall"
+        );
+        assert!(
+            player.retained_climb.is_none(),
+            "zero signed climb progress must not retain an airborne grip"
+        );
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            false,
+            &mut player,
+        );
+        let after_applied = world.get_player_translation(&player);
+        assert!(
+            after_applied.y < descending.y,
+            "the overhead blocker must not convert a fall into a cap stall: {descending:?} -> {after:?} -> {after_applied:?}"
+        );
+        assert!(player.jump_velocity.is_some());
+        assert!(player.retained_climb.is_none());
+    }
+
     #[test]
     fn player_climbs_climbable_wall_but_not_plain_wall() {
         let run = |group: CollisionGroup| -> (f32, f32) {
