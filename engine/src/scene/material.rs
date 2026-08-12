@@ -49,4 +49,10 @@ pub trait Material: Any {
     /// reset to its authored value with `None`. Default is a no-op for
     /// materials without transparency support.
     fn set_transparency_override(&mut self, _transparency: Option<f32>) {}
+
+    /// The transparency currently in effect (0.0 = opaque, 1.0 = invisible),
+    /// for debug inspection only. `None` for materials without transparency.
+    fn transparency(&self) -> Option<f32> {
+        None
+    }
 }

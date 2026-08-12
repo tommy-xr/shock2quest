@@ -5641,6 +5641,13 @@ impl MissionCore {
             .world
             .borrow::<View<dark::properties::PropRenderAlpha>>()
             .unwrap();
+        // Debug-only provenance, so tooling can report which entity/model each
+        // rendered object came from.
+        let v_model_name = self.world.borrow::<View<PropModelName>>().unwrap();
+        let v_sym_name = self
+            .world
+            .borrow::<View<dark::properties::PropSymName>>()
+            .unwrap();
         let v_joint_transforms = self
             .world
             .borrow::<View<RuntimePropJointTransforms>>()
@@ -5720,10 +5727,18 @@ impl MissionCore {
                 .map(|a| a.0.clamp(0.0, 1.0))
                 .filter(|a| *a < 1.0);
 
+            let debug_tag = Rc::new(engine::scene::SceneObjectDebugTag {
+                entity_id: Some(entity_id.inner()),
+                name: v_sym_name.get(*entity_id).ok().map(|n| n.0.clone()),
+                model: v_model_name.get(*entity_id).ok().map(|m| m.0.clone()),
+                source: Some("entity".to_owned()),
+            });
+
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(xform);
+                    xformed_obj.set_debug_tag(Some(debug_tag.clone()));
                     if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);
                         xformed_obj.set_skinned_transparency(Some(0.35));

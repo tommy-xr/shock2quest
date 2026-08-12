@@ -159,6 +159,18 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<PhysicsBodyListResult>,
     },
 
+    /// Describe the scene objects handed to the renderer on the last drawn
+    /// frame - what is actually being rendered, and with what transparency,
+    /// depth-write and backface-culling state.
+    ListSceneObjects {
+        /// Only objects belonging to this entity id.
+        entity_id: Option<i32>,
+        /// Only objects that are not fully opaque.
+        transparent_only: bool,
+        limit: Option<usize>,
+        reply: oneshot::Sender<SceneListResult>,
+    },
+
     /// Get detailed information about a physics body
     PhysicsBodyDetail {
         id: u32,
@@ -255,6 +267,36 @@ pub struct RayCastResult {
     pub body_id: Option<u32>,
     pub collision_group: Option<String>,
     pub is_sensor: bool,
+}
+
+/// Scene objects submitted on the last rendered frame
+#[derive(Debug, Serialize)]
+pub struct SceneListResult {
+    pub objects: Vec<SceneObjectSummary>,
+    /// Objects in the frame before any filtering.
+    pub total_count: usize,
+    /// Objects matching the filters, before `limit`.
+    pub matched_count: usize,
+    /// Frame index the snapshot came from.
+    pub frame_index: u64,
+}
+
+/// One scene object as submitted to the renderer
+#[derive(Debug, Serialize)]
+pub struct SceneObjectSummary {
+    pub entity_id: Option<u64>,
+    pub name: Option<String>,
+    pub model: Option<String>,
+    /// Render path that produced it, e.g. "entity". Absent for engine-built
+    /// geometry (world, HUD, debug overlays).
+    pub source: Option<String>,
+    pub position: [f32; 3],
+    /// Transparency in effect for this draw (0.0 = opaque, 1.0 = invisible).
+    pub transparency: Option<f32>,
+    pub depth_write: bool,
+    pub clear_depth: bool,
+    /// Front-face winding used for culling, or absent when double-sided.
+    pub backface_culling: Option<String>,
 }
 
 /// List of physics rigid bodies

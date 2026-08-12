@@ -314,6 +314,10 @@ impl Material for SkinnedMaterial {
         };
     }
 
+    fn transparency(&self) -> Option<f32> {
+        Some(self.transparency)
+    }
+
     fn has_initialized(&self) -> bool {
         self.has_initialized
     }
