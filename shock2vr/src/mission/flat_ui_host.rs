@@ -891,7 +891,7 @@ fn draw_components(
             // alpha is a VR world-quad translucency, deliberately not
             // applied here.
             GuiComponentRenderInfo::Image { texture, .. } => {
-                if component.transparent_index_0() {
+                if component.is_object_icon() {
                     canvas.object_icon(r, texture);
                 } else {
                     canvas.image(r, texture);
@@ -1023,6 +1023,7 @@ mod tests {
             interactive: true,
             entity: None,
             label: None,
+            panel_size_px: vec2(188.0, 296.0),
         };
         let r = component_canvas_rect(&info, panel);
         assert!((r.x - 17.0).abs() < 1e-3);
@@ -1128,6 +1129,7 @@ mod tests {
             interactive: false,
             entity: None,
             label: None,
+            panel_size_px: vec2(188.0, 296.0),
         };
         assert!(is_gui_cursor(&cursor));
         let backdrop = GuiComponentRenderInfo::Image {
@@ -1138,6 +1140,7 @@ mod tests {
             interactive: false,
             entity: None,
             label: None,
+            panel_size_px: vec2(188.0, 296.0),
         };
         assert!(!is_gui_cursor(&backdrop));
     }
@@ -1203,6 +1206,7 @@ mod tests {
                 interactive: true,
                 entity: Some(item),
                 label: None,
+                panel_size_px: vec2(188.0, 296.0),
             }],
         );
         let elements = host.debug_elements(&world);
@@ -1357,6 +1361,7 @@ mod tests {
                     interactive: false,
                     entity: None,
                     label: None,
+                    panel_size_px: vec2(188.0, 296.0),
                 },
                 GuiComponentRenderInfo::Image {
                     position: vec2(4.0 / 635.0, 18.0 / 120.0),
@@ -1366,6 +1371,7 @@ mod tests {
                     interactive: true,
                     entity: Some(wrench),
                     label: None,
+                    panel_size_px: vec2(188.0, 296.0),
                 },
             ],
         );
@@ -1411,6 +1417,7 @@ mod tests {
             interactive: true,
             entity: Some(entity),
             label: None,
+            panel_size_px: vec2(188.0, 296.0),
         }
     }
 

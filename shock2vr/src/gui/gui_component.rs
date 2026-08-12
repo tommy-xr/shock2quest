@@ -10,7 +10,7 @@ use engine::{
 use shipyard::EntityId;
 
 use crate::{
-    ui::{HAlign, UiElement, VAlign},
+    ui::{HAlign, ImageKind, UiElement, VAlign},
     vr_config::Handedness,
 };
 
@@ -30,14 +30,14 @@ where
                 size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
                 ..
             } => Self::Image {
                 position: new_position,
                 size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
             },
             Self::Bar {
                 size,
@@ -101,14 +101,14 @@ where
                 position,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
                 ..
             } => Self::Image {
                 position,
                 size: new_size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
             },
             Self::Bar {
                 position,
@@ -199,14 +199,14 @@ where
                 position,
                 size,
                 texture,
-                transparent_index_0,
+                kind,
                 ..
             } => Self::Image {
                 position,
                 size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
             },
             Self::Bar {
                 position,
@@ -297,14 +297,14 @@ where
                 alpha,
                 position,
                 size,
-                transparent_index_0,
+                kind,
                 ..
             } => Self::Image {
                 alpha,
                 position,
                 size,
                 texture: image.to_owned(),
-                transparent_index_0,
+                kind,
             },
             Self::Bar {
                 alpha,
@@ -414,13 +414,13 @@ where
                 size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
             } => GuiComponent::Image {
                 position,
                 size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
             },
             Self::Text {
                 position,
@@ -485,7 +485,7 @@ pub fn image<TMsg: Clone>(texture: &str) -> GuiComponent<TMsg> {
         size: vec2(30.0, 30.0),
         texture: texture.to_owned(),
         alpha: 0.5,
-        transparent_index_0: false,
+        kind: ImageKind::Ui,
     }
 }
 
@@ -556,6 +556,10 @@ pub enum GuiComponentRenderInfo {
         /// elevator floor name), if any. Purely informational - used by
         /// `GET /v1/ui`; takes precedence over entity/art-derived labels.
         label: Option<String>,
+        /// The source panel's pixel size. `position`/`size` are normalized by
+        /// it, so it is what converts an object icon's authored pixel
+        /// dimensions back into the same space (see [`Self::is_object_icon`]).
+        panel_size_px: Vector2<f32>,
     },
     Text {
         position: Vector2<f32>,
@@ -581,9 +585,11 @@ impl GuiComponentRenderInfo {
         }
     }
 
-    /// Entity-backed images are inventory/loot object icons. Dark keys their
-    /// paletted PCX art on palette index 0, independent of that entry's RGB.
-    pub(crate) fn transparent_index_0(&self) -> bool {
+    /// Entity-backed images are inventory/loot object icons: Dark keys their
+    /// paletted PCX art on palette index 0 (independent of that entry's RGB),
+    /// and blits it at its authored pixel size rather than stretching it to
+    /// the slot.
+    pub(crate) fn is_object_icon(&self) -> bool {
         matches!(
             self,
             Self::Image {
@@ -600,18 +606,30 @@ impl GuiComponentRenderInfo {
                 size,
                 texture,
                 alpha,
+                panel_size_px,
                 ..
             } => {
-                let texture: Rc<dyn TextureTrait> = asset_cache
+                let texture = asset_cache
                     .get_ext(
                         &TEXTURE_IMPORTER,
                         texture,
                         &TextureOptions {
-                            transparent_index_0: self.transparent_index_0(),
+                            transparent_index_0: self.is_object_icon(),
                             ..Default::default()
                         },
                     )
                     .clone();
+                // An object icon draws at its own authored pixels, anchored to
+                // the top-left of its slot; ordinary art fills the slot.
+                let size = &if self.is_object_icon() {
+                    vec2(
+                        texture.width() as f32 / panel_size_px.x,
+                        texture.height() as f32 / panel_size_px.y,
+                    )
+                } else {
+                    *size
+                };
+                let texture = texture as Rc<dyn TextureTrait>;
                 let comp_mat = engine::scene::basic_material::create(texture, 1.0, 1.0 - alpha);
                 let mut comp_obj =
                     SceneObject::new(comp_mat, Box::new(engine::scene::quad::create()));
@@ -688,7 +706,7 @@ where
                 size,
                 texture,
                 alpha,
-                transparent_index_0: _,
+                kind: _,
             } => GuiComponentRenderInfo::Image {
                 position: vec2(position.x / screen_size.x, position.y / screen_size.y),
                 size: vec2(size.x / screen_size.x, size.y / screen_size.y),
@@ -697,6 +715,7 @@ where
                 interactive: false,
                 entity: None,
                 label: None,
+                panel_size_px: screen_size,
             },
             GuiComponent::Bar {
                 position,
@@ -712,6 +731,7 @@ where
                 interactive: false,
                 entity: None,
                 label: None,
+                panel_size_px: screen_size,
             },
             GuiComponent::Button {
                 position,
@@ -748,6 +768,7 @@ where
                     interactive: on_click.is_some() || on_grab.is_some(),
                     entity: *entity,
                     label: label.clone(),
+                    panel_size_px: screen_size,
                 }
             }
         }
@@ -813,10 +834,10 @@ mod tests {
 
         let render_info = component.to_render_info(vec2(640.0, 480.0), Point2::new(0.5, 0.5));
 
-        assert!(render_info.transparent_index_0());
+        assert!(render_info.is_object_icon());
 
         let backdrop =
             image::<()>("invback.pcx").to_render_info(vec2(640.0, 480.0), Point2::new(0.5, 0.5));
-        assert!(!backdrop.transparent_index_0());
+        assert!(!backdrop.is_object_icon());
     }
 }

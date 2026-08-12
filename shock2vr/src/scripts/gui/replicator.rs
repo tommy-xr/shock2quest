@@ -153,7 +153,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
             size: vec2(30.0, button_height - 10.0),
             texture: icon.to_owned(),
             alpha: 0.5,
-            transparent_index_0: false,
+            kind: crate::ui::ImageKind::Ui,
         };
 
         let mut components: Vec<GuiComponent<ReplicatorMsg>> = vec![

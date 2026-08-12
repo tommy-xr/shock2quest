@@ -24,7 +24,7 @@ use engine::{
     assets::asset_cache::AssetCache,
     measure_text_width,
     scene::SceneObject,
-    texture::{TextureOptions, TextureTrait},
+    texture::{Texture, TextureOptions, TextureTrait},
 };
 use shipyard::EntityId;
 
@@ -148,6 +148,24 @@ pub enum ButtonHoverBehavior {
     Texture(String),
 }
 
+/// How an image's art is keyed and sized.
+///
+/// Dark's inventory object icons are authored at their own pixel size - a 1x1
+/// item ships a 32x32 icon, a 1x3 weapon a ~34x99 one, and some are narrower
+/// than their cell (the wrench is 22 wide) - and are blitted 1:1 into the
+/// slot, not stretched to it. They also key transparency on palette index 0,
+/// independent of that entry's RGB.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageKind {
+    /// Ordinary UI art: opaque, stretched to the element's rect.
+    #[default]
+    Ui,
+    /// Object-icon art: palette index 0 is transparent, and the icon draws at
+    /// its authored pixel size anchored to the element rect's top-left corner.
+    /// The rect still defines the element's slot for layout and hit-testing.
+    ObjectIcon,
+}
+
 /// One item in the shared 2D UI description language.
 ///
 /// `TEvent` is presentation-agnostic: interactive panels attach their
@@ -164,9 +182,8 @@ where
         size: Vector2<f32>,
         texture: String,
         alpha: f32,
-        /// Dark's paletted object-icon art keys transparency on palette index
-        /// 0, independent of that entry's RGB (see [`UiCanvas::object_icon`]).
-        transparent_index_0: bool,
+        /// How the art is keyed and sized (see [`ImageKind`]).
+        kind: ImageKind,
     },
     /// Horizontally-filling bar; `fill` (0..1) clips the texture from the left.
     Bar {
@@ -305,7 +322,7 @@ where
             size: vec2(rect.w, rect.h),
             texture: texture.to_owned(),
             alpha: 1.0,
-            transparent_index_0: false,
+            kind: ImageKind::Ui,
         });
         self
     }
@@ -318,7 +335,7 @@ where
             size: vec2(rect.w, rect.h),
             texture: texture.to_owned(),
             alpha: 1.0,
-            transparent_index_0: true,
+            kind: ImageKind::ObjectIcon,
         });
         self
     }
@@ -440,23 +457,24 @@ where
                     size,
                     texture,
                     alpha,
-                    transparent_index_0,
+                    kind,
                 } => {
                     let tex = asset_cache.get_ext(
                         &TEXTURE_IMPORTER,
                         texture,
                         &TextureOptions {
                             wrap: false,
-                            transparent_index_0: *transparent_index_0,
+                            transparent_index_0: *kind == ImageKind::ObjectIcon,
                         },
                     );
+                    let drawn = drawn_size(*size, texture_px(&tex), *kind);
                     objs.push(SceneObject::screen_space_quad2(
                         tex.clone() as Rc<dyn TextureTrait>,
                         vec2(
                             position.x * scale.x + offset.x,
                             position.y * scale.y + offset.y,
                         ),
-                        vec2(size.x * scale.x, size.y * scale.y),
+                        vec2(drawn.x * scale.x, drawn.y * scale.y),
                         *alpha,
                     ));
                 }
@@ -466,6 +484,7 @@ where
                     texture,
                     hover,
                     alpha,
+                    entity,
                     ..
                 } => {
                     let hovered = pointer.is_some_and(|point| {
@@ -475,7 +494,16 @@ where
                         (true, ButtonHoverBehavior::Texture(hover_texture)) => hover_texture,
                         _ => texture,
                     };
-                    let tex = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options);
+                    let kind = button_image_kind(entity);
+                    let tex = asset_cache.get_ext(
+                        &TEXTURE_IMPORTER,
+                        texture,
+                        &TextureOptions {
+                            wrap: false,
+                            transparent_index_0: kind == ImageKind::ObjectIcon,
+                        },
+                    );
+                    let size = &drawn_size(*size, texture_px(&tex), kind);
                     objs.push(SceneObject::screen_space_quad2(
                         tex.clone() as Rc<dyn TextureTrait>,
                         vec2(
@@ -580,7 +608,7 @@ where
                     size,
                     texture,
                     alpha,
-                    transparent_index_0,
+                    kind,
                 } => world_image(
                     asset_cache,
                     texture,
@@ -588,7 +616,7 @@ where
                     *size,
                     self.size,
                     force_alpha.unwrap_or(*alpha),
-                    *transparent_index_0,
+                    *kind,
                 ),
                 UiElement::Button {
                     position,
@@ -613,9 +641,7 @@ where
                         *size,
                         self.size,
                         force_alpha.unwrap_or(*alpha),
-                        // Entity-backed buttons are inventory/loot object
-                        // icons: Dark keys their paletted art on index 0.
-                        entity.is_some(),
+                        button_image_kind(entity),
                     )
                 }
                 UiElement::Bar {
@@ -691,22 +717,48 @@ fn world_image(
     size: Vector2<f32>,
     canvas_size: Vector2<f32>,
     alpha: f32,
-    transparent_index_0: bool,
+    kind: ImageKind,
 ) -> SceneObject {
-    let texture: Rc<dyn TextureTrait> = asset_cache
+    let texture = asset_cache
         .get_ext(
             &TEXTURE_IMPORTER,
             texture,
             &TextureOptions {
                 wrap: false,
-                transparent_index_0,
+                transparent_index_0: kind == ImageKind::ObjectIcon,
             },
         )
         .clone();
-    let material = engine::scene::basic_material::create(texture, 1.0, 1.0 - alpha);
+    let size = drawn_size(size, texture_px(&texture), kind);
+    let material =
+        engine::scene::basic_material::create(texture as Rc<dyn TextureTrait>, 1.0, 1.0 - alpha);
     let mut object = SceneObject::new(material, Box::new(engine::scene::quad::create()));
     object.set_local_transform(world_element_transform(position, size, canvas_size, 0.0));
     object
+}
+
+/// A button's art kind. Entity-backed buttons are the inventory/loot object
+/// icons; every other button is ordinary UI art.
+fn button_image_kind(entity: &Option<EntityId>) -> ImageKind {
+    match entity {
+        Some(_) => ImageKind::ObjectIcon,
+        None => ImageKind::Ui,
+    }
+}
+
+/// The size an element's art actually draws at: its slot rect for ordinary UI
+/// art, or the icon's own authored pixels for [`ImageKind::ObjectIcon`], which
+/// the original blits 1:1 into the slot rather than stretching to fill it.
+fn drawn_size(size: Vector2<f32>, texture_px: Vector2<f32>, kind: ImageKind) -> Vector2<f32> {
+    match kind {
+        ImageKind::Ui => size,
+        ImageKind::ObjectIcon => texture_px,
+    }
+}
+
+/// A loaded texture's authored pixel dimensions.
+fn texture_px(texture: &Texture) -> Vector2<f32> {
+    vec2(texture.width() as f32, texture.height() as f32)
 }
 
 fn world_element_transform(
@@ -814,6 +866,18 @@ mod tests {
         assert_eq!(p, Some(vec2(320.0, 120.0)));
     }
 
+    /// Object icons are blitted 1:1 at their authored size, not stretched to
+    /// the slot: the wrench ships a 22x99 icon for a 1x3 (35x102) slot, so
+    /// stretching it would make it ~60% too wide next to every other item.
+    #[test]
+    fn object_icons_draw_at_their_authored_pixel_size() {
+        let slot = vec2(35.0, 102.0);
+        let icon = vec2(22.0, 99.0);
+
+        assert_eq!(drawn_size(slot, icon, ImageKind::ObjectIcon), icon);
+        assert_eq!(drawn_size(slot, icon, ImageKind::Ui), slot);
+    }
+
     #[test]
     fn object_icon_marks_palette_index_zero_as_transparent() {
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
@@ -824,11 +888,11 @@ mod tests {
             canvas.elements.as_slice(),
             [
                 UiElement::Image {
-                    transparent_index_0: false,
+                    kind: ImageKind::Ui,
                     ..
                 },
                 UiElement::Image {
-                    transparent_index_0: true,
+                    kind: ImageKind::ObjectIcon,
                     ..
                 }
             ]
