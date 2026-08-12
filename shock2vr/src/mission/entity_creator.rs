@@ -465,6 +465,40 @@ fn initialize_sym_name_from_obj_map(
     }
 }
 
+/// How far a decal is pushed off the surface it is stuck to, in model-local
+/// units (1 world unit = `SCALE_FACTOR` Dark units). Small enough not to read
+/// as floating at grazing angles, large enough to clear depth-buffer precision
+/// at the ranges decals are legible from.
+const DECAL_SURFACE_OFFSET: f32 = 0.02;
+
+/// Decals (blood splatters, signs, bullet holes) are paper-thin models placed
+/// exactly coplanar with the surface they are stuck to, so they z-fight with
+/// the level geometry - they flicker, or vanish entirely, as the viewpoint
+/// moves. Lift such a model off its surface along its own outward normal.
+///
+/// A decal model has (near-)zero thickness along its local X axis (Dark's
+/// forward) and its visible face points along local -X, i.e. out of the wall.
+/// The offset is applied as the scene objects' *local* transform: the render
+/// path overwrites the model transform with the entity's
+/// `RuntimePropTransform` every frame, but composes it with the local one.
+fn apply_decal_offset(model: &mut Model) {
+    let Some(bbox) = model.bounding_box() else {
+        return;
+    };
+
+    let thickness = bbox.max.x - bbox.min.x;
+    let extent = (bbox.max.y - bbox.min.y).max(bbox.max.z - bbox.min.z);
+    if extent <= 0.0 || thickness > extent * 0.01 {
+        return;
+    }
+
+    model.set_local_transform(Matrix4::from_translation(vec3(
+        -DECAL_SURFACE_OFFSET,
+        0.0,
+        0.0,
+    )));
+}
+
 fn create_model(
     world: &mut World,
     asset_cache: &mut AssetCache,
@@ -529,7 +563,7 @@ fn create_model(
         // Runtime-generated terminal death poses are separate from authored
         // P$CretPose data, so mission-placed corpse decorations retain their
         // historical frame-1 bake and physics behavior.
-        let (model, animation_player) = {
+        let (mut model, animation_player) = {
             if let Ok(death_pose) = v_death_pose.get(entity_id) {
                 let animation_clip = asset_cache.get(
                     &ANIMATION_CLIP_IMPORTER,
@@ -581,6 +615,8 @@ fn create_model(
                 (transformed_model, None)
             }
         };
+
+        apply_decal_offset(&mut model);
 
         Some((model, animation_player))
     } else {
