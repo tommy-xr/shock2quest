@@ -7,7 +7,7 @@ import { teleportVerified } from "./helpers/teleport.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 test(
-  "crouched flat interaction collects SHODAN Delacroix log 4",
+  "crouched flat interaction collects SHODAN Delacroix log 4, and reads it back",
   { skip: !e2eEnabled, timeout: 600_000 },
   async (t) => {
     await using game = await GameServer.launch({
@@ -52,13 +52,44 @@ test(
 
     const collected = (await game.info()).player.collected_logs;
     assert.ok(
-      collected.some((entry) => entry.deck === 9 && entry.log === 4),
-      "production squeeze should collect Delacroix deck 9/log 4",
+      collected.some((entry) => entry.deck === 9 && entry.log === 4 && !entry.read),
+      "production squeeze should collect Delacroix deck 9/log 4, unread",
     );
+    // Collecting files the log; it does not raise the reader over the world.
+    assert.ok(
+      !(await game.ui.state()).active_panel,
+      "collecting a log must not open the reader",
+    );
+
+    // The disc is consumed by collection, so the world pickup is gone.
+    assert.equal(
+      (await game.physics.bodies({ entityId: log.id })).bodies.length,
+      0,
+      "the collected disc should lose its world presence",
+    );
+
+    // Reading it back is an explicit act: the newest unread log opens, and is
+    // marked read.
+    await game.input.trigger("ReadLastUnreadLog");
+    await game.step({ frames: 5 });
     assert.equal(
       (await game.ui.state()).active_panel?.template_id,
       290,
-      "the normal log script should open Delacroix log 4 in the reader",
+      "ReadLastUnreadLog should open Delacroix log 4 in the reader",
+    );
+    assert.ok(
+      (await game.info()).player.collected_logs.some(
+        (entry) => entry.deck === 9 && entry.log === 4 && entry.read,
+      ),
+      "playing the log back should mark it read",
+    );
+
+    // And it closes again, as any MFD panel does.
+    await game.input.trigger("CloseActivePanel");
+    await game.step({ frames: 5 });
+    assert.ok(
+      !(await game.ui.state()).active_panel,
+      "CloseActivePanel should dismiss the reader",
     );
 
     t.diagnostic(
