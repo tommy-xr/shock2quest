@@ -474,16 +474,18 @@ impl Model {
         }
     }
 
-    /// Set a model-space transform applied *inside* the entity transform. The
-    /// render path re-sets the entity (world) transform every frame; the local
-    /// one rides along with the model.
-    pub fn set_local_transform(&mut self, local_transform: Matrix4<f32>) {
+    /// Compose a model-space transform *inside* the entity transform, on top of
+    /// whatever local transform each scene object already carries (the obj
+    /// loader gives vhot debug cubes theirs). The render path re-sets the
+    /// entity (world) transform every frame; the local one rides along with
+    /// the model.
+    pub fn apply_local_transform(&mut self, local_transform: Matrix4<f32>) {
         let scene_objects = match &mut self.inner {
             InnerModel::Static(static_model) => &mut static_model.scene_objects,
             InnerModel::Animated(animated_model) => &mut animated_model.scene_objects,
         };
         for obj in scene_objects {
-            obj.set_local_transform(local_transform);
+            obj.set_local_transform(local_transform * obj.local_transform);
         }
     }
 
