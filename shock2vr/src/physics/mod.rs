@@ -2720,6 +2720,14 @@ impl PhysicsWorld {
         ))
     }
 
+    #[cfg(test)]
+    pub(crate) fn capsule_dimensions(&self, handle: RigidBodyHandle) -> Option<(f32, f32)> {
+        let body = self.rigid_body_set.get(handle)?;
+        let collider = self.collider_set.get(*body.colliders().first()?)?;
+        let capsule = collider.shape().as_capsule()?;
+        Some((capsule.radius, capsule.half_height() * 2.0))
+    }
+
     /// Whether any collider on a body is solid to the given character
     /// membership. Mirrors the player/actor movement queries: disabled bodies,
     /// disabled colliders, sensors, and non-collidable memberships never stop a
