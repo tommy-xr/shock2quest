@@ -302,9 +302,8 @@ pub fn load_mission_from_save_data(
     let current_mission = save_data.global_data.active_mission.clone();
 
     let populator: Box<dyn EntityPopulator> = {
-        if let Some(save_data) = save_data
-            .level_data
-            .get(&current_mission.to_ascii_lowercase())
+        if let Some(save_data) =
+            crate::save_load::mission_snapshot(&save_data.level_data, &current_mission)
         {
             let save_data_cloned = save_data.clone();
             let populator = SaveFileEntityPopulator::create(save_data_cloned);
