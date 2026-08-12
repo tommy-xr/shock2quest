@@ -32,7 +32,7 @@ import { teleportVerified } from "./helpers/teleport.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 test(
-  "log reader MFD: frob opens transcript with 45100, collects the log, persists",
+  "log reader MFD: collecting files the log, reading it opens the 45100 transcript, persists",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
