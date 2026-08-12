@@ -120,7 +120,8 @@ where
                 if !self.gui.opens_on_frob(entity_id, world) {
                     return frob_effect;
                 }
-                self.gui.prepare_state_on_frob(&mut self.state);
+                // The per-open reset arrives via `PanelOpened`, dispatched by
+                // the `OpenPanel` handler, so both open paths share one hook.
                 Effect::combine(vec![Effect::OpenPanel { entity: entity_id }, frob_effect])
             }
             MessagePayload::GUIHover {

@@ -2853,6 +2853,44 @@ impl MissionCore {
         self.make_un_physical(entity_id);
     }
 
+    /// Resolve an audio log's reader strings from `level<deck>.str` and cache
+    /// them on the disc for `MediaGui` to render.
+    ///
+    /// `RuntimePropLogData` is runtime-only and deliberately not serialized, so
+    /// this runs both when the log is collected and again each time the reader
+    /// is opened - otherwise a log collected before a save would open a blank
+    /// backdrop after loading.
+    fn attach_log_reader_strings(
+        &mut self,
+        entity_id: EntityId,
+        deck: u32,
+        log: u32,
+        asset_cache: &mut AssetCache,
+    ) {
+        let level_file = format!("level{deck:02}.str");
+        let Some(strings) = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, &level_file)
+        else {
+            return;
+        };
+        // The .str values carry literal backslash-n escapes ("AMANPOUR
+        // 07.JUL.14\nre: New code\n"); unescape them into real line breaks so
+        // the reader never draws "\n".
+        let get = |prefix: &str| {
+            strings
+                .get(&format!("{prefix}{log}"))
+                .map(|s| s.replace("\\n", "\n"))
+        };
+        self.world.add_component(
+            entity_id,
+            crate::runtime_props::RuntimePropLogData {
+                name: get("logname"),
+                text: get("logtext"),
+                portrait: get("logportrait"),
+                icon: get("logicon"),
+            },
+        );
+    }
+
     pub fn make_physical(&mut self, entity_id: EntityId) {
         let current_entity = self.id_to_physics.get(&entity_id);
         if current_entity.is_some() {
@@ -3623,6 +3661,12 @@ impl MissionCore {
                     if game_options.presentation_mode == crate::PresentationMode::Flat {
                         self.flat_ui.open(entity);
                     }
+                    // Give the gui its per-open state (the reader's scroll
+                    // reset) however the panel was reached.
+                    self.script_world.dispatch(Message {
+                        to: entity,
+                        payload: MessagePayload::PanelOpened,
+                    });
                 }
 
                 Effect::BeginResearch { entity_id } => {
@@ -3699,30 +3743,21 @@ impl MissionCore {
                         let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                         quests.collect_log(deck, log);
                     }
-                    // ...and resolve the reader strings from `level<deck>.str`,
-                    // caching them on the disc so the MediaGui panel can render
-                    // the portrait / deck icon / header / transcript.
-                    let level_file = format!("level{deck:02}.str");
-                    if let Some(strings) =
-                        asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, &level_file)
-                    {
-                        // The .str values carry literal backslash-n escapes
-                        // ("AMANPOUR 07.JUL.14\nre: New code\n"); unescape them
-                        // into real line breaks so the reader never draws "\n".
-                        let get = |prefix: &str| {
-                            strings
-                                .get(&format!("{prefix}{log}"))
-                                .map(|s| s.replace("\\n", "\n"))
-                        };
-                        self.world.add_component(
-                            entity_id,
-                            crate::runtime_props::RuntimePropLogData {
-                                name: get("logname"),
-                                text: get("logtext"),
-                                portrait: get("logportrait"),
-                                icon: get("logicon"),
-                            },
-                        );
+                    self.attach_log_reader_strings(entity_id, deck, log, asset_cache);
+
+                    // VR has no discrete-action mapper yet, so `ReadLastUnreadLog`
+                    // is unreachable there and the disc is retired from the world
+                    // on collection - without this, a Quest player could never
+                    // hear a log at all. Flat keeps the faithful split (collecting
+                    // files it; reading plays it). Remove once VR can trigger the
+                    // action (#916 tracks the surrounding player-feedback work).
+                    if game_options.presentation_mode != crate::PresentationMode::Flat {
+                        effects.push_front(Effect::PlaySound {
+                            handle: AudioHandle::new(),
+                            source: Some(entity_id),
+                            name: format!("LOG{deck:02}{log:02}"),
+                            spatial: false,
+                        });
                     }
                     // Retail copies the entry into the PDA and destroys the
                     // pickup. Keep only the entity-bound reader state; retire
@@ -3730,68 +3765,86 @@ impl MissionCore {
                     self.consume_log_pickup(entity_id);
                 }
 
-                Effect::CloseActivePanel => {
-                    self.flat_ui.close();
-                }
-
                 Effect::ReadLastUnreadLog => {
                     // The reader is entity-bound, so playback needs the disc
-                    // entity carrying this log. Discs collected on an earlier
-                    // deck are gone with their mission - cross-mission replay
-                    // is tracked separately (#741).
-                    let target =
-                        self.world
-                            .borrow::<UniqueView<QuestInfo>>()
-                            .ok()
-                            .and_then(|quest_info| {
-                                quest_info.last_unread_log().map(|log| (log.deck, log.log))
-                            });
+                    // that carries this log. Logs collected on an earlier deck
+                    // left their disc behind with that mission (#741), so pick
+                    // the newest unread log that actually resolves here rather
+                    // than letting an unreachable one wedge the key forever.
+                    let unread: Vec<(u32, u32)> = self
+                        .world
+                        .borrow::<UniqueView<QuestInfo>>()
+                        .map(|quest_info| {
+                            quest_info
+                                .collected_logs()
+                                .iter()
+                                .rev()
+                                .filter(|entry| !entry.read)
+                                .map(|entry| (entry.deck, entry.log))
+                                .collect()
+                        })
+                        .unwrap_or_default();
 
-                    if let Some((deck, log)) = target {
-                        let disc = {
-                            let v_log = self
-                                .world
-                                .borrow::<View<dark::properties::PropLog>>()
-                                .unwrap();
-                            v_log
+                    let target = {
+                        let v_log = self
+                            .world
+                            .borrow::<View<dark::properties::PropLog>>()
+                            .unwrap();
+                        let v_data = self
+                            .world
+                            .borrow::<View<crate::runtime_props::RuntimePropLogData>>()
+                            .unwrap();
+                        unread.into_iter().find_map(|(deck, log)| {
+                            // A (deck, log) pair is not unique across the
+                            // campaign - command1 object 2382 and command2 2379
+                            // both author deck 6 / log 5 - so prefer the disc
+                            // that was actually collected (only it carries the
+                            // resolved reader strings) over an untouched twin
+                            // still lying in the current mission.
+                            let mut matches = v_log
                                 .iter()
                                 .with_id()
-                                .find(|(_, authored)| authored.deck == deck && authored.log == log)
-                                .map(|(entity_id, _)| entity_id)
-                        };
+                                .filter(|(_, authored)| {
+                                    authored.deck == deck && authored.log == log
+                                })
+                                .map(|(entity_id, _)| entity_id);
+                            let first = matches.next()?;
+                            let collected = std::iter::once(first)
+                                .chain(matches)
+                                .find(|entity_id| v_data.get(*entity_id).is_ok());
+                            Some((collected.unwrap_or(first), deck, log))
+                        })
+                    };
 
-                        match disc {
-                            Some(disc) => {
-                                if let Ok(mut quest_info) =
-                                    self.world.borrow::<UniqueViewMut<QuestInfo>>()
-                                {
-                                    quest_info.mark_log_read(deck, log);
-                                }
-                                // Reaching the reader without a frob still needs
-                                // the per-open reset a frob-open would have
-                                // given it (the transcript starts at the top).
-                                self.script_world.dispatch(Message {
-                                    to: disc,
-                                    payload: MessagePayload::PanelOpened,
-                                });
-                                if game_options.presentation_mode == crate::PresentationMode::Flat {
-                                    self.flat_ui.open_unbound(disc);
-                                }
-                                effects.push_front(Effect::PlaySound {
-                                    handle: AudioHandle::new(),
-                                    source: None,
-                                    name: format!("LOG{deck:02}{log:02}"),
-                                    spatial: false,
-                                });
+                    match target {
+                        Some((disc, deck, log)) => {
+                            // Re-resolve the strings: they are runtime-only, so
+                            // a log collected before a save has none after load.
+                            self.attach_log_reader_strings(disc, deck, log, asset_cache);
+                            // Reaching the reader without a frob still needs the
+                            // per-open reset a frob-open would have given it
+                            // (the transcript starts at the top).
+                            self.script_world.dispatch(Message {
+                                to: disc,
+                                payload: MessagePayload::PanelOpened,
+                            });
+                            if let Ok(mut quest_info) =
+                                self.world.borrow::<UniqueViewMut<QuestInfo>>()
+                            {
+                                quest_info.mark_log_read(deck, log);
                             }
-                            None => {
-                                game_log!(
-                                    INFO,
-                                    "no backing disc for unread log {}/{}; cannot open the reader",
-                                    deck,
-                                    log
-                                );
+                            if game_options.presentation_mode == crate::PresentationMode::Flat {
+                                self.flat_ui.open_unbound(disc);
                             }
+                            effects.push_front(Effect::PlaySound {
+                                handle: AudioHandle::new(),
+                                source: None,
+                                name: format!("LOG{deck:02}{log:02}"),
+                                spatial: false,
+                            });
+                        }
+                        None => {
+                            game_log!(INFO, "no unread log is readable here");
                         }
                     }
                 }

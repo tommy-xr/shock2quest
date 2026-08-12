@@ -187,9 +187,6 @@ pub enum Effect {
     /// `InputAction::ReadLastUnreadLog`.
     ReadLastUnreadLog,
 
-    /// Dismiss the open MFD panel, if any.
-    CloseActivePanel,
-
     /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
     /// `M` key, `kOverlayMap 26`). Opens the wide map MFD bound to the
     /// synthetic map-panel entity, or closes it if it is already open. No-op in

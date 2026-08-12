@@ -89,9 +89,6 @@ pub enum InputAction {
     /// Collecting a disc only files it in the PDA, so this is how a log is
     /// actually read.
     ReadLastUnreadLog,
-
-    /// Dismiss the open MFD panel (the original closes its overlays on Tab).
-    CloseActivePanel,
 }
 
 impl InputAction {
@@ -130,7 +127,6 @@ impl InputAction {
             InputAction::DebugForceChase,
             InputAction::ToggleUseMode,
             InputAction::ReadLastUnreadLog,
-            InputAction::CloseActivePanel,
             InputAction::ToggleMap,
         ]
     }
@@ -168,7 +164,6 @@ impl InputAction {
             InputAction::DebugForceChase => "DebugForceChase",
             InputAction::ToggleUseMode => "ToggleUseMode",
             InputAction::ReadLastUnreadLog => "ReadLastUnreadLog",
-            InputAction::CloseActivePanel => "CloseActivePanel",
             InputAction::ToggleMap => "ToggleMap",
         }
     }

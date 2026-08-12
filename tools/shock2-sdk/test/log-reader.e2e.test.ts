@@ -187,12 +187,12 @@ test(
       "the Amanpour log should be recorded in the collection, now read",
     );
 
-    // --- Dismissing closes the reader (the original's Tab) ---
-    await game.input.trigger("CloseActivePanel");
+    // --- Tab dismisses the reader, as it does any open MFD panel ---
+    await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
     assert.ok(
       !(await game.ui.state()).active_panel,
-      "CloseActivePanel should dismiss the reader",
+      "Tab should dismiss the reader",
     );
 
     // Re-frobbing does not duplicate the collection entry.
@@ -225,6 +225,58 @@ test(
       (await game.info()).player.collected_logs,
       [{ deck: 2, log: 20, read: true }],
       "the collection and its read state should survive save/load",
+    );
+  },
+);
+
+// `RuntimePropLogData` (the resolved header/transcript/portrait/icon) is
+// runtime-only and deliberately not serialized. It used to be attached by the
+// same frob that opened the reader, so nothing noticed; now that reading is a
+// separate act, a log collected before a save must still render after loading.
+test(
+  "log reader MFD: a log collected before a save still reads back after loading",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8233),
+    });
+    await game.step({ frames: 5 });
+
+    const amanpour = (
+      await game.entities.list({ filter: "Audio Log", limit: 80 })
+    ).entities.find((e) => e.template_id === 1608);
+    assert.ok(amanpour, "medsci1 should contain the Amanpour log (obj 1608)");
+
+    // Collect it, and deliberately do NOT read it.
+    await game.entities.sendMessage(amanpour.id, { type: "Frob" });
+    await game.step({ frames: 5 });
+    assert.deepEqual(
+      (await game.info()).player.collected_logs,
+      [{ deck: 2, log: 20, read: false }],
+      "the log should be collected and still unread",
+    );
+
+    await game.save("log-unread-roundtrip");
+    await game.load("log-unread-roundtrip");
+    await game.step({ frames: 5 });
+
+    await game.input.trigger("ReadLastUnreadLog");
+    await game.step({ frames: 5 });
+
+    const panel = (await game.ui.state()).active_panel;
+    assert.ok(panel, "the unread log should still open after a save/load");
+    const text = panel.elements
+      .filter((e) => e.kind === "text" && e.text)
+      .map((e) => e.text)
+      .join(" ");
+    assert.ok(
+      text.includes("45100"),
+      `the reloaded reader must render its transcript, not a blank backdrop (got: ${text.slice(0, 160)})`,
+    );
+    assert.ok(
+      text.toUpperCase().includes("AMANPOUR"),
+      "the reloaded reader should still name the sender",
     );
   },
 );

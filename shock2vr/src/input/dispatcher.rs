@@ -144,9 +144,6 @@ impl ActionDispatcher {
         if state.just_triggered(InputAction::ReadLastUnreadLog) {
             effects.push(Effect::ReadLastUnreadLog);
         }
-        if state.just_triggered(InputAction::CloseActivePanel) {
-            effects.push(Effect::CloseActivePanel);
-        }
         effects
     }
 }
