@@ -243,6 +243,15 @@ For debugging visual/rendering changes without a full interactive session:
    curl "http://127.0.0.1:8080/v1/physics/bodies?entity_id=4"
    curl http://127.0.0.1:8080/v1/physics/bodies/12   # detail by body_id
 
+   # Inspect what the renderer actually drew on the last frame: per-object
+   # entity/model, effective transparency, depth-write and backface-culling
+   # winding. Answers "why does this prop look transparent/inside-out?" with
+   # data rather than screenshots. A translucent prop with depth_write=false
+   # came from PropRenderAlpha; with depth_write=true it is the material's own
+   # transparency.
+   curl "http://127.0.0.1:8080/v1/scene?transparent=true"
+   curl "http://127.0.0.1:8080/v1/scene?entity_id=246"
+
    # Inspect impulse joints (ragdoll constraint health): per-joint anchor
    # separation + applied impulse, labeled by skeleton bone. A healthy ball
    # joint at rest has separation ~0 and a small impulse; persistent values mean
