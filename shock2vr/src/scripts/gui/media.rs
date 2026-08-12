@@ -27,7 +27,7 @@ use crate::runtime_props::RuntimePropLogData;
 /// posts; that beep is the only audio a log pickup produces. The port has no
 /// overlay-text facility yet, so the cue is fired here as a stand-in.
 ///
-/// When that facility lands (#N), this moves with it: `linebeep` belongs to
+/// When that facility lands (#916), this moves with it: `linebeep` belongs to
 /// posting a message, not to collecting a log. Note the original does *not*
 /// play its item-pickup cue (`pickup_item`) for discs - that fires only on the
 /// frob path that moves an object into the inventory, and `Audio Log` (-76)
