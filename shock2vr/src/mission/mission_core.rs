@@ -5954,6 +5954,14 @@ impl MissionCore {
             .set_player_crouch(true, &mut self.player_handle);
     }
 
+    /// Schedule a legacy-save capsule audit for the first physics step. Rapier
+    /// builds its broad-phase query tree in that step, so an earlier audit
+    /// cannot see the freshly reconstructed mission geometry.
+    pub fn schedule_loaded_player_overlap_recovery(&mut self) {
+        self.physics
+            .schedule_loaded_player_overlap_recovery(&mut self.player_handle);
+    }
+
     /// Apply the effects produced by an interaction controller (the VR hands or
     /// the flat first-person controller). Shared so both presentations go
     /// through one path.

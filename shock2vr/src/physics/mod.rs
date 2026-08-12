@@ -665,6 +665,9 @@ struct PlayerMovement {
     /// Horizontal part of a gravity-induced slope slide, carried into the
     /// next gravity pass so a seam does not erase the player's momentum.
     slope_displacement: Vector<Real>,
+    /// This aggregate endpoint already passed an explicit full-shape fit test
+    /// inside a special movement planner (currently stair step-up).
+    endpoint_prevalidated: bool,
 }
 
 /// The moving-terrain body the player is standing on, and where it was the
@@ -818,6 +821,92 @@ fn shape_intersects(queries: &QueryPipeline, position: Vector<Real>, shape: &dyn
         )
         .next()
         .is_some()
+}
+
+/// The character controller treats its `offset` as part of the player's
+/// occupied clearance. Inflate the capsule by that Minkowski margin when
+/// validating a committed pose; a raw capsule can be technically disjoint yet
+/// already inside the controller's contact distance on opposing concave faces,
+/// which is just as unrecoverable on the next sweep.
+fn player_shape_intersects(
+    queries: &QueryPipeline,
+    position: Vector<Real>,
+    shape: &dyn Shape,
+) -> bool {
+    if let Some(capsule) = shape.as_capsule() {
+        let contact_offset = PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+        let clearance = Capsule::new_y(capsule.half_height(), capsule.radius + contact_offset);
+        let pose = Isometry::translation(position.x, position.y, position.z);
+        queries
+            .intersect_shape(pose, &clearance)
+            .any(|(_, collider)| {
+                let contact = rapier3d::parry::query::contact(
+                    &pose,
+                    shape,
+                    collider.position(),
+                    collider.shape(),
+                    contact_offset,
+                );
+                match contact {
+                    Ok(Some(contact)) => {
+                        // Raw geometric overlap is never a legal committed pose.
+                        // A nearby walkable surface *below* the capsule is the
+                        // controller's intentional ground gap; every other face
+                        // must preserve the controller margin too. Leave half the
+                        // tiny rest lift as float tolerance at exact contacts.
+                        contact.dist < -1.0e-5
+                            || (contact.normal1.y > -PLAYER_MIN_WALKABLE_NORMAL
+                                && contact.dist
+                                    < contact_offset - PLAYER_REST_LIFT / SCALE_FACTOR / 2.0)
+                    }
+                    // An expanded-shape intersection without a usable contact is
+                    // not a pose we can prove safe.
+                    _ => true,
+                }
+            })
+    } else {
+        shape_intersects(queries, position, shape)
+    }
+}
+
+/// Whether applying `translation` leaves the complete player shape outside
+/// every collider in the supplied player-blocking query set.
+fn player_movement_candidate_is_clear(
+    queries: &QueryPipeline,
+    position: &Isometry<Real>,
+    shape: &dyn Shape,
+    translation: Vector<Real>,
+) -> bool {
+    let candidate = Translation::from(translation) * position;
+    let overlaps_blocking_volume = |pose: &Isometry<Real>| {
+        queries.intersect_shape(*pose, shape).any(|(_, collider)| {
+            let contact = rapier3d::parry::query::contact(
+                pose,
+                shape,
+                collider.position(),
+                collider.shape(),
+                0.0,
+            );
+            match contact {
+                Ok(Some(contact)) => {
+                    // Rapier can report a resting capsule/trimesh boundary as a
+                    // deep intersection because parentless terrain triangles are
+                    // one-sided (legitimate ledge crossing approaches their back
+                    // face). Entity colliders have real volume, so a meaningful
+                    // non-floor penetration there is authoritative.
+                    collider.parent().is_some()
+                        && contact.normal1.y > -PLAYER_MIN_WALKABLE_NORMAL
+                        && contact.dist < -(PLAYER_REST_LIFT / SCALE_FACTOR + 1.0e-5)
+                }
+                _ => true,
+            }
+        })
+    };
+
+    // This guard prevents entry; it is not a depenetration solver. If an
+    // external relocation already placed the player inside a collider, allow
+    // the existing controller to move outward instead of pinning them harder.
+    !overlaps_blocking_volume(&candidate) || overlaps_blocking_volume(position)
 }
 
 /// Whether an expanded player shape is genuinely resting on walkable
@@ -1223,6 +1312,7 @@ fn plan_climb_top_out(
             is_crouched: false,
         }),
         slope_displacement: Vector::zeros(),
+        endpoint_prevalidated: true,
     })
 }
 
@@ -1488,6 +1578,7 @@ fn plan_jump_mantle(
             is_crouched,
         }),
         slope_displacement: Vector::zeros(),
+        endpoint_prevalidated: true,
     })
 }
 
@@ -1661,6 +1752,7 @@ fn step_player_movement(
                 movement: mvt,
                 top_out: None,
                 slope_displacement: Vector::zeros(),
+                endpoint_prevalidated: false,
             };
         }
     }
@@ -1814,6 +1906,7 @@ fn step_player_movement(
     // Stairs: if grounded walking was blocked, probe for a step and hop onto
     // it. (Grounded-only: an airborne player pressed against a wall must not
     // ratchet up ledges.)
+    let mut endpoint_prevalidated = false;
     if airborne_vertical.is_none() && mvt.grounded {
         if let Some(step) = try_step_up(
             queries,
@@ -1823,6 +1916,7 @@ fn step_player_movement(
             mvt.translation,
         ) {
             mvt.translation += step;
+            endpoint_prevalidated = true;
         }
     }
     // The caller applies one translation from the ORIGINAL pose, so fold the
@@ -1833,6 +1927,7 @@ fn step_player_movement(
         movement: mvt,
         top_out: None,
         slope_displacement: next_slope_displacement,
+        endpoint_prevalidated,
     }
 }
 
@@ -2174,6 +2269,11 @@ pub struct PlayerHandle {
     jump_velocity: Option<Real>,
     // Held-button edge state: one press launches at most one jump.
     jump_was_pressed: bool,
+    // Save loading rebuilds Rapier from scratch, so its broad-phase query tree
+    // does not exist until the first physics step. This one-shot flag runs the
+    // legacy-overlap audit immediately after that tree is built and before
+    // ordinary movement chooses a candidate.
+    recover_loaded_overlap_after_step: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2691,6 +2791,129 @@ impl PhysicsWorld {
         placed
     }
 
+    /// Recover a legacy save whose restored standing/crouched capsule starts
+    /// inside player-blocking geometry. Ordinary clear restores are untouched.
+    pub fn recover_loaded_player_overlap(
+        &mut self,
+        player_handle: &mut PlayerHandle,
+    ) -> Option<Vector3<f32>> {
+        let restored = self.get_player_translation(player_handle);
+        if self.player_pose_has_controller_clearance(restored, player_handle) {
+            return None;
+        }
+
+        let recovered = self.nearest_clear_grounded_player_pose(restored, player_handle);
+        match recovered {
+            Some(recovered) => {
+                tracing::warn!(
+                    "restored player capsule overlaps blocking geometry at {:?}; recovered to {:?}",
+                    restored,
+                    recovered
+                );
+                self.set_player_translation(recovered, player_handle);
+                Some(recovered)
+            }
+            None => {
+                tracing::warn!(
+                    "restored player capsule overlaps blocking geometry at {:?}, but no clear grounded pose was found within {} wu",
+                    restored,
+                    PLAYER_PLACEMENT_SEARCH_STEP * PLAYER_PLACEMENT_SEARCH_STEPS as f32
+                );
+                None
+            }
+        }
+    }
+
+    /// Settle a clear candidate onto nearby support with ordinary controller
+    /// gravity, then require that supported pose to stay put. This rules out a
+    /// clear point over a void or on a sliding face without inventing a floor
+    /// height from a point ray.
+    fn grounded_player_pose_from_candidate(
+        &self,
+        position: Vector3<f32>,
+        player_handle: &PlayerHandle,
+    ) -> Option<Vector3<f32>> {
+        if !self.player_pose_has_controller_clearance(position, player_handle) {
+            return None;
+        }
+
+        let shape = if player_handle.is_crouched {
+            crouched_player_capsule()
+        } else {
+            standing_player_capsule()
+        };
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            player_pose_filter(player_handle.character_handle),
+        );
+        let gravity = -0.5 / SCALE_FACTOR;
+        let settle_frames = (PLAYER_PLACEMENT_MAX_DROP / gravity.abs()).ceil() as usize + 4;
+        let start = vec_to_nvec(position);
+        let mut settled = start;
+        for _ in 0..settle_frames {
+            let pose = Isometry::translation(settled.x, settled.y, settled.z);
+            let movement = step_player_movement(
+                &player_handle.controller,
+                &queries,
+                &shape,
+                &pose,
+                Vector::zeros(),
+                Vector::zeros(),
+                self.integration_parameters.dt,
+                gravity,
+                None,
+                None,
+                None,
+            )
+            .movement;
+            let candidate = settled + movement.translation;
+            if start.y - candidate.y > PLAYER_PLACEMENT_MAX_DROP
+                || player_shape_intersects(&queries, candidate, &shape)
+            {
+                return None;
+            }
+            settled = candidate;
+            if movement.grounded
+                && shape_has_stable_support(
+                    &player_handle.controller,
+                    &queries,
+                    &shape,
+                    settled,
+                    self.integration_parameters.dt,
+                )
+            {
+                return Some(nvec_to_cgmath(settled));
+            }
+        }
+        None
+    }
+
+    /// Closest deterministic clear and supported pose around an overlapping
+    /// legacy save transform, using the restored standing/crouched shape.
+    fn nearest_clear_grounded_player_pose(
+        &self,
+        position: Vector3<f32>,
+        player_handle: &PlayerHandle,
+    ) -> Option<Vector3<f32>> {
+        for step in 1..=PLAYER_PLACEMENT_SEARCH_STEPS {
+            let distance = PLAYER_PLACEMENT_SEARCH_STEP * step as f32;
+            for compass in 0..PLAYER_PLACEMENT_SEARCH_DIRECTIONS {
+                let angle = std::f32::consts::TAU * compass as f32
+                    / PLAYER_PLACEMENT_SEARCH_DIRECTIONS as f32;
+                let candidate =
+                    position + vec3(angle.cos() * distance, 0.0, angle.sin() * distance);
+                if let Some(grounded) =
+                    self.grounded_player_pose_from_candidate(candidate, player_handle)
+                {
+                    return Some(grounded);
+                }
+            }
+        }
+        None
+    }
+
     /// Whether the player's *current* capsule - crouched or standing, since
     /// nothing uncrouches them on the way to a respawn - fits at `position`
     /// without overlapping blocking geometry (their own body excluded).
@@ -2701,6 +2924,27 @@ impl PhysicsWorld {
             standing_player_capsule()
         };
         self.pose_is_clear(position, player_handle, &capsule)
+    }
+
+    /// Whether the restored current capsule plus the controller's required
+    /// contact margin fits at `position`.
+    fn player_pose_has_controller_clearance(
+        &self,
+        position: Vector3<f32>,
+        player_handle: &PlayerHandle,
+    ) -> bool {
+        let capsule = if player_handle.is_crouched {
+            crouched_player_capsule()
+        } else {
+            standing_player_capsule()
+        };
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            player_pose_filter(player_handle.character_handle),
+        );
+        !player_shape_intersects(&queries, vec_to_nvec(position), &capsule)
     }
 
     /// Whether the STANDING capsule fits at `position`, whatever the player is
@@ -3017,7 +3261,11 @@ impl PhysicsWorld {
                     break;
                 }
                 let attempt = remaining.min(PLAYER_MOVE_SUBSTEP);
-                let mvt = step_player_movement(
+                let PlayerMovement {
+                    movement: mvt,
+                    endpoint_prevalidated,
+                    ..
+                } = step_player_movement(
                     &player_handle.controller,
                     &queries,
                     character_shape.as_ref(),
@@ -3033,8 +3281,7 @@ impl PhysicsWorld {
                     None,
                     // No ladder redirect: a validated move walks, it doesn't climb.
                     None,
-                )
-                .movement;
+                );
                 grounded = mvt.grounded;
 
                 let candidate = Translation::from(mvt.translation) * pos;
@@ -3047,6 +3294,21 @@ impl PhysicsWorld {
                 // a bounded hop. Never commit a solver result outside the
                 // requested horizontal radius.
                 if from_start.norm() > requested_distance + PLAYER_MOVE_ARRIVAL_EPSILON {
+                    break;
+                }
+                // `step_player_movement` composes independent carry, walk,
+                // gravity/snap and stair translations. Each pass is swept,
+                // but their aggregate endpoint is a new pose and must satisfy
+                // the full-capsule invariant before it becomes the next
+                // substep's origin.
+                if !endpoint_prevalidated
+                    && !player_movement_candidate_is_clear(
+                        &queries,
+                        &pos,
+                        character_shape.as_ref(),
+                        mvt.translation,
+                    )
+                {
                     break;
                 }
                 let after = vector![
@@ -3465,7 +3727,14 @@ impl PhysicsWorld {
             is_grounded: false,
             jump_velocity: None,
             jump_was_pressed: false,
+            recover_loaded_overlap_after_step: false,
         }
+    }
+
+    /// Schedule the legacy-save overlap audit for the first physics step,
+    /// after Rapier has built the fresh mission's broad-phase query tree.
+    pub fn schedule_loaded_player_overlap_recovery(&mut self, player_handle: &mut PlayerHandle) {
+        player_handle.recover_loaded_overlap_after_step = true;
     }
 
     /// Set the player's crouch state, resizing the capsule with the feet
@@ -3831,6 +4100,10 @@ impl PhysicsWorld {
         });
         self.has_stepped = true;
 
+        if std::mem::take(&mut player_handle.recover_loaded_overlap_after_step) {
+            self.recover_loaded_player_overlap(player_handle);
+        }
+
         // Update character controller
         let desired_movement = vec_to_nvec(desired_movement);
         let facing = vec_to_nvec(facing);
@@ -4072,7 +4345,8 @@ impl PhysicsWorld {
             })
             .unwrap_or_else(Vector::zeros);
 
-        let player_movement = profile!(scope: "physics", level: TRACE, "physics.move_player", {
+        let climbing = climb_movement.is_some();
+        let mut player_movement = profile!(scope: "physics", level: TRACE, "physics.move_player", {
             let queries = self.player_movement_queries(dispatcher, movement_filter);
             if let Some(top_out) = player_handle.top_out {
                 let (movement, top_out) = advance_climb_top_out(
@@ -4087,6 +4361,7 @@ impl PhysicsWorld {
                     movement,
                     top_out,
                     slope_displacement: Vector::zeros(),
+                    endpoint_prevalidated: true,
                 }
             } else {
                 // A compressed mantle restores the same standing/crouched
@@ -4134,6 +4409,26 @@ impl PhysicsWorld {
                 }
             }
         });
+        // The controller resolves carry, walk, gravity and stairs as separate
+        // sweeps, then returns one aggregate translation. Concave seams can
+        // make that endpoint overlap even though every contributing sweep was
+        // locally valid. Ordinary locomotion must retain its last clear pose
+        // rather than turn the next frame into an all-directions penetration.
+        if player_movement.top_out.is_none() && !climbing && !player_movement.endpoint_prevalidated
+        {
+            let queries =
+                self.player_movement_queries(self.narrow_phase.query_dispatcher(), movement_filter);
+            if !player_movement_candidate_is_clear(
+                &queries,
+                &original_position,
+                character_shape.as_ref(),
+                player_movement.movement.translation,
+            ) {
+                player_movement.movement.translation = Vector::zeros();
+                player_movement.movement.grounded = player_handle.is_grounded;
+                player_movement.slope_displacement = Vector::zeros();
+            }
+        }
         let was_top_out = player_handle.top_out.is_some();
         player_handle.top_out = player_movement.top_out;
         player_handle.slope_displacement = player_movement.slope_displacement;
@@ -8150,6 +8445,80 @@ mod tests {
         assert!(
             walked > 1.0,
             "a reconstructed player must be able to walk away, moved {walked}"
+        );
+    }
+
+    /// A composed controller result is not safe merely because each sweep that
+    /// contributed to it was safe. The complete standing/crouched capsule at
+    /// the aggregate endpoint is the invariant movement commits must enforce.
+    #[test]
+    fn player_movement_candidate_rejects_a_full_capsule_overlap() {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(1000).unwrap(),
+            vec3(1.0, 2.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.5, 8.0, 8.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player = world.create_player(
+            vec3(0.0, PLAYER_HALF_HEIGHT, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let character = &world.rigid_body_set[player.character_handle];
+        let position = *character.position();
+        let shape = world.collider_set[character.colliders()[0]]
+            .shared_shape()
+            .clone();
+        let queries = query_pipeline(&world, player_pose_filter(player.character_handle));
+
+        assert!(
+            !player_movement_candidate_is_clear(
+                &queries,
+                &position,
+                shape.as_ref(),
+                vector![1.0, 0.0, 0.0],
+            ),
+            "a movement candidate whose full capsule intersects the wall must be rejected"
+        );
+    }
+
+    /// Save loading is the compatibility boundary for already-corrupt poses:
+    /// use the restored standing/crouched shape and move only an overlapping
+    /// legacy pose to the nearest deterministic clear, supported candidate.
+    #[test]
+    fn legacy_load_recovery_moves_only_an_overlapping_player_pose() {
+        let (mut world, stand_y) = frob_box_fixture(true);
+        let mut player = world.create_player(
+            vec3(-4.0, stand_y, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        for _ in 0..10 {
+            world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        }
+
+        let clear = world.get_player_translation(&player);
+        assert_eq!(
+            world.recover_loaded_player_overlap(&mut player),
+            None,
+            "a clear restored pose must remain byte-for-byte unchanged"
+        );
+        assert_eq!(world.get_player_translation(&player), clear);
+
+        let overlapping = vec3(2.0, stand_y, 0.0);
+        world.set_player_translation(overlapping, &mut player);
+        assert!(!world.player_pose_is_clear(overlapping, &player));
+        let recovered = world
+            .recover_loaded_player_overlap(&mut player)
+            .expect("an overlapping legacy pose should recover nearby");
+        assert_ne!(recovered, overlapping);
+        assert!(
+            world.player_pose_is_clear(recovered, &player),
+            "recovered capsule must be clear, got {recovered:?}"
         );
     }
 
