@@ -474,6 +474,19 @@ impl Model {
         }
     }
 
+    /// Set a model-space transform applied *inside* the entity transform. The
+    /// render path re-sets the entity (world) transform every frame; the local
+    /// one rides along with the model.
+    pub fn set_local_transform(&mut self, local_transform: Matrix4<f32>) {
+        let scene_objects = match &mut self.inner {
+            InnerModel::Static(static_model) => &mut static_model.scene_objects,
+            InnerModel::Animated(animated_model) => &mut animated_model.scene_objects,
+        };
+        for obj in scene_objects {
+            obj.set_local_transform(local_transform);
+        }
+    }
+
     pub fn transform(model: &Model, transform: Matrix4<f32>) -> Model {
         match &model.inner {
             InnerModel::Static(static_model) => Model {
