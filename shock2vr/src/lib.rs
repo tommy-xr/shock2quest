@@ -73,17 +73,6 @@ pub const PLAYER_EYE_HEIGHT: f32 = physics::PLAYER_HEAD_POS + physics::PLAYER_EY
 /// cannot poke through a low ceiling the collider clears.
 pub const PLAYER_CROUCH_EYE_HEIGHT: f32 = 1.2;
 
-/// How far (world units) a VR runtime must lower the tracked poses when the
-/// player requests crouch with a button while physically standing: the full
-/// stand/crouch capsule height delta. The feet stay planted as the capsule
-/// shrinks, so a physically standing eye would otherwise sit far above the
-/// crouched capsule's crown - outside the collider, poking through the very
-/// ceiling the crouch just gained clearance under. A *physical* crouch needs
-/// no such drop: the tracked head already moved.
-pub fn player_stand_crouch_drop() -> f32 {
-    2.0 * physics::player_crouch_center_shift()
-}
-
 /// Real-world meters per world unit: 1 world unit is `dark::SCALE_FACTOR`
 /// (2.5) SS2 feet, and an SS2 foot is a real foot (0.3048 m). VR runtimes
 /// divide floor-relative tracked poses (meters) by this before feeding them

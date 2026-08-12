@@ -40,6 +40,13 @@ impl VrCrouchDetector {
             .map_or(eye_height, |calibrated| calibrated.max(eye_height));
         self.standing_eye_height = Some(standing_eye_height);
 
+        // A headset resting on the floor legitimately calibrates 0.0; the
+        // ratio below would be 0/0 = NaN, which happens to preserve state via
+        // NaN comparison semantics - make that explicit instead of accidental.
+        if standing_eye_height <= 0.0 {
+            return self.crouching;
+        }
+
         let height_ratio = eye_height / standing_eye_height;
         if self.crouching {
             if height_ratio > CROUCH_EXIT_HEIGHT_RATIO {

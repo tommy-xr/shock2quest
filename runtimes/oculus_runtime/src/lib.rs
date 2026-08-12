@@ -522,6 +522,11 @@ fn main() {
                             frame_profiler.reset();
                             vr_crouch.reset();
                             pending_stage_change_time = None;
+                            // A latched button crouch must not survive a
+                            // session restart (doffing the headset would
+                            // otherwise resume invisibly crouched).
+                            crouch_toggled = false;
+                            crouch_button_was_pressed = false;
 
                             // let available_rates =
                             //     session.enumerate_display_refresh_rates().unwrap();
@@ -578,6 +583,10 @@ fn main() {
             if xr_frame_state.predicted_display_time.as_nanos() >= change_time.as_nanos() {
                 vr_crouch.reset();
                 pending_stage_change_time = None;
+                // The reference space was redefined; drop the latched button
+                // crouch along with the height calibration.
+                crouch_toggled = false;
+                crouch_button_was_pressed = false;
             }
         }
 
@@ -614,14 +623,17 @@ fn main() {
             .state(&session, xr::Path::NULL)
             .unwrap()
             .current_state;
-        let crouch_pressed = crouch_action
-            .state(&session, xr::Path::NULL)
-            .unwrap()
-            .current_state;
-        if crouch_pressed && !crouch_button_was_pressed {
-            crouch_toggled = !crouch_toggled;
+        let crouch_state = crouch_action.state(&session, xr::Path::NULL).unwrap();
+        // Only edge-detect while the action is live: with the session merely
+        // VISIBLE (system overlay up), current_state reads false even though
+        // the button may still be physically held, and treating that as a
+        // release would mint a spurious toggle on refocus.
+        if crouch_state.is_active {
+            if crouch_state.current_state && !crouch_button_was_pressed {
+                crouch_toggled = !crouch_toggled;
+            }
+            crouch_button_was_pressed = crouch_state.current_state;
         }
-        crouch_button_was_pressed = crouch_pressed;
 
         let left_trigger_value = left_trigger
             .state(&session, xr::Path::NULL)
@@ -656,31 +668,25 @@ fn main() {
         );
 
         // Feed the detector before the poses are transformed so this frame's
-        // physical stance decides both the crouch request and the button-latch
-        // view drop below.
+        // physical stance is available to the crouch request below. Tracked
+        // poses are NEVER artificially displaced for a button crouch: the eye
+        // cap in `render_swapchain` alone keeps the view inside the crouched
+        // collider, and it does so continuously (a rigid pose drop keyed on
+        // detector state produced below-floor eyes/hands and frame-size view
+        // pops at the hysteresis thresholds).
         let tracked_head_position = head_location.location_flags.contains(
             xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::POSITION_TRACKED,
         );
         let physically_crouched =
             vr_crouch.update(tracked_head_position.then_some(head_location.pose.position.y));
-        // Button-crouch while physically standing: drop the tracked poses by
-        // the capsule's stand/crouch height delta so the eye lands inside the
-        // crouched collider instead of poking through the ceiling it just
-        // gained clearance under. Physical crouch needs no drop - the head
-        // already moved.
-        let tracked_pose_drop = if crouch_toggled && !physically_crouched {
-            shock2vr::player_stand_crouch_drop()
-        } else {
-            0.0
-        };
-        let pose_anchor = game.player_center_above_floor() + tracked_pose_drop;
+        let center_above_floor = game.player_center_above_floor();
         let right_hand_position = stage_to_pawn(
             vec3(
                 right_aim_location.pose.position.x,
                 right_aim_location.pose.position.y,
                 right_aim_location.pose.position.z,
             ),
-            pose_anchor,
+            center_above_floor,
         );
 
         let left_hand_position = stage_to_pawn(
@@ -689,7 +695,7 @@ fn main() {
                 left_aim_location.pose.position.y,
                 left_aim_location.pose.position.z,
             ),
-            pose_anchor,
+            center_above_floor,
         );
         let left_hand_rotation = cgmath::Quaternion::new(
             left_aim_location.pose.orientation.w,
@@ -904,7 +910,6 @@ fn main() {
             true,
             &scene,
             false,
-            tracked_pose_drop,
         );
         let left_eye_elapsed = left_eye_started.elapsed();
         let right_eye_started = Instant::now();
@@ -919,7 +924,6 @@ fn main() {
             true,
             &scene,
             true,
-            tracked_pose_drop,
         );
         let right_eye_elapsed = right_eye_started.elapsed();
 
@@ -1103,7 +1107,6 @@ fn render_swapchain(
     _log: bool,
     scene: &Vec<SceneObject>,
     is_last: bool,
-    tracked_pose_drop: f32,
 ) -> () {
     let mut xr_swapchain = swapchain.handle.borrow_mut();
     let image_index1 = xr_swapchain.acquire_image().unwrap();
@@ -1122,7 +1125,7 @@ fn render_swapchain(
             view.pose.position.y,
             view.pose.position.z,
         ),
-        game.player_center_above_floor() + tracked_pose_drop,
+        game.player_center_above_floor(),
     );
     // The tracked eye belongs to a real body, not to the game capsule, so it
     // must be held inside the collider crown: a physically crouched adult's
