@@ -36,6 +36,20 @@ pub enum FrontFaceWinding {
     CounterClockwise,
 }
 
+/// Debug-only provenance for a scene object, so tooling can report *what* the
+/// renderer was handed. Never read by the renderer itself.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SceneObjectDebugTag {
+    /// Runtime entity this object was built for, when it came from one.
+    pub entity_id: Option<u64>,
+    /// The entity's authored name, when it has one.
+    pub name: Option<String>,
+    /// Model the geometry was loaded from (`PropModelName`).
+    pub model: Option<String>,
+    /// Which render path produced the object, e.g. "entity".
+    pub source: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct SceneObject {
     pub material: Rc<RefCell<Box<dyn Material>>>,
@@ -57,6 +71,8 @@ pub struct SceneObject {
     /// Front-face winding used to cull backfaces for this object. Most engine
     /// geometry remains double-sided; imported Dark models opt in explicitly.
     backface_culling: Option<FrontFaceWinding>,
+    /// Debug-only provenance; `Rc` so cloning an object per frame stays cheap.
+    debug_tag: Option<Rc<SceneObjectDebugTag>>,
 }
 
 impl SceneObject {
@@ -232,6 +248,7 @@ impl SceneObject {
             depth_write: true,
             clear_depth: false,
             transparency_override: None,
+            debug_tag: None,
             backface_culling: None,
         }
     }
@@ -362,6 +379,7 @@ impl SceneObject {
             depth_write: true,
             clear_depth: false,
             transparency_override: None,
+            debug_tag: None,
             backface_culling: None,
         }
     }
@@ -376,6 +394,7 @@ impl SceneObject {
             depth_write: self.depth_write,
             clear_depth: self.clear_depth,
             transparency_override: self.transparency_override,
+            debug_tag: self.debug_tag.clone(),
             backface_culling: self.backface_culling,
         }
     }
@@ -390,6 +409,22 @@ impl SceneObject {
 
     pub fn set_backface_culling(&mut self, front_face: Option<FrontFaceWinding>) {
         self.backface_culling = front_face;
+    }
+
+    /// Attach debug provenance (see [`SceneObjectDebugTag`]).
+    pub fn set_debug_tag(&mut self, tag: Option<Rc<SceneObjectDebugTag>>) {
+        self.debug_tag = tag;
+    }
+
+    pub fn debug_tag(&self) -> Option<&SceneObjectDebugTag> {
+        self.debug_tag.as_deref()
+    }
+
+    /// The transparency in effect for this draw: the per-object override when
+    /// set, otherwise the material's own value.
+    pub fn effective_transparency(&self) -> Option<f32> {
+        self.transparency_override
+            .or_else(|| self.material.borrow().transparency())
     }
 
     pub fn backface_culling(&self) -> Option<FrontFaceWinding> {
@@ -454,5 +489,42 @@ mod tests {
         );
 
         assert_eq!(object.backface_culling(), None);
+    }
+
+    #[test]
+    fn scene_objects_are_untagged_until_a_debug_tag_is_attached() {
+        let mut object = SceneObject::new(
+            super::super::color_material::create(vec3(1.0, 1.0, 1.0)),
+            Box::new(super::super::geometry::EmptyMesh),
+        );
+
+        assert_eq!(object.debug_tag(), None);
+
+        let tag = SceneObjectDebugTag {
+            entity_id: Some(246),
+            name: Some("Pistol".to_owned()),
+            model: Some("atek_w".to_owned()),
+            source: Some("entity".to_owned()),
+        };
+        object.set_debug_tag(Some(Rc::new(tag.clone())));
+
+        assert_eq!(object.debug_tag(), Some(&tag));
+        // The tag has to survive the per-frame clone the render path makes.
+        assert_eq!(object.clone().debug_tag(), Some(&tag));
+    }
+
+    #[test]
+    fn a_per_object_override_wins_over_the_shared_material_transparency() {
+        let mut object = SceneObject::new(
+            super::super::color_material::create(vec3(1.0, 1.0, 1.0)),
+            Box::new(super::super::geometry::EmptyMesh),
+        );
+
+        // color_material reports no transparency of its own.
+        assert_eq!(object.effective_transparency(), None);
+
+        object.set_transparency(Some(0.35));
+
+        assert_eq!(object.effective_transparency(), Some(0.35));
     }
 }

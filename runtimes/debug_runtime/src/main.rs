@@ -305,6 +305,7 @@ async fn start_http_server(
         .route("/v1/player/spawn-item", axum::routing::post(spawn_item))
         .route("/v1/player/stats", axum::routing::post(set_player_stats))
         .route("/v1/physics/raycast", axum::routing::post(perform_raycast))
+        .route("/v1/scene", get(list_scene_objects))
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
         .route("/v1/physics/joints", get(list_physics_joints))
@@ -502,6 +503,10 @@ fn run_game_blocking(
     let mut accumulated_time = 0.0f32;
     let mut shutdown_requested = false;
     let mut frame_counter = 0u64;
+    // Snapshot of the objects submitted to the renderer on the last drawn
+    // frame, served by `/v1/scene`.
+    let mut last_scene: Vec<commands::SceneObjectSummary> = Vec::new();
+    let mut last_scene_frame = 0u64;
     let mut frames_to_step = 0u32;
     let mut target_step_time: Option<f32> = None;
     let mut action_state = InputActionState::new();
@@ -645,6 +650,8 @@ fn run_game_blocking(
                         frame_counter,
                         &mut action_state,
                         &mut current_input,
+                        &last_scene,
+                        last_scene_frame,
                     );
                 }
             }
@@ -820,6 +827,10 @@ fn run_game_blocking(
         // Combine scene objects
         scene.extend(per_eye_scene);
 
+        // Snapshot what the renderer is about to be handed, for `/v1/scene`.
+        last_scene = summarize_scene(&scene);
+        last_scene_frame = frame_counter;
+
         // Create the final scene for rendering
         let mut scene_for_render = Scene::from_objects(scene);
 
@@ -863,6 +874,28 @@ fn run_game_blocking(
 }
 
 /// Process a command from the HTTP server
+/// Describe the scene objects submitted to the renderer, for `/v1/scene`.
+fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneObjectSummary> {
+    scene
+        .iter()
+        .map(|obj| {
+            let tag = obj.debug_tag();
+            let translation = obj.get_transform().w;
+            commands::SceneObjectSummary {
+                entity_id: tag.and_then(|t| t.entity_id),
+                name: tag.and_then(|t| t.name.clone()),
+                model: tag.and_then(|t| t.model.clone()),
+                source: tag.and_then(|t| t.source.clone()),
+                position: [translation.x, translation.y, translation.z],
+                transparency: obj.effective_transparency(),
+                depth_write: obj.depth_write,
+                clear_depth: obj.clear_depth,
+                backface_culling: obj.backface_culling().map(|w| format!("{w:?}")),
+            }
+        })
+        .collect()
+}
+
 fn process_command(
     command: RuntimeCommand,
     game: &mut Game,
@@ -870,6 +903,8 @@ fn process_command(
     frame_counter: u64,
     action_state: &mut InputActionState,
     current_input: &mut InputContext,
+    last_scene: &[commands::SceneObjectSummary],
+    last_scene_frame: u64,
 ) {
     match command {
         RuntimeCommand::GetInfo(reply) => {
@@ -1523,6 +1558,47 @@ fn process_command(
                 if let Err(_) = reply.send(result) {
                     tracing::warn!("No debug scene available for physics body listing");
                 }
+            }
+        }
+        RuntimeCommand::ListSceneObjects {
+            entity_id,
+            transparent_only,
+            limit,
+            reply,
+        } => {
+            let total_count = last_scene.len();
+            let matched: Vec<&commands::SceneObjectSummary> = last_scene
+                .iter()
+                .filter(|o| match entity_id {
+                    Some(id) => o.entity_id == Some(id as u64),
+                    None => true,
+                })
+                .filter(|o| !transparent_only || o.transparency.is_some_and(|t| t > 0.0))
+                .collect();
+            let matched_count = matched.len();
+            let objects = matched
+                .into_iter()
+                .take(limit.unwrap_or(usize::MAX))
+                .map(|o| commands::SceneObjectSummary {
+                    entity_id: o.entity_id,
+                    name: o.name.clone(),
+                    model: o.model.clone(),
+                    source: o.source.clone(),
+                    position: o.position,
+                    transparency: o.transparency,
+                    depth_write: o.depth_write,
+                    clear_depth: o.clear_depth,
+                    backface_culling: o.backface_culling.clone(),
+                })
+                .collect();
+            let result = commands::SceneListResult {
+                objects,
+                total_count,
+                matched_count,
+                frame_index: last_scene_frame,
+            };
+            if let Err(_) = reply.send(result) {
+                tracing::warn!("Failed to send scene list - receiver dropped");
             }
         }
         RuntimeCommand::PhysicsBodyDetail { id, reply } => {
@@ -3016,6 +3092,51 @@ async fn perform_raycast(
 }
 
 /// Query parameters for physics body listing
+#[derive(Deserialize)]
+struct SceneQueryParams {
+    limit: Option<usize>,
+    /// Only objects belonging to this entity id.
+    entity_id: Option<i32>,
+    /// Only objects that are not fully opaque.
+    transparent: Option<bool>,
+}
+
+/// HTTP handler describing what the renderer drew on the last frame
+async fn list_scene_objects(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Query(params): Query<SceneQueryParams>,
+) -> Json<commands::SceneListResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    let empty = || commands::SceneListResult {
+        objects: vec![],
+        total_count: 0,
+        matched_count: 0,
+        frame_index: 0,
+    };
+
+    if command_tx
+        .send(RuntimeCommand::ListSceneObjects {
+            entity_id: params.entity_id,
+            transparent_only: params.transparent.unwrap_or(false),
+            limit: params.limit,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send ListSceneObjects command - game loop receiver dropped");
+        return Json(empty());
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive scene list - sender dropped");
+            Json(empty())
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct PhysicsBodyQueryParams {
     limit: Option<usize>,
