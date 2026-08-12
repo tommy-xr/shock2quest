@@ -84,12 +84,12 @@ test(
       "playing the log back should mark it read",
     );
 
-    // And it closes again, as any MFD panel does.
-    await game.input.trigger("CloseActivePanel");
+    // And Tab closes it again, as it does any MFD panel.
+    await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
     assert.ok(
       !(await game.ui.state()).active_panel,
-      "CloseActivePanel should dismiss the reader",
+      "Tab should dismiss the reader",
     );
 
     t.diagnostic(
