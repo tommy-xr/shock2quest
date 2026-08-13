@@ -175,6 +175,7 @@ impl GameScene for DebugMapScene {
                 self.map_entity,
                 RuntimePropMapData {
                     mission: MAP_MISSION.to_string(),
+                    map_params: dark::mission::MapParams::default(),
                     revealed_rects,
                     explored_rects,
                 },

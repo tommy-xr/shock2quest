@@ -134,6 +134,7 @@ impl DebugSceneBuilder {
                 song: String::new(),
             },
             room_db: RoomDatabase { rooms: Vec::new() },
+            map_params: dark::mission::MapParams::default(),
             physics_geometry,
             spatial_data: None,
             entity_info: SystemShock2EntityInfo::empty(),

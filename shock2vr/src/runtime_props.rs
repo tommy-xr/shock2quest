@@ -275,13 +275,16 @@ pub struct RuntimePropLaunchedProjectile;
 
 // RuntimePropMapData - the automap page data for the current mission, attached
 // to the synthetic map-panel entity at mission init: the mission's level file
-// name (for the per-level `intrface/<LEVEL>/english/` art paths) and the decal
-// rects from P001RA.BIN / P001XA.BIN (empty when the mission ships no automap).
-// Not serialized - rebuilt from mission data on every load.
+// name (for the per-level `intrface/<LEVEL>/english/` art paths), its authored
+// `MAPPARAM`, and the decal rects from P001RA.BIN / P001XA.BIN (empty when the
+// mission ships no automap). Not serialized - rebuilt from mission data on
+// every load.
 #[derive(Component, Clone, Debug)]
 pub struct RuntimePropMapData {
     /// Level file name as loaded (e.g. "medsci1.mis").
     pub mission: String,
+    /// Mission-authored automap axis mapping (`MAPPARAM`).
+    pub map_params: dark::mission::MapParams,
     /// Bright "revealed" decal rects (P001RA.BIN), indexed by map location.
     pub revealed_rects: Vec<dark::map::MapRect>,
     /// Dim "explored" decal rects (P001XA.BIN), indexed by map location.

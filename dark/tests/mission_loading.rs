@@ -15,7 +15,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
-use dark::mission::PathDatabase;
+use dark::mission::{MapParams, PathDatabase};
 use dark::properties::{self, Link};
 use dark::ss2_chunk_file_reader;
 use dark::ss2_entity_info::{self, SystemShock2EntityInfo};
@@ -49,6 +49,13 @@ fn load_path_database(data: &Path, mission: &str) -> Option<PathDatabase> {
     let mut reader = BufReader::new(file);
     let toc = ss2_chunk_file_reader::read_table_of_contents(&mut reader);
     PathDatabase::read(&toc, &mut reader)
+}
+
+fn load_map_params(data: &Path, mission: &str) -> Option<MapParams> {
+    let file = File::open(data.join(mission)).expect("mission file should open");
+    let mut reader = BufReader::new(file);
+    let toc = ss2_chunk_file_reader::read_table_of_contents(&mut reader);
+    MapParams::read(&toc, &mut reader)
 }
 
 /// Parse a mission's entity info (properties + links) directly from its own
@@ -93,6 +100,49 @@ fn all_missions(data: &Path) -> Vec<String> {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|name| name.ends_with(".mis"))
         .collect()
+}
+
+#[test]
+fn retail_missions_parse_authored_map_rotation() {
+    let Some(data) = data_root() else {
+        eprintln!("SKIP: no Data/ assets (set DARK_ASSET_PATH to run)");
+        return;
+    };
+    let retail_missions = [
+        "command1.mis",
+        "command2.mis",
+        "earth.mis",
+        "eng1.mis",
+        "eng2.mis",
+        "hydro1.mis",
+        "hydro2.mis",
+        "hydro3.mis",
+        "many.mis",
+        "medsci1.mis",
+        "medsci2.mis",
+        "ops1.mis",
+        "ops2.mis",
+        "ops3.mis",
+        "ops4.mis",
+        "rec1.mis",
+        "rec2.mis",
+        "rec3.mis",
+        "rick1.mis",
+        "rick2.mis",
+        "rick3.mis",
+        "shodan.mis",
+        "station.mis",
+    ];
+
+    for mission in retail_missions {
+        let params = load_map_params(&data, mission)
+            .unwrap_or_else(|| panic!("{mission}: retail MAPPARAM v1.0 should parse"));
+        let expected_rotate_hack = matches!(mission, "command1.mis" | "command2.mis");
+        assert_eq!(
+            params.rotate_hack, expected_rotate_hack,
+            "{mission}: unexpected authored rotate-hack flag"
+        );
+    }
 }
 
 #[test]

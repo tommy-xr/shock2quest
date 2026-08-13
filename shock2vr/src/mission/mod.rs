@@ -89,6 +89,7 @@ impl Mission {
         let mission_scene = dark::mission::to_scene(&level, asset_cache);
         let song_params = level.song_params.clone();
         let room_db = level.room_database.clone();
+        let map_params = level.map_params;
         let physics_geometry = create_physics_collider(&level);
         let spatial_data = LevelSpatialData::from_level(&level);
         let obj_map = level.obj_map.clone();
@@ -98,6 +99,7 @@ impl Mission {
             animated_lightmaps: Some(mission_scene.animated_lightmaps),
             song_params,
             room_db,
+            map_params,
             physics_geometry,
             spatial_data: Some(Box::new(spatial_data)),
             entity_info: level.entity_info,

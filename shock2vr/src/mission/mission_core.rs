@@ -668,6 +668,7 @@ pub struct AbstractMission {
     pub animated_lightmaps: Option<dark::mission::AnimatedLightmapController>,
     pub song_params: SongParams,
     pub room_db: RoomDatabase,
+    pub map_params: dark::mission::MapParams,
     pub physics_geometry: Option<Collider>,
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
     pub entity_info: SystemShock2EntityInfo,
@@ -946,6 +947,7 @@ impl MissionCore {
                 RuntimePropDoNotSerialize,
                 crate::runtime_props::RuntimePropMapData {
                     mission: mission.clone(),
+                    map_params: abstract_mission.map_params,
                     revealed_rects,
                     explored_rects,
                 },
