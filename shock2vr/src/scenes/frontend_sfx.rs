@@ -25,7 +25,9 @@
 
 use engine::{
     assets::asset_cache::AssetCache,
-    audio::{AudioContext, AudioHandle, PlayOptions, play_audio_with, stop_audio},
+    audio::{
+        AudioContext, AudioHandle, AudioPlaybackSettings, play_audio_with_settings, stop_audio,
+    },
 };
 use shipyard::EntityId;
 use tracing::warn;
@@ -124,9 +126,10 @@ impl<TWidget: Copy + PartialEq> FrontendSfx<TWidget> {
             self.hum = if self.play(
                 HUM_SOUND,
                 &handle,
-                PlayOptions {
-                    volume: HUM_VOLUME,
+                AudioPlaybackSettings {
+                    gain: HUM_VOLUME,
                     looping: true,
+                    ..Default::default()
                 },
                 asset_cache,
                 audio_context,
@@ -141,9 +144,9 @@ impl<TWidget: Copy + PartialEq> FrontendSfx<TWidget> {
             self.play(
                 sound,
                 &AudioHandle::new(),
-                PlayOptions {
-                    volume,
-                    looping: false,
+                AudioPlaybackSettings {
+                    gain: volume,
+                    ..Default::default()
                 },
                 asset_cache,
                 audio_context,
@@ -174,7 +177,7 @@ impl<TWidget: Copy + PartialEq> FrontendSfx<TWidget> {
         &mut self,
         name: &'static str,
         handle: &AudioHandle,
-        options: PlayOptions,
+        settings: AudioPlaybackSettings,
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> bool {
@@ -184,10 +187,15 @@ impl<TWidget: Copy + PartialEq> FrontendSfx<TWidget> {
             return false;
         };
         let duration = clip.total_duration();
-        let preempted = play_audio_with(audio_context, handle.clone(), None, clip, options);
+        let preempted =
+            play_audio_with_settings(audio_context, handle.clone(), None, clip, settings);
         crate::audio_log::record_stops(&preempted);
         crate::audio_log::record(crate::audio_log::SoundRecord {
             sample: name,
+            volume_millibels: None,
+            gain: settings.gain,
+            pan_millibels: None,
+            pan_applied: false,
             tags: vec![("kind".to_owned(), "menu".to_owned())],
             position: [0.0, 0.0, 0.0],
             duration,

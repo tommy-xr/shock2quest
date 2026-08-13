@@ -490,3 +490,32 @@ fn gamesys_hrm_params_match_retail_hacking_tuning() {
     assert_eq!(params.success_chance(50, 0, 1), 55);
     assert_eq!(params.mine_count(2, 0, 1), 1);
 }
+
+#[test]
+fn gamesys_sound_schema_resolves_authored_and_inherited_play_params() {
+    let Some(data) = data_root() else {
+        eprintln!("SKIP: no Data/ assets (set DARK_ASSET_PATH to run)");
+        return;
+    };
+    let (props, links, links_with_data) = properties::get();
+    let file = File::open(data.join("shock2.gam")).expect("shock2.gam should open");
+    let mut reader = BufReader::new(file);
+    let gamesys = dark::gamesys::read(&mut reader, &links, &links_with_data, &props);
+
+    // linebeep authors its own -25 dB attenuation in P$SchPlayPa.
+    let linebeep = gamesys
+        .sound_schema()
+        .resolve("linebeep")
+        .expect("linebeep schema should resolve");
+    assert_eq!(linebeep.volume_millibels, -2500);
+    assert_eq!(linebeep.pan_millibels, 0);
+
+    // log0219 has samples but no local play-params property. It inherits the
+    // SPEECH_LOGS fixed-pan values, so direct-only property loading loses both.
+    let log = gamesys
+        .sound_schema()
+        .resolve("log0219")
+        .expect("log0219 schema should resolve");
+    assert_eq!(log.volume_millibels, -300);
+    assert_eq!(log.pan_millibels, -1000);
+}

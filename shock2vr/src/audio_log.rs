@@ -51,6 +51,14 @@ pub struct PlayedSound {
     pub frame: u64,
     /// Resolved sample name (e.g. "bulmet2"), without extension.
     pub sample: String,
+    /// Authored Dark-schema volume, in millibels; absent for direct samples.
+    pub volume_millibels: Option<i32>,
+    /// Linear gain actually assigned to the rodio sink.
+    pub gain: f32,
+    /// Resolved authored pan, in millibels; absent for direct samples.
+    pub pan_millibels: Option<i32>,
+    /// False when positional 3D panning superseded the schema pan.
+    pub pan_applied: bool,
     /// The schema query's (tag, value) pairs (e.g. event=collision, material=metal).
     pub tags: Vec<(String, String)>,
     pub position: [f32; 3],
@@ -69,6 +77,10 @@ pub struct PlayedSound {
 /// Arguments for [`record`], grouped so call sites stay readable.
 pub struct SoundRecord<'a> {
     pub sample: &'a str,
+    pub volume_millibels: Option<i32>,
+    pub gain: f32,
+    pub pan_millibels: Option<i32>,
+    pub pan_applied: bool,
     pub tags: Vec<(String, String)>,
     pub position: [f32; 3],
     pub duration: Option<Duration>,
@@ -109,6 +121,10 @@ pub fn record(record: SoundRecord) {
         sim_time,
         frame: frame_of(sim_time),
         sample: record.sample.to_owned(),
+        volume_millibels: record.volume_millibels,
+        gain: record.gain,
+        pan_millibels: record.pan_millibels,
+        pan_applied: record.pan_applied,
         tags: record.tags,
         position: record.position,
         duration_secs: record.duration.map(|d| d.as_secs_f64()),
@@ -182,6 +198,10 @@ mod tests {
             sim_time,
             frame: frame_of(sim_time),
             sample: "test".to_owned(),
+            volume_millibels: None,
+            gain: 1.0,
+            pan_millibels: None,
+            pan_applied: false,
             tags: vec![],
             position: [0.0, 0.0, 0.0],
             duration_secs,
@@ -222,6 +242,10 @@ mod tests {
         for _ in 0..2 {
             record(SoundRecord {
                 sample: "test",
+                volume_millibels: None,
+                gain: 1.0,
+                pan_millibels: None,
+                pan_applied: false,
                 tags: vec![],
                 position: [0.0, 0.0, 0.0],
                 duration: Some(Duration::from_secs(5)),

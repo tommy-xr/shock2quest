@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use cgmath::{Vector3, vec3};
 use rodio::buffer::SamplesBuffer;
-use rodio::source::{Buffered, Source};
+use rodio::source::{Buffered, ChannelVolume, Source};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, SpatialSink};
 
 use crate::audio_log;
@@ -16,6 +16,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_HANDLE_ID: AtomicU64 = AtomicU64::new(0);
 
 const SOUND_SCALE_FACTOR: f32 = 5.0;
+// `play_audio` historically used a SpatialSink placed midway between the ears;
+// rodio's centered spatial mix applies 0.75 to both channels. Retain that
+// listener-relative baseline when using a regular Sink for authored pan.
+const STATIC_CENTER_GAIN: f32 = 0.75;
 
 #[derive(Clone, Debug)]
 pub struct AudioHandle {
@@ -43,6 +47,39 @@ impl AudioHandle {
 
 pub struct AudioChannel {
     name: String,
+}
+
+/// Gain, stereo channel attenuation and repeat behavior for
+/// listener-relative playback.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AudioPlaybackSettings {
+    pub gain: f32,
+    pub channel_gains: [f32; 2],
+    /// Repeat forever instead of playing once. `stop_audio` ends it.
+    pub looping: bool,
+}
+
+impl Default for AudioPlaybackSettings {
+    fn default() -> Self {
+        Self {
+            gain: 1.0,
+            channel_gains: [STATIC_CENTER_GAIN, STATIC_CENTER_GAIN],
+            looping: false,
+        }
+    }
+}
+
+impl AudioPlaybackSettings {
+    pub fn listener_relative(gain: f32, pan_gains: [f32; 2]) -> Self {
+        Self {
+            gain,
+            channel_gains: [
+                pan_gains[0] * STATIC_CENTER_GAIN,
+                pan_gains[1] * STATIC_CENTER_GAIN,
+            ],
+            ..Default::default()
+        }
+    }
 }
 
 impl AudioChannel {
@@ -84,7 +121,7 @@ where
 }
 
 enum SinkAdapter<TSourceKey> {
-    StaticSink(SpatialSink),
+    StaticSink(Sink),
     PositionalSink {
         sink: SpatialSink,
         emitter: TrackedEmitter<TSourceKey>,
@@ -95,14 +132,7 @@ impl<TSourceKey> SinkAdapter<TSourceKey>
 where
     TSourceKey: Copy,
 {
-    fn inner(&self) -> &SpatialSink {
-        match self {
-            SinkAdapter::StaticSink(sink) => sink,
-            SinkAdapter::PositionalSink { sink, .. } => sink,
-        }
-    }
-
-    fn fixed(sink: SpatialSink) -> SinkAdapter<TSourceKey> {
+    fn fixed(sink: Sink) -> SinkAdapter<TSourceKey> {
         SinkAdapter::StaticSink(sink)
     }
 
@@ -137,11 +167,17 @@ where
     }
 
     fn empty(&self) -> bool {
-        self.inner().empty()
+        match self {
+            SinkAdapter::StaticSink(sink) => sink.empty(),
+            SinkAdapter::PositionalSink { sink, .. } => sink.empty(),
+        }
     }
 
     fn stop(&self) {
-        self.inner().stop();
+        match self {
+            SinkAdapter::StaticSink(sink) => sink.stop(),
+            SinkAdapter::PositionalSink { sink, .. } => sink.stop(),
+        }
     }
 }
 
@@ -387,20 +423,35 @@ impl AudioClip {
             SourceType::Raw(source) => sink.append(source.clone()),
         }
     }
-
-    /// Append the clip so it repeats forever - a seamless bed (a menu hum, a
-    /// machine loop) rather than the re-append-when-empty pattern, which leaves
-    /// an audible gap of however long the caller takes to notice.
-    pub fn add_to_spatial_sink_looping(&self, sink: &SpatialSink) {
-        match &self.source {
-            SourceType::Bytes(source) => sink.append(source.clone().repeat_infinite()),
-            SourceType::Raw(source) => sink.append(source.clone().repeat_infinite()),
-        }
-    }
     pub fn add_to_sink(&self, sink: &Sink) {
         match &self.source {
             SourceType::Bytes(source) => sink.append(source.clone()),
             SourceType::Raw(source) => sink.append(source.clone()),
+        }
+    }
+
+    fn add_to_sink_with_settings(&self, sink: &Sink, settings: AudioPlaybackSettings) {
+        sink.set_volume(settings.gain);
+        let channel_volumes = settings.channel_gains.to_vec();
+        // A looping clip repeats inside the source - a seamless bed (a menu
+        // hum, a machine loop) rather than the re-append-when-empty pattern,
+        // which leaves an audible gap of however long the caller takes to
+        // notice.
+        match (&self.source, settings.looping) {
+            (SourceType::Bytes(source), false) => {
+                sink.append(ChannelVolume::new(source.clone(), channel_volumes))
+            }
+            (SourceType::Raw(source), false) => {
+                sink.append(ChannelVolume::new(source.clone(), channel_volumes))
+            }
+            (SourceType::Bytes(source), true) => sink.append(ChannelVolume::new(
+                source.clone().repeat_infinite(),
+                channel_volumes,
+            )),
+            (SourceType::Raw(source), true) => sink.append(ChannelVolume::new(
+                source.clone().repeat_infinite(),
+                channel_volumes,
+            )),
         }
     }
     pub fn from_bytes(bytes: Vec<u8>) -> AudioClip {
@@ -481,24 +532,6 @@ pub fn stop_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     }
 }
 
-/// How a clip is played, beyond where it is played.
-#[derive(Clone, Copy, Debug)]
-pub struct PlayOptions {
-    /// Sink volume, 1.0 being the clip's own level.
-    pub volume: f32,
-    /// Repeat forever instead of playing once. `stop_audio` ends it.
-    pub looping: bool,
-}
-
-impl Default for PlayOptions {
-    fn default() -> Self {
-        PlayOptions {
-            volume: 1.0,
-            looping: false,
-        }
-    }
-}
-
 /// Plays audio at the listener origin (non-spatial).
 pub fn play_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     context: &mut AudioContext<TAmbientKey, TCue>,
@@ -506,35 +539,26 @@ pub fn play_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
 ) -> Vec<u64> {
-    play_audio_with(
+    play_audio_with_settings(
         context,
         handle,
         maybe_channel,
         audio_clip,
-        PlayOptions::default(),
+        AudioPlaybackSettings::default(),
     )
 }
 
-/// [`play_audio`] with explicit volume/looping - for non-diegetic audio that
-/// is not simply "play this once at full volume" (a looping menu bed).
-pub fn play_audio_with<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
+pub fn play_audio_with_settings<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     context: &mut AudioContext<TAmbientKey, TCue>,
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
-    options: PlayOptions,
+    settings: AudioPlaybackSettings,
 ) -> Vec<u64> {
-    let position = (context.last_left_ear_position + context.last_right_ear_position) / 2.0;
-
     let id = handle.id;
-    let (sink, preempted) = play_audio_core(
-        context,
-        position,
-        handle,
-        maybe_channel,
-        audio_clip,
-        options,
-    );
+    let preempted = prepare_audio_play(context, &handle, maybe_channel);
+    let sink = rodio::Sink::try_new(&context.handle).unwrap();
+    audio_clip.add_to_sink_with_settings(&sink, settings);
 
     context.handle_to_sink.insert(id, SinkAdapter::fixed(sink));
     preempted
@@ -548,16 +572,31 @@ pub fn play_spatial_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
 ) -> Vec<u64> {
-    let id = handle.id;
-    let scaled_position = position / SOUND_SCALE_FACTOR;
-    let (sink, preempted) = play_audio_core(
+    play_spatial_audio_with_gain(
         context,
-        scaled_position,
+        position,
+        source,
         handle,
         maybe_channel,
         audio_clip,
-        PlayOptions::default(),
-    );
+        1.0,
+    )
+}
+
+pub fn play_spatial_audio_with_gain<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
+    context: &mut AudioContext<TAmbientKey, TCue>,
+    position: Vector3<f32>,
+    source: Option<TAmbientKey>,
+    handle: AudioHandle,
+    maybe_channel: Option<AudioChannel>,
+    audio_clip: Rc<AudioClip>,
+    gain: f32,
+) -> Vec<u64> {
+    let id = handle.id;
+    let scaled_position = position / SOUND_SCALE_FACTOR;
+    let (sink, preempted) =
+        play_audio_core(context, scaled_position, handle, maybe_channel, audio_clip);
+    sink.set_volume(gain);
 
     context
         .handle_to_sink
@@ -579,11 +618,41 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
-    options: PlayOptions,
 ) -> (SpatialSink, Vec<u64>) {
     // Handles whose playback this play cuts short. Reported back so callers
     // (the audio log) can mark them stopped - these preemptions never go
     // through `stop_audio`.
+    let preempted = prepare_audio_play(context, &handle, maybe_channel);
+
+    //let reverb = source.buffered().reverb(Duration::from_millis(40), 0.7);
+    // let x = rand::thread_rng().gen_range(-1.0..1.0);
+    // let y = rand::thread_rng().gen_range(-1.0..1.0);
+    // let z = rand::thread_rng().gen_range(-1.0..1.0);
+    let scaled_x = position.x;
+    let scaled_y = position.y;
+    let scaled_z = position.z;
+    let left_ear = context.last_left_ear_position;
+    let right_ear = context.last_right_ear_position;
+    let positions = (
+        [scaled_x, scaled_y, scaled_z],
+        [left_ear.x, left_ear.y, left_ear.z],
+        [right_ear.x, right_ear.y, right_ear.z],
+    );
+    let sink = rodio::SpatialSink::try_new(&context.handle, positions.0, positions.1, positions.2)
+        .unwrap();
+    audio_clip.add_to_spatial_sink(&sink);
+
+    //context.handle_to_sink.insert(handle.id, sink);
+    (sink, preempted)
+
+    //context.spatial_sinks.push(sink);
+}
+
+fn prepare_audio_play<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
+    context: &mut AudioContext<TAmbientKey, TCue>,
+    handle: &AudioHandle,
+    maybe_channel: Option<AudioChannel>,
+) -> Vec<u64> {
     let mut preempted = Vec::new();
 
     if let Some(channel) = maybe_channel {
@@ -612,38 +681,12 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
         }
     }
 
-    //let reverb = source.buffered().reverb(Duration::from_millis(40), 0.7);
-    // let x = rand::thread_rng().gen_range(-1.0..1.0);
-    // let y = rand::thread_rng().gen_range(-1.0..1.0);
-    // let z = rand::thread_rng().gen_range(-1.0..1.0);
-    let scaled_x = position.x;
-    let scaled_y = position.y;
-    let scaled_z = position.z;
-    let left_ear = context.last_left_ear_position;
-    let right_ear = context.last_right_ear_position;
-    let positions = (
-        [scaled_x, scaled_y, scaled_z],
-        [left_ear.x, left_ear.y, left_ear.z],
-        [right_ear.x, right_ear.y, right_ear.z],
-    );
-    let sink = rodio::SpatialSink::try_new(&context.handle, positions.0, positions.1, positions.2)
-        .unwrap();
-    sink.set_volume(options.volume);
-    if options.looping {
-        audio_clip.add_to_spatial_sink_looping(&sink);
-    } else {
-        audio_clip.add_to_spatial_sink(&sink);
-    }
-
-    //context.handle_to_sink.insert(handle.id, sink);
-    (sink, preempted)
-
-    //context.spatial_sinks.push(sink);
+    preempted
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{TrackedEmitter, wav_duration};
+    use super::{AudioClip, AudioPlaybackSettings, TrackedEmitter, wav_duration};
     use cgmath::vec3;
 
     fn riff(avg_bytes_per_sec: u32, data_len: usize) -> Vec<u8> {
@@ -693,5 +736,23 @@ mod tests {
         });
 
         assert_eq!(emitter.position(), vec3(4.0, 5.0, 6.0));
+    }
+
+    #[test]
+    fn static_sink_receives_schema_gain_and_pan() {
+        let clip = AudioClip::from_raw(1, 1, vec![i16::MAX / 2]);
+        let (sink, mut output) = rodio::Sink::new_idle();
+        clip.add_to_sink_with_settings(
+            &sink,
+            AudioPlaybackSettings {
+                gain: 0.5,
+                channel_gains: [1.0, 0.25],
+                looping: false,
+            },
+        );
+
+        assert_eq!(sink.volume(), 0.5);
+        assert!((output.next().unwrap() - 0.25).abs() < 0.001);
+        assert!((output.next().unwrap() - 0.0625).abs() < 0.001);
     }
 }

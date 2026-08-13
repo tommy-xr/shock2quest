@@ -51,7 +51,7 @@ use dark::{
 };
 use engine::{
     assets::asset_cache::AssetCache,
-    audio::{AudioChannel, AudioContext, AudioHandle},
+    audio::{AudioChannel, AudioContext, AudioHandle, AudioPlaybackSettings},
     game_log, profile,
     scene::{
         BillboardMaterial, ParticleSystem, SceneObject, VertexPosition, light::SpotLight, quad,
@@ -5081,6 +5081,10 @@ impl MissionCore {
                         crate::audio_log::record_stops(&preempted);
                         crate::audio_log::record(crate::audio_log::SoundRecord {
                             sample: &email_file,
+                            volume_millibels: None,
+                            gain: 1.0,
+                            pan_millibels: None,
+                            pan_applied: false,
                             tags: vec![("kind".to_string(), "email".to_string())],
                             position: [0.0, 0.0, 0.0],
                             duration,
@@ -5097,14 +5101,15 @@ impl MissionCore {
                     spatial,
                 } => {
                     println!("Trying to play sound: {}", &name);
-                    let audio_file = resolve_schema(global_context, &name.to_string());
-                    let maybe_audio_clip =
-                        asset_cache.get_opt(&AUDIO_IMPORTER, &format!("{audio_file}.wav"));
+                    let (resolved, has_schema) = resolve_schema(global_context, &name);
+                    let maybe_audio_clip = asset_cache
+                        .get_opt(&AUDIO_IMPORTER, &format!("{}.wav", resolved.sample_name));
 
                     if let Some(audio_clip) = maybe_audio_clip {
                         info!("Playing clip: {} handle: {:?}", name, &handle);
                         let duration = audio_clip.total_duration();
                         let handle_id = handle.id();
+                        let gain = resolved.linear_gain();
                         // Spatial emitters (TrapSound narrations anchored at
                         // their authored station) play at the source entity,
                         // like the original engine's object sounds. Everything
@@ -5117,16 +5122,26 @@ impl MissionCore {
                             None
                         };
                         let preempted = if let Some(position) = maybe_position {
-                            engine::audio::play_spatial_audio(
+                            engine::audio::play_spatial_audio_with_gain(
                                 audio_context,
                                 position,
                                 source,
                                 handle,
                                 None,
                                 audio_clip,
+                                gain,
                             )
                         } else {
-                            engine::audio::play_audio(audio_context, handle, None, audio_clip)
+                            engine::audio::play_audio_with_settings(
+                                audio_context,
+                                handle,
+                                None,
+                                audio_clip,
+                                AudioPlaybackSettings::listener_relative(
+                                    gain,
+                                    resolved.channel_gains(),
+                                ),
+                            )
                         };
                         // Observability: record scripted one-shot sounds (audio
                         // logs, keypad beeps, ...) so headless tooling can assert
@@ -5134,7 +5149,11 @@ impl MissionCore {
                         let position = maybe_position.unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
                         crate::audio_log::record_stops(&preempted);
                         crate::audio_log::record(crate::audio_log::SoundRecord {
-                            sample: &audio_file,
+                            sample: &resolved.sample_name,
+                            volume_millibels: has_schema.then_some(resolved.volume_millibels),
+                            gain,
+                            pan_millibels: has_schema.then_some(resolved.pan_millibels),
+                            pan_applied: has_schema && maybe_position.is_none(),
                             tags: vec![("kind".to_string(), "sound".to_string())],
                             position: [position.x, position.y, position.z],
                             duration,
@@ -5151,30 +5170,41 @@ impl MissionCore {
                     concept,
                     tags,
                 } => {
-                    if let Some(sample_name) = resolve_speech_sample(
+                    if let Some(resolved) = resolve_speech_sample(
                         &global_context.gamesys,
                         voice_index,
                         concept.as_str(),
                         &tags,
                     ) {
-                        let audio_path = format!("{sample_name}.wav");
+                        let audio_path = format!("{}.wav", resolved.sample_name);
                         if let Some(audio_clip) = asset_cache.get_opt(&AUDIO_IMPORTER, &audio_path)
                         {
                             let handle = AudioHandle::new();
                             let duration = audio_clip.total_duration();
                             let handle_id = handle.id();
+                            let gain = resolved.linear_gain();
                             let maybe_position = get_entity_position(&self.world, entity_id);
                             let preempted = if let Some(position) = maybe_position {
-                                engine::audio::play_spatial_audio(
+                                engine::audio::play_spatial_audio_with_gain(
                                     audio_context,
                                     position,
                                     Some(entity_id),
                                     handle,
                                     None,
                                     audio_clip,
+                                    gain,
                                 )
                             } else {
-                                engine::audio::play_audio(audio_context, handle, None, audio_clip)
+                                engine::audio::play_audio_with_settings(
+                                    audio_context,
+                                    handle,
+                                    None,
+                                    audio_clip,
+                                    AudioPlaybackSettings::listener_relative(
+                                        gain,
+                                        resolved.channel_gains(),
+                                    ),
+                                )
                             };
                             crate::audio_log::record_stops(&preempted);
                             // Observability: speech is the loudest source of
@@ -5186,7 +5216,11 @@ impl MissionCore {
                             ];
                             sound_tags.extend(tags.iter().cloned());
                             crate::audio_log::record(crate::audio_log::SoundRecord {
-                                sample: &sample_name,
+                                sample: &resolved.sample_name,
+                                volume_millibels: Some(resolved.volume_millibels),
+                                gain,
+                                pan_millibels: Some(resolved.pan_millibels),
+                                pan_applied: maybe_position.is_none(),
                                 tags: sound_tags,
                                 position: [position.x, position.y, position.z],
                                 duration,
@@ -7487,13 +7521,25 @@ pub fn make_un_physical2(
     id_to_physics.remove(&entity_id);
 }
 
-fn resolve_schema(global_context: &GlobalContext, name: &str) -> String {
+fn resolve_schema(global_context: &GlobalContext, name: &str) -> (dark::ResolvedSoundSchema, bool) {
     let sound_schema = &global_context.gamesys.sound_schema;
-    let ret = sound_schema
-        .get_random_sample(name)
-        .unwrap_or_else(|| name.to_owned());
-    trace!("resolved sound schema {} to {}", name, ret);
-    ret
+    if let Some(resolved) = sound_schema.resolve(name) {
+        trace!(
+            "resolved sound schema {} to {} at {} millibels, pan {}",
+            name, resolved.sample_name, resolved.volume_millibels, resolved.pan_millibels
+        );
+        (resolved, true)
+    } else {
+        trace!("sound {} is a direct sample, not a schema", name);
+        (
+            dark::ResolvedSoundSchema {
+                sample_name: name.to_owned(),
+                volume_millibels: 0,
+                pan_millibels: 0,
+            },
+            false,
+        )
+    }
 }
 
 fn resolve_speech_sample(
@@ -7501,7 +7547,7 @@ fn resolve_speech_sample(
     voice_index: usize,
     concept: &str,
     tags: &[(String, String)],
-) -> Option<String> {
+) -> Option<dark::ResolvedSoundSchema> {
     let speech_db = gamesys.speech_db();
     if voice_index >= speech_db.voices.len() {
         return None;
@@ -7562,7 +7608,9 @@ fn resolve_speech_sample(
         .map(|dist| dist.sample(&mut rng))
         .unwrap_or_else(|_| rng.gen_range(0..samples.len()));
 
-    Some(samples[selected_index].sample_name.clone())
+    gamesys
+        .sound_schema
+        .resolve_sample(schema_id, samples[selected_index].sample_name.clone())
 }
 
 /// Stable identity of the entity a sound came from, for the audio log.
@@ -7579,30 +7627,34 @@ fn play_environmental_sound(
     audio_handle: AudioHandle,
     position: Vector3<f32>,
 ) {
-    let maybe_audio_file = gamesys.get_random_environmental_sound(&query);
-    if maybe_audio_file.is_some() {
-        let audio_file = maybe_audio_file.unwrap();
-        let audio_clip = asset_cache.get(&AUDIO_IMPORTER, &format!("{audio_file}.wav").to_owned());
+    if let Some(resolved) = gamesys.get_random_environmental_sound(&query) {
+        let audio_clip = asset_cache.get(&AUDIO_IMPORTER, &format!("{}.wav", resolved.sample_name));
 
         info!(
             "Playing clip: {} handle: {:?} position: {:?}",
-            audio_file, &audio_handle, position
+            resolved.sample_name, &audio_handle, position
         );
         // Log the resolved play so headless tooling (debug runtime
         // /v1/audio/recent) can assert a schema actually played.
         let duration = audio_clip.total_duration();
         let handle_id = audio_handle.id();
-        let preempted = engine::audio::play_spatial_audio(
+        let gain = resolved.linear_gain();
+        let preempted = engine::audio::play_spatial_audio_with_gain(
             audio_context,
             position,
             None,
             audio_handle,
             None,
             audio_clip,
+            gain,
         );
         crate::audio_log::record_stops(&preempted);
         crate::audio_log::record(crate::audio_log::SoundRecord {
-            sample: &audio_file,
+            sample: &resolved.sample_name,
+            volume_millibels: Some(resolved.volume_millibels),
+            gain,
+            pan_millibels: Some(resolved.pan_millibels),
+            pan_applied: false,
             tags: query.tag_values(),
             position: [position.x, position.y, position.z],
             duration,

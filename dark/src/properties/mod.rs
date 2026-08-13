@@ -35,6 +35,7 @@ mod prop_render_type;
 mod prop_replicator;
 mod prop_research;
 mod prop_room_gravity;
+mod prop_schema_play_params;
 mod prop_service;
 mod prop_spawn;
 mod prop_trip_flags;
@@ -78,6 +79,7 @@ pub use prop_render_type::*;
 pub use prop_replicator::*;
 pub use prop_research::*;
 pub use prop_room_gravity::*;
+pub use prop_schema_play_params::*;
 pub use prop_service::*;
 pub use prop_spawn::*;
 pub use prop_trip_flags::*;
@@ -1747,6 +1749,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$RoomGrav",
             PropRoomGravity::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$SchPlayPa",
+            PropSchemaPlayParams::read,
             identity,
             accumulator::latest,
         ),
