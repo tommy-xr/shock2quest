@@ -68,10 +68,8 @@ impl HandPose {
                 index: 0,
                 roll: Deg(0.0),
                 // The rifle's supporting hand, under the handguard - which is
-                // also why it carries the most forearm of the three - and why
-                // the loader's density heuristic tips over on this one.
+                // also why it carries the most forearm of the three.
                 authored: Handedness::Left,
-                frame_is_reversed: true,
                 // Fingers fully extended: the far point IS a fingertip.
                 reach: 1.0,
             },
@@ -82,7 +80,6 @@ impl HandPose {
                 roll: Deg(0.0),
                 // The pistol's trigger hand.
                 authored: Handedness::Right,
-                frame_is_reversed: false,
                 // Curled partway - the far point is around the middle knuckles.
                 reach: 0.85,
             },
@@ -94,7 +91,6 @@ impl HandPose {
                 roll: Deg(0.0),
                 // The pistol's supporting hand, cupped under the grip.
                 authored: Handedness::Left,
-                frame_is_reversed: false,
                 // Fingers curled under into a cup: the far point is barely past
                 // the knuckles, so the step-back has to be much shorter.
                 reach: 0.7,
@@ -107,17 +103,6 @@ struct PoseSource {
     model: &'static str,
     index: usize,
     roll: Deg<f32>,
-    /// Whether the loader's wrist/fingertip detection came out backwards for
-    /// this source.
-    ///
-    /// [`dark::ss2_bin_obj_loader::hand_frame`] picks the *denser* end of the
-    /// point cloud as the fingertips - five digits pack in more geometry than a
-    /// smooth forearm tube. On a source carrying a long enough forearm that
-    /// tips over: the arm's far end wins, the frame comes out end-for-end, and
-    /// the hand renders nearer the eye than the arm, pointing back at the
-    /// player.
-    frame_is_reversed: bool,
-
     /// Which of the player's hands this geometry was actually authored as.
     ///
     /// These are weapon viewmodel hands, and a two-handed weapon is posed with
@@ -175,12 +160,7 @@ fn load_pose(asset_cache: &mut AssetCache, pose: HandPose) -> Option<LoadedPose>
 
     // Take the hand out of model space and into hand space: wrist to the
     // origin, fingers down the frame's forward axis, then the authored roll.
-    let anchor = anchor_of(
-        &hand.frame,
-        source.roll,
-        source.reach,
-        source.frame_is_reversed,
-    );
+    let anchor = anchor_of(&hand.frame, source.roll, source.reach);
 
     let objects = hand
         .model
@@ -208,9 +188,8 @@ fn anchor_of(
     frame: &dark::ss2_bin_obj_loader::HandFrame,
     roll: Deg<f32>,
     reach: f32,
-    reversed: bool,
 ) -> Matrix4<f32> {
-    let forward = finger_direction(frame, reversed);
+    let forward = frame.forward;
     let reference = if forward.y.abs() > 0.9 {
         vec3(1.0, 0.0, 0.0)
     } else {
@@ -236,17 +215,7 @@ fn anchor_of(
 
     Matrix4::from_angle_z(Rad::from(roll))
         * to_hand
-        * Matrix4::from_translation(-wrist_vector(frame, reach, reversed))
-}
-
-/// Wrist-to-fingertip direction, correcting a source whose frame came out
-/// end-for-end (see [`PoseSource::frame_is_reversed`]).
-fn finger_direction(frame: &dark::ss2_bin_obj_loader::HandFrame, reversed: bool) -> Vector3<f32> {
-    if reversed {
-        -frame.forward
-    } else {
-        frame.forward
-    }
+        * Matrix4::from_translation(-wrist_vector(frame, reach))
 }
 
 /// The wrist, set back from the pose's farthest point.
@@ -256,20 +225,9 @@ fn finger_direction(frame: &dark::ss2_bin_obj_loader::HandFrame, reversed: bool)
 /// off the controller by an arm's length. So we work from the other end, and
 /// step back `reach` hand-lengths (see [`PoseSource::reach`]: a curled hand's
 /// far point is a knuckle, not a fingertip, so it is nearer the wrist).
-fn wrist_vector(
-    frame: &dark::ss2_bin_obj_loader::HandFrame,
-    reach: f32,
-    reversed: bool,
-) -> Vector3<f32> {
-    let forward = finger_direction(frame, reversed);
-    // On a reversed frame the fingertips are at `origin` and the far end is the
-    // elbow, so the two ends swap along with the direction.
-    let fingertip = if reversed {
-        frame.origin
-    } else {
-        frame.origin + frame.forward * frame.length
-    };
-    let wrist = fingertip - forward * AUTHORED_HAND_LENGTH * reach;
+fn wrist_vector(frame: &dark::ss2_bin_obj_loader::HandFrame, reach: f32) -> Vector3<f32> {
+    let fingertip = frame.origin + frame.forward * frame.length;
+    let wrist = fingertip - frame.forward * AUTHORED_HAND_LENGTH * reach;
     vec3(wrist.x, wrist.y, wrist.z)
 }
 
@@ -300,7 +258,7 @@ mod tests {
             vec3(0.3, -0.5, 0.8),
             vec3(0.0, 1.0, 0.0),
         ] {
-            let anchor = anchor_of(&frame(forward), Deg(0.0), 1.0, false);
+            let anchor = anchor_of(&frame(forward), Deg(0.0), 1.0);
             let determinant = anchor.determinant();
             assert!(
                 determinant > 0.0,
@@ -337,7 +295,7 @@ mod tests {
     fn the_wrist_anchors_a_real_hand_back_from_the_far_point() {
         let f = frame(vec3(0.0, 0.0, 1.0));
         let far_point = f.origin + f.forward * f.length;
-        let wrist = wrist_vector(&f, 1.0, false);
+        let wrist = wrist_vector(&f, 1.0);
 
         let step_back = (far_point - point3(wrist.x, wrist.y, wrist.z)).magnitude();
         // In world units once the viewmodel scale is applied.
@@ -356,7 +314,7 @@ mod tests {
         let f = frame(vec3(0.0, 0.0, 1.0));
         let far_point = f.origin + f.forward * f.length;
         let distance = |reach| {
-            let w = wrist_vector(&f, reach, false);
+            let w = wrist_vector(&f, reach);
             (far_point - point3(w.x, w.y, w.z)).magnitude()
         };
 
@@ -399,7 +357,7 @@ mod tests {
             vec3(0.3, -0.5, 0.8),
         ] {
             let f = frame(forward);
-            let anchor = anchor_of(&f, Deg(0.0), 1.0, false);
+            let anchor = anchor_of(&f, Deg(0.0), 1.0);
             let pointed = anchor * Vector4::new(f.forward.x, f.forward.y, f.forward.z, 0.0);
             assert_relative_eq!(pointed.x, 0.0, epsilon = 1e-4);
             assert_relative_eq!(pointed.y, 0.0, epsilon = 1e-4);
