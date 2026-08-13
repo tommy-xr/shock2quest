@@ -521,16 +521,22 @@ fn run_game_blocking(
     let mut current_input = InputContext::default();
     current_input.head.rotation = default_camera_head_rotation();
     // In VR mode, give the simulated hands a natural first-person rest pose
-    // (pawn-local; forward is -X, matching the desktop camera convention) so
-    // `--vr` shows the glove hands at the bottom of the view without any
-    // /v1/control/input setup. The yaw-90 rotation aims each hand's -Z
-    // (raycast/fingers) at pawn-forward, like desktop_runtime's default hand
-    // yaw. HTTP patches override these as usual.
+    // (pawn-local; -X is pawn-forward) so `--vr` shows the hands at the bottom
+    // of the view without any /v1/control/input setup. The yaw-90 rotation aims
+    // each hand's -Z (raycast/fingers) at pawn-forward, like desktop_runtime's
+    // default hand yaw. HTTP patches override these as usual.
+    //
+    // The Y here is measured from the PAWN ORIGIN, not the floor, and the eye
+    // sits only `player_eye_height() / SCALE_FACTOR` (~1.04) above that origin.
+    // A hand at y 1.4 is therefore ~0.36 ABOVE the eye - well outside the 45°
+    // frustum at this distance - which is why the default `--vr` view used to
+    // show no hands at all and read as a broken VR render path (#932 handoff).
+    // Keep this below the eye height.
     if args.vr {
         let aim_forward = Quaternion::from_angle_y(cgmath::Deg(90.0));
-        current_input.right_hand.position = vec3(-0.55, 1.4, -0.2);
+        current_input.right_hand.position = vec3(-0.55, 0.9, -0.2);
         current_input.right_hand.rotation = aim_forward;
-        current_input.left_hand.position = vec3(-0.55, 1.4, 0.2);
+        current_input.left_hand.position = vec3(-0.55, 0.9, 0.2);
         current_input.left_hand.rotation = aim_forward;
     }
 
@@ -828,7 +834,7 @@ fn run_game_blocking(
         scene.extend(per_eye_scene);
 
         // Snapshot what the renderer is about to be handed, for `/v1/scene`.
-        last_scene = summarize_scene(&scene);
+        last_scene = summarize_scene(&scene, projection_matrix * view);
         last_scene_frame = frame_counter;
 
         // Create the final scene for rendering
@@ -875,12 +881,34 @@ fn run_game_blocking(
 
 /// Process a command from the HTTP server
 /// Describe the scene objects submitted to the renderer, for `/v1/scene`.
-fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneObjectSummary> {
+/// Summarize what the renderer is about to draw, including where each object's
+/// origin lands in the camera's clip space.
+///
+/// `view_projection` must be the matrix used for THIS frame's draw, so
+/// `/v1/scene` can answer "can the camera see it?" and not just "where is it?".
+/// World-space positions alone are famously easy to misread: hands sitting at
+/// plausible coordinates, opaque and correctly wound, drew nothing for an entire
+/// session because they were above the frustum.
+fn summarize_scene(
+    scene: &[engine::scene::SceneObject],
+    view_projection: cgmath::Matrix4<f32>,
+) -> Vec<commands::SceneObjectSummary> {
     scene
         .iter()
         .map(|obj| {
             let tag = obj.debug_tag();
             let translation = obj.get_transform().w;
+            let clip =
+                view_projection * cgmath::vec4(translation.x, translation.y, translation.z, 1.0);
+            // w <= 0 means the origin is at or behind the eye plane, where the
+            // perspective divide is meaningless - report no NDC rather than a
+            // mirrored-through-the-camera fiction.
+            let ndc = (clip.w > 0.0).then(|| [clip.x / clip.w, clip.y / clip.w, clip.z / clip.w]);
+            let origin_on_screen = ndc.is_some_and(|n| {
+                (-1.0..=1.0).contains(&n[0])
+                    && (-1.0..=1.0).contains(&n[1])
+                    && (-1.0..=1.0).contains(&n[2])
+            });
             commands::SceneObjectSummary {
                 entity_id: tag.and_then(|t| t.entity_id),
                 name: tag.and_then(|t| t.name.clone()),
@@ -891,6 +919,8 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
                 depth_write: obj.depth_write,
                 clear_depth: obj.clear_depth,
                 backface_culling: obj.backface_culling().map(|w| format!("{w:?}")),
+                ndc,
+                origin_on_screen,
             }
         })
         .collect()
@@ -1579,17 +1609,7 @@ fn process_command(
             let objects = matched
                 .into_iter()
                 .take(limit.unwrap_or(usize::MAX))
-                .map(|o| commands::SceneObjectSummary {
-                    entity_id: o.entity_id,
-                    name: o.name.clone(),
-                    model: o.model.clone(),
-                    source: o.source.clone(),
-                    position: o.position,
-                    transparency: o.transparency,
-                    depth_write: o.depth_write,
-                    clear_depth: o.clear_depth,
-                    backface_culling: o.backface_culling.clone(),
-                })
+                .cloned()
                 .collect();
             let result = commands::SceneListResult {
                 objects,

@@ -249,6 +249,15 @@ For debugging visual/rendering changes without a full interactive session:
    # data rather than screenshots. A translucent prop with depth_write=false
    # came from PropRenderAlpha; with depth_write=true it is the material's own
    # transparency.
+   #
+   # Each object also reports `ndc` (its ORIGIN in the drawing camera's clip
+   # space) and `origin_on_screen`. Use these before theorising about culling or
+   # materials when something "renders nothing": `ndc.y > 1` is off the top of
+   # the screen, `ndc: null` is behind the eye, `|ndc.x| > 1` is off the side.
+   # `position` is world-space and says nothing about visibility. Note it is an
+   # origin test, not a bounds test - a large object straddling the frustum edge
+   # reads `origin_on_screen: false` while plainly visible, so read `ndc` for
+   # how far off it is rather than trusting the boolean as a verdict.
    curl "http://127.0.0.1:8080/v1/scene?transparent=true"
    curl "http://127.0.0.1:8080/v1/scene?entity_id=246"
 

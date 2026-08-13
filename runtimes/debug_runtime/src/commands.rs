@@ -282,7 +282,7 @@ pub struct SceneListResult {
 }
 
 /// One scene object as submitted to the renderer
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct SceneObjectSummary {
     pub entity_id: Option<u64>,
     pub name: Option<String>,
@@ -297,6 +297,19 @@ pub struct SceneObjectSummary {
     pub clear_depth: bool,
     /// Front-face winding used for culling, or absent when double-sided.
     pub backface_culling: Option<String>,
+    /// The object's ORIGIN in normalized device coordinates for the camera that
+    /// drew this frame: x/y in [-1, 1] across the viewport, z in [-1, 1] between
+    /// the near and far planes. `None` when the origin is at or behind the eye
+    /// plane (w <= 0), where NDC is meaningless.
+    pub ndc: Option<[f32; 3]>,
+    /// Whether the object's ORIGIN falls inside the view frustum. Named for
+    /// what it actually tests: it is not a visibility verdict. A big object
+    /// straddling the edge reads `false` while plainly visible (the VR hands do
+    /// exactly this), and `true` does not rule out occlusion or backface
+    /// culling. Read it with `ndc`, which says *how far* off and in which
+    /// direction - `ndc.y > 1` is above the top of the screen, `ndc == null`
+    /// is behind the eye. That is the question `position` alone cannot answer.
+    pub origin_on_screen: bool,
 }
 
 /// List of physics rigid bodies
