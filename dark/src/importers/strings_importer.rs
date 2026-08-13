@@ -28,6 +28,15 @@ fn process_strings(
     _asset_cache: &mut AssetCache,
     _config: &(),
 ) -> HashMap<String, String> {
+    parse_strings(&content)
+}
+
+/// Parse the lines of a Dark `.STR` table into its `key -> value` map.
+///
+/// Split out of the importer so screens can unit-test their key names against
+/// the verbatim shipped table, without an `AssetCache` or the filesystem.
+/// Keys are lowercased; values may span multiple lines.
+pub fn parse_strings(content: &[String]) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let inner_content = content.iter();
 
