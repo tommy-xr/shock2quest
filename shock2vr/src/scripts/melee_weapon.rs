@@ -261,7 +261,10 @@ mod tests {
                 _ => None,
             })
             .expect("a landed swing should send Damage");
-        assert!((amount - WEAPON_BASH_INTENSITY).abs() < f32::EPSILON, "got {amount}");
+        assert!(
+            (amount - WEAPON_BASH_INTENSITY).abs() < f32::EPSILON,
+            "got {amount}"
+        );
     }
 
     /// Type effectiveness still applies: a target with no WeaponBash receptron
