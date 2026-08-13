@@ -106,8 +106,8 @@ impl Script for WeaponScript {
                 // A weapon with no Projectile link is melee. In flat mode a swing
                 // is a short forward raycast along the crosshair ray
                 // (RuntimePropFlatAim); a hit deals melee damage. (VR melee
-                // damages via physical collision - MeleeWeapon's Collided handler
-                // - and has no flat aim, so it just no-ops here.)
+                // damages through its trigger-gated physical contact handler
+                // and has no flat aim, so it just no-ops here.)
                 if maybe_projectile.is_none() {
                     if let Ok(aim) = world
                         .borrow::<View<RuntimePropFlatAim>>()

@@ -151,7 +151,7 @@ use self::{
     internal_simple_health::InternalSimpleHealth,
     level_change_button::LevelChangeButton,
     many_ride::{ParalyzePlayers, SitDownRightNow, StandUpAgain, WhiteOut},
-    melee_weapon::MeleeWeapon,
+    melee_weapon::{MeleeWeapon, TriggeredMeleeWeapon},
     obj_consume_button::ObjConsumeButton,
     once_room::OnceRoom,
     once_router::OnceRouter,
@@ -869,6 +869,7 @@ impl ScriptWorld {
                 Box::new(WeaponScript::new()),
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
+            "internal_triggered_melee_weapon" => Box::new(TriggeredMeleeWeapon::new()),
             "pistolmodify" => Box::new(NoopScript::new()),
 
             // TODO: Necessary

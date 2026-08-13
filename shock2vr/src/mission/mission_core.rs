@@ -6173,7 +6173,16 @@ impl MissionCore {
                     );
                 }
                 VirtualHandEffect::HoldItem { entity_id } => {
-                    self.make_un_physical(entity_id);
+                    if self.is_vr_melee_weapon(entity_id) {
+                        // Held guns/items stay unphysical, but a VR melee
+                        // weapon needs its authored collider to report genuine
+                        // controller-driven contacts. Kinematic motion keeps it
+                        // seated in the hand without gravity or solver drift.
+                        self.make_physical(entity_id);
+                        self.physics.set_held_melee(entity_id);
+                    } else {
+                        self.make_un_physical(entity_id);
+                    }
                     self.script_world.dispatch(Message {
                         payload: MessagePayload::Hold,
                         to: entity_id,
@@ -6190,6 +6199,11 @@ impl MissionCore {
                     }
                 }
                 VirtualHandEffect::DropItem { entity_id } => {
+                    if self.is_vr_melee_weapon(entity_id) {
+                        // Recreate from authored physics so the released item
+                        // is an ordinary dynamic, harmless loose prop again.
+                        self.make_un_physical(entity_id);
+                    }
                     self.make_physical(entity_id);
 
                     self.script_world.dispatch(Message {
@@ -6199,6 +6213,16 @@ impl MissionCore {
                 }
             }
         }
+    }
+
+    fn is_vr_melee_weapon(&self, entity_id: EntityId) -> bool {
+        self.world
+            .borrow::<UniqueView<GlobalPresentationMode>>()
+            .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr)
+            && self
+                .world
+                .borrow::<View<PropLimbModel>>()
+                .is_ok_and(|limb_models| limb_models.get(entity_id).is_ok())
     }
 
     /// Queue an entity to be triggered after scripts are initialized
