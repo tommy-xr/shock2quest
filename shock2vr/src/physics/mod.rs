@@ -1973,6 +1973,21 @@ impl CollisionGroup {
         })
     }
 
+    /// A player-held VR melee weapon remains a kinematic contact shape so an
+    /// actual controller swing can meet authored world/actor collision, while
+    /// ignoring the player's own capsule. Damage is still owned by the
+    /// weapon's trigger-gated script; this group only preserves contact events.
+    pub fn held_melee() -> CollisionGroup {
+        CollisionGroup(InteractionGroups {
+            memberships: InternalCollisionGroups::ENTITY.bits.into(),
+            filter: (InternalCollisionGroups::WORLD.bits
+                | InternalCollisionGroups::ENTITIES.bits
+                | InternalCollisionGroups::SELECTABLE.bits)
+                .into(),
+            test_mode: Default::default(),
+        })
+    }
+
     /// Collision behavior for a living creature capsule. It collides exactly
     /// like an ordinary physical entity, but its distinct membership lets
     /// interaction-only fixtures and unsimulated movable debris opt out of
@@ -2568,6 +2583,31 @@ impl PhysicsWorld {
                 collider.set_collision_groups(group.0);
             }
         }
+    }
+
+    /// Turn an existing loose-prop body into the controller-driven contact
+    /// shape used while a melee weapon is held in VR.
+    pub fn set_held_melee(&mut self, entity_id: EntityId) {
+        let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
+            return;
+        };
+        let Some(body) = self.rigid_body_set.get_mut(handle) else {
+            return;
+        };
+        body.set_body_type(RigidBodyType::KinematicPositionBased, true);
+        body.set_linvel(Vector::zeros(), true);
+        body.set_angvel(Vector::zeros(), true);
+        let collider_handles = body.colliders().to_vec();
+        for collider_handle in collider_handles {
+            if let Some(collider) = self.collider_set.get_mut(collider_handle) {
+                collider.set_active_collision_types(
+                    ActiveCollisionTypes::default()
+                        | ActiveCollisionTypes::KINEMATIC_KINEMATIC
+                        | ActiveCollisionTypes::KINEMATIC_FIXED,
+                );
+            }
+        }
+        self.set_collision_group(entity_id, CollisionGroup::held_melee());
     }
 
     /// Resize every cuboid collider attached to a kinematic body. GUI panels
@@ -5443,6 +5483,44 @@ mod tests {
 
     fn identity_quat() -> Quaternion<f32> {
         Quaternion::new(1.0, 0.0, 0.0, 0.0)
+    }
+
+    #[test]
+    fn held_melee_is_controller_driven_contact_without_blocking_player() {
+        let mut world = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        world.add_dynamic(
+            weapon,
+            vec3(0.0, 0.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.1, 0.5, 0.1)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+
+        world.set_held_melee(weapon);
+
+        let body = world
+            .debug_list_bodies()
+            .into_iter()
+            .find(|body| body.entity_id == Some(weapon.inner() as i32))
+            .unwrap();
+        assert_eq!(body.body_type, "kinematic");
+        assert!(!body.blocks_player, "the weapon must ignore its owner");
+        assert!(
+            body.blocks_actor,
+            "the controller-driven weapon must retain physical actor contact"
+        );
+        assert_eq!(body.linear_velocity, [0.0; 3]);
+        assert_eq!(body.angular_velocity, [0.0; 3]);
+
+        let body_handle = world.entity_id_to_body[&weapon];
+        let collider_handle = world.rigid_body_set[body_handle].colliders()[0];
+        let active_types = world.collider_set[collider_handle].active_collision_types();
+        assert!(active_types.contains(ActiveCollisionTypes::KINEMATIC_KINEMATIC));
+        assert!(active_types.contains(ActiveCollisionTypes::KINEMATIC_FIXED));
     }
 
     /// A collider deliberately made non-solid to characters must not remain an

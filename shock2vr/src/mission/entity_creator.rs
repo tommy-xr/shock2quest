@@ -22,8 +22,8 @@ use dark::{
     properties::{
         FrobFlag, InternalPropOriginalModelName, Link, Links, PhysicsModelType, PoseType,
         PropClassTag, PropCollisionType, PropCreature, PropCreaturePose, PropFrobInfo,
-        PropHUDSelect, PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropModelName,
-        PropPhysAttr, PropPhysDimensions, PropPhysState, PropPhysType, PropPosition,
+        PropHUDSelect, PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropLimbModel,
+        PropModelName, PropPhysAttr, PropPhysDimensions, PropPhysState, PropPhysType, PropPosition,
         PropRenderType, PropScale, PropSymName, PropTemplateId, PropTranslatingDoor, PropTripFlags,
         RenderType, StimPropagator, StimSourceOptions, TemplateLinks, WrappedEntityId,
     },
@@ -60,6 +60,10 @@ fn needs_internal_simple_health(
             || authored_scripts
                 .iter()
                 .any(|script| script.eq_ignore_ascii_case("TriggerDestroy")))
+}
+
+fn needs_internal_triggered_melee(has_limb_model: bool) -> bool {
+    has_limb_model
 }
 
 pub fn create_entity_with_position(
@@ -350,6 +354,15 @@ pub fn create_entity_core(
         processed_scripts.push("internal_keycard".to_owned());
     }
 
+    // Player melee weapons are authored by their first-person limb model, not
+    // by a literal `wrench` script (that name belongs to Maintenance Tool
+    // -2949). Give every such weapon the trigger-gated VR contact behavior;
+    // ordinary dropped weapons remain harmless because the script is inactive.
+    let v_limb_model = world.borrow::<View<PropLimbModel>>().unwrap();
+    if needs_internal_triggered_melee(v_limb_model.get(entity_id).is_ok()) {
+        processed_scripts.push("internal_triggered_melee_weapon".to_owned());
+    }
+
     // `MOVE` is an engine frob action, not an object script. Ordinary goodies
     // such as Med Patches and armor only inherit that flag, so give them the
     // internal handler that moves them into the backpack on Frob. Objects that
@@ -398,6 +411,7 @@ pub fn create_entity_core(
     drop(v_creature);
     drop(v_hp);
     drop(v_keysrc);
+    drop(v_limb_model);
 
     if is_explosion {
         processed_scripts.push("internal_explosion".to_owned());
@@ -1531,6 +1545,18 @@ mod tests {
         assert!(
             !needs_internal_simple_health(true, true, &trigger_destroy),
             "creatures retain ownership of their hitbox damage path"
+        );
+    }
+
+    #[test]
+    fn authored_limb_model_is_the_generic_player_melee_marker() {
+        assert!(
+            needs_internal_triggered_melee(true),
+            "player Wrench -928 and the other authored melee weapons carry PropLimbModel"
+        );
+        assert!(
+            !needs_internal_triggered_melee(false),
+            "Maintenance Tool -2949's literal Wrench script and guns must not gain player melee"
         );
     }
 
