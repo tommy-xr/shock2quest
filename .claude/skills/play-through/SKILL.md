@@ -12,7 +12,8 @@ description: >-
   a self-contained HTML timeline report. Invoke with a mission (default medsci1)
   and a goal (default: reach the level's exit). Use `--auto` to keep iterating to
   campaign completion, `--auto-once` for one iteration, or `--restart` to forget
-  the previous ledger and roll a fresh campaign.
+  the previous ledger and roll a fresh campaign. Use `--vr` to override the
+  presentation roll and force the debug runtime's VR mode.
 ---
 
 # play-through — the playtest → review → fix → replay loop
@@ -73,7 +74,9 @@ intent, not at random.
 
 Classify each validated finding two ways:
 - **Domain:** `[gameplay]` (broken interaction/objective) · `[visual]` (rendering)
-  · `[functionality]` (crash / won't load).
+  · `[physics]` (collision/rigid-body behavior) · `[functionality]` (crash /
+  won't load) · `[tool]` (debug runtime/SDK access) · `[test]` (playtest harness
+  or coverage).
 - **Kind — this matters as much as the domain, because this is a *partial* port:**
   - **bug** — broken logic in something that's implemented (an off-by-one, a wrong
     comparator, a crash). Targeted fix.
@@ -82,16 +85,31 @@ Classify each validated finding two ways:
     unparsed property). **Most blockers here are this kind.** The "fix" is a real
     feature, and it must be **faithful**, not a shim.
 
-**Blockers first** (they gate progress). File a GitHub issue (domain + kind,
-mission, repro: exact levers + step count, expected vs actual, the screenshot,
-and — in a rolled campaign — the campaign configuration: scenario, tweak,
-asset set, seed; same on the fix PR).
+**Apply GitHub labels when filing, not just bracketed title prefixes.** Select
+only the labels that describe the finding:
+
+- Kind: `bug` for broken implemented behavior; `enhancement` for a feature gap.
+- Area: `gameplay`, `visual`, or `physics`; add `vr` when VR-specific or found
+  through a missing/inaccessible VR interaction.
+- Test surface: `tool` for debug runtime/SDK/tooling gaps; `test` for playtest
+  harness, automation, or coverage gaps.
+- Severity: add `blocker` only when the finding halts campaign progress.
+
+Pass them to `gh issue create --label <label> --label <label> ...`; every label
+must exist in the repository. Do not attach every label mechanically.
+
+**Blockers first** (they gate progress). File a GitHub issue with those labels,
+domain + kind, mission, repro: exact levers + step count, expected vs actual,
+the screenshot, and — in a rolled campaign — the campaign configuration:
+scenario, tweak, 25th Anniversary asset set, presentation mode, and seed; include
+the same configuration on the fix PR.
 
 **Attach stateful reproduction evidence locally.** When a finding depends on
 deep campaign state, create a dedicated game save immediately before the
 smallest reproducing action (for example `pt-shodan-issue-725-repro`), then
-record its logical save name, SHA-256, mission, position, asset set, and load
-steps in `data.json`, the local report, and the fix-agent handoff. Never
+record its logical save name, SHA-256, mission, position, asset set,
+presentation mode, and load steps in `data.json`, the local report, and the
+fix-agent handoff. Never
 overwrite or repurpose the campaign frontier or a user-owned save; the fix agent
 copies the reproduction save into its task-owned asset directory before using
 it. Skip this artifact when a fresh mission plus concise steps reproduces the
@@ -213,9 +231,12 @@ play and stitch with the **`video-capture`** skill (60Hz sim / 4 = real-time
 
 ## Campaign randomization (`roll`)
 
-**Every new campaign starts with a roll.** Instead of always marching
-earth→shodan, the campaign randomizer picks three independent axes and persists
-them in the ledger (tables + per-pick instructions live in `scenarios.mjs`):
+**Every new campaign starts with a roll.** Every runtime uses the stock 25th
+Anniversary install at `$HOME/ss2-25th`; this is fixed, not a random axis or an
+override. Verify that it contains `sshock2.kpf` (or another data-root sentinel)
+and launch with `DARK_ASSET_PATH=$HOME/ss2-25th`; never fall back to legacy
+assets. The campaign randomizer picks three independent axes and persists them
+in the ledger (tables + per-pick instructions live in `scenarios.mjs`):
 
 1. **Mission-sequence scenario** — one of eight slices of the game, each with
    its own mission order and goal: `earth-to-medsci` (training → station →
@@ -229,31 +250,32 @@ them in the ledger (tables + per-pick instructions live in `scenarios.mjs`):
    verify OS upgraders, cutscene/research/regen/camera-alarm verification, Navy
    (hack/repair/modify), Marine (standard/electronic/organic/heavy weapons), OSA
    (psi tiers 1–5), AI/pathfinding stress, or a detailed test run.
-3. **Asset set** — legacy assets or the 25th Anniversary assets (loaded
-   directly from the stock `.kpf` install since #557); the pick is the
-   `DARK_ASSET_PATH` every runtime in the campaign must be launched with. Only
-   sets where a data-root sentinel exists (`shock2.gam` / `sshock2.kpf` / ...,
-   same list as `paths::data_root()`) enter the random draw; a missing install
-   can still be forced with `assets=<id>` and the roll prints a warning.
+3. **Presentation mode** — a uniform two-entry draw, `flat` or `vr`, gives each
+   campaign a 50/50 chance of running the debug runtime with `--vr`. Persist the
+   pick so fixes replay under the same interaction model. An explicit `--vr` in
+   the skill invocation forces VR for both new and resumed campaigns without
+   resetting their frontier.
 
 ```
 node .agents/skills/play-through/playthrough-state.mjs roll              # random campaign (idempotent)
 node .agents/skills/play-through/playthrough-state.mjs roll seed=42      # reproducible roll
+node .agents/skills/play-through/playthrough-state.mjs roll --vr         # force VR; preserve an existing frontier
 node .agents/skills/play-through/playthrough-state.mjs roll --restart    # forget ledger, roll fresh
-node .agents/skills/play-through/playthrough-state.mjs roll --force scenario=hydroponics tweak=melee-only assets=legacy
+node .agents/skills/play-through/playthrough-state.mjs roll --force scenario=hydroponics tweak=melee-only presentation=flat
 node .agents/skills/play-through/scenarios.mjs list                      # browse all ids
 ```
 
 **The roll happens once per campaign and then sticks**: like `init`, `roll` is
 idempotent — re-invoking the skill mid-campaign keeps the existing roll, so the
-frontier, scenario, tweak, and assets stay consistent across iterations
-(`--force` starts a fresh campaign with a new roll). `--restart` is different:
+frontier, scenario, tweak, and presentation stay consistent across iterations.
+The one exception is an explicit `--vr`, which changes only the persisted
+presentation. `--force` starts a fresh campaign with a new roll. `--restart` is different:
 it is the autonomous-mode spelling for forgetting the previous ledger and
 starting a newly rolled campaign; it does not retain the old seed, scenario,
-tweak, assets, mission order, fix branch, frontier, blockers, or history. `show`
-re-surfaces the goal, the tweak instructions, and the
-`DARK_ASSET_PATH` in its NEXT line every iteration — **feed the tweak
-instructions and campaign goal into every `playtest` prompt**, and treat a
+tweak, presentation, mission order, fix branch, frontier, blockers, or history.
+`show` re-surfaces the goal, tweak instructions, `DARK_ASSET_PATH`, and any
+required `--vr` in its NEXT line every iteration — **feed the presentation,
+tweak instructions, and campaign goal into every `playtest` prompt**, and treat a
 tweak's verifications as first-class findings (a broken psi power under an OSA
 tweak is a real finding even if the mission could be finished without it).
 Every roll prints its `seed`, so any campaign can be reproduced exactly (the
@@ -292,9 +314,10 @@ resources the character was never given.
 
 **Record the roll everywhere it matters:** every issue filed and every fix PR
 opened during a campaign must state the rolled configuration — scenario, tweak,
-asset set, and seed (e.g. `campaign: hydroponics · melee-only · legacy · seed
-42`) — so a reader can tell whether a finding is specific to a playstyle or
-asset set, and can reproduce the campaign that surfaced it.
+25th Anniversary asset set, presentation, and seed (e.g. `campaign:
+hydroponics · melee-only · 25th · vr · seed 42`) — so a reader can tell whether
+a finding is specific to a playstyle or presentation and can reproduce the
+campaign that surfaced it.
 
 ## Autonomous modes (`--auto`, `--auto-once`)
 
@@ -306,6 +329,10 @@ Choose the mode from the user's invocation:
   three times, or progress genuinely requires human input.
 - **`--auto-once` — bounded:** run exactly one complete iteration, persist its
   result, report, and return. A later invocation resumes from the ledger.
+- **`--vr` — presentation override:** combine it with either mode (or a manual
+  invocation) to force VR. Pass it to `playthrough-state.mjs roll --vr` on every
+  iteration so it also upgrades an existing flatscreen ledger without resetting
+  progress.
 
 Both modes **auto-create the campaign ledger on first run** — no setup step.
 State persists in that ledger so work survives restarts and context compaction,
@@ -320,8 +347,8 @@ node .agents/skills/play-through/playthrough-state.mjs show      # ledger + the 
 #   complete <finalLevel> [note...]                             (marks the campaign finished)
 ```
 
-The ledger holds: the campaign **roll** (`scenario` + `tweak` + `assets`, with
-its `seed`), `frontier` (the game **save** to `/v1/load` from), the
+The ledger holds: the campaign **roll** (`scenario` + `tweak` + `presentation`,
+the fixed `assets`, and its `seed`), `frontier` (the game **save** to `/v1/load` from), the
 `blockers` ledger (issue → PR → status + failed-fix count), terminal campaign
 completion, and `fix_branch` — the running branch that **stacks each fix** so
 the campaign plays *past* an already-fixed-but-unmerged blocker.
@@ -334,22 +361,25 @@ randomized campaign. Consume `--restart` once; every later iteration in the same
 normally.
 
 **Clear & start a new campaign:** `playthrough-state.mjs roll --force` (wipes
-the ledger back to iteration 0 with a fresh scenario/tweak/assets roll; plain
-`init --force` still exists for a fixed, non-randomized order). For a *truly*
+the ledger back to iteration 0 with a fresh scenario/tweak/presentation roll;
+plain `init --force` still exists for a fixed, non-randomized order). For a *truly*
 clean slate also recreate the `fix_branch` off current `main` and delete stale
 frontier saves (`<data_root>/saves/frontier*.sav`) — otherwise the fresh
 campaign just launches mission 0 with no frontier to load, which is harmless.
 
 **Each autonomous iteration:**
 
-1. `playthrough-state.mjs roll` (idempotent — rolls scenario + tweak + assets
+1. `playthrough-state.mjs roll` (idempotent — rolls scenario + tweak + presentation
    and creates the ledger on the first iteration, keeps the roll after), then
-   `show` → read the frontier + NEXT action (goal, tweak, `DARK_ASSET_PATH`).
+   `show` → read the frontier + NEXT action (goal, tweak, `DARK_ASSET_PATH`, and
+   presentation). When the skill was invoked with `--vr`, use `roll --vr` here.
 2. **Resume:** build the runtime from the **`fix_branch`** (so accrued fixes are
-   in), launch it **with the campaign's `DARK_ASSET_PATH`**, and `POST /v1/load
-   {file: frontier.save}` — or launch the first mission fresh at iteration 0.
+   in), launch it **with the campaign's `DARK_ASSET_PATH`** and append `--vr`
+   when the presentation is VR, then `POST /v1/load {file: frontier.save}` — or
+   launch the first mission fresh at iteration 0.
 3. **Playtest** from here toward the goal (the `playtest` primitive), passing the
-   campaign goal + the tweak instructions into the playtest prompt → `data.json`.
+   campaign goal + tweak instructions + presentation into the playtest prompt →
+   `data.json`.
 4. **Review** the session (§2). Shallow/invalid → re-playtest with guidance.
 5. **Triage** every validated finding (bug vs **feature-gap** — §3-4;
    feature-gaps get a *faithful*, non-shim fix). While play continues, file and

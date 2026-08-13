@@ -6,11 +6,12 @@
 //
 //   node playthrough-state.mjs <cmd> [args]
 //     init [order=earth,station,medsci1,eng1,...] [fixBranch=playthrough-fixes]
-//     roll [seed=N] [scenario=<id>] [tweak=<id>] [assets=<id>] [fixBranch=...] [--force|--restart]
+//     roll [seed=N] [scenario=<id>] [tweak=<id>] [presentation=<flat|vr>|--vr] [fixBranch=...] [--force|--restart]
 //                                       init a RANDOMIZED campaign: pick a mission-
-//                                       sequence scenario, a special tweak, and an
-//                                       asset set (see scenarios.mjs) and persist
-//                                       them in the ledger. Idempotent like init —
+//                                       sequence scenario, a special tweak, and a
+//                                       50/50 presentation mode (see scenarios.mjs)
+//                                       and persist them in the ledger. Assets are
+//                                       always 25th Anniversary. Idempotent like init —
 //                                       an existing campaign keeps its roll;
 //                                       --force re-rolls from scratch; --restart
 //                                       forgets the previous ledger and rolls a
@@ -25,11 +26,37 @@
 // State file: $PT_STATE, else /tmp/claude/playthrough/state.json.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { roll } from "./scenarios.mjs";
+import { ANNIVERSARY_ASSETS, PRESENTATION_MODES, roll } from "./scenarios.mjs";
 
 const FILE = process.env.PT_STATE || "/tmp/claude/playthrough/state.json";
-const load = () => (existsSync(FILE) ? JSON.parse(readFileSync(FILE, "utf8")) : null);
-const save = (s) => { mkdirSync(dirname(FILE), { recursive: true }); writeFileSync(FILE, JSON.stringify(s, null, 2) + "\n"); };
+const save = (s) => {
+  mkdirSync(dirname(FILE), { recursive: true });
+  writeFileSync(FILE, JSON.stringify(s, null, 2) + "\n");
+};
+const presentationById = (id) => PRESENTATION_MODES.find((mode) => mode.id === id);
+const load = () => {
+  if (!existsSync(FILE)) return null;
+  const state = JSON.parse(readFileSync(FILE, "utf8"));
+  if (!state.scenario) return state;
+
+  // Migrate rolled ledgers created before 25th-only / presentation-mode
+  // campaigns. Preserve their frontier, blockers, scenario, tweak, and seed.
+  let changed = false;
+  if (state.assets?.id !== ANNIVERSARY_ASSETS.id || state.assets?.path !== ANNIVERSARY_ASSETS.path) {
+    state.assets = ANNIVERSARY_ASSETS;
+    changed = true;
+  }
+  if (!state.presentation) {
+    state.presentation = roll({
+      seed: state.seed,
+      scenarioId: state.scenario.id,
+      tweakId: state.tweak?.id,
+    }).presentation;
+    changed = true;
+  }
+  if (changed) save(state);
+  return state;
+};
 const baseState = (order, fixBranch) => ({
   iteration: 0,
   mission_order: order,
@@ -49,7 +76,9 @@ function nextAction(s) {
   const failed = s.blockers.find((b) =>
     (b.fix_failures ?? (b.status === "failed" ? 3 : 0)) >= 3
   );
-  const campaign = (s.assets ? ` Launch every runtime with DARK_ASSET_PATH=${s.assets.path} (${s.assets.name}).` : "")
+  const campaign = (s.assets
+    ? ` Launch every runtime with DARK_ASSET_PATH=${s.assets.path} (${s.assets.name}) in ${s.presentation?.name ?? "the recorded presentation"}${s.presentation?.id === "vr" ? " with --vr" : ""}.`
+    : "")
     + (s.scenario ? ` Campaign goal: ${s.scenario.goal}` : "")
     + (s.tweak && s.tweak.id !== "none" ? ` TWEAK [${s.tweak.name}]: ${s.tweak.instructions}` : "");
   if (s.completed) {
@@ -80,29 +109,47 @@ switch (cmd) {
     break;
   }
   case "roll": {
-    // Randomized init: pick scenario + tweak + asset set and persist them so
+    // Randomized init: pick scenario + tweak + presentation and persist them so
     // every later iteration of the campaign plays under the same roll.
     // Idempotent like init — only rolls when no ledger exists. `--force`
     // replaces the roll; `--restart` forgets the old ledger and starts fresh.
     const force = args.includes("--force");
     const restart = args.includes("--restart");
+    const forceVr = args.includes("--vr");
+    const kv = (k) => rest.find((a) => a.startsWith(`${k}=`))?.slice(k.length + 1);
     if (force && restart) {
       console.error("--force and --restart are mutually exclusive: choose one way to replace the current campaign");
+      process.exit(1);
+    }
+    if (forceVr && kv("presentation") && kv("presentation") !== "vr") {
+      console.error("--vr conflicts with a non-VR presentation= override");
+      process.exit(1);
+    }
+    if (kv("assets") !== undefined) {
+      console.error("assets= is no longer configurable — every playtest uses the 25th Anniversary assets");
       process.exit(1);
     }
     const hadLedger = existsSync(FILE);
     if (hadLedger && !force && !restart) {
       const s = load();
       if (s.scenario) {
+        if (forceVr && s.presentation?.id !== "vr") {
+          s.presentation = presentationById("vr");
+          save(s);
+          console.log(
+            `overrode presentation to VR for existing campaign at ${FILE}; frontier and iteration kept.`,
+          );
+        }
         console.log(`ledger already exists at ${FILE} (iteration ${s.iteration}) — kept its roll. Use --restart or --force to replace it with a fresh roll.`);
-        console.log(`scenario: ${s.scenario.name} · tweak: ${s.tweak?.name} · assets: ${s.assets?.name}`);
+        console.log(
+          `scenario: ${s.scenario.name} · tweak: ${s.tweak?.name} · assets: ${s.assets?.name} · presentation: ${s.presentation?.name ?? "not recorded"}`,
+        );
       } else {
-        console.log(`WARNING: ledger at ${FILE} (iteration ${s.iteration}) predates campaign randomization — it has NO scenario/tweak/assets roll.`);
+        console.log(`WARNING: ledger at ${FILE} (iteration ${s.iteration}) predates campaign randomization — it has NO scenario/tweak/presentation roll.`);
         console.log(`Kept as-is (a mid-campaign re-roll would strand its frontier). Finish or abandon it, then 'roll --force' to start a rolled campaign.`);
       }
       break;
     }
-    const kv = (k) => rest.find((a) => a.startsWith(`${k}=`))?.slice(k.length + 1);
     const rawSeed = kv("seed");
     if (rawSeed !== undefined && !Number.isFinite(Number(rawSeed))) {
       console.error(`invalid seed '${rawSeed}' — must be a number`);
@@ -114,7 +161,7 @@ switch (cmd) {
         seed: rawSeed !== undefined ? Number(rawSeed) : undefined,
         scenarioId: kv("scenario"),
         tweakId: kv("tweak"),
-        assetsId: kv("assets"),
+        presentationId: forceVr ? "vr" : kv("presentation"),
       });
     } catch (e) {
       console.error(e.message);
@@ -127,6 +174,7 @@ switch (cmd) {
       scenario: { id: picked.scenario.id, name: picked.scenario.name, goal: picked.scenario.goal },
       tweak: picked.tweak,
       assets: picked.assets,
+      presentation: picked.presentation,
     });
     if (restart && hadLedger) {
       console.log(`forgot previous ledger and rolled fresh campaign (seed ${picked.seed}) -> ${FILE}`);
@@ -138,6 +186,9 @@ switch (cmd) {
     console.log(`  goal:     ${picked.scenario.goal}`);
     console.log(`  tweak:    ${picked.tweak.name} [${picked.tweak.id}] — ${picked.tweak.instructions}`);
     console.log(`  assets:   ${picked.assets.name} [${picked.assets.id}] — DARK_ASSET_PATH=${picked.assets.path}`);
+    console.log(
+      `  mode:     ${picked.presentation.name} [${picked.presentation.id}]${picked.presentation.runtimeArgs.length ? ` — ${picked.presentation.runtimeArgs.join(" ")}` : ""}`,
+    );
     break;
   }
   case "show": {
@@ -223,6 +274,6 @@ switch (cmd) {
     break;
   }
   default:
-    console.error("usage: init | roll [--force|--restart] | show | advance | complete | blocker add|set|fail (see file header)");
+    console.error("usage: init | roll [--vr] [--force|--restart] | show | advance | complete | blocker add|set|fail (see file header)");
     process.exit(1);
 }

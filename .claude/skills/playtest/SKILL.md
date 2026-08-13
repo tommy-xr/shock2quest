@@ -26,9 +26,36 @@ bypassable, then keep playing. Do not wait until `data.json` is complete: the
 manager validates, files, and delegates its fix in parallel. Continue to record
 the finding in the final `data.json`.
 
+## Choose the launch configuration
+
+**Always use the 25th Anniversary assets.** Set
+`DARK_ASSET_PATH="$HOME/ss2-25th"` on every debug-runtime launch and verify that
+the directory contains a data-root sentinel such as `sshock2.kpf` before
+starting. If it is missing, report a setup blocker; never fall back to legacy
+assets or the repository's `Data/` directory.
+
+Choose the presentation once per session:
+
+- Use the manager's persisted `presentation` when it supplied one.
+- An explicit `--vr` in the skill invocation overrides the manager choice or
+  standalone coin flip and forces VR.
+- Otherwise, for a standalone session, make a fair 50/50 `flat`/`vr` random
+  choice by running `node -e 'console.log(Math.random()<.5?"flat":"vr")'`
+  exactly once. Record the result before launch so it cannot be re-rolled after
+  a failure.
+
+Launch flatscreen with no presentation flag; launch VR by appending `--vr`.
+With the SDK, pass `debugFlags: presentation === "vr" ? ["--vr"] : []` to
+`GameServer.launch` (the process inherits `DARK_ASSET_PATH`). With raw Cargo:
+
+```bash
+DARK_ASSET_PATH="$HOME/ss2-25th" cargo dbgr --mission <m>.mis --port <p>
+DARK_ASSET_PATH="$HOME/ss2-25th" cargo dbgr --mission <m>.mis --port <p> --vr
+```
+
 ## Reach the start state
 - **Fresh:** launch the runtime on the mission (SDK `GameServer.launch`, or
-  `cargo dbgr --mission <m>.mis --port <p>`), `step 5` to settle.
+  the matching command above), `step 5` to settle.
 - **Resume at a frontier** (the manager passes one): warp with
   `POST /v1/control/transition-level {level, loc}` and/or `teleport {x,y,z}` to
   where the last session stalled, so you don't replay solved parts. (`QuickLoad`
@@ -50,11 +77,13 @@ the finding in the final `data.json`.
 `/v1/step {frames:N}` after each action so it takes effect (deterministic; no
 sleeps). Tripwires fire on entry; bulkhead buttons fire on Frob.
 
-### Frobbing *in world* (flat mode) — squeeze, not trigger
+### Player-authentic interaction differs by presentation
 
 `POST /v1/entities/:id/message {type:"Frob"}` is a **debug injection**: it drives
 the script directly and is fine for diagnosis, but it does **not** prove a player
-could do it. To frob the way a player does, in flat mode (the default):
+could do it.
+
+In **flat mode**, frob under the crosshair with squeeze, not trigger:
 
 1. **Aim** — the target must be under the crosshair. With the preferred SDK,
    call `game.player.aimAt(entity, {hitbox:"torso", visibility:"required"})`
@@ -88,6 +117,21 @@ curl -X POST .../v1/step -d '{"frames": 2}'
 
 A session that reports "frob does nothing" **without** having driven the squeeze
 edge has not tested frobbing — that finding will be rejected at review.
+
+In **VR mode**, exercise the production two-hand path. Place and rotate a hand
+with `{left|right}_hand.position` and `{left|right}_hand.rotation`, aim its ray at
+the object, drive that hand's `squeeze_value` across the 0.5 edge, then step and
+verify the result. Nearby movable items should attach to a hand (check
+`left_hand_entity_id` / `right_hand_entity_id` in `/v1/info`) and release when
+squeeze returns below 0.5. Do not use the flat crosshair/`aimAt` result as proof
+that a VR hand can reach or operate something.
+
+Use the actual VR forearm/two-hand UI and interaction whenever it is available.
+If `/v1/ui`, pointer input, inventory access, combat, or another debug-runtime
+lever only exposes the flat path, try the closest production VR input first and
+record the missing VR access as a `vr` + `tool` finding. Mark it as a blocker
+when it prevents the session goal. A debug-injected Frob may diagnose what lies
+beyond the gap, but does not clear the finding.
 
 **Tab opens the inventory UI in flat mode.** `POST /v1/input/action
 {action:"ToggleUseMode"}` enters the original's metagame "use" mode: `/v1/ui`
@@ -157,15 +201,18 @@ frontier/issues to drive the loop:
   "mission": "medsci1",
   "goal": "reach the eng1 exit",
   "generated": "iteration N",
+  "asset_set": "25th",
+  "presentation": "flat|vr",
   "frontier": "medsci1 @ (x,y,z) — reached the locked Sci door",
   "verdict": "one-line summary of how it went",
   "steps": [
     { "index": 1, "title": "Wake in cryo bay", "screenshot": "pt-01.png",
       "observation": "what you saw", "action": "what you did",
-      "bug": { "severity": "High|Med|Low", "class": "[gameplay|visual|functionality]", "detail": "..." } }
+      "bug": { "severity": "High|Med|Low", "class": "[gameplay|visual|physics|functionality|tool|test]", "detail": "..." } }
   ],
   "bugs": [
-    { "title": "short", "severity": "High", "class": "[gameplay]", "screenshot": "pt-07.png",
+    { "title": "short", "severity": "High", "class": "[gameplay]", "kind": "bug|feature-gap",
+      "labels": ["bug", "gameplay", "blocker"], "screenshot": "pt-07.png",
       "detail": "what's wrong + how you triggered it", "blocker": true }
   ]
 }
@@ -173,6 +220,9 @@ frontier/issues to drive the loop:
 
 - `steps[].bug` is optional (null when the step was clean).
 - Mark the progress **blocker** (`"blocker": true`) — the manager fixes it first.
+- Suggest only applicable issue `labels` from `bug`, `enhancement`, `gameplay`,
+  `visual`, `physics`, `vr`, `test`, `tool`, and `blocker`; never attach every
+  label mechanically.
 - Set `frontier` to the furthest reachable state so the next session resumes there.
 - Optional **session video**: also capture `frame-NNNN.png` every 4 sim-frames
   during play, stitch with the `video-capture` skill, and set `"video":

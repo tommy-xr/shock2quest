@@ -1,7 +1,7 @@
 // Campaign randomization tables for the play-through skill: the mission-sequence
-// scenarios and the bonus-objective / special-tweak playstyles a campaign can
-// roll. Consumed by `playthrough-state.mjs roll` (which persists the pick in the
-// ledger) — run directly only to browse the tables:
+// scenarios, bonus-objective / special-tweak playstyles, and presentation modes
+// a campaign can roll. Consumed by `playthrough-state.mjs roll` (which persists
+// the picks in the ledger) — run directly only to browse the tables:
 //
 //   node scenarios.mjs list          print all scenarios and tweaks with ids
 
@@ -177,24 +177,20 @@ export const TWEAKS = [
   },
 ];
 
-// Asset set to launch with: exported as DARK_ASSET_PATH for every runtime the
-// campaign starts. Paths are the two install locations used on our machines.
-// A set is only eligible for the random draw when a data-root sentinel exists
-// there — the same sentinel list as `shock2vr::paths::data_root()`: loose
-// classic data (`shock2.gam`, ...) or a 25th Anniversary install
-// (`sshock2.kpf`, supported since #557). A set with no sentinel (missing or
-// broken install) can still be forced (assets=<id>), never rolled.
-export const ASSET_SETS = [
-  {
-    id: "legacy",
-    name: "Legacy assets",
-    path: `${process.env.HOME}/ss2-data-unpacked`,
-  },
-  {
-    id: "25th",
-    name: "25th Anniversary assets",
-    path: `${process.env.HOME}/ss2-25th`,
-  },
+// Every playtest uses the 25th Anniversary install. Keep this as structured
+// campaign data so session reports and issues can identify the exact asset set,
+// but never put it back in the random draw.
+export const ANNIVERSARY_ASSETS = {
+  id: "25th",
+  name: "25th Anniversary assets",
+  path: `${process.env.HOME}/ss2-25th`,
+};
+
+// A two-entry uniform draw makes VR selection exactly 50/50. Persist the pick
+// for the campaign so every rebuild/replay uses the same interaction model.
+export const PRESENTATION_MODES = [
+  { id: "flat", name: "Flatscreen", runtimeArgs: [] },
+  { id: "vr", name: "VR", runtimeArgs: ["--vr"] },
 ];
 
 const DATA_ROOT_SENTINELS = ["shock2.gam", "res/obj.crf", "res/mesh.crf", "motiondb.bin", "sshock2.kpf"];
@@ -211,11 +207,12 @@ function mulberry32(seed) {
   };
 }
 
-// Roll a campaign: random scenario + tweak + asset set, seeded. Any of the
-// three can be forced by id. The RNG stream is drawn identically whether or
-// not picks are forced, so `seed=N` alone always reproduces the same random
-// draws regardless of which overrides were combined with it.
-export function roll({ seed, scenarioId, tweakId, assetsId } = {}) {
+// Roll a campaign: random scenario + tweak + presentation, seeded. Any of the
+// three can be forced by id. Assets remain fixed to the 25th Anniversary set.
+// The RNG stream is drawn identically whether or not picks are forced, so
+// `seed=N` alone always reproduces the same random draws regardless of which
+// overrides were combined with it.
+export function roll({ seed, scenarioId, tweakId, presentationId } = {}) {
   const s = seed ?? Math.floor(Math.random() * 2 ** 31);
   const rng = mulberry32(s);
   const byId = (table, id, label) => {
@@ -226,15 +223,25 @@ export function roll({ seed, scenarioId, tweakId, assetsId } = {}) {
   const draw = (table) => table[Math.floor(rng() * table.length)];
   const rolledScenario = draw(SCENARIOS);
   const rolledTweak = draw(TWEAKS);
-  const usableSets = ASSET_SETS.filter(assetSetUsable);
-  const rolledAssets = draw(usableSets.length ? usableSets : ASSET_SETS);
+  const rolledPresentation = draw(PRESENTATION_MODES);
   const scenario = scenarioId ? byId(SCENARIOS, scenarioId, "scenario") : rolledScenario;
   const tweak = tweakId ? byId(TWEAKS, tweakId, "tweak") : rolledTweak;
-  const assets = assetsId ? byId(ASSET_SETS, assetsId, "assets") : rolledAssets;
+  const presentation = presentationId
+    ? byId(PRESENTATION_MODES, presentationId, "presentation")
+    : rolledPresentation;
   const warnings = [];
-  if (!assetSetUsable(assets))
-    warnings.push(`asset set '${assets.id}' has no data-root sentinel (shock2.gam / sshock2.kpf / ...) at ${assets.path} — the engine cannot load it (missing install?)`);
-  return { seed: s, scenario, tweak, assets, warnings };
+  if (!assetSetUsable(ANNIVERSARY_ASSETS))
+    warnings.push(
+      `25th Anniversary assets have no data-root sentinel (sshock2.kpf / ...) at ${ANNIVERSARY_ASSETS.path} — the engine cannot load them (missing install?)`,
+    );
+  return {
+    seed: s,
+    scenario,
+    tweak,
+    assets: ANNIVERSARY_ASSETS,
+    presentation,
+    warnings,
+  };
 }
 
 if (process.argv[1]?.endsWith("scenarios.mjs")) {
@@ -244,8 +251,13 @@ if (process.argv[1]?.endsWith("scenarios.mjs")) {
     for (const s of SCENARIOS) console.log(`  ${s.id.padEnd(18)} ${s.missions.join(",").padEnd(28)} ${s.goal}`);
     console.log("Bonus objectives / tweaks:");
     for (const t of TWEAKS) console.log(`  ${t.id.padEnd(22)} ${t.instructions}`);
-    console.log("Asset sets:");
-    for (const a of ASSET_SETS) console.log(`  ${a.id.padEnd(22)} ${a.name} (DARK_ASSET_PATH=${a.path})${assetSetUsable(a) ? "" : " [NOT USABLE: no data-root sentinel — force-only, excluded from random draw]"}`);
+    console.log("Assets (fixed):");
+    console.log(
+      `  ${ANNIVERSARY_ASSETS.id.padEnd(22)} ${ANNIVERSARY_ASSETS.name} (DARK_ASSET_PATH=${ANNIVERSARY_ASSETS.path})${assetSetUsable(ANNIVERSARY_ASSETS) ? "" : " [NOT USABLE: no data-root sentinel]"}`,
+    );
+    console.log("Presentation modes (50/50):");
+    for (const mode of PRESENTATION_MODES)
+      console.log(`  ${mode.id.padEnd(22)} ${mode.name}${mode.runtimeArgs.length ? ` (${mode.runtimeArgs.join(" ")})` : ""}`);
   } else if (cmd) {
     console.error("usage: node scenarios.mjs list");
     process.exit(1);
