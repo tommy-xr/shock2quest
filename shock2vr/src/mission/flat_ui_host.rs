@@ -885,13 +885,17 @@ fn draw_components(
             // The original MFD art is opaque on screen; the render-info
             // alpha is a VR world-quad translucency, deliberately not
             // applied here.
-            GuiComponentRenderInfo::Image { texture, .. } => {
-                if component.is_object_icon() {
-                    canvas.object_icon(r, texture);
-                } else {
+            GuiComponentRenderInfo::Image { texture, kind, .. } => match kind {
+                crate::ui::ImageKind::Ui => {
                     canvas.image(r, texture);
                 }
-            }
+                crate::ui::ImageKind::ObjectIcon => {
+                    canvas.object_icon(r, texture);
+                }
+                crate::ui::ImageKind::ObjectIconFit => {
+                    canvas.fitted_object_icon(r, texture);
+                }
+            },
             GuiComponentRenderInfo::Text { text, font, .. } => {
                 // Render at the font's native pixel height (the Dark engine
                 // draws its bitmap fonts 1:1), not the component's box height -

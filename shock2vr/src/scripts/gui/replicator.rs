@@ -153,7 +153,11 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
             size: vec2(30.0, button_height - 10.0),
             texture: icon.to_owned(),
             alpha: 0.5,
-            kind: crate::ui::ImageKind::Ui,
+            // Replicator catalogs use the same PropObjIcon art as inventory,
+            // including palette-index-0 transparency. Unlike an inventory
+            // grid, this compact list has fixed 30x50 icon boxes, so uniformly
+            // fit oversized art rather than letting a tall icon overlap rows.
+            kind: crate::ui::ImageKind::ObjectIconFit,
         };
 
         let mut components: Vec<GuiComponent<ReplicatorMsg>> = vec![
@@ -450,10 +454,12 @@ fn effective_replicator_cost(world: &World, authored_cost: i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::super::keypad::{HackNode, HackPhase, base_hack_board, board_index};
     use super::*;
     use crate::gui::GuiScript;
-    use crate::mission::PlayerInfo;
+    use crate::mission::{EntityMetadata, PlayerInfo};
     use crate::physics::PhysicsWorld;
     use crate::runtime_props::RuntimePropTransform;
     use crate::scripts::{MessagePayload, Script};
@@ -469,6 +475,44 @@ mod tests {
             Effect::Combined { effects } => effects.iter().any(creates_template),
             _ => false,
         }
+    }
+
+    #[test]
+    fn catalog_item_art_is_declared_as_an_object_icon() {
+        let mut world = World::new();
+        world.add_unique(GlobalEntityMetadata(HashMap::from([(
+            "test item".to_owned(),
+            EntityMetadata {
+                template_id: -1,
+                obj_icon: Some("icn_pist.pcx".to_owned()),
+                obj_short_name: Some("Test item".to_owned()),
+                obj_name: None,
+            },
+        )])));
+        let replicator = world.add_entity(PropReplicatorContents {
+            costs: [10, 0, 0, 0, 0, 0],
+            object_names: [
+                "test item".to_owned(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ],
+        });
+
+        let components =
+            ReplicatorGui.get_components(&None, replicator, &world, &ReplicatorState::default());
+        let kind = components.iter().find_map(|component| match component {
+            GuiComponent::Image { texture, kind, .. } if texture == "icn_pist.pcx" => Some(*kind),
+            _ => None,
+        });
+
+        assert_eq!(
+            kind,
+            Some(crate::ui::ImageKind::ObjectIconFit),
+            "PropObjIcon art must key palette index 0 and preserve its aspect ratio"
+        );
     }
 
     #[test]
