@@ -26,6 +26,11 @@ impl MeleeWeapon {
 /// edge is that production attack gesture: contacts before it, after release,
 /// and after dropping the weapon are harmless. A target can be damaged only
 /// once per pull even if the physical swing chatters across several contacts.
+///
+/// Physical contact is *never* the damage trigger outside VR - a flat swing is
+/// `WeaponScript`'s aimed short-range raycast, so bumping a wielded wrench into
+/// scenery must do nothing. The whole script is therefore inert in flat mode
+/// rather than guarding individual messages.
 pub struct TriggeredMeleeWeapon {
     attack_active: bool,
     hit_entities: HashSet<EntityId>,
@@ -48,8 +53,12 @@ impl Script for TriggeredMeleeWeapon {
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        if !is_vr(world) {
+            return Effect::NoEffect;
+        }
+
         match msg {
-            MessagePayload::TriggerPull if is_vr(world) => {
+            MessagePayload::TriggerPull => {
                 self.attack_active = true;
                 self.hit_entities.clear();
                 Effect::NoEffect
