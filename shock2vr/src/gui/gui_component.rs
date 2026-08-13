@@ -655,15 +655,15 @@ impl GuiComponentRenderInfo {
         }
     }
 
-    /// Whether this is Dark object-icon art: keyed on palette index 0 and
-    /// blitted at its authored pixel size, centered in its slot.
+    /// Whether this is Dark object-icon art keyed on palette index 0. Its
+    /// sizing policy may be native-size or fitted to the slot.
     pub(crate) fn is_object_icon(&self) -> bool {
         matches!(
             self,
             Self::Image {
-                kind: ImageKind::ObjectIcon,
+                kind,
                 ..
-            }
+            } if kind.transparent_index_0()
         )
     }
 

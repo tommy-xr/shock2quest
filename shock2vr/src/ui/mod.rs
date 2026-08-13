@@ -161,9 +161,21 @@ pub enum ImageKind {
     #[default]
     Ui,
     /// Object-icon art: palette index 0 is transparent, and the icon draws at
-    /// its authored pixel size anchored to the element rect's top-left corner.
+    /// its authored pixel size centered inside the element rect.
     /// The rect still defines the element's slot for layout and hit-testing.
     ObjectIcon,
+    /// Object-icon art constrained to the element's rect. Palette index 0 is
+    /// transparent as above, but oversized art is scaled down uniformly and
+    /// centered so compact lists can show icons of every inventory footprint
+    /// without stretching or overlapping adjacent rows. Smaller art remains
+    /// at its authored size.
+    ObjectIconFit,
+}
+
+impl ImageKind {
+    pub(crate) fn transparent_index_0(self) -> bool {
+        matches!(self, Self::ObjectIcon | Self::ObjectIconFit)
+    }
 }
 
 /// One item in the shared 2D UI description language.
@@ -342,6 +354,18 @@ where
         self
     }
 
+    /// Add object-icon art centered and aspect-fitted inside `rect`.
+    pub fn fitted_object_icon(&mut self, rect: Rect, texture: &str) -> &mut Self {
+        self.elements.push(UiElement::Image {
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
+            texture: texture.to_owned(),
+            alpha: 1.0,
+            kind: ImageKind::ObjectIconFit,
+        });
+        self
+    }
+
     pub fn bar(&mut self, rect: Rect, texture: &str, fill: f32) -> &mut Self {
         self.elements.push(UiElement::Bar {
             position: vec2(rect.x, rect.y),
@@ -467,7 +491,7 @@ where
                         texture,
                         &TextureOptions {
                             wrap: false,
-                            transparent_index_0: *kind == ImageKind::ObjectIcon,
+                            transparent_index_0: kind.transparent_index_0(),
                         },
                     );
                     let (drawn_at, drawn) = drawn_rect(*position, *size, texture_px(&tex), *kind);
@@ -503,7 +527,7 @@ where
                         texture,
                         &TextureOptions {
                             wrap: false,
-                            transparent_index_0: kind == ImageKind::ObjectIcon,
+                            transparent_index_0: kind.transparent_index_0(),
                         },
                     );
                     let (drawn_at, drawn) = drawn_rect(*position, *size, texture_px(&tex), kind);
@@ -728,7 +752,7 @@ fn world_image(
             texture,
             &TextureOptions {
                 wrap: false,
-                transparent_index_0: kind == ImageKind::ObjectIcon,
+                transparent_index_0: kind.transparent_index_0(),
             },
         )
         .clone();
@@ -741,8 +765,8 @@ fn world_image(
 }
 
 /// The size an element's art actually draws at: its slot rect for ordinary UI
-/// art, or the icon's own authored pixels for [`ImageKind::ObjectIcon`], which
-/// the original blits 1:1 into the slot rather than stretching to fill it.
+/// art, the icon's own authored pixels for [`ImageKind::ObjectIcon`], or those
+/// authored pixels uniformly downscaled to fit for [`ImageKind::ObjectIconFit`].
 pub(crate) fn drawn_rect(
     position: Vector2<f32>,
     size: Vector2<f32>,
@@ -752,6 +776,11 @@ pub(crate) fn drawn_rect(
     match kind {
         ImageKind::Ui => (position, size),
         ImageKind::ObjectIcon => (position + centered_offset(size, texture_px), texture_px),
+        ImageKind::ObjectIconFit => {
+            let scale = (size.x / texture_px.x).min(size.y / texture_px.y).min(1.0);
+            let fitted = texture_px * scale;
+            (position + centered_offset(size, fitted), fitted)
+        }
     }
 }
 
@@ -893,6 +922,24 @@ mod tests {
             (at + centered_offset(slot, icon), icon)
         );
         assert_eq!(drawn_rect(at, slot, icon, ImageKind::Ui), (at, slot));
+    }
+
+    #[test]
+    fn fitted_object_icons_letterbox_without_distorting_or_upscaling() {
+        let slot = vec2(30.0, 50.0);
+        let at = vec2(10.0, 15.0);
+        assert!(ImageKind::ObjectIconFit.transparent_index_0());
+
+        let (tall_at, tall_size) = drawn_rect(at, slot, vec2(34.0, 99.0), ImageKind::ObjectIconFit);
+        assert_eq!(tall_at, at + vec2(6.0, 0.0));
+        assert!((tall_size.x - 34.0 * 50.0 / 99.0).abs() < 1e-5);
+        assert!((tall_size.y - 50.0).abs() < 1e-5);
+
+        assert_eq!(
+            drawn_rect(at, slot, vec2(16.0, 16.0), ImageKind::ObjectIconFit),
+            (at + vec2(7.0, 17.0), vec2(16.0, 16.0)),
+            "small icons should retain their authored pixels"
+        );
     }
 
     /// ...and centered in the slot, so narrow art (the 22px wrench in a 35px
