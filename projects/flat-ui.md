@@ -121,9 +121,11 @@ This left/right split matches the engine's `exclude_list_left/right` exactly
   chemical→research.
 - **ALT = split stack** (SPLIT cursor), **CTRL / "?" = query** an item; hover
   shows equipment condition.
-- **Dragging into the 3D view throws the item into the world.** An item can
-  stay on the cursor across UI states (a NewDark patch note covers
-  level-transition with an object on the cursor).
+- **LMB in the 3D view throws the cursor item into the world; RMB applies it
+  to the crosshair target** when that target explicitly accepts the item as a
+  tool. A refused/ignored item stays on the cursor. An item can stay on the
+  cursor across UI states (a NewDark patch note covers level-transition with
+  an object on the cursor).
 - Loot windows: left-click contents to take (manual p.7).
 - Audio logs: pickup downloads to the PDA; `U` plays the last unread; incoming
   **e-mail auto-plays**; BACKSPACE stops. **[unverified]** whether log *pickup*

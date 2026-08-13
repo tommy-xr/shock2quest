@@ -677,6 +677,7 @@ fn process_events(
             input_context.pointer = Some(shock2vr::input_context::Pointer2D {
                 position: vec2(x / SCR_WIDTH as f32, y / SCR_HEIGHT as f32),
                 pressed: window.get_mouse_button(MouseButton::Button1) == Action::Press,
+                secondary_pressed: window.get_mouse_button(MouseButton::Button2) == Action::Press,
             });
         }
     }

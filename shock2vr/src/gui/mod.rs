@@ -101,6 +101,19 @@ where
         }
     }
 
+    /// Whether this panel explicitly accepts `provided_entity_id` as a tool.
+    /// Flat mode queries this before sending the tool message so RMB never
+    /// takes an ordinary container-deposit path. The query must be pure; the
+    /// subsequent `on_provide_for_consumption` call owns all effects.
+    fn accepts_tool(
+        &self,
+        _entity_id: EntityId,
+        _world: &World,
+        _provided_entity_id: EntityId,
+    ) -> bool {
+        false
+    }
+
     /// An item was offered to this panel's entity (the port's tool channel:
     /// releasing a held item onto a target in VR, or a `ToolConsumable`
     /// touching it). `None` - the default - takes the ordinary deposit path,
