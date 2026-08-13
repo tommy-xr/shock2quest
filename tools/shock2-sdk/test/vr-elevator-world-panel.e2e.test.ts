@@ -28,6 +28,30 @@ const uiBodies = async (game: GameServer): Promise<PhysicsBodySummary[]> =>
     body.collision_groups.includes("ui"),
   );
 
+async function assertPanelIsRendered(
+  game: GameServer,
+  panel: PhysicsBodySummary,
+): Promise<void> {
+  const response = await fetch(`${game.baseUrl}/v1/scene`);
+  assert.equal(response.ok, true, "scene inspection should succeed");
+  const scene = (await response.json()) as {
+    objects: Array<{ position: Vec3; transparency: number | null }>;
+  };
+  const visiblePanelDraws = scene.objects.filter(
+    (object) =>
+      object.transparency !== 1 &&
+      Math.hypot(
+        object.position[0] - panel.position[0],
+        object.position[1] - panel.position[1],
+        object.position[2] - panel.position[2],
+      ) < 0.01,
+  );
+  assert.ok(
+    visiblePanelDraws.length > 0,
+    "the sole UI collider must have visible ElevatorGui draws at its world transform",
+  );
+}
+
 async function openElevatorThroughVrHand(
   game: GameServer,
 ): Promise<PhysicsBodySummary> {
@@ -69,6 +93,7 @@ async function openElevatorThroughVrHand(
     "production VR frob of button 74 must create exactly one visible/collidable panel",
   );
   assert.equal(panels[0].body_type, "kinematic");
+  await assertPanelIsRendered(game, panels[0]);
   return panels[0];
 }
 
