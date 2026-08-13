@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 
-import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
-import type { EntitySummary } from "../src/index.js";
+import { findRepoRoot, GameServer } from "../src/index.js";
+import type { EntitySummary, RayCastResult } from "../src/index.js";
 
 // End-to-end test for flat (desktop-style) ladder climbing.
 //
@@ -17,6 +19,20 @@ import type { EntitySummary } from "../src/index.js";
 // the ascent assertion fails.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
+function findSavePath(saveName: string): string | undefined {
+  const repoRoot = findRepoRoot(process.cwd()) ?? process.cwd();
+  const roots = [
+    process.env.DARK_ASSET_PATH,
+    join(repoRoot, "Data"),
+    join(repoRoot, "..", "Data"),
+  ].filter((root): root is string => Boolean(root));
+  for (const root of roots) {
+    const path = join(root, "saves", `${saveName}.sav`);
+    if (existsSync(path)) return path;
+  }
+  return undefined;
+}
+
 type LadderColumn = { x: number; z: number; ys: number[] };
 
 function groupLadderColumns(rungs: EntitySummary[]): LadderColumn[] {
@@ -29,6 +45,29 @@ function groupLadderColumns(rungs: EntitySummary[]): LadderColumn[] {
     columns.set(key, column);
   }
   return [...columns.values()];
+}
+
+async function findRick1OpeningLadder(
+  game: GameServer,
+): Promise<LadderColumn> {
+  const rungs = (
+    await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
+  ).entities;
+  assert.ok(rungs.length > 0, "rick1 should contain Rick Ladder 16 entities");
+
+  const spawn = await game.player.position();
+  const fullHeightColumns = groupLadderColumns(rungs).filter(
+    (col) => Math.max(...col.ys) - Math.min(...col.ys) > 15,
+  );
+  assert.ok(
+    fullHeightColumns.length > 0,
+    "rick1 should contain a full-height ladder stack",
+  );
+  return fullHeightColumns.reduce((best, col) => {
+    const distance = (candidate: LadderColumn) =>
+      Math.hypot(candidate.x - spawn.x, candidate.z - spawn.z);
+    return distance(col) < distance(best) ? col : best;
+  });
 }
 
 test(
@@ -105,27 +144,9 @@ test(
     });
     await game.step({ frames: 5 });
 
-    // Runtime ids change every launch. Group the authored rung entities into
-    // columns, keep full-height stacks, then pick the one nearest the fresh
-    // arrival-room spawn.
-    const rungs = (
-      await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
-    ).entities;
-    assert.ok(rungs.length > 0, "rick1 should contain Rick Ladder 16 entities");
-
-    const spawn = await game.player.position();
-    const fullHeightColumns = groupLadderColumns(rungs).filter(
-      (col) => Math.max(...col.ys) - Math.min(...col.ys) > 15,
-    );
-    assert.ok(
-      fullHeightColumns.length > 0,
-      "rick1 should contain a full-height ladder stack",
-    );
-    const ladder = fullHeightColumns.reduce((best, col) => {
-      const distance = (candidate: LadderColumn) =>
-        Math.hypot(candidate.x - spawn.x, candidate.z - spawn.z);
-      return distance(col) < distance(best) ? col : best;
-    });
+    // Runtime ids change every launch. Resolve the authored full-height stack
+    // nearest the fresh arrival-room spawn.
+    const ladder = await findRick1OpeningLadder(game);
     const ladderBottom = Math.min(...ladder.ys);
     const ladderTop = Math.max(...ladder.ys);
 
@@ -265,7 +286,7 @@ test(
     // room using only ordinary locomotion.
     await game.input.lookAtWorldPoint([
       stable.x,
-      stable.y + PLAYER_EYE_HEIGHT_WORLD,
+      stable.y + 1.6,
       ladder.z + 4,
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
@@ -282,7 +303,7 @@ test(
 
     await game.input.lookAtWorldPoint([
       deckSide.x + 8,
-      deckSide.y + PLAYER_EYE_HEIGHT_WORLD,
+      deckSide.y + 1.6,
       deckSide.z,
     ]);
     await game.input.set("right_hand.thumbstick", [0, 1]);
@@ -309,6 +330,1635 @@ test(
         `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
         `deckSide=(${deckSide.x.toFixed(2)}, ${deckSide.y.toFixed(2)}, ${deckSide.z.toFixed(2)}), ` +
         `ended=(${final.x.toFixed(2)}, ${final.y.toFixed(2)}, ${final.z.toFixed(2)})`,
+    );
+  },
+);
+
+// Issue #657: a single reasonable +X,+Z heading held continuously from the
+// base approached the ladder on a path whose climb was blocked 3.1 feet below
+// the authored column top. The original shorter top-out gate never planned a
+// mantle; after moving-terrain support landed, the same route could instead
+// leave scripted climbing through unsupported ordinary movement. Reproduce the
+// player's one-heading approach and require a controlled, supported release.
+test(
+  "flat climbing: continuous diagonal heading tops out onto rick1's opening deck",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "rick1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    const ladder = await findRick1OpeningLadder(game);
+    const ladderBottom = Math.min(...ladder.ys);
+    const ladderTop = Math.max(...ladder.ys);
+
+    // Start in clear floor space on the west/south side. The old direct-contact
+    // teleport was valid for the temporary narrow player but overlaps this
+    // rung stack after #712 restores Dark's 2.4-foot standing footprint. From
+    // this reachable pose, one continuous production heading performs the
+    // approach, grip, climb, and top-out. Aim in world space because the
+    // low-level `head.look` channel is pawn-local and rick1's restored player
+    // rotation otherwise turns the nominal +X,+Z heading toward -Z.
+    const clearTarget = {
+      x: ladder.x - 1,
+      y: ladderBottom - 2.2,
+      z: ladder.z - 0.4,
+    };
+    await game.player.teleport(clearTarget);
+    await game.step({ frames: 30 });
+    const base = await game.player.position();
+    const baseSupport = await game.raycast({
+      start: [base.x, base.y, base.z],
+      end: [base.x, base.y - 3, base.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      Math.hypot(
+        base.x - clearTarget.x,
+        base.z - clearTarget.z,
+      ) < 0.05 &&
+        baseSupport.hit &&
+        baseSupport.distance !== null &&
+        baseSupport.distance > 0.5 &&
+        baseSupport.distance < 1.5 &&
+        baseSupport.hit_normal !== null &&
+        baseSupport.hit_normal[1] > 0.5,
+      `expected to settle in clear floor space before the one-heading approach; ` +
+        `ladder=(${ladder.x.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
+        `target=(${clearTarget.x.toFixed(2)}, ${clearTarget.y.toFixed(2)}, ${clearTarget.z.toFixed(2)}), ` +
+        `base=(${base.x.toFixed(2)}, ${base.y.toFixed(2)}, ${base.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(baseSupport)}`,
+    );
+
+    await game.input.lookAtWorldPoint([
+      ladder.x + 8,
+      ladderTop + 2,
+      ladder.z + 2,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+
+    let previous = base;
+    let position = base;
+    let supportedFarSideReached = false;
+    let ordinaryWalkStart = base;
+    let ordinaryWalkSupport = "";
+    for (let elapsed = 0; elapsed < 1_050; ) {
+      // Sample every frame from input onset. With the restored full footprint,
+      // the bounded mantle can begin several feet below the authored rung top;
+      // a coarse ascent batch can therefore hide the first supported far-side
+      // landing pose that this safety regression must inspect.
+      const frames = 1;
+      await game.step({ frames });
+      elapsed += frames;
+      previous = position;
+      position = await game.player.position();
+      const beyondLip =
+        position.x > ladder.x && position.z > ladder.z + 0.35;
+      const atDeckHeight =
+        position.y > ladderTop - 1.5 && position.y < ladderTop + 0.2;
+      if (beyondLip && atDeckHeight) {
+        const nearbySupport = await game.raycast({
+          start: [position.x, position.y, position.z],
+          end: [position.x, position.y - 3, position.z],
+          collision_groups: ["world", "entity", "selectable"],
+          ignore_sensors: true,
+        });
+        const hasNearbySupport =
+          nearbySupport.hit &&
+          nearbySupport.distance !== null &&
+          nearbySupport.distance > 0.5 &&
+          nearbySupport.distance < 1.25 &&
+          nearbySupport.hit_normal !== null &&
+          nearbySupport.hit_normal[1] > 0.5;
+        if (hasNearbySupport) {
+          supportedFarSideReached = true;
+          ordinaryWalkStart = position;
+          ordinaryWalkSupport = JSON.stringify(nearbySupport);
+        }
+      }
+      if (supportedFarSideReached) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+
+    assert.ok(
+      supportedFarSideReached,
+      `one continuous diagonal heading must reach supported standing height past the lip; ` +
+        `ladder=(${ladder.x.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
+        `base=(${base.x.toFixed(2)}, ${base.y.toFixed(2)}, ${base.z.toFixed(2)}), ` +
+        `ordinary-start=(${ordinaryWalkStart.x.toFixed(2)}, ${ordinaryWalkStart.y.toFixed(2)}, ${ordinaryWalkStart.z.toFixed(2)}), ` +
+        `previous=(${previous.x.toFixed(2)}, ${previous.y.toFixed(2)}, ${previous.z.toFixed(2)}), ` +
+        `ended=(${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)}), ` +
+        `support=${ordinaryWalkSupport}`,
+    );
+
+    // The first supported standing-height frame marks contact with the upper
+    // deck after the bounded descent. Verify that pose has real production
+    // support, then release input and require a stable ordinary recovery.
+    const support = await game.raycast({
+      start: [
+        ordinaryWalkStart.x,
+        ordinaryWalkStart.y,
+        ordinaryWalkStart.z,
+      ],
+      end: [
+        ordinaryWalkStart.x,
+        ordinaryWalkStart.y - 3,
+        ordinaryWalkStart.z,
+      ],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      support.hit &&
+        support.distance !== null &&
+        support.distance > 0.5 &&
+        support.distance < 1.25 &&
+        support.hit_normal !== null &&
+        support.hit_normal[1] > 0.5 &&
+        support.collision_group !== "player",
+      `the restored standing pose must have collision-valid support; ` +
+        `ordinary-start=(${ordinaryWalkStart.x.toFixed(2)}, ${ordinaryWalkStart.y.toFixed(2)}, ${ordinaryWalkStart.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(support)}`,
+    );
+    await game.step({ frames: 120 });
+    const landed = await game.player.position();
+    await game.step({ frames: 60 });
+    const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      stable.x > ladder.x &&
+        stable.z > ladder.z + 0.35 &&
+        stable.y > ladderTop - 1.5 &&
+        stable.y < ladderTop + 0.2 &&
+        Math.abs(stable.y - landed.y) < 0.1 &&
+        Math.hypot(
+          stable.x - ordinaryWalkStart.x,
+          stable.z - ordinaryWalkStart.z,
+        ) < 1.0 &&
+        stableSupport.hit &&
+        stableSupport.distance !== null &&
+        stableSupport.distance > 0.5 &&
+        stableSupport.distance < 2.0 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5 &&
+        stableSupport.collision_group !== "player",
+      `the completed continuous top-out must settle on the supported deck; ` +
+        `ladder=(${ladder.x.toFixed(2)}, ${ladderTop.toFixed(2)}, ${ladder.z.toFixed(2)}), ` +
+        `ordinary-start=(${ordinaryWalkStart.x.toFixed(2)}, ${ordinaryWalkStart.y.toFixed(2)}, ${ordinaryWalkStart.z.toFixed(2)}), ` +
+        `landed=(${landed.x.toFixed(2)}, ${landed.y.toFixed(2)}, ${landed.z.toFixed(2)}), ` +
+        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
+        `stable-support=${JSON.stringify(stableSupport)}`,
+    );
+
+    // Prove the supported pose is the usable upper room. Reorient and walk
+    // first along +Z past the ladder opening, then +X into the room using only
+    // ordinary production locomotion.
+    await game.input.lookAtWorldPoint([
+      stable.x,
+      stable.y + 1.6,
+      ladder.z + 4,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let deckSide = stable;
+    for (let elapsed = 0; elapsed < 60; elapsed += 2) {
+      await game.step({ frames: 2 });
+      deckSide = await game.player.position();
+      if (deckSide.z > stable.z + 0.75) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 30 });
+
+    await game.input.lookAtWorldPoint([
+      deckSide.x + 8,
+      deckSide.y + 1.6,
+      deckSide.z,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let advanced = deckSide;
+    for (let elapsed = 0; elapsed < 120; elapsed += 5) {
+      await game.step({ frames: 5 });
+      advanced = await game.player.position();
+      if (advanced.x > deckSide.x + 1.5) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    const recovered = await game.player.position();
+    const recoveredSupport = await game.raycast({
+      start: [recovered.x, recovered.y, recovered.z],
+      end: [recovered.x, recovered.y - 3, recovered.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      deckSide.z > stable.z + 0.5 &&
+        recovered.x > ladder.x + 3 &&
+        recovered.z > ladder.z + 1 &&
+        recovered.x > deckSide.x + 1 &&
+        recovered.y > ladderTop - 1.5 &&
+        recovered.y < ladderTop + 0.2 &&
+        recoveredSupport.hit &&
+        recoveredSupport.distance !== null &&
+        recoveredSupport.distance > 0.5 &&
+        recoveredSupport.distance < 2.0 &&
+        recoveredSupport.hit_normal !== null &&
+        recoveredSupport.hit_normal[1] > 0.5 &&
+        recoveredSupport.collision_group !== "player",
+      `the continuous top-out must permit ordinary recovery into the upper room; ` +
+        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
+        `deck-side=(${deckSide.x.toFixed(2)}, ${deckSide.y.toFixed(2)}, ${deckSide.z.toFixed(2)}), ` +
+        `recovered=(${recovered.x.toFixed(2)}, ${recovered.y.toFixed(2)}, ${recovered.z.toFixed(2)}), ` +
+        `recovered-support=${JSON.stringify(recoveredSupport)}`,
+    );
+  },
+);
+
+// Issue #657's later Rick1 manifestation is a full-height ladder below a thin
+// upper-deck slab and an authored pipe with only 3.5 feet of headroom. Ordinary
+// +Z input from its reachable south face must carry an explicitly crouched
+// player through the local lip, restore the crouched capsule on the y=38 deck,
+// and leave standing refused until the player crawls clear of the pipe.
+test(
+  "flat climbing: rick1 ladder 488 route tops out ladder 499",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async (t) => {
+    const saveName = `rick1_ladder_488_to_499_${Date.now()}`;
+    t.after(() => {
+      const path = findSavePath(saveName);
+      if (path) rmSync(path, { force: true });
+    });
+    await using game = await GameServer.launch({
+      mission: "rick1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    // Runtime ids vary on every launch. Resolve both authored ladders by their
+    // stable mission identities, then derive the contact and onward heading
+    // from their live positions.
+    const ladders = (
+      await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
+    ).entities;
+    const ladder = ladders.find((entity) => entity.template_id === 488);
+    const nextLadder = ladders.find((entity) => entity.template_id === 499);
+    assert.ok(ladder, "rick1 should contain authored ladder object 488");
+    assert.ok(nextLadder, "rick1 should contain authored ladder object 499");
+    const longPipes = (
+      await game.entities.list({ filter: "RickPipe_2x16", limit: 100 })
+    ).entities;
+    const firstPipe = longPipes.find((entity) => entity.template_id === 640);
+    const secondPipe = longPipes.find((entity) => entity.template_id === 639);
+    const overheadPipe = (
+      await game.entities.list({ filter: "Pipe 24x4", limit: 100 })
+    ).entities.find((entity) => entity.template_id === 633);
+    assert.ok(firstPipe, "rick1 should contain authored pipe object 640");
+    assert.ok(secondPipe, "rick1 should contain authored pipe object 639");
+    assert.ok(overheadPipe, "rick1 should contain authored overhead pipe 633");
+    for (const pipe of [overheadPipe, firstPipe, secondPipe]) {
+      const bodies = (await game.physics.bodies({ entityId: pipe.id })).bodies;
+      assert.ok(
+        bodies.length > 0 && bodies.every((body) => body.blocks_player),
+        `the authentic route must retain authored pipe collision; ` +
+          `pipe=${pipe.template_id}, bodies=${JSON.stringify(bodies)}`,
+      );
+    }
+    const [ladderX, ladderY, ladderZ] = ladder.position;
+
+    // Geometry-relative setup at the campaign's reachable south-face pose.
+    // All motion from here is ordinary production input with no direct
+    // relocation. The ladder top-out itself uses no jump; the authored onward
+    // route later uses explicit crouched jumps. Crouch is held explicitly: the
+    // planner must never silently shrink the player.
+    await game.player.teleport({
+      x: ladderX,
+      y: ladderY - 2.48,
+      z: ladderZ - 0.6884,
+    });
+    await game.step({ frames: 30 });
+    const start = await game.player.position();
+    const startSupport = await game.raycast({
+      start: [start.x, start.y, start.z],
+      end: [start.x, start.y - 3, start.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      Math.hypot(start.x - ladderX, start.z - (ladderZ - 0.6884)) < 0.05 &&
+        startSupport.hit &&
+        startSupport.distance !== null &&
+        startSupport.distance > 0.5 &&
+        startSupport.distance < 2 &&
+        startSupport.hit_normal !== null &&
+        startSupport.hit_normal[1] > 0.5,
+      `expected supported south-face contact; ladder=${JSON.stringify(ladder.position)}, ` +
+        `start=${JSON.stringify(start)}, support=${JSON.stringify(startSupport)}`,
+    );
+
+    await game.input.setJump(false);
+    await game.input.set("crouch", 1);
+    await game.step({ frames: 10 });
+    const crouchedStart = await game.player.position();
+    assert.ok(
+      start.y - crouchedStart.y > 0.5 && start.y - crouchedStart.y < 0.75,
+      `the fixture must enter the explicit crouched profile before climbing; ` +
+        `standing=${JSON.stringify(start)}, crouched=${JSON.stringify(crouchedStart)}`,
+    );
+
+    await game.input.lookAtWorldPoint([
+      ladderX,
+      ladderY + 8,
+      ladderZ + 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+
+    const crouchedFloorOffset = 0.604;
+    let landing = crouchedStart;
+    let landingSupport: RayCastResult | null = null;
+    let supportedDeckReached = false;
+    for (let elapsed = 0; elapsed < 720; elapsed += 1) {
+      await game.step({ frames: 1 });
+      landing = await game.player.position();
+      if (landing.y < ladderY + 5.5) continue;
+      landingSupport = await game.raycast({
+        start: [landing.x, landing.y, landing.z],
+        end: [landing.x, landing.y - 3, landing.z],
+        collision_groups: ["world", "entity", "selectable"],
+        ignore_sensors: true,
+      });
+      supportedDeckReached =
+        landingSupport.hit &&
+        landingSupport.distance !== null &&
+        Math.abs(landingSupport.distance - crouchedFloorOffset) < 0.05 &&
+        landingSupport.hit_point !== null &&
+        Math.abs(landingSupport.hit_point[1] - 38) < 0.05 &&
+        landingSupport.hit_normal !== null &&
+        landingSupport.hit_normal[1] > 0.5;
+      if (supportedDeckReached) break;
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+
+    assert.ok(
+      supportedDeckReached,
+      `ordinary south-face input while crouched must reach supported crouch on the upper deck; ` +
+        `ladder=${JSON.stringify(ladder.position)}, start=${JSON.stringify(start)}, ` +
+        `ended=${JSON.stringify(landing)}, support=${JSON.stringify(landingSupport)}`,
+    );
+
+    await game.step({ frames: 180 });
+    const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      Math.abs(stable.y - landing.y) < 0.1 &&
+        Math.hypot(stable.x - landing.x, stable.z - landing.z) < 0.25 &&
+        stableSupport.hit &&
+        stableSupport.distance !== null &&
+        Math.abs(stableSupport.distance - crouchedFloorOffset) < 0.05 &&
+        stableSupport.hit_point !== null &&
+        Math.abs(stableSupport.hit_point[1] - 38) < 0.05 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5,
+      `release must remain stable on ladder 488's upper deck; ` +
+        `landing=${JSON.stringify(landing)}, stable=${JSON.stringify(stable)}, ` +
+        `support=${JSON.stringify(stableSupport)}`,
+    );
+
+    // The pipe above this exact landing is authored collision, not a planner
+    // exception. Releasing crouch must therefore keep the feet-planted center
+    // unchanged (standing would raise it by 0.64 world units).
+    await game.input.set("crouch", 0);
+    await game.step({ frames: 20 });
+    const refusedStand = await game.player.position();
+    assert.ok(
+      Math.abs(refusedStand.y - stable.y) < 0.1 &&
+        Math.hypot(refusedStand.x - stable.x, refusedStand.z - stable.z) < 0.1,
+      `standing under the authored pipe must be refused; ` +
+        `crouched=${JSON.stringify(stable)}, released=${JSON.stringify(refusedStand)}`,
+    );
+    await game.input.set("crouch", 1);
+    await game.step({ frames: 5 });
+
+    type RoutePose = typeof refusedStand;
+    const moveUntil = async (
+      target: [number, number, number],
+      reached: (position: RoutePose) => boolean,
+      maxFrames: number,
+      jump: boolean,
+    ): Promise<{ position: RoutePose; peak: RoutePose }> => {
+      let position = await game.player.position();
+      let peak = position;
+      await game.input.lookAtWorldPoint(target);
+      await game.input.set("right_hand.thumbstick", [0, 1]);
+      if (jump) {
+        await game.input.setJump(true);
+        await game.step({ frames: 2 });
+        await game.input.setJump(false);
+      }
+      for (let elapsed = 0; elapsed < maxFrames; elapsed += 1) {
+        await game.step({ frames: 1 });
+        position = await game.player.position();
+        if (position.y > peak.y) peak = position;
+        if (reached(position)) break;
+      }
+      await game.input.set("right_hand.thumbstick", [0, 0]);
+      // Some route gates are crossed while the crouched body is still
+      // descending. Let the ordinary controller settle before asserting the
+      // exact supported floor offset at the new side of the obstacle.
+      await game.step({ frames: 60 });
+      return { position: await game.player.position(), peak };
+    };
+    const supportedCrouch = async (position: RoutePose) => {
+      const support = await game.raycast({
+        start: [position.x, position.y, position.z],
+        end: [position.x, position.y - 3, position.z],
+        collision_groups: ["world", "entity", "selectable"],
+        ignore_sensors: true,
+      });
+      const frame = await game.info();
+      return {
+        support,
+        valid:
+          support.hit &&
+          support.distance !== null &&
+          Math.abs(support.distance - crouchedFloorOffset) < 0.08 &&
+          support.hit_normal !== null &&
+          support.hit_normal[1] > 0.5 &&
+          Math.abs(frame.player.camera_offset[1] - 0.48) < 0.02,
+      };
+    };
+
+    // The real route turns right/east through the steam pipes. Pipe 633 ends
+    // just north of the shared long-pipe centerline; a small southward offset
+    // derives the authored crouched-vault window while keeping every pipe
+    // collider live. This is ordinary input only, with no relocation after
+    // the initial ladder setup.
+    const vaultZ = firstPipe.position[2] - 0.25;
+    const southStage = await moveUntil(
+      [refusedStand.x, refusedStand.y + 0.5, vaultZ],
+      (position) => Math.abs(position.z - vaultZ) < 0.15,
+      240,
+      false,
+    );
+    const stageCeiling = await game.raycast({
+      start: [
+        southStage.position.x,
+        southStage.position.y,
+        southStage.position.z,
+      ],
+      end: [
+        southStage.position.x,
+        southStage.position.y + 4,
+        southStage.position.z,
+      ],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      Math.abs(southStage.position.z - vaultZ) < 0.2 &&
+        stageCeiling.hit &&
+        stageCeiling.distance !== null &&
+        stageCeiling.distance > 1.7,
+      `the ordinary route must reach the authored vault window south of pipe 633; ` +
+        `target_z=${vaultZ.toFixed(3)}, stage=${JSON.stringify(southStage.position)}, ` +
+        `ceiling=${JSON.stringify(stageCeiling)}`,
+    );
+
+    const firstThreshold = firstPipe.position[0] + 0.77;
+    const firstVault = await moveUntil(
+      [firstPipe.position[0] + 2, southStage.position.y + 0.8, vaultZ],
+      (position) => position.x >= firstThreshold,
+      120,
+      true,
+    );
+    const firstSupport = await supportedCrouch(firstVault.position);
+    assert.ok(
+      firstVault.position.x >= firstThreshold && firstSupport.valid,
+      `explicit crouched jump+forward must cross intact pipe 640 onto support; ` +
+        `threshold=${firstThreshold.toFixed(3)}, stage=${JSON.stringify(southStage.position)}, ` +
+        `peak=${JSON.stringify(firstVault.peak)}, landed=${JSON.stringify(firstVault.position)}, ` +
+        `support=${JSON.stringify(firstSupport.support)}`,
+    );
+
+    const secondStage = await moveUntil(
+      [secondPipe.position[0], firstVault.position.y + 0.5, vaultZ],
+      (position) =>
+        position.x >= secondPipe.position[0] - 0.88 &&
+        Math.abs(position.z - vaultZ) < 0.15,
+      240,
+      false,
+    );
+    const secondThreshold = secondPipe.position[0] + 0.77;
+    const secondVault = await moveUntil(
+      [secondPipe.position[0] + 2, secondStage.position.y + 0.8, vaultZ],
+      (position) => position.x >= secondThreshold,
+      120,
+      true,
+    );
+    const secondSupport = await supportedCrouch(secondVault.position);
+    assert.ok(
+      secondStage.position.x >= secondPipe.position[0] - 0.9 &&
+        secondVault.position.x >= secondThreshold &&
+        secondSupport.valid,
+      `explicit crouched jump+forward must cross intact pipe 639 onto support; ` +
+        `threshold=${secondThreshold.toFixed(3)}, stage=${JSON.stringify(secondStage.position)}, ` +
+        `peak=${JSON.stringify(secondVault.peak)}, landed=${JSON.stringify(secondVault.position)}, ` +
+        `support=${JSON.stringify(secondSupport.support)}`,
+    );
+
+    const [nextX, , nextZ] = nextLadder.position;
+    // Center just beyond Pipe639's east face before crossing the shaft. The
+    // floor strip on its far side is narrow, so carrying the vault's residual
+    // eastward offset into the jump can miss the authored lower corridor.
+    const shaftX = secondThreshold + 0.1;
+    const northEdge = await moveUntil(
+      [shaftX, secondVault.position.y + 0.5, nextZ],
+      (position) => position.z >= firstPipe.position[2] + 1.62,
+      240,
+      false,
+    );
+    const northJump = await moveUntil(
+      [shaftX, northEdge.position.y + 0.8, nextZ],
+      (position) => position.z >= nextZ - 0.65,
+      180,
+      true,
+    );
+    const corridorSupport = await supportedCrouch(northJump.position);
+    assert.ok(
+      northJump.position.z >= nextZ - 0.7 &&
+        corridorSupport.valid &&
+        corridorSupport.support.hit_point !== null &&
+        Math.abs(corridorSupport.support.hit_point[1] - 32.8) < 0.05,
+      `ordinary crouched jump must cross the north shaft onto the lower corridor; ` +
+        `edge=${JSON.stringify(northEdge.position)}, peak=${JSON.stringify(northJump.peak)}, ` +
+        `landed=${JSON.stringify(northJump.position)}, ` +
+        `support=${JSON.stringify(corridorSupport.support)}`,
+    );
+
+    // Traverse west along the supported lower corridor, staying south of the
+    // ladder's thin edge. Near 499, an explicit crouched hop carries the body
+    // onto the authored y34 strip at its north face.
+    const nextContactZ = northJump.position.z;
+    const westStage = await moveUntil(
+      [nextX, northJump.position.y + 0.8, nextContactZ],
+      (position) => Math.abs(position.x - nextX) < 0.15,
+      900,
+      false,
+    );
+    const lowerSupport = await supportedCrouch(westStage.position);
+    assert.ok(
+      lowerSupport.valid &&
+        lowerSupport.support.hit_point !== null &&
+        Math.abs(lowerSupport.support.hit_point[1] - 32.8) < 0.05,
+      `the west traverse must remain supported below 499; ` +
+        `stage=${JSON.stringify(westStage.position)}, support=${JSON.stringify(lowerSupport.support)}`,
+    );
+
+    // Crawl just over the south edge of the y34 strip. The resulting
+    // collision-resolved pose is intentionally not a landing: it is the
+    // authentic low starting edge for the explicit hop onto the strip.
+    await game.input.lookAtWorldPoint([
+      nextX,
+      westStage.position.y + 0.8,
+      nextZ - 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 0.2]);
+    let hopStage = westStage.position;
+    for (let elapsed = 0; elapsed < 60; elapsed += 1) {
+      await game.step({ frames: 1 });
+      hopStage = await game.player.position();
+      if (hopStage.z <= nextZ - 0.56) break;
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    hopStage = await game.player.position();
+    const hopStageFrame = await game.info();
+    assert.ok(
+      hopStage.z < nextZ - 0.55 &&
+        hopStage.z > nextZ - 0.8 &&
+        hopStage.y > 33.2 &&
+        hopStage.y < 33.5 &&
+        Math.abs(hopStageFrame.player.camera_offset[1] - 0.48) < 0.02,
+      `ordinary movement must reach the authentic crouched south edge for the y34 hop; ` +
+        `corridor=${JSON.stringify(westStage.position)}, edge=${JSON.stringify(hopStage)}, ` +
+        `camera=${JSON.stringify(hopStageFrame.player.camera_offset)}`,
+    );
+
+    // The strip begins at a sharp lip. A two-frame production jump from the
+    // lower edge has latched horizontal momentum: neutralize the analog input
+    // at the geometry-relative threshold, then let that ordinary momentum
+    // settle the crouched body on the north-side y34 support.
+    await game.input.lookAtWorldPoint([
+      nextX,
+      hopStage.y + 4,
+      nextZ + 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 0.35]);
+    await game.input.setJump(true);
+    await game.step({ frames: 2 });
+    await game.input.setJump(false);
+    let hopPeak = hopStage;
+    let neutralizedAt: RoutePose | null = null;
+    for (let elapsed = 0; elapsed < 60; elapsed += 1) {
+      await game.step({ frames: 1 });
+      const position = await game.player.position();
+      if (position.y > hopPeak.y) hopPeak = position;
+      if (position.z >= nextZ - 0.356) {
+        neutralizedAt = position;
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    const ladderContact = {
+      position: await game.player.position(),
+      peak: hopPeak,
+    };
+    const contactSupport = await supportedCrouch(ladderContact.position);
+    const contactRay = await game.raycast({
+      start: [ladderContact.position.x, ladderContact.position.y, ladderContact.position.z],
+      end: [nextX, ladderContact.position.y, nextZ],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      neutralizedAt !== null &&
+        Math.abs(ladderContact.position.x - nextX) < 0.2 &&
+        ladderContact.position.z > nextZ &&
+        contactSupport.valid &&
+        contactSupport.support.hit_point !== null &&
+        Math.abs(contactSupport.support.hit_point[1] - 34) < 0.05 &&
+        contactRay.hit &&
+        contactRay.entity_id === nextLadder.id &&
+        contactRay.distance !== null &&
+        contactRay.distance < 0.8,
+      `the production route from ladder 488 must reach 499's physical north face; ` +
+        `corridor=${JSON.stringify(northJump.position)}, ` +
+        `edge=${JSON.stringify(hopStage)}, neutralized=${JSON.stringify(neutralizedAt)}, ` +
+        `peak=${JSON.stringify(ladderContact.peak)}, ` +
+        `contact=${JSON.stringify(ladderContact.position)}, ` +
+        `ladder=${JSON.stringify(nextLadder.position)}, ` +
+        `support=${JSON.stringify(contactSupport.support)}, ray=${JSON.stringify(contactRay)}`,
+    );
+
+    const preSaveFrame = await game.info();
+    assert.ok(
+      Math.abs(preSaveFrame.player.camera_offset[1] - 0.48) < 0.02,
+      `ladder 499 contact must retain the explicit crouch; frame=${JSON.stringify(preSaveFrame.player)}`,
+    );
+    assert.equal((await game.save(saveName)).success, true);
+    assert.equal((await game.load(saveName)).success, true);
+    await game.step({ frames: 10 });
+    const loaded = await game.player.position();
+    const loadedFrame = await game.info();
+    assert.ok(
+      Math.hypot(
+        loaded.x - ladderContact.position.x,
+        loaded.y - ladderContact.position.y,
+        loaded.z - ladderContact.position.z,
+      ) < 0.15 &&
+        Math.abs(loadedFrame.player.camera_offset[1] - 0.48) < 0.02,
+      `save/load must preserve the crouched ladder 499 contact; ` +
+        `before=${JSON.stringify(ladderContact.position)}, after=${JSON.stringify(loaded)}, ` +
+        `camera=${JSON.stringify(loadedFrame.player.camera_offset)}`,
+    );
+
+    const loadedLadders = (
+      await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
+    ).entities;
+    const loadedNextLadder = loadedLadders.find(
+      (entity) => entity.template_id === 499,
+    );
+    assert.ok(loadedNextLadder, "rick1 should restore authored ladder object 499");
+    const [loadedNextX, loadedNextY, loadedNextZ] = loadedNextLadder.position;
+    await game.input.set("crouch", 1);
+    await game.input.lookAtWorldPoint([
+      loadedNextX,
+      loadedNextY + 8,
+      loadedNextZ - 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let landing499 = loaded;
+    let landing499Support: RayCastResult | null = null;
+    let peak499 = loaded;
+    for (let elapsed = 0; elapsed < 900; elapsed += 1) {
+      await game.step({ frames: 1 });
+      landing499 = await game.player.position();
+      if (landing499.y > peak499.y) peak499 = landing499;
+      if (landing499.y < 38.45 || landing499.y > 38.75) continue;
+      landing499Support = await game.raycast({
+        start: [landing499.x, landing499.y, landing499.z],
+        end: [landing499.x, landing499.y - 3, landing499.z],
+        collision_groups: ["world", "entity", "selectable"],
+        ignore_sensors: true,
+      });
+      if (
+        landing499Support.hit &&
+        landing499Support.distance !== null &&
+        Math.abs(landing499Support.distance - crouchedFloorOffset) < 0.05 &&
+        landing499Support.hit_point !== null &&
+        Math.abs(landing499Support.hit_point[1] - 38) < 0.05 &&
+        landing499Support.hit_normal !== null &&
+        landing499Support.hit_normal[1] > 0.5
+      ) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    assert.ok(
+      landing499Support?.hit &&
+        landing499Support.hit_point !== null &&
+        Math.abs(landing499Support.hit_point[1] - 38) < 0.05 &&
+        Math.abs(landing499.y - (38 + crouchedFloorOffset)) < 0.06 &&
+        landing499.z < loadedNextZ - 0.05 &&
+        Math.abs(landing499.x - loadedNextX) > 0.7,
+      `ordinary input after save/load must complete 499's crouched top-out onto the y38 deck; ` +
+        `contact=${JSON.stringify(loaded)}, peak=${JSON.stringify(peak499)}, ` +
+        `landing=${JSON.stringify(landing499)}, support=${JSON.stringify(landing499Support)}, ` +
+        `ladder=${JSON.stringify(loadedNextLadder.position)}`,
+    );
+
+    await game.step({ frames: 60 });
+    const stable499 = await game.player.position();
+    const stable499Support = await supportedCrouch(stable499);
+    assert.ok(
+      stable499Support.valid &&
+        stable499Support.support.hit_point !== null &&
+        Math.abs(stable499Support.support.hit_point[1] - 38) < 0.05 &&
+        Math.hypot(
+          stable499.x - landing499.x,
+          stable499.z - landing499.z,
+        ) < 0.15 &&
+        Math.abs(stable499.y - landing499.y) < 0.08,
+      `neutral input must remain stably supported after ladder 499 top-out; ` +
+        `landing=${JSON.stringify(landing499)}, stable=${JSON.stringify(stable499)}, ` +
+        `support=${JSON.stringify(stable499Support.support)}`,
+    );
+
+    const westEgress = await moveUntil(
+      [stable499.x - 10, stable499.y + 0.5, stable499.z],
+      (position) => position.x < stable499.x - 0.75,
+      180,
+      false,
+    );
+    const westSupport = await supportedCrouch(westEgress.position);
+    assert.ok(
+      westEgress.position.x < stable499.x - 0.7 &&
+        westSupport.valid &&
+        westSupport.support.hit_point !== null &&
+        Math.abs(westSupport.support.hit_point[1] - 38) < 0.05,
+      `ordinary westward input must leave ladder 499 on its connected y38 deck; ` +
+        `stable=${JSON.stringify(stable499)}, egress=${JSON.stringify(westEgress.position)}, ` +
+        `support=${JSON.stringify(westSupport.support)}`,
+    );
+  },
+);
+
+// Rick1 object532 is a tall south-face ladder whose real progression exit uses
+// Dark's explicit BreakClimb jump back onto the y38.8 arrival-side corridor.
+// From there the authored U-route steps down to y38.4, physically opens the
+// Security door, and reaches the Control Station. The north pocket and y42
+// roof are disconnected traps; a locally supported landing alone is not
+// campaign progress.
+test(
+  "flat climbing: rick1 ladder 532 reaches Security Control Station",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "rick1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    const ladder = (
+      await game.entities.list({ filter: "Rick Ladder 16", limit: 100 })
+    ).entities.find((entity) => entity.template_id === 532);
+    assert.ok(ladder, "rick1 should contain authored ladder object 532");
+    const [ladderX, ladderY, ladderZ] = ladder.position;
+
+    // Runtime ids vary every launch. Resolve the authored Security route gate
+    // and terminal by stable mission identities, then observe their live
+    // transforms so the test proves physical ENTER effects rather than
+    // coordinate proximity.
+    const tripwires = (
+      await game.entities.list({ filter: "Tripwire", limit: 200 })
+    ).entities;
+    const doors = (
+      await game.entities.list({ filter: "RD_Door_1", limit: 200 })
+    ).entities;
+    const securityTripwire = tripwires.find(
+      (entity) => entity.template_id === 842,
+    );
+    const securityDoor = doors.find((entity) => entity.template_id === 841);
+    const securityTerminal = (
+      await game.entities.list({ filter: "Security", limit: 200 })
+    ).entities.find((entity) => entity.template_id === 2110);
+    assert.ok(securityTripwire, "rick1 should contain authored tripwire 842");
+    assert.ok(securityDoor, "rick1 should contain authored door 841");
+    assert.ok(
+      securityTerminal,
+      "rick1 should contain Security Control Station terminal 2110",
+    );
+    const securityDoorClosedY = securityDoor.position[1];
+    const arrivalFloorY = securityTripwire.position[1] - 0.8;
+    const arrivalBodyY = arrivalFloorY + 1.244;
+    const lowerFloorY = securityTripwire.position[1] - 1.2;
+    const lowerBodyY = lowerFloorY + 1.244;
+
+    // Geometry-relative setup reproduces the reachable supported south-face
+    // stage. The climb and all post-setup movement use production controls.
+    await game.player.teleport({
+      x: ladderX,
+      y: ladderY - 7.15797,
+      z: ladderZ - 0.62918,
+    });
+    await game.input.set("crouch", 0);
+    await game.input.setJump(false);
+    await game.step({ frames: 30 });
+    const start = await game.player.position();
+    const startFrame = await game.info();
+    assert.ok(
+      Math.hypot(start.x - ladderX, start.z - (ladderZ - 0.62918)) < 0.05 &&
+        Math.abs(startFrame.player.camera_offset[1] - 1.04) < 0.02,
+      `expected standing south-face stage; ladder=${JSON.stringify(ladder.position)}, ` +
+        `start=${JSON.stringify(start)}, camera=${JSON.stringify(startFrame.player.camera_offset)}`,
+    );
+
+    // The walkthrough route climbs straight back up from the only reachable
+    // south face. Keep the held heading due north; the former NW aim was an
+    // invented oracle for the now-rejected west/roof landings.
+    const horizontal = 10;
+    await game.input.lookAtWorldPoint([
+      start.x,
+      start.y + Math.tan(Math.PI / 3) * horizontal,
+      start.z + horizontal,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let peak = start;
+    let cap = start;
+    let previous = start;
+    let stalledFrames = 0;
+    for (let frame = 0; frame < 240; frame += 1) {
+      await game.step({ frames: 1 });
+      cap = await game.player.position();
+      if (cap.y > peak.y) peak = cap;
+      stalledFrames =
+        cap.y > start.y + 7 && Math.abs(cap.y - previous.y) < 1e-4
+          ? stalledFrames + 1
+          : 0;
+      previous = cap;
+      if (stalledFrames >= 3) break;
+    }
+    assert.ok(
+      stalledFrames >= 3,
+      `pure-north grip must reach a stable high cap before BreakClimb; start=${JSON.stringify(start)}, cap=${JSON.stringify(cap)}`,
+    );
+
+    // Dark exits an object ladder only through PhysPlayerJump/BreakClimb. At
+    // the stable cap, atomically turn back toward the arrival-side corridor
+    // and emit one jump edge. The launch impulse must persist independently of
+    // thumbstick input; neutralize immediately so ordinary collision, gravity,
+    // and the inherited release velocity alone choose the landing.
+    await game.input.lookAtWorldPoint([
+      cap.x + 0.342 * horizontal,
+      cap.y + Math.tan(Math.PI / 3) * horizontal,
+      cap.z - 0.94 * horizontal,
+    ]);
+    await game.input.setJump(true);
+    await game.step({ frames: 1 });
+    const jumpAt = await game.player.position();
+    await game.input.setJump(false);
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    let reachedArrivalSide = false;
+    let landing = start;
+    for (let frame = 0; frame < 360; frame += 1) {
+      await game.step({ frames: 1 });
+      const position = await game.player.position();
+      if (position.y > peak.y) peak = position;
+      if (
+        Math.abs(position.y - arrivalBodyY) < 0.12 &&
+        position.x > 35.5 &&
+        position.x < 38.5 &&
+        position.z > -12 &&
+        position.z < -9.7
+      ) {
+        const support = await game.raycast({
+          start: [position.x, position.y + 0.1, position.z],
+          end: [position.x, position.y - 3, position.z],
+          collision_groups: ["world", "entity", "selectable"],
+          ignore_sensors: true,
+        });
+        if (
+          support.hit_point !== null &&
+          support.hit_normal !== null &&
+          Math.abs(
+            support.hit_point[1] - arrivalFloorY,
+          ) < 0.05 &&
+          support.hit_normal[1] > 0.5
+        ) {
+          reachedArrivalSide = true;
+          landing = position;
+          break;
+        }
+      }
+    }
+    await game.step({ frames: 60 });
+    const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y + 0.1, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      reachedArrivalSide &&
+        Math.abs(stable.y - arrivalBodyY) < 0.08 &&
+        stable.x > 35.5 &&
+        stable.x < 38.5 &&
+        stable.z > -12 &&
+        stable.z < -9.7 &&
+        stableSupport.hit &&
+        stableSupport.hit_point !== null &&
+        Math.abs(
+          stableSupport.hit_point[1] - arrivalFloorY,
+        ) < 0.05 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5,
+      `the explicit BreakClimb impulse must settle on the supported y38.8 arrival-side corridor; ` +
+        `start=${JSON.stringify(start)}, cap=${JSON.stringify(cap)}, jumpAt=${JSON.stringify(jumpAt)}, peak=${JSON.stringify(peak)}, landing=${JSON.stringify(landing)}, ` +
+        `stable=${JSON.stringify(stable)}, support=${JSON.stringify(stableSupport)}`,
+    );
+
+    const walkTo = async (
+      target: [number, number],
+      label: string,
+      maxFrames = 240,
+      tolerance = 0.65,
+    ) => {
+      let position = await game.player.position();
+      const initialDistance = Math.hypot(
+        position.x - target[0],
+        position.z - target[1],
+      );
+      let bestDistance = initialDistance;
+      let stalledFrames = 0;
+      await game.input.lookAtWorldPoint([
+        target[0],
+        position.y + 1.04,
+        target[1],
+      ]);
+      await game.input.set("right_hand.thumbstick", [0, 1]);
+      for (let frame = 0; frame < maxFrames; frame += 1) {
+        if (frame > 0 && frame % 12 === 0) {
+          await game.input.lookAtWorldPoint([
+            target[0],
+            position.y + 1.04,
+            target[1],
+          ]);
+        }
+        await game.step({ frames: 1 });
+        position = await game.player.position();
+        const distance = Math.hypot(
+          position.x - target[0],
+          position.z - target[1],
+        );
+        if (distance < tolerance) {
+          break;
+        }
+        if (distance < bestDistance - 0.05) {
+          bestDistance = distance;
+          stalledFrames = 0;
+        } else {
+          stalledFrames += 1;
+        }
+        if (stalledFrames >= 90 || distance > initialDistance + 3) {
+          break;
+        }
+      }
+      await game.input.set("right_hand.thumbstick", [0, 0]);
+      assert.ok(
+        Math.hypot(position.x - target[0], position.z - target[1]) < tolerance,
+        `${label} must be reachable with ordinary input; target=${JSON.stringify(target)}, ` +
+          `ended=${JSON.stringify(position)}`,
+      );
+      return position;
+    };
+
+    // Follow the collision-supported arrival-side U-route from the y38.8
+    // landing. Crossing x=42 takes the authored small step down to y38.4;
+    // this is ordinary movement, not another top-out or relocation.
+    const arrivalSideRoute: [number, number][] = [
+      [36.4, -10.8],
+      [35.1, -14],
+      [34, -15.6],
+      [34.95, -16.4],
+    ];
+    for (const [index, waypoint] of arrivalSideRoute.entries()) {
+      await walkTo(waypoint, `arrival-side U-route waypoint ${index + 1}`);
+    }
+    const lowerStep = await walkTo([37, -18], "arrival-side lower-route step");
+    const lowerStepSupport = await game.raycast({
+      start: [lowerStep.x, lowerStep.y + 0.1, lowerStep.z],
+      end: [lowerStep.x, lowerStep.y - 3, lowerStep.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      Math.abs(lowerStep.y - lowerBodyY) < 0.08 &&
+        lowerStepSupport.hit_point !== null &&
+        Math.abs(
+          lowerStepSupport.hit_point[1] - lowerFloorY,
+        ) < 0.05 &&
+        lowerStepSupport.hit_normal !== null &&
+        lowerStepSupport.hit_normal[1] > 0.5,
+      `ordinary movement must turn around the authored wall and step from y38.8 onto the connected y38.4 lower route; ` +
+        `position=${JSON.stringify(lowerStep)}, support=${JSON.stringify(lowerStepSupport)}`,
+    );
+    const lowerStepRoute: [number, number][] = [
+      [41.6, -18],
+      [42.2, -16.8],
+      [42.2, -15.1],
+    ];
+    for (const [index, waypoint] of lowerStepRoute.entries()) {
+      await walkTo(waypoint, `lower-route step waypoint ${index + 1}`);
+    }
+    const routeToSecurityGate: [number, number][] = [
+      [42.4, -14],
+      [44, -11.2],
+      [48, -11.2],
+      [51.2, -11.2],
+      [57.6, -11.2],
+      [61.2, -11.2],
+      [65.6, -12.8],
+      [65.6, -15.8],
+      [66.8, -17.2],
+    ];
+    for (const [index, waypoint] of routeToSecurityGate.entries()) {
+      await walkTo(waypoint, `Security route waypoint ${index + 1}`);
+    }
+
+    // Enter the real Security tripwire. The door's vertical travel is durable
+    // evidence that its sibling script received the physical ENTER event, and
+    // reaching the terminal beyond it matches the original game's route.
+    await walkTo(
+      [securityTripwire.position[0], securityTripwire.position[2]],
+      "tripwire842",
+    );
+    await game.step({ frames: 120 });
+    const openedSecurityDoor = await game.entities.detail(securityDoor.id);
+    assert.ok(
+      openedSecurityDoor.position[1] > securityDoorClosedY + 1,
+      `physical tripwire842 ENTER must open door841; ` +
+        `door-y=${securityDoorClosedY}->${openedSecurityDoor.position[1]}`,
+    );
+
+    const routeToSecurity: [number, number][] = [
+      [67.75, -18],
+      [68, -18],
+      [71, -15.6],
+      [72.6, -15.2],
+    ];
+    for (const [index, waypoint] of routeToSecurity.entries()) {
+      await walkTo(waypoint, `post-door Security waypoint ${index + 1}`);
+    }
+    const terminalApproach = await walkTo(
+      [securityTerminal.position[0], securityTerminal.position[2]],
+      "Security Control Station",
+      480,
+      1.2,
+    );
+    await game.step({ frames: 60 });
+    const terminalStable = await game.player.position();
+    const terminalSupport = await game.raycast({
+      start: [terminalStable.x, terminalStable.y + 0.1, terminalStable.z],
+      end: [terminalStable.x, terminalStable.y - 3, terminalStable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      Math.hypot(
+        terminalApproach.x - securityTerminal.position[0],
+        terminalApproach.z - securityTerminal.position[2],
+      ) < 1.2 &&
+        Math.hypot(
+          terminalStable.x - securityTerminal.position[0],
+          terminalStable.z - securityTerminal.position[2],
+        ) < 1.5 &&
+        terminalSupport.hit &&
+        terminalSupport.hit_normal !== null &&
+        terminalSupport.hit_normal[1] > 0.5,
+      `ordinary input must cross open door841 and settle at Security Control Station; ` +
+        `approach=${JSON.stringify(terminalApproach)}, stable=${JSON.stringify(terminalStable)}, ` +
+        `support=${JSON.stringify(terminalSupport)}, terminal=${JSON.stringify(securityTerminal.position)}`,
+    );
+  },
+);
+
+// Issue #657's Eng1 blocker is a different Dark BreakClimb shape from Rick1:
+// authored ladder 317 ends under a thick terrain slab. The player must rise
+// through the slab's two locally sampled wall planes, then descend to the
+// lower far-side deck. Treating the first plane as an ordinary full-height
+// wall caps the standing capsule near y=-14.64 forever.
+test(
+  "flat climbing: eng1 ladder 317 crosses its local wall onto supported deck",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "eng1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    // Runtime ids are unstable; object/template 317 and its authored name are
+    // the durable mission identity. Derive both contact poses from that
+    // authored object rather than baking its world coordinates into the test.
+    const ladder = (
+      await game.entities.list({ filter: "Ladder 16'", limit: 100 })
+    ).entities.find((entity) => entity.template_id === 317);
+    assert.ok(ladder, "eng1 should contain authored Ladder 16' object 317");
+    const [ladderX, ladderY, ladderZ] = ladder.position;
+    const standingY = ladderY + 1.243978;
+
+    // Negative control: the north face is behind ordinary world terrain. A
+    // production-forward push toward -Z must not phase through that wall or
+    // gain the ladder's top-out rise.
+    await game.player.teleport({
+      x: ladderX,
+      y: standingY,
+      z: ladderZ + 0.99,
+    });
+    await game.input.lookAtWorldPoint([
+      ladderX,
+      standingY + 1.6,
+      ladderZ - 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 60 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    const wrongFace = await game.player.position();
+    assert.ok(
+      wrongFace.z > ladderZ + 0.5 && wrongFace.y < ladderY + 2.5,
+      `the terrain-occluded face must remain a wall; ladder=(${ladderX.toFixed(2)}, ${ladderY.toFixed(2)}, ${ladderZ.toFixed(2)}), ` +
+        `ended=(${wrongFace.x.toFixed(2)}, ${wrongFace.y.toFixed(2)}, ${wrongFace.z.toFixed(2)})`,
+    );
+
+    // Setup-only correct-face contact. No simulation frame occurs between the
+    // relocation and production input, matching the campaign fixture while
+    // keeping the test independent of a private save.
+    await game.player.teleport({
+      x: ladderX,
+      y: standingY,
+      z: ladderZ - 0.68944,
+    });
+    const start = await game.player.position();
+    await game.input.lookAtWorldPoint([
+      start.x,
+      start.y + 1.6,
+      start.z + 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+
+    let crossedWall = false;
+    let supportedLanding = false;
+    let landing = start;
+    let landingSupport: RayCastResult | null = null;
+    for (let elapsed = 0; elapsed < 360; elapsed += 1) {
+      await game.step({ frames: 1 });
+      landing = await game.player.position();
+      crossedWall ||= landing.y > ladderY + 3.5;
+      if (landing.z > ladderZ + 0.7 && landing.y < ladderY + 2.5) {
+        landingSupport = await game.raycast({
+          start: [landing.x, landing.y, landing.z],
+          end: [landing.x, landing.y - 3, landing.z],
+          collision_groups: ["world", "entity", "selectable"],
+          ignore_sensors: true,
+        });
+        supportedLanding =
+          landingSupport.hit &&
+          landingSupport.distance !== null &&
+          landingSupport.distance > 0.5 &&
+          landingSupport.distance < 2 &&
+          landingSupport.hit_normal !== null &&
+          landingSupport.hit_normal[1] > 0.5;
+        if (supportedLanding) break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+
+    assert.ok(
+      crossedWall && supportedLanding,
+      `correct-face forward input must cross the local wall and reach supported far-side standing; ` +
+        `start=(${start.x.toFixed(2)}, ${start.y.toFixed(2)}, ${start.z.toFixed(2)}), ` +
+        `ended=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(landingSupport)}`,
+    );
+
+    await game.step({ frames: 180 });
+    const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      stable.z > ladderZ + 0.7 &&
+        Math.abs(stable.y - standingY) < 0.1 &&
+        Math.hypot(stable.x - landing.x, stable.z - landing.z) < 0.25 &&
+        stableSupport.hit &&
+        stableSupport.distance !== null &&
+        stableSupport.distance > 0.5 &&
+        stableSupport.distance < 2 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5,
+      `release must remain stable on Eng1's far-side deck; ` +
+        `landing=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
+        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(stableSupport)}`,
+    );
+  },
+);
+
+// Issue #657's Hydro2 extension is a third authored geometry family: eleven
+// separate Rick Ladder rungs climb the north face of a narrow Sector C shaft,
+// while the authored office sits below and behind the terrain slab at the
+// column top. A collision-supported exterior roof is not a successful landing:
+// the real route must descend through tripwire 1194, open doors 1195/1196, and
+// permit ordinary movement into the furnished office toward ACR3.
+test(
+  "flat climbing: hydro2 Sector C rung stack reaches the upper office",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "hydro2.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    // Runtime ids are unstable. Mission object 551 is the durable anchor for
+    // this stack; discover the rest by exact authored name and shared column
+    // geometry rather than baking its world coordinates into the scenario.
+    const rungs = (
+      await game.entities.list({ filter: "Rick Ladder", limit: 100 })
+    ).entities;
+    const anchor = rungs.find((entity) => entity.template_id === 551);
+    assert.ok(anchor, "hydro2 should contain Sector C Rick Ladder object 551");
+    const [ladderX, , ladderZ] = anchor.position;
+    const column = rungs.filter(
+      (entity) =>
+        entity.name === "Rick Ladder" &&
+        Math.hypot(
+          entity.position[0] - ladderX,
+          entity.position[2] - ladderZ,
+        ) < 0.05,
+    );
+    const stableIds = new Set(column.map((entity) => entity.template_id));
+    const ladderBottom = Math.min(...column.map((entity) => entity.position[1]));
+    const ladderTop = Math.max(...column.map((entity) => entity.position[1]));
+    assert.ok(
+      column.length === 11 &&
+        stableIds.has(551) &&
+        stableIds.has(564) &&
+        ladderTop - ladderBottom > 7.5,
+      `expected the authored 11-rung Sector C column, got ids=${JSON.stringify([...stableIds].sort())}, ` +
+        `span=${(ladderTop - ladderBottom).toFixed(2)}`,
+    );
+
+    // Discover the authored progression gate by stable mission identities.
+    // Their runtime ids vary between launches. Door positions are live, so the
+    // paired z deltas prove the tripwire actually fired rather than inferring
+    // success from a nearby player coordinate.
+    const tripwire = (
+      await game.entities.list({ filter: "New Tripwire", limit: 100 })
+    ).entities.find((entity) => entity.template_id === 1194);
+    const hydroDoors = (
+      await game.entities.list({ filter: "Double_Hydro", limit: 100 })
+    ).entities;
+    const nearDoor = hydroDoors.find((entity) => entity.template_id === 1196);
+    const farDoor = hydroDoors.find((entity) => entity.template_id === 1195);
+    assert.ok(tripwire, "hydro2 should contain authored office tripwire 1194");
+    assert.ok(nearDoor, "hydro2 should contain authored office door 1196");
+    assert.ok(farDoor, "hydro2 should contain authored office door 1195");
+    const nearDoorClosedZ = nearDoor.position[2];
+    const farDoorClosedZ = farDoor.position[2];
+
+    // Geometry-relative setup reproduces the campaign save's supported
+    // north-face contact. The climb and top-out use only production input.
+    const standingFloorOffset = 1.243978;
+    const northFaceOffset = 0.5712;
+    await game.player.teleport({
+      x: ladderX,
+      y: ladderBottom + standingFloorOffset,
+      z: ladderZ + northFaceOffset,
+    });
+    await game.step({ frames: 30 });
+    const start = await game.player.position();
+    const startSupport = await game.raycast({
+      start: [start.x, start.y, start.z],
+      end: [start.x, start.y - 3, start.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      Math.hypot(start.x - ladderX, start.z - (ladderZ + northFaceOffset)) < 0.05 &&
+        startSupport.hit &&
+        startSupport.distance !== null &&
+        startSupport.distance > 0.5 &&
+        startSupport.distance < 2 &&
+        startSupport.hit_normal !== null &&
+        startSupport.hit_normal[1] > 0.5,
+      `expected supported north-face contact; start=${JSON.stringify(start)}, ` +
+        `support=${JSON.stringify(startSupport)}`,
+    );
+
+    await game.input.lookAtWorldPoint([
+      ladderX,
+      ladderTop + 4,
+      ladderZ - 10,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+
+    let landing = start;
+    let landingSupport: RayCastResult | null = null;
+    let supportedLanding = false;
+    for (let elapsed = 0; elapsed < 720; elapsed += 1) {
+      await game.step({ frames: 1 });
+      landing = await game.player.position();
+      const crossedIntoOffice =
+        landing.z > ladderZ + 1 && landing.y < ladderTop - 1;
+      if (!crossedIntoOffice) continue;
+      landingSupport = await game.raycast({
+        start: [landing.x, landing.y, landing.z],
+        end: [landing.x, landing.y - 3, landing.z],
+        collision_groups: ["world", "entity", "selectable"],
+        ignore_sensors: true,
+      });
+      supportedLanding =
+        landingSupport.hit &&
+        landingSupport.distance !== null &&
+        landingSupport.distance > 0.5 &&
+        landingSupport.distance < 2 &&
+        Math.abs(landingSupport.distance - standingFloorOffset) < 0.05 &&
+        landingSupport.hit_point !== null &&
+        Math.abs(
+          landingSupport.hit_point[1] -
+            (tripwire.position[1] - 1.6),
+        ) < 0.05 &&
+        landingSupport.hit_normal !== null &&
+        landingSupport.hit_normal[1] > 0.5;
+      if (supportedLanding) break;
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    assert.ok(
+      supportedLanding,
+      `continuous north-face input must recover onto the supported lower office floor; ` +
+        `ladder=(${ladderX.toFixed(2)}, ${ladderTop.toFixed(2)}, ${ladderZ.toFixed(2)}), ` +
+        `start=(${start.x.toFixed(2)}, ${start.y.toFixed(2)}, ${start.z.toFixed(2)}), ` +
+        `ended=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(landingSupport)}`,
+    );
+
+    await game.step({ frames: 180 });
+    const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      stable.z > ladderZ + 1 &&
+        stable.y < ladderTop - 1 &&
+        Math.abs(stable.y - landing.y) < 0.1 &&
+        Math.hypot(stable.x - landing.x, stable.z - landing.z) < 0.25 &&
+        stableSupport.hit &&
+        stableSupport.distance !== null &&
+        stableSupport.distance > 0.5 &&
+        stableSupport.distance < 2 &&
+        stableSupport.hit_point !== null &&
+        Math.abs(
+          stableSupport.hit_point[1] -
+            (tripwire.position[1] - 1.6),
+        ) < 0.05 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5,
+      `the office landing must remain stable after release; ` +
+        `landing=${JSON.stringify(landing)}, stable=${JSON.stringify(stable)}, ` +
+        `support=${JSON.stringify(stableSupport)}`,
+    );
+
+    // Reorient toward the authored office threshold using only ordinary
+    // locomotion. The old oracle walked farther across the same exterior roof;
+    // this one requires the real sensor and its paired door movement.
+    await game.input.lookAtWorldPoint([
+      tripwire.position[0],
+      stable.y + 1.6,
+      tripwire.position[2],
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    let threshold = stable;
+    for (let elapsed = 0; elapsed < 180; elapsed += 1) {
+      await game.step({ frames: 1 });
+      threshold = await game.player.position();
+      if (
+        Math.hypot(
+          threshold.x - tripwire.position[0],
+          threshold.z - tripwire.position[2],
+        ) < 0.25
+      ) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    threshold = await game.player.position();
+    const openedNearDoor = await game.entities.detail(nearDoor.id);
+    const openedFarDoor = await game.entities.detail(farDoor.id);
+    const nearDoorTravel = Math.abs(
+      openedNearDoor.position[2] - nearDoorClosedZ,
+    );
+    const farDoorTravel = Math.abs(
+      openedFarDoor.position[2] - farDoorClosedZ,
+    );
+
+    assert.ok(
+      threshold.y < ladderTop - 1 &&
+        Math.abs(threshold.y - (tripwire.position[1] - 0.356022)) < 0.2 &&
+        nearDoorTravel > 1 &&
+        farDoorTravel > 1,
+      `the production top-out and ordinary approach must reach the lower office sensor and open both doors; ` +
+        `ladder-top=${ladderTop.toFixed(2)}, stable=${JSON.stringify(stable)}, ` +
+        `tripwire=${JSON.stringify(tripwire.position)}, threshold=${JSON.stringify(threshold)}, ` +
+        `door1196-z=${nearDoorClosedZ.toFixed(2)}->${openedNearDoor.position[2].toFixed(2)}, ` +
+        `door1195-z=${farDoorClosedZ.toFixed(2)}->${openedFarDoor.position[2].toFixed(2)}`,
+    );
+
+    // With the gate open, walk east through the real office instead of merely
+    // proving a sensor overlap. This remains ordinary production input.
+    await game.input.lookAtWorldPoint([
+      tripwire.position[0] + 8,
+      threshold.y + 1.6,
+      tripwire.position[2],
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await game.step({ frames: 120 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 60 });
+    const office = await game.player.position();
+    const officeSupport = await game.raycast({
+      start: [office.x, office.y, office.z],
+      end: [office.x, office.y - 3, office.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      office.x > tripwire.position[0] + 2 &&
+        office.y < ladderTop - 1 &&
+        officeSupport.hit &&
+        officeSupport.distance !== null &&
+        officeSupport.distance > 0.5 &&
+        officeSupport.distance < 2 &&
+        officeSupport.hit_point !== null &&
+        officeSupport.hit_point[1] < ladderTop - 1 &&
+        officeSupport.hit_normal !== null &&
+        officeSupport.hit_normal[1] > 0.5,
+      `the supported top-out must permit ordinary onward movement into the office; ` +
+        `threshold=${JSON.stringify(threshold)}, office=${JSON.stringify(office)}, ` +
+        `support=${JSON.stringify(officeSupport)}`,
+    );
+  },
+);
+
+// Issue #657: Engineering's upper Ladder 16' (mission object 945) reaches the
+// Engine Core through a thick authored floor/wall transition. The south face
+// is the real approach from the main-elevator corridor; holding ordinary
+// forward toward +Z must finish on supported core-side ground, not freeze in
+// the unsupported gap below the slab and fall back to the arrival floor.
+test(
+  "flat climbing: eng1 upper ladder 945 reaches supported core-side ground",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "eng1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8109),
+    });
+    await game.step({ frames: 5 });
+
+    // Runtime ids change every launch. Mission object 945 and its authored
+    // name are the durable identity; derive the campaign-proven south-face
+    // contact from that object instead of hard-coding a world position.
+    const ladder = (
+      await game.entities.list({ filter: "Ladder 16'", limit: 100 })
+    ).entities.find((entity) => entity.template_id === 945);
+    assert.ok(ladder, "eng1 should contain authored Ladder 16' object 945");
+    const [ladderX, ladderY, ladderZ] = ladder.position;
+    const startTarget = {
+      x: ladderX + 0.261,
+      y: ladderY - 1.956,
+      z: ladderZ - 0.883,
+    };
+
+    // Setup only: the production climb begins on the same supported south-face
+    // contact reached by ordinary movement in the accepted campaign replay.
+    // Do not step between relocation and input: a frame here can settle away
+    // from the narrow authored contact before the grip is evaluated.
+    await game.player.teleport(startTarget);
+    const start = await game.player.position();
+    await game.input.lookAtWorldPoint([
+      start.x,
+      start.y + 8,
+      start.z + 20,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+
+    let landing = start;
+    let support: RayCastResult | null = null;
+    for (let elapsed = 0; elapsed < 480; elapsed += 1) {
+      await game.step({ frames: 1 });
+      landing = await game.player.position();
+      if (landing.z <= ladderZ + 0.7 || landing.y <= ladderY + 3.5) {
+        continue;
+      }
+      support = await game.raycast({
+        start: [landing.x, landing.y, landing.z],
+        end: [landing.x, landing.y - 3, landing.z],
+        collision_groups: ["world", "entity", "selectable"],
+        ignore_sensors: true,
+      });
+      if (
+        support.hit &&
+        support.distance !== null &&
+        support.distance > 0.5 &&
+        support.distance < 2 &&
+        support.hit_normal !== null &&
+        support.hit_normal[1] > 0.5
+      ) {
+        break;
+      }
+    }
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+
+    assert.ok(
+      support?.hit &&
+        support.distance !== null &&
+        support.distance > 0.5 &&
+        support.distance < 2 &&
+        support.hit_normal !== null &&
+        support.hit_normal[1] > 0.5 &&
+        landing.z > ladderZ + 0.7 &&
+        landing.y > ladderY + 3.5,
+      `ordinary south-face input must reach supported core-side ground; ` +
+        `ladder=(${ladderX.toFixed(2)}, ${ladderY.toFixed(2)}, ${ladderZ.toFixed(2)}), ` +
+        `start=(${start.x.toFixed(2)}, ${start.y.toFixed(2)}, ${start.z.toFixed(2)}), ` +
+        `ended=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(support)}`,
+    );
+
+    // Releasing input does not cancel an in-flight top-out; let its bounded
+    // scripted waypoints finish, then prove the resulting pose itself remains
+    // still rather than mistaking an intermediate supported crossing for the
+    // landing.
+    await game.step({ frames: 180 });
+    const settled = await game.player.position();
+    await game.step({ frames: 180 });
+    const stable = await game.player.position();
+    const stableSupport = await game.raycast({
+      start: [stable.x, stable.y, stable.z],
+      end: [stable.x, stable.y - 3, stable.z],
+      collision_groups: ["world", "entity", "selectable"],
+      ignore_sensors: true,
+    });
+    assert.ok(
+      stable.z > ladderZ + 0.7 &&
+        stable.y > ladderY + 3.5 &&
+        Math.hypot(stable.x - settled.x, stable.z - settled.z) < 0.05 &&
+        stableSupport.hit &&
+        stableSupport.distance !== null &&
+        stableSupport.distance > 0.5 &&
+        stableSupport.distance < 2 &&
+        stableSupport.hit_normal !== null &&
+        stableSupport.hit_normal[1] > 0.5,
+      `release must remain stable on the core-side landing; ` +
+        `landing=(${landing.x.toFixed(2)}, ${landing.y.toFixed(2)}, ${landing.z.toFixed(2)}), ` +
+        `settled=(${settled.x.toFixed(2)}, ${settled.y.toFixed(2)}, ${settled.z.toFixed(2)}), ` +
+        `stable=(${stable.x.toFixed(2)}, ${stable.y.toFixed(2)}, ${stable.z.toFixed(2)}), ` +
+        `support=${JSON.stringify(stableSupport)}`,
     );
   },
 );

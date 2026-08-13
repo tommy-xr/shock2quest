@@ -4,7 +4,7 @@ pub(crate) mod util;
 
 use collision::Aabb3;
 use engine::profile;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use util::*;
 
 use bitflags::bitflags;
@@ -227,6 +227,12 @@ const PLAYER_STEP_HEIGHT: f32 = 2.0;
 const PLAYER_JUMP_SPEED: f32 = 28.0;
 const PLAYER_JUMP_GRAVITY: f32 = 40.0;
 const PLAYER_MAX_FALL_SPEED: f32 = 30.0;
+/// Dark's `BreakClimb` adds a short facing impulse to the ordinary jump that
+/// released the climb. Keep these in authored SS2 feet/second like the jump
+/// constants above; player velocity is converted to world units at launch.
+const CLIMB_JUMP_FORWARD_SPEED: f32 = 10.0;
+const CLIMB_JUMP_VERTICAL_BONUS: f32 = 0.5;
+const CLIMB_JUMP_REBOUND_SPEED: f32 = 5.0;
 /// Maximum forward search for a jump-through landing. This is deliberately a
 /// short body-scale transition, not a general wall bypass.
 const PLAYER_JUMP_MANTLE_FORWARD: f32 = 8.0;
@@ -303,27 +309,88 @@ const CLIMB_MIN_PROGRESS_FRACTION: f32 = 0.1;
 
 /// Dark probes one head diameter beyond the cleared lip, then advances the
 /// compressed player another body diameter.
+#[cfg(test)]
 const CLIMB_TOP_OUT_PROBE_FORWARD: f32 = 2.0 * CLIMB_TOP_OUT_RADIUS;
+#[cfg(test)]
 const CLIMB_TOP_OUT_ADVANCE: f32 = 2.0 * PLAYER_STANDING_RADIUS / SCALE_FACTOR;
 
 /// Dark's mantle probe goes 3.5 units up, then seven down.
 const CLIMB_TOP_OUT_UP: f32 = 3.5 / SCALE_FACTOR;
 const CLIMB_TOP_OUT_MAX_DROP: f32 = 7.0 / SCALE_FACTOR;
+const CLIMB_TOP_OUT_DEEP_DROP: f32 = 2.0 * CLIMB_TOP_OUT_MAX_DROP;
 const CLIMB_TOP_OUT_RADIUS: f32 = PLAYER_STANDING_RADIUS / SCALE_FACTOR;
 const CLIMB_TOP_OUT_FINAL_DROP: f32 = 4.0 / SCALE_FACTOR;
 const CLIMB_TOP_OUT_MIN_GROUND_NORMAL: f32 = 0.72;
 const CLIMB_TOP_OUT_RECOVERY_RETREAT: f32 = PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
 const CLIMB_TOP_OUT_MAX_RECOVERY_RETREAT: f32 = 4.0 / SCALE_FACTOR;
+/// Keep a mantle exception on the small connected surface patch around the
+/// probed floor. Rick1's authored floor-to-lip route is five triangle edges;
+/// eight leaves room for the neighboring triangles touched by the full ball
+/// without allowing connectivity through the rest of the level cell.
+const CLIMB_TOP_OUT_MAX_LIP_FACE_HOPS: usize = 8;
+/// Faces welded directly to the sampled floor must fit the bounded lip height.
+/// Rick1's authored transition genuinely touches tall vertical faces from hop
+/// three onward (including face 19461 on the staged route), so farther faces
+/// are instead constrained by the fixed corridor, overall hop cap, and the
+/// single bounded obstruction interval enforced by the route scan.
+const CLIMB_TOP_OUT_DIRECT_LIP_FACE_HOPS: usize = 2;
+const CLIMB_TOP_OUT_LOCAL_LIP_EXIT_ALLOWANCE: f32 =
+    2.0 * CLIMB_TOP_OUT_RADIUS + 2.0 * CLIMB_TOP_OUT_RECOVERY_RETREAT;
+/// A recovery rise may pass through opposite faces of one local deck slab.
+/// Bound that exception to one compressed body diameter plus the solver gap;
+/// thicker room geometry remains a ceiling rather than a mantle surface.
+const CLIMB_TOP_OUT_MAX_LOCAL_SLAB_THICKNESS: f32 =
+    2.0 * CLIMB_TOP_OUT_RADIUS + 2.0 * PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+/// Search at most four compressed-player radii farther in the held heading
+/// when an otherwise-supported landing still clips the upper ledge on descent.
+const CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY: f32 = 4.0 * CLIMB_TOP_OUT_RADIUS;
+/// A narrow landing can require clearing the side of a rail after the forward
+/// lip crossing. Keep that safety recovery separate from Dark's backward rise
+/// retreat and bound it to five compressed-player radii. The fifth sample is
+/// needed when the compressed route fits beside a wall but the standing
+/// capsule must clear that wall before expanding.
+const CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY: f32 = 5.0 * CLIMB_TOP_OUT_RADIUS;
+/// Only redirect a valid forward landing onto a recessed approach-side floor
+/// when the forward route needs at least a full compressed-body-width dogleg.
+/// A one-radius sidestep is ordinary ledge recovery and must keep the player's
+/// held-direction intent.
+const CLIMB_TOP_OUT_LARGE_LATERAL_DOGLEG: f32 = 2.0 * CLIMB_TOP_OUT_RADIUS;
+/// When every ordinary forward landing needs a wider sideways detour, also
+/// consider stepping back onto the ladder's approach side. Dark ladders can
+/// terminate above a recessed same-side floor; bounding this search by the
+/// already-validated deep-drop reach keeps the compressed route local.
+const CLIMB_TOP_OUT_MAX_APPROACH_RECOVERY: f32 = CLIMB_TOP_OUT_DEEP_DROP;
+/// Bound synchronous support/route evaluation when a ladder top has no valid
+/// landing. The three route bases, five forward offsets, and eleven signed
+/// lateral offsets cover the complete independently bounded recovery grid.
+const CLIMB_TOP_OUT_MAX_LANDING_CANDIDATES: usize = 3 * 5 * 11;
+/// A pre-lip side recovery is considered only after the ordinary forward grid
+/// fails. Retreat samples span at most one active-profile radius at the
+/// contact-offset interval; each may try both sides of the existing lateral
+/// distance bound. Crouching is the largest grid: sixteen retreat samples by
+/// eight lateral samples by two sides.
+const CLIMB_TOP_OUT_MAX_PRE_LIP_SIDE_CANDIDATES: usize = 16 * 8 * 2;
+/// Egress validation samples a full standing stride at contact-offset
+/// intervals. It is a landing preference, not a safety requirement, so limit
+/// it to the first few already-safe candidates in each support tier.
+const CLIMB_TOP_OUT_MAX_EGRESS_CANDIDATES: usize = 8;
+/// After an unchanged approach fails to plan, keep ordinary climbing responsive
+/// and retry at 10 Hz instead of repeating the bounded search every 60 Hz frame.
+const CLIMB_TOP_OUT_RETRY_COOLDOWN_FRAMES: u8 = 5;
+/// Require enough clear, similarly supported standing room after the landing
+/// to take one ordinary stride in the player's held heading. This rejects a
+/// rail-top perch that geometrically fits one stationary capsule.
+const CLIMB_TOP_OUT_EGRESS_DISTANCE: f32 = 4.0 * CLIMB_TOP_OUT_RADIUS;
 
-/// Begin probing only near the highest climbable in the current ladder column.
-/// The expanded column query sees the next segment in stacked ladders, avoiding
-/// a false "top" at every rung seam. Include one scripted substep and the
-/// controller gap: rick1's vertical cast stops with the capsule crown just over
-/// one half-height below the authored top, before the nominal crown-only
-/// threshold can ever become true.
-const CLIMB_TOP_OUT_TOP_REACH: f32 = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
-    + CLIMB_TOP_OUT_SUBSTEP
-    + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+/// Begin probing only when the highest climbable in the current ladder column
+/// is within Dark's authored 3.5-foot mantle probe. The expanded column query
+/// sees the next segment in stacked ladders, avoiding a false "top" at every
+/// rung seam. Use the full probe reach here: nearby level geometry can stop the
+/// standing capsule before its crown gets within one body half-height of the
+/// authored ladder top (rick1's diagonal approach stops 3.1 feet below it).
+/// Gating at the shorter body-derived distance leaves the climb redirect active
+/// but permanently blocked before top-out planning is ever attempted.
+const CLIMB_TOP_OUT_TOP_REACH: f32 = CLIMB_TOP_OUT_UP;
 const CLIMB_TOP_OUT_COLUMN_LOOKAHEAD: f32 =
     CLIMB_TOP_OUT_UP + PLAYER_STANDING_HEIGHT / SCALE_FACTOR;
 
@@ -387,6 +454,14 @@ fn climb_top_out_direction(desired: Vector<Real>, facing: Vector<Real>) -> Optio
     let desired = vector![desired.x, 0.0, desired.z].try_normalize(1.0e-6)?;
     let facing = vector![facing.x, 0.0, facing.z].try_normalize(1.0e-6)?;
     (desired.dot(&facing) >= MIN_CLIMB_GRIP_FRACTION).then_some(facing)
+}
+
+/// Dark's object-ladder BreakClimb gate compares the player's projected body
+/// center with the gripped OBB's own top, using a strict one-foot radius. This
+/// is intentionally separate from the mantle planner's much broader head
+/// lookahead across a stacked ladder column.
+fn break_climb_near_top(climbable_top: Real, player_center: Real) -> bool {
+    (climbable_top - player_center).abs() < 1.0 / SCALE_FACTOR
 }
 
 /// How much (SS2 ft) the step probe's clearance sweeps shrink the player
@@ -645,23 +720,68 @@ fn try_step_up(
 struct ClimbPass<'a> {
     movement: Vector<Real>,
     top_out: Option<(Vector<Real>, Real)>,
+    retained: RetainedClimb,
+    allow_top_out_attempt: bool,
+    is_crouched: bool,
     validation_queries: QueryPipeline<'a>,
     probe_queries: QueryPipeline<'a>,
     scripted_queries: QueryPipeline<'a>,
 }
 
+/// Climb contact sampled by the preceding movement frame. Dark evaluates a
+/// jump against the climb it was already holding before the newly turned
+/// player-facing is used for another grip query; that ordering is what lets a
+/// player turn away and jump off a ladder atomically.
+#[derive(Clone, Copy, Debug)]
+struct RetainedClimb {
+    toward_ladder: Vector<Real>,
+    climbable_top: Real,
+}
+
+/// Source-compatible facing impulse for an explicit jump from a retained
+/// climb, in authored SS2 feet/second. The caller adds the ordinary vertical
+/// jump shared with grounded movement and converts both components to world
+/// units.
+fn climb_jump_release(
+    retained: RetainedClimb,
+    facing: Vector<Real>,
+    player_center: Real,
+) -> Option<(Vector<Real>, Real)> {
+    let facing = vector![facing.x, 0.0, facing.z].try_normalize(1.0e-6)?;
+    if break_climb_near_top(retained.climbable_top, player_center) {
+        return Some((facing * CLIMB_JUMP_FORWARD_SPEED, CLIMB_JUMP_VERTICAL_BONUS));
+    }
+
+    // Away from the top, BreakClimb rebounds from the contacted face. Facing
+    // away keeps the full five-foot impulse; facing into it reflects and
+    // halves that direction before applying the same scale.
+    let away = -retained.toward_ladder;
+    let jump_direction = if facing.dot(&away) > 0.0 {
+        facing
+    } else {
+        (facing - away * (2.0 * facing.dot(&away))) * 0.5
+    };
+    Some((jump_direction * CLIMB_JUMP_REBOUND_SPEED, 0.0))
+}
+
 #[derive(Clone, Copy)]
 struct ClimbTopOut {
-    waypoints: [Vector<Real>; 7],
+    waypoints: [Vector<Real>; 8],
     next_waypoint: usize,
     save_pose: Vector<Real>,
     reversing: bool,
     is_crouched: bool,
+    /// Ladder recovery must restore onto proven upward support. An ordinary
+    /// jump mantle may instead release into its authored ballistic fall.
+    requires_final_support: bool,
 }
 
 struct PlayerMovement {
     movement: EffectiveCharacterMovement,
     top_out: Option<ClimbTopOut>,
+    /// A grip this exact movement frame proved by vertical progress, or by an
+    /// intentional near-top cap stall that kept compatible ladder contact.
+    retained_climb: Option<RetainedClimb>,
     /// Horizontal part of a gravity-induced slope slide, carried into the
     /// next gravity pass so a seam does not erase the player's momentum.
     slope_displacement: Vector<Real>,
@@ -918,10 +1038,10 @@ fn shape_sweep_is_clear(
 }
 
 fn ray_segment_is_clear(queries: &QueryPipeline, from: Vector<Real>, to: Vector<Real>) -> bool {
-    // The compressed sphere intentionally models Dark's sparse body and may
-    // overlap immutable terrain around the ladder lip. Its centerline still
-    // has to pass every authored point probe unobstructed: this prevents the
-    // exception from becoming permission to cross an unrelated wall.
+    // The compressed body intentionally models Dark's sparse player and may
+    // overlap immutable terrain during a scripted transition. Its centerline
+    // still has to pass every authored point probe unobstructed, preventing
+    // that exception from becoming permission to cross an unrelated wall.
     let delta = to - from;
     let distance = delta.norm();
     distance <= 1.0e-6
@@ -934,50 +1054,888 @@ fn ray_segment_is_clear(queries: &QueryPipeline, from: Vector<Real>, to: Vector<
             .is_none()
 }
 
-fn shape_route_exits_only_initial_obstruction(
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ShapeObstruction {
+    Collider(ColliderHandle),
+    TrimeshFace(ColliderHandle, u32),
+}
+
+/// Actual surface features touched by `shape`.
+///
+/// A whole closed level trimesh reports a solid-volume intersection even when
+/// the shape is in empty room space. Enumerating its triangle BVH and testing
+/// the candidate triangles distinguishes those volume false positives from
+/// real surface contact and, crucially, identifies every face involved.
+fn shape_obstructions(
+    queries: &QueryPipeline,
+    position: Vector<Real>,
+    shape: &dyn Shape,
+) -> HashSet<ShapeObstruction> {
+    let shape_position = Isometry::translation(position.x, position.y, position.z);
+    let shape_aabb = shape.compute_aabb(&shape_position);
+    let mut obstructions = HashSet::new();
+    for (handle, collider) in queries.intersect_aabb_conservative(shape_aabb) {
+        if let Some(mesh) = collider.shape().as_trimesh() {
+            let shape_in_collider = collider.position().inv_mul(&shape_position);
+            let local_aabb = shape.compute_aabb(&shape_in_collider);
+            for face in mesh.bvh().intersect_aabb(&local_aabb) {
+                let triangle = mesh.triangle(face);
+                if queries
+                    .dispatcher
+                    .intersection_test(&shape_in_collider, &triangle, shape)
+                    == Ok(true)
+                {
+                    obstructions.insert(ShapeObstruction::TrimeshFace(handle, face));
+                }
+            }
+        } else {
+            let shape_to_collider = shape_position.inv_mul(collider.position());
+            if queries
+                .dispatcher
+                .intersection_test(&shape_to_collider, shape, collider.shape())
+                == Ok(true)
+            {
+                obstructions.insert(ShapeObstruction::Collider(handle));
+            }
+        }
+    }
+    obstructions
+}
+
+#[derive(Clone, Copy)]
+struct ShapeCastObstruction {
+    distance: Real,
+    obstruction: ShapeObstruction,
+}
+
+/// Every actual surface feature touched by a continuous shape cast.
+///
+/// QueryPipeline's composite cast reports only the first collider and does not
+/// expose a trimesh face. Cast against the broad-phase candidates' local
+/// triangles instead, using each mesh BVH to keep the work proportional to the
+/// short route corridor rather than the whole mission mesh.
+fn shape_cast_obstructions(
+    queries: &QueryPipeline,
+    from: Vector<Real>,
+    to: Vector<Real>,
+    shape: &dyn Shape,
+) -> Vec<ShapeCastObstruction> {
+    let delta = to - from;
+    let distance = delta.norm();
+    if distance <= 1.0e-6 {
+        return shape_obstructions(queries, from, shape)
+            .into_iter()
+            .map(|obstruction| ShapeCastObstruction {
+                distance: 0.0,
+                obstruction,
+            })
+            .collect();
+    }
+
+    let start = Isometry::translation(from.x, from.y, from.z);
+    let end = Isometry::translation(to.x, to.y, to.z);
+    let swept_aabb = shape.compute_swept_aabb(&start, &end);
+    let options = rapier3d::parry::query::ShapeCastOptions {
+        max_time_of_impact: distance,
+        target_distance: 0.0,
+        stop_at_penetration: true,
+        compute_impact_geometry_on_penetration: true,
+    };
+    let mut hits = Vec::new();
+    for (handle, collider) in queries.intersect_aabb_conservative(swept_aabb) {
+        let local_start = collider.position().inv_mul(&start);
+        let local_end = collider.position().inv_mul(&end);
+        let local_delta = local_end.translation.vector - local_start.translation.vector;
+        let local_direction = local_delta / distance;
+        if let Some(mesh) = collider.shape().as_trimesh() {
+            let local_swept_aabb = shape.compute_swept_aabb(&local_start, &local_end);
+            for face in mesh.bvh().intersect_aabb(&local_swept_aabb) {
+                let triangle = mesh.triangle(face);
+                if let Ok(Some(hit)) = queries.dispatcher.cast_shapes(
+                    &local_start,
+                    &local_direction,
+                    &triangle,
+                    shape,
+                    options,
+                ) {
+                    hits.push(ShapeCastObstruction {
+                        distance: hit.time_of_impact,
+                        obstruction: ShapeObstruction::TrimeshFace(handle, face),
+                    });
+                }
+            }
+        } else if let Ok(Some(hit)) = queries.dispatcher.cast_shapes(
+            &local_start,
+            &local_direction,
+            collider.shape(),
+            shape,
+            options,
+        ) {
+            hits.push(ShapeCastObstruction {
+                distance: hit.time_of_impact,
+                obstruction: ShapeObstruction::Collider(handle),
+            });
+        }
+    }
+    hits
+}
+
+struct RouteObstructionScan {
+    first_clear: Vector<Real>,
+}
+
+/// Follow a sampled route and permit exactly one bounded obstruction interval.
+///
+/// The route may begin obstructed, or enter within `entry_limit`, but has to
+/// stay within `initial_obstruction_limit` and may never re-enter. When
+/// `require_clear` is true it must also clear before the route ends. Every
+/// actual collider/triangle touched must satisfy `allowed`.
+fn scan_initial_route_obstruction(
     queries: &QueryPipeline,
     waypoints: &[Vector<Real>],
     shape: &dyn Shape,
     initial_obstruction_limit: Real,
-) -> bool {
-    // Dark's sparse body may meet the local lip before reaching the ladder
-    // column's geometry-derived exit. Permit one continuous overlap in that
-    // bounded interval, but require the route to exit it and reject any later
-    // re-entry/new solid. Contact-offset sampling is finer than shipped wall
-    // thicknesses and keeps the exception spatially bound even when level
-    // terrain is one monolithic parentless collider.
-    let Some(first) = waypoints.first().copied() else {
-        return false;
-    };
-    let mut obstruction_seen = shape_intersects(queries, first, shape);
+    entry_limit: Real,
+    require_clear: bool,
+    bridged_interval: Option<(Real, Real)>,
+    allowed: impl Fn(ShapeObstruction) -> bool,
+) -> Option<RouteObstructionScan> {
+    // Dark's sparse body may start inside the local lip before reaching the
+    // ladder column's geometry-derived exit. Permit only that continuous
+    // initial overlap in the bounded interval. A route that starts clear may
+    // enter only within its caller's explicit entry bound, and a route that
+    // exits may not re-enter. An entry bound of zero permits start-overlap
+    // only.
+    // Contact-offset sampling is finer than shipped wall thicknesses and keeps
+    // the exception spatially bound even when level terrain is one monolithic
+    // parentless collider.
+    let first = waypoints.first().copied()?;
+    let mut obstruction_seen = false;
     let mut cleared_after_obstruction = false;
+    let mut first_clear = first;
     let mut route_distance = 0.0;
+    let inspect = |sample: Vector<Real>,
+                   sample_distance: Real,
+                   obstruction_seen: &mut bool,
+                   cleared_after_obstruction: &mut bool,
+                   first_clear: &mut Vector<Real>| {
+        let sample_obstructions = shape_obstructions(queries, sample, shape);
+        // A proven closed slab may have more space between its opposite
+        // triangle surfaces than the probe's diameter. Treat that enclosed
+        // underside-to-top span as part of the same physical obstruction,
+        // instead of a false clear followed by a re-entry at the top face.
+        let bridged = bridged_interval.is_some_and(|(start, end)| {
+            sample_distance + 1.0e-5 >= start && sample_distance <= end + 1.0e-5
+        });
+        let blocked = !sample_obstructions.is_empty() || bridged;
+        if blocked {
+            if sample_obstructions.iter().copied().any(|hit| !allowed(hit))
+                || (!*obstruction_seen && sample_distance > entry_limit)
+                || *cleared_after_obstruction
+                || sample_distance > initial_obstruction_limit
+            {
+                return false;
+            }
+            *obstruction_seen = true;
+        } else if *obstruction_seen && !*cleared_after_obstruction {
+            *cleared_after_obstruction = true;
+            *first_clear = sample;
+        }
+        true
+    };
+    if !inspect(
+        first,
+        0.0,
+        &mut obstruction_seen,
+        &mut cleared_after_obstruction,
+        &mut first_clear,
+    ) {
+        return None;
+    }
     for segment in waypoints.windows(2) {
         let from = segment[0];
         let to = segment[1];
         let delta = to - from;
         let distance = delta.norm();
         let steps = (distance / CLIMB_TOP_OUT_RECOVERY_RETREAT).ceil().max(1.0) as usize;
+        let mut previous = from;
+        let mut previous_distance = route_distance;
         for step in 1..=steps {
             let sample = from + delta * (step as Real / steps as Real);
-            let blocked = shape_intersects(queries, sample, shape);
             let sample_distance = route_distance + distance * step as Real / steps as Real;
-            if blocked {
-                if cleared_after_obstruction || sample_distance > initial_obstruction_limit {
-                    return false;
+            for hit in shape_cast_obstructions(queries, previous, sample, shape) {
+                let hit_distance = previous_distance + hit.distance;
+                if !allowed(hit.obstruction)
+                    || cleared_after_obstruction
+                    || (!obstruction_seen && hit_distance > entry_limit)
+                    || hit_distance > initial_obstruction_limit
+                {
+                    return None;
                 }
                 obstruction_seen = true;
-            } else if obstruction_seen {
-                cleared_after_obstruction = true;
             }
+            if !inspect(
+                sample,
+                sample_distance,
+                &mut obstruction_seen,
+                &mut cleared_after_obstruction,
+                &mut first_clear,
+            ) {
+                return None;
+            }
+            previous = sample;
+            previous_distance = sample_distance;
         }
         route_distance += distance;
     }
-    !obstruction_seen || cleared_after_obstruction
+    if require_clear && obstruction_seen && !cleared_after_obstruction {
+        return None;
+    }
+    Some(RouteObstructionScan { first_clear })
+}
+
+struct FirstRouteObstruction {
+    position: Vector<Real>,
+    obstructions: HashSet<ShapeObstruction>,
+}
+
+/// Find the first actual surface touched along a route. `None` in the outer
+/// option rejects a feature outside the allowed mantle patch; `Some(None)`
+/// means the route stayed clear.
+fn first_allowed_route_obstruction(
+    queries: &QueryPipeline,
+    waypoints: &[Vector<Real>],
+    shape: &dyn Shape,
+    allowed: impl Fn(ShapeObstruction) -> bool,
+) -> Option<Option<FirstRouteObstruction>> {
+    let first = waypoints.first().copied()?;
+    let inspect = |position| {
+        let obstructions = shape_obstructions(queries, position, shape);
+        if obstructions.iter().copied().any(|hit| !allowed(hit)) {
+            return None;
+        }
+        Some((!obstructions.is_empty()).then_some(FirstRouteObstruction {
+            position,
+            obstructions,
+        }))
+    };
+    if let Some(hit) = inspect(first)? {
+        return Some(Some(hit));
+    }
+    for segment in waypoints.windows(2) {
+        let from = segment[0];
+        let delta = segment[1] - from;
+        let distance = delta.norm();
+        if distance <= 1.0e-6 {
+            continue;
+        }
+        let cast_hits = shape_cast_obstructions(queries, from, segment[1], shape);
+        let first_distance = cast_hits
+            .iter()
+            .map(|hit| hit.distance)
+            .min_by(Real::total_cmp);
+        let Some(first_distance) = first_distance else {
+            continue;
+        };
+        let obstructions = cast_hits
+            .into_iter()
+            .filter(|hit| {
+                (hit.distance - first_distance).abs() <= CLIMB_TOP_OUT_RECOVERY_RETREAT * 0.25
+            })
+            .map(|hit| hit.obstruction)
+            .collect::<HashSet<_>>();
+        if obstructions.iter().copied().any(|hit| !allowed(hit)) {
+            return None;
+        }
+        return Some(Some(FirstRouteObstruction {
+            position: from + delta / distance * first_distance,
+            obstructions,
+        }));
+    }
+    Some(None)
+}
+
+fn obstruction_exit_direction(
+    queries: &QueryPipeline,
+    obstructions: &HashSet<ShapeObstruction>,
+    route_direction: Vector<Real>,
+) -> Option<Vector<Real>> {
+    obstructions
+        .iter()
+        .filter_map(|obstruction| {
+            let ShapeObstruction::TrimeshFace(handle, face) = *obstruction else {
+                return None;
+            };
+            let collider = queries.colliders.get(handle)?;
+            let mesh = collider.shape().as_trimesh()?;
+            let local_normal = mesh.triangle(face).normal()?;
+            let world_normal = collider.position().rotation * local_normal;
+            let mut horizontal = vector![world_normal.x, 0.0, world_normal.z];
+            let length = horizontal.norm();
+            if length <= 1.0e-6 {
+                return None;
+            }
+            horizontal /= length;
+            if horizontal.dot(&route_direction) < 0.0 {
+                horizontal = -horizontal;
+            }
+            let alignment = horizontal.dot(&route_direction);
+            (alignment > 1.0e-4).then_some((alignment, horizontal))
+        })
+        .max_by(
+            |(first_alignment, first_direction), (second_alignment, second_direction)| {
+                first_alignment
+                    .total_cmp(second_alignment)
+                    .then_with(|| first_direction.x.total_cmp(&second_direction.x))
+                    .then_with(|| first_direction.z.total_cmp(&second_direction.z))
+            },
+        )
+        .map(|(_, direction)| direction)
+}
+
+#[cfg(test)]
+fn shape_route_exits_only_initial_obstruction(
+    queries: &QueryPipeline,
+    waypoints: &[Vector<Real>],
+    shape: &dyn Shape,
+    initial_obstruction_limit: Real,
+    entry_limit: Real,
+) -> bool {
+    scan_initial_route_obstruction(
+        queries,
+        waypoints,
+        shape,
+        initial_obstruction_limit,
+        entry_limit,
+        true,
+        None,
+        |_| true,
+    )
+    .is_some()
+}
+
+struct MantleLipPatch {
+    handle: ColliderHandle,
+    faces: HashSet<u32>,
+}
+
+impl MantleLipPatch {
+    fn contains(&self, obstruction: ShapeObstruction) -> bool {
+        matches!(
+            obstruction,
+            ShapeObstruction::TrimeshFace(handle, face)
+                if handle == self.handle && self.faces.contains(&face)
+        )
+    }
+}
+
+/// Reconstruct the small, edge-connected terrain patch around the sampled
+/// mantle floor. The fixed corridor bounds and hop cap do not grow with Dark's
+/// room-sized fan triangles, and the mesh BVH avoids a whole-level scan.
+fn mantle_lip_patch(
+    queries: &QueryPipeline,
+    mantle_feature: Option<(ColliderHandle, FeatureId)>,
+    mantle_point: Vector<Real>,
+    corridor: &[Vector<Real>],
+    allow_tall_direct_faces: bool,
+) -> Option<MantleLipPatch> {
+    let (handle, FeatureId::Face(sampled_mantle_face)) = mantle_feature? else {
+        return None;
+    };
+    let collider = queries.colliders.get(handle)?;
+    let mesh = collider.shape().as_trimesh()?;
+    let face_count = mesh.indices().len();
+    if face_count == 0 {
+        return None;
+    }
+    // Parry identifies a two-sided trimesh backface as `face + face_count`.
+    // The topology and BVH use the canonical front-face index.
+    let mantle_face = sampled_mantle_face % face_count as u32;
+    let mantle_triangle = mesh.triangle(mantle_face);
+    let coplanar_with_mantle = |face: u32| {
+        let triangle = mesh.triangle(face);
+        let (Some(mantle_normal), Some(normal)) = (mantle_triangle.normal(), triangle.normal())
+        else {
+            return false;
+        };
+        mantle_normal.dot(&normal).abs() >= 1.0 - 1.0e-4
+            && (triangle.a - mantle_triangle.a)
+                .dot(mantle_normal.as_ref())
+                .abs()
+                <= CLIMB_TOP_OUT_RECOVERY_RETREAT + 1.0e-5
+    };
+
+    let local_mantle_point = collider
+        .position()
+        .inverse_transform_point(&Point::from(mantle_point));
+    let local_corridor = corridor
+        .iter()
+        .copied()
+        .map(|point| {
+            collider
+                .position()
+                .inverse_transform_point(&Point::from(point))
+        })
+        .collect::<Vec<_>>();
+    let mut corridor_points =
+        std::iter::once(local_mantle_point).chain(local_corridor.iter().copied());
+    let first_point = corridor_points.next()?;
+    let mut bounds_min = first_point;
+    let mut bounds_max = first_point;
+    for point in corridor_points {
+        bounds_min.x = bounds_min.x.min(point.x);
+        bounds_min.y = bounds_min.y.min(point.y);
+        bounds_min.z = bounds_min.z.min(point.z);
+        bounds_max.x = bounds_max.x.max(point.x);
+        bounds_max.y = bounds_max.y.max(point.y);
+        bounds_max.z = bounds_max.z.max(point.z);
+    }
+    bounds_min -= Vector::repeat(CLIMB_TOP_OUT_RADIUS);
+    bounds_max += Vector::repeat(CLIMB_TOP_OUT_RADIUS);
+    let bounds = rapier3d::parry::bounding_volume::Aabb::new(bounds_min, bounds_max);
+
+    let vertex_key = |point: Point<Real>| {
+        [point.x, point.y, point.z].map(|value| {
+            if value == 0.0 {
+                0.0f32.to_bits()
+            } else {
+                value.to_bits()
+            }
+        })
+    };
+    type VertexKey = [u32; 3];
+    type EdgeKey = (VertexKey, VertexKey);
+    let edge_key = |first: VertexKey, second: VertexKey| {
+        if first <= second {
+            (first, second)
+        } else {
+            (second, first)
+        }
+    };
+    let corridor_probe = Ball::new(CLIMB_TOP_OUT_RADIUS + CLIMB_TOP_OUT_RECOVERY_RETREAT);
+    let face_touches_probe_corridor = |triangle: &Triangle| {
+        let touches_point = |point: Point<Real>| {
+            queries.dispatcher.intersection_test(
+                &Isometry::translation(point.x, point.y, point.z),
+                triangle,
+                &corridor_probe,
+            ) == Ok(true)
+        };
+        touches_point(local_mantle_point)
+            || local_corridor.iter().copied().any(touches_point)
+            || local_corridor.windows(2).any(|segment| {
+                let delta = segment[1] - segment[0];
+                let distance = delta.norm();
+                distance > 1.0e-6
+                    && queries
+                        .dispatcher
+                        .cast_shapes(
+                            &Isometry::translation(segment[0].x, segment[0].y, segment[0].z),
+                            &(delta / distance),
+                            triangle,
+                            &corridor_probe,
+                            rapier3d::parry::query::ShapeCastOptions {
+                                max_time_of_impact: distance,
+                                target_distance: 0.0,
+                                stop_at_penetration: true,
+                                compute_impact_geometry_on_penetration: true,
+                            },
+                        )
+                        .is_ok_and(|hit| hit.is_some())
+            })
+    };
+    let mut local_faces = HashSet::new();
+    let mut corridor_faces = HashSet::new();
+    let mut faces_by_edge: HashMap<EdgeKey, Vec<u32>> = HashMap::new();
+    for face in mesh.bvh().intersect_aabb(&bounds) {
+        let triangle = mesh.triangle(face);
+        if face == mantle_face || face_touches_probe_corridor(&triangle) {
+            corridor_faces.insert(face);
+        }
+        let vertices = mesh.indices()[face as usize];
+        let points = vertices.map(|vertex| vertex_key(mesh.vertices()[vertex as usize]));
+        local_faces.insert(face);
+        for edge in [
+            edge_key(points[0], points[1]),
+            edge_key(points[1], points[2]),
+            edge_key(points[2], points[0]),
+        ] {
+            faces_by_edge.entry(edge).or_default().push(face);
+        }
+    }
+    if !local_faces.contains(&mantle_face) {
+        return None;
+    }
+
+    let mut neighbors: HashMap<u32, HashSet<u32>> = HashMap::new();
+    for edge_faces in faces_by_edge.values() {
+        for &face in edge_faces {
+            neighbors.entry(face).or_default().extend(
+                edge_faces
+                    .iter()
+                    .copied()
+                    .filter(|neighbor| *neighbor != face),
+            );
+        }
+    }
+    let mut connected = HashMap::from([(mantle_face, 0usize)]);
+    let mut pending = VecDeque::from([(mantle_face, 0usize)]);
+    while let Some((face, hops)) = pending.pop_front() {
+        if hops == CLIMB_TOP_OUT_MAX_LIP_FACE_HOPS {
+            continue;
+        }
+        for &neighbor in neighbors.get(&face).into_iter().flatten() {
+            if let std::collections::hash_map::Entry::Vacant(entry) = connected.entry(neighbor) {
+                entry.insert(hops + 1);
+                pending.push_back((neighbor, hops + 1));
+            }
+        }
+    }
+    let faces = corridor_faces
+        .into_iter()
+        .filter(|face| {
+            // Dark level meshes can represent one physical wall plane with
+            // overlapping fan triangles that do not share exact indexed
+            // edges. A ladder-attributed near/far boundary is independently
+            // ray-sampled; include only coplanar faces touching that same
+            // bounded corridor so the obstruction remains one local interval.
+            if allow_tall_direct_faces && coplanar_with_mantle(*face) {
+                return true;
+            }
+            let Some(&hops) = connected.get(face) else {
+                return false;
+            };
+            if allow_tall_direct_faces || hops > CLIMB_TOP_OUT_DIRECT_LIP_FACE_HOPS {
+                return true;
+            }
+            let triangle = mesh.triangle(*face);
+            let world_y =
+                [triangle.a, triangle.b, triangle.c].map(|point| (collider.position() * point).y);
+            let min_y = world_y.into_iter().fold(Real::INFINITY, Real::min);
+            let max_y = world_y.into_iter().fold(Real::NEG_INFINITY, Real::max);
+            max_y - min_y <= CLIMB_TOP_OUT_LOCAL_LIP_EXIT_ALLOWANCE + 1.0e-5
+        })
+        .collect::<HashSet<_>>();
+    Some(MantleLipPatch { handle, faces })
+}
+
+/// Extend a floor-seeded mantle patch with only the underside faces crossed by
+/// the actual recovered rise.
+///
+/// WorldRep is one mission-wide trimesh, so collider identity alone cannot
+/// prove that an overhead face belongs to the selected landing. Sample the
+/// underside and top at the recovered rise's exact x/z, require a bounded
+/// opposite-face slab whose top is already in the floor patch and matches the
+/// selected mantle height, then add a separately bounded underside patch.
+fn extend_lip_patch_with_recovery_slab(
+    queries: &QueryPipeline,
+    lip_patch: &mut Option<MantleLipPatch>,
+    mantle_handle: Option<ColliderHandle>,
+    mantle_floor: Option<Vector<Real>>,
+    rise_start: Vector<Real>,
+    cross_start: Vector<Real>,
+) -> Option<(Real, Real)> {
+    let (Some(floor_patch), Some(mantle_handle), Some(mantle_floor)) =
+        (lip_patch.as_ref(), mantle_handle, mantle_floor)
+    else {
+        return None;
+    };
+    if floor_patch.handle != mantle_handle {
+        return None;
+    }
+    let rise_distance = cross_start.y - rise_start.y;
+    if rise_distance <= 1.0e-6 {
+        return None;
+    }
+    let Some((underside_handle, underside)) = queries.cast_ray_and_get_normal(
+        &Ray::new(Point::from(rise_start), Vector::y()),
+        rise_distance,
+        true,
+    ) else {
+        return None;
+    };
+    let Some((top_handle, top)) = queries.cast_ray_and_get_normal(
+        &Ray::new(Point::from(cross_start), -Vector::y()),
+        rise_distance,
+        true,
+    ) else {
+        return None;
+    };
+    let (FeatureId::Face(underside_face), FeatureId::Face(top_face)) =
+        (underside.feature, top.feature)
+    else {
+        return None;
+    };
+    if underside_handle != mantle_handle
+        || top_handle != mantle_handle
+        || underside.normal.y >= -CLIMB_TOP_OUT_MIN_GROUND_NORMAL
+        || top.normal.y <= CLIMB_TOP_OUT_MIN_GROUND_NORMAL
+    {
+        return None;
+    }
+    let underside_y = rise_start.y + underside.time_of_impact;
+    let top_y = cross_start.y - top.time_of_impact;
+    let thickness = top_y - underside_y;
+    if thickness <= 1.0e-4
+        || thickness > CLIMB_TOP_OUT_MAX_LOCAL_SLAB_THICKNESS + 1.0e-4
+        || (top_y - mantle_floor.y).abs()
+            > CLIMB_TOP_OUT_RECOVERY_RETREAT + PROBE_SKIN / SCALE_FACTOR
+    {
+        return None;
+    }
+    let Some(collider) = queries.colliders.get(top_handle) else {
+        return None;
+    };
+    let Some(mesh) = collider.shape().as_trimesh() else {
+        return None;
+    };
+    let face_count = mesh.indices().len() as u32;
+    if face_count == 0
+        || !floor_patch.contains(ShapeObstruction::TrimeshFace(
+            top_handle,
+            top_face % face_count,
+        ))
+    {
+        return None;
+    }
+
+    // Prove these opposite-facing samples are the two sides of one closed
+    // local slab, rather than two disconnected surfaces that merely share the
+    // mission-wide WorldRep handle. Start just inside U and require the very
+    // next surface along the exact recovered rise to be T. A stacked slab,
+    // ceiling, or other intermediate shell is therefore a hard rejection
+    // before the geometric interior is authorized below.
+    let surface_epsilon = (thickness * 0.25).min(1.0e-4);
+    let inside_underside = rise_start + Vector::y() * (underside.time_of_impact + surface_epsilon);
+    let next_surface_distance = top_y - inside_underside.y + surface_epsilon;
+    let Some(next_surface) = collider.shape().cast_ray_and_get_normal(
+        collider.position(),
+        &Ray::new(Point::from(inside_underside), Vector::y()),
+        next_surface_distance,
+        false,
+    ) else {
+        return None;
+    };
+    let FeatureId::Face(next_face) = next_surface.feature else {
+        return None;
+    };
+    let next_y = inside_underside.y + next_surface.time_of_impact;
+    // Rapier orients a two-sided trimesh hit normal against the ray, so this
+    // upward crossing reports -Y even though it is the slab's authored top.
+    if next_surface.normal.y >= -CLIMB_TOP_OUT_MIN_GROUND_NORMAL
+        || (next_y - top_y).abs() > 2.0 * surface_epsilon
+        || !floor_patch.contains(ShapeObstruction::TrimeshFace(
+            top_handle,
+            next_face % face_count,
+        ))
+    {
+        return None;
+    }
+
+    let underside_point = rise_start + Vector::y() * underside.time_of_impact;
+    let Some(underside_patch) = mantle_lip_patch(
+        queries,
+        Some((underside_handle, FeatureId::Face(underside_face))),
+        underside_point,
+        &[rise_start, cross_start],
+        false,
+    ) else {
+        return None;
+    };
+    if underside_patch.handle != floor_patch.handle {
+        return None;
+    }
+    lip_patch
+        .as_mut()
+        .expect("floor patch was checked above")
+        .faces
+        .extend(underside_patch.faces);
+    Some((underside_y, top_y))
+}
+
+#[cfg(test)]
+fn trimesh_faces_connect_within_local_bounds(
+    queries: &QueryPipeline,
+    first: (ColliderHandle, FeatureId),
+    second: (ColliderHandle, FeatureId),
+) -> bool {
+    let (
+        (first_handle, FeatureId::Face(first_face)),
+        (second_handle, FeatureId::Face(second_face)),
+    ) = (first, second)
+    else {
+        return false;
+    };
+    if first_handle != second_handle {
+        return false;
+    }
+    let collider = match queries.colliders.get(first_handle) {
+        Some(collider) => collider,
+        None => return false,
+    };
+    let mesh = match collider.shape().as_trimesh() {
+        Some(mesh) => mesh,
+        None => return false,
+    };
+    let face_count = mesh.indices().len() as u32;
+    if face_count == 0 {
+        return false;
+    }
+    let canonical_first_face = first_face % face_count;
+    let canonical_second_face = second_face % face_count;
+    let (Some(first_vertices), Some(second_vertices)) = (
+        mesh.indices().get(canonical_first_face as usize),
+        mesh.indices().get(canonical_second_face as usize),
+    ) else {
+        return false;
+    };
+    let world_vertex = |vertex: u32| {
+        let point = collider.position() * mesh.vertices()[vertex as usize];
+        vector![point.x, point.y, point.z]
+    };
+    let first_points = first_vertices.map(world_vertex);
+    let second_points = second_vertices.map(world_vertex);
+    let corridor = first_points
+        .into_iter()
+        .chain(second_points)
+        .collect::<Vec<_>>();
+    mantle_lip_patch(
+        queries,
+        Some((first_handle, FeatureId::Face(first_face))),
+        first_points[0],
+        &corridor,
+        false,
+    )
+    .is_some_and(|patch| {
+        patch.handle == second_handle && patch.faces.contains(&canonical_second_face)
+    })
+}
+
+fn supported_standing_pose(
+    queries: &QueryPipeline,
+    probe: Vector<Real>,
+    max_drop: Real,
+    standing_floor_offset: Real,
+) -> Option<(Vector<Real>, Real)> {
+    let support_ray = Ray::new(Point::from(probe), -Vector::y());
+    let (_, ground) = queries
+        .cast_ray_and_get_normal(&support_ray, max_drop, true)
+        .filter(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)?;
+    let floor = probe - Vector::y() * ground.time_of_impact;
+    Some((
+        floor + Vector::y() * standing_floor_offset,
+        ground.time_of_impact,
+    ))
+}
+
+fn player_pose_matches_current_support(
+    queries: &QueryPipeline,
+    pose: Vector<Real>,
+    is_crouched: bool,
+) -> bool {
+    let body_height = if is_crouched {
+        PLAYER_CROUCH_HEIGHT
+    } else {
+        PLAYER_STANDING_HEIGHT
+    };
+    let floor_offset = body_height / 2.0 / SCALE_FACTOR
+        + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+        + PLAYER_REST_LIFT / SCALE_FACTOR;
+    // The waypoint loop intentionally stops within arrival epsilon. Allow the
+    // same residual plus one probe skin for floating-point/contact seams while
+    // still requiring the support to resolve to the planned standing height.
+    let release_tolerance = PLAYER_MOVE_ARRIVAL_EPSILON + PROBE_SKIN / SCALE_FACTOR;
+    supported_standing_pose(
+        queries,
+        pose,
+        floor_offset + release_tolerance,
+        floor_offset,
+    )
+    .is_some_and(|(supported_pose, _)| (supported_pose - pose).norm() <= release_tolerance + 1.0e-5)
+}
+
+/// Direction toward a climbable that the supplied player profile at `pose`
+/// can immediately grip through ordinary ladder detection.
+fn standing_pose_climb_direction(
+    queries: &QueryPipeline,
+    pose: Vector<Real>,
+    standing: &Capsule,
+) -> Option<Vector<Real>> {
+    let half_height = standing.half_height() + standing.radius;
+    let probe = Cuboid::new(vector![
+        standing.radius + CLIMB_REACH,
+        half_height,
+        standing.radius + CLIMB_REACH,
+    ]);
+    let position = Isometry::translation(pose.x, pose.y, pose.z);
+    queries
+        .intersect_shape(position, &probe)
+        .filter(|(_, collider)| {
+            collider
+                .collision_groups()
+                .memberships
+                .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
+        })
+        .find_map(|(_, collider)| {
+            rapier3d::parry::query::contact(
+                &position,
+                standing,
+                collider.position(),
+                collider.shape(),
+                CLIMB_REACH,
+            )
+            .ok()
+            .flatten()
+            .and_then(|contact| {
+                let toward = vector![contact.normal1.x, 0.0, contact.normal1.z];
+                let length = toward.norm();
+                (length > 0.5).then_some(toward / length)
+            })
+        })
+}
+
+fn has_supported_standing_egress(
+    queries: &QueryPipeline,
+    start: Vector<Real>,
+    direction: Vector<Real>,
+    standing: &Capsule,
+    standing_floor_offset: Real,
+) -> bool {
+    let step_height = PLAYER_STEP_HEIGHT / SCALE_FACTOR;
+    let narrowed = Capsule::new(
+        standing.segment.a,
+        standing.segment.b,
+        standing.radius - PROBE_SKIN / SCALE_FACTOR,
+    );
+    let steps = (CLIMB_TOP_OUT_EGRESS_DISTANCE / CLIMB_TOP_OUT_RECOVERY_RETREAT)
+        .ceil()
+        .max(1.0) as usize;
+    let mut previous = start;
+    for step in 1..=steps {
+        let distance = CLIMB_TOP_OUT_EGRESS_DISTANCE * step as Real / steps as Real;
+        let support_probe = start + direction * distance;
+        let Some((sample_standing, _)) = supported_standing_pose(
+            queries,
+            support_probe,
+            standing_floor_offset + step_height,
+            standing_floor_offset,
+        ) else {
+            return false;
+        };
+        if (sample_standing.y - start.y).abs() > step_height
+            || shape_intersects(queries, sample_standing, &narrowed)
+            || !shape_sweep_is_clear(queries, previous, sample_standing, &narrowed)
+        {
+            return false;
+        }
+        previous = sample_standing;
+    }
+    !shape_intersects(queries, previous, standing)
 }
 
 fn climb_top_out_recovery_start(
-    queries: &QueryPipeline,
+    rise_queries: &QueryPipeline,
+    approach_queries: &QueryPipeline,
     head: Vector<Real>,
     direction: Vector<Real>,
     cross_y: Real,
@@ -988,7 +1946,9 @@ fn climb_top_out_recovery_start(
     (0..=recovery_steps).find_map(|step| {
         let candidate = head - direction * (step as Real * CLIMB_TOP_OUT_RECOVERY_RETREAT);
         let raised_candidate = vector![candidate.x, cross_y, candidate.z];
-        shape_sweep_is_clear(queries, candidate, raised_candidate, compressed).then_some(candidate)
+        (shape_sweep_is_clear(approach_queries, head, candidate, compressed)
+            && shape_sweep_is_clear(rise_queries, candidate, raised_candidate, compressed))
+        .then_some(candidate)
     })
 }
 
@@ -1003,6 +1963,86 @@ fn climb_top_out_recovery_start(
 /// matching Dark's jump-through transition. Parented entity colliders remain
 /// live blockers throughout, and the final standing pose is validated against
 /// every collider, including level terrain.
+#[derive(Clone, Copy)]
+struct SupportedLanding {
+    sphere: Vector<Real>,
+    standing: Vector<Real>,
+    direct: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_pre_lip_side_landing(
+    validation_queries: &QueryPipeline,
+    probe_queries: &QueryPipeline,
+    probe_cross_end: Vector<Real>,
+    direction: Vector<Real>,
+    lateral: Vector<Real>,
+    compressed: &Ball,
+    standing: &Capsule,
+    compressed_radius: Real,
+    lateral_steps: usize,
+    standing_floor_offset: Real,
+    mantle_floor: Vector<Real>,
+    lip_patch: Option<&MantleLipPatch>,
+) -> Option<(Vector<Real>, Vector<Real>, Vector<Real>)> {
+    let retreat_steps = (compressed_radius / (PROBE_SKIN / SCALE_FACTOR)).ceil() as usize;
+    let mut evaluated = 0;
+    for retreat_step in 1..=retreat_steps {
+        let retreat = -direction * (retreat_step as Real * PROBE_SKIN / SCALE_FACTOR);
+        for lateral_step in 1..=lateral_steps {
+            let lateral_offset = lateral_step as Real * compressed_radius;
+            for side in [1.0, -1.0] {
+                if evaluated == CLIMB_TOP_OUT_MAX_PRE_LIP_SIDE_CANDIDATES {
+                    return None;
+                }
+                evaluated += 1;
+                let candidate = probe_cross_end + retreat + lateral * (side * lateral_offset);
+                let Some((supported_standing, _)) = supported_standing_pose(
+                    validation_queries,
+                    candidate,
+                    CLIMB_TOP_OUT_DEEP_DROP,
+                    standing_floor_offset,
+                ) else {
+                    continue;
+                };
+                let floor_y = supported_standing.y - standing_floor_offset;
+                if (floor_y - mantle_floor.y).abs()
+                    > CLIMB_TOP_OUT_RECOVERY_RETREAT + PROBE_SKIN / SCALE_FACTOR
+                    || shape_intersects(validation_queries, supported_standing, standing)
+                    || scan_initial_route_obstruction(
+                        probe_queries,
+                        &[probe_cross_end, candidate],
+                        compressed,
+                        compressed_radius,
+                        CLIMB_TOP_OUT_RECOVERY_RETREAT,
+                        true,
+                        None,
+                        |hit| lip_patch.is_some_and(|patch| patch.contains(hit)),
+                    )
+                    .is_none()
+                    || !shape_sweep_is_clear(
+                        validation_queries,
+                        candidate,
+                        supported_standing,
+                        compressed,
+                    )
+                    || !has_supported_standing_egress(
+                        validation_queries,
+                        supported_standing,
+                        lateral * side,
+                        standing,
+                        standing_floor_offset,
+                    )
+                {
+                    continue;
+                }
+                return Some((candidate, candidate, supported_standing));
+            }
+        }
+    }
+    None
+}
+
 fn plan_climb_top_out(
     controller: &KinematicCharacterController,
     validation_queries: &QueryPipeline,
@@ -1012,52 +2052,152 @@ fn plan_climb_top_out(
     direction: Vector<Real>,
     minimum_clear_forward: Real,
     dt: Real,
+    is_crouched: bool,
 ) -> Option<PlayerMovement> {
+    macro_rules! reject_top_out {
+        ($gate:literal) => {{
+            return None;
+        }};
+    }
     let direction_h = vector![direction.x, 0.0, direction.z];
     let direction_norm = direction_h.norm();
     if direction_norm <= 1.0e-6 {
-        return None;
+        reject_top_out!("direction");
     }
     let direction = direction_h / direction_norm;
-    let head_offset = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+    let (body_height, body_radius, standing) = if is_crouched {
+        (
+            PLAYER_CROUCH_HEIGHT,
+            PLAYER_CROUCH_RADIUS,
+            crouched_player_capsule(),
+        )
+    } else {
+        (
+            PLAYER_STANDING_HEIGHT,
+            PLAYER_STANDING_RADIUS,
+            standing_player_capsule(),
+        )
+    };
+    let compressed_radius = body_radius / SCALE_FACTOR;
+    let head_offset = (body_height / 2.0 - body_radius) / SCALE_FACTOR;
     let head = pos.translation.vector + Vector::y() * head_offset;
     let raised = head + Vector::y() * CLIMB_TOP_OUT_UP;
-    let probe_ahead = raised + direction * CLIMB_TOP_OUT_PROBE_FORWARD;
-    let route_forward = minimum_clear_forward.max(CLIMB_TOP_OUT_PROBE_FORWARD);
+    let probe_forward = 2.0 * compressed_radius;
+    let probe_ahead = raised + direction * probe_forward;
+    let route_forward = minimum_clear_forward.max(probe_forward);
     let route_ahead = raised + direction * route_forward;
-    let standing = standing_player_capsule();
-    let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
+    let compressed = Ball::new(compressed_radius);
     let up_ray = Ray::new(Point::from(head), Vector::y());
     // BreakClimb's jump-through remains valid when the mantle search meets a
     // lip after the compressed head has room to rise. Do not conflate that
     // authored fallback with a low ceiling: it must clear at least one full
     // head radius before the first upward obstruction. Rick1's merged lip is
     // hit after 0.559 wu; a ceiling close enough to pin the sphere is rejected.
-    let up_obstruction = probe_queries
-        .cast_ray(&up_ray, CLIMB_TOP_OUT_UP, true)
-        .map(|(_, time_of_impact)| (time_of_impact, head.y + time_of_impact));
-    if up_obstruction.is_some_and(|(time_of_impact, _)| time_of_impact < CLIMB_TOP_OUT_RADIUS) {
-        return None;
+    let up_hit = probe_queries.cast_ray_and_get_normal(&up_ray, CLIMB_TOP_OUT_UP, true);
+    let up_obstruction = up_hit.map(|(_, hit)| (hit.time_of_impact, head.y + hit.time_of_impact));
+    if up_obstruction.is_some_and(|(time_of_impact, _)| time_of_impact < compressed_radius) {
+        reject_top_out!("low_ceiling");
     }
-    if !ray_segment_is_clear(probe_queries, raised, probe_ahead) {
-        return None;
+    let raised_probe_ray = Ray::new(Point::from(raised), direction);
+    let raised_probe_hit = probe_queries.cast_ray_and_get_normal(
+        &raised_probe_ray,
+        (probe_ahead - raised).norm(),
+        true,
+    );
+    let ladder_exit_hit = raised_probe_hit.filter(|(_, hit)| {
+        matches!(hit.feature, FeatureId::Face(_))
+            && hit.time_of_impact <= route_forward + CLIMB_TOP_OUT_RECOVERY_RETREAT
+            && vector![hit.normal.x, 0.0, hit.normal.z].dot(&direction) <= -MIN_CLIMB_GRIP_FRACTION
+    });
+    if raised_probe_hit.is_some() && ladder_exit_hit.is_none() {
+        reject_top_out!("raised_probe");
     }
-    let down_ray = Ray::new(Point::from(probe_ahead), -Vector::y());
-    let mantle_floor = probe_queries
-        .cast_ray_and_get_normal(&down_ray, CLIMB_TOP_OUT_MAX_DROP, true)
-        .filter(|(_, landing)| landing.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
-        .map(|(_, landing)| probe_ahead - Vector::y() * landing.time_of_impact);
+    let ladder_far_hit = ladder_exit_hit.and_then(|(near_handle, _)| {
+        let reverse_delta = raised - route_ahead;
+        let reverse_distance = reverse_delta.norm();
+        probe_queries
+            .cast_ray_and_get_normal(
+                &Ray::new(Point::from(route_ahead), reverse_delta / reverse_distance),
+                reverse_distance,
+                true,
+            )
+            .filter(|(handle, hit)| {
+                *handle == near_handle
+                    && matches!(hit.feature, FeatureId::Face(_))
+                    && vector![hit.normal.x, 0.0, hit.normal.z]
+                        .dot(&direction)
+                        .abs()
+                        >= MIN_CLIMB_GRIP_FRACTION
+            })
+    });
+    let ladder_exit_geometry = ladder_exit_hit.and_then(|(_, near_hit)| {
+        let (_, far_hit) = ladder_far_hit?;
+        let near_point = raised + direction * near_hit.time_of_impact;
+        let far_point = route_ahead - direction * far_hit.time_of_impact;
+        let thickness = (far_point - near_point).dot(&direction);
+        (thickness >= -1.0e-5 && thickness <= CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY).then_some((
+            near_point,
+            far_point,
+            thickness.max(0.0),
+        ))
+    });
+    if ladder_exit_hit.is_some() && ladder_exit_geometry.is_none() {
+        reject_top_out!("ladder_far_probe");
+    }
+    let lip_exit_allowance = CLIMB_TOP_OUT_LOCAL_LIP_EXIT_ALLOWANCE
+        + ladder_exit_geometry.map_or(0.0, |(_, _, thickness)| thickness);
+    // Prefer Dark's fixed two-radius mantle probe, but authored ladder wells
+    // can be deeper than that while the grip-derived exit distance already
+    // reaches the adjacent floor. Sample that bounded route endpoint as a
+    // fallback; the complete compressed route and final standing pose remain
+    // validated against all colliders below.
+    let mantle_probe = |origin| {
+        let down_ray = Ray::new(Point::from(origin), -Vector::y());
+        probe_queries
+            .cast_ray_and_get_normal(&down_ray, CLIMB_TOP_OUT_MAX_DROP, true)
+            .filter(|(_, landing)| landing.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
+            .map(|(handle, landing)| (origin, handle, landing))
+    };
+    let fixed_mantle_hit = mantle_probe(probe_ahead);
+    let route_mantle_hit = fixed_mantle_hit
+        .is_none()
+        .then(|| mantle_probe(route_ahead))
+        .flatten();
+    let same_mantle_slab = match (up_hit, route_mantle_hit) {
+        (Some((up_handle, up)), Some((origin, floor_handle, floor)))
+            if up_handle == floor_handle
+                && (origin - probe_ahead).norm() > CLIMB_TOP_OUT_RECOVERY_RETREAT =>
+        {
+            let underside_y = head.y + up.time_of_impact;
+            let floor_y = origin.y - floor.time_of_impact;
+            up.normal.y < -CLIMB_TOP_OUT_MIN_GROUND_NORMAL
+                && floor_y + 1.0e-4 >= underside_y
+                && floor_y - underside_y
+                    <= compressed_radius + 2.0 * PLAYER_CONTACT_OFFSET / SCALE_FACTOR + 1.0e-4
+        }
+        _ => false,
+    };
+    let mantle_hit = fixed_mantle_hit.or_else(|| {
+        if same_mantle_slab {
+            route_mantle_hit
+        } else {
+            None
+        }
+    });
+    let mantle_floor =
+        mantle_hit.map(|(origin, _, landing)| origin - Vector::y() * landing.time_of_impact);
     if up_obstruction.is_some_and(|(_, obstruction_y)| {
         // A lip can have a thin underside above its adjacent landing. Treat
         // surfaces within one compressed radius plus the solver gap on both
         // faces as the same landing edge; a genuinely separate low ceiling
         // remains farther above the probed floor.
         mantle_floor.is_none_or(|floor| {
-            floor.y + CLIMB_TOP_OUT_RADIUS + 2.0 * PLAYER_CONTACT_OFFSET / SCALE_FACTOR + 1.0e-4
+            floor.y + compressed_radius + 2.0 * PLAYER_CONTACT_OFFSET / SCALE_FACTOR + 1.0e-4
                 < obstruction_y
         })
-    }) {
-        return None;
+    }) && ladder_exit_hit.is_none()
+    {
+        reject_top_out!("separate_ceiling");
     }
 
     // Dark's mantle target puts the physical head sphere just over the lip:
@@ -1069,7 +2209,7 @@ fn plan_climb_top_out(
     let minimum_cross_y = mantle_floor
         .map(|floor| {
             head.y
-                .max(floor.y + (1.02 * PLAYER_STANDING_RADIUS + 1.0) / SCALE_FACTOR)
+                .max(floor.y + (1.02 * body_radius + 1.0) / SCALE_FACTOR)
         })
         .unwrap_or(head.y);
     // Dark's rise target is the authored 3.5-foot probe endpoint (or the
@@ -1077,23 +2217,39 @@ fn plan_climb_top_out(
     // simulated; the bounded recovery search below already selects its nearest
     // viable retreat and avoids multiplying hundreds of controller casts per
     // candidate.
-    let cross_y = minimum_cross_y.max(raised.y);
+    let cross_y = minimum_cross_y.max(raised.y)
+        + if ladder_exit_hit.is_some() {
+            CLIMB_TOP_OUT_RECOVERY_RETREAT
+        } else {
+            0.0
+        };
     // A full sphere can sit under an overhanging lip even when the head
     // point above it is clear. Dark's recovery searches backward/up within
     // four authored feet. Use the same bound and choose the first
     // contact-offset step whose full-radius vertical sweep is clear.
-    let rise_start =
-        climb_top_out_recovery_start(scripted_queries, head, direction, cross_y, &compressed)?;
+    let Some(rise_start) = climb_top_out_recovery_start(
+        scripted_queries,
+        probe_queries,
+        head,
+        direction,
+        cross_y,
+        &compressed,
+    ) else {
+        reject_top_out!("recovery_start");
+    };
     let cross_start = vector![rise_start.x, cross_y, rise_start.z];
     let probe_cross_end = vector![probe_ahead.x, cross_y, probe_ahead.z];
     let cross_end = vector![route_ahead.x, cross_y, route_ahead.z];
-    let final_sphere = cross_end + direction * CLIMB_TOP_OUT_ADVANCE;
+    let full_advance = cross_end + direction * (2.0 * compressed_radius);
     // Parry treats balls and boxes wholly inside a closed trimesh as
     // intersecting its volume. A tiny non-degenerate capsule uses the same
     // triangle-surface query as the player while remaining point-scale.
     let route_probe = Capsule::new_y(PROBE_SKIN / SCALE_FACTOR, PROBE_SKIN / SCALE_FACTOR);
+    // Rick1's merged lip keeps the compressed sphere intersecting through a
+    // measured 0.7148-world-unit sample. Round that geometry extent up to the
+    // next contact-offset sample: one compressed diameter plus two samples.
     if !shape_sweep_is_clear(probe_queries, head, rise_start, &compressed) {
-        return None;
+        reject_top_out!("head_to_recovery");
     }
     // The continuous capsule must compress before rising through the local
     // lip that Dark's sparse body can straddle. Validate the recovered
@@ -1110,105 +2266,606 @@ fn plan_climb_top_out(
                 > CLIMB_TOP_OUT_RECOVERY_RETREAT + PROBE_SKIN / SCALE_FACTOR
         })
     }) {
-        return None;
+        reject_top_out!("recovery_ceiling");
     }
-    let recovery_obstruction_limit = recovery_up_obstruction
-        .map(|(time_of_impact, _)| time_of_impact + CLIMB_TOP_OUT_RECOVERY_RETREAT)
-        .unwrap_or(0.0);
-    if !shape_route_exits_only_initial_obstruction(
-        probe_queries,
-        &[rise_start, cross_start],
-        &route_probe,
-        recovery_obstruction_limit,
-    ) {
-        return None;
-    }
-    // Validate Dark's sparse-body corridor with a point-scale probe: it may
-    // remain inside the one local lip component while crossing, but must
-    // exit by the end and may never enter a second obstruction.
-    // Recovery may retreat the rise behind `raised`. Validate that entire
-    // offset approach before permitting the one bounded lip overlap below;
-    // otherwise the scripted parentless-terrain exception could cross an
-    // unrelated wall between the recovered rise and Dark's probe endpoint.
-    if shape_intersects(probe_queries, cross_start, &route_probe)
-        || !shape_sweep_is_clear(probe_queries, cross_start, probe_cross_end, &route_probe)
-    {
-        return None;
-    }
-    if mantle_floor.is_none() {
-        let support_ray = Ray::new(Point::from(final_sphere), -Vector::y());
-        let supported = validation_queries
-            .cast_ray_and_get_normal(&support_ray, 2.0 * CLIMB_TOP_OUT_MAX_DROP, true)
-            .is_some_and(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL);
-        if !supported {
-            return None;
-        }
-    }
-    let final_down_ray = Ray::new(Point::from(final_sphere), -Vector::y());
-    let final_standing = validation_queries
-        .cast_ray_and_get_normal(&final_down_ray, CLIMB_TOP_OUT_FINAL_DROP, true)
-        .filter(|(_, ground)| ground.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL)
-        .map(|(_, ground)| {
-            let floor = final_sphere - Vector::y() * ground.time_of_impact;
-            floor
-                + Vector::y()
-                    * (PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
-                        + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
-                        + PLAYER_REST_LIFT / SCALE_FACTOR)
-        })
-        // Some ladder tops open over a drop. Expand at a pose validated
-        // against every collider, then let ordinary gravity find the lower
-        // deck.
-        .unwrap_or(final_sphere - Vector::y() * head_offset);
-    if shape_intersects(validation_queries, final_standing, &standing) {
-        return None;
-    }
-    let initial_obstruction_limit =
-        (cross_end - probe_cross_end).norm() + CLIMB_TOP_OUT_RECOVERY_RETREAT;
-    if !shape_route_exits_only_initial_obstruction(
-        probe_queries,
-        &[probe_cross_end, cross_end, final_sphere, final_standing],
-        &route_probe,
-        initial_obstruction_limit,
-    ) {
-        return None;
-    }
-
-    // Preserve Dark's ordered rise-then-cross states. Scripted casts keep
-    // parented entity blockers live but deliberately permit passage through
-    // parentless immutable level terrain, the narrow Dark jump-through
-    // exception. Final standing fit still uses `validation_queries`.
-    let waypoints = [
-        head,
+    let lip_forward_end = cross_end + direction * lip_exit_allowance;
+    let mantle_feature = ladder_exit_hit
+        .map(|(handle, hit)| (handle, hit.feature))
+        .or_else(|| mantle_hit.map(|(_, handle, hit)| (handle, hit.feature)));
+    let mantle_handle = mantle_hit.map(|(_, handle, _)| handle);
+    let mantle_point = ladder_exit_hit
+        .map(|(_, hit)| raised + direction * hit.time_of_impact)
+        .unwrap_or_else(|| mantle_floor.unwrap_or(probe_ahead));
+    let lip_corridor = [
         rise_start,
         cross_start,
         probe_cross_end,
         cross_end,
-        final_sphere,
-        final_standing,
+        lip_forward_end,
     ];
+    let mut lip_patch = mantle_lip_patch(
+        probe_queries,
+        mantle_feature,
+        mantle_point,
+        &lip_corridor,
+        ladder_exit_hit.is_some(),
+    );
+    if ladder_exit_hit.is_some() || same_mantle_slab {
+        let up_feature = up_hit.map(|(handle, hit)| (handle, hit.feature));
+        let up_point = up_hit
+            .map(|(_, hit)| head + Vector::y() * hit.time_of_impact)
+            .unwrap_or(head);
+        if let (Some(lip_patch), Some(up_patch)) = (
+            lip_patch.as_mut(),
+            mantle_lip_patch(probe_queries, up_feature, up_point, &lip_corridor, true),
+        ) {
+            if lip_patch.handle == up_patch.handle {
+                lip_patch.faces.extend(up_patch.faces);
+            }
+        }
+    }
+    if ladder_exit_hit.is_some() {
+        let far_feature = ladder_far_hit.map(|(handle, hit)| (handle, hit.feature));
+        let far_point = ladder_far_hit
+            .map(|(_, hit)| route_ahead - direction * hit.time_of_impact)
+            .unwrap_or(route_ahead);
+        if let (Some(lip_patch), Some(far_patch)) = (
+            lip_patch.as_mut(),
+            mantle_lip_patch(probe_queries, far_feature, far_point, &lip_corridor, true),
+        ) {
+            if lip_patch.handle == far_patch.handle {
+                lip_patch.faces.extend(far_patch.faces);
+            }
+        }
+    }
+    let recovery_slab = extend_lip_patch_with_recovery_slab(
+        probe_queries,
+        &mut lip_patch,
+        mantle_handle,
+        mantle_floor,
+        rise_start,
+        cross_start,
+    );
+    let recovery_slab_proven = recovery_slab.is_some();
+    let same_mantle_slab = same_mantle_slab || recovery_slab_proven;
+    let bridged_rise_interval = recovery_slab.map(|(underside_y, top_y)| {
+        (
+            (underside_y - compressed_radius - rise_start.y).max(0.0),
+            (top_y + compressed_radius - rise_start.y).min((cross_start - rise_start).norm()),
+        )
+    });
+    let rise_scan = scan_initial_route_obstruction(
+        probe_queries,
+        &[rise_start, cross_start],
+        &compressed,
+        (cross_start - rise_start).norm(),
+        (cross_start - rise_start).norm(),
+        recovery_slab_proven,
+        bridged_rise_interval,
+        |hit| lip_patch.as_ref().is_some_and(|patch| patch.contains(hit)),
+    );
+    if rise_scan.is_none() {
+        reject_top_out!("rise_obstruction_scan");
+    }
+    let standing_floor_offset = body_height / 2.0 / SCALE_FACTOR
+        + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+        + PLAYER_REST_LIFT / SCALE_FACTOR;
+    // A recovered rise can finish directly above the approach-side surface
+    // of a thin deck. Forcing the generic forward lip exit in that case steps
+    // off narrow authored decks before the active capsule is restored. The
+    // endpoint-local U/T proof and one-interval rise scan above authorize only
+    // that vertical transition; the restored pose and an ordinary one-stride
+    // egress still use every collider.
+    let recovery_landing = recovery_slab_proven
+        .then(|| {
+            let mantle_handle = mantle_handle?;
+            let mantle_floor = mantle_floor?;
+            let (support_handle, support) = validation_queries.cast_ray_and_get_normal(
+                &Ray::new(Point::from(cross_start), -Vector::y()),
+                CLIMB_TOP_OUT_FINAL_DROP,
+                true,
+            )?;
+            let floor = cross_start - Vector::y() * support.time_of_impact;
+            let standing_pose = floor + Vector::y() * standing_floor_offset;
+            (support_handle == mantle_handle
+                && support.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL
+                && (floor.y - mantle_floor.y).abs()
+                    <= CLIMB_TOP_OUT_RECOVERY_RETREAT + PROBE_SKIN / SCALE_FACTOR
+                && shape_obstructions(validation_queries, cross_start, &compressed).is_empty()
+                && !shape_intersects(validation_queries, standing_pose, &standing)
+                && shape_sweep_is_clear(
+                    validation_queries,
+                    cross_start,
+                    standing_pose,
+                    &compressed,
+                )
+                && has_supported_standing_egress(
+                    validation_queries,
+                    standing_pose,
+                    -direction,
+                    &standing,
+                    standing_floor_offset,
+                ))
+            .then_some((cross_start, cross_start, standing_pose))
+        })
+        .flatten();
+    // Recovery may retreat the rise behind `raised`. Validate that entire
+    // offset approach before permitting the one bounded lip overlap below;
+    // otherwise the scripted parentless-terrain exception could cross an
+    // unrelated wall between the recovered rise and Dark's probe endpoint.
+    if recovery_landing.is_none()
+        && ladder_exit_hit.is_none()
+        && (shape_intersects(probe_queries, cross_start, &route_probe)
+            || !shape_sweep_is_clear(probe_queries, cross_start, probe_cross_end, &route_probe))
+    {
+        reject_top_out!("point_approach");
+    }
+    // The point-scale centerline can remain clear while the full ball clips a
+    // diagonal lip from the side. Find the ball's first actual terrain face on
+    // the held approach, require it to belong to the local mantle patch, then
+    // clear it along that face's outward horizontal normal. The exception ends
+    // after this one geometry-derived leg; candidate recovery is ordinary.
+    let first_lip = if recovery_landing.is_some() {
+        None
+    } else {
+        let Some(first_lip) = first_allowed_route_obstruction(
+            probe_queries,
+            &[cross_start, lip_forward_end],
+            &compressed,
+            |hit| lip_patch.as_ref().is_some_and(|patch| patch.contains(hit)),
+        ) else {
+            reject_top_out!("first_lip_scan");
+        };
+        first_lip
+    };
+    let (lip_approach, lip_clear) = if recovery_landing.is_some() {
+        (cross_start, cross_start)
+    } else if let Some(first_lip) = first_lip {
+        if !shape_sweep_is_clear(probe_queries, cross_start, first_lip.position, &route_probe) {
+            reject_top_out!("point_to_lip");
+        }
+        let Some(exit_direction) =
+            obstruction_exit_direction(probe_queries, &first_lip.obstructions, direction)
+        else {
+            reject_top_out!("exit_direction");
+        };
+        let lip_exit_end = first_lip.position + exit_direction * lip_exit_allowance;
+        let mut exit_lip_patch = mantle_lip_patch(
+            probe_queries,
+            mantle_feature,
+            mantle_floor.unwrap_or(probe_ahead),
+            &[
+                rise_start,
+                cross_start,
+                probe_cross_end,
+                cross_end,
+                lip_forward_end,
+                first_lip.position,
+                lip_exit_end,
+            ],
+            ladder_exit_hit.is_some(),
+        );
+        extend_lip_patch_with_recovery_slab(
+            probe_queries,
+            &mut exit_lip_patch,
+            mantle_handle,
+            mantle_floor,
+            rise_start,
+            cross_start,
+        );
+        if ladder_exit_hit.is_some() {
+            let far_feature = ladder_far_hit.map(|(handle, hit)| (handle, hit.feature));
+            let far_point = ladder_far_hit
+                .map(|(_, hit)| route_ahead - direction * hit.time_of_impact)
+                .unwrap_or(route_ahead);
+            if let (Some(exit_lip_patch), Some(far_patch)) = (
+                exit_lip_patch.as_mut(),
+                mantle_lip_patch(
+                    probe_queries,
+                    far_feature,
+                    far_point,
+                    &[
+                        rise_start,
+                        cross_start,
+                        probe_cross_end,
+                        cross_end,
+                        lip_forward_end,
+                        first_lip.position,
+                        lip_exit_end,
+                    ],
+                    true,
+                ),
+            ) {
+                if exit_lip_patch.handle == far_patch.handle {
+                    exit_lip_patch.faces.extend(far_patch.faces);
+                }
+            }
+        }
+        let Some(exit) = scan_initial_route_obstruction(
+            probe_queries,
+            &[first_lip.position, lip_exit_end],
+            &compressed,
+            lip_exit_allowance,
+            CLIMB_TOP_OUT_RECOVERY_RETREAT,
+            true,
+            None,
+            |hit| {
+                exit_lip_patch
+                    .as_ref()
+                    .is_some_and(|patch| patch.contains(hit))
+            },
+        ) else {
+            reject_top_out!("lip_exit_scan");
+        };
+        (first_lip.position, exit.first_clear)
+    } else {
+        if !shape_sweep_is_clear(probe_queries, cross_start, cross_end, &compressed) {
+            reject_top_out!("clear_cross");
+        }
+        (cross_end, cross_end)
+    };
+
+    let landing_pose = |candidate: Vector<Real>| {
+        let (supported_standing, support_drop) = supported_standing_pose(
+            validation_queries,
+            candidate,
+            CLIMB_TOP_OUT_DEEP_DROP,
+            standing_floor_offset,
+        )?;
+        (!shape_intersects(validation_queries, supported_standing, &standing)).then_some(
+            SupportedLanding {
+                sphere: candidate,
+                standing: supported_standing,
+                direct: support_drop <= CLIMB_TOP_OUT_FINAL_DROP,
+            },
+        )
+    };
+    // Dark advances a body diameter after probing the mantle floor. On a
+    // narrow landing that full advance can put the capsule over an open shaft
+    // even though the probe itself found the deck. Search the full advance,
+    // geometry-derived exit, and probe endpoint for the nearest standing-safe
+    // landing. Each ordered base can recover forward past an overhang, while a
+    // separate one-radius-step lateral search can clear a narrow rail. Forward
+    // recovery stays within four radii and lateral recovery within five. The
+    // compressed route first reaches the geometry-derived `lip_clear` before
+    // moving to the selected landing.
+    let lateral = vector![direction.z, 0.0, -direction.x];
+    let lateral_steps = (CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY / compressed_radius).ceil() as usize;
+    let forward_steps = (CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY / compressed_radius).ceil() as usize;
+    // Breadth-first by total recovery distance. Within an equal distance,
+    // consider lateral recovery first so the fixed candidate budget reaches
+    // the complete independently bounded forward/lateral grid.
+    let mut landing_candidates = Vec::new();
+    for total_step in 0..=lateral_steps + forward_steps {
+        for lateral_step in (0..=lateral_steps).rev() {
+            let Some(forward_step) = total_step.checked_sub(lateral_step) else {
+                continue;
+            };
+            if forward_step > forward_steps {
+                continue;
+            }
+            let lateral_offset = lateral_step as Real * compressed_radius;
+            let sides: &[Real] = if lateral_step == 0 {
+                &[0.0]
+            } else {
+                &[1.0, -1.0]
+            };
+            for side in sides {
+                for base in [full_advance, cross_end, probe_cross_end] {
+                    landing_candidates.push(
+                        base + lateral * (lateral_offset * side)
+                            + direction * (forward_step as Real * compressed_radius),
+                    );
+                }
+            }
+        }
+    }
+    // The only immutable-terrain exception is the geometry-attributed path to
+    // `lip_clear`. Validate its parented blockers once, before considering any
+    // landing. Every leg after `lip_clear` uses the ordinary all-collider
+    // pipeline, including climbables.
+    if recovery_landing.is_none()
+        && (!shape_sweep_is_clear(scripted_queries, cross_start, lip_approach, &compressed)
+            || !shape_sweep_is_clear(scripted_queries, lip_approach, lip_clear, &compressed)
+            || !shape_obstructions(validation_queries, lip_clear, &compressed).is_empty())
+    {
+        reject_top_out!("scripted_or_lip_clear");
+    }
+    let validated_landing = |landing: SupportedLanding| {
+        if !shape_sweep_is_clear(
+            validation_queries,
+            landing.sphere,
+            landing.standing,
+            &compressed,
+        ) {
+            return None;
+        }
+        let landing_delta = landing.sphere - lip_clear;
+        let lateral_turn = lip_clear + lateral * landing_delta.dot(&lateral);
+        let forward_turn = lip_clear + direction * landing_delta.dot(&direction);
+        // A diagonal can cut through the corner of an otherwise-clear shaft
+        // cap. Prefer the direct route, then try the two geometry-derived
+        // orthogonal doglegs; every leg uses ordinary all-collider sweeps.
+        [lip_clear, lateral_turn, forward_turn]
+            .into_iter()
+            .find(|turn| {
+                shape_sweep_is_clear(validation_queries, lip_clear, *turn, &compressed)
+                    && shape_sweep_is_clear(validation_queries, *turn, landing.sphere, &compressed)
+            })
+            .map(|turn| (turn, landing.sphere, landing.standing))
+    };
+    // Preserve cheap forward-first candidate order, generating bases lazily
+    // and deduplicating identical coordinates before their support and route
+    // queries. A supported egress is a preference: direct then bounded-deep.
+    // If neither tier has room for the ordinary stride, retain the first exact
+    // supported standing pose as a controlled fallback instead of re-freezing
+    // the ladder. No tier ever restores a midair pose.
+    let mut direct_with_egress = None;
+    let mut direct_candidates = Vec::new();
+    let mut deep_candidates = Vec::new();
+    let mut seen_candidates = HashSet::new();
+    let mut evaluated_candidates = 0;
+    let mut direct_egress_candidates = 0;
+    for candidate in landing_candidates {
+        if !seen_candidates.insert([
+            candidate.x.to_bits(),
+            candidate.y.to_bits(),
+            candidate.z.to_bits(),
+        ]) {
+            continue;
+        }
+        if evaluated_candidates == CLIMB_TOP_OUT_MAX_LANDING_CANDIDATES {
+            break;
+        }
+        evaluated_candidates += 1;
+        let Some(landing) = landing_pose(candidate) else {
+            continue;
+        };
+        let Some(validated) = validated_landing(landing) else {
+            continue;
+        };
+        if landing.direct {
+            direct_candidates.push(validated);
+            if direct_egress_candidates < CLIMB_TOP_OUT_MAX_EGRESS_CANDIDATES {
+                direct_egress_candidates += 1;
+                let has_egress = has_supported_standing_egress(
+                    validation_queries,
+                    landing.standing,
+                    direction,
+                    &standing,
+                    standing_floor_offset,
+                );
+                if has_egress {
+                    direct_with_egress = Some(validated);
+                    break;
+                }
+            }
+        } else {
+            // Cache the support and route casts and defer only the
+            // lower-priority egress probe.
+            deep_candidates.push((landing, validated));
+        }
+    }
+    let deep_with_egress = direct_with_egress.is_none().then(|| {
+        deep_candidates
+            .iter()
+            .copied()
+            .take(CLIMB_TOP_OUT_MAX_EGRESS_CANDIDATES)
+            .find_map(|(landing, validated)| {
+                let has_egress = has_supported_standing_egress(
+                    validation_queries,
+                    landing.standing,
+                    direction,
+                    &standing,
+                    standing_floor_offset,
+                );
+                has_egress.then_some(validated)
+            })
+    });
+    // A ladder may project above a recessed floor on the same side from which
+    // it is climbed. The normal held-direction search cannot see that floor:
+    // every candidate advances beyond the ladder, potentially finding a
+    // collision-safe but disconnected roof only after a large lateral dogleg.
+    // Probe a bounded straight retreat from `lip_clear` and validate both the
+    // complete all-collider route and an ordinary stride away from the shaft.
+    // This is deliberately not a general second 2-D grid: straight approach-
+    // side recovery is the least-steering alternative to a sideways detour.
+    let approach_steps = (CLIMB_TOP_OUT_MAX_APPROACH_RECOVERY / compressed_radius).ceil() as usize;
+    let approach_with_egress = (1..=approach_steps).find_map(|step| {
+        let offset = lip_clear - direction * (step as Real * compressed_radius);
+        let candidate = vector![offset.x, head.y, offset.z];
+        let landing = landing_pose(candidate)?;
+        if !shape_obstructions(validation_queries, candidate, &compressed).is_empty()
+            || !shape_sweep_is_clear(validation_queries, head, candidate, &compressed)
+            || !shape_sweep_is_clear(
+                validation_queries,
+                landing.sphere,
+                landing.standing,
+                &compressed,
+            )
+            || !has_supported_standing_egress(
+                validation_queries,
+                landing.standing,
+                -direction,
+                &standing,
+                standing_floor_offset,
+            )
+        {
+            return None;
+        }
+        Some((head, landing.sphere, landing.standing))
+    });
+    let direct_fallback = direct_with_egress
+        .is_none()
+        .then(|| direct_candidates.into_iter().next())
+        .flatten();
+    let deep_fallback = (direct_with_egress.is_none()
+        && deep_with_egress.as_ref().is_none_or(Option::is_none)
+        && direct_fallback.is_none())
+    .then(|| {
+        deep_candidates
+            .into_iter()
+            .next()
+            .map(|(_, validated)| validated)
+    })
+    .flatten();
+    let forward_landing = if same_mantle_slab {
+        // Once the upward and downward samples identify opposite faces of the
+        // same slab, a direct supported pose on its top is the authored exit.
+        // Do not carry the player across that landing and down a later opening
+        // merely because the lower floor offers a longer egress stride.
+        direct_with_egress
+            .or(direct_fallback)
+            .or(deep_with_egress.flatten())
+            .or(deep_fallback)
+    } else {
+        direct_with_egress
+            .or(deep_with_egress.flatten())
+            .or(direct_fallback)
+            .or(deep_fallback)
+    };
+    // A narrow landing can lie immediately behind the climbable itself but
+    // before the terrain lip's geometry-derived exit. In that layout the
+    // ordinary grid correctly clears the lip, then cannot come back through
+    // its wall to the landing. Only after that grid fails, search the mantle-
+    // probe side of the lip: clear the ladder laterally while compressed,
+    // retreat by at most one active-profile radius from the sampled wall, and
+    // require the authored mantle floor, full-profile fit, all-collider
+    // restoration, and supported egress away from the ladder. The initial
+    // wall graze must belong to the bounded mantle patch, clear exactly once,
+    // and stay clear through the candidate.
+    let pre_lip_side_landing = (recovery_landing.is_none() && forward_landing.is_none())
+        .then(|| {
+            mantle_floor.and_then(|mantle_floor| {
+                find_pre_lip_side_landing(
+                    validation_queries,
+                    probe_queries,
+                    probe_cross_end,
+                    direction,
+                    lateral,
+                    &compressed,
+                    &standing,
+                    compressed_radius,
+                    lateral_steps,
+                    standing_floor_offset,
+                    mantle_floor,
+                    lip_patch.as_ref(),
+                )
+            })
+        })
+        .flatten();
+    // Prefer the held-direction result unless it needs more lateral steering
+    // than the straight approach-side route. This preserves ordinary forward
+    // top-outs and uses the recessed-floor alternative only when it avoids a
+    // wider sideways recovery.
+    let selected_landing = if let Some(recovery) = recovery_landing {
+        Some((recovery, false, true, false))
+    } else {
+        match (forward_landing, pre_lip_side_landing, approach_with_egress) {
+            (Some(forward), _, Some(approach)) => {
+                let lateral_distance = |landing: &(Vector<Real>, Vector<Real>, Vector<Real>)| {
+                    (landing.1 - lip_clear).dot(&lateral).abs()
+                };
+                let forward_lateral = lateral_distance(&forward);
+                if forward_lateral + 1.0e-5 >= CLIMB_TOP_OUT_LARGE_LATERAL_DOGLEG
+                    && lateral_distance(&approach) + 1.0e-5 < forward_lateral
+                {
+                    Some((approach, true, false, false))
+                } else {
+                    Some((forward, false, false, false))
+                }
+            }
+            (Some(forward), _, None) => Some((forward, false, false, false)),
+            (None, Some(pre_lip), _) => Some((pre_lip, false, false, true)),
+            (None, None, Some(approach)) => Some((approach, true, false, false)),
+            (None, None, None) => None,
+        }
+    };
+    let Some((
+        (landing_route, final_sphere, final_standing),
+        approach_side,
+        recovery_side,
+        pre_lip_side,
+    )) = selected_landing
+    else {
+        reject_top_out!("landing");
+    };
+    // Preserve Dark's ordered rise-then-cross states. Scripted casts keep
+    // parented entity blockers live but deliberately permit passage through
+    // parentless immutable level terrain, the narrow Dark jump-through
+    // exception. Final standing fit still uses `validation_queries`.
+    let waypoints = if recovery_side {
+        [
+            head,
+            rise_start,
+            cross_start,
+            cross_start,
+            cross_start,
+            landing_route,
+            final_sphere,
+            final_standing,
+        ]
+    } else if approach_side {
+        [
+            head,
+            head,
+            head,
+            head,
+            head,
+            landing_route,
+            final_sphere,
+            final_standing,
+        ]
+    } else if pre_lip_side {
+        [
+            head,
+            rise_start,
+            cross_start,
+            probe_cross_end,
+            landing_route,
+            landing_route,
+            final_sphere,
+            final_standing,
+        ]
+    } else {
+        [
+            head,
+            rise_start,
+            cross_start,
+            lip_approach,
+            lip_clear,
+            landing_route,
+            final_sphere,
+            final_standing,
+        ]
+    };
     let mut simulated = pos.translation.vector;
     let mut first_movement = None;
-    for waypoint in waypoints {
+    for (waypoint_index, waypoint) in waypoints.into_iter().enumerate() {
+        let movement_queries = if waypoint_index >= 5 {
+            validation_queries
+        } else {
+            scripted_queries
+        };
         for _ in 0..512 {
             if (waypoint - simulated).norm() <= PLAYER_MOVE_ARRIVAL_EPSILON {
                 break;
             }
             let Some(movement) = slide_toward(
                 controller,
-                scripted_queries,
+                movement_queries,
                 &compressed,
                 simulated,
                 waypoint,
                 dt,
             ) else {
-                return None;
+                reject_top_out!("simulated_slide");
             };
             first_movement.get_or_insert(movement.translation);
             simulated += movement.translation;
         }
         if (waypoint - simulated).norm() > PLAYER_MOVE_ARRIVAL_EPSILON {
-            return None;
+            reject_top_out!("simulated_arrival");
         }
     }
     let first_step = first_movement?;
@@ -1220,8 +2877,10 @@ fn plan_climb_top_out(
             next_waypoint: 0,
             save_pose: pos.translation.vector,
             reversing: false,
-            is_crouched: false,
+            is_crouched,
+            requires_final_support: true,
         }),
+        retained_climb: None,
         slope_displacement: Vector::zeros(),
     })
 }
@@ -1449,6 +3108,7 @@ fn plan_jump_mantle(
         final_head,
         final_head,
         final_standing,
+        final_standing,
     ];
 
     // Preflight the exact fixed-timestep route against every parented entity
@@ -1486,23 +3146,27 @@ fn plan_jump_mantle(
             save_pose: pos.translation.vector,
             reversing: false,
             is_crouched,
+            requires_final_support: false,
         }),
+        retained_climb: None,
         slope_displacement: Vector::zeros(),
     })
 }
 
 /// Advance a compressed ladder or ordinary-jump top-out by one fixed-timestep
-/// step, checking every substep against current parented entity geometry.
-/// Parentless immutable level terrain is the narrow Dark jump-through
-/// exception. A newly-blocked route returns to its last valid standing pose
-/// before the capsule is expanded, and final standing fit is checked against
-/// every collider.
+/// step, checking
+/// every substep against current parented entity geometry. Parentless immutable
+/// level terrain is the narrow Dark jump-through exception. A newly-blocked
+/// route returns to its last valid full-profile pose before the capsule is restored.
+/// Final body fit and its current upward support are revalidated against
+/// every collider immediately before release.
 fn advance_climb_top_out(
     controller: &KinematicCharacterController,
     validation_queries: &QueryPipeline,
     scripted_queries: &QueryPipeline,
     pos: &Isometry<Real>,
     mut top_out: ClimbTopOut,
+    desired_movement: Vector<Real>,
     dt: Real,
 ) -> (EffectiveCharacterMovement, Option<ClimbTopOut>) {
     let final_shape = if top_out.is_crouched {
@@ -1518,7 +3182,14 @@ fn advance_climb_top_out(
             }
         } else if let Some(target) = top_out.waypoints.get(top_out.next_waypoint) {
             *target
-        } else if shape_intersects(validation_queries, pos.translation.vector, &final_shape) {
+        } else if shape_intersects(validation_queries, pos.translation.vector, &final_shape)
+            || (top_out.requires_final_support
+                && !player_pose_matches_current_support(
+                    validation_queries,
+                    pos.translation.vector,
+                    top_out.is_crouched,
+                ))
+        {
             top_out.reversing = true;
             continue;
         } else {
@@ -1530,7 +3201,22 @@ fn advance_climb_top_out(
         }
         if top_out.reversing {
             if top_out.next_waypoint == 0 {
-                if shape_intersects(validation_queries, top_out.save_pose, &final_shape) {
+                let save_pose_is_supported = player_pose_matches_current_support(
+                    validation_queries,
+                    top_out.save_pose,
+                    top_out.is_crouched,
+                );
+                let save_pose_can_resume_climb = standing_pose_climb_direction(
+                    validation_queries,
+                    top_out.save_pose,
+                    &final_shape,
+                )
+                .is_some_and(|toward| climb_redirect(desired_movement, toward).is_some());
+                if shape_intersects(validation_queries, top_out.save_pose, &final_shape)
+                    || (top_out.requires_final_support
+                        && !save_pose_is_supported
+                        && !save_pose_can_resume_climb)
+                {
                     return (scripted_character_movement(Vector::zeros()), Some(top_out));
                 }
                 return (scripted_character_movement(Vector::zeros()), None);
@@ -1546,17 +3232,27 @@ fn advance_climb_top_out(
         CLIMB_TOP_OUT_RADIUS
     };
     let compressed = Ball::new(compressed_radius);
+    let movement_queries = if top_out.requires_final_support && top_out.next_waypoint >= 5 {
+        // Waypoint 4 is `lip_clear`; every segment leaving or returning to it
+        // in a ladder recovery uses ordinary all-collider validation,
+        // including climbables. Jump mantles keep Dark's parentless-terrain
+        // exception through their whole scripted transition.
+        validation_queries
+    } else {
+        scripted_queries
+    };
     // A live entity can move into the compressed sphere between frames. The
     // forward route must stop, but refusing every cast from an overlapping
     // pose would pin the recovery forever. During reversal only, let Rapier's
     // character controller compute a collision-checked depenetrating step
     // toward the preceding validated waypoint.
-    let movement = (!shape_intersects(scripted_queries, pos.translation.vector, &compressed)
-        || top_out.reversing)
+    let current_obstructed =
+        !shape_obstructions(movement_queries, pos.translation.vector, &compressed).is_empty();
+    let movement = (!current_obstructed || top_out.reversing)
         .then(|| {
             slide_toward(
                 controller,
-                scripted_queries,
+                movement_queries,
                 &compressed,
                 pos.translation.vector,
                 target,
@@ -1633,12 +3329,16 @@ fn step_player_movement(
     if let Some(ClimbPass {
         movement: climb,
         top_out,
+        retained,
+        allow_top_out_attempt,
+        is_crouched,
         validation_queries,
         probe_queries: climb_queries,
         scripted_queries,
     }) = climb
     {
-        if climb.y > 0.0 {
+        let top_out_requested = climb.y > 0.0 && top_out.is_some();
+        if top_out_requested && allow_top_out_attempt {
             if let Some(top_out) = top_out.and_then(|(direction, minimum_clear_forward)| {
                 plan_climb_top_out(
                     controller,
@@ -1649,6 +3349,7 @@ fn step_player_movement(
                     direction,
                     minimum_clear_forward,
                     dt,
+                    is_crouched,
                 )
             }) {
                 return top_out;
@@ -1660,6 +3361,35 @@ fn step_player_movement(
             return PlayerMovement {
                 movement: mvt,
                 top_out: None,
+                retained_climb: Some(retained),
+                slope_displacement: Vector::zeros(),
+            };
+        }
+        if top_out_requested {
+            // An unsafe or throttled top-out remains an active climb frame.
+            // A horizontal contact slide may adjust the approach, but only
+            // while the resulting standing pose keeps a compatible grip on a
+            // climbable. Gravity stays suppressed, so this cannot reinterpret
+            // the diagonal input as unsupported ordinary movement.
+            let horizontal = vector![desired.x, 0.0, desired.z];
+            let reposition = controller.move_shape(dt, queries, shape, pos, horizontal, |_c| ());
+            let repositioned = pos.translation.vector + reposition.translation;
+            let keeps_grip = shape.as_capsule().is_some_and(|capsule| {
+                standing_pose_climb_direction(&validation_queries, repositioned, capsule)
+                    .is_some_and(|toward| climb_redirect(desired, toward).is_some())
+            });
+            if keeps_grip {
+                return PlayerMovement {
+                    movement: reposition,
+                    top_out: None,
+                    retained_climb: Some(retained),
+                    slope_displacement: Vector::zeros(),
+                };
+            }
+            return PlayerMovement {
+                movement: scripted_character_movement(Vector::zeros()),
+                top_out: None,
+                retained_climb: Some(retained),
                 slope_displacement: Vector::zeros(),
             };
         }
@@ -1832,6 +3562,7 @@ fn step_player_movement(
     PlayerMovement {
         movement: mvt,
         top_out: None,
+        retained_climb: None,
         slope_displacement: next_slope_displacement,
     }
 }
@@ -2158,6 +3889,9 @@ pub struct PlayerHandle {
     // transient locomotion state: direct relocation and crouching cancel it,
     // while save/load uses the last valid standing pose stored with it.
     top_out: Option<ClimbTopOut>,
+    // Short throttle after an unchanged top-out approach fails its bounded
+    // landing search. Ordinary ladder climbing continues during the cooldown.
+    top_out_retry_cooldown: u8,
     // Moving terrain the player was last seen standing on, and where it was
     // then. Purely derived per-frame state (re-probed every move), so nothing
     // needs to save or restore it.
@@ -2172,6 +3906,13 @@ pub struct PlayerHandle {
     // A live ordinary jump's vertical velocity (world units / second).
     // `None` means the legacy constant-gravity walk/fall path is active.
     jump_velocity: Option<Real>,
+    // Prior-frame ladder contact, retained just long enough for an atomic
+    // turn+jump to release it before the new facing recomputes grip.
+    retained_climb: Option<RetainedClimb>,
+    // Horizontal part of a live BreakClimb jump (world units / second).
+    // Ordinary input cannot steer it; collision and gravity own the arc until
+    // the controller reports a supported landing.
+    climb_jump_velocity: Option<Vector<Real>>,
     // Held-button edge state: one press launches at most one jump.
     jump_was_pressed: bool,
 }
@@ -2630,6 +4371,9 @@ impl PhysicsWorld {
         player_handle.slope_displacement = Vector::zeros();
         player_handle.is_grounded = false;
         player_handle.jump_velocity = None;
+        player_handle.retained_climb = None;
+        player_handle.climb_jump_velocity = None;
+        player_handle.top_out_retry_cooldown = 0;
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         let shape = if player_handle.is_crouched {
             crouched_player_shared_shape()
@@ -3460,10 +5204,13 @@ impl PhysicsWorld {
             character_handle,
             is_crouched: false,
             top_out: None,
+            top_out_retry_cooldown: 0,
             support: None,
             slope_displacement: Vector::zeros(),
             is_grounded: false,
             jump_velocity: None,
+            retained_climb: None,
+            climb_jump_velocity: None,
             jump_was_pressed: false,
         }
     }
@@ -3487,6 +5234,8 @@ impl PhysicsWorld {
         if want_crouch == player_handle.is_crouched {
             return player_handle.is_crouched;
         }
+        player_handle.top_out_retry_cooldown = 0;
+        player_handle.retained_climb = None;
 
         let character_handle = player_handle.character_handle;
         let collider_handle = self.rigid_body_set[character_handle].colliders()[0];
@@ -3789,11 +5538,12 @@ impl PhysicsWorld {
 
     /// Update player movement with facing and a held ordinary-jump button.
     ///
-    /// The button is edge-triggered inside [`PlayerHandle`], starts only from
-    /// controller-confirmed ground, and then follows a collision-cast ballistic
-    /// arc until landing. Keeping the request here (rather than as a debug
-    /// relocation/effect) means desktop, VR, and automated playtests all drive
-    /// the same production character controller.
+    /// The button is edge-triggered inside [`PlayerHandle`]. It starts from
+    /// controller-confirmed ground, or releases a climb retained by the prior
+    /// frame, then follows a collision-cast ballistic arc until landing.
+    /// Keeping the request here (rather than as a debug relocation/effect)
+    /// means desktop, VR, and automated playtests all drive the same production
+    /// character controller.
     pub fn update_with_facing_and_jump(
         &mut self,
         desired_movement: Vector3<f32>,
@@ -3912,9 +5662,34 @@ impl PhysicsWorld {
     ) -> (Vec<CollisionEvent>, &RigidBody) {
         let jump_edge = jump_pressed && !player_handle.jump_was_pressed;
         player_handle.jump_was_pressed = jump_pressed;
-        let launch_jump = jump_edge && player_handle.is_grounded && player_handle.top_out.is_none();
+        // Consume the prior frame's grip before the freshly turned facing can
+        // fail the into-ladder query below. It is deliberately one-frame
+        // state: separation without a simultaneous edge cannot launch later.
+        let retained_climb = player_handle.retained_climb.take();
+        let player_center = self.rigid_body_set[player_handle.character_handle]
+            .translation()
+            .y;
+        let climb_jump = (jump_edge
+            && player_handle.top_out.is_none()
+            && player_handle.jump_velocity.is_none())
+        .then(|| {
+            retained_climb.and_then(|retained| climb_jump_release(retained, facing, player_center))
+        })
+        .flatten();
+        if let Some((horizontal_velocity, vertical_bonus)) = climb_jump {
+            player_handle.jump_velocity = Some((PLAYER_JUMP_SPEED + vertical_bonus) / SCALE_FACTOR);
+            player_handle.climb_jump_velocity = Some(horizontal_velocity / SCALE_FACTOR);
+            player_handle.slope_displacement = Vector::zeros();
+            player_handle.is_grounded = false;
+            player_handle.support = None;
+        }
+        let launch_jump = jump_edge
+            && climb_jump.is_none()
+            && player_handle.is_grounded
+            && player_handle.top_out.is_none();
         if launch_jump {
             player_handle.jump_velocity = Some(PLAYER_JUMP_SPEED / SCALE_FACTOR);
+            player_handle.climb_jump_velocity = None;
             player_handle.is_grounded = false;
             // A jumping player has left their moving support. Its carry is
             // already represented by the first frame's body pose; do not keep
@@ -3938,6 +5713,10 @@ impl PhysicsWorld {
 
         let movement_filter = player_movement_filter(player_handle.character_handle);
         let dispatcher = self.narrow_phase.query_dispatcher();
+        if player_handle.top_out.is_none() && player_handle.top_out_retry_cooldown > 0 {
+            player_handle.top_out_retry_cooldown -= 1;
+        }
+        let allow_top_out_attempt = player_handle.top_out_retry_cooldown == 0;
 
         // Flat climbing: when the player overlaps a climbable surface (ladder)
         // and pushes toward it, redirect that input to vertical movement and
@@ -3986,7 +5765,7 @@ impl PhysicsWorld {
                 // (The collider-center direction is wrong when the player is
                 // off-center: it tilts away from the face, which under-reads
                 // the into-ladder push the grip test and climb speed use.)
-                let mut nearest: Option<(f32, Vector<Real>)> = None;
+                let mut nearest: Option<(f32, Vector<Real>, Real)> = None;
                 for (_handle, collider) in queries.intersect_shape(character_pos, &inflated) {
                     let contact = rapier3d::parry::query::contact(
                         &character_pos,
@@ -4001,15 +5780,15 @@ impl PhysicsWorld {
                         let toward_norm = toward_h.norm();
                         // A mostly-vertical normal means the player is on top of
                         // (or under) the surface - that's standing, not climbing.
-                        if toward_norm > 0.5 && nearest.is_none_or(|(d, _)| contact.dist < d) {
+                        if toward_norm > 0.5 && nearest.is_none_or(|(d, _, _)| contact.dist < d) {
                             let toward = toward_h / toward_norm;
-                            nearest = Some((contact.dist, toward));
+                            nearest = Some((contact.dist, toward, collider.compute_aabb().maxs.y));
                         }
                     }
                 }
-                nearest.and_then(|(_, toward)| {
+                nearest.and_then(|(_, toward, climbable_top)| {
                     climb_redirect(desired_movement, toward).map(|movement| {
-                        let top_out = if near_column_top && !player_handle.is_crouched {
+                        let top_out = if near_column_top {
                             climb_top_out_direction(desired_movement, facing).map(|direction| {
                                 // Stay compressed until projected facing has
                                 // exited every horizontally-expanded climbable
@@ -4032,12 +5811,21 @@ impl PhysicsWorld {
                         } else {
                             None
                         };
-                        (movement, top_out)
+                        (
+                            movement,
+                            top_out,
+                            RetainedClimb {
+                                toward_ladder: toward,
+                                climbable_top,
+                            },
+                        )
                     })
                 })
             })
         };
-
+        let attempted_top_out = climb_movement
+            .as_ref()
+            .is_some_and(|(_, top_out, _)| allow_top_out_attempt && top_out.is_some());
         // The climb cast collides with everything the walk does EXCEPT the
         // climbable surfaces themselves - see `ClimbPass`. Membership is checked
         // by predicate rather than by group filter because a ladder is also an
@@ -4081,11 +5869,13 @@ impl PhysicsWorld {
                     &queries.with_filter(scripted_top_out_filter),
                     &character_pos,
                     top_out,
+                    desired_movement,
                     self.integration_parameters.dt,
                 );
                 PlayerMovement {
                     movement,
                     top_out,
+                    retained_climb: None,
                     slope_displacement: Vector::zeros(),
                 }
             } else {
@@ -4109,6 +5899,11 @@ impl PhysicsWorld {
                 if let Some(jump_mantle) = jump_mantle {
                     jump_mantle
                 } else {
+                    let horizontal_movement = player_handle
+                        .climb_jump_velocity
+                        .map_or(desired_movement, |velocity| {
+                            velocity * self.integration_parameters.dt
+                        });
                     let airborne_vertical = player_handle
                         .jump_velocity
                         .map(|velocity| velocity * self.integration_parameters.dt);
@@ -4117,15 +5912,18 @@ impl PhysicsWorld {
                         &queries,
                         character_shape.as_ref(),
                         &character_pos,
-                        desired_movement,
+                        horizontal_movement,
                         carry,
                         self.integration_parameters.dt,
                         gravity,
                         Some(player_handle.slope_displacement),
                         airborne_vertical,
-                        climb_movement.map(|(movement, top_out)| ClimbPass {
+                        climb_movement.map(|(movement, top_out, retained)| ClimbPass {
                             movement,
                             top_out,
+                            retained,
+                            allow_top_out_attempt,
+                            is_crouched: player_handle.is_crouched,
                             validation_queries: queries,
                             probe_queries: queries.with_filter(climb_pass_filter),
                             scripted_queries: queries.with_filter(scripted_top_out_filter),
@@ -4134,7 +5932,15 @@ impl PhysicsWorld {
                 }
             }
         });
+        if attempted_top_out {
+            player_handle.top_out_retry_cooldown = if player_movement.top_out.is_some() {
+                0
+            } else {
+                CLIMB_TOP_OUT_RETRY_COOLDOWN_FRAMES
+            };
+        }
         let was_top_out = player_handle.top_out.is_some();
+        let next_retained_climb = player_movement.retained_climb;
         player_handle.top_out = player_movement.top_out;
         player_handle.slope_displacement = player_movement.slope_displacement;
         let is_top_out = player_handle.top_out.is_some();
@@ -4160,15 +5966,31 @@ impl PhysicsWorld {
         self.rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
         let scripted_top_out_frame = was_top_out || is_top_out;
         let mvt = player_movement.movement;
+        // Rapier's broad `grounded` flag can be set while a falling capsule is
+        // sliding against a wall/pipe. That is sufficient for ordinary jumps,
+        // which start from a floor, but a BreakClimb release may first collide
+        // with a side face on its way to the arrival-side deck. Preserve its
+        // horizontal impulse until the resolved full-profile pose has genuine
+        // upward support underfoot.
+        let resolved_pose = character_pos.translation.vector + mvt.translation;
+        let climb_jump_has_support = player_handle.climb_jump_velocity.is_some() && {
+            let queries = self.player_movement_queries(dispatcher, movement_filter);
+            player_pose_matches_current_support(&queries, resolved_pose, player_handle.is_crouched)
+        };
 
         if is_top_out {
             player_handle.jump_velocity = None;
+            player_handle.climb_jump_velocity = None;
             player_handle.is_grounded = false;
         } else if let Some(mut velocity) = player_handle.jump_velocity {
             let requested_vertical = velocity * self.integration_parameters.dt;
             let applied_vertical = mvt.translation.y - carry.y;
-            if mvt.grounded && requested_vertical <= 0.0 {
+            if mvt.grounded
+                && requested_vertical <= 0.0
+                && (player_handle.climb_jump_velocity.is_none() || climb_jump_has_support)
+            {
                 player_handle.jump_velocity = None;
+                player_handle.climb_jump_velocity = None;
                 player_handle.is_grounded = true;
             } else {
                 // A ceiling (or other overhead collision) consumes the upward
@@ -4183,8 +6005,14 @@ impl PhysicsWorld {
                 player_handle.is_grounded = false;
             }
         } else {
+            player_handle.climb_jump_velocity = None;
             player_handle.is_grounded = mvt.grounded;
         }
+        player_handle.retained_climb = if is_top_out || player_handle.jump_velocity.is_some() {
+            None
+        } else {
+            next_retained_climb
+        };
 
         // Edges already observed along a swept `move_player_validated` hop come
         // first: they happened before this frame's pose. They also leave
@@ -5961,6 +7789,13 @@ mod tests {
     /// Plan the standard rejection-test mantle: from the origin, facing +X,
     /// with the scripted casts seeing only parented (entity) colliders.
     fn plan_top_out_from_origin(world: &PhysicsWorld) -> Option<PlayerMovement> {
+        plan_top_out_from_origin_with_profile(world, false)
+    }
+
+    fn plan_top_out_from_origin_with_profile(
+        world: &PhysicsWorld,
+        is_crouched: bool,
+    ) -> Option<PlayerMovement> {
         let validation_queries = query_pipeline(world, QueryFilter::default());
         let parented_only = QueryFilter::default()
             .predicate(&|_handle: ColliderHandle, collider: &Collider| collider.parent().is_some());
@@ -5972,8 +7807,13 @@ mod tests {
             &scripted_queries,
             &Isometry::translation(0.0, 0.0, 0.0),
             Vector::x(),
-            CLIMB_TOP_OUT_PROBE_FORWARD,
+            if is_crouched {
+                2.0 * PLAYER_CROUCH_RADIUS / SCALE_FACTOR
+            } else {
+                CLIMB_TOP_OUT_PROBE_FORWARD
+            },
             1.0 / 60.0,
+            is_crouched,
         )
     }
 
@@ -6318,14 +8158,15 @@ mod tests {
         );
     }
 
-    /// The seven-waypoint route the reversal tests drive by hand.
-    fn test_waypoints() -> [Vector<Real>; 7] {
+    /// The eight-waypoint route the reversal tests drive by hand.
+    fn test_waypoints() -> [Vector<Real>; 8] {
         [
             vector![0.0, 0.0, 0.0],
             vector![0.0, 0.0, 0.0],
             vector![2.0, 0.0, 0.0],
             vector![2.5, 0.0, 0.0],
             vector![3.0, 0.0, 0.0],
+            vector![3.5, 0.0, 0.0],
             vector![4.0, 0.0, 0.0],
             vector![4.0, -0.64, 0.0],
         ]
@@ -6557,6 +8398,57 @@ mod tests {
     }
 
     #[test]
+    fn rejected_climb_top_out_does_not_fall_through_to_walk_or_gravity() {
+        let mut world = PhysicsWorld::new();
+        let standing = standing_player_capsule();
+        let standing_half_height = standing.half_height() + standing.radius;
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(10.0, 0.05, 10.0)
+                .translation(vector![0.0, standing_half_height + 0.06, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let controller = KinematicCharacterController::default();
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let movement = step_player_movement(
+            &controller,
+            &queries,
+            &standing,
+            &Isometry::identity(),
+            Vector::x() * 0.25,
+            Vector::zeros(),
+            1.0 / 60.0,
+            -0.2,
+            None,
+            None,
+            Some(ClimbPass {
+                movement: Vector::y() * 0.25,
+                top_out: Some((Vector::x(), CLIMB_TOP_OUT_PROBE_FORWARD)),
+                retained: RetainedClimb {
+                    toward_ladder: Vector::x(),
+                    climbable_top: 0.0,
+                },
+                allow_top_out_attempt: true,
+                is_crouched: false,
+                validation_queries: query_pipeline(&world, QueryFilter::default()),
+                probe_queries: query_pipeline(&world, QueryFilter::default()),
+                scripted_queries: query_pipeline(&world, QueryFilter::default()),
+            }),
+        );
+
+        assert!(
+            movement.movement.translation.x.abs() < 1.0e-5
+                && movement.movement.translation.y >= -1.0e-5,
+            "a rejected top-out must hold the climb instead of walking/falling: {:?}",
+            movement.movement.translation
+        );
+        assert!(movement.top_out.is_none());
+    }
+
+    #[test]
     fn climb_top_out_recovery_uses_minimum_bounded_clearance() {
         let mut world = PhysicsWorld::new();
         let mut player =
@@ -6593,7 +8485,7 @@ mod tests {
         );
 
         let recovered =
-            climb_top_out_recovery_start(&queries, head, direction, cross_y, &compressed)
+            climb_top_out_recovery_start(&queries, &queries, head, direction, cross_y, &compressed)
                 .expect("the authored recovery bound should reach a clear vertical sweep");
         let retreat = (head - recovered).norm();
         assert!(retreat > CLIMB_TOP_OUT_RECOVERY_RETREAT);
@@ -6613,6 +8505,383 @@ mod tests {
                 &compressed,
             ),
             "the recovery search must return the first clear contact-offset step"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_bridges_only_one_proven_closed_slab_interval() {
+        let mut world = PhysicsWorld::new();
+        let (vertices, indices) = Cuboid::new(vector![2.0, 0.4, 2.0]).to_trimesh();
+        let vertices = vertices
+            .into_iter()
+            .map(|vertex| Point::from(vertex + Vector::y() * 1.2))
+            .collect();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(vertices, indices)
+                .expect("closed slab trimesh")
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let route = [vector![0.0, 0.0, 0.0], vector![0.0, 2.4, 0.0]];
+        let crouched_head = Ball::new(PLAYER_CROUCH_RADIUS / SCALE_FACTOR);
+        let terrain_only = |hit| matches!(hit, ShapeObstruction::TrimeshFace(_, _));
+        assert!(
+            scan_initial_route_obstruction(
+                &query_pipeline(&world, QueryFilter::default()),
+                &route,
+                &crouched_head,
+                2.4,
+                2.4,
+                true,
+                None,
+                terrain_only,
+            )
+            .is_none(),
+            "a 0.64-wide surface probe sees a false clear inside this 0.8-thick closed slab"
+        );
+        assert!(
+            scan_initial_route_obstruction(
+                &query_pipeline(&world, QueryFilter::default()),
+                &route,
+                &crouched_head,
+                2.4,
+                2.4,
+                true,
+                Some((0.8 - crouched_head.radius, 1.6 + crouched_head.radius)),
+                terrain_only,
+            )
+            .is_some(),
+            "the proven underside-to-top span must remain one obstruction interval and clear above the slab"
+        );
+
+        world.add_kinematic(
+            EntityId::from_inner(3).unwrap(),
+            vec3(0.0, 2.2, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(4.0, 0.1, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        assert!(
+            scan_initial_route_obstruction(
+                &query_pipeline(&world, QueryFilter::default()),
+                &route,
+                &crouched_head,
+                2.4,
+                2.4,
+                true,
+                Some((0.8 - crouched_head.radius, 1.6 + crouched_head.radius)),
+                terrain_only,
+            )
+            .is_none(),
+            "a parented blocker after the slab remains a forbidden second obstruction"
+        );
+    }
+
+    #[test]
+    fn crouched_top_out_plans_below_headroom_that_rejects_standing() {
+        let mut world = PhysicsWorld::new();
+        let deck_top = 1.634;
+        let deck_thickness = 0.8;
+        let (vertices, indices) = Cuboid::new(vector![4.0, deck_thickness / 2.0, 4.0]).to_trimesh();
+        let vertices = vertices
+            .into_iter()
+            .map(|vertex| Point::from(vertex + Vector::y() * (deck_top - deck_thickness / 2.0)))
+            .collect();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(vertices, indices)
+                .expect("closed deck trimesh")
+                .build(),
+        );
+        // 1.4 world units of headroom matches the authored Rick1 pipe: the
+        // crouched 1.12-world-unit body fits, while the 2.4-world-unit
+        // standing body cannot. This is a real parented blocker and remains in
+        // every scripted and final-fit query.
+        world.add_kinematic(
+            EntityId::from_inner(2).unwrap(),
+            vec3(0.0, deck_top + 1.45, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(8.0, 0.1, 8.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        assert!(
+            plan_top_out_from_origin_with_profile(&world, false).is_none(),
+            "the planner must not ignore the parented ceiling or auto-crouch a standing player"
+        );
+        let crouched = plan_top_out_from_origin_with_profile(&world, true)
+            .expect("an explicitly crouched player should fit the proven deck landing");
+        let top_out = crouched.top_out.expect("planned crouched top-out");
+        let final_pose = top_out.waypoints[7];
+        let expected_y = deck_top
+            + PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            + PLAYER_REST_LIFT / SCALE_FACTOR;
+        assert!(top_out.is_crouched);
+        assert!((final_pose.y - expected_y).abs() < 1.0e-4);
+        assert!(!shape_intersects(
+            &query_pipeline(&world, QueryFilter::default()),
+            final_pose,
+            &crouched_player_capsule(),
+        ));
+    }
+
+    #[test]
+    fn recovery_slab_rejects_a_disconnected_surface_in_one_worldrep() {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for center_x in [-1.0, 1.0] {
+            let (island_vertices, island_indices) =
+                Cuboid::new(vector![0.4, 0.4, 0.4]).to_trimesh();
+            let base = vertices.len() as u32;
+            vertices.extend(
+                island_vertices
+                    .into_iter()
+                    .map(|vertex| Point::from(vertex + Vector::x() * center_x)),
+            );
+            indices.extend(
+                island_indices
+                    .into_iter()
+                    .map(|triangle| triangle.map(|index| index + base)),
+            );
+        }
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(vertices, indices)
+                .expect("two-island WorldRep")
+                .build(),
+        );
+        let handle = world.collider_set.iter().next().expect("WorldRep").0;
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let floor_origin = vector![1.0, 1.0, 0.0];
+        let (_, floor_hit) = queries
+            .cast_ray_and_get_normal(
+                &Ray::new(Point::from(floor_origin), -Vector::y()),
+                2.0,
+                true,
+            )
+            .expect("right-island top");
+        assert!(floor_hit.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL);
+        let floor = floor_origin - Vector::y() * floor_hit.time_of_impact;
+        let floor_patch = || {
+            mantle_lip_patch(
+                &queries,
+                Some((handle, floor_hit.feature)),
+                floor,
+                &[floor],
+                false,
+            )
+            .map(Some)
+            .expect("right-island floor patch")
+        };
+
+        let mut same_island_patch = floor_patch();
+        assert!(
+            extend_lip_patch_with_recovery_slab(
+                &queries,
+                &mut same_island_patch,
+                Some(handle),
+                Some(floor),
+                vector![1.0, -1.0, 0.0],
+                vector![1.0, 1.0, 0.0],
+            )
+            .is_some(),
+            "the paired underside and top of the selected island should prove one closed slab"
+        );
+
+        let mut disjoint_patch = floor_patch();
+        assert!(
+            extend_lip_patch_with_recovery_slab(
+                &queries,
+                &mut disjoint_patch,
+                Some(handle),
+                Some(floor),
+                vector![-1.0, -1.0, 0.0],
+                vector![-1.0, 1.0, 0.0],
+            )
+            .is_none(),
+            "collider identity and equal slab height must not connect disjoint islands in one WorldRep"
+        );
+    }
+
+    #[test]
+    fn recovery_slab_rejects_stacked_disconnected_surfaces_in_one_worldrep() {
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        for center_y in [0.0, 0.3] {
+            let (slab_vertices, slab_indices) = Cuboid::new(vector![0.4, 0.1, 0.4]).to_trimesh();
+            let base = vertices.len() as u32;
+            vertices.extend(
+                slab_vertices
+                    .into_iter()
+                    .map(|vertex| Point::from(vertex + Vector::y() * center_y)),
+            );
+            indices.extend(
+                slab_indices
+                    .into_iter()
+                    .map(|triangle| triangle.map(|index| index + base)),
+            );
+        }
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(vertices, indices)
+                .expect("stacked-slab WorldRep")
+                .build(),
+        );
+        let handle = world.collider_set.iter().next().expect("WorldRep").0;
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let floor_origin = vector![0.0, 1.0, 0.0];
+        let (_, floor_hit) = queries
+            .cast_ray_and_get_normal(
+                &Ray::new(Point::from(floor_origin), -Vector::y()),
+                2.0,
+                true,
+            )
+            .expect("upper slab top");
+        let floor = floor_origin - Vector::y() * floor_hit.time_of_impact;
+        let mut floor_patch = mantle_lip_patch(
+            &queries,
+            Some((handle, floor_hit.feature)),
+            floor,
+            &[floor],
+            false,
+        )
+        .map(Some)
+        .expect("upper-slab floor patch");
+
+        assert!(
+            extend_lip_patch_with_recovery_slab(
+                &queries,
+                &mut floor_patch,
+                Some(handle),
+                Some(floor),
+                vector![0.0, -1.0, 0.0],
+                vector![0.0, 1.0, 0.0],
+            )
+            .is_none(),
+            "a lower underside and disconnected upper landing must not be bridged as one slab"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_point_route_allows_bounded_lip_but_rejects_reentry() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(0.2, 0.2, 2.0)
+                .translation(vector![0.0, 0.0, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let route = [vector![0.0, 0.0, 0.0], vector![2.0, 0.0, 0.0]];
+        let route_probe = Capsule::new_y(PROBE_SKIN / SCALE_FACTOR, PROBE_SKIN / SCALE_FACTOR);
+        {
+            let queries = query_pipeline(&world, QueryFilter::default());
+            assert!(
+                shape_route_exits_only_initial_obstruction(
+                    &queries,
+                    &route,
+                    &route_probe,
+                    CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY,
+                    0.0,
+                ),
+                "the point core may leave a merged lip it genuinely starts inside"
+            );
+        }
+
+        world.add_collider(
+            EntityId::from_inner(3).unwrap(),
+            ColliderBuilder::cuboid(0.05, 0.2, 2.0)
+                .translation(vector![1.4, 0.0, 0.0])
+                .build(),
+        );
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let queries = query_pipeline(&world, QueryFilter::default());
+        assert!(
+            !shape_route_exits_only_initial_obstruction(
+                &queries,
+                &route,
+                &route_probe,
+                CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY,
+                0.0,
+            ),
+            "a later point obstruction after clearing the merged lip must reject the route"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_point_route_limits_known_lip_entry_and_rejects_a_later_wall() {
+        let mut world = PhysicsWorld::new();
+        // The point probe starts clear and first touches this thin lip in the
+        // first 0.04-world-unit contact sample. Supplying Rick1's measured
+        // known-lip entry bound makes the exception active rather than
+        // vacuously relying on a start overlap.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(0.02, 0.2, 2.0)
+                .translation(vector![0.08, 0.0, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let route = [vector![0.0, 0.0, 0.0], vector![2.0, 0.0, 0.0]];
+        let route_probe = Capsule::new_y(PROBE_SKIN / SCALE_FACTOR, PROBE_SKIN / SCALE_FACTOR);
+        let known_lip_entry_limit = 3.0 * CLIMB_TOP_OUT_RECOVERY_RETREAT;
+        {
+            let queries = query_pipeline(&world, QueryFilter::default());
+            assert!(!shape_intersects(&queries, route[0], &route_probe));
+            assert!(
+                shape_route_exits_only_initial_obstruction(
+                    &queries,
+                    &route,
+                    &route_probe,
+                    CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY,
+                    known_lip_entry_limit,
+                ),
+                "the clear point route may enter the known lip within its bounded first interval"
+            );
+        }
+
+        world.add_collider(
+            EntityId::from_inner(3).unwrap(),
+            ColliderBuilder::cuboid(0.05, 0.2, 2.0)
+                .translation(vector![0.8, 0.0, 0.0])
+                .build(),
+        );
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let queries = query_pipeline(&world, QueryFilter::default());
+        assert!(
+            !shape_route_exits_only_initial_obstruction(
+                &queries,
+                &route,
+                &route_probe,
+                CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY,
+                known_lip_entry_limit,
+            ),
+            "the active known-lip exception must still reject a later unrelated wall"
         );
     }
 
@@ -6637,8 +8906,69 @@ mod tests {
                 &[vector![0.0, 0.0, 0.0], vector![2.0, 0.0, 0.0]],
                 &route_probe,
                 0.4,
+                0.4,
             ),
             "an obstruction entered inside the allowance must still clear before the bound ends"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_rise_can_hand_off_one_attributed_overlap() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(0.6, 0.6, 0.6)
+                .translation(vector![1.0, 0.0, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let compressed = Ball::new(0.2);
+        let route = [vector![0.0, 0.0, 0.0], vector![1.0, 0.0, 0.0]];
+
+        assert!(
+            scan_initial_route_obstruction(
+                &queries,
+                &route,
+                &compressed,
+                1.0,
+                1.0,
+                false,
+                None,
+                |_| true,
+            )
+            .is_some(),
+            "an attributed initial interval may remain contiguous for the next route leg to clear"
+        );
+        assert!(
+            scan_initial_route_obstruction(
+                &queries,
+                &route,
+                &compressed,
+                1.0,
+                1.0,
+                true,
+                None,
+                |_| true,
+            )
+            .is_none(),
+            "a caller that owns the complete route must still require the interval to clear"
+        );
+        assert!(
+            scan_initial_route_obstruction(
+                &queries,
+                &route,
+                &compressed,
+                1.0,
+                1.0,
+                false,
+                None,
+                |_| false,
+            )
+            .is_none(),
+            "an unfinished interval never permits an unattributed obstruction"
         );
     }
 
@@ -6712,32 +9042,1020 @@ mod tests {
     }
 
     #[test]
-    fn climb_top_out_rejects_parentless_terrain_beyond_the_lip_probe() {
+    fn climb_top_out_rejects_a_single_parentless_wall_beyond_the_lip_probe() {
+        let plan = |include_wall: bool| {
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            let mut append_cuboid = |center: Vector<Real>, half_extents: Vector<Real>| {
+                let start = vertices.len();
+                let base = start as u32;
+                let (box_vertices, box_indices) = Cuboid::new(half_extents).to_trimesh();
+                vertices.extend(
+                    box_vertices
+                        .into_iter()
+                        .map(|vertex| Point::from(vertex + center)),
+                );
+                indices.extend(
+                    box_indices
+                        .into_iter()
+                        .map(|face| face.map(|vertex| vertex + base)),
+                );
+                start..vertices.len()
+            };
+            let _floor_vertices =
+                append_cuboid(vector![0.0, -0.55, 0.0], vector![10.0, 0.05, 10.0]);
+            // A thin shelf above the player is a genuine upward lip: the
+            // upward probe meets its underside after one full compressed
+            // radius, while the forward/down probe sees its walkable top.
+            let head_y = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+            let shelf_y = head_y + CLIMB_TOP_OUT_RADIUS + 0.02;
+            let shelf_half_x = CLIMB_TOP_OUT_PROBE_FORWARD / 2.0 + 0.02;
+            let shelf_vertices = append_cuboid(
+                vector![CLIMB_TOP_OUT_PROBE_FORWARD / 2.0, shelf_y, 0.0],
+                vector![shelf_half_x, 0.01, 2.0],
+            );
+            if include_wall {
+                // Add a wall whose lower edge exactly reuses the shelf's top
+                // outer edge in the SAME production-style parentless
+                // trimesh. Local topology alone must not authorize crossing
+                // its center-blocking faces.
+                let edge_x = vertices[shelf_vertices.clone()]
+                    .iter()
+                    .map(|point| point.x)
+                    .fold(Real::NEG_INFINITY, Real::max);
+                let edge_y = vertices[shelf_vertices.clone()]
+                    .iter()
+                    .filter(|point| point.x == edge_x)
+                    .map(|point| point.y)
+                    .fold(Real::NEG_INFINITY, Real::max);
+                let mut edge = vertices[shelf_vertices]
+                    .iter()
+                    .copied()
+                    .filter(|point| point.x == edge_x && point.y == edge_y)
+                    .collect::<Vec<_>>();
+                edge.sort_by(|first, second| first.z.total_cmp(&second.z));
+                edge.dedup();
+                assert_eq!(edge.len(), 2);
+                let base = vertices.len() as u32;
+                vertices.extend([
+                    edge[0],
+                    edge[1],
+                    point![edge_x, 3.0, edge[1].z],
+                    point![edge_x, 3.0, edge[0].z],
+                ]);
+                indices.extend([[base, base + 1, base + 2], [base, base + 2, base + 3]]);
+            }
+
+            let mut world = PhysicsWorld::new();
+            world.add_collider(
+                EntityId::from_inner(1).unwrap(),
+                ColliderBuilder::trimesh(vertices, indices)
+                    .expect("valid combined terrain")
+                    .build(),
+            );
+            let mut player =
+                world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+            world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+            plan_top_out_from_origin(&world)
+        };
+
+        assert!(
+            plan(false).is_some(),
+            "the authored upward-lip branch must be active before testing the unrelated wall"
+        );
+        assert!(
+            plan(true).is_none(),
+            "the lip exception must reject an unrelated face in the same parentless trimesh"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_matches_only_edge_connected_local_trimesh_faces() {
+        let mut world = PhysicsWorld::new();
+        // Dark duplicates vertices per triangle, so these first three faces
+        // use distinct indices while sharing exact geometric edges. The final
+        // face is spatially nearby but shares no edge with the mantle patch.
+        let vertices = vec![
+            point![0.0, 0.0, 0.0],
+            point![1.0, 0.0, 0.0],
+            point![0.0, 0.0, 1.0],
+            point![1.0, 0.0, 0.0],
+            point![0.0, 0.0, 1.0],
+            point![1.0, 0.2, 0.0],
+            point![0.0, 0.0, 1.0],
+            point![1.0, 0.2, 0.0],
+            point![1.0, 0.2, 1.0],
+            point![0.9, 0.1, 0.1],
+            point![0.9, 1.0, 0.1],
+            point![0.9, 1.0, 0.9],
+        ];
+        let indices = vec![[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]];
+        let collider = ColliderBuilder::trimesh(vertices, indices)
+            .expect("valid local topology")
+            .build();
+        let handle = world.collider_set.insert(collider);
+        let queries = query_pipeline(&world, QueryFilter::default());
+
+        assert!(trimesh_faces_connect_within_local_bounds(
+            &queries,
+            (handle, FeatureId::Face(0)),
+            (handle, FeatureId::Face(2)),
+        ));
+        assert!(
+            trimesh_faces_connect_within_local_bounds(
+                &queries,
+                (handle, FeatureId::Face(4)),
+                (handle, FeatureId::Face(2)),
+            ),
+            "a two-sided backface id must resolve to the same sampled mantle face"
+        );
+        assert!(!trimesh_faces_connect_within_local_bounds(
+            &queries,
+            (handle, FeatureId::Face(0)),
+            (handle, FeatureId::Face(3)),
+        ));
+    }
+
+    #[test]
+    fn climb_top_out_bounds_the_lip_patch_by_edge_hops() {
+        let mut world = PhysicsWorld::new();
+        // A triangle strip gives every face exactly one edge-connected next
+        // hop. All faces sit inside the same small corridor, so only the
+        // explicit topology-hop bound can exclude the farther face.
+        let vertices = (0..13)
+            .map(|index| {
+                point![
+                    index as Real * 0.05,
+                    if index % 2 == 0 { 0.0 } else { 0.1 },
+                    0.0
+                ]
+            })
+            .collect::<Vec<_>>();
+        let indices = (0..11)
+            .map(|index| [index, index + 1, index + 2])
+            .collect::<Vec<_>>();
+        let collider = ColliderBuilder::trimesh(vertices, indices)
+            .expect("valid triangle strip")
+            .build();
+        let handle = world.collider_set.insert(collider);
+        let queries = query_pipeline(&world, QueryFilter::default());
+
+        assert!(trimesh_faces_connect_within_local_bounds(
+            &queries,
+            (handle, FeatureId::Face(0)),
+            (
+                handle,
+                FeatureId::Face(CLIMB_TOP_OUT_MAX_LIP_FACE_HOPS as u32),
+            ),
+        ));
+        assert!(!trimesh_faces_connect_within_local_bounds(
+            &queries,
+            (handle, FeatureId::Face(0)),
+            (
+                handle,
+                FeatureId::Face(CLIMB_TOP_OUT_MAX_LIP_FACE_HOPS as u32 + 1),
+            ),
+        ));
+    }
+
+    #[test]
+    fn climb_top_out_finds_offset_full_sphere_contact_on_a_trimesh_face() {
+        let mut world = PhysicsWorld::new();
+        let (vertices, indices) = Cuboid::new(vector![0.05, 0.2, 0.04]).to_trimesh();
+        let vertices = vertices
+            .into_iter()
+            // The near face is only 0.001 inside the ball radius, making the
+            // contact interval shorter than one old fixed sampling step.
+            .map(|vertex| Point::from(vertex + vector![1.0, 0.0, 0.359]))
+            .collect();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::trimesh(vertices, indices)
+                .expect("valid offset terrain rail")
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let route = [vector![0.0, 0.0, 0.0], vector![2.0, 0.0, 0.0]];
+        let route_probe = Capsule::new_y(PROBE_SKIN / SCALE_FACTOR, PROBE_SKIN / SCALE_FACTOR);
+
+        assert!(
+            shape_sweep_is_clear(&queries, route[0], route[1], &route_probe),
+            "the point-scale centerline must miss the offset rail"
+        );
+        let full_sphere_contact = first_allowed_route_obstruction(
+            &queries,
+            &route,
+            &Ball::new(CLIMB_TOP_OUT_RADIUS),
+            |_| true,
+        )
+        .expect("every terrain face is allowed for this contact probe")
+        .expect("the full compressed sphere must touch the offset rail");
+        assert!(
+            full_sphere_contact
+                .obstructions
+                .iter()
+                .all(|hit| matches!(hit, ShapeObstruction::TrimeshFace(_, _))),
+            "the contact must be attributed to actual trimesh faces"
+        );
+        assert!(
+            first_allowed_route_obstruction(
+                &queries,
+                &route,
+                &Ball::new(CLIMB_TOP_OUT_RADIUS),
+                |_| false,
+            )
+            .is_none(),
+            "a full-sphere face outside the mantle patch must reject the route"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_finds_a_laterally_offset_supported_landing() {
+        let mut world = PhysicsWorld::new();
+        let cross_y = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR
+            + CLIMB_TOP_OUT_UP;
+        let deck_top = cross_y - CLIMB_TOP_OUT_FINAL_DROP + 0.02;
+        // Every forward-only candidate is unsupported. The only landing is a
+        // narrow deck at the full five-radius lateral bound to the right of
+        // the probe endpoint, forcing the candidate budget to reach the edge
+        // of the promised recovery search. It extends far enough in +X to
+        // provide the required supported standing egress.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0 + 0.12, 0.05, 0.12)
+                .translation(vector![
+                    CLIMB_TOP_OUT_PROBE_FORWARD + CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0,
+                    deck_top - 0.05,
+                    -CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY
+                ])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let validation_queries = query_pipeline(&world, QueryFilter::default());
+        let parented_only = QueryFilter::default()
+            .predicate(&|_handle: ColliderHandle, collider: &Collider| collider.parent().is_some());
+        let scripted_queries = validation_queries.with_filter(parented_only);
+        let route_forward = 1.0;
+        let movement = plan_climb_top_out(
+            &KinematicCharacterController::default(),
+            &validation_queries,
+            &validation_queries,
+            &scripted_queries,
+            &Isometry::translation(0.0, 0.0, 0.0),
+            Vector::x(),
+            route_forward,
+            1.0 / 60.0,
+            false,
+        )
+        .expect("the laterally offset deck should permit a top-out");
+        let waypoints = movement.top_out.expect("planned top-out").waypoints;
+        let cross_end = waypoints[4];
+        let final_sphere = waypoints[6];
+        let final_standing = waypoints[7];
+        let support_ray = Ray::new(Point::from(final_sphere), -Vector::y());
+        let (_, support) = validation_queries
+            .cast_ray_and_get_normal(&support_ray, CLIMB_TOP_OUT_FINAL_DROP, true)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the selected landing must be within the direct standing-drop bound; route {waypoints:?}"
+                )
+            });
+        let expected_standing_y = deck_top
+            + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            + PLAYER_REST_LIFT / SCALE_FACTOR;
+        let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
+
+        assert!(
+            (final_sphere.x - route_forward).abs() < 1.0e-4
+                && (final_sphere.z + CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY).abs() < 1.0e-4,
+            "the route must select the only laterally offset deck, got {final_sphere:?}"
+        );
+        assert!(
+            support.normal.y > CLIMB_TOP_OUT_MIN_GROUND_NORMAL
+                && (support.time_of_impact - (waypoints[6].y - deck_top)).abs() < 1.0e-4,
+            "the selected deck support must be independently upward and nearby, got {support:?}"
+        );
+        assert!(
+            (final_standing.y - expected_standing_y).abs() < 1.0e-4,
+            "the planned standing pose must put the capsule feet on the deck, got {final_standing:?}"
+        );
+        assert!(
+            shape_sweep_is_clear(&validation_queries, cross_end, final_sphere, &compressed),
+            "the full compressed sphere must have a clear lateral route"
+        );
+    }
+
+    fn pre_lip_side_test_world(block_side_routes: bool) -> PhysicsWorld {
         let mut world = PhysicsWorld::new();
         world.add_collider(
             EntityId::from_inner(1).unwrap(),
-            ColliderBuilder::cuboid(10.0, 0.05, 10.0)
-                .translation(vector![0.0, -0.55, 0.0])
+            ColliderBuilder::cuboid(3.2, 0.05, 3.2)
+                .translation(vector![0.0, -0.05, 0.0])
                 .build(),
         );
-        // The Dark point probe ends at x=0.64. This wall sits beyond that
-        // bounded lip region but before the otherwise-clear final standing
-        // pose. A blanket parentless-terrain exemption phases through it.
+        let (wall_vertices, wall_indices) = Cuboid::new(vector![0.01, 1.0, 3.2]).to_trimesh();
+        let wall_vertices = wall_vertices
+            .into_iter()
+            .map(|vertex| Point::from(vertex + vector![0.31, 1.0, 0.0]))
+            .collect();
         world.add_collider(
             EntityId::from_inner(2).unwrap(),
-            ColliderBuilder::cuboid(0.05, 2.0, 2.0)
-                .translation(vector![1.0, 1.0, 0.0])
+            ColliderBuilder::trimesh(wall_vertices, wall_indices)
+                .expect("pre-lip WorldRep wall")
+                .build(),
+        );
+        // A live climbable centered on the route forces the compressed body
+        // to move laterally before its crouched profile can be restored.
+        world.add_kinematic(
+            EntityId::from_inner(3).unwrap(),
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.08, 4.0, 0.9),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        if block_side_routes {
+            // These parented blockers begin just outside the initial head
+            // sphere but span both possible side routes. They must remain
+            // solid even though the local WorldRep wall is an attributed lip.
+            for (index, z) in [-1.15, 1.15].into_iter().enumerate() {
+                world.add_kinematic(
+                    EntityId::from_inner(4 + index as u64).unwrap(),
+                    vec3(-0.1, 1.64, z),
+                    identity_quat(),
+                    Vector3::new(0.0, 0.0, 0.0),
+                    vec3(0.5, 1.0, 1.0),
+                    CollisionGroup::entity(),
+                    false,
+                );
+            }
+        }
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(6).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        world
+    }
+
+    fn find_crouched_pre_lip_side_test(
+        world: &PhysicsWorld,
+        mantle_floor_y: Real,
+    ) -> Option<(Vector<Real>, Vector<Real>, Vector<Real>)> {
+        let validation_queries = query_pipeline(world, QueryFilter::default());
+        let not_climbable = |_handle: ColliderHandle, collider: &Collider| {
+            !collider
+                .collision_groups()
+                .memberships
+                .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
+        };
+        let probe_queries =
+            validation_queries.with_filter(QueryFilter::default().predicate(&not_climbable));
+        let (wall_handle, _) = probe_queries
+            .cast_ray_and_get_normal(&Ray::new(point![0.0, 1.64, 0.0], Vector::x()), 1.0, true)
+            .expect("local WorldRep wall");
+        let wall = validation_queries.colliders[wall_handle]
+            .shape()
+            .as_trimesh()
+            .expect("wall trimesh");
+        let lip_patch = MantleLipPatch {
+            handle: wall_handle,
+            faces: (0..wall.indices().len() as u32).collect(),
+        };
+        find_pre_lip_side_landing(
+            &validation_queries,
+            &probe_queries,
+            vector![0.0, 1.64, 0.0],
+            Vector::x(),
+            -Vector::z(),
+            &Ball::new(PLAYER_CROUCH_RADIUS / SCALE_FACTOR),
+            &crouched_player_capsule(),
+            PLAYER_CROUCH_RADIUS / SCALE_FACTOR,
+            (CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY / (PLAYER_CROUCH_RADIUS / SCALE_FACTOR)).ceil()
+                as usize,
+            PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR
+                + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+                + PLAYER_REST_LIFT / SCALE_FACTOR,
+            vector![0.0, mantle_floor_y, 0.0],
+            Some(&lip_patch),
+        )
+    }
+
+    #[test]
+    fn crouched_top_out_recovers_sideways_before_a_local_lip_wall() {
+        let world = pre_lip_side_test_world(false);
+        let (route, sphere, final_pose) = find_crouched_pre_lip_side_test(&world, 0.0)
+            .expect("the pre-lip deck should permit a supported side recovery");
+        let expected_y = PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            + PLAYER_REST_LIFT / SCALE_FACTOR;
+
+        assert!(
+            route.x < 0.0
+                && route.z.abs() >= 2.0 * PLAYER_CROUCH_RADIUS / SCALE_FACTOR
+                && (route - sphere).norm() < 1.0e-5,
+            "the route must retreat before the lip and clear the climbable laterally: {route:?}"
+        );
+        assert!(
+            (final_pose.y - expected_y).abs() < 1.0e-4
+                && final_pose.x < 0.0
+                && final_pose.z.abs() >= 2.0 * PLAYER_CROUCH_RADIUS / SCALE_FACTOR,
+            "the active crouched profile must restore on the selected y=0 deck: {final_pose:?}"
+        );
+    }
+
+    #[test]
+    fn pre_lip_side_recovery_rejects_parented_route_blockers() {
+        let world = pre_lip_side_test_world(true);
+        let landing = find_crouched_pre_lip_side_test(&world, 0.0);
+
+        assert!(
+            landing.is_none(),
+            "parented blockers across both lateral routes must not inherit the WorldRep lip exception: {landing:?}"
+        );
+    }
+
+    #[test]
+    fn pre_lip_side_recovery_rejects_the_wrong_mantle_floor() {
+        let world = pre_lip_side_test_world(false);
+        let landing = find_crouched_pre_lip_side_test(&world, 1.0);
+
+        assert!(
+            landing.is_none(),
+            "a side support at a different height must not replace the sampled mantle floor: {landing:?}"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_keeps_a_small_forward_sidestep_over_a_recessed_landing() {
+        let mut world = PhysicsWorld::new();
+        let head_y = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+        let cross_y = head_y + CLIMB_TOP_OUT_UP;
+        let deck_top = cross_y - CLIMB_TOP_OUT_FINAL_DROP + 0.02;
+        // A normal forward landing needs only one compressed-radius sidestep
+        // and has ordinary +X egress.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0 + 0.12, 0.05, 0.12)
+                .translation(vector![
+                    CLIMB_TOP_OUT_PROBE_FORWARD + CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0,
+                    deck_top - 0.05,
+                    -CLIMB_TOP_OUT_RADIUS,
+                ])
+                .build(),
+        );
+        // A lower approach-side floor is also safe, but it should not redirect
+        // an otherwise ordinary small forward sidestep back down the ladder.
+        let recessed_floor_top = -1.0;
+        world.add_collider(
+            EntityId::from_inner(2).unwrap(),
+            ColliderBuilder::cuboid(2.0, 0.05, 0.6)
+                .translation(vector![-2.4, recessed_floor_top - 0.05, 0.0])
                 .build(),
         );
         let mut player =
             world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
         world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
 
+        let movement = plan_top_out_from_origin(&world)
+            .expect("the small-offset forward deck should permit a top-out");
+        let waypoints = movement.top_out.expect("planned top-out").waypoints;
+        let final_sphere = waypoints[6];
+
+        assert!(
+            final_sphere.x > 0.0 && (final_sphere.z + CLIMB_TOP_OUT_RADIUS).abs() < 1.0e-5,
+            "the one-radius forward sidestep must outrank the recessed approach floor: {waypoints:?}"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_prefers_a_straight_recessed_approach_side_landing() {
+        let mut world = PhysicsWorld::new();
+        let head_y = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+        let cross_y = head_y + CLIMB_TOP_OUT_UP;
+        let roof_top = cross_y - CLIMB_TOP_OUT_FINAL_DROP + 0.02;
+        // A collision-safe roof exists only after the maximum lateral dogleg,
+        // matching the misleading Hydro2 landing. It has ordinary +X egress.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0 + 0.12, 0.05, 0.12)
+                .translation(vector![
+                    CLIMB_TOP_OUT_PROBE_FORWARD + CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0,
+                    roof_top - 0.05,
+                    -CLIMB_TOP_OUT_MAX_LATERAL_RECOVERY,
+                ])
+                .build(),
+        );
+        // The approach side instead has a lower, straight, fully supported
+        // floor. Reaching it never crosses the upper slab: the compressed body
+        // backs away at head height and then descends through clear space.
+        let recessed_floor_top = -1.0;
+        world.add_collider(
+            EntityId::from_inner(2).unwrap(),
+            ColliderBuilder::cuboid(2.0, 0.05, 0.6)
+                .translation(vector![-2.4, recessed_floor_top - 0.05, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let movement = plan_top_out_from_origin(&world)
+            .expect("the recessed approach-side floor should permit a top-out");
+        let waypoints = movement.top_out.expect("planned top-out").waypoints;
+        let final_sphere = waypoints[6];
+        let final_standing = waypoints[7];
+        let expected_standing_y = recessed_floor_top
+            + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            + PLAYER_REST_LIFT / SCALE_FACTOR;
+
+        assert!(
+            waypoints[0..=5]
+                .iter()
+                .all(|waypoint| (*waypoint - waypoints[0]).norm() < 1.0e-5),
+            "same-side recovery must remain below the upper slab instead of running the rise/cross route: {waypoints:?}"
+        );
+        assert!(
+            final_sphere.x < 0.0
+                && final_sphere.z.abs() < 1.0e-5
+                && (final_sphere.y - head_y).abs() < 1.0e-5
+                && (final_standing.y - expected_standing_y).abs() < 1.0e-5,
+            "the straight recessed floor must outrank the maximum-lateral roof: {waypoints:?}"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_reaches_the_full_forward_recovery_bound() {
+        let mut world = PhysicsWorld::new();
+        let route_forward = 1.0;
+        let expected_x = route_forward + CLIMB_TOP_OUT_ADVANCE + CLIMB_TOP_OUT_MAX_FORWARD_RECOVERY;
+        // A narrow cap supports only the full-advance base at the last forward
+        // recovery step. It intentionally has no standing egress, exercising
+        // the exact-supported fallback after the complete forward bound.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(0.12, 0.05, 0.12)
+                .translation(vector![expected_x, 0.45, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let validation_queries = query_pipeline(&world, QueryFilter::default());
+        let parented_only = QueryFilter::default()
+            .predicate(&|_handle: ColliderHandle, collider: &Collider| collider.parent().is_some());
+        let scripted_queries = validation_queries.with_filter(parented_only);
+        let movement = plan_climb_top_out(
+            &KinematicCharacterController::default(),
+            &validation_queries,
+            &validation_queries,
+            &scripted_queries,
+            &Isometry::identity(),
+            Vector::x(),
+            route_forward,
+            1.0 / 60.0,
+            false,
+        )
+        .expect("the candidate budget must reach the full forward recovery bound");
+        let final_sphere = movement.top_out.expect("planned top-out").waypoints[6];
+
+        assert!(
+            (final_sphere.x - expected_x).abs() < 1.0e-4 && final_sphere.z.abs() < 1.0e-4,
+            "the route must select the only four-radius forward landing, got {final_sphere:?}"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_prefers_full_advance_on_a_wide_deck() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(10.0, 0.05, 10.0)
+                .translation(vector![0.0, -0.05, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let movement =
+            plan_top_out_from_origin(&world).expect("the wide deck should permit egress");
+        let final_sphere = movement.top_out.expect("planned top-out").waypoints[6];
+        assert!(
+            (final_sphere.x - (CLIMB_TOP_OUT_PROBE_FORWARD + CLIMB_TOP_OUT_ADVANCE)).abs() < 1.0e-4
+                && final_sphere.z.abs() < 1.0e-4,
+            "the first full-advance candidate should win without lateral recovery, got {final_sphere:?}"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_moves_forward_past_an_upper_ledge_before_descending() {
+        let mut world = PhysicsWorld::new();
+        // A broad lower floor is reachable only after descending from the
+        // mantle height.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(10.0, 0.05, 10.0)
+                .translation(vector![0.0, -0.55, 0.0])
+                .build(),
+        );
+        // The ordinary full-advance center ray is beyond this upper ledge, but
+        // its compressed sphere clips the edge if it descends there. One more
+        // radius in +X clears the ledge before the exact descent.
+        world.add_collider(
+            EntityId::from_inner(2).unwrap(),
+            ColliderBuilder::cuboid(0.48, 0.05, 2.0)
+                .translation(vector![1.32, 1.65, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let movement = plan_top_out_from_origin(&world)
+            .expect("the lower floor should be reachable past the upper ledge");
+        let waypoints = movement.top_out.expect("planned top-out").waypoints;
+        let cross_end = waypoints[4];
+        let final_sphere = waypoints[6];
+        let final_standing = waypoints[7];
+        let full_advance = cross_end + Vector::x() * CLIMB_TOP_OUT_ADVANCE;
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let compressed = Ball::new(CLIMB_TOP_OUT_RADIUS);
+        let expected_standing_y = -0.5
+            + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            + PLAYER_REST_LIFT / SCALE_FACTOR;
+
+        assert!(
+            final_sphere.x >= full_advance.x + CLIMB_TOP_OUT_RADIUS - 1.0e-4
+                && (final_standing.y - expected_standing_y).abs() < 1.0e-4,
+            "the route must stay high past the ledge before descending to the lower floor; got {waypoints:?}"
+        );
+        assert!(
+            shape_route_exits_only_initial_obstruction(
+                &queries,
+                &[cross_end, final_sphere],
+                &compressed,
+                0.0,
+                0.0,
+            ) && shape_sweep_is_clear(&queries, final_sphere, final_standing, &compressed,),
+            "the full-radius high-horizontal route must remain clear through its descent"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_rejects_a_side_rail_clipped_only_by_the_full_sphere() {
+        let mut world = PhysicsWorld::new();
+        // Only the forward-most candidate has support and egress.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0 + 0.12, 0.05, 0.12)
+                .translation(vector![
+                    CLIMB_TOP_OUT_PROBE_FORWARD
+                        + CLIMB_TOP_OUT_ADVANCE
+                        + CLIMB_TOP_OUT_EGRESS_DISTANCE / 2.0,
+                    0.45,
+                    0.0
+                ])
+                .build(),
+        );
+        // Its face stays outside the point-scale centerline probe at z=0, but
+        // clips the 0.32-world-unit compressed player between cross and land.
+        world.add_collider(
+            EntityId::from_inner(2).unwrap(),
+            ColliderBuilder::cuboid(0.05, 0.2, 0.04)
+                .translation(vector![0.95, 2.04, 0.34])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let head_y = (PLAYER_STANDING_HEIGHT / 2.0 - PLAYER_STANDING_RADIUS) / SCALE_FACTOR;
+        let cross_y = head_y + CLIMB_TOP_OUT_UP;
+        let cross_end = vector![CLIMB_TOP_OUT_PROBE_FORWARD, cross_y, 0.0];
+        let full_advance = cross_end + Vector::x() * CLIMB_TOP_OUT_ADVANCE;
+        assert!(
+            !shape_sweep_is_clear(
+                &queries,
+                cross_end,
+                full_advance,
+                &Ball::new(CLIMB_TOP_OUT_RADIUS),
+            ),
+            "the production full-ball sweep must hit the side rail"
+        );
         let movement = plan_top_out_from_origin(&world);
+        assert!(
+            movement.is_none(),
+            "a side rail clipped by the full compressed radius must reject the route"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_post_lip_route_includes_unrelated_climbables() {
+        let mut world = PhysicsWorld::new();
+        // Support exists only beyond the barrier, so no pre-barrier exact
+        // standing fallback can make the test pass for the wrong reason.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(1.0, 0.05, 2.0)
+                .translation(vector![1.7, -0.05, 0.0])
+                .build(),
+        );
+        world.add_kinematic(
+            EntityId::from_inner(2).unwrap(),
+            vec3(0.85, 2.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.08, 4.0, 4.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let validation_queries = query_pipeline(&world, QueryFilter::default());
+        let not_climbable = |_handle: ColliderHandle, collider: &Collider| {
+            !collider
+                .collision_groups()
+                .memberships
+                .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
+        };
+        let parented_non_climbable = |handle: ColliderHandle, collider: &Collider| {
+            collider.parent().is_some() && not_climbable(handle, collider)
+        };
+        let probe_queries =
+            validation_queries.with_filter(QueryFilter::default().predicate(&not_climbable));
+        let scripted_queries = validation_queries
+            .with_filter(QueryFilter::default().predicate(&parented_non_climbable));
+        let movement = plan_climb_top_out(
+            &KinematicCharacterController::default(),
+            &validation_queries,
+            &probe_queries,
+            &scripted_queries,
+            &Isometry::translation(0.0, 0.0, 0.0),
+            Vector::x(),
+            CLIMB_TOP_OUT_PROBE_FORWARD,
+            1.0 / 60.0,
+            false,
+        );
 
         assert!(
             movement.is_none(),
-            "the lip exception must not permit crossing unrelated parentless terrain"
+            "once the lip exception ends, an unrelated climbable must block the only supported landing route"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_supported_egress_rejects_two_caps_separated_by_a_floor_gap() {
+        let mut world = PhysicsWorld::new();
+        for (index, x) in [0.0, CLIMB_TOP_OUT_EGRESS_DISTANCE].into_iter().enumerate() {
+            world.add_collider(
+                EntityId::from_inner(index as u64 + 1).unwrap(),
+                ColliderBuilder::cuboid(0.12, 0.05, 0.4)
+                    .translation(vector![x, -0.05, 0.0])
+                    .build(),
+            );
+        }
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(3).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let queries = query_pipeline(&world, QueryFilter::default());
+        let standing = standing_player_capsule();
+        let standing_floor_offset = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            + PLAYER_REST_LIFT / SCALE_FACTOR;
+
+        assert!(
+            !has_supported_standing_egress(
+                &queries,
+                Vector::y() * standing_floor_offset,
+                Vector::x(),
+                &standing,
+                standing_floor_offset,
+            ),
+            "supported endpoints must not hide an unsupported gap along the egress"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_keeps_an_exact_supported_rail_as_last_resort() {
+        let mut world = PhysicsWorld::new();
+        // The first short-drop candidate fits exactly on this rail cap, but a
+        // stride in the held +X heading has no similarly supported standing
+        // pose. It remains a controlled exact-standing fallback.
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(0.12, 0.05, 0.12)
+                .translation(vector![CLIMB_TOP_OUT_PROBE_FORWARD, 0.45, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+
+        let movement = plan_top_out_from_origin(&world)
+            .expect("an exact supported fallback should avoid re-freezing");
+        let final_standing = movement.top_out.expect("planned top-out").waypoints[7];
+        let expected_standing_y = 0.5
+            + PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            + PLAYER_REST_LIFT / SCALE_FACTOR;
+        assert!(
+            (final_standing.y - expected_standing_y).abs() < 1.0e-4,
+            "the fallback must restore the exact support-derived standing pose, got {final_standing:?}"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_final_release_reverses_without_current_support() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(1).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let controller = KinematicCharacterController::default();
+        let final_pose = vector![4.0, 1.0, 0.0];
+        let pos = Isometry::translation(final_pose.x, final_pose.y, final_pose.z);
+        let mut waypoints = [final_pose; 8];
+        waypoints[6] = final_pose + Vector::y();
+        let top_out = ClimbTopOut {
+            waypoints,
+            next_waypoint: 7,
+            save_pose: vector![-1.0, 1.0, 0.0],
+            reversing: false,
+            is_crouched: false,
+            requires_final_support: true,
+        };
+        let queries = query_pipeline(&world, QueryFilter::default());
+
+        let (movement, active) = advance_climb_top_out(
+            &controller,
+            &queries,
+            &queries,
+            &pos,
+            top_out,
+            Vector::zeros(),
+            1.0 / 60.0,
+        );
+
+        assert!(
+            movement.translation.y > 0.0 && active.is_some_and(|top_out| top_out.reversing),
+            "a final pose whose planned support disappeared must reverse before restoring standing"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_reversal_does_not_release_without_support_or_a_ladder_grip() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(1).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let controller = KinematicCharacterController::default();
+        let save_pose = vector![0.0, 1.0, 0.0];
+        let pos = Isometry::translation(save_pose.x, save_pose.y, save_pose.z);
+        let top_out = ClimbTopOut {
+            waypoints: [save_pose; 8],
+            next_waypoint: 0,
+            save_pose,
+            reversing: true,
+            is_crouched: false,
+            requires_final_support: true,
+        };
+        let queries = query_pipeline(&world, QueryFilter::default());
+
+        let (movement, active) = advance_climb_top_out(
+            &controller,
+            &queries,
+            &queries,
+            &pos,
+            top_out,
+            Vector::zeros(),
+            1.0 / 60.0,
+        );
+
+        assert_eq!(movement.translation, Vector::zeros());
+        assert!(
+            active.is_some_and(|top_out| top_out.reversing),
+            "reversal completion must remain compressed when neither support nor a ladder grip is current"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_reversal_returns_to_a_current_ladder_grip() {
+        let mut world = PhysicsWorld::new();
+        let save_pose = vector![0.0, 1.0, 0.0];
+        let ladder_x =
+            standing_player_capsule().radius + 0.04 + PLAYER_CONTACT_OFFSET / SCALE_FACTOR;
+        world.add_kinematic(
+            EntityId::from_inner(1).unwrap(),
+            vec3(ladder_x, save_pose.y, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.08, 2.0, 1.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let controller = KinematicCharacterController::default();
+        let pos = Isometry::translation(save_pose.x, save_pose.y, save_pose.z);
+        let top_out = ClimbTopOut {
+            waypoints: [save_pose; 8],
+            next_waypoint: 0,
+            save_pose,
+            reversing: true,
+            is_crouched: false,
+            requires_final_support: true,
+        };
+        let queries = query_pipeline(&world, QueryFilter::default());
+
+        assert!(
+            standing_pose_climb_direction(&queries, save_pose, &standing_player_capsule(),)
+                .is_some()
+        );
+        let (_, inactive_input) = advance_climb_top_out(
+            &controller,
+            &queries,
+            &queries,
+            &pos,
+            top_out,
+            Vector::zeros(),
+            1.0 / 60.0,
+        );
+        assert!(
+            inactive_input.is_some_and(|top_out| top_out.reversing),
+            "nearby ladder geometry alone must not release an unsupported reversal"
+        );
+        let (movement, active) = advance_climb_top_out(
+            &controller,
+            &queries,
+            &queries,
+            &pos,
+            top_out,
+            Vector::x(),
+            1.0 / 60.0,
+        );
+
+        assert_eq!(movement.translation, Vector::zeros());
+        assert!(
+            active.is_none(),
+            "reversal may return to ordinary climb handling when the original ladder is still grippable"
+        );
+    }
+
+    #[test]
+    fn climb_top_out_final_release_accepts_current_upward_support() {
+        let mut world = PhysicsWorld::new();
+        world.add_collider(
+            EntityId::from_inner(1).unwrap(),
+            ColliderBuilder::cuboid(10.0, 0.05, 10.0)
+                .translation(vector![0.0, -0.05, 0.0])
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let controller = KinematicCharacterController::default();
+        let standing_floor_offset = PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+            + PLAYER_CONTACT_OFFSET / SCALE_FACTOR
+            + PLAYER_REST_LIFT / SCALE_FACTOR;
+        let final_pose = vector![4.0, standing_floor_offset, 0.0];
+        let pos = Isometry::translation(final_pose.x, final_pose.y, final_pose.z);
+        let top_out = ClimbTopOut {
+            waypoints: [final_pose; 8],
+            next_waypoint: 7,
+            save_pose: vector![-1.0, standing_floor_offset, 0.0],
+            reversing: false,
+            is_crouched: false,
+            requires_final_support: true,
+        };
+        let queries = query_pipeline(&world, QueryFilter::default());
+
+        let (movement, active) = advance_climb_top_out(
+            &controller,
+            &queries,
+            &queries,
+            &pos,
+            top_out,
+            Vector::zeros(),
+            1.0 / 60.0,
+        );
+
+        assert_eq!(movement.translation, Vector::zeros());
+        assert!(
+            active.is_none(),
+            "an unblocked final pose on unchanged upward support should restore standing"
         );
     }
 
@@ -6755,10 +10073,19 @@ mod tests {
             save_pose: vector![-1.0, 0.0, 0.0],
             reversing: false,
             is_crouched: false,
+            requires_final_support: true,
         };
         let first = {
             let queries = query_pipeline(&world, QueryFilter::default());
-            advance_climb_top_out(&controller, &queries, &queries, &pos, top_out, 1.0 / 60.0)
+            advance_climb_top_out(
+                &controller,
+                &queries,
+                &queries,
+                &pos,
+                top_out,
+                Vector::zeros(),
+                1.0 / 60.0,
+            )
         };
         assert!(first.0.translation.x > 0.0);
         pos.translation.vector += first.0.translation;
@@ -6778,8 +10105,15 @@ mod tests {
         let mut active = first.1.expect("route remains active");
         let mut reversing = None;
         for _ in 0..32 {
-            let (movement, next) =
-                advance_climb_top_out(&controller, &queries, &queries, &pos, active, 1.0 / 60.0);
+            let (movement, next) = advance_climb_top_out(
+                &controller,
+                &queries,
+                &queries,
+                &pos,
+                active,
+                Vector::zeros(),
+                1.0 / 60.0,
+            );
             pos.translation.vector += movement.translation;
             active = next.expect("blocked route should remain recoverable");
             if active.reversing {
@@ -6798,6 +10132,61 @@ mod tests {
     }
 
     #[test]
+    fn climb_top_out_execution_includes_climbables_after_lip_clear() {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(1).unwrap(),
+            vec3(0.3, 0.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.04, 2.0, 2.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(2).unwrap());
+        world.update(Vector3::new(0.0, 0.0, 0.0), &mut player);
+        let controller = KinematicCharacterController::default();
+        let pos = Isometry::translation(0.0, 0.0, 0.0);
+        let mut waypoints = test_waypoints();
+        waypoints[4] = pos.translation.vector;
+        let top_out = ClimbTopOut {
+            waypoints,
+            next_waypoint: 5,
+            save_pose: vector![-1.0, 0.0, 0.0],
+            reversing: false,
+            is_crouched: false,
+            requires_final_support: true,
+        };
+        let validation_queries = query_pipeline(&world, QueryFilter::default());
+        let parented_non_climbable = |_handle: ColliderHandle, collider: &Collider| {
+            collider.parent().is_some()
+                && !collider
+                    .collision_groups()
+                    .memberships
+                    .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
+        };
+        let scripted_queries = validation_queries
+            .with_filter(QueryFilter::default().predicate(&parented_non_climbable));
+
+        let (movement, active) = advance_climb_top_out(
+            &controller,
+            &validation_queries,
+            &scripted_queries,
+            &pos,
+            top_out,
+            Vector::zeros(),
+            1.0 / 60.0,
+        );
+
+        assert_eq!(movement.translation, Vector::zeros());
+        assert!(
+            active.is_some_and(|top_out| top_out.reversing),
+            "a climbable that moves into a post-lip waypoint must reverse the live route"
+        );
+    }
+
+    #[test]
     fn climb_top_out_reverses_out_of_an_overlapping_parented_blocker() {
         let mut world = PhysicsWorld::new();
         let controller = KinematicCharacterController::default();
@@ -6808,6 +10197,7 @@ mod tests {
             save_pose: vector![-1.0, 0.0, 0.0],
             reversing: false,
             is_crouched: false,
+            requires_final_support: true,
         };
         world.add_kinematic(
             EntityId::from_inner(2).unwrap(),
@@ -6825,8 +10215,15 @@ mod tests {
 
         for _ in 0..32 {
             let queries = query_pipeline(&world, QueryFilter::default());
-            let (movement, next) =
-                advance_climb_top_out(&controller, &queries, &queries, &pos, active, 1.0 / 60.0);
+            let (movement, next) = advance_climb_top_out(
+                &controller,
+                &queries,
+                &queries,
+                &pos,
+                active,
+                Vector::zeros(),
+                1.0 / 60.0,
+            );
             pos.translation.vector += movement.translation;
             let Some(next) = next else {
                 break;
@@ -6861,10 +10258,18 @@ mod tests {
             save_pose: Vector::zeros(),
             reversing: false,
             is_crouched: true,
+            requires_final_support: false,
         };
 
-        let (movement, active) =
-            advance_climb_top_out(&controller, &queries, &queries, &pos, completed, 1.0 / 60.0);
+        let (movement, active) = advance_climb_top_out(
+            &controller,
+            &queries,
+            &queries,
+            &pos,
+            completed,
+            Vector::zeros(),
+            1.0 / 60.0,
+        );
 
         assert_eq!(movement.translation, Vector::zeros());
         assert!(
@@ -6894,11 +10299,12 @@ mod tests {
         world.collider_set[collider_handle].set_shape(SharedShape::ball(CLIMB_TOP_OUT_RADIUS));
         world.rigid_body_set[player.character_handle].enable_ccd(false);
         player.top_out = Some(ClimbTopOut {
-            waypoints: [compressed_pose; 7],
+            waypoints: [compressed_pose; 8],
             next_waypoint: 3,
             save_pose,
             reversing: true,
             is_crouched: false,
+            requires_final_support: true,
         });
         assert_eq!(
             world.get_player_save_translation(&player),
@@ -7548,6 +10954,400 @@ mod tests {
             max_y - start.y > 0.25,
             "the player should step onto the threshold under the ceiling, rose {}",
             max_y - start.y
+        );
+    }
+
+    #[test]
+    fn climb_jump_release_matches_dark_top_and_rebound_impulses() {
+        let toward_ladder = vector![1.0, 0.0, 0.0];
+        let (top_horizontal, top_bonus) = climb_jump_release(
+            RetainedClimb {
+                toward_ladder,
+                climbable_top: 0.0,
+            },
+            vector![0.6, 1.0, -0.8],
+            0.0,
+        )
+        .expect("a finite horizontal facing should release a climb");
+        assert!((top_horizontal - vector![6.0, 0.0, -8.0]).norm() < 1.0e-5);
+        assert_eq!(top_bonus, CLIMB_JUMP_VERTICAL_BONUS);
+
+        let below_top = RetainedClimb {
+            toward_ladder,
+            climbable_top: 10.0,
+        };
+        let (away, away_bonus) =
+            climb_jump_release(below_top, -Vector::x(), 0.0).expect("away-facing rebound");
+        assert!((away + Vector::x() * CLIMB_JUMP_REBOUND_SPEED).norm() < 1.0e-5);
+        assert_eq!(away_bonus, 0.0);
+        let (reflected, reflected_bonus) =
+            climb_jump_release(below_top, Vector::x(), 0.0).expect("into-face rebound");
+        assert!((reflected + Vector::x() * (0.5 * CLIMB_JUMP_REBOUND_SPEED)).norm() < 1.0e-5);
+        assert_eq!(reflected_bonus, 0.0);
+
+        let one_foot = 1.0 / SCALE_FACTOR;
+        assert!(break_climb_near_top(10.0, 10.0 - one_foot + 1.0e-4));
+        assert!(!break_climb_near_top(10.0, 10.0 - one_foot - 1.0e-4));
+        let top_boundary = RetainedClimb {
+            toward_ladder,
+            climbable_top: 10.0,
+        };
+        let (entered_band, entered_bonus) =
+            climb_jump_release(top_boundary, -Vector::x(), 10.0 - one_foot + 1.0e-4)
+                .expect("current pose just inside the band");
+        assert!((entered_band.x + CLIMB_JUMP_FORWARD_SPEED).abs() < 1.0e-4);
+        assert_eq!(entered_bonus, CLIMB_JUMP_VERTICAL_BONUS);
+        for current_center in [10.0 - one_foot - 1.0e-4, 10.0 + one_foot + 1.0e-4] {
+            let (left_band, left_bonus) =
+                climb_jump_release(top_boundary, -Vector::x(), current_center)
+                    .expect("current pose just outside the band");
+            assert!((left_band.x + CLIMB_JUMP_REBOUND_SPEED).abs() < 1.0e-4);
+            assert_eq!(left_bonus, 0.0);
+        }
+    }
+
+    fn flat_jump_world() -> (PhysicsWorld, PlayerHandle) {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(1000).unwrap(),
+            vec3(0.0, -0.5, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(20.0, 1.0, 20.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player = world.create_player(
+            vec3(0.0, PLAYER_HALF_HEIGHT + 0.1, 0.0),
+            EntityId::from_inner(2000).unwrap(),
+        );
+        step(&mut world, &mut player, 30);
+        (world, player)
+    }
+
+    #[test]
+    fn near_top_climb_jump_keeps_its_impulse_after_input_is_neutral() {
+        let (mut world, mut player) = flat_jump_world();
+        let start = world.get_player_translation(&player);
+        player.retained_climb = Some(RetainedClimb {
+            toward_ladder: Vector::x(),
+            climbable_top: start.y,
+        });
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        let edge = world.get_player_translation(&player);
+        let first_velocity = player
+            .climb_jump_velocity
+            .expect("the BreakClimb horizontal impulse should remain live");
+        assert!((first_velocity.x - CLIMB_JUMP_FORWARD_SPEED / SCALE_FACTOR).abs() < 1.0e-5);
+        assert_eq!(
+            edge, start,
+            "kinematic next-position applies on the following physics step"
+        );
+
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_z(),
+            false,
+            &mut player,
+        );
+        let in_flight = world.get_player_translation(&player);
+        assert!(
+            in_flight.x > start.x + 0.05 && in_flight.y > start.y + 0.1,
+            "the retained +X impulse, not fresh neutral input/facing, must own the arc: start={start:?}, edge={edge:?}, in_flight={in_flight:?}"
+        );
+
+        let horizontal_before_crouch = player.climb_jump_velocity;
+        let vertical_before_crouch = player.jump_velocity;
+        assert!(world.set_player_crouch(true, &mut player));
+        assert_eq!(
+            player.climb_jump_velocity, horizontal_before_crouch,
+            "changing posture during the arc must preserve horizontal momentum"
+        );
+        assert_eq!(
+            player.jump_velocity, vertical_before_crouch,
+            "changing posture during the arc must preserve vertical momentum"
+        );
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            -Vector3::unit_z(),
+            false,
+            &mut player,
+        );
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            -Vector3::unit_z(),
+            false,
+            &mut player,
+        );
+        let after_crouch = world.get_player_translation(&player);
+        assert!(
+            after_crouch.x > in_flight.x + 0.05,
+            "posture must not steer or cancel the retained release: in_flight={in_flight:?}, after={after_crouch:?}"
+        );
+    }
+
+    #[test]
+    fn climb_jump_requires_a_fresh_grip_and_is_one_edge() {
+        let (mut world, mut player) = flat_jump_world();
+        let center = world.get_player_translation(&player).y;
+        player.retained_climb = Some(RetainedClimb {
+            toward_ladder: Vector::x(),
+            climbable_top: center,
+        });
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            false,
+            &mut player,
+        );
+        assert!(
+            player.retained_climb.is_none(),
+            "one separated frame must expire a prior grip"
+        );
+
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        assert!(
+            player.climb_jump_velocity.is_none(),
+            "a stale grip must not become a BreakClimb launch"
+        );
+        let ordinary = player
+            .jump_velocity
+            .expect("the supported press should remain an ordinary jump");
+        assert!(ordinary < PLAYER_JUMP_SPEED / SCALE_FACTOR);
+
+        let before_held = ordinary;
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        assert!(
+            player.jump_velocity.expect("jump remains airborne") < before_held,
+            "holding jump must not relaunch either ordinary or climb motion"
+        );
+    }
+
+    #[test]
+    fn a_blocked_below_top_redirect_does_not_arm_break_climb() {
+        let (mut world, mut player) = flat_jump_world();
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(1.0, 5.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.2, 10.0, 4.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        let walk = 25.0 / SCALE_FACTOR / 60.0;
+        world.update_with_facing_and_jump(
+            Vector3::new(walk, -walk, 0.0),
+            Vector3::unit_x(),
+            false,
+            &mut player,
+        );
+        assert!(
+            player.retained_climb.is_none(),
+            "a descent redirect blocked by the floor must fall through to ordinary movement without arming a release"
+        );
+        world.update_with_facing_and_jump(
+            Vector3::new(-walk, 0.0, 0.0),
+            -Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        assert!(
+            player.climb_jump_velocity.is_none(),
+            "the next away-facing edge must remain an ordinary grounded jump"
+        );
+    }
+
+    #[test]
+    fn climb_jump_retains_the_gripped_objects_top_not_an_adjacent_segment() {
+        let (mut world, mut player) = flat_jump_world();
+        let center_y = world.get_player_translation(&player).y;
+        // The nearer/taller collider is the object actually gripped. A second
+        // climbable is also inside the broad column/reach query and has a top
+        // inside Dark's one-foot band, but it is not the selected contact.
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(0.75, 3.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.1, 6.0, 4.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        world.add_kinematic(
+            EntityId::from_inner(1002).unwrap(),
+            vec3(0.92, center_y, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.1, 0.2, 4.0),
+            CollisionGroup::climbable_entity(),
+            false,
+        );
+        let walk = 25.0 / SCALE_FACTOR / 60.0;
+        world.update_with_facing_and_jump(
+            Vector3::new(walk, 0.0, 0.0),
+            Vector3::unit_x(),
+            false,
+            &mut player,
+        );
+        let retained = player
+            .retained_climb
+            .expect("a real upward climb frame must retain its selected contact");
+        assert!(
+            (retained.climbable_top - 6.0).abs() < 1.0e-4,
+            "the nearest tall object, not the adjacent short segment/column, must supply the BreakClimb top: {retained:?}"
+        );
+
+        world.update_with_facing_and_jump(
+            Vector3::new(-walk, 0.0, 0.0),
+            -Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+        let rebound = player
+            .climb_jump_velocity
+            .expect("the retained below-top grip should detach");
+        assert!(
+            (rebound.x + CLIMB_JUMP_REBOUND_SPEED / SCALE_FACTOR).abs() < 1.0e-4,
+            "an unrelated segment inside the top band must not upgrade the rebound to a ten-foot top release: {rebound:?}"
+        );
+    }
+
+    #[test]
+    fn climb_jump_keeps_new_world_and_parented_walls_solid() {
+        let run = |parented: bool| {
+            let (mut world, mut player) = flat_jump_world();
+            if parented {
+                world.add_kinematic(
+                    EntityId::from_inner(1001).unwrap(),
+                    vec3(0.7, 5.0, 0.0),
+                    identity_quat(),
+                    Vector3::new(0.0, 0.0, 0.0),
+                    vec3(0.2, 10.0, 4.0),
+                    CollisionGroup::entity(),
+                    false,
+                );
+            } else {
+                world.add_collider(
+                    EntityId::from_inner(1001).unwrap(),
+                    ColliderBuilder::cuboid(0.1, 5.0, 2.0)
+                        .translation(vector![0.7, 5.0, 0.0])
+                        .build(),
+                );
+            }
+            player.retained_climb = Some(RetainedClimb {
+                toward_ladder: Vector::x(),
+                climbable_top: world.get_player_translation(&player).y,
+            });
+            for frame in 0..120 {
+                world.update_with_facing_and_jump(
+                    Vector3::new(0.0, 0.0, 0.0),
+                    Vector3::unit_x(),
+                    frame == 0,
+                    &mut player,
+                );
+            }
+            world.get_player_translation(&player)
+        };
+
+        for (kind, end) in [("world", run(false)), ("parented", run(true))] {
+            assert!(
+                end.x < 0.2,
+                "a BreakClimb impulse must not suppress a newly met {kind} wall, ended {end:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn climb_jump_survives_side_contact_and_clears_on_real_floor_support() {
+        let mut world = PhysicsWorld::new();
+        world.add_kinematic(
+            EntityId::from_inner(1000).unwrap(),
+            vec3(0.0, -0.5, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(20.0, 1.0, 20.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        world.add_kinematic(
+            EntityId::from_inner(1001).unwrap(),
+            vec3(0.7, 10.0, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.2, 20.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(0.0, 3.0, 0.0), EntityId::from_inner(2000).unwrap());
+        player.retained_climb = Some(RetainedClimb {
+            toward_ladder: Vector::x(),
+            climbable_top: 3.0,
+        });
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::unit_x(),
+            true,
+            &mut player,
+        );
+
+        let mut side_contact_frames = 0;
+        for _ in 0..360 {
+            world.update_with_facing_and_jump(
+                Vector3::new(0.0, 0.0, 0.0),
+                -Vector3::unit_z(),
+                false,
+                &mut player,
+            );
+            let position = world.get_player_translation(&player);
+            if position.x > 0.04 && position.x < 0.2 && position.y > 2.0 {
+                side_contact_frames += 1;
+                assert!(
+                    player.climb_jump_velocity.is_some(),
+                    "side contact without underfoot support must not consume the horizontal release at {position:?}"
+                );
+            }
+            if player.jump_velocity.is_none() {
+                break;
+            }
+        }
+        world.update_with_facing_and_jump(
+            Vector3::new(0.0, 0.0, 0.0),
+            -Vector3::unit_z(),
+            false,
+            &mut player,
+        );
+        let landed = world.get_player_translation(&player);
+        assert!(
+            side_contact_frames >= 3,
+            "the fixture must exercise a sustained airborne side contact"
+        );
+        let movement_filter = player_movement_filter(player.character_handle);
+        let queries =
+            world.player_movement_queries(world.narrow_phase.query_dispatcher(), movement_filter);
+        assert!(
+            player_pose_matches_current_support(&queries, vec_to_nvec(landed), false),
+            "the release should finish only on real floor support, ended {landed:?}"
+        );
+        assert!(
+            player.jump_velocity.is_none() && player.climb_jump_velocity.is_none(),
+            "both ballistic components must clear together on the supported landing"
         );
     }
 
@@ -8616,11 +12416,12 @@ mod tests {
         world.collider_set[collider_handle].set_shape(SharedShape::ball(CLIMB_TOP_OUT_RADIUS));
         world.rigid_body_set[player.character_handle].enable_ccd(false);
         player.top_out = Some(ClimbTopOut {
-            waypoints: [compressed_pose; 7],
+            waypoints: [compressed_pose; 8],
             next_waypoint: 3,
             save_pose,
             reversing: false,
             is_crouched: false,
+            requires_final_support: true,
         });
 
         let result = world.move_player_validated(vec3(f32::NAN, 0.5, 0.0), &mut player);
