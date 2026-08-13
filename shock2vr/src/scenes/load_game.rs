@@ -60,10 +60,37 @@ const FALLBACK_RECTS: [Rect; 4] = [
     Rect::new(527.0, 405.0, 95.0, 62.0),
 ];
 
-/// Height of one save row inside the list rect, in canvas pixels. Matches the
-/// 20px cell of `METAFONT.FON`, which is what the list was authored around -
-/// the vanilla 290px-tall list therefore holds 14 rows.
-const ROW_HEIGHT: f32 = 20.0;
+/// Row pitch inside the list rect, in canvas pixels. Rows are hit-tested at
+/// this pitch, so it also fixes the click targets.
+///
+/// The screen was authored around `METAFONT.FON`'s 20px cell, but save names
+/// draw in 11px [`LIST_FONT`], so a 20px pitch is mostly whitespace - and it
+/// costs a slot, because only 13 such rows clear [`FIELD_TOP_Y`]. 19px is the
+/// largest pitch that fits the shipped list's full 14, which matters while
+/// there is no scrolling: the last row is the last reachable save (#928).
+const ROW_HEIGHT: f32 = 19.0;
+
+/// Canvas y where `GAMELOD.PCX` starts painting a bordered field, decoded from
+/// the art (its border rows are 323, 325, 343 and 345). It is the save
+/// screen's name-entry box - `GAMESAVR.BIN` and `GAMELODR.BIN` are
+/// byte-identical and the two screens share this art - so on the load screen
+/// it is inert decoration that rows must still clear.
+///
+/// This is an absolute position in the backdrop, not an offset within the list
+/// rect: rows have to stop here no matter where the layout file puts the list.
+/// Naive `290 / 20` ignores it entirely, yielding 14 rows and drawing the last
+/// one straight through the field's border.
+const FIELD_TOP_Y: f32 = 323.0;
+
+/// Horizontal padding for a save name, applied to both edges of the row: the
+/// left so a left-aligned name clears the list panel's edge, the right so an
+/// ellipsized one stops short of it rather than running flush.
+const LIST_TEXT_INSET: f32 = 8.0;
+
+/// Save names are drawn in the small in-game font (11px) rather than the
+/// screen's 20px `METAFONT.FON`, so the list reads as data under the heavier
+/// header and buttons.
+const LIST_FONT: &str = "mainfont.fon";
 
 /// Opacity for a row or button that cannot be acted on.
 const DISABLED_OPACITY: f32 = 0.3;
@@ -120,9 +147,11 @@ fn label(strings: Option<&HashMap<String, String>>, key: &str, fallback: &str) -
         .unwrap_or_else(|| fallback.to_owned())
 }
 
-/// How many save rows fit in the list rect.
+/// How many save rows fit in the list rect, stopping at the backdrop's painted
+/// field (see [`FIELD_TOP_Y`]) when the rect runs past it.
 fn visible_row_count(list: Rect) -> usize {
-    (list.h / ROW_HEIGHT).floor().max(0.0) as usize
+    let usable = (list.y + list.h).min(FIELD_TOP_Y) - list.y;
+    (usable / ROW_HEIGHT).floor().max(0.0) as usize
 }
 
 /// The canvas rect of the `index`-th row of the list.
@@ -132,6 +161,19 @@ fn row_rect(list: Rect, index: usize) -> Rect {
         list.y + index as f32 * ROW_HEIGHT,
         list.w,
         ROW_HEIGHT,
+    )
+}
+
+/// The rect a row's save name is drawn in: the row, inset on both sides so the
+/// name clears the panel edges. Hit-testing still uses the full [`row_rect`],
+/// so the inset never costs a click.
+fn row_text_rect(list: Rect, index: usize) -> Rect {
+    let row = row_rect(list, index);
+    Rect::new(
+        row.x + LIST_TEXT_INSET,
+        row.y,
+        (row.w - 2.0 * LIST_TEXT_INSET).max(0.0),
+        row.h,
     )
 }
 
@@ -241,6 +283,11 @@ impl GameScene for LoadGameScene {
             .len()
             .min(visible_row_count(rects[LIST_RECT_INDEX]));
 
+        // Only a save the player can actually see is loadable. The constructor
+        // preselects row 0 from `saves` alone, which a layout too short to show
+        // a single row would otherwise turn into a "Load" for an invisible one.
+        let selected = self.selected.filter(|index| *index < visible);
+
         self.pointer = input_context.pointer;
         let (action, last_pressed) = resolve_click(
             input_context.pointer,
@@ -248,7 +295,7 @@ impl GameScene for LoadGameScene {
             self.last_screen_size,
             &rects,
             visible,
-            self.selected.is_some(),
+            selected.is_some(),
         );
         self.last_pressed = last_pressed;
 
@@ -257,8 +304,7 @@ impl GameScene for LoadGameScene {
                 self.selected = Some(index);
                 Vec::new()
             }
-            Some(LoadGameAction::Load) => self
-                .selected
+            Some(LoadGameAction::Load) => selected
                 .and_then(|index| self.saves.get(index))
                 .map(|save| {
                     vec![Effect::GlobalEffect(GlobalEffect::Load {
@@ -322,6 +368,9 @@ impl GameScene for LoadGameScene {
 
         let list = rects[LIST_RECT_INDEX];
         if self.saves.is_empty() {
+            // Deliberately header-styled rather than row-styled: this is a
+            // message about the list, not an entry in it, so it stays centered
+            // in MENU_FONT while real saves read as left-aligned data.
             canvas
                 .text_native(
                     row_rect(list, 0),
@@ -339,10 +388,10 @@ impl GameScene for LoadGameScene {
                     // are ellipsized to the list width rather than spilling
                     // over the Load button.
                     .text_native_fit(
-                        row_rect(list, index),
+                        row_text_rect(list, index),
                         &save.name,
-                        MENU_FONT,
-                        HAlign::Center,
+                        LIST_FONT,
+                        HAlign::Left,
                         VAlign::Middle,
                     )
                     .opacity(if self.selected == Some(index) {
@@ -510,15 +559,59 @@ mod tests {
     }
 
     #[test]
-    fn the_vanilla_list_holds_fourteen_rows() {
-        // 290px of list at a 20px row pitch. Guards the row geometry that the
-        // hit-testing and the render loop share.
-        assert_eq!(visible_row_count(FALLBACK_RECTS[LIST_RECT_INDEX]), 14);
+    fn the_vanilla_list_holds_fourteen_rows_clear_of_the_field() {
+        // Guards the row geometry that the hit-testing and the render loop
+        // share: all 14 of the shipped list's rows are reachable, and none of
+        // them touches the backdrop's painted field.
         let list = FALLBACK_RECTS[LIST_RECT_INDEX];
-        assert_eq!(row_rect(list, 0), Rect::new(261.0, 54.0, 202.0, 20.0));
-        assert_eq!(row_rect(list, 13), Rect::new(261.0, 314.0, 202.0, 20.0));
-        // Every row stays inside the authored list rect.
+        assert_eq!(visible_row_count(list), 14);
+        assert_eq!(row_rect(list, 0), Rect::new(261.0, 54.0, 202.0, 19.0));
+        assert_eq!(row_rect(list, 13), Rect::new(261.0, 301.0, 202.0, 19.0));
+        // Every row stays inside the authored list rect...
         assert!(row_rect(list, 13).y + ROW_HEIGHT <= list.y + list.h);
+        // ...and clears the painted field.
+        assert!(row_rect(list, 13).y + ROW_HEIGHT <= FIELD_TOP_Y);
+        // A 15th would not, so the count stops where the art does.
+        assert!(row_rect(list, 14).y + ROW_HEIGHT > FIELD_TOP_Y);
+        // The pitch is the largest that fits all 14 - one more pixel loses a
+        // row, which is what a naive 20px pitch did.
+        assert!(list.y + 14.0 * (ROW_HEIGHT + 1.0) > FIELD_TOP_Y);
+    }
+
+    #[test]
+    fn the_row_count_tracks_the_field_position_not_the_rect_height() {
+        // The field is at a fixed place in the backdrop, so the row count has
+        // to follow the list's position, not just its height. Reserving a
+        // fixed slice of `h` would get both of these wrong.
+        //
+        // A list clear of the field uses its full height...
+        let above = Rect::new(261.0, 20.0, 202.0, 290.0);
+        assert!(above.y + above.h <= FIELD_TOP_Y);
+        assert_eq!(visible_row_count(above), 15);
+        // ...while one running past it stops at the field, however tall it is.
+        let over = Rect::new(261.0, 54.0, 202.0, 350.0);
+        assert_eq!(visible_row_count(over), 14);
+        assert!(row_rect(over, 13).y + ROW_HEIGHT <= FIELD_TOP_Y);
+        // A list starting below the field shows nothing rather than underflowing.
+        assert_eq!(visible_row_count(Rect::new(261.0, 400.0, 202.0, 60.0)), 0);
+    }
+
+    #[test]
+    fn row_text_is_inset_from_the_left_but_the_whole_row_stays_clickable() {
+        let list = FALLBACK_RECTS[LIST_RECT_INDEX];
+        let row = row_rect(list, 0);
+        let text = row_text_rect(list, 0);
+        assert_eq!(text, Rect::new(269.0, 54.0, 186.0, ROW_HEIGHT));
+        // Inset on both edges, so an ellipsized name stops short of the panel.
+        assert_eq!(text.x - row.x, LIST_TEXT_INSET);
+        assert_eq!((row.x + row.w) - (text.x + text.w), LIST_TEXT_INSET);
+        // A click in either inset gap still selects the row.
+        for x in [list.x + 2.0, list.x + list.w - 2.0] {
+            assert_eq!(
+                click(at_canvas(vec2(x, list.y + 10.0)), 3, false),
+                Some(LoadGameAction::Select(0))
+            );
+        }
     }
 
     #[test]

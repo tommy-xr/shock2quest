@@ -18,7 +18,7 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 // Canvas-space widget centers on the 640x480 UI canvas, normalized to the
 // [0,1] pointer channel. From the shipped layouts: MAINR.BIN button 1 is
 // "Load Game" at (400,96,179x60); GAMELODR.BIN gives Load at (527,161,96x62),
-// Done at (527,405,95x62), and a list starting at (261,54) with a 20px pitch.
+// Done at (527,405,95x62), and a list starting at (261,54) with a 19px pitch.
 const CANVAS_W = 640;
 const CANVAS_H = 480;
 const norm = (x: number, y: number): [number, number] => [x / CANVAS_W, y / CANVAS_H];
@@ -26,7 +26,7 @@ const norm = (x: number, y: number): [number, number] => [x / CANVAS_W, y / CANV
 const LOAD_GAME_ENTRY = norm(400 + 179 / 2, 96 + 60 / 2);
 const LOAD_BUTTON = norm(527 + 96 / 2, 161 + 62 / 2);
 const DONE_BUTTON = norm(527 + 95 / 2, 405 + 62 / 2);
-const FIRST_ROW = norm(261 + 202 / 2, 54 + 20 / 2);
+const FIRST_ROW = norm(261 + 202 / 2, 54 + 19 / 2);
 
 async function click(game: GameServer, [x, y]: [number, number]): Promise<void> {
   await game.input.set("pointer.position", [x, y]);
