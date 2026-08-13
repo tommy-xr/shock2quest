@@ -62,14 +62,30 @@ fn creature_is_lootable(world: &World, entity_id: EntityId) -> bool {
     })
 }
 
+/// One inventory cell, in panel pixels. Both the backpack strip and the loot
+/// panel step their item grids by this pitch - it is the spacing of the cell
+/// separators drawn into `invback.pcx` and `contain.pcx`, whose grid lines sit
+/// 35px apart horizontally and 34px apart vertically.
+const SLOT_PITCH: (f32, f32) = (35.0, 34.0);
+
+/// Top-left of the loot panel's 4x4 item grid, in `contain.pcx` pixels: its
+/// cell separators run at x = 13 + 35n and y = 150 + 34n, and items are
+/// authored just inside that first line.
+const LOOT_GRID_ORIGIN: (f32, f32) = (15.0, 153.0);
+
+/// Top-left of the backpack strip's 15x3 item grid, in `invback.pcx` pixels
+/// (separators at x = 2 + 35n, y = 15 + 34n; the EQUIP paperdoll owns
+/// everything right of x = 527).
+const BACKPACK_GRID_ORIGIN: (f32, f32) = (4.0, 17.0);
+
 impl ContainerGui {
     pub fn loot_container() -> ContainerGui {
         ContainerGui {
             background_image: "contain.pcx".to_owned(),
             width: 188.0,
             height: 296.0,
-            inv_offset_x: 15.0,
-            inv_offset_y: 160.0,
+            inv_offset_x: LOOT_GRID_ORIGIN.0,
+            inv_offset_y: LOOT_GRID_ORIGIN.1,
             num_slots_x: 4,
             num_slots_y: 4,
             take_on_click: true,
@@ -93,8 +109,8 @@ impl ContainerGui {
             background_image: "invback.pcx".to_owned(),
             width: 635.0,
             height: 120.0,
-            inv_offset_x: 4.0,
-            inv_offset_y: 18.0,
+            inv_offset_x: BACKPACK_GRID_ORIGIN.0,
+            inv_offset_y: BACKPACK_GRID_ORIGIN.1,
             num_slots_x: 15,
             num_slots_y: 3,
             take_on_click: false,
@@ -148,8 +164,8 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             inventory.insert_first_available(entity.0, inv_dims.0 as usize, inv_dims.1 as usize);
         }
 
-        let slot_pixel_width = 35.0;
-        let slot_pixel_height = 32.0;
+        let slot_pixel_width = SLOT_PITCH.0;
+        let slot_pixel_height = SLOT_PITCH.1;
         let initial_offset_y = self.inv_offset_y;
         let initial_offset_x = self.inv_offset_x;
 
@@ -434,6 +450,37 @@ mod tests {
                 assert_eq!(dropped_entity_id, item);
             }
             other => panic!("Take should transfer via DropEntityInfo, got {:?}", other),
+        }
+    }
+
+    /// Both panels' item grids must land on the cell separators authored into
+    /// their backdrops - `contain.pcx` (loot) and `invback.pcx` (backpack) -
+    /// stepping by the shared 35x34 cell pitch. A 1x1 item therefore occupies
+    /// exactly one cell at the grid origin.
+    #[test]
+    fn item_grids_sit_on_the_authored_backdrop_cells() {
+        let (world, container, item, _inventory) = loot_world();
+
+        for (gui, expected_origin) in [
+            (ContainerGui::loot_container(), vec2(15.0, 153.0)),
+            (ContainerGui::inv_container(), vec2(4.0, 17.0)),
+        ] {
+            let components = gui.get_components(&None, container, &world, &ContainerGuiState {});
+            let (position, size) = components
+                .iter()
+                .find_map(|c| match c {
+                    GuiComponent::Button {
+                        entity: Some(e),
+                        position,
+                        size,
+                        ..
+                    } if *e == item => Some((*position, *size)),
+                    _ => None,
+                })
+                .expect("the panel should expose a button bound to the contained item");
+
+            assert_eq!(position, expected_origin, "grid origin");
+            assert_eq!(size, vec2(35.0, 34.0), "one cell of the shared pitch");
         }
     }
 
