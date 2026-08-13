@@ -254,15 +254,13 @@ pub fn main() {
         shock2vr::PresentationMode::Flat
     };
 
-    // With no explicit mission, flat boots the (mouse-driven) main menu; the VR
-    // rig has no pointer, so it boots straight into the first mission.
-    let mission_arg = args.mission.clone().unwrap_or_else(|| {
-        if args.vr {
-            "earth.mis".to_owned()
-        } else {
-            "main_menu".to_owned()
-        }
-    });
+    // With no explicit mission, both presentations boot the main menu. VR used
+    // to skip it because the rig had no pointer; it now drives the menu with a
+    // controller ray, so there is nothing to special-case.
+    let mission_arg = args
+        .mission
+        .clone()
+        .unwrap_or_else(|| "main_menu".to_owned());
     let (mission, spawn_location) = parse_mission(&mission_arg);
 
     let options = GameOptions {

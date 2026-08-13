@@ -18,7 +18,7 @@
 
 use std::rc::Rc;
 
-use cgmath::{Deg, Matrix4, Vector2, vec2, vec3};
+use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
 use dark::importers::{FONT_IMPORTER, TEXTURE_IMPORTER};
 use engine::{
     assets::asset_cache::AssetCache,
@@ -126,6 +126,83 @@ pub fn pointer_to_canvas(
 /// under `mode` - the rect analogue (and inverse) of [`pointer_to_canvas`].
 /// Lets clients (e.g. the debug runtime's `GET /v1/ui`) aim a normalized
 /// pointer at a canvas rect without re-deriving the letterbox math.
+/// A flat UI panel placed in the world: where it is, which way it faces, and
+/// how big it is in metres. Frontend scenes in VR present their canvas on one
+/// of these instead of on the screen.
+#[derive(Debug, Clone, Copy)]
+pub struct WorldPanel {
+    /// Center of the panel, in world space.
+    pub center: Vector3<f32>,
+    /// Panel orientation. The panel's face normal is this rotation applied to
+    /// +Z, so an identity rotation faces the default camera direction.
+    pub rotation: Quaternion<f32>,
+    /// Panel size in metres (width, height).
+    pub size: Vector2<f32>,
+}
+
+impl WorldPanel {
+    /// The panel's outward face normal.
+    pub fn normal(&self) -> Vector3<f32> {
+        self.rotation.rotate_vector(vec3(0.0, 0.0, 1.0))
+    }
+
+    /// Root transform for [`UiCanvas::render_world_space`].
+    ///
+    /// No facing correction is needed: the element path's own 180-degree
+    /// rotation is about **Z** (in-plane, flipping the canvas's axes), so the
+    /// quad's +Z normal is untouched and a panel whose
+    /// [`normal`](Self::normal) faces the viewer renders toward them.
+    pub fn transform(&self) -> Matrix4<f32> {
+        Matrix4::from_translation(self.center)
+            * Matrix4::from(self.rotation)
+            * Matrix4::from_nonuniform_scale(self.size.x, self.size.y, 1.0)
+    }
+}
+
+/// Intersect a pointing ray with `panel` and return where it lands, in canvas
+/// pixels - the VR counterpart of [`pointer_to_canvas`].
+///
+/// `canvas_size` is the panel's authored pixel canvas (e.g. 640x480).
+/// Returns `None` when the ray is parallel to the panel, points away from it,
+/// or lands outside its bounds, so a caller can treat "not pointing at the
+/// menu" the same way flat treats "cursor off the canvas".
+pub fn ray_to_canvas(
+    canvas_size: Vector2<f32>,
+    panel: &WorldPanel,
+    ray_origin: Vector3<f32>,
+    ray_direction: Vector3<f32>,
+) -> Option<Vector2<f32>> {
+    let normal = panel.normal();
+    let denominator = ray_direction.dot(normal);
+    // Parallel to the panel (or close enough that the intersection is
+    // numerically meaningless).
+    if denominator.abs() < 1e-6 {
+        return None;
+    }
+
+    let distance = (panel.center - ray_origin).dot(normal) / denominator;
+    // The panel is behind the ray, not in front of it.
+    if distance <= 0.0 {
+        return None;
+    }
+
+    let hit = ray_origin + ray_direction * distance;
+    let local = hit - panel.center;
+    // Undo the panel's rotation to get panel-local axes.
+    let inverse = panel.rotation.conjugate();
+    let local = inverse.rotate_vector(local);
+
+    // Panel-local -> [0,1] with the origin at the top-left, matching the
+    // canvas convention (y grows downward on the canvas, upward in the world).
+    let u = local.x / panel.size.x + 0.5;
+    let v = 0.5 - local.y / panel.size.y;
+    if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
+        return None;
+    }
+
+    Some(vec2(u * canvas_size.x, v * canvas_size.y))
+}
+
 pub fn canvas_rect_to_screen(
     rect: Rect,
     canvas_size: Vector2<f32>,
@@ -735,20 +812,54 @@ where
                 }
                 UiElement::Text {
                     position,
+                    size,
                     text,
                     font,
+                    font_size,
+                    h,
+                    v,
                     alpha,
                     ..
                 } => {
-                    let font = asset_cache.get(&FONT_IMPORTER, font).clone();
+                    let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
                     let alpha = force_alpha.unwrap_or(*alpha);
-                    let mut object =
-                        SceneObject::world_space_text(text, font, (1.0 - alpha).clamp(0.0, 1.0));
+
+                    // Align inside the element's rect, in canvas pixels, the
+                    // same way the screen-space path does - otherwise the two
+                    // presentations disagree about where a label sits and
+                    // world-space text drifts off its widget.
+                    let canvas_font_size = if *font_size > 0.0 {
+                        *font_size
+                    } else {
+                        font_obj.base_height()
+                    };
+                    let width = measure_text_width(&**font_obj, text, canvas_font_size);
+                    let x = match h {
+                        HAlign::Left => position.x,
+                        HAlign::Center => position.x + (size.x - width) / 2.0,
+                        HAlign::Right => position.x + size.x - width,
+                    };
+                    // `world_space_text` anchors on the text's vertical
+                    // CENTRE (unlike the screen-space path, which anchors on
+                    // its top), so each case carries half a line to land the
+                    // glyphs where the alignment says they should be.
+                    let half_line = canvas_font_size / 2.0;
+                    let y = match v {
+                        VAlign::Top => position.y + half_line,
+                        VAlign::Middle => position.y + size.y / 2.0,
+                        VAlign::Bottom => position.y + size.y - half_line,
+                    };
+
+                    let mut object = SceneObject::world_space_text(
+                        text,
+                        font_obj,
+                        (1.0 - alpha).clamp(0.0, 1.0),
+                    );
                     object.set_local_transform(
                         Matrix4::from_angle_y(Deg(180.0))
                             * Matrix4::from_translation(vec3(
-                                position.x / self.size.x - 0.5,
-                                -position.y / self.size.y - 0.5,
+                                x / self.size.x - 0.5,
+                                -y / self.size.y - 0.5,
                                 0.01,
                             )),
                     );
@@ -1030,5 +1141,162 @@ mod tests {
                 }
             ]
         ));
+    }
+
+    mod world_panel {
+        use super::*;
+        use cgmath::{Deg, Rotation3};
+
+        /// A 4:3 panel 2m in front of the origin, facing back toward it.
+        fn panel() -> WorldPanel {
+            WorldPanel {
+                center: vec3(0.0, 0.0, -2.0),
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                size: vec2(2.0, 1.5),
+            }
+        }
+
+        const CANVAS: Vector2<f32> = Vector2 { x: 640.0, y: 480.0 };
+
+        fn assert_close(actual: Vector2<f32>, expected: Vector2<f32>) {
+            assert!(
+                (actual.x - expected.x).abs() < 0.01 && (actual.y - expected.y).abs() < 0.01,
+                "expected {:?}, got {:?}",
+                expected,
+                actual
+            );
+        }
+
+        #[test]
+        fn a_ray_down_the_axis_hits_the_canvas_center() {
+            let hit = ray_to_canvas(CANVAS, &panel(), vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, -1.0));
+            assert_close(hit.expect("the ray should hit"), vec2(320.0, 240.0));
+        }
+
+        #[test]
+        fn world_up_is_canvas_up() {
+            // Aiming above center must land in the TOP half of the canvas
+            // (canvas y grows downward, world y grows upward) - the flip is
+            // exactly the kind of thing that silently inverts a menu.
+            let hit = ray_to_canvas(
+                CANVAS,
+                &panel(),
+                vec3(0.0, 0.375, 0.0),
+                vec3(0.0, 0.0, -1.0),
+            )
+            .expect("the ray should hit");
+            assert_close(hit, vec2(320.0, 120.0));
+            assert!(hit.y < 240.0, "aiming up must map to the top of the canvas");
+        }
+
+        #[test]
+        fn world_right_is_canvas_right() {
+            let hit = ray_to_canvas(CANVAS, &panel(), vec3(0.5, 0.0, 0.0), vec3(0.0, 0.0, -1.0))
+                .expect("the ray should hit");
+            assert_close(hit, vec2(480.0, 240.0));
+        }
+
+        #[test]
+        fn a_ray_past_the_edge_misses() {
+            // Just outside the panel's 2m width.
+            assert_eq!(
+                ray_to_canvas(CANVAS, &panel(), vec3(1.01, 0.0, 0.0), vec3(0.0, 0.0, -1.0)),
+                None
+            );
+            assert_eq!(
+                ray_to_canvas(CANVAS, &panel(), vec3(0.0, 0.76, 0.0), vec3(0.0, 0.0, -1.0)),
+                None
+            );
+        }
+
+        #[test]
+        fn the_corners_map_to_the_canvas_corners() {
+            // Top-left in world terms (-x, +y) is canvas (0, 0).
+            let hit = ray_to_canvas(
+                CANVAS,
+                &panel(),
+                vec3(-1.0, 0.75, 0.0),
+                vec3(0.0, 0.0, -1.0),
+            )
+            .expect("the corner should hit");
+            assert_close(hit, vec2(0.0, 0.0));
+            let hit = ray_to_canvas(
+                CANVAS,
+                &panel(),
+                vec3(1.0, -0.75, 0.0),
+                vec3(0.0, 0.0, -1.0),
+            )
+            .expect("the corner should hit");
+            assert_close(hit, vec2(640.0, 480.0));
+        }
+
+        #[test]
+        fn a_ray_pointing_away_misses() {
+            // The panel is behind the ray, so there is no forward hit.
+            assert_eq!(
+                ray_to_canvas(CANVAS, &panel(), vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0)),
+                None
+            );
+        }
+
+        #[test]
+        fn a_ray_parallel_to_the_panel_misses() {
+            assert_eq!(
+                ray_to_canvas(CANVAS, &panel(), vec3(0.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0)),
+                None
+            );
+        }
+
+        #[test]
+        fn an_angled_ray_lands_off_center() {
+            // 45 degrees right of straight ahead, from the origin: at 2m the
+            // hit is 2m to the right, well outside the 1m half-width.
+            let direction = vec3(1.0, 0.0, -1.0).normalize();
+            assert_eq!(
+                ray_to_canvas(CANVAS, &panel(), vec3(0.0, 0.0, 0.0), direction),
+                None
+            );
+            // A gentler angle stays on the panel and lands right of center.
+            let direction = vec3(0.25, 0.0, -1.0).normalize();
+            let hit = ray_to_canvas(CANVAS, &panel(), vec3(0.0, 0.0, 0.0), direction)
+                .expect("a gentle angle should still hit");
+            assert!(hit.x > 320.0, "a rightward angle must land right of center");
+        }
+
+        #[test]
+        fn a_rotated_panel_still_maps_correctly() {
+            // Yaw the panel 90 degrees so it faces +X, and place it to the
+            // player's right. Pointing along +X must hit its center.
+            let panel = WorldPanel {
+                center: vec3(2.0, 0.0, 0.0),
+                rotation: Quaternion::from_angle_y(Deg(-90.0)),
+                size: vec2(2.0, 1.5),
+            };
+            let hit = ray_to_canvas(CANVAS, &panel, vec3(0.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0))
+                .expect("the rotated panel should be hit");
+            assert_close(hit, vec2(320.0, 240.0));
+        }
+
+        #[test]
+        fn the_transform_scales_to_the_panel_size() {
+            let panel = panel();
+            // The canvas is authored in 0..1 space, so the transform must take
+            // the unit square to the panel's metres, centered on the panel.
+            let corner = panel.transform() * cgmath::vec4(0.5, 0.5, 0.0, 1.0);
+            assert!(corner.x.abs() - 1.0 < 1e-5, "half-width should be 1m");
+            assert!(corner.y.abs() - 0.75 < 1e-5, "half-height should be 0.75m");
+            assert!((corner.z + 2.0).abs() < 1e-5, "panel sits 2m ahead");
+        }
+
+        #[test]
+        fn the_transform_preserves_the_panels_facing() {
+            // The element path's own 180-degree rotation is about Z (in-plane),
+            // so `transform` must not add a facing correction of its own - an
+            // extra Y flip turns the panel away and it renders to nothing.
+            let panel = panel();
+            let right = panel.transform() * cgmath::vec4(0.5, 0.0, 0.0, 1.0);
+            assert!(right.x > 0.0, "local +X must stay along world +X");
+            assert!((panel.normal().z - 1.0).abs() < 1e-5);
+        }
     }
 }
