@@ -121,6 +121,14 @@ runtime's fixed eye-height offset. A real VR menu should anchor to the tracked h
 pose (place once in front of the player on entry, or soft-follow), which needs head
 position plumbed into `InputContext`.
 
+## Guiding principle
+
+**UI must render consistently between flatscreen and VR** (repo owner, explicit).
+Text rendering or sitting in a different place between the two presentations is
+unacceptable — it is a bug of the same severity as wrong content, not a cosmetic
+nit. Divergence should be **structurally impossible**, not merely caught by a
+test. Now encoded in `AGENTS.md` section 3.
+
 ## Renderer consolidation (in progress)
 
 ### Why the two presentations disagreed

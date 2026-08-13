@@ -24,7 +24,31 @@ the same workflow and engine reference.
   (e.g. `fix(physics): mantle over ladder tops`, `feat(play-through): ...`,
   `docs:`, `test:`, `refactor:`). Scope is optional; the type prefix is not.
 
-### 3. Visual Changes
+### 3. UI Renders Identically in Flatscreen and VR
+
+**A canvas must render the same way in flatscreen and in VR.** Text that is
+styled, sized, or *positioned* differently between the two presentations is a
+bug, not a cosmetic difference — a label that sits inside its button on screen
+and above it in VR is the same class of defect as a wrong string.
+
+Practically, when touching `shock2vr/src/ui/` or any UI emit path:
+
+- **Placement is decided once**, in shared layout, in canvas pixels. Per-
+  presentation code maps an already-resolved rect into its own space and makes
+  no placement decisions of its own — no alignment, no text measurement, no
+  ellipsizing, no per-element-kind branching that affects position or size.
+- If a presentation genuinely must differ, confine it to one named conversion at
+  the boundary, comment *why*, and cover it with a test. Known example:
+  `SceneObject::world_space_text` anchors on the text's vertical **centre**,
+  while `screen_space_text` anchors on its **top**.
+- **Prefer making divergence impossible over testing for it.** Independent emit
+  paths drift silently: every feature added to one quietly misses the others
+  (`ellipsize` shipped screen-only for exactly this reason).
+- When changing a shared UI path, render-verify **both** presentations —
+  `cargo dbgr --mission <scene>` and `--vr` — and compare where labels land
+  relative to their widgets, not just that something drew.
+
+### 4. Visual Changes
 
 Whenever a change adds or alters something visible (a viewmodel/HUD/rendering/
 material/lighting feature, a debug scene, an animation, a shader), capture a
