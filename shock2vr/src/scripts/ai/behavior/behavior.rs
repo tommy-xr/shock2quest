@@ -96,6 +96,13 @@ pub trait Behavior {
     fn is_locomotion(&self) -> bool {
         false
     }
+
+    /// Whether an alertness level change may replace this behavior. False for
+    /// a behavior counting down a commitment it must not restart (see
+    /// `SelfDestructBehavior`).
+    fn preempted_by_alertness(&self) -> bool {
+        true
+    }
 }
 
 #[allow(dead_code)]
