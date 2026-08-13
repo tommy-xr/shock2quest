@@ -147,6 +147,11 @@ impl WorldPanel {
     }
 
     /// Root transform for [`UiCanvas::render_world_space`].
+    ///
+    /// No facing correction is needed: the element path's own 180-degree
+    /// rotation is about **Z** (in-plane, flipping the canvas's axes), so the
+    /// quad's +Z normal is untouched and a panel whose
+    /// [`normal`](Self::normal) faces the viewer renders toward them.
     pub fn transform(&self) -> Matrix4<f32> {
         Matrix4::from_translation(self.center)
             * Matrix4::from(self.rotation)
@@ -1229,11 +1234,22 @@ mod tests {
         fn the_transform_scales_to_the_panel_size() {
             let panel = panel();
             // The canvas is authored in 0..1 space, so the transform must take
-            // the unit square to the panel's metres.
+            // the unit square to the panel's metres, centered on the panel.
             let corner = panel.transform() * cgmath::vec4(0.5, 0.5, 0.0, 1.0);
-            assert!((corner.x - 1.0).abs() < 1e-5, "half-width should be 1m");
-            assert!((corner.y - 0.75).abs() < 1e-5, "half-height should be 0.75m");
+            assert!(corner.x.abs() - 1.0 < 1e-5, "half-width should be 1m");
+            assert!(corner.y.abs() - 0.75 < 1e-5, "half-height should be 0.75m");
             assert!((corner.z + 2.0).abs() < 1e-5, "panel sits 2m ahead");
+        }
+
+        #[test]
+        fn the_transform_preserves_the_panels_facing() {
+            // The element path's own 180-degree rotation is about Z (in-plane),
+            // so `transform` must not add a facing correction of its own - an
+            // extra Y flip turns the panel away and it renders to nothing.
+            let panel = panel();
+            let right = panel.transform() * cgmath::vec4(0.5, 0.0, 0.0, 1.0);
+            assert!(right.x > 0.0, "local +X must stay along world +X");
+            assert!((panel.normal().z - 1.0).abs() < 1e-5);
         }
     }
 }

@@ -173,7 +173,12 @@ fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
 
 /// The VR menu hangs on a panel 2m ahead of the player at eye level, sized to
 /// the canvas's 4:3 aspect so the art is not stretched.
+///
+/// "Eye level" is not the scene origin: VR runtimes add a head offset of
+/// `player_eye_height / SCALE_FACTOR` on top of the camera position this scene
+/// returns, so a panel at y=0 hangs below the view and is never seen.
 const VR_PANEL_DISTANCE: f32 = 2.0;
+const VR_PANEL_EYE_HEIGHT: f32 = crate::PLAYER_EYE_HEIGHT / dark::SCALE_FACTOR;
 const VR_PANEL_SIZE: Vector2<f32> = Vector2 { x: 2.0, y: 1.5 };
 /// A VR trigger past this counts as "pressed", matching the hand code's
 /// grab/fire threshold.
@@ -186,7 +191,7 @@ const VR_COMPONENT_Z_STEP: f32 = 0.001;
 /// menu has no pawn to follow), facing the default camera direction.
 fn vr_panel() -> WorldPanel {
     WorldPanel {
-        center: vec3(0.0, 0.0, -VR_PANEL_DISTANCE),
+        center: vec3(0.0, VR_PANEL_EYE_HEIGHT, -VR_PANEL_DISTANCE),
         rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
         size: VR_PANEL_SIZE,
     }
@@ -438,9 +443,15 @@ impl GameScene for MainMenuScene {
         _view: cgmath::Matrix4<f32>,
         _projection: cgmath::Matrix4<f32>,
         screen_size: Vector2<f32>,
-        _options: &GameOptions,
+        options: &GameOptions,
     ) -> Vec<SceneObject> {
         self.last_screen_size = screen_size;
+        // In VR the menu lives on a world-space panel drawn by `render`; a
+        // screen-space copy here would paste the whole canvas over both eyes
+        // and hide it.
+        if options.presentation_mode == PresentationMode::Vr {
+            return Vec::new();
+        }
         let pointer_canvas = self.pointer.and_then(|p| {
             pointer_to_canvas(
                 vec2(CANVAS_W, CANVAS_H),
@@ -589,7 +600,11 @@ mod tests {
         let u = point.x / CANVAS_W - 0.5;
         let v = 0.5 - point.y / CANVAS_H;
         crate::input_context::Hand {
-            position: vec3(u * panel.size.x, v * panel.size.y, 0.0),
+            position: vec3(
+                panel.center.x + u * panel.size.x,
+                panel.center.y + v * panel.size.y,
+                0.0,
+            ),
             rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             trigger_value: trigger,
             ..crate::input_context::Hand::default()
