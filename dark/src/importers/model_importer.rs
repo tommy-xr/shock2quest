@@ -145,4 +145,3 @@ fn process_first_person_hands(
 pub static FIRST_PERSON_HANDS_IMPORTER: Lazy<
     AssetImporter<SystemShockContentModel, FirstPersonHands, ()>,
 > = Lazy::new(|| AssetImporter::define(load_model, process_first_person_hands));
-

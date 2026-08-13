@@ -37,14 +37,27 @@ const SPACING: f32 = 0.7;
 /// A stubby axis marker at the hand origin: red +X, green +Y, blue -Z (forward).
 fn axis_marker() -> Vec<SceneObject> {
     let axes = [
-        (vec3(1.0, 0.0, 0.0), vec3(0.09, 0.006, 0.006), vec3(0.05, 0.0, 0.0)),
-        (vec3(0.0, 1.0, 0.0), vec3(0.006, 0.09, 0.006), vec3(0.0, 0.05, 0.0)),
-        (vec3(0.2, 0.4, 1.0), vec3(0.006, 0.006, 0.14), vec3(0.0, 0.0, -0.07)),
+        (
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.09, 0.006, 0.006),
+            vec3(0.05, 0.0, 0.0),
+        ),
+        (
+            vec3(0.0, 1.0, 0.0),
+            vec3(0.006, 0.09, 0.006),
+            vec3(0.0, 0.05, 0.0),
+        ),
+        (
+            vec3(0.2, 0.4, 1.0),
+            vec3(0.006, 0.006, 0.14),
+            vec3(0.0, 0.0, -0.07),
+        ),
     ];
 
     axes.into_iter()
         .map(|(color, scale, offset)| {
-            let mut object = SceneObject::new(color_material::create(color), Box::new(cube::create()));
+            let mut object =
+                SceneObject::new(color_material::create(color), Box::new(cube::create()));
             object.set_transform(
                 Matrix4::from_translation(offset)
                     * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z),

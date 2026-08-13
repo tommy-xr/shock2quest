@@ -185,13 +185,12 @@ fn wrist_vector(frame: &dark::ss2_bin_obj_loader::HandFrame) -> Vector3<f32> {
     vec3(wrist.x, wrist.y, wrist.z)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::point3;
     use cgmath::{SquareMatrix, Vector4, assert_relative_eq};
     use dark::ss2_bin_obj_loader::HandFrame;
-    use cgmath::point3;
 
     fn frame(forward: Vector3<f32>) -> HandFrame {
         HandFrame {
@@ -225,7 +224,11 @@ mod tests {
     /// The fingers must end up pointing down -Z, which is `VirtualHand`'s forward.
     #[test]
     fn anchor_points_the_fingers_down_negative_z() {
-        for forward in [vec3(0.0, 0.0, 1.0), vec3(1.0, 0.0, 0.0), vec3(0.3, -0.5, 0.8)] {
+        for forward in [
+            vec3(0.0, 0.0, 1.0),
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.3, -0.5, 0.8),
+        ] {
             let f = frame(forward);
             let anchor = anchor_of(&f, Deg(0.0));
             let pointed = anchor * Vector4::new(f.forward.x, f.forward.y, f.forward.z, 0.0);

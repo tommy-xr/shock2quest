@@ -392,9 +392,7 @@ pub fn retain_materials(
     keep: impl Fn(&str) -> bool,
 ) -> SystemShock2ObjectMesh {
     let kept_slots = material_slots(&mesh, keep);
-    retain_polygons(mesh, |polygon| {
-        kept_slots.contains(&polygon.slot_index)
-    })
+    retain_polygons(mesh, |polygon| kept_slots.contains(&polygon.slot_index))
 }
 
 /// The material slots whose name `keep` accepts.
@@ -521,74 +519,9 @@ pub struct HandFrame {
     pub length: f32,
 }
 
-/// The authored placement of every hand on a first-person weapon.
-///
-/// `keep` selects the hand material (see `is_first_person_arm_material`); each
-/// sub-object drawing it yields one frame, so a two-handed model reports both.
-pub fn hand_frames(
-    mesh: &SystemShock2ObjectMesh,
-    keep: impl Fn(&str) -> bool,
-) -> Vec<HandFrame> {
-    let kept_slots = mesh
-        .materials
-        .iter()
-        .filter(|material| keep(&material.name))
-        .map(|material| material.slot_num as u16)
-        .collect::<HashSet<u16>>();
-
-    let transforms = sub_object_transforms(mesh);
-
-    // Group the hand's vertices by the sub-object that owns them, and put each
-    // group where skinning would put it.
-    let mut by_sub_object: HashMap<usize, Vec<Point3<f32>>> = HashMap::new();
-    for polygon in &mesh.polygons {
-        if !kept_slots.contains(&polygon.slot_index) {
-            continue;
-        }
-        for index in &polygon.vertex_indices {
-            let sub_object = get_bone_index_for_point(mesh, *index) as usize;
-            let Some((_, transform)) = transforms.get(sub_object) else {
-                continue;
-            };
-            let local = mesh.vertices[*index as usize];
-            let placed = transform.transform_point(point3(local.x, local.y, local.z));
-            by_sub_object.entry(sub_object).or_default().push(placed);
-        }
-    }
-
-    let mut frames = by_sub_object
-        .into_iter()
-        .filter_map(|(sub_object, points)| {
-            let (wrist, tip) = wrist_and_fingertip(&points)?;
-            let axis = tip - wrist;
-            let length = axis.magnitude();
-            if length <= f32::EPSILON {
-                return None;
-            }
-            Some(HandFrame {
-                name: transforms
-                    .get(sub_object)
-                    .map(|(name, _)| name.clone())
-                    .unwrap_or_default(),
-                origin: wrist,
-                forward: axis / length,
-                length,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    // Stable order so callers (and screenshots) don't shuffle between runs -
-    // `by_sub_object` is a HashMap.
-    frames.sort_by(|a, b| a.name.cmp(&b.name));
-    frames
-}
-
 /// One frame over all the geometry `keep` selects, for a mesh already known to
 /// hold a single hand (an island out of [`split_connected`]).
-pub fn hand_frame(
-    mesh: &SystemShock2ObjectMesh,
-    keep: impl Fn(&str) -> bool,
-) -> Option<HandFrame> {
+pub fn hand_frame(mesh: &SystemShock2ObjectMesh, keep: impl Fn(&str) -> bool) -> Option<HandFrame> {
     let kept_slots = material_slots(mesh, keep);
     let transforms = sub_object_transforms(mesh);
 
