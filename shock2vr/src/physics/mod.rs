@@ -12,7 +12,10 @@ use cgmath::{InnerSpace, Point3, Quaternion, Vector3, point3, vec3};
 use dark::{SCALE_FACTOR, mission::SystemShock2Level};
 use engine::scene::SceneObject;
 use rapier3d::{
-    control::{CharacterLength, EffectiveCharacterMovement, KinematicCharacterController},
+    control::{
+        CharacterCollision, CharacterLength, EffectiveCharacterMovement,
+        KinematicCharacterController,
+    },
     na,
     na::UnitQuaternion,
     prelude::*,
@@ -665,6 +668,10 @@ struct PlayerMovement {
     /// Horizontal part of a gravity-induced slope slide, carried into the
     /// next gravity pass so a seam does not erase the player's momentum.
     slope_displacement: Vector<Real>,
+    /// Live actor contacts from the player's intentional horizontal walk.
+    /// These are resolved against the dynamic bodies after the immutable
+    /// character-controller query is finished.
+    actor_collisions: Vec<CharacterCollision>,
 }
 
 /// The moving-terrain body the player is standing on, and where it was the
@@ -1223,6 +1230,7 @@ fn plan_climb_top_out(
             is_crouched: false,
         }),
         slope_displacement: Vector::zeros(),
+        actor_collisions: Vec::new(),
     })
 }
 
@@ -1488,6 +1496,7 @@ fn plan_jump_mantle(
             is_crouched,
         }),
         slope_displacement: Vector::zeros(),
+        actor_collisions: Vec::new(),
     })
 }
 
@@ -1661,6 +1670,7 @@ fn step_player_movement(
                 movement: mvt,
                 top_out: None,
                 slope_displacement: Vector::zeros(),
+                actor_collisions: Vec::new(),
             };
         }
     }
@@ -1681,7 +1691,21 @@ fn step_player_movement(
     // (there is no artificial upward movement): a combined walk+gravity cast
     // points into the floor the player rests on, which degenerates into
     // zero-progress resting contacts (see `PLAYER_REST_LIFT`).
-    let mut mvt = controller.move_shape(dt, queries, shape, pos, desired, |_c| ());
+    let mut walk_collisions = Vec::new();
+    let mut mvt = controller.move_shape(dt, queries, shape, pos, desired, |collision| {
+        walk_collisions.push(collision);
+    });
+    walk_collisions.retain(|collision| {
+        queries
+            .colliders
+            .get(collision.handle)
+            .is_some_and(|collider| {
+                collider
+                    .collision_groups()
+                    .memberships
+                    .intersects(InternalCollisionGroups::ACTOR.bits.into())
+            })
+    });
     let after_walk = Translation::from(mvt.translation) * pos;
     let gravity_step = Vector::y() * gravity;
     // A live jump owns vertical movement until it lands. Disable the
@@ -1833,6 +1857,7 @@ fn step_player_movement(
         movement: mvt,
         top_out: None,
         slope_displacement: next_slope_displacement,
+        actor_collisions: walk_collisions,
     }
 }
 
@@ -2231,6 +2256,11 @@ pub struct PhysicsWorld {
     // creature is touching the side of horizontally-moving kinematic terrain.
     // Ordinary supported movement, falling, and knockback allocate no entry.
     live_creature_sweep_recovery: HashMap<EntityId, LiveCreatureSweepRecovery>,
+
+    // Horizontal velocity transferred by this frame's kinematic-player shove.
+    // Creature animation publishes authored root velocity after player physics
+    // runs, so it consumes and adds this delta instead of overwriting it.
+    pending_player_push_velocity: HashMap<EntityId, Vector3<f32>>,
 
     // Dark PhysAttach links rigidly drive a kinematic child's translation
     // from its parent's next translation plus an authored world-space offset.
@@ -3156,6 +3186,16 @@ impl PhysicsWorld {
         }
     }
 
+    /// Consume velocity transferred by the kinematic player's most recent
+    /// walk contact with this live actor. Creature animation root motion is
+    /// published after the physics update, so its normal velocity write adds
+    /// this delta rather than erasing the shove before Rapier can integrate it.
+    pub fn take_player_push_velocity(&mut self, entity_id: EntityId) -> Vector3<f32> {
+        self.pending_player_push_velocity
+            .remove(&entity_id)
+            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0))
+    }
+
     pub fn get_rotation(&self, handle: RigidBodyHandle) -> Option<Quaternion<f32>> {
         let maybe_rigid_body = self.rigid_body_set.get(handle);
 
@@ -3420,6 +3460,7 @@ impl PhysicsWorld {
         }
         self.entity_id_to_body.remove(&entity_id);
         self.live_creature_sweep_recovery.remove(&entity_id);
+        self.pending_player_push_velocity.remove(&entity_id);
     }
 
     pub fn create_player(
@@ -3636,6 +3677,7 @@ impl PhysicsWorld {
             // event_handler: Box::new(event_handler),
             entity_id_to_body: HashMap::new(),
             live_creature_sweep_recovery: HashMap::new(),
+            pending_player_push_velocity: HashMap::new(),
             kinematic_attachments: HashMap::new(),
 
             debug_pipeline,
@@ -4087,6 +4129,7 @@ impl PhysicsWorld {
                     movement,
                     top_out,
                     slope_displacement: Vector::zeros(),
+                    actor_collisions: Vec::new(),
                 }
             } else {
                 // A compressed mantle restores the same standing/crouched
@@ -4160,6 +4203,74 @@ impl PhysicsWorld {
         self.rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
         let scripted_top_out_frame = was_top_out || is_top_out;
         let mvt = player_movement.movement;
+        let actor_collisions = player_movement.actor_collisions;
+
+        // Dark's dynamic character bodies shove one another at close range.
+        // Our player is kinematic, so Rapier's ordinary contact solver cannot
+        // transfer its requested motion to a live creature: two lightweight
+        // actors touching opposite sides of the capsule leave every cast at
+        // zero and pin the player permanently. Apply Rapier's character-body
+        // impulse approximation for the intentional walk contacts only. The
+        // actor-only query keeps floors, doors, corpses, hitboxes, and loose
+        // props unchanged; gravity, platform carry, and scripted mantles never
+        // generate a shove.
+        if !actor_collisions.is_empty() {
+            let character_mass = self.rigid_body_set[player_handle.character_handle].mass();
+            let actor_bodies = actor_collisions
+                .iter()
+                .filter_map(|collision| self.collider_set[collision.handle].parent())
+                .collect::<HashSet<_>>();
+            let before = actor_bodies
+                .iter()
+                .filter_map(|handle| {
+                    self.rigid_body_set.get(*handle).map(|body| {
+                        (
+                            *handle,
+                            EntityId::from_inner(body.user_data as u64),
+                            *body.linvel(),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            let actor_filter = QueryFilter::new()
+                .groups(InteractionGroups::new(
+                    InternalCollisionGroups::PLAYER.bits.into(),
+                    InternalCollisionGroups::ACTOR.bits.into(),
+                    Default::default(),
+                ))
+                .exclude_rigid_body(player_handle.character_handle)
+                .exclude_sensors();
+            let mut queries = self.broad_phase.as_query_pipeline_mut(
+                dispatcher,
+                &mut self.rigid_body_set,
+                &mut self.collider_set,
+                actor_filter,
+            );
+            player_handle.controller.solve_character_collision_impulses(
+                self.integration_parameters.dt,
+                &mut queries,
+                character_shape.as_ref(),
+                character_mass,
+                &actor_collisions,
+            );
+            drop(queries);
+            for (handle, maybe_entity_id, velocity_before) in before {
+                let Some(entity_id) = maybe_entity_id else {
+                    continue;
+                };
+                let Some(body) = self.rigid_body_set.get(handle) else {
+                    continue;
+                };
+                let velocity_delta = *body.linvel() - velocity_before;
+                let delta = vec3(velocity_delta.x, 0.0, velocity_delta.z);
+                if delta.magnitude2() > 0.0 {
+                    self.pending_player_push_velocity
+                        .entry(entity_id)
+                        .and_modify(|pending| *pending += delta)
+                        .or_insert(delta);
+                }
+            }
+        }
 
         if is_top_out {
             player_handle.jump_velocity = None;
@@ -5367,6 +5478,60 @@ mod tests {
         assert!(
             obstacle.0.test(generic_entity_ray),
             "selection/projectile rays must still hit the obstacle"
+        );
+    }
+
+    /// A pair of lightweight live actors can settle against opposite sides of
+    /// the kinematic player capsule. Walking must transfer enough motion to
+    /// the dynamic actors to open an escape route instead of leaving every
+    /// character-controller cast at zero progress (#819).
+    ///
+    /// Negative-first: without character collision impulses, both actor
+    /// capsules remain fixed against the player and the requested walk makes
+    /// only 0.014 world units of progress across the full second.
+    #[test]
+    fn player_pushes_out_between_live_creatures() {
+        let (mut world, mut player) = world_with_floor();
+        world.set_player_translation(vec3(0.0, 1.2, 0.0), &mut player);
+
+        let actors = [1010, 1011].map(|entity| EntityId::from_inner(entity).unwrap());
+        for (entity_id, x, z) in [(actors[0], 0.362, -1.016), (actors[1], 0.082, 1.076)] {
+            world.add_dynamic(
+                entity_id,
+                vec3(x, 0.84, z),
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                PhysicsShape::Capsule {
+                    height: 0.6,
+                    radius: 0.6,
+                },
+                CollisionGroup::actor(),
+                false,
+                DynamicPhysicsOptions {
+                    gravity_scale: 0.0,
+                    restitution: 0.0,
+                    friction: 0.0,
+                },
+            );
+            world.set_enabled_rotations(entity_id, false, false, false);
+        }
+
+        let start = world.get_player_translation(&player);
+        for _ in 0..60 {
+            world.update(vec3(1.0 / 6.0, 0.0, 0.0), &mut player);
+            // Mission animation publishes root motion after physics. Mimic
+            // that overwrite and prove the player shove is carried into it.
+            for actor in actors {
+                let push = world.take_player_push_velocity(actor);
+                let vertical = world.get_velocity(actor).unwrap().y;
+                world.set_velocity(actor, vec3(push.x, vertical, push.z));
+            }
+        }
+        let end = world.get_player_translation(&player);
+
+        assert!(
+            end.x - start.x > 1.0,
+            "player remained pinned between live creatures: {start:?} -> {end:?}"
         );
     }
 
