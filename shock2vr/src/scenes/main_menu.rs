@@ -1,15 +1,27 @@
 //! Flatscreen main menu.
 //!
-//! A minimal `GameScene` that draws the original `MAIN.PCX` backdrop with
-//! mouse-clickable "New Game" / "Quit" items, described on the shared
-//! [`UiCanvas`]. It reads `InputContext::pointer` (normalized screen coords) and
-//! emits a `GlobalEffect` on click: New Game -> `TransitionLevel` into the first
-//! mission, Quit -> `Quit`.
+//! A minimal `GameScene` that draws the original `MAIN.PCX` backdrop with the
+//! six mouse-clickable menu entries, described on the shared [`UiCanvas`]. It
+//! reads `InputContext::pointer` (normalized screen coords) and emits a
+//! `GlobalEffect` on click: New Game -> `TransitionLevel` into the first
+//! mission, Quit -> `Quit`. Entries the port does not implement yet are drawn
+//! dimmed and ignore clicks.
+//!
+//! Everything the screen needs is read from the shipped data rather than
+//! hardcoded: labels from `MAIN.STR`, button rects from `MAINR.BIN`. That
+//! matters beyond fidelity - the community mod layers (SCP) ship a redrawn
+//! backdrop *with a retuned `*R.BIN`*, so a hardcoded rect is wrong on a
+//! modded install.
 //!
 //! See `projects/flatscreen-and-vr-architecture.md` (Slice 3).
 
+use std::collections::HashMap;
+
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
-use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
+use dark::{
+    importers::{STRINGS_IMPORTER, UI_LAYOUT_IMPORTER},
+    map::MapRect,
+};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
@@ -39,8 +51,25 @@ const MENU_FONT: &str = "metafont.fon";
 /// Original widget layout for `MAIN.PCX` - LTRB rects for the six buttons
 /// (top to bottom) plus the corner logo (`UI_LAYOUT_IMPORTER`).
 const LAYOUT_FILE: &str = "MAINR.BIN";
+/// Original label strings for this screen, keyed by [`MenuItem::string_key`].
+const LABELS_FILE: &str = "MAIN.STR";
 /// The 4:3 menu art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
+
+/// Opacity for an entry the port has not implemented yet.
+const DISABLED_OPACITY: f32 = 0.25;
+/// Opacity for an implemented entry the pointer is not over.
+const IDLE_OPACITY: f32 = 0.6;
+/// Opacity for the entry under the pointer.
+const HOVER_OPACITY: f32 = 1.0;
+
+// Fallback button geometry, used only when `MAINR.BIN` is missing: the decoded
+// vanilla values - a column of six 179x60 buttons at x=400 on a 76px pitch.
+const FALLBACK_BUTTON_X: f32 = 400.0;
+const FALLBACK_BUTTON_TOP: f32 = 20.0;
+const FALLBACK_BUTTON_W: f32 = 179.0;
+const FALLBACK_BUTTON_H: f32 = 60.0;
+const FALLBACK_BUTTON_PITCH: f32 = 76.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
@@ -49,56 +78,97 @@ enum MenuAction {
 }
 
 struct MenuItem {
-    label: &'static str,
-    action: MenuAction,
-    /// Index of this button's rect in the `MAINR.BIN` layout (six buttons top
-    /// to bottom, then the corner logo).
-    layout_index: usize,
-    /// Hit/draw rect in canvas pixels if the layout file is absent (the decoded
-    /// `MAINR.BIN` values: buttons at x=400, 179x60, 76px vertical pitch).
-    fallback_rect: Rect,
+    /// Key into `MAIN.STR`.
+    string_key: &'static str,
+    /// Label used when `MAIN.STR` is absent or missing the key. These match the
+    /// shipped English strings.
+    fallback_label: &'static str,
+    /// `None` for an entry that exists on the original screen but that the port
+    /// does not implement yet - drawn dimmed, and not clickable.
+    action: Option<MenuAction>,
 }
 
 // MAIN.PCX (native 640x480) has a vertical stack of six buttons down the right
-// side; New Game = top button, Quit = bottom button. Labels are centered in the
-// button rect.
+// side. This list is in screen order, top to bottom, so an item's index is also
+// its rect index in `MAINR.BIN`. Labels are centered in the button rect.
+//
+// (`MAIN.STR` itself lists the keys in reverse screen order; the same reversal
+// holds for `SIM.STR` against the known pause-menu order.)
 const MENU_ITEMS: &[MenuItem] = &[
     MenuItem {
-        label: "NEW GAME",
-        action: MenuAction::NewGame,
-        layout_index: 0,
-        fallback_rect: Rect::new(400.0, 20.0, 179.0, 60.0),
+        string_key: "new_game",
+        fallback_label: "New Game",
+        action: Some(MenuAction::NewGame),
     },
     MenuItem {
-        label: "QUIT",
-        action: MenuAction::Quit,
-        layout_index: 5,
-        fallback_rect: Rect::new(400.0, 400.0, 179.0, 60.0),
+        string_key: "load_game",
+        fallback_label: "Load Game",
+        action: None,
+    },
+    MenuItem {
+        string_key: "options",
+        fallback_label: "Options",
+        action: None,
+    },
+    MenuItem {
+        string_key: "credits",
+        fallback_label: "Credits",
+        action: None,
+    },
+    MenuItem {
+        string_key: "intro",
+        fallback_label: "Intro",
+        action: None,
+    },
+    MenuItem {
+        string_key: "quit",
+        fallback_label: "Quit",
+        action: Some(MenuAction::Quit),
     },
 ];
 
 /// Resolve each menu item's canvas rect from the `MAINR.BIN` layout (falling
-/// back to the decoded values if it's absent). Parallel to [`MENU_ITEMS`].
+/// back to the vanilla geometry if it's absent). Parallel to [`MENU_ITEMS`].
 fn menu_rects(layout: Option<&[MapRect]>) -> Vec<Rect> {
     MENU_ITEMS
         .iter()
-        .map(
-            |item| match layout.and_then(|rects| rects.get(item.layout_index)) {
-                Some(r) => Rect::new(
-                    r.ul_x as f32,
-                    r.ul_y as f32,
-                    r.width() as f32,
-                    r.height() as f32,
-                ),
-                None => item.fallback_rect,
-            },
-        )
+        .enumerate()
+        .map(|(index, _)| match layout.and_then(|rects| rects.get(index)) {
+            Some(r) => Rect::new(
+                r.ul_x as f32,
+                r.ul_y as f32,
+                r.width() as f32,
+                r.height() as f32,
+            ),
+            None => Rect::new(
+                FALLBACK_BUTTON_X,
+                FALLBACK_BUTTON_TOP + index as f32 * FALLBACK_BUTTON_PITCH,
+                FALLBACK_BUTTON_W,
+                FALLBACK_BUTTON_H,
+            ),
+        })
         .collect()
 }
 
-/// Pure click resolution: on a rising press edge over an item (`rects` is
-/// parallel to [`MENU_ITEMS`]), return its action. Also returns the new
-/// `last_pressed` to track for the next frame.
+/// Resolve each menu item's label from `MAIN.STR`, falling back to the shipped
+/// English text when the string table is absent. Parallel to [`MENU_ITEMS`].
+fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
+    MENU_ITEMS
+        .iter()
+        .map(|item| {
+            strings
+                // The strings importer lowercases its keys.
+                .and_then(|s| s.get(item.string_key))
+                .filter(|label| !label.is_empty())
+                .cloned()
+                .unwrap_or_else(|| item.fallback_label.to_owned())
+        })
+        .collect()
+}
+
+/// Pure click resolution: on a rising press edge over an implemented item
+/// (`rects` is parallel to [`MENU_ITEMS`]), return its action. Also returns the
+/// new `last_pressed` to track for the next frame.
 fn resolve_click(
     pointer: Option<Pointer2D>,
     last_pressed: bool,
@@ -110,9 +180,13 @@ fn resolve_click(
             let action = if p.pressed && !last_pressed {
                 let mut canvas = UiCanvas::<MenuAction>::with_events(vec2(CANVAS_W, CANVAS_H));
                 for (item, rect) in MENU_ITEMS.iter().zip(rects) {
-                    // The backdrop already contains the button art; this
-                    // button is the shared canvas hit region for its label.
-                    canvas.button(*rect, "", item.action);
+                    // Unimplemented entries get no hit region at all, so a
+                    // click over one falls through as "nothing was clicked".
+                    if let Some(action) = item.action {
+                        // The backdrop already contains the button art; this
+                        // button is the shared canvas hit region for its label.
+                        canvas.button(*rect, "", action);
+                    }
                 }
                 pointer_to_canvas(
                     vec2(CANVAS_W, CANVAS_H),
@@ -230,11 +304,13 @@ impl GameScene for MainMenuScene {
         // Full-screen backdrop.
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), "MAIN.PCX");
 
-        // Clickable items, centered in their button and brighter when hovered.
-        // Button rects come from the original `MAINR.BIN` layout (cached by the
-        // asset cache after the first load).
+        // Menu items, centered in their button and brighter when hovered.
+        // Button rects come from the original `MAINR.BIN` layout and labels
+        // from `MAIN.STR` (both cached by the asset cache after first load).
         let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
         let rects = menu_rects(layout.as_deref().map(|r| r.as_slice()));
+        let strings = asset_cache.get_opt(&STRINGS_IMPORTER, LABELS_FILE);
+        let labels = menu_labels(strings.as_deref());
         let pointer_canvas = self.pointer.and_then(|p| {
             pointer_to_canvas(
                 vec2(CANVAS_W, CANVAS_H),
@@ -243,11 +319,17 @@ impl GameScene for MainMenuScene {
                 SCALE_MODE,
             )
         });
-        for (item, rect) in MENU_ITEMS.iter().zip(&rects) {
-            let hovered = pointer_canvas.is_some_and(|pp| rect.contains(pp));
+        for ((item, rect), label) in MENU_ITEMS.iter().zip(&rects).zip(&labels) {
+            let opacity = if item.action.is_none() {
+                DISABLED_OPACITY
+            } else if pointer_canvas.is_some_and(|pp| rect.contains(pp)) {
+                HOVER_OPACITY
+            } else {
+                IDLE_OPACITY
+            };
             canvas
-                .text_native(*rect, item.label, MENU_FONT, HAlign::Center, VAlign::Middle)
-                .opacity(if hovered { 1.0 } else { 0.6 });
+                .text_native(*rect, label, MENU_FONT, HAlign::Center, VAlign::Middle)
+                .opacity(opacity);
         }
 
         canvas.render_screen_space(asset_cache, screen_size, SCALE_MODE)
@@ -358,18 +440,59 @@ mod tests {
     }
 
     #[test]
+    fn click_over_an_unimplemented_item_does_nothing() {
+        // Rect 1 is "Load Game", which has no action yet: canvas y 96..156, so
+        // normalized y ~0.26 sits inside it.
+        let rects = menu_rects(None);
+        assert!(rects[1].contains(vec2(512.0, 126.0)));
+        let (action, _) = resolve_click(pointer_at(0.8, 0.2625, true), false, SCREEN, &rects);
+        assert_eq!(action, None);
+    }
+
+    #[test]
     fn menu_rects_prefer_layout_and_fall_back() {
-        // With a layout: New Game = rect 0, Quit = rect 5.
+        // Item index is the rect index: six buttons, top to bottom.
         let layout: Vec<MapRect> = (0..7)
             .map(|i| MapRect::new(10, i * 70, 110, i * 70 + 50))
             .collect();
         let rects = menu_rects(Some(&layout));
+        assert_eq!(rects.len(), MENU_ITEMS.len());
         assert_eq!(rects[0], Rect::new(10.0, 0.0, 100.0, 50.0));
-        assert_eq!(rects[1], Rect::new(10.0, 350.0, 100.0, 50.0));
-        // Without: the decoded MAINR.BIN fallbacks.
+        assert_eq!(rects[5], Rect::new(10.0, 350.0, 100.0, 50.0));
+        // Without a layout: the decoded vanilla MAINR.BIN geometry.
         let rects = menu_rects(None);
         assert_eq!(rects[0], Rect::new(400.0, 20.0, 179.0, 60.0));
-        assert_eq!(rects[1], Rect::new(400.0, 400.0, 179.0, 60.0));
+        assert_eq!(rects[5], Rect::new(400.0, 400.0, 179.0, 60.0));
+    }
+
+    #[test]
+    fn menu_labels_come_from_the_string_table() {
+        // The importer lowercases keys; values are the shipped mixed-case text.
+        let strings = HashMap::from([
+            ("new_game".to_owned(), "New Game".to_owned()),
+            ("quit".to_owned(), "Quit".to_owned()),
+            // A localized table would substitute here.
+            ("credits".to_owned(), "Mitwirkende".to_owned()),
+            // An empty value must not blank the button.
+            ("intro".to_owned(), String::new()),
+        ]);
+        let labels = menu_labels(Some(&strings));
+        assert_eq!(labels.len(), MENU_ITEMS.len());
+        assert_eq!(labels[0], "New Game");
+        assert_eq!(labels[3], "Mitwirkende");
+        assert_eq!(labels[5], "Quit");
+        // Missing key and empty value both fall back to the shipped English.
+        assert_eq!(labels[1], "Load Game");
+        assert_eq!(labels[4], "Intro");
+    }
+
+    #[test]
+    fn menu_labels_fall_back_without_a_string_table() {
+        let labels = menu_labels(None);
+        assert_eq!(
+            labels,
+            vec!["New Game", "Load Game", "Options", "Credits", "Intro", "Quit"]
+        );
     }
 
     #[test]
