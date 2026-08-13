@@ -540,6 +540,16 @@ pub fn is_killed(entity_id: EntityId, world: &World) -> bool {
     maybe_prop_hit_points.unwrap().hit_points <= 0
 }
 
+/// Whether this AI attacks by destroying itself: the `protocol` AI type (the
+/// protocol droid), whose gamesys template carries no `L$Weapon` archetype to
+/// resolve a blow with, but does link a `Corpse` explosion.
+pub fn is_self_destructing(world: &World, entity_id: EntityId) -> bool {
+    let v_ai = world.borrow::<View<PropAI>>().unwrap();
+    v_ai.get(entity_id)
+        .map(|prop_ai| prop_ai.0.eq_ignore_ascii_case("protocol"))
+        .unwrap_or(false)
+}
+
 /// Check if an entity has a ranged weapon capability
 ///
 /// Returns true if the entity has either an AIRangedWeapon link (used by turrets)

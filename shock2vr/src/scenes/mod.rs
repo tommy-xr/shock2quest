@@ -28,6 +28,7 @@ pub mod debug_joint_constraint;
 pub mod debug_map;
 pub mod debug_minimal;
 pub mod debug_particles;
+pub mod debug_protocol_droid;
 pub mod debug_psi;
 pub mod debug_ragdoll;
 pub mod debug_teleport;
@@ -46,6 +47,7 @@ pub use debug_joint_constraint::DebugJointConstraintScene;
 pub use debug_map::DebugMapScene;
 pub use debug_minimal::DebugMinimalScene;
 pub use debug_particles::DebugParticlesScene;
+pub use debug_protocol_droid::DebugProtocolDroidScene;
 pub use debug_psi::create_debug_psi_scene;
 pub use debug_ragdoll::DebugRagdollScene;
 pub use debug_teleport::DebugTeleportScene;
@@ -189,6 +191,18 @@ pub fn create_initial_scene(
     if options.mission.eq_ignore_ascii_case("debug_camera") {
         return SceneInitResult {
             scene: DebugCameraScene::new(global_context, options, asset_cache, audio_context),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    if options.mission.eq_ignore_ascii_case("debug_protocol_droid") {
+        return SceneInitResult {
+            scene: DebugProtocolDroidScene::new(
+                global_context,
+                options,
+                asset_cache,
+                audio_context,
+            ),
             mission_save_data: HashMap::new(),
         };
     }

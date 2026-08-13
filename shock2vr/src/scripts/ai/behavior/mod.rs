@@ -8,6 +8,7 @@ mod patrol_behavior;
 mod ranged_attack_behavior;
 mod scripted_sequence_behavior;
 mod search_behavior;
+mod self_destruct_behavior;
 mod wander_behavior;
 
 pub use behavior::*;
@@ -19,6 +20,7 @@ pub use patrol_behavior::*;
 pub use ranged_attack_behavior::*;
 pub use scripted_sequence_behavior::*;
 pub use search_behavior::*;
+pub use self_destruct_behavior::*;
 pub use wander_behavior::*;
 
 use std::cell::RefCell;
@@ -30,8 +32,15 @@ use crate::{
     physics::PhysicsWorld,
     scripts::ai::ai_util::{
         chase_target, chase_target_distance, has_line_of_fire, has_ranged_weapon,
+        is_self_destructing,
     },
 };
+
+/// How close a protocol droid gets before lighting its fuse. Same reach as a
+/// melee swing - the detonation IS its melee attack (see
+/// `SelfDestructBehavior`) - but named separately so tuning the blast's
+/// trigger doesn't move every creature's melee range.
+pub const PROTOCOL_DETONATION_RANGE: f32 = crate::scripts::ai::ai_util::MELEE_ATTACK_RANGE;
 
 /// The attack behavior for the current distance to the player, or None when
 /// out of attack range (the caller should chase to close the distance).
@@ -53,6 +62,12 @@ pub fn attack_behavior_for_distance(
     let melee_attack_distance = 8.0 / SCALE_FACTOR;
     let ranged_max_attack_distance = 40.0 / SCALE_FACTOR;
     let ranged_min_attack_distance = 15.0 / SCALE_FACTOR;
+
+    // A protocol droid has no weapon to swing: closing the distance starts
+    // its self-destruct instead of a melee attack.
+    if distance < PROTOCOL_DETONATION_RANGE && is_self_destructing(world, entity_id) {
+        return Some(Box::new(RefCell::new(SelfDestructBehavior::new())));
+    }
 
     // Only ranged-armed AIs stop to shoot; melee AIs must keep chasing or
     // they stall at mid-range bouncing between chase and ranged-attack.

@@ -908,8 +908,14 @@ impl Script for AnimatedMonsterAI {
                 // replaced - by alertness swings; the alertness state still
                 // updates and takes effect once the sequence finishes. (The
                 // original engine gates this via the response priority; we
-                // protect all sequences.)
-                if self.current_behavior.borrow().scripted_state() == ScriptedState::Running {
+                // protect all sequences.) A behavior mid-commitment (a
+                // protocol droid's lit fuse) declines preemption for the same
+                // reason: re-selecting it would restart the timer it is
+                // counting down.
+                let holds_against_alertness = self.current_behavior.borrow().scripted_state()
+                    == ScriptedState::Running
+                    || !self.current_behavior.borrow().preempted_by_alertness();
+                if holds_against_alertness {
                     (sync_effect, Effect::NoEffect)
                 } else {
                     // AIAlertLevel is repr(u32) in escalation order

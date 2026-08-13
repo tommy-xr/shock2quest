@@ -2539,6 +2539,19 @@ impl MissionCore {
             }
         }
 
+        // The player's pawn is physics-driven: its position lives in
+        // PlayerInfo and it never gets a RuntimePropTransform, so the sweep
+        // above cannot see it - without this, no blast has ever reached the
+        // player. Its receptrons (from `The Player` archetype) resolve the
+        // stim exactly like any other victim's.
+        {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            let distance = (player.pos - center).magnitude();
+            if distance < radius && !in_range.iter().any(|(id, _)| *id == player.entity_id) {
+                in_range.push((player.entity_id, intensity * (1.0 - distance / radius)));
+            }
+        }
+
         for (entity_id, felt_intensity) in in_range {
             let receptrons =
                 get_all_links_with_template(&self.world, entity_id, |link| match link {
