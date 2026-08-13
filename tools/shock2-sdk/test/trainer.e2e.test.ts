@@ -10,8 +10,9 @@ import { teleportVerified } from "./helpers/teleport.js";
 //
 // The four medsci1 trainer machines open category upgrade panels: rows list
 // the current level and the cost of the next level from the gamesys cost
-// tables (STATCOST 3/8/15/30/50 etc.), and buying spends cyber modules and
-// raises the stat persistently (save/load + level transition).
+// tables (STATCOST 3/8/15/30/50 etc.). Only stats with live effects may be
+// bought: Endurance raises maximum HP, Cybernetics feeds the hacking path, and
+// storage-only stats refuse without spending modules.
 //
 // Negative-first: on the C1 base, frobbing the Stats Trainer hits the
 // intentional SkillTrainerScript no-op stub (#424) - /v1/ui reports no active
@@ -20,7 +21,7 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8170);
 
 test(
-  "trainer MFD: frob opens the stats panel, buying Strength spends modules persistently",
+  "trainer MFD: Endurance 1->4 costs 26 modules and raises max HP persistently",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     const saveName = `trainer_e2e_${Date.now()}`;
@@ -36,34 +37,14 @@ test(
       return s;
     };
 
-    // --- Fund the player: fire every module award in the level (EXP traps
-    // carry PropExp, cookie piles their stack count). Discovery is by name +
-    // script, never by runtime id. ---
-    let expected = 0;
-    for (const e of (await game.entities.list({ filter: "Experience Trap" })).entities) {
-      const detail = await game.entities.detail(e.id);
-      const exp = detail.properties.find((p) => p.name === "Exp");
-      if (exp && Number(exp.value) > 0) {
-        await game.entities.sendMessage(e.id, { type: "TurnOn" });
-        expected += Number(exp.value);
-      }
-    }
-    for (const e of (await game.entities.list({ filter: "EXP" })).entities) {
-      const detail = await game.entities.detail(e.id);
-      const isCookie = detail.properties.some(
-        (p) => p.name === "Scripts" && p.value.includes("ExpCookie"),
-      );
-      const stack = detail.properties.find((p) => p.name === "StackCount");
-      if (isCookie && stack && Number(stack.value) > 0) {
-        await game.entities.sendMessage(e.id, { type: "Frob" });
-        expected += Number(stack.value);
-      }
-    }
-    await game.step({ frames: 5 });
-    const funded = await stats();
-    assert.equal(funded.cyber_modules, expected, "all module awards landed");
-    assert.ok(expected >= 3, `need at least 3 modules to buy Strength (got ${expected})`);
-    const baseStrength = funded.strength;
+    // Provision only the currency; purchases still go through the real MFD,
+    // button messages, effect queue, cost table, and live player properties.
+    const funded = await game.player.setStats({ cyber_modules: 26 });
+    assert.equal(funded.cyber_modules, 26);
+    assert.equal(funded.endurance, 1, "the regression starts at Endurance 1");
+    const beforePlayer = (await game.info()).player;
+    const baseMaxHp = beforePlayer.max_hit_points;
+    assert.ok(baseMaxHp != null, "player should have a maximum-HP pool");
 
     // --- Find the Stats Trainer (mission id 1352 is its stable template_id)
     // and get within the panel's walk-away radius. ---
@@ -91,24 +72,26 @@ test(
     await game.screenshot("trainer-panel-open.png");
 
     // --- The panel lists labeled rows with current level + cost from the
-    // gamesys STATCOST table (Strength 1 -> 2 costs 3). ---
+    // gamesys STATCOST table (Endurance 1 -> 2 costs 3). Unsupported stats
+    // remain listed but clearly unavailable instead of quoting a price. ---
     const textEl = (needle: string, els: UiElement[]) =>
       els.find((e) => e.kind === "text" && e.text?.includes(needle));
     const els = opened.active_panel.elements;
     for (const label of ["Strength", "Endurance", "Agility", "Psionics", "Cybernetics"]) {
       assert.ok(textEl(label, els), `panel should list a "${label}" row`);
     }
-    const strengthDetail = textEl(`lvl ${baseStrength} > ${baseStrength + 1}: 3 cm`, els);
+    const enduranceDetail = textEl("lvl 1 > 2: 3 cm", els);
     assert.ok(
-      strengthDetail,
-      `the Strength row should quote the STATCOST cost (3 cm), got: ${JSON.stringify(
+      enduranceDetail,
+      `the Endurance row should quote the STATCOST cost (3 cm), got: ${JSON.stringify(
         els.filter((e) => e.kind === "text").map((e) => e.text),
       )}`,
     );
-    assert.ok(textEl(`modules: ${expected}`, els), "panel shows the module pool");
+    assert.ok(textEl("unavailable", els), "storage-only stats are marked unavailable");
+    assert.ok(textEl("modules: 26", els), "panel shows the module pool");
 
-    // --- Click the Strength row's buy button by its semantic label (the
-    // shared button-label mechanism from the elevator PR). ---
+    // --- A storage-only stat refuses without taking currency. The same
+    // machine then remains usable for a supported purchase. ---
     const rowButton = (label: string, from: UiElement[]) => {
       const el = from.find((e) => e.kind === "button" && e.label === label);
       assert.ok(el, `the panel should expose a buy button labeled "${label}"`);
@@ -125,62 +108,65 @@ test(
     };
     await clickElement(rowButton("Strength", els));
     await game.step({ frames: 3 });
-
-    // --- The purchase applied: strength +1, modules -3, panel refreshed. ---
-    const afterBuy = await stats();
-    assert.equal(afterBuy.strength, baseStrength + 1, "Strength rose by one");
-    assert.equal(afterBuy.cyber_modules, expected - 3, "3 modules were spent");
-    const refreshed = await game.ui.state();
-    assert.ok(refreshed.active_panel, "panel stays open after a purchase");
-    assert.ok(
-      textEl(`modules: ${expected - 3}`, refreshed.active_panel.elements),
-      "the module pool readout refreshed",
+    assert.deepEqual(await stats(), funded, "refused stat leaves the sheet and modules unchanged");
+    assert.equal(
+      (await game.info()).player.max_hit_points,
+      baseMaxHp,
+      "refused stat leaves live HP unchanged",
     );
-    await game.screenshot("trainer-after-buy.png");
+    let refreshed = await game.ui.state();
+    assert.ok(
+      textEl("Upgrade unavailable", refreshed.active_panel!.elements),
+      "the panel explains the refusal",
+    );
 
-    // --- Refusal: the next Strength level costs 8 (STATCOST row 2); drain
-    // the balance below it by buying if needed, then assert refusal. ---
-    // With the medsci1 awards (9 modules) the balance is now 6 < 8, so a
-    // second click must refuse: message shown, nothing changes.
-    const balance = afterBuy.cyber_modules;
-    if (balance < 8) {
-      await clickElement(rowButton("Strength", refreshed.active_panel.elements));
+    // --- Reproduce issue #813's exact transaction: levels 1->4 cost
+    // 3 + 8 + 15 = 26 modules. Each purchase changes the live maximum-HP pool
+    // by the retail Normal-difficulty five points. ---
+    for (const [level, cost] of [[2, 3], [3, 8], [4, 15]] as const) {
+      await clickElement(rowButton("Endurance", refreshed.active_panel!.elements));
       await game.step({ frames: 3 });
-      const afterRefusal = await stats();
-      assert.equal(afterRefusal.strength, afterBuy.strength, "refused buy: no stat change");
-      assert.equal(
-        afterRefusal.cyber_modules,
-        balance,
-        "refused buy: no modules spent",
-      );
-      const refusalUi = await game.ui.state();
+      const afterBuy = await stats();
+      assert.equal(afterBuy.endurance, level, `Endurance rose to ${level}`);
+      const spent = level === 2 ? 3 : level === 3 ? 11 : 26;
+      assert.equal(afterBuy.cyber_modules, 26 - spent, `${cost} modules were spent`);
       assert.ok(
-        textEl("Insufficient cyber modules", refusalUi.active_panel!.elements),
-        "the panel shows the insufficient-modules error",
+        textEl("Max HP +5", (await game.ui.state()).active_panel!.elements),
+        "the panel reports the live Endurance benefit",
       );
-      await game.screenshot("trainer-refusal.png");
+      refreshed = await game.ui.state();
     }
+    const afterPurchases = (await game.info()).player;
+    assert.equal(afterPurchases.max_hit_points, baseMaxHp + 15, "three levels grant +15 max HP");
+    assert.equal(afterPurchases.hit_points, beforePlayer.hit_points, "Endurance does not heal");
+    await game.screenshot("trainer-after-endurance-4.png");
 
     // --- Persistence: save/load, then a level transition. ---
     await game.save(saveName);
     await game.load(saveName);
     await game.step({ frames: 3 });
     const afterLoad = await stats();
-    assert.equal(afterLoad.strength, baseStrength + 1, "strength survives save/load");
-    assert.equal(afterLoad.cyber_modules, expected - 3, "balance survives save/load");
+    assert.equal(afterLoad.endurance, 4, "Endurance survives save/load");
+    assert.equal(afterLoad.cyber_modules, 0, "spent balance survives save/load");
+    assert.equal(
+      (await game.info()).player.max_hit_points,
+      baseMaxHp + 15,
+      "Endurance-derived max HP survives save/load",
+    );
 
     await game.transitionLevel("eng1.mis");
     await game.step({ frames: 3 });
     const afterTransition = await stats();
     assert.equal(
-      afterTransition.strength,
-      baseStrength + 1,
-      "strength survives a level transition",
+      afterTransition.endurance,
+      4,
+      "Endurance survives a level transition",
     );
+    assert.equal(afterTransition.cyber_modules, 0, "balance survives a level transition");
     assert.equal(
-      afterTransition.cyber_modules,
-      expected - 3,
-      "balance survives a level transition",
+      (await game.info()).player.max_hit_points,
+      baseMaxHp + 15,
+      "Endurance-derived max HP survives a level transition",
     );
   },
 );

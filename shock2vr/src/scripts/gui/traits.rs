@@ -12,8 +12,8 @@
 //! `QuestInfo`, so it survives save/load and deck re-entry), and
 //! `Effect::AcquireOsTrait` applies the pick atomically. Live effects are
 //! implemented for the subset with existing consumers (Tank, Naturally Able,
-//! Replicator Expert - see [`live_effect_note`]); everything else is
-//! storage-only for now, listed per-trait in the PR.
+//! Replicator Expert - see [`live_effect_note`]); everything else stays visible
+//! but cannot consume a one-shot machine or trait slot until its effect exists.
 
 use cgmath::{Vector2, Vector3, vec2};
 use engine::assets::asset_cache::AssetCache;
@@ -110,6 +110,7 @@ fn machine_used(world: &World, machine: EntityId) -> bool {
 /// shipped table), used when a data install lacks it.
 const FALLBACK_HEADER_LABEL: &str = "Choose one upgrade.";
 const FALLBACK_USED_LABEL: &str = "Your OS has already been upgraded at this unit.";
+const UNAVAILABLE_LABEL: &str = "Upgrade unavailable in this build.";
 
 /// Preloaded trait-panel strings (`TRAITS.STR` descriptions plus the MISC.STR
 /// header / used-machine lines), added as a world unique at mission load so
@@ -298,6 +299,9 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
                 .map(|ctx| ctx.descriptions[(hovered - 1) as usize].clone())
                 .unwrap_or_else(|_| trait_name(hovered).to_owned());
             lines.push(description);
+            if live_effect_note(hovered).is_none() {
+                lines.push(UNAVAILABLE_LABEL.to_string());
+            }
         }
         // Word-wrap into the description box (the engine text path draws a
         // single unwrapped line; sentence-length TRAITS.STR text would run
@@ -344,6 +348,8 @@ impl Gui<TraitGuiState, TraitGuiMsg> for TraitGui {
                 Some("This upgrade unit is not responding.".to_string())
             } else if machine_used(world, entity_id) {
                 Some(used_label(world))
+            } else if live_effect_note(*trait_id).is_none() {
+                Some(UNAVAILABLE_LABEL.to_string())
             } else if stats.has_os_trait(*trait_id) {
                 Some(format!("{} is already installed.", trait_name(*trait_id)))
             } else if stats.os_traits.len() >= OS_TRAIT_SLOTS {
@@ -453,5 +459,30 @@ mod tests {
         // Degenerate inputs.
         assert!(wrap_text("", 10).is_empty());
         assert_eq!(wrap_text("word", 10), vec!["word".to_string()]);
+    }
+
+    #[test]
+    fn storage_only_trait_does_not_consume_the_machine() {
+        let mut world = World::new();
+        world.add_unique(QuestInfo::new());
+        let machine = world.add_entity((dark::properties::PropTemplateId { template_id: 133 },));
+
+        let (state, effect) = TraitGui.handle_msg(
+            machine,
+            &world,
+            &TraitGuiState::default(),
+            &TraitGuiMsg::Pick(4), // Speedy has no locomotion consumer yet.
+        );
+
+        assert!(matches!(effect, Effect::NoEffect));
+        assert_eq!(state.message.as_deref(), Some(UNAVAILABLE_LABEL));
+        assert_eq!(
+            world
+                .borrow::<UniqueView<QuestInfo>>()
+                .unwrap()
+                .read_quest_bit_value(&used_bit_name(133)),
+            dark::properties::QuestBitValue::UNKNOWN,
+            "a refused trait must leave the one-shot machine unused"
+        );
     }
 }

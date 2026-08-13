@@ -322,6 +322,60 @@ fn apply_psi_kit_use(world: &World, entity_id: EntityId, amount: i32) -> PsiKitU
     }
 }
 
+/// Raise only the live maximum HP pool. Buying Endurance is not healing: the
+/// original stat promises more maximum hit points, while Tank's separate O/S
+/// effect deliberately raises both current and maximum HP.
+fn increase_player_max_hit_points(world: &World, player: EntityId, amount: u32) -> bool {
+    let mut maximums = world
+        .borrow::<ViewMut<dark::properties::PropMaxHitPoints>>()
+        .unwrap();
+    if let Ok(maximum) = (&mut maximums).get(player) {
+        maximum.hit_points = maximum.hit_points.saturating_add(amount);
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(test)]
+mod endurance_upgrade_tests {
+    use super::*;
+
+    #[test]
+    fn endurance_raises_maximum_hp_without_healing() {
+        let mut world = World::new();
+        let player = world.add_entity((
+            PropHitPoints { hit_points: 25 },
+            dark::properties::PropMaxHitPoints { hit_points: 30 },
+        ));
+
+        assert!(increase_player_max_hit_points(
+            &world,
+            player,
+            crate::scripts::gui::ENDURANCE_HP_PER_LEVEL,
+        ));
+        assert_eq!(
+            world
+                .borrow::<View<dark::properties::PropMaxHitPoints>>()
+                .unwrap()
+                .get(player)
+                .unwrap()
+                .hit_points,
+            35
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropHitPoints>>()
+                .unwrap()
+                .get(player)
+                .unwrap()
+                .hit_points,
+            25,
+            "an Endurance upgrade must not double as a heal"
+        );
+    }
+}
+
 /// First-person player-melee idle clip (motiondb ActorType 1, `+plyrmelee:0`),
 /// used to pose the flat melee viewmodel in its ready stance.
 const MELEE_IDLE_CLIP: &str = "ph212203";
@@ -4873,6 +4927,24 @@ impl MissionCore {
                     // pre-validates for feedback): re-quote from the cost
                     // tables, spend atomically, then raise the target.
                     use crate::scripts::gui::{apply_purchase, upgrade_quote};
+                    let endurance_target = matches!(
+                        target,
+                        crate::scripts::gui::TrainerTarget::Stat(
+                            crate::player_stats::Stat::Endurance
+                        )
+                    );
+                    if endurance_target
+                        && self
+                            .world
+                            .borrow::<View<dark::properties::PropMaxHitPoints>>()
+                            .map_or(true, |maximums| maximums.get(player_entity).is_err())
+                    {
+                        warn!(
+                            "Trainer purchase {:?} refused: player has no maximum-HP pool",
+                            target
+                        );
+                        continue;
+                    }
                     let costs = self
                         .world
                         .borrow::<UniqueView<GlobalTrainerCosts>>()
@@ -4880,25 +4952,41 @@ impl MissionCore {
                         .0
                         .clone();
                     if let Some(costs) = costs {
-                        let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
-                        let stats = quests.player_stats_mut();
-                        match upgrade_quote(&costs, stats, target) {
-                            Some(cost) if stats.spend_cyber_modules(cost) => {
-                                apply_purchase(stats, target);
-                                info!(
-                                    "Trainer purchase {:?} (-{} modules, balance {})",
-                                    target, cost, stats.cyber_modules
-                                );
+                        let purchased = {
+                            let mut quests =
+                                self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                            let stats = quests.player_stats_mut();
+                            match upgrade_quote(&costs, stats, target) {
+                                Some(cost) if stats.spend_cyber_modules(cost) => {
+                                    apply_purchase(stats, target);
+                                    info!(
+                                        "Trainer purchase {:?} (-{} modules, balance {})",
+                                        target, cost, stats.cyber_modules
+                                    );
+                                    true
+                                }
+                                Some(cost) => {
+                                    info!(
+                                        "Trainer purchase {:?} refused: costs {}, balance {}",
+                                        target, cost, stats.cyber_modules
+                                    );
+                                    false
+                                }
+                                None => {
+                                    info!(
+                                        "Trainer purchase {:?} refused: maxed/locked/unavailable",
+                                        target
+                                    );
+                                    false
+                                }
                             }
-                            Some(cost) => {
-                                info!(
-                                    "Trainer purchase {:?} refused: costs {}, balance {}",
-                                    target, cost, stats.cyber_modules
-                                );
-                            }
-                            None => {
-                                info!("Trainer purchase {:?} refused: maxed/locked", target);
-                            }
+                        };
+                        if purchased && endurance_target {
+                            increase_player_max_hit_points(
+                                &self.world,
+                                player_entity,
+                                crate::scripts::gui::ENDURANCE_HP_PER_LEVEL,
+                            );
                         }
                     } else {
                         warn!("TrainerPurchase dropped: gamesys has no cost tables");

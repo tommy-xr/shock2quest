@@ -22,9 +22,9 @@
 //!
 //! Deferred (storage + grants only, per issue #453): career-specific stat
 //! baselines (all careers start from the uniform [`PlayerStats::default`]
-//! baseline for now), and *derived gameplay effects* - Endurance->maxHP scaling
-//! and wiring the granted psi disciplines into `crate::psi` known powers. Those
-//! are noted here so a follow-up can pick them up.
+//! baseline for now), and wiring granted psi disciplines into `crate::psi`
+//! known powers. The upgrade UI only sells primary stats with live consumers:
+//! Endurance->maxHP and Cyber Affinity->hacking; see `scripts::gui::trainer`.
 
 use std::collections::BTreeSet;
 
