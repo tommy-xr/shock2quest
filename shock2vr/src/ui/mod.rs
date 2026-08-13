@@ -812,20 +812,54 @@ where
                 }
                 UiElement::Text {
                     position,
+                    size,
                     text,
                     font,
+                    font_size,
+                    h,
+                    v,
                     alpha,
                     ..
                 } => {
-                    let font = asset_cache.get(&FONT_IMPORTER, font).clone();
+                    let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
                     let alpha = force_alpha.unwrap_or(*alpha);
-                    let mut object =
-                        SceneObject::world_space_text(text, font, (1.0 - alpha).clamp(0.0, 1.0));
+
+                    // Align inside the element's rect, in canvas pixels, the
+                    // same way the screen-space path does - otherwise the two
+                    // presentations disagree about where a label sits and
+                    // world-space text drifts off its widget.
+                    let canvas_font_size = if *font_size > 0.0 {
+                        *font_size
+                    } else {
+                        font_obj.base_height()
+                    };
+                    let width = measure_text_width(&**font_obj, text, canvas_font_size);
+                    let x = match h {
+                        HAlign::Left => position.x,
+                        HAlign::Center => position.x + (size.x - width) / 2.0,
+                        HAlign::Right => position.x + size.x - width,
+                    };
+                    // `world_space_text` anchors on the text's vertical
+                    // CENTRE (unlike the screen-space path, which anchors on
+                    // its top), so each case carries half a line to land the
+                    // glyphs where the alignment says they should be.
+                    let half_line = canvas_font_size / 2.0;
+                    let y = match v {
+                        VAlign::Top => position.y + half_line,
+                        VAlign::Middle => position.y + size.y / 2.0,
+                        VAlign::Bottom => position.y + size.y - half_line,
+                    };
+
+                    let mut object = SceneObject::world_space_text(
+                        text,
+                        font_obj,
+                        (1.0 - alpha).clamp(0.0, 1.0),
+                    );
                     object.set_local_transform(
                         Matrix4::from_angle_y(Deg(180.0))
                             * Matrix4::from_translation(vec3(
-                                position.x / self.size.x - 0.5,
-                                -position.y / self.size.y - 0.5,
+                                x / self.size.x - 0.5,
+                                -y / self.size.y - 0.5,
                                 0.01,
                             )),
                     );
