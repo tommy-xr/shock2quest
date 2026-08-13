@@ -133,6 +133,17 @@ use crate::{
 };
 use zip_asset_path::ZipAssetPath;
 
+const AUDIO_EAR_OFFSET: f32 = 1.0;
+
+fn listener_ear_positions(
+    position: Vector3<f32>,
+    player_rotation: Quaternion<f32>,
+    head_rotation: Quaternion<f32>,
+) -> (Vector3<f32>, Vector3<f32>) {
+    let right = (player_rotation * head_rotation) * vec3(AUDIO_EAR_OFFSET, 0.0, 0.0);
+    (position - right, position + right)
+}
+
 fn read_save_file(path: &Path) -> io::Result<SaveData> {
     let mut file = File::open(path)?;
     Ok(SaveData::read(&mut file))
@@ -1152,19 +1163,27 @@ impl Game {
 
         // Handle ambient audio
         let ambient_state = self.active_game_scene.ambient_audio_state();
+        let player_pose = self
+            .active_game_scene
+            .world()
+            .borrow::<UniqueView<PlayerInfo>>()
+            .ok()
+            .map(|player_info| (player_info.pos, player_info.rotation));
         let listener_position = ambient_state
             .as_ref()
             .map(|state| state.player_position)
-            .or_else(|| {
-                self.active_game_scene
-                    .world()
-                    .borrow::<UniqueView<PlayerInfo>>()
-                    .ok()
-                    .map(|player_info| player_info.pos)
-            })
+            .or_else(|| player_pose.map(|pose| pose.0))
             .unwrap_or(vec3(0.0, 0.0, 0.0));
+        let player_rotation = player_pose
+            .map(|pose| pose.1)
+            .unwrap_or_else(|| Quaternion::new(1.0, 0.0, 0.0, 0.0));
+        let (left_ear_position, right_ear_position) = listener_ear_positions(
+            listener_position,
+            player_rotation,
+            input_context.head.rotation,
+        );
 
-        if let Some(state) = ambient_state {
+        let ambient_sounds = if let Some(state) = ambient_state {
             if let Some(cue) = state.music_cue {
                 self.update_music_cue_if_necessary(cue);
             }
@@ -1174,7 +1193,7 @@ impl Game {
                 self.update_env_sound_if_necessary(resolved);
             }
 
-            let ambient_sounds = state
+            state
                 .ambient_emitters
                 .into_iter()
                 .filter_map(|(id, position, schema_name)| {
@@ -1184,12 +1203,18 @@ impl Game {
                         .get_opt(&AUDIO_IMPORTER, &format!("{asset_name}.wav"));
                     maybe_audio_clip.map(|clip| (id, position, clip.clone()))
                 })
-                .collect::<Vec<(EntityId, Vector3<f32>, Rc<AudioClip>)>>();
-
-            self.audio_context.update(listener_position, ambient_sounds);
+                .collect::<Vec<(EntityId, Vector3<f32>, Rc<AudioClip>)>>()
         } else {
-            self.audio_context.update(listener_position, Vec::new());
-        }
+            Vec::new()
+        };
+
+        let world = self.active_game_scene.world();
+        self.audio_context.update(
+            left_ear_position,
+            right_ear_position,
+            ambient_sounds,
+            |entity_id| util::get_entity_position(world, entity_id),
+        );
 
         // Handle global effects
         let global_effects = self.active_game_scene.handle_effects(
@@ -1578,6 +1603,7 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::{Deg, InnerSpace, Rotation3};
     use std::path::PathBuf;
 
     fn features(list: &[&str]) -> HashSet<String> {
@@ -1626,5 +1652,17 @@ mod tests {
         let result = read_save_file(&missing);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn listener_ears_follow_head_rotation() {
+        let position = vec3(10.0, 20.0, 30.0);
+        let player_rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let head_rotation = Quaternion::from_angle_y(Deg(90.0));
+
+        let (left, right) = listener_ear_positions(position, player_rotation, head_rotation);
+
+        assert!((left - vec3(10.0, 20.0, 31.0)).magnitude() < 0.0001);
+        assert!((right - vec3(10.0, 20.0, 29.0)).magnitude() < 0.0001);
     }
 }
