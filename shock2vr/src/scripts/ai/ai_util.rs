@@ -1,4 +1,7 @@
-use std::f32::consts::PI;
+use std::{
+    collections::{HashMap, HashSet},
+    f32::consts::PI,
+};
 
 use cgmath::{
     Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad, Rotation, Rotation3,
@@ -16,7 +19,9 @@ use crate::{
     runtime_props::{RuntimePropJointTransforms, RuntimePropProxyEntity, RuntimePropTransform},
     scripts::{
         Effect,
-        script_util::{get_first_link_of_type, get_first_link_with_template_and_data},
+        script_util::{
+            get_all_links_of_type, get_first_link_of_type, get_first_link_with_template_and_data,
+        },
     },
 };
 
@@ -55,6 +60,40 @@ pub fn is_patroller(world: &World, entity_id: EntityId) -> bool {
         .unwrap_or(false)
 }
 
+/// Current patrol destination stored in Dark's runtime-only relation. The
+/// Links component is serialized and entity-remapped by the normal save path,
+/// so this is also the alertness and save/load resume point.
+pub fn current_patrol_point(
+    world: &World,
+    patroller: EntityId,
+) -> Option<(EntityId, Vector3<f32>)> {
+    let target = get_first_link_of_type(world, patroller, Link::AICurrentPatrol)?;
+    entity_origin(world, target).map(|position| (target, position))
+}
+
+/// Whether `point` is a genuine end of chain - it authors no outgoing
+/// `AIPatrol` link at all. Distinct from `next_patrol_point` returning None,
+/// which also covers a link whose target was never instantiated or has no
+/// transform. Only a true dead end may clear the authored `AI_Patrol` flag;
+/// an unresolved route is a broken mission, not the end of a patrol.
+pub fn is_patrol_dead_end(world: &World, point: EntityId) -> bool {
+    // Deliberately inspects the authored links rather than going through
+    // `get_first_link_of_type`, which drops links whose target was never
+    // instantiated - exactly the case this must NOT report as an end of chain.
+    world
+        .borrow::<View<Links>>()
+        .ok()
+        .and_then(|links| {
+            links.get(point).ok().map(|links| {
+                !links
+                    .to_links
+                    .iter()
+                    .any(|link| link.link == Link::AIPatrol)
+            })
+        })
+        .unwrap_or(true)
+}
+
 /// The transform origin of an entity, if it has a runtime transform.
 fn entity_origin(world: &World, entity_id: EntityId) -> Option<Vector3<f32>> {
     let v_transform = world.borrow::<View<RuntimePropTransform>>().ok()?;
@@ -62,48 +101,214 @@ fn entity_origin(world: &World, entity_id: EntityId) -> Option<Vector3<f32>> {
     Some(xform.transform_point(point3(0.0, 0.0, 0.0)).to_vec())
 }
 
-/// The nearest patrol-point object to `from` - a node with an outgoing
-/// `AIPatrol` link (so the chain can actually be walked from it) - with its
-/// position. None if the mission has no patrol network. Scans all links, so
-/// call it on a behavior change (entering idle), not every frame.
+/// Initial patrol destination chosen the way Dark's `TargetNextPatrolObj`
+/// does: find the `AIPatrol` link whose source is nearest to `from`, but head
+/// directly to that link's destination. None if the mission has no usable
+/// patrol edge. Scans all links, so call it only when beginning a route.
 pub fn nearest_patrol_point(world: &World, from: Vector3<f32>) -> Option<(EntityId, Vector3<f32>)> {
     let v_links = world.borrow::<View<Links>>().ok()?;
     let v_transform = world.borrow::<View<RuntimePropTransform>>().ok()?;
 
     let mut best: Option<(EntityId, Vector3<f32>, f32)> = None;
-    for (id, links) in (&v_links).iter().with_id() {
-        let has_outgoing = links.to_links.iter().any(|l| l.link == Link::AIPatrol);
-        if !has_outgoing {
-            continue;
-        }
-        let Ok(xform) = v_transform.get(id) else {
+    for (source, links) in (&v_links).iter().with_id() {
+        let Ok(xform) = v_transform.get(source) else {
             continue;
         };
-        let pos = xform.0.transform_point(point3(0.0, 0.0, 0.0)).to_vec();
-        let dist_sq = (pos - from).magnitude2();
-        if best
-            .map(|(_, _, best_sq)| dist_sq < best_sq)
-            .unwrap_or(true)
+        let source_pos = xform.0.transform_point(point3(0.0, 0.0, 0.0)).to_vec();
+        let dist_sq = (source_pos - from).magnitude2();
+        for link in links
+            .to_links
+            .iter()
+            .filter(|link| link.link == Link::AIPatrol)
         {
-            best = Some((id, pos, dist_sq));
+            let Some(target) = link.to_entity_id.map(|id| id.0) else {
+                continue;
+            };
+            let Some(target_pos) = entity_origin(world, target) else {
+                continue;
+            };
+            if best
+                .map(|(_, _, best_sq)| dist_sq < best_sq)
+                .unwrap_or(true)
+            {
+                best = Some((target, target_pos, dist_sq));
+            }
         }
     }
     best.map(|(id, pos, _)| (id, pos))
 }
 
-/// The next patrol point after `point`, following its first outgoing `AIPatrol`
-/// link, with position. None at a dead-end. A route is usually a closed loop,
-/// so following the chain repeats forever.
-pub fn next_patrol_point(world: &World, point: EntityId) -> Option<(EntityId, Vector3<f32>)> {
-    let next = get_first_link_of_type(world, point, Link::AIPatrol)?;
-    let pos = entity_origin(world, next)?;
-    Some((next, pos))
+fn connected_patrol_points(world: &World, start: EntityId) -> Vec<EntityId> {
+    let Ok(v_links) = world.borrow::<View<Links>>() else {
+        return Vec::new();
+    };
+
+    // One pass over the link storage builds both directions of the patrol
+    // graph, so the walk below is O(nodes + edges) rather than rescanning
+    // every entity's links once per node reached.
+    let mut adjacency: HashMap<EntityId, Vec<EntityId>> = HashMap::new();
+    for (source, links) in (&v_links).iter().with_id() {
+        for target in links
+            .to_links
+            .iter()
+            .filter(|link| link.link == Link::AIPatrol)
+            .filter_map(|link| link.to_entity_id.map(|id| id.0))
+        {
+            adjacency.entry(source).or_default().push(target);
+            adjacency.entry(target).or_default().push(source);
+        }
+    }
+
+    let mut points = vec![start];
+    let mut seen = HashSet::from([start]);
+    let mut index = 0;
+    while index < points.len() {
+        let current = points[index];
+        index += 1;
+
+        for neighbor in adjacency.get(&current).into_iter().flatten() {
+            if seen.insert(*neighbor) {
+                points.push(*neighbor);
+            }
+        }
+    }
+    points
+}
+
+/// Pick the next patrol target. Ordinary routes choose uniformly among the
+/// current point's outgoing branches. `AI_PtrlRnd` routes may jump to any
+/// other node in the bidirectionally connected graph, matching Dark's random
+/// sequence mode.
+pub fn next_patrol_point(
+    world: &World,
+    patroller: EntityId,
+    point: EntityId,
+) -> Option<(EntityId, Vector3<f32>)> {
+    next_patrol_point_with_rng(world, patroller, point, &mut thread_rng())
+}
+
+fn next_patrol_point_with_rng<R: Rng + ?Sized>(
+    world: &World,
+    patroller: EntityId,
+    point: EntityId,
+    rng: &mut R,
+) -> Option<(EntityId, Vector3<f32>)> {
+    let random_sequence = world
+        .borrow::<View<PropAIPatrolRandom>>()
+        .ok()
+        .and_then(|random| random.get(patroller).ok().map(|value| value.0))
+        .unwrap_or(false);
+    let candidates = if random_sequence {
+        connected_patrol_points(world, point)
+            .into_iter()
+            .filter(|candidate| *candidate != point)
+            .filter_map(|candidate| entity_origin(world, candidate).map(|pos| (candidate, pos)))
+            .collect::<Vec<_>>()
+    } else {
+        get_all_links_of_type(world, point, Link::AIPatrol)
+            .into_iter()
+            .filter_map(|candidate| entity_origin(world, candidate).map(|pos| (candidate, pos)))
+            .collect::<Vec<_>>()
+    };
+    (!candidates.is_empty()).then(|| {
+        let index = rng.gen_range(0..candidates.len());
+        candidates[index]
+    })
 }
 
 pub fn current_yaw(entity_id: shipyard::EntityId, world: &shipyard::World) -> Deg<f32> {
     let (point, forward) = get_position_and_forward(world, entity_id);
     let position = point.to_vec();
     yaw_between_vectors(position, position + forward)
+}
+
+#[cfg(test)]
+mod patrol_tests {
+    use std::collections::HashSet;
+
+    use super::*;
+    use cgmath::Matrix4;
+    use rand::{SeedableRng, rngs::StdRng};
+    use shipyard::{Get, ViewMut};
+
+    fn point(world: &mut World, position: Vector3<f32>) -> EntityId {
+        world.add_entity((
+            RuntimePropTransform(Matrix4::from_translation(position)),
+            Links::empty(),
+        ))
+    }
+
+    fn link(world: &World, source: EntityId, dest: EntityId) {
+        let mut links = world.borrow::<ViewMut<Links>>().unwrap();
+        (&mut links).get(source).unwrap().to_links.push(ToLink {
+            to_template_id: 0,
+            to_entity_id: Some(WrappedEntityId(dest)),
+            link: Link::AIPatrol,
+        });
+    }
+
+    #[test]
+    fn initial_patrol_target_is_destination_of_nearest_source() {
+        let mut world = World::new();
+        let near_source = point(&mut world, vec3(1.0, 0.0, 0.0));
+        let near_dest = point(&mut world, vec3(20.0, 0.0, 0.0));
+        let far_source = point(&mut world, vec3(5.0, 0.0, 0.0));
+        let far_dest = point(&mut world, vec3(6.0, 0.0, 0.0));
+        link(&world, near_source, near_dest);
+        link(&world, far_source, far_dest);
+
+        let (target, goal) = nearest_patrol_point(&world, vec3(0.0, 0.0, 0.0)).unwrap();
+
+        assert_eq!(target, near_dest, "distance is measured to the link source");
+        assert_eq!(
+            goal,
+            vec3(20.0, 0.0, 0.0),
+            "the link destination is targeted"
+        );
+    }
+
+    #[test]
+    fn ordinary_patrol_can_take_every_outgoing_branch() {
+        let mut world = World::new();
+        let patroller = world.add_entity(PropAIPatrolRandom(false));
+        let source = point(&mut world, vec3(0.0, 0.0, 0.0));
+        let left = point(&mut world, vec3(-5.0, 0.0, 0.0));
+        let right = point(&mut world, vec3(5.0, 0.0, 0.0));
+        link(&world, source, left);
+        link(&world, source, right);
+
+        let mut rng = StdRng::seed_from_u64(410);
+        let selected: HashSet<_> = (0..256)
+            .filter_map(|_| {
+                next_patrol_point_with_rng(&world, patroller, source, &mut rng).map(|(id, _)| id)
+            })
+            .collect();
+
+        assert_eq!(selected, HashSet::from([left, right]));
+    }
+
+    #[test]
+    fn random_sequence_can_target_any_other_node_in_connected_graph() {
+        let mut world = World::new();
+        let patroller = world.add_entity(PropAIPatrolRandom(true));
+        let current = point(&mut world, vec3(0.0, 0.0, 0.0));
+        let outgoing = point(&mut world, vec3(1.0, 0.0, 0.0));
+        let descendant = point(&mut world, vec3(2.0, 0.0, 0.0));
+        let upstream = point(&mut world, vec3(-1.0, 0.0, 0.0));
+        link(&world, current, outgoing);
+        link(&world, outgoing, descendant);
+        link(&world, upstream, current);
+
+        let mut rng = StdRng::seed_from_u64(410);
+        let selected: HashSet<_> = (0..512)
+            .filter_map(|_| {
+                next_patrol_point_with_rng(&world, patroller, current, &mut rng).map(|(id, _)| id)
+            })
+            .collect();
+
+        assert_eq!(selected, HashSet::from([outgoing, descendant, upstream]));
+        assert!(!selected.contains(&current));
+    }
 }
 
 pub fn clamp_to_minimal_delta_angle(ang: Deg<f32>) -> Deg<f32> {

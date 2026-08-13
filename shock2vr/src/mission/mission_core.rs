@@ -5283,7 +5283,60 @@ impl MissionCore {
                                     },
                                 );
                             }
+                            AIPropertyUpdate::PatrolEnabled { enabled } => {
+                                self.world.add_component(
+                                    entity_id,
+                                    dark::properties::PropAIPatrol(enabled),
+                                );
+                            }
                         }
+                    }
+                }
+                Effect::SetAICurrentPatrol { entity_id, target } => {
+                    let is_alive = self
+                        .world
+                        .borrow::<shipyard::EntitiesView>()
+                        .map(|entities| entities.is_alive(entity_id))
+                        .unwrap_or(false);
+                    if !is_alive {
+                        continue;
+                    }
+                    let target_template_id = target.and_then(|target| {
+                        self.world
+                            .borrow::<View<dark::properties::PropTemplateId>>()
+                            .ok()
+                            .and_then(|templates| {
+                                templates.get(target).ok().map(|value| value.template_id)
+                            })
+                    });
+                    let mut needs_links = false;
+                    self.world.run(|mut v_links: ViewMut<Links>| {
+                        if let Ok(links) = (&mut v_links).get(entity_id) {
+                            links
+                                .to_links
+                                .retain(|link| link.link != Link::AICurrentPatrol);
+                            if let Some(target) = target {
+                                links.to_links.push(ToLink {
+                                    to_template_id: target_template_id.unwrap_or(0),
+                                    to_entity_id: Some(WrappedEntityId(target)),
+                                    link: Link::AICurrentPatrol,
+                                });
+                            }
+                        } else {
+                            needs_links = target.is_some();
+                        }
+                    });
+                    if let Some(target) = target.filter(|_| needs_links) {
+                        self.world.add_component(
+                            entity_id,
+                            Links {
+                                to_links: vec![ToLink {
+                                    to_template_id: target_template_id.unwrap_or(0),
+                                    to_entity_id: Some(WrappedEntityId(target)),
+                                    link: Link::AICurrentPatrol,
+                                }],
+                            },
+                        );
                     }
                 }
                 Effect::SetAllAIAlertness { level, pin } => {

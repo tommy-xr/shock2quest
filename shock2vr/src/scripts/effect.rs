@@ -98,6 +98,11 @@ pub enum AIPropertyUpdate {
     /// The AI forgot its target (fully calmed / position consumed by a
     /// search) - chase falls back to the true player position again
     ClearTargetAwareness,
+    /// Enable or disable the authored Dark `AI_Patrol` property. A true
+    /// patrol-chain dead end disables it, matching the original ability.
+    PatrolEnabled {
+        enabled: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -626,6 +631,13 @@ pub enum Effect {
     SetAIProperty {
         entity_id: EntityId,
         update: AIPropertyUpdate,
+    },
+
+    /// Replace Dark's runtime-only `AICurrentPatrol` relation for one AI.
+    /// `None` removes the relation when patrol stops or gives up.
+    SetAICurrentPatrol {
+        entity_id: EntityId,
+        target: Option<EntityId>,
     },
 
     /// Debug: force the alertness level of every AI in the mission (broadcast

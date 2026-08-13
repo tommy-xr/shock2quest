@@ -103,6 +103,13 @@ pub trait Behavior {
     fn preempted_by_alertness(&self) -> bool {
         true
     }
+
+    /// Live patrol destination, exposed to focused behavior tests without
+    /// downcasting trait objects.
+    #[cfg(test)]
+    fn patrol_target(&self) -> Option<EntityId> {
+        None
+    }
 }
 
 #[allow(dead_code)]

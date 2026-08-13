@@ -136,6 +136,7 @@ impl EntitySaveData {
 mod tests {
     use super::*;
     use crate::scripts::{SavedScriptState, ScriptState, ScriptStateIdentity};
+    use dark::properties::{Link, ToLink};
     use shipyard::{Get, View};
 
     #[test]
@@ -227,6 +228,42 @@ mod tests {
         assert!(data.canonical_template_ids.is_empty());
         assert!(data.launched_projectiles.is_empty());
         assert!(data.script_states.is_empty());
+    }
+
+    #[test]
+    fn current_patrol_link_round_trip_remaps_its_target() {
+        let old_ai = EntityId::new_from_index_and_gen(7, 3);
+        let old_target = EntityId::new_from_index_and_gen(8, 4);
+        let mut data = EntitySaveData::empty();
+        data.all_entities
+            .extend([old_ai.inner(), old_target.inner()]);
+        data.links.insert(
+            old_ai.inner(),
+            serde_json::to_value(Links {
+                to_links: vec![ToLink {
+                    to_template_id: 42,
+                    to_entity_id: Some(WrappedEntityId(old_target)),
+                    link: Link::AICurrentPatrol,
+                }],
+            })
+            .unwrap(),
+        );
+        let mut world = World::new();
+
+        let (_, entity_map) = data.instantiate(&mut world);
+
+        let new_ai = entity_map[&old_ai];
+        let new_target = entity_map[&old_target];
+        let links = world.borrow::<View<Links>>().unwrap();
+        let current = links
+            .get(new_ai)
+            .unwrap()
+            .to_links
+            .iter()
+            .find(|link| link.link == Link::AICurrentPatrol)
+            .unwrap();
+        assert_eq!(current.to_entity_id.unwrap().0, new_target);
+        assert_eq!(current.to_template_id, 42);
     }
 
     #[test]
