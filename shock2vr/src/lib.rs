@@ -596,8 +596,9 @@ impl Game {
             current_save_data.all_entities.len()
         );
 
-        self.mission_to_save_data.insert(
-            self.active_game_scene.scene_name().to_ascii_lowercase(),
+        save_load::insert_mission_snapshot(
+            &mut self.mission_to_save_data,
+            self.active_game_scene.scene_name(),
             current_save_data,
         );
 
@@ -617,9 +618,8 @@ impl Game {
         player_vitals: Option<PlayerVitals>,
     ) {
         let populator: Box<dyn EntityPopulator> = {
-            if let Some(save_data) = self
-                .mission_to_save_data
-                .get(&level_name.to_ascii_lowercase())
+            if let Some(save_data) =
+                save_load::mission_snapshot(&self.mission_to_save_data, &level_name)
             {
                 let save_data_cloned = save_data.clone();
                 let populator = SaveFileEntityPopulator::create(save_data_cloned);
@@ -714,9 +714,8 @@ impl Game {
             .expect("background level-parse thread panicked");
 
         let populator: Box<dyn EntityPopulator> = {
-            if let Some(save_data) = self
-                .mission_to_save_data
-                .get(&pending.level_name.to_ascii_lowercase())
+            if let Some(save_data) =
+                save_load::mission_snapshot(&self.mission_to_save_data, &pending.level_name)
             {
                 Box::new(SaveFileEntityPopulator::create(save_data.clone()))
             } else {
@@ -1282,14 +1281,18 @@ impl Game {
     }
 
     fn build_save_data(&self) -> Option<SaveData> {
-        let mut level_data = self.mission_to_save_data.clone();
+        let mut level_data = save_load::canonicalized_mission_snapshots(&self.mission_to_save_data);
 
         let (save_data, held_items) = save_load::to_save_data_with_scripts(
             self.active_game_scene.world(),
             self.active_game_scene.script_world(),
         );
 
-        level_data.insert(self.active_game_scene.scene_name().to_string(), save_data);
+        save_load::insert_mission_snapshot(
+            &mut level_data,
+            self.active_game_scene.scene_name(),
+            save_data,
+        );
 
         let is_crouched = self.active_game_scene.player_is_crouched();
         let (position, rotation) = self.player_standing_transform()?;
