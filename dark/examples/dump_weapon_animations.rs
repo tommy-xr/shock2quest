@@ -25,8 +25,13 @@ fn main() {
                 .iter()
                 .map(|t| format!("{}:{}", t.joint, t.keys.len()))
                 .collect();
-            println!("{category:24} {name:8} {}fps {:>3}f {:.2}s  [{}]",
-                a.fps as i32, a.length as i32, a.duration_seconds(), tracks.join(" "));
+            println!(
+                "{category:24} {name:8} {}fps {:>3}f {:.2}s  [{}]",
+                a.fps as i32,
+                a.length as i32,
+                a.duration_seconds(),
+                tracks.join(" ")
+            );
         }
     }
     println!("\n{total} animations parsed");

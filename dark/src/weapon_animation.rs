@@ -213,19 +213,15 @@ pub fn parse(source: &str) -> WeaponAnimations {
         let tracks = parse_tracks(&text[table + 1..end]);
         at = end;
 
-        animations
-            .by_category
-            .entry(category)
-            .or_default()
-            .insert(
-                clip,
-                WeaponAnimation {
-                    name,
-                    fps,
-                    length,
-                    tracks,
-                },
-            );
+        animations.by_category.entry(category).or_default().insert(
+            clip,
+            WeaponAnimation {
+                name,
+                fps,
+                length,
+                tracks,
+            },
+        );
     }
 
     animations
@@ -493,7 +489,10 @@ ND.g_weaponAnimations["Pistol"]["raise"] <- ND.PointRigAnimation("raise", 30, 60
         let raise = pistol_raise();
 
         let (back, _) = raise.sample("joint1", 16.0).expect("slide at 16");
-        assert!((back.x - -0.20).abs() < 1e-5, "slide should be back: {back:?}");
+        assert!(
+            (back.x - -0.20).abs() < 1e-5,
+            "slide should be back: {back:?}"
+        );
 
         let (mid, _) = raise.sample("joint1", 8.0).expect("slide at 8");
         assert!(
@@ -525,8 +524,14 @@ ND.g_weaponAnimations["default"]["shoot"] <- ND.PointRigAnimation("shoot", 30, 6
 	],
 });
 "#;
-        let shoot = parse(source).get("default", "shoot").cloned().expect("shoot");
-        assert_eq!(shoot.events_between(-1.0, 0.0), vec!["muzzleFlash", "eject"]);
+        let shoot = parse(source)
+            .get("default", "shoot")
+            .cloned()
+            .expect("shoot");
+        assert_eq!(
+            shoot.events_between(-1.0, 0.0),
+            vec!["muzzleFlash", "eject"]
+        );
         // Already consumed - stepping past must not repeat it.
         assert!(shoot.events_between(0.0, 12.0).is_empty());
     }
@@ -563,7 +568,10 @@ ND.g_weaponAnimations["default"]["shoot"] <- ND.PointRigAnimation("shoot", 30, 1
 	],
 });
 "#;
-        let shoot = parse(source).get("default", "shoot").cloned().expect("shoot");
+        let shoot = parse(source)
+            .get("default", "shoot")
+            .cloned()
+            .expect("shoot");
         let (at_five, _) = shoot.sample("gunPoint", 5.0).expect("sample at 5");
         assert_eq!(at_five.x, 9.0, "the later key at frame 5 should win");
     }
