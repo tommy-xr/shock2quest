@@ -201,6 +201,8 @@ where
         on_grab: Option<(TEvent, TEvent)>,
         hover: ButtonHoverBehavior,
         alpha: f32,
+        /// How the art is keyed and sized (see [`ImageKind`]).
+        kind: ImageKind,
         /// The world entity this button represents, for UI introspection.
         entity: Option<EntityId>,
         /// Optional semantic label, for UI introspection and automation.
@@ -364,6 +366,7 @@ where
             alpha: 1.0,
             entity: None,
             label: None,
+            kind: ImageKind::Ui,
         });
         self
     }
@@ -484,7 +487,7 @@ where
                     texture,
                     hover,
                     alpha,
-                    entity,
+                    kind,
                     ..
                 } => {
                     let hovered = pointer.is_some_and(|point| {
@@ -494,7 +497,7 @@ where
                         (true, ButtonHoverBehavior::Texture(hover_texture)) => hover_texture,
                         _ => texture,
                     };
-                    let kind = button_image_kind(entity);
+                    let kind = *kind;
                     let tex = asset_cache.get_ext(
                         &TEXTURE_IMPORTER,
                         texture,
@@ -624,7 +627,7 @@ where
                     texture,
                     hover,
                     alpha,
-                    entity,
+                    kind,
                     ..
                 } => {
                     let hovered = pointer.is_some_and(|point| {
@@ -641,7 +644,7 @@ where
                         *size,
                         self.size,
                         force_alpha.unwrap_or(*alpha),
-                        button_image_kind(entity),
+                        *kind,
                     )
                 }
                 UiElement::Bar {
@@ -737,19 +740,10 @@ fn world_image(
     object
 }
 
-/// A button's art kind. Entity-backed buttons are the inventory/loot object
-/// icons; every other button is ordinary UI art.
-fn button_image_kind(entity: &Option<EntityId>) -> ImageKind {
-    match entity {
-        Some(_) => ImageKind::ObjectIcon,
-        None => ImageKind::Ui,
-    }
-}
-
 /// The size an element's art actually draws at: its slot rect for ordinary UI
 /// art, or the icon's own authored pixels for [`ImageKind::ObjectIcon`], which
 /// the original blits 1:1 into the slot rather than stretching to fill it.
-fn drawn_rect(
+pub(crate) fn drawn_rect(
     position: Vector2<f32>,
     size: Vector2<f32>,
     texture_px: Vector2<f32>,
@@ -767,7 +761,7 @@ fn drawn_rect(
 /// Whole pixels only - a half-pixel origin would resample the icon's pixel art
 /// - and never negative: art bigger than its slot stays anchored at the
 /// top-left and overhangs to the right/bottom, which keeps it inside the panel.
-pub(crate) fn centered_offset(slot: Vector2<f32>, drawn: Vector2<f32>) -> Vector2<f32> {
+fn centered_offset(slot: Vector2<f32>, drawn: Vector2<f32>) -> Vector2<f32> {
     vec2(
         (((slot.x - drawn.x) / 2.0).floor()).max(0.0),
         (((slot.y - drawn.y) / 2.0).floor()).max(0.0),
