@@ -586,8 +586,9 @@ pub struct MissionCore {
     pub flat_use_mode: bool,
 
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
-    /// canvas rendering, and the pointer -> GUIHover input mapping. Inert in
-    /// VR (nothing opens a panel there). See `projects/flat-ui.md` §5.2.
+    /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
+    /// `GuiManager` for the corresponding object-bound world panel.
+    /// See `projects/flat-ui.md` §5.2.
     pub flat_ui: crate::mission::flat_ui_host::FlatUiHost,
 
     /// Whether ordinary movement/hand/pointer input reaches the active player.
@@ -1859,6 +1860,21 @@ impl MissionCore {
             &self.id_to_model,
             &mut self.id_to_physics,
         );
+
+        // Default VR has one object-bound world-panel slot. Keep its
+        // transient proxy faithful to the original overlay lifecycle before
+        // either hand raycasts: destroyed hosts and walk-away panels close,
+        // while `--experimental gui` retains its legacy all-panels behavior.
+        if game_options.presentation_mode == crate::PresentationMode::Vr
+            && !game_options.experimental_features.contains("gui")
+        {
+            self.gui.maintain_active_panel(
+                &mut self.world,
+                &mut self.physics,
+                &mut self.script_world,
+                &mut self.id_to_physics,
+            );
+        }
 
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
@@ -3428,7 +3444,13 @@ impl MissionCore {
         // must not outlive the entity (a recycled id would inherit it).
         self.id_to_animation_player.remove(&entity_id);
         self.failed_animation_queries.remove(&entity_id);
-        // TODO: gui - remove entity
+        self.gui.on_entity_destroyed(
+            entity_id,
+            &mut self.world,
+            &mut self.physics,
+            &mut self.script_world,
+            &mut self.id_to_physics,
+        );
         self.hit_boxes.remove_entity(
             entity_id,
             &mut self.world,
@@ -3722,11 +3744,21 @@ impl MissionCore {
                 }
 
                 Effect::OpenPanel { entity } => {
-                    // Flat-presentation only: bind the MFD panel to the
-                    // frobbed object (the original's frob-script -> overlay
-                    // flow). VR ignores it - panels are world quads there.
-                    if game_options.presentation_mode == crate::PresentationMode::Flat {
-                        self.flat_ui.open(entity);
+                    // Bind the presentation's single object-panel slot to the
+                    // frobbed entity (the original's frob-script -> overlay
+                    // flow). Flat docks it in the MFD; default VR creates a
+                    // world quad beside the object. The explicit experimental
+                    // mode retains its historical all-panels presentation.
+                    match game_options.presentation_mode {
+                        crate::PresentationMode::Flat => self.flat_ui.open(entity),
+                        crate::PresentationMode::Vr => self.gui.open_panel(
+                            entity,
+                            game_options.experimental_features.contains("gui"),
+                            &mut self.world,
+                            &mut self.physics,
+                            &mut self.script_world,
+                            &mut self.id_to_physics,
+                        ),
                     }
                     // Give the gui its per-open state (the reader's scroll
                     // reset) however the panel was reached.
@@ -4374,13 +4406,17 @@ impl MissionCore {
                     // Flat presentation: the active panel's components are
                     // drawn by the FlatUiHost onto the screen-space canvas.
                     // Deliberately NOT behind `--experimental gui` - the flat
-                    // MFD is the #435 fix; only the VR world-quad path below
-                    // keeps its gating (projects/flat-ui.md §7).
+                    // MFD is the #435 fix. Default VR accepts only the panel
+                    // explicitly opened through `OpenPanel`; the experimental
+                    // mode retains its legacy all-panels behavior.
                     if game_options.presentation_mode == crate::PresentationMode::Flat {
                         self.flat_ui
                             .on_set_ui(&self.world, parent_entity, world_size, &components);
                     }
-                    if game_options.experimental_features.contains("gui") {
+                    let update_world_panel = game_options.experimental_features.contains("gui")
+                        || (game_options.presentation_mode == crate::PresentationMode::Vr
+                            && self.gui.active_panel() == Some(parent_entity));
+                    if update_world_panel {
                         self.gui.update_ui(
                             &mut self.world,
                             &mut self.physics,
@@ -6148,11 +6184,13 @@ impl MissionCore {
             scene.push(debug);
         }
 
-        // Render gui
+        // Render world-space GUI. The explicit experiment preserves the old
+        // all-panels mode; default VR renders only the gameplay panel opened
+        // by frobbing its object.
         if options.experimental_features.contains("gui") {
-            let guis = self.gui.render(asset_cache, &self.world);
-
-            scene.extend(guis);
+            scene.extend(self.gui.render(asset_cache, &self.world));
+        } else if options.presentation_mode == crate::PresentationMode::Vr {
+            scene.extend(self.gui.render_active(asset_cache, &self.world));
         }
 
         // Note: Hand spotlights for enhanced lighting are now handled in the runtime

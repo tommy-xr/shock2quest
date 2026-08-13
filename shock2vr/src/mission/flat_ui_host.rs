@@ -1,9 +1,9 @@
 //! Flat-mode MFD panel host (projects/flat-ui.md §5.2, PR 2).
 //!
-//! The flat presentation of the shared `Gui` layer: where VR shows every
-//! panel as an always-on world quad (`GuiManager` + `ProxyGuiScript`), the
-//! original flat game *opens* an object-bound MFD overlay on frob and drives
-//! it with the mouse cursor. This host holds that flat-only state:
+//! The flat presentation of the shared `Gui` layer: default VR opens the same
+//! object-bound panel as a world quad (`GuiManager` + `ProxyGuiScript`), while
+//! the original flat game docks it in an MFD and drives it with the mouse
+//! cursor. This host holds that flat-only state:
 //!
 //! - **Open**: `Effect::OpenPanel { entity }` (emitted by `GuiScript` on
 //!   Frob) binds the panel to one world object - the original's single
@@ -575,8 +575,8 @@ impl FlatUiHost {
             return (Vec::new(), Vec::new());
         };
 
-        // Host-drawn close button (the shared guis have no close component -
-        // VR panels never close).
+        // Host-drawn close button (the shared guis have no close component;
+        // VR uses its world-space distance close instead).
         let close_rect = close_button_canvas_rect(rect);
         self.hover_close = close_rect.contains(canvas_pos);
         if pressed_edge && self.hover_close {
