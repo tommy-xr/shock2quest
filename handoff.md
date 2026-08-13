@@ -9,7 +9,7 @@ Living doc for the menu work. Updated as the investigation proceeds.
 | [#927](https://github.com/tommy-xr/shock2quest/pull/927) | **merged** | Main menu driven by `MAIN.STR` + `MAINR.BIN`; all six entries, four dimmed |
 | [#930](https://github.com/tommy-xr/shock2quest/pull/930) | open, CI green | Load-game screen (`GAMELOD.*`), `save_load::all_saves`, `engine::ellipsize` |
 | [#934](https://github.com/tommy-xr/shock2quest/pull/934) | merged into #930's branch | `cargo dbgr` boots the main menu with no `--mission` |
-| `feat/vr-menu-pointer` | **local, blocked** | VR controller pointer + VR menu presentation |
+| `feat/vr-menu-pointer` | local, renders in flat | VR controller pointer + world-space menu panel |
 
 Open issues: [#928](https://github.com/tommy-xr/shock2quest/issues/928) (load list has no scrolling past 14 rows), [#929](https://github.com/tommy-xr/shock2quest/issues/929) (failed load is silent).
 
@@ -20,51 +20,51 @@ Open issues: [#928](https://github.com/tommy-xr/shock2quest/issues/928) (load li
 - SCP ships redrawn backdrops **with retuned `*R.BIN`** (e.g. `SIMR.BIN` row 0 `400,20 179x76` -> `417,22 158x69`), so hardcoded rects are wrong on modded/25AE installs.
 - 25AE keeps the legacy frontend intact (`sshock2.kpf`); its remaster layer has **zero** `intrface/` files. A KEX-style menu would be from scratch: no layout data, `@2x` BC7 DDS art, TTF fonts (we have no TTF support).
 
-## Current blocker: the VR menu panel renders only when enormous
+## RESOLVED: the world-space menu panel now renders
 
-`MainMenuScene::render` presents its `UiCanvas` on a `WorldPanel` via
-`render_world_space`. The panel is blank at sane sizes.
+**Root cause: there is no canonical "forward" axis to hardcode.** The panel was
+pinned to a fixed `-Z` offset from the scene origin, but the runtimes' yaw-0
+camera looks along **+X**:
 
-### Measured (D = 2m, 45-degree FOV, flat mode with the world path forced)
-
-| Panel W | Result |
-| --- | --- |
-| 2.0 | blank |
-| 4.0 | blank |
-| 6.0 | blank |
-| 8.0 | **renders** (479 colours) |
-
-Equal `W/D` ratios give **byte-identical** images (W=8/D=2 == W=20/D=5), which is
-what proves the transform maths is sound.
-
-### Verified correct by instrumentation
-
-```
-root = translate(0, 1.04, -2) * scale(2.0, 1.5, 1)
-elem0 corners -> (-1.000, 0.290, -2.000) .. (1.000, 1.790, -2.000)
+```rust
+// runtimes/debug_runtime/src/main.rs
+fn head_rotation_from_yaw_pitch(yaw_deg, pitch_deg) {
+    let forward = point3(yaw.cos()*pitch.cos(), pitch.sin(), yaw.sin()*pitch.cos());
 ```
 
-Camera is at `(0, 1.04, 0)` (scene returns origin; the runtime adds
-`head_offset = player_eye_height / SCALE_FACTOR = 1.04`). Visible half-extents at
-z=-2 are +-1.10 x +-0.83. The panel is +-1.00 x +-0.75 — **fully inside the
-frustum, centred** — and still black.
+At yaw 0 that is `(1,0,0)`. (The doc comment on the `head.look` channel claiming
+"forward = -Z" is wrong.) The panel sat ~90 degrees off to the side, permanently
+outside the frustum — which explains every symptom: only an enormous panel's edge
+crept into view, and equal width/distance ratios produced byte-identical slivers.
 
-### Ruled out
+**Fix** (`5c8cba1`): place the panel at `head + (head_rotation * -Z) * distance`
+and orient it by looking from the panel back to the head — i.e. exactly what
+`DebugMapScene` does. `head_rotation` is now tracked on **every** update, not
+only on the VR branch (that omission silently left it at identity and cost an
+extra round of debugging).
 
-- Facing (tested both orientations; `gl::CULL_FACE` is commented out in `gl_engine`)
-- Eye height / vertical placement, and straddling the screen edge
-- `force_alpha` and the `pointer` argument (matched `debug_map`'s values exactly)
-- VR specifically — blank in flat too, with the world path forced
-- Frustum culling — `gl_engine::render` draws every object unconditionally
-- Size alone — `debug_map` renders a **smaller** panel (1.28x0.96) via the same call
+**Second fix** (`69e0553`): world-space text ignored its rect and alignment, so
+labels floated up-left of their buttons. It now aligns like the screen-space
+path — with the caveat that `SceneObject::world_space_text` anchors on the
+text's vertical **centre** while the screen-space path anchors on its **top**,
+so each `VAlign` case carries half a line.
 
-### Next suspect
+### How it was found
 
-`SceneObject::draw_opaque` only draws geometry when
-`material.draw_opaque(..)` returns **true**; otherwise the object is expected to
-be picked up by the transparent pass. Check what `basic_material`'s
-`draw_opaque`/`draw_transparent` return for these objects' alpha, and whether
-either pass actually issues a draw call.
+Bisection by transplant: swap the menu's canvas into `debug_map` (renders) and
+`debug_map`'s canvas into the menu (blank). That isolated *transform* from
+*content* in one step, after a long stretch of fruitless parameter tweaking.
+Worth reaching for much earlier next time.
+
+### Still open
+
+- The label drifts a few px right of centre — world text likely renders at a
+  slightly different scale than `measure_text_width` reports.
+- **World-space panels do not render in the debug runtime's `--vr` mode at
+  all** — `debug_map` is blank there too, so this is a harness limitation rather
+  than menu code. VR presentation needs verifying on desktop `--vr` or a Quest.
+- VR runtimes still default to a mission rather than the menu; flipping that
+  waits on the point above.
 
 ## Method traps (both cost real time)
 
@@ -75,6 +75,8 @@ either pass actually issues a draw call.
   "not rendering" and "rendering dark art" look identical.
 - **zsh does not word-split unquoted vars**, so `for cfg in "2 1.5 2"; do set -- $cfg` silently runs one config. Use `bash <<'EOF'` for sweeps.
 - The debug runtime **ignores `should_quit`**, so menu Quit paths cannot be verified there.
+- A silent `str.replace` in a patch script can no-op and send you chasing a
+  phantom; assert the pattern matched.
 
 ## Repro
 
