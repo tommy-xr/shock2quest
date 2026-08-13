@@ -56,6 +56,13 @@ pub enum GlobalEffect {
     /// with the game-over screen, which offers the load/quit recovery path.
     GameOver,
 
+    /// Open the load-game screen (the Tri-Optimum archive database), replacing
+    /// whatever scene is active.
+    ShowLoadGame,
+
+    /// Return to the main menu, replacing whatever scene is active.
+    ShowMainMenu,
+
     /// Play the retail ending and enter the campaign's terminal state.
     CompleteCampaign,
 

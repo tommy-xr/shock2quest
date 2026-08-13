@@ -36,6 +36,7 @@ pub mod debug_turret;
 pub mod debug_weapons;
 pub mod game_over;
 pub mod loading;
+pub mod load_game;
 pub mod main_menu;
 
 pub use cutscene_player::CutscenePlayerScene;
@@ -55,6 +56,7 @@ pub use debug_turret::DebugTurretScene;
 pub use debug_weapons::create_debug_weapons_scene;
 pub use game_over::GameOverScene;
 pub use loading::LoadingScene;
+pub use load_game::LoadGameScene;
 pub use main_menu::MainMenuScene;
 
 /// The minimal world a non-mission screen (menu, loading, game over) needs.

@@ -93,6 +93,7 @@ where
                 h,
                 v,
                 alpha,
+                fit_to_rect: false,
             },
         }
     }
@@ -166,6 +167,7 @@ where
                 h,
                 v,
                 alpha,
+                fit_to_rect: false,
             },
         }
     }
@@ -268,6 +270,7 @@ where
                 h,
                 v,
                 alpha,
+                fit_to_rect: false,
             },
         }
     }
@@ -493,6 +496,7 @@ where
                 h,
                 v,
                 alpha,
+                fit_to_rect,
             } => GuiComponent::Text {
                 position,
                 size,
@@ -502,6 +506,7 @@ where
                 h,
                 v,
                 alpha,
+                fit_to_rect,
             },
             Self::Bar {
                 position,
@@ -593,6 +598,7 @@ pub fn text<TMsg: Clone>(text: &str) -> GuiComponent<TMsg> {
         h: HAlign::Left,
         v: VAlign::Middle,
         alpha: 1.0,
+        fit_to_rect: false,
     }
 }
 
