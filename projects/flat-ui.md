@@ -446,10 +446,9 @@ a **flat presentation + a mouse-cursor input source**, and an **open/close model
   codebase**), which the proxy converts from a world-space hit point into normalized
   panel coordinates. A flat presentation replaces exactly this pair — nothing above
   it.
-- **Gating:** `Effect::SetUI` is only processed under `--experimental gui`
-  (`mission/mission_core.rs:2250-2270`, gate at `:2257`). In a default flat session
-  the panels neither render nor interact — part of why #435 sessions saw *nothing*
-  on frob.
+- **Gating (current):** flat `SetUI` snapshots feed the default MFD host. Default
+  VR feeds only the object-bound world panel opened through `OpenPanel`; the
+  explicit `--experimental gui` mode retains the historical all-panels world.
 
 ### 4.2 Panels already implemented against that trait (`shock2vr/src/scripts/gui/`)
 
@@ -569,7 +568,9 @@ drive frob → panel → take (§6 PR 3's e2e shows how).
    entity — the same message `ProxyGuiScript` synthesizes from the VR hand ray
    (`proxy_gui_script.rs:69-85`). One message type in, all panels work.
 3. **Panels are *opened*, not floating.** Original flat behavior: frob → MFD
-   overlay + cursor; close → cursor released. VR keeps its always-on world quads.
+   overlay + cursor; close → cursor released. Default VR now binds that same
+   `OpenPanel` event to one world quad and closes it on walk-away; only the
+   explicit GUI experiment keeps the old always-on presentation.
 4. **Every increment headlessly verifiable** (repo core principle): pointer
    channels + a UI-introspection endpoint land *with* the first panel, so e2e
    tests click real digits instead of teleporting state.
@@ -653,7 +654,7 @@ save/restore semantics) until taken (transfer link → player backpack, reusing
 | Shared with VR (untouched) | Flat-only (new) |
 | --- | --- |
 | `Gui` trait, all `scripts/gui/*` panels, `GuiScript` state machine, `GUIHover` contract, `Effect` vocabulary (`TurnOn` to SwitchLinks, sounds, grabs) | `FlatUiHost` (mode, active panel, anchor layout), `UiCanvas` panel rendering, cursor draw + `pointer_to_canvas` mapping, Tab action, `wants_pointer` wiring, pointer debug channels, `/v1/ui` |
-| Containment-at-creation fix (VR loot panels also stop double-placing items) | BIOFULL/AMMOFULL expanded readouts, inventory strip docking |
+| Containment-at-creation fix and the frob-bound default-VR world-panel slot | BIOFULL/AMMOFULL expanded readouts, inventory strip docking |
 
 ---
 
@@ -730,8 +731,9 @@ visible.
   path but couples flat rendering to the effect stream; a `FlatUiHost` that *calls*
   `Gui::get_components` directly (skipping `GuiScript`) would duplicate state.
   Current lean: intercept, keep `GuiScript` the single state owner.
-- **`--experimental gui` gate:** flat panels should work by default (they resolve
-  #435); does the VR world-quad path stay gated? Lean: yes, ungate only flat.
+- **`--experimental gui` gate (resolved by #940):** flat panels and the single
+  frob-bound VR world panel work by default. The flag is reserved for the legacy
+  all-panels world presentation.
 - **Keypad check timing fidelity:** the original defers the code check until
   **exactly 5 digits** are typed (`KeypadButton`, §2.3); shock2quest's
   `KeyPadGui` checks after *every* press (`keypad.rs:216-238`) — functionally
