@@ -15,6 +15,12 @@ use crate::{
 };
 
 use crate::gui::*;
+use crate::ui::{Rect, UiCanvas};
+
+/// Depth given to each successive panel element so a label does not z-fight
+/// with the art behind it. Panel-local -Z faces the viewer, which is the
+/// direction `UiCanvas::render_world_space` steps in.
+const COMPONENT_Z_STEP: f32 = 0.001;
 
 pub struct GuiInstanceInfo {
     pub parent_entity: EntityId,
@@ -303,11 +309,24 @@ impl GuiManager {
                 * Matrix4::from_nonuniform_scale(info.world_size.x,info.world_size.y, 1.0);
             gui_obj.set_transform(root_transform);
 
-            for component in &info.components {
-                let mut comp_obj = component.render(asset_cache);
-                comp_obj.set_transform(root_transform);
-                ret.push(comp_obj);
-            }
+            // Present the panel through the shared UI canvas, so the world
+            // panel and the flat MFD overlay are two mappings of ONE layout
+            // rather than two hand-written emit paths.
+            let size_px = info.world_size / crate::gui::GUI_PIXEL_TO_WORLD_SIZE;
+            let panel = Rect::new(0.0, 0.0, size_px.x, size_px.y);
+            let elements = info
+                .components
+                .iter()
+                .map(|component| component.to_ui_element(panel))
+                .collect();
+            let canvas = UiCanvas::from_elements(size_px, elements);
+            ret.extend(canvas.render_world_space(
+                asset_cache,
+                root_transform,
+                None,
+                None,
+                COMPONENT_Z_STEP,
+            ));
 
             // gui_obj.set_local_transform(
             //     Matrix4::from_translation(info.offset)

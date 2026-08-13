@@ -1,16 +1,8 @@
-use std::rc::Rc;
-
-use cgmath::{Deg, Matrix4, Point2, Vector2, vec2, vec3};
-use dark::importers::{FONT_IMPORTER, TEXTURE_IMPORTER};
-use engine::{
-    assets::asset_cache::AssetCache,
-    scene::SceneObject,
-    texture::{TextureOptions, TextureTrait},
-};
+use cgmath::{Point2, Vector2, vec2};
 use shipyard::EntityId;
 
 use crate::{
-    ui::{HAlign, ImageKind, UiElement, VAlign},
+    ui::{HAlign, ImageKind, Rect, UiElement, VAlign},
     vr_config::Handedness,
 };
 
@@ -665,7 +657,10 @@ impl GuiComponentRenderInfo {
     }
 
     /// Whether this is Dark object-icon art keyed on palette index 0. Its
-    /// sizing policy may be native-size or fitted to the slot.
+    /// sizing policy may be native-size or fitted to the slot. Renderers do
+    /// not ask - the `kind` rides along into the layout - so this is only the
+    /// assertion the tests make about that.
+    #[cfg(test)]
     pub(crate) fn is_object_icon(&self) -> bool {
         matches!(
             self,
@@ -676,82 +671,68 @@ impl GuiComponentRenderInfo {
         )
     }
 
-    pub fn render(&self, asset_cache: &mut AssetCache) -> SceneObject {
-        let scene_object = match self {
+    /// This component as a canvas-space [`UiElement`], laid inside `panel`
+    /// (the panel's rectangle in whatever canvas is being drawn).
+    ///
+    /// Panels ship normalized coordinates over the `SetUI` effect boundary, so
+    /// both presentations have to turn them back into pixels. Doing it here,
+    /// once, is what keeps the flat MFD overlay and the VR world panel showing
+    /// the same layout: the un-normalization, the text y-flip, the object-icon
+    /// keying and the text's alignment are decided in a single place instead
+    /// of being re-derived per presentation.
+    pub(crate) fn to_ui_element(&self, panel: Rect) -> UiElement<()> {
+        let rect = self.canvas_rect(panel);
+        match self {
             Self::Image {
-                position,
-                size,
                 texture,
-                alpha,
-                panel_size_px,
                 kind,
-                ..
-            } => {
-                let texture = asset_cache
-                    .get_ext(
-                        &TEXTURE_IMPORTER,
-                        texture,
-                        &TextureOptions {
-                            transparent_index_0: self.is_object_icon(),
-                            ..Default::default()
-                        },
-                    )
-                    .clone();
-                // Placement is decided in panel pixels by the same helper the
-                // 2D presenters use, then renormalized - this panel's own
-                // coordinates are normalized by `panel_size_px`.
-                //
-                // NOTE: the quad below composes through a 180-degree z
-                // rotation, which negates both axes. `drawn_rect` breaks an
-                // odd pixel of centering slack toward the top-left, so here
-                // that lands toward the bottom-right - the two presentations
-                // can differ by one pixel on odd slack.
-                let (position_px, size_px) = crate::ui::drawn_rect(
-                    vec2(position.x * panel_size_px.x, position.y * panel_size_px.y),
-                    vec2(size.x * panel_size_px.x, size.y * panel_size_px.y),
-                    vec2(texture.width() as f32, texture.height() as f32),
-                    *kind,
-                );
-                let position = &vec2(
-                    position_px.x / panel_size_px.x,
-                    position_px.y / panel_size_px.y,
-                );
-                let size = &vec2(size_px.x / panel_size_px.x, size_px.y / panel_size_px.y);
-                let texture = texture as Rc<dyn TextureTrait>;
-                let comp_mat = engine::scene::basic_material::create(texture, 1.0, 1.0 - alpha);
-                let mut comp_obj =
-                    SceneObject::new(comp_mat, Box::new(engine::scene::quad::create()));
-                comp_obj.set_local_transform(
-                    Matrix4::from_angle_z(Deg(180.0))
-                        * Matrix4::from_translation(vec3(
-                            position.x - 0.5 + size.x / 2.0,
-                            position.y - 0.5 + size.y / 2.0,
-                            0.0,
-                        ))
-                        * Matrix4::from_nonuniform_scale(size.x, size.y, 1.0),
-                );
-                comp_obj
-            }
-            Self::Text {
-                position,
-                size: _,
-                text,
-                font,
                 alpha,
-            } => {
-                let font = asset_cache.get(&FONT_IMPORTER, font).clone();
+                ..
+            } => UiElement::Image {
+                position: vec2(rect.x, rect.y),
+                size: vec2(rect.w, rect.h),
+                texture: texture.clone(),
+                alpha: *alpha,
+                kind: *kind,
+            },
+            Self::Text {
+                text, font, alpha, ..
+            } => UiElement::Text {
+                position: vec2(rect.x, rect.y),
+                size: vec2(rect.w, rect.h),
+                text: text.clone(),
+                font: font.clone(),
+                // Render at the font's native pixel height (the Dark engine
+                // draws its bitmap fonts 1:1), not the component's box height -
+                // the `size` on a GUI text component is its bounding box, not a
+                // font size. Vertically center the native-height text in that box.
+                font_size: 0.0,
+                h: HAlign::Left,
+                v: VAlign::Middle,
+                alpha: *alpha,
+                fit_to_rect: false,
+            },
+        }
+    }
 
-                let mut text =
-                    SceneObject::world_space_text(text, font, (1.0 - alpha).max(0.0).min(1.0));
-                text.set_local_transform(
-                    Matrix4::from_angle_y(Deg(180.0))
-                        * Matrix4::from_translation(vec3(position.x - 0.5, position.y - 0.5, 0.01)),
-                );
-                text
-            }
+    /// This component's rectangle in canvas pixels, given the panel's own
+    /// rectangle on that canvas.
+    pub(crate) fn canvas_rect(&self, panel: Rect) -> Rect {
+        let position = self.position();
+        let size = self.size();
+        // Text render-info positions carry a negated y (a leftover of the VR
+        // quad convention baked into `GuiComponent::to_render_info`); undo it
+        // here so both presentations see one coordinate system.
+        let y = match self {
+            Self::Text { .. } => -position.y,
+            _ => position.y,
         };
-
-        scene_object
+        Rect::new(
+            panel.x + position.x * panel.w,
+            panel.y + y * panel.h,
+            size.x * panel.w,
+            size.y * panel.h,
+        )
     }
 }
 
