@@ -1,4 +1,7 @@
-use std::{collections::HashSet, f32::consts::PI};
+use std::{
+    collections::{HashMap, HashSet},
+    f32::consts::PI,
+};
 
 use cgmath::{
     Deg, EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rad, Rotation, Rotation3,
@@ -14,7 +17,12 @@ use crate::{
     mission::{PlayerInfo, entity_creator::CreateEntityOptions},
     physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropProxyEntity, RuntimePropTransform},
-    scripts::{Effect, script_util::get_first_link_with_template_and_data},
+    scripts::{
+        Effect,
+        script_util::{
+            get_all_links_of_type, get_first_link_of_type, get_first_link_with_template_and_data,
+        },
+    },
 };
 
 ///
@@ -59,16 +67,31 @@ pub fn current_patrol_point(
     world: &World,
     patroller: EntityId,
 ) -> Option<(EntityId, Vector3<f32>)> {
-    let links = world.borrow::<View<Links>>().ok()?;
-    let target = links
-        .get(patroller)
-        .ok()?
-        .to_links
-        .iter()
-        .find(|link| link.link == Link::AICurrentPatrol)?
-        .to_entity_id?
-        .0;
+    let target = get_first_link_of_type(world, patroller, Link::AICurrentPatrol)?;
     entity_origin(world, target).map(|position| (target, position))
+}
+
+/// Whether `point` is a genuine end of chain - it authors no outgoing
+/// `AIPatrol` link at all. Distinct from `next_patrol_point` returning None,
+/// which also covers a link whose target was never instantiated or has no
+/// transform. Only a true dead end may clear the authored `AI_Patrol` flag;
+/// an unresolved route is a broken mission, not the end of a patrol.
+pub fn is_patrol_dead_end(world: &World, point: EntityId) -> bool {
+    // Deliberately inspects the authored links rather than going through
+    // `get_first_link_of_type`, which drops links whose target was never
+    // instantiated - exactly the case this must NOT report as an end of chain.
+    world
+        .borrow::<View<Links>>()
+        .ok()
+        .and_then(|links| {
+            links.get(point).ok().map(|links| {
+                !links
+                    .to_links
+                    .iter()
+                    .any(|link| link.link == Link::AIPatrol)
+            })
+        })
+        .unwrap_or(true)
 }
 
 /// The transform origin of an entity, if it has a runtime transform.
@@ -119,6 +142,23 @@ fn connected_patrol_points(world: &World, start: EntityId) -> Vec<EntityId> {
     let Ok(v_links) = world.borrow::<View<Links>>() else {
         return Vec::new();
     };
+
+    // One pass over the link storage builds both directions of the patrol
+    // graph, so the walk below is O(nodes + edges) rather than rescanning
+    // every entity's links once per node reached.
+    let mut adjacency: HashMap<EntityId, Vec<EntityId>> = HashMap::new();
+    for (source, links) in (&v_links).iter().with_id() {
+        for target in links
+            .to_links
+            .iter()
+            .filter(|link| link.link == Link::AIPatrol)
+            .filter_map(|link| link.to_entity_id.map(|id| id.0))
+        {
+            adjacency.entry(source).or_default().push(target);
+            adjacency.entry(target).or_default().push(source);
+        }
+    }
+
     let mut points = vec![start];
     let mut seen = HashSet::from([start]);
     let mut index = 0;
@@ -126,26 +166,9 @@ fn connected_patrol_points(world: &World, start: EntityId) -> Vec<EntityId> {
         let current = points[index];
         index += 1;
 
-        if let Ok(links) = v_links.get(current) {
-            for next in links
-                .to_links
-                .iter()
-                .filter(|link| link.link == Link::AIPatrol)
-                .filter_map(|link| link.to_entity_id.map(|id| id.0))
-            {
-                if seen.insert(next) {
-                    points.push(next);
-                }
-            }
-        }
-
-        for (source, links) in (&v_links).iter().with_id() {
-            let reaches_current = links.to_links.iter().any(|link| {
-                link.link == Link::AIPatrol
-                    && link.to_entity_id.is_some_and(|target| target.0 == current)
-            });
-            if reaches_current && seen.insert(source) {
-                points.push(source);
+        for neighbor in adjacency.get(&current).into_iter().flatten() {
+            if seen.insert(*neighbor) {
+                points.push(*neighbor);
             }
         }
     }
@@ -182,14 +205,8 @@ fn next_patrol_point_with_rng<R: Rng + ?Sized>(
             .filter_map(|candidate| entity_origin(world, candidate).map(|pos| (candidate, pos)))
             .collect::<Vec<_>>()
     } else {
-        let links = world.borrow::<View<Links>>().ok()?;
-        links
-            .get(point)
-            .ok()?
-            .to_links
-            .iter()
-            .filter(|link| link.link == Link::AIPatrol)
-            .filter_map(|link| link.to_entity_id.map(|id| id.0))
+        get_all_links_of_type(world, point, Link::AIPatrol)
+            .into_iter()
             .filter_map(|candidate| entity_origin(world, candidate).map(|pos| (candidate, pos)))
             .collect::<Vec<_>>()
     };

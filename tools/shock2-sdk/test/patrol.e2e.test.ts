@@ -326,3 +326,86 @@ test(
     );
   },
 );
+
+// Random-sequence patrol (P$AI_PtrlRnd) is the mode most shipped patrollers
+// use - eng1 flags 14 of its 17, medsci1 13 of its 14 - yet every other test
+// here targets an ordinary patroller (medsci1 object 163 is that mission's
+// only one). Random mode does not step to the adjacent marker: it may pick
+// ANY node in the connected patrol graph, so this is the only coverage that
+// the graph-wide selection actually drives a creature in a real mission.
+//
+// eng1 object 1672 is a live random patroller on a healthy stretch of the
+// network. (Not every patroller in the shipped data can walk its route - some
+// sit on nav islands the engine cannot path across, with or without random
+// mode - so this deliberately picks one that can.)
+const ENG1_RANDOM_PATROLLER_OBJ = 1672;
+
+test(
+  "a random-sequence patroller walks its graph (P$AI_PtrlRnd)",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "eng1.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8164),
+    });
+
+    // Keep the player far away: this is about an AI nobody ever alerted.
+    await game.player.teleport({ x: 300, y: 0, z: 300 });
+    await game.step({ frames: 60 });
+
+    const all = await game.entities.list({ limit: 5000 });
+    const patroller = all.entities.find(
+      (e) => e.template_id === ENG1_RANDOM_PATROLLER_OBJ,
+    );
+    assert.ok(
+      patroller,
+      `eng1 should have its random patroller (object ${ENG1_RANDOM_PATROLLER_OBJ})`,
+    );
+
+    let detail = await game.entities.detail(patroller.id);
+    assert.equal(
+      aiProp(detail, "AIBehavior"),
+      "Patrol",
+      "a random-sequence patroller patrols straight out of the load",
+    );
+
+    // Random mode picks a fresh target from the whole connected graph on every
+    // arrival, so the route it walks differs run to run - assert on what must
+    // hold for ANY selection: it keeps patrolling, keeps covering ground, and
+    // its live AICurrentPatrol target moves through more than one node.
+    let prev = detail.position;
+    let traveled = 0;
+    const targets: number[] = [];
+    for (let tick = 0; tick < 40; tick++) {
+      await game.step({ frames: 120 });
+      detail = await game.entities.detail(patroller.id);
+      traveled += distXZ(detail.position, prev);
+      prev = detail.position;
+      const current = detail.outgoing_links.find(
+        (l) => l.link_type === "AICurrentPatrol",
+      );
+      if (current && !targets.includes(current.target_id)) {
+        targets.push(current.target_id);
+      }
+      assert.equal(
+        aiProp(detail, "AIAlertness"),
+        "Lowest",
+        "nothing should have alerted the random patroller",
+      );
+    }
+
+    assert.equal(
+      aiProp(detail, "AIBehavior"),
+      "Patrol",
+      "a random-sequence patroller should stay on its route, not fall to Idle",
+    );
+    assert.ok(
+      traveled > WAYPOINT_REACHED * 4,
+      `random patroller should cover ground; traveled ${traveled.toFixed(1)}`,
+    );
+    assert.ok(
+      targets.length > 1,
+      `random patroller should retarget as it goes; saw ${JSON.stringify(targets)}`,
+    );
+  },
+);

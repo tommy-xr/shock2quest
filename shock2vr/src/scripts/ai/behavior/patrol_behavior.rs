@@ -68,6 +68,13 @@ pub struct PatrolBehavior {
     /// The runtime AICurrentPatrol link must be published once for a fresh
     /// behavior and whenever the target changes.
     target_dirty: bool,
+    /// Whether the route has actually advanced at least one edge. Dark clears
+    /// the authored AI_Patrol flag at a real end of chain, but the start rule
+    /// targets the *destination* of the nearest link, which in shipped data
+    /// can itself be a sink (eng2, hydro1, station all have some). Clearing on
+    /// that first arrival would disable the creature's patrol permanently -
+    /// the flag is a saved property - so a route that never moved on keeps it.
+    walked_an_edge: bool,
 }
 
 impl PatrolBehavior {
@@ -81,6 +88,7 @@ impl PatrolBehavior {
             stall_seconds: 0.0,
             skipped_points: 0,
             target_dirty: true,
+            walked_an_edge: false,
         }
     }
 
@@ -100,14 +108,10 @@ impl PatrolBehavior {
             && (position.y - self.goal.y).abs() < PATROL_ARRIVE_HEIGHT
     }
 
-    /// Advance to the next point on the route; a closed loop repeats. A
-    /// dead-end (no next link) ends the patrol.
-    fn advance(
-        &mut self,
-        world: &World,
-        entity_id: EntityId,
-        clear_flag_on_dead_end: bool,
-    ) -> Effect {
+    /// Advance to the next point on the route; a closed loop repeats. Running
+    /// out of route ends the patrol, and - when this arrival is a genuine end
+    /// of chain the AI actually walked to - also clears the authored flag.
+    fn advance(&mut self, world: &World, entity_id: EntityId, may_clear_flag: bool) -> Effect {
         match ai_util::next_patrol_point(world, entity_id, self.target_point) {
             Some((next, goal)) => {
                 self.target_point = next;
@@ -115,7 +119,7 @@ impl PatrolBehavior {
                 self.steering_strategy = Self::steering_to(goal);
                 self.stall_anchor = None;
                 self.stall_seconds = 0.0;
-                self.target_dirty = false;
+                self.walked_an_edge = true;
                 Effect::SetAICurrentPatrol {
                     entity_id,
                     target: Some(next),
@@ -127,7 +131,13 @@ impl PatrolBehavior {
                     entity_id,
                     target: None,
                 }];
-                if clear_flag_on_dead_end {
+                // Only an authored end of chain retires the route. A link the
+                // mission never resolved (no instantiated target, or one with
+                // no transform) also lands here, and that is a broken route,
+                // not a finished one - leave the flag alone so the AI can pick
+                // the route up again the next time it calms down.
+                let true_dead_end = ai_util::is_patrol_dead_end(world, self.target_point);
+                if may_clear_flag && true_dead_end && self.walked_an_edge {
                     effects.push(Effect::SetAIProperty {
                         entity_id,
                         update: crate::scripts::AIPropertyUpdate::PatrolEnabled { enabled: false },
@@ -397,21 +407,115 @@ mod tests {
         )));
     }
 
-    #[test]
-    fn patrol_dead_end_clears_flag_and_current_target() {
+    /// A two-point route `first -> final_point`, with the creature and both
+    /// markers stacked at the origin so every `arrived()` is immediate: the
+    /// AI walks one real edge and then hits the end of the chain.
+    fn world_with_route_ending_in_a_sink() -> (World, EntityId, EntityId, EntityId) {
         let mut world = World::new();
         let creature = world.add_entity(RuntimePropTransform(Matrix4::from_scale(1.0)));
         let final_point = world.add_entity((
             RuntimePropTransform(Matrix4::from_scale(1.0)),
             Links::empty(),
         ));
-        let physics = PhysicsWorld::new();
-        let mut patrol = PatrolBehavior::new(final_point, vec3(0.0, 0.0, 0.0));
-        let time = Time {
+        let first = world.add_entity((
+            RuntimePropTransform(Matrix4::from_scale(1.0)),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(final_point)),
+                    link: Link::AIPatrol,
+                }],
+            },
+        ));
+        (world, creature, first, final_point)
+    }
+
+    fn tick() -> Time {
+        Time {
             elapsed: std::time::Duration::from_millis(100),
             total: std::time::Duration::from_millis(0),
-        };
+        }
+    }
 
+    fn cleared_patrol_flag(effects: &[Effect], creature: EntityId) -> bool {
+        effects.iter().any(|effect| {
+            matches!(
+                effect,
+                Effect::SetAIProperty {
+                    entity_id,
+                    update: crate::scripts::AIPropertyUpdate::PatrolEnabled { enabled: false },
+                } if *entity_id == creature
+            )
+        })
+    }
+
+    /// The start rule targets the *destination* of the nearest link, and in
+    /// shipped data (eng2, hydro1, station) that destination can itself be a
+    /// sink. Retiring the route on that very first arrival would write
+    /// `PropAIPatrol(false)`, which is saved - the creature would never patrol
+    /// again for the rest of the playthrough.
+    #[test]
+    fn patrol_does_not_retire_a_route_it_never_walked() {
+        let (world, creature, _, sink) = world_with_route_ending_in_a_sink();
+        let physics = PhysicsWorld::new();
+        let mut patrol = PatrolBehavior::new(sink, vec3(0.0, 0.0, 0.0));
+
+        let (_, effect) = patrol
+            .steer(Deg(0.0), &world, &physics, creature, &tick())
+            .expect("the terminal transition must still emit its effects");
+
+        let effects = Effect::flatten(vec![effect]);
+        assert!(patrol.finished, "the behavior still ends");
+        assert!(
+            !cleared_patrol_flag(&effects, creature),
+            "a route that never advanced must keep its authored patrol flag"
+        );
+    }
+
+    /// A link the mission never resolved is a broken route, not a finished
+    /// one - it must not retire the authored flag either.
+    #[test]
+    fn patrol_does_not_retire_a_route_with_an_unresolved_link() {
+        let mut world = World::new();
+        let creature = world.add_entity(RuntimePropTransform(Matrix4::from_scale(1.0)));
+        let dangling = world.add_entity((
+            RuntimePropTransform(Matrix4::from_scale(1.0)),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 77,
+                    to_entity_id: None,
+                    link: Link::AIPatrol,
+                }],
+            },
+        ));
+        let physics = PhysicsWorld::new();
+        let mut patrol = PatrolBehavior::new(dangling, vec3(0.0, 0.0, 0.0));
+        patrol.walked_an_edge = true;
+
+        let (_, effect) = patrol
+            .steer(Deg(0.0), &world, &physics, creature, &tick())
+            .expect("the terminal transition must still emit its effects");
+
+        assert!(
+            !cleared_patrol_flag(&Effect::flatten(vec![effect]), creature),
+            "an unresolved patrol link is not an authored end of chain"
+        );
+    }
+
+    #[test]
+    fn patrol_dead_end_clears_flag_and_current_target() {
+        let (world, creature, first, _) = world_with_route_ending_in_a_sink();
+        let physics = PhysicsWorld::new();
+        let mut patrol = PatrolBehavior::new(first, vec3(0.0, 0.0, 0.0));
+        let time = tick();
+
+        // First arrival walks the real edge first -> final_point...
+        patrol
+            .steer(Deg(0.0), &world, &physics, creature, &time)
+            .expect("an active patrol steers");
+        assert!(!patrol.finished, "one edge still remains");
+
+        // ...and the second arrival is the genuine end of the chain.
         let (_, effect) = patrol
             .steer(Deg(0.0), &world, &physics, creature, &time)
             .expect("the terminal transition must still emit its effects");
