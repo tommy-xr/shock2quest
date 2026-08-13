@@ -30,7 +30,7 @@ use crate::{
     input_context::Pointer2D,
     mission::PlayerInfo,
     scripts::{Message, MessagePayload},
-    ui::{Rect, ScaleMode, UiCanvas, UiElement, pointer_to_canvas},
+    ui::{Rect, ScaleMode, UiCanvas, pointer_to_canvas},
     vr_config::Handedness,
 };
 
@@ -880,13 +880,10 @@ fn draw_components(
         }
         // The same component -> element conversion the VR world panel uses,
         // so the two presentations cannot lay the panel out differently.
-        let mut element = component.to_ui_element(rect);
-        // The original MFD art is opaque on screen; the render-info alpha is a
-        // VR world-quad translucency, deliberately not applied here.
-        if let UiElement::Image { alpha, .. } = &mut element {
-            *alpha = 1.0;
-        }
-        canvas.push(element);
+        // Only the opacity differs: the original MFD art is opaque on screen,
+        // while the component alphas (the elevator's 0.7 floor labels, say) are
+        // a VR world-quad translucency, deliberately not applied here.
+        canvas.push(component.to_ui_element(rect)).opacity(1.0);
     }
 }
 
