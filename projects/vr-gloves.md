@@ -100,7 +100,7 @@ Desktop `--vr` controls: hold **E** (right hand) or **Q** (left hand) to
 possess a hand — the mouse then drives it (move = aim, LMB = trigger,
 RMB = squeeze). Bare clicks do nothing to the hands in VR mode.
 
-Test headlessly with `cargo dbgr --vr`: the debug runtime's
+Test headlessly with `cargo dbgr --vr --mission earth.mis`: the debug runtime's
 `POST /v1/control/input` accepts `{left,right}_hand.position [x,y,z]`
 (pawn-local), `.rotation [x,y,z,w]`, `.trigger`, and `.squeeze` channels, so
 hand placement and finger state are fully scriptable for screenshots.

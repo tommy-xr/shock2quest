@@ -233,6 +233,9 @@ For debugging visual/rendering changes without a full interactive session:
    # Pass `--visible` to watch the game in a real window.
    cargo dbgr --mission medsci1.mis --port 8080
 
+   # With no --mission it boots the main menu (same entry point as the flat
+   # desktop runtime), so always pass one when a scene/mission is what you want.
+
    # Control via HTTP
    curl http://127.0.0.1:8080/v1/step -X POST -d '{"frames": 10}'
    curl http://127.0.0.1:8080/v1/screenshot -X POST -d '{"filename": "test.png"}'
