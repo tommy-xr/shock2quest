@@ -57,7 +57,7 @@ const LABELS_FILE: &str = "MAIN.STR";
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
 /// Opacity for an entry the port has not implemented yet.
-const DISABLED_OPACITY: f32 = 0.25;
+const DISABLED_OPACITY: f32 = 0.3;
 /// Opacity for an implemented entry the pointer is not over.
 const IDLE_OPACITY: f32 = 0.6;
 /// Opacity for the entry under the pointer.
@@ -484,6 +484,44 @@ mod tests {
         // Missing key and empty value both fall back to the shipped English.
         assert_eq!(labels[1], "Load Game");
         assert_eq!(labels[4], "Intro");
+    }
+
+    /// The body of the shipped `res/intrface/MAIN.STR`, verbatim (the file is
+    /// CRLF-terminated, which the importer's line splitting strips). Kept here
+    /// so a rename of a key - ours or the data's - fails a test rather than
+    /// silently falling back to the English constants at runtime, which is
+    /// invisible on an English install because the two agree.
+    const SHIPPED_MAIN_STR: &str = concat!(
+        "quit:\"Quit\"\n",
+        "intro:\"Intro\"\n",
+        "credits:\"Credits\"\n",
+        "options:\"Options\"\n",
+        "load_game:\"Load Game\"\n",
+        "new_game:\"New Game\"\n",
+    );
+
+    #[test]
+    fn every_item_key_resolves_against_the_shipped_string_table() {
+        let lines: Vec<String> = SHIPPED_MAIN_STR.lines().map(|l| l.to_owned()).collect();
+        let strings = dark::importers::parse_strings(&lines);
+
+        // Every key this screen asks for must exist in the shipped table...
+        for item in MENU_ITEMS {
+            assert!(
+                strings.contains_key(item.string_key),
+                "MAIN.STR has no key '{}'",
+                item.string_key
+            );
+        }
+        // ...and the table must account for all six entries, so a seventh
+        // shipped key would be a prompt to wire up another item.
+        assert_eq!(strings.len(), MENU_ITEMS.len());
+
+        // Resolved through the real parser, top to bottom.
+        assert_eq!(
+            menu_labels(Some(&strings)),
+            vec!["New Game", "Load Game", "Options", "Credits", "Intro", "Quit"]
+        );
     }
 
     #[test]
