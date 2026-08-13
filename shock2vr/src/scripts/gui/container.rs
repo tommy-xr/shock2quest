@@ -148,24 +148,12 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                 .with_size(vec2(self.width, self.height)),
         ];
 
-        let mut contained_entities =
-            script_util::get_all_links_with_data(world, entity_id, |link| match link {
-                Link::Contains(ordinal) => Some(*ordinal),
-                _ => None,
-            });
-
-        contained_entities.sort_by(|a, b| a.1.cmp(&b.1));
-
-        let mut inventory = Inventory::new(self.num_slots_x, self.num_slots_y);
+        // Items keep the cell stored on their containment link; see
+        // `Inventory::from_container`.
+        let inventory =
+            Inventory::from_container(world, entity_id, (self.num_slots_x, self.num_slots_y));
 
         let v_inv_dims = world.borrow::<View<PropInventoryDimensions>>().unwrap();
-        for entity in contained_entities {
-            let inv_dims = v_inv_dims
-                .get(entity.0)
-                .map(|dims| (dims.width, dims.height))
-                .unwrap_or((1, 1));
-            inventory.insert_first_available(entity.0, inv_dims.0 as usize, inv_dims.1 as usize);
-        }
 
         let slot_pixel_width = SLOT_PITCH.x;
         let slot_pixel_height = SLOT_PITCH.y;

@@ -2780,6 +2780,27 @@ impl MissionCore {
         container_entity_id: EntityId,
         dropped_entity_id: EntityId,
     ) -> bool {
+        // Give the item a cell in the container's grid, so it stays where it
+        // was put instead of being repacked on every draw. Computed before
+        // the borrow below, and *after* the item's own links are irrelevant -
+        // it is not in the container yet, so it cannot occupy a cell here.
+        let slot = {
+            let grid = crate::inventory::grid_for(&self.world, container_entity_id);
+            let occupied =
+                crate::inventory::Inventory::from_container(&self.world, container_entity_id, grid);
+            let dims = self
+                .world
+                .borrow::<View<dark::properties::PropInventoryDimensions>>()
+                .ok()
+                .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
+                .unwrap_or((1, 1));
+            // A full container still takes the item (the drop is already
+            // permitted by the caller); it just has no cell to remember.
+            occupied
+                .first_free_slot(dims.0 as usize, dims.1 as usize)
+                .unwrap_or(0)
+        };
+
         let mut was_able_to_drop = false;
         {
             // First, remove any existing contains links for the dropped entity..
@@ -2791,7 +2812,7 @@ impl MissionCore {
                 // If it is the container, we'll add the link!
                 if id == container_entity_id {
                     links.to_links.push(ToLink {
-                        link: Link::Contains(0),
+                        link: Link::Contains(slot),
                         to_entity_id: Some(dark::properties::WrappedEntityId(dropped_entity_id)),
                         to_template_id: 0, // todo?
                     });
