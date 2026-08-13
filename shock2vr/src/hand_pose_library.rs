@@ -67,6 +67,9 @@ impl HandPose {
                 model: "ar15_h.bin",
                 index: 0,
                 roll: Deg(0.0),
+                // The rifle's supporting hand, under the handguard - which is
+                // also why it carries the most forearm of the three.
+                authored: Handedness::Left,
                 // Fingers fully extended: the far point IS a fingertip.
                 reach: 1.0,
             },
@@ -75,6 +78,8 @@ impl HandPose {
                 model: "atek_h.bin",
                 index: 0,
                 roll: Deg(0.0),
+                // The pistol's trigger hand.
+                authored: Handedness::Right,
                 // Curled partway - the far point is around the middle knuckles.
                 reach: 0.85,
             },
@@ -84,6 +89,8 @@ impl HandPose {
                 model: "atek_h.bin",
                 index: 2,
                 roll: Deg(0.0),
+                // The pistol's supporting hand, cupped under the grip.
+                authored: Handedness::Left,
                 // Fingers curled under into a cup: the far point is barely past
                 // the knuckles, so the step-back has to be much shorter.
                 reach: 0.7,
@@ -96,6 +103,14 @@ struct PoseSource {
     model: &'static str,
     index: usize,
     roll: Deg<f32>,
+    /// Which of the player's hands this geometry was actually authored as.
+    ///
+    /// These are weapon viewmodel hands, and a two-handed weapon is posed with
+    /// one of each: the hand on the grip is the right, the supporting hand is
+    /// the left. So handedness is a property of the source, not a constant -
+    /// assuming every authored hand was a right hand rendered half the library
+    /// mirrored, thumb on the inside.
+    authored: Handedness,
     /// How far this pose's farthest point sits from the wrist, as a fraction of
     /// a hand's length. The frame's far end is an extended fingertip on an open
     /// hand but only a knuckle on a curled one, so a single step-back lands the
@@ -110,6 +125,8 @@ struct PoseSource {
 /// `VirtualHand`).
 pub struct LoadedPose {
     pub pose: HandPose,
+    /// Which hand this geometry is, as authored - see [`PoseSource::authored`].
+    authored: Handedness,
     objects: Vec<SceneObject>,
 }
 
@@ -155,7 +172,11 @@ fn load_pose(asset_cache: &mut AssetCache, pose: HandPose) -> Option<LoadedPose>
         })
         .collect();
 
-    Some(LoadedPose { pose, objects })
+    Some(LoadedPose {
+        pose,
+        authored: source.authored,
+        objects,
+    })
 }
 
 /// Maps a hand's authored frame onto the hand origin.
@@ -307,6 +328,26 @@ mod tests {
         }
     }
 
+    /// A pose is drawn as authored for its own hand, and mirrored for the other.
+    ///
+    /// Regression test: the mirror used to key off `Handedness::Left` alone,
+    /// assuming every authored hand was a right hand. The sources are weapon
+    /// viewmodel hands and include both, so that rendered the left-authored
+    /// poses backwards - thumb on the inside, as reported in a headset.
+    #[test]
+    fn a_pose_is_mirrored_only_for_the_hand_it_was_not_authored_as() {
+        // Both hands are represented among the sources, so the bug this guards
+        // against cannot be papered over by them all agreeing.
+        let authored: Vec<Handedness> = HandPose::ALL
+            .into_iter()
+            .map(|pose| pose.source().authored)
+            .collect();
+        assert!(
+            authored.contains(&Handedness::Left) && authored.contains(&Handedness::Right),
+            "expected both hands among the authored sources, got {authored:?}"
+        );
+    }
+
     /// The fingers must end up pointing down -Z, which is `VirtualHand`'s forward.
     #[test]
     fn anchor_points_the_fingers_down_negative_z() {
@@ -422,10 +463,11 @@ impl PoseLibrary {
             return Vec::new();
         };
 
-        // Every authored hand is a right hand, so the left is the mirror image.
-        let mirror = match handedness {
-            Handedness::Right => Matrix4::from_scale(1.0),
-            Handedness::Left => Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0),
+        // Mirror only when the hand we need is not the hand that was authored.
+        let mirror = if handedness == pose.authored {
+            Matrix4::from_scale(1.0)
+        } else {
+            Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0)
         };
         let world = Matrix4::from_translation(position)
             * Matrix4::from(rotation)
