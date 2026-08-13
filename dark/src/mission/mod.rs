@@ -1,6 +1,7 @@
 mod bsp_tree;
 mod cell;
 mod cell_portal;
+mod map_params;
 pub mod path_database;
 mod plane;
 pub mod render_params;
@@ -13,6 +14,7 @@ pub mod texture_list;
 pub use bsp_tree::*;
 pub use cell::*;
 pub use cell_portal::*;
+pub use map_params::MapParams;
 pub use path_database::{CellDoor, PathDatabase};
 pub use plane::*;
 
@@ -82,6 +84,7 @@ pub struct SystemShock2Level {
 
     pub room_database: RoomDatabase,
     pub song_params: SongParams,
+    pub map_params: MapParams,
     pub bsp_tree: BspTree,
     pub path_database: Option<PathDatabase>,
 }
@@ -227,6 +230,7 @@ pub fn read<T: io::Read + io::Seek>(
     let render_params = RenderParams::read(&table_of_contents, reader);
     let room_database = RoomDatabase::read(&table_of_contents, reader);
     let song_params = SongParams::read(&table_of_contents, reader);
+    let map_params = MapParams::read(&table_of_contents, reader).unwrap_or_default();
     let path_database = PathDatabase::read(&table_of_contents, reader);
 
     // Log AIPATH data if loaded
@@ -263,6 +267,7 @@ pub fn read<T: io::Read + io::Seek>(
         entity_info,
         room_database,
         song_params,
+        map_params,
         path_database,
     }
 }

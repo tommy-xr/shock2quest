@@ -52,22 +52,16 @@ pub struct MapGuiState {}
 #[derive(Clone)]
 pub enum MapGuiMsg {}
 
-/// KNOWN LIMITATION (xreview, both engines): the rotate-hack detection below is
-/// a heuristic - a level whose page mapping is legitimately non-uniform in
-/// scale (or near-tied between assignments) could get a mirrored/mis-placed
-/// player marker (cosmetic; decals are unaffected). medsci1 is verified from
-/// mission data; verify other decks' markers visually before trusting them
-/// (follow-up tracked on the PR).
-///
 /// World->page mapping solved from the level's two `MapRef` scale markers
-/// (`frame == -1`): each maps a world position to page pixels. Some level maps
-/// are drawn rotated 90 degrees (the original's `m_rotatehack`), which swaps
-/// which world axis feeds which page axis - detected here by picking the axis
-/// assignment whose two scale factors are closest in magnitude (the page art is
-/// uniformly scaled; the wrong assignment produces wildly mismatched scales).
+/// (`frame == -1`): each maps a world position to page pixels. `MAPPARAM` tells
+/// us which authored axis assignment to solve. The original's normal mapping
+/// is Dark y->page x and Dark x->page y; its rotate hack is Dark x->page x and
+/// Dark y->page y. `dark::ss2_common::read_vec3` converts those horizontal Dark
+/// x/y axes to engine -x/z, so normal maps are `swapped` here and rotate-hack
+/// maps are direct. The signed fitted scales absorb the x-axis negation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MapTransform {
-    /// Page x/y fed by world z/x (rotated map) instead of x/z.
+    /// Page x/y fed by engine world z/x (normal map) instead of x/z.
     swapped: bool,
     sx: f32,
     bx: f32,
@@ -76,8 +70,16 @@ pub struct MapTransform {
 }
 
 impl MapTransform {
-    /// Solve from two (world (x, z), page (x, y)) reference pairs.
-    pub fn solve(w1: (f32, f32), p1: (f32, f32), w2: (f32, f32), p2: (f32, f32)) -> Option<Self> {
+    /// Solve the authored assignment from two (world (x, z), page (x, y))
+    /// reference pairs. A degenerate authored assignment fails rather than
+    /// inferring the other one from marker scale uniformity.
+    pub fn solve(
+        rotate_hack: bool,
+        w1: (f32, f32),
+        p1: (f32, f32),
+        w2: (f32, f32),
+        p2: (f32, f32),
+    ) -> Option<Self> {
         let fit = |a1: f32, out1: f32, a2: f32, out2: f32| -> Option<(f32, f32)> {
             let da = a2 - a1;
             if da.abs() < 1e-3 {
@@ -86,38 +88,20 @@ impl MapTransform {
             let s = (out2 - out1) / da;
             Some((s, out1 - s * a1))
         };
-        let direct = match (fit(w1.0, p1.0, w2.0, p2.0), fit(w1.1, p1.1, w2.1, p2.1)) {
-            (Some((sx, bx)), Some((sy, by))) => Some(MapTransform {
-                swapped: false,
-                sx,
-                bx,
-                sy,
-                by,
-            }),
-            _ => None,
+        let (x1, y1, x2, y2, swapped) = if rotate_hack {
+            (w1.0, w1.1, w2.0, w2.1, false)
+        } else {
+            (w1.1, w1.0, w2.1, w2.0, true)
         };
-        let swapped = match (fit(w1.1, p1.0, w2.1, p2.0), fit(w1.0, p1.1, w2.0, p2.1)) {
-            (Some((sx, bx)), Some((sy, by))) => Some(MapTransform {
-                swapped: true,
-                sx,
-                bx,
-                sy,
-                by,
-            }),
-            _ => None,
-        };
-        // Prefer the assignment with the more uniform |scale| pair.
-        let uniformity = |t: &MapTransform| (t.sx.abs() - t.sy.abs()).abs() / t.sx.abs().max(1e-6);
-        match (direct, swapped) {
-            (Some(d), Some(s)) => Some(if uniformity(&d) <= uniformity(&s) {
-                d
-            } else {
-                s
-            }),
-            (Some(d), None) => Some(d),
-            (None, Some(s)) => Some(s),
-            (None, None) => None,
-        }
+        let (sx, bx) = fit(x1, p1.0, x2, p2.0)?;
+        let (sy, by) = fit(y1, p1.1, y2, p2.1)?;
+        Some(MapTransform {
+            swapped,
+            sx,
+            bx,
+            sy,
+            by,
+        })
     }
 
     /// Map a world (x, z) to page pixels.
@@ -163,10 +147,11 @@ pub fn place_player_pip(
     markers: &[MapRefMarker],
     current_location: Option<i32>,
     world_pos: (f32, f32),
+    rotate_hack: bool,
 ) -> Option<(f32, f32)> {
     let mut scale_markers = markers.iter().filter(|m| m.frame == -1);
     let (m1, m2) = (scale_markers.next()?, scale_markers.next()?);
-    let transform = MapTransform::solve(m1.world, m1.page, m2.world, m2.page)?;
+    let transform = MapTransform::solve(rotate_hack, m1.world, m1.page, m2.world, m2.page)?;
     if let Some(marker) = current_location.and_then(|loc| markers.iter().find(|m| m.frame == loc)) {
         let (dx, dy) =
             transform.apply_delta(world_pos.0 - marker.world.0, world_pos.1 - marker.world.1);
@@ -282,6 +267,7 @@ impl Gui<MapGuiState, MapGuiMsg> for MapGui {
                     &collect_markers(world),
                     current_location,
                     (player.pos.x, player.pos.z),
+                    data.map_params.rotate_hack,
                 )
             });
         if let Some((px, py)) = pip {
@@ -325,19 +311,19 @@ mod tests {
 
     /// The real medsci1 scale markers (mission ids 1032/1034, `frame == -1`):
     /// world (-40.311, 32.874) -> page (536, 239) and world (44.685, -76.399)
-    /// -> page (232, 10). medsci1's page art is drawn rotated (world z feeds
-    /// page x), so the solver must pick the swapped assignment - the direct one
-    /// produces wildly non-uniform scales (-3.58 vs 2.10).
+    /// -> page (232, 10). medsci1 authors the normal mapping (world z feeds
+    /// page x), so the solver must use the swapped assignment.
     #[test]
     fn medsci1_transform_is_axis_swapped_and_exact() {
         let t = MapTransform::solve(
+            false,
             (-40.311_17, 32.874_435),
             (536.0, 239.0),
             (44.685_417, -76.398_605),
             (232.0, 10.0),
         )
         .expect("two distinct markers must solve");
-        assert!(t.swapped, "medsci1's map is rotated (z -> page x)");
+        assert!(t.swapped, "medsci1 uses the normal crossed-axis mapping");
         // Both markers must round-trip exactly.
         let (x1, y1) = t.apply(-40.311_17, 32.874_435);
         assert!((x1 - 536.0).abs() < 0.5 && (y1 - 239.0).abs() < 0.5);
@@ -351,7 +337,7 @@ mod tests {
     fn degenerate_markers_do_not_solve() {
         // Identical world points can't span a transform.
         assert_eq!(
-            MapTransform::solve((1.0, 2.0), (10.0, 20.0), (1.0, 2.0), (30.0, 40.0)),
+            MapTransform::solve(false, (1.0, 2.0), (10.0, 20.0), (1.0, 2.0), (30.0, 40.0)),
             None
         );
     }
@@ -394,20 +380,20 @@ mod tests {
     fn pip_uses_per_frame_marker_for_inset_locations() {
         let markers = medsci1_markers();
         // Standing exactly at the frame-2 marker's world position.
-        let (px, py) = place_player_pip(&markers, Some(2), (-19.003_445, -54.242_805))
+        let (px, py) = place_player_pip(&markers, Some(2), (-19.003_445, -54.242_805), false)
             .expect("markers must place the pip");
         assert!((px - 72.0).abs() < 0.5 && (py - 127.0).abs() < 0.5);
         // The global affine would have placed it far away (in the upper
         // level's drawing of that world x/z) - the relocation matters.
-        let (gx, gy) = place_player_pip(&markers, None, (-19.003_445, -54.242_805)).unwrap();
+        let (gx, gy) = place_player_pip(&markers, None, (-19.003_445, -54.242_805), false).unwrap();
         assert!(((px - gx).abs() + (py - gy).abs()) > 50.0);
         // A position a few world units into the room stays inside the
         // location's inset rect, LTRB (25, 100, 144, 169).
-        let (nx, ny) = place_player_pip(&markers, Some(2), (-22.0, -58.0)).unwrap();
+        let (nx, ny) = place_player_pip(&markers, Some(2), (-22.0, -58.0), false).unwrap();
         assert!((25.0..=144.0).contains(&nx), "pip x {nx} outside inset");
         assert!((100.0..=169.0).contains(&ny), "pip y {ny} outside inset");
         // Same for map location 0's marker (inset rect LTRB (26, 30, 93, 90)).
-        let (fx, fy) = place_player_pip(&markers, Some(0), (11.585_943, 7.603_475)).unwrap();
+        let (fx, fy) = place_player_pip(&markers, Some(0), (11.585_943, 7.603_475), false).unwrap();
         assert!((fx - 92.0).abs() < 0.5 && (fy - 30.0).abs() < 0.5);
     }
 
@@ -417,6 +403,7 @@ mod tests {
     fn pip_falls_back_to_global_affine_without_per_frame_marker() {
         let markers = medsci1_markers();
         let t = MapTransform::solve(
+            false,
             markers[0].world,
             markers[0].page,
             markers[1].world,
@@ -424,7 +411,7 @@ mod tests {
         )
         .unwrap();
         for current in [None, Some(4), Some(9)] {
-            let (px, py) = place_player_pip(&markers, current, (10.0, -20.0)).unwrap();
+            let (px, py) = place_player_pip(&markers, current, (10.0, -20.0), false).unwrap();
             let (ex, ey) = t.apply(10.0, -20.0);
             assert!((px - ex).abs() < 1e-3 && (py - ey).abs() < 1e-3);
         }
@@ -434,17 +421,40 @@ mod tests {
     fn pip_needs_two_scale_markers() {
         let mut markers = medsci1_markers();
         markers.remove(0);
-        assert_eq!(place_player_pip(&markers, None, (0.0, 0.0)), None);
+        assert_eq!(place_player_pip(&markers, None, (0.0, 0.0), false), None);
     }
 
     #[test]
-    fn unrotated_map_picks_the_direct_assignment() {
+    fn rotate_hack_map_picks_the_direct_assignment() {
         // Synthetic level: page x = 2*wx + 100, page y = -2*wz + 200.
-        let t = MapTransform::solve((0.0, 0.0), (100.0, 200.0), (50.0, -50.0), (200.0, 300.0))
-            .expect("solvable");
+        let t = MapTransform::solve(
+            true,
+            (0.0, 0.0),
+            (100.0, 200.0),
+            (50.0, -50.0),
+            (200.0, 300.0),
+        )
+        .expect("solvable");
         assert!(!t.swapped);
         let (px, py) = t.apply(10.0, 10.0);
         assert!((px - 120.0).abs() < 1e-3);
         assert!((py - 180.0).abs() < 1e-3);
+    }
+
+    /// Authored data must win even when the old uniform-scale heuristic would
+    /// have selected the other axis assignment. These are medsci1's markers,
+    /// whose uniformity favors swapped axes; forcing the rotate hack must use
+    /// the direct assignment instead.
+    #[test]
+    fn authored_rotate_hack_selects_axes_without_inference() {
+        let t = MapTransform::solve(
+            true,
+            (-40.311_17, 32.874_435),
+            (536.0, 239.0),
+            (44.685_417, -76.398_605),
+            (232.0, 10.0),
+        )
+        .expect("both direct axes span a transform");
+        assert!(!t.swapped);
     }
 }
