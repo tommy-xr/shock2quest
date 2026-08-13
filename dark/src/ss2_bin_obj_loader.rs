@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     io::{SeekFrom, prelude::*},
     rc::Rc,
@@ -72,6 +72,7 @@ impl Vhot {
     }
 }
 
+#[derive(Clone)]
 pub struct SystemShock2ObjectMesh {
     pub header: ObjBinHeader,
     pub version: u32,
@@ -375,6 +376,320 @@ fn build_vertex(
         bone_weights: [1.0, 0.0, 0.0, 0.0], // Single bone weighting for obj files
         normal,
     }
+}
+
+/// Drops every polygon whose material name `keep` rejects, leaving the part of
+/// the model that the accepted materials draw.
+///
+/// Filtering *polygons* is enough to isolate a part, and is why this is cheap:
+/// `to_vertices` walks the polygon list and only emits the vertices those
+/// polygons reference, so the shared vertex/uv/normal arrays stay valid as-is
+/// and the entries nothing references are simply never read. Sub-objects are
+/// left intact so the skeleton - and hence the per-vertex bone index that
+/// places each sub-object at its rest transform - still resolves.
+pub fn retain_materials(
+    mesh: SystemShock2ObjectMesh,
+    keep: impl Fn(&str) -> bool,
+) -> SystemShock2ObjectMesh {
+    let kept_slots = material_slots(&mesh, keep);
+    retain_polygons(mesh, |polygon| {
+        kept_slots.contains(&polygon.slot_index)
+    })
+}
+
+/// The material slots whose name `keep` accepts.
+fn material_slots(mesh: &SystemShock2ObjectMesh, keep: impl Fn(&str) -> bool) -> HashSet<u16> {
+    mesh.materials
+        .iter()
+        .filter(|material| keep(&material.name))
+        .map(|material| material.slot_num as u16)
+        .collect()
+}
+
+/// Drops every polygon `keep` rejects. See [`retain_materials`] for why
+/// filtering polygons alone is sufficient.
+fn retain_polygons(
+    mut mesh: SystemShock2ObjectMesh,
+    keep: impl Fn(&SystemShock2ObjectPolygon) -> bool,
+) -> SystemShock2ObjectMesh {
+    mesh.polygons.retain(&keep);
+    mesh
+}
+
+/// Wrist-to-fingertip length of an adult hand, in world units (~19 cm).
+/// Anthropometric, not asset-specific - the yardstick for placing and trimming
+/// any hand mesh.
+pub const HAND_LENGTH_WORLD: f32 = 0.2493;
+
+/// Splits the geometry `keep` selects into connected pieces - one per hand.
+///
+/// A model can draw more than one hand with the same material (the pistol has a
+/// trigger hand and a support hand), and they are separate islands of geometry,
+/// so connectivity is what tells them apart. Returns one mesh per island,
+/// largest first, each still carrying the full material table.
+pub fn split_connected(
+    mesh: &SystemShock2ObjectMesh,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<SystemShock2ObjectMesh> {
+    let kept_slots = material_slots(mesh, keep);
+
+    // Union-find over vertex indices, joined along every kept polygon's edges.
+    let mut parent: HashMap<u16, u16> = HashMap::new();
+    fn find(parent: &mut HashMap<u16, u16>, mut node: u16) -> u16 {
+        while let Some(&next) = parent.get(&node) {
+            if next == node {
+                break;
+            }
+            let grand = *parent.get(&next).unwrap_or(&next);
+            parent.insert(node, grand);
+            node = grand;
+        }
+        parent.entry(node).or_insert(node);
+        node
+    }
+
+    for polygon in &mesh.polygons {
+        if !kept_slots.contains(&polygon.slot_index) {
+            continue;
+        }
+        let Some(&first) = polygon.vertex_indices.first() else {
+            continue;
+        };
+        for index in &polygon.vertex_indices {
+            let (a, b) = (find(&mut parent, first), find(&mut parent, *index));
+            if a != b {
+                parent.insert(a, b);
+            }
+        }
+    }
+
+    let mut islands: HashMap<u16, Vec<usize>> = HashMap::new();
+    for (index, polygon) in mesh.polygons.iter().enumerate() {
+        if !kept_slots.contains(&polygon.slot_index) {
+            continue;
+        }
+        let Some(&first) = polygon.vertex_indices.first() else {
+            continue;
+        };
+        let root = find(&mut parent, first);
+        islands.entry(root).or_default().push(index);
+    }
+
+    // Largest first, then by earliest polygon: `HashMap::into_values` is
+    // randomized, so equal-sized islands would otherwise swap between runs -
+    // and callers select a hand by ordinal.
+    let mut islands = islands.into_values().collect::<Vec<_>>();
+    islands.sort_by_key(|polygons| {
+        (
+            std::cmp::Reverse(polygons.len()),
+            polygons.iter().copied().min().unwrap_or(usize::MAX),
+        )
+    });
+
+    islands
+        .into_iter()
+        .map(|polygons| {
+            let wanted = polygons.into_iter().collect::<HashSet<usize>>();
+            let mut island = mesh.clone();
+            island.polygons = mesh
+                .polygons
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| wanted.contains(index))
+                .map(|(_, polygon)| polygon.clone())
+                .collect();
+            island
+        })
+        .collect()
+}
+
+/// Where one hand sits on a first-person weapon, in model space.
+///
+/// Derived from the hand's *geometry* rather than its bone transform. A
+/// sub-object's vertices are bone-local and are placed by the bone's global
+/// transform at skinning time, so the bone's own translation is a joint pivot
+/// (zero on `ar15_h`) and says nothing about where the hand ended up - only the
+/// transformed geometry does.
+#[derive(Debug, Clone)]
+pub struct HandFrame {
+    pub name: String,
+    /// The wrist end of the hand, where a controller would be held.
+    pub origin: Point3<f32>,
+    /// Unit vector from wrist toward the fingertips.
+    pub forward: Vector3<f32>,
+    /// Wrist-to-fingertip distance, for sanity checks and scaling.
+    pub length: f32,
+}
+
+/// The authored placement of every hand on a first-person weapon.
+///
+/// `keep` selects the hand material (see `is_first_person_arm_material`); each
+/// sub-object drawing it yields one frame, so a two-handed model reports both.
+pub fn hand_frames(
+    mesh: &SystemShock2ObjectMesh,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<HandFrame> {
+    let kept_slots = mesh
+        .materials
+        .iter()
+        .filter(|material| keep(&material.name))
+        .map(|material| material.slot_num as u16)
+        .collect::<HashSet<u16>>();
+
+    let transforms = sub_object_transforms(mesh);
+
+    // Group the hand's vertices by the sub-object that owns them, and put each
+    // group where skinning would put it.
+    let mut by_sub_object: HashMap<usize, Vec<Point3<f32>>> = HashMap::new();
+    for polygon in &mesh.polygons {
+        if !kept_slots.contains(&polygon.slot_index) {
+            continue;
+        }
+        for index in &polygon.vertex_indices {
+            let sub_object = get_bone_index_for_point(mesh, *index) as usize;
+            let Some((_, transform)) = transforms.get(sub_object) else {
+                continue;
+            };
+            let local = mesh.vertices[*index as usize];
+            let placed = transform.transform_point(point3(local.x, local.y, local.z));
+            by_sub_object.entry(sub_object).or_default().push(placed);
+        }
+    }
+
+    let mut frames = by_sub_object
+        .into_iter()
+        .filter_map(|(sub_object, points)| {
+            let (wrist, tip) = wrist_and_fingertip(&points)?;
+            let axis = tip - wrist;
+            let length = axis.magnitude();
+            if length <= f32::EPSILON {
+                return None;
+            }
+            Some(HandFrame {
+                name: transforms
+                    .get(sub_object)
+                    .map(|(name, _)| name.clone())
+                    .unwrap_or_default(),
+                origin: wrist,
+                forward: axis / length,
+                length,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    // Stable order so callers (and screenshots) don't shuffle between runs -
+    // `by_sub_object` is a HashMap.
+    frames.sort_by(|a, b| a.name.cmp(&b.name));
+    frames
+}
+
+/// One frame over all the geometry `keep` selects, for a mesh already known to
+/// hold a single hand (an island out of [`split_connected`]).
+pub fn hand_frame(
+    mesh: &SystemShock2ObjectMesh,
+    keep: impl Fn(&str) -> bool,
+) -> Option<HandFrame> {
+    let kept_slots = material_slots(mesh, keep);
+    let transforms = sub_object_transforms(mesh);
+
+    // Deduplicate by vertex index first. Walking polygon corners would push a
+    // shared vertex once per incident face, so the endpoint scoring below would
+    // measure triangulation density rather than geometry - a fan-triangulated
+    // palm can then outweigh the fingertips and reverse the axis.
+    let mut seen = HashSet::new();
+    let mut points = Vec::new();
+    for polygon in &mesh.polygons {
+        if !kept_slots.contains(&polygon.slot_index) {
+            continue;
+        }
+        for index in &polygon.vertex_indices {
+            if !seen.insert(*index) {
+                continue;
+            }
+            let sub_object = get_bone_index_for_point(mesh, *index) as usize;
+            let Some((_, transform)) = transforms.get(sub_object) else {
+                continue;
+            };
+            let local = mesh.vertices[*index as usize];
+            points.push(transform.transform_point(point3(local.x, local.y, local.z)));
+        }
+    }
+
+    let (wrist, tip) = wrist_and_fingertip(&points)?;
+    let axis = tip - wrist;
+    let length = axis.magnitude();
+    if length <= f32::EPSILON {
+        return None;
+    }
+
+    Some(HandFrame {
+        name: String::new(),
+        origin: wrist,
+        forward: axis / length,
+        length,
+    })
+}
+
+/// The hand's long axis, as the farthest-apart pair of points, oriented so the
+/// wrist comes first.
+///
+/// The *fingertip* end is the denser one: five separate digits pack far more
+/// geometry into the end of the hand than the smooth tube of a forearm (or the
+/// stump of a bare hand) does at the other. Verified against all six authored
+/// hands - picking the denser end as the wrist instead points every one of them
+/// backwards.
+fn wrist_and_fingertip(points: &[Point3<f32>]) -> Option<(Point3<f32>, Point3<f32>)> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    let mut best = (0usize, 1usize, 0.0_f32);
+    for (i, a) in points.iter().enumerate() {
+        for (j, b) in points.iter().enumerate().skip(i + 1) {
+            let distance = (b - a).magnitude2();
+            if distance > best.2 {
+                best = (i, j, distance);
+            }
+        }
+    }
+
+    let (a, b) = (points[best.0], points[best.1]);
+    let near_end = |end: Point3<f32>, other: Point3<f32>| {
+        let cutoff = (other - end).magnitude() * 0.25;
+        points
+            .iter()
+            .filter(|point| (*point - end).magnitude() < cutoff)
+            .count()
+    };
+
+    if near_end(a, b) >= near_end(b, a) {
+        Some((b, a))
+    } else {
+        Some((a, b))
+    }
+}
+
+/// The model-space transform of every sub-object, paired with its name - the
+/// placement the artist authored for that part.
+///
+/// For a 25AE first-person weapon this is what carries the *grip*: the hand
+/// sub-objects (`@s01_han`, `@s02_han`) are posed onto the weapon by hand, so
+/// their transforms say exactly where a hand belongs on that gun.
+pub fn sub_object_transforms(mesh: &SystemShock2ObjectMesh) -> Vec<(String, Matrix4<f32>)> {
+    let mut bones = Vec::new();
+    build_skeleton_for_obj_mesh(mesh, 0, None, &mut bones);
+    let skeleton = Skeleton::create_from_bones(bones);
+
+    mesh.sub_objects
+        .iter()
+        .enumerate()
+        .map(|(index, sub_object)| {
+            (
+                sub_object.name.clone(),
+                skeleton.global_transform(&(index as u32)),
+            )
+        })
+        .collect()
 }
 
 pub fn to_vertices(
@@ -705,7 +1020,7 @@ fn read_vertices<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<V
     vertices
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SubObjectHeader {
     #[allow(dead_code)]
     idx: u32,
@@ -771,6 +1086,7 @@ fn read_sub_objects<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Ve
     objs
 }
 
+#[derive(Clone)]
 pub struct ObjBinHeader {
     bbox_min: Point3<f32>,
     bbox_max: Point3<f32>,
@@ -940,6 +1256,87 @@ mod tests {
         let object = create_dark_object_scene_object(material, geometry);
 
         assert_eq!(object.backface_culling(), Some(FrontFaceWinding::Clockwise));
+    }
+
+    fn material_in_slot(name: &str, slot_num: u8) -> SystemShock2MeshMaterial {
+        SystemShock2MeshMaterial {
+            slot_num,
+            ..material(name)
+        }
+    }
+
+    fn polygon_in_slot(slot_index: u16) -> SystemShock2ObjectPolygon {
+        SystemShock2ObjectPolygon {
+            vertex_indices: vec![0, 1, 2],
+            normal_indices: vec![0, 1, 2],
+            uv_indices: vec![0, 1, 2],
+            slot_index,
+        }
+    }
+
+    /// A 25AE first-person model draws the hand with its own `ND-arm*` material,
+    /// so selecting on the material name is what isolates the arm from the
+    /// weapon - including on `sg_h`/`empgun_h`, where the hand shares a
+    /// sub-object with moving gun parts and a sub-object filter would take the
+    /// gun with it.
+    fn mesh_with(
+        materials: Vec<SystemShock2MeshMaterial>,
+        polygons: Vec<SystemShock2ObjectPolygon>,
+    ) -> SystemShock2ObjectMesh {
+        SystemShock2ObjectMesh {
+            header: header_with_mat_extra(0),
+            version: 4,
+            bounding_box: Aabb3::new(point3(0.0, 0.0, 0.0), point3(1.0, 1.0, 1.0)),
+            materials,
+            uvs: vec![Vector2::new(0.0, 0.0); 3],
+            vertices: vec![vec3(0.0, 0.0, 0.0); 3],
+            normals: vec![vec3(0.0, 1.0, 0.0); 3],
+            vhots: Vec::new(),
+            polygons,
+            sub_objects: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn retain_materials_keeps_only_the_selected_slots() {
+        let mesh = mesh_with(
+            vec![
+                material_in_slot("ND-ar15.psd", 0),
+                material_in_slot("ND-arm.psd", 1),
+            ],
+            vec![
+                polygon_in_slot(0),
+                polygon_in_slot(1),
+                polygon_in_slot(0),
+                polygon_in_slot(1),
+            ],
+        );
+
+        let arm = retain_materials(mesh, |name| name.starts_with("ND-arm"));
+
+        assert_eq!(arm.polygons.len(), 2);
+        assert!(arm.polygons.iter().all(|polygon| polygon.slot_index == 1));
+        // The material table is left whole, so the kept slot still resolves to
+        // its texture when the mesh is turned into scene objects.
+        assert_eq!(arm.materials.len(), 2);
+    }
+
+    /// The weapon half is the complement, which is what lets the same call site
+    /// draw the gun without the hand.
+    #[test]
+    fn retain_materials_can_select_the_complement() {
+        let mesh = mesh_with(
+            vec![
+                material_in_slot("ND-ar15.psd", 0),
+                material_in_slot("ND-arm.psd", 1),
+            ],
+            vec![polygon_in_slot(0), polygon_in_slot(1)],
+        );
+
+        let weapon = retain_materials(mesh, |name| !name.starts_with("ND-arm"));
+
+        assert_eq!(weapon.polygons.len(), 1);
+        assert_eq!(weapon.polygons[0].slot_index, 0);
     }
 
     fn material(name: &str) -> SystemShock2MeshMaterial {

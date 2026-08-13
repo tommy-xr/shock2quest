@@ -24,6 +24,30 @@ use crate::{
 const GLOVE_MODEL: &str = "vr_glove_model.glb";
 const GLOVE_TEXTURE: &str = "vr_glove_color.jpg";
 
+/// Wrist-to-fingertip length the glove model is authored at, in world units -
+/// the +Z span of its bind-pose bounding box (fingers point along +Z).
+pub const AUTHORED_HAND_LENGTH_WORLD: f32 = 0.2049;
+
+/// Wrist-to-fingertip length of an adult hand. Anthropometric mean is ~19 cm.
+const REAL_HAND_LENGTH_METERS: f32 = 0.19;
+
+/// Corrects the glove to life size.
+///
+/// VR renders the world at true scale - tracked poses are divided by
+/// [`crate::METERS_PER_WORLD_UNIT`], so a world unit really is 0.762 m - which
+/// means the hand has to be a real hand's size in world units or it reads as
+/// too small against everything around it. The model is authored at ~15.6 cm
+/// where a hand is ~19 cm, so it renders about a fifth undersized.
+///
+/// Measured, not guessed: rendering the glove beside a cube of known edge
+/// length in `debug_hands` put its bind pose at its authored bounding box, so
+/// the shortfall is in the asset, not in the skinning path.
+///
+/// This is the one number to adjust if life size turns out to read wrong in an
+/// actual headset - VR hands are often tuned slightly large.
+pub const GLOVE_SCALE: f32 =
+    (REAL_HAND_LENGTH_METERS / crate::METERS_PER_WORLD_UNIT) / AUTHORED_HAND_LENGTH_WORLD;
+
 /// Everything constant about the glove, resolved once: the model (a private
 /// clone whose skeleton is re-posed each frame), the pose retargeting, the
 /// blend endpoints, and one textured material per mesh (fresh cells so the
@@ -127,7 +151,11 @@ impl GloveRenderer {
             Handedness::Right => Matrix4::from_scale(1.0),
             Handedness::Left => Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0),
         };
-        let world = Matrix4::from_translation(position) * Matrix4::from(rotation) * mirror * grip;
+        let world = Matrix4::from_translation(position)
+            * Matrix4::from(rotation)
+            * mirror
+            * grip
+            * Matrix4::from_scale(GLOVE_SCALE);
 
         let mut objects = self.model.to_scene_objects_with_skinning();
         for (object, material) in objects.iter_mut().zip(&self.materials) {
@@ -135,5 +163,34 @@ impl GloveRenderer {
             object.set_transform(world);
         }
         objects
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Guards the two constants against drifting apart: the scale exists to put
+    /// the authored glove at a real hand's length once the world's true scale
+    /// (`METERS_PER_WORLD_UNIT`) is applied.
+    #[test]
+    fn glove_scale_renders_a_life_size_hand() {
+        let rendered_meters =
+            AUTHORED_HAND_LENGTH_WORLD * GLOVE_SCALE * crate::METERS_PER_WORLD_UNIT;
+
+        assert!(
+            (rendered_meters - REAL_HAND_LENGTH_METERS).abs() < 1e-4,
+            "glove renders {rendered_meters} m, expected {REAL_HAND_LENGTH_METERS} m"
+        );
+    }
+
+    /// The uncorrected glove is undersized, not oversized - a scale below 1.0
+    /// would mean a unit slip somewhere rather than a real correction.
+    #[test]
+    fn glove_scale_is_a_modest_enlargement() {
+        assert!(
+            (1.0..2.0).contains(&GLOVE_SCALE),
+            "unexpected glove scale {GLOVE_SCALE}"
+        );
     }
 }

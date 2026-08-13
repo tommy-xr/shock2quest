@@ -84,3 +84,65 @@ fn process_model(
 
 pub static MODELS_IMPORTER: Lazy<AssetImporter<SystemShockContentModel, Model, ()>> =
     Lazy::new(|| AssetImporter::define(load_model, process_model));
+
+/// Whether `name` is a material the 25th Anniversary Edition draws the player's
+/// hand and forearm with on a first-person weapon model (`obj/*_h.bin`).
+///
+/// The remaster gives the arm its own material - `ND-arm.psd` on most models,
+/// `ND-arm_atek.psd` on the pistol and shotgun - which is the only selector
+/// that isolates it everywhere. A sub-object filter works on `ar15_h`/`atek_h`,
+/// where the hand is its own `@s01_han`/`@s02_han`, but not on `sg_h` or
+/// `empgun_h`, where the hand rides a moving gun sub-object.
+pub fn is_first_person_arm_material(name: &str) -> bool {
+    name.to_ascii_lowercase().starts_with("nd-arm")
+}
+
+/// Newtype so this importer gets its own [`AssetCache`] bucket.
+///
+/// The cache keys by `importer.type_id()`, which is the *type* of the importer,
+/// so two importers that share `AssetImporter<_, Model, _>` would share one
+/// bucket and silently serve whichever view of the model was requested first.
+/// Any further view of an already-imported type needs its own newtype.
+/// One authored hand, as its own model plus the frame it sits in.
+pub struct FirstPersonHand {
+    pub frame: ss2_bin_obj_loader::HandFrame,
+    pub model: Model,
+}
+
+/// Every hand a first-person model draws, split apart. Newtype for cache
+/// separation, as [`FirstPersonArm`].
+pub struct FirstPersonHands(pub Vec<FirstPersonHand>);
+
+fn process_first_person_hands(
+    mesh: SystemShockContentModel,
+    asset_cache: &mut AssetCache,
+    _config: &(),
+) -> FirstPersonHands {
+    let SystemShockContentModel::Obj(obj) = mesh else {
+        return FirstPersonHands(Vec::new());
+    };
+
+    FirstPersonHands(
+        ss2_bin_obj_loader::split_connected(&obj, is_first_person_arm_material)
+            .into_iter()
+            .filter_map(|mut island| {
+                let frame = ss2_bin_obj_loader::hand_frame(&island, is_first_person_arm_material)?;
+                // Vhots belong to the weapon, and render as debug cubes.
+                island.vhots.clear();
+
+                Some(FirstPersonHand {
+                    frame,
+                    model: Model::from_obj_bin(island, asset_cache),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Each hand a first-person weapon model draws, as a separate model - the pose
+/// library we snap between. Ordered largest-island first, so index 0 is the
+/// main hand.
+pub static FIRST_PERSON_HANDS_IMPORTER: Lazy<
+    AssetImporter<SystemShockContentModel, FirstPersonHands, ()>,
+> = Lazy::new(|| AssetImporter::define(load_model, process_first_person_hands));
+
