@@ -313,6 +313,26 @@ impl PropMotionActorTags {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropSelfIllumination(pub f32);
 
+/// A container's inventory grid, in cells. The `Contains` link's ordinal is
+/// `y * width + x` against *this* width, so it is what makes a stored cell
+/// mean anything.
+///
+/// NOTE: the editor calls this `ContainDims`, but chunk names are stored in a
+/// 12-byte field, so on disk it is `P$ContainDi` - see the registration below.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropContainDimensions {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl PropContainDimensions {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, _len: u32) -> PropContainDimensions {
+        let width = read_u32(reader);
+        let height = read_u32(reader);
+        PropContainDimensions { width, height }
+    }
+}
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropInventoryDimensions {
     pub width: u32,
@@ -1408,6 +1428,14 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$HUDSelect",
             |reader, _len| read_bool(reader),
             PropHUDSelect,
+            accumulator::latest,
+        ),
+        define_prop(
+            // Truncated on disk from `P$ContainDims`: chunk names live in a
+            // 12-byte field (same trap as `P$AI_AlertC`).
+            "P$ContainDi",
+            PropContainDimensions::read,
+            identity,
             accumulator::latest,
         ),
         define_prop(
