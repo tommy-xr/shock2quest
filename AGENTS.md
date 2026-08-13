@@ -38,9 +38,12 @@ Practically, when touching `shock2vr/src/ui/` or any UI emit path:
   no placement decisions of its own — no alignment, no text measurement, no
   ellipsizing, no per-element-kind branching that affects position or size.
 - If a presentation genuinely must differ, confine it to one named conversion at
-  the boundary, comment *why*, and cover it with a test. Known example:
-  `SceneObject::world_space_text` anchors on the text's vertical **centre**,
-  while `screen_space_text` anchors on its **top**.
+  the boundary, comment *why*, and cover it with a test. The known example used
+  to be text anchoring - `world_space_text` anchored on the text's vertical
+  centre while `screen_space_text` anchored on its top - which is now gone
+  rather than confined: both build their glyphs from one routine, and
+  `world_space_text` normalizes them into the centered unit square so a panel
+  places a label with the same transform it uses for an image.
 - **Prefer making divergence impossible over testing for it.** Independent emit
   paths drift silently: every feature added to one quietly misses the others
   (`ellipsize` shipped screen-only for exactly this reason).

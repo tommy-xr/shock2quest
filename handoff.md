@@ -161,6 +161,39 @@ so it starts from verified-working VR with tests that pin the behaviour —
 rather than from `main`, where VR is broken and the anchor asymmetry is
 undiscoverable without rendering.
 
+### Outcome (landed on `refactor/ui-single-layout`)
+
+`UiCanvas::layout` is now the single placement authority: it resolves
+alignment, measures text, applies `ellipsize`, and sizes object icons, yielding
+`PlacedElement { rect, alpha, content }` in canvas pixels (for text the rect is
+the glyph box, so its height *is* the font size). Screen space and the
+world-space panel are mappers over that list with no per-element-kind placement
+left, and the GUI/MFD path was folded in: `GuiComponentRenderInfo::render` is
+gone, and both the flat overlay and the VR world quad build their elements
+through one `to_ui_element` conversion.
+
+The anchor asymmetry that section 3 of `AGENTS.md` warned about was *removed*
+rather than confined: `SceneObject::world_space_text` now normalizes its glyphs
+into the centered unit square (same shape as `quad::create`), so world-space
+text is placed by the very `world_element_transform` call an image uses.
+
+Two real divergences this fixed, both visible on the VR main menu:
+
+- world-space text was drawn at a **fixed** 0.045-of-panel-height regardless of
+  the layout's font size (~40% too large for the menu font, spilling out of the
+  button pills and over the numeral art);
+- it carried a half-line anchor fudge, so a `VAlign` case landed the label
+  higher than the flat presentation put it.
+
+VR MFD panel text had the same fixed-size problem relative to its own panel
+pixels; it now matches the flat MFD.
+
+Still open: the load-game screen has **no** world-space presentation at all —
+in `--vr` it falls back to the screen-space overlay (`LoadGameScene::render`
+returns nothing; `render_per_eye` draws for both modes). So the one canvas that
+exercises `fit_to_rect` is never actually shown on a panel. Ellipsizing now
+happens in layout, so it *will* be correct when that screen grows a VR panel.
+
 **Deferred: render-to-texture for world space.** Rendering the canvas to an
 offscreen target and mapping it onto the panel quad would make parity true *by
 construction* (one renderer, not two that agree). It is the better end state,
