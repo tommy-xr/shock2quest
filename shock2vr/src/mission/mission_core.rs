@@ -1001,11 +1001,11 @@ impl MissionCore {
         );
 
         if let Some(entity_id) = left_hand_entity {
-            make_un_physical2(&mut id_to_physics, &mut physics, entity_id);
+            restore_held_item_physics(&world, &mut id_to_physics, &mut physics, entity_id);
         };
 
         if let Some(entity_id) = right_hand_entity {
-            make_un_physical2(&mut id_to_physics, &mut physics, entity_id);
+            restore_held_item_physics(&world, &mut id_to_physics, &mut physics, entity_id);
         };
 
         let (start_pos, start_rotation) = spawn_loc.calculate_start_position(
@@ -4188,6 +4188,15 @@ impl MissionCore {
                     self.process_virtual_hand_effects(asset_cache, grab_effects);
 
                     if self.interaction.is_holding(entity_id) {
+                        // A grab routed through this effect (equip a carried
+                        // weapon, a backpack double-click) never emits
+                        // `HoldItem`, so establish the melee contact body here
+                        // too - otherwise a weapon equipped this way is held
+                        // without a collider and never reports contacts.
+                        if self.is_vr_melee_weapon(entity_id) {
+                            self.attach_held_melee_physics(entity_id);
+                        }
+
                         // Let the scripts know we are now holding the item..
                         self.script_world.dispatch(Message {
                             payload: MessagePayload::Hold,
@@ -6178,8 +6187,7 @@ impl MissionCore {
                         // weapon needs its authored collider to report genuine
                         // controller-driven contacts. Kinematic motion keeps it
                         // seated in the hand without gravity or solver drift.
-                        self.make_physical(entity_id);
-                        self.physics.set_held_melee(entity_id);
+                        self.attach_held_melee_physics(entity_id);
                     } else {
                         self.make_un_physical(entity_id);
                     }
@@ -6216,13 +6224,15 @@ impl MissionCore {
     }
 
     fn is_vr_melee_weapon(&self, entity_id: EntityId) -> bool {
-        self.world
-            .borrow::<UniqueView<GlobalPresentationMode>>()
-            .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr)
-            && self
-                .world
-                .borrow::<View<PropLimbModel>>()
-                .is_ok_and(|limb_models| limb_models.get(entity_id).is_ok())
+        is_vr_melee_weapon(&self.world, entity_id)
+    }
+
+    /// Give a held melee weapon the contact body the VR damage window needs.
+    /// Idempotent: `make_physical` no-ops when the body already exists, so this
+    /// is safe on both a fresh grab and a restore.
+    fn attach_held_melee_physics(&mut self, entity_id: EntityId) {
+        self.make_physical(entity_id);
+        self.physics.set_held_melee(entity_id);
     }
 
     /// Queue an entity to be triggered after scripts are initialized
@@ -6602,6 +6612,39 @@ fn drop_contains_links_to(links: &mut Links, target: EntityId) {
     links.to_links.retain(|link| {
         !(matches!(link.link, Link::Contains(_)) && link.to_entity_id.map(|e| e.0) == Some(target))
     });
+}
+
+/// Is this a melee weapon whose VR contact damage needs a live collider while
+/// held? Authored player melee weapons are marked by `PropLimbModel`
+/// (gamesys-wide: Wrench -928, PsiSword -2291, Crystal Shard -28, Electro
+/// Shock -24); the flat presentation swings by raycast and needs none of this.
+pub fn is_vr_melee_weapon(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<UniqueView<GlobalPresentationMode>>()
+        .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr)
+        && world
+            .borrow::<View<PropLimbModel>>()
+            .is_ok_and(|limb_models| limb_models.get(entity_id).is_ok())
+}
+
+/// Physics for an item restored into a hand by save/load or a level change.
+///
+/// The restore path cannot reuse `VirtualHandEffect::HoldItem` - only a fresh
+/// world grab emits that, and `VrInteraction::grab` returns no effects - so
+/// without this branch a carried melee weapon came back with its collider
+/// stripped and silently stopped reporting contacts for the rest of the
+/// session. Every other held item still goes unphysical, as before.
+fn restore_held_item_physics(
+    world: &World,
+    id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
+    physics: &mut PhysicsWorld,
+    entity_id: EntityId,
+) {
+    if is_vr_melee_weapon(world, entity_id) {
+        physics.set_held_melee(entity_id);
+    } else {
+        make_un_physical2(id_to_physics, physics, entity_id);
+    }
 }
 
 pub fn make_un_physical2(

@@ -190,3 +190,82 @@ test(
     );
   },
 );
+
+// Regression for the #943 review: `set_held_melee` was reachable only from
+// `VirtualHandEffect::HoldItem`, which only a fresh VR world grab emits.
+// `restore_held_item_interaction` goes through `VrInteraction::grab` (which
+// returns no effects) and then unconditionally strips held-item physics, so a
+// wrench carried through a save/load came back with NO collider and silently
+// never reported contacts again - the feature was dead on the path a player
+// actually uses to carry a weapon.
+test(
+  "a melee weapon carried through a save/load keeps its contact body and still damages",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "command2.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT_SAVE ?? 8139),
+      debugFlags: ["--vr"],
+      echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
+    });
+
+    const wrench = await byMissionId(game, "Wrench", WRENCH_MISSION_ID);
+
+    await game.player.teleport({
+      x: wrench.position[0],
+      y: wrench.position[1] - 1.4,
+      z: wrench.position[2] + 1.2,
+    });
+    await game.input.lookAtWorldPoint(wrench.position);
+    await game.input.set("right_hand.position", [0, 1.4, 0]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    assert.equal((await game.info()).player.right_hand_entity_id, wrench.id);
+
+    await game.save("melee-holdthrough");
+    await game.load("melee-holdthrough");
+    await game.step({ frames: 5 });
+
+    // Runtime ids are reassigned by the load, so rediscover everything.
+    const restoredWrench = await byMissionId(game, "Wrench", WRENCH_MISSION_ID);
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      restoredWrench.id,
+      "the Wrench should still be held after the load",
+    );
+
+    // The actual regression: the restored weapon must still have a live,
+    // controller-driven contact body.
+    const bodies = (await game.physics.bodies({ entityId: restoredWrench.id })).bodies;
+    assert.equal(
+      bodies[0]?.body_type,
+      "kinematic",
+      `a restored held melee weapon must keep its kinematic contact body: ${JSON.stringify(bodies)}`,
+    );
+
+    // ...and it must still actually damage an authored one-HP pane.
+    const pane = await byMissionId(game, "Window 2", BREAKABLE_PANE_MISSION_ID);
+    await game.player.teleport({
+      x: pane.position[0],
+      y: pane.position[1] - 1.04,
+      z: pane.position[2] - 2.6,
+    });
+    await game.step({ frames: 2 });
+    await game.input.lookAtWorldPoint(pane.position);
+    await game.input.set("right_hand.position", HAND_REST);
+    await game.step({ frames: 3 });
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 2 });
+    await sweepHeldWrench(game);
+
+    assert.equal(
+      await paneStillExists(game, pane.id),
+      false,
+      "a wrench carried through a save/load should still break the pane",
+    );
+  },
+);
