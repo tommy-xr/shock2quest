@@ -102,7 +102,7 @@ use crate::{
     },
     teleport::{TeleportSystem, TeleportUI, TeleportVisualStyle},
     time::Time,
-    util::{debug_entity, get_email_sound_file, has_refs, vec3_to_point3},
+    util::{debug_entity, get_email_sound_file, get_entity_position, has_refs, vec3_to_point3},
     virtual_hand::VirtualHandEffect,
     vr_config,
 };
@@ -4504,6 +4504,7 @@ impl MissionCore {
                             engine::audio::play_spatial_audio(
                                 audio_context,
                                 position,
+                                source,
                                 handle,
                                 None,
                                 audio_clip,
@@ -4551,6 +4552,7 @@ impl MissionCore {
                                 engine::audio::play_spatial_audio(
                                     audio_context,
                                     position,
+                                    Some(entity_id),
                                     handle,
                                     None,
                                     audio_clip,
@@ -6594,24 +6596,6 @@ pub fn make_un_physical2(
     id_to_physics.remove(&entity_id);
 }
 
-fn get_entity_position(world: &World, entity_id: EntityId) -> Option<Vector3<f32>> {
-    // Prefer the live transform; PropPosition can lag for entities moved by
-    // animation/physics, and is frozen for held/contained entities.
-    if let Ok(transforms) = world.borrow::<View<RuntimePropTransform>>() {
-        if let Ok(xform) = transforms.get(entity_id) {
-            use cgmath::Transform;
-            let p = xform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
-            return Some(vec3(p.x, p.y, p.z));
-        }
-    }
-    if let Ok(positions) = world.borrow::<View<PropPosition>>() {
-        if let Ok(prop) = positions.get(entity_id) {
-            return Some(prop.position);
-        }
-    }
-    None
-}
-
 fn resolve_schema(global_context: &GlobalContext, name: &str) -> String {
     let sound_schema = &global_context.gamesys.sound_schema;
     let ret = sound_schema
@@ -6720,6 +6704,7 @@ fn play_environmental_sound(
         let preempted = engine::audio::play_spatial_audio(
             audio_context,
             position,
+            None,
             audio_handle,
             None,
             audio_clip,

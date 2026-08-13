@@ -100,6 +100,22 @@ pub fn get_position_from_transform(
     }
 }
 
+/// The entity's current world position, preferring the runtime transform that
+/// follows animation and physics over the authored position property.
+pub fn get_entity_position(world: &World, entity_id: EntityId) -> Option<Vector3<f32>> {
+    if let Ok(transforms) = world.borrow::<View<RuntimePropTransform>>() {
+        if let Ok(xform) = transforms.get(entity_id) {
+            return Some(point3_to_vec3(
+                xform.0.transform_point(point3(0.0, 0.0, 0.0)),
+            ));
+        }
+    }
+    world
+        .borrow::<View<PropPosition>>()
+        .ok()
+        .and_then(|positions| positions.get(entity_id).ok().map(|prop| prop.position))
+}
+
 pub fn has_refs(world: &World, entity_id: EntityId) -> bool {
     let v_has_refs = world.borrow::<View<PropHasRefs>>().unwrap();
 
@@ -173,6 +189,7 @@ pub fn get_rotation_from_forward_vector(forward: Vector3<f32>) -> Quaternion<f32
 mod tests {
     use super::*;
     use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, Vector3};
+    use shipyard::ViewMut;
 
     #[test]
     fn test_get_position_from_matrix() {
@@ -205,6 +222,33 @@ mod tests {
             close_enough,
             "Rotations are not close enough: {:?} vs {:?}",
             extracted_rotation, known_rotation
+        );
+    }
+
+    #[test]
+    fn entity_position_follows_the_live_runtime_transform() {
+        let mut world = World::new();
+        let entity = world.add_entity((
+            PropPosition {
+                position: vec3(1.0, 2.0, 3.0),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            RuntimePropTransform(Matrix4::from_translation(vec3(4.0, 5.0, 6.0))),
+        ));
+
+        assert_eq!(
+            get_entity_position(&world, entity),
+            Some(vec3(4.0, 5.0, 6.0))
+        );
+
+        let mut transforms = world.borrow::<ViewMut<RuntimePropTransform>>().unwrap();
+        (&mut transforms).get(entity).unwrap().0 = Matrix4::from_translation(vec3(7.0, 8.0, 9.0));
+        drop(transforms);
+
+        assert_eq!(
+            get_entity_position(&world, entity),
+            Some(vec3(7.0, 8.0, 9.0))
         );
     }
 }

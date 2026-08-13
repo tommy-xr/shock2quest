@@ -55,46 +55,92 @@ pub trait BackgroundMusic<TCue> {
     fn next_clip(&mut self, cue: Option<TCue>) -> Option<Rc<AudioClip>>;
 }
 
-pub enum SinkAdapter {
-    StaticSink(SpatialSink),
-    PositionalSink(SpatialSink),
+#[derive(Clone, Copy, Debug)]
+struct TrackedEmitter<TSourceKey> {
+    position: Vector3<f32>,
+    source: Option<TSourceKey>,
 }
 
-impl SinkAdapter {
-    pub fn inner(&self) -> &SpatialSink {
-        match self {
-            SinkAdapter::StaticSink(sink) => sink,
-            SinkAdapter::PositionalSink(sink) => sink,
+impl<TSourceKey> TrackedEmitter<TSourceKey>
+where
+    TSourceKey: Copy,
+{
+    fn new(position: Vector3<f32>, source: Option<TSourceKey>) -> Self {
+        Self { position, source }
+    }
+
+    fn refresh<F>(&mut self, mut source_position: F)
+    where
+        F: FnMut(TSourceKey) -> Option<Vector3<f32>>,
+    {
+        if let Some(position) = self.source.and_then(&mut source_position) {
+            self.position = position;
         }
     }
 
-    pub fn fixed(sink: SpatialSink) -> SinkAdapter {
+    fn position(&self) -> Vector3<f32> {
+        self.position
+    }
+}
+
+enum SinkAdapter<TSourceKey> {
+    StaticSink(SpatialSink),
+    PositionalSink {
+        sink: SpatialSink,
+        emitter: TrackedEmitter<TSourceKey>,
+    },
+}
+
+impl<TSourceKey> SinkAdapter<TSourceKey>
+where
+    TSourceKey: Copy,
+{
+    fn inner(&self) -> &SpatialSink {
+        match self {
+            SinkAdapter::StaticSink(sink) => sink,
+            SinkAdapter::PositionalSink { sink, .. } => sink,
+        }
+    }
+
+    fn fixed(sink: SpatialSink) -> SinkAdapter<TSourceKey> {
         SinkAdapter::StaticSink(sink)
     }
 
-    pub fn positional(sink: SpatialSink) -> SinkAdapter {
-        SinkAdapter::PositionalSink(sink)
+    fn positional(
+        sink: SpatialSink,
+        position: Vector3<f32>,
+        source: Option<TSourceKey>,
+    ) -> SinkAdapter<TSourceKey> {
+        SinkAdapter::PositionalSink {
+            sink,
+            emitter: TrackedEmitter::new(position, source),
+        }
     }
 
-    pub fn update_listener_position(
+    fn update_spatial_position<F>(
         &mut self,
         left_ear_position: [f32; 3],
         right_ear_position: [f32; 3],
-    ) {
+        source_position: &mut F,
+    ) where
+        F: FnMut(TSourceKey) -> Option<Vector3<f32>>,
+    {
         match self {
             SinkAdapter::StaticSink(_) => (),
-            SinkAdapter::PositionalSink(sink) => {
+            SinkAdapter::PositionalSink { sink, emitter } => {
+                emitter.refresh(source_position);
+                sink.set_emitter_position(to_audio_position(emitter.position()));
                 sink.set_left_ear_position(left_ear_position);
                 sink.set_right_ear_position(right_ear_position);
             }
         }
     }
 
-    pub fn empty(&self) -> bool {
+    fn empty(&self) -> bool {
         self.inner().empty()
     }
 
-    pub fn stop(&self) {
+    fn stop(&self) {
         self.inner().stop();
     }
 }
@@ -110,7 +156,7 @@ where
     #[allow(dead_code)]
     sinks: Vec<Sink>,
     channel_to_last_handle: HashMap<String, u64>,
-    handle_to_sink: HashMap<u64, SinkAdapter>,
+    handle_to_sink: HashMap<u64, SinkAdapter<TAmbientKey>>,
     // Background music
     background_music: Option<Sink>,
     background_music_player: Option<Box<dyn BackgroundMusic<TCue>>>,
@@ -189,11 +235,15 @@ where
         self.environmental_sink = Some((sink, clip.clone()));
     }
 
-    pub fn update(
+    pub fn update<F>(
         &mut self,
-        position: Vector3<f32>,
+        left_ear_position: Vector3<f32>,
+        right_ear_position: Vector3<f32>,
         current_ambient_sounds: Vec<(TAmbientKey, Vector3<f32>, Rc<AudioClip>)>,
-    ) {
+        mut source_position: F,
+    ) where
+        F: FnMut(TAmbientKey) -> Option<Vector3<f32>>,
+    {
         audio_log!(DEBUG, "Audio system update started");
         self.update_background_music();
         self.update_environmental_sounds();
@@ -203,16 +253,8 @@ where
             current_ambient_sounds.len()
         );
 
-        let left_ear_position = [
-            (position.x - 1.0) / SOUND_SCALE_FACTOR,
-            position.y / SOUND_SCALE_FACTOR,
-            position.z / SOUND_SCALE_FACTOR,
-        ];
-        let right_ear_position = [
-            (position.x + 1.0) / SOUND_SCALE_FACTOR,
-            position.y / SOUND_SCALE_FACTOR,
-            position.z / SOUND_SCALE_FACTOR,
-        ];
+        let left_ear_position = to_audio_position(left_ear_position);
+        let right_ear_position = to_audio_position(right_ear_position);
 
         self.last_left_ear_position = vec3(
             left_ear_position[0],
@@ -228,7 +270,11 @@ where
         self.handle_to_sink.retain(|_, sink| !sink.empty());
         // Update positional sounds
         for sink in self.handle_to_sink.values_mut() {
-            sink.update_listener_position(left_ear_position, right_ear_position);
+            sink.update_spatial_position(
+                left_ear_position,
+                right_ear_position,
+                &mut source_position,
+            );
         }
 
         // Build hash map for new ambient sounds
@@ -245,11 +291,7 @@ where
                     clip.add_to_spatial_sink(sink);
                 }
 
-                sink.set_emitter_position([
-                    current_sound.0.x / SOUND_SCALE_FACTOR,
-                    current_sound.0.y / SOUND_SCALE_FACTOR,
-                    current_sound.0.z / SOUND_SCALE_FACTOR,
-                ]);
+                sink.set_emitter_position(to_audio_position(*current_sound.0));
 
                 // TODO
                 sink.set_left_ear_position(left_ear_position);
@@ -272,11 +314,7 @@ where
             if !self.ambient_sounds.contains_key(key) {
                 let sink = rodio::SpatialSink::try_new(
                     &self.handle,
-                    [
-                        pos.x / SOUND_SCALE_FACTOR,
-                        pos.y / SOUND_SCALE_FACTOR,
-                        pos.z / SOUND_SCALE_FACTOR,
-                    ],
+                    to_audio_position(*pos),
                     left_ear_position,
                     right_ear_position,
                 )
@@ -452,6 +490,7 @@ pub fn play_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
 pub fn play_spatial_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     context: &mut AudioContext<TAmbientKey, TCue>,
     position: Vector3<f32>,
+    source: Option<TAmbientKey>,
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
@@ -463,8 +502,16 @@ pub fn play_spatial_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
 
     context
         .handle_to_sink
-        .insert(id, SinkAdapter::positional(sink));
+        .insert(id, SinkAdapter::positional(sink, position, source));
     preempted
+}
+
+fn to_audio_position(position: Vector3<f32>) -> [f32; 3] {
+    [
+        position.x / SOUND_SCALE_FACTOR,
+        position.y / SOUND_SCALE_FACTOR,
+        position.z / SOUND_SCALE_FACTOR,
+    ]
 }
 
 pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
@@ -531,7 +578,8 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
 
 #[cfg(test)]
 mod tests {
-    use super::wav_duration;
+    use super::{TrackedEmitter, wav_duration};
+    use cgmath::vec3;
 
     fn riff(avg_bytes_per_sec: u32, data_len: usize) -> Vec<u8> {
         let mut fmt = Vec::new();
@@ -568,5 +616,17 @@ mod tests {
     fn wav_duration_rejects_non_riff_buffers() {
         assert!(wav_duration(b"not a wave file at all").is_none());
         assert!(wav_duration(&[]).is_none());
+    }
+
+    #[test]
+    fn positional_emitter_refreshes_from_its_live_source() {
+        let mut emitter = TrackedEmitter::new(vec3(1.0, 2.0, 3.0), Some(7_u32));
+
+        emitter.refresh(|source| {
+            assert_eq!(source, 7);
+            Some(vec3(4.0, 5.0, 6.0))
+        });
+
+        assert_eq!(emitter.position(), vec3(4.0, 5.0, 6.0));
     }
 }
