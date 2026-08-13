@@ -467,12 +467,12 @@ where
                             transparent_index_0: *kind == ImageKind::ObjectIcon,
                         },
                     );
-                    let drawn = drawn_size(*size, texture_px(&tex), *kind);
+                    let (drawn_at, drawn) = drawn_rect(*position, *size, texture_px(&tex), *kind);
                     objs.push(SceneObject::screen_space_quad2(
                         tex.clone() as Rc<dyn TextureTrait>,
                         vec2(
-                            position.x * scale.x + offset.x,
-                            position.y * scale.y + offset.y,
+                            drawn_at.x * scale.x + offset.x,
+                            drawn_at.y * scale.y + offset.y,
                         ),
                         vec2(drawn.x * scale.x, drawn.y * scale.y),
                         *alpha,
@@ -503,14 +503,14 @@ where
                             transparent_index_0: kind == ImageKind::ObjectIcon,
                         },
                     );
-                    let size = &drawn_size(*size, texture_px(&tex), kind);
+                    let (drawn_at, drawn) = drawn_rect(*position, *size, texture_px(&tex), kind);
                     objs.push(SceneObject::screen_space_quad2(
                         tex.clone() as Rc<dyn TextureTrait>,
                         vec2(
-                            position.x * scale.x + offset.x,
-                            position.y * scale.y + offset.y,
+                            drawn_at.x * scale.x + offset.x,
+                            drawn_at.y * scale.y + offset.y,
                         ),
-                        vec2(size.x * scale.x, size.y * scale.y),
+                        vec2(drawn.x * scale.x, drawn.y * scale.y),
                         *alpha,
                     ));
                 }
@@ -729,7 +729,7 @@ fn world_image(
             },
         )
         .clone();
-    let size = drawn_size(size, texture_px(&texture), kind);
+    let (position, size) = drawn_rect(position, size, texture_px(&texture), kind);
     let material =
         engine::scene::basic_material::create(texture as Rc<dyn TextureTrait>, 1.0, 1.0 - alpha);
     let mut object = SceneObject::new(material, Box::new(engine::scene::quad::create()));
@@ -749,11 +749,29 @@ fn button_image_kind(entity: &Option<EntityId>) -> ImageKind {
 /// The size an element's art actually draws at: its slot rect for ordinary UI
 /// art, or the icon's own authored pixels for [`ImageKind::ObjectIcon`], which
 /// the original blits 1:1 into the slot rather than stretching to fill it.
-fn drawn_size(size: Vector2<f32>, texture_px: Vector2<f32>, kind: ImageKind) -> Vector2<f32> {
+fn drawn_rect(
+    position: Vector2<f32>,
+    size: Vector2<f32>,
+    texture_px: Vector2<f32>,
+    kind: ImageKind,
+) -> (Vector2<f32>, Vector2<f32>) {
     match kind {
-        ImageKind::Ui => size,
-        ImageKind::ObjectIcon => texture_px,
+        ImageKind::Ui => (position, size),
+        ImageKind::ObjectIcon => (position + centered_offset(size, texture_px), texture_px),
     }
+}
+
+/// Where to place art of `drawn` size inside a `slot`, so it sits centered
+/// rather than flush against the slot's top-left corner.
+///
+/// Whole pixels only - a half-pixel origin would resample the icon's pixel art
+/// - and never negative: art bigger than its slot stays anchored at the
+/// top-left and overhangs to the right/bottom, which keeps it inside the panel.
+pub(crate) fn centered_offset(slot: Vector2<f32>, drawn: Vector2<f32>) -> Vector2<f32> {
+    vec2(
+        (((slot.x - drawn.x) / 2.0).floor()).max(0.0),
+        (((slot.y - drawn.y) / 2.0).floor()).max(0.0),
+    )
 }
 
 /// A loaded texture's authored pixel dimensions.
@@ -874,8 +892,39 @@ mod tests {
         let slot = vec2(35.0, 102.0);
         let icon = vec2(22.0, 99.0);
 
-        assert_eq!(drawn_size(slot, icon, ImageKind::ObjectIcon), icon);
-        assert_eq!(drawn_size(slot, icon, ImageKind::Ui), slot);
+        let at = vec2(15.0, 153.0);
+        // Size is the icon's own; position is its centered placement in the slot.
+        assert_eq!(
+            drawn_rect(at, slot, icon, ImageKind::ObjectIcon),
+            (at + centered_offset(slot, icon), icon)
+        );
+        assert_eq!(drawn_rect(at, slot, icon, ImageKind::Ui), (at, slot));
+    }
+
+    /// ...and centered in the slot, so narrow art (the 22px wrench in a 35px
+    /// cell) is not shoved against one separator with all its slack on the
+    /// other side. Whole pixels only, and art wider than its slot keeps the
+    /// top-left anchor instead of overhanging into the panel's chrome.
+    #[test]
+    fn object_icons_center_in_their_slot() {
+        assert_eq!(
+            centered_offset(vec2(35.0, 102.0), vec2(22.0, 99.0)),
+            vec2(6.0, 1.0)
+        );
+        assert_eq!(
+            centered_offset(vec2(35.0, 34.0), vec2(32.0, 32.0)),
+            vec2(1.0, 1.0)
+        );
+        // No half-pixel origins: 35 - 34 = 1 floors to 0 rather than 0.5.
+        assert_eq!(
+            centered_offset(vec2(35.0, 102.0), vec2(34.0, 99.0)),
+            vec2(0.0, 1.0)
+        );
+        // Art larger than its slot stays anchored top-left.
+        assert_eq!(
+            centered_offset(vec2(35.0, 34.0), vec2(66.0, 68.0)),
+            vec2(0.0, 0.0)
+        );
     }
 
     #[test]

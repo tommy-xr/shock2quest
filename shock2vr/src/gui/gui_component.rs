@@ -619,15 +619,23 @@ impl GuiComponentRenderInfo {
                         },
                     )
                     .clone();
-                // An object icon draws at its own authored pixels, anchored to
-                // the top-left of its slot; ordinary art fills the slot.
-                let size = &if self.is_object_icon() {
-                    vec2(
-                        texture.width() as f32 / panel_size_px.x,
-                        texture.height() as f32 / panel_size_px.y,
+                // An object icon draws at its own authored pixels, centered in
+                // its slot; ordinary art fills the slot. The panel's own
+                // coordinates are normalized, so the icon's authored pixels
+                // and the centering offset are converted through panel_size_px.
+                let (position, size) = &if self.is_object_icon() {
+                    let slot_px = vec2(size.x * panel_size_px.x, size.y * panel_size_px.y);
+                    let drawn_px = vec2(texture.width() as f32, texture.height() as f32);
+                    let offset_px = crate::ui::centered_offset(slot_px, drawn_px);
+                    (
+                        vec2(
+                            position.x + offset_px.x / panel_size_px.x,
+                            position.y + offset_px.y / panel_size_px.y,
+                        ),
+                        vec2(drawn_px.x / panel_size_px.x, drawn_px.y / panel_size_px.y),
                     )
                 } else {
-                    *size
+                    (*position, *size)
                 };
                 let texture = texture as Rc<dyn TextureTrait>;
                 let comp_mat = engine::scene::basic_material::create(texture, 1.0, 1.0 - alpha);
