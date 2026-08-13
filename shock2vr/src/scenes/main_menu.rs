@@ -74,6 +74,7 @@ const FALLBACK_BUTTON_PITCH: f32 = 76.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
     NewGame,
+    LoadGame,
     Quit,
 }
 
@@ -103,7 +104,7 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem {
         string_key: "load_game",
         fallback_label: "Load Game",
-        action: None,
+        action: Some(MenuAction::LoadGame),
     },
     MenuItem {
         string_key: "options",
@@ -272,6 +273,9 @@ impl GameScene for MainMenuScene {
                     vitals_transition:
                         crate::scripts::PlayerVitalsTransition::InitializeFromDestination,
                 })]
+            }
+            Some(MenuAction::LoadGame) => {
+                vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
             }
             Some(MenuAction::Quit) => vec![Effect::GlobalEffect(GlobalEffect::Quit)],
             None => Vec::new(),
@@ -442,12 +446,20 @@ mod tests {
     }
 
     #[test]
-    fn click_over_an_unimplemented_item_does_nothing() {
-        // Rect 1 is "Load Game", which has no action yet: canvas y 96..156, so
-        // normalized y ~0.26 sits inside it.
+    fn rising_edge_over_load_game_activates_it() {
+        // Rect 1 is "Load Game": canvas y 96..156, so y ~0.26 sits inside it.
         let rects = menu_rects(None);
         assert!(rects[1].contains(vec2(512.0, 126.0)));
         let (action, _) = resolve_click(pointer_at(0.8, 0.2625, true), false, SCREEN, &rects);
+        assert_eq!(action, Some(MenuAction::LoadGame));
+    }
+
+    #[test]
+    fn click_over_an_unimplemented_item_does_nothing() {
+        // Rect 2 is "Options", still unimplemented: canvas y 172..232.
+        let rects = menu_rects(None);
+        assert!(rects[2].contains(vec2(512.0, 202.0)));
+        let (action, _) = resolve_click(pointer_at(0.8, 0.4208, true), false, SCREEN, &rects);
         assert_eq!(action, None);
     }
 

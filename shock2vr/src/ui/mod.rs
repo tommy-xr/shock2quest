@@ -22,7 +22,7 @@ use cgmath::{Deg, Matrix4, Vector2, vec2, vec3};
 use dark::importers::{FONT_IMPORTER, TEXTURE_IMPORTER};
 use engine::{
     assets::asset_cache::AssetCache,
-    measure_text_width,
+    ellipsize, measure_text_width,
     scene::SceneObject,
     texture::{Texture, TextureOptions, TextureTrait},
 };
@@ -230,6 +230,10 @@ where
         h: HAlign,
         v: VAlign,
         alpha: f32,
+        /// When set, text wider than its rect is shortened with a trailing
+        /// ellipsis instead of spilling over neighbouring widgets. Only the
+        /// screen-space path honours this (see [`UiCanvas::text_native_fit`]).
+        fit_to_rect: bool,
     },
 }
 
@@ -420,17 +424,7 @@ where
         h: HAlign,
         v: VAlign,
     ) -> &mut Self {
-        self.elements.push(UiElement::Text {
-            position: vec2(rect.x, rect.y),
-            size: vec2(rect.w, rect.h),
-            text: text.to_owned(),
-            font: font.to_owned(),
-            font_size: size,
-            h,
-            v,
-            alpha: 1.0,
-        });
-        self
+        self.push_text(rect, text, font, size, h, v, false)
     }
 
     /// Add text rendered at the font's **native pixel height** on the 640x480
@@ -448,6 +442,46 @@ where
         v: VAlign,
     ) -> &mut Self {
         self.text(rect, text, font, 0.0, h, v)
+    }
+
+    /// [`text_native`](Self::text_native) for text of unbounded length - a save
+    /// name, a player-authored label - that must stay inside its rect. Anything
+    /// too wide is shortened with a trailing ellipsis at render time, where the
+    /// font (and so the real glyph widths) is available.
+    pub fn text_native_fit(
+        &mut self,
+        rect: Rect,
+        text: &str,
+        font: &str,
+        h: HAlign,
+        v: VAlign,
+    ) -> &mut Self {
+        self.push_text(rect, text, font, 0.0, h, v, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn push_text(
+        &mut self,
+        rect: Rect,
+        text: &str,
+        font: &str,
+        size: f32,
+        h: HAlign,
+        v: VAlign,
+        fit_to_rect: bool,
+    ) -> &mut Self {
+        self.elements.push(UiElement::Text {
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
+            text: text.to_owned(),
+            font: font.to_owned(),
+            font_size: size,
+            h,
+            v,
+            alpha: 1.0,
+            fit_to_rect,
+        });
+        self
     }
 
     /// Render the canvas as a screen-space overlay on `screen_size`, mapped via
@@ -573,6 +607,7 @@ where
                     h,
                     v,
                     alpha,
+                    fit_to_rect,
                 } => {
                     let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
                     // `size <= 0` renders at the font's native pixel height, so
@@ -584,12 +619,20 @@ where
                         font_obj.base_height()
                     };
                     let font_size = canvas_size * scale.y;
-                    let width = measure_text_width(&**font_obj, text, font_size);
 
                     let rx = position.x * scale.x + offset.x;
                     let ry = position.y * scale.y + offset.y;
                     let rw = size.x * scale.x;
                     let rh = size.y * scale.y;
+
+                    let fitted;
+                    let text: &str = if *fit_to_rect {
+                        fitted = ellipsize(&**font_obj, text, font_size, rw);
+                        &fitted
+                    } else {
+                        text
+                    };
+                    let width = measure_text_width(&**font_obj, text, font_size);
                     let x = match h {
                         HAlign::Left => rx,
                         HAlign::Center => rx + (rw - width) / 2.0,

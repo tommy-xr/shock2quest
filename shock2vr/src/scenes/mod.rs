@@ -36,6 +36,7 @@ pub mod debug_teleport;
 pub mod debug_turret;
 pub mod debug_weapons;
 pub mod game_over;
+pub mod load_game;
 pub mod loading;
 pub mod main_menu;
 
@@ -56,6 +57,7 @@ pub use debug_teleport::DebugTeleportScene;
 pub use debug_turret::DebugTurretScene;
 pub use debug_weapons::create_debug_weapons_scene;
 pub use game_over::GameOverScene;
+pub use load_game::LoadGameScene;
 pub use loading::LoadingScene;
 pub use main_menu::MainMenuScene;
 
