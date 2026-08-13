@@ -11,6 +11,7 @@ pub mod mission;
 pub mod model;
 pub mod motion;
 pub mod name_map;
+pub mod weapon_animation;
 pub mod ss2_bin_ai_loader;
 pub mod ss2_bin_header;
 pub mod ss2_bin_obj_loader;
