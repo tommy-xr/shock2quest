@@ -876,7 +876,9 @@ impl MissionCore {
             if game_options.presentation_mode == crate::PresentationMode::Flat {
                 Box::new(FlatInteraction::new())
             } else {
-                Box::new(VrInteraction::new())
+                Box::new(VrInteraction::new(
+                    game_options.experimental_features.contains("vr_hands_25ae"),
+                ))
             };
         let held_instantiation = held_item_save_data
             .instantiate_with_legacy_template_names(&mut world, &unique_gamesys_template_names);

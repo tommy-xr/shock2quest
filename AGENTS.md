@@ -511,6 +511,15 @@ The project supports experimental flags for gating in-progress features during d
   action reloads the current level in place to exercise this. See
   `projects/loading-screen.md`. Without it, transitions are synchronous and unchanged.
 
+- **`vr_hands_25ae`**: in VR, draw the player's hands using the 25th Anniversary
+  Edition's authored first-person hands (`hand_pose_library`) instead of the
+  SteamVR glove, snapping between `Rest` / `SemiClosed` / `Grip`. Requires a 25AE
+  install; a classic install has none of these models and falls back to the glove
+  regardless. **Unfinished** - the source models drag weapon-model forearm
+  geometry into view (`SemiClosed` has a sleeve wedge through the palm), and the
+  per-source handedness is not yet declared, so hands can appear mirrored. Off by
+  default; the glove is the shipped behaviour.
+
 - **`nav_bridges`**: reconnect the AI navigation mesh for full-map pathfinding. The
   shipped mission data partitions the walk graph into per-area islands with no links
   between them (original AI pathfinding was area-local); this flag synthesizes

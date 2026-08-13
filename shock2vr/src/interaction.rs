@@ -118,22 +118,32 @@ pub struct VrInteraction {
     /// The 25AE authored hands, resolved once. `Some(None)` records that this
     /// install has none, so we do not retry the asset lookup every frame.
     pose_library: RefCell<Option<Option<crate::hand_pose_library::PoseLibrary>>>,
+
+    /// Whether to prefer the authored hands over the glove at all. Off unless
+    /// `--experimental vr_hands_25ae` is passed.
+    use_authored_hands: bool,
 }
 
 impl VrInteraction {
-    pub fn new() -> Self {
+    /// `use_authored_hands` opts into the 25AE authored hand poses
+    /// (`--experimental vr_hands_25ae`); without it the SteamVR glove is used,
+    /// as before. See `hand_pose_library`'s module docs for what is still
+    /// unfinished about them.
+    pub fn new(use_authored_hands: bool) -> Self {
         Self {
             left_hand: VirtualHand::new(Handedness::Left),
             right_hand: VirtualHand::new(Handedness::Right),
             glove_renderer: RefCell::new(None),
             pose_library: RefCell::new(None),
+            use_authored_hands,
         }
     }
 }
 
 impl Default for VrInteraction {
+    /// The glove, which is the shipped behaviour.
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
@@ -182,9 +192,16 @@ impl PlayerInteraction for VrInteraction {
 
     fn render(&self, asset_cache: &mut AssetCache, world: &World) -> Vec<SceneObject> {
         let mut pose_slot = self.pose_library.borrow_mut();
-        let pose_library = pose_slot
-            .get_or_insert_with(|| crate::hand_pose_library::PoseLibrary::new(asset_cache))
-            .as_ref();
+        // `Some(None)` - the flag is on but this install has no authored hands -
+        // falls back exactly like the flag being off.
+        let pose_library = self
+            .use_authored_hands
+            .then(|| {
+                pose_slot
+                    .get_or_insert_with(|| crate::hand_pose_library::PoseLibrary::new(asset_cache))
+                    .as_ref()
+            })
+            .flatten();
 
         let mut objs = Vec::new();
         match pose_library {
