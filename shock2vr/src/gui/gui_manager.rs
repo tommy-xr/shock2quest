@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 
-use cgmath::{EuclideanSpace, Matrix4, Vector2, Vector3, vec3};
+use cgmath::{EuclideanSpace, InnerSpace, Matrix4, Vector2, Vector3, vec3};
 
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use rapier3d::prelude::RigidBodyHandle;
-use shipyard::{Component, EntityId, Get, View, World};
+use shipyard::{Component, EntitiesView, EntityId, Get, UniqueView, View, World};
 
 use crate::{
+    mission::PlayerInfo,
     physics::{CollisionGroup, PhysicsWorld},
     runtime_props::{RuntimePropDoNotSerialize, RuntimePropTransform},
     scripts::ScriptWorld,
@@ -16,7 +17,6 @@ use crate::{
 use crate::gui::*;
 
 pub struct GuiInstanceInfo {
-    #[allow(dead_code)]
     pub parent_entity: EntityId,
     pub proxy_entity: EntityId,
     #[allow(dead_code)]
@@ -29,7 +29,16 @@ pub struct GuiInstanceInfo {
 pub struct GuiManager {
     handle_to_instance: HashMap<GuiHandle, GuiInstanceInfo>,
     entity_id_to_proxy_entity_id: HashMap<EntityId, EntityId>,
+    /// The single object-bound world panel opened through `Effect::OpenPanel`
+    /// in default VR. The old `--experimental gui` mode still materializes
+    /// every panel and does not consult this slot.
+    active_panel: Option<EntityId>,
 }
+
+/// Match the original container overlay's distance-close behavior. Four world
+/// units is beyond normal frob reach, so small looting movements keep the
+/// panel open while walking away removes its transient collider and art.
+const PANEL_AUTO_CLOSE_DISTANCE: f32 = 4.0;
 
 #[derive(Component)]
 pub struct GuiPropProxyEntity {
@@ -45,6 +54,139 @@ impl GuiManager {
         GuiManager {
             handle_to_instance: HashMap::new(),
             entity_id_to_proxy_entity_id: HashMap::new(),
+            active_panel: None,
+        }
+    }
+
+    pub fn active_panel(&self) -> Option<EntityId> {
+        self.active_panel
+    }
+
+    /// Bind the default-VR world-panel slot to one gameplay entity. Opening a
+    /// second object removes the first panel's transient proxy, just as the
+    /// original left MFD slot replaces the previous object-bound overlay.
+    ///
+    /// `retain_existing` preserves the legacy `--experimental gui` behavior,
+    /// where all authored panels are materialized at once.
+    pub fn open_panel(
+        &mut self,
+        entity: EntityId,
+        retain_existing: bool,
+        world: &mut World,
+        physics: &mut PhysicsWorld,
+        scripts: &mut ScriptWorld,
+        id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
+    ) {
+        if self.active_panel != Some(entity) && !retain_existing {
+            if let Some(previous) = self.active_panel {
+                self.remove_parent_instances(previous, world, physics, scripts, id_to_physics);
+            }
+        }
+        self.active_panel = Some(entity);
+    }
+
+    /// Close the active default-VR panel and remove its non-serialized proxy.
+    pub fn close_panel(
+        &mut self,
+        world: &mut World,
+        physics: &mut PhysicsWorld,
+        scripts: &mut ScriptWorld,
+        id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
+    ) {
+        if let Some(parent) = self.active_panel.take() {
+            self.remove_parent_instances(parent, world, physics, scripts, id_to_physics);
+        }
+    }
+
+    /// Preserve the original overlay's close conditions in world space: a
+    /// destroyed host or a player walking away dismisses the panel. Carried
+    /// panel hosts are exempt because their authored world position is stale.
+    pub fn maintain_active_panel(
+        &mut self,
+        world: &mut World,
+        physics: &mut PhysicsWorld,
+        scripts: &mut ScriptWorld,
+        id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
+    ) {
+        let Some(parent) = self.active_panel else {
+            return;
+        };
+        let alive = world
+            .borrow::<EntitiesView>()
+            .map(|entities| entities.is_alive(parent))
+            .unwrap_or(false);
+        let carried =
+            alive && crate::scripts::script_util::player_carried_items(world).contains(&parent);
+        let too_far = alive
+            && !carried
+            && world
+                .borrow::<UniqueView<PlayerInfo>>()
+                .map(|player| {
+                    let position = get_position_from_transform(world, parent, vec3(0.0, 0.0, 0.0));
+                    (position.to_vec() - player.pos).magnitude() > PANEL_AUTO_CLOSE_DISTANCE
+                })
+                .unwrap_or(false);
+        if !alive || too_far {
+            self.close_panel(world, physics, scripts, id_to_physics);
+        }
+    }
+
+    /// Remove GUI state owned by a gameplay entity before that entity is
+    /// deleted. This also handles a proxy being removed independently, so no
+    /// recycled `EntityId` can inherit stale panel state.
+    pub fn on_entity_destroyed(
+        &mut self,
+        entity: EntityId,
+        world: &mut World,
+        physics: &mut PhysicsWorld,
+        scripts: &mut ScriptWorld,
+        id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
+    ) {
+        if self.active_panel == Some(entity) {
+            self.active_panel = None;
+        }
+        self.remove_parent_instances(entity, world, physics, scripts, id_to_physics);
+
+        let handles: Vec<_> = self
+            .handle_to_instance
+            .iter()
+            .filter_map(|(handle, info)| (info.proxy_entity == entity).then_some(*handle))
+            .collect();
+        for handle in handles {
+            self.handle_to_instance.remove(&handle);
+        }
+        self.entity_id_to_proxy_entity_id
+            .retain(|_, proxy| *proxy != entity);
+    }
+
+    fn remove_parent_instances(
+        &mut self,
+        parent: EntityId,
+        world: &mut World,
+        physics: &mut PhysicsWorld,
+        scripts: &mut ScriptWorld,
+        id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
+    ) {
+        let handles: Vec<_> = self
+            .handle_to_instance
+            .iter()
+            .filter_map(|(handle, info)| (info.parent_entity == parent).then_some(*handle))
+            .collect();
+        for handle in handles {
+            if let Some(instance) = self.handle_to_instance.remove(&handle) {
+                let proxy = instance.proxy_entity;
+                self.entity_id_to_proxy_entity_id.remove(&parent);
+                id_to_physics.remove(&proxy);
+                physics.remove(proxy);
+                scripts.remove_entity(proxy);
+                let alive = world
+                    .borrow::<EntitiesView>()
+                    .map(|entities| entities.is_alive(proxy))
+                    .unwrap_or(false);
+                if alive {
+                    world.delete_entity(proxy);
+                }
+            }
         }
     }
 
@@ -119,9 +261,31 @@ impl GuiManager {
     pub fn update(&mut self) {}
 
     pub fn render(&mut self, asset_cache: &mut AssetCache, world: &World) -> Vec<SceneObject> {
+        self.render_filtered(asset_cache, world, false)
+    }
+
+    /// Render only the object-bound default-VR slot. Experimental GUI keeps
+    /// using [`render`](Self::render) to show every authored panel.
+    pub fn render_active(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        world: &World,
+    ) -> Vec<SceneObject> {
+        self.render_filtered(asset_cache, world, true)
+    }
+
+    fn render_filtered(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        world: &World,
+        active_only: bool,
+    ) -> Vec<SceneObject> {
         let mut ret = Vec::new();
         let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
         for (_handle, info) in &self.handle_to_instance {
+            if active_only && Some(info.parent_entity) != self.active_panel {
+                continue;
+            }
             let player_mat = engine::scene::color_material::create(Vector3::new(0.0, 0.0, 1.0));
             let mut gui_obj = SceneObject::new(player_mat, Box::new(engine::scene::quad::create()));
             let maybe_transform = v_transform.get(info.proxy_entity);
@@ -157,8 +321,8 @@ impl GuiManager {
 
 #[cfg(test)]
 mod tests {
-    use cgmath::{Matrix4, vec2, vec3};
-    use shipyard::Get;
+    use cgmath::{Matrix4, Quaternion, vec2, vec3};
+    use shipyard::{EntitiesView, Get};
 
     use super::*;
 
@@ -210,5 +374,108 @@ mod tests {
             physics.cuboid_full_size(instance.physics_handle),
             Some(vec3(188.0, 296.0, 0.01))
         );
+    }
+
+    #[test]
+    fn opening_a_second_default_panel_removes_the_first_transient_proxy() {
+        let mut world = World::new();
+        let first = world.add_entity((RuntimePropTransform(Matrix4::from_scale(1.0)),));
+        let second = world.add_entity((RuntimePropTransform(Matrix4::from_scale(1.0)),));
+        let mut physics = PhysicsWorld::new();
+        let mut scripts = ScriptWorld::new();
+        let mut id_to_physics = HashMap::new();
+        let mut manager = GuiManager::new();
+
+        manager.open_panel(
+            first,
+            false,
+            &mut world,
+            &mut physics,
+            &mut scripts,
+            &mut id_to_physics,
+        );
+        manager.update_ui(
+            &mut world,
+            &mut physics,
+            &mut scripts,
+            &mut id_to_physics,
+            GuiHandle::new(),
+            first,
+            vec2(0.75, 1.18),
+            vec3(0.0, 1.0, 0.0),
+            Vec::new(),
+        );
+        let first_instance = manager.handle_to_instance.values().next().unwrap();
+        let first_proxy = first_instance.proxy_entity;
+        let first_physics = first_instance.physics_handle;
+
+        manager.open_panel(
+            second,
+            false,
+            &mut world,
+            &mut physics,
+            &mut scripts,
+            &mut id_to_physics,
+        );
+
+        assert_eq!(manager.active_panel(), Some(second));
+        assert!(manager.handle_to_instance.is_empty());
+        assert!(!id_to_physics.contains_key(&first_proxy));
+        assert!(physics.get_position(first_physics).is_none());
+        assert!(
+            !world
+                .borrow::<EntitiesView>()
+                .unwrap()
+                .is_alive(first_proxy)
+        );
+    }
+
+    #[test]
+    fn walking_beyond_the_overlay_distance_closes_the_default_panel() {
+        let mut world = World::new();
+        let inventory = world.add_entity(());
+        let player_entity = world.add_entity(());
+        let parent = world.add_entity((RuntimePropTransform(Matrix4::from_translation(vec3(
+            PANEL_AUTO_CLOSE_DISTANCE + 1.0,
+            0.0,
+            0.0,
+        ))),));
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player_entity,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+        let mut physics = PhysicsWorld::new();
+        let mut scripts = ScriptWorld::new();
+        let mut id_to_physics = HashMap::new();
+        let mut manager = GuiManager::new();
+        manager.open_panel(
+            parent,
+            false,
+            &mut world,
+            &mut physics,
+            &mut scripts,
+            &mut id_to_physics,
+        );
+        manager.update_ui(
+            &mut world,
+            &mut physics,
+            &mut scripts,
+            &mut id_to_physics,
+            GuiHandle::new(),
+            parent,
+            vec2(0.75, 1.18),
+            vec3(0.0, 1.0, 0.0),
+            Vec::new(),
+        );
+
+        manager.maintain_active_panel(&mut world, &mut physics, &mut scripts, &mut id_to_physics);
+
+        assert_eq!(manager.active_panel(), None);
+        assert!(manager.handle_to_instance.is_empty());
+        assert!(id_to_physics.is_empty());
     }
 }

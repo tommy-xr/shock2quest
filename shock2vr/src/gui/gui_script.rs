@@ -106,11 +106,11 @@ where
                     parent_entity_id: entity_id,
                     dropped_entity_id: *entity,
                 }),
-            // Frobbing a GUI-bearing entity opens its panel as a flat-mode MFD
-            // (the original's frob-script -> overlay flow). VR ignores the
-            // OpenPanel effect - its panels are world quads driven by `Hover` -
-            // but the `on_frob` side effects (e.g. an audio log recording +
-            // playing its clip) fire in both presentations. A gui can veto the
+            // Frobbing a GUI-bearing entity opens its presentation's panel
+            // slot (flat MFD or VR world quad), preserving the original's
+            // frob-script -> overlay flow. The `on_frob` side effects (e.g. an
+            // audio log recording + playing its clip) fire in both
+            // presentations. A gui can veto the
             // open (a content-less log disc) and/or ask for fresh per-open
             // state (the reader's scroll position).
             // Opened without a frob (the audio-log reader): give the gui the

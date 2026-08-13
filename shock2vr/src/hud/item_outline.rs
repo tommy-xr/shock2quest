@@ -35,8 +35,6 @@ pub fn draw_item_name(
 
     let v_prop_obj_short_name = world.borrow::<View<PropObjName>>().unwrap();
     let maybe_prop_obj_short_name = v_prop_obj_short_name.get(entity_id);
-    let v_prop_template_id = world.borrow::<View<PropTemplateId>>().unwrap();
-    let prop_template_id = v_prop_template_id.get(entity_id).unwrap();
 
     if maybe_prop_obj_short_name.is_err() {
         return vec![];
@@ -67,11 +65,17 @@ pub fn draw_item_name(
         .unwrap_or("?".to_string());
 
     let text_content = if debug_show_ids {
+        let template_id = world
+            .borrow::<View<PropTemplateId>>()
+            .unwrap()
+            .get(entity_id)
+            .map(|prop| prop.template_id.to_string())
+            .unwrap_or_else(|_| "runtime".to_owned());
         format!(
             "{} | {} (Tem {}| Ent {})",
             item_name,
             &maybe_hitpoints,
-            prop_template_id.template_id,
+            template_id,
             entity_id.inner(),
         )
     } else {
