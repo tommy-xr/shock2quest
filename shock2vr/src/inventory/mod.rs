@@ -7,7 +7,7 @@
 //! link, so this is also what makes a container's layout stable across a
 //! reload.
 
-use dark::properties::{Link, PropInventoryDimensions};
+use dark::properties::{Link, PropContainDimensions, PropInventoryDimensions};
 use shipyard::{EntityId, Get, View, World};
 
 pub mod player_inventory_entity;
@@ -27,15 +27,29 @@ const EQUIP_SLOT_BASE: u32 = 1000;
 /// Which grid `container_entity` is drawn with. The player's backpack is
 /// wider than a container's loot panel, and the ordinal encodes `y * width +
 /// x`, so both sides of the containment link must agree on the width.
+///
+/// A container's grid is authored as `P$ContainDims`; every container in the
+/// shipped game declares 4x4, which is also the fallback for anything that
+/// does not declare one. The backpack's width is not read from the world yet -
+/// the original derives it from Strength (see the tracking issue), so it stays
+/// at its maximum here.
 pub fn grid_for(world: &World, container_entity: EntityId) -> (usize, usize) {
     let is_backpack = world
         .borrow::<View<PlayerInventoryEntity>>()
         .map(|v| v.get(container_entity).is_ok())
         .unwrap_or(false);
-    match is_backpack {
-        true => BACKPACK_GRID,
-        false => CONTAINER_GRID,
+    if is_backpack {
+        return BACKPACK_GRID;
     }
+    world
+        .borrow::<View<PropContainDimensions>>()
+        .ok()
+        .and_then(|v| v.get(container_entity).ok().map(|d| (d.width, d.height)))
+        // A zero dimension would make every cell decode to nothing; treat it
+        // as unauthored rather than trusting it.
+        .filter(|(w, h)| *w > 0 && *h > 0)
+        .map(|(w, h)| (w as usize, h as usize))
+        .unwrap_or(CONTAINER_GRID)
 }
 
 #[derive(Clone, Debug)]
@@ -317,6 +331,37 @@ mod tests {
             second, first,
             "the loser must be packed elsewhere, not stacked"
         );
+    }
+
+    /// A container's authored `ContainDims` decides the width its ordinals
+    /// decode against - get that wrong and every stored cell lands somewhere
+    /// else. Shipped containers all declare 4x4, but the value is data.
+    #[test]
+    fn container_grid_comes_from_authored_contain_dims() {
+        use dark::properties::PropContainDimensions;
+
+        let mut world = World::new();
+        let plain = world.add_entity(());
+        assert_eq!(grid_for(&world, plain), CONTAINER_GRID, "fallback");
+
+        let wide = world.add_entity(PropContainDimensions {
+            width: 6,
+            height: 2,
+        });
+        assert_eq!(grid_for(&world, wide), (6, 2));
+
+        // Slot 7 is (3,1) in a 4-wide grid but (1,1) in a 6-wide one.
+        let six = Inventory::new(6, 2);
+        assert_eq!(six.cell_of(7), Some((1, 1)));
+        let four = Inventory::new(4, 4);
+        assert_eq!(four.cell_of(7), Some((3, 1)));
+
+        // A degenerate authored value must not swallow the grid.
+        let zero = world.add_entity(PropContainDimensions {
+            width: 0,
+            height: 4,
+        });
+        assert_eq!(grid_for(&world, zero), CONTAINER_GRID);
     }
 
     /// Equip-range ordinals are not cells; such an item still gets laid out.
