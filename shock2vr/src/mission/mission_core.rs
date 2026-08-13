@@ -549,6 +549,10 @@ pub struct MissionCore {
     #[allow(dead_code)]
     pub template_to_entity_id: HashMap<i32, WrappedEntityId>,
     pub template_name_to_template_id: HashMap<String, EntityMetadata>,
+    /// This mission's own objects (positive ids) that author a unique
+    /// `P$SymName`, indexed by lowercased name - the fallback an ecology spawn
+    /// uses when the gamesys has no archetype under the authored name.
+    mission_object_name_to_id: HashMap<String, i32>,
     pub obj_map: HashMap<i32, String>,
     pub world: World,
     pub player_handle: PlayerHandle,
@@ -751,6 +755,7 @@ impl MissionCore {
         // This is important for creating entities based on template name
         let (template_name_to_template_id, unique_gamesys_template_names) =
             create_template_name_map(game_entity_info);
+        let mission_object_name_to_id = create_mission_object_name_map(&entity_info_rc);
 
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
         world.add_unique(Time::default());
@@ -1308,6 +1313,7 @@ impl MissionCore {
             id_to_bitmap,
             id_to_particle_system: HashMap::new(),
             template_name_to_template_id,
+            mission_object_name_to_id,
             scene_objects: scene,
             animated_lightmaps,
             physics,
@@ -2765,15 +2771,36 @@ impl MissionCore {
                 .unwrap_or(false);
             (position.position, position.rotation, patrol)
         };
-        let Some(created) = self.create_entity_by_template_name(
-            asset_cache,
-            template_name,
-            Point3::new(position.x, position.y, position.z),
-            orientation,
-        ) else {
+        // Spawn markers name their archetype by object name, and that name
+        // often belongs to a concrete object placed in the mission and parked
+        // off-map (earth.mis's "DopeyDroid", the training-droid ecologies)
+        // rather than to a gamesys template - so fall back to this mission's
+        // own named objects. Gamesys archetypes still win, leaving every other
+        // by-name creation path untouched.
+        let name_lowercase = template_name.to_ascii_lowercase();
+        let archetype = self
+            .template_name_to_template_id
+            .get(&name_lowercase)
+            .map(|metadata| metadata.template_id)
+            .or_else(|| self.mission_object_name_to_id.get(&name_lowercase).copied());
+        let Some(archetype) = archetype else {
             warn!("TrapSpawn could not resolve archetype {template_name}");
             return;
         };
+        if archetype >= 0 {
+            // Cloning a concrete object also clones its authored links, which
+            // resolve to the *original's* live partners - log which object was
+            // picked so a bad resolution is diagnosable.
+            info!("TrapSpawn resolved archetype {template_name} to mission object {archetype}");
+        }
+        let created = self.create_entity_with_position(
+            asset_cache,
+            archetype,
+            Point3::new(position.x, position.y, position.z),
+            orientation,
+            Matrix4::identity(),
+            CreateEntityOptions::default(),
+        );
 
         if let Some(ecology_type) = ecology_type {
             self.world.add_component(
@@ -6454,6 +6481,48 @@ fn create_template_name_map(
     (name_to_template_id, unique_template_names)
 }
 
+/// Index this mission's own objects (the positive id space) that author their
+/// own `P$SymName`. Retail spawn markers name their archetype by object name,
+/// and that name often belongs to a concrete off-map object placed in the
+/// mission (earth.mis parks "DopeyDroid" as the training-droid archetype)
+/// rather than to a gamesys template. Only *own* `P$SymName`s are indexed - an
+/// object that merely inherits its archetype's name, or that is named only by
+/// the mission's `OBJ_MAP` (generic archetype names like "Marker", see
+/// `entity_creator::initialize_sym_name_from_obj_map`), is not a distinct
+/// archetype.
+fn create_mission_object_name_map(entity_info: &SystemShock2EntityInfo) -> HashMap<String, i32> {
+    let mut world = World::new();
+    for (id, props) in &entity_info.entity_to_properties {
+        if *id < 0 {
+            continue;
+        }
+        let entity = world.add_entity(dark::properties::PropTemplateId { template_id: *id });
+        for prop in props {
+            prop.initialize(&mut world, entity);
+        }
+    }
+
+    let mut ids_by_name: HashMap<String, Vec<i32>> = HashMap::new();
+    world.run(
+        |v_sym_name: View<dark::properties::PropSymName>,
+         v_template_id: View<dark::properties::PropTemplateId>| {
+            for (sym_name, template_id) in (&v_sym_name, &v_template_id).iter() {
+                ids_by_name
+                    .entry(sym_name.0.to_ascii_lowercase())
+                    .or_default()
+                    .push(template_id.template_id);
+            }
+        },
+    );
+    // Only unambiguous names resolve - picking one of several same-named
+    // objects would spawn an arbitrary one (same reasoning as the gamesys
+    // `unique_gamesys_template_names` map above).
+    ids_by_name
+        .into_iter()
+        .filter_map(|(name, ids)| (ids.len() == 1).then_some((name, ids[0])))
+        .collect()
+}
+
 /// Create a map of template IDs to their class tag data for script access
 fn create_template_class_tag_map(
     entity_info: &Arc<SystemShock2EntityInfo>,
@@ -8350,6 +8419,37 @@ mod held_item_restore_tests {
             )),
             "the displaced left-hand item must be returned to the backpack, got {effects:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod mission_object_name_map_tests {
+    use dark::properties::PropSymName;
+
+    use super::*;
+
+    fn named(entity_info: &mut SystemShock2EntityInfo, id: i32, name: &str) {
+        entity_info
+            .entity_to_properties
+            .insert(id, vec![Arc::new(Box::new(PropSymName(name.to_owned())))]);
+    }
+
+    #[test]
+    fn indexes_only_uniquely_named_mission_objects() {
+        let mut entity_info = SystemShock2EntityInfo::empty();
+        // The authored spawn archetype: a mission object with its own name.
+        named(&mut entity_info, 597, "DopeyDroid");
+        // Gamesys templates are resolved through the gamesys map instead.
+        named(&mut entity_info, -4015, "Training Droid");
+        // Two objects sharing a name cannot pick out an archetype.
+        named(&mut entity_info, 100, "Marker");
+        named(&mut entity_info, 101, "Marker");
+
+        let map = create_mission_object_name_map(&entity_info);
+
+        assert_eq!(map.get("dopeydroid"), Some(&597));
+        assert_eq!(map.get("training droid"), None);
+        assert_eq!(map.get("marker"), None);
     }
 }
 

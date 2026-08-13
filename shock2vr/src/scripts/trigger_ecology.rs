@@ -1,4 +1,4 @@
-use dark::properties::{PropEcoState, PropEcoType, PropEcology, PropHitPoints};
+use dark::properties::{PropEcoState, PropEcoType, PropEcology, PropHitPoints, PropTemplateId};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
@@ -38,6 +38,35 @@ impl TriggerEcology {
         }
     }
 
+    /// Whether this entity is a physical population member (a creature) rather
+    /// than one of the ecology's own non-physical markers, which carry the same
+    /// EcoType.
+    ///
+    /// The entity's *concrete* template is what answers that: the canonical
+    /// class id alone is the nearest negative ancestor, which for an object
+    /// whose metaprops sort ahead of its archetype is a **metaprop** (earth's
+    /// "DopeyDroid" and its third training droid both resolve to `Docile`,
+    /// which does not descend from `Physical`) - so those creatures were never
+    /// counted and their ecology spawned another every period, forever.
+    ///
+    /// The canonical id is the fallback for entities whose concrete template
+    /// this mission's hierarchy does not know - one carried in from another
+    /// mission, whose positive template id belongs to that mission's id space
+    /// and could alias an unrelated object here.
+    fn is_physical(
+        world: &World,
+        hierarchy: &GlobalTemplateHierarchy,
+        templates: Option<&View<PropTemplateId>>,
+        entity: EntityId,
+    ) -> bool {
+        let concrete = templates
+            .and_then(|templates| templates.get(entity).ok().map(|id| id.template_id))
+            .filter(|template| hierarchy.0.contains_key(template));
+        concrete
+            .or_else(|| entity_class_template_id(world, entity))
+            .is_some_and(|template| hierarchy.is_or_descends_from(template, PHYSICAL_TEMPLATE_ID))
+    }
+
     fn population(world: &World, ecology_type: i32) -> usize {
         let Ok(ecology_types) = world.borrow::<View<PropEcoType>>() else {
             return 0;
@@ -46,6 +75,7 @@ impl TriggerEcology {
             return 0;
         };
         let hit_points = world.borrow::<View<PropHitPoints>>().ok();
+        let templates = world.borrow::<View<PropTemplateId>>().ok();
         ecology_types
             .iter()
             .with_id()
@@ -55,9 +85,7 @@ impl TriggerEcology {
                         .as_ref()
                         .and_then(|hit_points| hit_points.get(*entity).ok())
                         .is_none_or(|hit_points| hit_points.hit_points > 0)
-                    && entity_class_template_id(world, *entity).is_some_and(|template| {
-                        hierarchy.is_or_descends_from(template, PHYSICAL_TEMPLATE_ID)
-                    })
+                    && Self::is_physical(world, &hierarchy, templates.as_ref(), *entity)
             })
             .count()
     }
@@ -345,6 +373,41 @@ mod tests {
         world.add_entity((PropEcoType(2501), RuntimePropCanonicalTemplateId(-196)));
         let effect = step(&mut script, ecology, &world, 15);
         assert!(!sends_to(effect, generator));
+    }
+
+    #[test]
+    fn counts_a_spawn_whose_canonical_class_is_a_metaprop() {
+        // earth's "DopeyDroid" archetype object: its nearest negative ancestor
+        // is the `Docile` metaprop (-1073, not under Physical), while its own
+        // template (597) does descend from Physical. Miscounting it as
+        // non-population makes the ecology respawn one droid every period.
+        let mut world = World::new();
+        world.add_unique(GlobalTemplateHierarchy(HashMap::from([
+            (597, vec![PHYSICAL_TEMPLATE_ID, -1073]),
+            (-1073, vec![-4]),
+        ])));
+        let generator = world.add_entity(());
+        let ecology = world.add_entity((
+            PropEcoType(41),
+            PropEcoState(ECOLOGY_STATE_NORMAL),
+            ecology_props([1, 0, 0], [1, 0, 0], [0.0; 3], [0, 0, 0]),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 598,
+                    to_entity_id: Some(WrappedEntityId(generator)),
+                    link: Link::SwitchLink,
+                }],
+            },
+        ));
+        world.add_entity((
+            PropEcoType(41),
+            PropTemplateId { template_id: 597 },
+            RuntimePropCanonicalTemplateId(-1073),
+        ));
+        let mut script = TriggerEcology::new();
+        script.initialize(ecology, &world);
+
+        assert!(!sends_to(step(&mut script, ecology, &world, 15), generator));
     }
 
     #[test]
