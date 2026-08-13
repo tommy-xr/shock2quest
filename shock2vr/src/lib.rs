@@ -1516,17 +1516,12 @@ impl Game {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) -> Vec<SceneObject> {
-        let hand_material = engine::scene::color_material::create(vec3(1.0, 0.0, 0.0));
-        let transform = Matrix4::from_scale(0.25) * Matrix4::from_translation(vec3(0.0, 4.0, 0.0));
-        let mut hand_obj = SceneObject::new(hand_material, Box::new(engine::scene::cube::create()));
-        hand_obj.set_transform(transform);
-
         // Sample for rendering
         let font = self.asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
         // let text_obj_0_0 =
         //     SceneObject::screen_space_text("0, 0", font.clone(), 16.0, 0.5, 0.0, 0.0);
 
-        let mut objs = self.active_game_scene.render_per_eye(
+        let objs = self.active_game_scene.render_per_eye(
             &mut self.asset_cache,
             view,
             projection,
@@ -1559,10 +1554,6 @@ impl Game {
         // 4 years earlier
         // Ramsey Recruitment Ctr
         // let text_string = "Ramsey Recruitment Ctr.";
-        // Debug placeholder cube; keep it out of the clean flatscreen view.
-        if self.options.presentation_mode == PresentationMode::Vr {
-            objs.extend(vec![hand_obj /*  text_obj_dynamic*/]);
-        }
         objs
     }
 
