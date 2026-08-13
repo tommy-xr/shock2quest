@@ -2567,6 +2567,16 @@ impl PhysicsWorld {
         body.set_body_type(RigidBodyType::KinematicPositionBased, true);
         body.set_linvel(Vector::zeros(), true);
         body.set_angvel(Vector::zeros(), true);
+        let collider_handles = body.colliders().to_vec();
+        for collider_handle in collider_handles {
+            if let Some(collider) = self.collider_set.get_mut(collider_handle) {
+                collider.set_active_collision_types(
+                    ActiveCollisionTypes::default()
+                        | ActiveCollisionTypes::KINEMATIC_KINEMATIC
+                        | ActiveCollisionTypes::KINEMATIC_FIXED,
+                );
+            }
+        }
         self.set_collision_group(entity_id, CollisionGroup::held_melee());
     }
 
@@ -5394,6 +5404,12 @@ mod tests {
         );
         assert_eq!(body.linear_velocity, [0.0; 3]);
         assert_eq!(body.angular_velocity, [0.0; 3]);
+
+        let body_handle = world.entity_id_to_body[&weapon];
+        let collider_handle = world.rigid_body_set[body_handle].colliders()[0];
+        let active_types = world.collider_set[collider_handle].active_collision_types();
+        assert!(active_types.contains(ActiveCollisionTypes::KINEMATIC_KINEMATIC));
+        assert!(active_types.contains(ActiveCollisionTypes::KINEMATIC_FIXED));
     }
 
     /// A collider deliberately made non-solid to characters must not remain an
