@@ -120,3 +120,52 @@ VR has a **head position**, not just a rotation. `InputContext` currently expose
 runtime's fixed eye-height offset. A real VR menu should anchor to the tracked head
 pose (place once in front of the player on entry, or soft-follow), which needs head
 position plumbed into `InputContext`.
+
+## Renderer consolidation (in progress)
+
+### Why the two presentations disagreed
+
+PR #840 ("unify 2D canvas descriptions") unified the *data model* — one
+`UiElement` enum — but left **three independent emit paths**, each re-deriving
+placement from the same description:
+
+| Path | Where | Notes |
+| --- | --- | --- |
+| screen-space | `UiCanvas::render_screen_space_with_pointer` (~159 lines) | aligns, measures, ellipsizes |
+| world-space | `UiCanvas::render_world_space` (~143 lines) | learned alignment only in `69e0553`; **still does not ellipsize** |
+| GUI / MFD | `GuiComponentRenderInfo::render` (`gui_component.rs`) | keypad, container, replicator, elevator, inventory |
+
+The world path was lifted from the older GUI world-space code, which only drew
+fixed-size widgets where alignment never mattered — so it inherited that code's
+quirks (Y-rotation instead of Z, negated y, corner anchor) and never grew
+alignment. Nothing forces the paths to agree, so each new feature lands in one
+and silently misses the others. Live proof: `fit_to_rect`/`ellipsize` is
+screen-only, so a VR load screen would spill long save names exactly as the flat
+one did before `engine::ellipsize` existed.
+
+### Decision: consolidate first, render-to-texture second
+
+**Chosen:** one canvas-space `layout()` pass producing `PlacedElement`s
+(alignment and ellipsize already resolved), consumed by thin affine mappers per
+presentation, plus a parity test asserting the mappers agree. Delegated to a
+subagent on `refactor/ui-single-layout`, branched from `feat/vr-menu-pointer`
+so it starts from verified-working VR with tests that pin the behaviour —
+rather than from `main`, where VR is broken and the anchor asymmetry is
+undiscoverable without rendering.
+
+**Deferred: render-to-texture for world space.** Rendering the canvas to an
+offscreen target and mapping it onto the panel quad would make parity true *by
+construction* (one renderer, not two that agree). It is the better end state,
+but:
+
+- `engine` has **no render-target abstraction at all** — the only FBO code is
+  `oculus_runtime`'s XR swapchain — so it needs one for desktop GL *and* Android
+  GLES.
+- Text sharpness becomes resolution-bound (fixed-size texture vs direct
+  geometry) and Quest memory/perf matters. Neither is measurable without a
+  headset.
+
+Consolidation makes world-space a thin mapper, so swapping that mapper for an
+RTT quad afterwards is a small contained change that can be benchmarked on
+device. Doing RTT first would bet the refactor on unverifiable engine work.
+
