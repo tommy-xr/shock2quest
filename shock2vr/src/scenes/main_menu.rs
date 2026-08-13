@@ -74,6 +74,7 @@ const FALLBACK_BUTTON_PITCH: f32 = 76.0;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
     NewGame,
+    LoadGame,
     Quit,
 }
 
@@ -103,7 +104,7 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem {
         string_key: "load_game",
         fallback_label: "Load Game",
-        action: None,
+        action: Some(MenuAction::LoadGame),
     },
     MenuItem {
         string_key: "options",
@@ -226,7 +227,12 @@ impl MainMenuScene {
             world,
             scene_name: "main_menu".to_owned(),
             pointer: None,
-            last_pressed: false,
+            // A press held across a scene swap must not read as a click
+            // here: both screens sit on the same 640x480 canvas and their
+            // widgets overlap (the load screen's "Done" center falls inside
+            // the menu's "Quit" rect), so starting "already pressed" makes
+            // the next rising edge require a real release first.
+            last_pressed: true,
             last_screen_size: vec2(CANVAS_W, CANVAS_H),
         }
     }
@@ -272,6 +278,9 @@ impl GameScene for MainMenuScene {
                     vitals_transition:
                         crate::scripts::PlayerVitalsTransition::InitializeFromDestination,
                 })]
+            }
+            Some(MenuAction::LoadGame) => {
+                vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
             }
             Some(MenuAction::Quit) => vec![Effect::GlobalEffect(GlobalEffect::Quit)],
             None => Vec::new(),
@@ -435,6 +444,36 @@ mod tests {
     }
 
     #[test]
+    fn a_press_held_from_the_previous_scene_does_not_click() {
+        // The load screen's "Done" button center (canvas 574.5, 436) falls
+        // inside this menu's "Quit" rect, so a press still held when that
+        // screen swaps to the menu would otherwise quit the game outright.
+        let rects = menu_rects(None);
+        assert!(
+            rects[5].contains(vec2(574.5, 436.0)),
+            "this test is only meaningful while the rects overlap"
+        );
+
+        let mut scene = MainMenuScene::new();
+        let held = pointer_at(574.5 / CANVAS_W, 436.0 / CANVAS_H, true);
+
+        // First frame after the swap: the press is held, not new.
+        let (action, last) = resolve_click(held, scene.last_pressed, SCREEN, &rects);
+        assert_eq!(action, None, "a carried-over press must not activate Quit");
+        scene.last_pressed = last;
+
+        // Releasing and pressing again is a real click.
+        let (_, last) = resolve_click(
+            pointer_at(574.5 / CANVAS_W, 436.0 / CANVAS_H, false),
+            scene.last_pressed,
+            SCREEN,
+            &rects,
+        );
+        let (action, _) = resolve_click(held, last, SCREEN, &rects);
+        assert_eq!(action, Some(MenuAction::Quit));
+    }
+
+    #[test]
     fn no_pointer_means_no_action() {
         let (action, last) = resolve_click(None, true, SCREEN, &menu_rects(None));
         assert_eq!(action, None);
@@ -442,12 +481,20 @@ mod tests {
     }
 
     #[test]
-    fn click_over_an_unimplemented_item_does_nothing() {
-        // Rect 1 is "Load Game", which has no action yet: canvas y 96..156, so
-        // normalized y ~0.26 sits inside it.
+    fn rising_edge_over_load_game_activates_it() {
+        // Rect 1 is "Load Game": canvas y 96..156, so y ~0.26 sits inside it.
         let rects = menu_rects(None);
         assert!(rects[1].contains(vec2(512.0, 126.0)));
         let (action, _) = resolve_click(pointer_at(0.8, 0.2625, true), false, SCREEN, &rects);
+        assert_eq!(action, Some(MenuAction::LoadGame));
+    }
+
+    #[test]
+    fn click_over_an_unimplemented_item_does_nothing() {
+        // Rect 2 is "Options", still unimplemented: canvas y 172..232.
+        let rects = menu_rects(None);
+        assert!(rects[2].contains(vec2(512.0, 202.0)));
+        let (action, _) = resolve_click(pointer_at(0.8, 0.4208, true), false, SCREEN, &rects);
         assert_eq!(action, None);
     }
 

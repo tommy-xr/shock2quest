@@ -77,8 +77,10 @@ where
 #[command(name = "debug_runtime")]
 #[command(about = "HTTP-controlled game runtime for LLM testing and automation")]
 struct Args {
-    /// Mission file to load (e.g., medsci1.mis)
-    #[arg(short, long, default_value = "earth.mis")]
+    /// Mission file to load (e.g., medsci1.mis), a debug scene name, or
+    /// "main_menu". Defaults to the main menu, the same entry point the flat
+    /// desktop runtime boots into - automation passes this explicitly anyway.
+    #[arg(short, long, default_value = "main_menu")]
     mission: String,
 
     /// Port to bind HTTP server to
