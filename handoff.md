@@ -7,9 +7,14 @@ Living doc for the menu work. Updated as the investigation proceeds.
 | PR | State | What |
 | --- | --- | --- |
 | [#927](https://github.com/tommy-xr/shock2quest/pull/927) | **merged** | Main menu driven by `MAIN.STR` + `MAINR.BIN`; all six entries, four dimmed |
-| [#930](https://github.com/tommy-xr/shock2quest/pull/930) | open, CI green | Load-game screen (`GAMELOD.*`), `save_load::all_saves`, `engine::ellipsize` |
-| [#934](https://github.com/tommy-xr/shock2quest/pull/934) | merged into #930's branch | `cargo dbgr` boots the main menu with no `--mission` |
-| `feat/vr-menu-pointer` | local, **VR working end to end** | VR controller pointer + world-space menu panel + VR menu default |
+| [#934](https://github.com/tommy-xr/shock2quest/pull/934) | **merged** | `cargo dbgr` boots the main menu with no `--mission` |
+| [#930](https://github.com/tommy-xr/shock2quest/pull/930) | **merged** | Load-game screen, `save_load::all_saves`, `engine::ellipsize` |
+| [#953](https://github.com/tommy-xr/shock2quest/pull/953) | open, mergeable, CI green | VR controller pointer + world-space menu panel + VR menu default |
+| [#961](https://github.com/tommy-xr/shock2quest/pull/961) | open, CI green | Three UI emit paths -> one layout pass; parity test |
+
+Both open PRs are rebased onto current `main` (#930 was squash-merged, so the
+original load-game commits had to be dropped by replaying only the VR commits
+with `git rebase --onto origin/main <last-load-game-commit>`).
 
 Open issues: [#928](https://github.com/tommy-xr/shock2quest/issues/928) (load list has no scrolling past 14 rows), [#929](https://github.com/tommy-xr/shock2quest/issues/929) (failed load is silent).
 
@@ -82,7 +87,7 @@ screenshotted. Removed in `4ce6934`.
   `desktop_runtime` is gone and `oculus_runtime`'s `DEFAULT_MISSION` is
   `main_menu` (`8a0a1c3`).
 
-### Still open
+### Still open (as of the #961 stack)
 
 - The label drifts a few px right of centre — world text likely renders at a
   slightly different scale than `measure_text_width` reports.
@@ -210,3 +215,28 @@ Consolidation makes world-space a thin mapper, so swapping that mapper for an
 RTT quad afterwards is a small contained change that can be benchmarked on
 device. Doing RTT first would bet the refactor on unverifiable engine work.
 
+## What is left
+
+- **No hardware verification.** Everything is the debug runtime's `--vr` path; the
+  Quest `DEFAULT_MISSION = main_menu` change is untested on device.
+- **The load screen has no VR presentation** - in `--vr` it falls back to the
+  screen-space overlay, so the one canvas using `fit_to_rect` never appears on a
+  panel. Small job now that `WorldPanel` + the layout pass exist.
+- **Render-to-texture for world space** remains the better end state (parity by
+  construction rather than by test). `engine` still has no render-target
+  abstraction; consolidation has made the world mapper thin enough that swapping
+  it for an RTT quad is now a contained change.
+- `ScaleMode::Stretch` on a mismatched aspect is the one residual divergence; no
+  shipped caller uses it, and it is documented on the enum.
+- A full e2e suite run before landing (`missions.e2e` 23/23 and a UI subset have
+  been run; the full suite has not, on the final tree).
+
+## Process notes worth keeping
+
+- **Never script `git rebase --skip` across conflicts.** Doing so silently
+  discarded four substantive commits here; only a pre-made backup branch saved
+  them. Inspect every conflict; skip only after positively verifying the content
+  is already upstream.
+- **Launch subagents with worktree isolation** when they will touch git state.
+  A non-isolated agent shares the checkout, so its branch switches land your
+  commits on its branch and block your own git operations.
