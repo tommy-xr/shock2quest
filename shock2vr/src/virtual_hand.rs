@@ -276,7 +276,7 @@ impl VirtualHand {
                         msgs.push(VirtualHandEffect::OutMessage {
                             message: Message {
                                 to: entity_id,
-                                payload: MessagePayload::TriggerPull,
+                                payload: held_trigger_press_payload(world, entity_id),
                             },
                         });
                     }
@@ -508,6 +508,29 @@ fn get_held_position_orientation(
     vr_config::get_vr_hand_model_adjustments_from_entity(entity_id, world, handedness)
 }
 
+/// Translate a production VR trigger press into the held object's authored
+/// interaction. Retail consumables expose `inventory_action = SCRIPT`; using
+/// one from a hand must therefore send the same `Frob` their inventory UI
+/// would send. Weapons (including the Psi Amp) keep their dedicated trigger
+/// protocol even though the Weapon archetype also inherits that inventory
+/// flag. The decision stays tied to Dark's production frob metadata.
+fn held_trigger_press_payload(world: &World, entity_id: EntityId) -> MessagePayload {
+    let has_scripted_inventory_use = world
+        .borrow::<View<PropFrobInfo>>()
+        .map(|frob_info| {
+            frob_info
+                .get(entity_id)
+                .is_ok_and(|frob_info| frob_info.inventory_action.contains(FrobFlag::SCRIPT))
+        })
+        .unwrap_or(false);
+
+    if has_scripted_inventory_use && !is_wieldable_weapon(world, entity_id) {
+        MessagePayload::Frob
+    } else {
+        MessagePayload::TriggerPull
+    }
+}
+
 pub(crate) fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
     let v_prop_frobinfo = world.borrow::<View<PropFrobInfo>>().unwrap();
 
@@ -591,5 +614,87 @@ fn resolve_hit_proxy_entity(world: &World, ray_cast_result: RayCastResult) -> Ra
     RayCastResult {
         maybe_entity_id: maybe_new_entity_id,
         ..ray_cast_result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dark::properties::{PropFrobInfo, PropPlayerGun};
+
+    fn scripted_inventory_use() -> PropFrobInfo {
+        PropFrobInfo {
+            world_action: FrobFlag::MOVE,
+            inventory_action: FrobFlag::SCRIPT,
+            tool_action: FrobFlag::empty(),
+        }
+    }
+
+    fn player_gun() -> PropPlayerGun {
+        PropPlayerGun {
+            flags: 0,
+            hand_model: "held_h".to_owned(),
+            icon_file: String::new(),
+            model_offset: vec3(0.0, 0.0, 0.0),
+            fire_offset: vec3(0.0, 0.0, 0.0),
+            heading: 0,
+            reload_pitch: 0,
+            reload_rate: 0,
+            gun_type: 0,
+        }
+    }
+
+    fn held_trigger_payload(world: &World, entity_id: EntityId) -> MessagePayload {
+        let hand = VirtualHand::new(Handedness::Right).grab_entity(world, entity_id);
+        let mut input = Hand::default();
+        input.squeeze_value = 1.0;
+        input.trigger_value = 1.0;
+
+        let (_, effects) = VirtualHand::update(
+            &hand,
+            &PhysicsWorld::new(),
+            world,
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            &input,
+        );
+
+        effects
+            .into_iter()
+            .find_map(|effect| match effect {
+                VirtualHandEffect::OutMessage { message } if message.to == entity_id => {
+                    Some(message.payload)
+                }
+                _ => None,
+            })
+            .expect("a rising trigger edge should message the actual held entity")
+    }
+
+    /// Negative-first regression for #958: a held retail consumable owns an
+    /// authored inventory SCRIPT action. The production VR trigger gesture
+    /// must request that same Frob action instead of weapon fire.
+    #[test]
+    fn held_scripted_inventory_item_uses_its_authored_frob_action() {
+        let mut world = World::new();
+        let booster = world.add_entity(scripted_inventory_use());
+
+        assert!(matches!(
+            held_trigger_payload(&world, booster),
+            MessagePayload::Frob
+        ));
+    }
+
+    /// Guns and the Psi Amp both carry PropPlayerGun, so their trigger must
+    /// continue reaching WeaponScript/PsiAmpScript as TriggerPull even though
+    /// their inherited inventory action is also SCRIPT.
+    #[test]
+    fn held_player_gun_preserves_trigger_pull() {
+        let mut world = World::new();
+        let weapon_or_psi_amp = world.add_entity((scripted_inventory_use(), player_gun()));
+
+        assert!(matches!(
+            held_trigger_payload(&world, weapon_or_psi_amp),
+            MessagePayload::TriggerPull
+        ));
     }
 }
