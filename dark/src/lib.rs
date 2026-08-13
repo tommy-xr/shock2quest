@@ -22,6 +22,7 @@ pub mod ss2_entity_info;
 pub mod ss2_skeleton;
 pub mod tag_database;
 pub mod util;
+pub mod weapon_animation;
 
 pub mod properties;
 
