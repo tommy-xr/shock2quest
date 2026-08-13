@@ -6,12 +6,13 @@
 //! textures carry their own embedded palettes), so it isn't loaded elsewhere.
 //! Loaded once and cached.
 
+use std::io::Read;
 use std::sync::OnceLock;
 
 use cgmath::{Vector3, vec3};
 use tracing::warn;
 
-use crate::paths;
+use crate::data_files;
 
 /// Master palette PCX, relative to the data root.
 const PALETTE_FILE: &str = "res/pal/SHOCKPAL.PCX";
@@ -34,24 +35,24 @@ pub fn index_to_rgb(index: u8) -> Vector3<f32> {
 }
 
 fn load_master_palette() -> MasterPalette {
-    let path = paths::data_root().join(PALETTE_FILE);
-    match std::fs::read(&path) {
-        Ok(bytes) => parse_pcx_palette(&bytes).unwrap_or_else(|| {
-            warn!(
-                "[palette] {} has no 256-color palette trailer; using white",
-                path.display()
-            );
-            [[255; 3]; 256]
-        }),
-        Err(e) => {
-            warn!(
-                "[palette] could not read {}: {} - using white",
-                path.display(),
-                e
-            );
-            [[255; 3]; 256]
-        }
+    // Resolved through the data-file mounts, not the filesystem: a 25th
+    // Anniversary install has no loose files at all - the palette lives inside
+    // `sshock2.kpf` under `data/` - and reading the data root directly there
+    // silently fell back to white, which turns every palette-indexed particle
+    // color (explosion smoke, sparks, steam) white.
+    let Some(mut reader) = data_files::open_data_file(PALETTE_FILE) else {
+        warn!("[palette] {PALETTE_FILE} not found in the data root - using white");
+        return [[255; 3]; 256];
+    };
+    let mut bytes = Vec::new();
+    if let Err(e) = reader.read_to_end(&mut bytes) {
+        warn!("[palette] could not read {PALETTE_FILE}: {e} - using white");
+        return [[255; 3]; 256];
     }
+    parse_pcx_palette(&bytes).unwrap_or_else(|| {
+        warn!("[palette] {PALETTE_FILE} has no 256-color palette trailer; using white");
+        [[255; 3]; 256]
+    })
 }
 
 /// A 256-color PCX stores its palette in the trailing 769 bytes: a `0x0C` marker
