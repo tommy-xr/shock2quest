@@ -908,7 +908,7 @@ fn process_command(
 ) {
     match command {
         RuntimeCommand::GetInfo(reply) => {
-            let snapshot = capture_frame_snapshot(game, time, frame_counter);
+            let snapshot = capture_frame_snapshot(game, time, frame_counter, current_input);
             if let Err(_) = reply.send(snapshot) {
                 tracing::warn!("Failed to send frame snapshot - receiver dropped");
             }
@@ -2008,8 +2008,35 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
     }
 }
 
+fn input_snapshot_from_context(input: &InputContext) -> InputSnapshot {
+    fn hand_snapshot(hand: commands::InputHand) -> HandSnapshot {
+        HandSnapshot {
+            position: hand.position,
+            rotation: hand.rotation,
+            thumbstick: hand.thumbstick,
+            trigger: hand.trigger_value,
+            squeeze: hand.squeeze_value,
+            a: hand.a_value,
+        }
+    }
+
+    let input = input_state_from_context(input);
+    InputSnapshot {
+        head_rotation: input.head.rotation,
+        hands: HandsSnapshot {
+            left: hand_snapshot(input.left_hand),
+            right: hand_snapshot(input.right_hand),
+        },
+    }
+}
+
 /// Capture current game state as a frame snapshot
-fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> FrameSnapshot {
+fn capture_frame_snapshot(
+    game: &Game,
+    time: &Time,
+    frame_counter: u64,
+    current_input: &InputContext,
+) -> FrameSnapshot {
     let world = game.world();
 
     // Query entity count by getting all entities with template IDs
@@ -2137,27 +2164,7 @@ fn capture_frame_snapshot(game: &Game, time: &Time, frame_counter: u64) -> Frame
         },
         entity_count,
         debug_features: vec![], // TODO: List active debug features
-        inputs: InputSnapshot {
-            head_rotation: [1.0, 0.0, 0.0, 0.0],
-            hands: HandsSnapshot {
-                left: HandSnapshot {
-                    position: [0.0, 0.0, 0.0],
-                    rotation: [1.0, 0.0, 0.0, 0.0],
-                    thumbstick: [0.0, 0.0],
-                    trigger: 0.0,
-                    squeeze: 0.0,
-                    a: 0.0,
-                },
-                right: HandSnapshot {
-                    position: [0.0, 0.0, 0.0],
-                    rotation: [1.0, 0.0, 0.0, 0.0],
-                    thumbstick: [0.0, 0.0],
-                    trigger: 0.0,
-                    squeeze: 0.0,
-                    a: 0.0,
-                },
-            },
-        },
+        inputs: input_snapshot_from_context(current_input),
     }
 }
 
@@ -3775,5 +3782,43 @@ mod shutdown_tests {
                 .1
                 .contains("collision_groups must contain at least one group")
         );
+    }
+
+    #[test]
+    fn info_input_snapshot_reports_patched_live_controls() {
+        let mut input = InputContext::default();
+        for (channel, value) in [
+            ("head.rotation", json!([0.0, 1.0, 0.0, 0.0])),
+            ("left_hand.position", json!([1.25, -2.5, 3.75])),
+            ("left_hand.rotation", json!([1.0, 0.0, 0.0, 0.0])),
+            ("left_hand.thumbstick", json!([0.25, -0.75])),
+            ("left_hand.trigger", json!(0.2)),
+            ("left_hand.squeeze", json!(0.4)),
+            ("left_hand.a", json!(0.6)),
+            ("right_hand.position", json!([-1.5, 2.25, -3.0])),
+            ("right_hand.rotation", json!([0.0, 0.0, 1.0, 0.0])),
+            ("right_hand.thumbstick", json!([-0.5, 0.75])),
+            ("right_hand.trigger", json!(0.3)),
+            ("right_hand.squeeze", json!(0.5)),
+            ("right_hand.a", json!(0.7)),
+        ] {
+            apply_input_patch(&mut input, channel, &value).unwrap();
+        }
+
+        let snapshot = input_snapshot_from_context(&input);
+
+        assert_eq!(snapshot.head_rotation, [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(snapshot.hands.left.position, [1.25, -2.5, 3.75]);
+        assert_eq!(snapshot.hands.left.rotation, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(snapshot.hands.left.thumbstick, [0.25, -0.75]);
+        assert_eq!(snapshot.hands.left.trigger, 0.2);
+        assert_eq!(snapshot.hands.left.squeeze, 0.4);
+        assert_eq!(snapshot.hands.left.a, 0.6);
+        assert_eq!(snapshot.hands.right.position, [-1.5, 2.25, -3.0]);
+        assert_eq!(snapshot.hands.right.rotation, [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(snapshot.hands.right.thumbstick, [-0.5, 0.75]);
+        assert_eq!(snapshot.hands.right.trigger, 0.3);
+        assert_eq!(snapshot.hands.right.squeeze, 0.5);
+        assert_eq!(snapshot.hands.right.a, 0.7);
     }
 }
