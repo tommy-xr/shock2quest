@@ -227,6 +227,9 @@ pub struct DebugLinkInfo {
     pub link_type: String,
     pub target_id: i32,
     pub target_name: String,
+    /// Inventory cell ordinal for `Contains` links. Kept separate from the
+    /// human-readable link label so tests can assert exact persisted slots.
+    pub contains_ordinal: Option<u32>,
 }
 
 /// Raycast hit result for debug queries

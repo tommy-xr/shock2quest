@@ -125,6 +125,8 @@ export interface LinkInfo {
   link_type: string;
   target_id: number;
   target_name: string;
+  /** Exact inventory cell for a Contains link; null for other link types. */
+  contains_ordinal?: number | null;
 }
 
 export interface EntityDetailResult {
@@ -344,6 +346,8 @@ export interface RagdollMetricsResult {
 
 export interface PlayerSnapshot {
   entity_id: number | null;
+  /** Runtime id of the backpack container; rediscover it after save/load. */
+  inventory_entity_id?: number | null;
   position: Vec3;
   rotation: [number, number, number, number];
   /** Current player lifecycle. `dead` is the terminal death sequence (no

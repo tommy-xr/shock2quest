@@ -26,7 +26,8 @@ pub enum InputAction {
     /// Spawn a debug monster (og-pipe hybrid) in front of the player
     SpawnDebugMonster,
 
-    /// Reposition the inventory in front of the player
+    /// Reposition the inventory in front of the player. In VR this also
+    /// toggles its physical backpack panel; flat inventory remains Tab/use mode.
     MoveInventory,
 
     /// Cycle creatures to their next animation pose (debug hitbox/ragdoll inspection)

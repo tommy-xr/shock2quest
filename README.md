@@ -44,6 +44,8 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `I` - move the floating inventory in front of you
 - `Alt+S` / `Alt+L` - quick save / quick load
 - `P` - cycle the pathfinding test (set start → set goal → show path)
+- Quest VR: press the left controller's `X` button to place/toggle the backpack;
+  point at a stored item and squeeze to retrieve it into that hand.
 - Directly equip a matching carried weapon with the original number-row bindings:
   `1` Wrench, `2` Pistol, `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol,
   `6` EMP Rifle, `7` Electro Shock, `8` Grenade Launcher, `9` Stasis Field

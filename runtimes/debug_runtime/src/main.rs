@@ -1410,6 +1410,7 @@ fn process_command(
                                 link_type: l.link_type,
                                 target_id: l.target_id,
                                 target_name: l.target_name,
+                                contains_ordinal: l.contains_ordinal,
                             })
                             .collect(),
                         incoming_links: detail
@@ -1419,6 +1420,7 @@ fn process_command(
                                 link_type: l.link_type,
                                 target_id: l.target_id,
                                 target_name: l.target_name,
+                                contains_ordinal: l.contains_ordinal,
                             })
                             .collect(),
                         aim_points: detail
@@ -1896,6 +1898,7 @@ fn capture_frame_snapshot(
             let state = game.player_state();
             PlayerInfo {
                 entity_id: state.as_ref().map(|s| s.entity_id),
+                inventory_entity_id: state.as_ref().map(|s| s.inventory_entity_id),
                 position: state
                     .as_ref()
                     .map(|s| s.position)

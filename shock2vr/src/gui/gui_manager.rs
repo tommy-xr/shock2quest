@@ -36,6 +36,9 @@ pub struct GuiInstanceInfo {
     #[allow(dead_code)]
     pub offset: Vector3<f32>,
     pub components: Vec<GuiComponentRenderInfo>,
+    /// Authored layout extent. This stays in canvas pixels even when a VR
+    /// presentation maps the panel onto a differently-sized physical quad.
+    pub canvas_size_px: Vector2<f32>,
     pub world_size: Vector2<f32>,
     pub physics_handle: RigidBodyHandle,
 }
@@ -74,6 +77,26 @@ impl GuiManager {
 
     pub fn active_panel(&self) -> Option<EntityId> {
         self.active_panel
+    }
+
+    /// Toggle one gameplay entity in the default-VR world-panel slot.
+    ///
+    /// Player-owned panels such as the backpack have no world object to frob,
+    /// so their production controller binding reaches the same panel lifecycle
+    /// directly. Object-bound panels still enter through `Effect::OpenPanel`.
+    pub fn toggle_panel(
+        &mut self,
+        entity: EntityId,
+        world: &mut World,
+        physics: &mut PhysicsWorld,
+        scripts: &mut ScriptWorld,
+        id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
+    ) {
+        if self.active_panel == Some(entity) {
+            self.close_panel(world, physics, scripts, id_to_physics);
+        } else {
+            self.open_panel(entity, false, world, physics, scripts, id_to_physics);
+        }
     }
 
     /// Bind the default-VR world-panel slot to one gameplay entity. Opening a
@@ -212,6 +235,7 @@ impl GuiManager {
         id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
         handle: GuiHandle,
         parent_entity: EntityId,
+        canvas_size_px: Vector2<f32>,
         world_size: Vector2<f32>,
         offset: Vector3<f32>,
         components: Vec<GuiComponentRenderInfo>,
@@ -251,12 +275,14 @@ impl GuiManager {
                 proxy_entity: ent,
                 offset,
                 components,
+                canvas_size_px,
                 world_size,
                 physics_handle,
             });
         } else {
             let instance: &mut GuiInstanceInfo = self.handle_to_instance.get_mut(&handle).unwrap();
             instance.components = components;
+            instance.canvas_size_px = canvas_size_px;
             if instance.world_size != world_size {
                 instance.world_size = world_size;
                 world.add_component(instance.proxy_entity, GuiPropProxySize(world_size));
@@ -324,7 +350,7 @@ impl GuiManager {
             // Present the panel through the shared UI canvas, so the world
             // panel and the flat MFD overlay are two mappings of ONE layout
             // rather than two hand-written emit paths.
-            let size_px = info.world_size / crate::gui::GUI_PIXEL_TO_WORLD_SIZE;
+            let size_px = info.canvas_size_px;
             let panel = Rect::new(0.0, 0.0, size_px.x, size_px.y);
             let elements = info
                 .components
@@ -371,6 +397,7 @@ mod tests {
             handle,
             parent,
             vec2(261.0, 296.0),
+            vec2(261.0, 296.0),
             vec3(0.0, 0.0, -1.0),
             Vec::new(),
         );
@@ -382,11 +409,13 @@ mod tests {
             handle,
             parent,
             vec2(188.0, 296.0),
+            vec2(188.0, 296.0),
             vec3(0.0, 0.0, -1.0),
             Vec::new(),
         );
 
         let instance = manager.handle_to_instance.get(&handle).unwrap();
+        assert_eq!(instance.canvas_size_px, vec2(188.0, 296.0));
         assert_eq!(instance.world_size, vec2(188.0, 296.0));
         assert_eq!(
             world
@@ -428,6 +457,7 @@ mod tests {
             &mut id_to_physics,
             GuiHandle::new(),
             first,
+            vec2(187.5, 295.0),
             vec2(0.75, 1.18),
             vec3(0.0, 1.0, 0.0),
             Vec::new(),
@@ -455,6 +485,51 @@ mod tests {
                 .unwrap()
                 .is_alive(first_proxy)
         );
+    }
+
+    #[test]
+    fn toggling_a_player_panel_closes_its_transient_proxy() {
+        let mut world = World::new();
+        let parent = world.add_entity((RuntimePropTransform(Matrix4::from_scale(1.0)),));
+        let mut physics = PhysicsWorld::new();
+        let mut scripts = ScriptWorld::new();
+        let mut id_to_physics = HashMap::new();
+        let mut manager = GuiManager::new();
+
+        manager.toggle_panel(
+            parent,
+            &mut world,
+            &mut physics,
+            &mut scripts,
+            &mut id_to_physics,
+        );
+        assert_eq!(manager.active_panel(), Some(parent));
+
+        manager.update_ui(
+            &mut world,
+            &mut physics,
+            &mut scripts,
+            &mut id_to_physics,
+            GuiHandle::new(),
+            parent,
+            vec2(635.0, 120.0),
+            vec2(2.54, 0.48),
+            vec3(0.0, 1.0, 0.0),
+            Vec::new(),
+        );
+        assert_eq!(manager.handle_to_instance.len(), 1);
+        assert_eq!(id_to_physics.len(), 1);
+
+        manager.toggle_panel(
+            parent,
+            &mut world,
+            &mut physics,
+            &mut scripts,
+            &mut id_to_physics,
+        );
+        assert_eq!(manager.active_panel(), None);
+        assert!(manager.handle_to_instance.is_empty());
+        assert!(id_to_physics.is_empty());
     }
 
     #[test]
@@ -494,6 +569,7 @@ mod tests {
             &mut id_to_physics,
             GuiHandle::new(),
             parent,
+            vec2(187.5, 295.0),
             vec2(0.75, 1.18),
             vec3(0.0, 1.0, 0.0),
             Vec::new(),
