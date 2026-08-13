@@ -21,6 +21,7 @@ use std::rc::Rc;
 use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
 use dark::importers::{FONT_IMPORTER, TEXTURE_IMPORTER};
 use engine::{
+    Font,
     assets::asset_cache::AssetCache,
     ellipsize, measure_text_width,
     scene::SceneObject,
@@ -71,6 +72,13 @@ pub enum VAlign {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScaleMode {
     /// Fill the target, stretching each axis independently (may distort).
+    ///
+    /// The one mapping under which text is *not* presentation-independent:
+    /// bitmap glyphs have a single size, so screen-space text scales uniformly
+    /// (by the vertical factor) while a world-space panel scales its text mesh
+    /// into the placed rect on both axes. Every shipped presentation maps the
+    /// canvas uniformly - flat scenes use `PreserveAspect`, and world panels
+    /// are sized `canvas_px * constant` - so the two agree in practice.
     Stretch,
     /// Uniform scale that fits the canvas inside the target, centered, leaving
     /// empty bars on the longer axis (letterbox / pillarbox).
@@ -210,11 +218,41 @@ pub fn canvas_rect_to_screen(
     mode: ScaleMode,
 ) -> Rect {
     let (scale, offset) = fit(canvas_size, screen_size, mode);
+    // The renderer's own mapping, then normalized - so this describes exactly
+    // where the screen presentation puts the rect, not a parallel derivation.
+    let px = canvas_rect_to_screen_px(rect, scale, offset);
     Rect::new(
-        (rect.x * scale.x + offset.x) / screen_size.x,
-        (rect.y * scale.y + offset.y) / screen_size.y,
-        rect.w * scale.x / screen_size.x,
-        rect.h * scale.y / screen_size.y,
+        px.x / screen_size.x,
+        px.y / screen_size.y,
+        px.w / screen_size.x,
+        px.h / screen_size.y,
+    )
+}
+
+/// Where a canvas rect lands on a world-space panel, in normalized panel
+/// coordinates (0..1 per axis, origin top-left) - the world counterpart of
+/// [`canvas_rect_to_screen`].
+///
+/// Derived from the transform the renderer actually uses, so it cannot claim a
+/// placement the panel does not draw. The element path composes an in-plane
+/// 180-degree rotation (about **Z**, so the panel keeps its facing) which
+/// negates both axes; undoing that negation is the whole conversion.
+pub fn canvas_rect_to_panel(rect: Rect, canvas_size: Vector2<f32>) -> Rect {
+    let transform =
+        world_element_transform(vec2(rect.x, rect.y), vec2(rect.w, rect.h), canvas_size, 0.0);
+    // `quad::create` (and the normalized world text mesh) span the centered
+    // unit square, so these are the element's own corners.
+    let corner = |x: f32, y: f32| {
+        let p = transform * cgmath::vec4(x, y, 0.0, 1.0);
+        vec2(0.5 - p.x, 0.5 - p.y)
+    };
+    let top_left = corner(-0.5, -0.5);
+    let bottom_right = corner(0.5, 0.5);
+    Rect::new(
+        top_left.x,
+        top_left.y,
+        bottom_right.x - top_left.x,
+        bottom_right.y - top_left.y,
     )
 }
 
@@ -253,6 +291,42 @@ impl ImageKind {
     pub(crate) fn transparent_index_0(self) -> bool {
         matches!(self, Self::ObjectIcon | Self::ObjectIconFit)
     }
+}
+
+/// One element after layout: where it goes, how opaque it is, and what to
+/// draw there. Produced by [`UiCanvas::layout`] and consumed by every
+/// presentation.
+///
+/// `rect` is in canvas pixels and is final - for text it is the *glyph box*
+/// (alignment already resolved, ellipsis already applied, height = font size),
+/// not the authored widget box. A presentation's only job is to map this
+/// rectangle into its own space.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedElement {
+    pub rect: Rect,
+    pub alpha: f32,
+    pub content: PlacedContent,
+}
+
+/// What a [`PlacedElement`] draws. Deliberately smaller than [`UiElement`]:
+/// buttons have collapsed into their resolved art, and alignment/fit options
+/// are gone because layout has already applied them.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PlacedContent {
+    Image {
+        texture: String,
+        kind: ImageKind,
+    },
+    Bar {
+        texture: String,
+        fill: f32,
+    },
+    /// Ellipsized, alignment-resolved text. There is no separate font size:
+    /// the placed `rect` IS the glyph box, so its height is the line height.
+    Text {
+        text: String,
+        font: String,
+    },
 }
 
 /// One item in the shared 2D UI description language.
@@ -561,6 +635,98 @@ where
         self
     }
 
+    /// Resolve every element to a concrete canvas-pixel rectangle plus the
+    /// content to draw in it - the **single** layout pass.
+    ///
+    /// Everything that decides *where* or *what* happens here: alignment, text
+    /// measurement, ellipsizing, and object-icon sizing. Presentations
+    /// (screen space, world-space panel) are affine mappers over the result
+    /// and make no placement decisions of their own, so they cannot drift
+    /// apart the way three hand-written emit paths did.
+    pub fn layout(&self, asset_cache: &mut AssetCache) -> Vec<PlacedElement> {
+        self.layout_with_pointer(asset_cache, None)
+    }
+
+    /// [`layout`](Self::layout) with a pointer in canvas pixels, so buttons
+    /// resolve their hover art. Hover is content, not placement: a hover
+    /// texture can be a different size, and the swap must happen before the
+    /// icon-sizing rules run.
+    pub fn layout_with_pointer(
+        &self,
+        asset_cache: &mut AssetCache,
+        pointer: Option<Vector2<f32>>,
+    ) -> Vec<PlacedElement> {
+        let mut placed = Vec::with_capacity(self.elements.len());
+        for element in &self.elements {
+            placed.push(match element {
+                UiElement::Image {
+                    position,
+                    size,
+                    texture,
+                    alpha,
+                    kind,
+                } => place_image(asset_cache, *position, *size, texture, *alpha, *kind),
+                UiElement::Button {
+                    position,
+                    size,
+                    texture,
+                    hover,
+                    alpha,
+                    kind,
+                    ..
+                } => {
+                    let hovered = pointer.is_some_and(|point| {
+                        Rect::new(position.x, position.y, size.x, size.y).contains(point)
+                    });
+                    let texture = match (hovered, hover) {
+                        (true, ButtonHoverBehavior::Texture(hover_texture)) => hover_texture,
+                        _ => texture,
+                    };
+                    place_image(asset_cache, *position, *size, texture, *alpha, *kind)
+                }
+                UiElement::Bar {
+                    position,
+                    size,
+                    texture,
+                    fill,
+                    alpha,
+                } => PlacedElement {
+                    rect: Rect::new(position.x, position.y, size.x, size.y),
+                    alpha: *alpha,
+                    content: PlacedContent::Bar {
+                        texture: texture.clone(),
+                        fill: *fill,
+                    },
+                },
+                UiElement::Text {
+                    position,
+                    size,
+                    text,
+                    font,
+                    font_size,
+                    h,
+                    v,
+                    alpha,
+                    fit_to_rect,
+                } => {
+                    let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
+                    place_text(
+                        &**font_obj,
+                        Rect::new(position.x, position.y, size.x, size.y),
+                        text,
+                        font,
+                        *font_size,
+                        *h,
+                        *v,
+                        *alpha,
+                        *fit_to_rect,
+                    )
+                }
+            });
+        }
+        placed
+    }
+
     /// Render the canvas as a screen-space overlay on `screen_size`, mapped via
     /// `mode` (stretch-to-fill or aspect-preserving letterbox).
     pub fn render_screen_space(
@@ -582,153 +748,13 @@ where
         pointer: Option<Vector2<f32>>,
     ) -> Vec<SceneObject> {
         let (scale, offset) = fit(self.size, screen_size, mode);
-        let texture_options = TextureOptions {
-            wrap: false,
-            ..Default::default()
-        };
-        let mut objs = Vec::with_capacity(self.elements.len());
-
-        for element in &self.elements {
-            match element {
-                UiElement::Image {
-                    position,
-                    size,
-                    texture,
-                    alpha,
-                    kind,
-                } => {
-                    let tex = asset_cache.get_ext(
-                        &TEXTURE_IMPORTER,
-                        texture,
-                        &TextureOptions {
-                            wrap: false,
-                            transparent_index_0: kind.transparent_index_0(),
-                        },
-                    );
-                    let (drawn_at, drawn) = drawn_rect(*position, *size, texture_px(&tex), *kind);
-                    objs.push(SceneObject::screen_space_quad2(
-                        tex.clone() as Rc<dyn TextureTrait>,
-                        vec2(
-                            drawn_at.x * scale.x + offset.x,
-                            drawn_at.y * scale.y + offset.y,
-                        ),
-                        vec2(drawn.x * scale.x, drawn.y * scale.y),
-                        *alpha,
-                    ));
-                }
-                UiElement::Button {
-                    position,
-                    size,
-                    texture,
-                    hover,
-                    alpha,
-                    kind,
-                    ..
-                } => {
-                    let hovered = pointer.is_some_and(|point| {
-                        Rect::new(position.x, position.y, size.x, size.y).contains(point)
-                    });
-                    let texture = match (hovered, hover) {
-                        (true, ButtonHoverBehavior::Texture(hover_texture)) => hover_texture,
-                        _ => texture,
-                    };
-                    let kind = *kind;
-                    let tex = asset_cache.get_ext(
-                        &TEXTURE_IMPORTER,
-                        texture,
-                        &TextureOptions {
-                            wrap: false,
-                            transparent_index_0: kind.transparent_index_0(),
-                        },
-                    );
-                    let (drawn_at, drawn) = drawn_rect(*position, *size, texture_px(&tex), kind);
-                    objs.push(SceneObject::screen_space_quad2(
-                        tex.clone() as Rc<dyn TextureTrait>,
-                        vec2(
-                            drawn_at.x * scale.x + offset.x,
-                            drawn_at.y * scale.y + offset.y,
-                        ),
-                        vec2(drawn.x * scale.x, drawn.y * scale.y),
-                        *alpha,
-                    ));
-                }
-                UiElement::Bar {
-                    position,
-                    size,
-                    texture,
-                    fill,
-                    alpha: _,
-                } => {
-                    let tex = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options);
-                    let material = engine::scene::clipped_screen_material::create_screen_space(
-                        tex.clone() as Rc<dyn TextureTrait>,
-                        *fill,
-                    );
-                    let mut obj =
-                        SceneObject::new(material, Box::new(engine::scene::quad::create()));
-                    obj.set_local_transform(screen_space_quad_transform(
-                        vec2(
-                            position.x * scale.x + offset.x,
-                            position.y * scale.y + offset.y,
-                        ),
-                        vec2(size.x * scale.x, size.y * scale.y),
-                    ));
-                    objs.push(obj);
-                }
-                UiElement::Text {
-                    position,
-                    size,
-                    text,
-                    font,
-                    font_size,
-                    h,
-                    v,
-                    alpha,
-                    fit_to_rect,
-                } => {
-                    let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
-                    // `size <= 0` renders at the font's native pixel height, so
-                    // Dark `.FON` bitmap fonts draw at their authored size (the
-                    // way the original engine does) instead of an ad-hoc scale.
-                    let canvas_size = if *font_size > 0.0 {
-                        *font_size
-                    } else {
-                        font_obj.base_height()
-                    };
-                    let font_size = canvas_size * scale.y;
-
-                    let rx = position.x * scale.x + offset.x;
-                    let ry = position.y * scale.y + offset.y;
-                    let rw = size.x * scale.x;
-                    let rh = size.y * scale.y;
-
-                    let fitted;
-                    let text: &str = if *fit_to_rect {
-                        fitted = ellipsize(&**font_obj, text, font_size, rw);
-                        &fitted
-                    } else {
-                        text
-                    };
-                    let width = measure_text_width(&**font_obj, text, font_size);
-                    let x = match h {
-                        HAlign::Left => rx,
-                        HAlign::Center => rx + (rw - width) / 2.0,
-                        HAlign::Right => rx + rw - width,
-                    };
-                    let y = match v {
-                        VAlign::Top => ry,
-                        VAlign::Middle => ry + (rh - font_size) / 2.0,
-                        VAlign::Bottom => ry + rh - font_size,
-                    };
-
-                    objs.push(SceneObject::screen_space_text(
-                        text, font_obj, font_size, *alpha, x, y,
-                    ));
-                }
-            }
+        let placed = self.layout_with_pointer(asset_cache, pointer);
+        let mut objects = Vec::with_capacity(placed.len());
+        for element in &placed {
+            let rect = canvas_rect_to_screen_px(element.rect, scale, offset);
+            objects.push(present_screen(asset_cache, element, rect));
         }
-
-        objs
+        objects
     }
 
     /// Present this canvas as a world-space panel. `root_transform` places a
@@ -742,137 +768,17 @@ where
         force_alpha: Option<f32>,
         component_z_step: f32,
     ) -> Vec<SceneObject> {
-        let texture_options = TextureOptions {
-            wrap: false,
-            ..Default::default()
-        };
-        let mut objects = Vec::with_capacity(self.elements.len());
-
-        for (index, element) in self.elements.iter().enumerate() {
-            let mut object = match element {
-                UiElement::Image {
-                    position,
-                    size,
-                    texture,
-                    alpha,
-                    kind,
-                } => world_image(
-                    asset_cache,
-                    texture,
-                    *position,
-                    *size,
-                    self.size,
-                    force_alpha.unwrap_or(*alpha),
-                    *kind,
-                ),
-                UiElement::Button {
-                    position,
-                    size,
-                    texture,
-                    hover,
-                    alpha,
-                    kind,
-                    ..
-                } => {
-                    let hovered = pointer.is_some_and(|point| {
-                        Rect::new(position.x, position.y, size.x, size.y).contains(point)
-                    });
-                    let texture = match (hovered, hover) {
-                        (true, ButtonHoverBehavior::Texture(hover_texture)) => hover_texture,
-                        _ => texture,
-                    };
-                    world_image(
-                        asset_cache,
-                        texture,
-                        *position,
-                        *size,
-                        self.size,
-                        force_alpha.unwrap_or(*alpha),
-                        *kind,
-                    )
-                }
-                UiElement::Bar {
-                    position,
-                    size,
-                    texture,
-                    fill,
-                    ..
-                } => {
-                    let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options);
-                    let material = engine::scene::clipped_screen_material::create(
-                        texture.clone() as Rc<dyn TextureTrait>,
-                        *fill,
-                    );
-                    let mut object =
-                        SceneObject::new(material, Box::new(engine::scene::quad::create()));
-                    object.set_local_transform(world_element_transform(
-                        *position, *size, self.size, 0.0,
-                    ));
-                    object
-                }
-                UiElement::Text {
-                    position,
-                    size,
-                    text,
-                    font,
-                    font_size,
-                    h,
-                    v,
-                    alpha,
-                    ..
-                } => {
-                    let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
-                    let alpha = force_alpha.unwrap_or(*alpha);
-
-                    // Align inside the element's rect, in canvas pixels, the
-                    // same way the screen-space path does - otherwise the two
-                    // presentations disagree about where a label sits and
-                    // world-space text drifts off its widget.
-                    let canvas_font_size = if *font_size > 0.0 {
-                        *font_size
-                    } else {
-                        font_obj.base_height()
-                    };
-                    let width = measure_text_width(&**font_obj, text, canvas_font_size);
-                    let x = match h {
-                        HAlign::Left => position.x,
-                        HAlign::Center => position.x + (size.x - width) / 2.0,
-                        HAlign::Right => position.x + size.x - width,
-                    };
-                    // `world_space_text` anchors on the text's vertical
-                    // CENTRE (unlike the screen-space path, which anchors on
-                    // its top), so each case carries half a line to land the
-                    // glyphs where the alignment says they should be.
-                    let half_line = canvas_font_size / 2.0;
-                    let y = match v {
-                        VAlign::Top => position.y + half_line,
-                        VAlign::Middle => position.y + size.y / 2.0,
-                        VAlign::Bottom => position.y + size.y - half_line,
-                    };
-
-                    let mut object = SceneObject::world_space_text(
-                        text,
-                        font_obj,
-                        (1.0 - alpha).clamp(0.0, 1.0),
-                    );
-                    object.set_local_transform(
-                        Matrix4::from_angle_y(Deg(180.0))
-                            * Matrix4::from_translation(vec3(
-                                x / self.size.x - 0.5,
-                                -y / self.size.y - 0.5,
-                                0.01,
-                            )),
-                    );
-                    object
-                }
-            };
+        let placed = self.layout_with_pointer(asset_cache, pointer);
+        let mut objects = Vec::with_capacity(placed.len());
+        for (index, element) in placed.iter().enumerate() {
+            let alpha = force_alpha.unwrap_or(element.alpha);
+            let mut object = present_world(asset_cache, element, alpha, self.size);
             object.set_transform(
                 root_transform
                     * Matrix4::from_translation(vec3(0.0, 0.0, -component_z_step * index as f32)),
             );
             objects.push(object);
         }
-
         objects
     }
 }
@@ -891,30 +797,197 @@ fn screen_space_quad_transform(position: Vector2<f32>, size: Vector2<f32>) -> Ma
         * Matrix4::from_translation(vec3(0.5, 0.5, 0.0))
 }
 
-fn world_image(
+/// How a `kind`'s art is sampled. Shared so layout and the presenters key the
+/// asset cache the same way.
+fn texture_options(kind: ImageKind) -> TextureOptions {
+    TextureOptions {
+        wrap: false,
+        transparent_index_0: kind.transparent_index_0(),
+    }
+}
+
+/// Lay out one piece of art: its slot rect, unless it is object-icon art,
+/// which draws at its own authored pixel size centered in the slot (or
+/// uniformly downscaled to fit it, for [`ImageKind::ObjectIconFit`]).
+fn place_image(
     asset_cache: &mut AssetCache,
-    texture: &str,
     position: Vector2<f32>,
     size: Vector2<f32>,
-    canvas_size: Vector2<f32>,
+    texture: &str,
     alpha: f32,
     kind: ImageKind,
+) -> PlacedElement {
+    let loaded = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options(kind));
+    let (position, size) = drawn_rect(position, size, texture_px(&loaded), kind);
+    PlacedElement {
+        rect: Rect::new(position.x, position.y, size.x, size.y),
+        alpha,
+        content: PlacedContent::Image {
+            texture: texture.to_owned(),
+            kind,
+        },
+    }
+}
+
+/// Lay out one text element inside its authored widget `rect`: pick the size,
+/// shorten it to fit, measure it, and resolve both alignments - the whole of
+/// "where does this string go", in canvas pixels.
+///
+/// Pure (it needs only the font's metrics), which is what lets the parity test
+/// exercise it over many alignments and strings without a GPU.
+#[allow(clippy::too_many_arguments)]
+fn place_text(
+    font: &dyn Font,
+    rect: Rect,
+    text: &str,
+    font_name: &str,
+    font_size: f32,
+    h: HAlign,
+    v: VAlign,
+    alpha: f32,
+    fit_to_rect: bool,
+) -> PlacedElement {
+    // `font_size <= 0` renders at the font's native pixel height, so Dark
+    // `.FON` bitmap fonts draw at their authored size (the way the original
+    // engine does) instead of an ad-hoc scale.
+    let font_size = if font_size > 0.0 {
+        font_size
+    } else {
+        font.base_height()
+    };
+    // Ellipsizing and alignment are measured in canvas pixels, so they are
+    // resolution-independent and identical in every presentation (they used to
+    // run in screen pixels, which is why only the screen path could ellipsize).
+    let text = if fit_to_rect {
+        ellipsize(font, text, font_size, rect.w)
+    } else {
+        text.to_owned()
+    };
+    let width = measure_text_width(font, &text, font_size);
+    let x = match h {
+        HAlign::Left => rect.x,
+        HAlign::Center => rect.x + (rect.w - width) / 2.0,
+        HAlign::Right => rect.x + rect.w - width,
+    };
+    let y = match v {
+        VAlign::Top => rect.y,
+        VAlign::Middle => rect.y + (rect.h - font_size) / 2.0,
+        VAlign::Bottom => rect.y + rect.h - font_size,
+    };
+    PlacedElement {
+        // The glyph box, not the authored widget box: its height IS the font
+        // size and its width the measured text width, so "draw this text in
+        // this rect" means the same thing to every presentation.
+        rect: Rect::new(x, y, width, font_size),
+        alpha,
+        content: PlacedContent::Text {
+            text,
+            font: font_name.to_owned(),
+        },
+    }
+}
+
+/// Canvas rect -> screen pixels, under a canvas->screen `fit`.
+fn canvas_rect_to_screen_px(rect: Rect, scale: Vector2<f32>, offset: Vector2<f32>) -> Rect {
+    Rect::new(
+        rect.x * scale.x + offset.x,
+        rect.y * scale.y + offset.y,
+        rect.w * scale.x,
+        rect.h * scale.y,
+    )
+}
+
+/// Screen-space presentation of one placed element, already mapped to screen
+/// pixels. Chooses a material; it never moves anything.
+fn present_screen(
+    asset_cache: &mut AssetCache,
+    element: &PlacedElement,
+    rect: Rect,
 ) -> SceneObject {
-    let texture = asset_cache
-        .get_ext(
-            &TEXTURE_IMPORTER,
-            texture,
-            &TextureOptions {
-                wrap: false,
-                transparent_index_0: kind.transparent_index_0(),
-            },
-        )
-        .clone();
-    let (position, size) = drawn_rect(position, size, texture_px(&texture), kind);
-    let material =
-        engine::scene::basic_material::create(texture as Rc<dyn TextureTrait>, 1.0, 1.0 - alpha);
-    let mut object = SceneObject::new(material, Box::new(engine::scene::quad::create()));
-    object.set_local_transform(world_element_transform(position, size, canvas_size, 0.0));
+    match &element.content {
+        PlacedContent::Image { texture, kind } => {
+            let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options(*kind));
+            SceneObject::screen_space_quad2(
+                texture.clone() as Rc<dyn TextureTrait>,
+                vec2(rect.x, rect.y),
+                vec2(rect.w, rect.h),
+                element.alpha,
+            )
+        }
+        PlacedContent::Bar { texture, fill } => {
+            let texture =
+                asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options(ImageKind::Ui));
+            let material = engine::scene::clipped_screen_material::create_screen_space(
+                texture.clone() as Rc<dyn TextureTrait>,
+                *fill,
+            );
+            let mut object = SceneObject::new(material, Box::new(engine::scene::quad::create()));
+            object.set_local_transform(screen_space_quad_transform(
+                vec2(rect.x, rect.y),
+                vec2(rect.w, rect.h),
+            ));
+            object
+        }
+        PlacedContent::Text { text, font, .. } => {
+            let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
+            // `screen_space_text` anchors on the glyph box's top-left and takes
+            // the line height as its size - which is exactly what the placed
+            // rect is, so there is nothing to adjust. The rect's *width* is
+            // measured, not imposed: a non-uniform canvas->screen scale
+            // (`ScaleMode::Stretch` on a non-4:3 screen) scales glyphs by the
+            // vertical factor only, since bitmap text has one size.
+            SceneObject::screen_space_text(text, font_obj, rect.h, element.alpha, rect.x, rect.y)
+        }
+    }
+}
+
+/// World-space (panel) presentation of one placed element.
+///
+/// Every content kind is placed by the same [`world_element_transform`] call
+/// on the same rect - text included, because `world_space_text` normalizes its
+/// glyph box to the centered unit square just like `quad::create`. There is no
+/// per-kind placement left to disagree about (there used to be: text carried
+/// its own rotation, its own half-line anchor fudge, and a fixed font size
+/// that ignored the layout entirely).
+fn present_world(
+    asset_cache: &mut AssetCache,
+    element: &PlacedElement,
+    alpha: f32,
+    canvas_size: Vector2<f32>,
+) -> SceneObject {
+    let rect = element.rect;
+    let mut object = match &element.content {
+        PlacedContent::Image { texture, kind } => {
+            let texture = asset_cache
+                .get_ext(&TEXTURE_IMPORTER, texture, &texture_options(*kind))
+                .clone();
+            let material = engine::scene::basic_material::create(
+                texture as Rc<dyn TextureTrait>,
+                1.0,
+                1.0 - alpha,
+            );
+            SceneObject::new(material, Box::new(engine::scene::quad::create()))
+        }
+        PlacedContent::Bar { texture, fill } => {
+            let texture =
+                asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options(ImageKind::Ui));
+            let material = engine::scene::clipped_screen_material::create(
+                texture.clone() as Rc<dyn TextureTrait>,
+                *fill,
+            );
+            SceneObject::new(material, Box::new(engine::scene::quad::create()))
+        }
+        PlacedContent::Text { text, font, .. } => {
+            let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
+            SceneObject::world_space_text(text, font_obj, (1.0 - alpha).clamp(0.0, 1.0))
+        }
+    };
+    object.set_local_transform(world_element_transform(
+        vec2(rect.x, rect.y),
+        vec2(rect.w, rect.h),
+        canvas_size,
+        0.0,
+    ));
     object
 }
 
@@ -1141,6 +1214,267 @@ mod tests {
                 }
             ]
         ));
+    }
+
+    /// The two presentations must place identical content identically.
+    ///
+    /// Screen space and a world-space panel are both "map the canvas onto a
+    /// 0..1 box"; the only thing that could ever make them disagree is a
+    /// placement decision taken *inside* a presentation. Since
+    /// [`UiCanvas::layout`] now owns every such decision, these assertions are
+    /// a check on that contract - if someone re-introduces alignment,
+    /// measurement or an anchor fudge in one mapper, this fails.
+    mod parity {
+        use super::*;
+
+        /// Fixed-metrics stub font: every glyph is 4 wide at a base height of
+        /// 10, except `?`, which the font does not have.
+        struct StubFont;
+
+        impl Font for StubFont {
+            fn get_texture(&self) -> Rc<dyn TextureTrait> {
+                unreachable!("layout does not touch the texture")
+            }
+            fn get_character_info(&self, c: char) -> Option<engine::FontCharacterInfo> {
+                if c == '?' {
+                    return None;
+                }
+                Some(engine::FontCharacterInfo {
+                    min_uv_x: 0.0,
+                    min_uv_y: 0.0,
+                    max_uv_x: 1.0,
+                    max_uv_y: 1.0,
+                    advance: 4.0,
+                })
+            }
+            fn base_height(&self) -> f32 {
+                10.0
+            }
+            fn get_half_pixel(&self) -> f32 {
+                0.0
+            }
+        }
+
+        const CANVAS: Vector2<f32> = Vector2 { x: 640.0, y: 480.0 };
+
+        fn assert_same_rect(what: &str, screen: Rect, panel: Rect) {
+            let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+            assert!(
+                close(screen.x, panel.x)
+                    && close(screen.y, panel.y)
+                    && close(screen.w, panel.w)
+                    && close(screen.h, panel.h),
+                "{what}: screen {screen:?} != panel {panel:?}"
+            );
+        }
+
+        /// Every placed rect must normalize the same way in both
+        /// presentations, on any screen shape.
+        /// Every placed rect must normalize the same way in both
+        /// presentations. `uniform_only` restricts the screen mappings to
+        /// uniform ones: a bitmap glyph has a single size, so under a
+        /// non-uniform canvas scale screen text keeps its aspect while a world
+        /// panel stretches its text mesh into the rect (see [`ScaleMode`]).
+        /// Art has no such constraint and must agree under any mapping.
+        fn assert_parity_with(what: &str, placed: &PlacedElement, uniform_only: bool) {
+            let panel = canvas_rect_to_panel(placed.rect, CANVAS);
+            if !uniform_only {
+                // Stretch fills the target, so normalized screen coordinates
+                // are canvas coordinates - comparable on any screen shape.
+                for screen in [
+                    vec2(640.0, 480.0),
+                    vec2(1920.0, 1080.0),
+                    vec2(800.0, 1200.0),
+                ] {
+                    assert_same_rect(
+                        what,
+                        canvas_rect_to_screen(placed.rect, CANVAS, screen, ScaleMode::Stretch),
+                        panel,
+                    );
+                }
+            }
+            // Aspect-preserving on screens of the canvas's own aspect: no bars,
+            // uniform scale - the mapping every shipped presentation uses.
+            for screen in [vec2(640.0, 480.0), vec2(1280.0, 960.0), vec2(320.0, 240.0)] {
+                assert_same_rect(
+                    what,
+                    canvas_rect_to_screen(placed.rect, CANVAS, screen, ScaleMode::PreserveAspect),
+                    panel,
+                );
+            }
+        }
+
+        fn assert_parity(what: &str, placed: &PlacedElement) {
+            assert_parity_with(what, placed, false);
+        }
+
+        fn text(
+            text: &str,
+            widget: Rect,
+            h: HAlign,
+            v: VAlign,
+            fit_to_rect: bool,
+        ) -> PlacedElement {
+            place_text(
+                &StubFont,
+                widget,
+                text,
+                "stub.fon",
+                0.0,
+                h,
+                v,
+                1.0,
+                fit_to_rect,
+            )
+        }
+
+        #[test]
+        fn text_lands_in_the_same_place_in_both_presentations() {
+            let widget = Rect::new(100.0, 60.0, 240.0, 40.0);
+            for h in [HAlign::Left, HAlign::Center, HAlign::Right] {
+                for v in [VAlign::Top, VAlign::Middle, VAlign::Bottom] {
+                    for body in [
+                        "",
+                        "a",
+                        "save1",
+                        // Multi-byte: ellipsizing must not split a char, and
+                        // both presentations must agree about the result.
+                        "\u{e9}l\u{e9}phant \u{2014} caf\u{e9}",
+                        "a very long save name that cannot possibly fit",
+                    ] {
+                        for fit in [false, true] {
+                            let placed = text(body, widget, h, v, fit);
+                            assert_parity_with(
+                                &format!("{body:?} {h:?} {v:?} fit={fit}"),
+                                &placed,
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn images_and_bars_land_in_the_same_place_in_both_presentations() {
+            for rect in [
+                Rect::new(0.0, 0.0, 640.0, 480.0),
+                Rect::new(17.0, 166.0, 45.0, 60.0),
+                Rect::new(639.0, 479.0, 1.0, 1.0),
+            ] {
+                assert_parity(
+                    "image",
+                    &PlacedElement {
+                        rect,
+                        alpha: 1.0,
+                        content: PlacedContent::Image {
+                            texture: "key10.pcx".to_owned(),
+                            kind: ImageKind::Ui,
+                        },
+                    },
+                );
+                assert_parity(
+                    "bar",
+                    &PlacedElement {
+                        rect,
+                        alpha: 1.0,
+                        content: PlacedContent::Bar {
+                            texture: "bar.pcx".to_owned(),
+                            fill: 0.5,
+                        },
+                    },
+                );
+            }
+        }
+
+        /// Text is placed by rect like everything else, so a label and the art
+        /// behind it cannot drift apart in one presentation only.
+        #[test]
+        fn a_text_rect_maps_exactly_like_an_image_rect() {
+            let placed = text(
+                "save1",
+                Rect::new(20.0, 30.0, 200.0, 24.0),
+                HAlign::Center,
+                VAlign::Middle,
+                false,
+            );
+            let image = PlacedElement {
+                rect: placed.rect,
+                alpha: 1.0,
+                content: PlacedContent::Image {
+                    texture: "x.pcx".to_owned(),
+                    kind: ImageKind::Ui,
+                },
+            };
+            assert_eq!(
+                canvas_rect_to_panel(placed.rect, CANVAS),
+                canvas_rect_to_panel(image.rect, CANVAS)
+            );
+        }
+
+        /// Ellipsizing is a layout decision, so it happens once and both
+        /// presentations receive the already-shortened string. It used to be
+        /// done inside the screen mapper, which is why world-space text
+        /// overflowed its widget.
+        #[test]
+        fn ellipsize_applies_in_layout_not_in_a_presentation() {
+            // 4px per glyph at native size 10: a 40px box fits 10 glyphs, and
+            // the ellipsis costs 3 of them.
+            let widget = Rect::new(0.0, 0.0, 40.0, 20.0);
+            let long = "abcdefghijklmnop";
+            let PlacedContent::Text { text: fitted, .. } =
+                &text(long, widget, HAlign::Left, VAlign::Top, true).content
+            else {
+                panic!("expected text");
+            };
+            assert_eq!(fitted, "abcdefg...");
+            assert!(measure_text_width(&StubFont, fitted, 10.0) <= widget.w);
+
+            // Without the option the string is untouched (and overflows) - in
+            // both presentations, identically.
+            let PlacedContent::Text { text: unfitted, .. } =
+                &text(long, widget, HAlign::Left, VAlign::Top, false).content
+            else {
+                panic!("expected text");
+            };
+            assert_eq!(unfitted, long);
+        }
+
+        /// A multi-byte string must be cut on a character boundary (a byte cut
+        /// would panic) and stay inside its box.
+        #[test]
+        fn ellipsize_respects_multi_byte_characters() {
+            let widget = Rect::new(0.0, 0.0, 40.0, 20.0);
+            let PlacedContent::Text { text: fitted, .. } = &text(
+                "\u{e9}l\u{e9}phant \u{2014} caf\u{e9}",
+                widget,
+                HAlign::Left,
+                VAlign::Top,
+                true,
+            )
+            .content
+            else {
+                panic!("expected text");
+            };
+            assert!(fitted.ends_with("..."));
+            assert!(measure_text_width(&StubFont, fitted, 10.0) <= widget.w);
+        }
+
+        /// The alignment cases themselves, in canvas pixels - the values both
+        /// presentations then agree on.
+        #[test]
+        fn alignment_resolves_against_the_widget_box() {
+            let widget = Rect::new(100.0, 60.0, 240.0, 40.0);
+            // "abcd" is 4 glyphs * 4px = 16px wide, 10px tall (native).
+            let left = text("abcd", widget, HAlign::Left, VAlign::Top, false).rect;
+            assert_eq!(left, Rect::new(100.0, 60.0, 16.0, 10.0));
+
+            let center = text("abcd", widget, HAlign::Center, VAlign::Middle, false).rect;
+            assert_eq!(center, Rect::new(100.0 + 112.0, 60.0 + 15.0, 16.0, 10.0));
+
+            let right = text("abcd", widget, HAlign::Right, VAlign::Bottom, false).rect;
+            assert_eq!(right, Rect::new(100.0 + 224.0, 60.0 + 30.0, 16.0, 10.0));
+        }
     }
 
     mod world_panel {

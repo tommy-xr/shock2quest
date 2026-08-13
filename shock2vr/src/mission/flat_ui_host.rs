@@ -30,7 +30,7 @@ use crate::{
     input_context::Pointer2D,
     mission::PlayerInfo,
     scripts::{Message, MessagePayload},
-    ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, pointer_to_canvas},
+    ui::{Rect, ScaleMode, UiCanvas, pointer_to_canvas},
     vr_config::Handedness,
 };
 
@@ -626,9 +626,7 @@ impl FlatUiHost {
                 interactive: true,
                 entity: Some(entity),
                 ..
-            } if Some(*entity) != held && component_canvas_rect(c, rect).contains(canvas_pos) => {
-                Some(*entity)
-            }
+            } if Some(*entity) != held && c.canvas_rect(rect).contains(canvas_pos) => Some(*entity),
             _ => None,
         })
     }
@@ -750,7 +748,7 @@ impl FlatUiHost {
                     continue;
                 }
             }
-            let r = component_canvas_rect(component, rect);
+            let r = component.canvas_rect(rect);
             let (kind, texture, text, label, entity_id) = match component {
                 GuiComponentRenderInfo::Image {
                     texture,
@@ -880,49 +878,13 @@ fn draw_components(
                 continue;
             }
         }
-        let r = component_canvas_rect(component, rect);
-        match component {
-            // The original MFD art is opaque on screen; the render-info
-            // alpha is a VR world-quad translucency, deliberately not
-            // applied here.
-            GuiComponentRenderInfo::Image { texture, kind, .. } => match kind {
-                crate::ui::ImageKind::Ui => {
-                    canvas.image(r, texture);
-                }
-                crate::ui::ImageKind::ObjectIcon => {
-                    canvas.object_icon(r, texture);
-                }
-                crate::ui::ImageKind::ObjectIconFit => {
-                    canvas.fitted_object_icon(r, texture);
-                }
-            },
-            GuiComponentRenderInfo::Text { text, font, .. } => {
-                // Render at the font's native pixel height (the Dark engine
-                // draws its bitmap fonts 1:1), not the component's box height -
-                // the `size` on a GUI text component is its bounding box, not a
-                // font size. Vertically center the native-height text in that box.
-                canvas.text_native(r, text, font, HAlign::Left, VAlign::Middle);
-            }
-        }
+        // The same component -> element conversion the VR world panel uses,
+        // so the two presentations cannot lay the panel out differently.
+        // Only the opacity differs: the original MFD art is opaque on screen,
+        // while the component alphas (the elevator's 0.7 floor labels, say) are
+        // a VR world-quad translucency, deliberately not applied here.
+        canvas.push(component.to_ui_element(rect)).opacity(1.0);
     }
-}
-
-/// Map one `SetUI` component (normalized panel coordinates) to canvas pixels.
-fn component_canvas_rect(info: &GuiComponentRenderInfo, panel: Rect) -> Rect {
-    let position = info.position();
-    let size = info.size();
-    // Text render-info positions carry a negated y (a VR world-quad
-    // convention baked into `GuiComponent::to_render_info`); undo it here.
-    let y = match info {
-        GuiComponentRenderInfo::Text { .. } => -position.y,
-        _ => position.y,
-    };
-    Rect::new(
-        panel.x + position.x * panel.w,
-        panel.y + y * panel.h,
-        size.x * panel.w,
-        size.y * panel.h,
-    )
 }
 
 fn component_entity(info: &GuiComponentRenderInfo) -> Option<EntityId> {
@@ -1025,7 +987,7 @@ mod tests {
             panel_size_px: vec2(188.0, 296.0),
             kind: crate::ui::ImageKind::Ui,
         };
-        let r = component_canvas_rect(&info, panel);
+        let r = info.canvas_rect(panel);
         assert!((r.x - 17.0).abs() < 1e-3);
         assert!((r.y - 166.0).abs() < 1e-3);
         assert!((r.w - 45.0).abs() < 1e-3);
@@ -1044,7 +1006,7 @@ mod tests {
             text: "451".to_owned(),
             alpha: 1.0,
         };
-        let r = component_canvas_rect(&info, panel);
+        let r = info.canvas_rect(panel);
         assert!((r.y - (124.0 + 20.0)).abs() < 1e-3);
     }
 

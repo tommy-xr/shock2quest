@@ -7,9 +7,14 @@ Living doc for the menu work. Updated as the investigation proceeds.
 | PR | State | What |
 | --- | --- | --- |
 | [#927](https://github.com/tommy-xr/shock2quest/pull/927) | **merged** | Main menu driven by `MAIN.STR` + `MAINR.BIN`; all six entries, four dimmed |
-| [#930](https://github.com/tommy-xr/shock2quest/pull/930) | open, CI green | Load-game screen (`GAMELOD.*`), `save_load::all_saves`, `engine::ellipsize` |
-| [#934](https://github.com/tommy-xr/shock2quest/pull/934) | merged into #930's branch | `cargo dbgr` boots the main menu with no `--mission` |
-| `feat/vr-menu-pointer` | local, **VR working end to end** | VR controller pointer + world-space menu panel + VR menu default |
+| [#934](https://github.com/tommy-xr/shock2quest/pull/934) | **merged** | `cargo dbgr` boots the main menu with no `--mission` |
+| [#930](https://github.com/tommy-xr/shock2quest/pull/930) | **merged** | Load-game screen, `save_load::all_saves`, `engine::ellipsize` |
+| [#953](https://github.com/tommy-xr/shock2quest/pull/953) | open, mergeable, CI green | VR controller pointer + world-space menu panel + VR menu default |
+| [#961](https://github.com/tommy-xr/shock2quest/pull/961) | open, CI green | Three UI emit paths -> one layout pass; parity test |
+
+Both open PRs are rebased onto current `main` (#930 was squash-merged, so the
+original load-game commits had to be dropped by replaying only the VR commits
+with `git rebase --onto origin/main <last-load-game-commit>`).
 
 Open issues: [#928](https://github.com/tommy-xr/shock2quest/issues/928) (load list has no scrolling past 14 rows), [#929](https://github.com/tommy-xr/shock2quest/issues/929) (failed load is silent).
 
@@ -82,7 +87,7 @@ screenshotted. Removed in `4ce6934`.
   `desktop_runtime` is gone and `oculus_runtime`'s `DEFAULT_MISSION` is
   `main_menu` (`8a0a1c3`).
 
-### Still open
+### Still open (as of the #961 stack)
 
 - The label drifts a few px right of centre — world text likely renders at a
   slightly different scale than `measure_text_width` reports.
@@ -120,3 +125,118 @@ VR has a **head position**, not just a rotation. `InputContext` currently expose
 runtime's fixed eye-height offset. A real VR menu should anchor to the tracked head
 pose (place once in front of the player on entry, or soft-follow), which needs head
 position plumbed into `InputContext`.
+
+## Guiding principle
+
+**UI must render consistently between flatscreen and VR** (repo owner, explicit).
+Text rendering or sitting in a different place between the two presentations is
+unacceptable — it is a bug of the same severity as wrong content, not a cosmetic
+nit. Divergence should be **structurally impossible**, not merely caught by a
+test. Now encoded in `AGENTS.md` section 3.
+
+## Renderer consolidation (in progress)
+
+### Why the two presentations disagreed
+
+PR #840 ("unify 2D canvas descriptions") unified the *data model* — one
+`UiElement` enum — but left **three independent emit paths**, each re-deriving
+placement from the same description:
+
+| Path | Where | Notes |
+| --- | --- | --- |
+| screen-space | `UiCanvas::render_screen_space_with_pointer` (~159 lines) | aligns, measures, ellipsizes |
+| world-space | `UiCanvas::render_world_space` (~143 lines) | learned alignment only in `69e0553`; **still does not ellipsize** |
+| GUI / MFD | `GuiComponentRenderInfo::render` (`gui_component.rs`) | keypad, container, replicator, elevator, inventory |
+
+The world path was lifted from the older GUI world-space code, which only drew
+fixed-size widgets where alignment never mattered — so it inherited that code's
+quirks (Y-rotation instead of Z, negated y, corner anchor) and never grew
+alignment. Nothing forces the paths to agree, so each new feature lands in one
+and silently misses the others. Live proof: `fit_to_rect`/`ellipsize` is
+screen-only, so a VR load screen would spill long save names exactly as the flat
+one did before `engine::ellipsize` existed.
+
+### Decision: consolidate first, render-to-texture second
+
+**Chosen:** one canvas-space `layout()` pass producing `PlacedElement`s
+(alignment and ellipsize already resolved), consumed by thin affine mappers per
+presentation, plus a parity test asserting the mappers agree. Delegated to a
+subagent on `refactor/ui-single-layout`, branched from `feat/vr-menu-pointer`
+so it starts from verified-working VR with tests that pin the behaviour —
+rather than from `main`, where VR is broken and the anchor asymmetry is
+undiscoverable without rendering.
+
+### Outcome (landed on `refactor/ui-single-layout`)
+
+`UiCanvas::layout` is now the single placement authority: it resolves
+alignment, measures text, applies `ellipsize`, and sizes object icons, yielding
+`PlacedElement { rect, alpha, content }` in canvas pixels (for text the rect is
+the glyph box, so its height *is* the font size). Screen space and the
+world-space panel are mappers over that list with no per-element-kind placement
+left, and the GUI/MFD path was folded in: `GuiComponentRenderInfo::render` is
+gone, and both the flat overlay and the VR world quad build their elements
+through one `to_ui_element` conversion.
+
+The anchor asymmetry that section 3 of `AGENTS.md` warned about was *removed*
+rather than confined: `SceneObject::world_space_text` now normalizes its glyphs
+into the centered unit square (same shape as `quad::create`), so world-space
+text is placed by the very `world_element_transform` call an image uses.
+
+Two real divergences this fixed, both visible on the VR main menu:
+
+- world-space text was drawn at a **fixed** 0.045-of-panel-height regardless of
+  the layout's font size (~40% too large for the menu font, spilling out of the
+  button pills and over the numeral art);
+- it carried a half-line anchor fudge, so a `VAlign` case landed the label
+  higher than the flat presentation put it.
+
+VR MFD panel text had the same fixed-size problem relative to its own panel
+pixels; it now matches the flat MFD.
+
+Still open: the load-game screen has **no** world-space presentation at all —
+in `--vr` it falls back to the screen-space overlay (`LoadGameScene::render`
+returns nothing; `render_per_eye` draws for both modes). So the one canvas that
+exercises `fit_to_rect` is never actually shown on a panel. Ellipsizing now
+happens in layout, so it *will* be correct when that screen grows a VR panel.
+
+**Deferred: render-to-texture for world space.** Rendering the canvas to an
+offscreen target and mapping it onto the panel quad would make parity true *by
+construction* (one renderer, not two that agree). It is the better end state,
+but:
+
+- `engine` has **no render-target abstraction at all** — the only FBO code is
+  `oculus_runtime`'s XR swapchain — so it needs one for desktop GL *and* Android
+  GLES.
+- Text sharpness becomes resolution-bound (fixed-size texture vs direct
+  geometry) and Quest memory/perf matters. Neither is measurable without a
+  headset.
+
+Consolidation makes world-space a thin mapper, so swapping that mapper for an
+RTT quad afterwards is a small contained change that can be benchmarked on
+device. Doing RTT first would bet the refactor on unverifiable engine work.
+
+## What is left
+
+- **No hardware verification.** Everything is the debug runtime's `--vr` path; the
+  Quest `DEFAULT_MISSION = main_menu` change is untested on device.
+- **The load screen has no VR presentation** - in `--vr` it falls back to the
+  screen-space overlay, so the one canvas using `fit_to_rect` never appears on a
+  panel. Small job now that `WorldPanel` + the layout pass exist.
+- **Render-to-texture for world space** remains the better end state (parity by
+  construction rather than by test). `engine` still has no render-target
+  abstraction; consolidation has made the world mapper thin enough that swapping
+  it for an RTT quad is now a contained change.
+- `ScaleMode::Stretch` on a mismatched aspect is the one residual divergence; no
+  shipped caller uses it, and it is documented on the enum.
+- A full e2e suite run before landing (`missions.e2e` 23/23 and a UI subset have
+  been run; the full suite has not, on the final tree).
+
+## Process notes worth keeping
+
+- **Never script `git rebase --skip` across conflicts.** Doing so silently
+  discarded four substantive commits here; only a pre-made backup branch saved
+  them. Inspect every conflict; skip only after positively verifying the content
+  is already upstream.
+- **Launch subagents with worktree isolation** when they will touch git state.
+  A non-isolated agent shares the checkout, so its branch switches land your
+  commits on its branch and block your own git operations.
