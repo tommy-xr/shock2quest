@@ -1,6 +1,7 @@
 pub mod audio_log;
 pub mod game_scene;
 pub mod hand_pose;
+pub mod hand_pose_library;
 pub mod input;
 pub mod input_context;
 pub mod inventory;
