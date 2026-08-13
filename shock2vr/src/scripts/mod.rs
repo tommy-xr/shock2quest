@@ -14,6 +14,7 @@ mod camera_alert;
 mod chemical;
 mod choose_mission;
 mod choose_service;
+mod comestible;
 mod core_room;
 mod create_sound;
 mod cs9;
@@ -107,6 +108,7 @@ use crate::gui::gui_script;
 use self::chemical::ChemicalScript;
 use self::choose_mission::ChooseMissionScript;
 use self::choose_service::ChooseServiceScript;
+use self::comestible::Comestible;
 /// Preloaded elevator floor labels (from MISC.STR) + current mission, added as
 /// a world unique at mission load so the (`AssetCache`-less) `ElevatorGui` can
 /// read them at draw time.
@@ -1051,7 +1053,7 @@ impl ScriptWorld {
             "statboostimplant" => Box::new(UnimplementedScript::new(&script_name)),
 
             // earth:
-            "comestible" => Box::new(UnimplementedScript::new(&script_name)),
+            "comestible" => Box::new(Comestible::new()),
             "liquor" => Box::new(NoopScript::new()),
 
             // Not implemented - new medsci1 ones:

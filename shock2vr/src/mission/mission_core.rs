@@ -273,6 +273,12 @@ enum PsiKitUseOutcome {
     DestroyEntity,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ComestibleUseOutcome {
+    NotUsed,
+    Consumed,
+}
+
 fn update_player_psi_points(world: &World, update: impl FnOnce(i32) -> i32) -> bool {
     let player_entity = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
     let mut psi_states = world
@@ -383,6 +389,46 @@ fn move_live_entity_into_container(
         world.add_component(dropped_entity_id, PropHasRefs(false));
     }
     was_able_to_drop
+}
+
+/// Apply one retail food/drink use against live state. The carried-source
+/// validation, bounded heal, and consumption decision occur in one effect
+/// pass, so duplicate queued uses of the same object cannot heal twice.
+fn apply_comestible_use(
+    world: &World,
+    entity_id: EntityId,
+    hit_points: i32,
+) -> ComestibleUseOutcome {
+    if hit_points <= 0
+        || !world
+            .borrow::<EntitiesView>()
+            .is_ok_and(|entities| entities.is_alive(entity_id))
+        || !crate::scripts::script_util::player_carried_items(world).contains(&entity_id)
+    {
+        return ComestibleUseOutcome::NotUsed;
+    }
+
+    let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
+    let maximum = world
+        .borrow::<View<dark::properties::PropMaxHitPoints>>()
+        .ok()
+        .and_then(|maximums| maximums.get(player).ok().map(|hp| hp.hit_points))
+        .map(|maximum| maximum.min(i32::MAX as u32) as i32);
+    let Some(maximum) = maximum else {
+        return ComestibleUseOutcome::NotUsed;
+    };
+
+    let mut current = world
+        .borrow::<ViewMut<dark::properties::PropHitPoints>>()
+        .unwrap();
+    let Ok(current) = (&mut current).get(player) else {
+        return ComestibleUseOutcome::NotUsed;
+    };
+    current.hit_points = current
+        .hit_points
+        .saturating_add(hit_points)
+        .clamp(0, maximum.max(0));
+    ComestibleUseOutcome::Consumed
 }
 
 /// Raise only the live maximum HP pool. Buying Endurance is not healing: the
@@ -4162,6 +4208,33 @@ impl MissionCore {
                     if outcome == PsiKitUseOutcome::DestroyEntity {
                         self.destroy_entity(entity_id);
                     }
+                    if !matches!(sound, Effect::NoEffect) {
+                        effects.push_front(sound);
+                    }
+                }
+
+                Effect::UseComestible {
+                    entity_id,
+                    hit_points,
+                } => {
+                    // Resolve the heal and source lifetime against the same
+                    // live world snapshot. A duplicate effect for an already
+                    // destroyed object safely no-ops; full health still
+                    // consumes, matching the retail script.
+                    if apply_comestible_use(&self.world, entity_id, hit_points)
+                        == ComestibleUseOutcome::NotUsed
+                    {
+                        continue;
+                    }
+
+                    let sound = crate::scripts::script_util::play_environmental_sound(
+                        &self.world,
+                        entity_id,
+                        "activate",
+                        vec![],
+                        AudioHandle::new(),
+                    );
+                    self.destroy_entity(entity_id);
                     if !matches!(sound, Effect::NoEffect) {
                         effects.push_front(sound);
                     }
@@ -8903,6 +8976,102 @@ mod psi_kit_use_tests {
                 .0,
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod comestible_use_tests {
+    use dark::properties::{Link, Links, PropHitPoints, PropMaxHitPoints, ToLink, WrappedEntityId};
+    use shipyard::{EntitiesView, Get, View};
+
+    use super::*;
+
+    fn world_with_player(hit_points: i32, carried: bool) -> (World, EntityId, EntityId) {
+        let mut world = World::new();
+        let food = world.add_entity(());
+        let inventory = world.add_entity(if carried {
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(food)),
+                    link: Link::Contains(0),
+                }],
+            }
+        } else {
+            Links::empty()
+        });
+        let player = world.add_entity((
+            PropHitPoints { hit_points },
+            PropMaxHitPoints { hit_points: 30 },
+        ));
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+        (world, player, food)
+    }
+
+    fn player_hit_points(world: &World, player: EntityId) -> i32 {
+        world
+            .borrow::<View<PropHitPoints>>()
+            .unwrap()
+            .get(player)
+            .unwrap()
+            .hit_points
+    }
+
+    #[test]
+    fn carried_comestible_heals_one_and_is_marked_consumed() {
+        let (world, player, food) = world_with_player(20, true);
+
+        assert_eq!(
+            apply_comestible_use(&world, food, 1),
+            ComestibleUseOutcome::Consumed
+        );
+        assert_eq!(player_hit_points(&world, player), 21);
+    }
+
+    #[test]
+    fn full_health_still_consumes_without_overhealing() {
+        let (world, player, food) = world_with_player(30, true);
+
+        assert_eq!(
+            apply_comestible_use(&world, food, 1),
+            ComestibleUseOutcome::Consumed
+        );
+        assert_eq!(player_hit_points(&world, player), 30);
+    }
+
+    #[test]
+    fn already_destroyed_source_cannot_heal_twice() {
+        let (mut world, player, food) = world_with_player(20, true);
+
+        assert_eq!(
+            apply_comestible_use(&world, food, 1),
+            ComestibleUseOutcome::Consumed
+        );
+        world.delete_entity(food);
+        assert_eq!(
+            apply_comestible_use(&world, food, 1),
+            ComestibleUseOutcome::NotUsed
+        );
+        assert_eq!(player_hit_points(&world, player), 21);
+        assert!(!world.borrow::<EntitiesView>().unwrap().is_alive(food));
+    }
+
+    #[test]
+    fn world_object_cannot_bypass_inventory_use() {
+        let (world, player, food) = world_with_player(20, false);
+
+        assert_eq!(
+            apply_comestible_use(&world, food, 1),
+            ComestibleUseOutcome::NotUsed
+        );
+        assert_eq!(player_hit_points(&world, player), 20);
     }
 }
 

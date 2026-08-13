@@ -246,6 +246,14 @@ pub enum Effect {
         amount: i32,
     },
 
+    /// Atomically apply a retail food/drink use against the live player and
+    /// consume the source object. Comestibles always disappear, including at
+    /// full health; the hit-point increase is clamped to the authored maximum.
+    UseComestible {
+        entity_id: EntityId,
+        hit_points: i32,
+    },
+
     /// Install a soft on the character sheet and consume the object it came
     /// from. Emitted by `scripts::auto_install_soft` when a soft is frobbed in
     /// the world or taken from a container. The applier does the atomic
