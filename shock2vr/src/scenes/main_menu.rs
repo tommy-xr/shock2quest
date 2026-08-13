@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use cgmath::{Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
+use cgmath::{InnerSpace, Matrix3, Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
 use dark::{
     importers::{STRINGS_IMPORTER, UI_LAYOUT_IMPORTER},
     map::MapRect,
@@ -185,12 +185,42 @@ const VR_TRIGGER_THRESHOLD: f32 = 0.5;
 /// front of the backdrop instead of z-fighting it.
 const VR_COMPONENT_Z_STEP: f32 = 0.001;
 
-/// The panel the VR menu is drawn on. Fixed relative to the scene origin (the
-/// menu has no pawn to follow), facing the default camera direction.
-fn vr_panel() -> WorldPanel {
+/// The panel the VR menu is drawn on: hung `VR_PANEL_DISTANCE` in front of the
+/// head and turned to face back at it.
+///
+/// It is anchored to the head's **facing**, not to a fixed world axis. There is
+/// no canonical "forward" to hardcode - the runtimes' yaw-0 camera looks along
+/// +X, not -Z - so a panel pinned to -Z sits off to the side and never enters
+/// the frustum. This mirrors `DebugMapScene`'s construction, which is the
+/// world-space panel that demonstrably renders.
+fn vr_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
+    let head = vec3(0.0, VR_PANEL_EYE_HEIGHT, 0.0);
+    let forward = head_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+    let center = head + forward * VR_PANEL_DISTANCE;
+
+    // Orient the panel by looking from it back to the head. `look_dir` runs
+    // panel -> head, so the panel's local +Z (the third column) points away
+    // from the viewer - the convention the world-space element path expects.
+    let mut look_dir = head - center;
+    look_dir = if look_dir.magnitude2() < 1e-6 {
+        vec3(0.0, 0.0, 1.0)
+    } else {
+        look_dir.normalize()
+    };
+    let mut up = vec3(0.0, 1.0, 0.0);
+    let mut right = look_dir.cross(up);
+    if right.magnitude2() < 1e-6 {
+        // Looking straight up or down: pick a different up to keep the basis
+        // well-defined.
+        up = vec3(0.0, 0.0, 1.0);
+        right = look_dir.cross(up);
+    }
+    let right = right.normalize();
+    let true_up = right.cross(look_dir).normalize();
+
     WorldPanel {
-        center: vec3(0.0, VR_PANEL_EYE_HEIGHT, -VR_PANEL_DISTANCE),
-        rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        center,
+        rotation: Quaternion::from(Matrix3::from_cols(right, true_up, -look_dir)),
         size: VR_PANEL_SIZE,
     }
 }
@@ -203,7 +233,7 @@ fn vr_panel() -> WorldPanel {
 /// held** wins, so either controller can click; ties and idle triggers fall
 /// back to the right hand, which then drives the hover highlight.
 fn vr_pointer(input_context: &InputContext) -> (Option<Vector2<f32>>, bool) {
-    let panel = vr_panel();
+    let panel = vr_panel(input_context.head.rotation);
     let right = &input_context.right_hand;
     let left = &input_context.left_hand;
     let held = |hand: &crate::input_context::Hand| hand.trigger_value > VR_TRIGGER_THRESHOLD;
@@ -284,6 +314,9 @@ pub struct MainMenuScene {
     /// Where the VR controller ray last met the panel, in canvas pixels. The
     /// VR counterpart of `pointer`, already in canvas space.
     vr_pointer_canvas: Option<Vector2<f32>>,
+    /// Head facing from the latest update, so `render` hangs the panel exactly
+    /// where `update` hit-tested it.
+    head_rotation: Quaternion<f32>,
     /// Whether the pointer was pressed last frame (for rising-edge clicks).
     last_pressed: bool,
     /// Screen size from the latest render, so `update` can map the pointer into
@@ -300,6 +333,7 @@ impl MainMenuScene {
             scene_name: "main_menu".to_owned(),
             pointer: None,
             vr_pointer_canvas: None,
+            head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             // A press held across a scene swap must not read as a click
             // here: both screens sit on the same 640x480 canvas and their
             // widgets overlap (the load screen's "Done" center falls inside
@@ -373,6 +407,10 @@ impl GameScene for MainMenuScene {
         let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
         let rects = menu_rects(layout.as_deref().map(|r| r.as_slice()));
 
+        // The panel hangs off the head's facing, so this is needed for the
+        // render regardless of which presentation drives the pointer.
+        self.head_rotation = input_context.head.rotation;
+
         let (action, last_pressed) = if game_options.presentation_mode == PresentationMode::Vr {
             // VR has no 2D cursor: the pointer is where a controller ray meets
             // the menu panel, and the trigger is the button.
@@ -423,7 +461,7 @@ impl GameScene for MainMenuScene {
 
         // In VR there is no screen to draw on, so the same canvas is presented
         // on a world-space panel in front of the player.
-        let panel = vr_panel();
+        let panel = vr_panel(self.head_rotation);
         let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
         let objects = canvas.render_world_space(
             asset_cache,
@@ -593,17 +631,27 @@ mod tests {
     /// A hand pointing at a given canvas point on the VR panel, with the
     /// trigger at `trigger`. Built by inverting `ray_to_canvas`: place the hand
     /// at the panel-plane offset and aim straight down -Z.
+    /// The head facing the tests aim against: the default camera orientation.
+    fn test_head() -> Quaternion<f32> {
+        Quaternion::new(1.0, 0.0, 0.0, 0.0)
+    }
+
+    /// A hand aimed at a given canvas point, derived from the panel's own basis
+    /// rather than world axes - so the test stays honest whichever way the
+    /// panel ends up facing.
     fn hand_aimed_at(point: Vector2<f32>, trigger: f32) -> crate::input_context::Hand {
-        let panel = vr_panel();
+        let panel = vr_panel(test_head());
         let u = point.x / CANVAS_W - 0.5;
         let v = 0.5 - point.y / CANVAS_H;
+        let right = panel.rotation.rotate_vector(vec3(1.0, 0.0, 0.0));
+        let up = panel.rotation.rotate_vector(vec3(0.0, 1.0, 0.0));
+        let normal = panel.normal();
+        let target = panel.center + right * (u * panel.size.x) + up * (v * panel.size.y);
+
         crate::input_context::Hand {
-            position: vec3(
-                panel.center.x + u * panel.size.x,
-                panel.center.y + v * panel.size.y,
-                0.0,
-            ),
-            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            // Stand back along the panel's normal and aim at the target.
+            position: target - normal * VR_PANEL_DISTANCE,
+            rotation: Quaternion::from_arc(vec3(0.0, 0.0, -1.0), normal, None),
             trigger_value: trigger,
             ..crate::input_context::Hand::default()
         }
@@ -664,8 +712,11 @@ mod tests {
         // Rotated 180 degrees: pointing behind the player, away from the panel.
         // Both hands must aim away - in VR both are always posed, so leaving
         // one at its default would have it pointing straight at the panel.
+        let panel = vr_panel(test_head());
         let away = || crate::input_context::Hand {
-            rotation: Quaternion::from_angle_y(cgmath::Deg(180.0)),
+            // Aim directly opposite the panel, from the panel's own centre.
+            position: panel.center,
+            rotation: Quaternion::from_arc(vec3(0.0, 0.0, -1.0), -panel.normal(), None),
             trigger_value: 1.0,
             ..crate::input_context::Hand::default()
         };
