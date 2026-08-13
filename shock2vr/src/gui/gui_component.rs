@@ -83,6 +83,7 @@ where
                 h,
                 v,
                 alpha,
+                fit_to_rect,
                 ..
             } => Self::Text {
                 position: new_position,
@@ -93,7 +94,7 @@ where
                 h,
                 v,
                 alpha,
-                fit_to_rect: false,
+                fit_to_rect,
             },
         }
     }
@@ -157,6 +158,7 @@ where
                 h,
                 v,
                 alpha,
+                fit_to_rect,
                 ..
             } => Self::Text {
                 position,
@@ -167,7 +169,7 @@ where
                 h,
                 v,
                 alpha,
-                fit_to_rect: false,
+                fit_to_rect,
             },
         }
     }
@@ -260,6 +262,7 @@ where
                 font_size,
                 h,
                 v,
+                fit_to_rect,
                 ..
             } => Self::Text {
                 position,
@@ -270,7 +273,7 @@ where
                 h,
                 v,
                 alpha,
-                fit_to_rect: false,
+                fit_to_rect,
             },
         }
     }

@@ -204,7 +204,12 @@ impl LoadGameScene {
             saves,
             selected,
             pointer: None,
-            last_pressed: false,
+            // A press held across a scene swap must not read as a click
+            // here: both screens sit on the same 640x480 canvas and their
+            // widgets overlap (the load screen's "Done" center falls inside
+            // the menu's "Quit" rect), so starting "already pressed" makes
+            // the next rising edge require a real release first.
+            last_pressed: true,
             last_screen_size: vec2(CANVAS_W, CANVAS_H),
         }
     }

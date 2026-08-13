@@ -227,7 +227,12 @@ impl MainMenuScene {
             world,
             scene_name: "main_menu".to_owned(),
             pointer: None,
-            last_pressed: false,
+            // A press held across a scene swap must not read as a click
+            // here: both screens sit on the same 640x480 canvas and their
+            // widgets overlap (the load screen's "Done" center falls inside
+            // the menu's "Quit" rect), so starting "already pressed" makes
+            // the next rising edge require a real release first.
+            last_pressed: true,
             last_screen_size: vec2(CANVAS_W, CANVAS_H),
         }
     }
@@ -436,6 +441,36 @@ mod tests {
             &menu_rects(None),
         );
         assert_eq!(action, None);
+    }
+
+    #[test]
+    fn a_press_held_from_the_previous_scene_does_not_click() {
+        // The load screen's "Done" button center (canvas 574.5, 436) falls
+        // inside this menu's "Quit" rect, so a press still held when that
+        // screen swaps to the menu would otherwise quit the game outright.
+        let rects = menu_rects(None);
+        assert!(
+            rects[5].contains(vec2(574.5, 436.0)),
+            "this test is only meaningful while the rects overlap"
+        );
+
+        let mut scene = MainMenuScene::new();
+        let held = pointer_at(574.5 / CANVAS_W, 436.0 / CANVAS_H, true);
+
+        // First frame after the swap: the press is held, not new.
+        let (action, last) = resolve_click(held, scene.last_pressed, SCREEN, &rects);
+        assert_eq!(action, None, "a carried-over press must not activate Quit");
+        scene.last_pressed = last;
+
+        // Releasing and pressing again is a real click.
+        let (_, last) = resolve_click(
+            pointer_at(574.5 / CANVAS_W, 436.0 / CANVAS_H, false),
+            scene.last_pressed,
+            SCREEN,
+            &rects,
+        );
+        let (action, _) = resolve_click(held, last, SCREEN, &rects);
+        assert_eq!(action, Some(MenuAction::Quit));
     }
 
     #[test]
