@@ -1178,11 +1178,21 @@ mod tests {
         #[test]
         fn the_corners_map_to_the_canvas_corners() {
             // Top-left in world terms (-x, +y) is canvas (0, 0).
-            let hit = ray_to_canvas(CANVAS, &panel(), vec3(-1.0, 0.75, 0.0), vec3(0.0, 0.0, -1.0))
-                .expect("the corner should hit");
+            let hit = ray_to_canvas(
+                CANVAS,
+                &panel(),
+                vec3(-1.0, 0.75, 0.0),
+                vec3(0.0, 0.0, -1.0),
+            )
+            .expect("the corner should hit");
             assert_close(hit, vec2(0.0, 0.0));
-            let hit = ray_to_canvas(CANVAS, &panel(), vec3(1.0, -0.75, 0.0), vec3(0.0, 0.0, -1.0))
-                .expect("the corner should hit");
+            let hit = ray_to_canvas(
+                CANVAS,
+                &panel(),
+                vec3(1.0, -0.75, 0.0),
+                vec3(0.0, 0.0, -1.0),
+            )
+            .expect("the corner should hit");
             assert_close(hit, vec2(640.0, 480.0));
         }
 
@@ -1208,7 +1218,10 @@ mod tests {
             // 45 degrees right of straight ahead, from the origin: at 2m the
             // hit is 2m to the right, well outside the 1m half-width.
             let direction = vec3(1.0, 0.0, -1.0).normalize();
-            assert_eq!(ray_to_canvas(CANVAS, &panel(), vec3(0.0, 0.0, 0.0), direction), None);
+            assert_eq!(
+                ray_to_canvas(CANVAS, &panel(), vec3(0.0, 0.0, 0.0), direction),
+                None
+            );
             // A gentler angle stays on the panel and lands right of center.
             let direction = vec3(0.25, 0.0, -1.0).normalize();
             let hit = ray_to_canvas(CANVAS, &panel(), vec3(0.0, 0.0, 0.0), direction)

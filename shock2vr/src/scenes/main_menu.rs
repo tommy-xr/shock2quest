@@ -36,9 +36,7 @@ use crate::{
     mission::GlobalContext,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    ui::{
-        HAlign, Rect, ScaleMode, UiCanvas, VAlign, WorldPanel, pointer_to_canvas, ray_to_canvas,
-    },
+    ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, WorldPanel, pointer_to_canvas, ray_to_canvas},
 };
 
 /// Mission loaded when the player chooses "New Game".
@@ -681,7 +679,10 @@ mod tests {
         // The trigger is still reported so the held press is consumed rather
         // than becoming a fresh edge when the ray swings back onto a button.
         assert!(pressed);
-        assert_eq!(resolve_click_at(point, pressed, false, &menu_rects(None)).0, None);
+        assert_eq!(
+            resolve_click_at(point, pressed, false, &menu_rects(None)).0,
+            None
+        );
     }
 
     #[test]
