@@ -115,6 +115,9 @@ pub struct VrInteraction {
     /// `Option` is "have we tried yet" - a glove that failed to load stays
     /// `Some(None)` so we don't hit the asset cache's miss path every frame.
     glove_renderer: RefCell<Option<Option<GloveRenderer>>>,
+    /// The 25AE authored hands, resolved once. `Some(None)` records that this
+    /// install has none, so we do not retry the asset lookup every frame.
+    pose_library: RefCell<Option<Option<crate::hand_pose_library::PoseLibrary>>>,
 }
 
 impl VrInteraction {
@@ -123,6 +126,7 @@ impl VrInteraction {
             left_hand: VirtualHand::new(Handedness::Left),
             right_hand: VirtualHand::new(Handedness::Right),
             glove_renderer: RefCell::new(None),
+            pose_library: RefCell::new(None),
         }
     }
 }
@@ -177,20 +181,30 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn render(&self, asset_cache: &mut AssetCache, world: &World) -> Vec<SceneObject> {
-        let mut glove_slot = self.glove_renderer.borrow_mut();
-        let glove_renderer = glove_slot
-            .get_or_insert_with(|| GloveRenderer::new(asset_cache))
-            .as_mut();
+        let mut pose_slot = self.pose_library.borrow_mut();
+        let pose_library = pose_slot
+            .get_or_insert_with(|| crate::hand_pose_library::PoseLibrary::new(asset_cache))
+            .as_ref();
 
         let mut objs = Vec::new();
-        match glove_renderer {
-            Some(renderer) => {
-                objs.append(&mut self.left_hand.render(Some(renderer)));
-                objs.append(&mut self.right_hand.render(Some(renderer)));
-            }
-            None => {
-                objs.append(&mut self.left_hand.render(None));
-                objs.append(&mut self.right_hand.render(None));
+        if pose_library.is_some() {
+            objs.append(&mut self.left_hand.render(pose_library, None));
+            objs.append(&mut self.right_hand.render(pose_library, None));
+        } else {
+            // No authored hands in this install - fall back to the glove.
+            let mut glove_slot = self.glove_renderer.borrow_mut();
+            let glove_renderer = glove_slot
+                .get_or_insert_with(|| GloveRenderer::new(asset_cache))
+                .as_mut();
+            match glove_renderer {
+                Some(renderer) => {
+                    objs.append(&mut self.left_hand.render(None, Some(renderer)));
+                    objs.append(&mut self.right_hand.render(None, Some(renderer)));
+                }
+                None => {
+                    objs.append(&mut self.left_hand.render(None, None));
+                    objs.append(&mut self.right_hand.render(None, None));
+                }
             }
         }
         objs.append(&mut create_arm_hud_panels(

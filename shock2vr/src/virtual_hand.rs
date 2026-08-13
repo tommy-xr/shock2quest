@@ -349,26 +349,42 @@ impl VirtualHand {
         (hand, effs)
     }
 
-    /// Render the glove for this hand, plus the raycast-hit debug cube. The
-    /// glove renderer is owned by the caller (`VrInteraction`) so its cached
-    /// state is shared between both hands.
+    /// Render this hand, plus the raycast-hit debug cube.
+    ///
+    /// Prefers the 25AE authored hands, which snap between poses; the SteamVR
+    /// glove is the fallback for an install that has none. Both renderers are
+    /// owned by the caller (`VrInteraction`) so their cached state is shared
+    /// between the two hands.
     pub fn render(
         &self,
+        pose_library: Option<&crate::hand_pose_library::PoseLibrary>,
         glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
     ) -> Vec<SceneObject> {
-        // The hand itself: the glove model, posed from the analog inputs
-        let mut scene_objects = glove_renderer
-            .map(|renderer| {
-                renderer.render_hand(
-                    self.position,
-                    self.rotation,
-                    self.handedness,
-                    self.trigger_value,
-                    self.squeeze_value,
-                    self.get_held_entity().is_some(),
-                )
-            })
-            .unwrap_or_default();
+        let holding = self.get_held_entity().is_some();
+
+        // The hand itself, posed from the analog inputs
+        let mut scene_objects = match pose_library {
+            Some(library) => library.render_hand(
+                self.position,
+                self.rotation,
+                self.handedness,
+                self.trigger_value,
+                self.squeeze_value,
+                holding,
+            ),
+            None => glove_renderer
+                .map(|renderer| {
+                    renderer.render_hand(
+                        self.position,
+                        self.rotation,
+                        self.handedness,
+                        self.trigger_value,
+                        self.squeeze_value,
+                        holding,
+                    )
+                })
+                .unwrap_or_default(),
+        };
 
         let hit_color = self.color_from_state();
 

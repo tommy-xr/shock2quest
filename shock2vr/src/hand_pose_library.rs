@@ -32,9 +32,14 @@
 //! case. A per-pose wrist offset alongside `roll`, tuned in the harness, is
 //! the intended fix.
 
-use cgmath::{Deg, InnerSpace, Matrix4, Rad, Vector3, vec3};
+use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Rad, Vector3, vec3};
 use dark::{importers::FIRST_PERSON_HANDS_IMPORTER, ss2_bin_obj_loader::HAND_LENGTH_WORLD};
-use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
+use engine::{
+    assets::asset_cache::AssetCache,
+    scene::{FrontFaceWinding, SceneObject},
+};
+
+use crate::vr_config::Handedness;
 
 /// A free-hand state we can show. Ordered open to closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,12 +67,16 @@ impl HandPose {
                 model: "ar15_h.bin",
                 index: 0,
                 roll: Deg(0.0),
+                // Fingers fully extended: the far point IS a fingertip.
+                reach: 1.0,
             },
             // The pistol's trigger hand: fingers curled partway, as if closing.
             HandPose::SemiClosed => PoseSource {
                 model: "atek_h.bin",
                 index: 0,
                 roll: Deg(0.0),
+                // Curled partway - the far point is around the middle knuckles.
+                reach: 0.85,
             },
             // The pistol's support hand, the most closed of the three: fingers
             // curled under into a cup.
@@ -75,6 +84,9 @@ impl HandPose {
                 model: "atek_h.bin",
                 index: 2,
                 roll: Deg(0.0),
+                // Fingers curled under into a cup: the far point is barely past
+                // the knuckles, so the step-back has to be much shorter.
+                reach: 0.7,
             },
         }
     }
@@ -84,6 +96,13 @@ struct PoseSource {
     model: &'static str,
     index: usize,
     roll: Deg<f32>,
+    /// How far this pose's farthest point sits from the wrist, as a fraction of
+    /// a hand's length. The frame's far end is an extended fingertip on an open
+    /// hand but only a knuckle on a curled one, so a single step-back lands the
+    /// wrist in a different place per pose - which is what made the hand jump
+    /// between poses. One number per pose, tuned visually, is the fix the module
+    /// docs call for.
+    reach: f32,
 }
 
 /// One pose's geometry, already anchored so the wrist sits at the origin with
@@ -124,7 +143,7 @@ fn load_pose(asset_cache: &mut AssetCache, pose: HandPose) -> Option<LoadedPose>
 
     // Take the hand out of model space and into hand space: wrist to the
     // origin, fingers down the frame's forward axis, then the authored roll.
-    let anchor = anchor_of(&hand.frame, source.roll);
+    let anchor = anchor_of(&hand.frame, source.roll, source.reach);
 
     let objects = hand
         .model
@@ -144,7 +163,11 @@ fn load_pose(asset_cache: &mut AssetCache, pose: HandPose) -> Option<LoadedPose>
 /// `VirtualHand`'s forward is -Z (the aim/raycast direction), so the fingers are
 /// pointed down -Z here and the whole hand is rolled about that axis by the
 /// pose's authored roll.
-fn anchor_of(frame: &dark::ss2_bin_obj_loader::HandFrame, roll: Deg<f32>) -> Matrix4<f32> {
+fn anchor_of(
+    frame: &dark::ss2_bin_obj_loader::HandFrame,
+    roll: Deg<f32>,
+    reach: f32,
+) -> Matrix4<f32> {
     let forward = frame.forward;
     let reference = if forward.y.abs() > 0.9 {
         vec3(1.0, 0.0, 0.0)
@@ -171,17 +194,32 @@ fn anchor_of(frame: &dark::ss2_bin_obj_loader::HandFrame, roll: Deg<f32>) -> Mat
 
     Matrix4::from_angle_z(Rad::from(roll))
         * to_hand
-        * Matrix4::from_translation(-wrist_vector(frame))
+        * Matrix4::from_translation(-wrist_vector(frame, reach))
 }
 
-/// The wrist, set back from the fingertips by a hand's length.
+/// A hand's wrist-to-fingertip length in the authored models' own units.
+///
+/// [`HAND_LENGTH_WORLD`] is that length in *world* units - the same 19 cm real
+/// hand the glove is scaled to (see `hand_glove::GLOVE_SCALE`), so both
+/// renderers anchor a hand of the same physical size at the wrist. The authored
+/// hands are viewmodel-sized until [`VIEWMODEL_HAND_SCALE`] brings them down, so
+/// measuring in their space means dividing it back out.
+///
+/// Without this conversion the step-back below is only ~61% of a hand and the
+/// anchor lands mid-palm rather than at the wrist - visible as the axis marker
+/// sitting in the middle of `ar15_h`'s hand.
+const AUTHORED_HAND_LENGTH: f32 = HAND_LENGTH_WORLD / VIEWMODEL_HAND_SCALE;
+
+/// The wrist, set back from the pose's farthest point.
 ///
 /// `HandFrame::origin` is the far end of the geometry, which on the models whose
 /// hand includes a forearm is the *elbow* - anchoring there would hang the hand
-/// off the controller by an arm's length.
-fn wrist_vector(frame: &dark::ss2_bin_obj_loader::HandFrame) -> Vector3<f32> {
+/// off the controller by an arm's length. So we work from the other end, and
+/// step back `reach` hand-lengths (see [`PoseSource::reach`]: a curled hand's
+/// far point is a knuckle, not a fingertip, so it is nearer the wrist).
+fn wrist_vector(frame: &dark::ss2_bin_obj_loader::HandFrame, reach: f32) -> Vector3<f32> {
     let fingertip = frame.origin + frame.forward * frame.length;
-    let wrist = fingertip - frame.forward * HAND_LENGTH_WORLD;
+    let wrist = fingertip - frame.forward * AUTHORED_HAND_LENGTH * reach;
     vec3(wrist.x, wrist.y, wrist.z)
 }
 
@@ -189,7 +227,7 @@ fn wrist_vector(frame: &dark::ss2_bin_obj_loader::HandFrame) -> Vector3<f32> {
 mod tests {
     use super::*;
     use cgmath::point3;
-    use cgmath::{SquareMatrix, Vector4, assert_relative_eq};
+    use cgmath::{InnerSpace, SquareMatrix, Vector4, assert_relative_eq};
     use dark::ss2_bin_obj_loader::HandFrame;
 
     fn frame(forward: Vector3<f32>) -> HandFrame {
@@ -212,11 +250,72 @@ mod tests {
             vec3(0.3, -0.5, 0.8),
             vec3(0.0, 1.0, 0.0),
         ] {
-            let anchor = anchor_of(&frame(forward), Deg(0.0));
+            let anchor = anchor_of(&frame(forward), Deg(0.0), 1.0);
             let determinant = anchor.determinant();
             assert!(
                 determinant > 0.0,
                 "anchor for {forward:?} has determinant {determinant} - it mirrors the hand"
+            );
+        }
+    }
+
+    #[test]
+    fn holding_something_always_grips() {
+        // Even with the analog inputs slack - the item is what holds the hand
+        // closed, not the squeeze.
+        assert_eq!(PoseLibrary::pose_for(0.0, 0.0, true), HandPose::Grip);
+    }
+
+    #[test]
+    fn an_empty_hand_opens_and_closes_with_the_analog_inputs() {
+        assert_eq!(PoseLibrary::pose_for(0.0, 0.0, false), HandPose::Rest);
+        assert_eq!(PoseLibrary::pose_for(0.4, 0.0, false), HandPose::SemiClosed);
+        assert_eq!(PoseLibrary::pose_for(1.0, 0.0, false), HandPose::Grip);
+        // Either input can close the hand; the larger wins.
+        assert_eq!(PoseLibrary::pose_for(0.0, 1.0, false), HandPose::Grip);
+        assert_eq!(PoseLibrary::pose_for(0.9, 0.1, false), HandPose::Grip);
+    }
+
+    /// The anchored wrist must sit one real hand-length back from the pose's far
+    /// point, so that once `VIEWMODEL_HAND_SCALE` is applied the hand is the same
+    /// physical size, anchored at the same landmark, as the glove.
+    ///
+    /// Regression test: `wrist_vector` used to step back `HAND_LENGTH_WORLD`
+    /// (a *world*-unit length) through *model*-space geometry, landing the
+    /// anchor ~61% of a hand short - mid-palm instead of at the wrist.
+    #[test]
+    fn the_wrist_anchors_a_real_hand_back_from_the_far_point() {
+        let f = frame(vec3(0.0, 0.0, 1.0));
+        let far_point = f.origin + f.forward * f.length;
+        let wrist = wrist_vector(&f, 1.0);
+
+        let step_back = (far_point - point3(wrist.x, wrist.y, wrist.z)).magnitude();
+        // In world units once the viewmodel scale is applied.
+        assert_relative_eq!(
+            step_back * VIEWMODEL_HAND_SCALE,
+            HAND_LENGTH_WORLD,
+            epsilon = 1e-5
+        );
+    }
+
+    /// A curled pose's far point is a knuckle, so its wrist must come out nearer
+    /// that point than an extended hand's - otherwise the step-back overshoots
+    /// into the forearm and the hand jumps between poses.
+    #[test]
+    fn a_shorter_reach_anchors_the_wrist_nearer_the_far_point() {
+        let f = frame(vec3(0.0, 0.0, 1.0));
+        let far_point = f.origin + f.forward * f.length;
+        let distance = |reach| {
+            let w = wrist_vector(&f, reach);
+            (far_point - point3(w.x, w.y, w.z)).magnitude()
+        };
+
+        assert!(distance(0.7) < distance(1.0));
+        for pose in HandPose::ALL {
+            let reach = pose.source().reach;
+            assert!(
+                (0.0..=1.0).contains(&reach),
+                "{pose:?} has an out-of-range reach {reach}"
             );
         }
     }
@@ -230,11 +329,106 @@ mod tests {
             vec3(0.3, -0.5, 0.8),
         ] {
             let f = frame(forward);
-            let anchor = anchor_of(&f, Deg(0.0));
+            let anchor = anchor_of(&f, Deg(0.0), 1.0);
             let pointed = anchor * Vector4::new(f.forward.x, f.forward.y, f.forward.z, 0.0);
             assert_relative_eq!(pointed.x, 0.0, epsilon = 1e-4);
             assert_relative_eq!(pointed.y, 0.0, epsilon = 1e-4);
             assert_relative_eq!(pointed.z, -1.0, epsilon = 1e-4);
         }
+    }
+}
+
+/// Brings the authored hands down to life size.
+///
+/// They are first-person *viewmodel* geometry, deliberately oversized so they
+/// read on a monitor - the pistol's bare support hand measures ~31 cm across
+/// where a real hand is ~19 cm. VR renders the world at true scale, so they
+/// have to come down or they dwarf the player's real hands.
+///
+/// One constant for all poses: they are one artist's hands at one viewmodel
+/// scale. Tune here if they read wrong in a headset.
+const VIEWMODEL_HAND_SCALE: f32 = 19.0 / 31.0;
+
+/// Analog closure at or above which the hand reads as fully closed.
+const CLOSED_THRESHOLD: f32 = 0.66;
+/// ...and below which it reads as fully open.
+const OPEN_THRESHOLD: f32 = 0.2;
+
+/// The loaded poses, ready to render as the player's hand.
+pub struct PoseLibrary {
+    poses: Vec<LoadedPose>,
+}
+
+impl PoseLibrary {
+    /// `None` when no pose could be loaded, which is what a non-25AE install
+    /// looks like. Callers should cache that outcome rather than retry per
+    /// frame, and fall back to the glove.
+    pub fn new(asset_cache: &mut AssetCache) -> Option<Self> {
+        let poses = load(asset_cache);
+        (!poses.is_empty()).then_some(Self { poses })
+    }
+
+    /// Which pose a hand in this state should show.
+    ///
+    /// Snapping, not blending: the authored hands have no finger joints and
+    /// four distinct topologies, so there is nothing to interpolate between
+    /// (see the module docs).
+    pub fn pose_for(trigger: f32, squeeze: f32, holding: bool) -> HandPose {
+        if holding {
+            return HandPose::Grip;
+        }
+        let closed = trigger.max(squeeze);
+        if closed >= CLOSED_THRESHOLD {
+            HandPose::Grip
+        } else if closed >= OPEN_THRESHOLD {
+            HandPose::SemiClosed
+        } else {
+            HandPose::Rest
+        }
+    }
+
+    /// The player's hand at `position`/`rotation`, in the pose its state calls
+    /// for. Empty if that pose failed to load.
+    pub fn render_hand(
+        &self,
+        position: Vector3<f32>,
+        rotation: Quaternion<f32>,
+        handedness: Handedness,
+        trigger_value: f32,
+        squeeze_value: f32,
+        holding: bool,
+    ) -> Vec<SceneObject> {
+        let wanted = Self::pose_for(trigger_value, squeeze_value, holding);
+        let Some(pose) = self.poses.iter().find(|loaded| loaded.pose == wanted) else {
+            return Vec::new();
+        };
+
+        // Every authored hand is a right hand, so the left is the mirror image.
+        let mirror = match handedness {
+            Handedness::Right => Matrix4::from_scale(1.0),
+            Handedness::Left => Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0),
+        };
+        let world = Matrix4::from_translation(position)
+            * Matrix4::from(rotation)
+            * mirror
+            * Matrix4::from_scale(VIEWMODEL_HAND_SCALE);
+
+        let mut objects = pose.at(world);
+
+        // A mirror reverses triangle winding, so the culling that the loader set
+        // for the authored (right-handed) geometry would now cull the front
+        // faces and show the hand's interior. Flip it with the mirror.
+        if matches!(handedness, Handedness::Left) {
+            for object in objects.iter_mut() {
+                if let Some(winding) = object.backface_culling() {
+                    object.set_backface_culling(Some(match winding {
+                        FrontFaceWinding::Clockwise => FrontFaceWinding::CounterClockwise,
+                        FrontFaceWinding::CounterClockwise => FrontFaceWinding::Clockwise,
+                    }));
+                }
+            }
+        }
+
+        objects
     }
 }
