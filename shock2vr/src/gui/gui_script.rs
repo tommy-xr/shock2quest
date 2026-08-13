@@ -71,7 +71,7 @@ where
             position: vec2(self.cursor.x, self.cursor.y),
             size,
             texture: "cursor.pcx".to_owned(),
-            transparent_index_0: false,
+            kind: crate::ui::ImageKind::Ui,
         });
         let render_components = canvas
             .into_elements()

@@ -10,7 +10,7 @@ use engine::{
 use shipyard::EntityId;
 
 use crate::{
-    ui::{HAlign, UiElement, VAlign},
+    ui::{HAlign, ImageKind, UiElement, VAlign},
     vr_config::Handedness,
 };
 
@@ -30,14 +30,14 @@ where
                 size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
                 ..
             } => Self::Image {
                 position: new_position,
                 size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
             },
             Self::Bar {
                 size,
@@ -61,6 +61,7 @@ where
                 alpha,
                 entity,
                 label,
+                kind,
                 ..
             } => Self::Button {
                 position: new_position,
@@ -72,6 +73,7 @@ where
                 alpha,
                 entity,
                 label,
+                kind,
             },
             Self::Text {
                 size,
@@ -101,14 +103,14 @@ where
                 position,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
                 ..
             } => Self::Image {
                 position,
                 size: new_size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
             },
             Self::Bar {
                 position,
@@ -132,6 +134,7 @@ where
                 alpha,
                 entity,
                 label,
+                kind,
                 ..
             } => Self::Button {
                 position,
@@ -143,6 +146,7 @@ where
                 alpha,
                 entity,
                 label,
+                kind,
             },
             Self::Text {
                 position,
@@ -177,8 +181,10 @@ where
                 alpha,
                 entity,
                 label,
+                kind,
                 ..
             } => GuiComponent::Button {
+                kind,
                 alpha,
                 position,
                 size,
@@ -199,14 +205,14 @@ where
                 position,
                 size,
                 texture,
-                transparent_index_0,
+                kind,
                 ..
             } => Self::Image {
                 position,
                 size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
             },
             Self::Bar {
                 position,
@@ -230,6 +236,7 @@ where
                 hover,
                 entity,
                 label,
+                kind,
                 ..
             } => Self::Button {
                 position,
@@ -241,6 +248,7 @@ where
                 alpha,
                 entity,
                 label,
+                kind,
             },
             Self::Text {
                 position,
@@ -275,6 +283,7 @@ where
                 on_grab,
                 entity,
                 label,
+                kind,
                 ..
             } => Self::Button {
                 alpha,
@@ -286,6 +295,7 @@ where
                 hover,
                 entity,
                 label,
+                kind,
             },
             other => other,
         }
@@ -297,14 +307,14 @@ where
                 alpha,
                 position,
                 size,
-                transparent_index_0,
+                kind,
                 ..
             } => Self::Image {
                 alpha,
                 position,
                 size,
                 texture: image.to_owned(),
-                transparent_index_0,
+                kind,
             },
             Self::Bar {
                 alpha,
@@ -328,6 +338,7 @@ where
                 hover,
                 entity,
                 label,
+                kind,
                 ..
             } => Self::Button {
                 alpha,
@@ -339,10 +350,57 @@ where
                 hover,
                 entity,
                 label,
+                kind,
             },
             Self::Text { .. } => self,
         }
     }
+    /// Declare this element's art to be Dark object-icon art: keyed on
+    /// palette index 0 and blitted at its authored pixel size, centered in
+    /// the element's rect (see [`ImageKind`]). The rect still defines layout
+    /// and hit-testing.
+    pub fn with_object_icon(self) -> GuiComponent<TEvent> {
+        match self {
+            Self::Image {
+                position,
+                size,
+                texture,
+                alpha,
+                ..
+            } => Self::Image {
+                position,
+                size,
+                texture,
+                alpha,
+                kind: ImageKind::ObjectIcon,
+            },
+            Self::Button {
+                position,
+                size,
+                texture,
+                on_click,
+                on_grab,
+                hover,
+                alpha,
+                entity,
+                label,
+                ..
+            } => Self::Button {
+                position,
+                size,
+                texture,
+                on_click,
+                on_grab,
+                hover,
+                alpha,
+                entity,
+                label,
+                kind: ImageKind::ObjectIcon,
+            },
+            other => other,
+        }
+    }
+
     /// Tag a `Button` with the world entity it stands for (no-op for other
     /// component kinds) - see `GuiComponent::Button::entity`.
     pub fn with_entity(self, new_entity: EntityId) -> GuiComponent<TEvent> {
@@ -356,6 +414,7 @@ where
                 on_grab,
                 hover,
                 label,
+                kind,
                 ..
             } => Self::Button {
                 alpha,
@@ -367,6 +426,7 @@ where
                 hover,
                 entity: Some(new_entity),
                 label,
+                kind,
             },
             other => other,
         }
@@ -387,6 +447,7 @@ where
                 on_grab,
                 hover,
                 entity,
+                kind,
                 ..
             } => Self::Button {
                 alpha,
@@ -398,6 +459,7 @@ where
                 hover,
                 entity,
                 label: Some(new_label.to_owned()),
+                kind,
             },
             other => other,
         }
@@ -414,13 +476,13 @@ where
                 size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
             } => GuiComponent::Image {
                 position,
                 size,
                 texture,
                 alpha,
-                transparent_index_0,
+                kind,
             },
             Self::Text {
                 position,
@@ -464,6 +526,7 @@ where
                 alpha,
                 entity,
                 label,
+                kind,
             } => GuiComponent::Button {
                 position,
                 size,
@@ -472,6 +535,7 @@ where
                 on_grab: on_grab.map(|(left, right)| (f(left), f(right))),
                 hover,
                 alpha,
+                kind,
                 entity,
                 label,
             },
@@ -485,7 +549,7 @@ pub fn image<TMsg: Clone>(texture: &str) -> GuiComponent<TMsg> {
         size: vec2(30.0, 30.0),
         texture: texture.to_owned(),
         alpha: 0.5,
-        transparent_index_0: false,
+        kind: ImageKind::Ui,
     }
 }
 
@@ -500,6 +564,7 @@ pub fn button<TMsg: Clone>(on_click: TMsg) -> GuiComponent<TMsg> {
         alpha: 0.5,
         entity: None,
         label: None,
+        kind: ImageKind::Ui,
     }
 }
 
@@ -514,6 +579,7 @@ pub fn grabbable<TMsg: Clone>(on_left_grab: TMsg, on_right_grab: TMsg) -> GuiCom
         alpha: 0.5,
         entity: None,
         label: None,
+        kind: ImageKind::Ui,
     }
 }
 
@@ -550,12 +616,20 @@ pub enum GuiComponentRenderInfo {
         interactive: bool,
         /// The world entity the source button stands for (a contained item in
         /// a loot panel), if any. Purely informational - used by `GET /v1/ui`
-        /// to label the element with the item's name and entity id.
+        /// to label the element with the item's name and entity id. How the
+        /// art draws is decided by `kind`, never by this.
         entity: Option<EntityId>,
         /// An explicit semantic label from the source `Button` (e.g. an
         /// elevator floor name), if any. Purely informational - used by
         /// `GET /v1/ui`; takes precedence over entity/art-derived labels.
         label: Option<String>,
+        /// The source panel's pixel size. `position`/`size` are normalized by
+        /// it, so it is what converts an object icon's authored pixel
+        /// dimensions back into the same space (see [`Self::is_object_icon`]).
+        panel_size_px: Vector2<f32>,
+        /// How the art is keyed and sized, carried from the authoring
+        /// component (see [`ImageKind`]).
+        kind: ImageKind,
     },
     Text {
         position: Vector2<f32>,
@@ -581,13 +655,13 @@ impl GuiComponentRenderInfo {
         }
     }
 
-    /// Entity-backed images are inventory/loot object icons. Dark keys their
-    /// paletted PCX art on palette index 0, independent of that entry's RGB.
-    pub(crate) fn transparent_index_0(&self) -> bool {
+    /// Whether this is Dark object-icon art: keyed on palette index 0 and
+    /// blitted at its authored pixel size, centered in its slot.
+    pub(crate) fn is_object_icon(&self) -> bool {
         matches!(
             self,
             Self::Image {
-                entity: Some(_),
+                kind: ImageKind::ObjectIcon,
                 ..
             }
         )
@@ -600,18 +674,41 @@ impl GuiComponentRenderInfo {
                 size,
                 texture,
                 alpha,
+                panel_size_px,
+                kind,
                 ..
             } => {
-                let texture: Rc<dyn TextureTrait> = asset_cache
+                let texture = asset_cache
                     .get_ext(
                         &TEXTURE_IMPORTER,
                         texture,
                         &TextureOptions {
-                            transparent_index_0: self.transparent_index_0(),
+                            transparent_index_0: self.is_object_icon(),
                             ..Default::default()
                         },
                     )
                     .clone();
+                // Placement is decided in panel pixels by the same helper the
+                // 2D presenters use, then renormalized - this panel's own
+                // coordinates are normalized by `panel_size_px`.
+                //
+                // NOTE: the quad below composes through a 180-degree z
+                // rotation, which negates both axes. `drawn_rect` breaks an
+                // odd pixel of centering slack toward the top-left, so here
+                // that lands toward the bottom-right - the two presentations
+                // can differ by one pixel on odd slack.
+                let (position_px, size_px) = crate::ui::drawn_rect(
+                    vec2(position.x * panel_size_px.x, position.y * panel_size_px.y),
+                    vec2(size.x * panel_size_px.x, size.y * panel_size_px.y),
+                    vec2(texture.width() as f32, texture.height() as f32),
+                    *kind,
+                );
+                let position = &vec2(
+                    position_px.x / panel_size_px.x,
+                    position_px.y / panel_size_px.y,
+                );
+                let size = &vec2(size_px.x / panel_size_px.x, size_px.y / panel_size_px.y);
+                let texture = texture as Rc<dyn TextureTrait>;
                 let comp_mat = engine::scene::basic_material::create(texture, 1.0, 1.0 - alpha);
                 let mut comp_obj =
                     SceneObject::new(comp_mat, Box::new(engine::scene::quad::create()));
@@ -688,7 +785,7 @@ where
                 size,
                 texture,
                 alpha,
-                transparent_index_0: _,
+                kind,
             } => GuiComponentRenderInfo::Image {
                 position: vec2(position.x / screen_size.x, position.y / screen_size.y),
                 size: vec2(size.x / screen_size.x, size.y / screen_size.y),
@@ -697,6 +794,8 @@ where
                 interactive: false,
                 entity: None,
                 label: None,
+                panel_size_px: screen_size,
+                kind: *kind,
             },
             GuiComponent::Bar {
                 position,
@@ -712,6 +811,8 @@ where
                 interactive: false,
                 entity: None,
                 label: None,
+                panel_size_px: screen_size,
+                kind: ImageKind::Ui,
             },
             GuiComponent::Button {
                 position,
@@ -723,6 +824,7 @@ where
                 on_grab,
                 entity,
                 label,
+                kind,
             } => {
                 let is_hovered = self
                     .rect()
@@ -748,6 +850,8 @@ where
                     interactive: on_click.is_some() || on_grab.is_some(),
                     entity: *entity,
                     label: label.clone(),
+                    panel_size_px: screen_size,
+                    kind: *kind,
                 }
             }
         }
@@ -804,19 +908,45 @@ mod tests {
         assert_eq!(canvas.click_at(vec2(5.0, 5.0)), None);
     }
 
+    /// The declared `ImageKind` survives the trip into render info - the
+    /// renderers must not have to re-guess it (they used to infer it from
+    /// `entity`, which silently disagreed with the flat path for the icon
+    /// riding the cursor: a plain image with no entity).
     #[test]
-    fn entity_backed_object_icons_use_palette_index_zero_transparency() {
+    fn the_declared_object_icon_kind_reaches_render_info() {
         let entity = EntityId::from_inner(1).unwrap();
-        let component = grabbable((), ())
+        let button = grabbable((), ())
             .with_entity(entity)
-            .with_image("passkey.pcx");
+            .with_image("passkey.pcx")
+            .with_object_icon();
+        assert!(
+            button
+                .to_render_info(vec2(640.0, 480.0), Point2::new(0.5, 0.5))
+                .is_object_icon()
+        );
 
-        let render_info = component.to_render_info(vec2(640.0, 480.0), Point2::new(0.5, 0.5));
+        // An entity-less plain image is object-icon art too, when it says so.
+        let cursor_item = image::<()>("passkey.pcx").with_object_icon();
+        assert!(
+            cursor_item
+                .to_render_info(vec2(640.0, 480.0), Point2::new(0.5, 0.5))
+                .is_object_icon()
+        );
 
-        assert!(render_info.transparent_index_0());
+        // ...and an entity-tagged button is NOT, unless it says so.
+        let plain = button_from_entity(entity);
+        assert!(
+            !plain
+                .to_render_info(vec2(640.0, 480.0), Point2::new(0.5, 0.5))
+                .is_object_icon()
+        );
 
         let backdrop =
             image::<()>("invback.pcx").to_render_info(vec2(640.0, 480.0), Point2::new(0.5, 0.5));
-        assert!(!backdrop.transparent_index_0());
+        assert!(!backdrop.is_object_icon());
+    }
+
+    fn button_from_entity(entity: EntityId) -> GuiComponent<()> {
+        grabbable((), ()).with_entity(entity).with_image("key0.pcx")
     }
 }

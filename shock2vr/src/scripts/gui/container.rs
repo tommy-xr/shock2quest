@@ -66,17 +66,20 @@ fn creature_is_lootable(world: &World, entity_id: EntityId) -> bool {
 /// panel step their item grids by this pitch - it is the spacing of the cell
 /// separators drawn into `invback.pcx` and `contain.pcx`, whose grid lines sit
 /// 35px apart horizontally and 34px apart vertically.
-const SLOT_PITCH: (f32, f32) = (35.0, 34.0);
+const SLOT_PITCH: Vector2<f32> = Vector2::new(35.0, 34.0);
 
-/// Top-left of the loot panel's 4x4 item grid, in `contain.pcx` pixels: its
-/// cell separators run at x = 13 + 35n and y = 150 + 34n, and items are
-/// authored just inside that first line.
-const LOOT_GRID_ORIGIN: (f32, f32) = (15.0, 153.0);
+/// Top-left of the loot panel's 4x4 item grid, in `contain.pcx` pixels. Its
+/// cell separators run at x = 13 + 35n and y = 150 + 34n; both are 2px wide,
+/// so this is flush with the first cell's interior horizontally and one row
+/// below it vertically. The two panels' insets differ - that asymmetry is the
+/// original's, not a rounding of ours.
+const LOOT_GRID_ORIGIN: Vector2<f32> = Vector2::new(15.0, 153.0);
 
-/// Top-left of the backpack strip's 15x3 item grid, in `invback.pcx` pixels
-/// (separators at x = 2 + 35n, y = 15 + 34n; the EQUIP paperdoll owns
-/// everything right of x = 527).
-const BACKPACK_GRID_ORIGIN: (f32, f32) = (4.0, 17.0);
+/// Top-left of the backpack strip's 15x3 item grid, in `invback.pcx` pixels:
+/// separators at x = 2 + 35n and y = 15 + 34n, so this sits 2px inside the
+/// first cell horizontally and flush with its interior vertically. The EQUIP
+/// paperdoll owns everything right of x = 527.
+const BACKPACK_GRID_ORIGIN: Vector2<f32> = Vector2::new(4.0, 17.0);
 
 impl ContainerGui {
     pub fn loot_container() -> ContainerGui {
@@ -84,8 +87,8 @@ impl ContainerGui {
             background_image: "contain.pcx".to_owned(),
             width: 188.0,
             height: 296.0,
-            inv_offset_x: LOOT_GRID_ORIGIN.0,
-            inv_offset_y: LOOT_GRID_ORIGIN.1,
+            inv_offset_x: LOOT_GRID_ORIGIN.x,
+            inv_offset_y: LOOT_GRID_ORIGIN.y,
             num_slots_x: 4,
             num_slots_y: 4,
             take_on_click: true,
@@ -109,8 +112,8 @@ impl ContainerGui {
             background_image: "invback.pcx".to_owned(),
             width: 635.0,
             height: 120.0,
-            inv_offset_x: BACKPACK_GRID_ORIGIN.0,
-            inv_offset_y: BACKPACK_GRID_ORIGIN.1,
+            inv_offset_x: BACKPACK_GRID_ORIGIN.x,
+            inv_offset_y: BACKPACK_GRID_ORIGIN.y,
             num_slots_x: 15,
             num_slots_y: 3,
             take_on_click: false,
@@ -164,8 +167,8 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             inventory.insert_first_available(entity.0, inv_dims.0 as usize, inv_dims.1 as usize);
         }
 
-        let slot_pixel_width = SLOT_PITCH.0;
-        let slot_pixel_height = SLOT_PITCH.1;
+        let slot_pixel_width = SLOT_PITCH.x;
+        let slot_pixel_height = SLOT_PITCH.y;
         let initial_offset_y = self.inv_offset_y;
         let initial_offset_x = self.inv_offset_x;
 
@@ -203,6 +206,7 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                 .with_onclick(on_click)
                 .with_entity(ent)
                 .with_image(&format!("{}.pcx", obj_icon))
+                .with_object_icon()
                 .with_position(vec2(
                     initial_offset_x + position_x,
                     initial_offset_y + position_y,
@@ -225,6 +229,7 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                         .unwrap_or((1, 1));
                     components.push(
                         gui::image(&format!("{}.pcx", obj_icon.0))
+                            .with_object_icon()
                             .with_position(vec2(cursor.position.x, cursor.position.y))
                             .with_size(vec2(
                                 slot_pixel_width * inv_dims.0 as f32,
@@ -481,6 +486,53 @@ mod tests {
 
             assert_eq!(position, expected_origin, "grid origin");
             assert_eq!(size, vec2(35.0, 34.0), "one cell of the shared pitch");
+        }
+    }
+
+    /// Every icon a panel draws for a contained item - the grid buttons and
+    /// the one riding the cursor - must be declared object-icon art, or it
+    /// renders stretched to the slot with palette index 0 opaque (a black box
+    /// behind the icon). The cursor image is the easy one to forget: it is a
+    /// plain `image`, not a button, so nothing about it says "item".
+    #[test]
+    fn contained_item_art_is_declared_as_object_icons() {
+        use crate::gui::GuiCursor;
+        use crate::ui::ImageKind;
+
+        let (world, container, item, _inventory) = loot_world();
+        let cursor = Some(GuiCursor {
+            position: point2(10.0, 10.0),
+            held_entity_id: Some(item),
+        });
+
+        for gui in [
+            ContainerGui::loot_container(),
+            ContainerGui::inv_container(),
+        ] {
+            let backdrop = gui.background_image.clone();
+            let components = gui.get_components(&cursor, container, &world, &ContainerGuiState {});
+            let kinds: Vec<ImageKind> = components
+                .iter()
+                .filter_map(|c| match c {
+                    GuiComponent::Button { kind, .. } => Some(*kind),
+                    // The panel's own backdrop is the only art that is not
+                    // an item icon.
+                    GuiComponent::Image { kind, texture, .. } if *texture != backdrop => {
+                        Some(*kind)
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            assert!(
+                !kinds.is_empty(),
+                "expected the panel to draw the item and the cursor icon"
+            );
+            assert!(
+                kinds.iter().all(|k| *k == ImageKind::ObjectIcon),
+                "every item icon should be object-icon art, got {:?}",
+                kinds
+            );
         }
     }
 

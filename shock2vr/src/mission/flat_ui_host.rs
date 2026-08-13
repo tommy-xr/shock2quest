@@ -61,11 +61,6 @@ const CLOSE_BUTTON_MARGIN: Vector2<f32> = Vector2::new(25.0, 8.0);
 /// `CURSOR.PCX` native size.
 const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
 
-/// Size of the item icon drawn when the cursor "is" a lifted item (the
-/// original replaces the arrow with the object's `objicon` art). One
-/// inventory slot (35x32, matching `ContainerGui`'s slot pixels).
-const CURSOR_ITEM_SIZE: Vector2<f32> = Vector2::new(35.0, 32.0);
-
 /// A host-side action produced by the cursor-is-the-item drag (§1.5/§2.4),
 /// applied by `mission_core` because it touches physics/effects.
 ///
@@ -673,10 +668,10 @@ impl FlatUiHost {
             // arrow (the original's `SCM_DRAGOBJ`, §2.4). Fall back to the
             // arrow when the held item has no icon or nothing is held.
             match self.cursor_item.as_ref().and_then(|c| c.icon.as_deref()) {
-                Some(icon) => canvas.object_icon(
-                    Rect::new(cursor.x, cursor.y, CURSOR_ITEM_SIZE.x, CURSOR_ITEM_SIZE.y),
-                    icon,
-                ),
+                // No slot rect: object icons draw at their authored size, and
+                // any rect bigger than the art would only center the icon
+                // inside it - i.e. slide it off the pointer.
+                Some(icon) => canvas.object_icon(Rect::new(cursor.x, cursor.y, 0.0, 0.0), icon),
                 None => canvas.image(
                     Rect::new(cursor.x, cursor.y, CURSOR_SIZE.x, CURSOR_SIZE.y),
                     "cursor.pcx",
@@ -891,7 +886,7 @@ fn draw_components(
             // alpha is a VR world-quad translucency, deliberately not
             // applied here.
             GuiComponentRenderInfo::Image { texture, .. } => {
-                if component.transparent_index_0() {
+                if component.is_object_icon() {
                     canvas.object_icon(r, texture);
                 } else {
                     canvas.image(r, texture);
@@ -1023,6 +1018,8 @@ mod tests {
             interactive: true,
             entity: None,
             label: None,
+            panel_size_px: vec2(188.0, 296.0),
+            kind: crate::ui::ImageKind::Ui,
         };
         let r = component_canvas_rect(&info, panel);
         assert!((r.x - 17.0).abs() < 1e-3);
@@ -1128,6 +1125,8 @@ mod tests {
             interactive: false,
             entity: None,
             label: None,
+            panel_size_px: vec2(188.0, 296.0),
+            kind: crate::ui::ImageKind::Ui,
         };
         assert!(is_gui_cursor(&cursor));
         let backdrop = GuiComponentRenderInfo::Image {
@@ -1138,6 +1137,8 @@ mod tests {
             interactive: false,
             entity: None,
             label: None,
+            panel_size_px: vec2(188.0, 296.0),
+            kind: crate::ui::ImageKind::Ui,
         };
         assert!(!is_gui_cursor(&backdrop));
     }
@@ -1203,6 +1204,8 @@ mod tests {
                 interactive: true,
                 entity: Some(item),
                 label: None,
+                panel_size_px: vec2(188.0, 296.0),
+                kind: crate::ui::ImageKind::Ui,
             }],
         );
         let elements = host.debug_elements(&world);
@@ -1357,15 +1360,19 @@ mod tests {
                     interactive: false,
                     entity: None,
                     label: None,
+                    panel_size_px: vec2(188.0, 296.0),
+                    kind: crate::ui::ImageKind::Ui,
                 },
                 GuiComponentRenderInfo::Image {
-                    position: vec2(4.0 / 635.0, 18.0 / 120.0),
-                    size: vec2(35.0 / 635.0, 32.0 / 120.0),
+                    position: vec2(4.0 / 635.0, 17.0 / 120.0),
+                    size: vec2(35.0 / 635.0, 34.0 / 120.0),
                     texture: "icn_wrench.pcx".to_owned(),
                     alpha: 0.5,
                     interactive: true,
                     entity: Some(wrench),
                     label: None,
+                    panel_size_px: vec2(188.0, 296.0),
+                    kind: crate::ui::ImageKind::Ui,
                 },
             ],
         );
@@ -1400,17 +1407,20 @@ mod tests {
     }
 
     fn strip_item(entity: EntityId, slot_x: usize) -> GuiComponentRenderInfo {
-        // ContainerGui strip slots: 4px inset, 35px slot pitch, 32px tall
-        // (container.rs inv_container), emitted normalized by 635x120.
+        // ContainerGui strip slots: BACKPACK_GRID_ORIGIN (4,17) stepping by
+        // SLOT_PITCH 35x34 (container.rs inv_container), emitted normalized
+        // by the 635x120 strip.
         let x = 4.0 + 35.0 * slot_x as f32;
         GuiComponentRenderInfo::Image {
-            position: vec2(x / 635.0, 18.0 / 120.0),
-            size: vec2(35.0 / 635.0, 32.0 / 120.0),
+            position: vec2(x / 635.0, 17.0 / 120.0),
+            size: vec2(35.0 / 635.0, 34.0 / 120.0),
             texture: "icn_x.pcx".to_owned(),
             alpha: 0.5,
             interactive: true,
             entity: Some(entity),
             label: None,
+            panel_size_px: vec2(188.0, 296.0),
+            kind: crate::ui::ImageKind::Ui,
         }
     }
 
