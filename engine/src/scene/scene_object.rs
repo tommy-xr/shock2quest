@@ -108,29 +108,38 @@ impl SceneObject {
         ret.set_local_transform(xform);
         ret
     }
-    pub fn screen_space_text(
+    /// Glyph quads for `str` at `font_size`, laid out from `origin` as the
+    /// **top-left of the line**, x growing right and y growing down.
+    ///
+    /// This is the single text-layout routine: screen space consumes it
+    /// directly, and the world-space panel path reproduces the same 2D
+    /// convention through its own mapping, so a string cannot be laid out two
+    /// different ways depending on where it is shown. Advances are exactly the
+    /// `.FON` offset-table column differences (side bearings are baked into
+    /// the glyph cells, nothing is added between glyphs), which is also what
+    /// [`measure_text_width`](crate::measure_text_width) sums.
+    fn text_vertices(
         str: &str,
-        font: Rc<Box<dyn Font>>,
+        font: &dyn Font,
         font_size: f32,
-        transparency: f32,
-        in_x: f32,
-        in_y: f32,
-    ) -> SceneObject {
-        render_log!(DEBUG, "screen-space-text: |{}|{}", str, str.len());
+        origin: Vector2<f32>,
+    ) -> Vec<TextVertex> {
         let multiplier = font_size / font.base_height();
         let adj_height = font_size;
 
-        let mut x = in_x;
-        let y = in_y;
+        let mut x = origin.x;
+        let y = origin.y;
 
         let mut vertices = Vec::new();
         for c in str.chars() {
-            let a_info = font.get_character_info(c).unwrap();
-            let _half_pixel = font.get_half_pixel();
+            let Some(a_info) = font.get_character_info(c) else {
+                continue;
+            };
             let min_uv_x = a_info.min_uv_x;
             let max_uv_x = a_info.max_uv_x;
-
-            // For screen space rendering - the y uvs need to be flipped:
+            // y grows downward here, so the glyph's top row of texels belongs
+            // to the smaller y - the uv rows are swapped relative to the
+            // font's own (y-up) ordering.
             let min_uv_y = a_info.max_uv_y;
             let max_uv_y = a_info.min_uv_y;
 
@@ -163,12 +172,41 @@ impl SceneObject {
                 },
             ]);
 
-            // Advance is exactly the `.FON` offset-table column difference -
-            // side bearings are baked into the glyph cells, nothing is added
-            // between glyphs (matches the original engine's layout).
             x += adj_width;
         }
+        vertices
+    }
 
+    /// [`Self::text_vertices`] normalized so the string's glyph box is the
+    /// centered unit square: x in -0.5..0.5 across the whole string, y in
+    /// -0.5..0.5 across the line height, y still growing downward.
+    ///
+    /// Empty (or entirely unmappable) text has no box to normalize into and
+    /// yields no vertices.
+    fn unit_text_vertices(str: &str, font: &dyn Font) -> Vec<TextVertex> {
+        let width = crate::measure_text_width(font, str, 1.0);
+        if width <= 0.0 {
+            return Vec::new();
+        }
+        let mut vertices = Self::text_vertices(str, font, 1.0, vec2(0.0, 0.0));
+        for vertex in &mut vertices {
+            vertex.position = vec2(vertex.position.x / width - 0.5, vertex.position.y - 0.5);
+        }
+        vertices
+    }
+
+    /// Text drawn in screen pixels, anchored at the **top-left** of its glyph
+    /// box (`in_x`, `in_y`) with a line height of `font_size`.
+    pub fn screen_space_text(
+        str: &str,
+        font: Rc<Box<dyn Font>>,
+        font_size: f32,
+        transparency: f32,
+        in_x: f32,
+        in_y: f32,
+    ) -> SceneObject {
+        render_log!(DEBUG, "screen-space-text: |{}|{}", str, str.len());
+        let vertices = Self::text_vertices(str, &**font, font_size, vec2(in_x, in_y));
         let mesh = mesh::create(vertices);
         let material = materials::ScreenSpaceMaterial::create(
             font.get_texture().clone(),
@@ -176,60 +214,21 @@ impl SceneObject {
         );
         Self::new(material, Box::new(mesh))
     }
+
+    /// Text as a **unit quad's worth of geometry**: the string's glyph box is
+    /// normalized to the centered unit square (-0.5..0.5 on both axes) with y
+    /// growing downward, exactly like [`quad::create`](crate::scene::quad).
+    ///
+    /// That is what makes one placement rule enough for a world-space UI
+    /// panel: text and images are both "fill this rect", so a caller maps a
+    /// laid-out rect onto the panel with the same transform for either, and
+    /// the two cannot drift apart. The glyph metrics are
+    /// [`Self::text_vertices`]', i.e. identical to screen space.
+    ///
+    /// An empty string (or one whose glyphs are all missing) has no box to
+    /// normalize into, so it produces an empty mesh.
     pub fn world_space_text(str: &str, font: Rc<Box<dyn Font>>, transparency: f32) -> SceneObject {
-        let mut x = 0.0;
-        let y = 1.0;
-
-        let font_size = 0.045;
-        let multiplier = font_size / font.base_height();
-        let adj_height = font_size;
-
-        let mut vertices = Vec::new();
-        for c in str.chars() {
-            let a_info = font.get_character_info(c).unwrap();
-            let _half_pixel = font.get_half_pixel();
-            let min_uv_x = a_info.min_uv_x;
-            let min_uv_y = a_info.min_uv_y;
-            let max_uv_x = a_info.max_uv_x;
-            // + a_info.uv_width
-            // - (half_pixel * 2.0);
-            let max_uv_y = a_info.max_uv_y;
-            // + a_info.uv_height
-            // - (half_pixel * 2.0);
-
-            let adj_width = a_info.advance * multiplier;
-
-            vertices.extend(vec![
-                TextVertex {
-                    position: vec2(x, y),
-                    uv: vec2(min_uv_x, max_uv_y),
-                },
-                TextVertex {
-                    position: vec2(x, y + adj_height),
-                    uv: vec2(min_uv_x, min_uv_y),
-                },
-                TextVertex {
-                    position: vec2(x + adj_width, y + adj_height),
-                    uv: vec2(max_uv_x, min_uv_y),
-                },
-                TextVertex {
-                    position: vec2(x, y),
-                    uv: vec2(min_uv_x, max_uv_y),
-                },
-                TextVertex {
-                    position: vec2(x + adj_width, y + adj_height),
-                    uv: vec2(max_uv_x, min_uv_y),
-                },
-                TextVertex {
-                    position: vec2(x + adj_width, y),
-                    uv: vec2(max_uv_x, max_uv_y),
-                },
-            ]);
-
-            x += adj_width + multiplier;
-        }
-
-        let mesh = mesh::create(vertices);
+        let mesh = mesh::create(Self::unit_text_vertices(str, &**font));
         let material = basic_material::create(font.get_texture(), 1.0, transparency);
         Self::new(material, Box::new(mesh))
     }
@@ -526,5 +525,89 @@ mod tests {
         object.set_transparency(Some(0.35));
 
         assert_eq!(object.effective_transparency(), Some(0.35));
+    }
+}
+
+#[cfg(test)]
+mod text_layout_tests {
+    use super::*;
+    use crate::font::FontCharacterInfo;
+
+    /// Fixed-metrics stub font: every glyph is `advance` wide at `base_height`.
+    struct StubFont;
+
+    impl Font for StubFont {
+        fn get_texture(&self) -> Rc<dyn TextureTrait> {
+            unreachable!("text layout does not touch the texture")
+        }
+        fn get_character_info(&self, c: char) -> Option<FontCharacterInfo> {
+            // '?' stands in for a glyph the font does not have.
+            if c == '?' {
+                return None;
+            }
+            Some(FontCharacterInfo {
+                min_uv_x: 0.0,
+                min_uv_y: 0.0,
+                max_uv_x: 1.0,
+                max_uv_y: 1.0,
+                advance: 4.0,
+            })
+        }
+        fn base_height(&self) -> f32 {
+            10.0
+        }
+        fn get_half_pixel(&self) -> f32 {
+            0.0
+        }
+    }
+
+    fn bounds(vertices: &[TextVertex]) -> (f32, f32, f32, f32) {
+        vertices.iter().fold(
+            (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
+            |(min_x, min_y, max_x, max_y), v| {
+                (
+                    min_x.min(v.position.x),
+                    min_y.min(v.position.y),
+                    max_x.max(v.position.x),
+                    max_y.max(v.position.y),
+                )
+            },
+        )
+    }
+
+    /// Screen-space text grows to the right and DOWN from its anchor, so the
+    /// anchor is the top-left of the glyph box and its height is the font size.
+    #[test]
+    fn text_lays_out_right_and_down_from_its_top_left() {
+        let v = SceneObject::text_vertices("abc", &StubFont, 20.0, vec2(100.0, 50.0));
+        // advance 4 at base_height 10 => 8 per glyph at font_size 20.
+        assert_eq!(bounds(&v), (100.0, 50.0, 124.0, 70.0));
+    }
+
+    /// The world-space mesh is the same layout normalized into the centered
+    /// unit square - the shape `quad::create` has - which is what lets a
+    /// world-space panel place text with the exact same transform it uses for
+    /// an image, instead of a text-only anchoring rule that can drift.
+    #[test]
+    fn world_text_normalizes_to_the_centered_unit_square() {
+        let (min_x, min_y, max_x, max_y) =
+            bounds(&SceneObject::unit_text_vertices("abc", &StubFont));
+        assert!((min_x + 0.5).abs() < 1e-6, "left edge: {min_x}");
+        assert!((min_y + 0.5).abs() < 1e-6, "top edge: {min_y}");
+        assert!((max_x - 0.5).abs() < 1e-6, "right edge: {max_x}");
+        assert!((max_y - 0.5).abs() < 1e-6, "bottom edge: {max_y}");
+
+        // Longer text still fills exactly one box (it is the placed rect that
+        // gets narrower or wider, never the normalization).
+        let (min_x, _, max_x, _) = bounds(&SceneObject::unit_text_vertices("abcdefgh", &StubFont));
+        assert!((min_x + 0.5).abs() < 1e-6);
+        assert!((max_x - 0.5).abs() < 1e-6);
+    }
+
+    /// Nothing to draw, and above all no division by a zero-width box.
+    #[test]
+    fn world_text_with_no_measurable_glyphs_is_empty() {
+        assert!(SceneObject::unit_text_vertices("", &StubFont).is_empty());
+        assert!(SceneObject::unit_text_vertices("???", &StubFont).is_empty());
     }
 }
