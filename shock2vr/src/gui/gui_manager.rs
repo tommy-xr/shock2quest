@@ -22,6 +22,13 @@ use crate::ui::{Rect, UiCanvas};
 /// direction `UiCanvas::render_world_space` steps in.
 const COMPONENT_Z_STEP: f32 = 0.001;
 
+/// Total depth a panel may spend on that separation. MFD panels are small
+/// (a keypad is ~0.75 m) and carry dozens of components - a full inventory is
+/// 15x3 slots - so an unbounded per-element step would push the last elements
+/// centimetres off the panel plane and visibly parallax in VR. The step
+/// shrinks to fit instead.
+const PANEL_DEPTH_BUDGET: f32 = 0.01;
+
 pub struct GuiInstanceInfo {
     pub parent_entity: EntityId,
     pub proxy_entity: EntityId,
@@ -320,13 +327,9 @@ impl GuiManager {
                 .map(|component| component.to_ui_element(panel))
                 .collect();
             let canvas = UiCanvas::from_elements(size_px, elements);
-            ret.extend(canvas.render_world_space(
-                asset_cache,
-                root_transform,
-                None,
-                None,
-                COMPONENT_Z_STEP,
-            ));
+            let z_step =
+                COMPONENT_Z_STEP.min(PANEL_DEPTH_BUDGET / canvas.element_count().max(1) as f32);
+            ret.extend(canvas.render_world_space(asset_cache, root_transform, None, None, z_step));
 
             // gui_obj.set_local_transform(
             //     Matrix4::from_translation(info.offset)

@@ -72,6 +72,13 @@ pub enum VAlign {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScaleMode {
     /// Fill the target, stretching each axis independently (may distort).
+    ///
+    /// The one mapping under which text is *not* presentation-independent:
+    /// bitmap glyphs have a single size, so screen-space text scales uniformly
+    /// (by the vertical factor) while a world-space panel scales its text mesh
+    /// into the placed rect on both axes. Every shipped presentation maps the
+    /// canvas uniformly - flat scenes use `PreserveAspect`, and world panels
+    /// are sized `canvas_px * constant` - so the two agree in practice.
     Stretch,
     /// Uniform scale that fits the canvas inside the target, centered, leaving
     /// empty bars on the longer axis (letterbox / pillarbox).
@@ -314,12 +321,11 @@ pub enum PlacedContent {
         texture: String,
         fill: f32,
     },
-    /// Ellipsized, alignment-resolved text. `font_size` is the line height in
-    /// canvas pixels and equals `rect.h`.
+    /// Ellipsized, alignment-resolved text. There is no separate font size:
+    /// the placed `rect` IS the glyph box, so its height is the line height.
     Text {
         text: String,
         font: String,
-        font_size: f32,
     },
 }
 
@@ -877,7 +883,6 @@ fn place_text(
         content: PlacedContent::Text {
             text,
             font: font_name.to_owned(),
-            font_size,
         },
     }
 }
@@ -1265,33 +1270,42 @@ mod tests {
 
         /// Every placed rect must normalize the same way in both
         /// presentations, on any screen shape.
-        fn assert_parity(what: &str, placed: &PlacedElement) {
+        /// Every placed rect must normalize the same way in both
+        /// presentations. `uniform_only` restricts the screen mappings to
+        /// uniform ones: a bitmap glyph has a single size, so under a
+        /// non-uniform canvas scale screen text keeps its aspect while a world
+        /// panel stretches its text mesh into the rect (see [`ScaleMode`]).
+        /// Art has no such constraint and must agree under any mapping.
+        fn assert_parity_with(what: &str, placed: &PlacedElement, uniform_only: bool) {
             let panel = canvas_rect_to_panel(placed.rect, CANVAS);
-            // Stretch fills the target, so normalized screen coordinates are
-            // canvas coordinates - directly comparable on any screen.
-            for screen in [
-                vec2(640.0, 480.0),
-                vec2(1920.0, 1080.0),
-                vec2(800.0, 1200.0),
-            ] {
+            if !uniform_only {
+                // Stretch fills the target, so normalized screen coordinates
+                // are canvas coordinates - comparable on any screen shape.
+                for screen in [
+                    vec2(640.0, 480.0),
+                    vec2(1920.0, 1080.0),
+                    vec2(800.0, 1200.0),
+                ] {
+                    assert_same_rect(
+                        what,
+                        canvas_rect_to_screen(placed.rect, CANVAS, screen, ScaleMode::Stretch),
+                        panel,
+                    );
+                }
+            }
+            // Aspect-preserving on screens of the canvas's own aspect: no bars,
+            // uniform scale - the mapping every shipped presentation uses.
+            for screen in [vec2(640.0, 480.0), vec2(1280.0, 960.0), vec2(320.0, 240.0)] {
                 assert_same_rect(
                     what,
-                    canvas_rect_to_screen(placed.rect, CANVAS, screen, ScaleMode::Stretch),
+                    canvas_rect_to_screen(placed.rect, CANVAS, screen, ScaleMode::PreserveAspect),
                     panel,
                 );
             }
-            // ...and with the aspect preserved on a matching-aspect screen
-            // there are no bars, so the same must hold.
-            assert_same_rect(
-                what,
-                canvas_rect_to_screen(
-                    placed.rect,
-                    CANVAS,
-                    vec2(1280.0, 960.0),
-                    ScaleMode::PreserveAspect,
-                ),
-                panel,
-            );
+        }
+
+        fn assert_parity(what: &str, placed: &PlacedElement) {
+            assert_parity_with(what, placed, false);
         }
 
         fn text(
@@ -1330,7 +1344,11 @@ mod tests {
                     ] {
                         for fit in [false, true] {
                             let placed = text(body, widget, h, v, fit);
-                            assert_parity(&format!("{body:?} {h:?} {v:?} fit={fit}"), &placed);
+                            assert_parity_with(
+                                &format!("{body:?} {h:?} {v:?} fit={fit}"),
+                                &placed,
+                                true,
+                            );
                         }
                     }
                 }
