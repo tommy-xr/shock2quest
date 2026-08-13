@@ -756,7 +756,7 @@ pub struct PlayerInfo {
 /// Input state snapshot
 #[derive(Debug, Serialize, Clone)]
 pub struct InputSnapshot {
-    pub head_rotation: [f32; 4], // quaternion
+    pub head_rotation: [f32; 4], // Quaternion [x, y, z, w]
     pub hands: HandsSnapshot,
 }
 
@@ -771,7 +771,7 @@ pub struct HandsSnapshot {
 #[derive(Debug, Serialize, Clone)]
 pub struct HandSnapshot {
     pub position: [f32; 3],
-    pub rotation: [f32; 4], // quaternion
+    pub rotation: [f32; 4], // Quaternion [x, y, z, w]
     pub thumbstick: [f32; 2],
     pub trigger: f32,
     pub squeeze: f32,
