@@ -9,7 +9,7 @@ Living doc for the menu work. Updated as the investigation proceeds.
 | [#927](https://github.com/tommy-xr/shock2quest/pull/927) | **merged** | Main menu driven by `MAIN.STR` + `MAINR.BIN`; all six entries, four dimmed |
 | [#930](https://github.com/tommy-xr/shock2quest/pull/930) | open, CI green | Load-game screen (`GAMELOD.*`), `save_load::all_saves`, `engine::ellipsize` |
 | [#934](https://github.com/tommy-xr/shock2quest/pull/934) | merged into #930's branch | `cargo dbgr` boots the main menu with no `--mission` |
-| `feat/vr-menu-pointer` | local, renders in flat | VR controller pointer + world-space menu panel |
+| `feat/vr-menu-pointer` | local, **VR working end to end** | VR controller pointer + world-space menu panel + VR menu default |
 
 Open issues: [#928](https://github.com/tommy-xr/shock2quest/issues/928) (load list has no scrolling past 14 rows), [#929](https://github.com/tommy-xr/shock2quest/issues/929) (failed load is silent).
 
@@ -56,15 +56,40 @@ Bisection by transplant: swap the menu's canvas into `debug_map` (renders) and
 *content* in one step, after a long stretch of fruitless parameter tweaking.
 Worth reaching for much earlier next time.
 
+### Third fix: the VR view was inside a red box
+
+`Game::render_per_eye` appended a red `color_material` cube **in VR only**:
+
+```rust
+from_scale(0.25) * from_translation(vec3(0.0, 4.0, 0.0))   // -> centred at (0, 1.0, 0)
+```
+
+The VR camera sits at eye height `(0, 1.04, 0)` — *inside* a cube spanning
++-0.125 — so every VR frame rendered the inside of a red box and hid the scene.
+That is why `debug_map` was blank in VR too, which made it look like a menu
+problem. An earlier comment ("keep it out of the clean flatscreen view") had
+gated it to VR rather than deleting it, hiding the damage in the mode nobody
+screenshotted. Removed in `4ce6934`.
+
+### VR now works end to end
+
+- Panel renders in VR (7 canvas objects, 14618 distinct colours).
+- Controller ray **hover** highlights the entry under it ("New Game" bright,
+  "Load Game" dim).
+- Trigger **activates**: aiming at "New Game" and pulling took the scene from
+  0 entities to 747.
+- `--vr` with **no `--mission`** boots the menu, so the VR special case in
+  `desktop_runtime` is gone and `oculus_runtime`'s `DEFAULT_MISSION` is
+  `main_menu` (`8a0a1c3`).
+
 ### Still open
 
 - The label drifts a few px right of centre — world text likely renders at a
   slightly different scale than `measure_text_width` reports.
-- **World-space panels do not render in the debug runtime's `--vr` mode at
-  all** — `debug_map` is blank there too, so this is a harness limitation rather
-  than menu code. VR presentation needs verifying on desktop `--vr` or a Quest.
-- VR runtimes still default to a mission rather than the menu; flipping that
-  waits on the point above.
+- The **load screen** has no VR presentation yet, so "Load Game" in VR opens a
+  screen that is still flat-only.
+- Not verified on real hardware (no headset here); everything above is the
+  debug runtime's `--vr` path.
 
 ## Method traps (both cost real time)
 
