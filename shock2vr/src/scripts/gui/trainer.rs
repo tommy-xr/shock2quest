@@ -20,6 +20,11 @@
 //! persistence lands. UNDO is deferred (the shared `Gui` layer has no
 //! panel-open/close lifecycle to snapshot against). Costs are Normal
 //! difficulty (no difficulty setting exists yet).
+//!
+//! A stat is only sold when it has a live gameplay consumer. Endurance raises
+//! maximum HP and Cyber Affinity feeds hacking odds; Strength, Psionics, and
+//! Agility stay visible but unavailable until their advertised systems exist.
+//! This prevents a stored-only stat bump from consuming irreplaceable modules.
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::gamesys::TrainerCostTables;
@@ -55,8 +60,22 @@ pub const STAT_CAP: i32 = 6;
 pub const SKILL_CAP: i32 = 6;
 pub const PSI_TIER_CAP: i32 = 5;
 
+/// Normal difficulty grants five maximum hit points per Endurance level. The
+/// original manual documents the stat as raising maximum HP; the retail Normal
+/// table is `30 + 5 * END`. shock2quest has no difficulty setting yet, matching
+/// the Normal-only trainer prices above.
+pub const ENDURANCE_HP_PER_LEVEL: u32 = 5;
+
+/// Whether a stat has a real gameplay consumer and is therefore safe to sell.
+/// Keep this gate shared by display, immediate feedback, and authoritative
+/// effect handling so a future caller cannot bypass the module-loss guard.
+pub fn stat_upgrade_available(stat: Stat) -> bool {
+    matches!(stat, Stat::Endurance | Stat::CyberAffinity)
+}
+
 /// The cost of buying `target`'s next level given the player's current sheet,
-/// or `None` if it cannot be bought (maxed, or an out-of-order psi tier).
+/// or `None` if it cannot be bought (unavailable, maxed, or an out-of-order
+/// psi tier).
 /// Shared by the panel (for display/refusal) and the `TrainerPurchase` effect
 /// handler (the authoritative re-validation before mutating).
 pub fn upgrade_quote(
@@ -66,6 +85,9 @@ pub fn upgrade_quote(
 ) -> Option<i32> {
     match target {
         TrainerTarget::Stat(stat) => {
+            if !stat_upgrade_available(stat) {
+                return None;
+            }
             let level = stats.stat_level(stat);
             if !(1..STAT_CAP).contains(&level) {
                 return None;
@@ -294,6 +316,9 @@ impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
                 // unavailable, not maxed.
                 None => "(offline)".to_string(),
                 Some(costs) => match (row.target, upgrade_quote(costs, &stats, row.target)) {
+                    (TrainerTarget::Stat(stat), _) if !stat_upgrade_available(stat) => {
+                        "unavailable".to_string()
+                    }
                     (TrainerTarget::PsiTier(_), Some(cost)) => {
                         format!("unlock: {} cm", cost)
                     }
@@ -360,6 +385,14 @@ impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
                 Effect::NoEffect,
             );
         };
+        if matches!(target, TrainerTarget::Stat(stat) if !stat_upgrade_available(*stat)) {
+            return (
+                TrainerGuiState {
+                    message: Some("Upgrade unavailable in this build.".to_string()),
+                },
+                Effect::NoEffect,
+            );
+        }
         match upgrade_quote(&costs, stats, *target) {
             // A psi tier beyond the next one is locked, not maxed - give the
             // faithful refusal for each.
@@ -384,7 +417,11 @@ impl Gui<TrainerGuiState, TrainerGuiMsg> for TrainerGui {
             ),
             Some(cost) => (
                 TrainerGuiState {
-                    message: Some(format!("Upgrade complete (-{} cm)", cost)),
+                    message: Some(if matches!(target, TrainerTarget::Stat(Stat::Endurance)) {
+                        format!("Max HP +{} (-{} cm)", ENDURANCE_HP_PER_LEVEL, cost)
+                    } else {
+                        format!("Upgrade complete (-{} cm)", cost)
+                    }),
                 },
                 Effect::TrainerPurchase { target: *target },
             ),
@@ -415,21 +452,21 @@ mod tests {
     #[test]
     fn stat_quotes_follow_statcost_and_cap_at_6() {
         let costs = tables();
-        let mut stats = PlayerStats::new(); // strength 1
+        let mut stats = PlayerStats::new(); // endurance 1
         assert_eq!(
-            upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::Strength)),
+            upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::Endurance)),
             Some(3)
         );
-        stats.raise_stat(Stat::Strength); // 2
+        stats.raise_stat(Stat::Endurance); // 2
         assert_eq!(
-            upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::Strength)),
+            upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::Endurance)),
             Some(8)
         );
         for _ in 0..4 {
-            stats.raise_stat(Stat::Strength);
+            stats.raise_stat(Stat::Endurance);
         } // 6 = cap
         assert_eq!(
-            upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::Strength)),
+            upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::Endurance)),
             None
         );
     }
@@ -495,5 +532,27 @@ mod tests {
         assert_eq!(stats.endurance, 2);
         apply_purchase(&mut stats, TrainerTarget::Skill(Skill::Repair));
         assert_eq!(stats.skills.repair, 1);
+    }
+
+    #[test]
+    fn stat_trainer_only_quotes_upgrades_with_live_gameplay_effects() {
+        let costs = tables();
+        let stats = PlayerStats::new();
+
+        assert_eq!(
+            upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::Endurance)),
+            Some(3)
+        );
+        assert_eq!(
+            upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::CyberAffinity)),
+            Some(3)
+        );
+        for unsupported in [Stat::Strength, Stat::PsionicAbility, Stat::Agility] {
+            assert_eq!(
+                upgrade_quote(&costs, &stats, TrainerTarget::Stat(unsupported)),
+                None,
+                "{unsupported:?} must not be sold until it has a gameplay effect"
+            );
+        }
     }
 }

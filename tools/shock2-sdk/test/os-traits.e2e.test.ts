@@ -8,10 +8,11 @@ import { teleportVerified } from "./helpers/teleport.js";
 // End-to-end test for the O/S upgrade (trait) machine MFD (flat UI 6f / PR C3).
 // Opt-in (SHOCK2_E2E=1); requires game assets in Data/.
 //
-// The trait machine offers a one-time pick from all 16 O/S traits (free, per
-// the original). The pick is stored on the persistent character sheet, the
-// machine becomes single-use (a quest bit keyed by its stable mission object
-// id), and implemented trait effects apply (Tank: +5 max AND current HP -
+// The trait machine shows all 16 O/S traits (free, per the original), but only
+// choices with live effects can consume its one-time pick. The chosen trait is
+// stored on the persistent character sheet, the machine becomes single-use (a
+// quest bit keyed by its stable mission object id), and implemented effects
+// apply (Tank: +5 max AND current HP -
 // original behavior: buying at 25/30 yields 30/35 - live and re-derived
 // across loads).
 //
@@ -110,12 +111,25 @@ test(
       traitButton(name, els);
     }
 
+    // --- A storage-only trait refuses clearly and leaves this one-shot
+    // machine available for a live choice. ---
+    await clickElement(game, traitButton("Speedy", els));
+    await game.step({ frames: 3 });
+    assert.deepEqual((await stats()).os_traits, [], "unsupported trait is not recorded");
+    let refreshed = await game.ui.state();
+    assert.ok(
+      refreshed.active_panel!.elements.some(
+        (e) => e.kind === "text" && e.text?.includes("Upgrade unavailable"),
+      ),
+      "the panel explains why the trait cannot be selected",
+    );
+
     // --- Pick Tank: stored + live +5 max AND current HP (the original
     // raises both - buying wounded at 25/30 yields 30/35). The player can't
     // be wounded headlessly (it has no scripts, so a debug Damage message is
     // dropped), but the current-HP grant is still observable at full health:
     // ceiling-only would leave 30/35, the original behavior yields 35/35. ---
-    await clickElement(game, traitButton("Tank", els));
+    await clickElement(game, traitButton("Tank", refreshed.active_panel!.elements));
     await game.step({ frames: 3 });
     const afterPick = await stats();
     assert.deepEqual(afterPick.os_traits, [8], "Tank (trait 8) is recorded");
@@ -133,7 +147,7 @@ test(
     await game.screenshot("traits-after-pick.png");
 
     // --- The machine is now single-use: a second pick refuses. ---
-    const refreshed = await game.ui.state();
+    refreshed = await game.ui.state();
     assert.ok(refreshed.active_panel, "panel stays open after the pick");
     await clickElement(game, traitButton("Speedy", refreshed.active_panel.elements));
     await game.step({ frames: 3 });
