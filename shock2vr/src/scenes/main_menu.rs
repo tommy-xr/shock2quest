@@ -133,20 +133,22 @@ fn menu_rects(layout: Option<&[MapRect]>) -> Vec<Rect> {
     MENU_ITEMS
         .iter()
         .enumerate()
-        .map(|(index, _)| match layout.and_then(|rects| rects.get(index)) {
-            Some(r) => Rect::new(
-                r.ul_x as f32,
-                r.ul_y as f32,
-                r.width() as f32,
-                r.height() as f32,
-            ),
-            None => Rect::new(
-                FALLBACK_BUTTON_X,
-                FALLBACK_BUTTON_TOP + index as f32 * FALLBACK_BUTTON_PITCH,
-                FALLBACK_BUTTON_W,
-                FALLBACK_BUTTON_H,
-            ),
-        })
+        .map(
+            |(index, _)| match layout.and_then(|rects| rects.get(index)) {
+                Some(r) => Rect::new(
+                    r.ul_x as f32,
+                    r.ul_y as f32,
+                    r.width() as f32,
+                    r.height() as f32,
+                ),
+                None => Rect::new(
+                    FALLBACK_BUTTON_X,
+                    FALLBACK_BUTTON_TOP + index as f32 * FALLBACK_BUTTON_PITCH,
+                    FALLBACK_BUTTON_W,
+                    FALLBACK_BUTTON_H,
+                ),
+            },
+        )
         .collect()
 }
 
@@ -520,7 +522,14 @@ mod tests {
         // Resolved through the real parser, top to bottom.
         assert_eq!(
             menu_labels(Some(&strings)),
-            vec!["New Game", "Load Game", "Options", "Credits", "Intro", "Quit"]
+            vec![
+                "New Game",
+                "Load Game",
+                "Options",
+                "Credits",
+                "Intro",
+                "Quit"
+            ]
         );
     }
 
@@ -529,7 +538,14 @@ mod tests {
         let labels = menu_labels(None);
         assert_eq!(
             labels,
-            vec!["New Game", "Load Game", "Options", "Credits", "Intro", "Quit"]
+            vec![
+                "New Game",
+                "Load Game",
+                "Options",
+                "Credits",
+                "Intro",
+                "Quit"
+            ]
         );
     }
 
