@@ -35,6 +35,18 @@ pub struct VirtualHand {
     handedness: Handedness,
 }
 
+/// What draws the hand itself.
+///
+/// The 25AE authored poses are preferred; the SteamVR glove is the fallback for
+/// an install that has none, and `None` covers an install with neither. One
+/// enum rather than two `Option` parameters, which would admit a "both" and a
+/// "neither-but-differently" state that mean nothing.
+pub enum HandRenderer<'a> {
+    Poses(&'a crate::hand_pose_library::PoseLibrary),
+    Glove(&'a mut crate::hand_glove::GloveRenderer),
+    None,
+}
+
 #[derive(Debug)]
 pub enum VirtualHandEffect {
     OutMessage {
@@ -351,20 +363,14 @@ impl VirtualHand {
 
     /// Render this hand, plus the raycast-hit debug cube.
     ///
-    /// Prefers the 25AE authored hands, which snap between poses; the SteamVR
-    /// glove is the fallback for an install that has none. Both renderers are
-    /// owned by the caller (`VrInteraction`) so their cached state is shared
-    /// between the two hands.
-    pub fn render(
-        &self,
-        pose_library: Option<&crate::hand_pose_library::PoseLibrary>,
-        glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
-    ) -> Vec<SceneObject> {
+    /// The renderer is chosen and owned by the caller (`VrInteraction`) so its
+    /// cached state is shared between the two hands.
+    pub fn render(&self, renderer: HandRenderer<'_>) -> Vec<SceneObject> {
         let holding = self.get_held_entity().is_some();
 
         // The hand itself, posed from the analog inputs
-        let mut scene_objects = match pose_library {
-            Some(library) => library.render_hand(
+        let mut scene_objects = match renderer {
+            HandRenderer::Poses(library) => library.render_hand(
                 self.position,
                 self.rotation,
                 self.handedness,
@@ -372,18 +378,15 @@ impl VirtualHand {
                 self.squeeze_value,
                 holding,
             ),
-            None => glove_renderer
-                .map(|renderer| {
-                    renderer.render_hand(
-                        self.position,
-                        self.rotation,
-                        self.handedness,
-                        self.trigger_value,
-                        self.squeeze_value,
-                        holding,
-                    )
-                })
-                .unwrap_or_default(),
+            HandRenderer::Glove(glove) => glove.render_hand(
+                self.position,
+                self.rotation,
+                self.handedness,
+                self.trigger_value,
+                self.squeeze_value,
+                holding,
+            ),
+            HandRenderer::None => Vec::new(),
         };
 
         let hit_color = self.color_from_state();

@@ -197,19 +197,6 @@ fn anchor_of(
         * Matrix4::from_translation(-wrist_vector(frame, reach))
 }
 
-/// A hand's wrist-to-fingertip length in the authored models' own units.
-///
-/// [`HAND_LENGTH_WORLD`] is that length in *world* units - the same 19 cm real
-/// hand the glove is scaled to (see `hand_glove::GLOVE_SCALE`), so both
-/// renderers anchor a hand of the same physical size at the wrist. The authored
-/// hands are viewmodel-sized until [`VIEWMODEL_HAND_SCALE`] brings them down, so
-/// measuring in their space means dividing it back out.
-///
-/// Without this conversion the step-back below is only ~61% of a hand and the
-/// anchor lands mid-palm rather than at the wrist - visible as the axis marker
-/// sitting in the middle of `ar15_h`'s hand.
-const AUTHORED_HAND_LENGTH: f32 = HAND_LENGTH_WORLD / VIEWMODEL_HAND_SCALE;
-
 /// The wrist, set back from the pose's farthest point.
 ///
 /// `HandFrame::origin` is the far end of the geometry, which on the models whose
@@ -338,16 +325,41 @@ mod tests {
     }
 }
 
+/// A hand's wrist-to-fingertip length in the authored models' own units.
+///
+/// This is the one measured number the sizing rests on, and it is deliberately
+/// the *primary* constant: [`VIEWMODEL_HAND_SCALE`] below is derived from it, and
+/// so is the wrist step-back in [`wrist_vector`]. Deriving the other way round
+/// would mean that adjusting the hands' size also slid the anchor along the
+/// finger axis, moving the hand off the controller - size and anchor come from
+/// one measurement because they are one measurement.
+///
+/// Same law as the glove, in the same direction:
+/// `hand_glove::GLOVE_SCALE = real_hand_length / AUTHORED_HAND_LENGTH_WORLD`.
+///
+/// Calibration caveat, worth knowing before trusting this in a headset: the
+/// value is inherited from a viewmodel measurement of ~31 cm taken *across* the
+/// pistol's support hand, against a 19 cm wrist-to-fingertip hand - a breadth
+/// compared with a length. It survives because it checks out empirically (the
+/// rendered SemiClosed hand measures within ~2% of the glove's, which is
+/// independently scaled to 19 cm), not because the derivation was sound. The
+/// honest fix is to measure wrist-to-fingertip on the hand geometry alone,
+/// excluding the cuff, and put that number here.
+///
+/// The digits are the previous calibration carried over exactly
+/// (`HAND_LENGTH_WORLD * 31.0 / 19.0`), so restructuring these constants left
+/// the render byte-for-byte unchanged. They are precision inherited, not
+/// precision measured - do not read them as a claim of accuracy.
+const AUTHORED_HAND_LENGTH: f32 = 0.406_752_63;
+
 /// Brings the authored hands down to life size.
 ///
 /// They are first-person *viewmodel* geometry, deliberately oversized so they
-/// read on a monitor - the pistol's bare support hand measures ~31 cm across
-/// where a real hand is ~19 cm. VR renders the world at true scale, so they
-/// have to come down or they dwarf the player's real hands.
+/// read on a monitor. VR renders the world at true scale, so they have to come
+/// down or they dwarf the player's real hands.
 ///
-/// One constant for all poses: they are one artist's hands at one viewmodel
-/// scale. Tune here if they read wrong in a headset.
-const VIEWMODEL_HAND_SCALE: f32 = 19.0 / 31.0;
+/// One scale for all poses: they are one artist's hands at one viewmodel scale.
+const VIEWMODEL_HAND_SCALE: f32 = HAND_LENGTH_WORLD / AUTHORED_HAND_LENGTH;
 
 /// Analog closure at or above which the hand reads as fully closed.
 const CLOSED_THRESHOLD: f32 = 0.66;
@@ -360,19 +372,26 @@ pub struct PoseLibrary {
 }
 
 impl PoseLibrary {
-    /// `None` when no pose could be loaded, which is what a non-25AE install
-    /// looks like. Callers should cache that outcome rather than retry per
-    /// frame, and fall back to the glove.
+    /// `None` unless EVERY pose loaded, which is what a non-25AE install looks
+    /// like. Callers should cache that outcome rather than retry per frame, and
+    /// fall back to the glove.
+    ///
+    /// All-or-nothing on purpose: `render_hand` draws nothing when the pose it
+    /// wants is missing, and the caller does not consult the glove once the
+    /// library exists. A partial install - mod layering, or an SCP/SHTUP variant
+    /// that ships `atek_h` but not `ar15_h` - would otherwise make the player's
+    /// hands vanish the moment they opened their hand. A whole glove is better
+    /// than an intermittently invisible hand.
     pub fn new(asset_cache: &mut AssetCache) -> Option<Self> {
         let poses = load(asset_cache);
-        (!poses.is_empty()).then_some(Self { poses })
+        (poses.len() == HandPose::ALL.len()).then_some(Self { poses })
     }
 
     /// Which pose a hand in this state should show.
     ///
-    /// Snapping, not blending: the authored hands have no finger joints and
-    /// four distinct topologies, so there is nothing to interpolate between
-    /// (see the module docs).
+    /// Snapping, not blending: the authored hands have no finger joints and the
+    /// three poses come from distinct source meshes, so there is nothing to
+    /// interpolate between (see the module docs).
     pub fn pose_for(trigger: f32, squeeze: f32, holding: bool) -> HandPose {
         if holding {
             return HandPose::Grip;

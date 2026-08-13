@@ -45,6 +45,10 @@ use shipyard::{Get, IntoIter, IntoWithId, View};
 const SCR_WIDTH: u32 = 800;
 const SCR_HEIGHT: u32 = 600;
 
+/// Near plane of the debug camera. Shared by the projection and `/v1/scene`'s
+/// NDC guard so the two cannot drift apart.
+const CAMERA_NEAR: f32 = 0.1;
+
 /// A request-body extractor that parses JSON **regardless of the `Content-Type`
 /// header**, unlike axum's `Json`. This debug/test API is driven by ad-hoc
 /// clients (`curl -d '{...}'` without a header, the SDK, etc.); requiring
@@ -793,7 +797,7 @@ fn run_game_blocking(
         // Render the game
         let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;
         let projection_matrix: cgmath::Matrix4<f32> =
-            cgmath::perspective(cgmath::Deg(45.0), ratio, 0.1, 1000.0);
+            cgmath::perspective(cgmath::Deg(45.0), ratio, CAMERA_NEAR, 1000.0);
 
         let screen_size = vec2(SCR_WIDTH as f32, SCR_HEIGHT as f32);
 
@@ -898,12 +902,27 @@ fn summarize_scene(
         .map(|obj| {
             let tag = obj.debug_tag();
             let translation = obj.get_transform().w;
-            let clip =
-                view_projection * cgmath::vec4(translation.x, translation.y, translation.z, 1.0);
-            // w <= 0 means the origin is at or behind the eye plane, where the
-            // perspective divide is meaningless - report no NDC rather than a
-            // mirrored-through-the-camera fiction.
-            let ndc = (clip.w > 0.0).then(|| [clip.x / clip.w, clip.y / clip.w, clip.z / clip.w]);
+            // The origin actually DRAWN, not just `transform`: `local_transform`
+            // is what places screen-space quads and text (see `SceneObject`), so
+            // projecting `transform` alone would describe a point the renderer
+            // never used.
+            let drawn = (obj.get_transform() * obj.local_transform).w;
+            let clip = view_projection * cgmath::vec4(drawn.x, drawn.y, drawn.z, 1.0);
+            // For a perspective projection `clip.w` is the distance along the
+            // view axis, so this rejects anything at or behind the eye (where
+            // the divide gives a mirrored-through-the-camera fiction) AND
+            // anything nearer than the near plane. The latter matters: an
+            // object sitting almost exactly on the eye plane passes `w > 0` but
+            // divides by ~0, reporting values like `ndc.y = -12122363` that read
+            // as data. It is clipped by the GPU anyway, so it has no NDC worth
+            // reporting.
+            // It also covers the screen-space HUD/UI quads, which draw with
+            // their own orthographic camera and would otherwise be described in
+            // world terms that mean nothing: they sit at the origin, so they
+            // fall inside the near plane and report no NDC. Verified on
+            // `medsci1.mis` - 118 of 219 objects.
+            let ndc = (clip.w >= CAMERA_NEAR)
+                .then(|| [clip.x / clip.w, clip.y / clip.w, clip.z / clip.w]);
             let origin_on_screen = ndc.is_some_and(|n| {
                 (-1.0..=1.0).contains(&n[0])
                     && (-1.0..=1.0).contains(&n[1])

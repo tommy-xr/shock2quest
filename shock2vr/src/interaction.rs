@@ -25,7 +25,7 @@ use crate::{
     hud::create_arm_hud_panels,
     input_context::InputContext,
     physics::PhysicsWorld,
-    virtual_hand::{VirtualHand, VirtualHandEffect},
+    virtual_hand::{HandRenderer, VirtualHand, VirtualHandEffect},
     vr_config::Handedness,
 };
 
@@ -187,23 +187,28 @@ impl PlayerInteraction for VrInteraction {
             .as_ref();
 
         let mut objs = Vec::new();
-        if pose_library.is_some() {
-            objs.append(&mut self.left_hand.render(pose_library, None));
-            objs.append(&mut self.right_hand.render(pose_library, None));
-        } else {
+        match pose_library {
+            Some(library) => {
+                objs.append(&mut self.left_hand.render(HandRenderer::Poses(library)));
+                objs.append(&mut self.right_hand.render(HandRenderer::Poses(library)));
+            }
             // No authored hands in this install - fall back to the glove.
-            let mut glove_slot = self.glove_renderer.borrow_mut();
-            let glove_renderer = glove_slot
-                .get_or_insert_with(|| GloveRenderer::new(asset_cache))
-                .as_mut();
-            match glove_renderer {
-                Some(renderer) => {
-                    objs.append(&mut self.left_hand.render(None, Some(renderer)));
-                    objs.append(&mut self.right_hand.render(None, Some(renderer)));
-                }
-                None => {
-                    objs.append(&mut self.left_hand.render(None, None));
-                    objs.append(&mut self.right_hand.render(None, None));
+            None => {
+                let mut glove_slot = self.glove_renderer.borrow_mut();
+                match glove_slot
+                    .get_or_insert_with(|| GloveRenderer::new(asset_cache))
+                    .as_mut()
+                {
+                    // Reborrowed for the second hand: the variant holds `&mut`,
+                    // so the two hands take the one renderer in turn.
+                    Some(glove) => {
+                        objs.append(&mut self.left_hand.render(HandRenderer::Glove(&mut *glove)));
+                        objs.append(&mut self.right_hand.render(HandRenderer::Glove(&mut *glove)));
+                    }
+                    None => {
+                        objs.append(&mut self.left_hand.render(HandRenderer::None));
+                        objs.append(&mut self.right_hand.render(HandRenderer::None));
+                    }
                 }
             }
         }
