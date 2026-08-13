@@ -2435,11 +2435,12 @@ impl MissionCore {
                     transform
                         .0
                         .transform_vector(vec3(velocity.z, curr_velocity.y, -velocity.x));
-                let scaled = vec3(
+                let mut scaled = vec3(
                     adj_velocity.x * scale,
                     adj_velocity.y,
                     adj_velocity.z * scale,
                 );
+                scaled += self.physics.take_player_push_velocity(*id);
                 // A restored terminal death player has no queued motion, but
                 // even writing zero velocity wakes its deliberately sleeping
                 // dynamic corpse body. Leave physics ownership untouched:
