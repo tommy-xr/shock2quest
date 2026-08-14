@@ -18,7 +18,9 @@
 
 use std::rc::Rc;
 
-use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
+use cgmath::{
+    Deg, InnerSpace, Matrix3, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec2, vec3,
+};
 use dark::importers::{FONT_IMPORTER, TEXTURE_IMPORTER};
 use engine::{
     Font,
@@ -30,6 +32,26 @@ use engine::{
 use shipyard::EntityId;
 
 use crate::vr_config::Handedness;
+
+/// Font name that resolves to the engine's compiled-in font rather than a
+/// `.FON` asset.
+///
+/// It is the only font available when the game data is missing - every other
+/// font in the game is loaded out of `intrface.crf` or the KPF archives - so
+/// the missing-assets screen names this one. Ordinary UI keeps naming its real
+/// font and is unaffected.
+pub const BUILTIN_FONT: &str = "@builtin";
+
+/// The font for a `UiElement::Text`, whichever kind it is.
+///
+/// Both presentations and the layout pass go through here, so the two cannot
+/// disagree about which font measured the text and which font draws it.
+fn resolve_font(asset_cache: &mut AssetCache, font: &str) -> Rc<Box<dyn engine::Font>> {
+    if font == BUILTIN_FONT {
+        return engine::shared_builtin_font();
+    }
+    asset_cache.get(&FONT_IMPORTER, font).clone()
+}
 
 /// A rectangle in canvas pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -164,6 +186,60 @@ impl WorldPanel {
         Matrix4::from_translation(self.center)
             * Matrix4::from(self.rotation)
             * Matrix4::from_nonuniform_scale(self.size.x, self.size.y, 1.0)
+    }
+}
+
+/// The VR menu hangs on a panel 2m ahead of the player at eye level, sized to
+/// the canvas's 4:3 aspect so the art is not stretched.
+///
+/// "Eye level" is not the scene origin: VR runtimes add a head offset of
+/// `player_eye_height / SCALE_FACTOR` on top of the camera position this scene
+/// returns, so a panel at y=0 hangs below the view and is never seen.
+pub const FRONTEND_PANEL_DISTANCE: f32 = 2.0;
+pub const FRONTEND_PANEL_EYE_HEIGHT: f32 = crate::PLAYER_EYE_HEIGHT / dark::SCALE_FACTOR;
+pub const FRONTEND_PANEL_SIZE: Vector2<f32> = Vector2 { x: 2.0, y: 1.5 };
+
+/// Spacing between stacked canvas layers in world space, so the labels sort in
+/// front of the backdrop instead of z-fighting it.
+pub const VR_COMPONENT_Z_STEP: f32 = 0.001;
+
+/// The panel a frontend screen is drawn on in VR: hung `FRONTEND_PANEL_DISTANCE` in front of the
+/// head and turned to face back at it.
+///
+/// It is anchored to the head's **facing**, not to a fixed world axis. There is
+/// no canonical "forward" to hardcode - the runtimes' yaw-0 camera looks along
+/// +X, not -Z - so a panel pinned to -Z sits off to the side and never enters
+/// the frustum. This mirrors `DebugMapScene`'s construction, which is the
+/// world-space panel that demonstrably renders.
+pub fn frontend_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
+    let head = vec3(0.0, FRONTEND_PANEL_EYE_HEIGHT, 0.0);
+    let forward = head_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+    let center = head + forward * FRONTEND_PANEL_DISTANCE;
+
+    // Orient the panel by looking from it back to the head. `look_dir` runs
+    // panel -> head, so the panel's local +Z (the third column) points away
+    // from the viewer - the convention the world-space element path expects.
+    let mut look_dir = head - center;
+    look_dir = if look_dir.magnitude2() < 1e-6 {
+        vec3(0.0, 0.0, 1.0)
+    } else {
+        look_dir.normalize()
+    };
+    let mut up = vec3(0.0, 1.0, 0.0);
+    let mut right = look_dir.cross(up);
+    if right.magnitude2() < 1e-6 {
+        // Looking straight up or down: pick a different up to keep the basis
+        // well-defined.
+        up = vec3(0.0, 0.0, 1.0);
+        right = look_dir.cross(up);
+    }
+    let right = right.normalize();
+    let true_up = right.cross(look_dir).normalize();
+
+    WorldPanel {
+        center,
+        rotation: Quaternion::from(Matrix3::from_cols(right, true_up, -look_dir)),
+        size: FRONTEND_PANEL_SIZE,
     }
 }
 
@@ -709,7 +785,7 @@ where
                     alpha,
                     fit_to_rect,
                 } => {
-                    let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
+                    let font_obj = resolve_font(asset_cache, font);
                     place_text(
                         &**font_obj,
                         Rect::new(position.x, position.y, size.x, size.y),
@@ -929,7 +1005,7 @@ fn present_screen(
             object
         }
         PlacedContent::Text { text, font, .. } => {
-            let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
+            let font_obj = resolve_font(asset_cache, font);
             // `screen_space_text` anchors on the glyph box's top-left and takes
             // the line height as its size - which is exactly what the placed
             // rect is, so there is nothing to adjust. The rect's *width* is
@@ -978,7 +1054,7 @@ fn present_world(
             SceneObject::new(material, Box::new(engine::scene::quad::create()))
         }
         PlacedContent::Text { text, font, .. } => {
-            let font_obj = asset_cache.get(&FONT_IMPORTER, font).clone();
+            let font_obj = resolve_font(asset_cache, font);
             SceneObject::world_space_text(text, font_obj, (1.0 - alpha).clamp(0.0, 1.0))
         }
     };

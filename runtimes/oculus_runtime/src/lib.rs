@@ -7,7 +7,7 @@ use engine::profile;
 use engine::scene::Scene;
 use engine::scene::SceneObject;
 use openxr as xr;
-use shock2vr::Game;
+use shock2vr::App;
 use shock2vr::GameOptions;
 use shock2vr::input_context::InputContext;
 use shock2vr::paths;
@@ -463,7 +463,7 @@ fn main() {
         debug_skeletons: false,
         ..GameOptions::default()
     };
-    let mut game = shock2vr::Game::init(options, bundle_storage);
+    let mut game = shock2vr::App::init(options, bundle_storage);
     println!(
         "SHOCK2QUEST_STARTUP mission={} init_ms={:.3}",
         mission,
@@ -1248,7 +1248,7 @@ fn stage_to_pawn(position_meters: Vector3<f32>, center_above_floor: f32) -> Vect
 }
 
 fn render_swapchain(
-    game: &mut Game,
+    game: &mut App,
     engine: &Box<dyn engine::Engine>,
     camera_pos: Vector3<f32>,
     camera_rot: Quaternion<f32>,

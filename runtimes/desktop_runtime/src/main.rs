@@ -279,7 +279,7 @@ pub fn main() {
         experimental_features,
         ..GameOptions::default()
     };
-    let mut game = shock2vr::Game::init(options, bundle_storage);
+    let mut game = shock2vr::App::init(options, bundle_storage);
     // FOR SCREENSHOT
     // let mut camera_context = CameraContext {
     //     camera_offset: cgmath::Vector3::new(1.25, -14.0, -24.0),
