@@ -323,6 +323,51 @@ Cheap probe: anchor the panel to the actual camera/eye position and re-capture.
 Note `debug_map` places its panel relative to the player entity, so if this is
 the cause it must explain that scene too.
 
+## BREAKTHROUGH: this reproduces on the DESKTOP — no headset needed
+
+The transplant probe recommended below was run, and it changes the whole shape
+of this problem.
+
+**Experiment.** In `NoAssetsScene::render`'s VR branch, emit a raw
+`SceneObject::world_space_text` placed with the *same* `panel.center` and
+`panel.rotation` as the canvas, i.e. bypassing `world_element_transform`.
+Placement is held constant; only the element path varies.
+
+**Result:**
+
+| | canvas text | raw probe |
+| --- | --- | --- |
+| `debug_runtime --vr` (desktop) | upright | **180 degrees rotated** |
+| Quest 3 | 180 degrees rotated | **180 degrees rotated** |
+
+**The probe is inverted on BOTH platforms.** So a raw world-space quad placed
+with the panel's own transform renders upside down *on the desktop too* — and
+`world_element_transform`'s `from_angle_z(180)` is the compensation that hides
+it there.
+
+### Why this matters
+
+The panel basis being 180 degrees off is **not** device-specific, and it is
+**desktop-reproducible**. That converts a headset-only bug, costing a
+build/install/capture cycle per idea, into something iterable in seconds with
+`cargo dbgr --vr`. Do that work on the desktop first.
+
+The success criterion to iterate against is now concrete and does not need a
+Quest: **make the raw probe render upright while the canvas stays upright.**
+Today exactly one of the two can be right at a time, which is the real defect —
+two paths to the same panel disagree by 180 degrees, and the canvas path is only
+correct because a hardcoded rotation cancels the error.
+
+### The one thing still unexplained
+
+If the panel basis is 180 off on both platforms, and the element path adds 180
+on both, the canvas should be correct on both. It is not: the canvas is upright
+on desktop and inverted on device, while the probe is identical on both. Attempt
+#3 (the honest 5-site version) also fixed the desktop canvas without changing
+the device. So there is a second, device-only factor on top of the shared basis
+error. Fix the shared, desktop-reproducible error first — it is likely to make
+the remaining device delta much easier to see.
+
 ## Recommended technique
 
 This document's own advice from the last round applies directly: **bisection by
