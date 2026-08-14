@@ -1944,11 +1944,25 @@ impl Default for DynamicPhysicsOptions {
 }
 
 #[derive(Clone, Copy)]
-pub struct CollisionGroup(InteractionGroups);
+pub struct CollisionGroup {
+    collision: InteractionGroups,
+    solver: InteractionGroups,
+}
 
 impl CollisionGroup {
+    fn solid(collision: InteractionGroups) -> CollisionGroup {
+        CollisionGroup {
+            collision,
+            // Ordinary contacts solve exactly when they collide. Keeping the
+            // two filters together by default makes the one deliberate split
+            // in `held_melee` explicit and prevents stale all-groups solver
+            // state when a collider changes roles.
+            solver: collision,
+        }
+    }
+
     pub fn hitbox() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
+        Self::solid(InteractionGroups {
             memberships: (InternalCollisionGroups::HITBOX.bits
                 | InternalCollisionGroups::RAYCAST.bits)
                 .into(),
@@ -1958,7 +1972,7 @@ impl CollisionGroup {
     }
 
     pub fn ui() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
+        Self::solid(InteractionGroups {
             memberships: InternalCollisionGroups::UI.bits.into(),
             filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
             test_mode: Default::default(),
@@ -1966,7 +1980,7 @@ impl CollisionGroup {
     }
 
     pub fn entity() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
+        Self::solid(InteractionGroups {
             memberships: InternalCollisionGroups::ENTITY.bits.into(),
             filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
             test_mode: Default::default(),
@@ -1978,14 +1992,28 @@ impl CollisionGroup {
     /// ignoring the player's own capsule. Damage is still owned by the
     /// weapon's trigger-gated script; this group only preserves contact events.
     pub fn held_melee() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
+        let collision = InteractionGroups {
             memberships: InternalCollisionGroups::ENTITY.bits.into(),
             filter: (InternalCollisionGroups::WORLD.bits
                 | InternalCollisionGroups::ENTITIES.bits
                 | InternalCollisionGroups::SELECTABLE.bits)
                 .into(),
             test_mode: Default::default(),
-        })
+        };
+        let solver = InteractionGroups {
+            memberships: InternalCollisionGroups::ENTITY.bits.into(),
+            // Contact generation still includes ACTOR through `collision`,
+            // so TriggeredMeleeWeapon receives CollisionStarted and owns the
+            // authored damage. Only Rapier's physical impulse is suppressed:
+            // a controller-driven kinematic pose must not launch a living
+            // dynamic capsule. World and loose-prop response remains solid.
+            filter: (InternalCollisionGroups::WORLD.bits
+                | InternalCollisionGroups::ENTITY.bits
+                | InternalCollisionGroups::SELECTABLE.bits)
+                .into(),
+            test_mode: Default::default(),
+        };
+        CollisionGroup { collision, solver }
     }
 
     /// Collision behavior for a living creature capsule. It collides exactly
@@ -1994,7 +2022,7 @@ impl CollisionGroup {
     /// blocking characters without also becoming transparent to physical
     /// projectiles and movable props.
     pub fn actor() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
+        Self::solid(InteractionGroups {
             memberships: InternalCollisionGroups::ACTOR.bits.into(),
             filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
             test_mode: Default::default(),
@@ -2006,7 +2034,7 @@ impl CollisionGroup {
     /// but do not leave its old creature capsule solid to players, living AIs,
     /// moving terrain, or loose props.
     pub fn corpse() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
+        Self::solid(InteractionGroups {
             memberships: InternalCollisionGroups::SELECTABLE.bits.into(),
             filter: InternalCollisionGroups::WORLD.bits.into(),
             test_mode: Default::default(),
@@ -2017,7 +2045,7 @@ impl CollisionGroup {
     /// membership so player movement can detect ladder contact (see
     /// `PropPhysAttr.climbable`).
     pub fn climbable_entity() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
+        Self::solid(InteractionGroups {
             memberships: (InternalCollisionGroups::ENTITY.bits
                 | InternalCollisionGroups::CLIMBABLE.bits)
                 .into(),
@@ -2027,7 +2055,7 @@ impl CollisionGroup {
     }
 
     pub fn selectable() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
+        Self::solid(InteractionGroups {
             memberships: InternalCollisionGroups::SELECTABLE.bits.into(),
             filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
             test_mode: Default::default(),
@@ -2046,11 +2074,11 @@ impl CollisionGroup {
     /// still needs a collider there so the object stays frobbable and
     /// raycastable, so keep the collider and only take characters out of it.
     pub fn non_solid_to_characters(self) -> CollisionGroup {
-        let filter = self.0.filter.bits() & !InternalCollisionGroups::CHARACTERS.bits;
-        CollisionGroup(InteractionGroups {
-            memberships: self.0.memberships,
+        let filter = self.collision.filter.bits() & !InternalCollisionGroups::CHARACTERS.bits;
+        Self::solid(InteractionGroups {
+            memberships: self.collision.memberships,
             filter: filter.into(),
-            test_mode: self.0.test_mode,
+            test_mode: self.collision.test_mode,
         })
     }
 
@@ -2064,7 +2092,7 @@ impl CollisionGroup {
     /// ragdoll "explosion"). The filter still excludes the leftover creature
     /// capsule (`ACTOR`) and per-joint hitboxes (`HITBOX`).
     pub fn ragdoll() -> CollisionGroup {
-        CollisionGroup(InteractionGroups {
+        Self::solid(InteractionGroups {
             memberships: InternalCollisionGroups::SELECTABLE.bits.into(),
             filter: (InternalCollisionGroups::WORLD.bits
                 | InternalCollisionGroups::SELECTABLE.bits)
@@ -2580,7 +2608,8 @@ impl PhysicsWorld {
         let collider_handles = body.colliders().to_vec();
         for collider_handle in collider_handles {
             if let Some(collider) = self.collider_set.get_mut(collider_handle) {
-                collider.set_collision_groups(group.0);
+                collider.set_collision_groups(group.collision);
+                collider.set_solver_groups(group.solver);
             }
         }
     }
@@ -3322,7 +3351,8 @@ impl PhysicsWorld {
         collider.set_density(0.1);
         collider.set_enabled(true);
         collider.set_sensor(is_sensor);
-        collider.set_collision_groups(collision_group.0);
+        collider.set_collision_groups(collision_group.collision);
+        collider.set_solver_groups(collision_group.solver);
         collider
             .set_active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS);
         collider.user_data = entity_id.inner() as u128;
@@ -3355,7 +3385,8 @@ impl PhysicsWorld {
         collider.set_enabled(true);
         collider.set_sensor(is_sensor);
         collider.user_data = entity_id.inner() as u128;
-        collider.set_collision_groups(collision_groups.0);
+        collider.set_collision_groups(collision_groups.collision);
+        collider.set_solver_groups(collision_groups.solver);
 
         self.collider_set
             .insert_with_parent(collider, handle, &mut self.rigid_body_set);
@@ -5081,7 +5112,8 @@ impl PhysicsWorld {
         let collider = ColliderBuilder::new(shape)
             .density(density)
             .translation(vec_to_nvec(offset))
-            .collision_groups(collision_group.0)
+            .collision_groups(collision_group.collision)
+            .solver_groups(collision_group.solver)
             .active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS)
             .build();
 
@@ -5511,16 +5543,149 @@ mod tests {
         assert!(!body.blocks_player, "the weapon must ignore its owner");
         assert!(
             body.blocks_actor,
-            "the controller-driven weapon must retain physical actor contact"
+            "the controller-driven weapon must retain actor contact detection"
         );
         assert_eq!(body.linear_velocity, [0.0; 3]);
         assert_eq!(body.angular_velocity, [0.0; 3]);
 
         let body_handle = world.entity_id_to_body[&weapon];
         let collider_handle = world.rigid_body_set[body_handle].colliders()[0];
-        let active_types = world.collider_set[collider_handle].active_collision_types();
+        let collider = &world.collider_set[collider_handle];
+        let active_types = collider.active_collision_types();
         assert!(active_types.contains(ActiveCollisionTypes::KINEMATIC_KINEMATIC));
         assert!(active_types.contains(ActiveCollisionTypes::KINEMATIC_FIXED));
+        let actor = CollisionGroup::actor();
+        assert!(
+            collider.collision_groups().test(actor.collision),
+            "held melee must still generate actor contacts"
+        );
+        assert!(
+            !collider.solver_groups().test(actor.solver),
+            "held melee must not solve impulses against living actors"
+        );
+    }
+
+    /// A controller pose can move a held weapon much farther than ordinary
+    /// simulation motion in one frame. That contact must still report a
+    /// `CollisionStarted` for trigger-gated damage, but it must not transfer
+    /// the kinematic velocity into a living actor's dynamic capsule (#984).
+    ///
+    /// Negative-first: with collision groups also controlling the solver, the
+    /// controller sweep below launches the actor at 18 world units/s.
+    #[test]
+    fn held_melee_contacts_live_actor_without_solver_launch() {
+        let (mut world, mut player) = world_with_floor();
+        let weapon = EntityId::from_inner(2).unwrap();
+        let actor = EntityId::from_inner(3).unwrap();
+
+        let actor_handle = world.add_dynamic(
+            actor,
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Capsule {
+                height: 0.8,
+                radius: 0.4,
+            },
+            CollisionGroup::actor(),
+            false,
+            DynamicPhysicsOptions {
+                gravity_scale: 0.0,
+                restitution: 0.0,
+                friction: 0.0,
+            },
+        );
+        world.set_enabled_rotations(actor, false, false, false);
+        world.add_dynamic(
+            weapon,
+            vec3(-2.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(1.5, 0.3, 0.3)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions {
+                gravity_scale: 0.0,
+                restitution: 0.0,
+                friction: 0.0,
+            },
+        );
+        world.set_held_melee(weapon);
+
+        // Establish the initial broad-phase pose, then cross the actor in one
+        // ordinary 60 Hz controller update.
+        step(&mut world, &mut player, 1);
+        let mut events = Vec::new();
+        for x in [-1.0, -0.7, -0.4, -0.2, 0.0] {
+            world.set_position_rotation2(weapon, vec3(x, 1.0, 0.0), identity_quat());
+            let (_, mut frame_events) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+            events.append(&mut frame_events);
+        }
+
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                CollisionEvent::CollisionStarted {
+                    entity1_id,
+                    entity2_id,
+                } if (*entity1_id == weapon && *entity2_id == actor)
+                    || (*entity1_id == actor && *entity2_id == weapon)
+            )),
+            "held melee must keep reporting authentic actor contact"
+        );
+        let actor_velocity = world.get_velocity(actor).unwrap();
+        let actor_position = world.get_position(actor_handle).unwrap();
+        assert!(
+            actor_velocity.magnitude() < 1.0 && actor_position.x.abs() < 0.1,
+            "held melee solver launched the actor to {actor_position:?} at {actor_velocity:?}"
+        );
+    }
+
+    /// Held-only solver filtering must not leak into the ordinary loose-prop
+    /// body recreated by DropItem. Store/destroy removes the body entirely;
+    /// a later world instantiation must likewise start with authored solid
+    /// groups instead of inheriting the old held collider's filter.
+    #[test]
+    fn recreated_melee_body_restores_ordinary_actor_solver_contact() {
+        let mut world = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(4).unwrap();
+        let actor = CollisionGroup::actor();
+        world.add_dynamic(
+            weapon,
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(1.5, 0.3, 0.3)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        world.set_held_melee(weapon);
+        let held_handle = world.entity_id_to_body[&weapon];
+        let held_collider = &world.collider_set[world.rigid_body_set[held_handle].colliders()[0]];
+        assert!(!held_collider.solver_groups().test(actor.solver));
+
+        world.remove(weapon);
+        assert!(
+            !world.entity_id_to_body.contains_key(&weapon),
+            "store/destroy must remove the held physics body"
+        );
+
+        let loose_handle = world.add_dynamic(
+            weapon,
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(1.5, 0.3, 0.3)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        let loose_collider = &world.collider_set[world.rigid_body_set[loose_handle].colliders()[0]];
+        assert!(
+            loose_collider.solver_groups().test(actor.solver),
+            "a dropped/recreated loose prop must restore ordinary actor response"
+        );
     }
 
     /// A collider deliberately made non-solid to characters must not remain an
@@ -5542,19 +5707,19 @@ mod tests {
         );
 
         assert!(
-            !obstacle.0.test(live_creature.0),
+            !obstacle.collision.test(live_creature.collision),
             "a player-passable collider must not stop a pursuing creature"
         );
         assert!(
-            physical_entity.0.test(live_creature.0),
+            physical_entity.collision.test(live_creature.collision),
             "ordinary props must remain solid to creatures"
         );
         assert!(
-            obstacle.0.test(physical_entity.0),
+            obstacle.collision.test(physical_entity.collision),
             "slow physical projectiles and movable props must still hit the obstacle"
         );
         assert!(
-            obstacle.0.test(generic_entity_ray),
+            obstacle.collision.test(generic_entity_ray),
             "selection/projectile rays must still hit the obstacle"
         );
     }
@@ -5640,7 +5805,7 @@ mod tests {
             InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
             Default::default(),
         );
-        let live_creature = CollisionGroup::actor().0;
+        let live_creature = CollisionGroup::actor().collision;
         let terrain = InteractionGroups::new(
             InternalCollisionGroups::WORLD.bits.into(),
             InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
