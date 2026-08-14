@@ -17,11 +17,21 @@ use std::path::{Path, PathBuf};
 
 /// The archive a 25th Anniversary install keeps its data in. Its presence is
 /// what distinguishes the two layouts.
-pub const ANNIVERSARY_SENTINEL: &str = "sshock2.kpf";
+pub(crate) const ANNIVERSARY_SENTINEL: &str = "sshock2.kpf";
+
+/// Whether `data_root` holds a 25th Anniversary install.
+///
+/// The single predicate: `data_files` mounts from it, `Game::init` picks a
+/// mount list from it, and [`probe`] classifies from it, so the three cannot
+/// disagree. `is_file` rather than `exists` so a directory or dangling link
+/// named `sshock2.kpf` is not mistaken for the archive.
+pub(crate) fn is_anniversary(data_root: &Path) -> bool {
+    data_root.join(ANNIVERSARY_SENTINEL).is_file()
+}
 
 /// Files that mark a directory as a *pre-remaster* game-data root. That install
 /// has the gamesys and `.crf` archives loose; the remaster has none of them.
-pub const LEGACY_SENTINELS: &[&str] =
+pub(crate) const LEGACY_SENTINELS: &[&str] =
     &["shock2.gam", "res/obj.crf", "res/mesh.crf", "motiondb.bin"];
 
 /// Which install layout a data root holds.
@@ -37,12 +47,12 @@ pub enum InstallKind {
 }
 
 /// What a data root holds, and what it is missing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct InstallStatus {
     pub data_root: PathBuf,
     pub kind: InstallKind,
     /// Data files found, in probe order.
-    pub found: Vec<String>,
+    pub found: Vec<&'static str>,
     /// Mod archives the remaster should have but doesn't. Always empty unless
     /// [`InstallKind::Anniversary`].
     ///
@@ -50,7 +60,7 @@ pub struct InstallStatus {
     /// that is otherwise *silent*: copying `sshock2.kpf` without `mods/` boots
     /// perfectly and renders the original 1999 art, so it looks like a working
     /// install and reads as "the upgrade did nothing".
-    pub missing_mods: Vec<String>,
+    pub missing_mods: Vec<&'static str>,
 }
 
 impl InstallStatus {
@@ -62,7 +72,16 @@ impl InstallStatus {
     /// One line for the startup log - the first thing to look at when a device
     /// renders the wrong art or fails to boot.
     pub fn summary(&self) -> String {
-        let root = self.data_root.display();
+        // `data_root` is often relative (`../../Data`, including the fallback
+        // used when nothing was found), and a relative path cannot be acted on
+        // without knowing the cwd - which in the fallback case is the thing
+        // that went wrong.
+        let absolute = std::fs::canonicalize(&self.data_root).unwrap_or_else(|_| {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join(&self.data_root)
+        });
+        let root = absolute.display();
         match self.kind {
             InstallKind::Anniversary if self.missing_mods.is_empty() => {
                 format!(
@@ -71,8 +90,8 @@ impl InstallStatus {
                 )
             }
             InstallKind::Anniversary => format!(
-                "install: 25th Anniversary at {root} ({}) - INCOMPLETE, missing {}; \
-                 the upgraded art will not load",
+                "install: 25th Anniversary at {root} ({}) - missing mod layers: {}; \
+                 art from those layers will not load",
                 self.found.join(", "),
                 self.missing_mods.join(", ")
             ),
@@ -95,20 +114,20 @@ pub fn probe(data_root: &Path) -> InstallStatus {
     let mut found = Vec::new();
     let mut missing_mods = Vec::new();
 
-    let kind = if data_root.join(ANNIVERSARY_SENTINEL).exists() {
-        found.push(ANNIVERSARY_SENTINEL.to_owned());
+    let kind = if is_anniversary(data_root) {
+        found.push(ANNIVERSARY_SENTINEL);
         for archive in crate::MOD_ARCHIVES {
             if data_root.join(archive).exists() {
-                found.push((*archive).to_owned());
+                found.push(*archive);
             } else {
-                missing_mods.push((*archive).to_owned());
+                missing_mods.push(*archive);
             }
         }
         InstallKind::Anniversary
     } else {
         for sentinel in LEGACY_SENTINELS {
             if data_root.join(sentinel).exists() {
-                found.push((*sentinel).to_owned());
+                found.push(*sentinel);
             }
         }
         if found.is_empty() {
@@ -167,7 +186,7 @@ mod tests {
         let status = probe(dir.path());
         assert_eq!(status.kind, InstallKind::Anniversary);
         assert_eq!(status.missing_mods.len(), crate::MOD_ARCHIVES.len());
-        assert!(status.summary().contains("INCOMPLETE"));
+        assert!(status.summary().contains("missing mod layers"));
     }
 
     #[test]

@@ -926,11 +926,12 @@ impl Game {
         info!("high-detail (PMNM) meshes: {high_detail}");
 
         // What data is actually here, decided once and reported before anything
-        // mounts it. `println!` rather than `info!`: only `debug_runtime`
-        // installs a tracing subscriber, so an `info!` is dropped on both the
-        // desktop and the Quest - the two places this line is needed most. On
-        // Quest it is the only way to tell a wrongly-provisioned headset from a
-        // broken build.
+        // mounts it. `println!` rather than `info!`: neither `desktop_runtime`
+        // nor `oculus_runtime` installs a tracing subscriber, so an `info!` here
+        // is dropped on the desktop and on the Quest - the two places this line
+        // is needed most. On Quest it is the only way to tell a
+        // wrongly-provisioned headset from a broken build. (ndk-glue redirects
+        // stdout into logcat, so `println!` does arrive there.)
         let install = install::probe_data_root();
         println!("{}", install.summary());
 
@@ -1023,9 +1024,12 @@ impl Game {
 
         // Through the asset paths, like the missions and motiondb: on a 25AE
         // install the gamesys lives inside `sshock2.kpf`.
-        let game_reader = asset_cache
-            .get_raw_reader("shock2.gam")
-            .unwrap_or_else(|| panic!("cannot load the game: {}", install.summary()));
+        let game_reader = asset_cache.get_raw_reader("shock2.gam").unwrap_or_else(|| {
+            panic!(
+                "cannot load the game: shock2.gam not found in the mounted data ({})",
+                install.summary()
+            )
+        });
 
         let _strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
 
