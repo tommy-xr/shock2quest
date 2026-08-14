@@ -1,0 +1,371 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import { GameServer } from "../src/index.js";
+import type { EntityDetailResult, EntitySummary, Vec3 } from "../src/index.js";
+import { teleportVerified } from "./helpers/teleport.js";
+import { aimVrHandAt } from "./helpers/vr-hand.js";
+
+// Production regression for #978. The MedSci1 Wrench is a concrete mission
+// object (990), but its authored melee class is the gamesys Wrench (-928).
+// Carrying it through save/load and a deck transition exercises the exact
+// identity split that made the campaign weapon physically shove creatures
+// without sending Damage.
+const e2eEnabled = process.env.SHOCK2_E2E === "1";
+const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8585);
+
+const MEDSCI1_WRENCH = 990;
+const WRENCH_CORPSE = 1177;
+const WRENCH_ARCHETYPE = -928;
+const MONKEY = 543;
+const PIPE_HYBRID = 1293;
+const SHOTGUN_HYBRID = 1392;
+const BREAKABLE_PANE = 237;
+const PANEL_SIZE_PX: Vec3 = [188, 296, 0];
+const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
+
+const add = (a: Vec3, b: Vec3): Vec3 => a.map((x, i) => x + b[i]) as Vec3;
+const sub = (a: Vec3, b: Vec3): Vec3 => a.map((x, i) => x - b[i]) as Vec3;
+const scale = (a: Vec3, factor: number): Vec3 => a.map((x) => x * factor) as Vec3;
+const dot = (a: number[], b: number[]): number =>
+  a.reduce((sum, x, i) => sum + x * b[i], 0);
+const cross = (a: Vec3, b: Vec3): Vec3 => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0],
+];
+const norm = (a: Vec3): Vec3 => scale(a, 1 / Math.sqrt(dot(a, a)));
+const qnorm = (q: number[]): [number, number, number, number] =>
+  q.map((value) => value / Math.sqrt(dot(q, q))) as [
+    number,
+    number,
+    number,
+    number,
+  ];
+const qconj = ([x, y, z, w]: number[]): [number, number, number, number] => [
+  -x,
+  -y,
+  -z,
+  w,
+];
+function qmul(a: number[], b: number[]): [number, number, number, number] {
+  const [ax, ay, az, aw] = a;
+  const [bx, by, bz, bw] = b;
+  return [
+    aw * bx + ax * bw + ay * bz - az * by,
+    aw * by - ax * bz + ay * bw + az * bx,
+    aw * bz + ax * by - ay * bx + az * bw,
+    aw * bw - ax * bx - ay * by - az * bz,
+  ];
+}
+function qrotate(q: number[], v: Vec3): Vec3 {
+  return qmul(qmul(q, [...v, 0]), qconj(q)).slice(0, 3) as Vec3;
+}
+function qFromTo(from: Vec3, to: Vec3): [number, number, number, number] {
+  const a = norm(from);
+  const b = norm(to);
+  const d = dot(a, b);
+  if (d < -0.999999) {
+    const axis =
+      Math.abs(a[0]) < 0.9
+        ? norm(cross(a, [1, 0, 0]))
+        : norm(cross(a, [0, 1, 0]));
+    return [axis[0], axis[1], axis[2], 0];
+  }
+  return qnorm([...cross(a, b), 1 + d]);
+}
+
+async function byMissionId(
+  game: GameServer,
+  name: string,
+  missionId: number,
+): Promise<EntitySummary> {
+  const entity = (
+    await game.entities.list({ filter: name, limit: 30 })
+  ).entities.find((candidate) => candidate.template_id === missionId);
+  assert.ok(entity, `expected ${name} mission object ${missionId}`);
+  return entity;
+}
+
+function hitPoints(detail: EntityDetailResult): number {
+  const property = detail.properties.find((candidate) => candidate.name === "HitPoints");
+  assert.ok(property, `entity ${detail.entity_id} should expose HitPoints`);
+  return Number(property.value);
+}
+
+// This is the production play-through gesture: orient the physical right hand
+// along the eye-to-target ray, wind up two units away, pull the trigger, and
+// sweep to 0.33 units. No damage/script message is injected by the test.
+async function poseWrench(game: GameServer, target: Vec3, distance: number): Promise<void> {
+  const info = await game.info();
+  const pawn = info.player.position;
+  const pawnQ = info.player.rotation;
+  const eye = add(pawn, [0, info.player.camera_offset[1], 0]);
+  const toward = norm(sub(target, eye));
+  const worldHand = sub(target, scale(toward, distance));
+  const worldDirection = norm(sub(target, worldHand));
+  const worldQ = qFromTo([0, 0, -1], worldDirection);
+  const localPosition = qrotate(qconj(pawnQ), sub(worldHand, pawn));
+  const localRotation = qnorm(qmul(qconj(pawnQ), worldQ));
+
+  await game.input.lookAtWorldPoint(target, {
+    eyeHeight: info.player.camera_offset[1],
+  });
+  await game.input.set("right_hand.position", localPosition);
+  await game.input.set("right_hand.rotation", localRotation);
+  await game.step({ frames: 4 });
+}
+
+async function damageMessagesSince(
+  game: GameServer,
+  sequence: number,
+  targetId: number,
+): Promise<number> {
+  return (await game.messages.recent()).messages.filter(
+    (message) =>
+      message.sequence > sequence &&
+      message.to.entity_id === targetId &&
+      message.payload === "Damage",
+  ).length;
+}
+
+async function armedSweep(
+  game: GameServer,
+  target: EntitySummary,
+): Promise<{ sequence: number; targetId: number }> {
+  const live = await game.entities.detail(target.id);
+  await game.player.teleport({
+    x: live.position[0] + 0.815,
+    y: live.position[1] + 0.236,
+    z: live.position[2] - 2.245,
+  });
+  await game.entities.sendMessage(target.id, {
+    type: "SetAlertness",
+    level: "Lowest",
+  });
+  await game.step({ frames: 2 });
+
+  const afterTeleport = await game.entities.detail(target.id);
+  const targetPoint =
+    afterTeleport.aim_points?.find((point) => point.classification === "torso")?.position ??
+    afterTeleport.position;
+  await poseWrench(game, targetPoint, 4);
+  await game.step({ frames: 4 });
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({ frames: 2 });
+  const sequence = (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 2 });
+  await poseWrench(game, targetPoint, 0.33);
+  return { sequence, targetId: target.id };
+}
+
+async function releaseTrigger(game: GameServer): Promise<void> {
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({ frames: 2 });
+}
+
+async function grabAuthoredCorpseWrench(game: GameServer): Promise<EntitySummary> {
+  const corpse = await byMissionId(game, "MS Male Corpse", WRENCH_CORPSE);
+  const corpseDetail = await game.entities.detail(corpse.id);
+  const contained = corpseDetail.outgoing_links.filter((link) =>
+    link.link_type.startsWith("Contains"),
+  );
+  assert.equal(contained.length, 1, "corpse 1177 should contain only its Wrench");
+  assert.match(contained[0].target_name, /Wrench/i);
+  const wrenchId = contained[0].target_id;
+
+  await teleportVerified(game, {
+    x: corpse.position[0] + 1.2,
+    y: corpse.position[1] + 0.5,
+    z: corpse.position[2],
+  });
+  await game.step({ frames: 5 });
+  const aim = await game.player.aimAt(corpse, {
+    hitbox: "center",
+    visibility: "required",
+  });
+  assert.equal(aim.interaction_target_id, corpse.id);
+  await aimVrHandAt(game, aim.world_point);
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 2 });
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({ frames: 5 });
+
+  const uiBodies = (await game.physics.bodies()).bodies.filter((body) =>
+    body.collision_groups.includes("ui"),
+  );
+  assert.equal(uiBodies.length, 1, "corpse frob should open one VR loot panel");
+  const panel = uiBodies[0];
+  const ui = (await game.ui.state()).active_panel;
+  assert.ok(ui, "corpse frob should expose its rendered loot panel");
+  const wrenchElement = ui.elements.find((element) => element.entity_id === wrenchId);
+  assert.ok(wrenchElement, "corpse panel should render Wrench 990");
+  const panelFront = qrotate(panel.rotation, [0, 0, -1]);
+  const eyeHeight = (await game.info()).player.camera_offset[1];
+  await teleportVerified(game, {
+    x: panel.position[0] + panelFront[0] * 1.25,
+    y: panel.position[1] - eyeHeight,
+    z: panel.position[2] + panelFront[2] * 1.25,
+  });
+  await game.step({ frames: 3 });
+  const panelSize: Vec3 = [
+    PANEL_SIZE_PX[0] * GUI_PIXEL_TO_WORLD_SIZE,
+    PANEL_SIZE_PX[1] * GUI_PIXEL_TO_WORLD_SIZE,
+    0,
+  ];
+  const [slotX, slotY, slotWidth, slotHeight] = wrenchElement.rect;
+  const u = (slotX + slotWidth / 2) / PANEL_SIZE_PX[0];
+  const v = (slotY + slotHeight / 2) / PANEL_SIZE_PX[1];
+  const localSlot: Vec3 = [
+    panelSize[0] * (0.5 - u),
+    panelSize[1] * (0.5 - v),
+    0,
+  ];
+  const slotWorld = add(panel.position, qrotate(panel.rotation, localSlot));
+  const panelAim = await aimVrHandAt(game, slotWorld, 0.35);
+  const panelHit = await game.raycast({
+    start: panelAim.start,
+    end: panelAim.target,
+    collision_groups: ["ui"],
+    max_distance: 1,
+  });
+  assert.equal(panelHit.entity_id, panel.entity_id, "hand ray should hit Wrench's slot");
+  await game.input.set("right_hand.squeeze", 1);
+  await game.step({ frames: 10 });
+  assert.equal(
+    (await game.info()).player.right_hand_entity_id,
+    wrenchId,
+    "squeezing the rendered loot slot should physically grab Wrench 990",
+  );
+
+  return byMissionId(game, "Wrench", MEDSCI1_WRENCH);
+}
+
+async function assertNineDamagePull(
+  game: GameServer,
+  name: string,
+  missionId: number,
+  initialHp: number,
+): Promise<void> {
+  const target = await byMissionId(game, name, missionId);
+  assert.equal(
+    hitPoints(await game.entities.detail(target.id)),
+    initialHp,
+    `${name} must start at its authored HP`,
+  );
+
+  const { sequence, targetId } = await armedSweep(game, target);
+  assert.equal(
+    await damageMessagesSince(game, sequence, targetId),
+    1,
+    `one pull must emit exactly one Damage to ${name}`,
+  );
+  assert.equal(
+    hitPoints(await game.entities.detail(targetId)),
+    initialHp - 9,
+    `${name} must take exactly 9 HP during the four-frame contact pose`,
+  );
+  await releaseTrigger(game);
+}
+
+test(
+  "MedSci saved mission Wrench keeps canonical 9-damage VR melee across decks and saves",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    // Fresh canonical control: the same physical gesture against the same
+    // authored Monkey establishes the expected 9-HP baseline independently.
+    {
+      await using control = await GameServer.launch({
+        mission: "medsci2.mis",
+        port: basePort + 1,
+        debugFlags: ["--vr"],
+        echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
+      });
+      const freshWrench = await control.player.spawnItem(WRENCH_ARCHETYPE);
+      await control.input.set("right_hand.squeeze", 1);
+      await control.input.trigger("EquipWrench");
+      await control.step({ frames: 3 });
+      assert.equal(
+        (await control.info()).player.right_hand_entity_id,
+        freshWrench.entity_id,
+        "fresh canonical control Wrench should be wielded",
+      );
+      const fresh = await byMissionId(control, "Blue Monkey", MONKEY);
+      const { sequence, targetId } = await armedSweep(control, fresh);
+      assert.equal(
+        await damageMessagesSince(control, sequence, targetId),
+        1,
+        "fresh Wrench should emit one Damage message",
+      );
+      assert.equal(hitPoints(await control.entities.detail(targetId)), 1);
+      await releaseTrigger(control);
+    }
+
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort,
+      debugFlags: ["--vr"],
+      echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
+    });
+
+    // Preserve the exact positive mission identity that exposed #978 by
+    // opening corpse 1177's physical VR panel and grabbing Wrench 990.
+    const worldWrench = await grabAuthoredCorpseWrench(game);
+    assert.equal((await game.info()).player.right_hand_entity_id, worldWrench.id);
+
+    // The suite's save cleaner keys off a trailing 13-digit epoch, so every
+    // name this test writes must end with `stamp`.
+    const stamp = Date.now();
+    const saveName = `medsci_saved_vr_melee_${stamp}`;
+    assert.equal((await game.save(saveName)).success, true);
+    assert.equal((await game.load(saveName)).success, true);
+    await game.step({ frames: 3 });
+    let restoredWrench = await byMissionId(game, "Wrench", MEDSCI1_WRENCH);
+    assert.equal((await game.info()).player.right_hand_entity_id, restoredWrench.id);
+
+    await game.transitionLevel("medsci2");
+    await game.step({ frames: 5 });
+    restoredWrench = await byMissionId(game, "Wrench", MEDSCI1_WRENCH);
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      restoredWrench.id,
+      "the concrete MedSci1 Wrench should remain wielded on MedSci2",
+    );
+    assert.equal(
+      (await game.physics.bodies({ entityId: restoredWrench.id })).bodies[0]?.body_type,
+      "kinematic",
+    );
+
+    const combatBaseline = `medsci_saved_vr_melee_combat_baseline_${stamp}`;
+    assert.equal((await game.save(combatBaseline)).success, true);
+    await assertNineDamagePull(game, "Blue Monkey", MONKEY, 10);
+    assert.equal((await game.load(combatBaseline)).success, true);
+    await releaseTrigger(game);
+    await assertNineDamagePull(game, "OG-Pipe", PIPE_HYBRID, 12);
+    assert.equal((await game.load(combatBaseline)).success, true);
+    await releaseTrigger(game);
+    await assertNineDamagePull(game, "OG-Shotgun", SHOTGUN_HYBRID, 24);
+
+    // A second save/load proves the canonical identity is not a one-transition
+    // accident. A one-HP authored world pane is also a non-creature control.
+    const roundTripSave = `medsci_saved_vr_melee_again_${stamp}`;
+    assert.equal((await game.save(roundTripSave)).success, true);
+    assert.equal((await game.load(roundTripSave)).success, true);
+    await game.step({ frames: 3 });
+    restoredWrench = await byMissionId(game, "Wrench", MEDSCI1_WRENCH);
+    assert.equal((await game.info()).player.right_hand_entity_id, restoredWrench.id);
+
+    const pane = await byMissionId(game, "Window 2", BREAKABLE_PANE);
+    const { sequence, targetId } = await armedSweep(game, pane);
+    assert.equal(await damageMessagesSince(game, sequence, targetId), 1);
+    assert.equal(
+      (await game.entities.list({ filter: "Window 2", limit: 30 })).entities.some(
+        (entity) => entity.id === targetId,
+      ),
+      false,
+      "restored Wrench contact should still destroy an authored world pane",
+    );
+    await releaseTrigger(game);
+  },
+);
