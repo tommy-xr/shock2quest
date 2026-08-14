@@ -221,6 +221,13 @@ pub fn frontend_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
     } else {
         head_rotation.normalize()
     };
+    // Assumes -Z forward, which is OpenXR's convention and so correct on
+    // device. `debug_runtime` does NOT share it: its head rotation is built so
+    // that yaw=pitch=0 looks toward -X (see `head_rotation_from_yaw_pitch`
+    // there), because the same rotation also drives the flat viewmodel. The two
+    // conventions are why a world-space panel that reads correctly in
+    // `debug_runtime --vr` renders 180 degrees around on the headset. Unifying
+    // them is the real fix and is bigger than any panel-basis tweak.
     let forward = head_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
     let center = head + forward * FRONTEND_PANEL_DISTANCE;
 
@@ -233,11 +240,12 @@ pub fn frontend_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
     } else {
         look_dir.normalize()
     };
-    // NB: `right` is `look_dir x up`, which rolls the basis 180 degrees about
-    // the view axis relative to a conventional camera basis. Do not "correct"
-    // it in isolation: `world_element_transform` applies its own 180-degree Z
-    // rotation, and flipping only one of the two turns the panel over (checked
-    // on device).
+    // NB: do not "fix" this basis in isolation. It is matched to
+    // `world_element_transform`'s 180-degree Z rotation (which the flat/VR
+    // parity tests pin), and separately to the head-rotation convention the
+    // runtime supplies. Flipping it makes the device correct and the desktop
+    // mirrored, or vice versa - both were tried on hardware. See the note on
+    // `forward` below.
     let mut up = vec3(0.0, 1.0, 0.0);
     let mut right = look_dir.cross(up);
     if right.magnitude2() < 1e-6 {
