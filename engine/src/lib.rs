@@ -1,5 +1,6 @@
 pub mod assets;
 pub mod audio;
+pub mod builtin_font;
 pub mod dds;
 mod engine;
 pub mod file_system;
@@ -17,6 +18,7 @@ pub mod texture_atlas;
 pub mod texture_format;
 pub mod util;
 
+pub use crate::builtin_font::BuiltinFont;
 pub use crate::engine::Engine;
 pub use crate::engine::EngineRenderContext;
 pub use crate::font::{Font, FontCharacterInfo, ellipsize, measure_text_width};
