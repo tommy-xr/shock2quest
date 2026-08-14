@@ -387,6 +387,16 @@ impl AudioClip {
             SourceType::Raw(source) => sink.append(source.clone()),
         }
     }
+
+    /// Append the clip so it repeats forever - a seamless bed (a menu hum, a
+    /// machine loop) rather than the re-append-when-empty pattern, which leaves
+    /// an audible gap of however long the caller takes to notice.
+    pub fn add_to_spatial_sink_looping(&self, sink: &SpatialSink) {
+        match &self.source {
+            SourceType::Bytes(source) => sink.append(source.clone().repeat_infinite()),
+            SourceType::Raw(source) => sink.append(source.clone().repeat_infinite()),
+        }
+    }
     pub fn add_to_sink(&self, sink: &Sink) {
         match &self.source {
             SourceType::Bytes(source) => sink.append(source.clone()),
@@ -471,6 +481,24 @@ pub fn stop_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     }
 }
 
+/// How a clip is played, beyond where it is played.
+#[derive(Clone, Copy, Debug)]
+pub struct PlayOptions {
+    /// Sink volume, 1.0 being the clip's own level.
+    pub volume: f32,
+    /// Repeat forever instead of playing once. `stop_audio` ends it.
+    pub looping: bool,
+}
+
+impl Default for PlayOptions {
+    fn default() -> Self {
+        PlayOptions {
+            volume: 1.0,
+            looping: false,
+        }
+    }
+}
+
 /// Plays audio at the listener origin (non-spatial).
 pub fn play_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     context: &mut AudioContext<TAmbientKey, TCue>,
@@ -478,10 +506,35 @@ pub fn play_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
 ) -> Vec<u64> {
+    play_audio_with(
+        context,
+        handle,
+        maybe_channel,
+        audio_clip,
+        PlayOptions::default(),
+    )
+}
+
+/// [`play_audio`] with explicit volume/looping - for non-diegetic audio that
+/// is not simply "play this once at full volume" (a looping menu bed).
+pub fn play_audio_with<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
+    context: &mut AudioContext<TAmbientKey, TCue>,
+    handle: AudioHandle,
+    maybe_channel: Option<AudioChannel>,
+    audio_clip: Rc<AudioClip>,
+    options: PlayOptions,
+) -> Vec<u64> {
     let position = (context.last_left_ear_position + context.last_right_ear_position) / 2.0;
 
     let id = handle.id;
-    let (sink, preempted) = play_audio_core(context, position, handle, maybe_channel, audio_clip);
+    let (sink, preempted) = play_audio_core(
+        context,
+        position,
+        handle,
+        maybe_channel,
+        audio_clip,
+        options,
+    );
 
     context.handle_to_sink.insert(id, SinkAdapter::fixed(sink));
     preempted
@@ -497,8 +550,14 @@ pub fn play_spatial_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
 ) -> Vec<u64> {
     let id = handle.id;
     let scaled_position = position / SOUND_SCALE_FACTOR;
-    let (sink, preempted) =
-        play_audio_core(context, scaled_position, handle, maybe_channel, audio_clip);
+    let (sink, preempted) = play_audio_core(
+        context,
+        scaled_position,
+        handle,
+        maybe_channel,
+        audio_clip,
+        PlayOptions::default(),
+    );
 
     context
         .handle_to_sink
@@ -520,6 +579,7 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     handle: AudioHandle,
     maybe_channel: Option<AudioChannel>,
     audio_clip: Rc<AudioClip>,
+    options: PlayOptions,
 ) -> (SpatialSink, Vec<u64>) {
     // Handles whose playback this play cuts short. Reported back so callers
     // (the audio log) can mark them stopped - these preemptions never go
@@ -568,7 +628,12 @@ pub fn play_audio_core<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     );
     let sink = rodio::SpatialSink::try_new(&context.handle, positions.0, positions.1, positions.2)
         .unwrap();
-    audio_clip.add_to_spatial_sink(&sink);
+    sink.set_volume(options.volume);
+    if options.looping {
+        audio_clip.add_to_spatial_sink_looping(&sink);
+    } else {
+        audio_clip.add_to_spatial_sink(&sink);
+    }
 
     //context.handle_to_sink.insert(handle.id, sink);
     (sink, preempted)

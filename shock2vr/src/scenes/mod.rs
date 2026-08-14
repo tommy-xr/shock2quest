@@ -35,6 +35,7 @@ pub mod debug_ragdoll;
 pub mod debug_teleport;
 pub mod debug_turret;
 pub mod debug_weapons;
+pub mod frontend_sfx;
 pub mod game_over;
 pub mod load_game;
 pub mod loading;
