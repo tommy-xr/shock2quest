@@ -278,6 +278,7 @@ export interface RayCastRequest {
   /** Defaults to `["world", "entity"]`; an explicit empty list is invalid. */
   collision_groups?: RayCastCollisionGroup[];
   max_distance?: number;
+  /** Defaults to `true`; pass `false` to probe trigger and other sensor volumes. */
   ignore_sensors?: boolean;
 }
 

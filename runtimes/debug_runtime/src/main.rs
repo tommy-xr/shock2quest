@@ -945,7 +945,7 @@ fn process_command(
                     groups: request
                         .collision_groups
                         .unwrap_or_else(|| vec!["world".to_string(), "entity".to_string()]),
-                    ignore_sensors: request.ignore_sensors.unwrap_or(false),
+                    ignore_sensors: normalize_raycast_ignore_sensors(request.ignore_sensors),
                 };
 
                 // Perform the raycast
@@ -3010,6 +3010,10 @@ async fn list_transitions(
 }
 
 /// HTTP handler for physics raycast
+fn normalize_raycast_ignore_sensors(ignore_sensors: Option<bool>) -> bool {
+    ignore_sensors.unwrap_or(true)
+}
+
 fn normalize_raycast_collision_groups(
     collision_groups: Option<Vec<String>>,
 ) -> Result<Vec<String>, (StatusCode, String)> {
@@ -3760,6 +3764,13 @@ mod shutdown_tests {
             normalize_raycast_collision_groups(None).unwrap(),
             ["world", "entity"]
         );
+    }
+
+    #[test]
+    fn raycast_ignores_sensors_by_default_with_explicit_opt_in() {
+        assert!(normalize_raycast_ignore_sensors(None));
+        assert!(normalize_raycast_ignore_sensors(Some(true)));
+        assert!(!normalize_raycast_ignore_sensors(Some(false)));
     }
 
     #[test]

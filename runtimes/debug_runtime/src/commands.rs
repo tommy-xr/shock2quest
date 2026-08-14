@@ -252,6 +252,7 @@ pub struct RayCastRequest {
     pub end: [f32; 3],
     pub collision_groups: Option<Vec<String>>,
     pub max_distance: Option<f32>,
+    /// Defaults to true; pass false to probe trigger and other sensor volumes.
     pub ignore_sensors: Option<bool>,
 }
 

@@ -123,6 +123,8 @@ Raycasts default to `world` and `entity`. Supported groups are `world`,
 `entity`, `selectable`, `player`, `ui`, `hitbox`, `raycast`, and `all`;
 `level` remains accepted as an alias for `world`. Unknown groups and explicit
 empty masks are rejected with HTTP 400 instead of being reported as clear rays.
+Sensors are ignored by default so room triggers do not look like distance-zero
+occluders; pass `ignore_sensors: false` when deliberately probing sensor volumes.
 
 To attach to a runtime you started yourself (`cargo dbgr -- --mission ... --port 8080`):
 
