@@ -200,6 +200,7 @@ impl VirtualHand {
         pawn_pos: Vector3<f32>,
         pawn_rot: Quaternion<f32>,
         input_hand: &Hand,
+        held_by_other_hand: Option<EntityId>,
     ) -> (VirtualHand, Vec<VirtualHandEffect>) {
         let handedness = prev.handedness;
         let hand_position = pawn_pos + HAND_OFFSET + pawn_rot.rotate_vector(input_hand.position);
@@ -208,9 +209,10 @@ impl VirtualHand {
         // Also do a raycast to provide the 'Hover' effect
         let ray_start = point3(hand_position.x, hand_position.y, hand_position.z);
         let forward = hand_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-        let result = physics.ray_cast(
+        let result = physics.ray_cast2(
             ray_start,
             forward,
+            100.0,
             // TODO: Two raycasts...
             // One for hit damage:
             //InternalCollisionGroups::HITBOX
@@ -219,6 +221,8 @@ impl VirtualHand {
                 | InternalCollisionGroups::WORLD
                 | InternalCollisionGroups::UI
                 | InternalCollisionGroups::RAYCAST,
+            prev.get_held_entity(),
+            true,
             //InternalCollisionGroups::all(),
             // One for frobbing:
             //CollisionGroups::WORLD | CollisionGroups::SELECTABLE,
@@ -321,6 +325,7 @@ impl VirtualHand {
                 world,
                 physics,
                 input_hand,
+                held_by_other_hand,
             ),
         };
 
@@ -408,12 +413,14 @@ fn handle_empty_hand_state(
     world: &World,
     physics: &PhysicsWorld,
     input_hand: &Hand,
+    held_by_other_hand: Option<EntityId>,
 ) -> (VirtualHand, Vec<VirtualHandEffect>) {
     let ray_start = point3(hand_position.x, hand_position.y, hand_position.z);
     let forward = hand_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-    let result = physics.ray_cast(
+    let result = physics.ray_cast2(
         ray_start,
         forward,
+        100.0,
         // TODO: Two raycasts...
         // One for hit damage,
         //InternalCollisionGroups::HITBOX
@@ -422,6 +429,8 @@ fn handle_empty_hand_state(
             | InternalCollisionGroups::WORLD
             | InternalCollisionGroups::UI
             | InternalCollisionGroups::RAYCAST,
+        held_by_other_hand,
+        true,
         // One for frobbing:
         //CollisionGroups::WORLD | CollisionGroups::SELECTABLE,
     );
@@ -471,7 +480,7 @@ fn handle_empty_hand_state(
             is_sensor: _,
         }) = result
         {
-            if can_grab_item(world, entity_id) {
+            if Some(entity_id) != held_by_other_hand && can_grab_item(world, entity_id) {
                 let position = &physics.get_position(rigid_body_handle).unwrap();
                 let _dir = hand_position - position;
                 msgs.push(VirtualHandEffect::HoldItem { entity_id });

@@ -135,6 +135,7 @@ impl Default for VrInteraction {
 
 impl PlayerInteraction for VrInteraction {
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
+        let left_held_entity = self.left_hand.get_held_entity();
         let (right_hand, mut right_msgs) = VirtualHand::update(
             &self.right_hand,
             ctx.physics,
@@ -142,9 +143,13 @@ impl PlayerInteraction for VrInteraction {
             ctx.player_pos,
             ctx.player_rotation,
             &ctx.input.right_hand,
+            left_held_entity,
         );
         self.right_hand = right_hand;
 
+        // Right updates first, so a same-frame right-hand grab is visible to
+        // the left hand and one physical item cannot enter both hand states.
+        let right_held_entity = self.right_hand.get_held_entity();
         let (left_hand, mut left_msgs) = VirtualHand::update(
             &self.left_hand,
             ctx.physics,
@@ -152,6 +157,7 @@ impl PlayerInteraction for VrInteraction {
             ctx.player_pos,
             ctx.player_rotation,
             &ctx.input.left_hand,
+            right_held_entity,
         );
         self.left_hand = left_hand;
 
@@ -228,6 +234,12 @@ impl PlayerInteraction for VrInteraction {
         entity_id: EntityId,
         hand: Handedness,
     ) -> Vec<VirtualHandEffect> {
+        // `Effect::GrabEntity` and save/load restoration enter through this
+        // path instead of the per-frame hand ray, so enforce the same single-
+        // owner invariant here too.
+        if self.left_hand.is_holding(entity_id) || self.right_hand.is_holding(entity_id) {
+            return Vec::new();
+        }
         if hand == Handedness::Left {
             self.left_hand = self.left_hand.grab_entity(world, entity_id);
         } else {
@@ -330,5 +342,139 @@ impl PlayerInteraction for FlatInteraction {
 
     fn flat_aim_ray(&self) -> Option<(Point3<f32>, Vector3<f32>)> {
         self.controller.aim_ray()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cgmath::{Quaternion, vec3};
+    use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
+
+    use super::*;
+    use crate::{
+        input_context::InputContext,
+        physics::{CollisionGroup, DynamicPhysicsOptions, PhysicsShape},
+        scripts::MessagePayload,
+    };
+
+    fn identity() -> Quaternion<f32> {
+        Quaternion::new(1.0, 0.0, 0.0, 0.0)
+    }
+
+    fn grabbable(world: &mut World) -> EntityId {
+        world.add_entity((
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+            PropModelName("test_item".to_owned()),
+        ))
+    }
+
+    fn context<'a>(
+        world: &'a World,
+        physics: &'a PhysicsWorld,
+        input: &'a InputContext,
+    ) -> InteractionContext<'a> {
+        InteractionContext {
+            physics,
+            world,
+            input,
+            player_pos: vec3(0.0, 0.0, 0.0),
+            player_rotation: identity(),
+            head_rotation: identity(),
+            eye_height: 1.04,
+        }
+    }
+
+    fn step_physics(physics: &mut PhysicsWorld) {
+        let player = EntityId::from_inner(10_000).unwrap();
+        let mut player = physics.create_player(vec3(10.0, 10.0, 10.0), player);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+    }
+
+    #[test]
+    fn one_item_cannot_be_grabbed_by_both_hands_on_the_same_frame() {
+        let mut world = World::new();
+        let item = grabbable(&mut world);
+        let mut physics = PhysicsWorld::new();
+        physics.add_dynamic(
+            item,
+            vec3(0.0, 0.0, -0.5),
+            identity(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.5, 0.5, 0.5)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        step_physics(&mut physics);
+        let mut input = InputContext::default();
+        input.left_hand.squeeze_value = 1.0;
+        input.right_hand.squeeze_value = 1.0;
+        let mut interaction = VrInteraction::new();
+
+        let effects = interaction.update(&context(&world, &physics, &input));
+
+        assert_eq!(
+            interaction.held_entities(),
+            (None, Some(item)),
+            "right-hand update wins ties; the left hand must see that the item is already held"
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| matches!(effect, VirtualHandEffect::HoldItem { entity_id } if *entity_id == item))
+                .count(),
+            1,
+            "one physical item must produce exactly one hold transition"
+        );
+    }
+
+    #[test]
+    fn a_held_item_does_not_receive_its_own_hands_hover() {
+        let mut world = World::new();
+        let item = grabbable(&mut world);
+        let mut physics = PhysicsWorld::new();
+        physics.add_dynamic(
+            item,
+            vec3(0.0, 0.0, -0.5),
+            identity(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.5, 0.5, 0.5)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        step_physics(&mut physics);
+        let mut input = InputContext::default();
+        input.left_hand.position = vec3(10.0, 0.0, 0.0);
+        input.right_hand.squeeze_value = 1.0;
+        let mut interaction = VrInteraction::new();
+        interaction.grab(&world, item, Handedness::Right);
+
+        let effects = interaction.update(&context(&world, &physics, &input));
+
+        assert!(
+            !effects.iter().any(|effect| matches!(
+                effect,
+                VirtualHandEffect::OutMessage { message }
+                    if message.to == item && matches!(message.payload, MessagePayload::Hover { .. })
+            )),
+            "a holding hand's ray must pass through its own item"
+        );
+    }
+
+    #[test]
+    fn externally_requested_grab_does_not_duplicate_an_existing_hold() {
+        let mut world = World::new();
+        let item = grabbable(&mut world);
+        let mut interaction = VrInteraction::new();
+
+        interaction.grab(&world, item, Handedness::Left);
+        interaction.grab(&world, item, Handedness::Right);
+
+        assert_eq!(interaction.held_entities(), (Some(item), None));
     }
 }
