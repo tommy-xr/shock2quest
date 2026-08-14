@@ -71,3 +71,26 @@ echo "  PKG_CONFIG_PATH: ${PKG_CONFIG_PATH}"
 echo "  CC: ${CC}"
 echo "  HOST_CC: ${HOST_CC}"
 echo "  CC_aarch64_apple_darwin: ${CC_aarch64_apple_darwin}"
+
+# --- APK signing key -------------------------------------------------------
+# `develop.keystore` is gitignored, so every fresh clone and every git worktree
+# starts without one and `cargo apk build --release` fails at the signing step
+# with a bare FileNotFoundException. Cargo.toml has to name a repo-relative path
+# (it is committed, so it cannot hold an absolute one), so keep the real key
+# outside the repo and link it in here. Override the location with
+# SHOCK2QUEST_KEYSTORE.
+KEYSTORE_SHARED="${SHOCK2QUEST_KEYSTORE:-$HOME/.shock2quest/develop.keystore}"
+KEYSTORE_LOCAL="$(pwd)/develop.keystore"
+if [ -e "${KEYSTORE_LOCAL}" ]; then
+  : # already present (a real file or a link from a previous run) - leave it be
+elif [ -f "${KEYSTORE_SHARED}" ]; then
+  ln -s "${KEYSTORE_SHARED}" "${KEYSTORE_LOCAL}"
+  echo "Linked develop.keystore -> ${KEYSTORE_SHARED}"
+else
+  echo "WARNING: no develop.keystore here, and none at ${KEYSTORE_SHARED}."
+  echo "  Debug builds are fine; release builds will fail to sign. Create one:"
+  echo "    mkdir -p \"$(dirname "${KEYSTORE_SHARED}")\""
+  echo "    keytool -genkey -v -keystore \"${KEYSTORE_SHARED}\" \\"
+  echo "      -alias com_tommybuilds_shock2quest -keyalg RSA -keysize 2048 -validity 10000"
+  echo "  The password must match keystore_password in runtimes/oculus_runtime/Cargo.toml."
+fi
