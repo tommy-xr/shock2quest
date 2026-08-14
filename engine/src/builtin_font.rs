@@ -24,8 +24,9 @@
 //! 00041:183C66667E666600          # == GLYPHS[0x41 - 0x20], the 'A' row below
 //! ```
 //!
-//! `the_table_matches_upstream_unscii_8` pins specific rows so a future edit or
-//! font swap cannot quietly drift from that attribution.
+//! `the_table_matches_upstream_unscii_8` pins specific rows, so an edit to the
+//! table fails a test rather than silently drifting from that attribution. The
+//! full 95-row table was diffed against upstream when it was added.
 //!
 //! # Layout
 //!
@@ -37,9 +38,11 @@
 //! column. The border is padding only: UVs address the inner 8x8, so the glyph
 //! metrics are unchanged by it.
 //!
-//! Unscii left-aligns glyphs in the cell and leaves the rightmost column (and,
-//! for characters without a descender, the bottom row) blank, so the cell is
-//! self-spacing: one advance equals one cell, and the font is monospace.
+//! The font is monospace: one advance is `GLYPH_PIXELS`, the *unpadded* glyph
+//! box (not `CELL_PIXELS`, which includes the border). Unscii left-aligns
+//! glyphs and most leave their rightmost column blank, which is what supplies
+//! letter spacing - but a few (`*`, `/`, `X`, `Y`, `\`, `_`) do reach column 7,
+//! so adjacent glyphs can touch. That is upstream's design, not a packing bug.
 
 use std::rc::Rc;
 
@@ -48,7 +51,7 @@ use crate::texture::{self, Texture, TextureTrait};
 use crate::texture_format::{PixelFormat, RawTextureData};
 
 /// Side length of one glyph, in pixels.
-pub const GLYPH_PIXELS: u32 = 8;
+const GLYPH_PIXELS: u32 = 8;
 /// Transparent border around each glyph, in pixels. See the module docs.
 const CELL_PADDING: u32 = 1;
 /// Side length of one atlas cell: the glyph plus its border on both sides.
@@ -61,9 +64,9 @@ const ATLAS_ROWS: u32 = 6;
 const FIRST_CHAR: u32 = 0x20;
 
 /// Atlas width in pixels.
-pub const ATLAS_WIDTH: u32 = ATLAS_COLUMNS * CELL_PIXELS;
+const ATLAS_WIDTH: u32 = ATLAS_COLUMNS * CELL_PIXELS;
 /// Atlas height in pixels.
-pub const ATLAS_HEIGHT: u32 = ATLAS_ROWS * CELL_PIXELS;
+const ATLAS_HEIGHT: u32 = ATLAS_ROWS * CELL_PIXELS;
 
 /// One byte per pixel row, most significant bit leftmost.
 #[rustfmt::skip]
@@ -189,8 +192,10 @@ fn glyph_origin(character: char) -> Option<(u32, u32)> {
 /// the pen. Pure, so the metrics are testable without a GL context.
 fn character_info(character: char) -> Option<FontCharacterInfo> {
     let (origin_x, origin_y) = glyph_origin(character)?;
-    // The padding is never sampled, so the UV rect is the exact glyph
-    // rectangle - no half-texel inset needed to keep neighbours out.
+    // Exact texel boundaries, with no half-texel inset: magnified linear
+    // sampling reaches at most half a texel past the rect, and what it reaches
+    // into is this glyph's own transparent border, so no neighbour can bleed
+    // in.
     Some(FontCharacterInfo {
         min_uv_x: origin_x as f32 / ATLAS_WIDTH as f32,
         max_uv_x: (origin_x + GLYPH_PIXELS) as f32 / ATLAS_WIDTH as f32,
@@ -201,13 +206,24 @@ fn character_info(character: char) -> Option<FontCharacterInfo> {
     })
 }
 
-/// Expand the glyph table into an RGBA atlas: white where a glyph pixel is set,
-/// transparent black elsewhere, so a tint multiply colors the text and the
-/// alpha blend leaves the cell background alone.
+/// Expand the glyph table into an RGBA atlas: every texel is white, and
+/// coverage lives entirely in the alpha channel.
+///
+/// The colour matters even where nothing is drawn. Blending is
+/// non-premultiplied (`SRC_ALPHA, ONE_MINUS_SRC_ALPHA`) and the text shader
+/// multiplies the tint by the sample, so a `GL_LINEAR` tap halfway between a
+/// lit and an unlit texel returns the average of both channels. Were the unlit
+/// texels transparent *black*, that tap would come back at half alpha and half
+/// brightness, fringing every magnified glyph edge with a dark halo. Keeping
+/// RGB white everywhere makes the interpolation touch alpha only. This is the
+/// same convention the `.FON` loader uses (`dark/src/font.rs`).
 ///
 /// Pure - no GL - so the packing is unit-testable headlessly.
-pub fn atlas_texture_data() -> RawTextureData {
-    let mut bytes = vec![0u8; (ATLAS_WIDTH * ATLAS_HEIGHT * 4) as usize];
+fn atlas_texture_data() -> RawTextureData {
+    let mut bytes = vec![255u8; (ATLAS_WIDTH * ATLAS_HEIGHT * 4) as usize];
+    for texel in bytes.chunks_exact_mut(4) {
+        texel[3] = 0;
+    }
     for (index, bitmap) in GLYPHS.iter().enumerate() {
         let column = index as u32 % ATLAS_COLUMNS;
         let row = index as u32 / ATLAS_COLUMNS;
@@ -220,8 +236,9 @@ pub fn atlas_texture_data() -> RawTextureData {
                 }
                 let x = origin_x + bitmap_column;
                 let y = origin_y + bitmap_row as u32;
+                // RGB is already white; coverage is alpha alone.
                 let offset = ((y * ATLAS_WIDTH + x) * 4) as usize;
-                bytes[offset..offset + 4].copy_from_slice(&[255, 255, 255, 255]);
+                bytes[offset + 3] = 255;
             }
         }
     }
@@ -239,6 +256,9 @@ pub struct BuiltinFont {
     texture: Rc<Texture>,
 }
 
+// No `Default`: constructing this uploads a texture, which needs a current GL
+// context - not something a `Default::default()` caller would expect.
+#[allow(clippy::new_without_default)]
 impl BuiltinFont {
     /// Upload the glyph atlas and build the font. Requires a current GL context.
     pub fn new() -> BuiltinFont {
@@ -275,9 +295,10 @@ mod tests {
         data.bytes[offset..offset + 4].try_into().unwrap()
     }
 
-    /// Pins the attribution: these rows are upstream `unscii-8.hex` verbatim, so
-    /// an edit or font swap cannot quietly drift from the license reasoning in
-    /// the module docs.
+    /// These rows are upstream `unscii-8.hex` verbatim. This detects an *edit* to
+    /// the table; it does not re-derive it from upstream, so it cannot catch a
+    /// wholesale swap to a differently-licensed font. Re-check by hand against
+    /// the URL in the module docs if the provenance is ever in question.
     #[test]
     fn the_table_matches_upstream_unscii_8() {
         // 00041:183C66667E666600
@@ -304,19 +325,40 @@ mod tests {
 
     /// The whole point of the padding: with `GL_LINEAR` magnification, a lit
     /// pixel at a glyph's edge must not sit against the next cell's glyph.
+    ///
+    /// Scans the whole atlas rather than sampling each cell's leading edge, so
+    /// an origin or stride error shows up as a lit pixel in a border.
     #[test]
-    fn every_cell_is_surrounded_by_transparent_padding() {
+    fn no_glyph_pixel_escapes_its_padded_cell() {
         let data = atlas_texture_data();
-        for row in 0..ATLAS_ROWS {
-            for column in 0..ATLAS_COLUMNS {
-                let x = column * CELL_PIXELS;
-                let y = row * CELL_PIXELS;
-                for offset in 0..CELL_PIXELS {
-                    // Top and left border of every cell.
-                    assert_eq!(pixel(&data, x + offset, y), [0, 0, 0, 0]);
-                    assert_eq!(pixel(&data, x, y + offset), [0, 0, 0, 0]);
+        for y in 0..ATLAS_HEIGHT {
+            for x in 0..ATLAS_WIDTH {
+                let inside_x = (x % CELL_PIXELS) >= CELL_PADDING
+                    && (x % CELL_PIXELS) < CELL_PADDING + GLYPH_PIXELS;
+                let inside_y = (y % CELL_PIXELS) >= CELL_PADDING
+                    && (y % CELL_PIXELS) < CELL_PADDING + GLYPH_PIXELS;
+                if !(inside_x && inside_y) {
+                    assert_eq!(
+                        pixel(&data, x, y),
+                        [255, 255, 255, 0],
+                        "lit or non-white texel in the border at ({x}, {y})"
+                    );
                 }
             }
+        }
+    }
+
+    /// Unlit texels must be white with zero alpha, not transparent black:
+    /// blending is non-premultiplied, so black would darken every magnified
+    /// glyph edge as `GL_LINEAR` interpolates toward it.
+    #[test]
+    fn unlit_texels_are_white_with_zero_alpha() {
+        let data = atlas_texture_data();
+        let (origin_x, origin_y) = glyph_origin('A').unwrap();
+        // 'A' row 0 is 0x18 - columns 3 and 4 lit, so column 0 is unlit.
+        assert_eq!(pixel(&data, origin_x, origin_y), [255, 255, 255, 0]);
+        for texel in data.bytes.chunks_exact(4) {
+            assert_eq!(&texel[0..3], &[255, 255, 255], "every texel is white");
         }
     }
 
@@ -329,7 +371,7 @@ mod tests {
         let (origin_x, origin_y) = glyph_origin('A').unwrap();
         assert_eq!(pixel(&data, origin_x + 3, origin_y), [255, 255, 255, 255]);
         assert_eq!(pixel(&data, origin_x + 4, origin_y), [255, 255, 255, 255]);
-        assert_eq!(pixel(&data, origin_x + 2, origin_y), [0, 0, 0, 0]);
+        assert_eq!(pixel(&data, origin_x + 2, origin_y), [255, 255, 255, 0]);
     }
 
     /// A space draws nothing but must still advance, because the text renderer

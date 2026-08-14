@@ -1,6 +1,6 @@
 pub mod assets;
 pub mod audio;
-pub mod builtin_font;
+mod builtin_font;
 pub mod dds;
 mod engine;
 pub mod file_system;
