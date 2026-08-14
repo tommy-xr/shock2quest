@@ -582,7 +582,7 @@ export interface UiElement {
   screen_rect: [number, number, number, number];
 }
 
-/** The open flat-mode MFD panel (opened by frobbing a GUI-bearing entity). */
+/** The open MFD or VR world panel (opened by a production UI action/frob). */
 export interface UiPanel {
   /** Runtime entity id of the bound object (NOT stable across runs). */
   entity_id: number;
@@ -604,7 +604,7 @@ export interface UiCursor {
   label: string | null;
 }
 
-/** Flat-mode UI snapshot (GET /v1/ui). */
+/** Active-presentation UI snapshot (GET /v1/ui). */
 export interface UiState {
   mode: "shooter" | "use";
   /** The open MFD panel, or null when none is open. */

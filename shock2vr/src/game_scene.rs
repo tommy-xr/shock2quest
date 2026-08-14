@@ -453,7 +453,8 @@ pub struct DebugSkillLevelsRequest {
     pub research: Option<i32>,
 }
 
-/// Snapshot of the flat-mode UI state for debug introspection (`GET /v1/ui`).
+/// Snapshot of the active presentation's UI state for debug introspection
+/// (`GET /v1/ui`).
 /// `mode` is "shooter" (mouse-look, no cursor) or "use" (cursor-driven
 /// metagame UI, the original game's Tab mode). `active_panel` is the
 /// object-bound MFD panel opened by frobbing a GUI-bearing entity (keypad,
@@ -483,8 +484,8 @@ pub struct DebugUiCursor {
     pub label: Option<String>,
 }
 
-/// The open flat-mode MFD panel: which entity it is bound to and its element
-/// list, so clients can click real widgets instead of hardcoding pixels.
+/// The open MFD/world panel: which entity it is bound to and its element list,
+/// so clients can inspect real widgets instead of hardcoding pixels.
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugUiPanel {
     /// Runtime entity id of the bound object (NOT stable across runs).

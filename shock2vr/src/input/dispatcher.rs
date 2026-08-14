@@ -142,7 +142,9 @@ impl ActionDispatcher {
             effects.push(Effect::ToggleMap);
         }
         if state.just_triggered(InputAction::ReadLastUnreadLog) {
-            effects.push(Effect::ReadLastUnreadLog);
+            effects.push(Effect::ReadLastUnreadLog {
+                head_rotation: input_context.head.rotation,
+            });
         }
         effects
     }
@@ -157,6 +159,23 @@ mod tests {
         let state = InputActionState::new();
         let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
         assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn audio_log_reader_carries_the_current_head_rotation() {
+        use cgmath::{Deg, Rotation3};
+
+        let mut state = InputActionState::new();
+        state.trigger(InputAction::ReadLastUnreadLog);
+        let mut input = InputContext::default();
+        input.head.rotation = cgmath::Quaternion::from_angle_y(Deg(37.0));
+
+        let effects = ActionDispatcher::dispatch(&state, &input);
+
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::ReadLastUnreadLog { head_rotation }] if *head_rotation == input.head.rotation
+        ));
     }
 
     #[test]

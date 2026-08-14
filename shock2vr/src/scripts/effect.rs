@@ -181,23 +181,26 @@ pub enum Effect {
     },
 
     /// Record an audio log the player just frobbed into the persistent
-    /// collection (`QuestInfo`), resolve its transcript/portrait strings onto
-    /// the disc entity (`RuntimePropLogData`) for the reader panel, then retire
-    /// the pickup's world presence. Emitted by the log disc's `MediaGui` on
-    /// frob. `entity_id` is retained only as reader backing state; `deck`/`log`
-    /// key the `level<deck>.str` strings.
+    /// collection (`QuestInfo`), then retire the pickup's world presence.
+    /// Emitted by the log disc's `MediaGui` on frob. `deck`/`log` are the
+    /// durable identity later localized by the player-owned reader host.
     CollectLog {
         entity_id: EntityId,
         deck: u32,
         log: u32,
     },
 
-    /// Play back the most recently collected audio log the player has not read
-    /// yet (the original's `play_unread_log`): open the reader bound to that
-    /// disc's backing entity, mark it read, and play its `LOG<dd><nn>` audio.
-    /// No-op when every collected log has been read. Emitted by
-    /// `InputAction::ReadLastUnreadLog`.
-    ReadLastUnreadLog,
+    /// Play back the newest unread audio log (the original's
+    /// `play_unread_log`), falling back to replaying the newest collected log
+    /// once all are read. Opens the localized player-owned reader before
+    /// marking it read and playing its `LOG<dd><nn>` audio. No-op only when the
+    /// collection is empty or the authored transcript is unavailable.
+    ReadLastUnreadLog {
+        /// Head rotation at the input edge. VR uses it to place the
+        /// player-owned reader comfortably in the player's current gaze;
+        /// flat presentation ignores it.
+        head_rotation: Quaternion<f32>,
+    },
 
     /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
     /// `M` key, `kOverlayMap 26`). Opens the wide map MFD bound to the

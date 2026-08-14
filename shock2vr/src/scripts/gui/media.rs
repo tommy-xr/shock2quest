@@ -1,14 +1,12 @@
 //! Audio-log / email reader MFD (`projects/flat-ui-panels.md` §1).
 //!
-//! The flat-mode reader panel matching the original game's email/log overlay: a
-//! `LOG.PCX` backdrop with the sender portrait, deck icon, header line and a word-wrapped,
-//! scrollable transcript. It is bound to the frobbed log-disc entity (the flat
-//! host's single-slot MFD), and reads its presentation strings from
-//! `RuntimePropLogData` - attached by the `Effect::CollectLog` handler when the
-//! disc is frobbed (that handler also records the log into the persistent
-//! `QuestInfo` collection and retires the physical pickup). The ECS entity stays
-//! alive only as reader backing state so the entity-bound panel remains valid
-//! after the retail-faithful one-shot pickup disappears from the world.
+//! The shared flat/VR reader panel matching the original game's email/log
+//! overlay: a `LOG.PCX` backdrop with sender portrait, deck icon, header and a
+//! word-wrapped, scrollable transcript. Pickup records a durable `(deck, log)`
+//! in `QuestInfo`; `ReadLastUnreadLog` resolves its localized presentation into
+//! `RuntimePropLogData` on a nonserialized player-owned host. Flat docks that
+//! exact canvas in its MFD slot, while VR maps it onto a head-positioned world
+//! panel through `GuiManager`.
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::PropLog;

@@ -46,6 +46,9 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `P` - cycle the pathfinding test (set start → set goal → show path)
 - Quest VR: press the left controller's `X` button to place/toggle the backpack;
   point at a stored item and squeeze to retrieve it into that hand.
+- Quest VR: press the left controller's `Y` button to open the newest unread
+  audio log. Press `Y` again to close it; after every log is read, `Y` replays
+  the most recently collected log.
 - Directly equip a matching carried weapon with the original number-row bindings:
   `1` Wrench, `2` Pistol, `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol,
   `6` EMP Rifle, `7` Electro Shock, `8` Grenade Launcher, `9` Stasis Field
