@@ -25,11 +25,21 @@
 
 ### 2. Provide data files
 
+shock2quest reads an unmodified retail install. Two layouts are supported:
+
+- **25th Anniversary Remaster (recommended)** — the data lives inside KPF
+  archives. You need `sshock2.kpf` and the `mods/` folder. The remaster's
+  upgraded models and textures are what the VR hand and weapon work is built
+  against. (`sshock2ee-vault.kpf` is a bonus gallery and the root
+  `sshock2ee.kpf` is frontend-only — neither is read; skip them.)
+- **Classic (1999) install** — loose `*.mis` files plus the `res/` folder of
+  `.crf` archives. Still supported, but missing the upgraded VR art.
+
 Either copy the files into the repo, or point the engine at an existing copy.
 
 **Option A — copy into `Data/`**
 
-- Copy local game files (\*.mis, res folder) into the `shock2quest/Data` folder
+- Copy the files above into the `shock2quest/Data` folder
 
 **Option B — set `DARK_ASSET_PATH`**
 
@@ -41,8 +51,9 @@ export DARK_ASSET_PATH=/path/to/your/shock2/data
 ```
 
 **Either way, the data directory must contain at least one _sentinel_ file** —
-`shock2.gam`, `res/obj.crf`, `res/mesh.crf`, or `motiondb.bin`. This is how the
-engine recognizes a directory as game data.
+`sshock2.kpf` (remaster), or `shock2.gam`, `res/obj.crf`, `res/mesh.crf`, or
+`motiondb.bin` (classic). This is how the engine recognizes a directory as game
+data.
 
 > **Gotcha:** if `DARK_ASSET_PATH` is set but contains no sentinel, it does *not*
 > fail. It logs a warning and falls back to searching `./Data`, `../Data`,
@@ -119,8 +130,21 @@ cargo dr --release --experimental teleport
 - Make sure [Developer Mode is enabled on your Quest device](https://www.reddit.com/r/OculusQuest/comments/17sa8n6/tutorial_quest_3_developer_mode_4_easy_steps/)
 - Make sure `adb` is installed and working. With Oculus connected, run `adb devices` and verify your headset shows up
 - Tweak `runtimes/oculus_runtime/set_up_android_sdk.sh` to match your paths
-- Before running for the first time, you'll need to copy over the system shock 2 data files.
-  - From the root of the repo, run: `adb push Data/ /sdcard/shock2quest`
+- Before running for the first time, you'll need to copy over the System Shock 2 data files.
+  - **Remaster (recommended)** — from your install directory, ~1.2 GB:
+    ```sh
+    adb shell mkdir -p /sdcard/shock2quest/mods
+    adb push sshock2.kpf /sdcard/shock2quest/
+    for f in sshock2ee 400 shtup scp patch_ext; do
+      adb push "mods/$f.kpf" /sdcard/shock2quest/mods/
+    done
+    ```
+  - **Classic** — from the root of the repo: `adb push Data/ /sdcard/shock2quest`
+
+  The two can coexist on the device: the runtime switches to the remaster as
+  soon as `sshock2.kpf` is present, and does not mount the `.crf` archives at
+  all in that mode. Deleting the KPFs reverts to the classic install without
+  re-pushing it.
 
 ##### Running
 
