@@ -150,8 +150,13 @@ pub fn create_initial_scene(
     // scene against a stand-in status so the screen can be render-verified in
     // both presentations without uninstalling the game.
     if options.mission.eq_ignore_ascii_case("debug_no_assets") {
+        // A stand-in root, deliberately NOT the real one. On a machine that has
+        // the data, `paths::data_root()` points at a directory that is not in
+        // fact missing anything, so the message would be nonsense - and it puts
+        // a local home-directory path (with the developer's username) into every
+        // screenshot taken of this scene.
         let status = crate::install::InstallStatus {
-            data_root: crate::paths::data_root().to_path_buf(),
+            data_root: std::path::PathBuf::from("/sdcard/shock2quest"),
             kind: crate::install::InstallKind::Missing,
             found: Vec::new(),
             missing_mods: Vec::new(),

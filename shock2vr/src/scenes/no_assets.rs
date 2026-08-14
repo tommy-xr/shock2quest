@@ -130,17 +130,42 @@ fn to_drawable(text: &str) -> String {
 ///
 /// Pure, so what the player is told is unit-testable without a renderer.
 pub fn message_lines(status: &InstallStatus) -> Vec<String> {
-    let columns = columns_at(BODY_SIZE);
-    let path = to_drawable(&status.absolute_data_root().display().to_string());
+    // Android's data root is a fixed, public path, and it is the only way a
+    // headset user can be told where to put the files - there is no file
+    // manager to browse with. On the desktop the resolved root is
+    // user-specific, is *not* what a reader needs (they need to know which
+    // folder to create, not the absolute path of one that does not exist), and
+    // putting it on screen means every screenshot of this scene carries
+    // someone's home directory. So the desktop names the two mechanisms
+    // instead.
+    if cfg!(target_os = "android") {
+        lines_for_path(&status.absolute_data_root().display().to_string())
+    } else {
+        wrap(&body_text(DESKTOP_DESTINATION), columns_at(BODY_SIZE))
+    }
+}
 
-    // Everything but the path is fixed, so the path is the only thing that can
-    // push the message off the bottom of the canvas. Drop leading path segments
-    // until it fits, rather than letting the closing instruction scroll into the
-    // void: the deepest segments are the ones that identify the directory, and
+/// Where a desktop player should put the files. Deliberately not a resolved
+/// absolute path - see [`message_lines`].
+const DESKTOP_DESTINATION: &str =
+    "a Data folder next to shock2quest,\nor the folder in DARK_ASSET_PATH";
+
+/// The message naming `path` as the destination, trimmed to fit the canvas.
+///
+/// Separate from [`message_lines`] so the trimming is testable on any host,
+/// not only when compiled for Android.
+fn lines_for_path(path: &str) -> Vec<String> {
+    let columns = columns_at(BODY_SIZE);
+    let path = to_drawable(path);
+
+    // The path is the only unbounded part of the message, so it is the only
+    // thing that can push the text off the bottom of the canvas. Drop leading
+    // segments until it fits rather than letting the closing instruction
+    // scroll into the void; the deepest segments identify the directory, and
     // the untrimmed path is in the startup log either way.
     //
-    // Iterating over a fixed segment list (rather than re-trimming a string
-    // that has already grown a "..." prefix) is what makes this terminate.
+    // Iterating a fixed segment list (rather than re-trimming a string that has
+    // already grown a "..." prefix) is what makes this terminate.
     let segments: Vec<&str> = path.split(['/', '\\']).collect();
     for dropped in 0..segments.len() {
         let shown = if dropped == 0 {
@@ -154,7 +179,6 @@ pub fn message_lines(status: &InstallStatus) -> Vec<String> {
         }
     }
 
-    // A single unsplittable segment longer than the canvas allows.
     let mut truncated: String = path.chars().take(columns.saturating_sub(3)).collect();
     truncated.push_str("...");
     wrap(&body_text(&truncated), columns)
@@ -325,7 +349,7 @@ mod tests {
     #[test]
     fn no_line_overflows_the_canvas() {
         let columns = columns_at(BODY_SIZE);
-        for line in message_lines(&missing("/sdcard/shock2quest")) {
+        for line in lines_for_path("/sdcard/shock2quest") {
             assert!(
                 line.chars().count() <= columns,
                 "line {line:?} is {} columns, over the {columns} that fit",
@@ -338,7 +362,7 @@ mod tests {
     /// The whole point of the screen: say where to put the files.
     #[test]
     fn the_message_names_the_data_root_and_what_to_copy() {
-        let lines = message_lines(&missing("/sdcard/shock2quest")).join("\n");
+        let lines = lines_for_path("/sdcard/shock2quest").join("\n");
         assert!(lines.contains("/sdcard/shock2quest"), "{lines}");
         assert!(lines.contains("sshock2.kpf"), "{lines}");
         assert!(lines.contains("mods"), "{lines}");
@@ -352,7 +376,7 @@ mod tests {
         let long =
             "/Users/somebody/very/deeply/nested/directory/tree/that/keeps/going/shock2quest-data";
         let columns = columns_at(BODY_SIZE);
-        let lines = message_lines(&missing(long));
+        let lines = lines_for_path(long);
         for line in &lines {
             assert!(line.chars().count() <= columns, "{line:?}");
         }
@@ -411,7 +435,7 @@ mod tests {
     #[test]
     fn a_pathological_root_still_fits_vertically() {
         let deep = format!("/{}", vec!["averylongdirectoryname"; 12].join("/"));
-        let lines = message_lines(&missing(&deep));
+        let lines = lines_for_path(&deep);
         let bottom = BODY_Y + (lines.len().saturating_sub(1)) as f32 * LINE_HEIGHT + BODY_SIZE;
         assert!(
             bottom <= CANVAS_H,
@@ -425,13 +449,26 @@ mod tests {
     /// mesh and panic.
     #[test]
     fn a_non_ascii_root_is_made_drawable() {
-        let lines = message_lines(&missing("/Users/\u{5c71}\u{7530}/\u{0161}ock2"));
+        let lines = lines_for_path("/data/\u{5c71}\u{7530}/\u{0161}ock2");
         let joined = lines.join("");
         assert!(joined.is_ascii(), "{joined:?}");
         assert!(joined.contains('?'));
         for line in &lines {
             assert!(!line.trim().is_empty() || line.is_empty());
         }
+    }
+
+    /// The desktop message must never carry a resolved filesystem path: it is
+    /// user-specific, it is not what a reader needs, and it would put someone's
+    /// home directory into every screenshot of this screen.
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn the_desktop_message_shows_no_absolute_path() {
+        let lines = message_lines(&missing("/Users/someone/private/dir")).join(" ");
+        assert!(!lines.contains("/Users/"), "{lines}");
+        assert!(!lines.contains("someone"), "{lines}");
+        assert!(lines.contains("DARK_ASSET_PATH"), "{lines}");
+        assert!(lines.contains("Data"), "{lines}");
     }
 
     #[test]
