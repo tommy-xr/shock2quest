@@ -269,3 +269,69 @@ test(
     );
   },
 );
+
+// Regression for #954. Keeping the real held-melee collider from #943 made it
+// selectable by both controller rays. The other hand could then acquire the
+// same runtime entity; releasing either hand restored dynamic physics while
+// the other continued hard-setting its transform every frame.
+test(
+  "a held VR melee weapon cannot hover or transfer into the other hand",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "command2.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT_HELD_RAY ?? 8140),
+      debugFlags: ["--vr"],
+      echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
+    });
+
+    const wrench = await byMissionId(game, "Wrench", WRENCH_MISSION_ID);
+    await game.player.teleport({
+      x: wrench.position[0],
+      y: wrench.position[1] - 1.4,
+      z: wrench.position[2] + 1.2,
+    });
+    await game.input.lookAtWorldPoint(wrench.position);
+    await game.input.set("right_hand.position", [0, 1.4, 0]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.input.set("right_hand.squeeze", 0);
+    // The authored Wrench's held collider sits 0.2 above the right-hand ray.
+    // Put the left production ray through its center instead of using a debug
+    // grab command; this is the exact dual-hand path reported in #954.
+    await game.input.set("left_hand.position", [0, 1.6, 0]);
+    await game.input.set("left_hand.rotation", [0, 0, 0, 1]);
+    await game.input.set("left_hand.squeeze", 0);
+    await game.step({ frames: 2 });
+
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    assert.equal((await game.info()).player.right_hand_entity_id, wrench.id);
+
+    await game.input.set("left_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    const afterRejectedGrab = await game.info();
+    assert.equal(
+      afterRejectedGrab.player.wielded_entity_id,
+      null,
+      "the left hand must not acquire the Wrench already held on the right",
+    );
+    assert.equal(afterRejectedGrab.player.right_hand_entity_id, wrench.id);
+    assert.equal(
+      (await game.physics.bodies({ entityId: wrench.id })).bodies[0]?.body_type,
+      "kinematic",
+      "a rejected second-hand grab must leave #943's live held-melee body intact",
+    );
+
+    await game.input.set("left_hand.squeeze", 0);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 2 });
+    const afterRelease = await game.info();
+    assert.equal(afterRelease.player.wielded_entity_id, null);
+    assert.equal(afterRelease.player.right_hand_entity_id, null);
+    assert.equal(
+      (await game.physics.bodies({ entityId: wrench.id })).bodies[0]?.body_type,
+      "dynamic",
+      "the sole owner releasing the Wrench should restore ordinary loose-prop physics",
+    );
+  },
+);
