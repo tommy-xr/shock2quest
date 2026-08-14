@@ -24,10 +24,10 @@ import { teleportVerified } from "./helpers/teleport.js";
 // PLAYTHROUGH scenario: Dr. Watts (734), an Invulnerable/Posing Male-MedSci
 // NPC, Contains the deck-2 log-14 disc whose transcript carries the conduit
 // access code 12451 (level02.str LogText14). Frobbing him opens his loot MFD so
-// the disc can be read. (Watts also inherits the always-open `containerscript`
-// from the root Object template, so his loot works independently of this fix;
-// the gated `creaturecontainer` recognises him as invulnerable and opens too,
-// coexisting without breaking his loot.)
+// the disc can be collected and read on demand. (Watts also inherits the
+// always-open `containerscript` from the root Object template, so his loot works
+// independently of this fix; the gated `creaturecontainer` recognises him as
+// invulnerable and opens too, coexisting without breaking his loot.)
 //
 // Discovery is by stable mission object id (the `template_id` /v1/entities
 // reports for level-authored entities); runtime entity ids are NOT stable.
@@ -162,18 +162,19 @@ test(
       "taking Watts' disc should record deck-2 log 14 (the 12451 code log)",
     );
 
-    // The disc's transcript surfaces 12451 in-fiction. Read it at the disc's own
-    // authored position (a contained disc keeps its position; standing at Watts
-    // is >4 units away, so the reader's walk-away auto-close would fire there).
+    // The disc's transcript surfaces 12451 in-fiction. Read it through the
+    // original's on-demand `play_unread_log` path at the disc's own authored
+    // position (the consumed entity remains as the reader backing state;
+    // standing at Watts is >4 units away, so walk-away auto-close would fire).
     const dp = (await game.entities.detail(codeDiscId)).position;
     await teleportVerified(game, { x: dp[0], y: dp[1] + 0.5, z: dp[2] });
-    await game.entities.sendMessage(codeDiscId, { type: "Frob" });
+    await game.input.trigger("ReadLastUnreadLog");
     await game.step({ frames: 5 });
     const reader = await activePanel();
     assert.equal(
       reader?.template_id,
       CODE_DISC,
-      "frobbing the looted disc should open the reader MFD bound to it",
+      "reading the looted disc should open the reader MFD bound to it",
     );
     const transcript = reader.elements
       .filter((e) => e.kind === "text" && e.text)
