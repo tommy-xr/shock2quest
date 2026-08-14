@@ -103,19 +103,19 @@ impl Script for WeaponScript {
                     .get(selected_ammo % projectiles.len().max(1))
                     .cloned();
 
-                // A weapon with no Projectile link is melee. In flat mode a swing
-                // is a short forward raycast along the crosshair ray
-                // (RuntimePropFlatAim); a hit deals melee damage. (VR melee
-                // damages through its trigger-gated physical contact handler
-                // and has no flat aim, so it just no-ops here.)
+                // A weapon with no Projectile link is melee. In flat mode the
+                // trigger starts the authored player-arm swing; its MF_TRIGGER1
+                // animation event resolves the short aimed raycast later, at
+                // visible impact. (VR has no flat aim and damages through its
+                // trigger-gated physical contact handler.)
                 if maybe_projectile.is_none() {
-                    if let Ok(aim) = world
+                    if world
                         .borrow::<View<RuntimePropFlatAim>>()
                         .unwrap()
                         .get(entity_id)
-                        .copied()
+                        .is_ok()
                     {
-                        return melee_swing(physics, entity_id, aim, world);
+                        return Effect::FlatMeleeSwing { entity_id };
                     }
                 }
 
@@ -216,23 +216,30 @@ impl Script for WeaponScript {
                 }
                 Effect::Multiple(effects)
             }
+            MessagePayload::AnimationFlagTriggered { motion_flags }
+                if motion_flags.contains(dark::motion::MotionFlags::TRIGGER1)
+                    && ordered_projectile_links(world, entity_id).is_empty() =>
+            {
+                let Ok(aim) = world
+                    .borrow::<View<RuntimePropFlatAim>>()
+                    .unwrap()
+                    .get(entity_id)
+                    .copied()
+                else {
+                    return Effect::NoEffect;
+                };
+                flat_melee_hit(physics, aim, world)
+            }
             MessagePayload::TriggerRelease => Effect::NoEffect,
             _ => Effect::NoEffect,
         }
     }
 }
 
-/// A flat melee swing: play the swing animation, and raycast a short distance
-/// along the crosshair ray - a hit deals melee damage (hitbox proxies resolve to
-/// their parent). The swing animation plays whether or not the swing connects.
-fn melee_swing(
-    physics: &PhysicsWorld,
-    entity_id: EntityId,
-    aim: RuntimePropFlatAim,
-    world: &World,
-) -> Effect {
-    let mut effects = vec![Effect::FlatMeleeSwing { entity_id }];
-
+/// Resolve the authored hit event of a flat melee swing: raycast a short
+/// distance along the current crosshair ray and damage the hit entity (hitbox
+/// proxies resolve to their parent).
+fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World) -> Effect {
     let hit = physics.ray_cast(
         aim.origin,
         aim.forward.normalize() * MELEE_RANGE,
@@ -247,7 +254,7 @@ fn melee_swing(
     }) = hit
     {
         let target = resolve_proxy_entity(world, target);
-        effects.push(Effect::Send {
+        return Effect::Send {
             msg: Message {
                 to: target,
                 payload: MessagePayload::Damage {
@@ -265,9 +272,9 @@ fn melee_swing(
                     }),
                 },
             },
-        });
+        };
     }
-    Effect::Multiple(effects)
+    Effect::NoEffect
 }
 
 /// An empty-clip dry fire: no projectile or muzzle flash, just the weapon's
@@ -396,5 +403,107 @@ pub(super) fn create_projectile(
             force_visible: true,
             ..CreateEntityOptions::default()
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cgmath::{Quaternion, point3, vec3};
+    use dark::{motion::MotionFlags, properties::Links};
+
+    use crate::physics::{CollisionGroup, PhysicsWorld};
+
+    use super::*;
+
+    fn flat_melee_fixture() -> (World, PhysicsWorld, EntityId, EntityId) {
+        let mut world = World::new();
+        let weapon = world.add_entity((
+            Links::empty(),
+            RuntimePropFlatAim {
+                origin: point3(0.0, 0.0, 0.0),
+                forward: vec3(0.0, 0.0, 1.0),
+            },
+        ));
+        let target = world.add_entity(());
+
+        let mut physics = PhysicsWorld::new();
+        physics.add_kinematic(
+            target,
+            vec3(0.0, 0.0, 0.6),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.2, 0.2, 0.2),
+            CollisionGroup::selectable(),
+            false,
+        );
+        // Populate Rapier's broad phase before the first query, as the real
+        // mission loop does each frame.
+        let player = world.add_entity(());
+        let mut player_handle = physics.create_player(vec3(100.0, 100.0, 100.0), player);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        assert!(
+            includes_damage_to(
+                flat_melee_hit(
+                    &physics,
+                    RuntimePropFlatAim {
+                        origin: point3(0.0, 0.0, 0.0),
+                        forward: vec3(0.0, 0.0, 1.0),
+                    },
+                    &world,
+                ),
+                target,
+            ),
+            "fixture must put a damageable target inside melee reach"
+        );
+
+        (world, physics, weapon, target)
+    }
+
+    fn includes_damage_to(effect: Effect, target: EntityId) -> bool {
+        Effect::flatten(vec![effect]).into_iter().any(|effect| {
+            matches!(
+                effect,
+                Effect::Send { msg }
+                    if msg.to == target
+                        && matches!(msg.payload, MessagePayload::Damage { .. })
+            )
+        })
+    }
+
+    #[test]
+    fn flat_melee_trigger_starts_the_animation_without_hitting_early() {
+        let (world, physics, weapon, target) = flat_melee_fixture();
+
+        let effect = WeaponScript::new().handle_message(
+            weapon,
+            &world,
+            &physics,
+            &MessagePayload::TriggerPull,
+        );
+
+        assert!(
+            !includes_damage_to(effect, target),
+            "the trigger edge is only the start of the visible swing"
+        );
+    }
+
+    #[test]
+    fn flat_melee_hits_on_the_authored_player_swing_trigger() {
+        let (world, physics, weapon, target) = flat_melee_fixture();
+
+        let effect = WeaponScript::new().handle_message(
+            weapon,
+            &world,
+            &physics,
+            &MessagePayload::AnimationFlagTriggered {
+                motion_flags: MotionFlags::TRIGGER1,
+            },
+        );
+
+        assert!(
+            includes_damage_to(effect, target),
+            "leftswing's MF_TRIGGER1 frame must resolve the aimed melee hit"
+        );
     }
 }

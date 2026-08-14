@@ -143,10 +143,15 @@ impl Script for MeleeWeapon {
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        // The legacy literal `wrench` script can still back a VR physical
+        // weapon, but contact is never a flat damage source. Flat player melee
+        // resolves once from WeaponScript at the authored swing event.
+        if !is_vr(world) {
+            return Effect::NoEffect;
+        }
+
         match msg {
-            // Legacy literal `wrench` script (Maintenance Tool -2949): keep its
-            // historical flat contact damage rather than re-tuning a shipped
-            // path from a VR bugfix. Tracked with its flat gating in #951.
+            // Legacy literal `wrench` script (Maintenance Tool -2949).
             MessagePayload::Collided { with } => melee_impact(entity_id, *with, world, 1.0),
             _ => Effect::NoEffect,
         }
@@ -372,5 +377,19 @@ mod tests {
             collide(&mut script, &world, weapon, target),
             Effect::NoEffect
         ));
+    }
+
+    #[test]
+    fn legacy_melee_collision_is_inert_outside_vr() {
+        let (world, weapon, target) = test_world(PresentationMode::Flat);
+
+        let effect = MeleeWeapon::new().handle_message(
+            weapon,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Collided { with: target },
+        );
+
+        assert!(matches!(effect, Effect::NoEffect));
     }
 }

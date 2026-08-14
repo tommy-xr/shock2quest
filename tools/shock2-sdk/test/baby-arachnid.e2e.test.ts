@@ -142,7 +142,8 @@ test(
     await game.player.aimAt(south, { hitbox: "torso", visibility: "required" });
     await game.step({ frames: 3 });
     await fireOnce(game);
-    await game.step({ frames: 30 });
+    // leftswing's authored MF_TRIGGER1 is frame 20 at 30 fps (sim frame 41).
+    await game.step({ frames: 45 });
     assert.ok(
       hitPoints(await game.entities.detail(south.id)) < wrenchBefore,
       "an aimed wrench swing should damage the Baby Arachnid",

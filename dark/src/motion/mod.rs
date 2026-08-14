@@ -303,7 +303,10 @@ bitflags! {
         const UNK1 = 1 << 9;
         const UNK2 = 1 << 10;
         const UNK3 = 1 << 11;
-        const UNK4 = 1 << 12;
+        /// Game-specific trigger 1 (`MF_TRIGGER1`). System Shock 2 registers
+        /// this flag on the player-arm swing to make a melee weapon physical;
+        /// the shipped `leftswing` clip authors it at frame 20.
+        const TRIGGER1 = 1 << 12;
 
         /// Melee contact window open / close - the frames during which a swing
         /// can connect (the Dark "damage hitbox" triggers that ShockEd's motion
