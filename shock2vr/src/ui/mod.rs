@@ -213,6 +213,14 @@ pub const VR_COMPONENT_Z_STEP: f32 = 0.001;
 /// world-space panel that demonstrably renders.
 pub fn frontend_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
     let head = vec3(0.0, FRONTEND_PANEL_EYE_HEIGHT, 0.0);
+    // An untracked pose arrives as the *zero* quaternion, not identity, and
+    // rotating by it silently yields the unrotated vector - so the panel would
+    // pin itself to world -Z and never follow the viewer.
+    let head_rotation = if head_rotation.magnitude2() < 1e-6 {
+        Quaternion::new(1.0, 0.0, 0.0, 0.0)
+    } else {
+        head_rotation.normalize()
+    };
     let forward = head_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
     let center = head + forward * FRONTEND_PANEL_DISTANCE;
 
@@ -225,6 +233,11 @@ pub fn frontend_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
     } else {
         look_dir.normalize()
     };
+    // NB: `right` is `look_dir x up`, which rolls the basis 180 degrees about
+    // the view axis relative to a conventional camera basis. Do not "correct"
+    // it in isolation: `world_element_transform` applies its own 180-degree Z
+    // rotation, and flipping only one of the two turns the panel over (checked
+    // on device).
     let mut up = vec3(0.0, 1.0, 0.0);
     let mut right = look_dir.cross(up);
     if right.magnitude2() < 1e-6 {
