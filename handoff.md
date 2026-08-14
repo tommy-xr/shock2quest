@@ -240,3 +240,115 @@ device. Doing RTT first would bet the refactor on unverifiable engine work.
 - **Launch subagents with worktree isolation** when they will touch git state.
   A non-isolated agent shares the checkout, so its branch switches land your
   commits on its branch and block your own git operations.
+
+---
+
+# OPEN: every world-space UI panel is 180 degrees rotated on a real headset
+
+Added 2026-08-14. The section above ("VR now works end to end") was verified with
+`cargo dbgr --vr` — **never on a Quest**. On device it does not work, and neither
+does anything else drawn on a world-space panel.
+
+## Symptom
+
+On a Quest 3, world-space UI renders rotated 180 degrees in-plane: text mirrored
+and upside down, and vertical order reversed (the main menu lists Quit at the top
+and New Game at the bottom). The **3D world renders correctly** — only panels are
+wrong.
+
+It is **not** scene-specific. Both are inverted identically:
+
+- the VR main menu, via `ui::frontend_panel`
+- `debug_map`, which places a panel **entity** and never calls `frontend_panel`
+
+So the cause is below both. The same builds render both panels **upright** under
+`debug_runtime --vr`.
+
+## Why nobody caught it
+
+`debug_runtime --vr` renders these panels correctly, so every screenshot, both
+code reviews, and the section above all passed. **The harness does not model the
+device for world-space UI.** Until that is fixed, a desktop VR capture is not
+evidence about VR.
+
+## Ruled out ON HARDWARE (do not re-try these)
+
+Each cost a build/install/capture cycle. All were reverted.
+
+| # | Attempt | Result |
+| --- | --- | --- |
+| 1 | Flip `frontend_panel`'s basis (negate `right` + `true_up` — a roll about Z) | Device unchanged; **desktop becomes mirrored**. Moves the bug between runtimes. |
+| 2 | Replace `world_element_transform`'s `from_angle_z(180)` with `from_nonuniform_scale(1,-1,1)` | **Fails the flat/VR parity tests.** The canvas->panel mapping genuinely needs both axes flipped *unless* `canvas_rect_to_panel` changes with it (see #3). |
+| 3 | The full atomic 5-site version (below) | **Desktop correct for both panels** (`debug_map` upright and readable for the first time); **device unchanged**. |
+| 4 | Platform-conditional yaw: `cfg!(target_os = "android")` picking `from_cols(-right, true_up, look_dir)` | Device still mirrored, **and the menu labels vanish entirely**. Strictly worse. |
+
+**#3 is the important negative result.** With a fully honest basis and no
+compensation anywhere, the desktop is right and the headset is still wrong. That
+rules out the UI math — basis, canvas mapping, and layer depth — as the cause.
+It also refutes the natural theory that "desktop is only correct by
+compensation".
+
+### The 5 coupled sites (if you touch one, you touch all of them)
+
+Found by a Codex pass; verified by the parity tests catching an incomplete version.
+
+1. `shock2vr/src/ui/mod.rs` `world_element_transform` — `from_angle_z(Deg(180.0))`, which flips x as well as y
+2. `shock2vr/src/ui/mod.rs` `frontend_panel` — basis with `right = look_dir.cross(up)` (negated) and third column `-look_dir`
+3. `shock2vr/src/scenes/debug_map.rs` (~line 229) — a duplicate of that same basis
+4. `shock2vr/src/ui/mod.rs` `canvas_rect_to_panel` — `vec2(0.5 - p.x, 0.5 - p.y)`, whose doc says it exists to undo the double negation. **This is what the parity tests pin**; with a y-only flip it becomes `vec2(p.x + 0.5, 0.5 - p.y)`.
+5. `shock2vr/src/ui/mod.rs` `render_world_space` — layer z-step direction, which follows the panel's facing convention
+
+## Verified true (don't re-derive)
+
+- **Hit detection follows the panel automatically.** `ray_to_canvas` intersects
+  using `panel.normal()` and un-rotates by `panel.rotation`, both taken from the
+  panel's own transform. A basis change carries the pointer with it; input cannot
+  desync from what is drawn.
+- **`PresentationMode::Vr` cannot distinguish the two runtimes** — desktop `--vr`
+  and the headset are both `Vr`. Any conditional has to be by platform.
+- **`input_context.head.rotation` used to be the RIGHT CONTROLLER's aim pose**
+  (`right_aim_location`), and is the *zero quaternion* when controllers are
+  untracked — `rotate_vector` by it silently returns the vector unrotated, so the
+  panel pinned itself to world `-Z`. Fixed in #994; the panel now tracks the head.
+  This was a real bug but is **not** the rotation cause.
+
+## Leading untested hypothesis
+
+`ui/mod.rs` `frontend_panel` anchors at `let head = vec3(0.0, FRONTEND_PANEL_EYE_HEIGHT, 0.0)`
+— the **world origin**, not the player's tracked position. Desktop's camera sits
+at the origin so it works there; on a headset you are offset roomscale, and a
+double-sided quad viewed from behind reads exactly as mirrored.
+
+Cheap probe: anchor the panel to the actual camera/eye position and re-capture.
+Note `debug_map` places its panel relative to the player entity, so if this is
+the cause it must explain that scene too.
+
+## Recommended technique
+
+This document's own advice from the last round applies directly: **bisection by
+transplant, early.** Four parameter guesses cost four device cycles and produced
+one useful negative. Instead, put a deliberately asymmetric test quad (e.g. an
+"F"-shaped texture) on device through the world-space path and see whether it is
+mirrored, rotated, or fine — that separates *transform* from *content* in one
+cycle, and would distinguish "panel viewed from behind" from "content built
+upside down".
+
+## Device workflow notes
+
+- The headset sleeps within seconds when not worn, and an unfocused app renders
+  nothing — compositor captures come back **black or zero bytes**. Fix:
+  `adb shell am broadcast -a com.oculus.vrpowermanager.prox_close`, then
+  `adb shell input keyevent KEYCODE_WAKEUP`. Without this, none of the above is
+  observable.
+- Capture: `node .claude/skills/vr-device-loop/scripts/quest-device.mjs --serial <S> capture out.png`.
+- Scene selection is `/sdcard/shock2quest/vr-mission.txt` (e.g. `main_menu`,
+  `debug_map`). **Restore it to `medsci1.mis` when done.**
+- `println!` reaches logcat; `tracing::info!` does **not** — neither
+  `desktop_runtime` nor `oculus_runtime` installs a subscriber. Instrumenting
+  `frontend_panel` with a rate-limited `println!` of the head quaternion and
+  basis vectors is what found the zero-quaternion bug, and is the fastest way in.
+
+## PR stack
+
+- [#993](https://github.com/tommy-xr/shock2quest/pull/993) `feat/no-assets-screen` -> `main` — missing-assets screen (inherits this bug in VR)
+- [#994](https://github.com/tommy-xr/shock2quest/pull/994) `fix/vr-frontend-panel-orientation` -> **#993** — the head-pose fix; carries comments at the traps above
