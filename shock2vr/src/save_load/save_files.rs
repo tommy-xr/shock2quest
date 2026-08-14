@@ -80,14 +80,8 @@ fn latest_save_in(directory: &Path) -> Option<SaveFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
     use std::time::Duration;
-
-    fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("shock2vr_save_files_{name}"));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     fn write_save(dir: &Path, name: &str) {
         fs::write(dir.join(name), b"save").unwrap();
@@ -103,26 +97,29 @@ mod tests {
 
     #[test]
     fn empty_directory_has_no_latest_save() {
-        let dir = scratch_dir("empty");
-        assert_eq!(latest_save_in(&dir), None);
+        let dir = TempDir::new("save-files-empty");
+        assert_eq!(latest_save_in(dir.path()), None);
     }
 
     #[test]
     fn non_save_files_are_ignored() {
-        let dir = scratch_dir("filter");
-        write_save(&dir, "notes.txt");
-        assert_eq!(latest_save_in(&dir), None);
+        let dir = TempDir::new("save-files-filter");
+        write_save(dir.path(), "notes.txt");
+        assert_eq!(latest_save_in(dir.path()), None);
     }
 
     #[test]
     fn all_saves_lists_every_save_most_recent_first() {
-        let dir = scratch_dir("listing");
-        write_save(&dir, "old.sav");
+        let dir = TempDir::new("save-files-listing");
+        write_save(dir.path(), "old.sav");
         std::thread::sleep(Duration::from_millis(20));
-        write_save(&dir, "new.sav");
-        write_save(&dir, "notes.txt");
+        write_save(dir.path(), "new.sav");
+        write_save(dir.path(), "notes.txt");
 
-        let names: Vec<String> = all_saves_in(&dir).into_iter().map(|s| s.name).collect();
+        let names: Vec<String> = all_saves_in(dir.path())
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
         assert_eq!(names, vec!["new".to_owned(), "old".to_owned()]);
     }
 
@@ -136,27 +133,27 @@ mod tests {
         // Ties must resolve the same way they did when `latest_save` was a
         // `max_by` over (modified, name): the greater name wins, so it heads
         // the list and stays what `latest_save` returns.
-        let dir = scratch_dir("ties");
-        write_save(&dir, "alpha.sav");
-        write_save(&dir, "beta.sav");
-        let saves = all_saves_in(&dir);
+        let dir = TempDir::new("save-files-ties");
+        write_save(dir.path(), "alpha.sav");
+        write_save(dir.path(), "beta.sav");
+        let saves = all_saves_in(dir.path());
         // Only meaningful when the filesystem really gave them equal mtimes.
         if saves[0].modified == saves[1].modified {
             assert_eq!(saves[0].name, "beta");
-            assert_eq!(latest_save_in(&dir).unwrap().name, "beta");
+            assert_eq!(latest_save_in(dir.path()).unwrap().name, "beta");
         }
     }
 
     #[test]
     fn the_most_recently_written_save_wins() {
-        let dir = scratch_dir("recency");
-        write_save(&dir, "old.sav");
+        let dir = TempDir::new("save-files-recency");
+        write_save(dir.path(), "old.sav");
         // Sleep past the filesystem's mtime granularity before the newer write.
         std::thread::sleep(Duration::from_millis(20));
-        write_save(&dir, "new.sav");
+        write_save(dir.path(), "new.sav");
 
-        let latest = latest_save_in(&dir).expect("a save should be found");
+        let latest = latest_save_in(dir.path()).expect("a save should be found");
         assert_eq!(latest.name, "new");
-        assert_eq!(latest.path, dir.join("new.sav"));
+        assert_eq!(latest.path, dir.path().join("new.sav"));
     }
 }

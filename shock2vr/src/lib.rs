@@ -4,6 +4,7 @@ pub mod hand_pose;
 pub mod hand_pose_library;
 pub mod input;
 pub mod input_context;
+pub mod install;
 pub mod inventory;
 pub mod message_trace;
 pub mod save_load;
@@ -31,6 +32,8 @@ pub mod research;
 mod runtime_props;
 mod scripts;
 mod systems;
+#[cfg(test)]
+mod test_support;
 mod ui;
 mod util;
 mod virtual_hand;
@@ -173,7 +176,7 @@ const RESOURCE_FAMILIES: &[&str] = &[
 /// 41 of its 42 string tables are `$`-token stubs that KEX resolves through
 /// `localization/loc_english.txt`, which we do not implement - honouring them
 /// renders raw keys like `$PSI6` in place of real text.
-const MOD_ARCHIVES: &[&str] = &[
+pub(crate) const MOD_ARCHIVES: &[&str] = &[
     "mods/sshock2ee.kpf",
     "mods/400.kpf",
     "mods/shtup.kpf",
@@ -922,10 +925,30 @@ impl Game {
         dark::high_detail::set_enabled(high_detail);
         info!("high-detail (PMNM) meshes: {high_detail}");
 
+        // What data is actually here, decided once and reported before anything
+        // mounts it. `println!` rather than `info!`: neither `desktop_runtime`
+        // nor `oculus_runtime` installs a tracing subscriber, so an `info!` here
+        // is dropped on the desktop and on the Quest - the two places this line
+        // is needed most. On Quest it is the only way to tell a
+        // wrongly-provisioned headset from a broken build. (ndk-glue redirects
+        // stdout into logcat, so `println!` does arrive there.)
+        let install = install::probe_data_root();
+        println!("{}", install.summary());
+
+        // Fail here rather than several layers down. Without this, an empty data
+        // root reaches the mount list and dies inside the archive reader on
+        // whichever `.crf` it happens to open first - a stack trace that names a
+        // zip path and says nothing about the actual problem. (The real fix is a
+        // screen that says this to the player instead of a panic; that needs a
+        // font that does not come from the missing data, which is why it is a
+        // separate change.)
+        if !install.has_data() {
+            panic!("cannot load the game: {}", install.summary());
+        }
+
         // A 25th Anniversary install keeps everything inside KPF archives, so it
-        // needs a different mount list from a classic install's loose `.crf`s.
-        let asset_paths = if is_25th_anniversary_install() {
-            info!("25th Anniversary Edition install detected; mounting KPF archives");
+        // needs a different mount list from a pre-remaster install's loose `.crf`s.
+        let asset_paths = if install.kind == install::InstallKind::Anniversary {
             AssetPath::combine(build_25th_anniversary_mounts(bundle_storage.clone()))
         } else {
             AssetPath::combine(vec![
@@ -1001,9 +1024,12 @@ impl Game {
 
         // Through the asset paths, like the missions and motiondb: on a 25AE
         // install the gamesys lives inside `sshock2.kpf`.
-        let game_reader = asset_cache
-            .get_raw_reader("shock2.gam")
-            .expect("shock2.gam should be present in the mounted data");
+        let game_reader = asset_cache.get_raw_reader("shock2.gam").unwrap_or_else(|| {
+            panic!(
+                "cannot load the game: shock2.gam not found in the mounted data ({})",
+                install.summary()
+            )
+        });
 
         let _strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
 

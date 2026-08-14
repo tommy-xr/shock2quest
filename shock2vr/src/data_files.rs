@@ -20,9 +20,6 @@ use engine::assets::asset_paths::{AbstractAssetPath, AssetPath, ReadableAndSeeka
 
 use crate::zip_asset_path::ZipAssetPath;
 
-/// The single archive a 25th Anniversary Edition install ships its data in.
-const BASE_ARCHIVE: &str = "sshock2.kpf";
-
 /// Where that archive keeps the gamesys and the missions.
 const ARCHIVE_DATA_PREFIX: &str = "data/";
 
@@ -30,7 +27,7 @@ const ARCHIVE_DATA_PREFIX: &str = "data/";
 /// classic one. The remaster ships its data inside `sshock2.kpf`; a classic
 /// install has loose `.crf` archives instead.
 pub fn is_25th_anniversary_install(data_root: &Path) -> bool {
-    data_root.join(BASE_ARCHIVE).exists()
+    crate::install::is_anniversary(data_root)
 }
 
 /// The archive mounts that hold the raw data files, highest priority first.
@@ -42,7 +39,10 @@ pub fn data_file_mounts(data_root: &Path) -> Vec<Box<dyn AbstractAssetPath>> {
         return Vec::new();
     }
 
-    let archive = data_root.join(BASE_ARCHIVE).to_string_lossy().into_owned();
+    let archive = data_root
+        .join(crate::install::ANNIVERSARY_SENTINEL)
+        .to_string_lossy()
+        .into_owned();
     vec![
         // `motiondb.bin` moved from the data root to `res/mschema/`, and the
         // missions + gamesys live under `data/`.
@@ -88,7 +88,7 @@ fn archived_mission_names(data_root: &Path) -> BTreeMap<String, String> {
     if !is_25th_anniversary_install(data_root) {
         return BTreeMap::new();
     }
-    let Ok(file) = std::fs::File::open(data_root.join(BASE_ARCHIVE)) else {
+    let Ok(file) = std::fs::File::open(data_root.join(crate::install::ANNIVERSARY_SENTINEL)) else {
         return BTreeMap::new();
     };
     let Ok(archive) = zip::ZipArchive::new(std::io::BufReader::new(file)) else {
@@ -141,39 +141,13 @@ pub fn open_data_file(name: &str) -> Option<Box<dyn ReadableAndSeekable>> {
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
-    use std::path::PathBuf;
 
     use super::*;
-
-    /// A scratch directory that removes itself when the test ends.
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(name: &str) -> TempDir {
-            let path = std::env::temp_dir().join(format!(
-                "shock2vr-data-files-{}-{}",
-                std::process::id(),
-                name
-            ));
-            let _ = std::fs::remove_dir_all(&path);
-            std::fs::create_dir_all(&path).unwrap();
-            TempDir(path)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_support::TempDir;
 
     /// Write a stand-in for the 25AE archive holding `entries`.
     fn write_archive(root: &Path, entries: &[(&str, &[u8])]) {
-        let file = std::fs::File::create(root.join(BASE_ARCHIVE)).unwrap();
+        let file = std::fs::File::create(root.join(crate::install::ANNIVERSARY_SENTINEL)).unwrap();
         let mut writer = zip::ZipWriter::new(file);
         for (name, contents) in entries {
             writer
