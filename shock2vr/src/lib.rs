@@ -662,7 +662,7 @@ impl Game {
             &self.options,
         );
         save_load::restore_player_vitals(&active_mission.mission_core.world, player_vitals);
-        self.active_game_scene = Box::new(active_mission);
+        self.set_active_scene(Box::new(active_mission));
         self.campaign_completed = false;
     }
 
@@ -709,7 +709,7 @@ impl Game {
             Mission::parse(&**asset_paths, &base_path, &parse_name, &global_context)
         });
 
-        self.active_game_scene = Box::new(LoadingScene::new());
+        self.set_active_scene(Box::new(LoadingScene::new()));
         self.pending_transition = Some(PendingTransition {
             level_name,
             spawn_loc,
@@ -758,7 +758,7 @@ impl Game {
             &self.options,
         );
         save_load::restore_player_vitals(&mission.mission_core.world, pending.player_vitals);
-        self.active_game_scene = Box::new(mission);
+        self.set_active_scene(Box::new(mission));
         self.campaign_completed = false;
 
         for entity_name in pending.entities_to_trigger {
@@ -1276,7 +1276,7 @@ impl Game {
         if was_crouched {
             mission.mission_core.restore_saved_crouch();
         }
-        self.active_game_scene = Box::new(mission);
+        self.set_active_scene(Box::new(mission));
         self.mission_to_save_data = level_map;
         self.campaign_completed = false;
         Ok(())
@@ -1422,17 +1422,17 @@ impl Game {
                 // forward is the screen's own recovery path (reload a save),
                 // which replaces the ledger wholesale.
                 self.pending_transition = None;
-                self.active_game_scene = Box::new(GameOverScene::new());
+                self.set_active_scene(Box::new(GameOverScene::new()));
             }
             GlobalEffect::ShowLoadGame => {
                 // A frontend screen swap, not a level transition: no ledger
                 // write-back, and any pending transition is abandoned.
                 self.pending_transition = None;
-                self.active_game_scene = Box::new(LoadGameScene::new());
+                self.set_active_scene(Box::new(LoadGameScene::new()));
             }
             GlobalEffect::ShowMainMenu => {
                 self.pending_transition = None;
-                self.active_game_scene = Box::new(MainMenuScene::new());
+                self.set_active_scene(Box::new(MainMenuScene::new()));
             }
             GlobalEffect::CompleteCampaign => {
                 // Preserve the destroyed head and the rest of the finale state
@@ -1455,13 +1455,21 @@ impl Game {
                 });
 
                 self.pending_transition = None;
-                self.active_game_scene = Box::new(cutscene);
+                self.set_active_scene(Box::new(cutscene));
                 self.campaign_completed = true;
             }
             GlobalEffect::Quit => {
                 self.should_quit = true;
             }
         }
+    }
+
+    /// Replace the active scene, giving the outgoing one a chance to release
+    /// what it owns beyond its own frame (see [`GameScene::on_exit`]). Every
+    /// scene swap goes through here so that hook cannot be forgotten.
+    fn set_active_scene(&mut self, scene: Box<dyn GameScene>) {
+        self.active_game_scene.on_exit(&mut self.audio_context);
+        self.active_game_scene = scene;
     }
 
     /// Get hand spotlights for enhanced lighting when experimental flag is enabled

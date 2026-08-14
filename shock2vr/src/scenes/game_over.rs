@@ -25,6 +25,7 @@ use crate::{
     input_context::{InputContext, Pointer2D},
     mission::{GlobalContext, PlayerLifeState},
     save_load::{SaveFile, latest_save},
+    scenes::frontend_sfx::{FrontendSfx, WidgetId},
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, pointer_to_canvas},
@@ -94,30 +95,47 @@ fn resolve_click(
     screen_size: Vector2<f32>,
     rects: &[Rect; 4],
     can_load: bool,
-) -> (Option<GameOverAction>, bool) {
+) -> (Option<GameOverAction>, bool, Option<Vector2<f32>>) {
     let Some(p) = pointer else {
-        return (None, false);
+        return (None, false, None);
     };
-    if !p.pressed || last_pressed {
-        return (None, p.pressed);
-    }
-
-    let action = pointer_to_canvas(
+    let canvas_point = pointer_to_canvas(
         vec2(CANVAS_W, CANVAS_H),
         p.position,
         screen_size,
         SCALE_MODE,
-    )
-    .and_then(|c| {
-        if can_load && rects[LOAD_RECT_INDEX].contains(c) {
-            Some(GameOverAction::Load)
-        } else if rects[QUIT_RECT_INDEX].contains(c) {
-            Some(GameOverAction::Quit)
-        } else {
-            None
-        }
-    });
-    (action, p.pressed)
+    );
+    if !p.pressed || last_pressed {
+        return (None, p.pressed, canvas_point);
+    }
+
+    let action = canvas_point.and_then(|c| hit(c, rects, can_load));
+    (action, p.pressed, canvas_point)
+}
+
+/// The button at a canvas point, if any. Shared by the click and the rollover
+/// sound so the two always agree on where a button is.
+fn hit(point: Vector2<f32>, rects: &[Rect; 4], can_load: bool) -> Option<GameOverAction> {
+    if can_load && rects[LOAD_RECT_INDEX].contains(point) {
+        Some(GameOverAction::Load)
+    } else if rects[QUIT_RECT_INDEX].contains(point) {
+        Some(GameOverAction::Quit)
+    } else {
+        None
+    }
+}
+
+/// Which button the pointer is over, for the rollover sound.
+fn hovered_widget(
+    point: Option<Vector2<f32>>,
+    rects: &[Rect; 4],
+    can_load: bool,
+) -> Option<WidgetId> {
+    let action = hit(point?, rects, can_load)?;
+    Some(match action {
+        GameOverAction::Load => 0,
+        GameOverAction::Quit => 1,
+    })
 }
 
 pub struct GameOverScene {
@@ -133,6 +151,8 @@ pub struct GameOverScene {
     /// Screen size from the latest render, so `update` maps the pointer into
     /// canvas space consistently with how the canvas is drawn.
     last_screen_size: Vector2<f32>,
+    /// The frontend's hum, rollover and select sounds.
+    sfx: FrontendSfx,
 }
 
 impl GameOverScene {
@@ -149,6 +169,7 @@ impl GameOverScene {
             pointer: None,
             last_pressed: false,
             last_screen_size: vec2(CANVAS_W, CANVAS_H),
+            sfx: FrontendSfx::new(),
         }
     }
 }
@@ -185,7 +206,7 @@ impl GameScene for GameOverScene {
         let rects = screen_rects(layout.as_deref().map(|r| r.as_slice()));
 
         self.pointer = input_context.pointer;
-        let (action, last_pressed) = resolve_click(
+        let (action, last_pressed, point) = resolve_click(
             input_context.pointer,
             self.last_pressed,
             self.last_screen_size,
@@ -193,6 +214,12 @@ impl GameScene for GameOverScene {
             self.save.is_some(),
         );
         self.last_pressed = last_pressed;
+
+        self.sfx
+            .hover(hovered_widget(point, &rects, self.save.is_some()));
+        if action.is_some() {
+            self.sfx.click();
+        }
 
         match action {
             Some(GameOverAction::Load) => {
@@ -288,9 +315,10 @@ impl GameScene for GameOverScene {
         effects: Vec<Effect>,
         _global_context: &GlobalContext,
         _game_options: &GameOptions,
-        _asset_cache: &mut AssetCache,
-        _audio_context: &mut AudioContext<EntityId, String>,
+        asset_cache: &mut AssetCache,
+        audio_context: &mut AudioContext<EntityId, String>,
     ) -> Vec<GlobalEffect> {
+        self.sfx.pump(asset_cache, audio_context);
         effects
             .into_iter()
             .filter_map(|e| match e {
@@ -298,6 +326,10 @@ impl GameScene for GameOverScene {
                 _ => None,
             })
             .collect()
+    }
+
+    fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        self.sfx.stop(audio_context);
     }
 
     fn wants_pointer(&self) -> bool {
@@ -336,7 +368,7 @@ mod tests {
     #[test]
     fn clicking_load_with_a_save_reloads() {
         let rects = screen_rects(None);
-        let (action, last) = resolve_click(
+        let (action, last, _) = resolve_click(
             pointer_at(rects[LOAD_RECT_INDEX], true),
             false,
             SCREEN,
@@ -350,7 +382,7 @@ mod tests {
     #[test]
     fn load_is_inert_without_a_save() {
         let rects = screen_rects(None);
-        let (action, _) = resolve_click(
+        let (action, _, _) = resolve_click(
             pointer_at(rects[LOAD_RECT_INDEX], true),
             false,
             SCREEN,
@@ -363,7 +395,7 @@ mod tests {
     #[test]
     fn quit_is_always_available() {
         let rects = screen_rects(None);
-        let (action, _) = resolve_click(
+        let (action, _, _) = resolve_click(
             pointer_at(rects[QUIT_RECT_INDEX], true),
             false,
             SCREEN,
@@ -376,7 +408,7 @@ mod tests {
     #[test]
     fn held_press_does_not_re_activate() {
         let rects = screen_rects(None);
-        let (action, last) = resolve_click(
+        let (action, last, _) = resolve_click(
             pointer_at(rects[LOAD_RECT_INDEX], true),
             true,
             SCREEN,
@@ -390,7 +422,7 @@ mod tests {
     #[test]
     fn clicking_outside_the_buttons_does_nothing() {
         let rects = screen_rects(None);
-        let (action, _) = resolve_click(
+        let (action, _, _) = resolve_click(
             pointer_at(rects[LIST_RECT_INDEX], true),
             false,
             SCREEN,

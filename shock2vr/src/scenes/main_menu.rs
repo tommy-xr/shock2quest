@@ -34,6 +34,7 @@ use crate::{
     game_scene::GameScene,
     input_context::{InputContext, Pointer2D},
     mission::GlobalContext,
+    scenes::frontend_sfx::{FrontendSfx, WidgetId},
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, WorldPanel, pointer_to_canvas, ray_to_canvas},
@@ -270,6 +271,12 @@ fn resolve_click_at(
     if !pressed || last_pressed {
         return (None, pressed);
     }
+    (point.and_then(|p| hit(p, rects)), pressed)
+}
+
+/// The menu entry at a canvas point, if any. Shared by the click and the
+/// rollover sound so the two can never disagree about where an entry is.
+fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<MenuAction> {
     let mut canvas = UiCanvas::<MenuAction>::with_events(vec2(CANVAS_W, CANVAS_H));
     for (item, rect) in MENU_ITEMS.iter().zip(rects) {
         // Unimplemented entries get no hit region at all, so a click over one
@@ -280,7 +287,7 @@ fn resolve_click_at(
             canvas.button(*rect, "", action);
         }
     }
-    (point.and_then(|p| canvas.click_at(p)), pressed)
+    canvas.click_at(point)
 }
 
 /// Pure click resolution: on a rising press edge over an implemented item
@@ -291,7 +298,7 @@ fn resolve_click(
     last_pressed: bool,
     screen_size: Vector2<f32>,
     rects: &[Rect],
-) -> (Option<MenuAction>, bool) {
+) -> (Option<MenuAction>, bool, Option<Vector2<f32>>) {
     match pointer {
         Some(p) => {
             let point = pointer_to_canvas(
@@ -300,9 +307,20 @@ fn resolve_click(
                 screen_size,
                 SCALE_MODE,
             );
-            resolve_click_at(point, p.pressed, last_pressed, rects)
+            let (action, pressed) = resolve_click_at(point, p.pressed, last_pressed, rects);
+            (action, pressed, point)
         }
-        None => (None, false),
+        None => (None, false, None),
+    }
+}
+
+/// Which menu entry the pointer is over, as a [`WidgetId`] for the rollover
+/// sound. Entries the port does not implement are not widgets.
+fn hovered_item(point: Option<Vector2<f32>>, rects: &[Rect]) -> Option<WidgetId> {
+    match hit(point?, rects)? {
+        MenuAction::NewGame => Some(0),
+        MenuAction::LoadGame => Some(1),
+        MenuAction::Quit => Some(2),
     }
 }
 
@@ -322,6 +340,8 @@ pub struct MainMenuScene {
     /// Screen size from the latest render, so `update` can map the pointer into
     /// canvas space consistently with how the canvas is drawn.
     last_screen_size: Vector2<f32>,
+    /// The frontend's hum, rollover and select sounds.
+    sfx: FrontendSfx,
 }
 
 impl MainMenuScene {
@@ -341,6 +361,7 @@ impl MainMenuScene {
             // the next rising edge require a real release first.
             last_pressed: true,
             last_screen_size: vec2(CANVAS_W, CANVAS_H),
+            sfx: FrontendSfx::new(),
         }
     }
 }
@@ -411,23 +432,33 @@ impl GameScene for MainMenuScene {
         // render regardless of which presentation drives the pointer.
         self.head_rotation = input_context.head.rotation;
 
-        let (action, last_pressed) = if game_options.presentation_mode == PresentationMode::Vr {
-            // VR has no 2D cursor: the pointer is where a controller ray meets
-            // the menu panel, and the trigger is the button.
-            let (point, pressed) = vr_pointer(input_context);
-            self.vr_pointer_canvas = point;
-            self.pointer = None;
-            resolve_click_at(point, pressed, self.last_pressed, &rects)
-        } else {
-            self.pointer = input_context.pointer;
-            resolve_click(
-                input_context.pointer,
-                self.last_pressed,
-                self.last_screen_size,
-                &rects,
-            )
-        };
+        let (action, last_pressed, point) =
+            if game_options.presentation_mode == PresentationMode::Vr {
+                // VR has no 2D cursor: the pointer is where a controller ray meets
+                // the menu panel, and the trigger is the button.
+                let (point, pressed) = vr_pointer(input_context);
+                self.vr_pointer_canvas = point;
+                self.pointer = None;
+                let (action, last_pressed) =
+                    resolve_click_at(point, pressed, self.last_pressed, &rects);
+                (action, last_pressed, point)
+            } else {
+                self.pointer = input_context.pointer;
+                resolve_click(
+                    input_context.pointer,
+                    self.last_pressed,
+                    self.last_screen_size,
+                    &rects,
+                )
+            };
         self.last_pressed = last_pressed;
+
+        // Hover and click feedback, from the same point that drives the
+        // highlight - so a sound plays exactly when an entry lights up.
+        self.sfx.hover(hovered_item(point, &rects));
+        if action.is_some() {
+            self.sfx.click();
+        }
 
         match action {
             Some(MenuAction::NewGame) => {
@@ -505,9 +536,10 @@ impl GameScene for MainMenuScene {
         effects: Vec<Effect>,
         _global_context: &GlobalContext,
         _game_options: &GameOptions,
-        _asset_cache: &mut AssetCache,
-        _audio_context: &mut AudioContext<EntityId, String>,
+        asset_cache: &mut AssetCache,
+        audio_context: &mut AudioContext<EntityId, String>,
     ) -> Vec<GlobalEffect> {
+        self.sfx.pump(asset_cache, audio_context);
         effects
             .into_iter()
             .filter_map(|e| match e {
@@ -515,6 +547,10 @@ impl GameScene for MainMenuScene {
                 _ => None,
             })
             .collect()
+    }
+
+    fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        self.sfx.stop(audio_context);
     }
 
     fn wants_pointer(&self) -> bool {
@@ -553,7 +589,7 @@ mod tests {
     #[test]
     fn rising_edge_over_new_game_activates_it() {
         // Press edge over the top button (normalized ~ canvas (512, 37)).
-        let (action, last) = resolve_click(
+        let (action, last, _) = resolve_click(
             pointer_at(0.8, 0.078, true),
             false,
             SCREEN,
@@ -565,7 +601,7 @@ mod tests {
 
     #[test]
     fn rising_edge_over_quit_activates_it() {
-        let (action, _) = resolve_click(
+        let (action, _, _) = resolve_click(
             pointer_at(0.8, 0.870, true),
             false,
             SCREEN,
@@ -577,7 +613,7 @@ mod tests {
     #[test]
     fn held_press_does_not_re_activate() {
         // Already pressed last frame -> no new activation even over an item.
-        let (action, last) = resolve_click(
+        let (action, last, _) = resolve_click(
             pointer_at(0.8, 0.078, true),
             true,
             SCREEN,
@@ -589,7 +625,7 @@ mod tests {
 
     #[test]
     fn click_outside_items_does_nothing() {
-        let (action, _) = resolve_click(
+        let (action, _, _) = resolve_click(
             pointer_at(0.05, 0.05, true),
             false,
             SCREEN,
@@ -613,18 +649,18 @@ mod tests {
         let held = pointer_at(574.5 / CANVAS_W, 436.0 / CANVAS_H, true);
 
         // First frame after the swap: the press is held, not new.
-        let (action, last) = resolve_click(held, scene.last_pressed, SCREEN, &rects);
+        let (action, last, _) = resolve_click(held, scene.last_pressed, SCREEN, &rects);
         assert_eq!(action, None, "a carried-over press must not activate Quit");
         scene.last_pressed = last;
 
         // Releasing and pressing again is a real click.
-        let (_, last) = resolve_click(
+        let (_, last, _) = resolve_click(
             pointer_at(574.5 / CANVAS_W, 436.0 / CANVAS_H, false),
             scene.last_pressed,
             SCREEN,
             &rects,
         );
-        let (action, _) = resolve_click(held, last, SCREEN, &rects);
+        let (action, _, _) = resolve_click(held, last, SCREEN, &rects);
         assert_eq!(action, Some(MenuAction::Quit));
     }
 
@@ -748,7 +784,7 @@ mod tests {
 
     #[test]
     fn no_pointer_means_no_action() {
-        let (action, last) = resolve_click(None, true, SCREEN, &menu_rects(None));
+        let (action, last, _) = resolve_click(None, true, SCREEN, &menu_rects(None));
         assert_eq!(action, None);
         assert!(!last);
     }
@@ -758,7 +794,7 @@ mod tests {
         // Rect 1 is "Load Game": canvas y 96..156, so y ~0.26 sits inside it.
         let rects = menu_rects(None);
         assert!(rects[1].contains(vec2(512.0, 126.0)));
-        let (action, _) = resolve_click(pointer_at(0.8, 0.2625, true), false, SCREEN, &rects);
+        let (action, _, _) = resolve_click(pointer_at(0.8, 0.2625, true), false, SCREEN, &rects);
         assert_eq!(action, Some(MenuAction::LoadGame));
     }
 
@@ -767,7 +803,7 @@ mod tests {
         // Rect 2 is "Options", still unimplemented: canvas y 172..232.
         let rects = menu_rects(None);
         assert!(rects[2].contains(vec2(512.0, 202.0)));
-        let (action, _) = resolve_click(pointer_at(0.8, 0.4208, true), false, SCREEN, &rects);
+        let (action, _, _) = resolve_click(pointer_at(0.8, 0.4208, true), false, SCREEN, &rects);
         assert_eq!(action, None);
     }
 

@@ -28,6 +28,7 @@ use crate::{
     input_context::{InputContext, Pointer2D},
     mission::GlobalContext,
     save_load::{SaveFile, all_saves},
+    scenes::frontend_sfx::{FrontendSfx, WidgetId},
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, pointer_to_canvas},
@@ -187,33 +188,58 @@ fn resolve_click(
     rects: &[Rect; 4],
     visible_saves: usize,
     has_selection: bool,
-) -> (Option<LoadGameAction>, bool) {
+) -> (Option<LoadGameAction>, bool, Option<Vector2<f32>>) {
     let Some(p) = pointer else {
-        return (None, false);
+        return (None, false, None);
     };
-    if !p.pressed || last_pressed {
-        return (None, p.pressed);
-    }
-
-    let action = pointer_to_canvas(
+    let canvas_point = pointer_to_canvas(
         vec2(CANVAS_W, CANVAS_H),
         p.position,
         screen_size,
         SCALE_MODE,
-    )
-    .and_then(|c| {
-        if has_selection && rects[LOAD_RECT_INDEX].contains(c) {
-            return Some(LoadGameAction::Load);
-        }
-        if rects[DONE_RECT_INDEX].contains(c) {
-            return Some(LoadGameAction::Done);
-        }
-        // Rows past the end of the save list are empty backdrop, not buttons.
-        (0..visible_saves)
-            .find(|index| row_rect(rects[LIST_RECT_INDEX], *index).contains(c))
-            .map(LoadGameAction::Select)
-    });
-    (action, p.pressed)
+    );
+    if !p.pressed || last_pressed {
+        return (None, p.pressed, canvas_point);
+    }
+
+    let action = canvas_point.and_then(|c| hit(c, rects, visible_saves, has_selection));
+    (action, p.pressed, canvas_point)
+}
+
+/// What is at a canvas point: a save row, "Load" (only with a selection), or
+/// "Done". Shared by the click and the rollover sound so the two always agree.
+fn hit(
+    point: Vector2<f32>,
+    rects: &[Rect; 4],
+    visible_saves: usize,
+    has_selection: bool,
+) -> Option<LoadGameAction> {
+    if has_selection && rects[LOAD_RECT_INDEX].contains(point) {
+        return Some(LoadGameAction::Load);
+    }
+    if rects[DONE_RECT_INDEX].contains(point) {
+        return Some(LoadGameAction::Done);
+    }
+    // Rows past the end of the save list are empty backdrop, not buttons.
+    (0..visible_saves)
+        .find(|index| row_rect(rects[LIST_RECT_INDEX], *index).contains(point))
+        .map(LoadGameAction::Select)
+}
+
+/// Which button the pointer is over, for the rollover sound.
+///
+/// Rows are deliberately silent: they highlight on selection rather than on
+/// hover, so a blip over one would be a sound with no visible counterpart.
+fn hovered_widget(
+    point: Option<Vector2<f32>>,
+    rects: &[Rect; 4],
+    has_selection: bool,
+) -> Option<WidgetId> {
+    match hit(point?, rects, 0, has_selection)? {
+        LoadGameAction::Load => Some(0),
+        LoadGameAction::Done => Some(1),
+        LoadGameAction::Select(_) => None,
+    }
 }
 
 pub struct LoadGameScene {
@@ -231,6 +257,8 @@ pub struct LoadGameScene {
     /// Screen size from the latest render, so `update` can map the pointer into
     /// canvas space consistently with how the canvas is drawn.
     last_screen_size: Vector2<f32>,
+    /// The frontend's hum, rollover and select sounds.
+    sfx: FrontendSfx,
 }
 
 impl LoadGameScene {
@@ -253,6 +281,7 @@ impl LoadGameScene {
             // the next rising edge require a real release first.
             last_pressed: true,
             last_screen_size: vec2(CANVAS_W, CANVAS_H),
+            sfx: FrontendSfx::new(),
         }
     }
 }
@@ -289,7 +318,7 @@ impl GameScene for LoadGameScene {
         let selected = self.selected.filter(|index| *index < visible);
 
         self.pointer = input_context.pointer;
-        let (action, last_pressed) = resolve_click(
+        let (action, last_pressed, point) = resolve_click(
             input_context.pointer,
             self.last_pressed,
             self.last_screen_size,
@@ -298,6 +327,12 @@ impl GameScene for LoadGameScene {
             selected.is_some(),
         );
         self.last_pressed = last_pressed;
+
+        self.sfx
+            .hover(hovered_widget(point, &rects, selected.is_some()));
+        if action.is_some() {
+            self.sfx.click();
+        }
 
         match action {
             Some(LoadGameAction::Select(index)) => {
@@ -436,9 +471,10 @@ impl GameScene for LoadGameScene {
         effects: Vec<Effect>,
         _global_context: &GlobalContext,
         _game_options: &GameOptions,
-        _asset_cache: &mut AssetCache,
-        _audio_context: &mut AudioContext<EntityId, String>,
+        asset_cache: &mut AssetCache,
+        audio_context: &mut AudioContext<EntityId, String>,
     ) -> Vec<GlobalEffect> {
+        self.sfx.pump(asset_cache, audio_context);
         effects
             .into_iter()
             .filter_map(|e| match e {
@@ -446,6 +482,10 @@ impl GameScene for LoadGameScene {
                 _ => None,
             })
             .collect()
+    }
+
+    fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        self.sfx.stop(audio_context);
     }
 
     fn wants_pointer(&self) -> bool {
@@ -539,7 +579,7 @@ mod tests {
     #[test]
     fn held_press_does_not_re_activate() {
         let done = FALLBACK_RECTS[DONE_RECT_INDEX].center();
-        let (action, last) = resolve_click(
+        let (action, last, _) = resolve_click(
             pointer_at(done.x / CANVAS_W, done.y / CANVAS_H, true),
             true,
             SCREEN,
@@ -553,7 +593,7 @@ mod tests {
 
     #[test]
     fn no_pointer_means_no_action() {
-        let (action, last) = resolve_click(None, true, SCREEN, &FALLBACK_RECTS, 3, true);
+        let (action, last, _) = resolve_click(None, true, SCREEN, &FALLBACK_RECTS, 3, true);
         assert_eq!(action, None);
         assert!(!last);
     }

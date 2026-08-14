@@ -84,6 +84,16 @@ pub trait GameScene {
         Vec::new()
     }
 
+    /// Called once, on the outgoing scene, just before it is replaced.
+    ///
+    /// A scene that started audio which outlives a single frame - anything
+    /// looping - must stop it here: the [`AudioContext`] belongs to `Game` and
+    /// keeps a sink alive until it drains, which a looping sink never does, so
+    /// dropping the scene alone would leave it playing forever. `handle_effects`
+    /// is not enough, because scenes are also replaced from paths that never
+    /// run it (a debug-runtime load, a level transition).
+    fn on_exit(&mut self, _audio_context: &mut AudioContext<EntityId, String>) {}
+
     /// Whether this scene wants a 2D mouse cursor (e.g. a menu). Flat runtimes
     /// show the OS cursor and populate `InputContext::pointer` when true; by
     /// default scenes capture the mouse for look.
