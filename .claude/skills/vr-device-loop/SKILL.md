@@ -44,15 +44,26 @@ Pass `--serial SERIAL` before the command when more than one device is attached.
 
 ## Preflight
 
-Resolve the device and confirm required game data:
+Resolve the device and confirm required game data. A 25th Anniversary Remaster
+install - what the game targets - keeps everything inside `sshock2.kpf` and has
+*no* loose gamesys or missions. Probe for the legacy loose layout too, since a
+device provisioned before the remaster still carries it and that is worth
+identifying rather than reading as "no data".
 
 ```sh
 adb devices -l
-adb -s SERIAL shell ls -l \
-  /sdcard/shock2quest/shock2.gam \
-  /sdcard/shock2quest/motiondb.bin \
-  /sdcard/shock2quest/earth.mis
+adb -s SERIAL shell '
+  ls -l /sdcard/shock2quest/sshock2.kpf /sdcard/shock2quest/mods/ 2>/dev/null \
+    || ls -l /sdcard/shock2quest/shock2.gam \
+             /sdcard/shock2quest/motiondb.bin \
+             /sdcard/shock2quest/earth.mis
+'
 ```
+
+Statting `shock2.gam` alone reports "missing data" on a correctly-provisioned
+remaster install. Note which layout answered: the remaster's upgraded models and
+textures are what the VR hands and weapons target, so a visual difference
+between two runs can simply be a device still on the legacy layout.
 
 The repository data and device data must describe the same workload. Sync the
 retail game data before interpreting visual or performance differences.
