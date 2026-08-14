@@ -1702,3 +1702,180 @@ mod tests {
         assert!((right - vec3(10.0, 20.0, 29.0)).magnitude() < 0.0001);
     }
 }
+
+/// What a runtime drives: either the game, or the screen explaining that there
+/// is no game data to run.
+///
+/// [`Game::init`] needs the gamesys, so it cannot be built at all on a machine
+/// with no data - and the failure it used to produce was a panic, which on a
+/// headset is a silent return to the Horizon shell. The runtimes construct this
+/// instead, and drive it with the same calls they already made on `Game`, so
+/// neither of them needs a second render loop for the one screen that has to
+/// work when nothing else does.
+pub enum App {
+    Ready(Box<Game>),
+    MissingAssets(MissingAssets),
+}
+
+impl App {
+    /// Probe the data root, then build whichever of the two is appropriate.
+    pub fn init(options: GameOptions, bundle_storage: Arc<dyn Storage>) -> App {
+        let install = install::probe_data_root();
+        if !install.has_data() {
+            // `Game::init` reports the install itself; it never runs here.
+            println!("{}", install.summary());
+            return App::MissingAssets(MissingAssets::new(&install, options, bundle_storage));
+        }
+        App::Ready(Box::new(Game::init(options, bundle_storage)))
+    }
+
+    pub fn update(
+        &mut self,
+        time: &Time,
+        input_context: &input_context::InputContext,
+        action_state: &mut input::InputActionState,
+    ) {
+        match self {
+            App::Ready(game) => game.update(time, input_context, action_state),
+            App::MissingAssets(missing) => missing.update(time, input_context),
+        }
+    }
+
+    pub fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
+        match self {
+            App::Ready(game) => game.render(),
+            App::MissingAssets(missing) => missing.render(),
+        }
+    }
+
+    pub fn render_per_eye(
+        &mut self,
+        view: Matrix4<f32>,
+        projection: Matrix4<f32>,
+        screen_size: Vector2<f32>,
+    ) -> Vec<SceneObject> {
+        match self {
+            App::Ready(game) => game.render_per_eye(view, projection, screen_size),
+            App::MissingAssets(missing) => missing.render_per_eye(view, projection, screen_size),
+        }
+    }
+
+    pub fn finish_render(
+        &mut self,
+        view: Matrix4<f32>,
+        projection: Matrix4<f32>,
+        screen_size: Vector2<f32>,
+    ) {
+        if let App::Ready(game) = self {
+            game.finish_render(view, projection, screen_size);
+        }
+    }
+
+    pub fn should_quit(&self) -> bool {
+        match self {
+            App::Ready(game) => game.should_quit(),
+            App::MissingAssets(_) => false,
+        }
+    }
+
+    pub fn wants_pointer(&self) -> bool {
+        match self {
+            App::Ready(game) => game.wants_pointer(),
+            // Nothing to click; leave the cursor to the window manager so the
+            // player can close the window.
+            App::MissingAssets(_) => true,
+        }
+    }
+
+    pub fn get_hand_spotlights(&self) -> Vec<engine::scene::light::SpotLight> {
+        match self {
+            App::Ready(game) => game.get_hand_spotlights(),
+            App::MissingAssets(_) => Vec::new(),
+        }
+    }
+
+    pub fn player_eye_height(&self) -> f32 {
+        match self {
+            App::Ready(game) => game.player_eye_height(),
+            App::MissingAssets(_) => PLAYER_EYE_HEIGHT,
+        }
+    }
+
+    pub fn player_center_above_floor(&self) -> f32 {
+        match self {
+            App::Ready(game) => game.player_center_above_floor(),
+            App::MissingAssets(_) => PLAYER_EYE_HEIGHT,
+        }
+    }
+
+    pub fn player_eye_cap_above_center(&self) -> f32 {
+        match self {
+            App::Ready(game) => game.player_eye_cap_above_center(),
+            App::MissingAssets(_) => 0.0,
+        }
+    }
+}
+
+/// The missing-assets screen and the little it needs to render itself.
+///
+/// The asset cache is real but empty: [`scenes::NoAssetsScene`] draws only text
+/// in the engine's compiled-in font, so nothing ever resolves through it. It
+/// exists because the shared canvas rendering takes one.
+pub struct MissingAssets {
+    scene: scenes::NoAssetsScene,
+    asset_cache: AssetCache,
+    options: GameOptions,
+}
+
+impl MissingAssets {
+    fn new(
+        install: &install::InstallStatus,
+        options: GameOptions,
+        bundle_storage: Arc<dyn Storage>,
+    ) -> MissingAssets {
+        let asset_paths = AssetPath::combine(vec![
+            BundleAssetPath::new("".to_owned(), bundle_storage),
+            AssetPath::folder("".to_owned()),
+        ]);
+        MissingAssets {
+            scene: scenes::NoAssetsScene::new(install),
+            asset_cache: AssetCache::new(
+                paths::data_root().to_string_lossy().into_owned(),
+                asset_paths,
+            ),
+            options,
+        }
+    }
+
+    fn update(&mut self, time: &Time, input_context: &input_context::InputContext) {
+        use crate::game_scene::GameScene;
+        self.scene.update(
+            time,
+            input_context,
+            &mut self.asset_cache,
+            &self.options,
+            Vec::new(),
+        );
+    }
+
+    fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
+        use crate::game_scene::GameScene;
+        self.scene.render(&mut self.asset_cache, &self.options)
+    }
+
+    fn render_per_eye(
+        &mut self,
+        view: Matrix4<f32>,
+        projection: Matrix4<f32>,
+        screen_size: Vector2<f32>,
+    ) -> Vec<SceneObject> {
+        use crate::game_scene::GameScene;
+        self.scene.render_per_eye(
+            &mut self.asset_cache,
+            view,
+            projection,
+            screen_size,
+            &self.options,
+        )
+    }
+}

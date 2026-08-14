@@ -44,6 +44,7 @@
 //! letter spacing - but a few (`*`, `/`, `X`, `Y`, `\`, `_`) do reach column 7,
 //! so adjacent glyphs can touch. That is upstream's design, not a packing bug.
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::font::{Font, FontCharacterInfo};
@@ -284,6 +285,29 @@ impl Font for BuiltinFont {
     fn get_character_info(&self, c: char) -> Option<FontCharacterInfo> {
         character_info(c)
     }
+}
+
+thread_local! {
+    /// Uploaded once per thread, on first use. The atlas is 160x60 and the
+    /// glyph table is compiled in, so this costs one small texture - but it
+    /// needs a live GL context, which rules out a `const`/`static` and means
+    /// it cannot be built until the renderer is up.
+    static SHARED: RefCell<Option<Rc<Box<dyn Font>>>> = const { RefCell::new(None) };
+}
+
+/// The shared fallback font, uploading it on first use.
+///
+/// Callers hold `Rc<Box<dyn Font>>` because that is what the scene text
+/// constructors and the `.FON` asset importer both produce, so a caller can
+/// swap between this and a loaded font without caring which it has.
+///
+/// Requires a current GL context.
+pub fn shared_builtin_font() -> Rc<Box<dyn Font>> {
+    SHARED.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        cell.get_or_insert_with(|| Rc::new(Box::new(BuiltinFont::new()) as Box<dyn Font>))
+            .clone()
+    })
 }
 
 #[cfg(test)]

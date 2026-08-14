@@ -18,7 +18,7 @@ pub mod texture_atlas;
 pub mod texture_format;
 pub mod util;
 
-pub use crate::builtin_font::BuiltinFont;
+pub use crate::builtin_font::{BuiltinFont, shared_builtin_font};
 pub use crate::engine::Engine;
 pub use crate::engine::EngineRenderContext;
 pub use crate::font::{Font, FontCharacterInfo, ellipsize, measure_text_width};

@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use cgmath::{InnerSpace, Matrix3, Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
+use cgmath::{Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
 use dark::{
     importers::{STRINGS_IMPORTER, UI_LAYOUT_IMPORTER},
     map::MapRect,
@@ -37,7 +37,10 @@ use crate::{
     scenes::frontend_sfx::FrontendSfx,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, WorldPanel, pointer_to_canvas, ray_to_canvas},
+    ui::{
+        HAlign, Rect, ScaleMode, UiCanvas, VAlign, VR_COMPONENT_Z_STEP, frontend_panel,
+        pointer_to_canvas, ray_to_canvas,
+    },
 };
 
 /// Mission loaded when the player chooses "New Game".
@@ -170,61 +173,9 @@ fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
         .collect()
 }
 
-/// The VR menu hangs on a panel 2m ahead of the player at eye level, sized to
-/// the canvas's 4:3 aspect so the art is not stretched.
-///
-/// "Eye level" is not the scene origin: VR runtimes add a head offset of
-/// `player_eye_height / SCALE_FACTOR` on top of the camera position this scene
-/// returns, so a panel at y=0 hangs below the view and is never seen.
-const VR_PANEL_DISTANCE: f32 = 2.0;
-const VR_PANEL_EYE_HEIGHT: f32 = crate::PLAYER_EYE_HEIGHT / dark::SCALE_FACTOR;
-const VR_PANEL_SIZE: Vector2<f32> = Vector2 { x: 2.0, y: 1.5 };
 /// A VR trigger past this counts as "pressed", matching the hand code's
 /// grab/fire threshold.
 const VR_TRIGGER_THRESHOLD: f32 = 0.5;
-/// Spacing between stacked canvas layers in world space, so the labels sort in
-/// front of the backdrop instead of z-fighting it.
-const VR_COMPONENT_Z_STEP: f32 = 0.001;
-
-/// The panel the VR menu is drawn on: hung `VR_PANEL_DISTANCE` in front of the
-/// head and turned to face back at it.
-///
-/// It is anchored to the head's **facing**, not to a fixed world axis. There is
-/// no canonical "forward" to hardcode - the runtimes' yaw-0 camera looks along
-/// +X, not -Z - so a panel pinned to -Z sits off to the side and never enters
-/// the frustum. This mirrors `DebugMapScene`'s construction, which is the
-/// world-space panel that demonstrably renders.
-fn vr_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
-    let head = vec3(0.0, VR_PANEL_EYE_HEIGHT, 0.0);
-    let forward = head_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-    let center = head + forward * VR_PANEL_DISTANCE;
-
-    // Orient the panel by looking from it back to the head. `look_dir` runs
-    // panel -> head, so the panel's local +Z (the third column) points away
-    // from the viewer - the convention the world-space element path expects.
-    let mut look_dir = head - center;
-    look_dir = if look_dir.magnitude2() < 1e-6 {
-        vec3(0.0, 0.0, 1.0)
-    } else {
-        look_dir.normalize()
-    };
-    let mut up = vec3(0.0, 1.0, 0.0);
-    let mut right = look_dir.cross(up);
-    if right.magnitude2() < 1e-6 {
-        // Looking straight up or down: pick a different up to keep the basis
-        // well-defined.
-        up = vec3(0.0, 0.0, 1.0);
-        right = look_dir.cross(up);
-    }
-    let right = right.normalize();
-    let true_up = right.cross(look_dir).normalize();
-
-    WorldPanel {
-        center,
-        rotation: Quaternion::from(Matrix3::from_cols(right, true_up, -look_dir)),
-        size: VR_PANEL_SIZE,
-    }
-}
 
 /// Where a hand is pointing on the menu panel, in canvas pixels, plus whether
 /// its trigger is held.
@@ -234,7 +185,7 @@ fn vr_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
 /// held** wins, so either controller can click; ties and idle triggers fall
 /// back to the right hand, which then drives the hover highlight.
 fn vr_pointer(input_context: &InputContext) -> (Option<Vector2<f32>>, bool) {
-    let panel = vr_panel(input_context.head.rotation);
+    let panel = frontend_panel(input_context.head.rotation);
     let right = &input_context.right_hand;
     let left = &input_context.left_hand;
     let held = |hand: &crate::input_context::Hand| hand.trigger_value > VR_TRIGGER_THRESHOLD;
@@ -482,7 +433,7 @@ impl GameScene for MainMenuScene {
 
         // In VR there is no screen to draw on, so the same canvas is presented
         // on a world-space panel in front of the player.
-        let panel = vr_panel(self.head_rotation);
+        let panel = frontend_panel(self.head_rotation);
         let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
         let objects = canvas.render_world_space(
             asset_cache,
@@ -563,6 +514,7 @@ impl GameScene for MainMenuScene {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::FRONTEND_PANEL_DISTANCE;
     use cgmath::Rotation3;
 
     fn pointer_at(x: f32, y: f32, pressed: bool) -> Option<Pointer2D> {
@@ -666,7 +618,7 @@ mod tests {
     /// rather than world axes - so the test stays honest whichever way the
     /// panel ends up facing.
     fn hand_aimed_at(point: Vector2<f32>, trigger: f32) -> crate::input_context::Hand {
-        let panel = vr_panel(test_head());
+        let panel = frontend_panel(test_head());
         let u = point.x / CANVAS_W - 0.5;
         let v = 0.5 - point.y / CANVAS_H;
         let right = panel.rotation.rotate_vector(vec3(1.0, 0.0, 0.0));
@@ -676,7 +628,7 @@ mod tests {
 
         crate::input_context::Hand {
             // Stand back along the panel's normal and aim at the target.
-            position: target - normal * VR_PANEL_DISTANCE,
+            position: target - normal * FRONTEND_PANEL_DISTANCE,
             rotation: Quaternion::from_arc(vec3(0.0, 0.0, -1.0), normal, None),
             trigger_value: trigger,
             ..crate::input_context::Hand::default()
@@ -738,7 +690,7 @@ mod tests {
         // Rotated 180 degrees: pointing behind the player, away from the panel.
         // Both hands must aim away - in VR both are always posed, so leaving
         // one at its default would have it pointing straight at the panel.
-        let panel = vr_panel(test_head());
+        let panel = frontend_panel(test_head());
         let away = || crate::input_context::Hand {
             // Aim directly opposite the panel, from the panel's own centre.
             position: panel.center,

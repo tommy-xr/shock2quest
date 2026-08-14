@@ -40,6 +40,7 @@ pub mod game_over;
 pub mod load_game;
 pub mod loading;
 pub mod main_menu;
+pub mod no_assets;
 
 pub use cutscene_player::CutscenePlayerScene;
 pub use debug_camera::DebugCameraScene;
@@ -61,6 +62,7 @@ pub use game_over::GameOverScene;
 pub use load_game::LoadGameScene;
 pub use loading::LoadingScene;
 pub use main_menu::MainMenuScene;
+pub use no_assets::NoAssetsScene;
 
 /// The minimal world a non-mission screen (menu, loading, game over) needs.
 ///
@@ -137,6 +139,25 @@ pub fn create_initial_scene(
     if options.mission.eq_ignore_ascii_case("main_menu") {
         return SceneInitResult {
             scene: Box::new(MainMenuScene::new()),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    // Visual-only scene to inspect the missing-assets screen. The real one is
+    // shown by the runtimes *instead of* a `Game`, since it exists precisely
+    // when there is no gamesys to build one from - which also means it cannot
+    // be reached on a machine that has the data. This entry renders the same
+    // scene against a stand-in status so the screen can be render-verified in
+    // both presentations without uninstalling the game.
+    if options.mission.eq_ignore_ascii_case("debug_no_assets") {
+        let status = crate::install::InstallStatus {
+            data_root: crate::paths::data_root().to_path_buf(),
+            kind: crate::install::InstallKind::Missing,
+            found: Vec::new(),
+            missing_mods: Vec::new(),
+        };
+        return SceneInitResult {
+            scene: Box::new(NoAssetsScene::new(&status)),
             mission_save_data: HashMap::new(),
         };
     }
