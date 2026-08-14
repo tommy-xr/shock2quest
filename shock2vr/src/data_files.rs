@@ -141,35 +141,9 @@ pub fn open_data_file(name: &str) -> Option<Box<dyn ReadableAndSeekable>> {
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
-    use std::path::PathBuf;
 
     use super::*;
-
-    /// A scratch directory that removes itself when the test ends.
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(name: &str) -> TempDir {
-            let path = std::env::temp_dir().join(format!(
-                "shock2vr-data-files-{}-{}",
-                std::process::id(),
-                name
-            ));
-            let _ = std::fs::remove_dir_all(&path);
-            std::fs::create_dir_all(&path).unwrap();
-            TempDir(path)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_support::TempDir;
 
     /// Write a stand-in for the 25AE archive holding `entries`.
     fn write_archive(root: &Path, entries: &[(&str, &[u8])]) {

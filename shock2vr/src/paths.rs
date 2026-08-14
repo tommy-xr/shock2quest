@@ -21,18 +21,6 @@ static DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
 const DESKTOP_CANDIDATES: &[&str] = &["./Data", "../Data", "../../Data", "."];
 
 #[cfg(not(target_os = "android"))]
-/// Files that mark a directory as a game-data root. A classic install has the
-/// loose gamesys and `.crf` archives; a 25th Anniversary Edition install has
-/// none of those at the root, keeping everything inside `sshock2.kpf` instead.
-const SENTINELS: &[&str] = &[
-    "shock2.gam",
-    "res/obj.crf",
-    "res/mesh.crf",
-    "motiondb.bin",
-    "sshock2.kpf",
-];
-
-#[cfg(not(target_os = "android"))]
 pub fn data_root() -> &'static Path {
     DATA_ROOT.get_or_init(resolve_desktop_data_root).as_path()
 }
@@ -68,8 +56,8 @@ fn resolve_desktop_data_root() -> PathBuf {
 
 #[cfg(not(target_os = "android"))]
 fn candidate_has_sentinel(path: &Path) -> bool {
-    SENTINELS
-        .iter()
-        .map(|sentinel| path.join(sentinel))
-        .any(|probe| probe.exists())
+    // One owner for "what counts as game data": `install` names both the
+    // remaster's single archive and the pre-remaster loose files, and probes
+    // the same set to report which layout was found.
+    crate::install::probe(path).has_data()
 }
