@@ -920,6 +920,7 @@ impl Game {
     }
 
     pub fn init(options: GameOptions, bundle_storage: Arc<dyn Storage>) -> Game {
+        engine::platform::service_events();
         // Must happen before any model is loaded.
         let high_detail = Self::resolve_high_detail_meshes(&options.experimental_features);
         dark::high_detail::set_enabled(high_detail);
@@ -1016,12 +1017,14 @@ impl Game {
         // Global items
         let base_path = paths::data_root().to_string_lossy().into_owned();
         let mut asset_cache = AssetCache::new(base_path, asset_paths);
+        engine::platform::service_events();
 
         // TODO: Start ffmpeg stuff
         #[cfg(feature = "ffmpeg")]
         engine_ffmpeg::init().unwrap();
 
         let (properties, links, links_with_data) = dark::properties::get();
+        engine::platform::service_events();
 
         // Through the asset paths, like the missions and motiondb: on a 25AE
         // install the gamesys lives inside `sshock2.kpf`.
@@ -1046,12 +1049,14 @@ impl Game {
             &links_with_data,
             &properties,
         );
+        engine::platform::service_events();
 
         // Likewise: 25AE moves this to `data/res/mschema/motiondb.bin`.
         let motiondb_reader = asset_cache
             .get_raw_reader("motiondb.bin")
             .expect("motiondb.bin should be present in the mounted data");
         let motiondb = MotionDB::read(&mut *motiondb_reader.borrow_mut());
+        engine::platform::service_events();
 
         let mut audio_context = AudioContext::new();
 
@@ -1115,6 +1120,7 @@ impl Game {
             &global_context,
             &options,
         );
+        engine::platform::service_events();
 
         // log_entities_with_link(&active_mission.world, |link| {
         //     matches!(link, Link::AIWatchObj(_))

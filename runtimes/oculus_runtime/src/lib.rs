@@ -463,6 +463,11 @@ fn main() {
         debug_skeletons: false,
         ..GameOptions::default()
     };
+    // NativeActivity owns Android lifecycle and input queues on this thread.
+    // Keep servicing them at milestones inside the synchronous first load,
+    // before the per-frame pump below exists.
+    #[cfg(target_os = "android")]
+    engine::platform::set_event_pump(Some(android_pump_events));
     let mut game = shock2vr::App::init(options, bundle_storage);
     println!(
         "SHOCK2QUEST_STARTUP mission={} init_ms={:.3}",
