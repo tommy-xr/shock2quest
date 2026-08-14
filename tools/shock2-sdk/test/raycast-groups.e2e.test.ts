@@ -5,6 +5,7 @@ import {
   GameServer,
   HttpClient,
   HttpError,
+  type RayCastResult,
 } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
@@ -16,7 +17,7 @@ const wallRay = {
 };
 
 test(
-  "raycast validates collision groups and keeps the level alias world-visible",
+  "raycast defaults ignore sensors while groups remain validated and compatible",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -59,17 +60,29 @@ test(
       "an explicit empty mask should receive a clear 400 response",
     );
 
-    // Omission remains the convenient common case and must include world
-    // geometry. Start just outside the Midwife capsule so the wall is first.
+    // Omission remains the convenient common case and must ignore room-trigger
+    // sensors. This origin is inside a Base Room sensor; the wall is the first
+    // solid surface along the ray.
     const defaultHit = await game.raycast({
       start: [79.0, -1.6, 32.0],
       end: wallRay.end,
-      ignore_sensors: true,
     });
     assert.equal(defaultHit.hit, true, "default raycast should see the Hydro2 wall");
     assert.ok(
       defaultHit.distance !== null && Math.abs(defaultHit.distance - 0.6015) < 0.01,
       `expected the nearby Hydro2 wall, got ${JSON.stringify(defaultHit)}`,
     );
+
+    // Raw HTTP callers can still opt in when they are deliberately probing
+    // trigger volumes.
+    const sensorHit = await client.post<RayCastResult>("/v1/physics/raycast", {
+      start: [79.0, -1.6, 32.0],
+      end: wallRay.end,
+      ignore_sensors: false,
+    });
+    assert.equal(sensorHit.hit, true);
+    assert.equal(sensorHit.is_sensor, true);
+    assert.equal(sensorHit.entity_name, "Base Room");
+    assert.equal(sensorHit.distance, 0);
   },
 );

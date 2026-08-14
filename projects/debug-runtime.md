@@ -292,7 +292,9 @@ curl -X POST http://127.0.0.1:8080/v1/screenshot \
 Omitting `collision_groups` defaults to `["world", "entity"]`. Supported
 names are `world`, `entity`, `selectable`, `player`, `ui`, `hitbox`, `raycast`,
 and `all`; the older documented name `level` is accepted as an alias for
-`world`. Unknown names and explicit empty masks return HTTP 400.
+`world`. Unknown names and explicit empty masks return HTTP 400. Sensors are
+ignored by default so room triggers do not look like distance-zero occluders;
+pass `"ignore_sensors": false` to probe sensor volumes deliberately.
 
 ## Key Files
 
