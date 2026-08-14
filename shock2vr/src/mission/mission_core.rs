@@ -5548,7 +5548,15 @@ impl MissionCore {
         if self.interaction.viewmodel_entity() != Some(entity) {
             return; // weapon changed; leave None -> static idle
         }
-        let (next, _flags, events, _disp) = AnimationPlayer::update(&player, dt);
+        let (next, flags, events, _disp) = AnimationPlayer::update(&player, dt);
+        if !flags.is_empty() {
+            self.script_world.dispatch(Message {
+                to: entity,
+                payload: MessagePayload::AnimationFlagTriggered {
+                    motion_flags: flags,
+                },
+            });
+        }
         let completed = events
             .iter()
             .any(|e| matches!(e, AnimationEvent::Completed));
@@ -5561,6 +5569,12 @@ impl MissionCore {
     /// `update_flat_melee_anim` drops it back to the static idle). Driven by
     /// `Effect::FlatMeleeSwing` on a melee attack.
     fn queue_flat_melee_swing(&mut self, asset_cache: &mut AssetCache, entity_id: EntityId) {
+        // Do not let release/pull chatter restart the clip before its authored
+        // hit frame (or manufacture extra hits). A new swing is accepted only
+        // after the current one returns to idle.
+        if self.flat_melee_anim.is_some() {
+            return;
+        }
         if let Some(clip) =
             asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{MELEE_SWING_CLIP}_.mc"))
         {
