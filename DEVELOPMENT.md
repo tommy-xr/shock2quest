@@ -123,11 +123,19 @@ cargo dr --release --experimental teleport
     - Add android target: `rustup target add aarch64-linux-android`
     - Install adb: `brew install android-platform-tools`
 
-- Create a `develop.keystore`. (ie, https://stackoverflow.com/questions/25975320/create-android-keystory-private-key-command-line)
-  - Make sure the password matches in the Cargo.toml file:
+- Create a `develop.keystore` for signing release APKs. Keep it **outside** the
+  repo - it is gitignored, so a copy inside one clone is invisible to every other
+  clone and worktree:
   ```sh
-  keytool -genkey -v -keystore develop.keystore -alias com_tommybuilds_shock2quest  -keyalg RSA -keysize 2048 -validity 10000
+  mkdir -p ~/.shock2quest
+  keytool -genkey -v -keystore ~/.shock2quest/develop.keystore \
+    -alias com_tommybuilds_shock2quest -keyalg RSA -keysize 2048 -validity 10000
   ```
+  - The password must match `keystore_password` in
+    `runtimes/oculus_runtime/Cargo.toml`.
+  - `set_up_android_sdk.sh` symlinks it into whichever checkout you source it
+    from, so each new clone or worktree picks it up with no extra step. Set
+    `SHOCK2QUEST_KEYSTORE` to keep it somewhere else.
 - Make sure [Developer Mode is enabled on your Quest device](https://www.reddit.com/r/OculusQuest/comments/17sa8n6/tutorial_quest_3_developer_mode_4_easy_steps/)
 - Make sure `adb` is installed and working. With Oculus connected, run `adb devices` and verify your headset shows up
 - Tweak `runtimes/oculus_runtime/set_up_android_sdk.sh` to match your paths
