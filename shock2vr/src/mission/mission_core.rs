@@ -440,6 +440,109 @@ fn move_live_entity_into_container(
     was_able_to_drop
 }
 
+/// Restore a live hand-released item to ordinary world ownership.
+///
+/// Inventory items may have an authored `HasRefs(false)` and can retain a
+/// stale `Contains` link across hand/world transitions. Physics creation is
+/// intentionally performed only after this invariant is restored: entity
+/// creation treats an unreferenced object as non-world state and otherwise
+/// declines to give it a selectable body.
+fn restore_live_entity_world_refs(world: &mut World, entity_id: EntityId) -> bool {
+    let is_alive = world
+        .borrow::<EntitiesView>()
+        .is_ok_and(|entities| entities.is_alive(entity_id));
+    if !is_alive {
+        return false;
+    }
+
+    {
+        let mut links_view = world.borrow::<ViewMut<Links>>().unwrap();
+        for links in (&mut links_view).iter() {
+            drop_contains_links_to(links, entity_id);
+        }
+    }
+    world.add_component(entity_id, PropHasRefs(true));
+    true
+}
+
+#[cfg(test)]
+mod released_item_world_refs_tests {
+    use super::*;
+
+    fn contains(container: &Links, item: EntityId) -> bool {
+        container.to_links.iter().any(|link| {
+            matches!(link.link, Link::Contains(_))
+                && link.to_entity_id.map(|wrapped| wrapped.0) == Some(item)
+        })
+    }
+
+    #[test]
+    fn hand_release_restores_refs_and_clears_residual_containment() {
+        let mut world = World::new();
+        let item = world.add_entity(PropHasRefs(false));
+        let container = world.add_entity(Links {
+            to_links: vec![ToLink {
+                link: Link::Contains(4),
+                to_entity_id: Some(WrappedEntityId(item)),
+                to_template_id: 0,
+            }],
+        });
+
+        assert!(restore_live_entity_world_refs(&mut world, item));
+        assert!(
+            world
+                .borrow::<View<PropHasRefs>>()
+                .unwrap()
+                .get(item)
+                .unwrap()
+                .0
+        );
+        assert!(!contains(
+            world
+                .borrow::<View<Links>>()
+                .unwrap()
+                .get(container)
+                .unwrap(),
+            item,
+        ));
+    }
+
+    #[test]
+    fn ordinary_container_transfer_still_removes_world_refs() {
+        let mut world = World::new();
+        let item = world.add_entity(PropHasRefs(true));
+        let container = world.add_entity(Links::empty());
+
+        assert!(move_live_entity_into_container(&mut world, container, item));
+        assert!(
+            !world
+                .borrow::<View<PropHasRefs>>()
+                .unwrap()
+                .get(item)
+                .unwrap()
+                .0
+        );
+        assert!(contains(
+            world
+                .borrow::<View<Links>>()
+                .unwrap()
+                .get(container)
+                .unwrap(),
+            item,
+        ));
+    }
+
+    #[test]
+    fn late_release_effect_cannot_resurrect_a_consumed_item() {
+        let mut world = World::new();
+        let item = world.add_entity(PropHasRefs(false));
+        world.delete_entity(item);
+
+        assert!(!restore_live_entity_world_refs(&mut world, item));
+        assert!(!world.borrow::<EntitiesView>().unwrap().is_alive(item));
+    }
+}
+
 /// Apply one retail food/drink use against live state. The carried-source
 /// validation, bounded heal, and consumption decision occur in one effect
 /// pass, so duplicate queued uses of the same object cannot heal twice.
@@ -6734,6 +6837,9 @@ impl MissionCore {
                     }
                 }
                 VirtualHandEffect::DropItem { entity_id } => {
+                    if !restore_live_entity_world_refs(&mut self.world, entity_id) {
+                        continue;
+                    }
                     if self.is_vr_melee_weapon(entity_id) {
                         // Recreate from authored physics so the released item
                         // is an ordinary dynamic, harmless loose prop again.
@@ -7630,6 +7736,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .run(|v: View<dark::properties::PropMaxHitPoints>| {
                 v.get(id).ok().map(|hp| hp.hit_points)
             });
+        let has_refs = self
+            .world
+            .run(|v: View<PropHasRefs>| v.get(id).ok().map(|refs| refs.0));
         // Most ecologies author no explicit P$EcoState; they behave as Normal
         // until their script's first transition creates the component.
         let ecology_state = self.world.run(
@@ -7729,6 +7838,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "MaxHitPoints".to_string(),
                         value: max_hit_points.to_string(),
+                    });
+                }
+                if let Some(has_refs) = has_refs {
+                    properties.push(DebugPropertyInfo {
+                        name: "HasRefs".to_string(),
+                        value: has_refs.to_string(),
                     });
                 }
                 if let Some(state) = ecology_state {
