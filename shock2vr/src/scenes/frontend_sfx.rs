@@ -46,52 +46,65 @@ const HUM_VOLUME: f32 = 0.35;
 const ROLLOVER_VOLUME: f32 = 0.5;
 const SELECT_VOLUME: f32 = 0.8;
 
-/// Identifies the widget under the pointer. Only equality matters - a screen
-/// numbers its own widgets however it likes, as long as two different widgets
-/// never share an id.
-pub type WidgetId = usize;
-
+/// Frontend sounds for one screen.
+///
+/// `TWidget` identifies the widget under the pointer; a screen passes its own
+/// action type, so the thing that decides *what was clicked* is also the thing
+/// that decides *what is hovered* - there is no second numbering to keep in
+/// step. Only equality is used.
 #[derive(Default)]
-pub struct FrontendSfx {
+pub struct FrontendSfx<TWidget> {
     /// Widget the pointer was over on the previous update, so the rollover
     /// fires once on entry rather than every frame it stays there.
-    hovered: Option<WidgetId>,
-    /// One-shots queued by `update`, played by the next `pump`.
-    pending: Vec<&'static str>,
+    hovered: Option<TWidget>,
+    /// One-shots queued by `update` with the level to play them at, played by
+    /// the next `pump`. Each sound carries its own level so adding one cannot
+    /// silently inherit another's.
+    pending: Vec<(&'static str, f32)>,
     /// The looping bed.
     hum: Hum,
+    /// Latched on the first sound that fails to load. All three live in the
+    /// same archive, so one miss means the set is not there - and without the
+    /// latch every hover would re-hit the asset cache and warn again.
+    unavailable: bool,
 }
 
-/// The bed's lifecycle. `Unavailable` is a latch: without it a missing
-/// `snd.crf` would re-hit the asset cache and warn once per frame, forever.
+/// The bed's lifecycle. `Stopped` is terminal: the screen that owned the bed is
+/// on its way out, and a restarted bed would be a looping sink with no owner
+/// left to stop it.
 #[derive(Default)]
 enum Hum {
     #[default]
     NotStarted,
     Playing(AudioHandle),
-    Unavailable,
+    Stopped,
 }
 
-impl FrontendSfx {
+impl<TWidget: Copy + PartialEq> FrontendSfx<TWidget> {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            hovered: None,
+            pending: Vec::new(),
+            hum: Hum::NotStarted,
+            unavailable: false,
+        }
     }
 
     /// The widget the pointer is over this update, or `None` when it is over
     /// nothing actionable.
-    pub fn hover(&mut self, target: Option<WidgetId>) {
+    pub fn hover(&mut self, target: Option<TWidget>) {
         if target == self.hovered {
             return;
         }
         self.hovered = target;
         if target.is_some() {
-            self.pending.push(ROLLOVER_SOUND);
+            self.pending.push((ROLLOVER_SOUND, ROLLOVER_VOLUME));
         }
     }
 
     /// A widget was activated.
     pub fn click(&mut self) {
-        self.pending.push(SELECT_SOUND);
+        self.pending.push((SELECT_SOUND, SELECT_VOLUME));
     }
 
     /// Start the bed if it is not running, and play anything queued since the
@@ -101,9 +114,14 @@ impl FrontendSfx {
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
     ) {
+        if self.unavailable {
+            self.pending.clear();
+            return;
+        }
+
         if matches!(self.hum, Hum::NotStarted) {
             let handle = AudioHandle::new();
-            self.hum = if play(
+            self.hum = if self.play(
                 HUM_SOUND,
                 &handle,
                 PlayOptions {
@@ -115,17 +133,12 @@ impl FrontendSfx {
             ) {
                 Hum::Playing(handle)
             } else {
-                Hum::Unavailable
+                Hum::NotStarted
             };
         }
 
-        for sound in std::mem::take(&mut self.pending) {
-            let volume = if sound == ROLLOVER_SOUND {
-                ROLLOVER_VOLUME
-            } else {
-                SELECT_VOLUME
-            };
-            play(
+        for (sound, volume) in std::mem::take(&mut self.pending) {
+            self.play(
                 sound,
                 &AudioHandle::new(),
                 PlayOptions {
@@ -144,68 +157,85 @@ impl FrontendSfx {
     /// One-shots are deliberately left alone: the select click that caused the
     /// transition should finish over the screen that replaces this one.
     pub fn stop(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
-        if let Hum::Playing(handle) = std::mem::take(&mut self.hum) {
+        if let Hum::Playing(handle) = std::mem::replace(&mut self.hum, Hum::Stopped) {
             stop_audio(audio_context, handle.clone());
             crate::audio_log::record_stop(handle.id());
         }
+        self.hum = Hum::Stopped;
     }
-}
 
-/// Play one frontend sound by asset name, reporting whether it was found.
-///
-/// The sounds live in `snd.crf` under `sfx/`, so they are addressed by their
-/// archive-relative path: the bare basenames are ambiguous across the mounted
-/// archives, and a menu that silently played some other `mloop1` would be
-/// worse than a silent one.
-fn play(
-    name: &'static str,
-    handle: &AudioHandle,
-    options: PlayOptions,
-    asset_cache: &mut AssetCache,
-    audio_context: &mut AudioContext<EntityId, String>,
-) -> bool {
-    let Some(clip) = asset_cache.get_opt(&AUDIO_IMPORTER, name) else {
-        warn!("frontend sfx: unable to load {name}");
-        return false;
-    };
-    let duration = clip.total_duration();
-    let preempted = play_audio_with(audio_context, handle.clone(), None, clip, options);
-    crate::audio_log::record_stops(&preempted);
-    crate::audio_log::record(crate::audio_log::SoundRecord {
-        sample: name,
-        tags: vec![("kind".to_owned(), "menu".to_owned())],
-        position: [0.0, 0.0, 0.0],
-        duration,
-        source_entity: None,
-        handle: Some(handle.id()),
-    });
-    true
+    /// Play one frontend sound by asset name, reporting whether it was found.
+    ///
+    /// The sounds live in `snd.crf` under `sfx/`, so they are addressed by
+    /// their archive-relative path: the bare basenames are ambiguous across the
+    /// mounted archives, and a menu that silently played some other `mloop1`
+    /// would be worse than a silent one.
+    fn play(
+        &mut self,
+        name: &'static str,
+        handle: &AudioHandle,
+        options: PlayOptions,
+        asset_cache: &mut AssetCache,
+        audio_context: &mut AudioContext<EntityId, String>,
+    ) -> bool {
+        let Some(clip) = asset_cache.get_opt(&AUDIO_IMPORTER, name) else {
+            warn!("frontend sfx: unable to load {name}");
+            self.unavailable = true;
+            return false;
+        };
+        let duration = clip.total_duration();
+        let preempted = play_audio_with(audio_context, handle.clone(), None, clip, options);
+        crate::audio_log::record_stops(&preempted);
+        crate::audio_log::record(crate::audio_log::SoundRecord {
+            sample: name,
+            tags: vec![("kind".to_owned(), "menu".to_owned())],
+            position: [0.0, 0.0, 0.0],
+            duration,
+            source_entity: None,
+            handle: Some(handle.id()),
+        });
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Stand-in for a screen's action type: the rollover only ever compares
+    /// widgets for equality.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Widget {
+        A,
+        B,
+    }
+
     #[test]
     fn rollover_fires_once_per_widget_entry() {
         let mut sfx = FrontendSfx::new();
 
-        sfx.hover(Some(2));
-        assert_eq!(sfx.pending, vec![ROLLOVER_SOUND]);
+        sfx.hover(Some(Widget::A));
+        assert_eq!(sfx.pending, vec![(ROLLOVER_SOUND, ROLLOVER_VOLUME)]);
 
         // Staying on the same widget is not a new entry.
-        sfx.hover(Some(2));
-        assert_eq!(sfx.pending, vec![ROLLOVER_SOUND]);
+        sfx.hover(Some(Widget::A));
+        assert_eq!(sfx.pending, vec![(ROLLOVER_SOUND, ROLLOVER_VOLUME)]);
 
         // Moving straight from one widget to another is.
-        sfx.hover(Some(3));
-        assert_eq!(sfx.pending, vec![ROLLOVER_SOUND, ROLLOVER_SOUND]);
+        sfx.hover(Some(Widget::B));
+        assert_eq!(
+            sfx.pending,
+            vec![
+                (ROLLOVER_SOUND, ROLLOVER_VOLUME),
+                (ROLLOVER_SOUND, ROLLOVER_VOLUME)
+            ]
+        );
     }
 
     #[test]
     fn leaving_a_widget_is_silent() {
         let mut sfx = FrontendSfx::new();
-        sfx.hover(Some(1));
+        sfx.hover(Some(Widget::A));
         sfx.pending.clear();
 
         sfx.hover(None);
@@ -215,18 +245,18 @@ mod tests {
     #[test]
     fn re_entering_the_same_widget_fires_again() {
         let mut sfx = FrontendSfx::new();
-        sfx.hover(Some(1));
+        sfx.hover(Some(Widget::A));
         sfx.hover(None);
         sfx.pending.clear();
 
-        sfx.hover(Some(1));
-        assert_eq!(sfx.pending, vec![ROLLOVER_SOUND]);
+        sfx.hover(Some(Widget::A));
+        assert_eq!(sfx.pending, vec![(ROLLOVER_SOUND, ROLLOVER_VOLUME)]);
     }
 
     #[test]
     fn click_queues_the_select_sound() {
-        let mut sfx = FrontendSfx::new();
+        let mut sfx = FrontendSfx::<Widget>::new();
         sfx.click();
-        assert_eq!(sfx.pending, vec![SELECT_SOUND]);
+        assert_eq!(sfx.pending, vec![(SELECT_SOUND, SELECT_VOLUME)]);
     }
 }

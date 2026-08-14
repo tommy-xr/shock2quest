@@ -34,7 +34,7 @@ use crate::{
     game_scene::GameScene,
     input_context::{InputContext, Pointer2D},
     mission::GlobalContext,
-    scenes::frontend_sfx::{FrontendSfx, WidgetId},
+    scenes::frontend_sfx::FrontendSfx,
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, WorldPanel, pointer_to_canvas, ray_to_canvas},
@@ -314,16 +314,6 @@ fn resolve_click(
     }
 }
 
-/// Which menu entry the pointer is over, as a [`WidgetId`] for the rollover
-/// sound. Entries the port does not implement are not widgets.
-fn hovered_item(point: Option<Vector2<f32>>, rects: &[Rect]) -> Option<WidgetId> {
-    match hit(point?, rects)? {
-        MenuAction::NewGame => Some(0),
-        MenuAction::LoadGame => Some(1),
-        MenuAction::Quit => Some(2),
-    }
-}
-
 pub struct MainMenuScene {
     world: World,
     scene_name: String,
@@ -341,7 +331,7 @@ pub struct MainMenuScene {
     /// canvas space consistently with how the canvas is drawn.
     last_screen_size: Vector2<f32>,
     /// The frontend's hum, rollover and select sounds.
-    sfx: FrontendSfx,
+    sfx: FrontendSfx<MenuAction>,
 }
 
 impl MainMenuScene {
@@ -455,7 +445,7 @@ impl GameScene for MainMenuScene {
 
         // Hover and click feedback, from the same point that drives the
         // highlight - so a sound plays exactly when an entry lights up.
-        self.sfx.hover(hovered_item(point, &rects));
+        self.sfx.hover(point.and_then(|p| hit(p, &rects)));
         if action.is_some() {
             self.sfx.click();
         }

@@ -25,7 +25,7 @@ use crate::{
     input_context::{InputContext, Pointer2D},
     mission::{GlobalContext, PlayerLifeState},
     save_load::{SaveFile, latest_save},
-    scenes::frontend_sfx::{FrontendSfx, WidgetId},
+    scenes::frontend_sfx::FrontendSfx,
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, pointer_to_canvas},
@@ -125,19 +125,6 @@ fn hit(point: Vector2<f32>, rects: &[Rect; 4], can_load: bool) -> Option<GameOve
     }
 }
 
-/// Which button the pointer is over, for the rollover sound.
-fn hovered_widget(
-    point: Option<Vector2<f32>>,
-    rects: &[Rect; 4],
-    can_load: bool,
-) -> Option<WidgetId> {
-    let action = hit(point?, rects, can_load)?;
-    Some(match action {
-        GameOverAction::Load => 0,
-        GameOverAction::Quit => 1,
-    })
-}
-
 pub struct GameOverScene {
     world: World,
     scene_name: String,
@@ -152,7 +139,7 @@ pub struct GameOverScene {
     /// canvas space consistently with how the canvas is drawn.
     last_screen_size: Vector2<f32>,
     /// The frontend's hum, rollover and select sounds.
-    sfx: FrontendSfx,
+    sfx: FrontendSfx<GameOverAction>,
 }
 
 impl GameOverScene {
@@ -216,7 +203,7 @@ impl GameScene for GameOverScene {
         self.last_pressed = last_pressed;
 
         self.sfx
-            .hover(hovered_widget(point, &rects, self.save.is_some()));
+            .hover(point.and_then(|p| hit(p, &rects, self.save.is_some())));
         if action.is_some() {
             self.sfx.click();
         }

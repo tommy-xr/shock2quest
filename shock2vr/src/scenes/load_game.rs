@@ -28,7 +28,7 @@ use crate::{
     input_context::{InputContext, Pointer2D},
     mission::GlobalContext,
     save_load::{SaveFile, all_saves},
-    scenes::frontend_sfx::{FrontendSfx, WidgetId},
+    scenes::frontend_sfx::FrontendSfx,
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, pointer_to_canvas},
@@ -226,22 +226,6 @@ fn hit(
         .map(LoadGameAction::Select)
 }
 
-/// Which button the pointer is over, for the rollover sound.
-///
-/// Rows are deliberately silent: they highlight on selection rather than on
-/// hover, so a blip over one would be a sound with no visible counterpart.
-fn hovered_widget(
-    point: Option<Vector2<f32>>,
-    rects: &[Rect; 4],
-    has_selection: bool,
-) -> Option<WidgetId> {
-    match hit(point?, rects, 0, has_selection)? {
-        LoadGameAction::Load => Some(0),
-        LoadGameAction::Done => Some(1),
-        LoadGameAction::Select(_) => None,
-    }
-}
-
 pub struct LoadGameScene {
     world: World,
     scene_name: String,
@@ -258,7 +242,7 @@ pub struct LoadGameScene {
     /// canvas space consistently with how the canvas is drawn.
     last_screen_size: Vector2<f32>,
     /// The frontend's hum, rollover and select sounds.
-    sfx: FrontendSfx,
+    sfx: FrontendSfx<LoadGameAction>,
 }
 
 impl LoadGameScene {
@@ -328,8 +312,11 @@ impl GameScene for LoadGameScene {
         );
         self.last_pressed = last_pressed;
 
+        // Rows are deliberately silent: they highlight on selection rather
+        // than on hover, so a blip over one would have no visible counterpart.
+        // Passing 0 visible rows is what makes `hit` skip them.
         self.sfx
-            .hover(hovered_widget(point, &rects, selected.is_some()));
+            .hover(point.and_then(|p| hit(p, &rects, 0, selected.is_some())));
         if action.is_some() {
             self.sfx.click();
         }
