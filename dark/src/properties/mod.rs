@@ -1220,7 +1220,9 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
-            "P$AI_AwrDel2",
+            // The editor property is AI_AwrDel2, but Dark's 11-character
+            // chunk-name field truncates its on-disk key to AI_AwrDel.
+            "P$AI_AwrDel",
             PropAIAwareDelay::read,
             identity,
             accumulator::latest,
@@ -2552,14 +2554,6 @@ mod tests {
     /// is exactly how `P$AI_AlertCap` went unparsed for every entity.
     #[test]
     fn registered_chunk_names_fit_the_11_char_chunk_field() {
-        // `P$AI_AwrDel2` is the same bug (the real chunk is `P$AI_AwrDel`), but
-        // the one shipped entry - Security Camera, template -367 - stores
-        // to_two = -1, a sentinel `AlertnessTimings::from_aware_delay` would
-        // turn into a ~50-day escalation delay, so simply renaming it would
-        // stop cameras alerting. Left broken deliberately until the sentinel is
-        // handled; see the tracking issue.
-        const KNOWN_TRUNCATED: [&str; 1] = ["P$AI_AwrDel2"];
-
         let (props, _, _) = get::<io::Cursor<Vec<u8>>>();
         let too_long: Vec<String> = props
             .iter()
@@ -2567,13 +2561,25 @@ mod tests {
             // `__`-prefixed names are internal runtime-only properties with no
             // chunk on disk, so the field width does not apply to them.
             .filter(|name| !name.starts_with("__"))
-            .filter(|name| name.len() > 11 && !KNOWN_TRUNCATED.contains(&name.as_str()))
+            .filter(|name| name.len() > 11)
             .collect();
         assert!(
             too_long.is_empty(),
             "these registered property names exceed the 11-character chunk-name \
              field and can never match a chunk: {too_long:?}"
         );
+    }
+
+    /// Regression guard for #887: the editor-facing property name is
+    /// `AI_AwrDel2`, but Dark's 11-character on-disk chunk key is truncated to
+    /// `P$AI_AwrDel`. Registering the editor name can never match retail data.
+    #[test]
+    fn ai_aware_delay_uses_the_retail_chunk_name() {
+        let (props, _, _) = get::<io::Cursor<Vec<u8>>>();
+        let names: Vec<String> = props.iter().map(|prop| prop.name()).collect();
+
+        assert!(names.iter().any(|name| name == "P$AI_AwrDel"));
+        assert!(!names.iter().any(|name| name == "P$AI_AwrDel2"));
     }
 
     #[test]

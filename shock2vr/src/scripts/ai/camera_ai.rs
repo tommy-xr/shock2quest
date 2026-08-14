@@ -279,11 +279,11 @@ impl CameraAI {
 
         // Build default aware delay using the same constants as before
         let default_aware_delay = PropAIAwareDelay {
-            to_two: (ALERT_ESCALATE_SECONDS * 1000.0) as u32,
-            to_three: (ALERT_ESCALATE_SECONDS * 1000.0) as u32,
-            two_reuse: (ALERT_DECAY_SECONDS * 1000.0) as u32,
-            three_reuse: (ALERT_DECAY_SECONDS * 1000.0) as u32,
-            ignore_range: (ALERT_DECAY_SECONDS * 1000.0) as u32,
+            to_two: (ALERT_ESCALATE_SECONDS * 1000.0) as i32,
+            to_three: (ALERT_ESCALATE_SECONDS * 1000.0) as i32,
+            two_reuse: (ALERT_DECAY_SECONDS * 1000.0) as i32,
+            three_reuse: (ALERT_DECAY_SECONDS * 1000.0) as i32,
+            ignore_range: (ALERT_DECAY_SECONDS * 1000.0) as i32,
         };
 
         let aware_delay = v_aware_delay

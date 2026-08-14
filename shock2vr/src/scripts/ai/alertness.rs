@@ -96,15 +96,21 @@ impl AlertnessTimings {
     /// - `three_reuse`: decay time from level 3
     /// - `ignore_range`: time to return to Lowest
     pub fn from_aware_delay(delay: &PropAIAwareDelay) -> Self {
-        let to_two_secs = delay.to_two as f32 / 1000.0;
+        // The retail Security Camera authors -1 for `to_two`. Looking Glass's
+        // runtime stored this field unsigned and added the resulting UINT_MAX
+        // directly to the current timer, wrapping its expiration to `now - 1`:
+        // an immediately expired reaction delay. Preserve that behavior by
+        // clamping negative serialized values to zero before conversion.
+        let seconds = |milliseconds: i32| milliseconds.max(0) as f32 / 1000.0;
+        let to_two_secs = seconds(delay.to_two);
         Self {
             // Split to_two between Lowest->Low and Low->Moderate transitions
             to_low: to_two_secs / 2.0,
             to_moderate: to_two_secs / 2.0,
-            to_high: delay.to_three as f32 / 1000.0,
-            from_high: delay.three_reuse as f32 / 1000.0,
-            from_moderate: delay.two_reuse as f32 / 1000.0,
-            from_low: delay.ignore_range as f32 / 1000.0,
+            to_high: seconds(delay.to_three),
+            from_high: seconds(delay.three_reuse),
+            from_moderate: seconds(delay.two_reuse),
+            from_low: seconds(delay.ignore_range),
         }
     }
 }
@@ -501,6 +507,24 @@ mod tests {
         assert_eq!(timings.from_high, 6.0);
         assert_eq!(timings.from_moderate, 5.0);
         assert_eq!(timings.from_low, 7.0);
+    }
+
+    /// Retail Security Camera authors `to_two = -1`. The original Dark
+    /// engine passes that bit pattern through its unsigned timer arithmetic,
+    /// making the timer immediately expired; it is not a multi-day delay.
+    #[test]
+    fn test_from_aware_delay_treats_minus_one_as_immediate() {
+        let mut bytes = Vec::new();
+        for value in [-1_i32, 4000, 10000, 10000, 0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let delay = PropAIAwareDelay::read(&mut std::io::Cursor::new(bytes), 20);
+
+        let timings = AlertnessTimings::from_aware_delay(&delay);
+
+        assert_eq!(timings.to_low, 0.0);
+        assert_eq!(timings.to_moderate, 0.0);
+        assert_eq!(timings.to_high, 4.0);
     }
 
     #[test]
