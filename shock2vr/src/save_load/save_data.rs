@@ -5,6 +5,7 @@
  */
 use super::{EntitySaveData, HeldItemSaveData, PlayerVitals};
 use crate::quest_info::QuestInfo;
+use crate::scripts::healing_item::ActiveHealing;
 use cgmath::{Quaternion, Vector3};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -46,6 +47,11 @@ pub struct GlobalData {
     /// the pre-existing template/career initialization behavior.
     #[serde(default)]
     pub player_vitals: Option<PlayerVitals>,
+    /// In-progress retail healing timers. This is global because the source
+    /// item is consumed when a course starts and cannot own script state.
+    /// Ordinary level transitions intentionally start with an empty queue.
+    #[serde(default)]
+    pub active_healing: ActiveHealing,
     pub active_mission: String,
     /// Whether the player was crouched at save time. Defaults false for
     /// saves that predate crouch.
@@ -66,6 +72,7 @@ mod tests {
             quest_info: QuestInfo::new(),
             held_items: HeldItemSaveData::empty(),
             player_vitals,
+            active_healing: ActiveHealing::default(),
             active_mission: "earth.mis".to_owned(),
             is_crouched: false,
         }
@@ -105,5 +112,23 @@ mod tests {
         let decoded: GlobalData = serde_json::from_value(legacy).unwrap();
 
         assert_eq!(decoded.player_vitals, None);
+    }
+
+    #[test]
+    fn active_healing_round_trips_and_older_saves_default_empty() {
+        let mut original = global_data(Some(sample_vitals()));
+        assert!(original.active_healing.queue(10, 2, 0.1, 1.5));
+        let encoded = serde_json::to_value(&original).unwrap();
+        let decoded: GlobalData = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(decoded.active_healing, original.active_healing);
+
+        let mut legacy = encoded;
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("active_healing")
+            .unwrap();
+        let decoded: GlobalData = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.active_healing, ActiveHealing::default());
     }
 }

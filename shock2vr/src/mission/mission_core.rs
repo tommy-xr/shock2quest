@@ -328,6 +328,13 @@ enum ComestibleUseOutcome {
     Consumed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HealingItemUseOutcome {
+    NotUsed,
+    DecrementedStack,
+    DestroyEntity,
+}
+
 fn update_player_psi_points(world: &World, update: impl FnOnce(i32) -> i32) -> bool {
     let player_entity = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
     let mut psi_states = world
@@ -438,6 +445,70 @@ fn move_live_entity_into_container(
         world.add_component(dropped_entity_id, PropHasRefs(false));
     }
     was_able_to_drop
+}
+
+/// Start one retail timed healing course and consume exactly one carried
+/// source item. The health check, queue mutation, and stack decrement all run
+/// against live state in one effect pass, so duplicate uses safely no-op.
+fn apply_healing_item_use(
+    world: &World,
+    entity_id: EntityId,
+    total: i32,
+    pulse: i32,
+    first_pulse_secs: f32,
+    pulse_interval_secs: f32,
+) -> HealingItemUseOutcome {
+    let is_alive = world
+        .borrow::<EntitiesView>()
+        .is_ok_and(|entities| entities.is_alive(entity_id));
+    if !is_alive || !crate::scripts::script_util::player_carried_items(world).contains(&entity_id) {
+        return HealingItemUseOutcome::NotUsed;
+    }
+    let stack_count = world
+        .borrow::<View<dark::properties::PropStackCount>>()
+        .ok()
+        .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
+    if stack_count.is_some_and(|stack| stack <= 0) {
+        return HealingItemUseOutcome::NotUsed;
+    }
+
+    let player = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
+    let current = world
+        .borrow::<View<dark::properties::PropHitPoints>>()
+        .ok()
+        .and_then(|hit_points| hit_points.get(player).ok().map(|hp| hp.hit_points));
+    let maximum = world
+        .borrow::<View<dark::properties::PropMaxHitPoints>>()
+        .ok()
+        .and_then(|max_hit_points| {
+            max_hit_points
+                .get(player)
+                .ok()
+                .map(|hp| hp.hit_points.min(i32::MAX as u32) as i32)
+        });
+    if !matches!((current, maximum), (Some(current), Some(maximum)) if current > 0 && current < maximum)
+    {
+        return HealingItemUseOutcome::NotUsed;
+    }
+
+    let queued = world
+        .borrow::<UniqueViewMut<crate::scripts::healing_item::ActiveHealing>>()
+        .is_ok_and(|mut active| active.queue(total, pulse, first_pulse_secs, pulse_interval_secs));
+    if !queued {
+        return HealingItemUseOutcome::NotUsed;
+    }
+
+    if stack_count.is_some_and(|stack| stack > 1) {
+        let mut stacks = world
+            .borrow::<ViewMut<dark::properties::PropStackCount>>()
+            .unwrap();
+        if let Ok(stack) = (&mut stacks).get(entity_id) {
+            stack.0 -= 1;
+        }
+        HealingItemUseOutcome::DecrementedStack
+    } else {
+        HealingItemUseOutcome::DestroyEntity
+    }
 }
 
 /// Restore a live hand-released item to ordinary world ownership.
@@ -1133,6 +1204,7 @@ impl MissionCore {
         world.add_unique(psi_selection);
         world.add_unique(known_powers);
         world.add_unique(crate::psi::ActivePsiPowers::default());
+        world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
 
         // ** Entity creation
 
@@ -1951,6 +2023,12 @@ impl MissionCore {
         // Life-state effects go first so a scene-replacing GameOver cannot
         // clobber a same-frame quick-load arriving in `command_effects`.
         let mut effects = life_state_effects;
+        if let Some(healing) = crate::scripts::healing_item::tick_player_healing(
+            &self.world,
+            time.elapsed.as_secs_f32(),
+        ) {
+            effects.push(healing);
+        }
         effects.extend(command_effects);
 
         let player = {
@@ -4445,6 +4523,40 @@ impl MissionCore {
                         AudioHandle::new(),
                     );
                     self.destroy_entity(entity_id);
+                    if !matches!(sound, Effect::NoEffect) {
+                        effects.push_front(sound);
+                    }
+                }
+
+                Effect::UseHealingItem {
+                    entity_id,
+                    total,
+                    pulse,
+                    first_pulse_secs,
+                    pulse_interval_secs,
+                } => {
+                    let outcome = apply_healing_item_use(
+                        &self.world,
+                        entity_id,
+                        total,
+                        pulse,
+                        first_pulse_secs,
+                        pulse_interval_secs,
+                    );
+                    if outcome == HealingItemUseOutcome::NotUsed {
+                        continue;
+                    }
+
+                    let sound = crate::scripts::script_util::play_environmental_sound(
+                        &self.world,
+                        entity_id,
+                        "activate",
+                        vec![],
+                        AudioHandle::new(),
+                    );
+                    if outcome == HealingItemUseOutcome::DestroyEntity {
+                        self.destroy_entity(entity_id);
+                    }
                     if !matches!(sound, Effect::NoEffect) {
                         effects.push_front(sound);
                     }
@@ -9370,6 +9482,145 @@ mod comestible_use_tests {
             ComestibleUseOutcome::NotUsed
         );
         assert_eq!(player_hit_points(&world, player), 20);
+    }
+}
+
+#[cfg(test)]
+mod healing_item_use_tests {
+    use dark::properties::{
+        Link, Links, PropHitPoints, PropMaxHitPoints, PropStackCount, ToLink, WrappedEntityId,
+    };
+    use shipyard::{EntitiesView, Get, UniqueViewMut, View};
+
+    use super::*;
+    use crate::scripts::healing_item::{ActiveHealing, tick_player_healing};
+
+    fn world_with_player(
+        hit_points: i32,
+        stack: i32,
+        carried: bool,
+    ) -> (World, EntityId, EntityId) {
+        let mut world = World::new();
+        let patch = world.add_entity(PropStackCount(stack));
+        let inventory = world.add_entity(if carried {
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(patch)),
+                    link: Link::Contains(0),
+                }],
+            }
+        } else {
+            Links::empty()
+        });
+        let player = world.add_entity((
+            PropHitPoints { hit_points },
+            PropMaxHitPoints { hit_points: 30 },
+        ));
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+        world.add_unique(ActiveHealing::default());
+        (world, player, patch)
+    }
+
+    #[test]
+    fn damaged_player_queues_course_and_consumes_one_stack_unit() {
+        let (world, player, patch) = world_with_player(8, 2, true);
+
+        assert_eq!(
+            apply_healing_item_use(&world, patch, 10, 2, 0.1, 1.5),
+            HealingItemUseOutcome::DecrementedStack
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropStackCount>>()
+                .unwrap()
+                .get(patch)
+                .unwrap()
+                .0,
+            1
+        );
+        assert!(matches!(
+            tick_player_healing(&world, 0.1),
+            Some(Effect::AdjustHitPoints {
+                entity_id,
+                delta: 2
+            }) if entity_id == player
+        ));
+        assert_eq!(
+            world
+                .borrow::<View<PropHitPoints>>()
+                .unwrap()
+                .get(player)
+                .unwrap()
+                .hit_points,
+            8,
+            "timed healing must not bypass the central effect handler"
+        );
+    }
+
+    #[test]
+    fn full_health_refuses_without_consuming_or_queuing() {
+        let (world, _player, patch) = world_with_player(30, 1, true);
+
+        assert_eq!(
+            apply_healing_item_use(&world, patch, 10, 2, 0.1, 1.5),
+            HealingItemUseOutcome::NotUsed
+        );
+        assert!(world.borrow::<EntitiesView>().unwrap().is_alive(patch));
+        assert_eq!(
+            world
+                .borrow::<View<PropStackCount>>()
+                .unwrap()
+                .get(patch)
+                .unwrap()
+                .0,
+            1
+        );
+        assert_eq!(
+            world
+                .borrow::<UniqueViewMut<ActiveHealing>>()
+                .unwrap()
+                .advance(5.0, 30, 30),
+            0
+        );
+    }
+
+    #[test]
+    fn world_object_cannot_bypass_inventory_use() {
+        let (world, _player, patch) = world_with_player(8, 1, false);
+        assert_eq!(
+            apply_healing_item_use(&world, patch, 10, 2, 0.1, 1.5),
+            HealingItemUseOutcome::NotUsed
+        );
+        assert!(world.borrow::<EntitiesView>().unwrap().is_alive(patch));
+    }
+
+    #[test]
+    fn duplicate_use_of_destroyed_source_does_not_queue_twice() {
+        let (mut world, _player, patch) = world_with_player(8, 1, true);
+        assert_eq!(
+            apply_healing_item_use(&world, patch, 10, 2, 0.1, 1.5),
+            HealingItemUseOutcome::DestroyEntity
+        );
+        world.delete_entity(patch);
+        assert_eq!(
+            apply_healing_item_use(&world, patch, 10, 2, 0.1, 1.5),
+            HealingItemUseOutcome::NotUsed
+        );
+        assert_eq!(
+            world
+                .borrow::<UniqueViewMut<ActiveHealing>>()
+                .unwrap()
+                .advance(0.1, 8, 30),
+            2
+        );
     }
 }
 

@@ -1388,6 +1388,12 @@ impl Game {
             rotation,
             quest_info,
             player_vitals: save_load::capture_player_vitals(self.active_game_scene.world()),
+            active_healing: self
+                .active_game_scene
+                .world()
+                .borrow::<UniqueView<crate::scripts::healing_item::ActiveHealing>>()
+                .map(|active| active.clone())
+                .unwrap_or_default(),
             active_mission: self.active_game_scene.scene_name().to_string(),
             is_crouched,
         };
