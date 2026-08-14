@@ -23,6 +23,7 @@ use tracing;
 mod android_permissions;
 mod frame_profiler;
 mod quest_config;
+mod refresh_rate;
 
 use tokio::runtime::Runtime;
 
@@ -105,6 +106,7 @@ fn main() {
     // like your rendering API might not be provided by the active runtime. APIs like OpenGL don't
     // have universal support.
     assert!(available_extensions.khr_opengl_es_enable);
+    assert!(available_extensions.fb_display_refresh_rate);
 
     // Initialize OpenXR with the extensions we've found!
     let mut enabled_extensions = xr::ExtensionSet::default();
@@ -486,6 +488,7 @@ fn main() {
     let mut last_update_time = render_time;
     let mut frame_profiler = frame_profiler::FrameProfiler::new(Duration::from_secs(1));
     let mut display_refresh_rate = None;
+    let mut requested_display_refresh_rate = None;
     let mut ready_reported = false;
     let mut session_focused = false;
     'main_loop: loop {
@@ -524,7 +527,49 @@ fn main() {
                         xr::SessionState::READY => {
                             session.begin(VIEW_TYPE).unwrap();
                             session_running = true;
-                            display_refresh_rate = session.get_display_refresh_rate().ok();
+                            let available_refresh_rates =
+                                session.enumerate_display_refresh_rates().unwrap();
+                            let advertised_refresh_rate = refresh_rate::select_supported_rate(
+                                &available_refresh_rates,
+                                refresh_rate::TARGET_HZ,
+                            );
+                            println!(
+                                "SHOCK2QUEST_REFRESH_RATES target_hz={:.3} available_hz={available_refresh_rates:?}",
+                                refresh_rate::TARGET_HZ
+                            );
+                            // Horizon OS can return an empty advertised-rate list
+                            // immediately after session begin. In that case, let
+                            // xrRequestDisplayRefreshRateFB authoritatively accept or
+                            // reject the target instead of silently inheriting a default.
+                            let request_candidate = advertised_refresh_rate.or_else(|| {
+                                available_refresh_rates
+                                    .is_empty()
+                                    .then_some(refresh_rate::TARGET_HZ)
+                            });
+                            requested_display_refresh_rate =
+                                request_candidate.and_then(|requested_hz| {
+                                    match session.request_display_refresh_rate(requested_hz) {
+                                        Ok(()) => Some(requested_hz),
+                                        Err(
+                                            error
+                                            @ xr::sys::Result::ERROR_DISPLAY_REFRESH_RATE_UNSUPPORTED_FB,
+                                        ) if available_refresh_rates.is_empty() => {
+                                            println!(
+                                                "SHOCK2QUEST_REFRESH_REQUEST requested_hz={requested_hz:.3} result=unsupported error={error:?}"
+                                            );
+                                            None
+                                        }
+                                        Err(error) => {
+                                            panic!(
+                                                "failed to request advertised refresh rate {requested_hz:.3}: {error:?}"
+                                            );
+                                        }
+                                    }
+                                });
+                            display_refresh_rate =
+                                Some(session.get_display_refresh_rate().unwrap_or_else(|error| {
+                                    panic!("failed to query active display refresh rate: {error:?}")
+                                }));
                             ready_reported = false;
                             last_update_time = Instant::now();
                             frame_profiler.reset();
@@ -535,13 +580,6 @@ fn main() {
                             // otherwise resume invisibly crouched).
                             crouch_toggled = false;
                             crouch_button_was_pressed = false;
-
-                            // let available_rates =
-                            //     session.enumerate_display_refresh_rates().unwrap();
-                            // println!("refresh rate: {}", refresh_rate);
-                            // println!("all rates: {:?}", available_rates);
-                            // //panic!("refresh rate");
-                            // session.request_display_refresh_rate(90.0).unwrap();
                         }
                         xr::SessionState::STOPPING => {
                             session.end().unwrap();
@@ -568,6 +606,14 @@ fn main() {
                 }
                 EventsLost(e) => {
                     println!("lost {} events", e.lost_event_count());
+                }
+                DisplayRefreshRateChangedFB(e) => {
+                    display_refresh_rate = Some(e.to_display_refresh_rate());
+                    println!(
+                        "SHOCK2QUEST_REFRESH_CHANGED from_hz={:.3} to_hz={:.3}",
+                        e.from_display_refresh_rate(),
+                        e.to_display_refresh_rate()
+                    );
                 }
                 _ => {}
             }
@@ -906,8 +952,7 @@ fn main() {
 
         // Render to each eye
         let time = now.elapsed().as_secs_f32();
-        let left_eye_started = Instant::now();
-        render_swapchain(
+        let (left_eye_elapsed, _) = render_swapchain(
             &mut game,
             &engine,
             camera_pos,
@@ -919,9 +964,7 @@ fn main() {
             &scene,
             false,
         );
-        let left_eye_elapsed = left_eye_started.elapsed();
-        let right_eye_started = Instant::now();
-        render_swapchain(
+        let (right_eye_elapsed, finish_elapsed) = render_swapchain(
             &mut game,
             &engine,
             camera_pos,
@@ -933,7 +976,6 @@ fn main() {
             &scene,
             true,
         );
-        let right_eye_elapsed = right_eye_started.elapsed();
 
         let swap1 = &swapchain[0].handle.borrow();
         let rect = xr::Rect2Di {
@@ -974,10 +1016,16 @@ fn main() {
             .unwrap();
         let submit_elapsed = submit_started.elapsed();
 
-        if !ready_reported {
+        let requested_refresh_is_active = display_refresh_rate.is_some_and(|active_hz| {
+            requested_display_refresh_rate
+                .is_none_or(|requested_hz| refresh_rate::rate_matches(active_hz, requested_hz))
+        });
+        if !ready_reported && requested_refresh_is_active {
             println!(
-                "SHOCK2QUEST_READY mission={} refresh_hz={:.3} eye_width={} eye_height={}",
+                "SHOCK2QUEST_READY mission={} target_refresh_hz={:.3} requested_refresh_hz={:.3} refresh_hz={:.3} eye_width={} eye_height={}",
                 mission,
+                refresh_rate::TARGET_HZ,
+                requested_display_refresh_rate.unwrap_or_default(),
                 display_refresh_rate.unwrap_or_default(),
                 swapchain[0].width,
                 swapchain[0].height
@@ -991,6 +1039,7 @@ fn main() {
             scene: scene_elapsed,
             left_eye: left_eye_elapsed,
             right_eye: right_eye_elapsed,
+            finish: finish_elapsed,
             submit: submit_elapsed,
         }) {
             print_frame_report(&mission, session_focused, report);
@@ -1031,7 +1080,7 @@ fn main() {
 
 fn print_frame_report(mission: &str, focused: bool, report: frame_profiler::FrameReport) {
     println!(
-        "SHOCK2QUEST_PERF mission={} focused={} samples={} skipped={} fps={:.3} frame_ms={:.3} update_ms={:.3} scene_ms={:.3} left_eye_ms={:.3} right_eye_ms={:.3} submit_ms={:.3}",
+        "SHOCK2QUEST_PERF mission={} focused={} samples={} skipped={} fps={:.3} frame_ms={:.3} update_ms={:.3} scene_ms={:.3} left_eye_ms={:.3} right_eye_ms={:.3} finish_ms={:.3} submit_ms={:.3}",
         mission,
         focused,
         report.frames,
@@ -1042,6 +1091,7 @@ fn print_frame_report(mission: &str, focused: bool, report: frame_profiler::Fram
         report.scene_ms,
         report.left_eye_ms,
         report.right_eye_ms,
+        report.finish_ms,
         report.submit_ms
     );
 }
@@ -1208,7 +1258,8 @@ fn render_swapchain(
     _log: bool,
     scene: &Vec<SceneObject>,
     is_last: bool,
-) -> () {
+) -> (Duration, Duration) {
+    let eye_started = Instant::now();
     let mut xr_swapchain = swapchain.handle.borrow_mut();
     let image_index1 = xr_swapchain.acquire_image().unwrap();
     // Wait until the image is available to render to. The compositor could still be
@@ -1292,11 +1343,20 @@ fn render_swapchain(
         gl::BindFramebuffer(gl::DRAW_FRAMEBUFFER, 0);
     }
 
-    if is_last {
+    let finish_elapsed = if is_last {
+        let finish_started = Instant::now();
         game.finish_render(view_matrix, projection_matrix, screen_size);
-    }
+        finish_started.elapsed()
+    } else {
+        Duration::ZERO
+    };
 
     xr_swapchain.release_image().unwrap();
+
+    (
+        eye_started.elapsed().saturating_sub(finish_elapsed),
+        finish_elapsed,
+    )
 }
 
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;

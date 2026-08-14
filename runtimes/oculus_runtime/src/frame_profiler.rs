@@ -7,6 +7,7 @@ pub struct FrameTimings {
     pub scene: Duration,
     pub left_eye: Duration,
     pub right_eye: Duration,
+    pub finish: Duration,
     pub submit: Duration,
 }
 
@@ -30,6 +31,7 @@ pub struct FrameReport {
     pub scene_ms: f64,
     pub left_eye_ms: f64,
     pub right_eye_ms: f64,
+    pub finish_ms: f64,
     pub submit_ms: f64,
 }
 
@@ -43,6 +45,7 @@ pub struct FrameProfiler {
     scene: Duration,
     left_eye: Duration,
     right_eye: Duration,
+    finish: Duration,
     submit: Duration,
 }
 
@@ -58,6 +61,7 @@ impl FrameProfiler {
             scene: Duration::ZERO,
             left_eye: Duration::ZERO,
             right_eye: Duration::ZERO,
+            finish: Duration::ZERO,
             submit: Duration::ZERO,
         }
     }
@@ -84,6 +88,7 @@ impl FrameProfiler {
         self.scene = Duration::ZERO;
         self.left_eye = Duration::ZERO;
         self.right_eye = Duration::ZERO;
+        self.finish = Duration::ZERO;
         self.submit = Duration::ZERO;
     }
 
@@ -93,6 +98,7 @@ impl FrameProfiler {
         self.scene += timings.scene;
         self.left_eye += timings.left_eye;
         self.right_eye += timings.right_eye;
+        self.finish += timings.finish;
         self.submit += timings.submit;
 
         if self.elapsed < self.report_interval {
@@ -113,6 +119,7 @@ impl FrameProfiler {
             scene_ms: self.scene.as_secs_f64() * 1_000.0 / rendered_divisor,
             left_eye_ms: self.left_eye.as_secs_f64() * 1_000.0 / rendered_divisor,
             right_eye_ms: self.right_eye.as_secs_f64() * 1_000.0 / rendered_divisor,
+            finish_ms: self.finish.as_secs_f64() * 1_000.0 / rendered_divisor,
             submit_ms: self.submit.as_secs_f64() * 1_000.0 / rendered_divisor,
         };
 
@@ -136,6 +143,7 @@ mod tests {
             scene: Duration::from_millis(2),
             left_eye: Duration::from_millis(3),
             right_eye: Duration::from_millis(3),
+            finish: Duration::from_millis(1),
             submit: Duration::from_millis(1),
         };
 
@@ -150,6 +158,7 @@ mod tests {
         assert_eq!(report.scene_ms, 2.0);
         assert_eq!(report.left_eye_ms, 3.0);
         assert_eq!(report.right_eye_ms, 3.0);
+        assert_eq!(report.finish_ms, 1.0);
         assert_eq!(report.submit_ms, 1.0);
     }
 

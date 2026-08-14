@@ -59,6 +59,15 @@ launch-to-focused. The latter includes Android activity startup, OpenXR/EGL
 setup, mission initialization, session focus, swapchain allocation, and the
 first render.
 
+The Oculus runtime requests 90 Hz when the active OpenXR runtime advertises it.
+Horizon OS can transiently return an empty rate list immediately after session
+begin, so the runtime probes 90 Hz in that case and accepts only the extension's
+specific unsupported-rate error as a graceful fallback. `SHOCK2QUEST_READY`
+records the target, requested, and active rates; use the active rate as the
+frame-budget denominator and do not compare runs at different rates. The
+benchmark also records later refresh-rate transitions and rejects a sample that
+diverges from the requested rate.
+
 Use identical release builds, headset refresh rate, device power state, mission
 selector, spawn point, warmup, and interval for comparisons. Repeat noisy
 results; do not compare a cold first run against a warmed asset cache without
@@ -72,12 +81,15 @@ labeling it.
 - `skipped`: frames for which OpenXR said not to render;
 - `update_ms`: `Game::update`;
 - `scene_ms`: shared `Game::render` scene preparation;
-- `left_eye_ms`, `right_eye_ms`: per-eye scene generation plus GLES rendering;
+- `left_eye_ms`, `right_eye_ms`: per-eye swapchain acquire/wait, scene
+  generation plus GLES rendering, and swapchain release;
+- `finish_ms`: post-eye `Game::finish_render`, currently visibility preparation;
 - `submit_ms`: OpenXR `FrameStream::end`.
 
-The two eye timings are currently sequential. Their sum is the direct CPU/GPU
-submission cost exposed to the app, but GPU execution can overlap; use VrApi
-and hardware counters before calling it pure GPU time.
+The two eye timings are currently sequential and exclude `finish_ms`. Their sum
+also includes swapchain synchronization, so it is not pure render or GPU time.
+Use VrApi and hardware counters before attributing it, and split synchronization
+from draw submission when diagnosing CPU stalls.
 
 Always report VrApi minimum FPS and stale/torn frame counts beside mean
 presentation FPS. Compositor presentation at the selected refresh rate can
