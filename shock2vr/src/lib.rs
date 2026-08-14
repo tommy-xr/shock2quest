@@ -938,10 +938,11 @@ impl Game {
         // Fail here rather than several layers down. Without this, an empty data
         // root reaches the mount list and dies inside the archive reader on
         // whichever `.crf` it happens to open first - a stack trace that names a
-        // zip path and says nothing about the actual problem. (The real fix is a
-        // screen that says this to the player instead of a panic; that needs a
-        // font that does not come from the missing data, which is why it is a
-        // separate change.)
+        // zip path and says nothing about the actual problem.
+        //
+        // `App::init` routes this case to the missing-assets screen instead, so
+        // the player never reaches this panic. It still guards `debug_runtime`
+        // and `dark_viewer`, which build a `Game` directly.
         if !install.has_data() {
             panic!("cannot load the game: {}", install.summary());
         }
@@ -1724,7 +1725,7 @@ impl App {
         if !install.has_data() {
             // `Game::init` reports the install itself; it never runs here.
             println!("{}", install.summary());
-            return App::MissingAssets(MissingAssets::new(&install, options, bundle_storage));
+            return App::MissingAssets(MissingAssets::new(&install, options));
         }
         App::Ready(Box::new(Game::init(options, bundle_storage)))
     }
@@ -1794,6 +1795,12 @@ impl App {
         }
     }
 
+    // The three pose accessors below must answer exactly as an uncrouched
+    // `Game` does. They are not cosmetic: the VR runtime derives the tracked
+    // head offset from them, and a wrong *unit* here (unscaled eye height where
+    // a scaled collider-center height is expected) tilts the panel tens of
+    // degrees off the player's gaze - on the one screen whose entire job is to
+    // be read. `no_assets_pose_matches_a_standing_game` pins them.
     pub fn player_eye_height(&self) -> f32 {
         match self {
             App::Ready(game) => game.player_eye_height(),
@@ -1804,14 +1811,14 @@ impl App {
     pub fn player_center_above_floor(&self) -> f32 {
         match self {
             App::Ready(game) => game.player_center_above_floor(),
-            App::MissingAssets(_) => PLAYER_EYE_HEIGHT,
+            App::MissingAssets(_) => physics::player_center_above_floor(false),
         }
     }
 
     pub fn player_eye_cap_above_center(&self) -> f32 {
         match self {
             App::Ready(game) => game.player_eye_cap_above_center(),
-            App::MissingAssets(_) => 0.0,
+            App::MissingAssets(_) => physics::player_eye_cap_above_center(false),
         }
     }
 }
@@ -1828,15 +1835,14 @@ pub struct MissingAssets {
 }
 
 impl MissingAssets {
-    fn new(
-        install: &install::InstallStatus,
-        options: GameOptions,
-        bundle_storage: Arc<dyn Storage>,
-    ) -> MissingAssets {
-        let asset_paths = AssetPath::combine(vec![
-            BundleAssetPath::new("".to_owned(), bundle_storage),
-            AssetPath::folder("".to_owned()),
-        ]);
+    /// Takes no bundle storage: nothing here resolves an asset, and not taking
+    /// it keeps the type constructible in a unit test.
+    fn new(install: &install::InstallStatus, options: GameOptions) -> MissingAssets {
+        // Deliberately empty: the scene draws only text in the compiled-in
+        // font, so nothing resolves through here. Mounting the working
+        // directory would let a stray future lookup succeed by accident
+        // instead of failing loudly.
+        let asset_paths = AssetPath::combine(Vec::new());
         MissingAssets {
             scene: scenes::NoAssetsScene::new(install),
             asset_cache: AssetCache::new(
@@ -1877,5 +1883,50 @@ impl MissingAssets {
             screen_size,
             &self.options,
         )
+    }
+}
+
+#[cfg(test)]
+mod app_tests {
+    use super::*;
+
+    fn missing_assets_app() -> App {
+        let status = install::InstallStatus {
+            data_root: std::path::PathBuf::from("/nowhere"),
+            kind: install::InstallKind::Missing,
+            found: Vec::new(),
+            missing_mods: Vec::new(),
+        };
+        App::MissingAssets(MissingAssets::new(&status, GameOptions::default()))
+    }
+
+    /// The VR runtime derives the tracked head offset from these three, so a
+    /// value in the wrong *unit space* silently tilts the panel tens of degrees
+    /// off the player's gaze - on the one screen whose whole job is to be read,
+    /// and in a state no debug scene can reach (the debug scene runs inside a
+    /// real `Game`). They must answer exactly as an uncrouched player does.
+    #[test]
+    fn the_missing_assets_pose_matches_a_standing_player() {
+        let app = missing_assets_app();
+        assert_eq!(
+            app.player_center_above_floor(),
+            physics::player_center_above_floor(false)
+        );
+        assert_eq!(
+            app.player_eye_cap_above_center(),
+            physics::player_eye_cap_above_center(false)
+        );
+        assert_eq!(app.player_eye_height(), PLAYER_EYE_HEIGHT);
+    }
+
+    /// The specific mix-up that shipped: `PLAYER_EYE_HEIGHT` is an *unscaled*
+    /// eye height, while these two are *scaled* world units. Returning the
+    /// former for either is wrong by a factor of `SCALE_FACTOR`.
+    #[test]
+    fn the_pose_accessors_are_in_scaled_world_units() {
+        let app = missing_assets_app();
+        assert!(app.player_center_above_floor() < PLAYER_EYE_HEIGHT);
+        assert!(app.player_eye_cap_above_center() > 0.0);
+        assert!(app.player_eye_cap_above_center() < PLAYER_EYE_HEIGHT);
     }
 }

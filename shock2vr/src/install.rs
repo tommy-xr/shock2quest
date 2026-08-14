@@ -69,18 +69,25 @@ impl InstallStatus {
         self.kind != InstallKind::Missing
     }
 
-    /// One line for the startup log - the first thing to look at when a device
-    /// renders the wrong art or fails to boot.
-    pub fn summary(&self) -> String {
-        // `data_root` is often relative (`../../Data`, including the fallback
-        // used when nothing was found), and a relative path cannot be acted on
-        // without knowing the cwd - which in the fallback case is the thing
-        // that went wrong.
-        let absolute = std::fs::canonicalize(&self.data_root).unwrap_or_else(|_| {
+    /// The data root as something a human can act on.
+    ///
+    /// `data_root` is often relative (`../../Data`, including the fallback used
+    /// when nothing was found), and a relative path cannot be acted on without
+    /// knowing the cwd - which in the fallback case is the thing that went
+    /// wrong. Both the startup log and the missing-assets screen show this, so
+    /// they cannot disagree.
+    pub fn absolute_data_root(&self) -> PathBuf {
+        std::fs::canonicalize(&self.data_root).unwrap_or_else(|_| {
             std::env::current_dir()
                 .unwrap_or_default()
                 .join(&self.data_root)
-        });
+        })
+    }
+
+    /// One line for the startup log - the first thing to look at when a device
+    /// renders the wrong art or fails to boot.
+    pub fn summary(&self) -> String {
+        let absolute = self.absolute_data_root();
         let root = absolute.display();
         match self.kind {
             InstallKind::Anniversary if self.missing_mods.is_empty() => {

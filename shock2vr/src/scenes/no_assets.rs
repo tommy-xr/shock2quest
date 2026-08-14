@@ -55,6 +55,11 @@ const BODY_Y: f32 = 150.0;
 
 const TITLE: &str = "GAME DATA NOT FOUND";
 
+/// Body rows that fit between [`BODY_Y`] and the bottom of the canvas.
+fn max_body_lines() -> usize {
+    (((CANVAS_H - BODY_Y) / LINE_HEIGHT).floor() as usize).max(1)
+}
+
 /// How many characters fit across the canvas at `size`.
 ///
 /// Exact, not an estimate: the builtin font is monospace, so one glyph is one
@@ -108,24 +113,66 @@ fn wrap(text: &str, columns: usize) -> Vec<String> {
     lines
 }
 
+/// Replace anything the builtin font cannot draw with `?`.
+///
+/// The font covers printable ASCII only (U+0020..U+007E). Unmapped characters
+/// are silently dropped by `measure_text_width`, so a path containing them
+/// would be shown *wrong* - and a wrapped chunk consisting entirely of them
+/// measures zero-wide, builds a mesh with no vertices, and panics. A screen
+/// whose whole purpose is to replace a panic must not have one.
+fn to_drawable(text: &str) -> String {
+    text.chars()
+        .map(|c| if (' '..='~').contains(&c) { c } else { '?' })
+        .collect()
+}
+
 /// The message body for `status`, already wrapped to the canvas.
 ///
 /// Pure, so what the player is told is unit-testable without a renderer.
 pub fn message_lines(status: &InstallStatus) -> Vec<String> {
     let columns = columns_at(BODY_SIZE);
-    let body = format!(
+    let path = to_drawable(&status.absolute_data_root().display().to_string());
+
+    // Everything but the path is fixed, so the path is the only thing that can
+    // push the message off the bottom of the canvas. Drop leading path segments
+    // until it fits, rather than letting the closing instruction scroll into the
+    // void: the deepest segments are the ones that identify the directory, and
+    // the untrimmed path is in the startup log either way.
+    //
+    // Iterating over a fixed segment list (rather than re-trimming a string
+    // that has already grown a "..." prefix) is what makes this terminate.
+    let segments: Vec<&str> = path.split(['/', '\\']).collect();
+    for dropped in 0..segments.len() {
+        let shown = if dropped == 0 {
+            path.clone()
+        } else {
+            format!("...{}", segments[dropped..].join("/"))
+        };
+        let lines = wrap(&body_text(&shown), columns);
+        if lines.len() <= max_body_lines() {
+            return lines;
+        }
+    }
+
+    // A single unsplittable segment longer than the canvas allows.
+    let mut truncated: String = path.chars().take(columns.saturating_sub(3)).collect();
+    truncated.push_str("...");
+    wrap(&body_text(&truncated), columns)
+}
+
+/// The message around `path`.
+fn body_text(path: &str) -> String {
+    format!(
         "shock2quest needs a copy of\n\
          System Shock 2: 25th Anniversary Remaster.\n\
          \n\
          Copy sshock2.kpf and the mods folder\n\
          from your install into:\n\
          \n\
-         {}\n\
+         {path}\n\
          \n\
-         then start shock2quest again.",
-        status.data_root.display()
-    );
-    wrap(&body, columns)
+         then start shock2quest again."
+    )
 }
 
 /// See the module docs.
@@ -339,6 +386,52 @@ mod tests {
         assert!(blanks > 0, "the message is expected to have blank lines");
         let drawn = scene.build_canvas().element_count() - 1; // minus the title
         assert_eq!(drawn, scene.lines.len() - blanks);
+
+        // ...and the rows after a blank must not slide up into its place.
+        let first_blank = scene
+            .lines
+            .iter()
+            .position(|l| l.trim().is_empty())
+            .unwrap();
+        let next_text = first_blank + 1;
+        let canvas = scene.build_canvas();
+        let expected_y = BODY_Y + next_text as f32 * LINE_HEIGHT;
+        let found = canvas
+            .elements()
+            .iter()
+            .any(|e| (e.rect().y - expected_y).abs() < 0.01);
+        assert!(
+            found,
+            "no element sits at y={expected_y}, so a blank row collapsed"
+        );
+    }
+
+    /// A pathological data root must not push the message off the bottom of
+    /// the canvas - the horizontal checks above would still pass.
+    #[test]
+    fn a_pathological_root_still_fits_vertically() {
+        let deep = format!("/{}", vec!["averylongdirectoryname"; 12].join("/"));
+        let lines = message_lines(&missing(&deep));
+        let bottom = BODY_Y + (lines.len().saturating_sub(1)) as f32 * LINE_HEIGHT + BODY_SIZE;
+        assert!(
+            bottom <= CANVAS_H,
+            "{} lines run to y={bottom}, past the {CANVAS_H} canvas",
+            lines.len()
+        );
+    }
+
+    /// Non-ASCII cannot reach the glyph table: it would render wrong, and a
+    /// wrapped chunk of nothing but unmapped characters would build an empty
+    /// mesh and panic.
+    #[test]
+    fn a_non_ascii_root_is_made_drawable() {
+        let lines = message_lines(&missing("/Users/\u{5c71}\u{7530}/\u{0161}ock2"));
+        let joined = lines.join("");
+        assert!(joined.is_ascii(), "{joined:?}");
+        assert!(joined.contains('?'));
+        for line in &lines {
+            assert!(!line.trim().is_empty() || line.is_empty());
+        }
     }
 
     #[test]
