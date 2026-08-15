@@ -233,6 +233,12 @@ POST /v1/player/stats     - Provision skills/stats/psi tier/cyber modules
 POST /v1/screenshot       - Capture screenshot
 ```
 
+The `/v1/control/input` channel vocabulary lives in `shock2vr::input::remote`
+(not in this runtime), because the oculus runtime speaks the same channels for
+on-device automation - see the `vr-device-loop` skill. There it is applied as an
+override on top of the OpenXR-built `InputContext` (`InputOverrides`); here the
+runtime owns the context and patches it directly.
+
 ## Usage
 
 ### Starting the Debug Runtime
