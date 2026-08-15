@@ -175,6 +175,75 @@ fn camera_rotation(camera: &CameraContext) -> Quaternion<f32> {
     mat.rot.invert()
 }
 
+/// Hand yaw the rig snaps back to when neither hand-aim key (E/Q) is held: the
+/// hand then aims straight down the head's facing.
+const REST_HAND_YAW: f32 = 90.0;
+
+/// World pose of one simulated VR hand: `side` is `+1.0` for the right hand and
+/// `-1.0` for the left. The hand sits out in front of the head (so it is
+/// visible) and aims along the head's facing turned by the hand's own
+/// yaw/pitch, which mouse-look drives while E (right) or Q (left) is held.
+///
+/// Its aim axis is **-Z**, the OpenXR aim convention every VR consumer in
+/// `shock2vr` assumes (`main_menu::vr_pointer`, the hand raycasts):
+/// `camera_rotation` maps local +Z to `camera_forward`, and the rig's own
+/// forward is `-camera_forward`, so the two negations cancel.
+fn hand_pose(
+    camera_context: &CameraContext,
+    hand_camera_context: &CameraContext,
+    side: f32,
+) -> (Vector3<f32>, Quaternion<f32>) {
+    let forward = -1.0 * camera_forward(camera_context);
+    let right = Vector3::cross(forward, vec3(0.0, 1.0, 0.0)).normalize();
+    let position = vec3(0.0, 2.0 / SCALE_FACTOR, 0.0)
+        + right * side * 2.0 / SCALE_FACTOR
+        + (forward * 4.0 / SCALE_FACTOR);
+    let rotation = camera_rotation(camera_context) * camera_rotation(hand_camera_context);
+    (position, rotation)
+}
+
+/// What this frame's mouse motion turns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MouseLookTarget {
+    Head,
+    RightHand,
+    LeftHand,
+    /// Nothing: a flatscreen 2D cursor UI is up and owns the mouse.
+    Cursor,
+}
+
+/// Route this frame's mouse motion.
+///
+/// Holding E or Q aims that hand, as always. Otherwise a scene asking for a
+/// pointer (`Game::wants_pointer`) normally takes the mouse: on flatscreen the
+/// cursor *is* the menu, so mouse-look stops.
+///
+/// Under `--vr` that bargain is wrong and was the bug: the frontend is a world
+/// panel aimed by the simulated hand rays, so freezing mouse-look pinned the
+/// ray wherever it happened to point (canvas x=64, left of every button) and
+/// hover/click never responded. Turning the *head* would not have helped
+/// either - the panel is anchored to the head, so head and ray move together
+/// and the hit point never changes. The mouse therefore aims the right hand
+/// directly, which is the only thing that moves the ray across the panel.
+fn mouse_look_target(
+    right_hand_key: bool,
+    left_hand_key: bool,
+    scene_wants_pointer: bool,
+    presentation: shock2vr::PresentationMode,
+) -> MouseLookTarget {
+    if right_hand_key {
+        MouseLookTarget::RightHand
+    } else if left_hand_key {
+        MouseLookTarget::LeftHand
+    } else if !scene_wants_pointer {
+        MouseLookTarget::Head
+    } else if presentation == shock2vr::PresentationMode::Vr {
+        MouseLookTarget::RightHand
+    } else {
+        MouseLookTarget::Cursor
+    }
+}
+
 fn f32_from_bool(v: bool) -> f32 {
     if v { 1.0 } else { 0.0 }
 }
@@ -354,6 +423,7 @@ pub fn main() {
             &mut input_mapper,
             &mut action_state,
             wants_pointer,
+            presentation_mode,
         );
 
         // Flat first-person: left mouse button fires the wielded weapon; right
@@ -501,6 +571,7 @@ fn process_events(
     input_mapper: &mut DesktopInputMapper,
     action_state: &mut InputActionState,
     wants_pointer: bool,
+    presentation: shock2vr::PresentationMode,
 ) -> InputContext {
     let _speed = 20.0;
     let head_rot_speed = 10.0;
@@ -549,42 +620,57 @@ fn process_events(
         }
     }
 
-    // While a 2D cursor UI is up, mouse motion moves the cursor, not the
-    // camera/hands - the original surrenders mouse-look to the metagame.
-    if wants_pointer {
-        rot_yaw = 0.0;
-        rot_pitch = 0.0;
+    let mouse_pressed = |button| window.get_mouse_button(button) == Action::Press;
+    let look_target = mouse_look_target(
+        window.get_key(Key::E) == Action::Press,
+        window.get_key(Key::Q) == Action::Press,
+        wants_pointer,
+        presentation,
+    );
+    match look_target {
+        MouseLookTarget::RightHand => {
+            hand_context.right_hand_context.yaw += rot_yaw * head_rot_speed * delta_time;
+            hand_context.right_hand_context.pitch += rot_pitch * head_rot_speed * delta_time;
+
+            hand_context.right_trigger_pressed = mouse_pressed(MouseButton::Button1);
+            hand_context.right_squeeze_pressed = mouse_pressed(MouseButton::Button2);
+            hand_context.right_a_pressed = mouse_pressed(MouseButton::Button3);
+        }
+        MouseLookTarget::LeftHand => {
+            hand_context.left_hand_context.yaw += rot_yaw * head_rot_speed * delta_time;
+            hand_context.left_hand_context.pitch += rot_pitch * head_rot_speed * delta_time;
+
+            hand_context.left_trigger_pressed = mouse_pressed(MouseButton::Button1);
+            hand_context.left_squeeze_pressed = mouse_pressed(MouseButton::Button2);
+            hand_context.left_a_pressed = mouse_pressed(MouseButton::Button3);
+        }
+        target @ (MouseLookTarget::Head | MouseLookTarget::Cursor) => {
+            if target == MouseLookTarget::Head {
+                camera_context.yaw += rot_yaw * head_rot_speed * delta_time;
+                camera_context.pitch += rot_pitch * head_rot_speed * delta_time;
+            }
+
+            hand_context.left_hand_context.yaw = REST_HAND_YAW;
+            hand_context.left_hand_context.pitch = 0.0;
+
+            hand_context.right_hand_context.yaw = REST_HAND_YAW;
+            hand_context.right_hand_context.pitch = 0.0;
+        }
     }
 
-    if window.get_key(Key::E) == Action::Press {
-        hand_context.right_hand_context.yaw += rot_yaw * head_rot_speed * delta_time;
-        hand_context.right_hand_context.pitch += rot_pitch * head_rot_speed * delta_time;
-
-        hand_context.right_trigger_pressed =
-            window.get_mouse_button(MouseButton::Button1) == Action::Press;
-        hand_context.right_squeeze_pressed =
-            window.get_mouse_button(MouseButton::Button2) == Action::Press;
-        hand_context.right_a_pressed =
-            window.get_mouse_button(MouseButton::Button3) == Action::Press;
-    } else if window.get_key(Key::Q) == Action::Press {
-        hand_context.left_hand_context.yaw += rot_yaw * head_rot_speed * delta_time;
-        hand_context.left_hand_context.pitch += rot_pitch * head_rot_speed * delta_time;
-
-        hand_context.left_trigger_pressed =
-            window.get_mouse_button(MouseButton::Button1) == Action::Press;
-        hand_context.left_squeeze_pressed =
-            window.get_mouse_button(MouseButton::Button2) == Action::Press;
-        hand_context.left_a_pressed =
-            window.get_mouse_button(MouseButton::Button3) == Action::Press;
-    } else {
-        camera_context.yaw += rot_yaw * head_rot_speed * delta_time;
-        camera_context.pitch += rot_pitch * head_rot_speed * delta_time;
-
-        hand_context.left_hand_context.yaw = 90.0;
-        hand_context.left_hand_context.pitch = 0.0;
-
-        hand_context.right_hand_context.yaw = 90.0;
-        hand_context.right_hand_context.pitch = 0.0;
+    // A hand's buttons are the mouse buttons *while the mouse is driving that
+    // hand*. Clearing an undriven hand's buttons keeps a press from latching
+    // when the aim key is released first - a stuck trigger swallows the menu's
+    // rising edge, so the next click does nothing.
+    if look_target != MouseLookTarget::RightHand {
+        hand_context.right_trigger_pressed = false;
+        hand_context.right_squeeze_pressed = false;
+        hand_context.right_a_pressed = false;
+    }
+    if look_target != MouseLookTarget::LeftHand {
+        hand_context.left_trigger_pressed = false;
+        hand_context.left_squeeze_pressed = false;
+        hand_context.left_a_pressed = false;
     }
 
     if camera_context.pitch < -89.0 {
@@ -594,10 +680,6 @@ fn process_events(
     if camera_context.pitch > 89.0 {
         camera_context.pitch = 89.0
     }
-
-    //let rotation = camera_rotation(camera_context);
-    let forward = -1.0 * camera_forward(camera_context);
-    let right = Vector3::cross(forward, vec3(0.0, 1.0, 0.0)).normalize();
 
     let mut right_thumbstick_value = vec2(0.0, 0.0);
     let mut left_thumbstick_value = vec2(0.0, 0.0);
@@ -648,21 +730,19 @@ fn process_events(
     let mut input_context = InputContext::default();
     let head_rotation = camera_rotation(camera_context);
     input_context.head.rotation = head_rotation;
-    input_context.right_hand.position = vec3(0.0, 2.0 / SCALE_FACTOR, 0.0)
-        + right * 2.0 / SCALE_FACTOR
-        + (forward * 4.0 / SCALE_FACTOR);
-    input_context.right_hand.rotation =
-        head_rotation * camera_rotation(&hand_context.right_hand_context);
+    let (right_hand_position, right_hand_rotation) =
+        hand_pose(camera_context, &hand_context.right_hand_context, 1.0);
+    input_context.right_hand.position = right_hand_position;
+    input_context.right_hand.rotation = right_hand_rotation;
     input_context.right_hand.thumbstick = right_thumbstick_value;
     input_context.right_hand.trigger_value = f32_from_bool(hand_context.right_trigger_pressed);
     input_context.right_hand.squeeze_value = f32_from_bool(hand_context.right_squeeze_pressed);
     input_context.right_hand.a_value = f32_from_bool(hand_context.right_a_pressed);
 
-    input_context.left_hand.position = vec3(0.0, 2.0 / SCALE_FACTOR, 0.0)
-        - right * 2.0 / SCALE_FACTOR
-        + (forward * 4.0 / SCALE_FACTOR);
-    input_context.left_hand.rotation =
-        head_rotation * camera_rotation(&hand_context.left_hand_context);
+    let (left_hand_position, left_hand_rotation) =
+        hand_pose(camera_context, &hand_context.left_hand_context, -1.0);
+    input_context.left_hand.position = left_hand_position;
+    input_context.left_hand.rotation = left_hand_rotation;
     input_context.left_hand.thumbstick = left_thumbstick_value;
     input_context.left_hand.trigger_value = f32_from_bool(hand_context.left_trigger_pressed);
     input_context.left_hand.squeeze_value = f32_from_bool(hand_context.left_squeeze_pressed);
@@ -689,4 +769,126 @@ fn process_events(
     input_mapper.poll(window, action_state);
 
     input_context
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shock2vr::ui::{frontend_panel, ray_to_canvas};
+
+    /// The frontend canvas the VR panel presents (`main_menu`'s 640x480).
+    const CANVAS: cgmath::Vector2<f32> = cgmath::Vector2 { x: 640.0, y: 480.0 };
+
+    fn ctx(yaw: f32, pitch: f32) -> CameraContext {
+        CameraContext {
+            yaw,
+            pitch,
+            mouse_position: None,
+        }
+    }
+
+    /// Where the desktop rig's right-hand ray lands on the VR frontend panel,
+    /// in canvas pixels - exactly what `main_menu::vr_pointer` computes.
+    fn right_hand_hit(
+        camera: &CameraContext,
+        hand: &CameraContext,
+    ) -> Option<cgmath::Vector2<f32>> {
+        let (position, rotation) = hand_pose(camera, hand, 1.0);
+        let panel = frontend_panel(camera_rotation(camera));
+        let direction = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+        ray_to_canvas(CANVAS, &panel, position, direction)
+    }
+
+    /// `camera_rotation` maps local **+Z** (not -Z) onto `camera_forward`, and
+    /// the rig's own forward is `-camera_forward` - so a pose built from it
+    /// aims along -Z, the convention every VR consumer assumes. Pinned here
+    /// because the two negations cancelling is easy to "fix" into a backwards
+    /// ray.
+    #[test]
+    fn hand_aim_axis_is_negative_z_and_matches_the_render_direction() {
+        let camera = ctx(0.0, 0.0);
+        let render_direction = camera_rotation(&camera).rotate_vector(vec3(0.0, 0.0, -1.0));
+        let (_, rotation) = hand_pose(&camera, &ctx(REST_HAND_YAW, 0.0), 1.0);
+        let aim = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+
+        // Yaw 0 looks along -X in this rig, and the resting hand aims with it.
+        assert!((render_direction - vec3(-1.0, 0.0, 0.0)).magnitude() < 1e-4);
+        assert!((aim - render_direction).magnitude() < 1e-4);
+    }
+
+    /// The geometry is sound: the resting ray does hit the panel, so a miss is
+    /// never why the menu is dead. The right hand sits right of the head, so
+    /// its resting ray lands in the right-hand button column (the historical
+    /// (64.0, 316.8) measurement was taken against the old mirrored
+    /// `ray_to_canvas`; the honest basis reports the same physical hit as
+    /// (576.0, 316.8)). Reaching the *other* buttons still needs the hand aim
+    /// that mouse-look drives, which is what the suppression fix restores.
+    #[test]
+    fn resting_hand_ray_hits_the_panel_in_the_button_column() {
+        let hit = right_hand_hit(&ctx(0.0, 0.0), &ctx(REST_HAND_YAW, 0.0))
+            .expect("resting hand ray should intersect the frontend panel");
+
+        // Measured: (576.0, 316.8) - the buttons start at x=400.
+        assert!(hit.x > CANVAS.x * 0.625 && hit.x < CANVAS.x, "hit: {hit:?}");
+        assert!(hit.y > 0.0 && hit.y < CANVAS.y, "hit: {hit:?}");
+    }
+
+    /// The rig can only aim by yawing the hand, which is mouse-look's job. If
+    /// the runtime surrenders mouse motion to a 2D cursor (as it must in flat
+    /// mode) the hand is frozen at the pose above and no button is ever
+    /// reachable - the desktop `--vr` menu bug. Yawing the hand reaches the
+    /// full canvas width, including the button column.
+    #[test]
+    fn yawing_the_hand_sweeps_the_ray_across_the_whole_canvas() {
+        let camera = ctx(0.0, 0.0);
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        for step in 0..=180 {
+            let yaw = REST_HAND_YAW - 90.0 + step as f32;
+            if let Some(hit) = right_hand_hit(&camera, &ctx(yaw, 0.0)) {
+                min_x = min_x.min(hit.x);
+                max_x = max_x.max(hit.x);
+            }
+        }
+
+        assert!(min_x < CANVAS.x * 0.1, "min_x: {min_x}");
+        // The menu's buttons live in the right-hand column (x >= 400 on the
+        // 640-wide canvas), so the ray must be able to get there.
+        assert!(max_x > 580.0, "max_x: {max_x}");
+    }
+
+    /// The fix: surrendering mouse-look to a 2D cursor is a flatscreen bargain.
+    /// Doing it under `--vr` froze the head and hands, so the menu ray stuck at
+    /// the resting pose and hover/click never responded. Under `--vr` a
+    /// pointer-wanting scene routes the mouse to the right hand (the only thing
+    /// that moves the ray across the head-anchored panel); E/Q always win.
+    #[test]
+    fn pointer_scenes_route_the_mouse_to_the_right_hand_in_vr() {
+        use shock2vr::PresentationMode::{Flat, Vr};
+
+        assert_eq!(
+            mouse_look_target(false, false, true, Flat),
+            MouseLookTarget::Cursor
+        );
+        assert_eq!(
+            mouse_look_target(false, false, true, Vr),
+            MouseLookTarget::RightHand
+        );
+        assert_eq!(
+            mouse_look_target(false, false, false, Flat),
+            MouseLookTarget::Head
+        );
+        assert_eq!(
+            mouse_look_target(false, false, false, Vr),
+            MouseLookTarget::Head
+        );
+        assert_eq!(
+            mouse_look_target(true, false, true, Vr),
+            MouseLookTarget::RightHand
+        );
+        assert_eq!(
+            mouse_look_target(false, true, true, Vr),
+            MouseLookTarget::LeftHand
+        );
+    }
 }
