@@ -91,8 +91,6 @@ screenshotted. Removed in `4ce6934`.
 
 - The label drifts a few px right of centre — world text likely renders at a
   slightly different scale than `measure_text_width` reports.
-- The **load screen** has no VR presentation yet, so "Load Game" in VR opens a
-  screen that is still flat-only.
 - Not verified on real hardware (no headset here); everything above is the
   debug runtime's `--vr` path.
 
@@ -193,11 +191,10 @@ Two real divergences this fixed, both visible on the VR main menu:
 VR MFD panel text had the same fixed-size problem relative to its own panel
 pixels; it now matches the flat MFD.
 
-Still open: the load-game screen has **no** world-space presentation at all —
-in `--vr` it falls back to the screen-space overlay (`LoadGameScene::render`
-returns nothing; `render_per_eye` draws for both modes). So the one canvas that
-exercises `fit_to_rect` is never actually shown on a panel. Ellipsizing now
-happens in layout, so it *will* be correct when that screen grows a VR panel.
+The load-game and game-over screens have since grown world-space presentations
+of their own — see "the whole frontend flow now works in VR" below. Ellipsizing
+happening in layout rather than in a presentation is exactly what made the load
+list come out right on the panel with no extra work.
 
 **Deferred: render-to-texture for world space.** Rendering the canvas to an
 offscreen target and mapping it onto the panel quad would make parity true *by
@@ -215,13 +212,42 @@ Consolidation makes world-space a thin mapper, so swapping that mapper for an
 RTT quad afterwards is a small contained change that can be benchmarked on
 device. Doing RTT first would bet the refactor on unverifiable engine work.
 
+## RESOLVED: the whole frontend flow now works in VR
+
+`feat/vr-menu-load-gameover` gives **`LoadGameScene` and `GameOverScene`** the
+same treatment the main menu already had, and factors the pointer rule out so
+there is one copy of it:
+
+- `ui::vr_frontend_pointer(input_context, canvas_size)` (new
+  `shock2vr/src/ui/frontend_pointer.rs`) is the single hand-ray pointer: panel
+  raycast, trigger-held hand wins, off-panel presses stay consumed. All three
+  screens call it; `test_support` there is the shared "aim a hand at a canvas
+  point" rig their tests use.
+- An **untracked controller** reports a *zero* quaternion, and cgmath's
+  `rotate_vector` passes it through unchanged - so the old code aimed a fixed
+  `(0,0,-1)` ray that lands dead centre on the panel. Guarded now.
+- Each screen has one `build_canvas`, consumed by `render_world_space` in VR and
+  `render_screen_space` in flat. Ellipsization already lived in layout, so the
+  load list's `fit_to_rect` came out right on the panel with no extra work.
+
+Two rising-edge holes surfaced in review and are fixed: game-over started
+`last_pressed: false`, so dying with the trigger still held could fire *Quit* on
+the first frame; and the pointer reported only the winning hand's trigger, so an
+idle hand resting on the panel released the other hand's held press.
+
+Verified end to end on the debug runtime's `--vr` path: menu -> Load Game ->
+row select -> Done -> menu, and death -> game-over panel -> LOAD -> `earth.mis`.
+
 ## What is left
 
 - **No hardware verification.** Everything is the debug runtime's `--vr` path; the
   Quest `DEFAULT_MISSION = main_menu` change is untested on device.
-- **The load screen has no VR presentation** - in `--vr` it falls back to the
-  screen-space overlay, so the one canvas using `fit_to_rect` never appears on a
-  panel. Small job now that `WorldPanel` + the layout pass exist.
+- **The presentation split is now a fourth copy.** `main_menu`, `load_game`,
+  `game_over` and `no_assets` each carry the same `render`/`render_per_eye` VR
+  early-return + `build_canvas` + panel dance, and a third copy of
+  `resolve_click_at`. Hoisting that into one helper beside `vr_frontend_pointer`
+  is the obvious next de-duplication (deliberately out of scope here, which was
+  the pointer only).
 - **Render-to-texture for world space** remains the better end state (parity by
   construction rather than by test). `engine` still has no render-target
   abstraction; consolidation has made the world mapper thin enough that swapping
