@@ -397,3 +397,64 @@ upside down".
 
 - [#993](https://github.com/tommy-xr/shock2quest/pull/993) `feat/no-assets-screen` -> `main` — missing-assets screen (inherits this bug in VR)
 - [#994](https://github.com/tommy-xr/shock2quest/pull/994) `fix/vr-frontend-panel-orientation` -> **#993** — the head-pose fix; carries comments at the traps above
+
+## RESOLVED (desktop): the shared basis error is fixed — the basis is now honest
+
+Landed on this branch (2026-08-15). The "honest" change is now in, atomically,
+at **six** sites — the handoff's five plus one it missed:
+
+1. `world_element_transform`: the `from_angle_z(180)` compensation is gone. The
+   one flip that remains is the canvas-y flip (canvas y grows down, panel y
+   grows up), done as `from_angle_x(180)` — a proper rotation, so triangle
+   winding is preserved (a `scale(1,-1,1)` mirror would flip winding).
+2. `frontend_panel`: basis is `right = up x look_dir` (the viewer's right),
+   `true_up = look_dir x right`, third column **+look_dir** — local +Z points AT
+   the viewer. `WorldPanel::normal` is now genuinely the outward face.
+3. `debug_map.rs`: same basis change (its duplicate copy).
+4. `canvas_rect_to_panel`: corner map is `(p.x + 0.5, 0.5 - p.y)`.
+5. `render_world_space`: layers step **+z** (toward the viewer).
+6. **`gui_manager.rs` (the missed site)**: the MFD proxy entity's outward face
+   is its local -Z, so its root transform now carries an explicit
+   `from_angle_y(180)` at that one boundary, commented. Without this the honest
+   element path would have turned every in-game MFD panel around.
+
+Also fixed by this, silently: `ray_to_canvas` hit-testing was **horizontally
+mirrored** against the old basis (a hit at canvas x mapped to 640-x). Nobody
+noticed because the menu buttons are full-width rows and the unit tests invert
+`ray_to_canvas` to build their hand poses, so the error cancelled. It is gone
+now (`u = cx` under the honest basis), and a click aimed at New Game's true
+rect center was verified to fire New Game (0 -> 747 entities).
+
+### What the probe actually shows now (calibration for the device pass)
+
+With the honest basis, the raw `world_space_text` probe renders **y-flipped
+only** — letter order correct left-to-right, each glyph vertically mirrored —
+NOT 180-rotated. That is not a basis error: `unit_text_vertices` (and every
+raster texture) is authored y-down, and the single canvas-y flip that corrects
+it lives in `world_element_transform`. In other words the earlier "probe is 180
+rotated on both platforms" was y-down content x the old basis's hidden
+turn-around; the turn-around is gone and the y-down convention remains, applied
+once, on purpose, for all content kinds equally.
+
+**Device implication**: re-run the probe on the Quest against this branch.
+Expected if the device shares desktop behavior: probe y-flipped, canvas
+upright. If the canvas is still 180-rotated on device, the delta is now
+guaranteed to be outside the UI math entirely (basis, element path, and canvas
+mapping are all honest and desktop-verified). `SHOCK2_PANEL_LOG=1` makes
+`frontend_panel` print the head quaternion + derived basis via `println!`
+(reaches logcat), rate-limited — compare desktop vs device readings directly.
+
+### Desktop verification evidence (all `cargo dbgr`, DARK_ASSET_PATH=~/ss2-data-unpacked)
+
+- VR menu: canvas upright, New Game top / Quit bottom, labels in their pills.
+- Raw probe: y-flip only (letter order preserved) — basis honest.
+- `debug_map --vr`: panel upright and readable (ELEVATOR / CRYO / key legend).
+- Hover: hand ray aimed at New Game's rect center brightens exactly New Game.
+- Click: trigger pull on New Game transitioned the scene, 0 -> 747 entities.
+- Flat menu: pixel-identical before vs after (ImageChops diff bbox = None).
+- `cargo test -p shock2vr`: 682 passed, zero expectation changes — the parity
+  tests pass unchanged because element path and corner map moved together.
+- `RUSTFLAGS="-D warnings" cargo check -p shock2vr -p desktop_runtime -p debug_runtime` clean.
+
+Still open: the device-only factor (untested on hardware since this change),
+and the desktop_runtime `--vr` hand-ray issue (owned by a separate stream).

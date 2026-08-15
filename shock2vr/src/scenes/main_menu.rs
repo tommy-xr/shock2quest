@@ -627,9 +627,10 @@ mod tests {
         let target = panel.center + right * (u * panel.size.x) + up * (v * panel.size.y);
 
         crate::input_context::Hand {
-            // Stand back along the panel's normal and aim at the target.
-            position: target - normal * FRONTEND_PANEL_DISTANCE,
-            rotation: Quaternion::from_arc(vec3(0.0, 0.0, -1.0), normal, None),
+            // Stand back on the viewer's side (the normal points at the
+            // viewer) and aim at the target.
+            position: target + normal * FRONTEND_PANEL_DISTANCE,
+            rotation: Quaternion::from_arc(vec3(0.0, 0.0, -1.0), -normal, None),
             trigger_value: trigger,
             ..crate::input_context::Hand::default()
         }

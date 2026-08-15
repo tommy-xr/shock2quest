@@ -218,15 +218,17 @@ impl GameScene for DebugMapScene {
             look_dir = look_dir.normalize();
         }
 
+        // Honest basis, same as `ui::frontend_panel`: local +x the viewer's
+        // right, +y up, +Z at the viewer.
         let mut up = vec3(0.0, 1.0, 0.0);
-        let mut right = look_dir.cross(up);
+        let mut right = up.cross(look_dir);
         if right.magnitude2() < 1e-6 {
             up = vec3(0.0, 0.0, 1.0);
-            right = look_dir.cross(up);
+            right = up.cross(look_dir);
         }
         right = right.normalize();
-        let true_up = right.cross(look_dir).normalize();
-        let rotation_matrix = Matrix3::from_cols(right, true_up, -look_dir);
+        let true_up = look_dir.cross(right).normalize();
+        let rotation_matrix = Matrix3::from_cols(right, true_up, look_dir);
 
         // Compose the panel through MapGui - the automap's composition path -
         // and present the shared UiCanvas in world space, anchored at the
