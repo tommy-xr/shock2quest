@@ -503,3 +503,40 @@ Unverified (needs an interactive window): mouse sensitivity — VR keeps the
 cursor in Normal mode, so deltas are per-event and `delta_time`-scaled; finite
 screen travel may under-rotate the hand. If it bites, capture the cursor for
 raw relative motion while a VR panel is up.
+
+---
+
+# CLOSED OUT (2026-08-15): the VR menu effort is a 4-PR stack, all evidence on the PRs
+
+```
+main
+ └─ #994  fix(vr): head-anchored panels, honest basis, desktop --vr input
+     ├─ #997  feat(ui): VR pointer + world panels for load/game-over  (base: #994)
+     │    └─ #998  feat(vr): head-anchored panels with lazy recenter  (base: #997)
+     └─ #996  feat(oculus): remote input injection over adb           (base: #994)
+```
+
+- **#994** carries this document's fixes: head (not controller) anchoring, the
+  honest basis (both platforms; the "second device factor" was a stale APK),
+  and the desktop --vr mouse→hand-ray routing. Device stills + desktop GIF are
+  embedded in the PR. The menu-audio e2e test was re-aimed for the honest
+  mapping (it encoded the old mirrored canvas+x→world+z).
+- **#997** gives LoadGameScene and GameOverScene the VR pointer + world panel
+  (shared `vr_frontend_pointer`, untracked-hand guard, rising-edge fixes). Full
+  VR flow verified: menu → load → row → Done → menu; death → game-over → LOAD.
+- **#998** replaces gaze-glued panels with place-on-entry / gravity-aligned /
+  world-locked / lazy-recenter (`FrontendPanelAnchor`), with `head.position`
+  plumbed through all three runtimes. Device before/after in the PR: panel
+  moved from ~600 px above eye-centre (inverted disparity) to centred, face-on.
+- **#996** adds the Quest remote input server (`/sdcard/shock2quest/debug-port.txt`
+  → loopback HTTP over `adb forward`, shared `shock2vr::input::remote` channel
+  vocabulary, requires `android.permission.INTERNET` — Android denies even
+  loopback bind without it). Used on-device to hover + click the menu with the
+  headset resting on a desk: that capture IS the device interaction proof.
+- Follow-ups filed: #999 (`debug_map` panel ~17° above gaze — hardcoded 1.5 wu
+  head height, pre-existing). Noted in #998: the anchor is per-scene, so the
+  panel re-places on each frontend screen swap; hoist one anchor if that feels
+  jumpy on head.
+- Agent-workflow trap recorded: worktree-isolated subagents branch from
+  origin/main, NOT the session's branch — two agents built on the wrong base
+  and needed rebase + re-verification. Verify `git merge-base` before stacking.
