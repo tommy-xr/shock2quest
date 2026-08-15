@@ -34,9 +34,14 @@ use shipyard::EntityId;
 use crate::vr_config::Handedness;
 
 mod frontend_pointer;
+mod panel_anchor;
 #[cfg(test)]
 pub use frontend_pointer::test_support;
 pub use frontend_pointer::vr_frontend_pointer;
+pub use panel_anchor::{
+    FrontendPanelAnchor, PanelPlacement, RECENTER_DISTANCE, RECENTER_EASE_SECONDS,
+    RECENTER_HOLD_SECONDS, RECENTER_YAW_DEGREES, horizontal_forward, lerp_placement,
+};
 
 /// Font name that resolves to the engine's compiled-in font rather than a
 /// `.FON` asset.
