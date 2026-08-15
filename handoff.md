@@ -480,7 +480,26 @@ Note for future Android probing: `SHOCK2_PANEL_LOG` is env-gated and env vars
 do not reach an Android app — the device run above used a throwaway local edit
 (`cfg!(target_os = "android") ||` in the gate) that was reverted after capture.
 
-Still open: the desktop_runtime `--vr` hand-ray issue (menu ray is cast as
-`hand.rotation * (0,0,-1)`, OpenXR convention, but desktop's `camera_rotation`
-maps **+Z** to forward, so the simulated hands' rays point backward and
-`ray_to_canvas` rejects the panel as behind the ray).
+## RESOLVED (desktop `--vr` interaction): input routing, not geometry
+
+The desktop `--vr` menu being dead was a third, separate defect. The suspected
+ray inversion was a **false lead**, measured rather than argued: desktop's
+`camera_rotation` does map local +Z onto `camera_forward`, but the rig defines
+its own forward as `-camera_forward`, so the negations cancel — eye direction,
+panel placement, and hand aim all agree, and `ray_to_canvas` returns a real hit
+for the resting pose. The tell: the hit point was not wrong, it was *constant*.
+`MainMenuScene::wants_pointer()` is unconditionally true, and the rig answered a
+pointer request by zeroing mouse deltas — the flatscreen cursor bargain —
+freezing the only thing that aims the hand rays.
+
+Fix: one routing decision, `mouse_look_target`. E/Q still aim their hand;
+no-pointer still turns the head; pointer+Flat still surrenders to the cursor
+(unchanged); pointer+VR routes the mouse to the **right hand** — head-aiming
+cannot work because the panel is head-anchored, so head and ray move together.
+An undriven hand's mouse-button state is cleared each frame so a press released
+out of order cannot latch the trigger and swallow the menu's rising edge.
+
+Unverified (needs an interactive window): mouse sensitivity — VR keeps the
+cursor in Normal mode, so deltas are per-event and `delta_time`-scaled; finite
+screen travel may under-rotate the hand. If it bites, capture the cursor for
+raw relative motion while a VR panel is up.
