@@ -168,8 +168,18 @@ Patched channels are an **override**, not a replacement: the frame loop still
 builds its `InputContext` from OpenXR and only the claimed channels are
 overwritten, so a human can wear the headset while an agent nudges one channel.
 `null` (or `POST /v1/control/input/clear`) releases a channel back to the
-controller. The channel vocabulary is `shock2vr::input::remote`, shared verbatim
-with `runtimes/debug_runtime` (`runtimes/oculus_runtime/src/debug_input.rs`).
+controller; releasing a channel that was never claimed is a 400, so a typo'd
+release cannot silently leave the real override latched. Claims persist until
+released - **clear before disconnecting**, or the wearer is left holding
+whatever the agent set. The channel vocabulary is `shock2vr::input::remote`,
+shared verbatim with `runtimes/debug_runtime`
+(`runtimes/oculus_runtime/src/debug_input.rs`).
+
+Caveat: `head.rotation` / `head.look` drive aim and locomotion direction only -
+the rendered view still comes from the OpenXR views, so claiming them
+desynchronizes what a wearer sees from where the game thinks they are aiming
+(and `head.look`'s yaw/pitch is the flat camera convention, not the VR head
+frame). Prefer the hand channels for VR interaction.
 
 ## Toward a device debug runtime
 

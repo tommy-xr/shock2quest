@@ -75,10 +75,20 @@ pub fn apply_input_patch(
 ) -> Result<(), String> {
     // Parse a scalar/array value for `channel`, attributing a clear error to the
     // channel and value shape when it doesn't match.
+    // Non-finite values are rejected here rather than downstream: an override is
+    // re-applied every frame, so one NaN would poison aim/locomotion until it is
+    // released, with no clue where it came from.
     fn num(channel: &str, v: &Value) -> Result<f32, String> {
-        v.as_f64()
+        let n = v
+            .as_f64()
             .map(|f| f as f32)
-            .ok_or_else(|| format!("channel '{channel}' expects a number, got {v}"))
+            .ok_or_else(|| format!("channel '{channel}' expects a number, got {v}"))?;
+        if !n.is_finite() {
+            return Err(format!(
+                "channel '{channel}' expects a finite number, got {v}"
+            ));
+        }
+        Ok(n)
     }
     fn arr(channel: &str, v: &Value, n: usize) -> Result<Vec<f32>, String> {
         let a = v.as_array().ok_or_else(|| {
@@ -132,7 +142,15 @@ pub fn apply_input_patch(
             }
             "rotation" => {
                 let q = arr(channel, value, 4)?;
-                hand.rotation = Quaternion::new(q[3], q[0], q[1], q[2]).normalize();
+                let rotation = Quaternion::new(q[3], q[0], q[1], q[2]);
+                // A zero quaternion normalizes to NaN, which would silently
+                // corrupt the hand transform every frame.
+                if rotation.magnitude2() <= 0.0 {
+                    return Err(format!(
+                        "channel '{channel}' expects a non-zero quaternion, got {value}"
+                    ));
+                }
+                hand.rotation = rotation.normalize();
                 Ok(())
             }
             _ => Err(format!(
@@ -268,6 +286,55 @@ pub fn parse_input_patches(body: &Value) -> Result<Vec<(String, Value)>, String>
         .collect())
 }
 
+fn unknown_channel(channel: &str) -> String {
+    format!(
+        "unknown input channel '{channel}'; {}",
+        input_channels_help()
+    )
+}
+
+/// The canonical name for a channel, plus whether it was the `head.look`
+/// spelling (which needs its value converted, see `canonical_channel_value`).
+/// Aliases collapse - `right_hand.trigger_value` is `right_hand.trigger`, and
+/// `head.look` is `head.rotation` - so two spellings of one field can never be
+/// held as two independent claims.
+fn canonical_channel(channel: &str) -> Result<(String, bool), String> {
+    if let Some((side, field)) = channel.split_once("_hand.") {
+        if side != "left" && side != "right" {
+            return Err(unknown_channel(channel));
+        }
+        let field = match field {
+            "trigger" | "trigger_value" => "trigger",
+            "squeeze" | "squeeze_value" => "squeeze",
+            "a" | "a_value" => "a",
+            "thumbstick" | "position" | "rotation" => field,
+            _ => return Err(unknown_channel(channel)),
+        };
+        return Ok((format!("{side}_hand.{field}"), false));
+    }
+    match channel {
+        "head.look" => Ok(("head.rotation".to_owned(), true)),
+        "head.rotation" | "pointer.position" | "pointer.pressed" | "crouch" | "jump" => {
+            Ok((channel.to_owned(), false))
+        }
+        _ => Err(unknown_channel(channel)),
+    }
+}
+
+/// Canonicalize a channel *and* its value: `head.look` is resolved to the
+/// quaternion it means, so it is stored as the same claim `head.rotation` would
+/// make.
+fn canonical_channel_value(channel: &str, value: Value) -> Result<(String, Value), String> {
+    let (canonical, is_look) = canonical_channel(channel)?;
+    if is_look {
+        let mut scratch = InputContext::default();
+        apply_input_patch(&mut scratch, channel, &value)?;
+        let r = scratch.head.rotation;
+        return Ok((canonical, serde_json::json!([r.v.x, r.v.y, r.v.z, r.s])));
+    }
+    Ok((canonical, value))
+}
+
 /// Channels an agent has claimed, layered over a runtime-built `InputContext`.
 ///
 /// This is the *override* half of remote control, used where the runtime cannot
@@ -294,13 +361,25 @@ impl InputOverrides {
     /// Claim (or, with `null`, release) a channel. The value is validated
     /// eagerly against a scratch context so a bad request is rejected at the
     /// call rather than silently mis-driving the game every frame after.
+    ///
+    /// Channels are stored under a canonical name, so an alias (`trigger_value`)
+    /// or an equivalent spelling (`head.look` for `head.rotation`) replaces the
+    /// claim it duplicates instead of latching a second, unreleasable copy of the
+    /// same field.
     pub fn set(&mut self, channel: &str, value: Value) -> Result<(), String> {
         if value.is_null() {
-            self.channels.remove(channel);
-            return Ok(());
+            // A release names a channel too, and a typo'd one ("thumstick")
+            // would otherwise report success while the real override stayed
+            // latched - the exact failure a remote driver cannot see.
+            let canonical = canonical_channel(channel)?.0;
+            return match self.channels.remove(&canonical) {
+                Some(_) => Ok(()),
+                None => Err(format!("channel '{channel}' is not currently overridden")),
+            };
         }
-        apply_input_patch(&mut InputContext::default(), channel, &value)?;
-        self.channels.insert(channel.to_owned(), value);
+        let (canonical, value) = canonical_channel_value(channel, value)?;
+        apply_input_patch(&mut InputContext::default(), &canonical, &value)?;
+        self.channels.insert(canonical, value);
         Ok(())
     }
 
@@ -401,6 +480,62 @@ mod tests {
         input.left_hand.thumbstick = Vector2::new(-1.0, -1.0);
         overrides.apply(&mut input);
         assert_eq!(input.left_hand.thumbstick, Vector2::new(-1.0, -1.0));
+    }
+
+    /// Two spellings of one field must be one claim, or releasing the spelling
+    /// you remember leaves the other latched forever.
+    #[test]
+    fn overrides_collapse_aliases_and_equivalent_spellings() {
+        let mut overrides = InputOverrides::new();
+        overrides
+            .set("right_hand.trigger_value", json!(1.0))
+            .unwrap();
+        overrides.set("right_hand.trigger", json!(0.5)).unwrap();
+        assert_eq!(overrides.channels().len(), 1);
+        overrides.set("right_hand.trigger", Value::Null).unwrap();
+        assert!(overrides.is_empty());
+
+        overrides.set("head.look", json!([30.0, 0.0])).unwrap();
+        overrides
+            .set("head.rotation", json!([0.0, 0.0, 0.0, 1.0]))
+            .unwrap();
+        assert_eq!(overrides.channels().len(), 1);
+        assert!(overrides.channels().contains_key("head.rotation"));
+    }
+
+    /// A misspelled release used to report success while the real override
+    /// stayed latched - invisible to a remote driver.
+    #[test]
+    fn releasing_an_unknown_or_unclaimed_channel_is_an_error() {
+        let mut overrides = InputOverrides::new();
+        overrides
+            .set("left_hand.thumbstick", json!([0.0, 1.0]))
+            .unwrap();
+        assert!(overrides.set("left_hand.thumstick", Value::Null).is_err());
+        assert_eq!(overrides.channels().len(), 1);
+        assert!(overrides.set("jump", Value::Null).is_err());
+        overrides.set("left_hand.thumbstick", Value::Null).unwrap();
+        assert!(overrides.is_empty());
+    }
+
+    /// Non-finite numbers and a degenerate quaternion would be re-applied every
+    /// frame, poisoning aim with no trace of where it came from.
+    #[test]
+    fn patch_rejects_non_finite_and_degenerate_values() {
+        let mut input = InputContext::default();
+        // 1e300 is a finite f64 that overflows to +inf as an f32.
+        assert!(apply_input_patch(&mut input, "right_hand.trigger", &json!(1e300)).is_err());
+        assert!(
+            apply_input_patch(&mut input, "left_hand.position", &json!([1.0, 1e300, 0.0])).is_err()
+        );
+        assert!(
+            apply_input_patch(
+                &mut input,
+                "left_hand.rotation",
+                &json!([0.0, 0.0, 0.0, 0.0])
+            )
+            .is_err()
+        );
     }
 
     #[test]

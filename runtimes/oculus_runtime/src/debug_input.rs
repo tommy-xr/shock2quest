@@ -13,9 +13,11 @@
 //! unparseable => nothing is started. The listener binds loopback only, so it is
 //! reachable exclusively through `adb forward tcp:<port> tcp:<port>`.
 
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 use std::{fs, thread};
 
 use serde_json::{Value, json};
@@ -25,13 +27,29 @@ use shock2vr::input_context::InputContext;
 
 pub const PORT_CONFIG_PATH: &str = "/sdcard/shock2quest/debug-port.txt";
 
+/// Connections are served one at a time, so a client that stalls mid-request
+/// would otherwise block every later request - including the `null` / `clear`
+/// that releases a latched movement override. Time the socket out instead.
+const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Cap on a request body. `Content-Length` is attacker-supplied and the buffer
+/// is allocated up front, so an absurd length would OOM-kill the game.
+const MAX_BODY_BYTES: usize = 64 * 1024;
+
+/// Bound on queued actions, so a client that posts while the XR session is
+/// idle (the frame loop is not running, so nothing drains) cannot grow it
+/// without limit.
+const MAX_PENDING_ACTIONS: usize = 64;
+
 /// State shared between the HTTP thread and the frame loop.
 #[derive(Default)]
 struct SharedState {
     overrides: InputOverrides,
-    /// Actions posted since the last frame, delivered exactly once (they are
-    /// edge-triggered, unlike the level-held channels).
-    pending_actions: Vec<InputAction>,
+    /// Actions posted since the last frame. Delivered ONE PER FRAME, in order:
+    /// they are edge-triggered, and firing a whole queue into a single
+    /// `Game::update` would collapse a scripted sequence (save, then load) into
+    /// one dispatch.
+    pending_actions: VecDeque<InputAction>,
     frame: u64,
 }
 
@@ -76,11 +94,14 @@ impl DebugInputServer {
     /// deliver any queued discrete actions. Call once per frame, immediately
     /// before `game.update`.
     pub fn apply(&self, input: &mut InputContext, actions: &mut InputActionState) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = lock(&self.state);
         state.frame += 1;
         state.overrides.apply(input);
-        for action in state.pending_actions.drain(..) {
+        if let Some(action) = state.pending_actions.pop_front() {
             actions.trigger(action);
+            // Single-shot semantics, matching the debug runtime: don't leave a
+            // remotely fired action held for the rest of the process.
+            actions.release(action);
         }
     }
 }
@@ -100,7 +121,17 @@ fn parse_port(raw: &str) -> Option<u16> {
     }
 }
 
+/// Lock the shared state, ignoring poisoning: a panic in the HTTP thread must
+/// not take the render thread down with it on the next frame.
+fn lock(state: &Arc<Mutex<SharedState>>) -> MutexGuard<'_, SharedState> {
+    state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn serve_connection(mut stream: TcpStream, state: &Arc<Mutex<SharedState>>, mission: &str) {
+    let _ = stream.set_read_timeout(Some(SOCKET_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(SOCKET_TIMEOUT));
     let (status, body) = match read_request(&mut stream) {
         Ok((method, path, body)) => handle_request(state, mission, &method, &path, &body),
         Err(message) => (400, json!({ "error": message })),
@@ -146,6 +177,11 @@ fn read_request(stream: &mut TcpStream) -> Result<(String, String, String), Stri
         }
     }
 
+    if content_length > MAX_BODY_BYTES {
+        return Err(format!(
+            "request body too large ({content_length} bytes, max {MAX_BODY_BYTES})"
+        ));
+    }
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         reader
@@ -167,7 +203,7 @@ fn handle_request(
     let path = path.split('?').next().unwrap_or(path);
     match (method, path) {
         ("GET", "/v1/status") => {
-            let state = state.lock().unwrap();
+            let state = lock(state);
             (
                 200,
                 json!({
@@ -178,7 +214,7 @@ fn handle_request(
             )
         }
         ("GET", "/v1/control/input") => {
-            let state = state.lock().unwrap();
+            let state = lock(state);
             (200, json!({ "overrides": state.overrides.channels() }))
         }
         ("POST", "/v1/control/input") => {
@@ -190,21 +226,24 @@ fn handle_request(
                 Ok(patches) => patches,
                 Err(error) => return (400, json!({ "error": error })),
             };
-            let mut state = state.lock().unwrap();
+            let mut state = lock(state);
+            // Apply the whole batch to a scratch copy first: a request whose
+            // second channel is bad must not leave the first one latched (the
+            // map form isn't even ordered by what the caller wrote).
+            let mut updated = state.overrides.clone();
             for (channel, value) in patches {
-                // Stop at the first bad channel so the caller gets an
-                // actionable error instead of a silent partial apply.
-                if let Err(error) = state.overrides.set(&channel, value) {
+                if let Err(error) = updated.set(&channel, value) {
                     return (400, json!({ "error": error }));
                 }
             }
+            state.overrides = updated;
             (
                 200,
                 json!({ "success": true, "overrides": state.overrides.channels() }),
             )
         }
         ("POST", "/v1/control/input/clear") => {
-            let mut state = state.lock().unwrap();
+            let mut state = lock(state);
             state.overrides.clear();
             (200, json!({ "success": true, "overrides": {} }))
         }
@@ -221,7 +260,14 @@ fn handle_request(
             };
             match name.parse::<InputAction>() {
                 Ok(action) => {
-                    state.lock().unwrap().pending_actions.push(action);
+                    let mut state = lock(state);
+                    if state.pending_actions.len() >= MAX_PENDING_ACTIONS {
+                        return (
+                            400,
+                            json!({ "error": "action queue is full; is the XR session running?" }),
+                        );
+                    }
+                    state.pending_actions.push_back(action);
                     (200, json!({ "success": true, "action": name }))
                 }
                 Err(_) => (
@@ -289,13 +335,28 @@ mod tests {
         assert_eq!(status, 200);
 
         let mut input = InputContext::default();
-        state.lock().unwrap().overrides.apply(&mut input);
+        lock(&state).overrides.apply(&mut input);
         assert_eq!(input.right_hand.trigger_value, 1.0);
 
         let (status, _) =
             handle_request(&state, "medsci1.mis", "POST", "/v1/control/input/clear", "");
         assert_eq!(status, 200);
-        assert!(state.lock().unwrap().overrides.is_empty());
+        assert!(lock(&state).overrides.is_empty());
+    }
+
+    /// A batch with a bad channel must leave NO part of itself latched.
+    #[test]
+    fn a_failed_batch_leaves_overrides_untouched() {
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let (status, _) = handle_request(
+            &state,
+            "medsci1.mis",
+            "POST",
+            "/v1/control/input",
+            "{\"right_hand.thumbstick\": [0.0, 1.0], \"bogus\": 1.0}",
+        );
+        assert_eq!(status, 400);
+        assert!(lock(&state).overrides.is_empty());
     }
 
     #[test]
@@ -317,6 +378,6 @@ mod tests {
             "{\"action\": \"NotAnAction\"}",
         );
         assert_eq!(status, 400);
-        assert!(state.lock().unwrap().pending_actions.is_empty());
+        assert!(lock(&state).pending_actions.is_empty());
     }
 }
