@@ -62,11 +62,13 @@ function quatFromTo(from: Vec3, to: Vec3): Quat {
   return quatNormalize([...cross(a, b), 1 + d]);
 }
 
-/** Aim the production VR hand ray at a world point without direct entity messages. */
+/** Aim the production VR hand ray at a world point without direct entity
+ * messages. Pass `squeeze = 1` to preserve an already-held item while aiming. */
 export async function aimVrHandAt(
   game: GameServer,
   target: Vec3,
   standOff = 0.45,
+  squeeze = 0,
 ): Promise<{ start: Vec3; target: Vec3 }> {
   const snapshot = await game.info();
   const pawn = snapshot.player.position;
@@ -90,7 +92,7 @@ export async function aimVrHandAt(
   await game.input.set("right_hand.position", localHand);
   await game.input.set("right_hand.rotation", localHandRotation);
   await game.input.set("right_hand.trigger", 0);
-  await game.input.set("right_hand.squeeze", 0);
+  await game.input.set("right_hand.squeeze", squeeze);
   await game.step({ frames: 3 });
   return { start: worldHand, target };
 }

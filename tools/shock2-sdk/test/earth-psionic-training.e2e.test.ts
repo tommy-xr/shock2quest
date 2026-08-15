@@ -134,6 +134,198 @@ function hitPoints(detail: Awaited<ReturnType<GameServer["entities"]["detail"]>>
   return Number(property.value);
 }
 
+// Negative-first production-VR regression for #958. On the parent commit the
+// squeeze really holds mission object 275, but the holder trigger sends only
+// TriggerPull. PsiKitScript never sees its authored inventory Frob, leaving PSI
+// at five and the exact held entity alive. This test intentionally does not use
+// a direct Frob, Give, inventory-strip click, or debug vitals mutation.
+test(
+  "VR uses the actual held Earth Psi Booster through its authored inventory action",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "earth.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8201),
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 5 });
+
+    await crossEarthTrainingTripwire(
+      game,
+      PSIONIC_ENTRY_TRIPWIRE,
+      PSIONIC_ENTRY_DESTINATION,
+    );
+    assert.equal(
+      psiPoints(await game.info()),
+      5,
+      "the held-consumable regression starts from the authored course value",
+    );
+
+    const booster = await exactlyOne(game, PSI_BOOSTERS[0], "authored Psi Booster");
+    const boosterBodies = (await game.physics.bodies({ entityId: booster.id })).bodies;
+    assert.equal(boosterBodies.length, 1, "booster 275 must begin as one physical world item");
+    // MOVE pickups are dynamically instantiated one sixth of a Dark unit
+    // above PropPosition. Aim at the live body, not the authored transform;
+    // aiming at the latter passes underneath this tiny hypo collider.
+    const boosterPosition = boosterBodies[0].position;
+    // The three boosters are only 0.4 units apart along x. Stand on object
+    // 275's lower-x side so it is the first selectable body on this ray.
+    await teleportVerified(game, {
+      x: boosterPosition[0] - 1.5,
+      y: boosterPosition[1] - 0.42,
+      z: boosterPosition[2],
+    });
+    const handRay = await aimVrHandAt(game, boosterPosition, 0.15);
+    const hit = await game.raycast({
+      start: handRay.start,
+      end: handRay.target,
+      collision_groups: ["entity", "selectable", "world", "ui", "raycast"],
+      max_distance: 1,
+      ignore_sensors: true,
+    });
+    assert.equal(
+      hit.entity_id,
+      booster.id,
+      `the production hand ray must select booster 275: ${JSON.stringify({ booster, boosterBodies, handRay, hit, player: (await game.info()).player.position })}`,
+    );
+
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    const heldBeforeUse = await game.info();
+    assert.equal(
+      heldBeforeUse.player.right_hand_entity_id,
+      booster.id,
+      "the regression must use the actual entity held by the right VR hand",
+    );
+    assert.ok(
+      (await game.player.inventory()).items.some(
+        (item) => item.entity_id === booster.id && item.location === "right_hand",
+      ),
+      "the exact held booster must be part of the player's carried state",
+    );
+    assert.equal(
+      (await game.physics.bodies({ entityId: booster.id })).bodies.length,
+      0,
+      "a genuinely held item must already be outside world-ray selection",
+    );
+
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 2 });
+
+    const afterUse = await game.info();
+    const messageTrace = await game.messages.recent();
+    const heldItemMessages = messageTrace.messages.filter(
+      (message) => message.to.entity_id === booster.id,
+    );
+    assert.ok(
+      heldItemMessages.some((message) => message.payload === "Frob"),
+      "the holder trigger must route the authored inventory Frob to the exact held booster",
+    );
+    assert.ok(
+      !heldItemMessages.some((message) => message.payload === "TriggerPull"),
+      "a held consumable must not receive the weapon TriggerPull protocol",
+    );
+    assert.equal(
+      psiPoints(afterUse),
+      25,
+      "one holder-trigger gesture must restore exactly the retail 20 PSI",
+    );
+    assert.equal(
+      (await game.entities.byTemplate(booster.template_id)).length,
+      0,
+      "using the one-unit mission object must consume that exact held entity",
+    );
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      null,
+      "canonical entity teardown must release the hand after consumption",
+    );
+    assert.ok(
+      !(await game.player.inventory()).items.some((item) => item.entity_id === booster.id),
+      "the consumed held id must leave all carried locations",
+    );
+    for (const remainingTemplate of PSI_BOOSTERS.slice(1)) {
+      assert.equal(
+        (await game.entities.byTemplate(remainingTemplate)).length,
+        1,
+        "using one held unit must not consume either neighboring course booster",
+      );
+    }
+
+    // Continue the room's authored VR lesson. This also proves that the
+    // generic consumable decision did not steal TriggerPull from the Psi Amp.
+    await game.input.set("right_hand.trigger", 0);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 2 });
+
+    const amp = await exactlyOne(game, PSI_AMP, "authored Psi Amp");
+    const ampBodies = (await game.physics.bodies({ entityId: amp.id })).bodies;
+    assert.equal(ampBodies.length, 1, "the authored Psi Amp should be physically supplied");
+    const ampPosition = ampBodies[0].position;
+    await teleportVerified(game, {
+      x: ampPosition[0] - 1.5,
+      y: ampPosition[1] - 0.42,
+      z: ampPosition[2],
+    });
+    await aimVrHandAt(game, ampPosition, 0.18);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      amp.id,
+      "the production hand must hold the course's actual Psi Amp",
+    );
+
+    await game.input.trigger("CyclePsiPower");
+    await game.step({ frames: 2 });
+    assert.equal((await game.info()).player.selected_psi_power, "Cryokinesis");
+
+    const droid = await exactlyOne(game, TRAINING_DROID, "Training Droid");
+    const droidHpBefore = hitPoints(await game.entities.detail(droid.id));
+    const droidPosition = (await game.entities.detail(droid.id)).position;
+    await teleportVerified(game, {
+      x: droidPosition[0] - 4,
+      y: droidPosition[1],
+      z: droidPosition[2],
+    });
+    const droidAim = await game.player.aimAt(droid, {
+      hitbox: "torso",
+      // The VR projectile starts at the hand, not the camera. Stage the hand
+      // directly in front of the live torso below and let that production ray
+      // be the authoritative clearance check.
+      visibility: "unchecked",
+    });
+    await aimVrHandAt(game, droidAim.world_point, 0.45, 1);
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 1 });
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 61 });
+    assert.equal(
+      psiPoints(await game.info()),
+      24,
+      "the held Psi Amp must preserve TriggerPull and spend one PSI on Cryokinesis",
+    );
+    assert.ok(
+      hitPoints(await game.entities.detail(droid.id)) < droidHpBefore,
+      "the real held-Amp cast must damage the course's Training Droid",
+    );
+
+    await crossEarthTrainingTripwire(
+      game,
+      PSIONIC_EXIT_TRIPWIRE,
+      PSIONIC_EXIT_DESTINATION,
+    );
+    const exited = await game.info();
+    assert.equal(exited.player.right_hand_entity_id, null);
+    assert.equal((await game.player.inventory()).count, 0);
+    assert.equal((await game.entities.byTemplate(PSI_AMP)).length, 0);
+    assert.equal((await game.entities.byTemplate(PSI_BOOSTERS[0])).length, 0);
+    for (const templateId of PSI_BOOSTERS.slice(1)) {
+      assert.equal((await game.entities.byTemplate(templateId)).length, 1);
+    }
+  },
+);
+
 test(
   "VR world-frob consumes one Psi Booster without racing its automatic pickup",
   { skip: !e2eEnabled, timeout: 600_000 },
