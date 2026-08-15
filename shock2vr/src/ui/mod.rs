@@ -18,9 +18,7 @@
 
 use std::rc::Rc;
 
-use cgmath::{
-    Deg, InnerSpace, Matrix3, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec2, vec3,
-};
+use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
 use dark::importers::{FONT_IMPORTER, TEXTURE_IMPORTER};
 use engine::{
     Font,
@@ -38,10 +36,7 @@ mod panel_anchor;
 #[cfg(test)]
 pub use frontend_pointer::test_support;
 pub use frontend_pointer::vr_frontend_pointer;
-pub use panel_anchor::{
-    FrontendPanelAnchor, PanelPlacement, RECENTER_DISTANCE, RECENTER_EASE_SECONDS,
-    RECENTER_HOLD_SECONDS, RECENTER_YAW_DEGREES, horizontal_forward, lerp_placement,
-};
+pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
 
 /// Font name that resolves to the engine's compiled-in font rather than a
 /// `.FON` asset.
@@ -203,106 +198,17 @@ impl WorldPanel {
 /// The VR menu hangs on a panel 2m ahead of the player at eye level, sized to
 /// the canvas's 4:3 aspect so the art is not stretched.
 ///
-/// "Eye level" is not the scene origin: VR runtimes add a head offset of
-/// `player_eye_height / SCALE_FACTOR` on top of the camera position this scene
-/// returns, so a panel at y=0 hangs below the view and is never seen.
+/// "Eye level" is not the scene origin: VR runtimes add a head offset on top of
+/// the camera position this scene returns, so a panel at y=0 hangs below the
+/// view and is never seen. The panel is hung off the head's tracked position
+/// ([`crate::input_context::Head::position`], which defaults to that same eye
+/// height) rather than off the origin.
 pub const FRONTEND_PANEL_DISTANCE: f32 = 2.0;
-pub const FRONTEND_PANEL_EYE_HEIGHT: f32 = crate::PLAYER_EYE_HEIGHT / dark::SCALE_FACTOR;
 pub const FRONTEND_PANEL_SIZE: Vector2<f32> = Vector2 { x: 2.0, y: 1.5 };
 
 /// Spacing between stacked canvas layers in world space, so the labels sort in
 /// front of the backdrop instead of z-fighting it.
 pub const VR_COMPONENT_Z_STEP: f32 = 0.001;
-
-/// The panel a frontend screen is drawn on in VR: hung `FRONTEND_PANEL_DISTANCE` in front of the
-/// head and turned to face back at it.
-///
-/// It is anchored to the head's **facing**, not to a fixed world axis. There is
-/// no canonical "forward" to hardcode - the runtimes' yaw-0 camera looks along
-/// +X, not -Z - so a panel pinned to -Z sits off to the side and never enters
-/// the frustum. This mirrors `DebugMapScene`'s construction, which is the
-/// world-space panel that demonstrably renders.
-pub fn frontend_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
-    let head = vec3(0.0, FRONTEND_PANEL_EYE_HEIGHT, 0.0);
-    // An untracked pose arrives as the *zero* quaternion, not identity, and
-    // rotating by it silently yields the unrotated vector - so the panel would
-    // pin itself to world -Z and never follow the viewer.
-    let head_rotation = if head_rotation.magnitude2() < 1e-6 {
-        Quaternion::new(1.0, 0.0, 0.0, 0.0)
-    } else {
-        head_rotation.normalize()
-    };
-    // Assumes -Z forward, which is OpenXR's convention. The desktop runtimes'
-    // quaternions happen to agree about the *rendered* view direction (their
-    // `camera_rotation` maps -Z to the direction the view matrix actually
-    // looks), so the panel lands in front of the camera on every runtime.
-    let forward = head_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-    let center = head + forward * FRONTEND_PANEL_DISTANCE;
-
-    // Orient the panel by looking from it back to the head. `look_dir` runs
-    // panel -> head, and the basis is honest: local +x is the viewer's right,
-    // local +y is up, and local +Z (the third column, [`WorldPanel::normal`])
-    // points *at* the viewer. A raw element placed with this rotation alone
-    // renders upright; no compensating rotation exists anywhere in the element
-    // path (the only remaining flip is `world_element_transform`'s canvas-y
-    // flip, which every presentation shares).
-    let mut look_dir = head - center;
-    look_dir = if look_dir.magnitude2() < 1e-6 {
-        vec3(0.0, 0.0, 1.0)
-    } else {
-        look_dir.normalize()
-    };
-    let mut up = vec3(0.0, 1.0, 0.0);
-    // The viewer looks along -look_dir, so their right hand points along
-    // (-look_dir) x up == up x look_dir.
-    let mut right = up.cross(look_dir);
-    if right.magnitude2() < 1e-6 {
-        // Looking straight up or down: pick a different up to keep the basis
-        // well-defined.
-        up = vec3(0.0, 0.0, 1.0);
-        right = up.cross(look_dir);
-    }
-    let right = right.normalize();
-    let true_up = look_dir.cross(right).normalize();
-
-    let panel = WorldPanel {
-        center,
-        rotation: Quaternion::from(Matrix3::from_cols(right, true_up, look_dir)),
-        size: FRONTEND_PANEL_SIZE,
-    };
-
-    // Device-comparison probe: `SHOCK2_PANEL_LOG=1` prints the head pose and
-    // the basis this function derived from it, rate-limited. `println!` (not
-    // `tracing`) on purpose - it reaches logcat on Quest, where no tracing
-    // subscriber is installed.
-    if std::env::var_os("SHOCK2_PANEL_LOG").is_some() {
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static CALLS: AtomicU32 = AtomicU32::new(0);
-        if CALLS.fetch_add(1, Ordering::Relaxed) % 90 == 0 {
-            println!(
-                "SHOCK2_PANEL head_quat=({:.4},{:.4},{:.4},{:.4}) forward=({:.4},{:.4},{:.4}) right=({:.4},{:.4},{:.4}) up=({:.4},{:.4},{:.4}) normal=({:.4},{:.4},{:.4})",
-                head_rotation.s,
-                head_rotation.v.x,
-                head_rotation.v.y,
-                head_rotation.v.z,
-                forward.x,
-                forward.y,
-                forward.z,
-                right.x,
-                right.y,
-                right.z,
-                true_up.x,
-                true_up.y,
-                true_up.z,
-                look_dir.x,
-                look_dir.y,
-                look_dir.z,
-            );
-        }
-    }
-
-    panel
-}
 
 /// Intersect a pointing ray with `panel` and return where it lands, in canvas
 /// pixels - the VR counterpart of [`pointer_to_canvas`].

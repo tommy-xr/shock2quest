@@ -738,9 +738,29 @@ fn main() {
             right_aim_location.pose.orientation.y,
             right_aim_location.pose.orientation.z,
         );
-        // ...so the head gets the actual head, falling back to the aim pose
-        // only on the first frame, before any view has been located.
-        let head_rotation = last_view_rotation.unwrap_or(aim_rotation);
+        // ...so the head gets the actual head. Before any view has been
+        // located (frame 0) the HEAD SPACE pose - located above, this frame -
+        // stands in; the controller aim is only the last resort, when neither
+        // is available. That matters now that the frontend panel is *placed
+        // once* off this pose: anchoring the boot menu to wherever a controller
+        // happened to point would strand it there for the whole screen.
+        let head_pose_rotation = head_location
+            .location_flags
+            .contains(
+                xr::SpaceLocationFlags::ORIENTATION_VALID
+                    | xr::SpaceLocationFlags::ORIENTATION_TRACKED,
+            )
+            .then(|| {
+                cgmath::Quaternion::new(
+                    head_location.pose.orientation.w,
+                    head_location.pose.orientation.x,
+                    head_location.pose.orientation.y,
+                    head_location.pose.orientation.z,
+                )
+            });
+        let head_rotation = last_view_rotation
+            .or(head_pose_rotation)
+            .unwrap_or(aim_rotation);
 
         // Feed the detector before the poses are transformed so this frame's
         // physical stance is available to the crouch request below. Tracked
@@ -781,10 +801,21 @@ fn main() {
 
         let mut input_context = InputContext::default();
         input_context.head.rotation = head_rotation;
-        // The tracked eye, in pawn space. Before the first located view (and
-        // when the head is untracked) this keeps `Head::default`'s fixed eye
-        // height, which is where the camera renders from anyway.
-        if let Some(position) = last_view_position {
+        // The tracked eye, in pawn space. The located head space covers frame
+        // 0, before any view has been located; when the head is untracked
+        // entirely this keeps `Head::default`'s fixed eye height, which is
+        // where the camera renders from anyway.
+        let head_pose_position = tracked_head_position.then(|| {
+            stage_to_pawn(
+                vec3(
+                    head_location.pose.position.x,
+                    head_location.pose.position.y,
+                    head_location.pose.position.z,
+                ),
+                center_above_floor,
+            )
+        });
+        if let Some(position) = last_view_position.or(head_pose_position) {
             input_context.head.position = position;
         }
         input_context.right_hand.rotation = aim_rotation;

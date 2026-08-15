@@ -18,20 +18,20 @@
 
 use std::time::Duration;
 
-use cgmath::{Deg, InnerSpace, Matrix3, Quaternion, Rad, Rotation, Vector3, vec3};
+use cgmath::{Deg, InnerSpace, Quaternion, Rad, Rotation, Vector3, vec3};
 
 use crate::ui::{FRONTEND_PANEL_DISTANCE, FRONTEND_PANEL_SIZE, WorldPanel};
 
 /// Gaze may drift this far off the panel before a recenter starts counting.
-pub const RECENTER_YAW_DEGREES: f32 = 60.0;
+const RECENTER_YAW_DEGREES: f32 = 60.0;
 /// ...or the head may move this far (world units) from where it placed it.
-pub const RECENTER_DISTANCE: f32 = 1.0;
+const RECENTER_DISTANCE: f32 = 1.0;
 /// The divergence must be *sustained* this long, so a glance across the room
 /// never drags the menu along.
-pub const RECENTER_HOLD_SECONDS: f32 = 1.0;
+const RECENTER_HOLD_SECONDS: f32 = 1.0;
 /// How long the re-placement takes. A teleporting panel reads as a glitch;
 /// this is short enough to feel responsive and long enough to be followed.
-pub const RECENTER_EASE_SECONDS: f32 = 0.3;
+const RECENTER_EASE_SECONDS: f32 = 0.3;
 
 /// Where a panel was placed: the head position it was hung off, and the
 /// horizontal (yaw-only) direction it was hung along.
@@ -56,10 +56,12 @@ pub struct PanelPlacement {
 ///   pose (rotating by it silently returns the input vector), is treated as
 ///   identity;
 /// - a **vertical** forward (looking straight down or up), where the horizontal
-///   projection vanishes. There the head's own **up** axis is used instead:
-///   looking at the floor, the top of your head points where you are facing, so
-///   the panel spawns ahead of the player rather than at an arbitrary yaw.
-pub fn horizontal_forward(head_rotation: Quaternion<f32>) -> Vector3<f32> {
+///   projection vanishes. There the head's own **up** axis carries the yaw -
+///   but only with the right sign: looking at the floor the top of your head
+///   points where you are facing, while looking at the ceiling it points
+///   *behind* you, so the up axis is negated in that case. (Getting this wrong
+///   spawns the panel behind a player who entered the menu looking up.)
+fn horizontal_forward(head_rotation: Quaternion<f32>) -> Vector3<f32> {
     let rotation = if head_rotation.magnitude2() < 1e-6 {
         Quaternion::new(1.0, 0.0, 0.0, 0.0)
     } else {
@@ -71,12 +73,27 @@ pub fn horizontal_forward(head_rotation: Quaternion<f32>) -> Vector3<f32> {
         (flat.magnitude2() > 1e-6).then(|| flat.normalize())
     };
 
-    flatten(rotation.rotate_vector(vec3(0.0, 0.0, -1.0)))
-        // Looking straight down/up: the head's up axis carries the yaw.
-        .or_else(|| flatten(rotation.rotate_vector(vec3(0.0, 1.0, 0.0))))
+    let forward = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+    flatten(forward)
+        .or_else(|| {
+            let up = rotation.rotate_vector(vec3(0.0, 1.0, 0.0));
+            flatten(if forward.y > 0.0 { -up } else { up })
+        })
         // Unreachable for a real rotation (forward and up cannot both be
         // vertical), but a defined answer beats a NaN basis.
         .unwrap_or_else(|| vec3(0.0, 0.0, -1.0))
+}
+
+/// The compass angle of a horizontal unit vector, and its inverse. Yaw is the
+/// only degree of freedom a placement has, so interpolating it directly is what
+/// makes a recenter turn the short way round at any angle - blending the
+/// vectors instead collapses to a jump at 180 degrees.
+fn yaw_of(forward: Vector3<f32>) -> f32 {
+    forward.x.atan2(forward.z)
+}
+
+fn forward_of(yaw: f32) -> Vector3<f32> {
+    vec3(yaw.sin(), 0.0, yaw.cos())
 }
 
 impl PanelPlacement {
@@ -90,25 +107,21 @@ impl PanelPlacement {
 
     /// The panel this placement describes.
     ///
-    /// Same distance, size and honest basis as the gaze-glued
-    /// [`crate::ui::frontend_panel`] - local +x the viewer's right, +y up, +Z
-    /// pointing back at the viewer - but built from a stored placement instead
-    /// of the live head, and gravity-aligned (+y is exactly world up).
+    /// The basis is honest - local +x the viewer's right, +y up, +Z pointing
+    /// back at the viewer, so a raw element placed with it renders upright -
+    /// and gravity-aligned, because the placement's forward is horizontal.
     pub fn panel(&self) -> WorldPanel {
-        let center = self.head_position + self.forward * FRONTEND_PANEL_DISTANCE;
-        // Panel -> head, horizontal, so the panel faces the player squarely.
-        let look_dir = -self.forward;
-        let up = vec3(0.0, 1.0, 0.0);
-        // The viewer looks along -look_dir, so their right is up x look_dir.
-        let right = up.cross(look_dir).normalize();
         WorldPanel {
-            center,
-            rotation: Quaternion::from(Matrix3::from_cols(right, up, look_dir)),
+            center: self.head_position + self.forward * FRONTEND_PANEL_DISTANCE,
+            // Panel -> head, so the panel faces the player squarely. The
+            // helper's degenerate-vertical branch cannot fire here: a
+            // placement's forward is horizontal by construction.
+            rotation: crate::util::get_rotation_from_forward_vector(-self.forward),
             size: FRONTEND_PANEL_SIZE,
         }
     }
 
-    /// Signed-magnitude angle between this placement's yaw and a head facing.
+    /// Unsigned angle between this placement's yaw and a head facing.
     pub fn yaw_offset_degrees(&self, head_rotation: Quaternion<f32>) -> f32 {
         let gaze = horizontal_forward(head_rotation);
         let dot = self.forward.dot(gaze).clamp(-1.0, 1.0);
@@ -127,28 +140,22 @@ impl PanelPlacement {
 
 /// Interpolate between two placements. `t` is clamped to `[0, 1]`, so the
 /// endpoints are exactly `from` and `to`.
-pub fn lerp_placement(from: PanelPlacement, to: PanelPlacement, t: f32) -> PanelPlacement {
+fn lerp_placement(from: PanelPlacement, to: PanelPlacement, t: f32) -> PanelPlacement {
     let t = t.clamp(0.0, 1.0);
     // Smoothstep: no velocity discontinuity at either end, which is what makes
     // the re-placement read as a move rather than a jump.
     let s = t * t * (3.0 - 2.0 * t);
     let head_position = from.head_position + (to.head_position - from.head_position) * s;
-    let blended = from.forward + (to.forward - from.forward) * s;
-    let forward = if blended.magnitude2() < 1e-6 {
-        // Exactly-opposed placements have no shortest arc; commit to the
-        // target rather than producing a zero direction.
-        to.forward
-    } else {
-        let flat = vec3(blended.x, 0.0, blended.z);
-        if flat.magnitude2() < 1e-6 {
-            to.forward
-        } else {
-            flat.normalize()
-        }
-    };
+    // Turn along the shortest arc at a constant rate. Blending the direction
+    // vectors instead would stall near the start of a half-turn and snap
+    // through the middle - exactly the teleport the ease exists to avoid.
+    let from_yaw = yaw_of(from.forward);
+    let mut delta = yaw_of(to.forward) - from_yaw;
+    let tau = std::f32::consts::TAU;
+    delta = delta - tau * (delta / tau).round();
     PanelPlacement {
         head_position,
-        forward,
+        forward: forward_of(from_yaw + delta * s),
     }
 }
 
@@ -181,8 +188,8 @@ impl FrontendPanelAnchor {
 
     /// Advance the anchor for a frame and return where the panel now is.
     ///
-    /// The first call places the panel; later calls leave it alone unless a
-    /// recenter is due or in progress.
+    /// The first call with a tracked pose places the panel; later calls leave
+    /// it alone unless a recenter is due or in progress.
     pub fn update(
         &mut self,
         head_position: Vector3<f32>,
@@ -191,6 +198,13 @@ impl FrontendPanelAnchor {
     ) -> WorldPanel {
         let dt = dt.as_secs_f32();
         let Some(current) = self.placement else {
+            // An untracked head arrives as the ZERO quaternion. Placement is
+            // permanent, so locking one in from a pose that carries no facing
+            // would strand the panel along world -Z for the whole screen -
+            // wait for a real pose instead, and show the default meanwhile.
+            if head_rotation.magnitude2() < 1e-6 {
+                return self.panel();
+            }
             let placed = PanelPlacement::from_head(head_position, head_rotation);
             self.placement = Some(placed);
             return placed.panel();
@@ -311,9 +325,43 @@ mod tests {
     }
 
     #[test]
+    fn looking_straight_up_keeps_the_heads_yaw_too() {
+        // The mirror of the case above, and the one that catches a naive
+        // fallback: looking up, the head's up axis points BEHIND the player,
+        // so using it unsigned spawns the panel over their shoulder.
+        let straight_up = yaw(90.0) * Quaternion::from_angle_x(Deg(90.0));
+        let forward = horizontal_forward(straight_up);
+        let expected = yaw(90.0).rotate_vector(vec3(0.0, 0.0, -1.0));
+        assert!(
+            (forward - expected).magnitude() < 1e-3,
+            "expected {expected:?}, got {forward:?}"
+        );
+    }
+
+    #[test]
     fn an_untracked_head_is_treated_as_identity() {
         let forward = horizontal_forward(Quaternion::zero());
         assert!((forward - vec3(0.0, 0.0, -1.0)).magnitude() < 1e-6);
+    }
+
+    #[test]
+    fn an_untracked_head_does_not_lock_a_placement() {
+        // Placement is permanent, so committing to an untracked pose would
+        // strand the panel along world -Z for the whole screen. The runtimes
+        // can report one on their first frame, which is exactly when the
+        // frontend screens place.
+        let mut anchor = FrontendPanelAnchor::new();
+        anchor.update(eye(), Quaternion::zero(), FRAME);
+        assert!(
+            anchor.placement().is_none(),
+            "an untracked pose must not be locked in"
+        );
+
+        // ...and the first tracked pose places it, off to the side rather than
+        // along the default facing.
+        anchor.update(eye(), yaw(90.0), FRAME);
+        let placed = anchor.placement().expect("a tracked pose should place");
+        assert!(placed.yaw_offset_degrees(yaw(90.0)) < 1e-3);
     }
 
     #[test]
@@ -405,11 +453,32 @@ mod tests {
     }
 
     #[test]
-    fn an_exactly_opposed_ease_still_yields_a_direction() {
-        let a = PanelPlacement::from_head(Vector3::zero(), yaw(0.0));
-        let b = PanelPlacement::from_head(Vector3::zero(), yaw(180.0));
-        let mid = lerp_placement(a, b, 0.5);
-        assert!((mid.forward.magnitude() - 1.0).abs() < 1e-5);
+    fn the_ease_turns_at_an_even_rate_even_through_a_half_turn() {
+        // Blending the direction VECTORS makes a near-180 recenter sit still
+        // and then snap through the middle - the teleport the ease exists to
+        // prevent. Interpolating the yaw keeps every step comparable.
+        for turn in [179.0, 180.0] {
+            let a = PanelPlacement::from_head(Vector3::zero(), yaw(0.0));
+            let b = PanelPlacement::from_head(Vector3::zero(), yaw(turn));
+            let steps = 20;
+            let angles: Vec<f32> = (0..=steps)
+                .map(|i| {
+                    let p = lerp_placement(a, b, i as f32 / steps as f32);
+                    assert!((p.forward.magnitude() - 1.0).abs() < 1e-4);
+                    p.yaw_offset_degrees(yaw(0.0))
+                })
+                .collect();
+            let biggest = angles
+                .windows(2)
+                .map(|w| (w[1] - w[0]).abs())
+                .fold(0.0f32, f32::max);
+            // Smoothstep peaks at 1.5x the mean step; a snap would be ~10x.
+            let mean = turn / steps as f32;
+            assert!(
+                biggest < mean * 2.0,
+                "{turn} degree recenter jumped {biggest} in one step (mean {mean})"
+            );
+        }
     }
 
     #[test]

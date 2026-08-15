@@ -579,13 +579,13 @@ mod tests {
         assert_eq!(action, Some(MenuAction::Quit));
     }
 
-    /// A hand aimed at a canvas point on this screen's VR panel.
     /// The panel the anchor places on scene entry from the default head pose -
     /// what `update` would have hit-tested against on the menu's first frame.
     fn test_panel() -> WorldPanel {
         crate::ui::test_support::test_panel()
     }
 
+    /// A hand aimed at a canvas point on this screen's VR panel.
     fn hand_aimed_at(point: Vector2<f32>, trigger: f32) -> crate::input_context::Hand {
         crate::ui::test_support::hand_aimed_at(vec2(CANVAS_W, CANVAS_H), point, trigger)
     }
