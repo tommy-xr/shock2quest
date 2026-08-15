@@ -42,6 +42,13 @@ const BACKDROP_TEXTURE: &str = "GAMELOD.PCX";
 const LAYOUT_FILE: &str = "GAMELODR.BIN";
 /// Same display font the main menu uses (`res/intrface/METAFONT.FON`).
 const MENU_FONT: &str = "metafont.fon";
+/// The small in-game font the load screen draws save names in, so the one row
+/// this screen shows reads as the same kind of data.
+const LIST_FONT: &str = "mainfont.fon";
+/// Height of that single row, and the horizontal padding on each of its edges -
+/// matching the load screen's list geometry.
+const LIST_ROW_HEIGHT: f32 = 19.0;
+const LIST_TEXT_INSET: f32 = 8.0;
 /// The 4:3 art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
@@ -221,10 +228,21 @@ impl GameOverScene {
             None => NO_SAVE_LABEL,
         };
         let list = rects[LIST_RECT_INDEX];
-        canvas.text_native(
-            Rect::new(list.x, list.y, list.w, 20.0),
+        canvas.text_native_fit(
+            // Inset on both edges so an ellipsized name stops short of the
+            // panel rather than running flush with it.
+            Rect::new(
+                list.x + LIST_TEXT_INSET,
+                list.y,
+                (list.w - 2.0 * LIST_TEXT_INSET).max(0.0),
+                LIST_ROW_HEIGHT,
+            ),
             save_label,
-            MENU_FONT,
+            // Save names are player-authored and unbounded, so this row is
+            // drawn the way the load screen draws its list: the small font,
+            // ellipsized to the panel. In the screen's 20px MENU_FONT a
+            // typical name spills clear across the backdrop art.
+            LIST_FONT,
             HAlign::Center,
             VAlign::Middle,
         );
