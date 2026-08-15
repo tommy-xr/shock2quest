@@ -55,12 +55,22 @@ pub struct Pointer2D {
 
 #[derive(Debug, Clone)]
 pub struct Head {
+    /// Where the head is, in pawn space (the same space the hands use), so a
+    /// world-anchored panel can be placed from the player's actual eye rather
+    /// than from a fixed height on the pawn origin.
+    pub position: Vector3<f32>,
     pub rotation: Quaternion<f32>,
 }
+
+/// The seated/standing eye height every runtime falls back to when no tracked
+/// head position is available - the fixed offset the render camera has always
+/// applied on top of the pawn origin.
+pub const DEFAULT_HEAD_HEIGHT: f32 = crate::PLAYER_EYE_HEIGHT / dark::SCALE_FACTOR;
 
 impl Head {
     pub fn default() -> Head {
         Head {
+            position: Vector3::new(0.0, DEFAULT_HEAD_HEIGHT, 0.0),
             rotation: Quaternion {
                 v: Vector3::zero(),
                 s: 1.0,

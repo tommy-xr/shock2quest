@@ -474,6 +474,9 @@ fn main() {
     // pose does not exist yet; one frame of latency is imperceptible for
     // head-anchored UI and is far better than the alternative below.
     let mut last_view_rotation: Option<cgmath::Quaternion<f32>> = None;
+    // Where that same view was, already converted to pawn space (the space the
+    // hands and the world-anchored frontend panel live in).
+    let mut last_view_position: Option<cgmath::Vector3<f32>> = None;
     println!(
         "SHOCK2QUEST_STARTUP mission={} init_ms={:.3}",
         mission,
@@ -778,6 +781,12 @@ fn main() {
 
         let mut input_context = InputContext::default();
         input_context.head.rotation = head_rotation;
+        // The tracked eye, in pawn space. Before the first located view (and
+        // when the head is untracked) this keeps `Head::default`'s fixed eye
+        // height, which is where the camera renders from anyway.
+        if let Some(position) = last_view_position {
+            input_context.head.position = position;
+        }
         input_context.right_hand.rotation = aim_rotation;
         input_context.right_hand.position = right_hand_position;
         input_context.right_hand.trigger_value = right_trigger_value;
@@ -958,6 +967,14 @@ fn main() {
 
         // Remember where the head actually is, for next frame's input context.
         if let Some(view) = views.first() {
+            last_view_position = Some(stage_to_pawn(
+                vec3(
+                    view.pose.position.x,
+                    view.pose.position.y,
+                    view.pose.position.z,
+                ),
+                game.player_center_above_floor(),
+            ));
             last_view_rotation = Some(cgmath::Quaternion::new(
                 view.pose.orientation.w,
                 view.pose.orientation.x,

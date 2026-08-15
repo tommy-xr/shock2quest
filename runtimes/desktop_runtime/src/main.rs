@@ -730,6 +730,9 @@ fn process_events(
     let mut input_context = InputContext::default();
     let head_rotation = camera_rotation(camera_context);
     input_context.head.rotation = head_rotation;
+    // The flat rig has no tracked head: the eye sits directly above the pawn
+    // origin at the fixed camera height, which is exactly the default.
+    input_context.head.position = vec3(0.0, shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR, 0.0);
     let (right_hand_position, right_hand_rotation) =
         hand_pose(camera_context, &hand_context.right_hand_context, 1.0);
     input_context.right_hand.position = right_hand_position;
