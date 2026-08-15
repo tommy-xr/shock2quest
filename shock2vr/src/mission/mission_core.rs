@@ -5704,6 +5704,7 @@ impl MissionCore {
                     // panel. Flat keeps its established MoveInventory behavior
                     // unchanged; its real inventory is the Tab/use-mode strip.
                     if game_options.presentation_mode == crate::PresentationMode::Vr {
+                        let was_open = self.gui.active_panel() == Some(inventory_entity);
                         self.gui.toggle_panel(
                             inventory_entity,
                             &mut self.world,
@@ -5711,10 +5712,16 @@ impl MissionCore {
                             &mut self.script_world,
                             &mut self.id_to_physics,
                         );
-                        self.script_world.dispatch(Message {
-                            to: inventory_entity,
-                            payload: MessagePayload::PanelOpened,
-                        });
+                        // Only the opening half of the toggle announces itself;
+                        // dispatching PanelOpened on the closing press would
+                        // have the backpack script re-populate a panel that is
+                        // no longer on screen.
+                        if !was_open {
+                            self.script_world.dispatch(Message {
+                                to: inventory_entity,
+                                payload: MessagePayload::PanelOpened,
+                            });
+                        }
                     }
                 }
                 Effect::TurnOffTweqs { entity_id } => {
