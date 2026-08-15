@@ -169,7 +169,7 @@ mod tests {
         let untracked = Hand {
             rotation: Quaternion::zero(),
             // At eye level, where a hand held up in front of the player sits.
-            position: vec3(0.0, crate::ui::FRONTEND_PANEL_EYE_HEIGHT, 0.0),
+            position: crate::input_context::Head::default().position,
             trigger_value: 1.0,
             ..Hand::default()
         };

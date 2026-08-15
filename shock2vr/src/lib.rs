@@ -36,7 +36,8 @@ mod systems;
 mod test_support;
 /// Shared 2D canvas UI: layout, the screen-space presentation, and the
 /// world-space (VR) panel. Public so a runtime can check where its simulated
-/// controller ray lands on a frontend panel (`frontend_panel` + `ray_to_canvas`).
+/// controller ray lands on a frontend panel (`FrontendPanelAnchor` +
+/// `ray_to_canvas`).
 pub mod ui;
 mod util;
 mod virtual_hand;

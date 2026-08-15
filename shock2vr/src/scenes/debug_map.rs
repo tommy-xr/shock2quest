@@ -218,7 +218,7 @@ impl GameScene for DebugMapScene {
             look_dir = look_dir.normalize();
         }
 
-        // Honest basis, same as `ui::frontend_panel`: local +x the viewer's
+        // Honest basis, same as `ui::PanelPlacement::panel`: local +x the viewer's
         // right, +y up, +Z at the viewer.
         let mut up = vec3(0.0, 1.0, 0.0);
         let mut right = up.cross(look_dir);
