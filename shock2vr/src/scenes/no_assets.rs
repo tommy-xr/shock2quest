@@ -36,8 +36,8 @@ use crate::{
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        BUILTIN_FONT, HAlign, Rect, ScaleMode, UiCanvas, VAlign, VR_COMPONENT_Z_STEP,
-        frontend_panel,
+        BUILTIN_FONT, FrontendPanelAnchor, HAlign, Rect, ScaleMode, UiCanvas, VAlign,
+        VR_COMPONENT_Z_STEP,
     },
 };
 
@@ -202,7 +202,7 @@ fn body_text(path: &str) -> String {
 /// See the module docs.
 pub struct NoAssetsScene {
     lines: Vec<String>,
-    head_rotation: Quaternion<f32>,
+    panel_anchor: FrontendPanelAnchor,
     world: World,
 }
 
@@ -210,7 +210,7 @@ impl NoAssetsScene {
     pub fn new(status: &InstallStatus) -> NoAssetsScene {
         NoAssetsScene {
             lines: message_lines(status),
-            head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            panel_anchor: FrontendPanelAnchor::new(),
             world: World::new(),
         }
     }
@@ -256,13 +256,17 @@ impl NoAssetsScene {
 impl GameScene for NoAssetsScene {
     fn update(
         &mut self,
-        _time: &Time,
+        time: &Time,
         input_context: &InputContext,
         _asset_cache: &mut AssetCache,
         _game_options: &GameOptions,
         _command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
-        self.head_rotation = input_context.head.rotation;
+        self.panel_anchor.update(
+            input_context.head.position,
+            input_context.head.rotation,
+            time.elapsed,
+        );
         Vec::new()
     }
 
@@ -277,7 +281,7 @@ impl GameScene for NoAssetsScene {
             // the screen size is known.
             return (Vec::new(), vec3(0.0, 0.0, 0.0), identity);
         }
-        let panel = frontend_panel(self.head_rotation);
+        let panel = self.panel_anchor.panel();
         let objects = self.build_canvas().render_world_space(
             asset_cache,
             panel.transform(),

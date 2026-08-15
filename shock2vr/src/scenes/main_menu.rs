@@ -38,8 +38,8 @@ use crate::{
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        HAlign, Rect, ScaleMode, UiCanvas, VAlign, VR_COMPONENT_Z_STEP, frontend_panel,
-        pointer_to_canvas, vr_frontend_pointer,
+        FrontendPanelAnchor, HAlign, Rect, ScaleMode, UiCanvas, VAlign, VR_COMPONENT_Z_STEP,
+        WorldPanel, pointer_to_canvas, vr_frontend_pointer,
     },
 };
 
@@ -176,8 +176,8 @@ fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
 /// Where a hand is pointing on the menu panel, in canvas pixels, plus whether
 /// its trigger is held. The rule is the frontend's, not this screen's, so it
 /// lives in [`vr_frontend_pointer`].
-fn vr_pointer(input_context: &InputContext) -> (Option<Vector2<f32>>, bool) {
-    vr_frontend_pointer(input_context, vec2(CANVAS_W, CANVAS_H))
+fn vr_pointer(input_context: &InputContext, panel: &WorldPanel) -> (Option<Vector2<f32>>, bool) {
+    vr_frontend_pointer(input_context, vec2(CANVAS_W, CANVAS_H), panel)
 }
 
 /// Shared click core: both presentations reduce to "a point on the canvas plus
@@ -242,9 +242,10 @@ pub struct MainMenuScene {
     /// Where the VR controller ray last met the panel, in canvas pixels. The
     /// VR counterpart of `pointer`, already in canvas space.
     vr_pointer_canvas: Option<Vector2<f32>>,
-    /// Head facing from the latest update, so `render` hangs the panel exactly
+    /// Where the VR panel is anchored. Placed on scene entry from the head
+    /// pose and world-locked after that, so `render` hangs the panel exactly
     /// where `update` hit-tested it.
-    head_rotation: Quaternion<f32>,
+    panel_anchor: FrontendPanelAnchor,
     /// Whether the pointer was pressed last frame (for rising-edge clicks).
     last_pressed: bool,
     /// Screen size from the latest render, so `update` can map the pointer into
@@ -263,7 +264,7 @@ impl MainMenuScene {
             scene_name: "main_menu".to_owned(),
             pointer: None,
             vr_pointer_canvas: None,
-            head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            panel_anchor: FrontendPanelAnchor::new(),
             // A press held across a scene swap must not read as a click
             // here: both screens sit on the same 640x480 canvas and their
             // widgets overlap (the load screen's "Done" center falls inside
@@ -338,15 +339,20 @@ impl GameScene for MainMenuScene {
         let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
         let rects = menu_rects(layout.as_deref().map(|r| r.as_slice()));
 
-        // The panel hangs off the head's facing, so this is needed for the
-        // render regardless of which presentation drives the pointer.
-        self.head_rotation = input_context.head.rotation;
+        // The panel is placed from the head on scene entry and world-locked
+        // after that; advancing it here keeps the ray and the render agreeing
+        // on where the menu is, in either presentation.
+        let panel = self.panel_anchor.update(
+            input_context.head.position,
+            input_context.head.rotation,
+            time.elapsed,
+        );
 
         let (action, last_pressed, point) =
             if game_options.presentation_mode == PresentationMode::Vr {
                 // VR has no 2D cursor: the pointer is where a controller ray meets
                 // the menu panel, and the trigger is the button.
-                let (point, pressed) = vr_pointer(input_context);
+                let (point, pressed) = vr_pointer(input_context, &panel);
                 self.vr_pointer_canvas = point;
                 self.pointer = None;
                 let (action, last_pressed) =
@@ -402,7 +408,7 @@ impl GameScene for MainMenuScene {
 
         // In VR there is no screen to draw on, so the same canvas is presented
         // on a world-space panel in front of the player.
-        let panel = frontend_panel(self.head_rotation);
+        let panel = self.panel_anchor.panel();
         let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
         let objects = canvas.render_world_space(
             asset_cache,
@@ -574,6 +580,12 @@ mod tests {
     }
 
     /// A hand aimed at a canvas point on this screen's VR panel.
+    /// The panel the anchor places on scene entry from the default head pose -
+    /// what `update` would have hit-tested against on the menu's first frame.
+    fn test_panel() -> WorldPanel {
+        crate::ui::test_support::test_panel()
+    }
+
     fn hand_aimed_at(point: Vector2<f32>, trigger: f32) -> crate::input_context::Hand {
         crate::ui::test_support::hand_aimed_at(vec2(CANVAS_W, CANVAS_H), point, trigger)
     }
@@ -590,7 +602,7 @@ mod tests {
         // Aim at the center of "New Game" (rect 0) and pull the trigger.
         let rects = menu_rects(None);
         let target = rects[0].center();
-        let (point, pressed) = vr_pointer(&vr_input(hand_aimed_at(target, 1.0)));
+        let (point, pressed) = vr_pointer(&vr_input(hand_aimed_at(target, 1.0)), &test_panel());
         let point = point.expect("the ray should land on the panel");
         assert!(
             rects[0].contains(point),
@@ -612,7 +624,7 @@ mod tests {
             left_hand: hand_aimed_at(rects[5].center(), 1.0),
             ..InputContext::default()
         };
-        let (point, pressed) = vr_pointer(&input);
+        let (point, pressed) = vr_pointer(&input, &test_panel());
         let point = point.expect("the left hand should land on the panel");
         assert!(rects[5].contains(point));
         assert_eq!(
@@ -624,7 +636,10 @@ mod tests {
     #[test]
     fn a_light_vr_trigger_is_not_a_press() {
         let rects = menu_rects(None);
-        let (_, pressed) = vr_pointer(&vr_input(hand_aimed_at(rects[0].center(), 0.2)));
+        let (_, pressed) = vr_pointer(
+            &vr_input(hand_aimed_at(rects[0].center(), 0.2)),
+            &test_panel(),
+        );
         assert!(!pressed, "a barely-touched trigger must not click");
     }
 
@@ -639,7 +654,7 @@ mod tests {
             left_hand: away(),
             ..InputContext::default()
         };
-        let (point, pressed) = vr_pointer(&input);
+        let (point, pressed) = vr_pointer(&input, &test_panel());
         assert_eq!(point, None);
         // The trigger is still reported so the held press is consumed rather
         // than becoming a fresh edge when the ray swings back onto a button.
