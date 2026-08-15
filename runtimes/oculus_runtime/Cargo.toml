@@ -31,6 +31,11 @@ launch_mode = "singleTask"
 orientation = "landscape"
 resizeable_activity = false
 
+# Loopback-only debug input server (debug_input.rs): Android denies socket()/
+# bind() even on 127.0.0.1 to apps without INTERNET permission.
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
 [[package.metadata.android.uses_permission]]
 name = "android.permission.WRITE_EXTERNAL_STORAGE"
 
