@@ -19,7 +19,7 @@ where
     cursor: Point2<f32>,
     gui: Box<dyn Gui<TState, TMsg>>,
     state: TState,
-    last_input_info: Option<GuiInputInfo>,
+    last_input_info_by_hand: [Option<GuiInputInfo>; 2],
     last_cursor: Option<GuiCursor>,
 }
 
@@ -34,7 +34,7 @@ where
             cursor: point2(0.0, 0.0),
             gui,
             state: TState::default(),
-            last_input_info: None,
+            last_input_info_by_hand: [None, None],
             last_cursor: None,
         }
     }
@@ -168,8 +168,12 @@ where
                 self.last_cursor = cursor_obj;
 
                 // Is the UI going to generate an event, based on the input state?
+                let hand_index = match hand {
+                    crate::vr_config::Handedness::Left => 0,
+                    crate::vr_config::Handedness::Right => 1,
+                };
                 let mut maybe_output_event = None;
-                if let Some(last) = &self.last_input_info {
+                if let Some(last) = &self.last_input_info_by_hand[hand_index] {
                     for c in canvas.elements() {
                         let maybe_event = c.get_event(last, &current_input_info);
                         if maybe_event.is_some() {
@@ -179,7 +183,7 @@ where
                 }
 
                 self.cursor = cursor;
-                self.last_input_info = Some(current_input_info);
+                self.last_input_info_by_hand[hand_index] = Some(current_input_info);
 
                 if let Some(output_event) = maybe_output_event {
                     let (state, effect) =
@@ -201,4 +205,102 @@ pub fn gui_script<TState: Default + 'static, TMsg: Clone + 'static>(
     gui: Box<dyn Gui<TState, TMsg>>,
 ) -> Box<dyn Script> {
     Box::new(GuiScript::new(gui))
+}
+
+#[cfg(test)]
+mod tests {
+    use cgmath::{Vector2, Vector3, point2, vec2};
+
+    use super::*;
+    use crate::{gui, scripts::Script, vr_config::Handedness};
+
+    struct CountingGui;
+
+    impl Gui<usize, ()> for CountingGui {
+        fn get_components(
+            &self,
+            _cursor: &Option<GuiCursor>,
+            _entity_id: EntityId,
+            _world: &World,
+            _state: &usize,
+        ) -> Vec<GuiComponent<()>> {
+            vec![
+                gui::button(())
+                    .with_position(vec2(0.0, 0.0))
+                    .with_size(vec2(100.0, 100.0)),
+            ]
+        }
+
+        fn get_config(&self) -> crate::gui::GuiConfig {
+            crate::gui::GuiConfig {
+                world_offset: Vector3::new(0.0, 0.0, 0.0),
+                screen_size_in_pixels: Vector2::new(100.0, 100.0),
+            }
+        }
+
+        fn handle_msg(
+            &self,
+            _entity_id: EntityId,
+            _world: &World,
+            state: &usize,
+            _msg: &(),
+        ) -> (usize, Effect) {
+            (state + 1, Effect::NoEffect)
+        }
+    }
+
+    fn hover(hand: Handedness, pressed: bool) -> MessagePayload {
+        MessagePayload::GUIHover {
+            held_entity_id: None,
+            screen_coordinates: point2(0.5, 0.5),
+            is_triggered: pressed,
+            is_grabbing: false,
+            hand,
+        }
+    }
+
+    fn send(
+        script: &mut GuiScript<usize, ()>,
+        entity: EntityId,
+        world: &World,
+        hand: Handedness,
+        pressed: bool,
+    ) {
+        script.handle_message(entity, world, &PhysicsWorld::new(), &hover(hand, pressed));
+    }
+
+    #[test]
+    fn each_vr_hand_tracks_its_own_trigger_edge_over_one_shared_panel() {
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        let mut script = GuiScript::new(Box::new(CountingGui));
+
+        // VR dispatches the idle left hand before the active right hand each
+        // frame. One held physical trigger must remain one panel activation.
+        for pressed in [false, true, true, true] {
+            send(&mut script, entity, &world, Handedness::Left, false);
+            send(&mut script, entity, &world, Handedness::Right, pressed);
+        }
+        assert_eq!(script.state, 1);
+
+        // Release and press again: one new physical edge is one new action.
+        send(&mut script, entity, &world, Handedness::Left, false);
+        send(&mut script, entity, &world, Handedness::Right, false);
+        send(&mut script, entity, &world, Handedness::Left, false);
+        send(&mut script, entity, &world, Handedness::Right, true);
+        assert_eq!(script.state, 2);
+    }
+
+    #[test]
+    fn one_hand_panel_press_still_fires_once_until_release() {
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        let mut script = GuiScript::new(Box::new(CountingGui));
+
+        for pressed in [false, true, true, true, false, true] {
+            send(&mut script, entity, &world, Handedness::Right, pressed);
+        }
+
+        assert_eq!(script.state, 2);
+    }
 }
