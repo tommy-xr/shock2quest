@@ -33,6 +33,11 @@ use shipyard::EntityId;
 
 use crate::vr_config::Handedness;
 
+mod frontend_pointer;
+#[cfg(test)]
+pub use frontend_pointer::test_support;
+pub use frontend_pointer::vr_frontend_pointer;
+
 /// Font name that resolves to the engine's compiled-in font rather than a
 /// `.FON` asset.
 ///

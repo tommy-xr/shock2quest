@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use cgmath::{Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
+use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
 use dark::{
     importers::{STRINGS_IMPORTER, UI_LAYOUT_IMPORTER},
     map::MapRect,
@@ -39,7 +39,7 @@ use crate::{
     time::Time,
     ui::{
         HAlign, Rect, ScaleMode, UiCanvas, VAlign, VR_COMPONENT_Z_STEP, frontend_panel,
-        pointer_to_canvas, ray_to_canvas,
+        pointer_to_canvas, vr_frontend_pointer,
     },
 };
 
@@ -173,42 +173,11 @@ fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
         .collect()
 }
 
-/// A VR trigger past this counts as "pressed", matching the hand code's
-/// grab/fire threshold.
-const VR_TRIGGER_THRESHOLD: f32 = 0.5;
-
 /// Where a hand is pointing on the menu panel, in canvas pixels, plus whether
-/// its trigger is held.
-///
-/// Both controllers are always posed in VR, so "whichever hand hits the panel"
-/// would always resolve to the same one. Instead a hand **with its trigger
-/// held** wins, so either controller can click; ties and idle triggers fall
-/// back to the right hand, which then drives the hover highlight.
+/// its trigger is held. The rule is the frontend's, not this screen's, so it
+/// lives in [`vr_frontend_pointer`].
 fn vr_pointer(input_context: &InputContext) -> (Option<Vector2<f32>>, bool) {
-    let panel = frontend_panel(input_context.head.rotation);
-    let right = &input_context.right_hand;
-    let left = &input_context.left_hand;
-    let held = |hand: &crate::input_context::Hand| hand.trigger_value > VR_TRIGGER_THRESHOLD;
-
-    let order = if held(left) && !held(right) {
-        [left, right]
-    } else {
-        [right, left]
-    };
-
-    for hand in order {
-        let direction = hand.rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-        if let Some(point) =
-            ray_to_canvas(vec2(CANVAS_W, CANVAS_H), &panel, hand.position, direction)
-        {
-            return (Some(point), held(hand));
-        }
-    }
-
-    // Neither hand points at the menu; report the trigger anyway so a press
-    // that starts off-panel is still consumed as "held" rather than becoming a
-    // fresh edge the moment the ray crosses onto a button.
-    (None, held(right) || held(left))
+    vr_frontend_pointer(input_context, vec2(CANVAS_W, CANVAS_H))
 }
 
 /// Shared click core: both presentations reduce to "a point on the canvas plus
@@ -514,8 +483,6 @@ impl GameScene for MainMenuScene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::FRONTEND_PANEL_DISTANCE;
-    use cgmath::Rotation3;
 
     fn pointer_at(x: f32, y: f32, pressed: bool) -> Option<Pointer2D> {
         Some(Pointer2D {
@@ -606,34 +573,9 @@ mod tests {
         assert_eq!(action, Some(MenuAction::Quit));
     }
 
-    /// A hand pointing at a given canvas point on the VR panel, with the
-    /// trigger at `trigger`. Built by inverting `ray_to_canvas`: place the hand
-    /// at the panel-plane offset and aim straight down -Z.
-    /// The head facing the tests aim against: the default camera orientation.
-    fn test_head() -> Quaternion<f32> {
-        Quaternion::new(1.0, 0.0, 0.0, 0.0)
-    }
-
-    /// A hand aimed at a given canvas point, derived from the panel's own basis
-    /// rather than world axes - so the test stays honest whichever way the
-    /// panel ends up facing.
+    /// A hand aimed at a canvas point on this screen's VR panel.
     fn hand_aimed_at(point: Vector2<f32>, trigger: f32) -> crate::input_context::Hand {
-        let panel = frontend_panel(test_head());
-        let u = point.x / CANVAS_W - 0.5;
-        let v = 0.5 - point.y / CANVAS_H;
-        let right = panel.rotation.rotate_vector(vec3(1.0, 0.0, 0.0));
-        let up = panel.rotation.rotate_vector(vec3(0.0, 1.0, 0.0));
-        let normal = panel.normal();
-        let target = panel.center + right * (u * panel.size.x) + up * (v * panel.size.y);
-
-        crate::input_context::Hand {
-            // Stand back on the viewer's side (the normal points at the
-            // viewer) and aim at the target.
-            position: target + normal * FRONTEND_PANEL_DISTANCE,
-            rotation: Quaternion::from_arc(vec3(0.0, 0.0, -1.0), -normal, None),
-            trigger_value: trigger,
-            ..crate::input_context::Hand::default()
-        }
+        crate::ui::test_support::hand_aimed_at(vec2(CANVAS_W, CANVAS_H), point, trigger)
     }
 
     fn vr_input(hand: crate::input_context::Hand) -> InputContext {
@@ -691,14 +633,7 @@ mod tests {
         // Rotated 180 degrees: pointing behind the player, away from the panel.
         // Both hands must aim away - in VR both are always posed, so leaving
         // one at its default would have it pointing straight at the panel.
-        let panel = frontend_panel(test_head());
-        let away = || crate::input_context::Hand {
-            // Aim directly opposite the panel, from the panel's own centre.
-            position: panel.center,
-            rotation: Quaternion::from_arc(vec3(0.0, 0.0, -1.0), -panel.normal(), None),
-            trigger_value: 1.0,
-            ..crate::input_context::Hand::default()
-        };
+        let away = || crate::ui::test_support::hand_aimed_away(1.0);
         let input = InputContext {
             right_hand: away(),
             left_hand: away(),
