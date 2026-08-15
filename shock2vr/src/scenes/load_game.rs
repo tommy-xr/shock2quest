@@ -426,7 +426,10 @@ impl GameScene for LoadGameScene {
         // Only a save the player can actually see is loadable. The constructor
         // preselects row 0 from `saves` alone, which a layout too short to show
         // a single row would otherwise turn into a "Load" for an invisible one.
-        let selected = self.selected.filter(|index| *index < visible);
+        // Clamped on the field rather than into a local, so `build_canvas` draws
+        // "Load" disabled in exactly the cases the click rejects it.
+        self.selected = self.selected.filter(|index| *index < visible);
+        let selected = self.selected;
 
         // The panel hangs off the head's facing, so this is needed for the
         // render regardless of which presentation drives the pointer.

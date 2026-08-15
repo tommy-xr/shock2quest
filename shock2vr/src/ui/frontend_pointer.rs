@@ -49,6 +49,7 @@ pub fn vr_frontend_pointer(
     let right = &input_context.right_hand;
     let left = &input_context.left_hand;
 
+    let any_held = held(right) || held(left);
     let order = if held(left) && !held(right) {
         [left, right]
     } else {
@@ -56,18 +57,25 @@ pub fn vr_frontend_pointer(
     };
 
     for hand in order {
+        // While a trigger is down, only the hand holding it may supply the
+        // point: otherwise an idle hand resting on the panel would report
+        // "not pressed" and clear the held state, so sweeping the pressed hand
+        // onto a button would read as a fresh edge and click it.
+        if any_held && !held(hand) {
+            continue;
+        }
         let Some(direction) = hand_ray(hand.rotation) else {
             continue;
         };
         if let Some(point) = ray_to_canvas(canvas_size, &panel, hand.position, direction) {
-            return (Some(point), held(hand));
+            return (Some(point), any_held);
         }
     }
 
-    // Neither hand points at the screen; report the trigger anyway so a press
-    // that starts off-panel is still consumed as "held" rather than becoming a
-    // fresh edge the moment the ray crosses onto a button.
-    (None, held(right) || held(left))
+    // Nothing points at the screen; report the trigger anyway so a press that
+    // starts off-panel is still consumed as "held" rather than becoming a fresh
+    // edge the moment the ray crosses onto a button.
+    (None, any_held)
 }
 
 /// Test-only rig for aiming a controller at a canvas point, shared by the
@@ -106,8 +114,14 @@ pub mod test_support {
     }
 
     /// A hand on the viewer's side of the panel, aimed directly away from it.
+    ///
+    /// The origin is deliberately off the panel plane: sitting exactly on
+    /// `panel.center` makes `ray_to_canvas` bail on distance before it ever
+    /// looks at the direction, so the test would pass even aimed at the panel.
     pub fn hand_aimed_away(trigger: f32) -> Hand {
         let panel = frontend_panel(test_head());
+        // The panel's normal points at the viewer, so this stands in front of
+        // it and looks the other way.
         let normal = panel.normal();
         Hand {
             position: panel.center + normal * FRONTEND_PANEL_DISTANCE,
@@ -168,6 +182,24 @@ mod tests {
         let point = point.expect("the tracked hand should land on the panel");
         assert!((point.x - target.x).abs() < 1.0 && (point.y - target.y).abs() < 1.0);
         assert!(pressed);
+    }
+
+    #[test]
+    fn an_idle_hand_on_the_panel_does_not_release_the_other_hands_trigger() {
+        // Left trigger held but aimed off-panel, right hand idle and resting on
+        // it. Reporting the right hand's idle trigger would clear `last_pressed`
+        // and turn the still-held left press into a fresh edge as soon as it
+        // swept onto a button - a click nobody made.
+        let input = vr_input(
+            hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
+            hand_aimed_away(1.0),
+        );
+        let (point, pressed) = vr_frontend_pointer(&input, CANVAS);
+        assert!(pressed, "a held trigger must stay reported as held");
+        assert_eq!(
+            point, None,
+            "the idle hand must not supply a point while the other is pressed"
+        );
     }
 
     #[test]

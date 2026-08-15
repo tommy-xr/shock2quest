@@ -407,7 +407,7 @@ impl GameScene for MainMenuScene {
         let objects = canvas.render_world_space(
             asset_cache,
             panel.transform(),
-            self.vr_pointer_canvas.map(|p| vec2(p.x, p.y)),
+            self.vr_pointer_canvas,
             None,
             VR_COMPONENT_Z_STEP,
         );

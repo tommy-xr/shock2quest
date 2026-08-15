@@ -177,7 +177,11 @@ impl GameOverScene {
             pointer: None,
             vr_pointer_canvas: None,
             head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            last_pressed: false,
+            // This screen is entered straight out of gameplay - very plausibly
+            // with the VR trigger still held from the shot that preceded the
+            // death - so it starts "already pressed": the next rising edge
+            // requires a real release first, and "Quit" cannot fire itself.
+            last_pressed: true,
             last_screen_size: vec2(CANVAS_W, CANVAS_H),
             sfx: FrontendSfx::new(),
         }
@@ -541,6 +545,30 @@ mod tests {
         assert_eq!(
             resolve_click_at(point, pressed, false, &rects, false).0,
             None
+        );
+    }
+
+    #[test]
+    fn a_trigger_held_from_the_death_that_opened_this_screen_does_not_click() {
+        // The screen is entered straight out of gameplay, so the trigger that
+        // was being fired can still be down on the first frame. Without the
+        // constructor's `last_pressed: true` that reads as a rising edge over
+        // whatever the ray happens to cross - up to and including Quit.
+        let rects = screen_rects(None);
+        let scene = GameOverScene::new();
+        let (point, pressed) = vr_frontend_pointer(
+            &vr_input(hand_aimed_at(rects[QUIT_RECT_INDEX].center(), 1.0)),
+            vec2(CANVAS_W, CANVAS_H),
+        );
+        assert!(pressed);
+        let (action, last) = resolve_click_at(point, pressed, scene.last_pressed, &rects, true);
+        assert_eq!(action, None, "a carried-over press must not activate Quit");
+
+        // Releasing and pressing again is a real click.
+        let (_, last) = resolve_click_at(point, false, last, &rects, true);
+        assert_eq!(
+            resolve_click_at(point, true, last, &rects, true).0,
+            Some(GameOverAction::Quit)
         );
     }
 
