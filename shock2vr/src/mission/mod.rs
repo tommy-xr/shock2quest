@@ -86,12 +86,16 @@ impl Mission {
         held_item_save_data: HeldItemSaveData,
         game_options: &GameOptions,
     ) -> Mission {
+        engine::platform::service_events();
         let mission_scene = dark::mission::to_scene(&level, asset_cache);
+        engine::platform::service_events();
         let song_params = level.song_params.clone();
         let room_db = level.room_database.clone();
         let map_params = level.map_params;
         let physics_geometry = create_physics_collider(&level);
+        engine::platform::service_events();
         let spatial_data = LevelSpatialData::from_level(&level);
+        engine::platform::service_events();
         let obj_map = level.obj_map.clone();
 
         let abstract_mission = AbstractMission {
@@ -120,6 +124,7 @@ impl Mission {
             held_item_save_data,
             game_options,
         );
+        engine::platform::service_events();
         Mission { mission_core }
     }
 
@@ -136,6 +141,7 @@ impl Mission {
         held_item_save_data: HeldItemSaveData,
         game_options: &GameOptions,
     ) -> Mission {
+        engine::platform::service_events();
         let base_path = asset_cache.base_path().to_string();
         let level = Self::parse(
             asset_cache.asset_paths(),
@@ -143,6 +149,7 @@ impl Mission {
             &mission,
             global_context,
         );
+        engine::platform::service_events();
         Self::build(
             level,
             mission,

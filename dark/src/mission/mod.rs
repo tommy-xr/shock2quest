@@ -116,6 +116,8 @@ pub struct TextureSize {
 }
 
 const LIGHTMAP_SIZE: u32 = 4096;
+/// Keep a long synchronous mission parse responsive to host-platform queues.
+const LOAD_EVENT_PUMP_CELL_INTERVAL: usize = 32;
 
 pub struct UVCalculationInfo {
     origin: Vector3<f32>,
@@ -147,6 +149,7 @@ pub fn read<T: io::Read + io::Seek>(
     links_with_data: &Vec<Box<dyn LinkDefinitionWithData>>,
     properties: &Vec<Box<dyn PropertyDefinition<T>>>,
 ) -> SystemShock2Level {
+    engine::platform::service_events();
     let table_of_contents = ss2_chunk_file_reader::read_table_of_contents(reader);
 
     let wr_ext = table_of_contents.has_chunk("WREXT".to_string()); // Extended representation
@@ -191,11 +194,16 @@ pub fn read<T: io::Read + io::Seek>(
     let mut cells: Vec<Cell> = Vec::new();
     let mut packer = TexturePacker::<image::Rgb<u8>>::new_rgb(LIGHTMAP_SIZE, LIGHTMAP_SIZE);
     for cell_idx in 0..wr_num_cells {
+        if cell_idx as usize % LOAD_EVENT_PUMP_CELL_INTERVAL == 0 {
+            engine::platform::service_events();
+        }
         let cell = Cell::read(reader, &mut packer, wr_ext, cell_idx, light_size);
         cells.push(cell);
     }
+    engine::platform::service_events();
 
     let bsp_tree = BspTree::read(reader, &cells);
+    engine::platform::service_events();
 
     if wr_ext {
         let _ = read_bytes(reader, wr_num_cells as usize);
@@ -217,6 +225,7 @@ pub fn read<T: io::Read + io::Seek>(
         properties,
         reader,
     );
+    engine::platform::service_events();
 
     let textures = TextureList::read(
         &table_of_contents,
@@ -226,12 +235,14 @@ pub fn read<T: io::Read + io::Seek>(
         reader,
     );
     let all_geometry = create_geometry(asset_paths, base_path, &cells, &textures.0);
+    engine::platform::service_events();
 
     let render_params = RenderParams::read(&table_of_contents, reader);
     let room_database = RoomDatabase::read(&table_of_contents, reader);
     let song_params = SongParams::read(&table_of_contents, reader);
     let map_params = MapParams::read(&table_of_contents, reader).unwrap_or_default();
     let path_database = PathDatabase::read(&table_of_contents, reader);
+    engine::platform::service_events();
 
     // Log AIPATH data if loaded
     if let Some(ref pathdb) = path_database {
@@ -308,7 +319,10 @@ fn create_geometry(
 ) -> Vec<SystemShock2Geometry> {
     let mut all_geometry: Vec<SystemShock2Geometry> = Vec::new();
     let mut cell_idx = 0;
-    for cell in cells {
+    for (cell_index, cell) in cells.iter().enumerate() {
+        if cell_index % LOAD_EVENT_PUMP_CELL_INTERVAL == 0 {
+            engine::platform::service_events();
+        }
         let num_render_polys = cell.textured_polygons.len();
 
         // Create geometry!

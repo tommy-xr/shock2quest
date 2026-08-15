@@ -117,6 +117,9 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 /// floor-lying crumple pose doesn't start deeply interpenetrating the level
 /// trimesh (see `spawn_ragdoll`).
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
+/// Cold model loads make entity initialization the longest main-thread load
+/// loop, so periodically let the host service its platform queues.
+const LOAD_EVENT_PUMP_ENTITY_INTERVAL: usize = 32;
 
 fn is_realtime_crumple(frame_count: f32) -> bool {
     // `humdieup1` is an authored "already dead" pose: three frames with no
@@ -690,6 +693,7 @@ impl MissionCore {
         held_item_save_data: HeldItemSaveData,
         game_options: &GameOptions,
     ) -> MissionCore {
+        engine::platform::service_events();
         let game_entity_info = &global_context.gamesys;
         let _motiondb = &global_context.motiondb;
 
@@ -704,6 +708,7 @@ impl MissionCore {
         let entity_info =
             ss2_entity_info::merge_with_gamesys(&abstract_mission.entity_info, game_entity_info);
         let entity_info_rc = Arc::new(entity_info);
+        engine::platform::service_events();
 
         let speech_registry = SpeechVoiceRegistry::from_entity_info(&entity_info_rc);
         let screen_fade_texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
@@ -873,6 +878,7 @@ impl MissionCore {
             &abstract_mission.obj_map,
             &mut world,
         );
+        engine::platform::service_events();
         let template_to_entity_id = population.template_to_entity_id;
         let mission_script_entity_id_map = population.entity_id_map;
         let mission_saved_script_states = population.script_states;
@@ -1017,7 +1023,12 @@ impl MissionCore {
         }
 
         // Finally, instantiate these entities
-        for (entity_id, template_id) in entities_to_instantiate {
+        for (entity_index, (entity_id, template_id)) in
+            entities_to_instantiate.into_iter().enumerate()
+        {
+            if entity_index % LOAD_EVENT_PUMP_ENTITY_INTERVAL == 0 {
+                engine::platform::service_events();
+            }
             let created_entity = entity_creator::initialize_entity(
                 entity_id,
                 template_id,
@@ -1043,6 +1054,7 @@ impl MissionCore {
                 Matrix4::identity(),
             );
         }
+        engine::platform::service_events();
 
         restore_saved_script_namespaces(
             &mut script_world,
@@ -1346,6 +1358,7 @@ impl MissionCore {
             screen_fade_texture,
         };
         mission_core.process_virtual_hand_effects(asset_cache, held_restore_effects);
+        engine::platform::service_events();
         mission_core
     }
 
