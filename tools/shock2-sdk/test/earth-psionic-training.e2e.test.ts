@@ -5,7 +5,9 @@ import { GameServer } from "../src/index.js";
 import type { EntitySummary, UiElement } from "../src/types.js";
 import { crossEarthTrainingTripwire } from "./helpers/earth-tripwire.js";
 import { earthWorldUse } from "./helpers/earth-world-use.js";
+import { teleportVerified } from "./helpers/teleport.js";
 import { clickUiElement } from "./helpers/ui.js";
+import { aimVrHandAt } from "./helpers/vr-hand.js";
 import { fireOnce } from "./helpers/weapon.js";
 
 // Honest Earth Psionic Training regression for #548. Runtime ids are
@@ -131,6 +133,68 @@ function hitPoints(detail: Awaited<ReturnType<GameServer["entities"]["detail"]>>
   assert.ok(property, `entity ${detail.entity_id} should expose HitPoints`);
   return Number(property.value);
 }
+
+test(
+  "VR world-frob consumes one Psi Booster without racing its automatic pickup",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "earth.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8200),
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 5 });
+
+    await crossEarthTrainingTripwire(
+      game,
+      PSIONIC_ENTRY_TRIPWIRE,
+      PSIONIC_ENTRY_DESTINATION,
+    );
+    assert.equal(psiPoints(await game.info()), 5);
+
+    const booster = await exactlyOne(game, PSI_BOOSTERS[0], "authored Psi Booster");
+    const [x, y, z] = (await game.entities.detail(booster.id)).position;
+    await teleportVerified(game, { x: x + 0.4, y: y + 1, z });
+    const livePosition = (await game.entities.detail(booster.id)).position;
+    const aim = await aimVrHandAt(game, livePosition, 0.25);
+    const handHit = await game.raycast({
+      start: aim.start,
+      end: aim.target,
+      collision_groups: ["entity", "selectable", "world", "raycast"],
+      max_distance: 1,
+      ignore_sensors: true,
+    });
+    assert.equal(
+      handHit.entity_id,
+      booster.id,
+      `the production hand ray must hit the booster: ${JSON.stringify(handHit)}`,
+    );
+
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 1 });
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 2 });
+
+    assert.equal(
+      psiPoints(await game.info()),
+      25,
+      `the booster should restore exactly 20 psi; messages=${JSON.stringify(
+        (await game.messages.recent()).messages.slice(-5),
+      )}`,
+    );
+    assert.equal(
+      (await game.entities.byTemplate(booster.template_id)).length,
+      0,
+      "the one-unit booster should be consumed exactly once",
+    );
+    assert.equal(
+      (await game.player.inventory()).items.filter((item) => item.name === "Psi Booster")
+        .length,
+      0,
+      "the stale automatic pickup must not add the consumed booster to the backpack",
+    );
+  },
+);
 
 test(
   "Earth Psionic Training reduces, refills, casts, and cleans up through real objectives",

@@ -325,6 +325,66 @@ fn apply_psi_kit_use(world: &World, entity_id: EntityId, amount: i32) -> PsiKitU
     }
 }
 
+/// Move a still-live entity's containment link and mark it as no longer
+/// world-referenced. Effects are processed sequentially, so an earlier effect
+/// in the same batch may already have consumed the requested item.
+fn move_live_entity_into_container(
+    world: &mut World,
+    container_entity_id: EntityId,
+    dropped_entity_id: EntityId,
+) -> bool {
+    let is_alive = world
+        .borrow::<EntitiesView>()
+        .is_ok_and(|entities| entities.is_alive(dropped_entity_id));
+    if !is_alive {
+        return false;
+    }
+
+    // Give the item a cell in the container's grid, so it stays where it
+    // was put instead of being repacked on every draw. Computed before
+    // the borrow below, and *after* the item's own links are irrelevant -
+    // it is not in the container yet, so it cannot occupy a cell here.
+    let slot = {
+        let grid = crate::inventory::grid_for(world, container_entity_id);
+        let occupied =
+            crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+        let dims = world
+            .borrow::<View<dark::properties::PropInventoryDimensions>>()
+            .ok()
+            .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
+            .unwrap_or((1, 1));
+        // A full container still takes the item (the drop is already
+        // permitted by the caller); it just has no cell to remember.
+        occupied
+            .first_free_slot(dims.0 as usize, dims.1 as usize)
+            .unwrap_or(0)
+    };
+
+    let mut was_able_to_drop = false;
+    {
+        // First, remove any existing contains links for the dropped entity.
+        let mut v_links = world.borrow::<ViewMut<Links>>().unwrap();
+
+        for (id, links) in (&mut v_links).iter().with_id() {
+            drop_contains_links_to(links, dropped_entity_id);
+
+            // If it is the container, add the replacement link.
+            if id == container_entity_id {
+                links.to_links.push(ToLink {
+                    link: Link::Contains(slot),
+                    to_entity_id: Some(dark::properties::WrappedEntityId(dropped_entity_id)),
+                    to_template_id: 0, // todo?
+                });
+                was_able_to_drop = true;
+            }
+        }
+    }
+    if was_able_to_drop {
+        world.add_component(dropped_entity_id, PropHasRefs(false));
+    }
+    was_able_to_drop
+}
+
 /// Raise only the live maximum HP pool. Buying Endurance is not healing: the
 /// original stat promises more maximum hit points, while Tank's separate O/S
 /// effect deliberately raises both current and maximum HP.
@@ -2893,52 +2953,15 @@ impl MissionCore {
         container_entity_id: EntityId,
         dropped_entity_id: EntityId,
     ) -> bool {
-        // Give the item a cell in the container's grid, so it stays where it
-        // was put instead of being repacked on every draw. Computed before
-        // the borrow below, and *after* the item's own links are irrelevant -
-        // it is not in the container yet, so it cannot occupy a cell here.
-        let slot = {
-            let grid = crate::inventory::grid_for(&self.world, container_entity_id);
-            let occupied =
-                crate::inventory::Inventory::from_container(&self.world, container_entity_id, grid);
-            let dims = self
-                .world
-                .borrow::<View<dark::properties::PropInventoryDimensions>>()
-                .ok()
-                .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
-                .unwrap_or((1, 1));
-            // A full container still takes the item (the drop is already
-            // permitted by the caller); it just has no cell to remember.
-            occupied
-                .first_free_slot(dims.0 as usize, dims.1 as usize)
-                .unwrap_or(0)
-        };
-
-        let mut was_able_to_drop = false;
-        {
-            // First, remove any existing contains links for the dropped entity..
-            let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
-
-            for (id, links) in (&mut v_links).iter().with_id() {
-                drop_contains_links_to(links, dropped_entity_id);
-
-                // If it is the container, we'll add the link!
-                if id == container_entity_id {
-                    links.to_links.push(ToLink {
-                        link: Link::Contains(slot),
-                        to_entity_id: Some(dark::properties::WrappedEntityId(dropped_entity_id)),
-                        to_template_id: 0, // todo?
-                    });
-                    was_able_to_drop = true;
-                }
-            }
-        }
-        if was_able_to_drop {
-            self.world
-                .add_component(dropped_entity_id, PropHasRefs(false));
+        let moved = move_live_entity_into_container(
+            &mut self.world,
+            container_entity_id,
+            dropped_entity_id,
+        );
+        if moved {
             self.make_un_physical(dropped_entity_id);
         }
-        was_able_to_drop
+        moved
     }
 
     /// When an entity is replaced (e.g. a dead power cell recharged into a live
@@ -8683,7 +8706,7 @@ mod psi_kit_use_tests {
 
     fn world_with_player(psi_points: i32) -> World {
         let mut world = World::new();
-        let inventory_entity_id = world.add_entity(());
+        let inventory_entity_id = world.add_entity(Links::empty());
         let player = world.add_entity(PropPsiState {
             psi_points,
             max_psi_points: 50,
@@ -8702,13 +8725,23 @@ mod psi_kit_use_tests {
 
     fn apply_effect_batch(world: &mut World, effects: Vec<Effect>) {
         for effect in effects {
-            let Effect::UsePsiKit { entity_id, amount } = effect else {
-                panic!("unexpected effect in psi-kit test batch");
-            };
-            if apply_psi_kit_use(world, entity_id, amount) == PsiKitUseOutcome::DestroyEntity {
-                // Production performs MissionCore's canonical teardown here;
-                // this state-level regression has no render/physics/script maps.
-                world.delete_entity(entity_id);
+            match effect {
+                Effect::UsePsiKit { entity_id, amount } => {
+                    if apply_psi_kit_use(world, entity_id, amount)
+                        == PsiKitUseOutcome::DestroyEntity
+                    {
+                        // Production performs MissionCore's canonical teardown here;
+                        // this state-level regression has no render/physics/script maps.
+                        world.delete_entity(entity_id);
+                    }
+                }
+                Effect::DropEntityInfo {
+                    parent_entity_id,
+                    dropped_entity_id,
+                } => {
+                    move_live_entity_into_container(world, parent_entity_id, dropped_entity_id);
+                }
+                other => panic!("unexpected effect in psi-kit test batch: {other:?}"),
             }
         }
     }
@@ -8721,6 +8754,84 @@ mod psi_kit_use_tests {
             .get(player)
             .unwrap()
             .psi_points
+    }
+
+    fn inventory_contains(world: &World, entity_id: EntityId) -> bool {
+        let inventory = world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .unwrap()
+            .inventory_entity_id;
+        world
+            .borrow::<View<Links>>()
+            .unwrap()
+            .get(inventory)
+            .unwrap()
+            .to_links
+            .iter()
+            .any(|link| {
+                matches!(link.link, Link::Contains(_))
+                    && link.to_entity_id.map(|wrapped| wrapped.0) == Some(entity_id)
+            })
+    }
+
+    #[test]
+    fn world_frob_psi_kit_batch_ignores_pickup_after_consumption() {
+        let mut world = world_with_player(5);
+        let inventory = world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .unwrap()
+            .inventory_entity_id;
+        let booster = world.add_entity(PropStackCount(1));
+
+        // One world Frob is handled by both PsiKitScript and the engine's
+        // internal MOVE script, in this order, before either effect is applied.
+        apply_effect_batch(
+            &mut world,
+            vec![
+                Effect::UsePsiKit {
+                    entity_id: booster,
+                    amount: 20,
+                },
+                Effect::DropEntityInfo {
+                    parent_entity_id: inventory,
+                    dropped_entity_id: booster,
+                },
+            ],
+        );
+
+        assert_eq!(player_psi_points(&world), 25);
+        assert!(!world.borrow::<EntitiesView>().unwrap().is_alive(booster));
+        assert!(!inventory_contains(&world, booster));
+    }
+
+    #[test]
+    fn live_drop_entity_info_still_transfers_into_the_inventory() {
+        let mut world = world_with_player(5);
+        let inventory = world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .unwrap()
+            .inventory_entity_id;
+        let booster = world.add_entity((PropStackCount(1), PropHasRefs(true)));
+
+        apply_effect_batch(
+            &mut world,
+            vec![Effect::DropEntityInfo {
+                parent_entity_id: inventory,
+                dropped_entity_id: booster,
+            }],
+        );
+
+        assert!(world.borrow::<EntitiesView>().unwrap().is_alive(booster));
+        assert!(inventory_contains(&world, booster));
+        assert_eq!(
+            world
+                .borrow::<View<PropHasRefs>>()
+                .unwrap()
+                .get(booster)
+                .unwrap()
+                .0,
+            false
+        );
     }
 
     #[test]
