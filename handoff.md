@@ -456,5 +456,31 @@ mapping are all honest and desktop-verified). `SHOCK2_PANEL_LOG=1` makes
   tests pass unchanged because element path and corner map moved together.
 - `RUSTFLAGS="-D warnings" cargo check -p shock2vr -p desktop_runtime -p debug_runtime` clean.
 
-Still open: the device-only factor (untested on hardware since this change),
-and the desktop_runtime `--vr` hand-ray issue (owned by a separate stream).
+## RESOLVED (device): there was no second device-only factor
+
+Verified on the Quest 3 (2026-08-15, release APK of this branch at `b698fe4`):
+
+- **`main_menu`: upright.** New Game top, Quit bottom, every label readable
+  inside its pill. Compositor capture, real tracked head pose.
+- **`debug_map`: upright.** ELEVATOR / CRYO / SCIENCE / MEDICAL SCIENCE legend
+  all read correctly; no mirror, no rotation.
+- The `SHOCK2_PANEL` logcat line shows the same honest basis as desktop
+  (right = viewer's right, normal pointing back at the head), fed by a real
+  tracked quaternion — e.g. `right=(1,0,0) up=(0,0.97,0.22)
+  normal=(0,-0.22,0.97)` for a headset resting pitched up.
+
+So the honest basis fix resolved **both** platforms. The earlier on-hardware
+negative result for attempt #3 ("desktop correct, device unchanged") was almost
+certainly a stale or incomplete device build — the very trap this document
+warns about twice (silent patch no-ops, installs not matching the tree). The
+"one thing still unexplained" section above is thereby explained: there was
+never a second factor, only bad device evidence.
+
+Note for future Android probing: `SHOCK2_PANEL_LOG` is env-gated and env vars
+do not reach an Android app — the device run above used a throwaway local edit
+(`cfg!(target_os = "android") ||` in the gate) that was reverted after capture.
+
+Still open: the desktop_runtime `--vr` hand-ray issue (menu ray is cast as
+`hand.rotation * (0,0,-1)`, OpenXR convention, but desktop's `camera_rotation`
+maps **+Z** to forward, so the simulated hands' rays point backward and
+`ray_to_canvas` rejects the panel as behind the ray).
