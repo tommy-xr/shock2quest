@@ -730,6 +730,9 @@ fn process_events(
     let mut input_context = InputContext::default();
     let head_rotation = camera_rotation(camera_context);
     input_context.head.rotation = head_rotation;
+    // The flat rig has no tracked head: the eye sits directly above the pawn
+    // origin at the fixed camera height, which is exactly the default.
+    input_context.head.position = vec3(0.0, shock2vr::input_context::DEFAULT_HEAD_HEIGHT, 0.0);
     let (right_hand_position, right_hand_rotation) =
         hand_pose(camera_context, &hand_context.right_hand_context, 1.0);
     input_context.right_hand.position = right_hand_position;
@@ -774,7 +777,7 @@ fn process_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shock2vr::ui::{frontend_panel, ray_to_canvas};
+    use shock2vr::ui::{PanelPlacement, ray_to_canvas};
 
     /// The frontend canvas the VR panel presents (`main_menu`'s 640x480).
     const CANVAS: cgmath::Vector2<f32> = cgmath::Vector2 { x: 640.0, y: 480.0 };
@@ -794,7 +797,13 @@ mod tests {
         hand: &CameraContext,
     ) -> Option<cgmath::Vector2<f32>> {
         let (position, rotation) = hand_pose(camera, hand, 1.0);
-        let panel = frontend_panel(camera_rotation(camera));
+        // The panel the frontend anchor places from this camera pose - the
+        // one the game actually builds, so this stays a real regression guard.
+        let panel = PanelPlacement::from_head(
+            shock2vr::input_context::Head::default().position,
+            camera_rotation(camera),
+        )
+        .panel();
         let direction = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
         ray_to_canvas(CANVAS, &panel, position, direction)
     }

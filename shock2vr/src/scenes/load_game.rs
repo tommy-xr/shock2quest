@@ -23,7 +23,7 @@ use shipyard::{EntityId, UniqueViewMut, World};
 use std::collections::HashMap;
 
 use crate::{
-    GameOptions,
+    GameOptions, PresentationMode,
     game_scene::GameScene,
     input_context::{InputContext, Pointer2D},
     mission::GlobalContext,
@@ -31,7 +31,10 @@ use crate::{
     scenes::frontend_sfx::FrontendSfx,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, pointer_to_canvas},
+    ui::{
+        FrontendPanelAnchor, HAlign, Rect, ScaleMode, UiCanvas, VAlign, VR_COMPONENT_Z_STEP,
+        pointer_to_canvas, vr_frontend_pointer,
+    },
 };
 
 /// The screen is authored on the original 640x480 `GAMELOD.PCX` canvas.
@@ -178,6 +181,25 @@ fn row_text_rect(list: Rect, index: usize) -> Rect {
     )
 }
 
+/// Shared click core: both presentations reduce to "a point on the canvas plus
+/// a pressed flag", so the rising-edge rule and the hit regions live here once.
+fn resolve_click_at(
+    point: Option<Vector2<f32>>,
+    pressed: bool,
+    last_pressed: bool,
+    rects: &[Rect; 4],
+    visible_saves: usize,
+    has_selection: bool,
+) -> (Option<LoadGameAction>, bool) {
+    if !pressed || last_pressed {
+        return (None, pressed);
+    }
+    (
+        point.and_then(|c| hit(c, rects, visible_saves, has_selection)),
+        pressed,
+    )
+}
+
 /// Pure click resolution: on a rising press edge, map the pointer to whatever
 /// it is over - a save row, "Load" (only when a save is selected), or "Done".
 /// Also returns the new `last_pressed` to track for the next frame.
@@ -198,12 +220,15 @@ fn resolve_click(
         screen_size,
         SCALE_MODE,
     );
-    if !p.pressed || last_pressed {
-        return (None, p.pressed, canvas_point);
-    }
-
-    let action = canvas_point.and_then(|c| hit(c, rects, visible_saves, has_selection));
-    (action, p.pressed, canvas_point)
+    let (action, pressed) = resolve_click_at(
+        canvas_point,
+        p.pressed,
+        last_pressed,
+        rects,
+        visible_saves,
+        has_selection,
+    );
+    (action, pressed, canvas_point)
 }
 
 /// What is at a canvas point: a save row, "Load" (only with a selection), or
@@ -236,6 +261,13 @@ pub struct LoadGameScene {
     selected: Option<usize>,
     /// Pointer from the latest update, used for hover highlighting in render.
     pointer: Option<Pointer2D>,
+    /// Where the VR controller ray last met the panel, in canvas pixels. The
+    /// VR counterpart of `pointer`, already in canvas space.
+    vr_pointer_canvas: Option<Vector2<f32>>,
+    /// Where the VR panel is anchored: placed from the head on scene entry
+    /// and world-locked after that, so `render` hangs the panel exactly
+    /// where `update` hit-tested it.
+    panel_anchor: FrontendPanelAnchor,
     /// Whether the pointer was pressed last frame (for rising-edge clicks).
     last_pressed: bool,
     /// Screen size from the latest render, so `update` can map the pointer into
@@ -258,6 +290,8 @@ impl LoadGameScene {
             saves,
             selected,
             pointer: None,
+            vr_pointer_canvas: None,
+            panel_anchor: FrontendPanelAnchor::new(),
             // A press held across a scene swap must not read as a click
             // here: both screens sit on the same 640x480 canvas and their
             // widgets overlap (the load screen's "Done" center falls inside
@@ -270,100 +304,18 @@ impl LoadGameScene {
     }
 }
 
-impl Default for LoadGameScene {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl GameScene for LoadGameScene {
-    fn update(
-        &mut self,
-        time: &Time,
-        input_context: &InputContext,
+impl LoadGameScene {
+    /// The screen, described once. Screen-space and world-space presentation
+    /// differ only in how this canvas is rendered, so the two can never drift
+    /// apart in layout, labels, or which widgets look actionable.
+    ///
+    /// `pointer_canvas` is the hover position in canvas pixels, whatever
+    /// produced it - the mouse or a VR controller ray.
+    fn build_canvas(
+        &self,
         asset_cache: &mut AssetCache,
-        _game_options: &GameOptions,
-        _command_effects: Vec<Effect>,
-    ) -> Vec<Effect> {
-        if let Ok(mut world_time) = self.world.borrow::<UniqueViewMut<Time>>() {
-            *world_time = time.clone();
-        }
-
-        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
-        let rects = screen_rects(layout.as_deref().map(|r| r.as_slice()));
-        let visible = self
-            .saves
-            .len()
-            .min(visible_row_count(rects[LIST_RECT_INDEX]));
-
-        // Only a save the player can actually see is loadable. The constructor
-        // preselects row 0 from `saves` alone, which a layout too short to show
-        // a single row would otherwise turn into a "Load" for an invisible one.
-        let selected = self.selected.filter(|index| *index < visible);
-
-        self.pointer = input_context.pointer;
-        let (action, last_pressed, point) = resolve_click(
-            input_context.pointer,
-            self.last_pressed,
-            self.last_screen_size,
-            &rects,
-            visible,
-            selected.is_some(),
-        );
-        self.last_pressed = last_pressed;
-
-        // Rows are deliberately silent: they highlight on selection rather
-        // than on hover, so a blip over one would have no visible counterpart.
-        // Passing 0 visible rows is what makes `hit` skip them.
-        self.sfx
-            .hover(point.and_then(|p| hit(p, &rects, 0, selected.is_some())));
-        if action.is_some() {
-            self.sfx.click();
-        }
-
-        match action {
-            Some(LoadGameAction::Select(index)) => {
-                self.selected = Some(index);
-                Vec::new()
-            }
-            Some(LoadGameAction::Load) => selected
-                .and_then(|index| self.saves.get(index))
-                .map(|save| {
-                    vec![Effect::GlobalEffect(GlobalEffect::Load {
-                        file_name: save.path.to_string_lossy().into_owned(),
-                    })]
-                })
-                .unwrap_or_default(),
-            Some(LoadGameAction::Done) => {
-                vec![Effect::GlobalEffect(GlobalEffect::ShowMainMenu)]
-            }
-            None => Vec::new(),
-        }
-    }
-
-    fn render(
-        &mut self,
-        _asset_cache: &mut AssetCache,
-        _options: &GameOptions,
-    ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        // The screen is drawn in screen space in `render_per_eye` (which has
-        // the screen size); the 3D scene is empty.
-        (
-            Vec::new(),
-            vec3(0.0, 0.0, 0.0),
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-        )
-    }
-
-    fn render_per_eye(
-        &mut self,
-        asset_cache: &mut AssetCache,
-        _view: cgmath::Matrix4<f32>,
-        _projection: cgmath::Matrix4<f32>,
-        screen_size: Vector2<f32>,
-        _options: &GameOptions,
-    ) -> Vec<SceneObject> {
-        self.last_screen_size = screen_size;
+        pointer_canvas: Option<Vector2<f32>>,
+    ) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
@@ -371,14 +323,6 @@ impl GameScene for LoadGameScene {
         let rects = screen_rects(layout.as_deref().map(|r| r.as_slice()));
         let strings = asset_cache.get_opt(&STRINGS_IMPORTER, LABELS_FILE);
         let strings = strings.as_deref();
-        let pointer_canvas = self.pointer.and_then(|p| {
-            pointer_to_canvas(
-                vec2(CANVAS_W, CANVAS_H),
-                p.position,
-                screen_size,
-                SCALE_MODE,
-            )
-        });
 
         canvas.text_native(
             rects[HEADER_RECT_INDEX],
@@ -450,6 +394,162 @@ impl GameScene for LoadGameScene {
                 .opacity(opacity);
         }
 
+        canvas
+    }
+}
+
+impl Default for LoadGameScene {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GameScene for LoadGameScene {
+    fn update(
+        &mut self,
+        time: &Time,
+        input_context: &InputContext,
+        asset_cache: &mut AssetCache,
+        game_options: &GameOptions,
+        _command_effects: Vec<Effect>,
+    ) -> Vec<Effect> {
+        if let Ok(mut world_time) = self.world.borrow::<UniqueViewMut<Time>>() {
+            *world_time = time.clone();
+        }
+
+        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
+        let rects = screen_rects(layout.as_deref().map(|r| r.as_slice()));
+        let visible = self
+            .saves
+            .len()
+            .min(visible_row_count(rects[LIST_RECT_INDEX]));
+
+        // Only a save the player can actually see is loadable. The constructor
+        // preselects row 0 from `saves` alone, which a layout too short to show
+        // a single row would otherwise turn into a "Load" for an invisible one.
+        // Clamped on the field rather than into a local, so `build_canvas` draws
+        // "Load" disabled in exactly the cases the click rejects it.
+        self.selected = self.selected.filter(|index| *index < visible);
+        let selected = self.selected;
+
+        // The panel is placed from the head on scene entry and world-locked
+        // after that; advancing it here keeps the ray and the render agreeing
+        // on where the screen is, in either presentation.
+        let panel = self.panel_anchor.update(
+            input_context.head.position,
+            input_context.head.rotation,
+            time.elapsed,
+        );
+
+        let (action, last_pressed, point) =
+            if game_options.presentation_mode == PresentationMode::Vr {
+                // VR has no 2D cursor: the pointer is where a controller ray meets
+                // the panel, and the trigger is the button.
+                let (point, pressed) =
+                    vr_frontend_pointer(input_context, vec2(CANVAS_W, CANVAS_H), &panel);
+                self.vr_pointer_canvas = point;
+                self.pointer = None;
+                let (action, last_pressed) = resolve_click_at(
+                    point,
+                    pressed,
+                    self.last_pressed,
+                    &rects,
+                    visible,
+                    selected.is_some(),
+                );
+                (action, last_pressed, point)
+            } else {
+                self.pointer = input_context.pointer;
+                resolve_click(
+                    input_context.pointer,
+                    self.last_pressed,
+                    self.last_screen_size,
+                    &rects,
+                    visible,
+                    selected.is_some(),
+                )
+            };
+        self.last_pressed = last_pressed;
+
+        // Rows are deliberately silent: they highlight on selection rather
+        // than on hover, so a blip over one would have no visible counterpart.
+        // Passing 0 visible rows is what makes `hit` skip them.
+        self.sfx
+            .hover(point.and_then(|p| hit(p, &rects, 0, selected.is_some())));
+        if action.is_some() {
+            self.sfx.click();
+        }
+
+        match action {
+            Some(LoadGameAction::Select(index)) => {
+                self.selected = Some(index);
+                Vec::new()
+            }
+            Some(LoadGameAction::Load) => selected
+                .and_then(|index| self.saves.get(index))
+                .map(|save| {
+                    vec![Effect::GlobalEffect(GlobalEffect::Load {
+                        file_name: save.path.to_string_lossy().into_owned(),
+                    })]
+                })
+                .unwrap_or_default(),
+            Some(LoadGameAction::Done) => {
+                vec![Effect::GlobalEffect(GlobalEffect::ShowMainMenu)]
+            }
+            None => Vec::new(),
+        }
+    }
+
+    fn render(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        options: &GameOptions,
+    ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        // In flat presentation the screen is drawn in screen space in
+        // `render_per_eye` (which has the screen size); the 3D scene is empty.
+        if options.presentation_mode != PresentationMode::Vr {
+            return (Vec::new(), vec3(0.0, 0.0, 0.0), identity);
+        }
+
+        // In VR there is no screen to draw on, so the same canvas is presented
+        // on a world-space panel in front of the player.
+        let panel = self.panel_anchor.panel();
+        let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
+        let objects = canvas.render_world_space(
+            asset_cache,
+            panel.transform(),
+            self.vr_pointer_canvas,
+            None,
+            VR_COMPONENT_Z_STEP,
+        );
+        (objects, vec3(0.0, 0.0, 0.0), identity)
+    }
+
+    fn render_per_eye(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        _view: cgmath::Matrix4<f32>,
+        _projection: cgmath::Matrix4<f32>,
+        screen_size: Vector2<f32>,
+        options: &GameOptions,
+    ) -> Vec<SceneObject> {
+        self.last_screen_size = screen_size;
+        // In VR the screen lives on a world-space panel drawn by `render`; a
+        // screen-space copy here would paste the whole canvas over both eyes
+        // and hide it.
+        if options.presentation_mode == PresentationMode::Vr {
+            return Vec::new();
+        }
+        let pointer_canvas = self.pointer.and_then(|p| {
+            pointer_to_canvas(
+                vec2(CANVAS_W, CANVAS_H),
+                p.position,
+                screen_size,
+                SCALE_MODE,
+            )
+        });
+        let canvas = self.build_canvas(asset_cache, pointer_canvas);
         canvas.render_screen_space(asset_cache, screen_size, SCALE_MODE)
     }
 
@@ -639,6 +739,80 @@ mod tests {
                 Some(LoadGameAction::Select(0))
             );
         }
+    }
+
+    /// The panel the anchor places on scene entry from the default head pose -
+    /// what `update` would have hit-tested against on the screen's first frame.
+    fn test_panel() -> crate::ui::WorldPanel {
+        crate::ui::test_support::test_panel()
+    }
+
+    /// A hand aimed at a canvas point on this screen's VR panel.
+    fn hand_aimed_at(point: Vector2<f32>, trigger: f32) -> crate::input_context::Hand {
+        crate::ui::test_support::hand_aimed_at(vec2(CANVAS_W, CANVAS_H), point, trigger)
+    }
+
+    fn vr_input(hand: crate::input_context::Hand) -> InputContext {
+        InputContext {
+            right_hand: hand,
+            ..InputContext::default()
+        }
+    }
+
+    #[test]
+    fn a_vr_ray_can_press_done() {
+        let done = FALLBACK_RECTS[DONE_RECT_INDEX].center();
+        let (point, pressed) = vr_frontend_pointer(
+            &vr_input(hand_aimed_at(done, 1.0)),
+            vec2(CANVAS_W, CANVAS_H),
+            &test_panel(),
+        );
+        let point = point.expect("the ray should land on the panel");
+        assert!(FALLBACK_RECTS[DONE_RECT_INDEX].contains(point));
+        assert!(pressed);
+        assert_eq!(
+            resolve_click_at(Some(point), pressed, false, &FALLBACK_RECTS, 0, false).0,
+            Some(LoadGameAction::Done)
+        );
+    }
+
+    #[test]
+    fn a_vr_ray_can_select_a_save_row_and_load_it() {
+        let list = FALLBACK_RECTS[LIST_RECT_INDEX];
+        let row = row_rect(list, 2).center();
+        let (point, pressed) = vr_frontend_pointer(
+            &vr_input(hand_aimed_at(row, 1.0)),
+            vec2(CANVAS_W, CANVAS_H),
+            &test_panel(),
+        );
+        let point = point.expect("the ray should land on the panel");
+        assert_eq!(
+            resolve_click_at(Some(point), pressed, false, &FALLBACK_RECTS, 3, false).0,
+            Some(LoadGameAction::Select(2))
+        );
+
+        // With a selection, the same rig over "Load" performs the load.
+        let load = FALLBACK_RECTS[LOAD_RECT_INDEX].center();
+        let (point, pressed) = vr_frontend_pointer(
+            &vr_input(hand_aimed_at(load, 1.0)),
+            vec2(CANVAS_W, CANVAS_H),
+            &test_panel(),
+        );
+        assert_eq!(
+            resolve_click_at(point, pressed, false, &FALLBACK_RECTS, 3, true).0,
+            Some(LoadGameAction::Load)
+        );
+    }
+
+    #[test]
+    fn a_vr_press_held_across_frames_clicks_once() {
+        let point = Some(FALLBACK_RECTS[DONE_RECT_INDEX].center());
+        let (action, last) = resolve_click_at(point, true, false, &FALLBACK_RECTS, 0, false);
+        assert_eq!(action, Some(LoadGameAction::Done));
+        assert_eq!(
+            resolve_click_at(point, true, last, &FALLBACK_RECTS, 0, false).0,
+            None
+        );
     }
 
     #[test]

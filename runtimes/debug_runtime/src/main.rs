@@ -1820,6 +1820,7 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
 ///
 /// Recognized channels:
 /// - `head.rotation`                : `[x, y, z, w]` quaternion
+/// - `head.position`                : `[x, y, z]` pawn-local tracked eye position
 /// - `head.look`                    : `[yaw_deg, pitch_deg]` convenience (forward = -Z).
 ///   **Pitch is POSITIVE DOWN** - `+60` looks at the floor, `-60` at the ceiling
 ///   - matching the desktop runtime, where mouse-down increments pitch. The same
@@ -1836,6 +1837,7 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
 /// stick does what) since that is the game's convention, not guessable.
 fn input_channels_help() -> &'static str {
     "valid channels: head.rotation [x,y,z,w], head.look [yaw_deg,pitch_deg], \
+     head.position [x,y,z] (pawn-local), \
      pointer.position [x,y] in [0,1] (origin top-left; null clears), pointer.pressed 0|1, \
      {left,right}_hand.{trigger,squeeze,a} <number 0..1>, \
      {left,right}_hand.thumbstick [x,y], \
@@ -1924,6 +1926,14 @@ fn apply_input_patch(input: &mut InputContext, channel: &str, value: &Value) -> 
         "head.rotation" => {
             let q = arr(channel, value, 4)?;
             input.head.rotation = Quaternion::new(q[3], q[0], q[1], q[2]);
+            Ok(())
+        }
+        // Where the head is, in pawn space - the tracked eye a headset would
+        // report. Defaults to the fixed camera eye height above the pawn
+        // origin; world-anchored UI (the VR frontend panels) is placed from it.
+        "head.position" => {
+            let p = arr(channel, value, 3)?;
+            input.head.position = cgmath::vec3(p[0], p[1], p[2]);
             Ok(())
         }
         // Desktop camera convention (yaw=pitch=0 looks toward -X); drives both
