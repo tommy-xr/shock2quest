@@ -301,9 +301,8 @@ mod tests {
     /// Placement is decided once, in canvas pixels: the same rects must reach
     /// both presentations, so neither can move the disc or the bar.
     #[test]
-    fn the_layout_is_the_same_canvas_for_both_presentations() {
-        let mut scene = LoadingScene::new();
-        scene.set_progress(0.5);
+    fn the_canvas_places_the_widgets_at_the_layout_rects() {
+        let scene = LoadingScene::new();
         let rects: Vec<_> = scene
             .build_canvas(None)
             .elements()
