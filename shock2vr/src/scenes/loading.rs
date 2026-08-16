@@ -24,13 +24,13 @@ use engine::{
 use shipyard::{EntityId, UniqueViewMut, World};
 
 use crate::{
-    GameOptions,
+    GameOptions, PresentationMode,
     game_scene::GameScene,
     input_context::InputContext,
     mission::GlobalContext,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    ui::{Rect, ScaleMode, UiCanvas},
+    ui::{FrontendPanelAnchor, Rect, ScaleMode, UiCanvas, VR_COMPONENT_Z_STEP},
 };
 
 /// The loading art is authored on the original 640x480 `LOADING.PCX` canvas.
@@ -79,6 +79,8 @@ pub struct LoadingScene {
     elapsed_secs: f32,
     /// When true, `progress` is swept from `elapsed_secs` for visual inspection.
     demo: bool,
+    /// Where the VR panel is. Unused in flat presentation.
+    panel_anchor: FrontendPanelAnchor,
 }
 
 impl LoadingScene {
@@ -101,6 +103,7 @@ impl LoadingScene {
             progress: 0.0,
             elapsed_secs: 0.0,
             demo,
+            panel_anchor: FrontendPanelAnchor::new(),
         }
     }
 
@@ -114,6 +117,38 @@ impl LoadingScene {
         let frame = ((self.elapsed_secs * LOADA_FPS) as u32 % LOADA_FRAME_COUNT) + 1;
         format!("meters/LOADA_{frame:02}.PCX")
     }
+
+    /// The single layout pass. Both presentations map this same canvas, so
+    /// neither can place the disc or the bar differently (AGENTS.md "UI Renders
+    /// Identically in Flatscreen and VR").
+    ///
+    /// `layout` is the decoded `loadingr.BIN` rects, or `None` to use the
+    /// fallbacks — taken as an argument rather than read from the asset cache
+    /// here so the layout is testable without one.
+    fn build_canvas(&self, layout: Option<&[MapRect]>) -> UiCanvas {
+        let disc_rect = layout_rect(layout, DISC_RECT_INDEX, DISC_FALLBACK);
+        let bar_rect = layout_rect(layout, BAR_RECT_INDEX, BAR_FALLBACK);
+
+        let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
+
+        // 1. Full-screen backdrop.
+        canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
+
+        // 2. Rotating center disc (cycled LOADA frames).
+        canvas.image(disc_rect, &self.current_disc_frame());
+
+        // 3. Progress bar fill (clipped 0..1).
+        canvas.bar(bar_rect, PROGRESS_TEXTURE, self.progress);
+
+        canvas
+    }
+
+    /// The canvas for this frame, with the widget rects from the original
+    /// `loadingr.BIN` layout (cached by the asset cache after the first load).
+    fn build_canvas_from_cache(&self, asset_cache: &mut AssetCache) -> UiCanvas {
+        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
+        self.build_canvas(layout.as_deref().map(|rects| rects.as_slice()))
+    }
 }
 
 impl Default for LoadingScene {
@@ -126,7 +161,7 @@ impl GameScene for LoadingScene {
     fn update(
         &mut self,
         time: &Time,
-        _input_context: &InputContext,
+        input_context: &InputContext,
         _asset_cache: &mut AssetCache,
         _game_options: &GameOptions,
         _command_effects: Vec<Effect>,
@@ -134,6 +169,12 @@ impl GameScene for LoadingScene {
         if let Ok(mut world_time) = self.world.borrow::<UniqueViewMut<Time>>() {
             *world_time = time.clone();
         }
+
+        self.panel_anchor.update(
+            input_context.head.position,
+            input_context.head.rotation,
+            time.elapsed,
+        );
 
         self.elapsed_secs += time.elapsed.as_secs_f32();
         if self.demo {
@@ -145,15 +186,31 @@ impl GameScene for LoadingScene {
 
     fn render(
         &mut self,
-        _asset_cache: &mut AssetCache,
-        _options: &GameOptions,
+        asset_cache: &mut AssetCache,
+        options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        // Drawn in screen space in `render_per_eye`; the 3D scene is empty.
-        (
-            Vec::new(),
-            vec3(0.0, 0.0, 0.0),
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-        )
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        // In flat presentation the screen is drawn in screen space in
+        // `render_per_eye` (which has the screen size); the 3D scene is empty.
+        if options.presentation_mode != PresentationMode::Vr {
+            return (Vec::new(), vec3(0.0, 0.0, 0.0), identity);
+        }
+
+        // In VR there is no screen to draw on, so the same canvas is presented
+        // on a world-space panel in front of the player - without which a level
+        // transition in the headset shows nothing at all (#1002). Nothing here
+        // is clickable, so there is no pointer.
+        let panel = self.panel_anchor.panel();
+        let objects = self
+            .build_canvas_from_cache(asset_cache)
+            .render_world_space(
+                asset_cache,
+                panel.transform(),
+                None,
+                None,
+                VR_COMPONENT_Z_STEP,
+            );
+        (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
     fn render_per_eye(
@@ -162,28 +219,16 @@ impl GameScene for LoadingScene {
         _view: cgmath::Matrix4<f32>,
         _projection: cgmath::Matrix4<f32>,
         screen_size: Vector2<f32>,
-        _options: &GameOptions,
+        options: &GameOptions,
     ) -> Vec<SceneObject> {
-        let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
-
-        // Widget rects come from the original `loadingr.BIN` layout (cached by the asset
-        // cache after the first load); fall back to the decoded values if it's absent.
-        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
-        let layout = layout.as_deref().map(|rects| rects.as_slice());
-        let disc_rect = layout_rect(layout, DISC_RECT_INDEX, DISC_FALLBACK);
-        let bar_rect = layout_rect(layout, BAR_RECT_INDEX, BAR_FALLBACK);
-
-        // 1. Full-screen backdrop.
-        canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
-
-        // 2. Rotating center disc (cycled LOADA frames).
-        let disc_frame = self.current_disc_frame();
-        canvas.image(disc_rect, &disc_frame);
-
-        // 3. Progress bar fill (clipped 0..1).
-        canvas.bar(bar_rect, PROGRESS_TEXTURE, self.progress);
-
-        canvas.render_screen_space(asset_cache, screen_size, SCALE_MODE)
+        // In VR the screen lives on the world-space panel drawn by `render`; a
+        // screen-space copy here would paste the whole canvas over both eyes
+        // and hide it.
+        if options.presentation_mode == PresentationMode::Vr {
+            return Vec::new();
+        }
+        self.build_canvas_from_cache(asset_cache)
+            .render_screen_space(asset_cache, screen_size, SCALE_MODE)
     }
 
     fn handle_effects(
@@ -241,6 +286,33 @@ mod tests {
         // wraps back to frame 1 after a full cycle
         scene.elapsed_secs = LOADA_FRAME_COUNT as f32 / LOADA_FPS;
         assert_eq!(scene.current_disc_frame(), "meters/LOADA_01.PCX");
+    }
+
+    /// The canvas is what the VR panel presents. Before the panel existed the
+    /// screen was built inline in `render_per_eye`, so in VR there was nothing
+    /// to present at all - this is the shared artifact both presentations map.
+    #[test]
+    fn the_canvas_carries_the_backdrop_disc_and_bar() {
+        let scene = LoadingScene::new();
+        let canvas = scene.build_canvas(None);
+        assert_eq!(canvas.element_count(), 3);
+    }
+
+    /// Placement is decided once, in canvas pixels: the same rects must reach
+    /// both presentations, so neither can move the disc or the bar.
+    #[test]
+    fn the_layout_is_the_same_canvas_for_both_presentations() {
+        let mut scene = LoadingScene::new();
+        scene.set_progress(0.5);
+        let rects: Vec<_> = scene
+            .build_canvas(None)
+            .elements()
+            .iter()
+            .map(|e| e.rect())
+            .collect();
+        assert_eq!(rects[0], Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H));
+        assert_eq!(rects[1], DISC_FALLBACK);
+        assert_eq!(rects[2], BAR_FALLBACK);
     }
 
     #[test]
