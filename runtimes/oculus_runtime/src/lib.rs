@@ -21,6 +21,7 @@ use std::env;
 use tracing;
 
 mod android_permissions;
+mod debug_input;
 mod frame_profiler;
 mod quest_config;
 mod refresh_rate;
@@ -484,8 +485,12 @@ fn main() {
     );
 
     // No discrete actions are mapped for VR controllers yet; this stays empty
-    // until an OculusInputMapper is added.
+    // until an OculusInputMapper is added (the debug input server below can
+    // inject them remotely).
     let mut action_state = shock2vr::input::InputActionState::new();
+    // Opt-in remote control for on-device automation; `None` unless
+    // /sdcard/shock2quest/debug-port.txt configures a port.
+    let debug_input = debug_input::DebugInputServer::start_if_configured(&mission);
     let mut vr_crouch = VrCrouchDetector::default();
     let mut pending_stage_change_time = None;
     // Button-crouch alternative to the physical detector: left thumbstick
@@ -835,6 +840,11 @@ fn main() {
         // The detector was already fed exactly once above (it keeps its
         // standing calibration warm even while the button latch is active).
         input_context.crouch = physically_crouched || crouch_toggled;
+        // Remote overrides are layered ON TOP of the live controller state, so
+        // only the channels an agent claimed are replaced.
+        if let Some(debug_input) = &debug_input {
+            debug_input.apply(&mut input_context, &mut action_state);
+        }
         let update_started = Instant::now();
         game.update(&time_context, &input_context, &mut action_state);
         let update_elapsed = update_started.elapsed();

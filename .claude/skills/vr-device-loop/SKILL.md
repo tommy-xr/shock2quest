@@ -145,6 +145,42 @@ When opening or updating a PR, use the `pr-visuals` hosting and embedding
 workflow, but use these Quest artifacts whenever the claim depends on device
 behavior. Include before/after device captures for visual modifications.
 
+## Drive input on the device
+
+The device runtime can accept remote input, so menu/aim/trigger interaction is
+verifiable without a human in the headset. It is gated on a port file (env vars
+do not reach an Android app) and binds loopback only:
+
+```bash
+adb shell "echo 8171 > /sdcard/shock2quest/debug-port.txt"   # then (re)launch
+adb logcat -d RustStdoutStderr:V '*:S' | grep SHOCK2QUEST_DEBUG_SERVER
+adb forward tcp:8171 tcp:8171
+
+curl -s http://127.0.0.1:8171/v1/status
+curl -s -X POST http://127.0.0.1:8171/v1/control/input \
+  -d '{"right_hand.rotation":[0,0,0,1],"right_hand.trigger":1.0}'
+curl -s -X POST http://127.0.0.1:8171/v1/control/input -d '{"right_hand.trigger":null}'
+curl -s -X POST http://127.0.0.1:8171/v1/input/action -d '{"action":"QuickSave"}'
+adb shell rm /sdcard/shock2quest/debug-port.txt              # disable again
+```
+
+Patched channels are an **override**, not a replacement: the frame loop still
+builds its `InputContext` from OpenXR and only the claimed channels are
+overwritten, so a human can wear the headset while an agent nudges one channel.
+`null` (or `POST /v1/control/input/clear`) releases a channel back to the
+controller; releasing a channel that was never claimed is a 400, so a typo'd
+release cannot silently leave the real override latched. Claims persist until
+released - **clear before disconnecting**, or the wearer is left holding
+whatever the agent set. The channel vocabulary is `shock2vr::input::remote`,
+shared verbatim with `runtimes/debug_runtime`
+(`runtimes/oculus_runtime/src/debug_input.rs`).
+
+Caveat: `head.rotation` / `head.look` drive aim and locomotion direction only -
+the rendered view still comes from the OpenXR views, so claiming them
+desynchronizes what a wearer sees from where the game thinks they are aiming
+(and `head.look`'s yaw/pitch is the flat camera convention, not the VR head
+frame). Prefer the hand channels for VR interaction.
+
 ## Toward a device debug runtime
 
 Prefer a thin loopback-only HTTP server reached through `adb forward`, sharing
@@ -152,9 +188,10 @@ wire types and behavior with `runtimes/debug_runtime`, rather than a separate
 automation model. Add it incrementally:
 
 1. `GET /v1/info` and `GET /v1/metrics` for mission, session state, frame
-   counter, views, and aggregate timings.
+   counter, views, and aggregate timings. (`GET /v1/status` covers mission +
+   frame counter today.)
 2. `POST /v1/screenshot` for a raw left/right swapchain capture.
-3. Existing input actions and control channels.
+3. ~~Existing input actions and control channels.~~ Done - see above.
 4. Entity/physics inspection only after the common interface is extracted.
 
 Keep OpenXR rendering focused while serving requests. A server that responds

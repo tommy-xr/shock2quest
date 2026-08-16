@@ -3743,6 +3743,7 @@ dependencies = [
  "oboe 0.5.0",
  "openxr",
  "pcx",
+ "serde_json",
  "shock2vr",
  "tokio",
  "tracing",
