@@ -72,6 +72,7 @@ export interface PathfindingStats {
   queries: number;
   stressed_retries: number;
   no_route: number;
+  partial_searches: number;
 }
 
 export interface PathfindingTestStatus {
@@ -96,6 +97,7 @@ export type DebugEntityMessage =
   | { type: "Frob" }
   | { type: "Signal"; name: string }
   | { type: "SetAlertness"; level: "Lowest" | "Low" | "Moderate" | "High" }
+  | { type: "SetLocked"; locked: boolean }
   // Switch-link activate/deactivate - what a tripwire/button sends to its targets.
   | { type: "TurnOn" }
   | { type: "TurnOff" };

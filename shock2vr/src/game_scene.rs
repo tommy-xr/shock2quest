@@ -898,6 +898,7 @@ pub struct DebugPathfindingStats {
     pub queries: u64,
     pub stressed_retries: u64,
     pub no_route: u64,
+    pub partial_searches: u64,
 }
 
 /// A script message a debug client can inject into a specific entity.
@@ -928,6 +929,9 @@ pub enum DebugEntityMessage {
     SetAlertness {
         level: dark::properties::AIAlertLevel,
     },
+    /// Set Dark's live `P$Locked` state. This drives the same production lock
+    /// checks and navigation-door synchronization as authored lock traps.
+    SetLocked { locked: bool },
     /// Switch-link activate (what a tripwire/button sends to its targets).
     TurnOn,
     /// Switch-link deactivate.
