@@ -29,8 +29,8 @@ use crate::{
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        FrontendPanelAnchor, HAlign, Rect, ScaleMode, UiCanvas, VAlign, VR_COMPONENT_Z_STEP,
-        pointer_to_canvas, vr_frontend_pointer,
+        FrontendPanelAnchor, FrontendPointerPass, HAlign, Rect, ScaleMode, UiCanvas, VAlign,
+        VR_COMPONENT_Z_STEP, pointer_to_canvas, render_pointer_rays, vr_frontend_pointer_pass,
     },
 };
 
@@ -158,6 +158,10 @@ pub struct GameOverScene {
     /// Where the VR controller ray last met the panel, in canvas pixels. The
     /// VR counterpart of `pointer`, already in canvas space.
     vr_pointer_canvas: Option<Vector2<f32>>,
+    /// The pointer pass that hit-tested this frame, kept so `render` draws the
+    /// beams and dot from the very rays `update` resolved the highlight from.
+    vr_pointer: FrontendPointerPass,
+
     /// Where the VR panel is anchored: placed from the head on scene entry
     /// and world-locked after that, so `render` hangs the panel exactly
     /// where `update` hit-tested it.
@@ -184,6 +188,7 @@ impl GameOverScene {
             save: latest_save(),
             pointer: None,
             vr_pointer_canvas: None,
+            vr_pointer: FrontendPointerPass::default(),
             panel_anchor: FrontendPanelAnchor::new(),
             // This screen is entered straight out of gameplay - very plausibly
             // with the VR trigger still held from the shot that preceded the
@@ -309,8 +314,9 @@ impl GameScene for GameOverScene {
             if game_options.presentation_mode == PresentationMode::Vr {
                 // VR has no 2D cursor: the pointer is where a controller ray meets
                 // the panel, and the trigger is the button.
-                let (point, pressed) =
-                    vr_frontend_pointer(input_context, vec2(CANVAS_W, CANVAS_H), &panel);
+                self.vr_pointer =
+                    vr_frontend_pointer_pass(input_context, vec2(CANVAS_W, CANVAS_H), &panel);
+                let (point, pressed) = (self.vr_pointer.point(), self.vr_pointer.pressed);
                 self.vr_pointer_canvas = point;
                 self.pointer = None;
                 let (action, last_pressed) = resolve_click_at(
@@ -323,6 +329,7 @@ impl GameScene for GameOverScene {
                 (action, last_pressed, point)
             } else {
                 self.pointer = input_context.pointer;
+                self.vr_pointer = FrontendPointerPass::default();
                 resolve_click(
                     input_context.pointer,
                     self.last_pressed,
@@ -369,13 +376,23 @@ impl GameScene for GameOverScene {
         // on a world-space panel in front of the player.
         let panel = self.panel_anchor.panel();
         let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
-        let objects = canvas.render_world_space(
+        let mut objects = canvas.render_world_space(
             asset_cache,
             panel.transform(),
             self.vr_pointer_canvas,
             None,
             VR_COMPONENT_Z_STEP,
         );
+        // The controllers and their aim rays, so the player can see where they
+        // are pointing before an entry lights up. The canvas objects already in
+        // hand are the layer stack the hit dot has to float clear of.
+        let panel_layers = objects.len();
+        objects.extend(render_pointer_rays(
+            &self.vr_pointer,
+            vec2(CANVAS_W, CANVAS_H),
+            &panel,
+            panel_layers,
+        ));
         (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
@@ -553,11 +570,12 @@ mod tests {
             (LOAD_RECT_INDEX, GameOverAction::Load),
             (QUIT_RECT_INDEX, GameOverAction::Quit),
         ] {
-            let (point, pressed) = vr_frontend_pointer(
+            let pass = vr_frontend_pointer_pass(
                 &vr_input(hand_aimed_at(rects[index].center(), 1.0)),
                 vec2(CANVAS_W, CANVAS_H),
                 &test_panel(),
             );
+            let (point, pressed) = (pass.point(), pass.pressed);
             let point = point.expect("the ray should land on the panel");
             assert!(rects[index].contains(point));
             assert_eq!(
@@ -570,11 +588,12 @@ mod tests {
     #[test]
     fn a_vr_ray_over_load_is_inert_without_a_save() {
         let rects = screen_rects(None);
-        let (point, pressed) = vr_frontend_pointer(
+        let pass = vr_frontend_pointer_pass(
             &vr_input(hand_aimed_at(rects[LOAD_RECT_INDEX].center(), 1.0)),
             vec2(CANVAS_W, CANVAS_H),
             &test_panel(),
         );
+        let (point, pressed) = (pass.point(), pass.pressed);
         assert_eq!(
             resolve_click_at(point, pressed, false, &rects, false).0,
             None
@@ -589,11 +608,12 @@ mod tests {
         // whatever the ray happens to cross - up to and including Quit.
         let rects = screen_rects(None);
         let scene = GameOverScene::new();
-        let (point, pressed) = vr_frontend_pointer(
+        let pass = vr_frontend_pointer_pass(
             &vr_input(hand_aimed_at(rects[QUIT_RECT_INDEX].center(), 1.0)),
             vec2(CANVAS_W, CANVAS_H),
             &test_panel(),
         );
+        let (point, pressed) = (pass.point(), pass.pressed);
         assert!(pressed);
         let (action, last) = resolve_click_at(point, pressed, scene.last_pressed, &rects, true);
         assert_eq!(action, None, "a carried-over press must not activate Quit");

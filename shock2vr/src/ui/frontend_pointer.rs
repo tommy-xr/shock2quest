@@ -34,48 +34,120 @@ fn held(hand: &Hand) -> bool {
     hand.trigger_value > VR_TRIGGER_THRESHOLD
 }
 
-/// Where a hand is pointing on a frontend screen's panel, in canvas pixels,
-/// plus whether its trigger is held.
+/// One controller's aim ray against a frontend panel: where it starts, where it
+/// points, and where it lands on the canvas (if it lands at all).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrontendRay {
+    /// The controller's position, in world space.
+    pub origin: Vector3<f32>,
+    /// The direction the controller points (its local -Z), normalized.
+    pub direction: Vector3<f32>,
+    /// Where the ray meets the panel, in canvas pixels, or `None` when it
+    /// misses.
+    pub canvas_hit: Option<Vector2<f32>>,
+}
+
+/// The ray for one hand, or `None` when that controller is not tracked.
+///
+/// The one place a hand becomes a ray: everything that pointing means - the
+/// tracked guard, the -Z aim, the panel intersection - happens here once.
+fn frontend_ray(hand: &Hand, canvas_size: Vector2<f32>, panel: &WorldPanel) -> Option<FrontendRay> {
+    let direction = hand_ray(hand.rotation)?;
+    Some(FrontendRay {
+        origin: hand.position,
+        direction,
+        canvas_hit: ray_to_canvas(canvas_size, panel, hand.position, direction),
+    })
+}
+
+/// One frame of frontend pointing: every tracked controller's ray, *which* of
+/// them the menu is listening to, and whether a trigger is down.
+///
+/// This is the single unit of frontend pointing. The hover highlight, the click
+/// and the drawn hit dot ([`crate::ui::render_pointer_rays`]) all read the same
+/// pass, so the dot cannot appear anywhere but the pixel the menu hit-tested,
+/// and a controller the menu is ignoring cannot draw a dot that says otherwise.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FrontendPointerPass {
+    /// Every tracked controller's ray, right hand first. An untracked
+    /// controller contributes nothing, so it draws nothing - the same guard
+    /// that keeps it from driving the highlight.
+    pub rays: Vec<FrontendRay>,
+    /// Index into `rays` of the controller actually driving the menu, when one
+    /// of them is on the panel.
+    active: Option<usize>,
+    /// Whether either trigger is held.
+    pub pressed: bool,
+}
+
+impl FrontendPointerPass {
+    /// Where the menu is being pointed, in canvas pixels.
+    pub fn point(&self) -> Option<Vector2<f32>> {
+        self.active.and_then(|index| self.rays[index].canvas_hit)
+    }
+
+    /// Whether `rays[index]` is the ray the menu is listening to.
+    pub fn is_active(&self, index: usize) -> bool {
+        self.active == Some(index)
+    }
+}
+
+/// Resolve one frame of frontend pointing.
 ///
 /// Both controllers are always posed in VR, so "whichever hand hits the panel"
 /// would always resolve to the same one. Instead a hand **with its trigger
 /// held** wins, so either controller can click; ties and idle triggers fall
 /// back to the right hand, which then drives the hover highlight.
-pub fn vr_frontend_pointer(
+pub fn vr_frontend_pointer_pass(
     input_context: &InputContext,
     canvas_size: Vector2<f32>,
     panel: &WorldPanel,
-) -> (Option<Vector2<f32>>, bool) {
-    let right = &input_context.right_hand;
-    let left = &input_context.left_hand;
+) -> FrontendPointerPass {
+    let hands = [&input_context.right_hand, &input_context.left_hand];
 
-    let any_held = held(right) || held(left);
-    let order = if held(left) && !held(right) {
-        [left, right]
+    let mut rays = Vec::with_capacity(hands.len());
+    // Where each hand's ray landed in `rays`, since untracked hands are skipped.
+    let mut ray_of_hand = [None, None];
+    for (slot, hand) in hands.iter().enumerate() {
+        if let Some(ray) = frontend_ray(hand, canvas_size, panel) {
+            ray_of_hand[slot] = Some(rays.len());
+            rays.push(ray);
+        }
+    }
+
+    let any_held = held(hands[0]) || held(hands[1]);
+    let order = if held(hands[1]) && !held(hands[0]) {
+        [1, 0]
     } else {
-        [right, left]
+        [0, 1]
     };
 
-    for hand in order {
+    let mut active = None;
+    for slot in order {
         // While a trigger is down, only the hand holding it may supply the
         // point: otherwise an idle hand resting on the panel would report
         // "not pressed" and clear the held state, so sweeping the pressed hand
         // onto a button would read as a fresh edge and click it.
-        if any_held && !held(hand) {
+        if any_held && !held(hands[slot]) {
             continue;
         }
-        let Some(direction) = hand_ray(hand.rotation) else {
+        let Some(index) = ray_of_hand[slot] else {
             continue;
         };
-        if let Some(point) = ray_to_canvas(canvas_size, panel, hand.position, direction) {
-            return (Some(point), any_held);
+        if rays[index].canvas_hit.is_some() {
+            active = Some(index);
+            break;
         }
     }
 
-    // Nothing points at the screen; report the trigger anyway so a press that
-    // starts off-panel is still consumed as "held" rather than becoming a fresh
-    // edge the moment the ray crosses onto a button.
-    (None, any_held)
+    FrontendPointerPass {
+        rays,
+        active,
+        // Nothing may be pointing at the screen; report the trigger anyway so a
+        // press that starts off-panel is still consumed as "held" rather than
+        // becoming a fresh edge the moment the ray crosses onto a button.
+        pressed: any_held,
+    }
 }
 
 /// Test-only rig for aiming a controller at a canvas point, shared by the
@@ -84,7 +156,7 @@ pub fn vr_frontend_pointer(
 #[cfg(test)]
 pub mod test_support {
     use super::*;
-    use crate::ui::{FRONTEND_PANEL_DISTANCE, FrontendPanelAnchor};
+    use crate::ui::{FRONTEND_PANEL_DISTANCE, FrontendPanelAnchor, canvas_to_panel_world};
     use std::time::Duration;
 
     /// The head facing the tests aim against: the default camera orientation.
@@ -108,12 +180,8 @@ pub mod test_support {
     /// panel ends up facing. This is the inverse of [`ray_to_canvas`].
     pub fn hand_aimed_at(canvas_size: Vector2<f32>, point: Vector2<f32>, trigger: f32) -> Hand {
         let panel = test_panel();
-        let u = point.x / canvas_size.x - 0.5;
-        let v = 0.5 - point.y / canvas_size.y;
-        let right = panel.rotation.rotate_vector(vec3(1.0, 0.0, 0.0));
-        let up = panel.rotation.rotate_vector(vec3(0.0, 1.0, 0.0));
         let normal = panel.normal();
-        let target = panel.center + right * (u * panel.size.x) + up * (v * panel.size.y);
+        let target = canvas_to_panel_world(canvas_size, &panel, point);
 
         Hand {
             // Stand back on the viewer's side (the panel's normal points at the
@@ -173,13 +241,14 @@ mod tests {
             trigger_value: 1.0,
             ..Hand::default()
         };
-        let (point, _) = vr_frontend_pointer(
+        let pass = vr_frontend_pointer_pass(
             &vr_input(untracked.clone(), untracked),
             CANVAS,
             &test_panel(),
         );
         assert_eq!(
-            point, None,
+            pass.point(),
+            None,
             "an untracked controller must not report a pointer"
         );
     }
@@ -191,11 +260,12 @@ mod tests {
             ..Hand::default()
         };
         let target = vec2(320.0, 240.0);
-        let (point, pressed) = vr_frontend_pointer(
+        let pass = vr_frontend_pointer_pass(
             &vr_input(untracked, hand_aimed_at(CANVAS, target, 1.0)),
             CANVAS,
             &test_panel(),
         );
+        let (point, pressed) = (pass.point(), pass.pressed);
         let point = point.expect("the tracked hand should land on the panel");
         assert!((point.x - target.x).abs() < 1.0 && (point.y - target.y).abs() < 1.0);
         assert!(pressed);
@@ -211,7 +281,8 @@ mod tests {
             hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
             hand_aimed_away(1.0),
         );
-        let (point, pressed) = vr_frontend_pointer(&input, CANVAS, &test_panel());
+        let pass = vr_frontend_pointer_pass(&input, CANVAS, &test_panel());
+        let (point, pressed) = (pass.point(), pass.pressed);
         assert!(pressed, "a held trigger must stay reported as held");
         assert_eq!(
             point, None,
@@ -221,11 +292,12 @@ mod tests {
 
     #[test]
     fn aiming_away_yields_no_point_but_keeps_the_trigger() {
-        let (point, pressed) = vr_frontend_pointer(
+        let pass = vr_frontend_pointer_pass(
             &vr_input(hand_aimed_away(1.0), hand_aimed_away(1.0)),
             CANVAS,
             &test_panel(),
         );
+        let (point, pressed) = (pass.point(), pass.pressed);
         assert_eq!(point, None);
         assert!(pressed);
     }
