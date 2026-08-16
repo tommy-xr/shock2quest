@@ -42,7 +42,7 @@ fn parse_mission(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_mission;
+    use super::{DEFAULT_MISSION, parse_mission};
 
     #[test]
     fn accepts_missions_and_debug_scenes() {
