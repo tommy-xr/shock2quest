@@ -171,17 +171,18 @@ pub struct WorldPanel {
 }
 
 impl WorldPanel {
-    /// The panel's outward face normal.
+    /// The panel's outward face normal: local +Z, pointing at the viewer the
+    /// panel was oriented toward.
     pub fn normal(&self) -> Vector3<f32> {
         self.rotation.rotate_vector(vec3(0.0, 0.0, 1.0))
     }
 
     /// Root transform for [`UiCanvas::render_world_space`].
     ///
-    /// No facing correction is needed: the element path's own 180-degree
-    /// rotation is about **Z** (in-plane, flipping the canvas's axes), so the
-    /// quad's +Z normal is untouched and a panel whose
-    /// [`normal`](Self::normal) faces the viewer renders toward them.
+    /// The basis is honest - local +x the viewer's right, +y up, +Z at the
+    /// viewer - so a raw element placed with this transform alone renders
+    /// upright. The canvas path adds only `world_element_transform`'s
+    /// canvas-y flip on top.
     pub fn transform(&self) -> Matrix4<f32> {
         Matrix4::from_translation(self.center)
             * Matrix4::from(self.rotation)
@@ -213,12 +214,28 @@ pub const VR_COMPONENT_Z_STEP: f32 = 0.001;
 /// world-space panel that demonstrably renders.
 pub fn frontend_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
     let head = vec3(0.0, FRONTEND_PANEL_EYE_HEIGHT, 0.0);
+    // An untracked pose arrives as the *zero* quaternion, not identity, and
+    // rotating by it silently yields the unrotated vector - so the panel would
+    // pin itself to world -Z and never follow the viewer.
+    let head_rotation = if head_rotation.magnitude2() < 1e-6 {
+        Quaternion::new(1.0, 0.0, 0.0, 0.0)
+    } else {
+        head_rotation.normalize()
+    };
+    // Assumes -Z forward, which is OpenXR's convention. The desktop runtimes'
+    // quaternions happen to agree about the *rendered* view direction (their
+    // `camera_rotation` maps -Z to the direction the view matrix actually
+    // looks), so the panel lands in front of the camera on every runtime.
     let forward = head_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
     let center = head + forward * FRONTEND_PANEL_DISTANCE;
 
     // Orient the panel by looking from it back to the head. `look_dir` runs
-    // panel -> head, so the panel's local +Z (the third column) points away
-    // from the viewer - the convention the world-space element path expects.
+    // panel -> head, and the basis is honest: local +x is the viewer's right,
+    // local +y is up, and local +Z (the third column, [`WorldPanel::normal`])
+    // points *at* the viewer. A raw element placed with this rotation alone
+    // renders upright; no compensating rotation exists anywhere in the element
+    // path (the only remaining flip is `world_element_transform`'s canvas-y
+    // flip, which every presentation shares).
     let mut look_dir = head - center;
     look_dir = if look_dir.magnitude2() < 1e-6 {
         vec3(0.0, 0.0, 1.0)
@@ -226,21 +243,55 @@ pub fn frontend_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
         look_dir.normalize()
     };
     let mut up = vec3(0.0, 1.0, 0.0);
-    let mut right = look_dir.cross(up);
+    // The viewer looks along -look_dir, so their right hand points along
+    // (-look_dir) x up == up x look_dir.
+    let mut right = up.cross(look_dir);
     if right.magnitude2() < 1e-6 {
         // Looking straight up or down: pick a different up to keep the basis
         // well-defined.
         up = vec3(0.0, 0.0, 1.0);
-        right = look_dir.cross(up);
+        right = up.cross(look_dir);
     }
     let right = right.normalize();
-    let true_up = right.cross(look_dir).normalize();
+    let true_up = look_dir.cross(right).normalize();
 
-    WorldPanel {
+    let panel = WorldPanel {
         center,
-        rotation: Quaternion::from(Matrix3::from_cols(right, true_up, -look_dir)),
+        rotation: Quaternion::from(Matrix3::from_cols(right, true_up, look_dir)),
         size: FRONTEND_PANEL_SIZE,
+    };
+
+    // Device-comparison probe: `SHOCK2_PANEL_LOG=1` prints the head pose and
+    // the basis this function derived from it, rate-limited. `println!` (not
+    // `tracing`) on purpose - it reaches logcat on Quest, where no tracing
+    // subscriber is installed.
+    if std::env::var_os("SHOCK2_PANEL_LOG").is_some() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static CALLS: AtomicU32 = AtomicU32::new(0);
+        if CALLS.fetch_add(1, Ordering::Relaxed) % 90 == 0 {
+            println!(
+                "SHOCK2_PANEL head_quat=({:.4},{:.4},{:.4},{:.4}) forward=({:.4},{:.4},{:.4}) right=({:.4},{:.4},{:.4}) up=({:.4},{:.4},{:.4}) normal=({:.4},{:.4},{:.4})",
+                head_rotation.s,
+                head_rotation.v.x,
+                head_rotation.v.y,
+                head_rotation.v.z,
+                forward.x,
+                forward.y,
+                forward.z,
+                right.x,
+                right.y,
+                right.z,
+                true_up.x,
+                true_up.y,
+                true_up.z,
+                look_dir.x,
+                look_dir.y,
+                look_dir.z,
+            );
+        }
     }
+
+    panel
 }
 
 /// Intersect a pointing ray with `panel` and return where it lands, in canvas
@@ -310,9 +361,9 @@ pub fn canvas_rect_to_screen(
 /// [`canvas_rect_to_screen`].
 ///
 /// Derived from the transform the renderer actually uses, so it cannot claim a
-/// placement the panel does not draw. The element path composes an in-plane
-/// 180-degree rotation (about **Z**, so the panel keeps its facing) which
-/// negates both axes; undoing that negation is the whole conversion.
+/// placement the panel does not draw. The element path's only flip is the
+/// canvas-y one (panel-local y grows up, canvas y grows down); undoing it is
+/// the whole conversion.
 pub fn canvas_rect_to_panel(rect: Rect, canvas_size: Vector2<f32>) -> Rect {
     let transform =
         world_element_transform(vec2(rect.x, rect.y), vec2(rect.w, rect.h), canvas_size, 0.0);
@@ -320,7 +371,7 @@ pub fn canvas_rect_to_panel(rect: Rect, canvas_size: Vector2<f32>) -> Rect {
     // unit square, so these are the element's own corners.
     let corner = |x: f32, y: f32| {
         let p = transform * cgmath::vec4(x, y, 0.0, 1.0);
-        vec2(0.5 - p.x, 0.5 - p.y)
+        vec2(p.x + 0.5, 0.5 - p.y)
     };
     let top_left = corner(-0.5, -0.5);
     let bottom_right = corner(0.5, 0.5);
@@ -849,9 +900,11 @@ where
         for (index, element) in placed.iter().enumerate() {
             let alpha = force_alpha.unwrap_or(element.alpha);
             let mut object = present_world(asset_cache, element, alpha, self.size);
+            // Panel-local +Z faces the viewer, so later (higher-layer)
+            // elements step toward them to sort in front of the backdrop.
             object.set_transform(
                 root_transform
-                    * Matrix4::from_translation(vec3(0.0, 0.0, -component_z_step * index as f32)),
+                    * Matrix4::from_translation(vec3(0.0, 0.0, component_z_step * index as f32)),
             );
             objects.push(object);
         }
@@ -1105,6 +1158,12 @@ fn texture_px(texture: &Texture) -> Vector2<f32> {
     vec2(texture.width() as f32, texture.height() as f32)
 }
 
+/// Canvas y grows downward while panel-local y grows up, so the element must
+/// be y-flipped into place. The flip is a 180-degree rotation about **X** - a
+/// proper rotation, not a mirror - so triangle winding is preserved; the cost
+/// is that the quad shows the viewer its local -Z face, which the untextured
+/// two-sided UI materials render identically. Canvas x maps straight to
+/// panel-local +x (the viewer's right), with no compensation anywhere.
 fn world_element_transform(
     position: Vector2<f32>,
     size: Vector2<f32>,
@@ -1113,7 +1172,7 @@ fn world_element_transform(
 ) -> Matrix4<f32> {
     let position = vec2(position.x / canvas_size.x, position.y / canvas_size.y);
     let size = vec2(size.x / canvas_size.x, size.y / canvas_size.y);
-    Matrix4::from_angle_z(Deg(180.0))
+    Matrix4::from_angle_x(Deg(180.0))
         * Matrix4::from_translation(vec3(
             position.x - 0.5 + size.x / 2.0,
             position.y - 0.5 + size.y / 2.0,
@@ -1700,9 +1759,9 @@ mod tests {
 
         #[test]
         fn the_transform_preserves_the_panels_facing() {
-            // The element path's own 180-degree rotation is about Z (in-plane),
-            // so `transform` must not add a facing correction of its own - an
-            // extra Y flip turns the panel away and it renders to nothing.
+            // `transform` must not add a facing correction of its own: the
+            // basis is honest (+Z at the viewer), and an extra Y flip would
+            // turn the panel away and mirror it.
             let panel = panel();
             let right = panel.transform() * cgmath::vec4(0.5, 0.0, 0.0, 1.0);
             assert!(right.x > 0.0, "local +X must stay along world +X");

@@ -54,7 +54,10 @@ export function resolveSerial(explicitSerial) {
 export function validateMission(mission) {
   const trimmed = mission.trim();
   const validCharacters = /^[A-Za-z0-9_.-]+$/.test(trimmed);
-  const validName = trimmed.startsWith("debug_") || trimmed.endsWith(".mis");
+  const validName =
+    trimmed.startsWith("debug_") ||
+    trimmed.endsWith(".mis") ||
+    trimmed === "main_menu";
   if (!trimmed || !validCharacters || !validName) {
     throw new Error(`invalid mission name: ${JSON.stringify(mission)}`);
   }

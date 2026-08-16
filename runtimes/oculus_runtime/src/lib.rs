@@ -469,6 +469,11 @@ fn main() {
     #[cfg(target_os = "android")]
     engine::platform::set_event_pump(Some(android_pump_events));
     let mut game = shock2vr::App::init(options, bundle_storage);
+    // The real HMD orientation, from the previous frame's located view.
+    // `input_context` is built before `locate_views` runs, so this frame's view
+    // pose does not exist yet; one frame of latency is imperceptible for
+    // head-anchored UI and is far better than the alternative below.
+    let mut last_view_rotation: Option<cgmath::Quaternion<f32>> = None;
     println!(
         "SHOCK2QUEST_STARTUP mission={} init_ms={:.3}",
         mission,
@@ -719,12 +724,20 @@ fn main() {
         // let dir = cgmath::Quaternion::new(forward_xr.w, forward_xr.x, forward_xr.y, forward_xr.z);
 
         // let forward = dir.rotate_vector(vec3(0.0, 0.0, -time * right_trigger_value * 10.));
-        let head_rotation = cgmath::Quaternion::new(
+        // The RIGHT CONTROLLER's aim pose. It drives hand aiming and, for want
+        // of anything else, has also been standing in for the head - which is
+        // wrong for anything that wants to know where the player is *looking*,
+        // and is the zero quaternion entirely when the controllers are not
+        // tracked.
+        let aim_rotation = cgmath::Quaternion::new(
             right_aim_location.pose.orientation.w,
             right_aim_location.pose.orientation.x,
             right_aim_location.pose.orientation.y,
             right_aim_location.pose.orientation.z,
         );
+        // ...so the head gets the actual head, falling back to the aim pose
+        // only on the first frame, before any view has been located.
+        let head_rotation = last_view_rotation.unwrap_or(aim_rotation);
 
         // Feed the detector before the poses are transformed so this frame's
         // physical stance is available to the crouch request below. Tracked
@@ -765,7 +778,7 @@ fn main() {
 
         let mut input_context = InputContext::default();
         input_context.head.rotation = head_rotation;
-        input_context.right_hand.rotation = head_rotation;
+        input_context.right_hand.rotation = aim_rotation;
         input_context.right_hand.position = right_hand_position;
         input_context.right_hand.trigger_value = right_trigger_value;
         input_context.right_hand.squeeze_value = right_squeeze_value;
@@ -942,6 +955,16 @@ fn main() {
         let (_, views) = session
             .locate_views(VIEW_TYPE, xr_frame_state.predicted_display_time, &stage)
             .unwrap();
+
+        // Remember where the head actually is, for next frame's input context.
+        if let Some(view) = views.first() {
+            last_view_rotation = Some(cgmath::Quaternion::new(
+                view.pose.orientation.w,
+                view.pose.orientation.x,
+                view.pose.orientation.y,
+                view.pose.orientation.z,
+            ));
+        }
 
         let (_, _eyes) = session
             .locate_views(

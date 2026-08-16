@@ -114,7 +114,8 @@ test(
 // (AGENTS.md: "a canvas must render the same way in flatscreen and in VR").
 //
 // The runtime's VR head yaw is +90 degrees (the camera looks along -X), so the
-// panel hangs at x=-2 with canvas +x mapping to world +z and canvas +y to -y.
+// panel hangs at x=-2 facing back at the head: canvas +x maps to world -z
+// (the viewer's right) and canvas +y to -y.
 // A hand placed on the button's world position and aimed along -X points at it.
 const PANEL_DISTANCE = 2;
 const PANEL_SIZE = { x: 2, y: 1.5 };
@@ -125,7 +126,7 @@ const AIM_AT_PANEL: [number, number, number, number] = [0, 0.7071068, 0, 0.70710
 const panelPoint = ([u, v]: [number, number]): [number, number, number] => [
   -PANEL_DISTANCE,
   PLAYER_EYE_HEIGHT_WORLD + (0.5 - v) * PANEL_SIZE.y,
-  (u - 0.5) * PANEL_SIZE.x,
+  (0.5 - u) * PANEL_SIZE.x,
 ];
 
 test(

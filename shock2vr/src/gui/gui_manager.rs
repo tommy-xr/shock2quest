@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{EuclideanSpace, InnerSpace, Matrix4, Vector2, Vector3, vec3};
+use cgmath::{Deg, EuclideanSpace, InnerSpace, Matrix4, Vector2, Vector3, vec3};
 
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use rapier3d::prelude::RigidBodyHandle;
@@ -18,8 +18,9 @@ use crate::gui::*;
 use crate::ui::{Rect, UiCanvas};
 
 /// Depth given to each successive panel element so a label does not z-fight
-/// with the art behind it. Panel-local -Z faces the viewer, which is the
-/// direction `UiCanvas::render_world_space` steps in.
+/// with the art behind it. Canvas-local +Z faces the viewer (the root
+/// transform below turns the proxy entity's -Z face into that convention),
+/// which is the direction `UiCanvas::render_world_space` steps in.
 const COMPONENT_Z_STEP: f32 = 0.001;
 
 /// Total depth a panel may spend on that separation. MFD panels are small
@@ -311,9 +312,13 @@ impl GuiManager {
             let _root_transform = parent_entity_transform;
             // * Matrix4::from_translation(info.offset)
             // * Matrix4::from_nonuniform_scale(0.5, 0.6, 1.0);
+            // The proxy entity's outward face is its local -Z, while the
+            // world-space canvas convention is "+Z faces the viewer" - so turn
+            // the panel around here, at the one boundary where the entity's
+            // authored facing meets the shared canvas path.
             let root_transform = parent_entity_transform
-            //     * Matrix4::from_translation(info.offset)
-                * Matrix4::from_nonuniform_scale(info.world_size.x,info.world_size.y, 1.0);
+                * Matrix4::from_angle_y(Deg(180.0))
+                * Matrix4::from_nonuniform_scale(info.world_size.x, info.world_size.y, 1.0);
             gui_obj.set_transform(root_transform);
 
             // Present the panel through the shared UI canvas, so the world
