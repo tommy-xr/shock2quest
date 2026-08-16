@@ -271,11 +271,22 @@ pub fn frontend_panel(head_rotation: Quaternion<f32>) -> WorldPanel {
         if CALLS.fetch_add(1, Ordering::Relaxed) % 90 == 0 {
             println!(
                 "SHOCK2_PANEL head_quat=({:.4},{:.4},{:.4},{:.4}) forward=({:.4},{:.4},{:.4}) right=({:.4},{:.4},{:.4}) up=({:.4},{:.4},{:.4}) normal=({:.4},{:.4},{:.4})",
-                head_rotation.s, head_rotation.v.x, head_rotation.v.y, head_rotation.v.z,
-                forward.x, forward.y, forward.z,
-                right.x, right.y, right.z,
-                true_up.x, true_up.y, true_up.z,
-                look_dir.x, look_dir.y, look_dir.z,
+                head_rotation.s,
+                head_rotation.v.x,
+                head_rotation.v.y,
+                head_rotation.v.z,
+                forward.x,
+                forward.y,
+                forward.z,
+                right.x,
+                right.y,
+                right.z,
+                true_up.x,
+                true_up.y,
+                true_up.z,
+                look_dir.x,
+                look_dir.y,
+                look_dir.z,
             );
         }
     }

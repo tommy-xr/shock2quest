@@ -318,7 +318,7 @@ impl GuiManager {
             // authored facing meets the shared canvas path.
             let root_transform = parent_entity_transform
                 * Matrix4::from_angle_y(Deg(180.0))
-                * Matrix4::from_nonuniform_scale(info.world_size.x,info.world_size.y, 1.0);
+                * Matrix4::from_nonuniform_scale(info.world_size.x, info.world_size.y, 1.0);
             gui_obj.set_transform(root_transform);
 
             // Present the panel through the shared UI canvas, so the world
