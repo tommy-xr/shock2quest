@@ -846,6 +846,20 @@ fn resolve_proxy_entity(world: &World, entity_id: EntityId) -> EntityId {
 /// surfaces that remain, fully rendered objects occlude while authored alpha
 /// (the Windows archetype is 0.45) and non-rendered helpers pass sight. Proxy
 /// hitboxes are classified through their visible owner.
+///
+/// Creatures never occlude, in any state. A packmate's capsule must not hide
+/// the player from the AI behind it - a pack closing on the player would blind
+/// everything but its front rank, leaving sight stricter than line of fire -
+/// and the same has to hold once that packmate dies, or an AI would see
+/// through the body standing up and be blinded by it a second later. Corpses
+/// and ragdoll limbs are `SELECTABLE` rather than `ACTOR`, so deciding this
+/// here rather than by dropping `ACTOR` from the collision mask is what covers
+/// every state from one place. The original engine's sight cast tests world
+/// geometry plus an explicit list of vision-blocking objects (doors and
+/// anything authored to block AI vision); creatures are never in it. Line of
+/// FIRE stays stricter and keeps reasoning about allies (see
+/// `has_line_of_fire`): a packmate does not hide the player, but it is still a
+/// reason not to shoot.
 fn entity_occludes_sight(
     world: &World,
     observer: EntityId,
@@ -854,6 +868,14 @@ fn entity_occludes_sight(
 ) -> bool {
     let entity_id = resolve_proxy_entity(world, hit_entity);
     if entity_id == observer || entity_id == target {
+        return false;
+    }
+
+    let is_creature = world
+        .borrow::<View<PropCreature>>()
+        .map(|creatures| creatures.contains(entity_id))
+        .unwrap_or(false);
+    if is_creature {
         return false;
     }
 
@@ -1489,6 +1511,43 @@ mod sight_occlusion_tests {
         assert!(
             !player_is_in_line_of_fire(&scene),
             "transparent physical cover must keep the projectile gate unchanged"
+        );
+    }
+
+    #[test]
+    fn a_living_creature_does_not_occlude_sight_but_does_block_the_shot() {
+        let mut scene = sight_scene(CollisionGroup::actor());
+        scene.world.add_component(
+            scene.blocker,
+            (PropCreature(0), PropHitPoints { hit_points: 10 }),
+        );
+
+        assert!(
+            player_is_visible(&scene),
+            "a packmate standing in the way must not hide the player"
+        );
+        assert!(
+            !player_is_in_line_of_fire(&scene),
+            "a living ally in the way must still suppress the shot"
+        );
+    }
+
+    /// A corpse keeps its creature identity but swaps `ACTOR` membership for
+    /// `SELECTABLE`. Today it is already unreachable by an actor-membership
+    /// ray, so this passes for two independent reasons - it is here to catch a
+    /// future regrouping that puts bodies back in the ray's path and leaves an
+    /// AI seeing through a packmate standing up but blinded by its corpse.
+    #[test]
+    fn a_creature_corpse_does_not_occlude_sight_either() {
+        let mut scene = sight_scene(CollisionGroup::corpse());
+        scene.world.add_component(
+            scene.blocker,
+            (PropCreature(0), PropHitPoints { hit_points: 0 }),
+        );
+
+        assert!(
+            player_is_visible(&scene),
+            "a body on the floor must not hide the player any more than it did standing"
         );
     }
 
