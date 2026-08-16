@@ -4443,8 +4443,11 @@ impl PhysicsWorld {
     }
 
     /// Raycast with living-actor membership while allowing the caller to
-    /// reject individual entity colliders. World geometry (which may not have
-    /// an ECS owner) is always retained. This is the visibility-query path:
+    /// reject individual entity colliders. The filter is consulted only for
+    /// colliders that carry an entity id, so ownerless colliders - world
+    /// geometry among them - are retained without being offered to it; an
+    /// entity-owned collider is subject to the filter whatever it represents.
+    /// This is the visibility-query path:
     /// actor membership naturally skips interaction-only bounds that do not
     /// block creatures, while the entity filter can pass through authored
     /// transparent objects without changing projectile or selection rays.
