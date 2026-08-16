@@ -666,6 +666,7 @@ mod tests {
             Vector3::zero(),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             &input,
+            None,
         );
 
         effects
