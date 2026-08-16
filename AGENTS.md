@@ -527,10 +527,14 @@ The project supports experimental flags for gating in-progress features during d
 
 - **`loading_screen`**: show the animated loading screen during level transitions
   (`GlobalEffect::TransitionLevel` / `TestReload`) instead of switching instantly. The
-  transition is deferred: the outgoing scene is saved, the `LoadingScene` renders for a
-  brief minimum, then the (currently synchronous) load runs. The `DebugReloadLevel` input
-  action reloads the current level in place to exercise this. See
-  `projects/loading-screen.md`. Without it, transitions are synchronous and unchanged.
+  transition is deferred: the outgoing scene is saved, the level parse runs on a worker
+  thread while the `LoadingScene` animates for at least a brief minimum, then the
+  main-thread GPU build runs (still blocking - no frames are submitted while it does).
+  The screen is presented on a world panel in VR and in screen space when flat. The
+  `DebugReloadLevel` input action reloads the current level in place to exercise this.
+  See `projects/loading-screen.md`. Without it, transitions are synchronous and
+  unchanged. **Enabled by default on Quest** (`oculus_runtime`), where freezing the
+  compositor on the last frame is far worse than on a monitor; opt-in on the desktop.
 
 - **`nav_bridges`**: reconnect the AI navigation mesh for full-map pathfinding. The
   shipped mission data partitions the walk graph into per-area islands with no links
