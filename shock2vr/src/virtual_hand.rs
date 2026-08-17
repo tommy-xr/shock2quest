@@ -354,15 +354,18 @@ impl VirtualHand {
         (hand, effs)
     }
 
-    /// Render the glove for this hand, plus the raycast-hit debug cube. The
-    /// glove renderer is owned by the caller (`VrInteraction`) so its cached
-    /// state is shared between both hands.
+    /// Render the hand (skin + forearm) for this hand, plus the raycast-hit
+    /// debug cube. The hand renderer is owned by the caller (`VrInteraction`)
+    /// so its cached state is shared between both hands.
     pub fn render(
         &self,
+        world: &World,
         glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
     ) -> Vec<SceneObject> {
-        // The hand itself: the glove model, posed from the analog inputs
+        // The hand itself: the skinned hand model, posed from the analog
+        // inputs - unless a wielded weapon's model stands in for it.
         let mut scene_objects = glove_renderer
+            .filter(|_| shows_hand_visual(world, self.get_held_entity()))
             .map(|renderer| {
                 renderer.render_hand(
                     self.position,
@@ -591,6 +594,20 @@ pub(crate) fn is_wieldable_weapon(world: &World, entity_id: EntityId) -> bool {
             .unwrap_or(false)
 }
 
+/// Whether the hand visual (skin + forearm) is drawn for a hand holding
+/// `held_entity`.
+///
+/// A wielded weapon carries its own first-person model, which is drawn at the
+/// hand's transform and *replaces* the hand - drawing both puts a hand inside
+/// the gun. Anything else - an empty hand, or a held object with no
+/// first-person weapon model - keeps the hand.
+pub(crate) fn shows_hand_visual(world: &World, held_entity: Option<EntityId>) -> bool {
+    match held_entity {
+        None => true,
+        Some(entity_id) => !is_wieldable_weapon(world, entity_id),
+    }
+}
+
 /// Find the player's carried weapon matching an original gamesys weapon
 /// archetype. Mission objects and carried items can have more-specific or
 /// mission-local template ids, so selection follows the preserved canonical
@@ -706,5 +723,26 @@ mod tests {
             held_trigger_payload(&world, weapon_or_psi_amp),
             MessagePayload::TriggerPull
         ));
+    }
+
+    /// A wielded weapon draws its own first-person model at the hand, so the
+    /// hand visual has to step aside - otherwise there is a hand inside the gun.
+    #[test]
+    fn wielded_weapon_replaces_the_hand_visual() {
+        let mut world = World::new();
+        let weapon = world.add_entity(player_gun());
+
+        assert!(!shows_hand_visual(&world, Some(weapon)));
+    }
+
+    /// An empty hand, or one holding something with no first-person weapon
+    /// model (a crate, a consumable), still shows the hand.
+    #[test]
+    fn empty_and_plain_held_hands_keep_the_hand_visual() {
+        let mut world = World::new();
+        let consumable = world.add_entity(scripted_inventory_use());
+
+        assert!(shows_hand_visual(&world, None));
+        assert!(shows_hand_visual(&world, Some(consumable)));
     }
 }

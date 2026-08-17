@@ -2,6 +2,10 @@
 //! controller's analog inputs (trigger curls the index finger, squeeze curls
 //! the rest). The left hand mirrors the right-hand model (`flip_x`-style
 //! negative scale), like held-weapon models do.
+//!
+//! The model is skinned with a bare-skin texture rather than the glove's own
+//! colour map, and a plain tube runs from the wrist toward the elbow, so the
+//! hands read as the player's own hands instead of disembodied gloves.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -22,7 +26,24 @@ use crate::{
 };
 
 const GLOVE_MODEL: &str = "vr_glove_model.glb";
-const GLOVE_TEXTURE: &str = "vr_glove_color.jpg";
+
+/// Bare-skin colour map applied to the glove mesh (and to the forearm), in
+/// place of the glove's own `vr_glove_color.jpg`. Skin tone sampled from the
+/// game's own first-person hand texture; brightness varies across `u` so the
+/// forearm tube - whose `u` wraps its circumference - shades like a cylinder.
+/// See `projects/vr-gloves.md` for the recipe that generated it.
+const HAND_SKIN_TEXTURE: &str = "vr_hand_skin.png";
+
+/// Where the forearm tube starts and ends along the hand's local +Z (the
+/// direction of the elbow - the hand's forward is -Z), in meters from the
+/// wrist. It starts slightly *inside* the hand so there is no gap at the
+/// wrist, and stops short of the forearm HUD panel
+/// (`hud::virtual_arms::FOREARM_OFFSET`, ~19 cm out) so the two don't intersect.
+const FOREARM_START_METERS: f32 = -0.02;
+const FOREARM_END_METERS: f32 = 0.16;
+
+/// Forearm thickness - a little over a wrist, a little under a forearm.
+const FOREARM_RADIUS_METERS: f32 = 0.032;
 
 /// Wrist-to-fingertip length the glove model is authored at, in world units -
 /// the +Z span of its bind-pose bounding box (fingers point along +Z).
@@ -59,6 +80,18 @@ pub struct GloveRenderer {
     fist: Pose,
     point: Pose,
     materials: Vec<Rc<RefCell<Box<dyn Material>>>>,
+    /// Skin material for the forearm tube; `None` when the skin texture is
+    /// missing, in which case the hand renders without a forearm rather than
+    /// with an untextured one.
+    forearm_material: Option<Rc<RefCell<Box<dyn Material>>>>,
+}
+
+/// The materials one hand is drawn with. Built at each call site rather than
+/// by a `&self` method, so the borrow stays disjoint from the `&mut self.model`
+/// the posing needs.
+struct HandSkin<'a> {
+    meshes: &'a [Rc<RefCell<Box<dyn Material>>>],
+    forearm: Option<&'a Rc<RefCell<Box<dyn Material>>>>,
 }
 
 /// An authored pose a hand can be shown in when nothing analog is driving it -
@@ -83,9 +116,7 @@ impl GloveRenderer {
         }
         let model = model.as_ref().clone();
 
-        let texture = asset_cache
-            .get_opt::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, GLOVE_TEXTURE)
-            .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>);
+        let texture = load_hand_skin(asset_cache);
 
         // One material per mesh; without the external texture, keep the
         // materials the importer built (solid-color fallback).
@@ -104,6 +135,12 @@ impl GloveRenderer {
 
         let retarget = HandPoseRetarget::for_right_glove(model.skeleton());
 
+        let forearm_material = texture.map(|texture| {
+            Rc::new(RefCell::new(engine::scene::basic_material::create(
+                texture, 1.0, 0.0,
+            )))
+        });
+
         Some(Self {
             model,
             retarget,
@@ -111,6 +148,7 @@ impl GloveRenderer {
             fist: hand_pose::fist_right_hand(),
             point: hand_pose::point_right_hand(),
             materials,
+            forearm_material,
         })
     }
 
@@ -149,10 +187,14 @@ impl GloveRenderer {
             }
         };
         let pose = self.open.blend_per_finger(&self.fist, &amounts);
+        let skin = HandSkin {
+            meshes: &self.materials,
+            forearm: self.forearm_material.as_ref(),
+        };
         Self::render_posed(
             &mut self.model,
             &self.retarget,
-            &self.materials,
+            skin,
             &pose,
             position,
             rotation,
@@ -180,10 +222,14 @@ impl GloveRenderer {
             StaticHandPose::Relaxed => &self.open,
             StaticHandPose::Pointing => &self.point,
         };
+        let skin = HandSkin {
+            meshes: &self.materials,
+            forearm: self.forearm_material.as_ref(),
+        };
         Self::render_posed(
             &mut self.model,
             &self.retarget,
-            &self.materials,
+            skin,
             pose,
             position,
             rotation,
@@ -197,7 +243,7 @@ impl GloveRenderer {
     fn render_posed(
         model: &mut GlbModel,
         retarget: &HandPoseRetarget,
-        materials: &[Rc<RefCell<Box<dyn Material>>>],
+        skin: HandSkin<'_>,
         pose: &Pose,
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
@@ -225,12 +271,59 @@ impl GloveRenderer {
             * Matrix4::from_scale(GLOVE_SCALE);
 
         let mut objects = model.to_scene_objects_with_skinning();
-        for (object, material) in objects.iter_mut().zip(materials) {
+        for (object, material) in objects.iter_mut().zip(skin.meshes) {
             object.material = material.clone();
             object.set_transform(world);
         }
+
+        if let Some(material) = skin.forearm {
+            objects.push(forearm_object(material, position, rotation));
+        }
+
         objects
     }
+}
+
+/// The skin colour map both the hand and the forearm are drawn with. One
+/// loader so the two can't end up on different skins.
+pub fn load_hand_skin(
+    asset_cache: &mut AssetCache,
+) -> Option<Rc<dyn engine::texture::TextureTrait>> {
+    asset_cache
+        .get_opt::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, HAND_SKIN_TEXTURE)
+        .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>)
+}
+
+/// A plain skin-coloured tube from the wrist toward the elbow, rigidly attached
+/// to the hand pose - enough that the hand doesn't read as severed. There is no
+/// elbow: the tube follows the wrist exactly, like the forearm HUD panels do.
+fn forearm_object(
+    material: &Rc<RefCell<Box<dyn Material>>>,
+    position: Vector3<f32>,
+    rotation: Quaternion<f32>,
+) -> SceneObject {
+    let mut object = SceneObject::new(
+        engine::scene::color_material::create(cgmath::vec3(1.0, 1.0, 1.0)),
+        Box::new(engine::scene::cylinder::create()),
+    );
+    object.material = material.clone();
+    object.set_transform(forearm_transform(position, rotation));
+    object
+}
+
+/// Places the unit cylinder (z = 0..1, radius 0.5) as the forearm of a hand at
+/// `position`/`rotation`: scaled to the arm's thickness and length, then pushed
+/// along the hand's local +Z so it starts just inside the wrist.
+fn forearm_transform(position: Vector3<f32>, rotation: Quaternion<f32>) -> Matrix4<f32> {
+    let to_world_units = |meters: f32| meters / crate::METERS_PER_WORLD_UNIT;
+    let start = to_world_units(FOREARM_START_METERS);
+    let length = to_world_units(FOREARM_END_METERS - FOREARM_START_METERS);
+    let diameter = to_world_units(2.0 * FOREARM_RADIUS_METERS);
+
+    Matrix4::from_translation(position)
+        * Matrix4::from(rotation)
+        * Matrix4::from_translation(Vector3::new(0.0, 0.0, start))
+        * Matrix4::from_nonuniform_scale(diameter, diameter, length)
 }
 
 #[cfg(test)]
@@ -248,6 +341,39 @@ mod tests {
         assert!(
             (rendered_meters - REAL_HAND_LENGTH_METERS).abs() < 1e-4,
             "glove renders {rendered_meters} m, expected {REAL_HAND_LENGTH_METERS} m"
+        );
+    }
+
+    /// The forearm has to start *inside* the hand, or a rotating wrist opens a
+    /// visible gap between the tube and the hand it belongs to.
+    #[test]
+    fn forearm_starts_behind_the_wrist_and_runs_toward_the_elbow() {
+        use cgmath::{EuclideanSpace, Point3, Transform};
+
+        let position = Vector3::new(1.0, 2.0, 3.0);
+        let transform = forearm_transform(position, Quaternion::new(1.0, 0.0, 0.0, 0.0));
+        let end_of = |z: f32| transform.transform_point(Point3::new(0.0, 0.0, z)).to_vec();
+
+        // The hand's forward is -Z, so the elbow end must be at greater z than
+        // the wrist end, which itself sits behind the hand origin.
+        assert!(end_of(0.0).z < position.z, "forearm starts past the wrist");
+        assert!(end_of(1.0).z > end_of(0.0).z, "forearm runs the wrong way");
+
+        let length_meters = (end_of(1.0) - end_of(0.0)).z * crate::METERS_PER_WORLD_UNIT;
+        assert!(
+            (length_meters - (FOREARM_END_METERS - FOREARM_START_METERS)).abs() < 1e-4,
+            "forearm renders {length_meters} m long"
+        );
+    }
+
+    /// The forearm must stop short of the forearm HUD panel
+    /// (`hud::virtual_arms::FOREARM_OFFSET`), or the two intersect.
+    #[test]
+    fn forearm_stops_before_the_forearm_hud_panel() {
+        let hud_panel_meters = 0.25 * crate::METERS_PER_WORLD_UNIT;
+        assert!(
+            FOREARM_END_METERS < hud_panel_meters,
+            "forearm reaches {FOREARM_END_METERS} m, HUD panel sits at {hud_panel_meters} m"
         );
     }
 

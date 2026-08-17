@@ -1,10 +1,7 @@
 use std::rc::Rc;
 
 use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3, point3, vec3};
-use dark::{
-    glb_model::GlbModel,
-    importers::{GLB_MODELS_IMPORTER, TEXTURE_IMPORTER},
-};
+use dark::{glb_model::GlbModel, importers::GLB_MODELS_IMPORTER};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
@@ -170,16 +167,6 @@ fn create_skeleton_debug_cubes(glb_model: &mut GlbModel, cube_size: f32) -> Vec<
     debug_cubes
 }
 
-fn load_glove_texture(
-    asset_cache: &mut AssetCache,
-) -> Option<Rc<dyn engine::texture::TextureTrait>> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        asset_cache.get::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, "vr_glove_color.jpg")
-    }))
-    .ok()
-    .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>)
-}
-
 fn clone_with_transform(template: &[SceneObject], transform: Matrix4<f32>) -> Vec<SceneObject> {
     template
         .iter()
@@ -218,7 +205,9 @@ impl DebugGlovesScene {
         let core = builder.build_core(build_options);
 
         let glove_model = asset_cache.get(&GLB_MODELS_IMPORTER, "vr_glove_model.glb");
-        let texture = load_glove_texture(asset_cache);
+        // The same skin the production hands use, so this scene can't show a
+        // different hand from the one the player wears.
+        let texture = crate::hand_glove::load_hand_skin(asset_cache);
         let retarget = HandPoseRetarget::for_right_glove(glove_model.skeleton());
 
         let open = hand_pose::open_right_hand();

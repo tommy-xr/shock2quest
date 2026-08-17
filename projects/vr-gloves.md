@@ -118,10 +118,39 @@ use the generic held-weapon placement. Note the model long axes differ per
 weapon (pistol/AR along model Y, wrench along model X), so offset axes are
 per-model — probe with exaggerated single-axis offsets when tuning a new one.
 
+## Bare hands + forearm (#950, first pass)
+
+The glove *mechanics* are unchanged; only its look is. Three parts:
+
+- **Skin instead of glove.** `hand_glove.rs` skins the same GLB with
+  `assets/vr_hand_skin.png` rather than `vr_glove_color.jpg`. The skin map is a
+  256x256 procedural texture: base tone `(185, 139, 124)` - the mean skin colour
+  of the game's own first-person hand texture `res/obj/txt16/HRPistArm.gif` -
+  modulated by `0.74 + 0.26 * sin(pi*u)^0.7` across `u` (times a gentle
+  `0.96 + 0.04 * cos(pi*v)` along `v`) and 2% grain. The rendering is unlit
+  (`emissivity` 1.0), so all shading has to live in the texel; the `u` falloff
+  is what gives the forearm tube - whose `u` wraps its circumference - real
+  cylindrical shading, and it reads as soft tonal variation on the hand's atlas.
+  `load_hand_skin` is the single loader, used by `debug_gloves` too, so the
+  scene can't drift onto a different skin from the production hands.
+- **Forearm.** `engine::scene::cylinder` is a capped unit cylinder (radius 0.5,
+  z = 0..1, 16 segments) placed by `hand_glove::forearm_transform`: from 2 cm
+  *inside* the wrist (no gap when the wrist turns) to 16 cm toward the elbow
+  along the hand's local +Z, 6.4 cm across. It stops short of the forearm HUD
+  panel at ~19 cm (`hud::virtual_arms::FOREARM_OFFSET`) so the two never
+  intersect - a unit test guards that. It is rigidly attached to the hand pose:
+  no elbow, no IK.
+- **A weapon replaces the hand.** `virtual_hand::shows_hand_visual` hides the
+  hand and forearm while the hand holds a wieldable weapon (`PropPlayerGun` /
+  `PropLimbModel`), because the weapon's own model is drawn at the same
+  transform - previously the glove rendered *inside* the gun. An empty hand, or
+  one holding anything without a first-person weapon model, still shows.
+
+Deferred (see #950): pose switching, point-on-hover, procedural auto-grab,
+elbow IK, and the 25AE authored hand models.
+
 ## Follow-ups
 
 - On-headset tuning of `grip_rotation()` / wrist offset once tested in a real
   HMD (alignment was tuned visually through the flat debug capture path).
-- Hide or relax the glove pose when a weapon is wielded, if the fist-around-
-  weapon look needs it.
 - More poses if needed (`fallback_relaxed`, pinch) — transcribe like the fist.
