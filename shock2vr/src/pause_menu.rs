@@ -1057,6 +1057,33 @@ mod tests {
         }
     }
 
+    /// Straight up and straight down are where a look-at basis degenerates: the
+    /// gaze is parallel to world up, so the usual up-cross-forward is a zero
+    /// vector and normalizing it yields NaN - which would put the dim's whole
+    /// transform out of the frustum and leave the view undimmed. Unlike the
+    /// panel (gravity-aligned, so it never points vertically) the dim follows
+    /// the true gaze and can hit this exactly.
+    #[test]
+    fn a_vertical_gaze_still_produces_a_finite_dim() {
+        let panel = test_panel();
+        let eye = vec3(0.0, 1.6, 0.0);
+        for pitch in [90.0, -90.0] {
+            let (position, forward) = dim_pose(eye, head_looking(0.0, pitch), &panel);
+            let transform = world_dim_layer(position, forward).get_transform();
+            assert!(
+                transform.x.truncate().magnitude().is_finite()
+                    && transform.w.truncate().magnitude().is_finite(),
+                "a {pitch} degree gaze produced a non-finite transform: {transform:?}"
+            );
+            // ...and still centred on the gaze, not snapped to some default axis.
+            let to_center = (transform.w.truncate() - eye).normalize();
+            assert!(
+                (to_center - forward.normalize()).magnitude() < 1e-4,
+                "the dim left the gaze axis at {pitch} degrees"
+            );
+        }
+    }
+
     /// Behind the panel, so the panel's opaque backdrop occludes it and the menu
     /// reads at full brightness over a dimmed world.
     #[test]
