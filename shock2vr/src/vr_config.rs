@@ -129,8 +129,20 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
     }
 
     let items = vec![
-        // Weapons - first-person hand models (_h), used when wielded in flat
+        // Weapons - first-person hand models (_h). Used by flat's wield swap
+        // (FLAT_WIELD_SWAP_MODELS) and, on a 25AE install, wielded directly in
+        // VR (VR_25AE_VIEW_MODELS). The whole 25AE set is authored barrel
+        // along -X, so one -90 yaw seats every gun; offsets are hand-fitted
+        // per model to land the grip in the palm.
         ("atek_h", held_weapon.clone()),
+        ("ar15_h", held_weapon.clone()),
+        ("sg_h", held_weapon.clone()),
+        ("empgun_h", held_weapon.clone()),
+        ("gren_h", held_weapon.clone()),
+        ("sfg_h", held_weapon.clone()),
+        ("fsn_h", held_weapon.clone()),
+        ("al_h", held_weapon.clone()),
+        ("viro_h", held_weapon.clone()),
         ("amp_h", held_weapon.clone()),
         (
             "lasehand",
@@ -197,8 +209,36 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
     map
 });
 
+/// First-person models the flat wield swap may apply. Frozen to the set that
+/// was allowed before the VR `_h` route grew the grip table, so flat behavior
+/// (which models donate vhots via the swap) is unchanged by VR tuning entries.
+const FLAT_WIELD_SWAP_MODELS: &[&str] = &["atek_h", "amp_h", "lasehand", "wrench_h"];
+
 pub fn is_allowed_hand_model(model_name: &str) -> bool {
-    HAND_MODEL_POSITIONING.contains_key(model_name)
+    let name = model_name.to_ascii_lowercase();
+    FLAT_WIELD_SWAP_MODELS.contains(&name.as_str())
+}
+
+/// The 25th Anniversary Edition's remastered first-person gun models
+/// (`obj/*_h.bin`, LGMD), shipped in `mods/sshock2ee.kpf` which outranks every
+/// classic archive - so on a 25AE install these names always resolve to the
+/// remastered meshes. mesh_audit measures them 0-10.5% open edges versus
+/// 19-38% for the classic `_h` set, and they are authored barrel-along -X
+/// with real muzzle vhots, so VR can wield them from any viewpoint.
+///
+/// Melee `_h` models (wrench/rapier/shard/psword) are LGMM skinned meshes that
+/// need a posed skeleton, so VR melee keeps world models for now.
+const VR_25AE_VIEW_MODELS: &[&str] = &[
+    "atek_h", "ar15_h", "sg_h", "lasehand", "empgun_h", "gren_h", "sfg_h", "fsn_h", "al_h",
+    "viro_h", "amp_h",
+];
+
+/// Whether `model_name` is a first-person view model VR should wield in place
+/// of the world model (only meaningful on a 25AE install, where the remastered
+/// copy is what resolves).
+pub fn is_vr_view_model(model_name: &str) -> bool {
+    let name = model_name.to_ascii_lowercase();
+    VR_25AE_VIEW_MODELS.contains(&name.as_str())
 }
 
 pub fn get_vr_hand_model_adjustments_from_entity(
@@ -258,4 +298,41 @@ fn get_vr_projectile_rotation_from_model(model_name: &str) -> Quaternion<f32> {
     }
 
     maybe_adjustments.unwrap().projectile_rotation
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every VR-wieldable 25AE view model must have a grip entry, or it would
+    /// anchor at the model origin with no rotation.
+    #[test]
+    fn every_vr_view_model_has_a_grip_entry() {
+        for name in VR_25AE_VIEW_MODELS {
+            assert!(
+                HAND_MODEL_POSITIONING.contains_key(name),
+                "missing HAND_MODEL_POSITIONING entry for {name}"
+            );
+        }
+    }
+
+    /// Flat's wield swap is frozen: growing the VR grip table must not change
+    /// which models flat swaps to (and thereby its vhot donors).
+    #[test]
+    fn flat_wield_swap_set_is_frozen() {
+        for name in ["atek_h", "amp_h", "lasehand", "wrench_h"] {
+            assert!(is_allowed_hand_model(name));
+        }
+        for name in ["sg_h", "ar15_h", "empgun_h", "atek_w", "battery"] {
+            assert!(!is_allowed_hand_model(name), "{name} must not swap in flat");
+        }
+    }
+
+    #[test]
+    fn vr_view_model_lookup_is_case_insensitive() {
+        assert!(is_vr_view_model("ATEK_H"));
+        assert!(is_vr_view_model("lasehand"));
+        assert!(!is_vr_view_model("wrench_h"));
+        assert!(!is_vr_view_model("atek_w"));
+    }
 }

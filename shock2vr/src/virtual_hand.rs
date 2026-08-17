@@ -597,10 +597,11 @@ pub(crate) fn is_wieldable_weapon(world: &World, entity_id: EntityId) -> bool {
 /// Whether the hand visual (skin + forearm) is drawn for a hand holding
 /// `held_entity`.
 ///
-/// A wielded weapon carries its own first-person model, which is drawn at the
-/// hand's transform and *replaces* the hand - drawing both puts a hand inside
-/// the gun. Anything else - an empty hand, or a held object with no
-/// first-person weapon model - keeps the hand.
+/// A wielded weapon's model is drawn at the hand's transform and *replaces*
+/// the hand - drawing both puts a hand inside the gun. On a 25AE install VR
+/// wields the remastered first-person model (baked hand and forearm included);
+/// otherwise the weapon's world model is drawn. Anything else - an empty hand,
+/// or a held object that is not a wieldable weapon - keeps the hand.
 pub(crate) fn shows_hand_visual(world: &World, held_entity: Option<EntityId>) -> bool {
     match held_entity {
         None => true,

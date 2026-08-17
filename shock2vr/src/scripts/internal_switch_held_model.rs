@@ -22,15 +22,30 @@ impl Script for InternalSwitchHeldModelScript {
     ) -> Effect {
         match msg {
             MessagePayload::Hold => {
-                // The swap to the first-person hand model (_h mesh) is
-                // flat-only: those meshes have their never-visible faces
-                // stripped for the fixed flat camera and look broken from
-                // VR's free viewpoints, so VR keeps the world model (#352).
                 let is_vr = world
                     .borrow::<UniqueView<GlobalPresentationMode>>()
                     .map(|mode| mode.0 == PresentationMode::Vr)
                     .unwrap_or(false);
                 if is_vr {
+                    // On a 25AE install the remastered first-person gun models
+                    // resolve (mods/sshock2ee.kpf outranks the classic
+                    // archives) and are closed meshes, so VR wields them
+                    // directly - ChangeModel also adopts their muzzle vhots.
+                    if crate::is_25th_anniversary_install() {
+                        if let Some(view_model) = get_raw_view_model(world, entity_id)
+                            .filter(|name| vr_config::is_vr_view_model(name))
+                        {
+                            return Effect::ChangeModel {
+                                entity_id,
+                                model_name: view_model,
+                            };
+                        }
+                    }
+
+                    // Otherwise keep the world model: the classic _h meshes
+                    // have their never-visible faces stripped for the fixed
+                    // flat camera and look broken from VR's free viewpoints
+                    // (#352).
                     let mut effects = Vec::new();
 
                     // Self-heal cross-mode saves: a save made in flat while
@@ -87,21 +102,23 @@ impl Script for InternalSwitchHeldModelScript {
     }
 }
 
-fn get_view_model(world: &World, entity_id: EntityId) -> Option<String> {
+/// The entity's authored first-person model name, unfiltered:
+/// `PropPlayerGun.hand_model` for guns, `PropLimbModel` for melee.
+fn get_raw_view_model(world: &World, entity_id: EntityId) -> Option<String> {
     let v_player_gun = world.borrow::<View<PropPlayerGun>>().unwrap();
     let v_melee_weapon = world.borrow::<View<PropLimbModel>>().unwrap();
 
-    let ret = {
-        if let Ok(player_gun) = v_player_gun.get(entity_id) {
-            Some(player_gun.hand_model.clone())
-        } else if let Ok(limb_model) = v_melee_weapon.get(entity_id) {
-            Some(limb_model.0.clone())
-        } else {
-            None
-        }
-    };
+    if let Ok(player_gun) = v_player_gun.get(entity_id) {
+        Some(player_gun.hand_model.clone())
+    } else if let Ok(limb_model) = v_melee_weapon.get(entity_id) {
+        Some(limb_model.0.clone())
+    } else {
+        None
+    }
+}
 
-    ret.filter(|str| vr_config::is_allowed_hand_model(str))
+fn get_view_model(world: &World, entity_id: EntityId) -> Option<String> {
+    get_raw_view_model(world, entity_id).filter(|str| vr_config::is_allowed_hand_model(str))
 }
 
 fn get_current_model(world: &World, entity_id: EntityId) -> Option<String> {
