@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { EntityDetailResult, EntitySummary, Vec3 } from "../src/index.js";
+import type {
+  EntityDetailResult,
+  EntitySummary,
+  PhysicsBodySummary,
+  Vec3,
+} from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
 
@@ -26,7 +31,8 @@ const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
 
 const add = (a: Vec3, b: Vec3): Vec3 => a.map((x, i) => x + b[i]) as Vec3;
 const sub = (a: Vec3, b: Vec3): Vec3 => a.map((x, i) => x - b[i]) as Vec3;
-const scale = (a: Vec3, factor: number): Vec3 => a.map((x) => x * factor) as Vec3;
+const scale = (a: Vec3, factor: number): Vec3 =>
+  a.map((x) => x * factor) as Vec3;
 const dot = (a: number[], b: number[]): number =>
   a.reduce((sum, x, i) => sum + x * b[i], 0);
 const cross = (a: Vec3, b: Vec3): Vec3 => [
@@ -88,7 +94,9 @@ async function byMissionId(
 }
 
 function hitPoints(detail: EntityDetailResult): number {
-  const property = detail.properties.find((candidate) => candidate.name === "HitPoints");
+  const property = detail.properties.find(
+    (candidate) => candidate.name === "HitPoints",
+  );
   assert.ok(property, `entity ${detail.entity_id} should expose HitPoints`);
   return Number(property.value);
 }
@@ -96,7 +104,12 @@ function hitPoints(detail: EntityDetailResult): number {
 // This is the production play-through gesture: orient the physical right hand
 // along the eye-to-target ray, wind up two units away, pull the trigger, and
 // sweep to 0.33 units. No damage/script message is injected by the test.
-async function poseWrench(game: GameServer, target: Vec3, distance: number): Promise<void> {
+async function poseWrench(
+  game: GameServer,
+  target: Vec3,
+  distance: number,
+  frames = 4,
+): Promise<void> {
   const info = await game.info();
   const pawn = info.player.position;
   const pawnQ = info.player.rotation;
@@ -113,7 +126,48 @@ async function poseWrench(game: GameServer, target: Vec3, distance: number): Pro
   });
   await game.input.set("right_hand.position", localPosition);
   await game.input.set("right_hand.rotation", localRotation);
-  await game.step({ frames: 4 });
+  await game.input.set("right_hand.squeeze", 1);
+  await game.step({ frames });
+}
+
+async function bodyFor(
+  game: GameServer,
+  entityId: number,
+): Promise<PhysicsBodySummary> {
+  const body = (await game.physics.bodies({ entityId })).bodies[0];
+  assert.ok(body, `entity ${entityId} should have one primary physics body`);
+  return body;
+}
+
+const distance = (a: Vec3, b: Vec3): number =>
+  Math.sqrt(a.reduce((sum, value, index) => sum + (value - b[index]) ** 2, 0));
+
+function assertBoundedActor(
+  before: PhysicsBodySummary,
+  after: PhysicsBodySummary,
+  label: string,
+  bounds: { displacement: number; speed: number } = {
+    displacement: 8,
+    speed: 10,
+  },
+): void {
+  assert.ok(
+    [...after.position, ...after.velocity].every(Number.isFinite),
+    `${label}: actor physics must stay finite: ${JSON.stringify(after)}`,
+  );
+  assert.ok(
+    distance(after.position, before.position) < bounds.displacement,
+    `${label}: held Wrench displaced the actor out of its lane: ${JSON.stringify(
+      {
+        before: before.position,
+        after: after.position,
+      },
+    )}`,
+  );
+  assert.ok(
+    Math.max(...after.velocity.map(Math.abs)) < bounds.speed,
+    `${label}: held Wrench gave the actor runaway linear velocity: ${JSON.stringify(after.velocity)}`,
+  );
 }
 
 async function damageMessagesSince(
@@ -132,7 +186,7 @@ async function damageMessagesSince(
 async function armedSweep(
   game: GameServer,
   target: EntitySummary,
-): Promise<{ sequence: number; targetId: number }> {
+): Promise<{ sequence: number; targetId: number; targetPoint: Vec3 }> {
   const live = await game.entities.detail(target.id);
   await game.player.teleport({
     x: live.position[0] + 0.815,
@@ -147,31 +201,83 @@ async function armedSweep(
 
   const afterTeleport = await game.entities.detail(target.id);
   const targetPoint =
-    afterTeleport.aim_points?.find((point) => point.classification === "torso")?.position ??
-    afterTeleport.position;
+    afterTeleport.aim_points?.find((point) => point.classification === "torso")
+      ?.position ?? afterTeleport.position;
   await poseWrench(game, targetPoint, 4);
   await game.step({ frames: 4 });
   await game.input.set("right_hand.trigger", 0);
   await game.step({ frames: 2 });
-  const sequence = (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
+  const sequence =
+    (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
   await game.input.set("right_hand.trigger", 1);
   await game.step({ frames: 2 });
   await poseWrench(game, targetPoint, 0.33);
-  return { sequence, targetId: target.id };
+  return { sequence, targetId: target.id, targetPoint };
 }
 
-async function releaseTrigger(game: GameServer): Promise<void> {
+// The #984 report/review's live-torso incremental approach, with one necessary
+// correction: the Wrench's full model bounds can already overlap the actor at
+// a 1.5-unit hand-origin pose. Arm from a measured-clear four-unit pose, then
+// reacquire the moving torso for every 1.5 -> 1.0 -> 0.7 -> 0.4 -> 0.2 step.
+async function reviewedIncrementalSweep(
+  game: GameServer,
+  target: EntitySummary,
+): Promise<{ sequence: number; targetId: number; targetPoint: Vec3 }> {
+  const live = await game.entities.detail(target.id);
+  await game.player.teleport({
+    x: live.position[0] + 0.815,
+    y: live.position[1] + 0.236,
+    z: live.position[2] - 2.245,
+  });
+  await game.entities.sendMessage(target.id, {
+    type: "SetAlertness",
+    level: "Lowest",
+  });
+  await game.input.set("right_hand.trigger", 0);
+  let targetPoint =
+    live.aim_points?.find((point) => point.classification === "torso")
+      ?.position ?? live.position;
+  await poseWrench(game, targetPoint, 4, 4);
+
+  const sequence =
+    (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 2 });
+  for (const handDistance of [1.5, 1.0, 0.7, 0.4, 0.2]) {
+    const current = await game.entities.detail(target.id);
+    targetPoint =
+      current.aim_points?.find((point) => point.classification === "torso")
+        ?.position ?? current.position;
+    await poseWrench(game, targetPoint, handDistance, 1);
+  }
+  await game.step({ frames: 2 });
+  return { sequence, targetId: target.id, targetPoint };
+}
+
+async function releaseTrigger(
+  game: GameServer,
+  targetPoint?: Vec3,
+): Promise<void> {
   await game.input.set("right_hand.trigger", 0);
   await game.step({ frames: 2 });
+  if (targetPoint) {
+    await poseWrench(game, targetPoint, 4);
+  }
 }
 
-async function grabAuthoredCorpseWrench(game: GameServer): Promise<EntitySummary> {
+async function grabAuthoredCorpseWrench(
+  game: GameServer,
+): Promise<EntitySummary> {
   const corpse = await byMissionId(game, "MS Male Corpse", WRENCH_CORPSE);
   const corpseDetail = await game.entities.detail(corpse.id);
   const contained = corpseDetail.outgoing_links.filter((link) =>
     link.link_type.startsWith("Contains"),
   );
-  assert.equal(contained.length, 1, "corpse 1177 should contain only its Wrench");
+  assert.equal(
+    contained.length,
+    1,
+    "corpse 1177 should contain only its Wrench",
+  );
   assert.match(contained[0].target_name, /Wrench/i);
   const wrenchId = contained[0].target_id;
 
@@ -199,7 +305,9 @@ async function grabAuthoredCorpseWrench(game: GameServer): Promise<EntitySummary
   const panel = uiBodies[0];
   const ui = (await game.ui.state()).active_panel;
   assert.ok(ui, "corpse frob should expose its rendered loot panel");
-  const wrenchElement = ui.elements.find((element) => element.entity_id === wrenchId);
+  const wrenchElement = ui.elements.find(
+    (element) => element.entity_id === wrenchId,
+  );
   assert.ok(wrenchElement, "corpse panel should render Wrench 990");
   const panelFront = qrotate(panel.rotation, [0, 0, -1]);
   const eyeHeight = (await game.info()).player.camera_offset[1];
@@ -230,7 +338,11 @@ async function grabAuthoredCorpseWrench(game: GameServer): Promise<EntitySummary
     collision_groups: ["ui"],
     max_distance: 1,
   });
-  assert.equal(panelHit.entity_id, panel.entity_id, "hand ray should hit Wrench's slot");
+  assert.equal(
+    panelHit.entity_id,
+    panel.entity_id,
+    "hand ray should hit Wrench's slot",
+  );
   await game.input.set("right_hand.squeeze", 1);
   await game.step({ frames: 10 });
   assert.equal(
@@ -255,7 +367,7 @@ async function assertNineDamagePull(
     `${name} must start at its authored HP`,
   );
 
-  const { sequence, targetId } = await armedSweep(game, target);
+  const { sequence, targetId, targetPoint } = await armedSweep(game, target);
   assert.equal(
     await damageMessagesSince(game, sequence, targetId),
     1,
@@ -266,7 +378,90 @@ async function assertNineDamagePull(
     initialHp - 9,
     `${name} must take exactly 9 HP during the four-frame contact pose`,
   );
-  await releaseTrigger(game);
+  await releaseTrigger(game, targetPoint);
+}
+
+async function killShotgunWithThreeBoundedPulls(
+  game: GameServer,
+): Promise<void> {
+  const target = await byMissionId(game, "OG-Shotgun", SHOTGUN_HYBRID);
+  assert.equal(hitPoints(await game.entities.detail(target.id)), 24);
+
+  for (const [hit, expectedHp] of [15, 6, 0].entries()) {
+    const beforeBody = await bodyFor(game, target.id);
+    const { sequence, targetId, targetPoint } = await reviewedIncrementalSweep(
+      game,
+      target,
+    );
+    assert.equal(
+      await damageMessagesSince(game, sequence, targetId),
+      1,
+      `shotgun pull ${hit + 1} must emit exactly one Damage`,
+    );
+
+    if (expectedHp > 0) {
+      assert.equal(
+        hitPoints(await game.entities.detail(targetId)),
+        expectedHp,
+        `same OG-Shotgun must take one authored 9-HP hit on pull ${hit + 1}`,
+      );
+      assertBoundedActor(
+        beforeBody,
+        await bodyFor(game, targetId),
+        `pull ${hit + 1}`,
+      );
+    } else {
+      const fatalDetail = await game.entities.detail(targetId);
+      assert.ok(
+        hitPoints(fatalDetail) <= 0,
+        "the third normal pull must exhaust the same original OG-Shotgun's HP",
+      );
+      assertBoundedActor(
+        beforeBody,
+        await bodyFor(game, targetId),
+        `lethal pull ${hit + 1}`,
+      );
+    }
+
+    await releaseTrigger(game, targetPoint);
+    await game.step({ frames: 120 });
+    const settledBodies = (await game.physics.bodies({ entityId: targetId }))
+      .bodies;
+    if (expectedHp > 0) {
+      assert.equal(
+        settledBodies.length,
+        1,
+        "the live target must remain in the mission",
+      );
+      assertBoundedActor(
+        beforeBody,
+        settledBodies[0],
+        `pull ${hit + 1} after 120 ordinary frames`,
+        { displacement: 64, speed: 64 },
+      );
+    } else {
+      const corpse = await game.entities.detail(targetId);
+      assert.equal(
+        corpse.properties.find((property) => property.name === "AIBehavior")
+          ?.value,
+        "Dead",
+        "the third normal pull must leave the same original OG-Shotgun dead",
+      );
+      assert.equal(
+        settledBodies.length,
+        1,
+        "the dead OG-Shotgun should retain its lootable corpse body",
+      );
+      assert.deepEqual(settledBodies[0].collision_groups, ["selectable"]);
+      assert.equal(settledBodies[0].blocks_actor, false);
+      assertBoundedActor(
+        beforeBody,
+        settledBodies[0],
+        "lethal pull after 120 ordinary frames",
+        { displacement: 64, speed: 64 },
+      );
+    }
+  }
 }
 
 test(
@@ -312,7 +507,10 @@ test(
     // Preserve the exact positive mission identity that exposed #978 by
     // opening corpse 1177's physical VR panel and grabbing Wrench 990.
     const worldWrench = await grabAuthoredCorpseWrench(game);
-    assert.equal((await game.info()).player.right_hand_entity_id, worldWrench.id);
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      worldWrench.id,
+    );
 
     // The suite's save cleaner keys off a trailing 13-digit epoch, so every
     // name this test writes must end with `stamp`.
@@ -322,7 +520,10 @@ test(
     assert.equal((await game.load(saveName)).success, true);
     await game.step({ frames: 3 });
     let restoredWrench = await byMissionId(game, "Wrench", MEDSCI1_WRENCH);
-    assert.equal((await game.info()).player.right_hand_entity_id, restoredWrench.id);
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      restoredWrench.id,
+    );
 
     await game.transitionLevel("medsci2");
     await game.step({ frames: 5 });
@@ -333,7 +534,8 @@ test(
       "the concrete MedSci1 Wrench should remain wielded on MedSci2",
     );
     assert.equal(
-      (await game.physics.bodies({ entityId: restoredWrench.id })).bodies[0]?.body_type,
+      (await game.physics.bodies({ entityId: restoredWrench.id })).bodies[0]
+        ?.body_type,
       "kinematic",
     );
 
@@ -345,7 +547,10 @@ test(
     await assertNineDamagePull(game, "OG-Pipe", PIPE_HYBRID, 12);
     assert.equal((await game.load(combatBaseline)).success, true);
     await releaseTrigger(game);
-    await assertNineDamagePull(game, "OG-Shotgun", SHOTGUN_HYBRID, 24);
+    // #984's exact acceptance path: one shipped 24-HP target, three fully
+    // released and separated physical pulls, no replacement/reload between
+    // hits, and two seconds of ordinary simulation after every contact.
+    await killShotgunWithThreeBoundedPulls(game);
 
     // A second save/load proves the canonical identity is not a one-transition
     // accident. A one-HP authored world pane is also a non-creature control.
@@ -354,18 +559,43 @@ test(
     assert.equal((await game.load(roundTripSave)).success, true);
     await game.step({ frames: 3 });
     restoredWrench = await byMissionId(game, "Wrench", MEDSCI1_WRENCH);
-    assert.equal((await game.info()).player.right_hand_entity_id, restoredWrench.id);
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      restoredWrench.id,
+    );
 
     const pane = await byMissionId(game, "Window 2", BREAKABLE_PANE);
-    const { sequence, targetId } = await armedSweep(game, pane);
+    const { sequence, targetId, targetPoint } = await armedSweep(game, pane);
     assert.equal(await damageMessagesSince(game, sequence, targetId), 1);
     assert.equal(
-      (await game.entities.list({ filter: "Window 2", limit: 30 })).entities.some(
-        (entity) => entity.id === targetId,
-      ),
+      (
+        await game.entities.list({ filter: "Window 2", limit: 30 })
+      ).entities.some((entity) => entity.id === targetId),
       false,
       "restored Wrench contact should still destroy an authored world pane",
     );
-    await releaseTrigger(game);
+    await releaseTrigger(game, targetPoint);
+
+    // Drop through the real VR squeeze edge. The held-only solver filter must
+    // leave with the old kinematic body: the recreated world Wrench is again a
+    // normal dynamic, actor-solid loose prop and remains finite under gravity.
+    await game.input.set("right_hand.position", [0, 0.6, -0.6]);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 2 });
+    assert.equal((await game.info()).player.right_hand_entity_id, null);
+    const dropped = await bodyFor(game, restoredWrench.id);
+    assert.equal(dropped.body_type, "dynamic");
+    assert.equal(dropped.blocks_actor, true);
+    assert.equal(dropped.is_sensor, false);
+    await game.step({ frames: 120 });
+    const droppedSettled = await bodyFor(game, restoredWrench.id);
+    assert.ok(
+      [...droppedSettled.position, ...droppedSettled.velocity].every(
+        Number.isFinite,
+      ),
+      `dropped Wrench physics must remain finite: ${JSON.stringify(droppedSettled)}`,
+    );
   },
 );
