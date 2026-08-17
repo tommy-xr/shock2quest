@@ -32,8 +32,8 @@ use crate::{
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        FrontendPanelAnchor, HAlign, Rect, ScaleMode, UiCanvas, VAlign, VR_COMPONENT_Z_STEP,
-        pointer_to_canvas, vr_frontend_pointer,
+        FrontendPanelAnchor, FrontendPointerPass, HAlign, PointerVisuals, Rect, ScaleMode,
+        UiCanvas, VAlign, VR_COMPONENT_Z_STEP, pointer_to_canvas, vr_frontend_pointer_pass,
     },
 };
 
@@ -264,6 +264,13 @@ pub struct LoadGameScene {
     /// Where the VR controller ray last met the panel, in canvas pixels. The
     /// VR counterpart of `pointer`, already in canvas space.
     vr_pointer_canvas: Option<Vector2<f32>>,
+    /// The pointer pass that hit-tested this frame, kept so `render` draws the
+    /// beams and dot from the very rays `update` resolved the highlight from.
+    vr_pointer: FrontendPointerPass,
+    /// The drawn half of that pointer (hands, beams, dot), holding the lazily
+    /// loaded glove model.
+    vr_pointer_visuals: PointerVisuals,
+
     /// Where the VR panel is anchored: placed from the head on scene entry
     /// and world-locked after that, so `render` hangs the panel exactly
     /// where `update` hit-tested it.
@@ -291,6 +298,8 @@ impl LoadGameScene {
             selected,
             pointer: None,
             vr_pointer_canvas: None,
+            vr_pointer: FrontendPointerPass::default(),
+            vr_pointer_visuals: PointerVisuals::new(),
             panel_anchor: FrontendPanelAnchor::new(),
             // A press held across a scene swap must not read as a click
             // here: both screens sit on the same 640x480 canvas and their
@@ -445,8 +454,9 @@ impl GameScene for LoadGameScene {
             if game_options.presentation_mode == PresentationMode::Vr {
                 // VR has no 2D cursor: the pointer is where a controller ray meets
                 // the panel, and the trigger is the button.
-                let (point, pressed) =
-                    vr_frontend_pointer(input_context, vec2(CANVAS_W, CANVAS_H), &panel);
+                self.vr_pointer =
+                    vr_frontend_pointer_pass(input_context, vec2(CANVAS_W, CANVAS_H), &panel);
+                let (point, pressed) = (self.vr_pointer.point(), self.vr_pointer.pressed);
                 self.vr_pointer_canvas = point;
                 self.pointer = None;
                 let (action, last_pressed) = resolve_click_at(
@@ -460,6 +470,7 @@ impl GameScene for LoadGameScene {
                 (action, last_pressed, point)
             } else {
                 self.pointer = input_context.pointer;
+                self.vr_pointer = FrontendPointerPass::default();
                 resolve_click(
                     input_context.pointer,
                     self.last_pressed,
@@ -516,13 +527,24 @@ impl GameScene for LoadGameScene {
         // on a world-space panel in front of the player.
         let panel = self.panel_anchor.panel();
         let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
-        let objects = canvas.render_world_space(
+        let mut objects = canvas.render_world_space(
             asset_cache,
             panel.transform(),
             self.vr_pointer_canvas,
             None,
             VR_COMPONENT_Z_STEP,
         );
+        // The controllers and their aim rays, so the player can see where they
+        // are pointing before an entry lights up. The canvas objects already in
+        // hand are the layer stack the hit dot has to float clear of.
+        let panel_layers = objects.len();
+        objects.extend(self.vr_pointer_visuals.render(
+            asset_cache,
+            &self.vr_pointer,
+            vec2(CANVAS_W, CANVAS_H),
+            &panel,
+            panel_layers,
+        ));
         (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
@@ -762,11 +784,12 @@ mod tests {
     #[test]
     fn a_vr_ray_can_press_done() {
         let done = FALLBACK_RECTS[DONE_RECT_INDEX].center();
-        let (point, pressed) = vr_frontend_pointer(
+        let pass = vr_frontend_pointer_pass(
             &vr_input(hand_aimed_at(done, 1.0)),
             vec2(CANVAS_W, CANVAS_H),
             &test_panel(),
         );
+        let (point, pressed) = (pass.point(), pass.pressed);
         let point = point.expect("the ray should land on the panel");
         assert!(FALLBACK_RECTS[DONE_RECT_INDEX].contains(point));
         assert!(pressed);
@@ -780,11 +803,12 @@ mod tests {
     fn a_vr_ray_can_select_a_save_row_and_load_it() {
         let list = FALLBACK_RECTS[LIST_RECT_INDEX];
         let row = row_rect(list, 2).center();
-        let (point, pressed) = vr_frontend_pointer(
+        let pass = vr_frontend_pointer_pass(
             &vr_input(hand_aimed_at(row, 1.0)),
             vec2(CANVAS_W, CANVAS_H),
             &test_panel(),
         );
+        let (point, pressed) = (pass.point(), pass.pressed);
         let point = point.expect("the ray should land on the panel");
         assert_eq!(
             resolve_click_at(Some(point), pressed, false, &FALLBACK_RECTS, 3, false).0,
@@ -793,11 +817,12 @@ mod tests {
 
         // With a selection, the same rig over "Load" performs the load.
         let load = FALLBACK_RECTS[LOAD_RECT_INDEX].center();
-        let (point, pressed) = vr_frontend_pointer(
+        let pass = vr_frontend_pointer_pass(
             &vr_input(hand_aimed_at(load, 1.0)),
             vec2(CANVAS_W, CANVAS_H),
             &test_panel(),
         );
+        let (point, pressed) = (pass.point(), pass.pressed);
         assert_eq!(
             resolve_click_at(point, pressed, false, &FALLBACK_RECTS, 3, true).0,
             Some(LoadGameAction::Load)

@@ -33,10 +33,12 @@ use crate::vr_config::Handedness;
 
 mod frontend_pointer;
 mod panel_anchor;
+mod pointer_visual;
 #[cfg(test)]
 pub use frontend_pointer::test_support;
-pub use frontend_pointer::vr_frontend_pointer;
+pub use frontend_pointer::{FrontendPointerPass, FrontendRay, vr_frontend_pointer_pass};
 pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
+pub use pointer_visual::PointerVisuals;
 
 /// Font name that resolves to the engine's compiled-in font rather than a
 /// `.FON` asset.
@@ -252,6 +254,26 @@ pub fn ray_to_canvas(
     }
 
     Some(vec2(u * canvas_size.x, v * canvas_size.y))
+}
+
+/// Where a canvas point sits in world space on `panel` - the exact inverse of
+/// [`ray_to_canvas`].
+///
+/// Lets a caller that already hit-tested a ray place something *at the hit*
+/// (the VR pointer's dot) from the hit-test's own answer, instead of
+/// re-intersecting the ray and hoping the two agree.
+pub fn canvas_to_panel_world(
+    canvas_size: Vector2<f32>,
+    panel: &WorldPanel,
+    point: Vector2<f32>,
+) -> Vector3<f32> {
+    // Normalize into the same centered unit square `transform` places, then let
+    // the panel's own transform do the placing - rather than re-deriving its
+    // basis here, where it could drift from what the canvas renders with.
+    let u = point.x / canvas_size.x - 0.5;
+    let v = 0.5 - point.y / canvas_size.y;
+    let placed = panel.transform() * cgmath::vec4(u, v, 0.0, 1.0);
+    vec3(placed.x, placed.y, placed.z)
 }
 
 pub fn canvas_rect_to_screen(
