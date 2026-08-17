@@ -136,35 +136,19 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         // per model to land the grip in the palm.
         (
             "atek_h",
-            symmetric(
-                held_weapon_right
-                    .clone()
-                    .with_offset(vec3(0.0, 0.12, 0.10)),
-            ),
+            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.12, 0.10))),
         ),
         (
             "ar15_h",
-            symmetric(
-                held_weapon_right
-                    .clone()
-                    .with_offset(vec3(0.0, 0.01, 0.17)),
-            ),
+            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.01, 0.17))),
         ),
         (
             "sg_h",
-            symmetric(
-                held_weapon_right
-                    .clone()
-                    .with_offset(vec3(0.0, 0.04, 0.28)),
-            ),
+            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.04, 0.28))),
         ),
         (
             "empgun_h",
-            symmetric(
-                held_weapon_right
-                    .clone()
-                    .with_offset(vec3(0.0, 0.01, 0.29)),
-            ),
+            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.01, 0.29))),
         ),
         (
             "gren_h",
@@ -192,11 +176,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         ),
         (
             "al_h",
-            symmetric(
-                held_weapon_right
-                    .clone()
-                    .with_offset(vec3(0.0, 0.09, 0.0)),
-            ),
+            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.09, 0.0))),
         ),
         (
             "viro_h",
@@ -208,20 +188,12 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         ),
         (
             "amp_h",
-            symmetric(
-                held_weapon_right
-                    .clone()
-                    .with_offset(vec3(0.0, 0.0, 0.40)),
-            ),
+            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.0, 0.40))),
         ),
         (
             "lasehand",
-            symmetric(
-                held_weapon_right
-                    .clone()
-                    .with_offset(vec3(0.0, 0.12, 0.27)),
-            )
-            .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.))),
+            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.12, 0.27)))
+                .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.))),
         ),
         ("wrench_h", default.clone()),
         // Weapons - world models, kept when held in VR (#352): the _h meshes

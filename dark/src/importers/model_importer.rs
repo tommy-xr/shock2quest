@@ -119,8 +119,7 @@ fn process_vr_held_model(
     };
 
     let islands = ss2_bin_obj_loader::connected_islands(&obj, is_first_person_arm_material);
-    let drop: std::collections::HashSet<usize> =
-        islands.into_iter().skip(1).flatten().collect();
+    let drop: std::collections::HashSet<usize> = islands.into_iter().skip(1).flatten().collect();
 
     let obj = if drop.is_empty() {
         obj

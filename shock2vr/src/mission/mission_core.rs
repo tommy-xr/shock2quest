@@ -5018,8 +5018,7 @@ impl MissionCore {
                         // A VR-wielded first-person model drops its spare
                         // baked hand islands (see `VrHeldModel`); everything
                         // else loads the model as authored.
-                        let vr_held = game_options.presentation_mode
-                            == crate::PresentationMode::Vr
+                        let vr_held = game_options.presentation_mode == crate::PresentationMode::Vr
                             && crate::vr_config::is_vr_view_model(&model_name);
                         // A missing model must never take down the frame (or a
                         // load): keep the current model and complain loudly.
