@@ -28,9 +28,11 @@ use crate::{
 const GLOVE_MODEL: &str = "vr_glove_model.glb";
 
 /// Bare-skin colour map applied to the glove mesh in place of the glove's own
-/// `vr_glove_color.jpg`. It is that same map recoloured: the glove's *local*
-/// relief (creases, wrinkles, seam shadows) kept and tinted with skin, its
-/// albedo (black leather vs white strap) divided out. The hand has to be
+/// `vr_glove_color.jpg`. It is that same map recoloured: the glove's *skin-scale*
+/// relief (grain, creases, wrinkles) kept and tinted with skin, its albedo
+/// (black leather vs white strap) divided out, and its hardware (straps,
+/// buckles, stitching, panel edges) flattened by a structure mask - see
+/// `tools/make_vr_hand_skin.py`. The hand has to be
 /// textured in the glove's own UV atlas - the game's first-person hand texture
 /// samples that atlas as background, not skin - and a flat tint reads as
 /// plastic. See `projects/vr-gloves.md` for the recipe that generated it.
@@ -39,6 +41,15 @@ const HAND_SKIN_TEXTURE: &str = "vr_hand_skin.png";
 /// Wrist-to-fingertip length the glove model is authored at, in world units -
 /// the +Z span of its bind-pose bounding box (fingers point along +Z).
 pub const AUTHORED_HAND_LENGTH_WORLD: f32 = 0.2049;
+
+/// How far the mesh reaches *behind* its own origin, in world units - the
+/// bind-pose bounding box's `-z` extent (the origin sits at the wrist joint,
+/// but the mesh continues past it as a short wrist stub, ending in the open
+/// hole the sleeve has to cover).
+///
+/// [`crate::hand_forearm`] needs this: the tube has to start at that stub's
+/// end, not at the hand's origin, or it runs up the inside of the hand.
+pub const AUTHORED_WRIST_STUB_WORLD: f32 = 0.0285;
 
 /// Wrist-to-fingertip length of an adult hand. Anthropometric mean is ~19 cm.
 const REAL_HAND_LENGTH_METERS: f32 = 0.19;
