@@ -5015,22 +5015,46 @@ impl MissionCore {
                         //drop(scene_obj);
 
                         let _ext_name = model_name.clone();
+                        // A VR-wielded first-person model drops its spare
+                        // baked hand islands (see `VrHeldModel`); everything
+                        // else loads the model as authored.
+                        let vr_held = game_options.presentation_mode
+                            == crate::PresentationMode::Vr
+                            && crate::vr_config::is_vr_view_model(&model_name);
                         // A missing model must never take down the frame (or a
                         // load): keep the current model and complain loudly.
-                        let Some(orig_model) =
-                            asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"))
-                        else {
+                        let new_model = if vr_held {
+                            asset_cache
+                                .get_opt(
+                                    &dark::importers::VR_HELD_MODELS_IMPORTER,
+                                    &format!("{model_name}.BIN"),
+                                )
+                                .map(|m| Model::transform(&m.as_ref().0, xform))
+                        } else {
+                            asset_cache
+                                .get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"))
+                                .map(|m| Model::transform(m.as_ref(), xform))
+                        };
+                        let Some(new_model) = new_model else {
                             tracing::error!(
                                 "ChangeModel: model '{model_name}.BIN' could not be loaded for entity {entity_id:?} - keeping current model"
                             );
                             continue;
                         };
 
-                        let orig_model_ref = orig_model.as_ref();
-
-                        let new_model = Model::transform(orig_model_ref, xform);
-
                         let vhots = new_model.vhots();
+                        // An articulated model (e.g. a first-person weapon
+                        // wielded in VR: hand + arm + gun as skeleton
+                        // sub-objects) renders unposed without a player, so
+                        // give it the empty bind pose. An empty player emits
+                        // no motion flags or completion events, and it is a
+                        // no-op if the entity later swaps back to a static
+                        // model.
+                        if new_model.is_animated() {
+                            self.id_to_animation_player
+                                .entry(entity_id)
+                                .or_insert_with(AnimationPlayer::empty);
+                        }
                         self.id_to_model.insert(entity_id, new_model);
                         self.world
                             .add_component(entity_id, PropModelName(model_name));
