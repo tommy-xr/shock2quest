@@ -208,22 +208,9 @@ test(
 // `origin/main` at the time of writing: the paused frame carried 8 in-game hand
 // objects on top of the menu's own pointer hands, and no dim layer at all.
 
-interface SceneObjectSummary {
-  source: string | null;
-  transparency: number | null;
-  clear_depth: boolean;
-  position: [number, number, number];
-}
-
-async function sceneObjects(game: GameServer): Promise<SceneObjectSummary[]> {
-  const response = await fetch(`${game.baseUrl}/v1/scene`);
-  assert.ok(response.ok, `/v1/scene failed: ${response.status}`);
-  const body = (await response.json()) as { objects: SceneObjectSummary[] };
-  return body.objects;
-}
-
-const withSource = (objects: SceneObjectSummary[], source: string) =>
-  objects.filter((o) => o.source === source);
+const HANDS = "player_hands";
+const POINTER = "frontend_pointer";
+const DIM = "pause_dim";
 
 test(
   "pausing in VR swaps the scene's hands for the menu's own, and dims the world",
@@ -236,13 +223,12 @@ test(
     });
     await game.step({ frames: 30 });
 
-    const running = await sceneObjects(game);
     assert.ok(
-      withSource(running, "player_hands").length > 0,
+      (await game.scene.fromSource(HANDS)).length > 0,
       "the VR scene should draw the player's hands while it is running",
     );
     assert.equal(
-      withSource(running, "pause_dim").length,
+      (await game.scene.fromSource(DIM)).length,
       0,
       "nothing may dim the world while the player is playing",
     );
@@ -251,14 +237,19 @@ test(
     await game.step({ frames: 30 });
     assert.equal((await game.info()).paused, true);
 
-    const paused = await sceneObjects(game);
     assert.equal(
-      withSource(paused, "player_hands").length,
+      (await game.scene.fromSource(HANDS)).length,
       0,
-      "while paused the menu's pointer hands are the only hands (issue #1018)",
+      "the scene's own hands must not draw under the menu (issue #1018)",
+    );
+    // ...and the other half of "one set of hands": the menu's own pointer is
+    // still there. Without this, drawing NO hands at all would pass.
+    assert.ok(
+      (await game.scene.fromSource(POINTER)).length > 0,
+      "the menu's pointer hands are the pair the player should see",
     );
 
-    const dim = withSource(paused, "pause_dim");
+    const dim = await game.scene.fromSource(DIM);
     assert.equal(dim.length, 1, "exactly one dimming layer, behind the panel");
     assert.ok(
       dim[0].transparency !== null && dim[0].transparency > 0.02 && dim[0].transparency < 0.98,
@@ -273,13 +264,12 @@ test(
     // Resuming puts the world back exactly as it was.
     await game.input.trigger("TogglePauseMenu");
     await game.step({ frames: 30 });
-    const resumed = await sceneObjects(game);
     assert.ok(
-      withSource(resumed, "player_hands").length > 0,
+      (await game.scene.fromSource(HANDS)).length > 0,
       "the hands come back on resume",
     );
     assert.equal(
-      withSource(resumed, "pause_dim").length,
+      (await game.scene.fromSource(DIM)).length,
       0,
       "and the dim goes away with the menu",
     );
@@ -303,9 +293,8 @@ test(
     // space, so the flat pause screen already hides the world; adding a world
     // dim there would be a second, differently-tuned answer to a solved
     // problem - and a divergence between the two presentations.
-    const paused = await sceneObjects(game);
     assert.equal(
-      withSource(paused, "pause_dim").length,
+      (await game.scene.fromSource(DIM)).length,
       0,
       "the comfort dim is a VR treatment only",
     );

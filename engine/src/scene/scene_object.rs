@@ -36,8 +36,10 @@ pub enum FrontFaceWinding {
     CounterClockwise,
 }
 
-/// Debug-only provenance for a scene object, so tooling can report *what* the
-/// renderer was handed. Never read by the renderer itself.
+/// Provenance for a scene object, so tooling can report *what* the renderer was
+/// handed. Never read by the renderer itself; a game layer may filter its own
+/// scene by `source` before submitting it (shock2vr drops the player's hands
+/// while its pause menu is up).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SceneObjectDebugTag {
     /// Runtime entity this object was built for, when it came from one.

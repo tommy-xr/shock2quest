@@ -63,6 +63,11 @@ pub fn create_arm_hud_panels(
     );
     scene_objects.push(right_hud);
 
+    // Part of the player's hand visuals: labelled here rather than at the call
+    // sites so the `debug_hud` scene, which emits these without an interaction
+    // controller, is covered by the pause menu's suppression too (issue #1018).
+    crate::util::tag_render_source(&mut scene_objects, crate::util::render_source::PLAYER_HANDS);
+
     scene_objects
 }
 

@@ -250,7 +250,12 @@ impl PointerVisuals {
             .glove
             .get_or_insert_with(|| GloveRenderer::new(asset_cache))
             .as_mut();
-        render_pointer_rays(glove, pass, canvas_size, panel, panel_layers)
+        let mut objects = render_pointer_rays(glove, pass, canvas_size, panel, panel_layers);
+        // The one pair of hands a frontend screen shows. Labelled so a check
+        // can assert *both* halves of issue #1018's fix: the scene's hands are
+        // gone, and these are still there.
+        crate::util::tag_render_source(&mut objects, crate::util::render_source::FRONTEND_POINTER);
+        objects
     }
 }
 

@@ -8,12 +8,12 @@
 //! Both implementations speak the same `VirtualHandEffect` language, which
 //! `mission_core` already processes in one place.
 
-use std::{cell::RefCell, rc::Rc};
+use std::cell::RefCell;
 
 use cgmath::{InnerSpace, Point3, Quaternion, Vector3, Vector4};
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{SceneObject, SceneObjectDebugTag, light::SpotLight},
+    scene::{SceneObject, light::SpotLight},
 };
 use rapier3d::prelude::RigidBodyHandle;
 use shipyard::{EntityId, World};
@@ -28,10 +28,6 @@ use crate::{
     virtual_hand::{VirtualHand, VirtualHandEffect},
     vr_config::Handedness,
 };
-
-/// `/v1/scene`'s label for the player's own hand visuals (VR gloves, raycast
-/// markers and forearm HUD panels).
-pub const PLAYER_HANDS_SOURCE: &str = "player_hands";
 
 /// Read-only per-frame inputs an interaction controller needs to update.
 pub struct InteractionContext<'a> {
@@ -203,6 +199,11 @@ impl PlayerInteraction for VrInteraction {
                 objs.append(&mut self.right_hand.render(None));
             }
         }
+        // Labelled as the player's hands: that is what `Game` drops while the
+        // pause menu is up (issue #1018), and what `/v1/scene` reports. The
+        // forearm panels carry their own label from `create_arm_hud_panels`,
+        // which the `debug_hud` scene emits without going through here.
+        crate::util::tag_render_source(&mut objs, crate::util::render_source::PLAYER_HANDS);
         objs.append(&mut create_arm_hud_panels(
             asset_cache,
             world,
@@ -211,19 +212,6 @@ impl PlayerInteraction for VrInteraction {
             self.right_hand.get_position(),
             self.right_hand.get_rotation(),
         ));
-        // Label the whole set for `/v1/scene`, so "the scene's own hands are
-        // not drawn while a menu owns the pointer" (issue #1018) is a claim an
-        // automated check can make about the frame that was actually submitted,
-        // rather than something to eyeball in a screenshot.
-        let tag = Rc::new(SceneObjectDebugTag {
-            entity_id: None,
-            name: None,
-            model: None,
-            source: Some(PLAYER_HANDS_SOURCE.to_owned()),
-        });
-        for object in &mut objs {
-            object.set_debug_tag(Some(tag.clone()));
-        }
         objs
     }
 

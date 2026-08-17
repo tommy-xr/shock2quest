@@ -330,6 +330,35 @@ export interface PhysicsBodyListResult {
   player_position: Vec3;
 }
 
+/**
+ * One object as submitted to the renderer on the last frame
+ * (GET /v1/scene). Mirrors `commands::SceneObjectSummary`.
+ */
+export interface SceneObjectSummary {
+  entity_id: number | null;
+  name: string | null;
+  model: string | null;
+  /**
+   * Render path that produced it, e.g. "entity", "player_hands",
+   * "frontend_pointer", "pause_dim". Null for engine-built geometry.
+   */
+  source: string | null;
+  position: Vec3;
+  /** Transparency in effect for this draw (0 = opaque, 1 = invisible). */
+  transparency: number | null;
+  depth_write: boolean;
+  clear_depth: boolean;
+  /** Front-face winding used for culling, or null when double-sided. */
+  backface_culling: string | null;
+}
+
+export interface SceneListResult {
+  objects: SceneObjectSummary[];
+  total_count: number;
+  matched_count: number;
+  frame_index: number;
+}
+
 /** Settle/quality metrics for one ragdoll (GET /v1/ragdoll/metrics). */
 export interface RagdollMetrics {
   entity_id: number;

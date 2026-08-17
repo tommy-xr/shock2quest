@@ -185,10 +185,6 @@ impl GameScene for DebugScene {
         true
     }
 
-    fn set_hand_visuals_hidden(&mut self, hidden: bool) {
-        crate::game_scene::GameScene::set_hand_visuals_hidden(&mut self.core, hidden)
-    }
-
     fn update(
         &mut self,
         time: &Time,
@@ -385,10 +381,6 @@ impl<H> HookedDebugScene<H> {
 impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
     fn is_pausable(&self) -> bool {
         true
-    }
-
-    fn set_hand_visuals_hidden(&mut self, hidden: bool) {
-        crate::game_scene::GameScene::set_hand_visuals_hidden(&mut self.core, hidden)
     }
 
     fn update(

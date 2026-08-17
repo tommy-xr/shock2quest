@@ -188,10 +188,6 @@ impl crate::game_scene::GameScene for Mission {
         true
     }
 
-    fn set_hand_visuals_hidden(&mut self, hidden: bool) {
-        crate::game_scene::GameScene::set_hand_visuals_hidden(&mut self.mission_core, hidden)
-    }
-
     fn update(
         &mut self,
         time: &Time,
