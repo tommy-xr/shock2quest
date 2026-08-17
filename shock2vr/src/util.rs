@@ -1,9 +1,12 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use cgmath::{InnerSpace, Matrix3, Matrix4, Point3, Quaternion, Transform, Vector3, point3, vec3};
 
 use dark::properties::{PropHasRefs, PropPosition};
-use engine::game_log;
+use engine::{
+    game_log,
+    scene::{SceneObject, SceneObjectDebugTag},
+};
 use shipyard::{EntityId, Get, View, World};
 use tracing::warn;
 
@@ -288,5 +291,39 @@ pub fn resolve_proxy_entity(world: &World, maybe_entity_id: EntityId) -> EntityI
     } else {
         // Otherwise, return the current entity id
         maybe_entity_id
+    }
+}
+
+/// Render-path labels attached to scene objects as [`SceneObjectDebugTag::source`].
+///
+/// `/v1/scene` reports them, so automation can assert what the renderer was
+/// actually handed. One of them is also load-bearing: `Game` drops
+/// [`PLAYER_HANDS_SOURCE`] objects while the pause menu is up (issue #1018).
+pub mod render_source {
+    /// The player's own hand visuals: the VR gloves, their raycast markers and
+    /// the forearm HUD panels. Emitted by both the mission interaction
+    /// controller and the `debug_hud` scene.
+    pub const PLAYER_HANDS: &str = "player_hands";
+    /// A frontend panel's pointer: a hand per tracked controller, its aim beam
+    /// and the hit dot. This is the *only* pair of hands a frontend screen or
+    /// the pause menu shows.
+    pub const FRONTEND_POINTER: &str = "frontend_pointer";
+    /// The pause menu's comfort dim, behind its panel.
+    pub const PAUSE_DIM: &str = "pause_dim";
+}
+
+/// A tag that records only which render path produced an object.
+pub fn render_source_tag(source: &str) -> Rc<SceneObjectDebugTag> {
+    Rc::new(SceneObjectDebugTag {
+        source: Some(source.to_owned()),
+        ..Default::default()
+    })
+}
+
+/// Label every object in `objects` with `source`, sharing one tag allocation.
+pub fn tag_render_source(objects: &mut [SceneObject], source: &str) {
+    let tag = render_source_tag(source);
+    for object in objects {
+        object.set_debug_tag(Some(tag.clone()));
     }
 }

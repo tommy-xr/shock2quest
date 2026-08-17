@@ -11,6 +11,8 @@ import type {
   PathfindingStats,
   PathfindingTestStatus,
   PhysicsBodyListResult,
+  SceneListResult,
+  SceneObjectSummary,
   Position,
   RagdollMetricsResult,
   RayCastRequest,
@@ -537,6 +539,37 @@ export class PhysicsApi {
   }
 }
 
+/** What the renderer was handed on the last frame (GET /v1/scene). */
+export class SceneApi {
+  constructor(private readonly client: HttpClient) {}
+
+  /**
+   * The objects submitted to the renderer, optionally scoped to one entity or
+   * to the transparent draws. Use `source` to identify a render path -
+   * "player_hands", "frontend_pointer", "pause_dim" and friends.
+   */
+  async objects(options?: {
+    entityId?: number;
+    transparent?: boolean;
+    limit?: number;
+  }): Promise<SceneListResult> {
+    const params = new URLSearchParams();
+    if (options?.entityId !== undefined)
+      params.set("entity_id", String(options.entityId));
+    if (options?.transparent !== undefined)
+      params.set("transparent", String(options.transparent));
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    const query = params.size > 0 ? `?${params}` : "";
+    return this.client.get<SceneListResult>(`/v1/scene${query}`);
+  }
+
+  /** The objects a given render path produced this frame. */
+  async fromSource(source: string): Promise<SceneObjectSummary[]> {
+    const { objects } = await this.objects();
+    return objects.filter((object) => object.source === source);
+  }
+}
+
 /** Interactive pathfinding test (visual A* debugging). */
 export class PathfindingTestApi {
   constructor(private readonly client: HttpClient) {}
@@ -666,6 +699,7 @@ export class Game {
   readonly pathfindingTest: PathfindingTestApi;
   readonly pathfinding: PathfindingApi;
   readonly physics: PhysicsApi;
+  readonly scene: SceneApi;
   readonly quests: QuestsApi;
   readonly ui: UiApi;
   readonly audio: AudioApi;
@@ -678,6 +712,7 @@ export class Game {
     this.pathfindingTest = new PathfindingTestApi(client);
     this.pathfinding = new PathfindingApi(client);
     this.physics = new PhysicsApi(client);
+    this.scene = new SceneApi(client);
     this.quests = new QuestsApi(client);
     this.ui = new UiApi(client);
     this.audio = new AudioApi(client);

@@ -21,16 +21,10 @@ import type { Vec3 } from "../src/types.js";
 // `render` returned nothing in either presentation.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-interface SceneResult {
-  objects: { position: Vec3 }[];
-}
-
 /** Where the renderer was handed each object on the last frame. */
 async function drawnAt(game: GameServer): Promise<Vec3[]> {
-  const response = await fetch(`${game.baseUrl}/v1/scene`);
-  assert.ok(response.ok, `GET /v1/scene failed: ${response.status}`);
-  const scene = (await response.json()) as SceneResult;
-  return scene.objects.map((object) => object.position);
+  const { objects } = await game.scene.objects();
+  return objects.map((object) => object.position);
 }
 
 /**

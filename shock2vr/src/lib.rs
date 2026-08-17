@@ -1707,6 +1707,12 @@ impl Game {
 
     /// Get hand spotlights for enhanced lighting when experimental flag is enabled
     pub fn get_hand_spotlights(&self) -> Vec<engine::scene::light::SpotLight> {
+        // The lights belong to the hands: with the hands suppressed they would
+        // be two pools cast by nothing - and, being world lighting, they light
+        // the scene *before* the pause dim and show straight through it.
+        if self.pause_menu.is_open() {
+            return Vec::new();
+        }
         self.active_game_scene.get_hand_spotlights(&self.options)
     }
 
@@ -1739,6 +1745,19 @@ impl Game {
         let (mut scene, pos, rot) = self
             .active_game_scene
             .render(&mut self.asset_cache, &self.options);
+
+        // While the menu is up it draws its own pointer hands, so the scene's
+        // must not draw a second pair inside them (issue #1018). Dropped here,
+        // by render-path label, rather than through a per-scene opt-in: every
+        // scene that emits hands is covered, present and future, and nothing is
+        // left latched when the menu closes. The same `is_open()` gate drops the
+        // scene's screen-space UI in `render_per_eye`.
+        if self.pause_menu.is_open() {
+            scene.retain(|object| {
+                object.debug_tag().and_then(|tag| tag.source.as_deref())
+                    != Some(util::render_source::PLAYER_HANDS)
+            });
+        }
 
         // The pause panel hangs in front of the still-rendered world. It is
         // anchored in the tracked play space (like the head and hands that

@@ -32,12 +32,8 @@ async function assertPanelIsRendered(
   game: GameServer,
   panel: PhysicsBodySummary,
 ): Promise<void> {
-  const response = await fetch(`${game.baseUrl}/v1/scene`);
-  assert.equal(response.ok, true, "scene inspection should succeed");
-  const scene = (await response.json()) as {
-    objects: Array<{ position: Vec3; transparency: number | null }>;
-  };
-  const visiblePanelDraws = scene.objects.filter(
+  const { objects } = await game.scene.objects();
+  const visiblePanelDraws = objects.filter(
     (object) =>
       object.transparency !== 1 &&
       Math.hypot(

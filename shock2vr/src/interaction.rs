@@ -199,6 +199,11 @@ impl PlayerInteraction for VrInteraction {
                 objs.append(&mut self.right_hand.render(world, None));
             }
         }
+        // Labelled as the player's hands: that is what `Game` drops while the
+        // pause menu is up (issue #1018), and what `/v1/scene` reports. The
+        // forearm panels carry their own label from `create_arm_hud_panels`,
+        // which the `debug_hud` scene emits without going through here.
+        crate::util::tag_render_source(&mut objs, crate::util::render_source::PLAYER_HANDS);
         objs.append(&mut create_arm_hud_panels(
             asset_cache,
             world,

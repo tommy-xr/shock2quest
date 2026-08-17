@@ -6775,7 +6775,8 @@ impl MissionCore {
 
         // The interaction controller owns its own visuals: VR draws hand models
         // + forearm HUD panels; flat draws nothing here (its weapon viewmodel is
-        // drawn on top in `render_per_eye`).
+        // drawn on top in `render_per_eye`). They are labelled `PLAYER_HANDS_SOURCE`
+        // so `Game` can drop them while the pause menu is up (issue #1018).
         scene.append(&mut self.interaction.render(asset_cache, &self.world));
 
         // The old synthetic blue inventory cube remains a desktop diagnostic.
