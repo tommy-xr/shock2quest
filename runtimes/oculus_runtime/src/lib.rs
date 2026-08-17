@@ -514,6 +514,12 @@ fn main() {
     let mut requested_display_refresh_rate = None;
     let mut ready_reported = false;
     let mut session_focused = false;
+    // Consecutive rejected frame submissions, and consecutive frames whose
+    // views were not tracked. Both are logged once at the start of a burst and
+    // once on recovery (with the length), so a long outage is still visible in
+    // logcat without printing at the display refresh rate.
+    let mut submit_failures: u64 = 0;
+    let mut untracked_view_frames: u64 = 0;
     'main_loop: loop {
         // Drain Android's NativeActivity queues. OpenXR is the real input
         // path - nothing here feeds gameplay - but NativeActivity hands the
@@ -864,13 +870,11 @@ fn main() {
 
         if !xr_frame_state.should_render {
             //println!("Skipping frame!");
-            frame_stream
-                .end(
-                    xr_frame_state.predicted_display_time,
-                    environment_blend_mode,
-                    &[],
-                )
-                .unwrap();
+            end_frame_with_no_layers(
+                &mut frame_stream,
+                xr_frame_state.predicted_display_time,
+                environment_blend_mode,
+            );
             if let Some(report) = frame_profiler.record_skipped(elapsed_time, update_elapsed) {
                 print_frame_report(&mission, session_focused, report);
             }
@@ -1007,9 +1011,43 @@ fn main() {
             swapchain_handles
         });
 
-        let (_, views) = session
+        let (view_flags, views) = session
             .locate_views(VIEW_TYPE, xr_frame_state.predicted_display_time, &stage)
             .unwrap();
+
+        // `should_render` being true does not promise the views are tracked:
+        // for a frame or two after the session begins (donning the headset, or
+        // waking it after it dozed) the runtime still reports the view pose as
+        // invalid, and hands back a ZERO quaternion rather than a unit one.
+        // Feeding that to the projection layer makes xrEndFrame fail with
+        // ERROR_POSE_INVALID - which used to panic the render thread, and a
+        // dead render thread stops draining NativeActivity's input queue, so
+        // Horizon OS raises "shock2quest isn't responding" on the next key
+        // event. Treat an untracked view exactly like a frame we were told not
+        // to render: submit no layers and try again next frame.
+        if !view_flags
+            .contains(xr::ViewStateFlags::ORIENTATION_VALID | xr::ViewStateFlags::POSITION_VALID)
+        {
+            if untracked_view_frames == 0 {
+                println!("SHOCK2QUEST_XR_VIEWS_UNTRACKED mission={mission} flags={view_flags:?}");
+            }
+            untracked_view_frames += 1;
+            end_frame_with_no_layers(
+                &mut frame_stream,
+                xr_frame_state.predicted_display_time,
+                environment_blend_mode,
+            );
+            if let Some(report) = frame_profiler.record_skipped(elapsed_time, update_elapsed) {
+                print_frame_report(&mission, session_focused, report);
+            }
+            continue;
+        }
+        if untracked_view_frames > 0 {
+            println!(
+                "SHOCK2QUEST_XR_VIEWS_TRACKED mission={mission} untracked_frames={untracked_view_frames}"
+            );
+            untracked_view_frames = 0;
+        }
 
         // Remember where the head actually is, for next frame's input context.
         if let Some(view) = views.first() {
@@ -1087,24 +1125,40 @@ fn main() {
             .swapchain(swap2)
             .image_rect(rect);
         let submit_started = Instant::now();
-        frame_stream
-            .end(
-                xr_frame_state.predicted_display_time,
-                environment_blend_mode,
-                &[
-                    &xr::CompositionLayerProjection::new().space(&stage).views(&[
-                        xr::CompositionLayerProjectionView::new()
-                            .pose(views[0].pose)
-                            .fov(views[0].fov)
-                            .sub_image(sub1),
-                        xr::CompositionLayerProjectionView::new()
-                            .pose(views[1].pose)
-                            .fov(views[1].fov)
-                            .sub_image(sub2),
-                    ]),
-                ],
-            )
-            .unwrap();
+        // Never fatal: a rejected frame costs one dropped image, but a panic
+        // here kills the render thread, and with it the per-frame drain of
+        // NativeActivity's lifecycle/input queues - which is what turns a
+        // one-frame compositor complaint into an app-wide ANR.
+        if let Err(error) = frame_stream.end(
+            xr_frame_state.predicted_display_time,
+            environment_blend_mode,
+            &[
+                &xr::CompositionLayerProjection::new().space(&stage).views(&[
+                    xr::CompositionLayerProjectionView::new()
+                        .pose(views[0].pose)
+                        .fov(views[0].fov)
+                        .sub_image(sub1),
+                    xr::CompositionLayerProjectionView::new()
+                        .pose(views[1].pose)
+                        .fov(views[1].fov)
+                        .sub_image(sub2),
+                ]),
+            ],
+        ) {
+            // Only the start of a burst is logged, so a persistently unhappy
+            // compositor cannot flood logcat at 90 Hz.
+            if submit_failures == 0 {
+                println!("SHOCK2QUEST_XR_SUBMIT_FAILED mission={mission} error={error:?}");
+            }
+            submit_failures += 1;
+        } else {
+            if submit_failures > 0 {
+                println!(
+                    "SHOCK2QUEST_XR_SUBMIT_RECOVERED mission={mission} failed_frames={submit_failures}"
+                );
+            }
+            submit_failures = 0;
+        }
         let submit_elapsed = submit_started.elapsed();
 
         let requested_refresh_is_active = display_refresh_rate.is_some_and(|active_hz| {
@@ -1231,6 +1285,24 @@ fn create_projection_matrix(fov: &xr::Fovf, near_z: f32, far_z: f32) -> cgmath::
         c0r0, c1r0, c2r0, c3r0, c0r1, c1r1, c2r1, c3r1, c0r2, c1r2, c2r2, c3r2, c0r3, c1r3, c2r3,
         c3r3,
     )
+}
+
+/// Close out a frame that has nothing to show: submit no layers, so the runtime
+/// composites nothing this frame (it does NOT hold the previous image). Used
+/// both when the runtime tells us not to render and when the located views are
+/// not yet tracked - in the latter case the alternative is a garbage pose, and
+/// a blank frame or two while tracking comes up is the lesser evil.
+///
+/// Deliberately non-fatal for the same reason as the projection-layer submit:
+/// a panic on the render thread stops the Android event pump and the app ANRs.
+fn end_frame_with_no_layers(
+    frame_stream: &mut xr::FrameStream<xr::OpenGlEs>,
+    predicted_display_time: xr::Time,
+    environment_blend_mode: xr::EnvironmentBlendMode,
+) {
+    if let Err(error) = frame_stream.end(predicted_display_time, environment_blend_mode, &[]) {
+        println!("SHOCK2QUEST_XR_EMPTY_FRAME_FAILED error={error:?}");
+    }
 }
 
 /// Non-blockingly drain the Android lifecycle and input queues once per frame.
