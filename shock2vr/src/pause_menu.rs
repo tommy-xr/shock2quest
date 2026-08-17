@@ -23,14 +23,14 @@
 
 use std::collections::HashMap;
 
-use cgmath::{Matrix4, Vector2, Vector3, vec2};
+use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
 use dark::{
     importers::{STRINGS_IMPORTER, UI_LAYOUT_IMPORTER},
     map::MapRect,
 };
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{FrontFaceWinding, SceneObject, color_material, cube},
+    scene::{SceneObject, color_material, quad},
 };
 
 use crate::{
@@ -105,52 +105,61 @@ const WORLD_DIM_COLOR: Vector3<f32> = Vector3 {
     y: 0.0,
     z: 0.0,
 };
-/// Half-edge of the dim box, in metres. Only two things constrain it: it must
-/// enclose the panel (which hangs [`FRONTEND_PANEL_DISTANCE`] ahead), so the
-/// panel occludes it rather than the other way round; and it must not be so
-/// large that a leaning head can escape it. One unlit box costs a single draw
-/// per eye at any size.
-const WORLD_DIM_HALF_EXTENT: f32 = 20.0;
+/// How far in front of the eyes the dim hangs, in metres. Behind the panel
+/// (which is at [`FRONTEND_PANEL_DISTANCE`]) so the panel's own opaque backdrop
+/// occludes it and the menu stays at full brightness.
+const WORLD_DIM_DISTANCE: f32 = FRONTEND_PANEL_DISTANCE + 1.0;
+/// Half-edge of the dim quad, as a multiple of [`WORLD_DIM_DISTANCE`]. This is
+/// the whole coverage argument: a viewer-locked quad at ratio `r` covers
+/// `atan(r)` off-axis in every direction, *independently of where the player is
+/// looking and of how wide the headset's field of view is*. 5 covers +/-78.7
+/// degrees, against a Quest's ~55 degree half-field - and against the ~0.6
+/// degrees of parallax the eyes' 32 mm offset adds at this distance, which is
+/// why one viewer-locked quad is safe for both eyes.
+const WORLD_DIM_EXTENT_RATIO: f32 = 5.0;
 
-/// The darkening layer the paused player is inside.
+/// The darkening layer between the paused player and the world.
 ///
-/// A **box centred on the head**, drawn from within, rather than a plane in
-/// front of them: the panel is world-locked and the head is not, so a flat dim
-/// stops covering the view as soon as the player looks off-axis - and no plane
-/// can cover more than a hemisphere however large it is. Enclosing the player
-/// means every direction they can turn is dimmed.
+/// **Locked to the live head pose**, not to the panel: the panel is
+/// world-locked and the head is not, so a dim placed once at pause time stops
+/// covering the view the moment the player looks off-axis. Following the head
+/// makes coverage a property of the geometry rather than of where they happen
+/// to be looking.
 ///
-/// Part of the panel's **clear-depth overlay group**, not of the world: the
-/// group's depth clear (carried by this object, the first one
-/// [`PauseMenu::render`] emits) is what makes both the dim and the panel immune
-/// to geometry in front of them. A world-depth-tested dim would be swallowed by
-/// the wall the player is standing against - exactly the failure the overlay
-/// group exists to prevent, and the behavior #1017 was praised for.
+/// It is one flat quad and it **does not rely on backface culling**. The
+/// previous attempt was a box drawn from inside, which needs the host to agree
+/// about which winding faces the viewer; on the Quest it does not, and half the
+/// box was culled - the "only parts of the screen were covered" report on
+/// #1020. A single double-sided quad rasterizes exactly once per pixel on any
+/// host, so it can neither vanish nor double-blend.
 ///
-/// The box's faces are all farther from the head than the panel is, so the
-/// panel's own opaque backdrop occludes it: the menu stays at full brightness
-/// over a dimmed world.
-fn world_dim_layer(panel: &WorldPanel) -> SceneObject {
-    // The panel hangs `FRONTEND_PANEL_DISTANCE` along its own normal from the
-    // head that placed it, and the normal points back at that head - so this
-    // recovers the head position without the anchor having to hand it over.
-    let head = panel.center + panel.normal() * FRONTEND_PANEL_DISTANCE;
+/// It is emitted **inside the panel's clear-depth overlay group** (first, so it
+/// carries the group's depth clear) rather than from `render_per_eye`, which
+/// would be the natural home for a view-locked layer: the two VR hosts disagree
+/// about where per-eye objects land in the scene list - the debug runtime
+/// appends them, `oculus_runtime` prepends them - so from there the dim would
+/// either be drawn before the panel (dimming the menu) or be depth-tested
+/// against a world that has not been cleared yet (dimming only the parts of the
+/// view with nothing close in front of them). Inside the group, order is ours.
+///
+/// `head_forward` is the *true* gaze direction (not flattened to horizontal),
+/// so looking at the floor or the ceiling is covered like any other direction.
+fn world_dim_layer(head_position: Vector3<f32>, head_forward: Vector3<f32>) -> SceneObject {
+    let extent = WORLD_DIM_DISTANCE * WORLD_DIM_EXTENT_RATIO;
     let mut object = SceneObject::new(
         color_material::create(WORLD_DIM_COLOR),
-        Box::new(cube::create()),
+        Box::new(quad::create()),
     );
     object.set_transform(
-        Matrix4::from_translation(head) * Matrix4::from_scale(WORLD_DIM_HALF_EXTENT * 2.0),
+        Matrix4::from_translation(head_position + head_forward * WORLD_DIM_DISTANCE)
+            // The quad's own +Z faces the viewer when it is turned to look back
+            // along the gaze, exactly as the frontend panel is oriented.
+            * Matrix4::from(crate::util::get_rotation_from_forward_vector(-head_forward))
+            * Matrix4::from_scale(extent * 2.0),
     );
     // The material speaks in transparency (0 = opaque), the constant in "how
     // dark does the world go" - the direction a human tunes in.
     object.set_transparency(Some(1.0 - WORLD_DIM_STRENGTH));
-    // Drawn from inside, so the faces between the player and the world are the
-    // ones to keep: the cube's own outward faces are wound clockwise (see
-    // `pointer_visual::beam_objects`), so culling those leaves exactly one
-    // dimmed layer per pixel. Without it the near and far walls both blend and
-    // the authored strength silently squares itself.
-    object.set_backface_culling(Some(FrontFaceWinding::Clockwise));
     // Translucent, and drawn before the panel: writing depth here would let the
     // dim occlude the menu that draws over it.
     object.set_depth_write(false);
@@ -165,6 +174,33 @@ fn world_dim_layer(panel: &WorldPanel) -> SceneObject {
         crate::util::render_source::PAUSE_DIM,
     )));
     object
+}
+
+/// Where to hang the dim: the viewer's position and gaze.
+///
+/// An untracked head arrives as the ZERO quaternion, which `rotate_vector`
+/// silently returns unrotated (and comes with a meaningless position) - so it is
+/// treated as "no pose", and the panel stands in for it. The panel hangs
+/// [`FRONTEND_PANEL_DISTANCE`] along its own normal from the head that placed
+/// it, with the normal pointing back at that head, so it carries a usable
+/// viewer pose: where the player was when they opened the menu.
+fn dim_pose(
+    head_position: Vector3<f32>,
+    head_rotation: Quaternion<f32>,
+    panel: &WorldPanel,
+) -> (Vector3<f32>, Vector3<f32>) {
+    if head_rotation.magnitude2() < 1e-6 {
+        return (
+            panel.center + panel.normal() * FRONTEND_PANEL_DISTANCE,
+            -panel.normal(),
+        );
+    }
+    (
+        head_position,
+        head_rotation
+            .normalize()
+            .rotate_vector(vec3(0.0, 0.0, -1.0)),
+    )
 }
 
 /// What a click on the pause menu asks `Game` to do.
@@ -344,6 +380,10 @@ pub struct PauseMenu {
     /// Where the VR panel hangs: placed from the head when the menu opens and
     /// world-locked after that, so `render` draws it where `update` hit-tested.
     panel_anchor: FrontendPanelAnchor,
+    /// The head pose from the latest update. The panel is world-locked, but the
+    /// comfort dim follows the gaze, so it needs the live pose rather than the
+    /// placement (see [`world_dim_layer`]).
+    head: (Vector3<f32>, Quaternion<f32>),
     /// Whether the pointer was pressed last frame (for rising-edge clicks).
     last_pressed: bool,
     /// Screen size from the latest render, so `update` maps the flat pointer
@@ -369,6 +409,10 @@ impl PauseMenu {
             vr_pointer: FrontendPointerPass::default(),
             vr_pointer_visuals: PointerVisuals::new(),
             panel_anchor: FrontendPanelAnchor::new(),
+            head: (
+                Vector3::new(0.0, 0.0, 0.0),
+                Quaternion::new(0.0, 0.0, 0.0, 0.0),
+            ),
             last_pressed: true,
             last_screen_size: vec2(CANVAS_W, CANVAS_H),
             closed_under_a_held_press: false,
@@ -452,6 +496,7 @@ impl PauseMenu {
         }
 
         let rects = self.rects(asset_cache);
+        self.head = (input_context.head.position, input_context.head.rotation);
 
         // Placed from the head when the menu opens and world-locked after
         // that; advancing it here keeps the ray and the render agreeing on
@@ -510,7 +555,8 @@ impl PauseMenu {
         let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
         // First in the list, and therefore first in the overlay group: the
         // comfort dim, which the depth clear below rides on.
-        let mut objects = vec![world_dim_layer(&panel)];
+        let (dim_position, dim_forward) = dim_pose(self.head.0, self.head.1, &panel);
+        let mut objects = vec![world_dim_layer(dim_position, dim_forward)];
         let canvas_objects = canvas.render_world_space(
             asset_cache,
             panel.transform(),
@@ -641,7 +687,7 @@ impl PauseMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::InnerSpace;
+    use cgmath::{Deg, Rad, Zero};
 
     /// The runtimes render 4:3, so PreserveAspect maps normalized coordinates
     /// straight onto the 640x480 canvas.
@@ -925,12 +971,18 @@ mod tests {
         );
     }
 
+    fn head_looking(yaw_deg: f32, pitch_deg: f32) -> Quaternion<f32> {
+        use cgmath::Rotation3;
+        Quaternion::from_angle_y(Deg(yaw_deg)) * Quaternion::from_angle_x(Deg(pitch_deg))
+    }
+
     /// The dim is a *comfort* layer, so the thing to pin is that it actually
     /// darkens: an object that renders at full transparency is a no-op that
     /// would still pass a "the layer exists" test.
     #[test]
     fn the_dim_layer_darkens_the_world() {
-        let object = world_dim_layer(&test_panel());
+        let (position, forward) = dim_pose(Vector3::zero(), head_looking(0.0, 0.0), &test_panel());
+        let object = world_dim_layer(position, forward);
         let transparency = object
             .effective_transparency()
             .expect("the dim must draw translucent, not opaque");
@@ -942,44 +994,94 @@ mod tests {
             (0.05..0.95).contains(&transparency),
             "fully opaque would hide the world, fully clear would not dim it: {transparency}"
         );
-        // Seen from inside, one face per pixel. Double-blending the box would
-        // silently square the authored strength.
+    }
+
+    /// The device bug this replaced: a box drawn from inside needs the host to
+    /// agree which winding faces the viewer, and the Quest did not - half of it
+    /// was culled, so only parts of the view were dimmed. One double-sided quad
+    /// rasterizes once per pixel on any host: it can neither vanish nor
+    /// double-blend (which would silently square the authored strength).
+    #[test]
+    fn the_dim_layer_does_not_depend_on_backface_culling() {
+        let (position, forward) = dim_pose(Vector3::zero(), head_looking(0.0, 0.0), &test_panel());
         assert_eq!(
-            object.backface_culling(),
-            Some(FrontFaceWinding::Clockwise),
-            "the box must be drawn from the inside, one layer deep"
+            world_dim_layer(position, forward).backface_culling(),
+            None,
+            "the dim must not opt into culling - a host that disagrees about \
+             winding would cull it away"
         );
     }
 
-    /// The dim encloses the player rather than facing them. A plane cannot
-    /// cover more than a hemisphere at any size, and the panel is world-locked
-    /// while the head is not - so a flat dim leaves undimmed world at the edge
-    /// of vision the moment the player looks off-axis.
+    /// Coverage is the whole point, and it must not depend on where the player
+    /// is looking or on how wide the headset's field of view is. A viewer-locked
+    /// quad at ratio `r` subtends `atan(r)` off-axis from the eye, in every
+    /// direction, at every gaze angle.
     #[test]
-    fn the_dim_layer_encloses_the_head_and_the_panel() {
+    fn the_dim_layer_covers_the_view_at_any_gaze_angle() {
         let panel = test_panel();
-        let object = world_dim_layer(&panel);
-        let center = object.get_transform().w.truncate();
+        let eye = vec3(1.0, 1.6, -2.0);
+        // A Quest's half-field is about 55 degrees; leave real margin over it.
+        let half_field = Deg(55.0);
 
-        // Centred on the head that placed the panel, which is one panel
-        // distance back along the panel's normal.
-        let head = panel.center + panel.normal() * crate::ui::FRONTEND_PANEL_DISTANCE;
-        assert!(
-            (center - head).magnitude() < 1e-4,
-            "the dim should be centred on the head, got {center:?} vs {head:?}"
-        );
+        for (yaw, pitch) in [
+            (0.0, 0.0),
+            (75.0, 0.0),
+            (180.0, 0.0),
+            (-120.0, 0.0),
+            (0.0, 89.0),
+            (0.0, -89.0),
+            (37.0, -62.0),
+        ] {
+            let (position, forward) = dim_pose(eye, head_looking(yaw, pitch), &panel);
+            assert!(
+                (position - eye).magnitude() < 1e-5,
+                "the dim must ride the eye, not the panel"
+            );
+            let object = world_dim_layer(position, forward);
+            let center = object.get_transform().w.truncate();
 
-        // ...and big enough that the panel is inside it, so the panel occludes
-        // the dim rather than the dim greying out the menu.
+            // Centred straight down the gaze...
+            let to_center = (center - eye).normalize();
+            assert!(
+                (to_center - forward.normalize()).magnitude() < 1e-4,
+                "the dim must sit on the gaze axis at ({yaw}, {pitch})"
+            );
+            // ...at a fixed distance, so the half-angle it subtends is fixed too.
+            let distance = (center - eye).magnitude();
+            assert!((distance - WORLD_DIM_DISTANCE).abs() < 1e-4);
+            let half_angle = Deg::from(Rad(WORLD_DIM_EXTENT_RATIO.atan())).0;
+            assert!(
+                half_angle > half_field.0 + 20.0,
+                "coverage is only +/-{half_angle} degrees against a {half_field:?} half-field"
+            );
+        }
+    }
+
+    /// Behind the panel, so the panel's opaque backdrop occludes it and the menu
+    /// reads at full brightness over a dimmed world.
+    #[test]
+    fn the_dim_layer_hangs_behind_the_panel() {
         assert!(
-            WORLD_DIM_HALF_EXTENT > crate::ui::FRONTEND_PANEL_DISTANCE * 2.0,
-            "the box must comfortably enclose the panel"
+            WORLD_DIM_DISTANCE > crate::ui::FRONTEND_PANEL_DISTANCE,
+            "a dim in front of the panel would grey out the menu it exists to make readable"
         );
-        let scale = object.get_transform().x.truncate().magnitude();
+    }
+
+    /// An untracked head is the ZERO quaternion, and `rotate_vector` returns the
+    /// input unrotated for it - a dim hung along that would face world -Z
+    /// wherever the player is actually looking.
+    #[test]
+    fn an_untracked_head_falls_back_to_the_panel() {
+        let panel = test_panel();
+        let (position, forward) = dim_pose(vec3(9.0, 9.0, 9.0), Quaternion::zero(), &panel);
         assert!(
-            (scale - WORLD_DIM_HALF_EXTENT * 2.0).abs() < 1e-3,
-            "the unit cube must be scaled to the constant's edge length, got {scale}"
+            (forward - -panel.normal()).magnitude() < 1e-4,
+            "an untracked pose must fall back to the panel's own facing"
         );
+        // ...and to the viewer position the panel implies, not to the garbage
+        // position that came with the untracked pose.
+        let implied_head = panel.center + panel.normal() * crate::ui::FRONTEND_PANEL_DISTANCE;
+        assert!((position - implied_head).magnitude() < 1e-4);
     }
 
     /// The overlay group starts at the first `clear_depth` object, and
@@ -989,7 +1091,8 @@ mod tests {
     /// the dim while leaving the menu floating over a bright world.
     #[test]
     fn the_dim_layer_is_not_depth_tested_against_the_world() {
-        let object = world_dim_layer(&test_panel());
+        let (position, forward) = dim_pose(Vector3::zero(), head_looking(0.0, 0.0), &test_panel());
+        let object = world_dim_layer(position, forward);
         assert!(
             object.clear_depth,
             "the dim opens the overlay group; without the clear, the wall the player is standing against swallows it"
