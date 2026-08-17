@@ -121,6 +121,48 @@ const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
 /// loop, so periodically let the host service its platform queues.
 const LOAD_EVENT_PUMP_ENTITY_INTERVAL: usize = 32;
 
+/// Head-relative authored-space placement for the wide VR backpack canvas.
+/// After `SCALE_FACTOR` conversion this is 2 world units forward and 1.2 up.
+/// The shared canvas keeps its authored pixels; the physical VR boundary
+/// scales the unusually wide 15-column strip so all of it fits at arm's reach.
+const VR_BACKPACK_FORWARD: f32 = 5.0;
+const VR_BACKPACK_UP: f32 = 3.0;
+const VR_BACKPACK_WORLD_SCALE: f32 = 0.55;
+
+fn presentation_world_panel_size(
+    presentation: crate::PresentationMode,
+    is_player_backpack: bool,
+    authored_size: Vector2<f32>,
+) -> Vector2<f32> {
+    if presentation == crate::PresentationMode::Vr && is_player_backpack {
+        authored_size * VR_BACKPACK_WORLD_SCALE
+    } else {
+        authored_size
+    }
+}
+
+#[cfg(test)]
+mod vr_backpack_panel_tests {
+    use super::*;
+
+    #[test]
+    fn only_vr_scales_the_shared_backpack_canvas_at_the_world_boundary() {
+        let authored = vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE;
+        assert_eq!(
+            presentation_world_panel_size(crate::PresentationMode::Flat, true, authored),
+            authored
+        );
+        assert_eq!(
+            presentation_world_panel_size(crate::PresentationMode::Vr, false, authored),
+            authored
+        );
+        assert_eq!(
+            presentation_world_panel_size(crate::PresentationMode::Vr, true, authored),
+            authored * VR_BACKPACK_WORLD_SCALE
+        );
+    }
+}
+
 fn is_realtime_crumple(frame_count: f32) -> bool {
     // `humdieup1` is an authored "already dead" pose: three frames with no
     // fall. It shares the human crumple+die schema, but is not a real-time
@@ -4586,6 +4628,20 @@ impl MissionCore {
                         || (game_options.presentation_mode == crate::PresentationMode::Vr
                             && self.gui.active_panel() == Some(parent_entity));
                     if update_world_panel {
+                        // `internal_inventory` is a 15-column strip: keep its
+                        // shared canvas/layout identical, but map that resolved
+                        // canvas to a comfortable physical width at the VR
+                        // presentation boundary. Ordinary object panels retain
+                        // their authored world size.
+                        let is_player_backpack = self
+                            .world
+                            .borrow::<UniqueView<PlayerInfo>>()
+                            .is_ok_and(|player| player.inventory_entity_id == parent_entity);
+                        let presentation_size = presentation_world_panel_size(
+                            game_options.presentation_mode,
+                            is_player_backpack,
+                            world_size,
+                        );
                         self.gui.update_ui(
                             &mut self.world,
                             &mut self.physics,
@@ -4593,7 +4649,8 @@ impl MissionCore {
                             &mut self.id_to_physics,
                             handle,
                             parent_entity,
-                            world_size,
+                            world_size / crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+                            presentation_size,
                             world_offset,
                             components,
                         );
@@ -5609,16 +5666,63 @@ impl MissionCore {
                     self.process_virtual_hand_effects(asset_cache, msgs);
                 }
                 Effect::PositionInventoryRelativeToPlayer { head_rotation } => {
-                    let (pos, rot) = {
+                    let (pos, rot, inventory_entity) = {
                         let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-                        (player.pos, player.rotation * head_rotation)
+                        (
+                            player.pos,
+                            player.rotation * head_rotation,
+                            player.inventory_entity_id,
+                        )
                     };
-                    let forward = rot * vec3(0.0, 0.5 / SCALE_FACTOR, -8.0 / SCALE_FACTOR);
+                    // Keep the wide VR panel within an ordinary arm's reach;
+                    // the old placeholder cube sat farther out and commonly
+                    // landed the new canvas inside a nearby wall. Preserve that
+                    // diagnostic cube's established desktop placement.
+                    let distance = if game_options.presentation_mode == crate::PresentationMode::Vr
+                    {
+                        VR_BACKPACK_FORWARD
+                    } else {
+                        8.0
+                    };
+                    let vertical = if game_options.presentation_mode == crate::PresentationMode::Vr
+                    {
+                        VR_BACKPACK_UP
+                    } else {
+                        0.5
+                    };
+                    let forward =
+                        rot * vec3(0.0, vertical / SCALE_FACTOR, -distance / SCALE_FACTOR);
                     PlayerInventoryEntity::set_position_rotation(
                         &mut self.world,
                         pos + forward,
                         Quaternion::from_angle_y(cgmath::Deg(180.0)) * rot,
-                    )
+                    );
+
+                    // VR has no cursor/metagame mode: the controller binding
+                    // places and toggles the backpack's existing
+                    // `internal_inventory` GuiScript as a physical world
+                    // panel. Flat keeps its established MoveInventory behavior
+                    // unchanged; its real inventory is the Tab/use-mode strip.
+                    if game_options.presentation_mode == crate::PresentationMode::Vr {
+                        let was_open = self.gui.active_panel() == Some(inventory_entity);
+                        self.gui.toggle_panel(
+                            inventory_entity,
+                            &mut self.world,
+                            &mut self.physics,
+                            &mut self.script_world,
+                            &mut self.id_to_physics,
+                        );
+                        // Only the opening half of the toggle announces itself;
+                        // dispatching PanelOpened on the closing press would
+                        // have the backpack script re-populate a panel that is
+                        // no longer on screen.
+                        if !was_open {
+                            self.script_world.dispatch(Message {
+                                to: inventory_entity,
+                                payload: MessagePayload::PanelOpened,
+                            });
+                        }
+                    }
                 }
                 Effect::TurnOffTweqs { entity_id } => {
                     self.world.run_with_data(turn_off_tweqs, entity_id);
@@ -6340,9 +6444,12 @@ impl MissionCore {
         // drawn on top in `render_per_eye`).
         scene.append(&mut self.interaction.render(asset_cache, &self.world));
 
-        // Render inventory
-        let inventory_objs = PlayerInventoryEntity::render(&self.world);
-        scene.extend(inventory_objs);
+        // The old synthetic blue inventory cube remains a desktop diagnostic.
+        // VR presents the authored INVBACK canvas through GuiManager instead.
+        if options.presentation_mode == crate::PresentationMode::Flat {
+            let inventory_objs = PlayerInventoryEntity::render(&self.world);
+            scene.extend(inventory_objs);
+        }
 
         // Render teleport arc + landing indicator
         if options.experimental_features.contains("teleport")
@@ -7651,6 +7758,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                                     .unwrap_or_else(|_| {
                                         format!("Entity_{}", target_entity.0.inner())
                                     }),
+                                contains_ordinal: match link.link {
+                                    dark::properties::Link::Contains(ordinal) => Some(ordinal),
+                                    _ => None,
+                                },
                             });
                         }
                     }

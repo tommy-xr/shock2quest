@@ -349,6 +349,10 @@ fn main() {
         .create_action::<bool>("crouch", "Crouch Toggle", &[])
         .unwrap();
 
+    let inventory_action = action_set
+        .create_action::<bool>("inventory", "Backpack Inventory", &[])
+        .unwrap();
+
     // Bind our actions to input devices using the given profile
     // If you want to access inputs specific to a particular device you may specify a different
     // interaction profile
@@ -430,6 +434,12 @@ fn main() {
                         .string_to_path("/user/hand/left/input/thumbstick/click")
                         .unwrap(),
                 ),
+                xr::Binding::new(
+                    &inventory_action,
+                    xr_instance
+                        .string_to_path("/user/hand/left/input/x/click")
+                        .unwrap(),
+                ),
             ],
         )
         .unwrap();
@@ -499,9 +509,9 @@ fn main() {
         game_init_started.elapsed().as_secs_f64() * 1_000.0
     );
 
-    // No discrete actions are mapped for VR controllers yet; this stays empty
-    // until an OculusInputMapper is added (the debug input server below can
-    // inject them remotely).
+    // Controller button edges feed the same semantic action dispatcher as the
+    // desktop and debug runtimes. X exposes the player-owned backpack panel.
+    // (The debug input server below can inject the same actions remotely.)
     let mut action_state = shock2vr::input::InputActionState::new();
     // Opt-in remote control for on-device automation; `None` unless
     // /sdcard/shock2quest/debug-port.txt configures a port.
@@ -619,6 +629,7 @@ fn main() {
                             // otherwise resume invisibly crouched).
                             crouch_toggled = false;
                             crouch_button_was_pressed = false;
+                            action_state.release(shock2vr::input::InputAction::MoveInventory);
                         }
                         xr::SessionState::STOPPING => {
                             session.end().unwrap();
@@ -735,6 +746,7 @@ fn main() {
             .unwrap()
             .current_state;
         let crouch_state = crouch_action.state(&session, xr::Path::NULL).unwrap();
+        let inventory_state = inventory_action.state(&session, xr::Path::NULL).unwrap();
         // Only edge-detect while the action is live: with the session merely
         // VISIBLE (system overlay up), current_state reads false even though
         // the button may still be physically held, and treating that as a
@@ -744,6 +756,13 @@ fn main() {
                 crouch_toggled = !crouch_toggled;
             }
             crouch_button_was_pressed = crouch_state.current_state;
+        }
+        if inventory_state.is_active && inventory_state.changed_since_last_sync {
+            if inventory_state.current_state {
+                action_state.trigger(shock2vr::input::InputAction::MoveInventory);
+            } else {
+                action_state.release(shock2vr::input::InputAction::MoveInventory);
+            }
         }
 
         let left_trigger_value = left_trigger

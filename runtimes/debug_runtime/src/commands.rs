@@ -675,6 +675,7 @@ pub struct LinkInfo {
     pub link_type: String,
     pub target_id: i32,
     pub target_name: String,
+    pub contains_ordinal: Option<u32>,
 }
 
 /// Current state of the game
@@ -706,6 +707,7 @@ pub struct TimeInfo {
 #[derive(Debug, Serialize, Clone)]
 pub struct PlayerInfo {
     pub entity_id: Option<i32>,
+    pub inventory_entity_id: Option<i32>,
     pub position: [f32; 3],
     pub rotation: [f32; 4], // quaternion
     /// "alive", terminally "dead", or waiting for QBR reconstruction.

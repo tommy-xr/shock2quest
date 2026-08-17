@@ -233,7 +233,11 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
 
     fn get_config(&self) -> GuiConfig {
         GuiConfig {
-            world_offset: Vector3::new(0.0, 1.0, 0.0),
+            // MoveInventory positions the wide backpack itself at viewing
+            // height; applying the object-panel lift again would put it above
+            // the player's comfortable field of view. Loot panels remain
+            // lifted beside their physical host.
+            world_offset: Vector3::new(0.0, if self.take_on_click { 1.0 } else { 0.0 }, 0.0),
             screen_size_in_pixels: Vector2::new(self.width, self.height),
         }
     }
@@ -475,6 +479,18 @@ mod tests {
             assert_eq!(position, expected_origin, "grid origin");
             assert_eq!(size, vec2(35.0, 34.0), "one cell of the shared pitch");
         }
+    }
+
+    #[test]
+    fn backpack_is_head_positioned_without_an_extra_host_offset() {
+        assert_eq!(
+            ContainerGui::inv_container().get_config().world_offset,
+            vec3(0.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            ContainerGui::loot_container().get_config().world_offset,
+            vec3(0.0, 1.0, 0.0)
+        );
     }
 
     /// Every icon a panel draws for a contained item - the grid buttons and

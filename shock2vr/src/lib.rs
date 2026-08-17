@@ -434,6 +434,10 @@ pub struct Game {
 #[derive(Clone, Debug)]
 pub struct PlayerStateSnapshot {
     pub entity_id: i32,
+    /// Runtime id of the player's backpack container. Exposed for deterministic
+    /// inventory/link assertions; like every concrete id it must be rediscovered
+    /// after load.
+    pub inventory_entity_id: i32,
     pub position: [f32; 3],
     pub rotation: [f32; 4],
     /// "alive", terminally "dead", or waiting for an activated QBR while
@@ -516,6 +520,7 @@ impl Game {
         });
         Some(PlayerStateSnapshot {
             entity_id: info.entity_id.inner() as i32,
+            inventory_entity_id: info.inventory_entity_id.inner() as i32,
             position: [info.pos.x, info.pos.y, info.pos.z],
             rotation: [
                 info.rotation.v.x,
