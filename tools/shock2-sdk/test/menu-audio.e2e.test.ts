@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
+import { GameServer } from "../src/index.js";
 import type { PlayedSound } from "../src/types.js";
+import { AIM_AT_PANEL, menuEntry, norm, panelPoint } from "./helpers/frontend-menu.js";
 
 // End-to-end test for the frontend's sound: the original menus are not silent -
 // `res/snd/sfx/` ships a looping bed (mloop1), a rollover blip played when the
@@ -18,15 +19,6 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const HUM = "sfx/mloop1.wav";
 const ROLLOVER = "sfx/mrollov1.wav";
 const SELECT = "sfx/mselect1.wav";
-
-// Canvas-space widget centers on the 640x480 UI canvas, normalized to the
-// [0,1] pointer channel. MAINR.BIN stacks six 179x60 buttons at x=400 on a
-// 76px pitch: button 0 is "New Game", button 1 "Load Game".
-const CANVAS_W = 640;
-const CANVAS_H = 480;
-const norm = (x: number, y: number): [number, number] => [x / CANVAS_W, y / CANVAS_H];
-const menuEntry = (index: number): [number, number] =>
-  norm(400 + 179 / 2, 20 + index * 76 + 60 / 2);
 
 const NEW_GAME_ENTRY = menuEntry(0);
 const LOAD_GAME_ENTRY = menuEntry(1);
@@ -112,22 +104,6 @@ test(
 // The VR menu is the same canvas on a world-space panel, driven by a controller
 // ray instead of a cursor - so it must make the same sounds at the same moments
 // (AGENTS.md: "a canvas must render the same way in flatscreen and in VR").
-//
-// The runtime's VR head yaw is +90 degrees (the camera looks along -X), so the
-// panel hangs at x=-2 facing back at the head: canvas +x maps to world -z
-// (the viewer's right) and canvas +y to -y.
-// A hand placed on the button's world position and aimed along -X points at it.
-const PANEL_DISTANCE = 2;
-const PANEL_SIZE = { x: 2, y: 1.5 };
-/** 90-degree yaw: rotates a hand's -Z ray onto the panel's -X. */
-const AIM_AT_PANEL: [number, number, number, number] = [0, 0.7071068, 0, 0.7071068];
-
-/** Pawn-local position of a canvas point on the VR panel. */
-const panelPoint = ([u, v]: [number, number]): [number, number, number] => [
-  -PANEL_DISTANCE,
-  PLAYER_EYE_HEIGHT_WORLD + (0.5 - v) * PANEL_SIZE.y,
-  (0.5 - u) * PANEL_SIZE.x,
-];
 
 test(
   "the VR menu plays the same sounds off the controller ray",
