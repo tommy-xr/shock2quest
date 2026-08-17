@@ -2,6 +2,10 @@
 //! controller's analog inputs (trigger curls the index finger, squeeze curls
 //! the rest). The left hand mirrors the right-hand model (`flip_x`-style
 //! negative scale), like held-weapon models do.
+//!
+//! The model is skinned with a bare-skin texture rather than the glove's own
+//! colour map, and [`crate::hand_forearm`] hangs a sleeved tube off the wrist,
+//! so the hands read as the player's own hands instead of disembodied gloves.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -22,11 +26,30 @@ use crate::{
 };
 
 const GLOVE_MODEL: &str = "vr_glove_model.glb";
-const GLOVE_TEXTURE: &str = "vr_glove_color.jpg";
+
+/// Bare-skin colour map applied to the glove mesh in place of the glove's own
+/// `vr_glove_color.jpg`. It is that same map recoloured: the glove's *skin-scale*
+/// relief (grain, creases, wrinkles) kept and tinted with skin, its albedo
+/// (black leather vs white strap) divided out, and its hardware (straps,
+/// buckles, stitching, panel edges) flattened by a structure mask - see
+/// `tools/make_vr_hand_skin.py`. The hand has to be
+/// textured in the glove's own UV atlas - the game's first-person hand texture
+/// samples that atlas as background, not skin - and a flat tint reads as
+/// plastic. See `projects/vr-gloves.md` for the recipe that generated it.
+const HAND_SKIN_TEXTURE: &str = "vr_hand_skin.png";
 
 /// Wrist-to-fingertip length the glove model is authored at, in world units -
 /// the +Z span of its bind-pose bounding box (fingers point along +Z).
 pub const AUTHORED_HAND_LENGTH_WORLD: f32 = 0.2049;
+
+/// How far the mesh reaches *behind* its own origin, in world units - the
+/// bind-pose bounding box's `-z` extent (the origin sits at the wrist joint,
+/// but the mesh continues past it as a short wrist stub, ending in the open
+/// hole the sleeve has to cover).
+///
+/// [`crate::hand_forearm`] needs this: the tube has to start at that stub's
+/// end, not at the hand's origin, or it runs up the inside of the hand.
+pub const AUTHORED_WRIST_STUB_WORLD: f32 = 0.0285;
 
 /// Wrist-to-fingertip length of an adult hand. Anthropometric mean is ~19 cm.
 const REAL_HAND_LENGTH_METERS: f32 = 0.19;
@@ -59,6 +82,19 @@ pub struct GloveRenderer {
     fist: Pose,
     point: Pose,
     materials: Vec<Rc<RefCell<Box<dyn Material>>>>,
+    /// The sleeved forearm, built once at the identity transform and cloned
+    /// per hand per frame. `None` when the sleeve texture is missing, in which
+    /// case the hand renders without a forearm rather than with an untextured
+    /// one.
+    forearm: Option<SceneObject>,
+}
+
+/// The materials one hand is drawn with. Built at each call site rather than
+/// by a `&self` method, so the borrow stays disjoint from the `&mut self.model`
+/// the posing needs.
+struct HandSkin<'a> {
+    meshes: &'a [Rc<RefCell<Box<dyn Material>>>],
+    forearm: Option<&'a SceneObject>,
 }
 
 /// An authored pose a hand can be shown in when nothing analog is driving it -
@@ -83,9 +119,7 @@ impl GloveRenderer {
         }
         let model = model.as_ref().clone();
 
-        let texture = asset_cache
-            .get_opt::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, GLOVE_TEXTURE)
-            .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>);
+        let texture = load_hand_skin(asset_cache);
 
         // One material per mesh; without the external texture, keep the
         // materials the importer built (solid-color fallback).
@@ -104,6 +138,8 @@ impl GloveRenderer {
 
         let retarget = HandPoseRetarget::for_right_glove(model.skeleton());
 
+        let forearm = crate::hand_forearm::template(asset_cache);
+
         Some(Self {
             model,
             retarget,
@@ -111,6 +147,7 @@ impl GloveRenderer {
             fist: hand_pose::fist_right_hand(),
             point: hand_pose::point_right_hand(),
             materials,
+            forearm,
         })
     }
 
@@ -149,10 +186,14 @@ impl GloveRenderer {
             }
         };
         let pose = self.open.blend_per_finger(&self.fist, &amounts);
+        let skin = HandSkin {
+            meshes: &self.materials,
+            forearm: self.forearm.as_ref(),
+        };
         Self::render_posed(
             &mut self.model,
             &self.retarget,
-            &self.materials,
+            skin,
             &pose,
             position,
             rotation,
@@ -180,10 +221,14 @@ impl GloveRenderer {
             StaticHandPose::Relaxed => &self.open,
             StaticHandPose::Pointing => &self.point,
         };
+        let skin = HandSkin {
+            meshes: &self.materials,
+            forearm: self.forearm.as_ref(),
+        };
         Self::render_posed(
             &mut self.model,
             &self.retarget,
-            &self.materials,
+            skin,
             pose,
             position,
             rotation,
@@ -197,7 +242,7 @@ impl GloveRenderer {
     fn render_posed(
         model: &mut GlbModel,
         retarget: &HandPoseRetarget,
-        materials: &[Rc<RefCell<Box<dyn Material>>>],
+        skin: HandSkin<'_>,
         pose: &Pose,
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
@@ -225,12 +270,30 @@ impl GloveRenderer {
             * Matrix4::from_scale(GLOVE_SCALE);
 
         let mut objects = model.to_scene_objects_with_skinning();
-        for (object, material) in objects.iter_mut().zip(materials) {
+        for (object, material) in objects.iter_mut().zip(skin.meshes) {
             object.material = material.clone();
             object.set_transform(world);
         }
+
+        if let Some(forearm) = skin.forearm {
+            let mut forearm = forearm.duplicate();
+            forearm.set_transform(crate::hand_forearm::transform(position, rotation));
+            objects.push(forearm);
+        }
+
         objects
     }
+}
+
+/// The hand's skin colour map. One loader, shared with the `debug_gloves`
+/// harness, so the two can't end up on different skins. (The forearm has its
+/// own map - the game's suit sleeve - see [`crate::hand_forearm`].)
+pub fn load_hand_skin(
+    asset_cache: &mut AssetCache,
+) -> Option<Rc<dyn engine::texture::TextureTrait>> {
+    asset_cache
+        .get_opt::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, HAND_SKIN_TEXTURE)
+        .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>)
 }
 
 #[cfg(test)]

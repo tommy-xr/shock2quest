@@ -118,10 +118,121 @@ use the generic held-weapon placement. Note the model long axes differ per
 weapon (pistol/AR along model Y, wrench along model X), so offset axes are
 per-model — probe with exaggerated single-axis offsets when tuning a new one.
 
+## Bare hands + sleeved forearm (#950, first pass)
+
+The glove *mechanics* are unchanged; only its look is. Three parts:
+
+- **Skin instead of glove.** `hand_glove.rs` skins the same GLB with
+  `assets/vr_hand_skin.png` rather than `vr_glove_color.jpg`. The hand has to be
+  textured in the *glove's* UV atlas, so the skin map is that atlas recoloured:
+
+  ```
+  # 1. what is glove HARDWARE rather than surface? whatever stands far off its
+  #    own neighbourhood: straps, buckles, stitching, panel edges.
+  structure = |ln(luminance / blur(luminance, size/32))|
+  structure = clamp((structure - 0.18) / (0.45 - 0.18), 0, 1)
+  structure = blur(dilate(structure, 9px), 3px)            # cover edges, soften
+
+  # 2. relief at SKIN scale only, erased where the mask says "hardware"
+  detail = 1 + (luminance / blur(luminance, size/256) - 1) * (1 - structure)
+  texel  = skin_tone * clamp(detail, 0.86, 1.14) ** 0.6    # softened by 1.5 px
+  ```
+
+  which keeps the glove's fine grain - the thing that stops a hand reading as
+  plastic - while dividing out its albedo, so black leather and white straps
+  don't land as light and dark patches of skin.
+
+  The **structure mask** is the second pass (owner feedback on the first: "the
+  straps are baked in and the luminance recolour preserves them"). The first
+  recipe divided by a `size/32` blur, which is *panel*-scale: every strap edge,
+  buckle and stitch row survived as a ridge, so the skin still read as a glove.
+  Two changes fix that. The relief now comes from a `size/256` blur, which is
+  too fine to carry a strap; and the mask flattens what is left of the glove's
+  hardware, identified with no hand-drawn regions - a strap is simply a run of
+  texels far off the local mean, so `|ln(L / blur(L))|` finds all of them at
+  once. The mask is **dilated (max filter) before it is feathered**: a strap's
+  *edge* is the highest-gradient part of it, and a plain blur-and-gain left
+  every panel and knuckle-pad boundary legible as a thin etched outline.
+  Everything below the mask's low threshold - fabric weave, pores, creases -
+  passes through untouched, which is what keeps the skin off "plastic"
+  (measured: atlas luminance sigma 6.5 -> 1.1, high-frequency sigma held).
+  `tools/make_vr_hand_skin.py` is the generator, so the asset is reproducible
+  and tunable rather than a one-off.
+
+  `skin_tone` is the mean skin colour of the game's own first-person hand
+  texture `res/obj/txt16/HRPistArm.gif` — `(185, 139, 124)` — **divided by 1.5**:
+  both material shaders composite `texel * 0.5` (ambient) `+ texel * emissivity`
+  and the hands render at emissivity 1.0, so an undivided tone clips at white
+  and washes out. `load_hand_skin` is the single loader, used by `debug_gloves`
+  too, so the harness cannot drift onto a different skin from the production
+  hands.
+
+  Two approaches were tried and rejected first: the game's own hand texture
+  (`HRPistArm.gif`) through the glove's UVs renders **magenta** - the glove's
+  atlas lands on that texture's transparent background, its layouts being
+  unrelated - and a flat skin tint reads as rough, featureless plastic.
+- **A sleeved forearm** (`shock2vr/src/hand_forearm.rs`). A capped, tapered tube
+  (16 segments, built in world units at its real size) running from the end of
+  the hand mesh's wrist stub to 8.5 cm toward the elbow, 6.4 cm across at the
+  cuff and widening gently to 7.0 cm at the elbow, rigidly following the hand
+  pose — no elbow, no IK. It wears the game's own suit cuff: `FISTCOMP.PCX`, the texture the `*_h`
+  first-person hand models wear, whose top ~42% is the ribbed sleeve and whose
+  remainder is bare skin. The tube's UVs sample only that band, running it
+  cuff-edge-at-the-wrist to deeper-sleeve-at-the-elbow, and the caps sample a
+  single texel (a `u` interpolated across a fan wedge would draw the ribbing as
+  concentric rings). Resolution goes through `dark::util::resolve_texture_name`,
+  so a 25AE or mod install's upgraded encoding of that same texture wins
+  automatically and a classic install finds the original in `obj.crf` — no new
+  art is committed for the sleeve.
+  Where the tube *starts* is load-bearing and unit-tested. The hand's origin is
+  its wrist **joint**, but the mesh keeps going ~2.6 cm past it as a wrist stub
+  (`AUTHORED_WRIST_STUB_WORLD`, the bind-pose bbox's `-z` extent, scaled by
+  `GLOVE_SCALE`), so the first pass's "start 2 cm inside the hand" actually put
+  the cuff 4.6 cm up the *inside* of the hand: from most angles nothing looked
+  wrong, but from the side the cuff ran a third of the way over the back of the
+  palm and its cap disc surfaced through it. The tube now starts one
+  `CUFF_OVERLAP_METERS` (1 cm) short of the stub's end — far enough inside that
+  no gap opens, not far enough to reach the palm — and arrives at the *hand
+  mesh's own wrist width*, so the two meet without a step. It flares only 9% over
+  its length: a wrist-sized cuff on a forearm-sized elbow end reads as a
+  megaphone. It also stops before the forearm HUD
+  panel's **near edge** — the panel lies *along* the arm, centred on its axis and
+  26 cm wide, so its near edge is at `FOREARM_OFFSET.z - HUD_PANEL_WIDTH / 2`
+  = 9.1 cm, not at its 19 cm centre. (Guarding against the centre passed while
+  the tube swallowed a third of the panel; the test now derives the bound from
+  `hud::virtual_arms`' own constants.)
+- **A weapon replaces the hand.** `virtual_hand::shows_hand_visual` hides the
+  hand *and* its sleeve while the hand holds a wieldable weapon (`PropPlayerGun`
+  / `PropLimbModel`), because the weapon's own model is drawn at the same
+  transform - previously the glove rendered *inside* the gun. An empty hand, or
+  one holding anything without a first-person weapon model, still shows. Hiding
+  the sleeve too is the owner's scoped rule ("the weapon model renders as-is and
+  replaces the hand visual"), not an oversight.
+
+Deferred (see #950): pose switching, point-on-hover, procedural auto-grab,
+elbow IK, and the 25AE authored hand models.
+
 ## Follow-ups
 
 - On-headset tuning of `grip_rotation()` / wrist offset once tested in a real
   HMD (alignment was tuned visually through the flat debug capture path).
-- Hide or relax the glove pose when a weapon is wielded, if the fist-around-
-  weapon look needs it.
 - More poses if needed (`fallback_relaxed`, pinch) — transcribe like the fist.
+- The sleeve is unlit and its shading rides with the wrist, so rolling the
+  forearm rotates the ribbing's highlight rather than leaving it with the light.
+- The glove mesh keeps its strap and cuff-flap geometry under the bare skin;
+  removing them needs mesh surgery, not a texture swap. **Upstream has no
+  strapless hand to swap in**: `Assets/SteamVR/Models/` ships only
+  `vr_glove_model.fbx`, `vr_glove_{left,right}_model_slim.fbx`,
+  `vr_hand_grabposes.fbx` — every one of which binds `vr_glove_color.jpg` /
+  `models/hands/vr_glove.vmat`, i.e. the same strapped glove — plus the
+  deliberately stylised `vr_alien_hand.fbx` and `vr_floppyHand.fbx`. All are
+  binary FBX, so any future import needs an FBX2glTF (or Blender) pass, the way
+  `vr_glove_model.glb` was made. The plugin is **BSD-3-Clause** ("Copyright (c)
+  Valve Corporation / All rights reserved. / Redistribution and use in source
+  and binary forms, with or without modification, are permitted provided that
+  the following conditions are met"), with no separate licence or notice file
+  anywhere under `Assets/` — so an import is licensable, provided the notice is
+  reproduced. **Gap:** this repo reproduces no such notice today for the glove
+  model it already ships — `README.md` credits it ("VR glove model adapted from
+  Valve's SteamVR Unity Plugin") but BSD-3 clause 2 asks for the copyright
+  notice, conditions and disclaimer in the documentation.

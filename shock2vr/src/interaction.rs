@@ -191,12 +191,12 @@ impl PlayerInteraction for VrInteraction {
         let mut objs = Vec::new();
         match glove_renderer {
             Some(renderer) => {
-                objs.append(&mut self.left_hand.render(Some(renderer)));
-                objs.append(&mut self.right_hand.render(Some(renderer)));
+                objs.append(&mut self.left_hand.render(world, Some(renderer)));
+                objs.append(&mut self.right_hand.render(world, Some(renderer)));
             }
             None => {
-                objs.append(&mut self.left_hand.render(None));
-                objs.append(&mut self.right_hand.render(None));
+                objs.append(&mut self.left_hand.render(world, None));
+                objs.append(&mut self.right_hand.render(world, None));
             }
         }
         objs.append(&mut create_arm_hud_panels(

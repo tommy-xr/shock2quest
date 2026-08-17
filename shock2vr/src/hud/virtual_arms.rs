@@ -8,11 +8,15 @@ use shipyard::{Get, UniqueView, View, World};
 
 use crate::{mission::PlayerInfo, vr_config::Handedness};
 
-/// Offset from hand position to forearm HUD panel position
-const FOREARM_OFFSET: Vector3<f32> = vec3(0.0, 0.0, 0.25); // 10cm toward elbow from hand
+/// Offset from hand position to forearm HUD panel *centre*. The panel's width
+/// axis runs along the arm (hand-local +Z), so it spans
+/// `FOREARM_OFFSET.z +/- HUD_PANEL_WIDTH / 2` and its near edge - not this
+/// centre - is what the forearm geometry has to stop short of.
+pub(crate) const FOREARM_OFFSET: Vector3<f32> = vec3(0.0, 0.0, 0.25); // world units: 0.25 * 0.762 = 19 cm toward the elbow
 
-/// Size of the HUD panels (260x64 aspect ratio) - doubled in size
-const HUD_PANEL_WIDTH: f32 = 0.26; // 26cm wide
+/// Size of the HUD panels (260x64 aspect ratio) - doubled in size. In world
+/// units, like every other length here; `crate::METERS_PER_WORLD_UNIT` converts.
+pub(crate) const HUD_PANEL_WIDTH: f32 = 0.26; // world units: 0.26 * 0.762 = 20 cm along the arm
 const HUD_PANEL_HEIGHT: f32 = 0.064; // 6.4cm tall (260:64 = 4.0625:1 ratio)
 
 /// BIOFULL.PCX texture dimensions
