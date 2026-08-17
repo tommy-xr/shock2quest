@@ -397,6 +397,15 @@ impl PauseMenu {
         for object in &mut objects {
             object.set_transform(pawn_to_world * object.get_transform());
         }
+        // A modal panel the player cannot read is not a pause menu: world-locked
+        // two metres ahead, it lands inside a wall or a console often enough
+        // that depth-testing it against the world is not an option. The
+        // renderer treats everything from the first `clear_depth` object onward
+        // as an overlay group drawn after the world's own passes, and `Game`
+        // appends these last, so the group is exactly the panel and its rays.
+        if let Some(first) = objects.first_mut() {
+            first.set_clear_depth(true);
+        }
         objects
     }
 
