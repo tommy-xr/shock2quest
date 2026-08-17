@@ -22,6 +22,8 @@ use rapier3d::{
 };
 use shipyard::EntityId;
 
+use crate::game_scene::PlayerSavePoseError;
+
 use physics_events::*;
 
 use self::debug_render_pipeline::DebugRenderer;
@@ -2920,6 +2922,33 @@ impl PhysicsWorld {
         self.standing_player_pose_is_clear(nvec_to_cgmath(top_out.save_pose), player_handle)
     }
 
+    /// Whether the live pose has nearby walkable ground to settle onto. The
+    /// last movement frame's `is_grounded` flag is the fast path, but a fresh
+    /// mission spawn can still be a fraction above its authored floor while
+    /// the controller settles. Accept ground within one standing body height;
+    /// that short fall is faithfully restorable, unlike a pose over a void.
+    fn player_save_pose_has_support(&self, player_handle: &PlayerHandle) -> bool {
+        if player_handle.is_grounded {
+            return true;
+        }
+        let position = vec_to_nvec(self.get_player_translation(player_handle));
+        let half_height = if player_handle.is_crouched {
+            PLAYER_CROUCH_HEIGHT / 2.0 / SCALE_FACTOR
+        } else {
+            PLAYER_STANDING_HEIGHT / 2.0 / SCALE_FACTOR
+        };
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            player_pose_filter(player_handle.character_handle),
+        );
+        let down = Ray::new(Point::from(position), -Vector::y());
+        queries
+            .cast_ray_and_get_normal(&down, half_height + PLAYER_PLACEMENT_MAX_DROP, true)
+            .is_some_and(|(_, hit)| hit.normal.y >= SUPPORT_MIN_GROUND_NORMAL)
+    }
+
     /// Position safe to serialize for the player. A compressed mantle can
     /// occupy places where the standing capsule does not fit, so persist its
     /// last valid standing start instead of an in-flight waypoint. A live
@@ -2930,7 +2959,7 @@ impl PhysicsWorld {
     pub fn get_player_save_translation(
         &self,
         player_handle: &PlayerHandle,
-    ) -> Option<Vector3<f32>> {
+    ) -> Result<Vector3<f32>, PlayerSavePoseError> {
         // This short-lived displacement is the kinematic equivalent of
         // in-flight velocity. Loading only a transform in the middle of a
         // chained slope would erase it and can strand the player on an
@@ -2938,14 +2967,17 @@ impl PhysicsWorld {
         if player_handle.slope_displacement.norm_squared()
             > PLAYER_SLOPE_DISPLACEMENT_EPSILON_SQUARED
         {
-            return None;
+            return Err(PlayerSavePoseError::TransientSlopeMotion);
         }
         match player_handle.top_out {
             Some(top_out) if self.top_out_save_pose_is_clear(player_handle, top_out) => {
-                Some(nvec_to_cgmath(top_out.save_pose))
+                Ok(nvec_to_cgmath(top_out.save_pose))
             }
-            Some(_) => None,
-            None => Some(self.get_player_translation(player_handle)),
+            Some(_) => Err(PlayerSavePoseError::BlockedRecoveryPose),
+            None if !self.player_save_pose_has_support(player_handle) => {
+                Err(PlayerSavePoseError::UnsupportedPose)
+            }
+            None => Ok(self.get_player_translation(player_handle)),
         }
     }
 
@@ -6188,25 +6220,42 @@ mod tests {
 
     #[test]
     fn player_save_waits_for_transient_slope_displacement() {
-        let mut world = PhysicsWorld::new();
-        let mut player =
-            world.create_player(vec3(0.0, 3.0, 0.0), EntityId::from_inner(2102).unwrap());
+        let (mut world, mut player) = world_with_floor();
+        world.set_player_translation(vec3(0.0, 2.0, 0.0), &mut player);
+        step(&mut world, &mut player, 30);
         assert!(
-            world.get_player_save_translation(&player).is_some(),
+            world.get_player_save_translation(&player).is_ok(),
             "a stationary player should be saveable"
         );
 
         player.slope_displacement = vector![0.1, 0.0, 0.0];
         assert_eq!(
             world.get_player_save_translation(&player),
-            None,
+            Err(PlayerSavePoseError::TransientSlopeMotion),
             "a transform-only save must not erase active slope carry"
         );
 
-        world.set_player_translation(vec3(1.0, 3.0, 0.0), &mut player);
+        let current = world.get_player_translation(&player);
+        world.set_player_translation(current + vec3(1.0, 0.0, 0.0), &mut player);
+        step(&mut world, &mut player, 2);
         assert!(
-            world.get_player_save_translation(&player).is_some(),
+            world.get_player_save_translation(&player).is_ok(),
             "an explicit relocation clears the transient carry"
+        );
+    }
+
+    #[test]
+    fn player_save_rejects_an_unsupported_void_pose() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, -100.0, 0.0), EntityId::from_inner(2106).unwrap());
+
+        step(&mut world, &mut player, 3);
+
+        assert_eq!(
+            world.get_player_save_translation(&player),
+            Err(PlayerSavePoseError::UnsupportedPose),
+            "a falling player with no walkable support must not brick a save slot"
         );
     }
 
@@ -7239,7 +7288,7 @@ mod tests {
         player.top_out = Some(reversing);
         assert_eq!(
             world.get_player_save_translation(&player),
-            Some(vec3(-1.0, 0.0, 0.0)),
+            Ok(vec3(-1.0, 0.0, 0.0)),
             "an in-flight save must serialize the last standing pose"
         );
     }
@@ -7349,7 +7398,7 @@ mod tests {
         });
         assert_eq!(
             world.get_player_save_translation(&player),
-            None,
+            Err(PlayerSavePoseError::BlockedRecoveryPose),
             "a blocker occupying the cached standing pose must defer saving"
         );
 

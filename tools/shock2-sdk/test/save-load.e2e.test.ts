@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { GameServer, HttpError, findRepoRoot } from "../src/index.js";
@@ -222,6 +222,63 @@ test(
       (await game.info()).mission,
       "medsci1.mis",
       "runtime should stay live on medsci1 after a failed load",
+    );
+  },
+);
+
+test(
+  "saving an unsupported player returns a structured pose refusal",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async (t) => {
+    const saveName = `unsupported_save_e2e_${Date.now()}`;
+    t.after(() => {
+      const path = findSavePath(saveName);
+      if (path) rmSync(path, { force: true });
+    });
+
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort + 5,
+    });
+    await game.step({ frames: 5 });
+
+    const start = await game.player.position();
+    await game.player.teleport({ x: start.x, y: -100, z: start.z });
+    await game.step({ frames: 3 });
+    const unsupported = await game.player.position();
+
+    await assert.rejects(
+      game.save(saveName),
+      (error: unknown) => {
+        if (!(error instanceof HttpError) || error.status !== 409) return false;
+        const body = JSON.parse(error.body) as {
+          success: boolean;
+          error_code: string;
+          reason: string;
+          player_pose: {
+            position: [number, number, number];
+            is_crouched: boolean;
+          };
+        };
+        assert.equal(body.success, false);
+        assert.equal(body.error_code, "unsupported_player_pose");
+        assert.match(body.reason, /support/i);
+        assert.equal(body.player_pose.is_crouched, false);
+        assert.ok(
+          Math.abs(body.player_pose.position[0] - unsupported.x) < 0.01 &&
+            Math.abs(body.player_pose.position[1] - unsupported.y) < 0.01 &&
+            Math.abs(body.player_pose.position[2] - unsupported.z) < 0.01,
+          `refusal must report the live pose: ${JSON.stringify(body.player_pose)} vs ${JSON.stringify(unsupported)}`,
+        );
+        return true;
+      },
+      "an unsupported pose must be an explicit 409 with its reason and live pose",
+    );
+
+    assert.equal(
+      (await game.info()).mission,
+      "medsci1.mis",
+      "a refused save must leave the runtime live",
     );
   },
 );

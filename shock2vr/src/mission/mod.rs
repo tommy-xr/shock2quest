@@ -261,7 +261,7 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.player_is_crouched()
     }
 
-    fn player_save_position(&self) -> Option<Vector3<f32>> {
+    fn player_save_position(&self) -> Result<Vector3<f32>, crate::game_scene::PlayerSavePoseError> {
         self.mission_core.player_save_position()
     }
 

@@ -61,6 +61,7 @@ test(
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8153),
     });
     await game.step({ frames: 5 });
+    const supportedSavePosition = await game.player.position();
 
     const pictures = (
       await game.entities.list({ filter: CODE_PIC_1, limit: 20 })
@@ -82,6 +83,10 @@ test(
       "PictureSwap should retain static for the authored one-second delay",
     );
     const saveName = `picture_swap_mid_static_${Date.now()}`;
+    // The reticle helper stages beside the authored picture in non-playable
+    // geometry. Restore the supported spawn without stepping so the exact
+    // one-second PictureSwap timer remains the behavior under test.
+    await game.player.teleport(supportedSavePosition);
     assert.equal((await game.save(saveName)).success, true);
     assert.equal((await game.load(saveName)).success, true);
     const restoredPictures = (

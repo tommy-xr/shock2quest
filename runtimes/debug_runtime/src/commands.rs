@@ -527,6 +527,15 @@ pub struct SaveLoadResult {
     /// load this is the restored mission; after a save it is the scene saved.
     pub mission: String,
     pub message: String,
+    /// Stable failure code. Omitted on success.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// Human-readable refusal reason. Omitted on success.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Exact live pose associated with an unsafe-player-state refusal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub player_pose: Option<shock2vr::SavePlayerPose>,
 }
 
 /// Result of a level transition (warp) request

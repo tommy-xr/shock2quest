@@ -74,6 +74,7 @@ use crate::{
     GameOptions,
     creature::{HitBoxManager, RagDollManager, get_creature_definition},
     game_scene::AmbientAudioState,
+    game_scene::PlayerSavePoseError,
     gui::GuiManager,
     hud::{draw_item_name, draw_item_outline},
     input_context::{self, InputContext},
@@ -6863,12 +6864,31 @@ impl MissionCore {
         self.player_handle.is_crouched()
     }
 
-    pub fn player_save_position(&self) -> Option<Vector3<f32>> {
+    pub fn player_save_position(&self) -> Result<Vector3<f32>, PlayerSavePoseError> {
         if !self.player_is_alive() {
-            return None;
+            return Err(PlayerSavePoseError::PlayerNotAlive);
         }
-        self.physics
+        match self
+            .physics
             .get_player_save_translation(&self.player_handle)
+        {
+            Err(PlayerSavePoseError::UnsupportedPose) => {
+                let position = self.physics.get_player_translation(&self.player_handle);
+                let inside_authored_cell = self.spatial_data.as_ref().is_some_and(|spatial| {
+                    (0..spatial.get_cell_count()).any(|index| {
+                        spatial.get_cell_by_index(index).is_some_and(|cell| {
+                            (position - cell.center).magnitude2() <= cell.radius * cell.radius
+                        })
+                    })
+                });
+                if inside_authored_cell {
+                    Ok(position)
+                } else {
+                    Err(PlayerSavePoseError::UnsupportedPose)
+                }
+            }
+            result => result,
+        }
     }
 
     /// Re-apply a crouch recorded in save data. The save stores the
