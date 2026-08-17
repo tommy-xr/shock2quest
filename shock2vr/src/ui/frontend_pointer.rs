@@ -1,7 +1,7 @@
 //! The VR pointer shared by every frontend screen.
 //!
 //! In VR there is no 2D cursor: the "pointer" is where a controller ray meets
-//! the screen's [`frontend_panel`], and the trigger is the button. That rule is
+//! the screen's anchored world panel, and the trigger is the button. That rule is
 //! identical for the main menu, the load screen and the game-over screen, so it
 //! lives here once rather than being re-derived per scene - the same reason
 //! placement lives in one layout pass (see `AGENTS.md` section 3): independent
@@ -11,7 +11,7 @@ use cgmath::{InnerSpace, Quaternion, Rotation, Vector2, Vector3, vec3};
 
 use crate::{
     input_context::{Hand, InputContext},
-    ui::{frontend_panel, ray_to_canvas},
+    ui::{WorldPanel, ray_to_canvas},
 };
 
 /// A VR trigger past this counts as "pressed", matching the hand code's
@@ -44,8 +44,8 @@ fn held(hand: &Hand) -> bool {
 pub fn vr_frontend_pointer(
     input_context: &InputContext,
     canvas_size: Vector2<f32>,
+    panel: &WorldPanel,
 ) -> (Option<Vector2<f32>>, bool) {
-    let panel = frontend_panel(input_context.head.rotation);
     let right = &input_context.right_hand;
     let left = &input_context.left_hand;
 
@@ -67,7 +67,7 @@ pub fn vr_frontend_pointer(
         let Some(direction) = hand_ray(hand.rotation) else {
             continue;
         };
-        if let Some(point) = ray_to_canvas(canvas_size, &panel, hand.position, direction) {
+        if let Some(point) = ray_to_canvas(canvas_size, panel, hand.position, direction) {
             return (Some(point), any_held);
         }
     }
@@ -84,18 +84,30 @@ pub fn vr_frontend_pointer(
 #[cfg(test)]
 pub mod test_support {
     use super::*;
-    use crate::ui::FRONTEND_PANEL_DISTANCE;
+    use crate::ui::{FRONTEND_PANEL_DISTANCE, FrontendPanelAnchor};
+    use std::time::Duration;
 
     /// The head facing the tests aim against: the default camera orientation.
     pub fn test_head() -> Quaternion<f32> {
         Quaternion::new(1.0, 0.0, 0.0, 0.0)
     }
 
+    /// The panel the tests aim at: what a frontend scene's anchor places on
+    /// entry from the default head pose. Built through the real anchor so the
+    /// tests track placement changes instead of re-deriving them.
+    pub fn test_panel() -> WorldPanel {
+        FrontendPanelAnchor::new().update(
+            crate::input_context::Head::default().position,
+            test_head(),
+            Duration::ZERO,
+        )
+    }
+
     /// A hand aimed at a given canvas point, derived from the panel's own basis
     /// rather than world axes - so the tests stay honest whichever way the
     /// panel ends up facing. This is the inverse of [`ray_to_canvas`].
     pub fn hand_aimed_at(canvas_size: Vector2<f32>, point: Vector2<f32>, trigger: f32) -> Hand {
-        let panel = frontend_panel(test_head());
+        let panel = test_panel();
         let u = point.x / canvas_size.x - 0.5;
         let v = 0.5 - point.y / canvas_size.y;
         let right = panel.rotation.rotate_vector(vec3(1.0, 0.0, 0.0));
@@ -119,7 +131,7 @@ pub mod test_support {
     /// `panel.center` makes `ray_to_canvas` bail on distance before it ever
     /// looks at the direction, so the test would pass even aimed at the panel.
     pub fn hand_aimed_away(trigger: f32) -> Hand {
-        let panel = frontend_panel(test_head());
+        let panel = test_panel();
         // The panel's normal points at the viewer, so this stands in front of
         // it and looks the other way.
         let normal = panel.normal();
@@ -157,11 +169,15 @@ mod tests {
         let untracked = Hand {
             rotation: Quaternion::zero(),
             // At eye level, where a hand held up in front of the player sits.
-            position: vec3(0.0, crate::ui::FRONTEND_PANEL_EYE_HEIGHT, 0.0),
+            position: crate::input_context::Head::default().position,
             trigger_value: 1.0,
             ..Hand::default()
         };
-        let (point, _) = vr_frontend_pointer(&vr_input(untracked.clone(), untracked), CANVAS);
+        let (point, _) = vr_frontend_pointer(
+            &vr_input(untracked.clone(), untracked),
+            CANVAS,
+            &test_panel(),
+        );
         assert_eq!(
             point, None,
             "an untracked controller must not report a pointer"
@@ -178,6 +194,7 @@ mod tests {
         let (point, pressed) = vr_frontend_pointer(
             &vr_input(untracked, hand_aimed_at(CANVAS, target, 1.0)),
             CANVAS,
+            &test_panel(),
         );
         let point = point.expect("the tracked hand should land on the panel");
         assert!((point.x - target.x).abs() < 1.0 && (point.y - target.y).abs() < 1.0);
@@ -194,7 +211,7 @@ mod tests {
             hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
             hand_aimed_away(1.0),
         );
-        let (point, pressed) = vr_frontend_pointer(&input, CANVAS);
+        let (point, pressed) = vr_frontend_pointer(&input, CANVAS, &test_panel());
         assert!(pressed, "a held trigger must stay reported as held");
         assert_eq!(
             point, None,
@@ -207,6 +224,7 @@ mod tests {
         let (point, pressed) = vr_frontend_pointer(
             &vr_input(hand_aimed_away(1.0), hand_aimed_away(1.0)),
             CANVAS,
+            &test_panel(),
         );
         assert_eq!(point, None);
         assert!(pressed);

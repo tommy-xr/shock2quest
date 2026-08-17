@@ -475,6 +475,9 @@ fn main() {
     // pose does not exist yet; one frame of latency is imperceptible for
     // head-anchored UI and is far better than the alternative below.
     let mut last_view_rotation: Option<cgmath::Quaternion<f32>> = None;
+    // Where that same view was, already converted to pawn space (the space the
+    // hands and the world-anchored frontend panel live in).
+    let mut last_view_position: Option<cgmath::Vector3<f32>> = None;
     println!(
         "SHOCK2QUEST_STARTUP mission={} init_ms={:.3}",
         mission,
@@ -740,9 +743,29 @@ fn main() {
             right_aim_location.pose.orientation.y,
             right_aim_location.pose.orientation.z,
         );
-        // ...so the head gets the actual head, falling back to the aim pose
-        // only on the first frame, before any view has been located.
-        let head_rotation = last_view_rotation.unwrap_or(aim_rotation);
+        // ...so the head gets the actual head. Before any view has been
+        // located (frame 0) the HEAD SPACE pose - located above, this frame -
+        // stands in; the controller aim is only the last resort, when neither
+        // is available. That matters now that the frontend panel is *placed
+        // once* off this pose: anchoring the boot menu to wherever a controller
+        // happened to point would strand it there for the whole screen.
+        let head_pose_rotation = head_location
+            .location_flags
+            .contains(
+                xr::SpaceLocationFlags::ORIENTATION_VALID
+                    | xr::SpaceLocationFlags::ORIENTATION_TRACKED,
+            )
+            .then(|| {
+                cgmath::Quaternion::new(
+                    head_location.pose.orientation.w,
+                    head_location.pose.orientation.x,
+                    head_location.pose.orientation.y,
+                    head_location.pose.orientation.z,
+                )
+            });
+        let head_rotation = last_view_rotation
+            .or(head_pose_rotation)
+            .unwrap_or(aim_rotation);
 
         // Feed the detector before the poses are transformed so this frame's
         // physical stance is available to the crouch request below. Tracked
@@ -783,6 +806,23 @@ fn main() {
 
         let mut input_context = InputContext::default();
         input_context.head.rotation = head_rotation;
+        // The tracked eye, in pawn space. The located head space covers frame
+        // 0, before any view has been located; when the head is untracked
+        // entirely this keeps `Head::default`'s fixed eye height, which is
+        // where the camera renders from anyway.
+        let head_pose_position = tracked_head_position.then(|| {
+            stage_to_pawn(
+                vec3(
+                    head_location.pose.position.x,
+                    head_location.pose.position.y,
+                    head_location.pose.position.z,
+                ),
+                center_above_floor,
+            )
+        });
+        if let Some(position) = last_view_position.or(head_pose_position) {
+            input_context.head.position = position;
+        }
         input_context.right_hand.rotation = aim_rotation;
         input_context.right_hand.position = right_hand_position;
         input_context.right_hand.trigger_value = right_trigger_value;
@@ -968,6 +1008,14 @@ fn main() {
 
         // Remember where the head actually is, for next frame's input context.
         if let Some(view) = views.first() {
+            last_view_position = Some(stage_to_pawn(
+                vec3(
+                    view.pose.position.x,
+                    view.pose.position.y,
+                    view.pose.position.z,
+                ),
+                game.player_center_above_floor(),
+            ));
             last_view_rotation = Some(cgmath::Quaternion::new(
                 view.pose.orientation.w,
                 view.pose.orientation.x,
