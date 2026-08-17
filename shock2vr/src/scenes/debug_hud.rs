@@ -163,6 +163,10 @@ impl Default for DebugHudScene {
 }
 
 impl GameScene for DebugHudScene {
+    fn is_pausable(&self) -> bool {
+        true
+    }
+
     fn update(
         &mut self,
         time: &Time,

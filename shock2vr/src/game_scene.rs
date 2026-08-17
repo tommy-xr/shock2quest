@@ -139,6 +139,17 @@ pub trait GameScene {
         false
     }
 
+    /// Whether the in-game pause menu may open over this scene.
+    ///
+    /// True for scenes that run a simulation the player would want frozen -
+    /// missions and the `debug_*` scenes. Frontend screens (main menu, load,
+    /// game over, loading, cutscenes) are already system UI with their own way
+    /// out, so pausing them is meaningless and would trap the player behind two
+    /// stacked menus; they keep the default.
+    fn is_pausable(&self) -> bool {
+        false
+    }
+
     /// Whether the player's collider is currently crouched (the *actual*
     /// physics state - stand-up can be refused for lack of headroom). Drives
     /// the crouch-aware camera height; non-mission scenes have no player.

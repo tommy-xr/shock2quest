@@ -357,6 +357,12 @@ fn main() {
         .create_action::<bool>("audio_log_reader", "Audio Log Reader", &[])
         .unwrap();
 
+    // The left controller's Menu button. (The right controller's is reserved
+    // by the Quest system UI, so it can never be the app's.)
+    let menu_action = action_set
+        .create_action::<bool>("menu", "Pause Menu", &[])
+        .unwrap();
+
     // Bind our actions to input devices using the given profile
     // If you want to access inputs specific to a particular device you may specify a different
     // interaction profile
@@ -458,6 +464,16 @@ fn main() {
                         )
                         .unwrap(),
                 ),
+                xr::Binding::new(
+                    &menu_action,
+                    xr_instance
+                        .string_to_path(
+                            shock2vr::input::InputAction::TogglePauseMenu
+                                .quest_touch_click_path()
+                                .expect("Quest pause-menu binding"),
+                        )
+                        .unwrap(),
+                ),
             ],
         )
         .unwrap();
@@ -529,7 +545,8 @@ fn main() {
 
     // Controller button edges feed the same semantic action dispatcher as the
     // desktop and debug runtimes. X exposes the player-owned backpack panel;
-    // Y opens/closes and replays the player-owned audio-log reader.
+    // Y opens/closes and replays the player-owned audio-log reader; the left
+    // Menu button opens/closes the pause menu.
     // (The debug input server below can inject the same actions remotely.)
     let mut action_state = shock2vr::input::InputActionState::new();
     // Opt-in remote control for on-device automation; `None` unless
@@ -768,6 +785,7 @@ fn main() {
         let crouch_state = crouch_action.state(&session, xr::Path::NULL).unwrap();
         let inventory_state = inventory_action.state(&session, xr::Path::NULL).unwrap();
         let audio_log_state = audio_log_action.state(&session, xr::Path::NULL).unwrap();
+        let menu_state = menu_action.state(&session, xr::Path::NULL).unwrap();
         // Only edge-detect while the action is live: with the session merely
         // VISIBLE (system overlay up), current_state reads false even though
         // the button may still be physically held, and treating that as a
@@ -789,6 +807,12 @@ fn main() {
             audio_log_state.is_active,
             audio_log_state.changed_since_last_sync,
             audio_log_state.current_state,
+        );
+        action_state.sync_discrete_button(
+            shock2vr::input::InputAction::TogglePauseMenu,
+            menu_state.is_active,
+            menu_state.changed_since_last_sync,
+            menu_state.current_state,
         );
 
         let left_trigger_value = left_trigger

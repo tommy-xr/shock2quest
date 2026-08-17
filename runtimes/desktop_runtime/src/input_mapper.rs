@@ -147,6 +147,15 @@ impl DesktopInputMapper {
                 modifier: Modifier::None,
                 action: InputAction::ToggleUseMode,
             },
+            // Escape opens/closes the in-game pause menu, as it does in the
+            // original. It used to close the window outright (a raw glfw
+            // handler in `main.rs`); the pause menu's "Quit to Main Menu" plus
+            // the main menu's "Quit" is now the way out.
+            Binding {
+                key: Key::Escape,
+                modifier: Modifier::None,
+                action: InputAction::TogglePauseMenu,
+            },
             // AI debug: make everything hunt the player (pinned) / calm down
             Binding {
                 key: Key::G,

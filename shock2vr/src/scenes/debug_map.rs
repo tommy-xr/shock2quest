@@ -140,6 +140,10 @@ impl DebugMapScene {
 }
 
 impl GameScene for DebugMapScene {
+    fn is_pausable(&self) -> bool {
+        true
+    }
+
     fn update(
         &mut self,
         time: &Time,

@@ -184,6 +184,10 @@ impl Mission {
 
 // Implementation of GameScene trait for Mission
 impl crate::game_scene::GameScene for Mission {
+    fn is_pausable(&self) -> bool {
+        true
+    }
+
     fn update(
         &mut self,
         time: &Time,

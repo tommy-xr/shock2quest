@@ -161,6 +161,12 @@ pub enum Effect {
     /// See `projects/flat-ui.md`.
     ToggleUseMode,
 
+    /// Leave the flat-mode "use" (metagame) mode and dismiss any open MFD
+    /// panel, idempotently. Unlike [`Effect::ToggleUseMode`] this only ever
+    /// closes, so the pause menu can suspend the metagame without having to
+    /// know how many toggles it would take. No-op in VR.
+    CloseUseMode,
+
     /// Open the presentation's object-bound panel slot - a flat MFD or a VR
     /// world quad - emitted by `GuiScript` when its entity is frobbed. This
     /// mirrors the original engine's frob-script overlay flow

@@ -146,6 +146,11 @@ impl ActionDispatcher {
                 head_rotation: input_context.head.rotation,
             });
         }
+        // `InputAction::TogglePauseMenu` deliberately produces no effect: the
+        // pause overlay is owned by `Game`, which reads the action directly
+        // before dispatching. Routing it through the scene would make it
+        // undeliverable exactly when it matters, because a paused scene is
+        // not updated at all.
         effects
     }
 }
@@ -304,6 +309,17 @@ mod tests {
 
         let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
         assert!(matches!(effects[0], Effect::ToggleMap));
+    }
+
+    #[test]
+    fn toggle_pause_menu_produces_no_scene_effect() {
+        // `Game` consumes this one itself; if it ever became an effect the
+        // scene would swallow it while paused and the menu could not close.
+        let mut state = InputActionState::new();
+        state.trigger(InputAction::TogglePauseMenu);
+
+        let effects = ActionDispatcher::dispatch(&state, &InputContext::default());
+        assert!(effects.is_empty());
     }
 
     #[test]

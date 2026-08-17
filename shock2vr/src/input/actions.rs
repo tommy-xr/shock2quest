@@ -85,6 +85,13 @@ pub enum InputAction {
     /// `M` key). No-op in VR. See `projects/flat-ui-panels.md` §5.
     ToggleMap,
 
+    /// Toggle the in-game pause menu. Unlike every other action here this one
+    /// is consumed by `Game` itself rather than turned into an `Effect`: the
+    /// pause overlay lives above the active scene (so missions and debug
+    /// scenes alike get it), and while paused the scene's `update` is skipped -
+    /// an effect routed through the scene could never close the menu again.
+    TogglePauseMenu,
+
     /// Open/play the newest unread audio log (the original's
     /// `play_unread_log`), or replay the newest collected log once all are read.
     /// Collecting a disc only files it in the PDA, so this is how it is read.
@@ -128,6 +135,7 @@ impl InputAction {
             InputAction::ToggleUseMode,
             InputAction::ReadLastUnreadLog,
             InputAction::ToggleMap,
+            InputAction::TogglePauseMenu,
         ]
     }
 
@@ -165,6 +173,7 @@ impl InputAction {
             InputAction::ToggleUseMode => "ToggleUseMode",
             InputAction::ReadLastUnreadLog => "ReadLastUnreadLog",
             InputAction::ToggleMap => "ToggleMap",
+            InputAction::TogglePauseMenu => "TogglePauseMenu",
         }
     }
 
@@ -175,6 +184,9 @@ impl InputAction {
         match self {
             InputAction::MoveInventory => Some("/user/hand/left/input/x/click"),
             InputAction::ReadLastUnreadLog => Some("/user/hand/left/input/y/click"),
+            // The right controller's menu button is reserved by the Quest
+            // system UI; the left one is the app's.
+            InputAction::TogglePauseMenu => Some("/user/hand/left/input/menu/click"),
             _ => None,
         }
     }
@@ -242,6 +254,10 @@ mod tests {
         assert_eq!(
             InputAction::ReadLastUnreadLog.quest_touch_click_path(),
             Some("/user/hand/left/input/y/click")
+        );
+        assert_eq!(
+            InputAction::TogglePauseMenu.quest_touch_click_path(),
+            Some("/user/hand/left/input/menu/click")
         );
     }
 

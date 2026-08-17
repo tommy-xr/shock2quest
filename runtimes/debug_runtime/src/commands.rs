@@ -699,6 +699,10 @@ pub struct FrameSnapshot {
     /// The debug runtime deliberately stays up - an automation session must not
     /// kill itself - so this is how the quit path is observed headlessly.
     pub quit_requested: bool,
+    /// True while the in-game pause menu is up - the simulation is frozen and
+    /// `/v1/step` advances only rendering, so automation can tell "paused" from
+    /// "stuck".
+    pub paused: bool,
     pub player: PlayerInfo,
     pub entity_count: usize,
     pub debug_features: Vec<String>,
