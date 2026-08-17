@@ -353,6 +353,10 @@ fn main() {
         .create_action::<bool>("inventory", "Backpack Inventory", &[])
         .unwrap();
 
+    let audio_log_action = action_set
+        .create_action::<bool>("audio_log_reader", "Audio Log Reader", &[])
+        .unwrap();
+
     // Bind our actions to input devices using the given profile
     // If you want to access inputs specific to a particular device you may specify a different
     // interaction profile
@@ -437,7 +441,21 @@ fn main() {
                 xr::Binding::new(
                     &inventory_action,
                     xr_instance
-                        .string_to_path("/user/hand/left/input/x/click")
+                        .string_to_path(
+                            shock2vr::input::InputAction::MoveInventory
+                                .quest_touch_click_path()
+                                .expect("Quest backpack binding"),
+                        )
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &audio_log_action,
+                    xr_instance
+                        .string_to_path(
+                            shock2vr::input::InputAction::ReadLastUnreadLog
+                                .quest_touch_click_path()
+                                .expect("Quest audio-log binding"),
+                        )
                         .unwrap(),
                 ),
             ],
@@ -510,7 +528,8 @@ fn main() {
     );
 
     // Controller button edges feed the same semantic action dispatcher as the
-    // desktop and debug runtimes. X exposes the player-owned backpack panel.
+    // desktop and debug runtimes. X exposes the player-owned backpack panel;
+    // Y opens/closes and replays the player-owned audio-log reader.
     // (The debug input server below can inject the same actions remotely.)
     let mut action_state = shock2vr::input::InputActionState::new();
     // Opt-in remote control for on-device automation; `None` unless
@@ -630,6 +649,7 @@ fn main() {
                             crouch_toggled = false;
                             crouch_button_was_pressed = false;
                             action_state.release(shock2vr::input::InputAction::MoveInventory);
+                            action_state.release(shock2vr::input::InputAction::ReadLastUnreadLog);
                         }
                         xr::SessionState::STOPPING => {
                             session.end().unwrap();
@@ -747,6 +767,7 @@ fn main() {
             .current_state;
         let crouch_state = crouch_action.state(&session, xr::Path::NULL).unwrap();
         let inventory_state = inventory_action.state(&session, xr::Path::NULL).unwrap();
+        let audio_log_state = audio_log_action.state(&session, xr::Path::NULL).unwrap();
         // Only edge-detect while the action is live: with the session merely
         // VISIBLE (system overlay up), current_state reads false even though
         // the button may still be physically held, and treating that as a
@@ -757,13 +778,18 @@ fn main() {
             }
             crouch_button_was_pressed = crouch_state.current_state;
         }
-        if inventory_state.is_active && inventory_state.changed_since_last_sync {
-            if inventory_state.current_state {
-                action_state.trigger(shock2vr::input::InputAction::MoveInventory);
-            } else {
-                action_state.release(shock2vr::input::InputAction::MoveInventory);
-            }
-        }
+        action_state.sync_discrete_button(
+            shock2vr::input::InputAction::MoveInventory,
+            inventory_state.is_active,
+            inventory_state.changed_since_last_sync,
+            inventory_state.current_state,
+        );
+        action_state.sync_discrete_button(
+            shock2vr::input::InputAction::ReadLastUnreadLog,
+            audio_log_state.is_active,
+            audio_log_state.changed_since_last_sync,
+            audio_log_state.current_state,
+        );
 
         let left_trigger_value = left_trigger
             .state(&session, xr::Path::NULL)

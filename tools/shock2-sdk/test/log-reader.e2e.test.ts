@@ -28,7 +28,8 @@ import { teleportVerified } from "./helpers/teleport.js";
 // texture wins - the archive-qualified assertions below fail on that build.
 //
 // Entity discovery is by stable template_id (1608 = the mission-file object
-// id); runtime entity ids are NOT stable across launches.
+// id); playback uses the synthetic player-owned reader host (template -1), so
+// it remains valid after the source disc's mission is gone.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 test(
@@ -98,8 +99,8 @@ test(
     );
     assert.equal(
       opened.active_panel.template_id,
-      1608,
-      "the reader panel should be bound to the Amanpour log entity",
+      -1,
+      "the reader panel should be bound to the player-owned media host",
     );
     assert.deepEqual(
       (await game.info()).player.collected_logs,

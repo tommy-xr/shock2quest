@@ -128,6 +128,22 @@ impl QuestInfo {
         self.collected_logs.iter().rev().find(|entry| !entry.read)
     }
 
+    /// Candidates for the reader/replay control, in preference order: retail's
+    /// newest-unread-first ordering, then the already-read entries (newest
+    /// first) so the same control remains a replay affordance once everything
+    /// is read.
+    ///
+    /// This is a sequence rather than a single target because the caller has
+    /// to resolve each candidate's localized reader strings, which can fail
+    /// (a log collected on an earlier deck, a missing transcript). Offering
+    /// only the front entry would let one unresolvable log wedge the reader
+    /// forever; the caller skips to the next candidate instead.
+    pub fn logs_for_reader(&self) -> impl Iterator<Item = &CollectedLog> {
+        let unread = self.collected_logs.iter().rev().filter(|entry| !entry.read);
+        let read = self.collected_logs.iter().rev().filter(|entry| entry.read);
+        unread.chain(read)
+    }
+
     /// Mark a collected log as played back. Returns `true` when this flipped it
     /// from unread (re-reading an already-read log is a no-op).
     pub fn mark_log_read(&mut self, deck: u32, log: u32) -> bool {
@@ -244,13 +260,50 @@ mod log_tests {
     }
 
     #[test]
-    fn nothing_is_played_back_once_every_log_is_read() {
+    fn reader_replays_the_latest_collected_log_once_everything_is_read() {
         let mut quest_info = quest_info_with(&[(1, 1), (2, 2)]);
 
         quest_info.mark_log_read(1, 1);
         quest_info.mark_log_read(2, 2);
 
         assert!(quest_info.last_unread_log().is_none());
+        let replay = quest_info
+            .logs_for_reader()
+            .next()
+            .expect("latest log remains replayable");
+        assert_eq!((replay.deck, replay.log), (2, 2));
+    }
+
+    #[test]
+    fn reader_prefers_a_newer_unread_entry_before_replay_fallback() {
+        let mut quest_info = quest_info_with(&[(1, 1), (2, 2), (3, 3)]);
+        quest_info.mark_log_read(3, 3);
+
+        let target = quest_info
+            .logs_for_reader()
+            .next()
+            .expect("older unread log remains");
+
+        assert_eq!((target.deck, target.log), (2, 2));
+    }
+
+    /// A log whose reader strings do not resolve here (collected on an earlier
+    /// deck, missing localized transcript) must not wedge the control forever:
+    /// the reader offers every collected entry in preference order so the
+    /// caller can skip to the next resolvable one.
+    #[test]
+    fn an_unresolvable_log_does_not_wedge_the_reader() {
+        let mut quest_info = quest_info_with(&[(1, 1), (2, 2), (3, 3)]);
+        quest_info.mark_log_read(3, 3);
+
+        let candidates: Vec<(u32, u32)> = quest_info
+            .logs_for_reader()
+            .map(|entry| (entry.deck, entry.log))
+            .collect();
+
+        // Unread newest-first, then the already-read entries newest-first as
+        // the replay fallback. Every collected log is reachable.
+        assert_eq!(candidates, vec![(2, 2), (1, 1), (3, 3)]);
     }
 
     /// Re-reading is a no-op, and an unknown log is not silently inserted.

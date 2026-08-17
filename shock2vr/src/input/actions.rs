@@ -85,10 +85,9 @@ pub enum InputAction {
     /// `M` key). No-op in VR. See `projects/flat-ui-panels.md` §5.
     ToggleMap,
 
-    /// Play back the most recently collected audio log the player has not read
-    /// yet, opening the reader on it (the original's `play_unread_log`).
-    /// Collecting a disc only files it in the PDA, so this is how a log is
-    /// actually read.
+    /// Open/play the newest unread audio log (the original's
+    /// `play_unread_log`), or replay the newest collected log once all are read.
+    /// Collecting a disc only files it in the PDA, so this is how it is read.
     ReadLastUnreadLog,
 }
 
@@ -168,6 +167,17 @@ impl InputAction {
             InputAction::ToggleMap => "ToggleMap",
         }
     }
+
+    /// Production Meta Quest Touch binding for the two player-owned panels.
+    /// Keeping these paths beside their semantic actions makes the Oculus
+    /// mapping host-testable even though that runtime only compiles for Android.
+    pub fn quest_touch_click_path(&self) -> Option<&'static str> {
+        match self {
+            InputAction::MoveInventory => Some("/user/hand/left/input/x/click"),
+            InputAction::ReadLastUnreadLog => Some("/user/hand/left/input/y/click"),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for InputAction {
@@ -221,6 +231,18 @@ mod tests {
     fn from_str_rejects_unknown_action() {
         let result = "NotARealAction".parse::<InputAction>();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn quest_touch_keeps_x_for_backpack_and_assigns_y_to_the_log_reader() {
+        assert_eq!(
+            InputAction::MoveInventory.quest_touch_click_path(),
+            Some("/user/hand/left/input/x/click")
+        );
+        assert_eq!(
+            InputAction::ReadLastUnreadLog.quest_touch_click_path(),
+            Some("/user/hand/left/input/y/click")
+        );
     }
 
     #[test]

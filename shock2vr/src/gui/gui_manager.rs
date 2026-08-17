@@ -314,6 +314,81 @@ impl GuiManager {
         self.render_filtered(asset_cache, world, true)
     }
 
+    /// Read-only snapshot of the active VR panel using the exact normalized
+    /// component data its world-space renderer consumes. This extends the
+    /// existing `/v1/ui` contract across presentations without introducing a
+    /// debug-only UI path or re-laying out any element.
+    pub fn debug_active_elements(&self, world: &World) -> Vec<crate::game_scene::DebugUiElement> {
+        let Some(active) = self.active_panel else {
+            return Vec::new();
+        };
+        let Some(info) = self
+            .handle_to_instance
+            .values()
+            .find(|instance| instance.parent_entity == active)
+        else {
+            return Vec::new();
+        };
+        let panel = Rect::new(0.0, 0.0, info.canvas_size_px.x, info.canvas_size_px.y);
+        info.components
+            .iter()
+            .filter(|component| {
+                !matches!(
+                    component,
+                    GuiComponentRenderInfo::Image { texture, .. }
+                        if texture.eq_ignore_ascii_case("cursor.pcx")
+                )
+            })
+            .map(|component| {
+                let rect = component.canvas_rect(panel);
+                let normalized = [
+                    rect.x / panel.w,
+                    rect.y / panel.h,
+                    rect.w / panel.w,
+                    rect.h / panel.h,
+                ];
+                let (kind, texture, text, label, entity_id) = match component {
+                    GuiComponentRenderInfo::Image {
+                        texture,
+                        interactive,
+                        entity,
+                        label,
+                        ..
+                    } => (
+                        if *interactive { "button" } else { "image" },
+                        Some(texture.clone()),
+                        None,
+                        label.clone().or_else(|| {
+                            entity.and_then(|entity| {
+                                world
+                                    .borrow::<View<dark::properties::PropSymName>>()
+                                    .ok()
+                                    .and_then(|names| {
+                                        names.get(entity).ok().map(|name| name.0.clone())
+                                    })
+                            })
+                        }),
+                        entity.map(|entity| entity.inner() as i32),
+                    ),
+                    GuiComponentRenderInfo::Text { text, .. } => {
+                        ("text", None, Some(text.clone()), None, None)
+                    }
+                };
+                crate::game_scene::DebugUiElement {
+                    kind: kind.to_owned(),
+                    texture,
+                    text,
+                    label,
+                    entity_id,
+                    rect: [rect.x, rect.y, rect.w, rect.h],
+                    // In VR there is no screen-space MFD rectangle; retain the
+                    // field as panel-normalized coordinates for tooling.
+                    screen_rect: normalized,
+                }
+            })
+            .collect()
+    }
+
     fn render_filtered(
         &mut self,
         asset_cache: &mut AssetCache,

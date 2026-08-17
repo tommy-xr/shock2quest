@@ -41,10 +41,10 @@ use dark::{
         PropFrameAnimState, PropHasRefs, PropHitPoints, PropLimbModel, PropLocalPlayer,
         PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
         PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
-        PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts, PropTeleported,
-        PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState, PropTweqModelConfig,
-        PropertyDefinition, RenderType, TeleportSource, ToLink, TripFlags, TweqAnimationState,
-        WrappedEntityId,
+        PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts, PropSymName,
+        PropTeleported, PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState,
+        PropTweqModelConfig, PropertyDefinition, RenderType, TeleportSource, ToLink, TripFlags,
+        TweqAnimationState, WrappedEntityId,
     },
     ss2_entity_info::{self, SystemShock2EntityInfo},
     tag_database::{TagQuery, TagQueryItem},
@@ -128,6 +128,13 @@ const LOAD_EVENT_PUMP_ENTITY_INTERVAL: usize = 32;
 const VR_BACKPACK_FORWARD: f32 = 5.0;
 const VR_BACKPACK_UP: f32 = 3.0;
 const VR_BACKPACK_WORLD_SCALE: f32 = 0.55;
+
+/// Head-relative authored-space placement for the narrow portrait reader.
+/// After Dark's scale conversion the panel center is 1.5 world units forward
+/// and 1.4 units above the player origin, keeping its 0.75 x 1.18 canvas fully
+/// framed and within ordinary controller reach.
+const VR_MEDIA_FORWARD: f32 = 3.75;
+const VR_MEDIA_UP: f32 = 3.5;
 
 fn presentation_world_panel_size(
     presentation: crate::PresentationMode,
@@ -608,6 +615,12 @@ pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
 /// flat host. See `projects/flat-ui-panels.md` §5.
 #[derive(Unique, Clone, Copy)]
 pub struct MapPanelEntity(pub EntityId);
+
+/// Nonserialized player-owned host for the audio-log reader. Physical log
+/// discs belong to their source mission; this host is rebuilt on every mission
+/// so a persisted `(deck, log)` can be localized and replayed anywhere.
+#[derive(Unique, Clone, Copy)]
+pub struct MediaPanelEntity(pub EntityId);
 
 /// The automap location (`PropMapLoc`) of the mapped room the player most
 /// recently entered - the player's *current* map location. The automap uses it
@@ -1108,6 +1121,27 @@ impl MissionCore {
             ));
             world.add_unique(MapPanelEntity(entity));
         }
+
+        // Both presentations share the exact MediaGui canvas. Flat docks this
+        // synthetic host in its MFD slot; VR positions the same host in front
+        // of the player's current gaze and routes it through GuiManager.
+        let media_panel = world.add_entity((
+            Links::empty(),
+            PropScripts {
+                scripts: vec!["internal_media".to_owned()],
+                inherits: false,
+            },
+            dark::properties::PropTemplateId { template_id: -1 },
+            PropSymName("Audio Log Reader".to_owned()),
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                cell: 0,
+            },
+            RuntimePropTransform(Matrix4::identity()),
+            RuntimePropDoNotSerialize,
+        ));
+        world.add_unique(MediaPanelEntity(media_panel));
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
 
@@ -3095,11 +3129,9 @@ impl MissionCore {
         }
     }
 
-    /// Consume an audio-log pickup while retaining its ECS entity as the
-    /// backing object for the currently open reader panel. Retail SS2 destroys
-    /// the disc after copying its log identity into the player's PDA; the
-    /// reader in this port is entity-bound, so removing its world presence is
-    /// the equivalent transition without invalidating the panel mid-frob.
+    /// Consume an audio-log pickup after copying its identity into the PDA.
+    /// The ECS entity remains as inert mission state, while playback binds the
+    /// shared MediaGui to the nonserialized player-owned reader host.
     ///
     /// `PropHasRefs(false)` persists through mission save/load, removing the
     /// model from rendering on both the current and reconstructed mission. The
@@ -3112,23 +3144,24 @@ impl MissionCore {
     }
 
     /// Resolve an audio log's reader strings from `level<deck>.str` and cache
-    /// them on the disc for `MediaGui` to render.
+    /// them on the supplied `MediaGui` host. Returns true only when a real
+    /// transcript was found, so callers never mark a log read or play audio
+    /// after opening an empty backdrop.
     ///
     /// `RuntimePropLogData` is runtime-only and deliberately not serialized, so
-    /// this runs both when the log is collected and again each time the reader
-    /// is opened - otherwise a log collected before a save would open a blank
-    /// backdrop after loading.
+    /// this runs each time the reader is opened - otherwise a log collected
+    /// before a save would open a blank backdrop after loading.
     fn attach_log_reader_strings(
         &mut self,
         entity_id: EntityId,
         deck: u32,
         log: u32,
         asset_cache: &mut AssetCache,
-    ) {
+    ) -> bool {
         let level_file = format!("level{deck:02}.str");
         let Some(strings) = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, &level_file)
         else {
-            return;
+            return false;
         };
         // The .str values carry literal backslash-n escapes ("AMANPOUR
         // 07.JUL.14\nre: New code\n"); unescape them into real line breaks so
@@ -3138,15 +3171,17 @@ impl MissionCore {
                 .get(&format!("{prefix}{log}"))
                 .map(|s| s.replace("\\n", "\n"))
         };
-        self.world.add_component(
-            entity_id,
-            crate::runtime_props::RuntimePropLogData {
-                name: get("logname"),
-                text: get("logtext"),
-                portrait: get("logportrait"),
-                icon: get("logicon"),
-            },
-        );
+        let data = crate::runtime_props::RuntimePropLogData {
+            name: get("logname"),
+            text: get("logtext"),
+            portrait: get("logportrait"),
+            icon: get("logicon"),
+        };
+        if data.text.as_deref().is_none_or(str::is_empty) {
+            return false;
+        }
+        self.world.add_component(entity_id, data);
+        true
     }
 
     pub fn make_physical(&mut self, entity_id: EntityId) {
@@ -4012,115 +4047,145 @@ impl MissionCore {
                     deck,
                     log,
                 } => {
-                    // Record the log identity into the persistent collection...
+                    // Retail pickup files the identity and acknowledges it; it
+                    // does not play the log or open the reader. Quest now has
+                    // a production Y binding for the same explicit playback
+                    // action as flat presentation, so the old VR auto-play
+                    // stopgap is no longer needed.
                     {
                         let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                         quests.collect_log(deck, log);
                     }
-                    self.attach_log_reader_strings(entity_id, deck, log, asset_cache);
-
-                    // VR has no discrete-action mapper yet, so `ReadLastUnreadLog`
-                    // is unreachable there and the disc is retired from the world
-                    // on collection - without this, a Quest player could never
-                    // hear a log at all. Flat keeps the faithful split (collecting
-                    // files it; reading plays it). Stopgap: remove once VR can
-                    // trigger the action (#921).
-                    if game_options.presentation_mode != crate::PresentationMode::Flat {
-                        effects.push_front(Effect::PlaySound {
-                            handle: AudioHandle::new(),
-                            source: Some(entity_id),
-                            name: format!("LOG{deck:02}{log:02}"),
-                            spatial: false,
-                        });
-                    }
                     // Retail copies the entry into the PDA and destroys the
-                    // pickup. Keep only the entity-bound reader state; retire
-                    // the disc from the rendered, physical, frobbable world.
+                    // pickup. Retire it from rendered, physical and container
+                    // presence; the player-owned reader carries presentation.
                     self.consume_log_pickup(entity_id);
                 }
 
-                Effect::ReadLastUnreadLog => {
-                    // The reader is entity-bound, so playback needs the disc
-                    // that carries this log. Logs collected on an earlier deck
-                    // left their disc behind with that mission (#741), so pick
-                    // the newest unread log that actually resolves here rather
-                    // than letting an unreachable one wedge the key forever.
-                    let unread: Vec<(u32, u32)> = self
+                Effect::ReadLastUnreadLog { head_rotation } => {
+                    let panel_entity = self
+                        .world
+                        .borrow::<UniqueView<MediaPanelEntity>>()
+                        .ok()
+                        .map(|panel| panel.0);
+                    let Some(panel_entity) = panel_entity else {
+                        game_log!(WARN, "audio log reader host is unavailable");
+                        continue;
+                    };
+
+                    // Y is also the production dismiss affordance in VR. The
+                    // next press re-enters this path, re-resolves and replays
+                    // the latest collected log even when it is already read.
+                    if game_options.presentation_mode == crate::PresentationMode::Vr
+                        && self.gui.active_panel() == Some(panel_entity)
+                    {
+                        self.gui.close_panel(
+                            &mut self.world,
+                            &mut self.physics,
+                            &mut self.script_world,
+                            &mut self.id_to_physics,
+                        );
+                        continue;
+                    }
+
+                    // Resolving a candidate's reader strings can fail (a log
+                    // collected on an earlier deck, a missing transcript), so
+                    // walk the preference-ordered candidates and open the first
+                    // one that actually resolves - taking only the front entry
+                    // would let one unresolvable log wedge the control forever
+                    // (it is never marked read, so it stays at the front).
+                    let candidates: Vec<(u32, u32)> = self
                         .world
                         .borrow::<UniqueView<QuestInfo>>()
-                        .map(|quest_info| {
-                            quest_info
-                                .collected_logs()
-                                .iter()
-                                .rev()
-                                .filter(|entry| !entry.read)
+                        .map(|quests| {
+                            quests
+                                .logs_for_reader()
                                 .map(|entry| (entry.deck, entry.log))
                                 .collect()
                         })
                         .unwrap_or_default();
-
-                    let target = {
-                        let v_log = self
-                            .world
-                            .borrow::<View<dark::properties::PropLog>>()
-                            .unwrap();
-                        let v_data = self
-                            .world
-                            .borrow::<View<crate::runtime_props::RuntimePropLogData>>()
-                            .unwrap();
-                        unread.into_iter().find_map(|(deck, log)| {
-                            // A (deck, log) pair is not unique across the
-                            // campaign - command1 object 2382 and command2 2379
-                            // both author deck 6 / log 5 - so prefer the disc
-                            // that was actually collected (only it carries the
-                            // resolved reader strings) over an untouched twin
-                            // still lying in the current mission.
-                            let mut matches = v_log
-                                .iter()
-                                .with_id()
-                                .filter(|(_, authored)| {
-                                    authored.deck == deck && authored.log == log
-                                })
-                                .map(|(entity_id, _)| entity_id);
-                            let first = matches.next()?;
-                            let collected = std::iter::once(first)
-                                .chain(matches)
-                                .find(|entity_id| v_data.get(*entity_id).is_ok());
-                            Some((collected.unwrap_or(first), deck, log))
-                        })
+                    if candidates.is_empty() {
+                        game_log!(INFO, "no collected audio log is available");
+                        continue;
+                    }
+                    let resolved = candidates.into_iter().find(|(deck, log)| {
+                        self.attach_log_reader_strings(panel_entity, *deck, *log, asset_cache)
+                    });
+                    let Some((deck, log)) = resolved else {
+                        game_log!(
+                            WARN,
+                            "unable to open audio log reader: no collected log has a localized transcript here"
+                        );
+                        continue;
                     };
+                    self.world.add_component(
+                        panel_entity,
+                        dark::properties::PropLog {
+                            deck,
+                            email: 33,
+                            log,
+                            note: 0,
+                            video: 0,
+                        },
+                    );
+                    self.script_world.dispatch(Message {
+                        to: panel_entity,
+                        payload: MessagePayload::PanelOpened,
+                    });
 
-                    match target {
-                        Some((disc, deck, log)) => {
-                            // Re-resolve the strings: they are runtime-only, so
-                            // a log collected before a save has none after load.
-                            self.attach_log_reader_strings(disc, deck, log, asset_cache);
-                            // Reaching the reader without a frob still needs the
-                            // per-open reset a frob-open would have given it
-                            // (the transcript starts at the top).
-                            self.script_world.dispatch(Message {
-                                to: disc,
-                                payload: MessagePayload::PanelOpened,
-                            });
-                            if let Ok(mut quest_info) =
-                                self.world.borrow::<UniqueViewMut<QuestInfo>>()
-                            {
-                                quest_info.mark_log_read(deck, log);
-                            }
-                            if game_options.presentation_mode == crate::PresentationMode::Flat {
-                                self.flat_ui.open_unbound(disc);
-                            }
-                            effects.push_front(Effect::PlaySound {
-                                handle: AudioHandle::new(),
-                                source: None,
-                                name: format!("LOG{deck:02}{log:02}"),
-                                spatial: false,
-                            });
-                        }
-                        None => {
-                            game_log!(INFO, "no unread log is readable here");
+                    match game_options.presentation_mode {
+                        crate::PresentationMode::Flat => self.flat_ui.open_unbound(panel_entity),
+                        crate::PresentationMode::Vr => {
+                            let (player_position, player_rotation) = {
+                                let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                                (player.pos, player.rotation * head_rotation)
+                            };
+                            let offset = player_rotation
+                                * vec3(
+                                    0.0,
+                                    VR_MEDIA_UP / SCALE_FACTOR,
+                                    -VR_MEDIA_FORWARD / SCALE_FACTOR,
+                                );
+                            let panel_position = player_position + offset;
+                            let panel_rotation =
+                                Quaternion::from_angle_y(cgmath::Deg(180.0)) * player_rotation;
+                            self.world.add_component(
+                                panel_entity,
+                                PropPosition {
+                                    position: panel_position,
+                                    rotation: panel_rotation,
+                                    cell: 0,
+                                },
+                            );
+                            self.world.add_component(
+                                panel_entity,
+                                RuntimePropTransform(
+                                    Matrix4::from_translation(panel_position)
+                                        * Matrix4::from(panel_rotation),
+                                ),
+                            );
+                            self.gui.open_panel(
+                                panel_entity,
+                                false,
+                                &mut self.world,
+                                &mut self.physics,
+                                &mut self.script_world,
+                                &mut self.id_to_physics,
+                            );
                         }
                     }
+
+                    // Only after a localized reader is bound to the active
+                    // presentation do read state and audio advance together.
+                    if let Ok(mut quest_info) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
+                        quest_info.mark_log_read(deck, log);
+                    }
+                    effects.push_front(Effect::PlaySound {
+                        handle: AudioHandle::new(),
+                        source: None,
+                        name: format!("LOG{deck:02}{log:02}"),
+                        spatial: false,
+                    });
                 }
 
                 Effect::ToggleMap => {
@@ -8066,15 +8131,22 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 .unwrap_or(0);
             (name, template_id)
         };
-        let active_panel = self.flat_ui.active_panel().map(|entity| {
-            let (name, template_id) = panel_identity(entity);
-            crate::game_scene::DebugUiPanel {
-                entity_id: entity.inner() as i32,
-                template_id,
-                name,
-                elements: self.flat_ui.debug_elements(&self.world),
-            }
-        });
+        let flat_panel = self.flat_ui.active_panel();
+        let active_panel = flat_panel
+            .or_else(|| self.gui.active_panel())
+            .map(|entity| {
+                let (name, template_id) = panel_identity(entity);
+                crate::game_scene::DebugUiPanel {
+                    entity_id: entity.inner() as i32,
+                    template_id,
+                    name,
+                    elements: if flat_panel == Some(entity) {
+                        self.flat_ui.debug_elements(&self.world)
+                    } else {
+                        self.gui.debug_active_elements(&self.world)
+                    },
+                }
+            });
         // The top-docked inventory strip (Tab metagame mode), same element
         // contract as the MFD panel.
         let strip = self.flat_ui.strip_entity().map(|entity| {
