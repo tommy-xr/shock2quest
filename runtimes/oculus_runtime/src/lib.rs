@@ -450,6 +450,9 @@ fn main() {
     let mut swapchain = None;
     let mut event_storage = xr::EventDataBuffer::new();
     let mut session_running = false;
+    // Set once a scene has asked to quit and we've asked OpenXR to exit, so the
+    // request is made exactly once (the runtime takes several frames to answer).
+    let mut exit_requested = false;
     let now = Instant::now();
     let engine = engine::android();
     let bundle_storage = engine.get_storage();
@@ -473,7 +476,14 @@ fn main() {
     // Keep servicing them at milestones inside the synchronous first load,
     // before the per-frame pump below exists.
     #[cfg(target_os = "android")]
-    engine::platform::set_event_pump(Some(android_pump_events));
+    {
+        // `set_event_pump` takes a plain `fn()`; the drain's "was the activity
+        // destroyed" answer is only read at teardown.
+        fn pump_events() {
+            android_pump_events();
+        }
+        engine::platform::set_event_pump(Some(pump_events));
+    }
     let mut game = shock2vr::App::init(options, bundle_storage);
     // The real HMD orientation, from the previous frame's located view.
     // `input_context` is built before `locate_views` runs, so this frame's view
@@ -651,6 +661,24 @@ fn main() {
             // Don't grind up the CPU
             std::thread::sleep(Duration::from_millis(100));
             continue;
+        }
+
+        // A scene asked to quit (the main menu's Quit item). OpenXR owns
+        // teardown: xrRequestExitSession makes the runtime walk us through
+        // STOPPING - where the handler above ends the session - to EXITING,
+        // which breaks 'main_loop. `should_quit` latches, so it is read here,
+        // outside the wait/begin/end frame sequence: the failure path below
+        // leaves the loop, and doing that mid-frame would strand an
+        // xrWaitFrame with no matching xrBeginFrame.
+        if !exit_requested && game.should_quit() {
+            exit_requested = true;
+            println!("SHOCK2QUEST_XR_EXIT_REQUESTED");
+            if let Err(error) = session.request_exit() {
+                // No orderly path left; leave the loop and finish the activity
+                // rather than lingering on a session nobody can end.
+                println!("SHOCK2QUEST_XR_EXIT_REQUEST_FAILED error={error:?}");
+                break 'main_loop;
+            }
         }
         // println!(
         //     " - After polling events: {}",
@@ -1206,6 +1234,37 @@ fn main() {
         //render_time = Instant::now();
     }
 
+    // The session is over (EXITING / LOSS_PENDING, or an instance loss). Just
+    // returning is not enough on Android: ndk-glue runs `main` on a thread it
+    // spawned, so the NativeActivity - and the process - would stay up with
+    // nothing rendering, which the headset shows as a black void. Ask Android
+    // to finish the activity, keep servicing its queues while it does, then end
+    // the process.
+    #[cfg(target_os = "android")]
+    {
+        println!("SHOCK2QUEST_XR_SHUTDOWN - finishing the activity");
+        // ndk-glue 0.6 deprecates this in favor of `ndk_context`, which hands
+        // back the JavaVM and the Java activity object - not the
+        // `ANativeActivity` that `finish()` needs. This is still the only way
+        // to reach ANativeActivity_finish from here.
+        #[allow(deprecated)]
+        ndk_glue::native_activity().finish();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline && !android_pump_events() {
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        // `process::exit` runs no destructors, so hand the XR objects back
+        // explicitly first - otherwise even the clean exit destroys neither the
+        // session nor the instance, and the runtime service can carry that
+        // state into the next launch.
+        drop(swapchain);
+        drop(frame_stream);
+        drop(frame_wait);
+        drop(session);
+        drop(xr_instance);
+        std::process::exit(0);
+    }
+
     // egl_display
     // let config = egl
     //     .choose_first_config(display, &attributes)
@@ -1314,12 +1373,14 @@ fn end_frame_with_no_layers(
 /// which queue actually has something pending, so every read below is
 /// guaranteed not to block.
 ///
-/// Teardown is deliberately *not* driven from here. The OpenXR session state
-/// machine already exits the main loop on EXITING/LOSS_PENDING after a clean
+/// Returns whether the activity was destroyed during this drain. Teardown is
+/// deliberately *not* driven from that during the main loop: the OpenXR session
+/// state machine already exits it on EXITING/LOSS_PENDING after a clean
 /// `session.end()`; breaking out on ndk-glue's `Destroy` instead would tear
 /// down GL and XR objects after the activity is already gone, with the session
-/// possibly never ended - strictly worse ordering. `Destroy` is logged and the
-/// drain stops for the frame.
+/// possibly never ended - strictly worse ordering. The flag is only read after
+/// the loop, where it ends the post-`finish()` wait as soon as Android has
+/// actually torn the activity down. `Destroy` also stops the drain for the frame.
 ///
 /// The input events are finished as *unhandled* on purpose: gameplay input
 /// arrives through OpenXR actions, and these only need to be consumed so the
@@ -1328,7 +1389,7 @@ fn end_frame_with_no_layers(
 /// must be honored - when it takes the event (IME and friends) it owns it, and
 /// finishing it ourselves would be a double free.
 #[cfg(target_os = "android")]
-fn android_pump_events() {
+fn android_pump_events() -> bool {
     use ndk::looper::{Poll, ThreadLooper};
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1346,7 +1407,7 @@ fn android_pump_events() {
                 "android_pump_events: no ALooper for this thread - Android queues are NOT being serviced"
             );
         }
-        return;
+        return false;
     };
 
     // Bounded so a flooded queue can never starve rendering; anything left
@@ -1364,7 +1425,7 @@ fn android_pump_events() {
                         // state, so the rest of the lifecycle is informational.
                         if event == ndk_glue::Event::Destroy {
                             println!("android_pump_events: activity destroyed");
-                            return;
+                            return true;
                         }
                     }
                 }
@@ -1396,6 +1457,7 @@ fn android_pump_events() {
             }
         }
     }
+    false
 }
 
 /// Convert a floor-origin STAGE-space position (meters) into the game's pawn

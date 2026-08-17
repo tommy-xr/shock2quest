@@ -458,6 +458,10 @@ export interface FrameSnapshot {
   mission: string;
   /** True once the retail finale has entered its terminal ending cutscene. */
   campaign_completed: boolean;
+  /** True once a scene asked the runtime to quit (the main menu's Quit). The
+   * debug runtime stays up regardless, so this is how the quit path is
+   * observed headlessly. */
+  quit_requested: boolean;
   player: PlayerSnapshot;
   entity_count: number;
   debug_features: string[];
