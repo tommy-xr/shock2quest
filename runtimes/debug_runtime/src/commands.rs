@@ -685,6 +685,10 @@ pub struct FrameSnapshot {
     pub mission: String,
     /// True once the retail finale has entered its terminal ending cutscene.
     pub campaign_completed: bool,
+    /// True once a scene has asked the runtime to quit (the main menu's Quit).
+    /// The debug runtime deliberately stays up - an automation session must not
+    /// kill itself - so this is how the quit path is observed headlessly.
+    pub quit_requested: bool,
     pub player: PlayerInfo,
     pub entity_count: usize,
     pub debug_features: Vec<String>,

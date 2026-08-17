@@ -1890,6 +1890,7 @@ fn capture_frame_snapshot(
         },
         mission: game.scene_name().to_string(),
         campaign_completed: game.campaign_completed(),
+        quit_requested: game.should_quit(),
         player: {
             // Real player state from the active world (position, look, and the
             // held/wielded entities), or zeros when the scene has no player.

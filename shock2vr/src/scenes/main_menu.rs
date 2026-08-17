@@ -180,6 +180,28 @@ fn vr_pointer(input_context: &InputContext, panel: &WorldPanel) -> (Option<Vecto
     vr_frontend_pointer(input_context, vec2(CANVAS_W, CANVAS_H), panel)
 }
 
+/// What a selected menu entry asks the game to do. Split out of `update` so the
+/// mapping is assertable without a running game - notably Quit, whose effect is
+/// the only thing that makes the runtimes shut down.
+fn effects_for_action(action: Option<MenuAction>) -> Vec<Effect> {
+    match action {
+        Some(MenuAction::NewGame) => {
+            vec![Effect::GlobalEffect(GlobalEffect::TransitionLevel {
+                level_file: NEW_GAME_MISSION.to_owned(),
+                loc: None,
+                entities_to_trigger: vec![],
+                vitals_transition:
+                    crate::scripts::PlayerVitalsTransition::InitializeFromDestination,
+            })]
+        }
+        Some(MenuAction::LoadGame) => {
+            vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
+        }
+        Some(MenuAction::Quit) => vec![Effect::GlobalEffect(GlobalEffect::Quit)],
+        None => Vec::new(),
+    }
+}
+
 /// Shared click core: both presentations reduce to "a point on the canvas plus
 /// a pressed flag", so the rising-edge rule and the hit regions live here once.
 fn resolve_click_at(
@@ -376,22 +398,7 @@ impl GameScene for MainMenuScene {
             self.sfx.click();
         }
 
-        match action {
-            Some(MenuAction::NewGame) => {
-                vec![Effect::GlobalEffect(GlobalEffect::TransitionLevel {
-                    level_file: NEW_GAME_MISSION.to_owned(),
-                    loc: None,
-                    entities_to_trigger: vec![],
-                    vitals_transition:
-                        crate::scripts::PlayerVitalsTransition::InitializeFromDestination,
-                })]
-            }
-            Some(MenuAction::LoadGame) => {
-                vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
-            }
-            Some(MenuAction::Quit) => vec![Effect::GlobalEffect(GlobalEffect::Quit)],
-            None => Vec::new(),
-        }
+        effects_for_action(action)
     }
 
     fn render(
@@ -523,6 +530,17 @@ mod tests {
             &menu_rects(None),
         );
         assert_eq!(action, Some(MenuAction::Quit));
+    }
+
+    /// Selecting Quit must ask the game to quit - the runtimes shut down off
+    /// this effect and nothing else.
+    #[test]
+    fn quit_asks_the_game_to_quit() {
+        assert!(matches!(
+            effects_for_action(Some(MenuAction::Quit)).as_slice(),
+            [Effect::GlobalEffect(GlobalEffect::Quit)]
+        ));
+        assert!(effects_for_action(None).is_empty());
     }
 
     #[test]

@@ -450,6 +450,9 @@ fn main() {
     let mut swapchain = None;
     let mut event_storage = xr::EventDataBuffer::new();
     let mut session_running = false;
+    // Set once a scene has asked to quit and we've asked OpenXR to exit, so the
+    // request is made exactly once (the runtime takes several frames to answer).
+    let mut exit_requested = false;
     let now = Instant::now();
     let engine = engine::android();
     let bundle_storage = engine.get_storage();
@@ -860,6 +863,22 @@ fn main() {
         game.update(&time_context, &input_context, &mut action_state);
         let update_elapsed = update_started.elapsed();
 
+        // A scene asked to quit (the main menu's Quit item). OpenXR owns
+        // teardown: xrRequestExitSession makes the runtime walk us through
+        // STOPPING - where the handler above ends the session - to EXITING,
+        // which breaks 'main_loop. Done here, before xrBeginFrame, so we never
+        // abandon a frame we've already begun.
+        if !exit_requested && game.should_quit() {
+            exit_requested = true;
+            println!("SHOCK2QUEST_XR_EXIT_REQUESTED");
+            if let Err(error) = session.request_exit() {
+                // No orderly path left; leave the loop and finish the activity
+                // rather than lingering on a session nobody can end.
+                println!("SHOCK2QUEST_XR_EXIT_REQUEST_FAILED error={error:?}");
+                break 'main_loop;
+            }
+        }
+
         // Must be called before any rendering is done!
         frame_stream.begin().unwrap();
 
@@ -1204,6 +1223,29 @@ fn main() {
         //     println!();
         // }
         //render_time = Instant::now();
+    }
+
+    // The session is over (EXITING / LOSS_PENDING, or an instance loss). Just
+    // returning is not enough on Android: ndk-glue runs `main` on a thread it
+    // spawned, so the NativeActivity - and the process - would stay up with
+    // nothing rendering, which the headset shows as a black void. Ask Android
+    // to finish the activity, keep servicing its queues while it does, then end
+    // the process.
+    #[cfg(target_os = "android")]
+    {
+        println!("SHOCK2QUEST_XR_SHUTDOWN - finishing the activity");
+        // ndk-glue 0.6 deprecates this in favor of `ndk_context`, which hands
+        // back the JavaVM and the Java activity object - not the
+        // `ANativeActivity` that `finish()` needs. This is still the only way
+        // to reach ANativeActivity_finish from here.
+        #[allow(deprecated)]
+        ndk_glue::native_activity().finish();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            android_pump_events();
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        std::process::exit(0);
     }
 
     // egl_display
