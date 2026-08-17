@@ -352,6 +352,7 @@ pub fn load_mission_from_save_data(
     game_options: &GameOptions,
 ) -> (Mission, HashMap<String, EntitySaveData>) {
     let current_mission = save_data.global_data.active_mission.clone();
+    let active_healing = save_data.global_data.active_healing.clone();
 
     let populator: Box<dyn EntityPopulator> = {
         if let Some(save_data) = save_data
@@ -386,6 +387,13 @@ pub fn load_mission_from_save_data(
         &active_mission.mission_core.world,
         save_data.global_data.player_vitals,
     );
+    if let Ok(mut healing) = active_mission
+        .mission_core
+        .world
+        .borrow::<shipyard::UniqueViewMut<crate::scripts::healing_item::ActiveHealing>>()
+    {
+        *healing = active_healing;
+    }
 
     // A loaded mission rebuilds Rapier from scratch. Mark the restored player
     // so the first BeginIntersect events reconstruct already-existing sensor

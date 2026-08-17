@@ -26,6 +26,7 @@ mod energy_weapon;
 mod exp_cookie;
 mod frob_qb;
 pub mod gui;
+pub mod healing_item;
 mod internal_collision_type;
 mod internal_explosion;
 pub mod internal_fast_projectile;
@@ -117,6 +118,7 @@ use self::gui::{
     ComputerGui, ContainerGui, ElevatorGui, GamePigGui, HackableCrateGui, KeyPadGui, MapGui,
     MediaGui, ReplicatorGui, ResearchGui, TrainerGui, TrainerMode, TraitGui,
 };
+use self::healing_item::{HealingItemKind, HealingItemScript};
 use self::internal_frob_move::InternalFrobMove;
 use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::picture_swap::PictureSwap;
@@ -1045,9 +1047,9 @@ impl ScriptWorld {
 
             //goodies:
             "expcookie" => Box::new(ExpCookie::new()), // cyber modules
-            "medkitscript" => Box::new(UnimplementedScript::new(&script_name)), // cyber modules
+            "medkitscript" => Box::new(HealingItemScript::new(HealingItemKind::MedicalKit)),
             "speedpatch" => Box::new(UnimplementedScript::new(&script_name)), // speed boost
-            "radpatch" => Box::new(UnimplementedScript::new(&script_name)), // speed boost
+            "radpatch" => Box::new(UnimplementedScript::new(&script_name)),   // speed boost
             "autoinstallsoft" => Box::new(AutoInstallSoft::new()), // auto install software
             "strboost" => Box::new(UnimplementedScript::new(&script_name)), // strength boost
             "intboost" => Box::new(UnimplementedScript::new(&script_name)),
@@ -1063,7 +1065,7 @@ impl ScriptWorld {
                 Box::new(apparition::Apparition::new()),
             ])),
             "ectoplasm" => Box::new(UnimplementedScript::new(&script_name)),
-            "medpatchscript" => Box::new(UnimplementedScript::new(&script_name)),
+            "medpatchscript" => Box::new(HealingItemScript::new(HealingItemKind::MedPatch)),
             "psikitscript" => Box::new(PsiKitScript::new()),
             "computer" => gui_script(Box::new(ComputerGui)),
             "lightsoundon" => Box::new(NoopScript::new()),

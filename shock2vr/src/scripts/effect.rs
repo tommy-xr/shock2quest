@@ -257,6 +257,16 @@ pub enum Effect {
         hit_points: i32,
     },
 
+    /// Consume one Med Patch / Medical Kit and queue its retail timed healing
+    /// course. Invalid and full-health uses leave the source item untouched.
+    UseHealingItem {
+        entity_id: EntityId,
+        total: i32,
+        pulse: i32,
+        first_pulse_secs: f32,
+        pulse_interval_secs: f32,
+    },
+
     /// Install a soft on the character sheet and consume the object it came
     /// from. Emitted by `scripts::auto_install_soft` when a soft is frobbed in
     /// the world or taken from a container. The applier does the atomic
