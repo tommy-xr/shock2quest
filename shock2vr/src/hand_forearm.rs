@@ -15,10 +15,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use cgmath::{Matrix4, Quaternion, Vector3, vec2, vec3};
-use dark::importers::TEXTURE_IMPORTER;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{Geometry, Mesh, SceneObject, VertexPositionTextureNormal, mesh},
+    scene::{Geometry, SceneObject, VertexPositionTextureNormal, mesh},
 };
 
 /// The game's first-person hand texture; its top band is the suit cuff.
@@ -48,21 +47,6 @@ const FOREARM_RADIUS_METERS: f32 = 0.032;
 /// Sides around the tube. Sixteen is smooth enough for an arm-sized tube at
 /// arm's length and stays cheap on the Quest (16 * 4 = 64 triangles).
 const SEGMENTS: usize = 16;
-
-thread_local! {
-    static FOREARM_MESH: once_cell::unsync::OnceCell<Mesh> =
-        const { once_cell::unsync::OnceCell::new() };
-}
-
-/// A capped tube of unit length and unit diameter around +Z, spanning
-/// z = 0..1, with the sleeve band baked into its UVs.
-struct ForearmTube;
-
-impl Geometry for ForearmTube {
-    fn draw(&self) {
-        FOREARM_MESH.with(|cell| cell.get_or_init(|| mesh::create(build_vertices())).draw());
-    }
-}
 
 /// The tube as plain data - separate from `draw` so its winding and UVs are
 /// testable without a GL context.
@@ -127,24 +111,21 @@ fn build_vertices() -> Vec<VertexPositionTextureNormal> {
     vertices
 }
 
-/// The sleeve texture, or `None` on an install that has neither an upgraded nor
-/// the original encoding of it - in which case the hand renders without a
-/// forearm rather than with an untextured one.
-pub fn load_sleeve(asset_cache: &mut AssetCache) -> Option<Rc<dyn engine::texture::TextureTrait>> {
-    let resolved = dark::util::resolve_texture_name(asset_cache, SLEEVE_TEXTURE)?;
-    asset_cache
-        .get_opt::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, &resolved)
-        .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>)
-}
+/// Build the forearm once, at the identity transform, with its mesh and
+/// material owned by the returned object: callers clone it per hand per frame
+/// (the clone shares both) and only set the transform.
+///
+/// `None` on an install that has neither an upgraded nor the original encoding
+/// of the sleeve texture - the hand then renders without a forearm rather than
+/// with an untextured one.
+pub fn template(asset_cache: &mut AssetCache) -> Option<SceneObject> {
+    let texture = dark::util::load_texture_with_fallback(asset_cache, SLEEVE_TEXTURE)?
+        as Rc<dyn engine::texture::TextureTrait>;
 
-/// Build the forearm once, at the identity transform. Callers clone it per hand
-/// per frame (sharing its material and geometry) and set the transform, rather
-/// than rebuilding a material every frame for every hand.
-pub fn template(texture: Rc<dyn engine::texture::TextureTrait>) -> SceneObject {
-    SceneObject::create(
+    Some(SceneObject::create(
         RefCell::new(engine::scene::basic_material::create(texture, 1.0, 0.0)),
-        Rc::new(Box::new(ForearmTube) as Box<dyn Geometry>),
-    )
+        Rc::new(Box::new(mesh::create(build_vertices())) as Box<dyn Geometry>),
+    ))
 }
 
 /// Place a cloned [`template`] as the forearm of a hand at

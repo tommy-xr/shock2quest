@@ -123,16 +123,29 @@ per-model — probe with exaggerated single-axis offsets when tuning a new one.
 The glove *mechanics* are unchanged; only its look is. Three parts:
 
 - **Skin instead of glove.** `hand_glove.rs` skins the same GLB with
-  `assets/vr_hand_skin.png` rather than `vr_glove_color.jpg`. It is a flat
-  256x256 tone: the mean skin colour of the game's own first-person hand texture
-  `res/obj/txt16/HRPistArm.gif` — `(185, 139, 124)` — **divided by 1.5**, plus 2%
-  grain. The divide matters: both material shaders composite `texel * 0.5`
-  (ambient) `+ texel * emissivity`, and the hands render at emissivity 1.0, so an
-  undivided tone clips at white and washes out. It is deliberately flat, because
-  the glove's UV atlas scatters the hand across the map and any baked gradient
-  shows up as hard-edged patches where its islands abut. `load_hand_skin` is the
-  single loader, used by `debug_gloves` too, so the harness cannot drift onto a
-  different skin from the production hands.
+  `assets/vr_hand_skin.png` rather than `vr_glove_color.jpg`. The hand has to be
+  textured in the *glove's* UV atlas, so the skin map is that atlas recoloured:
+
+  ```
+  detail = luminance / gaussian_blur(luminance, size/32)   # local relief only
+  texel  = skin_tone * clamp(detail, 0.86, 1.14) ** 0.6    # softened by 1.5 px
+  ```
+
+  which keeps the glove's baked creases, wrinkles and seam shadows - the thing
+  that stops a hand reading as plastic - while dividing out its albedo, so black
+  leather and white straps don't land as light and dark patches of skin.
+  `skin_tone` is the mean skin colour of the game's own first-person hand
+  texture `res/obj/txt16/HRPistArm.gif` — `(185, 139, 124)` — **divided by 1.5**:
+  both material shaders composite `texel * 0.5` (ambient) `+ texel * emissivity`
+  and the hands render at emissivity 1.0, so an undivided tone clips at white
+  and washes out. `load_hand_skin` is the single loader, used by `debug_gloves`
+  too, so the harness cannot drift onto a different skin from the production
+  hands.
+
+  Two approaches were tried and rejected first: the game's own hand texture
+  (`HRPistArm.gif`) through the glove's UVs renders **magenta** - the glove's
+  atlas lands on that texture's transparent background, its layouts being
+  unrelated - and a flat skin tint reads as rough, featureless plastic.
 - **A sleeved forearm** (`shock2vr/src/hand_forearm.rs`). A capped tube (radius
   0.5, z = 0..1, 16 segments) running from 2 cm *inside* the wrist to 8.5 cm
   toward the elbow, 6.4 cm across, rigidly following the hand pose — no elbow, no
