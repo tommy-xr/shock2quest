@@ -59,8 +59,10 @@ const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
 /// Opacity for an entry the port has not implemented yet.
 const DISABLED_OPACITY: f32 = 0.3;
-/// Opacity for an implemented entry the pointer is not over.
-const IDLE_OPACITY: f32 = 0.6;
+/// Opacity for an implemented entry the pointer is not over. Kept well clear
+/// of [`HOVER_OPACITY`]: on a menu where one of the two live entries abandons
+/// the run, "which one am I about to press" has to read at a glance.
+const IDLE_OPACITY: f32 = 0.45;
 /// Opacity for the entry under the pointer.
 const HOVER_OPACITY: f32 = 1.0;
 
@@ -177,8 +179,9 @@ fn label_lines(label: &str) -> Vec<&str> {
         .collect()
 }
 
-/// The menu entry at a canvas point, if any. Shared by the click and the hover
-/// highlight so the two can never disagree about where an entry is.
+/// The menu entry at a canvas point, if any. Both the click and the hover
+/// highlight go through this, so the two can never disagree about where an
+/// entry is - or about which entries are live at all.
 fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<PauseAction> {
     let mut canvas = UiCanvas::<PauseAction>::with_events(vec2(CANVAS_W, CANVAS_H));
     for (item, rect) in MENU_ITEMS.iter().zip(rects) {
@@ -224,7 +227,11 @@ fn resolve_click(
             let (action, pressed) = resolve_click_at(point, p.pressed, last_pressed, rects);
             (action, pressed, point)
         }
-        None => (None, false, None),
+        // No pointer this frame is not a release: on desktop the cursor is
+        // captured for mouse-look until `wants_pointer` flips it on, so the
+        // frame the menu opens has no pointer at all. Clearing the guard here
+        // would re-arm the click edge under a still-held button.
+        None => (None, last_pressed, None),
     }
 }
 
@@ -249,6 +256,9 @@ pub struct PauseMenu {
     /// Screen size from the latest render, so `update` maps the flat pointer
     /// into canvas space consistently with how the canvas is drawn.
     last_screen_size: Vector2<f32>,
+    /// Set when a click closed the menu, and cleared once that click is
+    /// released. See [`PauseMenu::suspends_scene`].
+    closed_under_a_held_press: bool,
 }
 
 impl Default for PauseMenu {
@@ -268,11 +278,40 @@ impl PauseMenu {
             panel_anchor: FrontendPanelAnchor::new(),
             last_pressed: true,
             last_screen_size: vec2(CANVAS_W, CANVAS_H),
+            closed_under_a_held_press: false,
         }
     }
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Whether the active scene must stay frozen this frame.
+    ///
+    /// Wider than [`is_open`](Self::is_open) by one beat: the trigger that
+    /// pressed "Continue" is still down on the frame the menu closes, and
+    /// `VirtualHand` - which was never advanced while paused - would read it as
+    /// a fresh rising edge and fire the held weapon the instant the world came
+    /// back. The scene stays suspended until that press is released, which is
+    /// the same rising-edge rule the menu applies to itself on the way in.
+    pub fn suspends_scene(&self) -> bool {
+        self.open || self.closed_under_a_held_press
+    }
+
+    /// Clear the post-close latch once nothing is pressed any more.
+    pub fn poll_release(&mut self, input_context: &InputContext) {
+        if !self.closed_under_a_held_press {
+            return;
+        }
+        let hand_held = |hand: &crate::input_context::Hand| {
+            hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD
+        };
+        let pressed = hand_held(&input_context.right_hand)
+            || hand_held(&input_context.left_hand)
+            || input_context.pointer.is_some_and(|p| p.pressed);
+        if !pressed {
+            self.closed_under_a_held_press = false;
+        }
     }
 
     /// Open the menu in front of the player.
@@ -290,6 +329,13 @@ impl PauseMenu {
         self.vr_pointer_canvas = None;
         self.vr_pointer = FrontendPointerPass::default();
         self.last_pressed = true;
+    }
+
+    /// Close because an entry was clicked - the press that did it is still
+    /// held, so latch the scene shut until it is released.
+    pub fn close_after_click(&mut self) {
+        self.closed_under_a_held_press = true;
+        self.close();
     }
 
     pub fn close(&mut self) {
@@ -450,25 +496,24 @@ impl PauseMenu {
 
         // The original's opaque full-screen backdrop. In flat presentation this
         // is also the "dim the world" answer: it covers the view exactly as the
-        // original pause screen does. In VR it covers only the panel, and the
-        // world stays visible (and lit) around it - deliberately, since dimming
-        // the whole VR view would need a renderer-wide pass this skeleton does
-        // not add.
+        // original pause screen does. In VR it covers the panel only - but the
+        // panel is large and close enough to fill most of the field of view, so
+        // in practice the world reads as a border around it rather than a
+        // backdrop. Sizing the VR panel deliberately (and dimming what is left
+        // of the world behind it) is follow-up work this skeleton does not do.
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
-        let rects = menu_rects(
-            asset_cache
-                .get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE)
-                .as_deref()
-                .map(|r| r.as_slice()),
-        );
+        let rects = self.rects(asset_cache);
         let strings = asset_cache.get_opt(&STRINGS_IMPORTER, LABELS_FILE);
         let labels = menu_labels(strings.as_deref());
+        // The highlight resolves through the very same `hit` the click does, so
+        // an entry can never light up under a ray that would not activate it.
+        let hovered = pointer_canvas.and_then(|p| hit(p, &rects));
 
         for ((item, rect), label) in MENU_ITEMS.iter().zip(&rects).zip(&labels) {
             let opacity = if item.action.is_none() {
                 DISABLED_OPACITY
-            } else if pointer_canvas.is_some_and(|p| rect.contains(p)) {
+            } else if item.action == hovered {
                 HOVER_OPACITY
             } else {
                 IDLE_OPACITY
@@ -714,6 +759,77 @@ mod tests {
         assert!(!crate::scenes::MainMenuScene::new().is_pausable());
         assert!(!crate::scenes::GameOverScene::new().is_pausable());
         assert!(!crate::scenes::LoadGameScene::new().is_pausable());
+    }
+
+    /// The desktop opening frame: mouse-look still has the cursor captured, so
+    /// `InputContext::pointer` is `None`. Treating that as a release would
+    /// discard `open()`'s guard and let a still-held button click on frame 2.
+    #[test]
+    fn a_frame_without_a_pointer_is_not_a_release() {
+        let rects = menu_rects(None);
+        let (action, last, _) = resolve_click(None, true, SCREEN, &rects);
+        assert_eq!(action, None);
+        assert!(last, "a missing pointer must not clear the press guard");
+    }
+
+    /// The trigger that pressed "Continue" is still down on the frame the menu
+    /// closes; `VirtualHand` was never advanced while paused, so resuming into
+    /// it reads as a fresh rising edge and fires the held weapon.
+    #[test]
+    fn the_scene_stays_suspended_until_the_selecting_press_is_released() {
+        let mut menu = PauseMenu::new();
+        menu.open();
+        assert!(menu.suspends_scene());
+
+        menu.close_after_click();
+        assert!(!menu.is_open());
+        assert!(menu.suspends_scene(), "the click is still held");
+
+        // Still held: a trigger over the threshold keeps the world frozen.
+        let mut held = InputContext::default();
+        held.right_hand.trigger_value = 1.0;
+        menu.poll_release(&held);
+        assert!(menu.suspends_scene());
+
+        // The flat pointer counts too.
+        let clicking = InputContext {
+            pointer: Some(Pointer2D {
+                position: vec2(0.5, 0.5),
+                pressed: true,
+            }),
+            ..InputContext::default()
+        };
+        menu.poll_release(&clicking);
+        assert!(menu.suspends_scene());
+
+        menu.poll_release(&InputContext::default());
+        assert!(!menu.suspends_scene(), "released: the world may run again");
+    }
+
+    /// A toggle-close (the menu button, not a click) has nothing held to wait
+    /// for, so it must not strand the simulation.
+    #[test]
+    fn closing_with_the_toggle_resumes_immediately() {
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.close();
+        assert!(!menu.suspends_scene());
+    }
+
+    /// The highlight must come from the same hit test as the click, so a
+    /// dimmed stub can never light up and a live entry can never fail to.
+    #[test]
+    fn only_the_entry_a_click_would_activate_is_highlighted() {
+        let rects = menu_rects(None);
+        assert_eq!(
+            hit(rects[RESUME_INDEX].center(), &rects),
+            Some(PauseAction::Resume)
+        );
+        assert_eq!(hit(rects[SAVE_INDEX].center(), &rects), None);
+        assert_eq!(
+            hit(rects[QUIT_INDEX].center(), &rects),
+            Some(PauseAction::QuitToMainMenu)
+        );
     }
 
     #[test]

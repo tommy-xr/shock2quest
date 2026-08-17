@@ -242,7 +242,7 @@ impl PlayerLifeState {
         }
     }
 
-    fn is_alive(&self) -> bool {
+    pub fn is_alive(&self) -> bool {
         matches!(self, PlayerLifeState::Alive)
     }
 }
@@ -3969,6 +3969,21 @@ impl MissionCore {
         }
     }
 
+    /// Drop out of the flat "use" (metagame) mode: put the inventory strip
+    /// away and let go of anything on the cursor. The cursor item was never
+    /// removed from the backpack (the host only hid it from the strip), so
+    /// clearing the cursor is enough - the item is already reachable there
+    /// (projects/flat-ui.md §1.5), and a save or transition mid-drag serializes
+    /// it correctly with no orphan.
+    ///
+    /// Shared by `ToggleUseMode` and `CloseUseMode` so the two exits from use
+    /// mode cannot drift apart.
+    fn leave_use_mode(&mut self) {
+        self.flat_use_mode = false;
+        self.flat_ui.take_cursor_item();
+        self.flat_ui.set_strip(None);
+    }
+
     pub fn handle_effects(
         &mut self,
         effects: Vec<Effect>,
@@ -4107,29 +4122,19 @@ impl MissionCore {
                         // player into shooter mode with it still up.
                         if self.flat_ui.active_panel().is_some() {
                             self.flat_ui.close();
+                        } else if self.flat_use_mode {
+                            self.leave_use_mode();
                         } else {
-                            self.flat_use_mode = !self.flat_use_mode;
+                            self.flat_use_mode = true;
                             // Use mode shows the player's backpack as the
                             // top-docked inventory strip: bind the strip to the
                             // `internal_inventory` entity (whose GuiScript
                             // already emits SetUI every frame).
-                            // Leaving use mode drops any item on the cursor. It was
-                            // never removed from the backpack (the host only hid it
-                            // from the strip), so clearing the cursor is enough -
-                            // the item is already reachable there (projects/flat-ui.md
-                            // §1.5). This also means a save/transition mid-drag
-                            // serializes it correctly, with no orphan.
-                            if !self.flat_use_mode {
-                                self.flat_ui.take_cursor_item();
-                            }
-                            let strip_entity = if self.flat_use_mode {
-                                self.world
-                                    .borrow::<UniqueView<PlayerInfo>>()
-                                    .ok()
-                                    .map(|player| player.inventory_entity_id)
-                            } else {
-                                None
-                            };
+                            let strip_entity = self
+                                .world
+                                .borrow::<UniqueView<PlayerInfo>>()
+                                .ok()
+                                .map(|player| player.inventory_entity_id);
                             self.flat_ui.set_strip(strip_entity);
                         }
                     }
@@ -4144,9 +4149,7 @@ impl MissionCore {
                     if game_options.presentation_mode == crate::PresentationMode::Flat {
                         self.flat_ui.close();
                         if self.flat_use_mode {
-                            self.flat_use_mode = false;
-                            self.flat_ui.take_cursor_item();
-                            self.flat_ui.set_strip(None);
+                            self.leave_use_mode();
                         }
                     }
                 }

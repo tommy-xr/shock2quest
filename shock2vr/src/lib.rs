@@ -433,6 +433,10 @@ pub struct Game {
     /// gameplay scene - missions and `debug_*` alike - gets pause for free, and
     /// so the paused scene keeps rendering while its update is skipped.
     pause_menu: pause_menu::PauseMenu,
+
+    /// Wall-clock time spent with the simulation suspended, subtracted from the
+    /// clock the scene sees. See [`Game::scene_time`].
+    time_suspended: std::time::Duration,
 }
 
 /// Player state for debug introspection. Entity ids use `EntityId::inner() as
@@ -1200,6 +1204,7 @@ impl Game {
             should_quit: false,
             campaign_completed: false,
             pause_menu: pause_menu::PauseMenu::new(),
+            time_suspended: std::time::Duration::ZERO,
         }
     }
 
@@ -1217,7 +1222,7 @@ impl Game {
         // Publish the simulation clock for the diagnostics ring buffers
         // (audio log / message trace), so their entries can be stamped
         // without threading `Time` through every record site.
-        audio_log::set_sim_time(time.total.as_secs_f64());
+        audio_log::set_sim_time(self.scene_time(time).total.as_secs_f64());
 
         // Drive a background transition: the loading screen animates while the parse
         // runs on its worker thread. Once the parse has finished AND the loading screen
@@ -1237,15 +1242,23 @@ impl Game {
         // scene is not updated at all, so a scene-routed effect could never
         // close the menu again.
         self.update_pause_menu(time, input_context, actions);
-        if self.pause_menu.is_open() {
+        if self.pause_menu.suspends_scene() {
             // Paused: the scene is not updated (nothing simulates, and
             // `VirtualHand` is never advanced, so hands are inert but keep
             // whatever they were holding). It is still *rendered* every frame
             // by `render`/`render_per_eye` - in VR the world must never stop
             // drawing.
+            //
+            // Nothing simulated, so nothing aged: bank this frame's wall time
+            // as suspended rather than letting it reach the scene's clock.
+            // Without this a minute spent in the menu expires every AI deadline
+            // and jumps every total-time-driven animation the moment the world
+            // comes back.
+            self.time_suspended += time.elapsed;
             actions.clear_triggered();
             return;
         }
+        let time = &self.scene_time(time);
 
         // Convert triggered actions into effects; triggered actions are
         // consumed here so injected actions (e.g. from the debug runtime)
@@ -1331,6 +1344,17 @@ impl Game {
         }
     }
 
+    /// The clock the active scene sees: wall time with every suspended frame
+    /// taken back out, so simulation time stops while the pause menu is up.
+    /// `elapsed` is untouched - a suspended frame never reaches the scene at
+    /// all, so its delta is never applied.
+    fn scene_time(&self, time: &Time) -> Time {
+        Time {
+            elapsed: time.elapsed,
+            total: time.total.saturating_sub(self.time_suspended),
+        }
+    }
+
     /// Whether the pause menu is allowed to be up right now.
     ///
     /// Frontend screens are already system UI with their own way out; a dead
@@ -1349,7 +1373,7 @@ impl Game {
         self.active_game_scene
             .world()
             .borrow::<UniqueView<PlayerLifeState>>()
-            .map(|state| state.as_str() == "alive")
+            .map(|state| state.is_alive())
             .unwrap_or(true)
     }
 
@@ -1360,6 +1384,8 @@ impl Game {
         input_context: &input_context::InputContext,
         actions: &input::InputActionState,
     ) {
+        self.pause_menu.poll_release(input_context);
+
         if !self.pause_is_allowed() {
             // Also covers a menu that was up when the scene stopped being
             // pausable (the player died, a transition started): close rather
@@ -1390,9 +1416,9 @@ impl Game {
             &self.options,
         );
         match action {
-            Some(PauseAction::Resume) => self.pause_menu.close(),
+            Some(PauseAction::Resume) => self.pause_menu.close_after_click(),
             Some(PauseAction::QuitToMainMenu) => {
-                self.pause_menu.close();
+                self.pause_menu.close_after_click();
                 self.handle_global_effect(GlobalEffect::ShowMainMenu);
             }
             None => {}
@@ -1745,16 +1771,18 @@ impl Game {
         // let text_obj_0_0 =
         //     SceneObject::screen_space_text("0, 0", font.clone(), 16.0, 0.5, 0.0, 0.0);
 
-        // While the flat pause menu is up its backdrop covers the screen, and
-        // the scene's own screen-space UI (viewmodel, HUD, MFD) must not show
-        // through it. Dropping it here rather than relying on draw order is
-        // deliberate: the renderer runs a transparent pass after the opaque
-        // one, so the HUD's translucent meters land on top of the backdrop no
-        // matter which order the objects are handed over in. The 3D world is
-        // unaffected - `render` still emits it every frame.
-        let mut objs = if self.pause_menu.is_open()
-            && self.options.presentation_mode != PresentationMode::Vr
-        {
+        // While the pause menu is up, the scene's own screen-space UI
+        // (viewmodel, HUD, MFD, and the frozen frob highlights and item labels
+        // that this path emits in VR too) must not show through it. Dropping it
+        // here rather than relying on draw order is deliberate: the renderer
+        // runs a transparent pass after the opaque one, so the HUD's
+        // translucent meters land on top of the backdrop no matter which order
+        // the objects are handed over in. It is dropped in BOTH presentations
+        // because the two VR hosts disagree about where per-eye objects land in
+        // the list (the debug runtime appends, the oculus runtime prepends), so
+        // leaving them in would depth-fight the panel on one host only. The 3D
+        // world is unaffected - `render` still emits it every frame.
+        let mut objs = if self.pause_menu.is_open() {
             Vec::new()
         } else {
             self.active_game_scene.render_per_eye(

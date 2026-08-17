@@ -36,7 +36,9 @@ mod panel_anchor;
 mod pointer_visual;
 #[cfg(test)]
 pub use frontend_pointer::test_support;
-pub use frontend_pointer::{FrontendPointerPass, FrontendRay, vr_frontend_pointer_pass};
+pub use frontend_pointer::{
+    FrontendPointerPass, FrontendRay, VR_TRIGGER_THRESHOLD, vr_frontend_pointer_pass,
+};
 pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
 pub use pointer_visual::PointerVisuals;
 
