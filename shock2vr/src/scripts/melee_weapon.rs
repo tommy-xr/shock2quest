@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use cgmath::{EuclideanSpace, vec3};
-use dark::properties::{CollisionType, PropCollisionType, PropTemplateId};
+use dark::properties::{CollisionType, PropCollisionType};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
@@ -11,7 +11,10 @@ use crate::{
     util::get_position_from_transform,
 };
 
-use super::{Effect, Message, MessagePayload, Script, script_util::play_impact_sound};
+use super::{
+    Effect, Message, MessagePayload, Script,
+    script_util::{entity_class_template_id, play_impact_sound},
+};
 
 // Script to handle collision type
 pub struct MeleeWeapon {}
@@ -100,10 +103,7 @@ fn is_vr(world: &World) -> bool {
 /// no receptron for the stim): the caller emits nothing at all, so a swing at
 /// scenery is silent rather than a free 1-point tap.
 fn authored_contact_damage(world: &World, weapon: EntityId, victim: EntityId) -> Option<f32> {
-    let template_id = world
-        .borrow::<View<PropTemplateId>>()
-        .ok()
-        .and_then(|v| v.get(weapon).ok().map(|t| t.template_id))?;
+    let template_id = entity_class_template_id(world, weapon)?;
     let damage = contact_stim_damage(world, template_id, victim);
     (damage > 0.0).then_some(damage)
 }
@@ -162,7 +162,9 @@ impl Script for MeleeWeapon {
 mod tests {
     use std::collections::HashMap;
 
-    use dark::properties::{Link, Links, ReceptronEffect, ReceptronOptions, ToLink};
+    use dark::properties::{
+        Link, Links, PropTemplateId, ReceptronEffect, ReceptronOptions, ToLink,
+    };
 
     use crate::mission::stim_response::GlobalContactStims;
 
@@ -173,7 +175,7 @@ mod tests {
     /// x1 WeaponBash damage receptron.
     const WRENCH: i32 = -928;
     const WEAPON_BASH: i32 = -3058;
-    const WEAPON_BASH_INTENSITY: f32 = 6.0;
+    const WEAPON_BASH_INTENSITY: f32 = 9.0;
 
     /// A world where the weapon's authored contact stim resolves against the
     /// target's receptron - so a landed swing costs WEAPON_BASH_INTENSITY.
@@ -270,6 +272,31 @@ mod tests {
             (amount - WEAPON_BASH_INTENSITY).abs() < f32::EPSILON,
             "got {amount}"
         );
+    }
+
+    /// Campaign save/load retains the concrete MedSci1 object id in
+    /// `PropTemplateId` and restores the stable Wrench archetype beside it.
+    /// Contact damage must use the latter: positive id 990 has no entry in the
+    /// gamesys-wide contact-stim table.
+    #[test]
+    fn a_restored_concrete_wrench_uses_its_canonical_template_for_damage() {
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        world.add_component(
+            weapon,
+            (
+                PropTemplateId { template_id: 990 },
+                crate::runtime_props::RuntimePropCanonicalTemplateId(WRENCH),
+            ),
+        );
+        let mut script = TriggeredMeleeWeapon::new();
+        script.handle_message(
+            weapon,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::TriggerPull,
+        );
+
+        assert_damage(collide(&mut script, &world, weapon, target), target);
     }
 
     /// Type effectiveness still applies: a target with no WeaponBash receptron
