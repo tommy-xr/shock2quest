@@ -608,9 +608,6 @@ fn process_events(
             // glfw::WindowEvent::Key(Key::Space, _, Action::Press, _) => {
             //     engine::audio::play_audio(audio)
             // }
-            glfw::WindowEvent::Key(Key::Escape, _, Action::Press, _) => {
-                window.set_should_close(true)
-            }
             glfw::WindowEvent::CursorPos(x, y) => {
                 let mouse_update = camera_update_mouse(camera_context, x as f32, y as f32);
                 rot_yaw = 1.0 * mouse_update.delta_x;

@@ -24,6 +24,7 @@ export type InputAction =
   | "Reload"
   | "CyclePsiPower"
   | "ToggleUseMode"
+  | "TogglePauseMenu"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
 
@@ -466,6 +467,8 @@ export interface FrameSnapshot {
    * debug runtime stays up regardless, so this is how the quit path is
    * observed headlessly. */
   quit_requested: boolean;
+  /** True while the in-game pause menu is up (the simulation is frozen). */
+  paused: boolean;
   player: PlayerSnapshot;
   entity_count: number;
   debug_features: string[];
