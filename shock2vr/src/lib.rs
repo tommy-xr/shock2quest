@@ -24,6 +24,7 @@ mod mission;
 pub mod palette;
 pub mod pathfinding;
 pub mod paths;
+pub mod pause_menu;
 mod physics;
 pub mod player_stats;
 mod psi;
@@ -136,7 +137,9 @@ use tracing::{Level, info, span, trace, warn};
 
 use crate::{
     game_scene::GameScene,
-    mission::{GlobalContext, Mission, PlayerInfo},
+    input::InputAction,
+    mission::{GlobalContext, Mission, PlayerInfo, PlayerLifeState},
+    pause_menu::PauseAction,
     scripts::Effect,
 };
 use zip_asset_path::ZipAssetPath;
@@ -425,6 +428,11 @@ pub struct Game {
     // Set only once the retail finale chain reaches DIE-SHODAN-DIE and the
     // ending cutscene has become the active scene.
     campaign_completed: bool,
+
+    /// The in-game pause menu. It lives here rather than in a scene so every
+    /// gameplay scene - missions and `debug_*` alike - gets pause for free, and
+    /// so the paused scene keeps rendering while its update is skipped.
+    pause_menu: pause_menu::PauseMenu,
 }
 
 /// Player state for debug introspection. Entity ids use `EntityId::inner() as
@@ -841,7 +849,15 @@ impl Game {
     /// runtimes use this to show the OS cursor and feed `InputContext::pointer`
     /// rather than capturing the mouse for look.
     pub fn wants_pointer(&self) -> bool {
-        self.active_game_scene.wants_pointer()
+        // The pause menu is pointer-driven in flat presentation, and it is
+        // drawn over scenes that otherwise capture the mouse for look.
+        self.pause_menu.is_open() || self.active_game_scene.wants_pointer()
+    }
+
+    /// Whether the in-game pause menu is up (and therefore the simulation is
+    /// frozen). Automation reads this to tell "paused" from "stuck".
+    pub fn is_paused(&self) -> bool {
+        self.pause_menu.is_open()
     }
 
     /// Name of the currently active scene (e.g. "medsci1.mis"), tracking
@@ -1183,6 +1199,7 @@ impl Game {
             mission_to_save_data,
             should_quit: false,
             campaign_completed: false,
+            pause_menu: pause_menu::PauseMenu::new(),
         }
     }
 
@@ -1213,6 +1230,21 @@ impl Game {
                 let pending = self.pending_transition.take().unwrap();
                 self.finish_transition(pending);
             }
+        }
+
+        // The pause menu is a Game-level overlay, so its toggle is consumed
+        // here instead of being dispatched into the scene: while paused the
+        // scene is not updated at all, so a scene-routed effect could never
+        // close the menu again.
+        self.update_pause_menu(time, input_context, actions);
+        if self.pause_menu.is_open() {
+            // Paused: the scene is not updated (nothing simulates, and
+            // `VirtualHand` is never advanced, so hands are inert but keep
+            // whatever they were holding). It is still *rendered* every frame
+            // by `render`/`render_per_eye` - in VR the world must never stop
+            // drawing.
+            actions.clear_triggered();
+            return;
         }
 
         // Convert triggered actions into effects; triggered actions are
@@ -1297,6 +1329,92 @@ impl Game {
         for effect in global_effects {
             self.handle_global_effect(effect);
         }
+    }
+
+    /// Whether the pause menu is allowed to be up right now.
+    ///
+    /// Frontend screens are already system UI with their own way out; a dead
+    /// player belongs to the game-over screen, which owns that moment; and a
+    /// level transition in flight owns the scene swap, so pausing over the
+    /// loading screen would only hide it.
+    fn pause_is_allowed(&self) -> bool {
+        self.pending_transition.is_none()
+            && self.active_game_scene.is_pausable()
+            && self.player_is_alive()
+    }
+
+    fn player_is_alive(&self) -> bool {
+        // Scenes without the life-state unique (the debug scenes) have no death
+        // to be in, so they count as alive.
+        self.active_game_scene
+            .world()
+            .borrow::<UniqueView<PlayerLifeState>>()
+            .map(|state| state.as_str() == "alive")
+            .unwrap_or(true)
+    }
+
+    /// Apply the pause toggle and, while open, drive the overlay.
+    fn update_pause_menu(
+        &mut self,
+        time: &Time,
+        input_context: &input_context::InputContext,
+        actions: &input::InputActionState,
+    ) {
+        if !self.pause_is_allowed() {
+            // Also covers a menu that was up when the scene stopped being
+            // pausable (the player died, a transition started): close rather
+            // than strand the player on a panel over a screen that has taken
+            // over. The toggle itself is left unhandled - i.e. ignored.
+            self.pause_menu.close();
+            return;
+        }
+
+        // `just_triggered` is a rising edge by construction (mappers trigger on
+        // key/button down), so holding the menu button cannot re-toggle.
+        if actions.just_triggered(InputAction::TogglePauseMenu) {
+            if self.pause_menu.is_open() {
+                self.pause_menu.close();
+            } else {
+                self.open_pause_menu();
+            }
+        }
+
+        if !self.pause_menu.is_open() {
+            return;
+        }
+
+        let action = self.pause_menu.update(
+            time.elapsed,
+            input_context,
+            &mut self.asset_cache,
+            &self.options,
+        );
+        match action {
+            Some(PauseAction::Resume) => self.pause_menu.close(),
+            Some(PauseAction::QuitToMainMenu) => {
+                self.pause_menu.close();
+                self.handle_global_effect(GlobalEffect::ShowMainMenu);
+            }
+            None => {}
+        }
+    }
+
+    fn open_pause_menu(&mut self) {
+        // Taking over the screen suspends the flat metagame (Tab/MFD) mode, so
+        // the player is not left with a cursor-driven overlay under the pause
+        // panel. Effects reach a scene through `handle_effects`, which stays
+        // callable while the scene's `update` is skipped.
+        let global_effects = self.active_game_scene.handle_effects(
+            vec![Effect::CloseUseMode],
+            &self.global_context,
+            &self.options,
+            &mut self.asset_cache,
+            &mut self.audio_context,
+        );
+        for effect in global_effects {
+            self.handle_global_effect(effect);
+        }
+        self.pause_menu.open();
     }
 
     fn save_to_file(&self, file_name: String) -> Result<(), SaveGameError> {
@@ -1591,9 +1709,19 @@ impl Game {
     }
 
     pub fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        let (scene, pos, rot) = self
+        let (mut scene, pos, rot) = self
             .active_game_scene
             .render(&mut self.asset_cache, &self.options);
+
+        // The pause panel hangs in front of the still-rendered world. It is
+        // anchored in the tracked play space (like the head and hands that
+        // aim at it), so it is mapped into world coordinates with the same
+        // pawn transform the runtime builds its camera from.
+        let pawn_to_world = Matrix4::from_translation(pos) * Matrix4::from(rot);
+        scene.extend(
+            self.pause_menu
+                .render(&mut self.asset_cache, &self.options, pawn_to_world),
+        );
 
         // let font = File::open(resource_path("res/fonts/mainfont.FON")).unwrap();
         // let mut font_reader = BufReader::new(font);
@@ -1617,13 +1745,34 @@ impl Game {
         // let text_obj_0_0 =
         //     SceneObject::screen_space_text("0, 0", font.clone(), 16.0, 0.5, 0.0, 0.0);
 
-        let objs = self.active_game_scene.render_per_eye(
+        // While the flat pause menu is up its backdrop covers the screen, and
+        // the scene's own screen-space UI (viewmodel, HUD, MFD) must not show
+        // through it. Dropping it here rather than relying on draw order is
+        // deliberate: the renderer runs a transparent pass after the opaque
+        // one, so the HUD's translucent meters land on top of the backdrop no
+        // matter which order the objects are handed over in. The 3D world is
+        // unaffected - `render` still emits it every frame.
+        let mut objs = if self.pause_menu.is_open()
+            && self.options.presentation_mode != PresentationMode::Vr
+        {
+            Vec::new()
+        } else {
+            self.active_game_scene.render_per_eye(
+                &mut self.asset_cache,
+                view,
+                projection,
+                screen_size,
+                &self.options,
+            )
+        };
+
+        // Drawn last so the pause panel sits over the scene's own screen-space
+        // UI (viewmodel, HUD, MFD).
+        objs.extend(self.pause_menu.render_per_eye(
             &mut self.asset_cache,
-            view,
-            projection,
             screen_size,
             &self.options,
-        );
+        ));
 
         let world_position = vec3(0.0, 1.0, 0.0);
         let screen_width = screen_size.x;

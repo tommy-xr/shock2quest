@@ -181,6 +181,10 @@ impl DebugScene {
 }
 
 impl GameScene for DebugScene {
+    fn is_pausable(&self) -> bool {
+        true
+    }
+
     fn update(
         &mut self,
         time: &Time,
@@ -375,6 +379,10 @@ impl<H> HookedDebugScene<H> {
 }
 
 impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
+    fn is_pausable(&self) -> bool {
+        true
+    }
+
     fn update(
         &mut self,
         time: &Time,

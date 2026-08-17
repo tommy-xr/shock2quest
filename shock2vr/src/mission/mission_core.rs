@@ -4135,6 +4135,22 @@ impl MissionCore {
                     }
                 }
 
+                Effect::CloseUseMode => {
+                    // Idempotent counterpart to `ToggleUseMode`, used when
+                    // something outside the mission (the pause menu) takes over
+                    // the screen: put the overlay away and drop back to shooter
+                    // mode, dropping any cursor item back into the backpack it
+                    // was never actually removed from.
+                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                        self.flat_ui.close();
+                        if self.flat_use_mode {
+                            self.flat_use_mode = false;
+                            self.flat_ui.take_cursor_item();
+                            self.flat_ui.set_strip(None);
+                        }
+                    }
+                }
+
                 Effect::OpenPanel { entity } => {
                     // Bind the presentation's single object-panel slot to the
                     // frobbed entity (the original's frob-script -> overlay
@@ -9668,6 +9684,10 @@ fn wildcard_match(text: &str, pattern: &str) -> bool {
 }
 
 impl crate::game_scene::GameScene for MissionCore {
+    fn is_pausable(&self) -> bool {
+        true
+    }
+
     fn update(
         &mut self,
         time: &Time,
