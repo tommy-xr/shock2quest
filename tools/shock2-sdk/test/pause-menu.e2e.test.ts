@@ -198,3 +198,116 @@ test(
     );
   },
 );
+
+// --- #1018 polish: one set of hands, and a dimmed world behind the panel -----
+//
+// Both claims are made about the frame the renderer was actually handed:
+// `/v1/scene` reports every submitted object with the render path that produced
+// it, so "the scene's own hands are not drawn" and "a dim layer is drawn" are
+// assertions rather than screenshot impressions. Negative-first, against
+// `origin/main` at the time of writing: the paused frame carried 8 in-game hand
+// objects on top of the menu's own pointer hands, and no dim layer at all.
+
+interface SceneObjectSummary {
+  source: string | null;
+  transparency: number | null;
+  clear_depth: boolean;
+  position: [number, number, number];
+}
+
+async function sceneObjects(game: GameServer): Promise<SceneObjectSummary[]> {
+  const response = await fetch(`${game.baseUrl}/v1/scene`);
+  assert.ok(response.ok, `/v1/scene failed: ${response.status}`);
+  const body = (await response.json()) as { objects: SceneObjectSummary[] };
+  return body.objects;
+}
+
+const withSource = (objects: SceneObjectSummary[], source: string) =>
+  objects.filter((o) => o.source === source);
+
+test(
+  "pausing in VR swaps the scene's hands for the menu's own, and dims the world",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort + 4,
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 30 });
+
+    const running = await sceneObjects(game);
+    assert.ok(
+      withSource(running, "player_hands").length > 0,
+      "the VR scene should draw the player's hands while it is running",
+    );
+    assert.equal(
+      withSource(running, "pause_dim").length,
+      0,
+      "nothing may dim the world while the player is playing",
+    );
+
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 30 });
+    assert.equal((await game.info()).paused, true);
+
+    const paused = await sceneObjects(game);
+    assert.equal(
+      withSource(paused, "player_hands").length,
+      0,
+      "while paused the menu's pointer hands are the only hands (issue #1018)",
+    );
+
+    const dim = withSource(paused, "pause_dim");
+    assert.equal(dim.length, 1, "exactly one dimming layer, behind the panel");
+    assert.ok(
+      dim[0].transparency !== null && dim[0].transparency > 0.02 && dim[0].transparency < 0.98,
+      `the dim must actually be translucent, got ${dim[0].transparency}`,
+    );
+    // The panel renders over the world unconditionally (#1017's clear-depth
+    // overlay group, explicitly kept). The dim now opens that group, so it has
+    // to carry the clear - otherwise a wall in the player's face would swallow
+    // the dim and leave the menu floating over a bright world.
+    assert.equal(dim[0].clear_depth, true, "the dim opens the overlay group");
+
+    // Resuming puts the world back exactly as it was.
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 30 });
+    const resumed = await sceneObjects(game);
+    assert.ok(
+      withSource(resumed, "player_hands").length > 0,
+      "the hands come back on resume",
+    );
+    assert.equal(
+      withSource(resumed, "pause_dim").length,
+      0,
+      "and the dim goes away with the menu",
+    );
+  },
+);
+
+test(
+  "flat presentation is untouched: no dim layer, no hand suppression to do",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort + 5,
+    });
+    await game.step({ frames: 30 });
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 30 });
+    assert.equal((await game.info()).paused, true);
+
+    // `SIM.PCX` is an opaque full-screen backdrop when it is drawn in screen
+    // space, so the flat pause screen already hides the world; adding a world
+    // dim there would be a second, differently-tuned answer to a solved
+    // problem - and a divergence between the two presentations.
+    const paused = await sceneObjects(game);
+    assert.equal(
+      withSource(paused, "pause_dim").length,
+      0,
+      "the comfort dim is a VR treatment only",
+    );
+  },
+);

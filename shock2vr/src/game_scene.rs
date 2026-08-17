@@ -150,6 +150,19 @@ pub trait GameScene {
         false
     }
 
+    /// Hide (or restore) the scene's own hand visuals.
+    ///
+    /// While the pause menu is up it draws the frontend pointer - a hand at
+    /// each tracked controller, plus beams and a hit dot - and the scene's VR
+    /// gloves would render a *second* pair inside them (issue #1018). `Game`
+    /// sets this from the pause state every frame, so suppression lives at the
+    /// pause layer: what a hand is allowed to look like while gameplay runs is
+    /// untouched, and the scene never has to know a menu exists.
+    ///
+    /// Only the visuals: the scene is already frozen while paused, so nothing
+    /// about what the hands are *holding* changes here.
+    fn set_hand_visuals_hidden(&mut self, _hidden: bool) {}
+
     /// Whether the player's collider is currently crouched (the *actual*
     /// physics state - stand-up can be refused for lack of headroom). Drives
     /// the crouch-aware camera height; non-mission scenes have no player.

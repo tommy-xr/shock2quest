@@ -1735,6 +1735,12 @@ impl Game {
     }
 
     pub fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
+        // While the menu is up it draws its own pointer hands, so the scene's
+        // must not draw a second pair inside them (issue #1018). Set every
+        // frame, from here, so the scene goes back to normal the frame the menu
+        // closes without either side latching state.
+        self.active_game_scene
+            .set_hand_visuals_hidden(self.pause_menu.is_open());
         let (mut scene, pos, rot) = self
             .active_game_scene
             .render(&mut self.asset_cache, &self.options);

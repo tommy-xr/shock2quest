@@ -903,6 +903,11 @@ pub struct MissionCore {
     template_to_particle_riders: HashMap<i32, Vec<(i32, dark::properties::ParticleAttachOptions)>>,
     template_to_particle_attachees: HashMap<i32, Vec<i32>>,
     interaction: Box<dyn PlayerInteraction>,
+    /// Set by `Game` while a system-UI overlay owns the pointer (the pause
+    /// menu), so the interaction controller's own visuals - the VR hands and
+    /// the forearm HUD panels - are not drawn under it. See
+    /// [`crate::game_scene::GameScene::set_hand_visuals_hidden`].
+    hand_visuals_hidden: bool,
     pub visibility_engine: Box<dyn VisibilityEngine>,
     pub teleport_system: TeleportSystem,
     pub pending_entity_triggers: Vec<String>,
@@ -1674,6 +1679,7 @@ impl MissionCore {
 
         let mut mission_core = MissionCore {
             interaction,
+            hand_visuals_hidden: false,
             level_name: mission,
             entity_info: entity_info_rc.clone(),
             template_to_particle_riders,
@@ -6741,8 +6747,12 @@ impl MissionCore {
 
         // The interaction controller owns its own visuals: VR draws hand models
         // + forearm HUD panels; flat draws nothing here (its weapon viewmodel is
-        // drawn on top in `render_per_eye`).
-        scene.append(&mut self.interaction.render(asset_cache, &self.world));
+        // drawn on top in `render_per_eye`). While a system-UI overlay is up the
+        // overlay draws its own pointer hands, so these are suppressed - drawing
+        // both is the two-sets-of-hands bug (issue #1018).
+        if !self.hand_visuals_hidden {
+            scene.append(&mut self.interaction.render(asset_cache, &self.world));
+        }
 
         // The old synthetic blue inventory cube remains a desktop diagnostic.
         // VR presents the authored INVBACK canvas through GuiManager instead.
@@ -9689,6 +9699,10 @@ fn wildcard_match(text: &str, pattern: &str) -> bool {
 impl crate::game_scene::GameScene for MissionCore {
     fn is_pausable(&self) -> bool {
         true
+    }
+
+    fn set_hand_visuals_hidden(&mut self, hidden: bool) {
+        self.hand_visuals_hidden = hidden;
     }
 
     fn update(

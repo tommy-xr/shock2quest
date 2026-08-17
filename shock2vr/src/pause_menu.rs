@@ -21,21 +21,25 @@
 //! paused" rule free: `VirtualHand` is never advanced, so nothing is grabbed,
 //! dropped or fired, and whatever was already held is still held on resume.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
-use cgmath::{Matrix4, Vector2, vec2};
+use cgmath::{Matrix4, Vector2, Vector3, vec2};
 use dark::{
     importers::{STRINGS_IMPORTER, UI_LAYOUT_IMPORTER},
     map::MapRect,
 };
-use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
+use engine::{
+    assets::asset_cache::AssetCache,
+    scene::{SceneObject, SceneObjectDebugTag, color_material, quad},
+};
 
 use crate::{
     GameOptions, PresentationMode,
     input_context::{InputContext, Pointer2D},
     ui::{
         FrontendPanelAnchor, FrontendPointerPass, HAlign, PointerVisuals, Rect, ScaleMode,
-        UiCanvas, VAlign, VR_COMPONENT_Z_STEP, pointer_to_canvas, vr_frontend_pointer_pass,
+        UiCanvas, VAlign, VR_COMPONENT_Z_STEP, WorldPanel, pointer_to_canvas,
+        vr_frontend_pointer_pass,
     },
 };
 
@@ -73,6 +77,89 @@ const FALLBACK_BUTTON_TOP: f32 = 20.0;
 const FALLBACK_BUTTON_W: f32 = 179.0;
 const FALLBACK_BUTTON_H: f32 = 76.0;
 const FALLBACK_BUTTON_PITCH: f32 = 92.0;
+
+// ---------------------------------------------------------------------------
+// The VR comfort dim.
+//
+// Flat presentation needs none of this: `SIM.PCX` is an opaque full-screen
+// backdrop, so the world is already gone. In VR the panel covers about 50
+// degrees of a 100-degree field, and the frozen world around it - vivid, still,
+// and at a depth the eyes are no longer converging on - is what on-headset
+// testing reported as nauseating (issue #1018). A darkening layer behind the
+// panel is the standard answer: it says "this space is UI now" without hiding
+// where the player is standing.
+// ---------------------------------------------------------------------------
+
+/// How dark the world goes behind the panel: 0 leaves it untouched, 1 blacks it
+/// out completely. **This is the tuning knob** - the value wants a worn check,
+/// because how heavy a dim reads in a headset is not something a screenshot
+/// settles.
+const WORLD_DIM_STRENGTH: f32 = 0.72;
+/// What the world is dimmed *toward*. Black rather than a tint: any hue here
+/// would grade the whole scene and fight the panel art.
+const WORLD_DIM_COLOR: Vector3<f32> = Vector3 {
+    x: 0.0,
+    y: 0.0,
+    z: 0.0,
+};
+/// How far behind the panel the dim hangs, in metres. Far enough that the two
+/// coplanar quads cannot z-fight; near enough that the panel's own art still
+/// reads as sitting just in front of it rather than floating in a void.
+const WORLD_DIM_SETBACK: f32 = 0.25;
+/// Edge length of the dim quad, in metres. It only has to out-cover the
+/// headset's field of view from ~2.25 m away: 40 m covers +/-83 degrees, so the
+/// player cannot find its edge by looking around, and one unlit quad costs a
+/// single draw per eye however big it is.
+const WORLD_DIM_EXTENT: f32 = 40.0;
+/// `/v1/scene`'s label for the layer, so an automated check can assert the dim
+/// is there (and only while paused) instead of eyeballing a screenshot.
+const WORLD_DIM_SOURCE: &str = "pause_dim";
+
+/// The darkening layer that hangs behind the pause panel.
+///
+/// Part of the panel's **clear-depth overlay group**, not of the world: the
+/// group's depth clear (set on the first object, which is this one) is what
+/// makes both the dim and the panel immune to geometry in front of them. A
+/// world-depth-tested dim would be swallowed by the wall the player is standing
+/// against - exactly the failure the overlay group exists to prevent, and the
+/// behavior #1017 was praised for.
+///
+/// It sits *behind* the panel so the panel's own opaque backdrop occludes it,
+/// leaving the menu at full brightness over a dimmed world.
+///
+/// This object carries the group's `clear_depth`, because it is the first one
+/// [`PauseMenu::render`] emits.
+fn world_dim_layer(panel: &WorldPanel) -> SceneObject {
+    let mut object = SceneObject::new(
+        color_material::create(WORLD_DIM_COLOR),
+        Box::new(quad::create()),
+    );
+    object.set_transform(
+        Matrix4::from_translation(panel.center - panel.normal() * WORLD_DIM_SETBACK)
+            * Matrix4::from(panel.rotation)
+            * Matrix4::from_scale(WORLD_DIM_EXTENT),
+    );
+    // The material speaks in transparency (0 = opaque), the constant in "how
+    // dark does the world go" - the direction a human tunes in.
+    object.set_transparency(Some(1.0 - WORLD_DIM_STRENGTH));
+    // Translucent, and drawn before the panel: writing depth here would let the
+    // dim occlude the menu that draws over it.
+    object.set_depth_write(false);
+    // A modal panel the player cannot read is not a pause menu: world-locked
+    // two metres ahead, it lands inside a wall or a console often enough that
+    // depth-testing it against the world is not an option. The renderer treats
+    // everything from the first `clear_depth` object onward as an overlay group
+    // drawn after the world's own passes, and `Game` appends the menu's objects
+    // last, so the group is exactly the dim, the panel and its rays.
+    object.set_clear_depth(true);
+    object.set_debug_tag(Some(Rc::new(SceneObjectDebugTag {
+        entity_id: None,
+        name: None,
+        model: None,
+        source: Some(WORLD_DIM_SOURCE.to_owned()),
+    })));
+    object
+}
 
 /// What a click on the pause menu asks `Game` to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -415,7 +502,10 @@ impl PauseMenu {
         }
         let panel = self.panel_anchor.panel();
         let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
-        let mut objects = canvas.render_world_space(
+        // First in the list, and therefore first in the overlay group: the
+        // comfort dim, which the depth clear below rides on.
+        let mut objects = vec![world_dim_layer(&panel)];
+        let canvas_objects = canvas.render_world_space(
             asset_cache,
             panel.transform(),
             self.vr_pointer_canvas,
@@ -425,8 +515,10 @@ impl PauseMenu {
         // The controllers and their aim rays, drawn from the same pass that
         // resolved the highlight, so the beams can never promise a hover the
         // menu will not give. The canvas objects already in hand are the layer
-        // stack the hit dot has to float clear of.
-        let panel_layers = objects.len();
+        // stack the hit dot has to float clear of - the dim is not one of them,
+        // it hangs behind the panel rather than on it.
+        let panel_layers = canvas_objects.len();
+        objects.extend(canvas_objects);
         objects.extend(self.vr_pointer_visuals.render(
             asset_cache,
             &self.vr_pointer,
@@ -443,15 +535,10 @@ impl PauseMenu {
         for object in &mut objects {
             object.set_transform(pawn_to_world * object.get_transform());
         }
-        // A modal panel the player cannot read is not a pause menu: world-locked
-        // two metres ahead, it lands inside a wall or a console often enough
-        // that depth-testing it against the world is not an option. The
-        // renderer treats everything from the first `clear_depth` object onward
-        // as an overlay group drawn after the world's own passes, and `Game`
-        // appends these last, so the group is exactly the panel and its rays.
-        if let Some(first) = objects.first_mut() {
-            first.set_clear_depth(true);
-        }
+        // The overlay group starts at `world_dim_layer`'s `clear_depth`, which
+        // is why the dim is emitted first: the group is the dim, the panel and
+        // its rays, all drawn over the world.
+        debug_assert!(objects.first().is_some_and(|first| first.clear_depth));
         objects
     }
 
@@ -549,6 +636,7 @@ impl PauseMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::InnerSpace;
 
     /// The runtimes render 4:3, so PreserveAspect maps normalized coordinates
     /// straight onto the 640x480 canvas.
@@ -829,6 +917,71 @@ mod tests {
         assert_eq!(
             hit(rects[QUIT_INDEX].center(), &rects),
             Some(PauseAction::QuitToMainMenu)
+        );
+    }
+
+    /// The dim is a *comfort* layer, so the thing to pin is that it actually
+    /// darkens: an object that renders at full transparency is a no-op that
+    /// would still pass a "the layer exists" test.
+    #[test]
+    fn the_dim_layer_darkens_the_world() {
+        let object = world_dim_layer(&test_panel());
+        let transparency = object
+            .effective_transparency()
+            .expect("the dim must draw translucent, not opaque");
+        assert!(
+            (transparency - (1.0 - WORLD_DIM_STRENGTH)).abs() < 1e-6,
+            "the tuning constant must reach the material: {transparency}"
+        );
+        assert!(
+            (0.05..0.95).contains(&transparency),
+            "a dim that is invisible or opaque is not a dim: {transparency}"
+        );
+    }
+
+    /// Behind the panel, and wide enough that the player cannot find its edge.
+    /// A dim in *front* would grey out the menu it exists to make readable.
+    #[test]
+    fn the_dim_layer_hangs_behind_the_panel_and_out_covers_the_view() {
+        let panel = test_panel();
+        let object = world_dim_layer(&panel);
+        let center = object.get_transform().w.truncate();
+
+        let toward_viewer = (center - panel.center).dot(panel.normal());
+        assert!(
+            toward_viewer < 0.0,
+            "the dim must sit behind the panel, not in front of it: {toward_viewer}"
+        );
+        assert!(
+            (-toward_viewer - WORLD_DIM_SETBACK).abs() < 1e-4,
+            "the set-back must be the constant's, so the two cannot z-fight"
+        );
+
+        // Half-angle subtended from the head, at the panel distance plus the
+        // set-back. A Quest's field of view is about 50 degrees off-axis.
+        let distance = crate::ui::FRONTEND_PANEL_DISTANCE + WORLD_DIM_SETBACK;
+        let half_angle = (WORLD_DIM_EXTENT * 0.5 / distance).atan().to_degrees();
+        assert!(
+            half_angle > 60.0,
+            "the dim must out-cover the headset's field of view, covers +/-{half_angle}"
+        );
+    }
+
+    /// The overlay group starts at the first `clear_depth` object, and
+    /// everything from there on draws over the world. The dim is now first, so
+    /// it is the object that has to carry the clear - otherwise the group would
+    /// start at the panel and a wall in the player's face would swallow the
+    /// dim while leaving the menu floating over it.
+    #[test]
+    fn the_dim_layer_is_not_depth_tested_against_the_world() {
+        let object = world_dim_layer(&test_panel());
+        assert!(
+            object.clear_depth,
+            "the dim opens the overlay group; without the clear, the wall the              player is standing against swallows it"
+        );
+        assert!(
+            !object.depth_write,
+            "the dim must not write depth: the panel draws after it"
         );
     }
 
