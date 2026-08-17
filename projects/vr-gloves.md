@@ -118,33 +118,47 @@ use the generic held-weapon placement. Note the model long axes differ per
 weapon (pistol/AR along model Y, wrench along model X), so offset axes are
 per-model — probe with exaggerated single-axis offsets when tuning a new one.
 
-## Bare hands + forearm (#950, first pass)
+## Bare hands + sleeved forearm (#950, first pass)
 
 The glove *mechanics* are unchanged; only its look is. Three parts:
 
 - **Skin instead of glove.** `hand_glove.rs` skins the same GLB with
-  `assets/vr_hand_skin.png` rather than `vr_glove_color.jpg`. The skin map is a
-  256x256 procedural texture: base tone `(185, 139, 124)` - the mean skin colour
-  of the game's own first-person hand texture `res/obj/txt16/HRPistArm.gif` -
-  modulated by `0.74 + 0.26 * sin(pi*u)^0.7` across `u` (times a gentle
-  `0.96 + 0.04 * cos(pi*v)` along `v`) and 2% grain. The rendering is unlit
-  (`emissivity` 1.0), so all shading has to live in the texel; the `u` falloff
-  is what gives the forearm tube - whose `u` wraps its circumference - real
-  cylindrical shading, and it reads as soft tonal variation on the hand's atlas.
-  `load_hand_skin` is the single loader, used by `debug_gloves` too, so the
-  scene can't drift onto a different skin from the production hands.
-- **Forearm.** `engine::scene::cylinder` is a capped unit cylinder (radius 0.5,
-  z = 0..1, 16 segments) placed by `hand_glove::forearm_transform`: from 2 cm
-  *inside* the wrist (no gap when the wrist turns) to 16 cm toward the elbow
-  along the hand's local +Z, 6.4 cm across. It stops short of the forearm HUD
-  panel at ~19 cm (`hud::virtual_arms::FOREARM_OFFSET`) so the two never
-  intersect - a unit test guards that. It is rigidly attached to the hand pose:
-  no elbow, no IK.
+  `assets/vr_hand_skin.png` rather than `vr_glove_color.jpg`. It is a flat
+  256x256 tone: the mean skin colour of the game's own first-person hand texture
+  `res/obj/txt16/HRPistArm.gif` — `(185, 139, 124)` — **divided by 1.5**, plus 2%
+  grain. The divide matters: both material shaders composite `texel * 0.5`
+  (ambient) `+ texel * emissivity`, and the hands render at emissivity 1.0, so an
+  undivided tone clips at white and washes out. It is deliberately flat, because
+  the glove's UV atlas scatters the hand across the map and any baked gradient
+  shows up as hard-edged patches where its islands abut. `load_hand_skin` is the
+  single loader, used by `debug_gloves` too, so the harness cannot drift onto a
+  different skin from the production hands.
+- **A sleeved forearm** (`shock2vr/src/hand_forearm.rs`). A capped tube (radius
+  0.5, z = 0..1, 16 segments) running from 2 cm *inside* the wrist to 8.5 cm
+  toward the elbow, 6.4 cm across, rigidly following the hand pose — no elbow, no
+  IK. It wears the game's own suit cuff: `FISTCOMP.PCX`, the texture the `*_h`
+  first-person hand models wear, whose top ~42% is the ribbed sleeve and whose
+  remainder is bare skin. The tube's UVs sample only that band, running it
+  cuff-edge-at-the-wrist to deeper-sleeve-at-the-elbow, and the caps sample a
+  single texel (a `u` interpolated across a fan wedge would draw the ribbing as
+  concentric rings). Resolution goes through `dark::util::resolve_texture_name`,
+  so a 25AE or mod install's upgraded encoding of that same texture wins
+  automatically and a classic install finds the original in `obj.crf` — no new
+  art is committed for the sleeve.
+  Two numbers are load-bearing and unit-tested: the tube starts inside the hand
+  so a turning wrist never opens a gap, and it stops before the forearm HUD
+  panel's **near edge** — the panel lies *along* the arm, centred on its axis and
+  26 cm wide, so its near edge is at `FOREARM_OFFSET.z - HUD_PANEL_WIDTH / 2`
+  = 9.1 cm, not at its 19 cm centre. (Guarding against the centre passed while
+  the tube swallowed a third of the panel; the test now derives the bound from
+  `hud::virtual_arms`' own constants.)
 - **A weapon replaces the hand.** `virtual_hand::shows_hand_visual` hides the
-  hand and forearm while the hand holds a wieldable weapon (`PropPlayerGun` /
-  `PropLimbModel`), because the weapon's own model is drawn at the same
+  hand *and* its sleeve while the hand holds a wieldable weapon (`PropPlayerGun`
+  / `PropLimbModel`), because the weapon's own model is drawn at the same
   transform - previously the glove rendered *inside* the gun. An empty hand, or
-  one holding anything without a first-person weapon model, still shows.
+  one holding anything without a first-person weapon model, still shows. Hiding
+  the sleeve too is the owner's scoped rule ("the weapon model renders as-is and
+  replaces the hand visual"), not an oversight.
 
 Deferred (see #950): pose switching, point-on-hover, procedural auto-grab,
 elbow IK, and the 25AE authored hand models.
@@ -154,3 +168,7 @@ elbow IK, and the 25AE authored hand models.
 - On-headset tuning of `grip_rotation()` / wrist offset once tested in a real
   HMD (alignment was tuned visually through the flat debug capture path).
 - More poses if needed (`fallback_relaxed`, pinch) — transcribe like the fist.
+- The sleeve is unlit and its shading rides with the wrist, so rolling the
+  forearm rotates the ribbing's highlight rather than leaving it with the light.
+- The glove mesh keeps its strap and cuff-flap geometry under the bare skin;
+  removing them needs mesh surgery, not a texture swap.

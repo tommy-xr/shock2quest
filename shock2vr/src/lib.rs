@@ -17,6 +17,7 @@ mod creature;
 pub mod data_files;
 mod flat_player_controller;
 mod gui;
+mod hand_forearm;
 mod hand_glove;
 mod hud;
 mod interaction;
