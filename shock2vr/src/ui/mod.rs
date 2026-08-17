@@ -38,7 +38,7 @@ mod pointer_visual;
 pub use frontend_pointer::test_support;
 pub use frontend_pointer::{FrontendPointerPass, FrontendRay, vr_frontend_pointer_pass};
 pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
-pub use pointer_visual::render_pointer_rays;
+pub use pointer_visual::PointerVisuals;
 
 /// Font name that resolves to the engine's compiled-in font rather than a
 /// `.FON` asset.

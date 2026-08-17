@@ -12,6 +12,7 @@ use cgmath::{InnerSpace, Quaternion, Rotation, Vector2, Vector3, vec3};
 use crate::{
     input_context::{Hand, InputContext},
     ui::{WorldPanel, ray_to_canvas},
+    vr_config::Handedness,
 };
 
 /// A VR trigger past this counts as "pressed", matching the hand code's
@@ -23,11 +24,12 @@ pub const VR_TRIGGER_THRESHOLD: f32 = 0.5;
 /// An untracked hand reports a zero quaternion rather than an identity one.
 /// Rotating by it collapses the ray to the zero vector, so guarding here keeps
 /// an untracked controller from being treated as a hand aimed anywhere at all.
-fn hand_ray(rotation: Quaternion<f32>) -> Option<Vector3<f32>> {
+fn hand_ray(rotation: Quaternion<f32>) -> Option<(Quaternion<f32>, Vector3<f32>)> {
     if rotation.magnitude2() < 1e-6 {
         return None;
     }
-    Some(rotation.normalize().rotate_vector(vec3(0.0, 0.0, -1.0)))
+    let rotation = rotation.normalize();
+    Some((rotation, rotation.rotate_vector(vec3(0.0, 0.0, -1.0))))
 }
 
 fn held(hand: &Hand) -> bool {
@@ -45,18 +47,32 @@ pub struct FrontendRay {
     /// Where the ray meets the panel, in canvas pixels, or `None` when it
     /// misses.
     pub canvas_hit: Option<Vector2<f32>>,
+    /// Which hand this ray belongs to, so the drawn hand is the right one -
+    /// the glove model is right-handed and mirrored for the left.
+    pub handedness: Handedness,
+    /// The controller's own orientation, normalized. The aim is derived from
+    /// it, but the drawn hand needs the full rotation (roll included), and it
+    /// must be the same one the aim came from or hand and beam disagree.
+    pub rotation: Quaternion<f32>,
 }
 
 /// The ray for one hand, or `None` when that controller is not tracked.
 ///
 /// The one place a hand becomes a ray: everything that pointing means - the
 /// tracked guard, the -Z aim, the panel intersection - happens here once.
-fn frontend_ray(hand: &Hand, canvas_size: Vector2<f32>, panel: &WorldPanel) -> Option<FrontendRay> {
-    let direction = hand_ray(hand.rotation)?;
+fn frontend_ray(
+    hand: &Hand,
+    handedness: Handedness,
+    canvas_size: Vector2<f32>,
+    panel: &WorldPanel,
+) -> Option<FrontendRay> {
+    let (rotation, direction) = hand_ray(hand.rotation)?;
     Some(FrontendRay {
         origin: hand.position,
         direction,
         canvas_hit: ray_to_canvas(canvas_size, panel, hand.position, direction),
+        handedness,
+        rotation,
     })
 }
 
@@ -64,7 +80,7 @@ fn frontend_ray(hand: &Hand, canvas_size: Vector2<f32>, panel: &WorldPanel) -> O
 /// them the menu is listening to, and whether a trigger is down.
 ///
 /// This is the single unit of frontend pointing. The hover highlight, the click
-/// and the drawn hit dot ([`crate::ui::render_pointer_rays`]) all read the same
+/// and the drawn hit dot ([`crate::ui::PointerVisuals`]) all read the same
 /// pass, so the dot cannot appear anywhere but the pixel the menu hit-tested,
 /// and a controller the menu is ignoring cannot draw a dot that says otherwise.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -104,12 +120,13 @@ pub fn vr_frontend_pointer_pass(
     panel: &WorldPanel,
 ) -> FrontendPointerPass {
     let hands = [&input_context.right_hand, &input_context.left_hand];
+    let handedness = [Handedness::Right, Handedness::Left];
 
     let mut rays = Vec::with_capacity(hands.len());
     // Where each hand's ray landed in `rays`, since untracked hands are skipped.
     let mut ray_of_hand = [None, None];
     for (slot, hand) in hands.iter().enumerate() {
-        if let Some(ray) = frontend_ray(hand, canvas_size, panel) {
+        if let Some(ray) = frontend_ray(hand, handedness[slot], canvas_size, panel) {
             ray_of_hand[slot] = Some(rays.len());
             rays.push(ray);
         }

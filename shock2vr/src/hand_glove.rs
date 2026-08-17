@@ -57,7 +57,19 @@ pub struct GloveRenderer {
     retarget: HandPoseRetarget,
     open: Pose,
     fist: Pose,
+    point: Pose,
     materials: Vec<Rc<RefCell<Box<dyn Material>>>>,
+}
+
+/// An authored pose a hand can be shown in when nothing analog is driving it -
+/// the VR frontend pointer, where there is no world to grab and the trigger is
+/// just a button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaticHandPose {
+    /// Relaxed, open hand.
+    Relaxed,
+    /// Index extended, the rest curled.
+    Pointing,
 }
 
 impl GloveRenderer {
@@ -97,6 +109,7 @@ impl GloveRenderer {
             retarget,
             open: hand_pose::open_right_hand(),
             fist: hand_pose::fist_right_hand(),
+            point: hand_pose::point_right_hand(),
             materials,
         })
     }
@@ -136,7 +149,61 @@ impl GloveRenderer {
             }
         };
         let pose = self.open.blend_per_finger(&self.fist, &amounts);
-        self.retarget.apply(&pose, &mut self.model);
+        Self::render_posed(
+            &mut self.model,
+            &self.retarget,
+            &self.materials,
+            &pose,
+            position,
+            rotation,
+            handedness,
+        )
+    }
+
+    /// Build the glove in one of the authored [`StaticHandPose`]s.
+    ///
+    /// The frontend pointer needs this: on a menu there is nothing to grab and
+    /// the trigger is a click, so the analog blend `render_hand` does has
+    /// nothing to say - the hand should read as "pointing at the panel" or
+    /// "not", which is exactly what the authored poses are for.
+    pub fn render_static_hand(
+        &mut self,
+        position: Vector3<f32>,
+        rotation: Quaternion<f32>,
+        handedness: Handedness,
+        pose: StaticHandPose,
+    ) -> Vec<SceneObject> {
+        // Borrowing the pose straight out of the field (rather than cloning
+        // its two bone vectors every frame) is why this takes the fields
+        // apart instead of `&mut self`.
+        let pose = match pose {
+            StaticHandPose::Relaxed => &self.open,
+            StaticHandPose::Pointing => &self.point,
+        };
+        Self::render_posed(
+            &mut self.model,
+            &self.retarget,
+            &self.materials,
+            pose,
+            position,
+            rotation,
+            handedness,
+        )
+    }
+
+    /// Bake `pose` into the shared model and place it at the hand's transform.
+    /// The one place the model-to-hand frame conversion lives, so every caller
+    /// gets the same hand at the same place.
+    fn render_posed(
+        model: &mut GlbModel,
+        retarget: &HandPoseRetarget,
+        materials: &[Rc<RefCell<Box<dyn Material>>>],
+        pose: &Pose,
+        position: Vector3<f32>,
+        rotation: Quaternion<f32>,
+        handedness: Handedness,
+    ) -> Vec<SceneObject> {
+        retarget.apply(pose, model);
 
         // The right-hand model is mirrored across the hand's local X for the
         // left hand (same trick as vr_config::flip_x for held weapons). The
@@ -157,8 +224,8 @@ impl GloveRenderer {
             * grip
             * Matrix4::from_scale(GLOVE_SCALE);
 
-        let mut objects = self.model.to_scene_objects_with_skinning();
-        for (object, material) in objects.iter_mut().zip(&self.materials) {
+        let mut objects = model.to_scene_objects_with_skinning();
+        for (object, material) in objects.iter_mut().zip(materials) {
             object.material = material.clone();
             object.set_transform(world);
         }

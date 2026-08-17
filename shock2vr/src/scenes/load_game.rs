@@ -32,8 +32,8 @@ use crate::{
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        FrontendPanelAnchor, FrontendPointerPass, HAlign, Rect, ScaleMode, UiCanvas, VAlign,
-        VR_COMPONENT_Z_STEP, pointer_to_canvas, render_pointer_rays, vr_frontend_pointer_pass,
+        FrontendPanelAnchor, FrontendPointerPass, HAlign, PointerVisuals, Rect, ScaleMode,
+        UiCanvas, VAlign, VR_COMPONENT_Z_STEP, pointer_to_canvas, vr_frontend_pointer_pass,
     },
 };
 
@@ -267,6 +267,9 @@ pub struct LoadGameScene {
     /// The pointer pass that hit-tested this frame, kept so `render` draws the
     /// beams and dot from the very rays `update` resolved the highlight from.
     vr_pointer: FrontendPointerPass,
+    /// The drawn half of that pointer (hands, beams, dot), holding the lazily
+    /// loaded glove model.
+    vr_pointer_visuals: PointerVisuals,
 
     /// Where the VR panel is anchored: placed from the head on scene entry
     /// and world-locked after that, so `render` hangs the panel exactly
@@ -296,6 +299,7 @@ impl LoadGameScene {
             pointer: None,
             vr_pointer_canvas: None,
             vr_pointer: FrontendPointerPass::default(),
+            vr_pointer_visuals: PointerVisuals::new(),
             panel_anchor: FrontendPanelAnchor::new(),
             // A press held across a scene swap must not read as a click
             // here: both screens sit on the same 640x480 canvas and their
@@ -534,7 +538,8 @@ impl GameScene for LoadGameScene {
         // are pointing before an entry lights up. The canvas objects already in
         // hand are the layer stack the hit dot has to float clear of.
         let panel_layers = objects.len();
-        objects.extend(render_pointer_rays(
+        objects.extend(self.vr_pointer_visuals.render(
+            asset_cache,
             &self.vr_pointer,
             vec2(CANVAS_W, CANVAS_H),
             &panel,
