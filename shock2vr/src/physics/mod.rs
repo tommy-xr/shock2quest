@@ -4414,6 +4414,7 @@ impl PhysicsWorld {
             collision_groups,
             entity_to_ignore,
             ignore_sensors,
+            None,
         )
     }
 
@@ -4437,6 +4438,38 @@ impl PhysicsWorld {
             collision_groups,
             entity_to_ignore,
             ignore_sensors,
+            None,
+        )
+    }
+
+    /// Raycast with living-actor membership while allowing the caller to
+    /// reject individual entity colliders. The filter is consulted only for
+    /// colliders that carry an entity id, so ownerless colliders - world
+    /// geometry among them - are retained without being offered to it; an
+    /// entity-owned collider is subject to the filter whatever it represents.
+    /// This is the visibility-query path:
+    /// actor membership naturally skips interaction-only bounds that do not
+    /// block creatures, while the entity filter can pass through authored
+    /// transparent objects without changing projectile or selection rays.
+    pub fn ray_cast2_as_actor_with_entity_filter(
+        &self,
+        start_point: Point3<f32>,
+        direction: Vector3<f32>,
+        max_toi: f32,
+        collision_groups: InternalCollisionGroups,
+        entity_to_ignore: Option<EntityId>,
+        ignore_sensors: bool,
+        entity_filter: &dyn Fn(EntityId) -> bool,
+    ) -> Option<RayCastResult> {
+        self.ray_cast2_with_memberships(
+            InternalCollisionGroups::ACTOR,
+            start_point,
+            direction,
+            max_toi,
+            collision_groups,
+            entity_to_ignore,
+            ignore_sensors,
+            Some(entity_filter),
         )
     }
 
@@ -4449,6 +4482,7 @@ impl PhysicsWorld {
         collision_groups: InternalCollisionGroups,
         entity_to_ignore: Option<EntityId>,
         ignore_sensors: bool,
+        entity_filter: Option<&dyn Fn(EntityId) -> bool>,
     ) -> Option<RayCastResult> {
         // Guard against degenerate rays. A zero-length direction normalizes to
         // NaN, and a NaN/zero ray direction sends parry's `clip_aabb_line` down
@@ -4493,6 +4527,11 @@ impl PhysicsWorld {
             let data = collider.user_data;
             let maybe_entity_id = EntityId::from_inner(data as u64);
             if maybe_entity_id == entity_to_ignore {
+                return false;
+            }
+            if let (Some(entity_id), Some(entity_filter)) = (maybe_entity_id, entity_filter)
+                && !entity_filter(entity_id)
+            {
                 return false;
             }
             // A degenerate collider (zero-extent / non-finite AABB, e.g.

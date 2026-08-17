@@ -826,6 +826,110 @@ fn is_player_psi_invisible(world: &World) -> bool {
         .unwrap_or(false)
 }
 
+const SIGHT_COLLISION_GROUPS: InternalCollisionGroups = InternalCollisionGroups::WORLD
+    .union(InternalCollisionGroups::ENTITIES)
+    .union(InternalCollisionGroups::SELECTABLE);
+
+fn resolve_proxy_entity(world: &World, entity_id: EntityId) -> EntityId {
+    world
+        .borrow::<View<RuntimePropProxyEntity>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|proxy| proxy.0))
+        .unwrap_or(entity_id)
+}
+
+/// Whether an entity-backed physical surface should stop an AI sight ray.
+///
+/// The ray itself uses actor membership, so model-bounds colliders authored
+/// only for frobbing/selecting are already excluded by the same collision
+/// filter that lets creatures walk through them. Of the genuinely physical
+/// surfaces that remain, fully rendered objects occlude while authored alpha
+/// (the Windows archetype is 0.45) and non-rendered helpers pass sight. Proxy
+/// hitboxes are classified through their visible owner.
+///
+/// Creatures never occlude, in any state. A packmate's capsule must not hide
+/// the player from the AI behind it - a pack closing on the player would blind
+/// everything but its front rank, leaving sight stricter than line of fire -
+/// and the same has to hold once that packmate dies, or an AI would see
+/// through the body standing up and be blinded by it a second later. Corpses
+/// and ragdoll limbs are `SELECTABLE` rather than `ACTOR`, so deciding this
+/// here rather than by dropping `ACTOR` from the collision mask is what covers
+/// every state from one place. The original engine's sight cast tests world
+/// geometry plus an explicit list of vision-blocking objects (doors and
+/// anything authored to block AI vision); creatures are never in it. Line of
+/// FIRE stays stricter and keeps reasoning about allies (see
+/// `has_line_of_fire`): a packmate does not hide the player, but it is still a
+/// reason not to shoot.
+fn entity_occludes_sight(
+    world: &World,
+    observer: EntityId,
+    target: EntityId,
+    hit_entity: EntityId,
+) -> bool {
+    let entity_id = resolve_proxy_entity(world, hit_entity);
+    if entity_id == observer || entity_id == target {
+        return false;
+    }
+
+    let is_creature = world
+        .borrow::<View<PropCreature>>()
+        .map(|creatures| creatures.contains(entity_id))
+        .unwrap_or(false);
+    if is_creature {
+        return false;
+    }
+
+    let is_not_rendered = world
+        .borrow::<View<PropRenderType>>()
+        .map(|render_types| {
+            render_types.get(entity_id).is_ok_and(|render_type| {
+                matches!(render_type.0, RenderType::NoRender | RenderType::EditorOnly)
+            })
+        })
+        .unwrap_or(false);
+    if is_not_rendered {
+        return false;
+    }
+
+    world
+        .borrow::<View<PropRenderAlpha>>()
+        .map(|render_alpha| {
+            render_alpha
+                .get(entity_id)
+                .map(|render_alpha| render_alpha.0 >= 1.0)
+                .unwrap_or(true)
+        })
+        .unwrap_or(true)
+}
+
+fn has_clear_sight_between(
+    observer: EntityId,
+    target: EntityId,
+    start_point: Point3<f32>,
+    end_point: Point3<f32>,
+    world: &World,
+    physics: &PhysicsWorld,
+) -> bool {
+    let to_target = end_point - start_point;
+    let distance_squared = to_target.magnitude2();
+    if distance_squared <= 1.0e-12 {
+        return true;
+    }
+    let distance = distance_squared.sqrt();
+    let occludes = |hit_entity| entity_occludes_sight(world, observer, target, hit_entity);
+    physics
+        .ray_cast2_as_actor_with_entity_filter(
+            start_point,
+            to_target / distance,
+            distance,
+            SIGHT_COLLISION_GROUPS,
+            Some(observer),
+            true,
+            &occludes,
+        )
+        .is_none()
+}
+
 /// Check if the player is visible from an entity (raycast only, no FOV check)
 ///
 /// This is a basic visibility check that only verifies line-of-sight.
@@ -841,21 +945,14 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
     if let Ok(ent_pos) = v_current_pos.get(from_entity) {
         let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
         let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
-        let direction = (end_point - start_point).normalize();
-        let distance = (end_point - start_point).magnitude();
-        let result = physics.ray_cast2(
+        return has_clear_sight_between(
+            from_entity,
+            u_player.entity_id,
             start_point,
-            direction,
-            distance,
-            InternalCollisionGroups::WORLD,
-            Some(from_entity),
-            true,
+            end_point,
+            world,
+            physics,
         );
-
-        // If we didn't hit anything - player visible!
-        // Currently, the ray cast doesn't intersect player...
-        // TODO: Check for entities, but pass-through transparent ones (ie, glass/windows)
-        return result.is_none();
     };
 
     false
@@ -863,14 +960,14 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
 
 /// Whether `from_entity` has a clear line of FIRE to `target` (its known
 /// aim point - see `chase_target`) - the occlusion gate for standing
-/// ranged attacks. Unlike `is_player_visible`
-/// (sight: WORLD geometry only), this also tests door and prop colliders,
-/// because projectiles collide with those - an AI allowed to stop and
-/// shoot through a closed door or a crate stands rooted firing into it
-/// for as long as its target stays known (issue #481's stand-and-shoot
-/// freeze). Living allies block the shot, while an enemy creature or the
-/// intended target counts as clear. This preserves pursuit/attack against
-/// enemies without letting converged ranged AIs shoot through their own side.
+/// ranged attacks. This intentionally remains stricter than sight: projectiles
+/// collide with transparent glass and small physical props too, so an AI
+/// allowed to stop and shoot through them stands rooted firing into the
+/// obstacle for as long as its target stays known (issue #481's
+/// stand-and-shoot freeze). Living allies block the shot, while an enemy
+/// creature or the intended target counts as clear. This preserves
+/// pursuit/attack against enemies without letting converged ranged AIs shoot
+/// through their own side.
 pub fn has_line_of_fire(
     from_entity: EntityId,
     world: &World,
@@ -933,11 +1030,7 @@ fn has_line_of_fire_from(
         Some(hit) => hit
             .maybe_entity_id
             .map(|id| {
-                let id = world
-                    .borrow::<View<RuntimePropProxyEntity>>()
-                    .ok()
-                    .and_then(|v| v.get(id).ok().map(|proxy| proxy.0))
-                    .unwrap_or(id);
+                let id = resolve_proxy_entity(world, id);
                 if target_entity == id {
                     return true;
                 }
@@ -1054,18 +1147,14 @@ pub fn is_player_visible_in_fov(
         // Player is in FOV, now check line-of-sight
         let start_point = point3(0.0, 0.0, 0.0) + entity_pos;
         let end_point = point3(0.0, 0.0, 0.0) + player_pos;
-        let direction = (end_point - start_point).normalize();
-        let distance = (end_point - start_point).magnitude();
-        let result = physics.ray_cast2(
+        return has_clear_sight_between(
+            from_entity,
+            u_player.entity_id,
             start_point,
-            direction,
-            distance,
-            InternalCollisionGroups::WORLD,
-            Some(from_entity),
-            true,
+            end_point,
+            world,
+            physics,
         );
-
-        return result.is_none();
     };
 
     false
@@ -1279,5 +1368,259 @@ mod line_of_fire_tests {
             &physics,
             vec3(0.0, 0.0, 5.0),
         ));
+    }
+}
+
+#[cfg(test)]
+mod sight_occlusion_tests {
+    use super::*;
+    use crate::{
+        mission::PlayerInfo,
+        physics::{CollisionGroup, PlayerHandle},
+    };
+
+    struct SightScene {
+        world: World,
+        physics: PhysicsWorld,
+        observer: EntityId,
+        blocker: EntityId,
+        player_handle: PlayerHandle,
+    }
+
+    fn identity_rotation() -> Quaternion<f32> {
+        Quaternion::from_sv(1.0, vec3(0.0, 0.0, 0.0))
+    }
+
+    fn sight_scene(group: CollisionGroup) -> SightScene {
+        let mut world = World::new();
+        let observer = world.add_entity(PropPosition {
+            position: vec3(0.0, 0.0, 0.0),
+            cell: 0,
+            rotation: identity_rotation(),
+        });
+        let blocker = world.add_entity(());
+        let player = world.add_entity(());
+        let inventory = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 10.0),
+            rotation: identity_rotation(),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+
+        let mut physics = PhysicsWorld::new();
+        physics.add_kinematic(
+            blocker,
+            vec3(0.0, 0.0, 5.0),
+            identity_rotation(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 2.0, 1.0),
+            group,
+            false,
+        );
+        let mut player_handle = physics.create_player(vec3(50.0, 50.0, 50.0), player);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        SightScene {
+            world,
+            physics,
+            observer,
+            blocker,
+            player_handle,
+        }
+    }
+
+    fn player_is_visible(scene: &SightScene) -> bool {
+        is_player_visible(scene.observer, &scene.world, &scene.physics)
+    }
+
+    fn player_is_in_line_of_fire(scene: &SightScene) -> bool {
+        has_line_of_fire(
+            scene.observer,
+            &scene.world,
+            &scene.physics,
+            vec3(0.0, 0.0, 10.0),
+        )
+    }
+
+    #[test]
+    fn opaque_solid_entity_occludes_sight() {
+        let scene = sight_scene(CollisionGroup::entity());
+
+        assert!(
+            !player_is_visible(&scene),
+            "a solid entity collider between the observer and player must block sight"
+        );
+    }
+
+    #[test]
+    fn opaque_cover_hands_ranged_attack_back_to_pursuit() {
+        let mut scene = sight_scene(CollisionGroup::entity());
+        scene.world.add_component(
+            scene.observer,
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: -1,
+                    to_entity_id: None,
+                    link: Link::AIRangedWeapon,
+                }],
+            },
+        );
+
+        assert!(
+            crate::scripts::ai::behavior::attack_behavior_for_distance(
+                &scene.world,
+                &scene.physics,
+                scene.observer,
+            )
+            .is_none(),
+            "closed cover must make the ranged behavior resume pursuit",
+        );
+
+        scene.physics.set_position_rotation2(
+            scene.blocker,
+            vec3(10.0, 0.0, 5.0),
+            identity_rotation(),
+        );
+        scene
+            .physics
+            .update(vec3(0.0, 0.0, 0.0), &mut scene.player_handle);
+
+        let behavior = crate::scripts::ai::behavior::attack_behavior_for_distance(
+            &scene.world,
+            &scene.physics,
+            scene.observer,
+        )
+        .expect("open line of fire should select the ranged attack");
+        assert_eq!(behavior.borrow().name(), "RangedAttack");
+    }
+
+    #[test]
+    fn authored_transparency_passes_sight_but_still_blocks_projectiles() {
+        let mut scene = sight_scene(CollisionGroup::entity());
+        scene
+            .world
+            .add_component(scene.blocker, PropRenderAlpha(0.45));
+
+        assert!(
+            player_is_visible(&scene),
+            "the shipped Windows alpha must remain transparent to sight"
+        );
+        assert!(
+            !player_is_in_line_of_fire(&scene),
+            "transparent physical cover must keep the projectile gate unchanged"
+        );
+    }
+
+    #[test]
+    fn a_living_creature_does_not_occlude_sight_but_does_block_the_shot() {
+        let mut scene = sight_scene(CollisionGroup::actor());
+        scene.world.add_component(
+            scene.blocker,
+            (PropCreature(0), PropHitPoints { hit_points: 10 }),
+        );
+
+        assert!(
+            player_is_visible(&scene),
+            "a packmate standing in the way must not hide the player"
+        );
+        assert!(
+            !player_is_in_line_of_fire(&scene),
+            "a living ally in the way must still suppress the shot"
+        );
+    }
+
+    /// A corpse keeps its creature identity but swaps `ACTOR` membership for
+    /// `SELECTABLE`. Today it is already unreachable by an actor-membership
+    /// ray, so this passes for two independent reasons - it is here to catch a
+    /// future regrouping that puts bodies back in the ray's path and leaves an
+    /// AI seeing through a packmate standing up but blinded by its corpse.
+    #[test]
+    fn a_creature_corpse_does_not_occlude_sight_either() {
+        let mut scene = sight_scene(CollisionGroup::corpse());
+        scene.world.add_component(
+            scene.blocker,
+            (PropCreature(0), PropHitPoints { hit_points: 0 }),
+        );
+
+        assert!(
+            player_is_visible(&scene),
+            "a body on the floor must not hide the player any more than it did standing"
+        );
+    }
+
+    #[test]
+    fn interaction_only_selectable_bounds_do_not_occlude_sight() {
+        let scene = sight_scene(CollisionGroup::selectable().non_solid_to_characters());
+
+        assert!(
+            player_is_visible(&scene),
+            "a collider retained only for frobbing must not become visual cover"
+        );
+        assert!(
+            !player_is_in_line_of_fire(&scene),
+            "the generic projectile query must remain independent of sight"
+        );
+    }
+
+    #[test]
+    fn transparent_proxy_is_classified_through_its_owner() {
+        let mut scene = sight_scene(CollisionGroup::entity());
+        let visible_owner = scene.world.add_entity(PropRenderAlpha(0.45));
+        scene
+            .world
+            .add_component(scene.blocker, RuntimePropProxyEntity(visible_owner));
+
+        assert!(
+            player_is_visible(&scene),
+            "a transparent owner must not become opaque through a physics proxy"
+        );
+    }
+
+    #[test]
+    fn non_rendered_physics_helpers_do_not_occlude_sight() {
+        let mut scene = sight_scene(CollisionGroup::entity());
+        scene
+            .world
+            .add_component(scene.blocker, PropRenderType(RenderType::NoRender));
+
+        assert!(player_is_visible(&scene));
+    }
+
+    #[test]
+    fn a_closed_standard_door_occludes_and_its_open_pose_restores_sight() {
+        let mut scene = sight_scene(CollisionGroup::entity());
+        scene.world.add_component(
+            scene.blocker,
+            PropTranslatingDoor {
+                door_type: 0,
+                closed: 0.0,
+                open: 10.0,
+                speed: 1.0,
+                axis: 2,
+                state: 0,
+                base_closed_location: vec3(0.0, 0.0, 5.0),
+                base_open_location: vec3(10.0, 0.0, 5.0),
+                base_location: vec3(0.0, 0.0, 5.0),
+            },
+        );
+
+        assert!(!player_is_visible(&scene), "the closed door must occlude");
+
+        scene.physics.set_position_rotation2(
+            scene.blocker,
+            vec3(10.0, 0.0, 5.0),
+            identity_rotation(),
+        );
+        scene
+            .physics
+            .update(vec3(0.0, 0.0, 0.0), &mut scene.player_handle);
+
+        assert!(
+            player_is_visible(&scene),
+            "moving the door collider to its open pose must restore sight"
+        );
     }
 }
