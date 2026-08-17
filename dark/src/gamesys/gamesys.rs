@@ -1,9 +1,7 @@
 use std::io;
 
-use rand::{distributions::WeightedIndex, prelude::Distribution, thread_rng};
-
 use crate::{
-    EnvMap, EnvSoundQuery, SoundSchema, SpeechDB, TagDatabase,
+    EnvMap, EnvSoundQuery, ResolvedSoundSchema, SoundSchema, SpeechDB, TagDatabase,
     gamesys::params::{HrmParams, SkillParams, TrainerCostTables},
     properties::{LinkDefinition, LinkDefinitionWithData, PropertyDefinition},
     ss2_chunk_file_reader::{self},
@@ -25,26 +23,17 @@ pub struct Gamesys {
 }
 
 impl Gamesys {
-    pub fn get_random_environmental_sound(&self, query: &EnvSoundQuery) -> Option<String> {
+    pub fn get_random_environmental_sound(
+        &self,
+        query: &EnvSoundQuery,
+    ) -> Option<ResolvedSoundSchema> {
         let tag_query = query.to_tag_query(&self.speech_db.tag_map, &self.speech_db.value_map);
         let result = self.env_tag_map.query_match_all(&tag_query);
         if result.is_empty() {
             return None;
         }
 
-        let sample = result[0];
-        let maybe_samples = self.sound_schema.id_to_samples.get(&sample);
-
-        maybe_samples?;
-
-        let samples = maybe_samples.unwrap();
-
-        let mut rng = thread_rng();
-        let weights = samples.iter().map(|s| s.frequency).collect::<Vec<u8>>();
-        let weight_index = WeightedIndex::new(weights).unwrap();
-        let idx = weight_index.sample(&mut rng);
-
-        Some(samples[idx].sample_name.to_owned())
+        self.sound_schema.resolve_id(result[0])
     }
 
     pub fn speech_db(&self) -> &SpeechDB {

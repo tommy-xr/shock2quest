@@ -676,6 +676,14 @@ export interface PlayedSound {
   frame: number;
   /** Resolved schema sample name without extension (e.g. "bulmet2"). */
   sample: string;
+  /** Dark-schema volume in millibels, or null for a direct sample. */
+  volume_millibels: number | null;
+  /** Linear gain assigned to the audio sink. */
+  gain: number;
+  /** Resolved Dark-schema pan in millibels, or null for a direct sample. */
+  pan_millibels: number | null;
+  /** False when positional 3D audio supersedes the schema's fixed pan. */
+  pan_applied: boolean;
   /** The schema query's (tag, value) pairs (e.g. ["event", "collision"]). */
   tags: [string, string][];
   position: [number, number, number];

@@ -762,7 +762,10 @@ fn handle_sound_command(tags: &[String]) -> Result<()> {
 
     println!("Query: {:?}", query);
     match result {
-        Some(sound_file) => println!("Result: {}", sound_file),
+        Some(sound) => println!(
+            "Result: {} (volume {} millibels, pan {} millibels)",
+            sound.sample_name, sound.volume_millibels, sound.pan_millibels
+        ),
         None => println!("No matching sounds found"),
     }
 

@@ -69,6 +69,17 @@ test(
     assert.equal(sound.still_playing, true, "a clip this long is still playing");
     assert.equal(sound.stopped_at_sim_time, null);
 
+    // trg0001 has no local play params: it inherits -500 millibels from
+    // SPEECH_BRIEFING. The resolved gain is delivered to the spatial sink;
+    // world-space positioning supersedes schema pan, as in the original.
+    assert.equal(sound.volume_millibels, -500);
+    assert.ok(
+      Math.abs(sound.gain - 0.5623413) < 0.000001,
+      `expected -500 millibels to reach the sink as gain 0.5623413, got ${sound.gain}`,
+    );
+    assert.equal(sound.pan_millibels, 0);
+    assert.equal(sound.pan_applied, false);
+
     // TrapSound narrations play spatially at their authored station, like the
     // original engine's object sounds (pre-change the log recorded [0,0,0]).
     const [tx, ty, tz] = trap.position;

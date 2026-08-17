@@ -115,6 +115,8 @@ test(
     await game.screenshot("keypad-panel-open.png");
 
     // --- Click 4-5-1-0-0 via the pointer channels ---
+    const audioBefore = await game.audio.recent();
+    const lastAudioSequence = audioBefore.sounds.at(-1)?.sequence ?? 0;
     // Rects come from /v1/ui in normalized screen space (letterbox-corrected),
     // so the click point is just the rect center.
     const clickElement = async (el: UiElement) => {
@@ -140,6 +142,25 @@ test(
       await clickElement(el);
     }
     await game.screenshot("keypad-code-entered.png");
+
+    // Each digit emits the real `keypad` schema, whose P$SchPlayPa authors
+    // -1500 millibels and fixed -1000 pan. Both must reach the non-spatial
+    // sink rather than playing at full, centered volume.
+    const recentAudio = (await game.audio.recent()).sounds.filter(
+      (sound) => sound.sequence > lastAudioSequence,
+    );
+    const keypadSound = recentAudio.find(
+      (sound) =>
+        sound.sample === "bkeypad" &&
+        sound.volume_millibels === -1500 &&
+        sound.pan_millibels === -1000,
+    );
+    assert.ok(
+      keypadSound,
+      `entering a digit should resolve keypad's authored volume and fixed pan; got ${JSON.stringify(recentAudio)}`,
+    );
+    assert.ok(Math.abs(keypadSound.gain - 0.17782794) < 0.000001);
+    assert.equal(keypadSound.pan_applied, true);
 
     // --- The SwitchLinked door must open (TranslatingDoor slides ~2.4 units) ---
     await game.step({ frames: 120 }); // ~2s for the door to travel
