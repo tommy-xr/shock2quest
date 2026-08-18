@@ -89,21 +89,36 @@ test(
       debugFlags: ["--vr"],
     });
 
-    // In VR, spawnItem drops the item into the world in front of the player.
+    // DebugCycleWeapon spawns each roster weapon in turn (VR wield is a no-op,
+    // so each drops to the floor); cycle until the Wrench appears.
     await game.step({ frames: 10 });
-    await game.player.spawnItem("Wrench");
-    await game.step({ frames: 90 });
-
-    const wrench = (await game.entities.list({ limit: 100 })).entities.find(
-      (e) => e.name === "Wrench",
-    );
+    let wrench;
+    for (let i = 0; i < 20 && !wrench; i++) {
+      await game.input.trigger("DebugCycleWeapon");
+      await game.step({ frames: 5 });
+      wrench = (await game.entities.list({ limit: 100 })).entities.find(
+        (e) => e.name === "Wrench",
+      );
+    }
     assert.ok(wrench, "wrench should have spawned");
+    await game.step({ frames: 60 });
     assert.equal(modelOf(await game.entities.detail(wrench.id)), "wrench_w");
 
-    // Grab it (same recipe as the pistol test above).
-    const pawnY = (await game.info()).player.position[1];
-    const [px, py, pz] = wrench.position;
-    await game.input.set("right_hand.position", [px + 0.4, py - pawnY, pz]);
+    // Grab it: put the hand at the settled wrench's live position (pawn-local)
+    // and squeeze.
+    const pawn = (await game.info()).player.position;
+    const settled = (await game.entities.list({ limit: 100 })).entities.find(
+      (e) => e.id === wrench!.id,
+    )!;
+    const [px, py, pz] = settled.position;
+    await game.input.set("right_hand.position", [
+      px - pawn[0],
+      py - pawn[1],
+      pz - pawn[2],
+    ]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.input.set("right_hand.squeeze", 0.0);
+    await game.step({ frames: 2 });
     await game.input.set("right_hand.squeeze", 1.0);
     await game.step({ frames: 10 });
 
