@@ -97,6 +97,30 @@ pub fn is_first_person_arm_material(name: &str) -> bool {
     name.to_ascii_lowercase().starts_with("nd-arm")
 }
 
+/// A first-person weapon model prepared for VR wielding, as its own cache
+/// bucket (see [`FirstPersonHand`] for the type_id trap).
+///
+/// The mesh renders exactly as authored, baked hand and forearm included. An
+/// earlier revision stripped every arm island but the largest to hide the
+/// spare hands some reload/fire animations pose into view - but "one arm
+/// island = one hand" is false: the pistol (`atek_h`) splits its firing hand
+/// (`ND-arm_atek.psd`) and sleeve (`ND-arm.psd`) into separate islands, so the
+/// strip kept the sleeve and deleted the gripping hand. Spare-hand stripping
+/// is deliberately dropped (a floating spare hand is the lesser evil); it can
+/// return if a reliable classifier turns up.
+pub struct VrHeldModel(pub Model);
+
+fn process_vr_held_model(
+    mesh: SystemShockContentModel,
+    asset_cache: &mut AssetCache,
+    _config: &(),
+) -> VrHeldModel {
+    VrHeldModel(process_model(mesh, asset_cache, &()))
+}
+
+pub static VR_HELD_MODELS_IMPORTER: Lazy<AssetImporter<SystemShockContentModel, VrHeldModel, ()>> =
+    Lazy::new(|| AssetImporter::define(load_model, process_vr_held_model));
+
 /// Newtype so this importer gets its own [`AssetCache`] bucket.
 ///
 /// The cache keys by `importer.type_id()`, which is the *type* of the importer,

@@ -429,6 +429,30 @@ pub fn split_connected(
     mesh: &SystemShock2ObjectMesh,
     keep: impl Fn(&str) -> bool,
 ) -> Vec<SystemShock2ObjectMesh> {
+    connected_islands(mesh, keep)
+        .into_iter()
+        .map(|polygons| {
+            let wanted = polygons.into_iter().collect::<HashSet<usize>>();
+            let mut island = mesh.clone();
+            island.polygons = mesh
+                .polygons
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| wanted.contains(index))
+                .map(|(_, polygon)| polygon.clone())
+                .collect();
+            island
+        })
+        .collect()
+}
+
+/// Polygon indices of each connected island over the polygons `keep` selects,
+/// ordered largest first (then by earliest polygon, so equal-sized islands are
+/// stable across runs).
+pub fn connected_islands(
+    mesh: &SystemShock2ObjectMesh,
+    keep: impl Fn(&str) -> bool,
+) -> Vec<Vec<usize>> {
     let kept_slots = material_slots(mesh, keep);
 
     // Union-find over vertex indices, joined along every kept polygon's edges.
@@ -485,20 +509,6 @@ pub fn split_connected(
     });
 
     islands
-        .into_iter()
-        .map(|polygons| {
-            let wanted = polygons.into_iter().collect::<HashSet<usize>>();
-            let mut island = mesh.clone();
-            island.polygons = mesh
-                .polygons
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| wanted.contains(index))
-                .map(|(_, polygon)| polygon.clone())
-                .collect();
-            island
-        })
-        .collect()
 }
 
 /// Where one hand sits on a first-person weapon, in model space.
