@@ -6030,8 +6030,6 @@ mod tests {
     /// the crown would be outside every room whose ceiling the body clears.
     #[test]
     fn standing_eye_is_the_head_sphere_plus_eye_offset_inside_the_collider() {
-        // player_eye_height_for reads the live EYE_HEIGHT_OFFSET dev param.
-        let _guard = crate::dev_params::test_guard();
         let eye = crate::player_eye_height_for(false);
         assert_eq!(
             eye,
@@ -6055,8 +6053,6 @@ mod tests {
     /// resolves to the one-sided ceiling rather than the container.
     #[test]
     fn standing_crosshair_reaches_a_container_under_a_seven_foot_ceiling() {
-        // player_eye_height_for reads the live EYE_HEIGHT_OFFSET dev param.
-        let _guard = crate::dev_params::test_guard();
         // hydro2's corpse alcove: a flat floor with a one-sided level ceiling
         // seven feet above it, which the six-foot standing body clears.
         const ROOM_HEIGHT: f32 = 7.0 / SCALE_FACTOR;

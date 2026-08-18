@@ -483,6 +483,8 @@ mod tests {
 
     #[test]
     fn the_placed_panel_faces_the_head() {
+        // Asserts against the live dev-param value; serialize with its mutation tests.
+        let _guard = crate::dev_params::test_guard();
         let placement = PanelPlacement::from_head(eye(), yaw(37.0));
         let panel = placement.panel();
         let to_head = (eye() - panel.center).normalize();

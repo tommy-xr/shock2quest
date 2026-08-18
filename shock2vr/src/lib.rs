@@ -96,14 +96,11 @@ pub const METERS_PER_WORLD_UNIT: f32 = 0.3048 * dark::SCALE_FACTOR;
 /// [`Game::player_eye_height`], which wraps it) so shots stay on the
 /// crosshair.
 pub fn player_eye_height_for(crouched: bool) -> f32 {
-    let base = if crouched {
+    if crouched {
         PLAYER_CROUCH_EYE_HEIGHT
     } else {
         PLAYER_EYE_HEIGHT
-    };
-    // Live-tunable extra eye height, declared in real-world meters; an SS2
-    // unit is a foot, so meters convert at 0.3048. Default 0 = `base` exactly.
-    base + dev_params::get(dev_params::EYE_HEIGHT_OFFSET) / 0.3048
+    }
 }
 
 use std::{
@@ -2170,9 +2167,6 @@ mod app_tests {
     /// real `Game`). They must answer exactly as an uncrouched player does.
     #[test]
     fn the_missing_assets_pose_matches_a_standing_player() {
-        // Eye height now includes the live EYE_HEIGHT_OFFSET dev param;
-        // serialize against tests that mutate it.
-        let _guard = dev_params::test_guard();
         let app = missing_assets_app();
         assert_eq!(
             app.player_center_above_floor(),

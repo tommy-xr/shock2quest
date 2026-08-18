@@ -12,12 +12,18 @@
 //! write the registry directly (no `RuntimeCommand` round-trip), and what will
 //! let the Developer menu screen do the same from the game thread.
 //!
+//! Reads are individually atomic but deliberately unsynchronized across a
+//! frame: a [`set`] landing mid-frame can be seen by later reads in the same
+//! frame (e.g. a panel hit-test and its render disagreeing by one frame).
+//! That is acceptable for tuning knobs - the next frame is consistent - and
+//! in the stepped debug runtime it never happens at all, because HTTP sets
+//! land between frames.
+//!
 //! Ground rule: **if the consumer does not read the parameter every frame, it
 //! does not belong in this table yet.** Values latched at construction time
 //! (feature gates, collider dimensions, anything baked into a scene object)
 //! would need a poke/rebuild path this registry deliberately does not have.
 
-use once_cell::sync::Lazy;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// How a parameter's value is interpreted and constrained.
@@ -58,6 +64,12 @@ macro_rules! dev_params {
             }),+
         ];
 
+        /// Current values, as `f32` bits, seeded with the defaults. A sized
+        /// array, not a `&[_]` slice: a borrow of interior-mutable data
+        /// cannot be promoted to `'static` (E0492).
+        static VALUES: [AtomicU32; [$(($default as f32)),+].len()] =
+            [$(AtomicU32::new(($default as f32).to_bits())),+];
+
         #[allow(non_camel_case_types, clippy::upper_case_acronyms, dead_code)]
         enum __DevParamIndex { $($id),+ }
 
@@ -73,20 +85,14 @@ dev_params! {
     /// untouched, 1 blacks it out. Default matches the old
     /// `pause_menu::WORLD_DIM_STRENGTH` const.
     WORLD_DIM_STRENGTH = float("dim_strength", "Pause dim", 0.72, 0.0, 1.0, 0.02),
-    /// Extra eye height, in real-world meters, added on top of the stance's
-    /// base eye height. Default 0 = the unmodified `PLAYER_EYE_HEIGHT`.
-    EYE_HEIGHT_OFFSET = float("eye_offset", "Eye height offset (m)", 0.0, -0.5, 0.5, 0.02),
+    // An eye-height offset was considered for this seed set and deliberately
+    // left out: on the Quest the eye is the *tracked pose* (capped in
+    // `oculus_runtime`), which never reads `player_eye_height_for` - so the
+    // knob would be inert exactly where live tuning matters, while the debug
+    // runtime's `--vr` path (which does read it) would falsely "verify" it.
+    // It returns with the Developer screen once the tracked-stage offset is
+    // wired through the runtime (head and hands together).
 }
-
-/// Current values, as `f32` bits. `Lazy` because `f32::to_bits` in a `static`
-/// initializer wants a newer const story than the table needs; the first read
-/// simply seeds every slot with its default.
-static VALUES: Lazy<Vec<AtomicU32>> = Lazy::new(|| {
-    PARAMS
-        .iter()
-        .map(|p| AtomicU32::new(p.default.to_bits()))
-        .collect()
-});
 
 /// Every parameter with its id, in declaration order.
 pub fn all() -> impl Iterator<Item = (DevParamId, &'static DevParam)> {
@@ -130,6 +136,15 @@ pub fn set(id: DevParamId, value: f32) -> f32 {
     applied
 }
 
+/// Restore a parameter to its declared default, exactly. This stores the
+/// default's own bits rather than routing through [`set`], whose snap grid
+/// does not round-trip every default (e.g. 0.72 on a 0.02 grid lands on
+/// 0.71999997 in f32) - the difference matters to tests (and a future menu
+/// "reset" row) that compare against the default with `==`.
+pub fn reset(id: DevParamId) {
+    VALUES[id.0].store(spec(id).default.to_bits(), Ordering::Relaxed);
+}
+
 /// Serializes tests that read or write the registry: the values are process
 /// globals, so a mutation test running in parallel with a test that asserts a
 /// default would flake. Writers must restore defaults before dropping the
@@ -144,47 +159,58 @@ pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
 mod tests {
     use super::*;
 
-    /// The registry replaced three consts; anything but these exact defaults
+    /// The registry replaced two consts; anything but these exact defaults
     /// is a behavior change at launch.
     #[test]
     fn defaults_equal_the_consts_they_replaced() {
         let _guard = test_guard();
         assert_eq!(get(FRONTEND_PANEL_DISTANCE), 2.0);
         assert_eq!(get(WORLD_DIM_STRENGTH), 0.72);
-        assert_eq!(get(EYE_HEIGHT_OFFSET), 0.0);
     }
 
-    // The mutation tests below deliberately touch only EYE_HEIGHT_OFFSET: it
-    // has the fewest reader tests elsewhere in the crate, and each of those
-    // takes [`test_guard`] too, so a temporarily non-default value is never
-    // observed.
+    // The mutation tests below hold [`test_guard`] and restore defaults
+    // before releasing it; tests elsewhere in the crate that assert against a
+    // parameter's live value take the same guard so a temporarily non-default
+    // value is never observed.
 
     #[test]
     fn set_moves_the_live_value_and_reports_what_it_applied() {
         let _guard = test_guard();
         // Negative first: before the set, the default is in effect.
-        assert_eq!(get(EYE_HEIGHT_OFFSET), 0.0);
-        let applied = set(EYE_HEIGHT_OFFSET, 0.2);
-        assert!((applied - 0.2).abs() < 1e-4);
-        assert!((get(EYE_HEIGHT_OFFSET) - 0.2).abs() < 1e-4);
-        set(EYE_HEIGHT_OFFSET, spec(EYE_HEIGHT_OFFSET).default);
+        assert_eq!(get(FRONTEND_PANEL_DISTANCE), 2.0);
+        let applied = set(FRONTEND_PANEL_DISTANCE, 2.5);
+        assert!((applied - 2.5).abs() < 1e-4);
+        assert!((get(FRONTEND_PANEL_DISTANCE) - 2.5).abs() < 1e-4);
+        reset(FRONTEND_PANEL_DISTANCE);
     }
 
     #[test]
     fn set_clamps_into_the_declared_range() {
         let _guard = test_guard();
-        assert_eq!(set(EYE_HEIGHT_OFFSET, 99.0), 0.5);
-        assert_eq!(set(EYE_HEIGHT_OFFSET, -3.0), -0.5);
-        set(EYE_HEIGHT_OFFSET, spec(EYE_HEIGHT_OFFSET).default);
+        assert_eq!(set(FRONTEND_PANEL_DISTANCE, 99.0), 6.0);
+        assert_eq!(set(FRONTEND_PANEL_DISTANCE, -3.0), 0.5);
+        reset(FRONTEND_PANEL_DISTANCE);
     }
 
     #[test]
     fn set_snaps_to_the_step_grid() {
         let _guard = test_guard();
-        // 0.013 is between grid points 0.0 and 0.02 (min -0.5, step 0.02).
-        let applied = set(EYE_HEIGHT_OFFSET, 0.013);
+        // 0.013 is between grid points 0.0 and 0.02 (min 0.0, step 0.02).
+        let applied = set(WORLD_DIM_STRENGTH, 0.013);
         assert!((applied - 0.02).abs() < 1e-4, "got {applied}");
-        set(EYE_HEIGHT_OFFSET, spec(EYE_HEIGHT_OFFSET).default);
+        reset(WORLD_DIM_STRENGTH);
+    }
+
+    /// `set(default)` is NOT an exact restore (the snap grid can miss the
+    /// default's bits); `reset` must be.
+    #[test]
+    fn reset_restores_the_exact_default_even_off_grid() {
+        let _guard = test_guard();
+        // 0.72 is default for a 0.02-step grid: set() snaps it to 0.71999997.
+        set(WORLD_DIM_STRENGTH, spec(WORLD_DIM_STRENGTH).default);
+        assert_ne!(get(WORLD_DIM_STRENGTH).to_bits(), 0.72f32.to_bits());
+        reset(WORLD_DIM_STRENGTH);
+        assert_eq!(get(WORLD_DIM_STRENGTH), 0.72);
     }
 
     #[test]
