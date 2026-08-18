@@ -63,6 +63,12 @@ pub enum GlobalEffect {
     /// Return to the main menu, replacing whatever scene is active.
     ShowMainMenu,
 
+    /// Open the Developer screen (live-tunable runtime parameters), replacing
+    /// whatever scene is active. Reached from the main menu; the pause menu
+    /// hosts the same panel as an overlay page instead, so a mission is never
+    /// unloaded to reach it.
+    ShowDeveloper,
+
     /// Play the retail ending and enter the campaign's terminal state.
     CompleteCampaign,
 

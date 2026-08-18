@@ -38,8 +38,8 @@ use crate::{
     input_context::{InputContext, Pointer2D},
     ui::{
         FrontendPanelAnchor, FrontendPointerPass, HAlign, PointerVisuals, Rect, ScaleMode,
-        UiCanvas, VAlign, VR_COMPONENT_Z_STEP, WorldPanel, frontend_panel_distance,
-        pointer_to_canvas, vr_frontend_pointer_pass,
+        UiCanvas, VAlign, VR_COMPONENT_Z_STEP, WorldPanel, dev_params_panel,
+        frontend_panel_distance, pointer_to_canvas, vr_frontend_pointer_pass,
     },
 };
 
@@ -47,6 +47,12 @@ use crate::{
 const CANVAS_W: f32 = 640.0;
 const CANVAS_H: f32 = 480.0;
 const BACKDROP_TEXTURE: &str = "SIM.PCX";
+/// Backdrop for the Developer page: the archive frame
+/// [`dev_params_panel`]'s row geometry is laid out against, shared with the
+/// standalone Developer scene so the page is identical whichever way it is
+/// reached. Still an opaque full-screen cover, so the flat presentation's
+/// "the world is already gone" property holds on this page too.
+const DEVELOPER_BACKDROP_TEXTURE: &str = "GAMELOD.PCX";
 /// Original widget layout for `SIM.PCX` - LTRB rects for the five buttons,
 /// top to bottom (`UI_LAYOUT_IMPORTER`).
 const LAYOUT_FILE: &str = "SIMR.BIN";
@@ -252,6 +258,24 @@ pub enum PauseAction {
     QuitToMainMenu,
 }
 
+/// Which page of the overlay is showing. The Developer page is a page of the
+/// same overlay rather than a scene precisely because the overlay is not a
+/// scene: swapping scenes would unload the mission the player is tuning over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PauseMenuPage {
+    Root,
+    Developer,
+}
+
+/// What a click on a root-page entry means: either something [`PauseAction`]
+/// the owning `Game` must act on, or navigation the overlay handles itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PauseMenuEntry {
+    Action(PauseAction),
+    /// Switch to the Developer page.
+    Developer,
+}
+
 struct MenuItem {
     /// Key into `SIM.STR`.
     string_key: &'static str,
@@ -260,7 +284,11 @@ struct MenuItem {
     fallback_label: &'static str,
     /// `None` for an entry that exists on the original screen but that the port
     /// does not implement yet - drawn dimmed, and not clickable.
-    action: Option<PauseAction>,
+    action: Option<PauseMenuEntry>,
+    /// Label drawn instead of the string-table text (and the fallback). Used
+    /// by the Developer entry, which repurposes the inert Options slot - see
+    /// the identical field on the main menu's `MenuItem`.
+    label_override: Option<&'static str>,
 }
 
 // `SIM.PCX` (native 640x480) has a vertical stack of five buttons down the
@@ -270,27 +298,34 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem {
         string_key: "continue",
         fallback_label: "Continue",
-        action: Some(PauseAction::Resume),
+        action: Some(PauseMenuEntry::Action(PauseAction::Resume)),
+        label_override: None,
     },
     MenuItem {
         string_key: "save_game",
         fallback_label: "Save Game",
         action: None,
+        label_override: None,
     },
     MenuItem {
         string_key: "load_game",
         fallback_label: "Load Game",
         action: None,
+        label_override: None,
     },
+    // The Options slot hosts the Developer page while no real options screen
+    // exists, matching the main menu's slot.
     MenuItem {
         string_key: "options",
         fallback_label: "Options",
-        action: None,
+        action: Some(PauseMenuEntry::Developer),
+        label_override: Some("Developer"),
     },
     MenuItem {
         string_key: "quit",
         fallback_label: "Quit to \\nMain Menu",
-        action: Some(PauseAction::QuitToMainMenu),
+        action: Some(PauseMenuEntry::Action(PauseAction::QuitToMainMenu)),
+        label_override: None,
     },
 ];
 
@@ -325,6 +360,9 @@ fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
     MENU_ITEMS
         .iter()
         .map(|item| {
+            if let Some(label) = item.label_override {
+                return label.to_owned();
+            }
             strings
                 // The strings importer lowercases its keys.
                 .and_then(|s| s.get(item.string_key))
@@ -351,8 +389,8 @@ fn label_lines(label: &str) -> Vec<&str> {
 /// The menu entry at a canvas point, if any. Both the click and the hover
 /// highlight go through this, so the two can never disagree about where an
 /// entry is - or about which entries are live at all.
-fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<PauseAction> {
-    let mut canvas = UiCanvas::<PauseAction>::with_events(vec2(CANVAS_W, CANVAS_H));
+fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<PauseMenuEntry> {
+    let mut canvas = UiCanvas::<PauseMenuEntry>::with_events(vec2(CANVAS_W, CANVAS_H));
     for (item, rect) in MENU_ITEMS.iter().zip(rects) {
         // Unimplemented entries get no hit region at all, so a click over one
         // falls through as "nothing was clicked".
@@ -370,43 +408,60 @@ fn resolve_click_at(
     pressed: bool,
     last_pressed: bool,
     rects: &[Rect],
-) -> (Option<PauseAction>, bool) {
+) -> (Option<PauseMenuEntry>, bool) {
     if !pressed || last_pressed {
         return (None, pressed);
     }
     (point.and_then(|p| hit(p, rects)), pressed)
 }
 
-/// Pure click resolution for the flat pointer: on a rising press edge over an
-/// implemented item, return its action, plus the `last_pressed` to carry.
+/// Reduce the flat pointer to "a point on the canvas plus a pressed flag" -
+/// the same shape the VR pointer pass yields, so the page routing above them
+/// is shared. No pointer this frame is not a release: on desktop the cursor
+/// is captured for mouse-look until `wants_pointer` flips it on, so the frame
+/// the menu opens has no pointer at all. Clearing the guard there would
+/// re-arm the click edge under a still-held button, hence `last_pressed`
+/// carries through.
+fn flat_pointer_state(
+    pointer: Option<Pointer2D>,
+    last_pressed: bool,
+    screen_size: Vector2<f32>,
+) -> (Option<Vector2<f32>>, bool) {
+    match pointer {
+        Some(p) => (
+            pointer_to_canvas(
+                vec2(CANVAS_W, CANVAS_H),
+                p.position,
+                screen_size,
+                SCALE_MODE,
+            ),
+            p.pressed,
+        ),
+        None => (None, last_pressed),
+    }
+}
+
+/// Pure click resolution for the flat pointer on the root page: on a rising
+/// press edge over an implemented item, return its entry, plus the
+/// `last_pressed` to carry. Kept as the tests' composition of the two pure
+/// halves `update` uses.
+#[cfg(test)]
 fn resolve_click(
     pointer: Option<Pointer2D>,
     last_pressed: bool,
     screen_size: Vector2<f32>,
     rects: &[Rect],
-) -> (Option<PauseAction>, bool, Option<Vector2<f32>>) {
-    match pointer {
-        Some(p) => {
-            let point = pointer_to_canvas(
-                vec2(CANVAS_W, CANVAS_H),
-                p.position,
-                screen_size,
-                SCALE_MODE,
-            );
-            let (action, pressed) = resolve_click_at(point, p.pressed, last_pressed, rects);
-            (action, pressed, point)
-        }
-        // No pointer this frame is not a release: on desktop the cursor is
-        // captured for mouse-look until `wants_pointer` flips it on, so the
-        // frame the menu opens has no pointer at all. Clearing the guard here
-        // would re-arm the click edge under a still-held button.
-        None => (None, last_pressed, None),
-    }
+) -> (Option<PauseMenuEntry>, bool, Option<Vector2<f32>>) {
+    let (point, pressed) = flat_pointer_state(pointer, last_pressed, screen_size);
+    let (action, pressed) = resolve_click_at(point, pressed, last_pressed, rects);
+    (action, pressed, point)
 }
 
 /// The pause overlay. Closed by default; [`PauseMenu::open`] arms it.
 pub struct PauseMenu {
     open: bool,
+    /// Which page the overlay is showing; reset to the root on every open.
+    page: PauseMenuPage,
     /// Pointer from the latest update, used for hover highlighting in render.
     pointer: Option<Pointer2D>,
     /// Where the VR controller ray last met the panel, in canvas pixels.
@@ -444,6 +499,7 @@ impl PauseMenu {
     pub fn new() -> Self {
         Self {
             open: false,
+            page: PauseMenuPage::Root,
             pointer: None,
             vr_pointer_canvas: None,
             vr_pointer: FrontendPointerPass::default(),
@@ -501,6 +557,9 @@ impl PauseMenu {
     /// frame - the game-over screen shipped with exactly that bug.
     pub fn open(&mut self) {
         self.open = true;
+        // Always land on the root page: reopening straight onto a parameter
+        // list the player forgot they left would read as a broken menu.
+        self.page = PauseMenuPage::Root;
         self.panel_anchor = FrontendPanelAnchor::new();
         // Forget the previous session's head: if `render` runs before the first
         // `update` of this one, a stale pose would hang the dim where the player
@@ -551,7 +610,9 @@ impl PauseMenu {
             elapsed,
         );
 
-        let (action, last_pressed) = if options.presentation_mode == PresentationMode::Vr {
+        // Both presentations reduce to "a point on the canvas plus a pressed
+        // flag"; which page consumes the click is decided after.
+        let (point, pressed) = if options.presentation_mode == PresentationMode::Vr {
             // VR has no 2D cursor: the pointer is where a controller ray meets
             // the panel, and the trigger is the button.
             self.vr_pointer =
@@ -559,20 +620,62 @@ impl PauseMenu {
             let (point, pressed) = (self.vr_pointer.point(), self.vr_pointer.pressed);
             self.vr_pointer_canvas = point;
             self.pointer = None;
-            resolve_click_at(point, pressed, self.last_pressed, &rects)
+            (point, pressed)
         } else {
             self.pointer = input_context.pointer;
             self.vr_pointer = FrontendPointerPass::default();
-            let (action, last_pressed, _) = resolve_click(
+            flat_pointer_state(
                 input_context.pointer,
                 self.last_pressed,
                 self.last_screen_size,
-                &rects,
-            );
-            (action, last_pressed)
+            )
         };
-        self.last_pressed = last_pressed;
-        action
+
+        match self.page {
+            PauseMenuPage::Root => {
+                let (entry, last_pressed) =
+                    resolve_click_at(point, pressed, self.last_pressed, &rects);
+                self.last_pressed = last_pressed;
+                self.handle_root_entry(entry)
+            }
+            PauseMenuPage::Developer => {
+                // Same rising-edge rule as the root, over the shared panel's
+                // hit regions instead of the entry rects.
+                let event = (pressed && !self.last_pressed)
+                    .then(|| point.and_then(dev_params_panel::hit))
+                    .flatten();
+                self.last_pressed = pressed;
+                self.handle_developer_event(event)
+            }
+        }
+    }
+
+    /// Route a clicked root entry: actions go to the owning `Game`, the
+    /// Developer entry switches pages inside the overlay.
+    fn handle_root_entry(&mut self, entry: Option<PauseMenuEntry>) -> Option<PauseAction> {
+        match entry {
+            Some(PauseMenuEntry::Action(action)) => Some(action),
+            Some(PauseMenuEntry::Developer) => {
+                self.page = PauseMenuPage::Developer;
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Route a clicked Developer-page event: parameter steps mutate the
+    /// registry, "Done" returns to the root page. Never a [`PauseAction`] -
+    /// nothing on this page closes the menu or reaches `Game`.
+    fn handle_developer_event(
+        &mut self,
+        event: Option<dev_params_panel::DevParamsEvent>,
+    ) -> Option<PauseAction> {
+        if let Some(event) = event {
+            if dev_params_panel::activate(event) {
+                self.page = PauseMenuPage::Root;
+            }
+        }
+        None
     }
 
     /// World-space presentation: the canvas on a panel in front of the player.
@@ -680,6 +783,19 @@ impl PauseMenu {
     ) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
 
+        if self.page == PauseMenuPage::Developer {
+            // The Developer page: the shared parameter panel on its own
+            // backdrop. Everything about the page - rows, arrows, "Done" -
+            // is described by `dev_params_panel`, so this page and the
+            // standalone Developer scene cannot drift apart.
+            canvas.image(
+                Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H),
+                DEVELOPER_BACKDROP_TEXTURE,
+            );
+            dev_params_panel::draw(&mut canvas, pointer_canvas);
+            return canvas;
+        }
+
         // The original's opaque full-screen backdrop. In flat presentation this
         // is also the "dim the world" answer: it covers the view exactly as the
         // original pause screen does. In VR it covers the panel only - but the
@@ -764,7 +880,7 @@ mod tests {
         ] {
             let (action, last, _) =
                 resolve_click(pointer_at(rects[index], true), false, SCREEN, &rects);
-            assert_eq!(action, Some(expected));
+            assert_eq!(action, Some(PauseMenuEntry::Action(expected)));
             assert!(last);
         }
     }
@@ -772,11 +888,71 @@ mod tests {
     #[test]
     fn the_stubbed_entries_are_inert() {
         let rects = menu_rects(None);
-        for index in [SAVE_INDEX, LOAD_INDEX, OPTIONS_INDEX] {
+        for index in [SAVE_INDEX, LOAD_INDEX] {
             let (action, _, _) =
                 resolve_click(pointer_at(rects[index], true), false, SCREEN, &rects);
             assert_eq!(action, None, "entry {index} is a dimmed stub");
         }
+    }
+
+    #[test]
+    fn clicking_the_developer_slot_switches_pages_without_reaching_game() {
+        let rects = menu_rects(None);
+        let (entry, _, _) = resolve_click(
+            pointer_at(rects[OPTIONS_INDEX], true),
+            false,
+            SCREEN,
+            &rects,
+        );
+        assert_eq!(entry, Some(PauseMenuEntry::Developer));
+
+        let mut menu = PauseMenu::new();
+        menu.open();
+        assert_eq!(menu.page, PauseMenuPage::Root);
+        // Routing the click: no PauseAction escapes to `Game` (the mission
+        // must stay paused, the menu must stay open) - the overlay just
+        // turns its page.
+        assert_eq!(menu.handle_root_entry(entry), None);
+        assert_eq!(menu.page, PauseMenuPage::Developer);
+        assert!(menu.is_open());
+    }
+
+    #[test]
+    fn done_on_the_developer_page_returns_to_the_root_page() {
+        use crate::ui::dev_params_panel::DevParamsEvent;
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.handle_root_entry(Some(PauseMenuEntry::Developer));
+        assert_eq!(menu.page, PauseMenuPage::Developer);
+
+        // A frame with no click keeps the page.
+        assert_eq!(menu.handle_developer_event(None), None);
+        assert_eq!(menu.page, PauseMenuPage::Developer);
+
+        // "Done" returns to the root - it does not close the menu, and it
+        // does not reach `Game`. (The step events are not exercised here:
+        // they mutate the process-global registry, which parallel tests
+        // read - the SDK e2e proves a click really moves a value.)
+        assert_eq!(
+            menu.handle_developer_event(Some(DevParamsEvent::Done)),
+            None
+        );
+        assert_eq!(menu.page, PauseMenuPage::Root);
+        assert!(menu.is_open());
+    }
+
+    #[test]
+    fn reopening_lands_on_the_root_page() {
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.handle_root_entry(Some(PauseMenuEntry::Developer));
+        menu.close();
+        menu.open();
+        assert_eq!(
+            menu.page,
+            PauseMenuPage::Root,
+            "a reopened menu must not resume on the parameter list"
+        );
     }
 
     #[test]
@@ -835,6 +1011,9 @@ mod tests {
         assert_eq!(labels[RESUME_INDEX], "Continue");
         assert_eq!(labels[SAVE_INDEX], "Save Game");
         assert_eq!(labels[QUIT_INDEX], "Quit to \\nMain Menu");
+        // The repurposed Options slot reads what it does, whatever the
+        // string table says.
+        assert_eq!(labels[OPTIONS_INDEX], "Developer");
     }
 
     #[test]
@@ -856,7 +1035,7 @@ mod tests {
                 "Continue",
                 "Save Game",
                 "Load Game",
-                "Options",
+                "Developer",
                 "Quit to \\nMain Menu"
             ]
         );
@@ -894,7 +1073,7 @@ mod tests {
             assert!(rects[index].contains(point));
             assert_eq!(
                 resolve_click_at(Some(point), pressed, false, &rects).0,
-                Some(expected)
+                Some(PauseMenuEntry::Action(expected))
             );
         }
     }
@@ -924,7 +1103,7 @@ mod tests {
         let (_, last) = resolve_click_at(point, false, last, &rects);
         assert_eq!(
             resolve_click_at(point, true, last, &rects).0,
-            Some(PauseAction::QuitToMainMenu)
+            Some(PauseMenuEntry::Action(PauseAction::QuitToMainMenu))
         );
     }
 
@@ -933,7 +1112,7 @@ mod tests {
         let rects = menu_rects(None);
         let point = Some(rects[RESUME_INDEX].center());
         let (action, last) = resolve_click_at(point, true, false, &rects);
-        assert_eq!(action, Some(PauseAction::Resume));
+        assert_eq!(action, Some(PauseMenuEntry::Action(PauseAction::Resume)));
         assert_eq!(resolve_click_at(point, true, last, &rects).0, None);
     }
 
@@ -1010,12 +1189,16 @@ mod tests {
         let rects = menu_rects(None);
         assert_eq!(
             hit(rects[RESUME_INDEX].center(), &rects),
-            Some(PauseAction::Resume)
+            Some(PauseMenuEntry::Action(PauseAction::Resume))
         );
         assert_eq!(hit(rects[SAVE_INDEX].center(), &rects), None);
         assert_eq!(
+            hit(rects[OPTIONS_INDEX].center(), &rects),
+            Some(PauseMenuEntry::Developer)
+        );
+        assert_eq!(
             hit(rects[QUIT_INDEX].center(), &rects),
-            Some(PauseAction::QuitToMainMenu)
+            Some(PauseMenuEntry::Action(PauseAction::QuitToMainMenu))
         );
     }
 
