@@ -1716,6 +1716,19 @@ impl MissionCore {
             screen_fade_texture,
         };
         mission_core.process_virtual_hand_effects(asset_cache, held_restore_effects);
+        // Re-run each restored held item's Hold script. Only a fresh world
+        // grab dispatches Hold (see `restore_held_item_physics` for the same
+        // restore gap), so without this a save/load or level transition loses
+        // whatever Hold set up: the save carries the swapped first-person
+        // PropModelName, but the model was rebuilt through the plain importer
+        // - spare baked hands back - and the cross-mode heal never ran. The
+        // handlers are idempotent for an already-wielded item.
+        for entity_id in [left_hand_entity, right_hand_entity].into_iter().flatten() {
+            mission_core.script_world.dispatch(Message {
+                payload: MessagePayload::Hold,
+                to: entity_id,
+            });
+        }
         engine::platform::service_events();
         mission_core
     }
@@ -5018,8 +5031,23 @@ impl MissionCore {
                         // A VR-wielded first-person model drops its spare
                         // baked hand islands (see `VrHeldModel`); everything
                         // else loads the model as authored.
-                        let vr_held = game_options.presentation_mode == crate::PresentationMode::Vr
-                            && crate::vr_config::is_vr_view_model(&model_name);
+                        let is_vr = game_options.presentation_mode == crate::PresentationMode::Vr;
+                        let vr_held = is_vr && crate::vr_config::is_vr_view_model(&model_name);
+                        // Was the *outgoing* model a VR-wielded first-person
+                        // model? (Read before PropModelName is overwritten
+                        // below - identifies the drop-restore swap.)
+                        let was_vr_held = is_vr
+                            && self
+                                .world
+                                .borrow::<View<PropModelName>>()
+                                .ok()
+                                .and_then(|v_model_name| {
+                                    v_model_name
+                                        .get(entity_id)
+                                        .ok()
+                                        .map(|model| crate::vr_config::is_vr_view_model(&model.0))
+                                })
+                                .unwrap_or(false);
                         // A missing model must never take down the frame (or a
                         // load): keep the current model and complain loudly.
                         let new_model = if vr_held {
@@ -5042,17 +5070,24 @@ impl MissionCore {
                         };
 
                         let vhots = new_model.vhots();
-                        // An articulated model (e.g. a first-person weapon
-                        // wielded in VR: hand + arm + gun as skeleton
-                        // sub-objects) renders unposed without a player, so
-                        // give it the empty bind pose. An empty player emits
-                        // no motion flags or completion events, and it is a
-                        // no-op if the entity later swaps back to a static
-                        // model.
-                        if new_model.is_animated() {
+                        // An articulated VR-wielded first-person model (hand +
+                        // arm + gun as skeleton sub-objects) renders unposed
+                        // without a player, so give it the empty bind pose (it
+                        // emits no motion flags or completion events). The
+                        // player must NOT outlive the wield: the animation
+                        // loop writes every player's root velocity into
+                        // physics each frame, and an empty player's is zero -
+                        // left in place after the drop-restore to the static
+                        // world model it would pin the dropped weapon's
+                        // horizontal velocity to zero. Scoped to the VR wield
+                        // swap so every other ChangeModel (both presentations)
+                        // behaves exactly as before this path existed.
+                        if vr_held && new_model.is_animated() {
                             self.id_to_animation_player
                                 .entry(entity_id)
                                 .or_insert_with(AnimationPlayer::empty);
+                        } else if was_vr_held && !new_model.is_animated() {
+                            self.id_to_animation_player.remove(&entity_id);
                         }
                         self.id_to_model.insert(entity_id, new_model);
                         self.world
