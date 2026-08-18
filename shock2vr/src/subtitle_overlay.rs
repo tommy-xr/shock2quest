@@ -38,9 +38,11 @@ const CANVAS_W: f32 = 640.0;
 const CANVAS_H: f32 = 480.0;
 /// Text column width; the rest is side margin.
 const TEXT_W: f32 = 520.0;
-/// Where the *bottom* line of text sits. On the VR panel (1.5 m tall at 2 m)
-/// this puts the text ~15 degrees below the view center - subtitle height.
-const TEXT_BOTTOM: f32 = 440.0;
+/// Where the *bottom* line of text sits: above the flat HUD's vitals cluster
+/// (whose art tops out around y=414), so a long line never runs through it.
+/// On the VR panel (1.5 m tall at 2 m) this puts the text ~13 degrees below
+/// the view center - subtitle height.
+const TEXT_BOTTOM: f32 = 408.0;
 /// Glyph-cell height in canvas pixels. `mainfont` is ~10 px native; doubling
 /// it keeps the line count low and the text legible at the panel distance.
 const FONT_SIZE: f32 = 20.0;
