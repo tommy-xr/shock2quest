@@ -100,6 +100,19 @@ impl SubtitleOverlay {
         self.place_pending = false;
     }
 
+    /// Drop the text for `sample` if it is what's showing - the counterpart of
+    /// a TrapSound TurnOff stopping that narration's audio. Text belonging to
+    /// a different narration stays.
+    pub fn clear_sample(&mut self, sample: &str) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.sample.eq_ignore_ascii_case(sample))
+        {
+            self.clear();
+        }
+    }
+
     /// Start showing a sample's cues.
     ///
     /// Re-posting the sample already on screen is ignored (the data marks
@@ -346,6 +359,16 @@ mod tests {
         overlay.post("trg0001", vec![cue(0, 5000, "old")]);
         overlay.post("trg0002", vec![cue(0, 1000, "new")]);
         assert_eq!(overlay.visible_lines(), vec!["new"]);
+    }
+
+    #[test]
+    fn clear_sample_drops_only_the_matching_narration() {
+        let mut overlay = SubtitleOverlay::new();
+        overlay.post("trg0001", vec![cue(0, 5000, "line")]);
+        overlay.clear_sample("trg0002");
+        assert!(overlay.is_visible(), "another sample's text must stay");
+        overlay.clear_sample("TRG0001");
+        assert!(!overlay.is_visible());
     }
 
     #[test]

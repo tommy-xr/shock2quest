@@ -331,13 +331,24 @@ fn load_subtitle_db(asset_cache: &AssetCache) -> subtitles::SubtitleDb {
         Some(text)
     };
     let mut db = subtitles::SubtitleDb::default();
-    let Some(loc_source) = read_text("loc_english.txt") else {
-        return db;
-    };
-    let loc = subtitles::Localization::parse(&loc_source);
-    for sub_file in ["vbriefs.sub", "vtriggers.sub"] {
-        if let Some(source) = read_text(sub_file) {
-            db.add_sub_source(&source, &loc);
+    match read_text("loc_english.txt") {
+        Some(loc_source) => {
+            let loc = subtitles::Localization::parse(&loc_source);
+            for sub_file in ["vbriefs.sub", "vtriggers.sub"] {
+                if let Some(source) = read_text(sub_file) {
+                    db.add_sub_source(&source, &loc);
+                }
+            }
+        }
+        None => {
+            // Expected on a classic install; on a 25AE install with the cue
+            // files present it means base.kpf is missing/unreadable - say so
+            // rather than silently dropping every subtitle.
+            if read_text("vbriefs.sub").is_some() {
+                println!(
+                    "narration subtitles: cue files found but localization/loc_english.txt is missing - subtitles disabled"
+                );
+            }
         }
     }
     // `println!` like the install summary above: this is the tell-tale for
@@ -1783,6 +1794,9 @@ impl Game {
                     // re-fires. (Every loaded track today is a 1:1 schema.)
                     self.subtitle_overlay.post(&audio_schema, cues.to_vec());
                 }
+            }
+            GlobalEffect::HideSubtitle { audio_schema } => {
+                self.subtitle_overlay.clear_sample(&audio_schema);
             }
         }
     }

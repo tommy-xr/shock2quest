@@ -64,6 +64,15 @@ impl Script for TrapSound {
                     });
                 }
                 self.playing_sounds.clear();
+                // Silencing the narration takes its text down with it -
+                // otherwise the authored "silence all" TurnOff broadcasts
+                // (earth's training inverters) leave silent text on screen.
+                let v_sound = world.borrow::<View<PropObjectSound>>().unwrap();
+                if let Ok(sound) = v_sound.get(entity_id) {
+                    eff.push(Effect::GlobalEffect(GlobalEffect::HideSubtitle {
+                        audio_schema: sound.name.to_owned(),
+                    }));
+                }
                 Effect::Combined { effects: eff }
             }
             _ => Effect::NoEffect,
@@ -100,6 +109,35 @@ mod tests {
         assert!(flattened.iter().any(|effect| matches!(
             effect,
             Effect::GlobalEffect(GlobalEffect::ShowSubtitle { audio_schema }) if audio_schema == "trg0001"
+        )));
+    }
+
+    #[test]
+    fn turn_off_takes_the_subtitle_down_with_the_sound() {
+        let mut world = World::new();
+        let entity_id = world.add_entity((PropObjectSound {
+            name: "trg0001".to_owned(),
+        },));
+        let physics = PhysicsWorld::new();
+        let mut trap = TrapSound::new();
+        trap.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: entity_id },
+        );
+
+        let effect = trap.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::TurnOff { from: entity_id },
+        );
+
+        let flattened = Effect::flatten(vec![effect]);
+        assert!(flattened.iter().any(|effect| matches!(
+            effect,
+            Effect::GlobalEffect(GlobalEffect::HideSubtitle { audio_schema }) if audio_schema == "trg0001"
         )));
     }
 }

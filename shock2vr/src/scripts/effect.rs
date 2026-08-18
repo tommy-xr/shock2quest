@@ -75,6 +75,12 @@ pub enum GlobalEffect {
         audio_schema: String,
     },
 
+    /// Take a narration's subtitle down early because its sound was stopped
+    /// (TrapSound TurnOff). A no-op when that schema's text is not showing.
+    HideSubtitle {
+        audio_schema: String,
+    },
+
     // Quit the game (e.g. from the main menu). The runtime is responsible for
     // observing this via `Game::should_quit` and closing its window.
     Quit,
