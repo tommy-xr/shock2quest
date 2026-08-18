@@ -1911,11 +1911,7 @@ mod tests {
     /// On by default on every platform since the Quest measurement (#1022).
     #[test]
     fn defaults_to_enabled_when_unspecified() {
-        assert!(dark::high_detail::default_enabled());
-        assert_eq!(
-            Game::resolve_high_detail_meshes(&features(&[])),
-            dark::high_detail::default_enabled()
-        );
+        assert!(Game::resolve_high_detail_meshes(&features(&[])));
     }
 
     #[test]

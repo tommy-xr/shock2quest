@@ -746,8 +746,9 @@ mod tests {
 /// Build scene objects from an appended `PMNM` high-detail chunk, in its authored
 /// rest pose.
 ///
-/// Opt-in via `SS2_PMNM_MESHES=1`. The vertices are skinned to the same skeleton
-/// the original mesh uses, so these animate normally; the caller supplies the
+/// Gated on [`crate::high_detail::enabled`] (on by default). The vertices are
+/// skinned to the same skeleton the original mesh uses, so these animate
+/// normally; the caller supplies the
 /// bind-pose undo via [`pmnm_bind_matrices`].
 pub fn pmnm_to_scene_objects(
     mesh: &crate::ss2_bin_pmnm::PmnmMesh,

@@ -16,23 +16,23 @@
 //!   not running the remaster's data.
 //! - **Quest** shipped off pending a device measurement (#1022). Measured on a
 //!   Quest 3 (release APK, 90 Hz): earth.mis and medsci1.mis hold the same
-//!   FPS/stale-frame profile as with the gate closed, with no meaningful eye
-//!   render time or memory delta, so it is now on by default on device too.
-//!   `no_high_detail_meshes` (see `Game::resolve_high_detail_meshes`) remains
-//!   the opt-out.
+//!   FPS/stale-frame profile as with the gate closed (~0.3 ms extra combined
+//!   eye time in a 6-creature stress scene, +12 MiB PSS on medsci1), so it is
+//!   now on by default on device too. `no_high_detail_meshes` (see
+//!   `Game::resolve_high_detail_meshes`) forces it off on runtimes that pass
+//!   experimental flags (desktop/debug); the Quest runtime hardcodes its flag
+//!   set, so disabling there is a rebuild.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// See the module docs for the measurements behind this.
-const fn platform_default() -> bool {
-    true
-}
+const DEFAULT_ENABLED: bool = true;
 
-static ENABLED: AtomicBool = AtomicBool::new(platform_default());
+static ENABLED: AtomicBool = AtomicBool::new(DEFAULT_ENABLED);
 
-/// The default for this platform, before any explicit override.
+/// The default, before any explicit override.
 pub fn default_enabled() -> bool {
-    platform_default()
+    DEFAULT_ENABLED
 }
 
 /// Set once at startup, before any model is loaded.
