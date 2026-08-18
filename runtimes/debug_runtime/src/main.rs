@@ -313,6 +313,8 @@ async fn start_http_server(
             axum::routing::post(trigger_input_action),
         )
         .route("/v1/input/actions", get(list_input_actions))
+        .route("/v1/dev-params", get(list_dev_params))
+        .route("/v1/dev-params", axum::routing::post(set_dev_param))
         .route("/v1/audio/recent", get(get_recent_audio))
         .route("/v1/messages/recent", get(get_recent_messages))
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
@@ -368,6 +370,8 @@ async fn start_http_server(
         "  POST /v1/input/action     - Trigger a discrete input action (e.g. PathfindingTestCycle)"
     );
     info!("  GET  /v1/input/actions    - List available input actions");
+    info!("  GET  /v1/dev-params       - List live-tunable dev params (range, value, default)");
+    info!("  POST /v1/dev-params       - Set a dev param {{key, value}} (clamped + snapped, live next frame)");
     info!("  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source)");
     info!("  GET  /v1/messages/recent  - Recently delivered script messages (to/payload/from)");
     info!("  POST /v1/screenshot       - Capture the current framebuffer");
@@ -3518,6 +3522,54 @@ async fn trigger_input_action(
 }
 
 /// HTTP endpoint handler: List available input actions
+/// HTTP handler listing the live-tunable dev params (key, label, kind/range,
+/// current value, default). The registry is process-global atomics
+/// (`shock2vr::dev_params`), so this reads it directly - no game-loop
+/// round-trip, same as `/v1/audio/recent`.
+async fn list_dev_params() -> Json<Value> {
+    let params: Vec<Value> = shock2vr::dev_params::all()
+        .map(|(id, param)| {
+            let shock2vr::dev_params::DevParamKind::Float { min, max, step } = param.kind;
+            json!({
+                "key": param.key,
+                "label": param.label,
+                "kind": "float",
+                "min": min,
+                "max": max,
+                "step": step,
+                "value": shock2vr::dev_params::get(id),
+                "default": param.default,
+            })
+        })
+        .collect();
+    Json(json!({ "params": params }))
+}
+
+#[derive(Deserialize)]
+struct SetDevParamRequest {
+    key: String,
+    value: f32,
+}
+
+/// HTTP handler setting one dev param by key. The value is clamped into the
+/// param's range and snapped to its step grid; the response reports what was
+/// actually applied. Consumers read the registry every frame, so the change is
+/// live on the next stepped frame. Unknown keys are a 404.
+async fn set_dev_param(
+    LenientJson(request): LenientJson<SetDevParamRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    match shock2vr::dev_params::find(&request.key) {
+        Some(id) => {
+            let applied = shock2vr::dev_params::set(id, request.value);
+            Ok(Json(json!({ "key": request.key, "value": applied })))
+        }
+        None => Err((
+            StatusCode::NOT_FOUND,
+            format!("unknown dev param key: {}", request.key),
+        )),
+    }
+}
+
 async fn list_input_actions() -> Json<Value> {
     let actions: Vec<&str> = InputAction::all().iter().map(|a| a.as_str()).collect();
     Json(serde_json::json!({ "actions": actions }))

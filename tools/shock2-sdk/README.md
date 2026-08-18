@@ -117,6 +117,11 @@ await game.raycast({
 // Recently played environmental sounds (resolved schema sample + query tags) -
 // the headless way to assert audio, e.g. weapon impact sounds.
 const { sounds } = await game.audio.recent();
+
+// Live-tunable dev params (shock2vr::dev_params): list every knob with its
+// range/current/default, or set one - clamped + snapped, applied next frame.
+const { params } = await game.devParams.list();
+await game.devParams.set("panel_distance", 3.0);
 ```
 
 Raycasts default to `world` and `entity`. Supported groups are `world`,

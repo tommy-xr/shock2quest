@@ -3,6 +3,7 @@ export {
   AimOcclusionError,
   AudioApi,
   CommandError,
+  DevParamsApi,
   EntitiesApi,
   Game,
   headRotationForWorldPoint,
