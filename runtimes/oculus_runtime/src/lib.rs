@@ -1538,7 +1538,15 @@ fn android_pump_events() -> bool {
 /// eye ~1.8 SS2 ft above the original game's eye line (and world scale ~31%
 /// large).
 fn stage_to_pawn(position_meters: Vector3<f32>, center_above_floor: f32) -> Vector3<f32> {
-    position_meters / shock2vr::METERS_PER_WORLD_UNIT - vec3(0.0, center_above_floor, 0.0)
+    // The dev-params eye-height offset raises or lowers the whole tracked
+    // stage: every tracked position - head input, both hands, and the per-eye
+    // view - routes through this one mapping, so they move together and the
+    // hands never detach from the raised eye line. The per-eye cap in
+    // `render_swapchain` applies after this, so an upward offset still cannot
+    // push the view out of the collider crown.
+    let stage_offset_meters = shock2vr::dev_params::get(shock2vr::dev_params::EYE_HEIGHT_OFFSET);
+    (position_meters + vec3(0.0, stage_offset_meters, 0.0)) / shock2vr::METERS_PER_WORLD_UNIT
+        - vec3(0.0, center_above_floor, 0.0)
 }
 
 fn render_swapchain(
