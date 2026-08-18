@@ -371,7 +371,9 @@ async fn start_http_server(
     );
     info!("  GET  /v1/input/actions    - List available input actions");
     info!("  GET  /v1/dev-params       - List live-tunable dev params (range, value, default)");
-    info!("  POST /v1/dev-params       - Set a dev param {{key, value}} (clamped + snapped, live next frame)");
+    info!(
+        "  POST /v1/dev-params       - Set a dev param {{key, value}} (clamped + snapped, live next frame)"
+    );
     info!("  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source)");
     info!("  GET  /v1/messages/recent  - Recently delivered script messages (to/payload/from)");
     info!("  POST /v1/screenshot       - Capture the current framebuffer");
