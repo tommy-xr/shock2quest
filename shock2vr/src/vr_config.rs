@@ -102,9 +102,12 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         .rotate_y(Deg(90.0))
         .with_offset(vec3(0.0, 0.0, -0.4));
 
-    // Starting orientation for the posed melee _h arms; per-model offsets are
-    // fit from captures like the guns.
-    let melee_h_right = VRHandModelPerHandAdjustments::new().rotate_y(Deg(90.0));
+    // Orientation for the posed melee _h arms: +120 deg yaw points the
+    // authored ready-stance weapon up-forward from the fist. Offsets cancel
+    // the posed fist joint so the baked fist lands on the tracked hand -
+    // computed by `cargo run -p shock2vr --example melee_grip -- 120`, then
+    // eyeball-adjusted from debug_weapons --vr captures.
+    let melee_h_right = VRHandModelPerHandAdjustments::new().rotate_y(Deg(120.0));
 
     let held_item_hand = VRHandModelPerHandAdjustments::new().rotate_y(Deg(180.0));
     let held_item = VRHandModelAdjustments::new(
@@ -200,19 +203,35 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         // --vr captures, same method as the guns above).
         (
             "wrench_h",
-            symmetric(melee_h_right.clone().with_offset(vec3(0.0, 0.05, 0.35))),
+            symmetric(
+                melee_h_right
+                    .clone()
+                    .with_offset(vec3(-0.699, -0.152, -0.147)),
+            ),
         ),
         (
             "rapier_h",
-            symmetric(melee_h_right.clone().with_offset(vec3(0.0, 0.05, 0.35))),
+            symmetric(
+                melee_h_right
+                    .clone()
+                    .with_offset(vec3(-0.717, -0.214, -0.129)),
+            ),
         ),
         (
             "shard_h",
-            symmetric(melee_h_right.clone().with_offset(vec3(0.0, 0.05, 0.35))),
+            symmetric(
+                melee_h_right
+                    .clone()
+                    .with_offset(vec3(-0.717, -0.214, -0.129)),
+            ),
         ),
         (
             "psword_h",
-            symmetric(melee_h_right.clone().with_offset(vec3(0.0, 0.05, 0.35))),
+            symmetric(
+                melee_h_right
+                    .clone()
+                    .with_offset(vec3(-0.707, -0.217, -0.128)),
+            ),
         ),
         // Weapons - world models, kept when held in VR (#352): the _h meshes
         // have faces stripped for the fixed flat camera. sg_w/empgun predate

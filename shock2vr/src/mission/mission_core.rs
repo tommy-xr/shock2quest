@@ -5021,19 +5021,32 @@ impl MissionCore {
                     entity_id,
                     model_name,
                 } => {
-                    if let Some(model) = self.id_to_model.get(&entity_id) {
-                        // if !scene_objs.is_empty() {
-                        //let scene_obj = scene_objs.get(0).unwrap().borrow();
-                        let xform = model.get_transform();
-                        //drop(scene_obj);
-
+                    // A VR-wielded first-person model loads as authored,
+                    // baked hands included (see `VrHeldModel`); the
+                    // separate importer is the seam where per-wield mesh
+                    // preparation lives.
+                    let is_vr = game_options.presentation_mode == crate::PresentationMode::Vr;
+                    let vr_held = is_vr && crate::vr_config::is_vr_view_model(&model_name);
+                    // The PsiSword authors no world model at all (PropLimbModel
+                    // only), so it has no id_to_model entry to take a transform
+                    // from - a VR wield materializes its first model from the
+                    // entity transform instead. Every other ChangeModel still
+                    // requires an existing model, exactly as before.
+                    let maybe_xform = self
+                        .id_to_model
+                        .get(&entity_id)
+                        .map(|model| model.get_transform())
+                        .or_else(|| {
+                            if !vr_held {
+                                return None;
+                            }
+                            self.world
+                                .borrow::<View<RuntimePropTransform>>()
+                                .ok()
+                                .and_then(|v| v.get(entity_id).ok().map(|t| t.0))
+                        });
+                    if let Some(xform) = maybe_xform {
                         let _ext_name = model_name.clone();
-                        // A VR-wielded first-person model loads as authored,
-                        // baked hands included (see `VrHeldModel`); the
-                        // separate importer is the seam where per-wield mesh
-                        // preparation lives.
-                        let is_vr = game_options.presentation_mode == crate::PresentationMode::Vr;
-                        let vr_held = is_vr && crate::vr_config::is_vr_view_model(&model_name);
                         // Was the *outgoing* model a VR-wielded first-person
                         // model? (Read before PropModelName is overwritten
                         // below - identifies the drop-restore swap.)
