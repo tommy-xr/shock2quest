@@ -36,6 +36,13 @@ use std::time::Duration;
 
 /// The KEX localization table: `$key = "value"` lines, `//` comments and
 /// `[section]` headers.
+///
+/// Section headers are treated as comments, so keys from every section land in
+/// one flat map, last definition wins. That is safe for the subtitle keys
+/// (unique across the file) but NOT for the UI sections, which reuse generic
+/// keys (`$cancel`, `$select`, ...) per section - a future caller resolving
+/// the Nightdive `strings` stubs through this table (see
+/// `mod_layer_may_override`) must add section-qualified lookup first.
 #[derive(Debug, Default)]
 pub struct Localization {
     entries: HashMap<String, String>,

@@ -68,6 +68,13 @@ pub struct SubtitleOverlay {
     /// VR panel placement, reset when a new narration starts so the toast is
     /// hung from the head pose that heard it (vr-ui-design rule 3).
     anchor: FrontendPanelAnchor,
+    /// Set by [`post`](Self::post), consumed by the next
+    /// [`update`](Self::update): effects (and so `post`) run *after* the
+    /// frame's update, where the head pose lives, so the anchor reset is
+    /// deferred to the next update rather than leaving an un-placed anchor
+    /// for `render` to fall back on (which would hang the panel at the
+    /// pawn-origin default for one frame).
+    place_pending: bool,
 }
 
 impl Default for SubtitleOverlay {
@@ -81,7 +88,16 @@ impl SubtitleOverlay {
         Self {
             active: None,
             anchor: FrontendPanelAnchor::new(),
+            place_pending: false,
         }
+    }
+
+    /// Drop whatever is showing. Called on scene swaps: a narration in flight
+    /// when the player takes an elevator, dies, or quits to the menu must not
+    /// keep playing its remaining cues over the next scene.
+    pub fn clear(&mut self) {
+        self.active = None;
+        self.place_pending = false;
     }
 
     /// Start showing a sample's cues.
@@ -94,10 +110,12 @@ impl SubtitleOverlay {
         if cues.is_empty() {
             return;
         }
-        if let Some(active) = &self.active {
-            if active.sample.eq_ignore_ascii_case(sample) {
-                return;
-            }
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.sample.eq_ignore_ascii_case(sample))
+        {
+            return;
         }
         let total = cues
             .iter()
@@ -110,8 +128,9 @@ impl SubtitleOverlay {
             clock: Duration::ZERO,
             total,
         });
-        // Place the panel fresh from the head pose the narration starts at.
-        self.anchor = FrontendPanelAnchor::new();
+        // Re-place the panel from the head pose the narration starts at - on
+        // the next update, which is where that pose is available.
+        self.place_pending = true;
     }
 
     /// Advance the clock and the VR panel anchor. Call on the *scene* clock:
@@ -125,6 +144,10 @@ impl SubtitleOverlay {
         if active.clock >= active.total {
             self.active = None;
             return;
+        }
+        if self.place_pending {
+            self.anchor = FrontendPanelAnchor::new();
+            self.place_pending = false;
         }
         self.anchor.update(
             input_context.head.position,
@@ -193,6 +216,12 @@ impl SubtitleOverlay {
         if !self.is_visible() || options.presentation_mode != PresentationMode::Vr {
             return Vec::new();
         }
+        // A pending placement means no update has seen the head pose since the
+        // narration started; the anchor's fallback would hang the panel at the
+        // pawn-origin default for this one frame, so draw nothing instead.
+        if self.place_pending || self.anchor.placement().is_none() {
+            return Vec::new();
+        }
         let panel = self.anchor.panel();
         let canvas = self.build_canvas(asset_cache);
         let mut objects = canvas.render_world_space(
@@ -204,6 +233,14 @@ impl SubtitleOverlay {
         );
         for object in &mut objects {
             object.set_transform(pawn_to_world * object.get_transform());
+        }
+        // The toast is an overlay, not a world prop: the renderer starts its
+        // overlay group (depth cleared, drawn after the world's passes) at the
+        // first `clear_depth` object, exactly like the pause menu's dim layer.
+        // Without this the text depth-tests against the world and any wall
+        // nearer than the panel's 2 m swallows it - i.e. most of the ship.
+        if let Some(first) = objects.first_mut() {
+            first.clear_depth = true;
         }
         tag_render_source(&mut objects, render_source::SUBTITLE);
         objects
@@ -309,6 +346,16 @@ mod tests {
         overlay.post("trg0001", vec![cue(0, 5000, "old")]);
         overlay.post("trg0002", vec![cue(0, 1000, "new")]);
         assert_eq!(overlay.visible_lines(), vec!["new"]);
+    }
+
+    #[test]
+    fn clear_drops_the_active_narration() {
+        let mut overlay = SubtitleOverlay::new();
+        overlay.post("trg0001", vec![cue(0, 5000, "line")]);
+        assert!(overlay.is_visible());
+        overlay.clear();
+        assert!(!overlay.is_visible());
+        assert!(overlay.visible_lines().is_empty());
     }
 
     #[test]

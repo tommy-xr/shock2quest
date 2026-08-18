@@ -1777,7 +1777,11 @@ impl Game {
                     .cues(&sample)
                     .or_else(|| self.subtitle_db.cues(&audio_schema));
                 if let Some(cues) = cues {
-                    self.subtitle_overlay.post(&sample, cues.to_vec());
+                    // Keyed by the *schema* name: `resolve_schema` is a random
+                    // draw for multi-sample schemas, so keying on the sample
+                    // would defeat the repeat-while-playing guard when a trap
+                    // re-fires. (Every loaded track today is a 1:1 schema.)
+                    self.subtitle_overlay.post(&audio_schema, cues.to_vec());
                 }
             }
         }
@@ -1788,6 +1792,10 @@ impl Game {
     /// scene swap goes through here so that hook cannot be forgotten.
     fn set_active_scene(&mut self, scene: Box<dyn GameScene>) {
         self.active_game_scene.on_exit(&mut self.audio_context);
+        // A narration's remaining cues belong to the outgoing scene - they
+        // must not keep drawing over the menu, the loading screen, or the
+        // next level.
+        self.subtitle_overlay.clear();
         self.active_game_scene = scene;
     }
 
@@ -1850,9 +1858,9 @@ impl Game {
         // aim at it), so it is mapped into world coordinates with the same
         // pawn transform the runtime builds its camera from.
         let pawn_to_world = Matrix4::from_translation(pos) * Matrix4::from(rot);
-        // The VR subtitle toast, before the pause panel: while the menu is up
-        // the frozen toast stays a world object behind the menu's dim rather
-        // than fighting the panel.
+        // The VR subtitle toast. Suppressed entirely while the pause menu is
+        // up (its clock is frozen anyway): both draw in the renderer's
+        // clear-depth overlay group, and the menu owns that space.
         if !self.pause_menu.is_open() {
             scene.extend(self.subtitle_overlay.render(
                 &mut self.asset_cache,
