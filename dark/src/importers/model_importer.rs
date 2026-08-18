@@ -100,12 +100,14 @@ pub fn is_first_person_arm_material(name: &str) -> bool {
 /// A first-person weapon model prepared for VR wielding, as its own cache
 /// bucket (see [`FirstPersonHand`] for the type_id trap).
 ///
-/// The 25AE `obj/*_h` models bake in the player's hand and forearm, plus
-/// spare hand islands their reload/fire animations pose into view (e.g. the
-/// pistol's off-hand holding a magazine). In VR the model renders in bind
-/// pose from free viewpoints, so those spare hands float disembodied beside
-/// the gun. Keep the largest arm island (the gripping hand and its sleeve)
-/// and drop the rest; non-arm geometry is untouched.
+/// The mesh renders exactly as authored, baked hand and forearm included. An
+/// earlier revision stripped every arm island but the largest to hide the
+/// spare hands some reload/fire animations pose into view - but "one arm
+/// island = one hand" is false: the pistol (`atek_h`) splits its firing hand
+/// (`ND-arm_atek.psd`) and sleeve (`ND-arm.psd`) into separate islands, so the
+/// strip kept the sleeve and deleted the gripping hand. Spare-hand stripping
+/// is deliberately dropped (a floating spare hand is the lesser evil); it can
+/// return if a reliable classifier turns up.
 pub struct VrHeldModel(pub Model);
 
 fn process_vr_held_model(
@@ -113,29 +115,7 @@ fn process_vr_held_model(
     asset_cache: &mut AssetCache,
     _config: &(),
 ) -> VrHeldModel {
-    let obj = match mesh {
-        SystemShockContentModel::Obj(obj) => obj,
-        other => return VrHeldModel(process_model(other, asset_cache, &())),
-    };
-
-    let islands = ss2_bin_obj_loader::connected_islands(&obj, is_first_person_arm_material);
-    let drop: std::collections::HashSet<usize> = islands.into_iter().skip(1).flatten().collect();
-
-    let obj = if drop.is_empty() {
-        obj
-    } else {
-        let mut filtered = obj.clone();
-        filtered.polygons = obj
-            .polygons
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !drop.contains(index))
-            .map(|(_, polygon)| polygon.clone())
-            .collect();
-        filtered
-    };
-
-    VrHeldModel(Model::from_obj_bin(obj, asset_cache))
+    VrHeldModel(process_model(mesh, asset_cache, &()))
 }
 
 pub static VR_HELD_MODELS_IMPORTER: Lazy<AssetImporter<SystemShockContentModel, VrHeldModel, ()>> =

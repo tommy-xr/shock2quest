@@ -5028,9 +5028,10 @@ impl MissionCore {
                         //drop(scene_obj);
 
                         let _ext_name = model_name.clone();
-                        // A VR-wielded first-person model drops its spare
-                        // baked hand islands (see `VrHeldModel`); everything
-                        // else loads the model as authored.
+                        // A VR-wielded first-person model loads as authored,
+                        // baked hands included (see `VrHeldModel`); the
+                        // separate importer is the seam where per-wield mesh
+                        // preparation lives.
                         let is_vr = game_options.presentation_mode == crate::PresentationMode::Vr;
                         let vr_held = is_vr && crate::vr_config::is_vr_view_model(&model_name);
                         // Was the *outgoing* model a VR-wielded first-person
