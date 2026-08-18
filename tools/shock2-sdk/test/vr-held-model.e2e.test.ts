@@ -3,10 +3,12 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 
-// End-to-end regression tests for held-weapon models (#352): the first-person
-// hand models (_h meshes) have their never-visible faces stripped for the
-// fixed flat camera, so in VR a held weapon keeps its world model, while flat
-// still swaps to the viewmodel for the first-person weapon path.
+// End-to-end regression tests for held-weapon models: on a 25AE install the
+// remastered first-person gun models (obj/*_h.bin in mods/sshock2ee.kpf) are
+// closed meshes, so a VR-grabbed gun swaps to its _h viewmodel; on a classic
+// install the _h meshes have their never-visible faces stripped for the fixed
+// flat camera (#352) and VR keeps the world model. These tests run against the
+// configured DARK_ASSET_PATH, which is a 25AE install.
 //
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
@@ -19,7 +21,7 @@ function modelOf(detail: { properties: { name: string; value: string }[] }): str
 }
 
 test(
-  "VR: a grabbed weapon keeps its world model",
+  "VR: a grabbed weapon wields the 25AE first-person model",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -52,7 +54,12 @@ test(
     const held = (await game.info()).player.right_hand_entity_id;
     assert.equal(held, pistol.id, "pistol should be grabbed by the right hand");
 
-    // The held pistol keeps the world model - no _h viewmodel swap in VR.
+    // The held pistol swaps to the remastered first-person model (25AE
+    // install); dropping it restores the world model.
+    assert.equal(modelOf(await game.entities.detail(pistol.id)), "atek_h");
+
+    await game.input.set("right_hand.squeeze", 0.0);
+    await game.step({ frames: 10 });
     assert.equal(modelOf(await game.entities.detail(pistol.id)), "atek_w");
   },
 );
