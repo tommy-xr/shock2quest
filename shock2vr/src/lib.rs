@@ -961,10 +961,10 @@ impl Game {
     /// Resolve the high-detail (`PMNM`) mesh setting from the experimental flags,
     /// falling back to the platform default.
     ///
-    /// Two explicit flags rather than one, because the default differs per
-    /// platform: `high_detail_meshes` forces it on (for measuring on Quest, where
-    /// it is off by default), `no_high_detail_meshes` forces it off (to rule it
-    /// out on desktop, where it is on).
+    /// Two explicit flags rather than one so either direction can be forced
+    /// regardless of the default: `high_detail_meshes` forces it on,
+    /// `no_high_detail_meshes` forces it off (the A/B lever that proved #1022
+    /// on desktop and measured it on Quest).
     fn resolve_high_detail_meshes(features: &HashSet<String>) -> bool {
         if features.contains("no_high_detail_meshes") {
             false
@@ -980,7 +980,10 @@ impl Game {
         // Must happen before any model is loaded.
         let high_detail = Self::resolve_high_detail_meshes(&options.experimental_features);
         dark::high_detail::set_enabled(high_detail);
-        info!("high-detail (PMNM) meshes: {high_detail}");
+        // `println!` for the same reason as the install summary below: no
+        // tracing subscriber runs on desktop or Quest, and this line is the
+        // on-device tell-tale that the PMNM gate is open (#1022).
+        println!("high-detail (PMNM) meshes: {high_detail}");
 
         // What data is actually here, decided once and reported before anything
         // mounts it. `println!` rather than `info!`: neither `desktop_runtime`
@@ -1905,12 +1908,10 @@ mod tests {
         list.iter().map(|s| s.to_string()).collect()
     }
 
+    /// On by default on every platform since the Quest measurement (#1022).
     #[test]
-    fn defaults_to_the_platform_default_when_unspecified() {
-        assert_eq!(
-            Game::resolve_high_detail_meshes(&features(&[])),
-            dark::high_detail::default_enabled()
-        );
+    fn defaults_to_enabled_when_unspecified() {
+        assert!(Game::resolve_high_detail_meshes(&features(&[])));
     }
 
     #[test]

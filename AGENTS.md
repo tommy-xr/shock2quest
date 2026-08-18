@@ -547,6 +547,15 @@ The project supports experimental flags for gating in-progress features during d
   prop, e.g. shield membranes) are sealed in A* in every mode. Verify AI routing
   with `GET /v1/ai/paths` on the debug runtime.
 
+- **`high_detail_meshes`** / **`no_high_detail_meshes`**: force the 25AE
+  high-detail (`PMNM`) creature meshes on or off, overriding the default (on
+  everywhere since the Quest 3 measurement in #1022; ~0.3 ms extra combined eye
+  time in a 6-creature stress scene, +12 MiB PSS on medsci1). A classic install
+  is unaffected either way - those `.bin`s carry no `PMNM` chunk. `no_...` wins
+  a contradiction. The Quest runtime hardcodes its flag set, so on device the
+  default is the only reachable setting without a rebuild. Tell-tale log line:
+  `high-detail (PMNM) meshes: true|false`.
+
 #### Adding New Experimental Features
 
 1. **Gate the feature in code**:
