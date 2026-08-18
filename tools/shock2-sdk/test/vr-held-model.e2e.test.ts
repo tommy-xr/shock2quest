@@ -79,6 +79,48 @@ test(
   },
 );
 
+test(
+  "VR: a grabbed melee weapon wields the 25AE first-person model",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "debug_weapons",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8106),
+      debugFlags: ["--vr"],
+    });
+
+    // In VR, spawnItem drops the item into the world in front of the player.
+    await game.step({ frames: 10 });
+    await game.player.spawnItem("Wrench");
+    await game.step({ frames: 90 });
+
+    const wrench = (await game.entities.list({ limit: 100 })).entities.find(
+      (e) => e.name === "Wrench",
+    );
+    assert.ok(wrench, "wrench should have spawned");
+    assert.equal(modelOf(await game.entities.detail(wrench.id)), "wrench_w");
+
+    // Grab it (same recipe as the pistol test above).
+    const pawnY = (await game.info()).player.position[1];
+    const [px, py, pz] = wrench.position;
+    await game.input.set("right_hand.position", [px + 0.4, py - pawnY, pz]);
+    await game.input.set("right_hand.squeeze", 1.0);
+    await game.step({ frames: 10 });
+
+    const held = (await game.info()).player.right_hand_entity_id;
+    assert.equal(held, wrench.id, "wrench should be grabbed by the right hand");
+
+    // The held wrench swaps to the remastered first-person melee model (LGMM
+    // skinned mesh with the arm baked in, rendered at rest pose); dropping it
+    // restores the world model.
+    assert.equal(modelOf(await game.entities.detail(wrench.id)), "wrench_h");
+
+    await game.input.set("right_hand.squeeze", 0.0);
+    await game.step({ frames: 10 });
+    assert.equal(modelOf(await game.entities.detail(wrench.id)), "wrench_w");
+  },
+);
+
 function findSavePath(saveName: string): string | undefined {
   const repoRoot = findRepoRoot(process.cwd()) ?? process.cwd();
   const roots = [

@@ -102,17 +102,15 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         .rotate_y(Deg(90.0))
         .with_offset(vec3(0.0, 0.0, -0.4));
 
+    // Starting orientation for the posed melee _h arms; per-model offsets are
+    // fit from captures like the guns.
+    let melee_h_right = VRHandModelPerHandAdjustments::new().rotate_y(Deg(90.0));
+
     let held_item_hand = VRHandModelPerHandAdjustments::new().rotate_y(Deg(180.0));
     let held_item = VRHandModelAdjustments::new(
         held_item_hand.clone(),
         held_item_hand,
         Quaternion::from_angle_y(Deg(0.0)),
-    );
-
-    let default = VRHandModelAdjustments::new(
-        VRHandModelPerHandAdjustments::new(),
-        VRHandModelPerHandAdjustments::new(),
-        Quaternion::from_angle_y(Deg(-180.0)),
     );
 
     // Hand model adjustments for VR
@@ -195,7 +193,27 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
             symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.12, 0.27)))
                 .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.))),
         ),
-        ("wrench_h", default.clone()),
+        // Melee first-person models (_h): LGMM skinned meshes posed to the
+        // player-melee idle (see ChangeModel in mission_core). The posed arm
+        // extends behind the grip toward the shoulder; the offsets seat the
+        // model's own baked fist on the tracked hand (fit from debug_weapons
+        // --vr captures, same method as the guns above).
+        (
+            "wrench_h",
+            symmetric(melee_h_right.clone().with_offset(vec3(0.0, 0.05, 0.35))),
+        ),
+        (
+            "rapier_h",
+            symmetric(melee_h_right.clone().with_offset(vec3(0.0, 0.05, 0.35))),
+        ),
+        (
+            "shard_h",
+            symmetric(melee_h_right.clone().with_offset(vec3(0.0, 0.05, 0.35))),
+        ),
+        (
+            "psword_h",
+            symmetric(melee_h_right.clone().with_offset(vec3(0.0, 0.05, 0.35))),
+        ),
         // Weapons - world models, kept when held in VR (#352): the _h meshes
         // have faces stripped for the fixed flat camera. sg_w/empgun predate
         // this and show the world models grip fine with the same offsets.
@@ -271,11 +289,14 @@ pub fn is_allowed_hand_model(model_name: &str) -> bool {
 /// 19-38% for the classic `_h` set, and they are authored barrel-along -X
 /// with real muzzle vhots, so VR can wield them from any viewpoint.
 ///
-/// Melee `_h` models (wrench/rapier/shard/psword) are LGMM skinned meshes that
-/// need a posed skeleton, so VR melee keeps world models for now.
+/// Melee `_h` models (wrench/rapier/shard/psword) are LGMM skinned meshes
+/// (classic geometry + remastered `PMNM` chunk); VR wields them posed to the
+/// player-melee idle clip (see `Effect::ChangeModel` in mission_core). The
+/// 25AE-only `pipewrench_h` has no gamesys template (it ships as a KEX squirrel
+/// script we don't run), so it is not listed.
 const VR_25AE_VIEW_MODELS: &[&str] = &[
     "atek_h", "ar15_h", "sg_h", "lasehand", "empgun_h", "gren_h", "sfg_h", "fsn_h", "al_h",
-    "viro_h", "amp_h",
+    "viro_h", "amp_h", "wrench_h", "rapier_h", "shard_h", "psword_h",
 ];
 
 /// Whether `model_name` is a first-person view model VR should wield in place
@@ -377,7 +398,9 @@ mod tests {
     fn vr_view_model_lookup_is_case_insensitive() {
         assert!(is_vr_view_model("ATEK_H"));
         assert!(is_vr_view_model("lasehand"));
-        assert!(!is_vr_view_model("wrench_h"));
+        assert!(is_vr_view_model("WRENCH_H"));
+        assert!(is_vr_view_model("psword_h"));
+        assert!(!is_vr_view_model("pipewrench_h"));
         assert!(!is_vr_view_model("atek_w"));
     }
 }

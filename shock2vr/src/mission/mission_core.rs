@@ -5084,9 +5084,39 @@ impl MissionCore {
                         // swap so every other ChangeModel (both presentations)
                         // behaves exactly as before this path existed.
                         if vr_held && new_model.is_animated() {
-                            self.id_to_animation_player
-                                .entry(entity_id)
-                                .or_insert_with(AnimationPlayer::empty);
+                            // Melee _h models are LGMM skinned meshes: the
+                            // empty player's rest pose leaves the arm splayed
+                            // mid-swing (same defect the flat viewmodel path
+                            // documents), so hold the player-melee idle's
+                            // final frame instead - a static pose that emits
+                            // no motion flags, events, or root velocity
+                            // (`from_completed_animation`). Root motion is
+                            // cancelled for the same reason as flat: the
+                            // entity transform is re-anchored (there to the
+                            // camera, here to the tracked hand) every frame.
+                            let is_melee = self
+                                .world
+                                .borrow::<View<PropLimbModel>>()
+                                .ok()
+                                .is_some_and(|v| v.get(entity_id).is_ok());
+                            if is_melee {
+                                let player = asset_cache
+                                    .get_opt(
+                                        &ANIMATION_CLIP_IMPORTER,
+                                        &format!("{MELEE_IDLE_CLIP}_.mc"),
+                                    )
+                                    .map(|clip| {
+                                        AnimationPlayer::with_root_motion_cancelled(
+                                            &AnimationPlayer::from_completed_animation(clip),
+                                        )
+                                    })
+                                    .unwrap_or_else(AnimationPlayer::empty);
+                                self.id_to_animation_player.insert(entity_id, player);
+                            } else {
+                                self.id_to_animation_player
+                                    .entry(entity_id)
+                                    .or_insert_with(AnimationPlayer::empty);
+                            }
                         } else if was_vr_held && !new_model.is_animated() {
                             self.id_to_animation_player.remove(&entity_id);
                         }
