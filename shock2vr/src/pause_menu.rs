@@ -1029,8 +1029,6 @@ mod tests {
     /// would still pass a "the layer exists" test.
     #[test]
     fn the_dim_layer_darkens_the_world() {
-        // Asserts against the live dev-param value; serialize with its mutation tests.
-        let _guard = crate::dev_params::test_guard();
         let panel = test_panel();
         let (position, forward) = dim_pose(Vector3::zero(), head_looking(0.0, 0.0), &panel);
         let object = world_dim_layer(position, forward, dim_distance(position, &panel));
@@ -1159,8 +1157,6 @@ mod tests {
     /// in front would grey out the menu it exists to make readable.
     #[test]
     fn the_dim_layer_stays_behind_the_panel_even_after_stepping_back() {
-        // Asserts against the live dev-param value; serialize with its mutation tests.
-        let _guard = crate::dev_params::test_guard();
         let panel = test_panel();
         let eye = panel.center + panel.normal() * crate::ui::frontend_panel_distance();
 
@@ -1189,8 +1185,6 @@ mod tests {
     /// shrink the angle it subtends.
     #[test]
     fn pushing_the_dim_out_does_not_cost_coverage() {
-        // Asserts against the live dev-param value; serialize with its mutation tests.
-        let _guard = crate::dev_params::test_guard();
         let panel = test_panel();
         let eye = panel.center + panel.normal() * 5.0;
         let distance = dim_distance(eye, &panel);
@@ -1224,8 +1218,6 @@ mod tests {
     /// wherever the player is actually looking.
     #[test]
     fn an_untracked_head_falls_back_to_the_panel() {
-        // Asserts against the live dev-param value; serialize with its mutation tests.
-        let _guard = crate::dev_params::test_guard();
         let panel = test_panel();
         let (position, forward) = dim_pose(vec3(9.0, 9.0, 9.0), Quaternion::zero(), &panel);
         assert!(

@@ -122,6 +122,7 @@ const { sounds } = await game.audio.recent();
 // range/current/default, or set one - clamped + snapped, applied next frame.
 const { params } = await game.devParams.list();
 await game.devParams.set("panel_distance", 3.0);
+await game.devParams.reset("panel_distance"); // exact declared default
 ```
 
 Raycasts default to `world` and `entity`. Supported groups are `world`,

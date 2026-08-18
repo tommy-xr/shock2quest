@@ -3523,7 +3523,6 @@ async fn trigger_input_action(
     }
 }
 
-/// HTTP endpoint handler: List available input actions
 /// HTTP handler listing the live-tunable dev params (key, label, kind/range,
 /// current value, default). The registry is process-global atomics
 /// (`shock2vr::dev_params`), so this reads it directly - no game-loop
@@ -3550,28 +3549,51 @@ async fn list_dev_params() -> Json<Value> {
 #[derive(Deserialize)]
 struct SetDevParamRequest {
     key: String,
-    value: f32,
+    #[serde(default)]
+    value: Option<f32>,
+    #[serde(default)]
+    reset: bool,
 }
 
-/// HTTP handler setting one dev param by key. The value is clamped into the
-/// param's range and snapped to its step grid; the response reports what was
-/// actually applied. Consumers read the registry every frame, so the change is
-/// live on the next stepped frame. Unknown keys are a 404.
+/// HTTP handler setting one dev param by key. `{key, value}` clamps into the
+/// param's range and snaps to its step grid; `{key, reset: true}` restores
+/// the exact declared default (which a `value` POST cannot always reach - the
+/// snap grid does not round-trip every default). The response reports what
+/// was actually applied. Consumers read the registry every frame, so the
+/// change is live on the next stepped frame. Unknown keys are a 404;
+/// non-finite values, and requests with both or neither of `value`/`reset`,
+/// are a 400.
 async fn set_dev_param(
     LenientJson(request): LenientJson<SetDevParamRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    match shock2vr::dev_params::find(&request.key) {
-        Some(id) => {
-            let applied = shock2vr::dev_params::set(id, request.value);
-            Ok(Json(json!({ "key": request.key, "value": applied })))
-        }
-        None => Err((
+    let Some(id) = shock2vr::dev_params::find(&request.key) else {
+        return Err((
             StatusCode::NOT_FOUND,
             format!("unknown dev param key: {}", request.key),
-        )),
-    }
+        ));
+    };
+    let applied = match (request.value, request.reset) {
+        (Some(value), false) => {
+            if !value.is_finite() {
+                return Err((StatusCode::BAD_REQUEST, "value must be finite".to_string()));
+            }
+            shock2vr::dev_params::set(id, value)
+        }
+        (None, true) => {
+            shock2vr::dev_params::reset(id);
+            shock2vr::dev_params::get(id)
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "provide exactly one of 'value' or 'reset: true'".to_string(),
+            ));
+        }
+    };
+    Ok(Json(json!({ "key": request.key, "value": applied })))
 }
 
+/// HTTP endpoint handler: List available input actions
 async fn list_input_actions() -> Json<Value> {
     let actions: Vec<&str> = InputAction::all().iter().map(|a| a.as_str()).collect();
     Json(serde_json::json!({ "actions": actions }))

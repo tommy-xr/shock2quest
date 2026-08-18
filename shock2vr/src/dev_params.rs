@@ -119,106 +119,143 @@ pub fn get(id: DevParamId) -> f32 {
 /// (the current value is returned unchanged) so no consumer can ever read
 /// a NaN out of the registry.
 pub fn set(id: DevParamId, value: f32) -> f32 {
-    if !value.is_finite() {
-        return get(id);
-    }
-    let applied = match spec(id).kind {
-        DevParamKind::Float { min, max, step } => {
-            let snapped = if step > 0.0 {
-                min + ((value - min) / step).round() * step
-            } else {
-                value
-            };
-            snapped.clamp(min, max)
-        }
-    };
+    let applied = apply(&spec(id).kind, get(id), value);
     VALUES[id.0].store(applied.to_bits(), Ordering::Relaxed);
     applied
+}
+
+/// The pure constrain step behind [`set`]: what `value` becomes under `kind`
+/// when the parameter currently reads `current`. Split out so the clamp/snap
+/// rules are testable without touching the process-global values (mutating
+/// them from unit tests would race every parallel test that reads a live
+/// parameter).
+fn apply(kind: &DevParamKind, current: f32, value: f32) -> f32 {
+    if !value.is_finite() {
+        return current;
+    }
+    match *kind {
+        DevParamKind::Float { min, max, step } => {
+            if step > 0.0 {
+                // Clamp the grid *index*, not the snapped value: clamping
+                // afterwards would return `max` itself, which is off the
+                // advertised grid whenever the range is not a whole number
+                // of steps (and a future menu's arrows would then walk a
+                // shifted grid).
+                let max_index = ((max - min) / step).floor();
+                let index = ((value - min) / step).round().clamp(0.0, max_index);
+                (min + index * step).clamp(min, max)
+            } else {
+                value.clamp(min, max)
+            }
+        }
+    }
 }
 
 /// Restore a parameter to its declared default, exactly. This stores the
 /// default's own bits rather than routing through [`set`], whose snap grid
 /// does not round-trip every default (e.g. 0.72 on a 0.02 grid lands on
-/// 0.71999997 in f32) - the difference matters to tests (and a future menu
-/// "reset" row) that compare against the default with `==`.
+/// 0.71999997 in f32) - the difference matters to anything that compares
+/// against the default with `==` (the HTTP mirror's reset, a future menu
+/// "reset" row).
 pub fn reset(id: DevParamId) {
     VALUES[id.0].store(spec(id).default.to_bits(), Ordering::Relaxed);
-}
-
-/// Serializes tests that read or write the registry: the values are process
-/// globals, so a mutation test running in parallel with a test that asserts a
-/// default would flake. Writers must restore defaults before dropping the
-/// guard.
-#[cfg(test)]
-pub(crate) fn test_guard() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // No test here (or anywhere in the crate) mutates the live registry:
+    // the values are process globals read by parallel tests all over the
+    // crate, so a unit-test `set` would be a cross-test race. The constrain
+    // rules are tested through the pure [`apply`]; that `set`/`reset` really
+    // move what consumers render is proven end-to-end by the SDK e2e
+    // (`dev-params.e2e.test.ts`), which watches the VR panel move over HTTP.
+
     /// The registry replaced two consts; anything but these exact defaults
     /// is a behavior change at launch.
     #[test]
     fn defaults_equal_the_consts_they_replaced() {
-        let _guard = test_guard();
         assert_eq!(get(FRONTEND_PANEL_DISTANCE), 2.0);
         assert_eq!(get(WORLD_DIM_STRENGTH), 0.72);
     }
 
-    // The mutation tests below hold [`test_guard`] and restore defaults
-    // before releasing it; tests elsewhere in the crate that assert against a
-    // parameter's live value take the same guard so a temporarily non-default
-    // value is never observed.
+    /// Every declared default must be finite and inside its own range, or
+    /// the seeded value would already violate the registry's contract.
+    #[test]
+    fn every_default_is_within_its_declared_range() {
+        for (_, param) in all() {
+            let DevParamKind::Float { min, max, step } = param.kind;
+            assert!(param.default.is_finite());
+            assert!(
+                (min..=max).contains(&param.default),
+                "{}: default {} outside {min}..={max}",
+                param.key,
+                param.default
+            );
+            assert!(step >= 0.0, "{}: negative step", param.key);
+        }
+    }
+
+    const GRID: DevParamKind = DevParamKind::Float {
+        min: 0.5,
+        max: 6.0,
+        step: 0.1,
+    };
 
     #[test]
-    fn set_moves_the_live_value_and_reports_what_it_applied() {
-        let _guard = test_guard();
-        // Negative first: before the set, the default is in effect.
-        assert_eq!(get(FRONTEND_PANEL_DISTANCE), 2.0);
-        let applied = set(FRONTEND_PANEL_DISTANCE, 2.5);
-        assert!((applied - 2.5).abs() < 1e-4);
-        assert!((get(FRONTEND_PANEL_DISTANCE) - 2.5).abs() < 1e-4);
-        reset(FRONTEND_PANEL_DISTANCE);
+    fn apply_passes_an_in_range_on_grid_value_through() {
+        assert!((apply(&GRID, 2.0, 2.5) - 2.5).abs() < 1e-4);
     }
 
     #[test]
-    fn set_clamps_into_the_declared_range() {
-        let _guard = test_guard();
-        assert_eq!(set(FRONTEND_PANEL_DISTANCE, 99.0), 6.0);
-        assert_eq!(set(FRONTEND_PANEL_DISTANCE, -3.0), 0.5);
-        reset(FRONTEND_PANEL_DISTANCE);
+    fn apply_clamps_into_the_declared_range() {
+        assert_eq!(apply(&GRID, 2.0, 99.0), 6.0);
+        assert_eq!(apply(&GRID, 2.0, -3.0), 0.5);
     }
 
     #[test]
-    fn set_snaps_to_the_step_grid() {
-        let _guard = test_guard();
-        // 0.013 is between grid points 0.0 and 0.02 (min 0.0, step 0.02).
-        let applied = set(WORLD_DIM_STRENGTH, 0.013);
+    fn apply_snaps_to_the_step_grid() {
+        let kind = DevParamKind::Float {
+            min: 0.0,
+            max: 1.0,
+            step: 0.02,
+        };
+        // 0.013 is between grid points 0.0 and 0.02.
+        let applied = apply(&kind, 0.72, 0.013);
         assert!((applied - 0.02).abs() < 1e-4, "got {applied}");
-        reset(WORLD_DIM_STRENGTH);
     }
 
-    /// `set(default)` is NOT an exact restore (the snap grid can miss the
-    /// default's bits); `reset` must be.
+    /// A range that is not a whole number of steps must still land on the
+    /// grid at its top end: snapping *then* clamping would return `max`
+    /// itself, off the advertised grid.
     #[test]
-    fn reset_restores_the_exact_default_even_off_grid() {
-        let _guard = test_guard();
-        // 0.72 is default for a 0.02-step grid: set() snaps it to 0.71999997.
-        set(WORLD_DIM_STRENGTH, spec(WORLD_DIM_STRENGTH).default);
-        assert_ne!(get(WORLD_DIM_STRENGTH).to_bits(), 0.72f32.to_bits());
-        reset(WORLD_DIM_STRENGTH);
-        assert_eq!(get(WORLD_DIM_STRENGTH), 0.72);
+    fn apply_keeps_an_uneven_ranges_top_end_on_grid() {
+        let kind = DevParamKind::Float {
+            min: 0.0,
+            max: 0.05,
+            step: 0.02,
+        };
+        assert!((apply(&kind, 0.0, 99.0) - 0.04).abs() < 1e-6);
+    }
+
+    /// Why [`reset`] stores the default's own bits instead of routing
+    /// through the snap: the grid cannot represent every default exactly.
+    #[test]
+    fn the_snap_grid_does_not_round_trip_every_default() {
+        let kind = DevParamKind::Float {
+            min: 0.0,
+            max: 1.0,
+            step: 0.02,
+        };
+        assert_ne!(apply(&kind, 0.72, 0.72).to_bits(), 0.72f32.to_bits());
     }
 
     #[test]
-    fn a_non_finite_set_is_refused() {
-        let _guard = test_guard();
-        assert_eq!(set(WORLD_DIM_STRENGTH, f32::NAN), 0.72);
-        assert_eq!(get(WORLD_DIM_STRENGTH), 0.72);
-        assert_eq!(set(WORLD_DIM_STRENGTH, f32::INFINITY), 0.72);
+    fn a_non_finite_value_is_refused() {
+        assert_eq!(apply(&GRID, 2.0, f32::NAN), 2.0);
+        assert_eq!(apply(&GRID, 2.0, f32::INFINITY), 2.0);
+        assert_eq!(apply(&GRID, 2.0, f32::NEG_INFINITY), 2.0);
     }
 
     #[test]

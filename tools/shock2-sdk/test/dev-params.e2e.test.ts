@@ -39,7 +39,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "main_menu",
-      port: 8097,
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8106),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 10 });
@@ -79,7 +79,19 @@ test(
     const clamped = await game.devParams.set("panel_distance", 99.0);
     assert.ok(Math.abs(clamped.value - 6.0) < 1e-4);
 
-    // ...and unknown keys are refused, not silently accepted.
+    // Reset restores the exact declared default (bit-identical, not merely
+    // close: set(default) can miss it, since the snap grid does not
+    // round-trip every default), and the panel renders back at it.
+    const reset = await game.devParams.reset("panel_distance");
+    assert.equal(reset.value, panelDistance.default);
+    await game.step({ frames: 2 });
+    const restored = panelDepth((await game.scene.objects()).objects);
+    assert.ok(
+      Math.abs(restored - 2.0) < 0.05,
+      `panel should be back at the 2.0m default after reset, got ${restored}`,
+    );
+
+    // Unknown keys are refused, not silently accepted.
     await assert.rejects(
       game.devParams.set("no_such_param", 1.0),
       /404/,

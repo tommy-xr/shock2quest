@@ -590,6 +590,18 @@ export class DevParamsApi {
   async set(key: string, value: number): Promise<DevParamSetResult> {
     return this.client.post<DevParamSetResult>("/v1/dev-params", { key, value });
   }
+
+  /**
+   * Restore one param to its exact declared default. A `set(key, default)`
+   * cannot always get there - the snap grid does not round-trip every
+   * default - so reset is its own operation.
+   */
+  async reset(key: string): Promise<DevParamSetResult> {
+    return this.client.post<DevParamSetResult>("/v1/dev-params", {
+      key,
+      reset: true,
+    });
+  }
 }
 
 /** Interactive pathfinding test (visual A* debugging). */
