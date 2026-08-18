@@ -37,9 +37,9 @@ use crate::{
     GameOptions, PresentationMode,
     input_context::{InputContext, Pointer2D},
     ui::{
-        FRONTEND_PANEL_DISTANCE, FrontendPanelAnchor, FrontendPointerPass, HAlign, PointerVisuals,
-        Rect, ScaleMode, UiCanvas, VAlign, VR_COMPONENT_Z_STEP, WorldPanel, pointer_to_canvas,
-        vr_frontend_pointer_pass,
+        FrontendPanelAnchor, FrontendPointerPass, HAlign, PointerVisuals, Rect, ScaleMode,
+        UiCanvas, VAlign, VR_COMPONENT_Z_STEP, WorldPanel, frontend_panel_distance,
+        pointer_to_canvas, vr_frontend_pointer_pass,
     },
 };
 
@@ -97,7 +97,11 @@ const FALLBACK_BUTTON_PITCH: f32 = 92.0;
 /// out completely. **This is the tuning knob** - the value wants a worn check,
 /// because how heavy a dim reads in a headset is not something a screenshot
 /// settles.
-const WORLD_DIM_STRENGTH: f32 = 0.72;
+///
+/// Live-tunable ([`crate::dev_params::WORLD_DIM_STRENGTH`]); read per frame.
+fn world_dim_strength() -> f32 {
+    crate::dev_params::get(crate::dev_params::WORLD_DIM_STRENGTH)
+}
 /// What the world is dimmed *toward*. Black rather than a tint: any hue here
 /// would grade the whole scene and fight the panel art.
 const WORLD_DIM_COLOR: Vector3<f32> = Vector3 {
@@ -107,10 +111,12 @@ const WORLD_DIM_COLOR: Vector3<f32> = Vector3 {
 };
 /// How far in front of the eyes the dim hangs, in metres, when the player is
 /// standing where they opened the menu. Behind the panel (which is at
-/// [`FRONTEND_PANEL_DISTANCE`]) so the panel's own opaque backdrop occludes it
+/// [`frontend_panel_distance`]) so the panel's own opaque backdrop occludes it
 /// and the menu stays at full brightness. Room-scale movement can push the
 /// panel farther away than this, which is what [`dim_distance`] is for.
-const WORLD_DIM_MIN_DISTANCE: f32 = FRONTEND_PANEL_DISTANCE + 1.0;
+fn world_dim_min_distance() -> f32 {
+    frontend_panel_distance() + 1.0
+}
 /// Clear air kept between the panel's farthest corner and the dim, in metres.
 const WORLD_DIM_PANEL_CLEARANCE: f32 = 1.0;
 /// Half-edge of the dim quad, as a multiple of its distance. This is
@@ -137,7 +143,7 @@ const UNTRACKED_HEAD: (Vector3<f32>, Quaternion<f32>) = (
 /// (a sustained deviation, held ~1 s) brings the panel with them. A dim at a
 /// fixed distance would then be in *front* of the panel and grey out the menu.
 /// So it is pushed past the panel's farthest corner, with clearance - never
-/// nearer than [`WORLD_DIM_MIN_DISTANCE`], and never at the panel's own depth.
+/// nearer than [`world_dim_min_distance`], and never at the panel's own depth.
 fn dim_distance(head_position: Vector3<f32>, panel: &WorldPanel) -> f32 {
     let right = panel.rotation.rotate_vector(vec3(1.0, 0.0, 0.0)) * panel.size.x * 0.5;
     let up = panel.rotation.rotate_vector(vec3(0.0, 1.0, 0.0)) * panel.size.y * 0.5;
@@ -145,7 +151,7 @@ fn dim_distance(head_position: Vector3<f32>, panel: &WorldPanel) -> f32 {
         .into_iter()
         .map(|(x, y)| (panel.center + right * x + up * y - head_position).magnitude())
         .fold(0.0_f32, f32::max);
-    (farthest_corner + WORLD_DIM_PANEL_CLEARANCE).max(WORLD_DIM_MIN_DISTANCE)
+    (farthest_corner + WORLD_DIM_PANEL_CLEARANCE).max(world_dim_min_distance())
 }
 
 /// The darkening layer between the paused player and the world.
@@ -191,9 +197,9 @@ fn world_dim_layer(
             * Matrix4::from(crate::util::get_rotation_from_forward_vector(-head_forward))
             * Matrix4::from_scale(extent * 2.0),
     );
-    // The material speaks in transparency (0 = opaque), the constant in "how
+    // The material speaks in transparency (0 = opaque), the strength in "how
     // dark does the world go" - the direction a human tunes in.
-    object.set_transparency(Some(1.0 - WORLD_DIM_STRENGTH));
+    object.set_transparency(Some(1.0 - world_dim_strength()));
     // Translucent, and drawn before the panel: writing depth here would let the
     // dim occlude the menu that draws over it.
     object.set_depth_write(false);
@@ -215,7 +221,7 @@ fn world_dim_layer(
 /// An untracked head arrives as the ZERO quaternion, which `rotate_vector`
 /// silently returns unrotated (and comes with a meaningless position) - so it is
 /// treated as "no pose", and the panel stands in for it. The panel hangs
-/// [`FRONTEND_PANEL_DISTANCE`] along its own normal from the head that placed
+/// [`frontend_panel_distance`] along its own normal from the head that placed
 /// it, with the normal pointing back at that head, so it carries a usable
 /// viewer pose: where the player was when they opened the menu.
 fn dim_pose(
@@ -225,7 +231,7 @@ fn dim_pose(
 ) -> (Vector3<f32>, Vector3<f32>) {
     if head_rotation.magnitude2() < 1e-6 {
         return (
-            panel.center + panel.normal() * FRONTEND_PANEL_DISTANCE,
+            panel.center + panel.normal() * frontend_panel_distance(),
             -panel.normal(),
         );
     }
@@ -1030,7 +1036,7 @@ mod tests {
             .effective_transparency()
             .expect("the dim must draw translucent, not opaque");
         assert!(
-            (transparency - (1.0 - WORLD_DIM_STRENGTH)).abs() < 1e-6,
+            (transparency - (1.0 - world_dim_strength())).abs() < 1e-6,
             "the tuning constant must reach the material: {transparency}"
         );
         assert!(
@@ -1152,7 +1158,7 @@ mod tests {
     #[test]
     fn the_dim_layer_stays_behind_the_panel_even_after_stepping_back() {
         let panel = test_panel();
-        let eye = panel.center + panel.normal() * crate::ui::FRONTEND_PANEL_DISTANCE;
+        let eye = panel.center + panel.normal() * crate::ui::frontend_panel_distance();
 
         for step_back in [0.0, 0.5, 1.0, 2.5, 6.0] {
             // Backing away from the panel along its own normal is the worst case.
@@ -1171,7 +1177,7 @@ mod tests {
                 "after stepping back {step_back} m the dim is at {distance} m, \
                  inside the panel's farthest corner at {farthest_corner} m"
             );
-            assert!(distance >= WORLD_DIM_MIN_DISTANCE);
+            assert!(distance >= world_dim_min_distance());
         }
     }
 
@@ -1183,7 +1189,7 @@ mod tests {
         let eye = panel.center + panel.normal() * 5.0;
         let distance = dim_distance(eye, &panel);
         assert!(
-            distance > WORLD_DIM_MIN_DISTANCE,
+            distance > world_dim_min_distance(),
             "this case should push out"
         );
         let object = world_dim_layer(eye, -panel.normal(), distance);
@@ -1220,7 +1226,7 @@ mod tests {
         );
         // ...and to the viewer position the panel implies, not to the garbage
         // position that came with the untracked pose.
-        let implied_head = panel.center + panel.normal() * crate::ui::FRONTEND_PANEL_DISTANCE;
+        let implied_head = panel.center + panel.normal() * crate::ui::frontend_panel_distance();
         assert!((position - implied_head).magnitude() < 1e-4);
     }
 
