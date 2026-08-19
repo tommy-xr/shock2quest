@@ -6,13 +6,14 @@
 //! resolution and rendered to a screen-space overlay. Built only in
 //! `PresentationMode::Flat`. See `projects/flatscreen-and-vr-architecture.md`.
 
-use cgmath::vec2;
+use cgmath::{Vector2, vec2};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::World;
 
+use super::ammo_panel::{self, AmmoReadout};
 use super::{
-    get_health_percentage, get_psi_percentage, get_wielded_ammo, get_wielded_ammo_icon,
-    get_wielded_ammo_type, get_wielded_psi_charge, get_wielded_psi_power,
+    get_health_percentage, get_psi_percentage, get_wielded_ammo, get_wielded_psi_charge,
+    get_wielded_psi_power,
 };
 use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
 use crate::ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign};
@@ -76,25 +77,17 @@ const METERS_FULL_W: f32 = 260.0;
 const AMMO_FULL_MODE_DX: f32 = 166.0;
 const AMMO_FULL_X: f32 = AMMO_X - AMMO_FULL_MODE_DX; // 378
 const AMMO_FULL_GAUGE: Rect = Rect::new(AMMO_FULL_X, AMMO_Y, METERS_FULL_W, AMMO_H);
+/// Where the AMMOFULL panel's upper-left corner lands on the 640x480 HUD
+/// canvas. Everything *inside* the panel (round count, ammo icon and label,
+/// psi discipline, the cycle button) is laid out once in [`ammo_panel`] in
+/// panel pixels and placed relative to this - the VR forearm draws the same
+/// panel with its own origin.
+const AMMO_PANEL_ORIGIN: Vector2<f32> = vec2(AMMO_FULL_X, AMMO_Y);
 /// The AMMOFULL ammo-type cycle button (the original's cycle hotspot, ammoarw
 /// art). Clicking it cycles the wielded weapon's ammo type. Exposed so the
 /// flat pointer host can hit-test the same rect it is drawn at.
 pub(crate) const AMMO_CYCLE_BUTTON: Rect =
-    Rect::new(AMMO_FULL_X + 186.0, AMMO_Y + 15.0, 12.0, 41.0);
-const AMMO_TEXT: Rect = Rect::new(AMMO_X, AMMO_Y + 22.0, AMMO_W, 20.0); // centered over the gauge
-// Selected ammo-type indicator: the projectile's object icon (P$ObjIcon) just
-// left of the gauge, with its type label (std/he/ap) below the round count.
-const AMMO_ICON: Rect = Rect::new(AMMO_X - 40.0, AMMO_Y + 16.0, 32.0, 32.0);
-const AMMO_TYPE_TEXT: Rect = Rect::new(AMMO_X, AMMO_Y + 44.0, AMMO_W, 16.0);
-
-// Selected psi power display - drawn in the ammo section while the psi amp
-// is wielded (replacing the meaningless clip readout): the tier badge
-// (AmPsi<tier>1.PCX, 32x19 art), the psi point cost as the count, and the
-// discipline name below.
-const PSI_TIER_BADGE: Rect = Rect::new(AMMO_X - 44.0, AMMO_Y + 22.0, 32.0, 19.0);
-// The discipline names ("Projected Cryokinesis") are long, so the label rect
-// extends left of the gauge and uses a smaller size than the ammo-type label.
-const PSI_POWER_NAME: Rect = Rect::new(AMMO_X - 60.0, AMMO_Y + 44.0, AMMO_W + 60.0, 16.0);
+    ammo_panel::at(AMMO_PANEL_ORIGIN, ammo_panel::CYCLE_BUTTON);
 
 // Psi overload meter - drawn center-screen below the crosshair while the psi
 // amp's trigger is held on an overloadable power (and briefly after release,
@@ -115,18 +108,13 @@ const OVERLOAD_METER: Rect = Rect::new(
 /// access), so it is unit-testable. `crosshair` is false in use mode - the
 /// original turns the crosshair overlay off while the cursor is up
 /// (`ShockOverlayMouseMode`, projects/flat-ui.md §2.1).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_flat_hud_canvas(
     crosshair: bool,
     use_mode: bool,
     health_fraction: f32,
     psi_fraction: f32,
     psi_charge: Option<RuntimePropPsiCharge>,
-    psi_power: Option<(String, i32)>,
-    ammo: Option<i32>,
-    ammo_icon: Option<String>,
-    ammo_type: Option<String>,
-    can_cycle_ammo: bool,
+    ammo_readout: &AmmoReadout,
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(VIRTUAL_W, VIRTUAL_H));
 
@@ -194,59 +182,13 @@ pub(crate) fn build_flat_hud_canvas(
         }
     }
 
-    // Selected psi power (psi amp wielded): the ammo section shows the
-    // discipline instead of a clip - tier badge, psi cost as the count, and
-    // the discipline name.
-    if let Some((power_name, tier)) = psi_power {
-        canvas
-            .image(ammo_backdrop, ammo_art)
-            .image(PSI_TIER_BADGE, &format!("AmPsi{}1.PCX", tier.clamp(1, 5)))
-            .text_native(
-                AMMO_TEXT,
-                &format!("{tier}"),
-                "mainfont.fon",
-                HAlign::Center,
-                VAlign::Middle,
-            )
-            .text_native(
-                PSI_POWER_NAME,
-                &power_name.to_ascii_uppercase(),
-                "mainfont.fon",
-                HAlign::Center,
-                VAlign::Middle,
-            );
-        return canvas;
-    }
-
-    // Ammo gauge (only when a weapon with a clip is wielded).
-    if let Some(rounds) = ammo {
-        canvas.image(ammo_backdrop, ammo_art).text_native(
-            AMMO_TEXT,
-            &format!("{rounds}"),
-            "mainfont.fon",
-            HAlign::Center,
-            VAlign::Middle,
-        );
-
-        // Selected ammo-type indicator: the projectile's icon + type label.
-        if let Some(icon) = ammo_icon {
-            canvas.image(AMMO_ICON, &icon);
-        }
-        if let Some(ammo_type) = ammo_type {
-            canvas.text_native(
-                AMMO_TYPE_TEXT,
-                &ammo_type.to_ascii_uppercase(),
-                "mainfont.fon",
-                HAlign::Center,
-                VAlign::Middle,
-            );
-        }
-
-        // AMMOFULL ammo-type cycle button (use mode, multi-ammo weapon): the
-        // clickable ammoarw gadget the flat pointer host wires to CycleAmmo.
-        if use_mode && can_cycle_ammo {
-            canvas.image(AMMO_CYCLE_BUTTON, "ammoarw0.pcx");
-        }
+    // Ammo gauge (a weapon with a clip, or the psi amp's selected discipline
+    // in its place). The backdrop art is flat's to choose - use mode expands
+    // it - but everything drawn inside the panel is placed by the shared
+    // `ammo_panel` layout the VR forearm uses.
+    if !ammo_readout.is_empty() {
+        canvas.image(ammo_backdrop, ammo_art);
+        ammo_panel::emit(&mut canvas, AMMO_PANEL_ORIGIN, ammo_readout);
     }
 
     canvas
@@ -267,12 +209,8 @@ pub(crate) fn create_flat_hud(
         get_health_percentage(world),
         get_psi_percentage(world),
         get_wielded_psi_charge(world),
-        get_wielded_psi_power(world),
-        get_wielded_ammo(world),
-        get_wielded_ammo_icon(world),
-        get_wielded_ammo_type(world),
         // The same predicate the pointer hit-test uses, so drawn == clickable.
-        ammo_cycle_button_visible(world, use_mode),
+        &AmmoReadout::from_world(world, ammo_cycle_button_visible(world, use_mode)),
     );
     // Keep the crosshair square and bars undistorted on non-4:3 windows.
     canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
@@ -281,13 +219,7 @@ pub(crate) fn create_flat_hud(
 /// Whether the wielded weapon may cycle ammo (empty, with 2+ selectable
 /// projectile types). Uses the same predicate as `cycle_ammo`.
 pub(crate) fn can_cycle_wielded_ammo(world: &World) -> bool {
-    let Some(player) = world
-        .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
-        .ok()
-    else {
-        return false;
-    };
-    let Some(weapon) = player.left_hand_entity_id else {
+    let Some(weapon) = crate::wielded_weapon::wielded_weapon(world) else {
         return false;
     };
     crate::scripts::script_util::can_cycle_ammo(world, weapon)
@@ -310,11 +242,33 @@ pub(crate) fn ammo_cycle_button_visible(world: &World, use_mode: bool) -> bool {
 mod tests {
     use super::*;
 
+    /// `AmmoReadout` for the common test shapes.
+    fn readout(
+        ammo: Option<i32>,
+        ammo_icon: Option<&str>,
+        ammo_type: Option<&str>,
+        show_cycle_button: bool,
+    ) -> AmmoReadout {
+        AmmoReadout {
+            psi_power: None,
+            ammo,
+            ammo_icon: ammo_icon.map(str::to_string),
+            ammo_type: ammo_type.map(str::to_string),
+            show_cycle_button,
+        }
+    }
+
     #[test]
     fn canvas_has_crosshair_bio_backdrop_bars_and_readouts() {
         // Crosshair + bio backdrop + 2 bars + 2 stat numbers = 6 (no weapon).
-        let canvas =
-            build_flat_hud_canvas(true, false, 1.0, 0.75, None, None, None, None, None, false);
+        let canvas = build_flat_hud_canvas(
+            true,
+            false,
+            1.0,
+            0.75,
+            None,
+            &readout(None, None, None, false),
+        );
         assert_eq!(canvas.element_count(), 6);
     }
 
@@ -327,11 +281,7 @@ mod tests {
             1.0,
             0.75,
             None,
-            None,
-            Some(12),
-            None,
-            None,
-            false,
+            &readout(Some(12), None, None, false),
         );
         assert_eq!(canvas.element_count(), 8);
     }
@@ -345,11 +295,7 @@ mod tests {
             1.0,
             0.75,
             None,
-            None,
-            Some(12),
-            Some("STD_I.PCX".to_string()),
-            Some("std".to_string()),
-            false,
+            &readout(Some(12), Some("STD_I.PCX"), Some("std"), false),
         );
         assert_eq!(canvas.element_count(), 10);
     }
@@ -364,11 +310,11 @@ mod tests {
             1.0,
             0.75,
             None,
-            Some(("Projected Cryokinesis".to_string(), 1)),
-            Some(0),
-            None,
-            None,
-            false,
+            &AmmoReadout {
+                psi_power: Some(("Projected Cryokinesis".to_string(), 1)),
+                ammo: Some(0),
+                ..Default::default()
+            },
         );
         assert_eq!(canvas.element_count(), 10);
     }
@@ -376,18 +322,15 @@ mod tests {
     #[test]
     fn use_mode_expands_readouts_and_adds_the_ammo_cycle_button() {
         // Shooter with a multi-ammo weapon: crosshair + bio + 2 bars + 2
-        // numbers + ammo backdrop + count = 8; NO cycle button.
+        // numbers + ammo backdrop + count = 8; NO cycle button (the caller
+        // gates it on use mode, see `ammo_cycle_button_visible`).
         let shooter = build_flat_hud_canvas(
             true,
             false,
             1.0,
             0.75,
             None,
-            None,
-            Some(12),
-            None,
-            None,
-            true,
+            &readout(Some(12), None, None, false),
         );
         assert_eq!(shooter.element_count(), 8);
         // Use mode (crosshair off) with an empty multi-ammo weapon: the same
@@ -399,11 +342,7 @@ mod tests {
             1.0,
             0.75,
             None,
-            None,
-            Some(0),
-            None,
-            None,
-            true,
+            &readout(Some(0), None, None, true),
         );
         assert_eq!(use_mode.element_count(), 8);
         // The cycle button only appears when the weapon can actually cycle.
@@ -413,11 +352,7 @@ mod tests {
             1.0,
             0.75,
             None,
-            None,
-            Some(0),
-            None,
-            None,
-            false,
+            &readout(Some(0), None, None, false),
         );
         assert_eq!(single_ammo.element_count(), 7);
     }
@@ -428,6 +363,38 @@ mod tests {
         // AMMOFULL gauge and left of the compact AMMOBACK footprint.
         assert!(AMMO_FULL_GAUGE.x <= AMMO_CYCLE_BUTTON.x);
         assert!(AMMO_CYCLE_BUTTON.x + AMMO_CYCLE_BUTTON.w <= AMMO_FULL_GAUGE.x + AMMO_FULL_GAUGE.w);
+    }
+
+    /// The shared panel layout must keep landing where the flat HUD authored
+    /// it: the ammo readout moved into `ammo_panel` in panel-local pixels, and
+    /// these are the absolute canvas rects it replaced.
+    #[test]
+    fn shared_panel_layout_reproduces_the_authored_flat_rects() {
+        let placed = |rect| ammo_panel::at(AMMO_PANEL_ORIGIN, rect);
+        assert_eq!(
+            placed(ammo_panel::CYCLE_BUTTON),
+            Rect::new(564.0, 429.0, 12.0, 41.0)
+        );
+        assert_eq!(
+            placed(ammo_panel::COUNT),
+            Rect::new(544.0, 436.0, 94.0, 20.0)
+        );
+        assert_eq!(
+            placed(ammo_panel::ICON),
+            Rect::new(504.0, 430.0, 32.0, 32.0)
+        );
+        assert_eq!(
+            placed(ammo_panel::TYPE_LABEL),
+            Rect::new(544.0, 458.0, 94.0, 16.0)
+        );
+        assert_eq!(
+            placed(ammo_panel::PSI_TIER_BADGE),
+            Rect::new(500.0, 436.0, 32.0, 19.0)
+        );
+        assert_eq!(
+            placed(ammo_panel::PSI_POWER_NAME),
+            Rect::new(484.0, 458.0, 154.0, 16.0)
+        );
     }
 
     #[test]
@@ -445,16 +412,22 @@ mod tests {
     fn use_mode_hides_the_crosshair() {
         // The original turns the crosshair overlay off while the cursor is
         // up (ShockOverlayMouseMode) - one fewer element than shooter mode.
-        let shooter =
-            build_flat_hud_canvas(true, false, 1.0, 0.75, None, None, None, None, None, false);
-        let use_mode =
-            build_flat_hud_canvas(false, false, 1.0, 0.75, None, None, None, None, None, false);
+        let empty = readout(None, None, None, false);
+        let shooter = build_flat_hud_canvas(true, false, 1.0, 0.75, None, &empty);
+        let use_mode = build_flat_hud_canvas(false, false, 1.0, 0.75, None, &empty);
         assert_eq!(use_mode.element_count(), shooter.element_count() - 1);
     }
 
     #[test]
     fn out_of_range_fractions_do_not_panic() {
         // Fills are clamped inside `UiCanvas::bar`.
-        let _ = build_flat_hud_canvas(true, false, 2.0, -1.0, None, None, None, None, None, false);
+        let _ = build_flat_hud_canvas(
+            true,
+            false,
+            2.0,
+            -1.0,
+            None,
+            &readout(None, None, None, false),
+        );
     }
 }
