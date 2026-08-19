@@ -359,6 +359,28 @@ export interface SceneListResult {
   frame_index: number;
 }
 
+/** One live-tunable developer parameter (GET /v1/dev-params). */
+export interface DevParamSummary {
+  key: string;
+  label: string;
+  kind: "float";
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  default: number;
+}
+
+export interface DevParamsListResult {
+  params: DevParamSummary[];
+}
+
+/** What a POST /v1/dev-params actually applied (after clamp/snap). */
+export interface DevParamSetResult {
+  key: string;
+  value: number;
+}
+
 /** Settle/quality metrics for one ragdoll (GET /v1/ragdoll/metrics). */
 export interface RagdollMetrics {
   entity_id: number;

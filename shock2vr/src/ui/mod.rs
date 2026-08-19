@@ -207,7 +207,12 @@ impl WorldPanel {
 /// view and is never seen. The panel is hung off the head's tracked position
 /// ([`crate::input_context::Head::position`], which defaults to that same eye
 /// height) rather than off the origin.
-pub const FRONTEND_PANEL_DISTANCE: f32 = 2.0;
+///
+/// Live-tunable ([`crate::dev_params::FRONTEND_PANEL_DISTANCE`]); read it per
+/// frame rather than latching it.
+pub fn frontend_panel_distance() -> f32 {
+    crate::dev_params::get(crate::dev_params::FRONTEND_PANEL_DISTANCE)
+}
 pub const FRONTEND_PANEL_SIZE: Vector2<f32> = Vector2 { x: 2.0, y: 1.5 };
 
 /// Spacing between stacked canvas layers in world space, so the labels sort in

@@ -231,6 +231,20 @@ POST /v1/control/input    - Set input channel
 POST /v1/player/spawn-item - Provision an item template into the inventory
 POST /v1/player/stats     - Provision skills/stats/psi tier/cyber modules
 POST /v1/screenshot       - Capture screenshot
+GET  /v1/dev-params       - List live-tunable dev params (key, label, range, value, default)
+POST /v1/dev-params       - Set a dev param {key, value} (clamped + snapped) or restore its exact default {key, reset: true}; 404 on unknown key
+```
+
+`/v1/dev-params` mirrors the `shock2vr::dev_params` registry (the live tuning
+knobs the Developer menu will expose - frontend panel distance, pause dim
+strength). The values are process-global atomics read by
+their consumers every frame, so the handlers touch the registry directly - no
+`RuntimeCommand` round-trip - and a POST is visible on the next stepped frame:
+
+```bash
+curl http://127.0.0.1:8080/v1/dev-params
+curl -X POST http://127.0.0.1:8080/v1/dev-params -d '{"key": "panel_distance", "value": 3.0}'
+curl -X POST http://127.0.0.1:8080/v1/dev-params -d '{"key": "panel_distance", "reset": true}'
 ```
 
 The `/v1/control/input` channel vocabulary lives in `shock2vr::input::remote`

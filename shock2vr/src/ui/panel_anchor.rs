@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use cgmath::{Deg, InnerSpace, Quaternion, Rad, Rotation, Vector3, vec3};
 
-use crate::ui::{FRONTEND_PANEL_DISTANCE, FRONTEND_PANEL_SIZE, WorldPanel};
+use crate::ui::{FRONTEND_PANEL_SIZE, WorldPanel, frontend_panel_distance};
 
 /// Gaze may drift this far off the panel before a recenter starts counting.
 const RECENTER_YAW_DEGREES: f32 = 60.0;
@@ -112,7 +112,7 @@ impl PanelPlacement {
     /// and gravity-aligned, because the placement's forward is horizontal.
     pub fn panel(&self) -> WorldPanel {
         WorldPanel {
-            center: self.head_position + self.forward * FRONTEND_PANEL_DISTANCE,
+            center: self.head_position + self.forward * frontend_panel_distance(),
             // Panel -> head, so the panel faces the player squarely. The
             // helper's degenerate-vertical branch cannot fire here: a
             // placement's forward is horizontal by construction.
@@ -491,7 +491,7 @@ mod tests {
             "the panel normal must point back at the viewer"
         );
         assert!(
-            ((panel.center - eye()).magnitude() - FRONTEND_PANEL_DISTANCE).abs() < 1e-4,
+            ((panel.center - eye()).magnitude() - frontend_panel_distance()).abs() < 1e-4,
             "the panel must hang at the frontend distance"
         );
     }

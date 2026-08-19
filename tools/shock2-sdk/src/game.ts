@@ -3,6 +3,8 @@ import type {
   AnimationState,
   CommandResult,
   DebugEntityMessage,
+  DevParamSetResult,
+  DevParamsListResult,
   EntityDetailResult,
   EntityListResult,
   EntitySummary,
@@ -573,6 +575,38 @@ export class SceneApi {
   }
 }
 
+/** Live-tunable developer parameters (the dev_params registry mirror). */
+export class DevParamsApi {
+  constructor(private readonly client: HttpClient) {}
+
+  /** Every registered param with its range, current value, and default. */
+  async list(): Promise<DevParamsListResult> {
+    return this.client.get<DevParamsListResult>("/v1/dev-params");
+  }
+
+  /**
+   * Set one param by key. The runtime clamps into the param's range and snaps
+   * to its step grid; the result reports the value actually applied. Consumers
+   * read the registry every frame, so the change is live on the next stepped
+   * frame. Unknown keys reject with HTTP 404.
+   */
+  async set(key: string, value: number): Promise<DevParamSetResult> {
+    return this.client.post<DevParamSetResult>("/v1/dev-params", { key, value });
+  }
+
+  /**
+   * Restore one param to its exact declared default. A `set(key, default)`
+   * cannot always get there - the snap grid does not round-trip every
+   * default - so reset is its own operation.
+   */
+  async reset(key: string): Promise<DevParamSetResult> {
+    return this.client.post<DevParamSetResult>("/v1/dev-params", {
+      key,
+      reset: true,
+    });
+  }
+}
+
 /** Interactive pathfinding test (visual A* debugging). */
 export class PathfindingTestApi {
   constructor(private readonly client: HttpClient) {}
@@ -703,6 +737,7 @@ export class Game {
   readonly pathfinding: PathfindingApi;
   readonly physics: PhysicsApi;
   readonly scene: SceneApi;
+  readonly devParams: DevParamsApi;
   readonly quests: QuestsApi;
   readonly ui: UiApi;
   readonly audio: AudioApi;
@@ -716,6 +751,7 @@ export class Game {
     this.pathfinding = new PathfindingApi(client);
     this.physics = new PhysicsApi(client);
     this.scene = new SceneApi(client);
+    this.devParams = new DevParamsApi(client);
     this.quests = new QuestsApi(client);
     this.ui = new UiApi(client);
     this.audio = new AudioApi(client);

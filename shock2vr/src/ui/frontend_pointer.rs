@@ -173,7 +173,7 @@ pub fn vr_frontend_pointer_pass(
 #[cfg(test)]
 pub mod test_support {
     use super::*;
-    use crate::ui::{FRONTEND_PANEL_DISTANCE, FrontendPanelAnchor, canvas_to_panel_world};
+    use crate::ui::{FrontendPanelAnchor, canvas_to_panel_world, frontend_panel_distance};
     use std::time::Duration;
 
     /// The head facing the tests aim against: the default camera orientation.
@@ -203,7 +203,7 @@ pub mod test_support {
         Hand {
             // Stand back on the viewer's side (the panel's normal points at the
             // viewer) and aim at the target.
-            position: target + normal * FRONTEND_PANEL_DISTANCE,
+            position: target + normal * frontend_panel_distance(),
             rotation: Quaternion::from_arc(vec3(0.0, 0.0, -1.0), -normal, None),
             trigger_value: trigger,
             ..Hand::default()
@@ -221,7 +221,7 @@ pub mod test_support {
         // it and looks the other way.
         let normal = panel.normal();
         Hand {
-            position: panel.center + normal * FRONTEND_PANEL_DISTANCE,
+            position: panel.center + normal * frontend_panel_distance(),
             rotation: Quaternion::from_arc(vec3(0.0, 0.0, -1.0), normal, None),
             trigger_value: trigger,
             ..Hand::default()

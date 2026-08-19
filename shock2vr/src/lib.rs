@@ -15,6 +15,7 @@ pub mod time;
 pub mod career;
 mod creature;
 pub mod data_files;
+pub mod dev_params;
 mod flat_player_controller;
 mod gui;
 mod hand_forearm;
