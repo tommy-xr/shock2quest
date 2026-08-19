@@ -27,8 +27,19 @@ use crate::{
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        FrontendPanelAnchor, FrontendPointerPass, PointerVisuals, Rect, ScaleMode, UiCanvas,
-        VR_COMPONENT_Z_STEP, dev_params_panel, dev_params_panel::DevParamsEvent, pointer_to_canvas,
+        FrontendPanelAnchor,
+        FrontendPointerPass,
+        PointerVisuals,
+        Rect,
+        ScaleMode,
+        UiCanvas,
+        VR_COMPONENT_Z_STEP,
+        dev_params_panel,
+        // The archive-database frame: a header line, a dark pane the rows sit
+        // in, and framed button art for "Done" - the geometry the panel is
+        // laid out against, owned by the panel so both hosts share it.
+        dev_params_panel::{BACKDROP_TEXTURE, DevParamsEvent, PanelRects},
+        pointer_to_canvas,
         vr_frontend_pointer_pass,
     },
 };
@@ -36,10 +47,6 @@ use crate::{
 /// The screen is authored on the original 640x480 canvas.
 const CANVAS_W: f32 = 640.0;
 const CANVAS_H: f32 = 480.0;
-/// The archive-database frame: a header line, a dark pane the rows sit in,
-/// and framed button art for "Done" - the geometry
-/// [`crate::ui::dev_params_panel`] is laid out against.
-const BACKDROP_TEXTURE: &str = "GAMELOD.PCX";
 /// The 4:3 art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
@@ -47,6 +54,7 @@ const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 /// a pressed flag", so the rising-edge rule lives here once. The hit regions
 /// themselves are the panel's ([`dev_params_panel::hit`]).
 fn resolve_click_at(
+    rects: PanelRects,
     point: Option<Vector2<f32>>,
     pressed: bool,
     last_pressed: bool,
@@ -54,11 +62,12 @@ fn resolve_click_at(
     if !pressed || last_pressed {
         return (None, pressed);
     }
-    (point.and_then(dev_params_panel::hit), pressed)
+    (point.and_then(|p| dev_params_panel::hit(rects, p)), pressed)
 }
 
 /// Pure click resolution for the flat pointer.
 fn resolve_click(
+    rects: PanelRects,
     pointer: Option<Pointer2D>,
     last_pressed: bool,
     screen_size: Vector2<f32>,
@@ -71,10 +80,15 @@ fn resolve_click(
                 screen_size,
                 SCALE_MODE,
             );
-            let (event, pressed) = resolve_click_at(point, p.pressed, last_pressed);
+            let (event, pressed) = resolve_click_at(rects, point, p.pressed, last_pressed);
             (event, pressed, point)
         }
-        None => (None, false, None),
+        // A frame with no pointer at all carries `last_pressed` through rather
+        // than clearing it: clearing would re-arm the click edge under a
+        // still-held button, so a trigger held across scene entry (which is
+        // exactly why the scene starts with `last_pressed = true`) would fire
+        // the moment the pointer reappears. Same rule the pause overlay keeps.
+        None => (None, last_pressed, None),
     }
 }
 
@@ -100,6 +114,9 @@ pub struct DeveloperScene {
     last_screen_size: Vector2<f32>,
     /// The frontend's hum, rollover and select sounds.
     sfx: FrontendSfx<DevParamsEvent>,
+    /// The panel's widget rects, re-resolved from `GAMELODR.BIN` each update
+    /// (the render path takes `&self`, so it reads the resolved value here).
+    panel_rects: PanelRects,
 }
 
 impl DeveloperScene {
@@ -119,6 +136,7 @@ impl DeveloperScene {
             last_pressed: true,
             last_screen_size: vec2(CANVAS_W, CANVAS_H),
             sfx: FrontendSfx::new(),
+            panel_rects: PanelRects::default(),
         }
     }
 
@@ -127,7 +145,7 @@ impl DeveloperScene {
     fn build_canvas(&self, pointer_canvas: Option<Vector2<f32>>) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
-        dev_params_panel::draw(&mut canvas, pointer_canvas);
+        dev_params_panel::draw(&mut canvas, self.panel_rects, pointer_canvas);
         canvas
     }
 }
@@ -143,13 +161,19 @@ impl GameScene for DeveloperScene {
         &mut self,
         time: &Time,
         input_context: &InputContext,
-        _asset_cache: &mut AssetCache,
+        asset_cache: &mut AssetCache,
         game_options: &GameOptions,
         _command_effects: Vec<Effect>,
     ) -> Vec<Effect> {
         if let Ok(mut world_time) = self.world.borrow::<UniqueViewMut<Time>>() {
             *world_time = time.clone();
         }
+
+        // The rows ride the backdrop's authored widget rects, so they are
+        // resolved from the layout file rather than hardcoded (see
+        // `dev_params_panel::PanelRects`).
+        self.panel_rects = dev_params_panel::rects(asset_cache);
+        let rects = self.panel_rects;
 
         // The panel is placed from the head on scene entry and world-locked
         // after that; advancing it here keeps the ray and the render agreeing
@@ -169,12 +193,13 @@ impl GameScene for DeveloperScene {
             let (point, pressed) = (self.vr_pointer.point(), self.vr_pointer.pressed);
             self.vr_pointer_canvas = point;
             self.pointer = None;
-            let (event, last_pressed) = resolve_click_at(point, pressed, self.last_pressed);
+            let (event, last_pressed) = resolve_click_at(rects, point, pressed, self.last_pressed);
             (event, last_pressed, point)
         } else {
             self.pointer = input_context.pointer;
             self.vr_pointer = FrontendPointerPass::default();
             resolve_click(
+                rects,
                 input_context.pointer,
                 self.last_pressed,
                 self.last_screen_size,
@@ -184,7 +209,8 @@ impl GameScene for DeveloperScene {
 
         // Hover and click feedback from the same hit test that resolves the
         // click, so a sound plays exactly when a button lights up.
-        self.sfx.hover(point.and_then(dev_params_panel::hit));
+        self.sfx
+            .hover(point.and_then(|p| dev_params_panel::hit(rects, p)));
         if event.is_some() {
             self.sfx.click();
         }
@@ -326,7 +352,9 @@ mod tests {
         for y in (0..480).step_by(2) {
             for x in (0..640).step_by(2) {
                 let p = vec2(x as f32, y as f32);
-                if dev_params_panel::hit(p) == Some(DevParamsEvent::Increment(id)) {
+                if dev_params_panel::hit(PanelRects::default(), p)
+                    == Some(DevParamsEvent::Increment(id))
+                {
                     return p;
                 }
             }
@@ -337,16 +365,24 @@ mod tests {
     #[test]
     fn rising_edge_over_an_arrow_yields_its_event() {
         let (id, _) = dev_params::all().next().unwrap();
-        let (event, last, _) =
-            resolve_click(pointer_at(first_increment_point(), true), false, SCREEN);
+        let (event, last, _) = resolve_click(
+            PanelRects::default(),
+            pointer_at(first_increment_point(), true),
+            false,
+            SCREEN,
+        );
         assert_eq!(event, Some(DevParamsEvent::Increment(id)));
         assert!(last);
     }
 
     #[test]
     fn held_press_does_not_re_activate() {
-        let (event, last, _) =
-            resolve_click(pointer_at(first_increment_point(), true), true, SCREEN);
+        let (event, last, _) = resolve_click(
+            PanelRects::default(),
+            pointer_at(first_increment_point(), true),
+            true,
+            SCREEN,
+        );
         assert_eq!(event, None, "a held press must not step the value again");
         assert!(last);
     }
@@ -359,6 +395,7 @@ mod tests {
         // "Quit" area on the shared canvas).
         let scene = DeveloperScene::new();
         let (event, _, _) = resolve_click(
+            PanelRects::default(),
             pointer_at(first_increment_point(), true),
             scene.last_pressed,
             SCREEN,
@@ -366,9 +403,39 @@ mod tests {
         assert_eq!(event, None);
     }
 
+    /// A frame with no pointer must not re-arm the click edge: the scene is
+    /// entered with `last_pressed = true` precisely because a trigger can
+    /// still be held from the main menu's Developer click, and clearing the
+    /// flag on a pointerless frame would let that same unbroken press fire the
+    /// moment the pointer reappears.
+    #[test]
+    fn a_pointerless_frame_keeps_the_held_press_guard() {
+        let scene = DeveloperScene::new();
+        assert!(scene.last_pressed);
+        let (event, last, point) =
+            resolve_click(PanelRects::default(), None, scene.last_pressed, SCREEN);
+        assert_eq!(event, None);
+        assert_eq!(point, None);
+        assert!(last, "a pointerless frame must carry the guard through");
+
+        // ...so the press reappearing still resolves to nothing.
+        let (event, _, _) = resolve_click(
+            PanelRects::default(),
+            pointer_at(first_increment_point(), true),
+            last,
+            SCREEN,
+        );
+        assert_eq!(event, None);
+    }
+
     #[test]
     fn click_on_bare_backdrop_does_nothing() {
-        let (event, _, _) = resolve_click(pointer_at(vec2(50.0, 50.0), true), false, SCREEN);
+        let (event, _, _) = resolve_click(
+            PanelRects::default(),
+            pointer_at(vec2(50.0, 50.0), true),
+            false,
+            SCREEN,
+        );
         assert_eq!(event, None);
     }
 
@@ -388,7 +455,7 @@ mod tests {
         let ray_point = pass.point().expect("the ray should land on the panel");
         let (id, _) = dev_params::all().next().unwrap();
         assert_eq!(
-            resolve_click_at(Some(ray_point), pass.pressed, false).0,
+            resolve_click_at(PanelRects::default(), Some(ray_point), pass.pressed, false).0,
             Some(DevParamsEvent::Increment(id))
         );
     }

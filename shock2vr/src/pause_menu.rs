@@ -487,6 +487,9 @@ pub struct PauseMenu {
     /// Set when a click closed the menu, and cleared once that click is
     /// released. See [`PauseMenu::suspends_scene`].
     closed_under_a_held_press: bool,
+    /// The Developer page's widget rects, re-resolved from `GAMELODR.BIN`
+    /// each update (the render path takes `&self`, so it reads them here).
+    panel_rects: dev_params_panel::PanelRects,
 }
 
 impl Default for PauseMenu {
@@ -512,6 +515,7 @@ impl PauseMenu {
             last_pressed: true,
             last_screen_size: vec2(CANVAS_W, CANVAS_H),
             closed_under_a_held_press: false,
+            panel_rects: dev_params_panel::PanelRects::default(),
         }
     }
 
@@ -599,6 +603,9 @@ impl PauseMenu {
         }
 
         let rects = self.rects(asset_cache);
+        // The Developer page's rows ride the backdrop's authored widget rects,
+        // so they follow the layout file rather than hardcoded numbers.
+        self.panel_rects = dev_params_panel::rects(asset_cache);
         self.head = (input_context.head.position, input_context.head.rotation);
 
         // Placed from the head when the menu opens and world-locked after
@@ -631,10 +638,29 @@ impl PauseMenu {
             )
         };
 
+        self.consume_pointer(point, pressed, &rects)
+    }
+
+    /// Route one frame's resolved pointer state to whichever page is showing,
+    /// carrying the rising-edge flag across a page turn.
+    ///
+    /// Split out of [`Self::update`] so the press edge is testable without a
+    /// presentation: the highest-risk interaction on this overlay is a *held*
+    /// press surviving a page turn, because the Developer page's "Done" rect
+    /// (527,405,95,62) overlaps the root's "Quit to Main Menu" rect - so a
+    /// press that leaves the Developer page could otherwise land on Quit the
+    /// very next frame. Whichever page consumes the click stores the pressed
+    /// flag, so the next frame's rising edge is already spent.
+    fn consume_pointer(
+        &mut self,
+        point: Option<Vector2<f32>>,
+        pressed: bool,
+        rects: &[Rect],
+    ) -> Option<PauseAction> {
         match self.page {
             PauseMenuPage::Root => {
                 let (entry, last_pressed) =
-                    resolve_click_at(point, pressed, self.last_pressed, &rects);
+                    resolve_click_at(point, pressed, self.last_pressed, rects);
                 self.last_pressed = last_pressed;
                 self.handle_root_entry(entry)
             }
@@ -642,7 +668,7 @@ impl PauseMenu {
                 // Same rising-edge rule as the root, over the shared panel's
                 // hit regions instead of the entry rects.
                 let event = (pressed && !self.last_pressed)
-                    .then(|| point.and_then(dev_params_panel::hit))
+                    .then(|| point.and_then(|p| dev_params_panel::hit(self.panel_rects, p)))
                     .flatten();
                 self.last_pressed = pressed;
                 self.handle_developer_event(event)
@@ -792,7 +818,7 @@ impl PauseMenu {
                 Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H),
                 DEVELOPER_BACKDROP_TEXTURE,
             );
-            dev_params_panel::draw(&mut canvas, pointer_canvas);
+            dev_params_panel::draw(&mut canvas, self.panel_rects, pointer_canvas);
             return canvas;
         }
 
@@ -939,6 +965,73 @@ mod tests {
         );
         assert_eq!(menu.page, PauseMenuPage::Root);
         assert!(menu.is_open());
+    }
+
+    /// The overlay's most dangerous interaction: the Developer page's "Done"
+    /// rect OVERLAPS the root page's "Quit to Main Menu" button, so a press
+    /// that is still held when "Done" turns the page back would land on Quit
+    /// the very next frame - abandoning the run from a menu that was only
+    /// meant to close a settings page. This is the game-over insta-Quit bug
+    /// class (vr-ui-design rule 6), so it is asserted through `consume_pointer`,
+    /// which carries the real `last_pressed` flag, rather than through the
+    /// page handlers that bypass it.
+    #[test]
+    fn a_press_held_through_done_cannot_fall_through_onto_quit() {
+        let rects = menu_rects(None);
+        let panel = dev_params_panel::PanelRects::default();
+        let done = panel.done_center();
+        // The premise: the two rects really do overlap, so this is a live
+        // hazard and not a hypothetical one.
+        assert!(
+            rects[QUIT_INDEX].contains(done),
+            "Done must sit over Quit for this test to mean anything"
+        );
+
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.handle_root_entry(Some(PauseMenuEntry::Developer));
+        assert_eq!(menu.page, PauseMenuPage::Developer);
+        // Nothing pressed yet, so the next frame is a genuine rising edge.
+        menu.last_pressed = false;
+
+        // Frame 1: press on "Done" - the page turns back to the root.
+        assert_eq!(menu.consume_pointer(Some(done), true, &rects), None);
+        assert_eq!(menu.page, PauseMenuPage::Root);
+
+        // Frame 2: the SAME press is still held, over the Quit button now
+        // under the pointer. It must not activate.
+        assert_eq!(
+            menu.consume_pointer(Some(done), true, &rects),
+            None,
+            "a held press must not fall through onto Quit after the page turn"
+        );
+        assert!(menu.is_open());
+
+        // Only a real release and a fresh press reaches Quit.
+        assert_eq!(menu.consume_pointer(Some(done), false, &rects), None);
+        assert_eq!(
+            menu.consume_pointer(Some(done), true, &rects),
+            Some(PauseAction::QuitToMainMenu)
+        );
+    }
+
+    /// The mirror image: the press that opens the Developer page must not
+    /// immediately step a parameter with the same still-held press.
+    #[test]
+    fn a_press_held_into_the_developer_page_does_not_step_a_param() {
+        let rects = menu_rects(None);
+        let mut menu = PauseMenu::new();
+        menu.open();
+        menu.last_pressed = false;
+
+        let developer = rects[OPTIONS_INDEX].center();
+        assert_eq!(menu.consume_pointer(Some(developer), true, &rects), None);
+        assert_eq!(menu.page, PauseMenuPage::Developer);
+        // Still held on the next frame: the edge is already spent, so no
+        // panel event is resolved at all.
+        assert!(menu.last_pressed);
+        assert_eq!(menu.consume_pointer(Some(developer), true, &rects), None);
+        assert_eq!(menu.page, PauseMenuPage::Developer);
     }
 
     #[test]

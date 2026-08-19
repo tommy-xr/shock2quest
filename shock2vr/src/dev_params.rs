@@ -88,9 +88,13 @@ dev_params! {
     /// Vertical offset applied to the whole tracked stage on the Quest, in
     /// **meters** (the stage's own unit): head, hands and the per-eye view
     /// move together, because `oculus_runtime` adds it inside its single
-    /// stage-to-pawn mapping. The per-eye cap that keeps the view inside the
-    /// collider crown applies *after* the offset, so raising the eye can
-    /// never see out of the world. Deliberately NOT read by
+    /// stage-to-pawn mapping. The per-eye cap that holds a *tracked* head
+    /// inside the collider crown is raised by the same offset, so the knob
+    /// moves the view by exactly what it moves the hands by rather than
+    /// saturating the view a couple of centimeters in (standing headroom above
+    /// the collider center is only ~0.85 m, which an adult's tracked eye
+    /// already nearly fills). At the default 0 the cap is unchanged.
+    /// Deliberately NOT read by
     /// `player_eye_height_for` (the flat/debug camera): on the Quest the eye
     /// is the tracked pose, which never goes through that accessor - wiring
     /// the accessor instead would leave the knob inert exactly where live

@@ -1541,12 +1541,34 @@ fn stage_to_pawn(position_meters: Vector3<f32>, center_above_floor: f32) -> Vect
     // The dev-params eye-height offset raises or lowers the whole tracked
     // stage: every tracked position - head input, both hands, and the per-eye
     // view - routes through this one mapping, so they move together and the
-    // hands never detach from the raised eye line. The per-eye cap in
-    // `render_swapchain` applies after this, so an upward offset still cannot
-    // push the view out of the collider crown.
-    let stage_offset_meters = shock2vr::dev_params::get(shock2vr::dev_params::EYE_HEIGHT_OFFSET);
-    (position_meters + vec3(0.0, stage_offset_meters, 0.0)) / shock2vr::METERS_PER_WORLD_UNIT
+    // hands never detach from the raised eye line. See
+    // `stage_offset_above_center` for how the per-eye cap keeps out of its way.
+    (position_meters + vec3(0.0, stage_offset_meters(), 0.0)) / shock2vr::METERS_PER_WORLD_UNIT
         - vec3(0.0, center_above_floor, 0.0)
+}
+
+/// The dev-params eye-height offset, in meters of STAGE space.
+fn stage_offset_meters() -> f32 {
+    shock2vr::dev_params::get(shock2vr::dev_params::EYE_HEIGHT_OFFSET)
+}
+
+/// The same offset expressed in world units, for raising the eye cap by
+/// exactly what [`stage_to_pawn`] already added.
+///
+/// The cap bounds the *tracked body*: a real head is not the game capsule's,
+/// so it is held inside the collider crown. The dev offset is not a tracked
+/// body - it is an explicit authored displacement of the whole stage - so the
+/// cap has to move with it, or it would silently eat the raise: standing
+/// headroom is only ~1.12 wu (0.85 m) above the collider center and an adult's
+/// tracked eye already sits within a few centimeters of it, so an uncapped-cap
+/// `eye_offset` would saturate the VIEW after a couple of centimeters while
+/// the hands kept rising the full half-meter - the head/hand desync this
+/// wiring exists to avoid. Raising the cap by the offset keeps the tracked
+/// portion bounded exactly as before (at the default offset of 0 this is
+/// bit-identical to the pre-existing cap) while letting a deliberate dev
+/// offset through.
+fn stage_offset_above_center() -> f32 {
+    stage_offset_meters() / shock2vr::METERS_PER_WORLD_UNIT
 }
 
 fn render_swapchain(
@@ -1589,7 +1611,12 @@ fn render_swapchain(
     // have no such clipping concern and clamping them would break reaching up.
     // The cap binds essentially only while crouched (or button-latched);
     // standing it sits above any realistic head, so tracking stays 1:1.
-    head_offset.y = head_offset.y.min(game.player_eye_cap_above_center());
+    // The cap rides the dev eye-height offset (see `stage_offset_above_center`)
+    // so the knob moves the view by exactly what it moves the hands by; at the
+    // default offset of 0 this is the plain crown cap it has always been.
+    head_offset.y = head_offset
+        .y
+        .min(game.player_eye_cap_above_center() + stage_offset_above_center());
     let head_rotation = cgmath::Quaternion::new(
         view.pose.orientation.w,
         view.pose.orientation.x,
