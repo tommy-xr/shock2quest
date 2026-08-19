@@ -47,7 +47,14 @@ const HAND_SWEEP: Vec3[] = [
 async function sweepHeldWrench(game: GameServer): Promise<void> {
   for (const hand of HAND_SWEEP) {
     await game.input.set("right_hand.position", hand);
-    await game.step({ frames: 1 });
+    // Two frames per sample, not one: the Wrench's authored contact volume is
+    // a 4.6cm sphere (PropPhysDimensions radius0), and the sweep's last sample
+    // lands it right on the pane plane. At one frame per sample whether the
+    // contact is generated came down to how much physics free-ran between the
+    // HTTP requests - the same swing passed or failed purely on request
+    // latency. Two frames gives the contact a real overlap window instead of a
+    // tangential touch; nothing else about the gesture changes.
+    await game.step({ frames: 2 });
   }
 }
 
