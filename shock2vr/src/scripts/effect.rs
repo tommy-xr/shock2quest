@@ -348,6 +348,14 @@ pub enum Effect {
         entity_id: EntityId,
         model_name: String,
     },
+    /// Undo a `ChangeModel` on an entity that had no model to begin with -
+    /// the inverse of the VR wield swap for the PsiSword, whose gamesys
+    /// template authors only `PropLimbModel` and so renders nothing until it
+    /// is wielded. Without it a dropped PsiSword would keep the first-person
+    /// arm mesh (and its animation player) lying in the world forever.
+    ClearModel {
+        entity_id: EntityId,
+    },
     /// Replace the entity's fire-point vhots with those of `model_name`
     /// without changing the rendered model. Used by the VR held-weapon path:
     /// the world model stays rendered (#352), but its mesh has no vhots -

@@ -79,6 +79,132 @@ test(
   },
 );
 
+test(
+  "VR: a grabbed melee weapon wields the 25AE first-person model",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "debug_weapons",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8106),
+      debugFlags: ["--vr"],
+    });
+
+    // DebugCycleWeapon spawns each roster weapon in turn (VR wield is a no-op,
+    // so each drops to the floor); cycle until the Wrench appears.
+    await game.step({ frames: 10 });
+    let wrench;
+    for (let i = 0; i < 20 && !wrench; i++) {
+      await game.input.trigger("DebugCycleWeapon");
+      await game.step({ frames: 5 });
+      wrench = (await game.entities.list({ limit: 100 })).entities.find(
+        (e) => e.name === "Wrench",
+      );
+    }
+    assert.ok(wrench, "wrench should have spawned");
+    await game.step({ frames: 60 });
+    assert.equal(modelOf(await game.entities.detail(wrench.id)), "wrench_w");
+
+    // Grab it: put the hand at the settled wrench's live position (pawn-local)
+    // and squeeze.
+    const pawn = (await game.info()).player.position;
+    const settled = (await game.entities.list({ limit: 100 })).entities.find(
+      (e) => e.id === wrench!.id,
+    )!;
+    const [px, py, pz] = settled.position;
+    await game.input.set("right_hand.position", [
+      px - pawn[0],
+      py - pawn[1],
+      pz - pawn[2],
+    ]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.input.set("right_hand.squeeze", 0.0);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.squeeze", 1.0);
+    await game.step({ frames: 10 });
+
+    const held = (await game.info()).player.right_hand_entity_id;
+    assert.equal(held, wrench.id, "wrench should be grabbed by the right hand");
+
+    // The held wrench swaps to the remastered first-person melee model (LGMM
+    // skinned mesh with the arm baked in, rendered at rest pose); dropping it
+    // restores the world model.
+    assert.equal(modelOf(await game.entities.detail(wrench.id)), "wrench_h");
+
+    await game.input.set("right_hand.squeeze", 0.0);
+    await game.step({ frames: 10 });
+    assert.equal(modelOf(await game.entities.detail(wrench.id)), "wrench_w");
+  },
+);
+
+test(
+  "VR: dropping the PsiSword takes its materialized first-person model away",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "debug_weapons",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8107),
+      debugFlags: ["--vr"],
+    });
+
+    // The PsiSword authors only PropLimbModel - no world model at all - so the
+    // VR wield has to *materialize* its first model. That swap must be
+    // symmetric: without the drop half, the released sword keeps rendering the
+    // first-person arm mesh where it was let go, forever and through saves.
+    await game.step({ frames: 10 });
+    let sword;
+    for (let i = 0; i < 20 && !sword; i++) {
+      await game.input.trigger("DebugCycleWeapon");
+      await game.step({ frames: 5 });
+      sword = (await game.entities.list({ limit: 100 })).entities.find(
+        (e) => e.name === "PsiSword",
+      );
+    }
+    assert.ok(sword, "psi sword should have spawned");
+    await game.step({ frames: 60 });
+
+    const pawn = (await game.info()).player.position;
+    const settled = (await game.entities.list({ limit: 100 })).entities.find(
+      (e) => e.id === sword!.id,
+    )!;
+    const [px, py, pz] = settled.position;
+    await game.input.set("right_hand.position", [
+      px - pawn[0],
+      py - pawn[1],
+      pz - pawn[2],
+    ]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.input.set("right_hand.squeeze", 0.0);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.squeeze", 1.0);
+    await game.step({ frames: 10 });
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      sword.id,
+      "psi sword should be grabbed by the right hand",
+    );
+    assert.equal(modelOf(await game.entities.detail(sword.id)), "psword_h");
+    assert.ok(
+      (await game.scene.objects({ entityId: sword.id })).objects.length > 0,
+      "the wielded psi sword should draw",
+    );
+
+    await game.input.set("right_hand.squeeze", 0.0);
+    await game.step({ frames: 20 });
+    assert.equal(
+      (await game.entities.detail(sword.id)).properties.find(
+        (p) => p.name === "Model",
+      ),
+      undefined,
+      "a dropped psi sword should have no model again",
+    );
+    assert.equal(
+      (await game.scene.objects({ entityId: sword.id })).objects.length,
+      0,
+      "a dropped psi sword must not leave the first-person arm in the world",
+    );
+  },
+);
+
 function findSavePath(saveName: string): string | undefined {
   const repoRoot = findRepoRoot(process.cwd()) ?? process.cwd();
   const roots = [

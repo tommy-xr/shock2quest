@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use cgmath::{Deg, Quaternion, Rotation3, Vector3, vec3};
 use dark::properties::PropModelName;
+
+use crate::runtime_props::RuntimePropVrGripOffset;
 use once_cell::sync::Lazy;
 use shipyard::{EntityId, Get, View, World};
 
@@ -109,12 +111,6 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         Quaternion::from_angle_y(Deg(0.0)),
     );
 
-    let default = VRHandModelAdjustments::new(
-        VRHandModelPerHandAdjustments::new(),
-        VRHandModelPerHandAdjustments::new(),
-        Quaternion::from_angle_y(Deg(-180.0)),
-    );
-
     // Hand model adjustments for VR
     // Specify overrides for particular models with how they should be oriented
     // relative ot the virtual hand
@@ -195,7 +191,14 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
             symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.12, 0.27)))
                 .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.))),
         ),
-        ("wrench_h", default.clone()),
+        // Melee first-person models (_h) deliberately have NO entry: their
+        // grip is not a constant. The held body is the melee contact collider
+        // (#942/#978) and has to sit on the *rendered* weapon head, which is
+        // only known once the arm is posed - so the wield computes it
+        // (`melee_contact_offset`) and stores it per entity as
+        // `RuntimePropVrGripOffset`, which this table defers to. Leaving them
+        // unmapped also keeps the default 180-degree projectile rotation they
+        // had before VR wielded them.
         // Weapons - world models, kept when held in VR (#352): the _h meshes
         // have faces stripped for the fixed flat camera. sg_w/empgun predate
         // this and show the world models grip fine with the same offsets.
@@ -271,11 +274,14 @@ pub fn is_allowed_hand_model(model_name: &str) -> bool {
 /// 19-38% for the classic `_h` set, and they are authored barrel-along -X
 /// with real muzzle vhots, so VR can wield them from any viewpoint.
 ///
-/// Melee `_h` models (wrench/rapier/shard/psword) are LGMM skinned meshes that
-/// need a posed skeleton, so VR melee keeps world models for now.
+/// Melee `_h` models (wrench/rapier/shard/psword) are LGMM skinned meshes
+/// (classic geometry + remastered `PMNM` chunk); VR wields them posed to the
+/// player-melee idle clip (see `Effect::ChangeModel` in mission_core). The
+/// 25AE-only `pipewrench_h` has no gamesys template (it ships as a KEX squirrel
+/// script we don't run), so it is not listed.
 const VR_25AE_VIEW_MODELS: &[&str] = &[
     "atek_h", "ar15_h", "sg_h", "lasehand", "empgun_h", "gren_h", "sfg_h", "fsn_h", "al_h",
-    "viro_h", "amp_h",
+    "viro_h", "amp_h", "wrench_h", "rapier_h", "shard_h", "psword_h",
 ];
 
 /// Whether `model_name` is a first-person view model VR should wield in place
@@ -286,11 +292,108 @@ pub fn is_vr_view_model(model_name: &str) -> bool {
     VR_25AE_VIEW_MODELS.contains(&name.as_str())
 }
 
+/// Skeleton joints of the melee `_h` rigs: root, shoulder, **elbow**, **fist**,
+/// **weapon** (see `cargo run -p shock2vr --example melee_grip`).
+const MELEE_ARM_JOINT: usize = 2;
+const MELEE_GRIP_JOINT: usize = 3;
+const MELEE_WEAPON_JOINT: usize = 4;
+
+/// The posed arm's joints, in model space, that the wield is built from:
+/// elbow, fist and the weapon joint at the business end of the blade/head.
+#[derive(Clone, Copy, Debug)]
+pub struct MeleePosedArm {
+    pub elbow: Vector3<f32>,
+    pub fist: Vector3<f32>,
+    pub weapon: Vector3<f32>,
+}
+
+impl MeleePosedArm {
+    /// Read the three joints out of a posed melee `_h` skeleton
+    /// (`AnimationPlayer::get_transforms`). `None` for a rig that does not
+    /// have them - a patched or modded mesh must leave the wield unseated,
+    /// not panic the frame.
+    pub fn from_joints(joints: &[cgmath::Matrix4<f32>]) -> Option<MeleePosedArm> {
+        Some(MeleePosedArm {
+            elbow: joints.get(MELEE_ARM_JOINT)?.w.truncate(),
+            fist: joints.get(MELEE_GRIP_JOINT)?.w.truncate(),
+            weapon: joints.get(MELEE_WEAPON_JOINT)?.w.truncate(),
+        })
+    }
+}
+
+/// Rotation that takes the posed arm out of model space and into the hand's
+/// own frame: the forearm runs back along the hand frame's **+Z** - the axis
+/// [`crate::hand_forearm`] hangs the empty hand's sleeve along, and the
+/// opposite of the -Z the fingers/aim point down - and the weapon is rolled
+/// into the hand's vertical plane so it stands up out of the fist.
+///
+/// Derived from the rig rather than hand-tuned: a single authored yaw can only
+/// satisfy one of the two, and the shipped 120 degrees satisfied the weapon,
+/// leaving the forearm 71-80 degrees off the hand's own arm axis (it stuck out
+/// sideways past the wrist instead of running back toward the elbow).
+fn melee_wield_alignment(arm: MeleePosedArm) -> Quaternion<f32> {
+    use cgmath::{Rad, Rotation};
+
+    let forearm = arm.elbow - arm.fist;
+    let weapon = arm.weapon - arm.fist;
+    let align = Quaternion::from_arc(forearm, Vector3::unit_z(), None);
+    let aligned_weapon = align.rotate_vector(weapon);
+    // Roll about the forearm until the weapon lies in the hand's YZ plane,
+    // pointing along +Y (up out of the fist) rather than across the palm.
+    let roll = Quaternion::from_angle_z(Rad(aligned_weapon.x.atan2(aligned_weapon.y)));
+    roll * align
+}
+
+/// Where the weapon joint ends up, in hand-local space, once the arm is seated
+/// by [`melee_wield_alignment`] - i.e. where the *rendered* head of the weapon
+/// is, and therefore where the held entity's body (the melee contact collider)
+/// has to sit for the drawn weapon and the damage volume to be the same place.
+/// The wield stores it as `RuntimePropVrGripOffset`;
+/// `cargo run -p shock2vr --example melee_grip` prints it per model.
+///
+/// Known limitation: the authored contact volume is a ~5 cm sphere, so this
+/// arms the weapon's *head* and nothing else along its length. Covering the
+/// whole blade needs a collider shaped like the weapon, which is a bigger
+/// change than putting the existing one in the right place.
+pub fn melee_contact_offset(arm: MeleePosedArm) -> Vector3<f32> {
+    use cgmath::Rotation;
+
+    melee_wield_alignment(arm).rotate_vector(arm.weapon - arm.fist)
+}
+
+/// Model-space transform that seats a posed melee `_h` arm's baked fist on the
+/// tracked hand, with the forearm along the hand's arm axis.
+///
+/// This is a *render* correction rather than a grip offset because the held
+/// entity's rigid body is the melee contact collider, and that has its own job:
+/// sitting on the rendered weapon head (#942/#978). The two are two halves of
+/// one placement and are derived from the same posed arm, so they cannot drift:
+/// the entity is at `hand + contact`, this cancels that same `contact`, and the
+/// weapon joint therefore renders exactly on the collider for any rig.
+pub fn melee_wield_pose_correction(arm: MeleePosedArm) -> cgmath::Matrix4<f32> {
+    use cgmath::Matrix4;
+
+    Matrix4::from_translation(-melee_contact_offset(arm))
+        * Matrix4::from(melee_wield_alignment(arm))
+        * Matrix4::from_translation(-arm.fist)
+}
+
 pub fn get_vr_hand_model_adjustments_from_entity(
     entity_id: EntityId,
     world: &World,
     handedness: Handedness,
 ) -> VRHandModelPerHandAdjustments {
+    // A wield that had to compute its own grip (melee `_h`: the collider goes
+    // on the rendered weapon head, which is only known once the arm is posed)
+    // stored it on the entity. It is hand-agnostic by construction.
+    if let Some(grip) = world
+        .borrow::<View<RuntimePropVrGripOffset>>()
+        .ok()
+        .and_then(|view| view.get(entity_id).ok().map(|grip| grip.0))
+    {
+        return VRHandModelPerHandAdjustments::new().with_offset(grip);
+    }
+
     let v_model_name = world.borrow::<View<PropModelName>>().unwrap();
     let maybe_model_name = v_model_name
         .get(entity_id)
@@ -349,11 +452,19 @@ fn get_vr_projectile_rotation_from_model(model_name: &str) -> Quaternion<f32> {
 mod tests {
     use super::*;
 
-    /// Every VR-wieldable 25AE view model must have a grip entry, or it would
-    /// anchor at the model origin with no rotation.
+    /// The melee subset of [`VR_25AE_VIEW_MODELS`]: skinned arm rigs, seated
+    /// from the posed skeleton rather than from a static grip entry.
+    const MELEE_VIEW_MODELS: &[&str] = &["wrench_h", "rapier_h", "shard_h", "psword_h"];
+
+    /// Every VR-wieldable 25AE gun must have a grip entry, or it would anchor
+    /// at the model origin with no rotation. The melee `_h` are the deliberate
+    /// exception - see `melee_view_models_have_no_static_grip`.
     #[test]
     fn every_vr_view_model_has_a_grip_entry() {
         for name in VR_25AE_VIEW_MODELS {
+            if MELEE_VIEW_MODELS.contains(name) {
+                continue;
+            }
             assert!(
                 HAND_MODEL_POSITIONING.contains_key(name),
                 "missing HAND_MODEL_POSITIONING entry for {name}"
@@ -373,11 +484,131 @@ mod tests {
         }
     }
 
+    /// A melee `_h` must NOT have a static grip entry: its grip is computed
+    /// per wield (`RuntimePropVrGripOffset`) because the collider has to land
+    /// on the rendered weapon head. A table entry here would take precedence
+    /// for anything that looks the model up by name and silently reintroduce a
+    /// fixed offset the render correction is not cancelling.
+    #[test]
+    fn melee_view_models_have_no_static_grip() {
+        for name in MELEE_VIEW_MODELS {
+            assert!(
+                !HAND_MODEL_POSITIONING.contains_key(name),
+                "{name} must take its grip from the posed rig, not this table"
+            );
+            // ... and stay on the unmapped default projectile rotation they
+            // had before VR wielded them.
+            assert_eq!(
+                get_vr_projectile_rotation_from_model(name),
+                Quaternion::from_angle_y(Deg(180.0))
+            );
+        }
+    }
+
+    /// The four shipped melee `_h` rigs, posed to the player-melee idle's
+    /// final frame, as `cargo run -p shock2vr --example melee_grip` prints
+    /// them. Test data so the seating maths can be checked without assets.
+    fn posed_melee_arms() -> [(&'static str, MeleePosedArm); 4] {
+        [
+            (
+                "wrench_h",
+                MeleePosedArm {
+                    elbow: vec3(-0.4087, 0.2532, 0.1699),
+                    fist: vec3(-0.4767, 0.1516, 0.5323),
+                    weapon: vec3(-0.0019, 0.7427, 0.8214),
+                },
+            ),
+            (
+                "rapier_h",
+                MeleePosedArm {
+                    elbow: vec3(-0.3454, 0.2872, 0.2055),
+                    fist: vec3(-0.4700, 0.2143, 0.5563),
+                    weapon: vec3(-0.0936, 1.3100, 0.7363),
+                },
+            ),
+            (
+                "shard_h",
+                MeleePosedArm {
+                    elbow: vec3(-0.3454, 0.2872, 0.2055),
+                    fist: vec3(-0.4700, 0.2143, 0.5563),
+                    weapon: vec3(-0.0999, 1.3987, 0.5924),
+                },
+            ),
+            (
+                "psword_h",
+                MeleePosedArm {
+                    elbow: vec3(-0.3454, 0.2872, 0.2055),
+                    fist: vec3(-0.4642, 0.2175, 0.5483),
+                    weapon: vec3(-0.1333, 1.3595, 0.5553),
+                },
+            ),
+        ]
+    }
+
+    /// The seated arm must run back along the hand frame's +Z - the axis the
+    /// empty hand's sleeve (`hand_forearm`) uses - with the weapon standing up
+    /// out of the fist in the hand's vertical plane. The shipped single yaw
+    /// left the forearm 71-80 degrees off this, poking out sideways past the
+    /// wrist.
+    #[test]
+    fn melee_wield_seats_the_forearm_on_the_hands_arm_axis() {
+        use cgmath::{InnerSpace, Rotation};
+
+        for (name, arm) in posed_melee_arms() {
+            let alignment = melee_wield_alignment(arm);
+            let forearm = alignment.rotate_vector(arm.elbow - arm.fist);
+            let angle = forearm
+                .normalize()
+                .dot(Vector3::unit_z())
+                .acos()
+                .to_degrees();
+            assert!(angle < 0.5, "{name} forearm {angle} deg off the hand's +Z");
+
+            let weapon = alignment.rotate_vector(arm.weapon - arm.fist);
+            assert!(weapon.x.abs() < 1e-3, "{name} weapon out of the YZ plane");
+            assert!(weapon.y > 0.0, "{name} weapon points down out of the fist");
+        }
+    }
+
+    /// The whole point of the arrangement: the entity sits at
+    /// `hand + melee_contact_offset` (its body is the contact collider) and the
+    /// render correction runs inside that transform, so the model's *weapon
+    /// joint* must land exactly on the collider and its *fist* exactly on the
+    /// hand. Checked as composed matrices, for every shipped rig - this is what
+    /// makes "what you see is what you hit" a property rather than a
+    /// measurement someone has to keep up to date.
+    #[test]
+    fn the_rendered_weapon_head_lands_on_the_contact_collider() {
+        use cgmath::{EuclideanSpace, InnerSpace, Matrix4, Point3, Transform};
+
+        for (name, arm) in posed_melee_arms() {
+            // What `VirtualHand::SetPositionRotation` composes for a hand at
+            // the origin with no rotation: entity = T(grip.offset).
+            let entity = Matrix4::from_translation(melee_contact_offset(arm));
+            let rendered = entity * melee_wield_pose_correction(arm);
+
+            let head = rendered.transform_point(Point3::from_vec(arm.weapon));
+            let collider = Point3::from_vec(melee_contact_offset(arm));
+            assert!(
+                (head - collider).magnitude() < 1e-4,
+                "{name}: rendered weapon head {head:?} is off the collider {collider:?}"
+            );
+
+            let fist = rendered.transform_point(Point3::from_vec(arm.fist));
+            assert!(
+                fist.to_vec().magnitude() < 1e-4,
+                "{name}: rendered fist {fist:?} is off the tracked hand"
+            );
+        }
+    }
+
     #[test]
     fn vr_view_model_lookup_is_case_insensitive() {
         assert!(is_vr_view_model("ATEK_H"));
         assert!(is_vr_view_model("lasehand"));
-        assert!(!is_vr_view_model("wrench_h"));
+        assert!(is_vr_view_model("WRENCH_H"));
+        assert!(is_vr_view_model("psword_h"));
+        assert!(!is_vr_view_model("pipewrench_h"));
         assert!(!is_vr_view_model("atek_w"));
     }
 }

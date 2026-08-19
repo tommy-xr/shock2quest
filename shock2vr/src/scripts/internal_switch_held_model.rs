@@ -88,12 +88,20 @@ impl Script for InternalSwitchHeldModelScript {
 
             MessagePayload::Drop => {
                 if let Some(view_model) = get_previous_model(world, entity_id) {
-                    Effect::ChangeModel {
+                    return Effect::ChangeModel {
                         entity_id,
                         model_name: view_model,
+                    };
+                }
+                // No original model to restore. For the PsiSword the VR wield
+                // *materialized* one (it authors only `PropLimbModel`), so the
+                // drop has to take it away again - otherwise the first-person
+                // arm mesh stays in the world where the sword was released.
+                match get_current_model(world, entity_id) {
+                    Some(current) if vr_config::is_vr_view_model(&current) => {
+                        Effect::ClearModel { entity_id }
                     }
-                } else {
-                    Effect::NoEffect
+                    _ => Effect::NoEffect,
                 }
             }
 

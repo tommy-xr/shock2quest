@@ -29,9 +29,11 @@ async function byMissionId(
   return entity;
 }
 
-// `right_hand.position` is pawn-local and the held grip sits 0.4 behind the
-// hand, so the wrench's world z is `player.z + local_z - 0.4`. Staging is
-// expressed relative to the pane rather than as bare magic coordinates.
+// `right_hand.position` is pawn-local, and the held Wrench's contact volume
+// sits wherever its VR grip puts it relative to the hand (for the melee `_h`
+// wield, on the rendered weapon head - see `vr_config::melee_contact_offset`).
+// Staging is expressed relative to the pane rather than as bare magic
+// coordinates; the pane is tall enough that the sweep crosses it either way.
 const HAND_Y = 1.03;
 const HAND_REST: Vec3 = [0.55, HAND_Y, 1.1];
 const HAND_SWEEP: Vec3[] = [
@@ -47,7 +49,14 @@ const HAND_SWEEP: Vec3[] = [
 async function sweepHeldWrench(game: GameServer): Promise<void> {
   for (const hand of HAND_SWEEP) {
     await game.input.set("right_hand.position", hand);
-    await game.step({ frames: 1 });
+    // Two frames per sample, not one: the Wrench's authored contact volume is
+    // a 4.6cm sphere (PropPhysDimensions radius0), and the sweep's last sample
+    // lands it right on the pane plane. At one frame per sample whether the
+    // contact is generated came down to how much physics free-ran between the
+    // HTTP requests - the same swing passed or failed purely on request
+    // latency. Two frames gives the contact a real overlap window instead of a
+    // tangential touch; nothing else about the gesture changes.
+    await game.step({ frames: 2 });
   }
 }
 

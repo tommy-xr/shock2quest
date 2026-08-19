@@ -304,3 +304,18 @@ pub struct RuntimePropLogData {
     pub portrait: Option<String>,
     pub icon: Option<String>,
 }
+
+// RuntimePropVrGripOffset - hand-local placement of a VR-held entity's rigid
+// body, when the model's static `vr_config` grip entry cannot express it.
+//
+// Melee `_h` wields are the case: the body IS the melee contact collider, and
+// it has to sit on the *rendered* weapon head, which is only known once the
+// arm has been posed (`vr_config::melee_contact_offset`). Computing it there
+// and storing it here is what keeps the drawn weapon and the damage volume
+// exactly coincident for any rig, instead of pinning them together with
+// hand-measured constants that a modded or updated mesh would silently break.
+//
+// Not serialized: the wield's `Effect::ChangeModel` recomputes it whenever the
+// first-person model is (re)applied, including on load.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropVrGripOffset(pub Vector3<f32>);

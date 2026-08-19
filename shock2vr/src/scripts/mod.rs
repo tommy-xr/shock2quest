@@ -873,7 +873,16 @@ impl ScriptWorld {
                 Box::new(WeaponScript::new()),
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
-            "internal_triggered_melee_weapon" => Box::new(TriggeredMeleeWeapon::new()),
+            // Attached by entity_creator to every PropLimbModel weapon. The
+            // held-model swap rides along because most melee weapons (Electro
+            // Shock, Crystal Shard, PsiSword) author no WeaponScript, so this
+            // marker is their only script. The Wrench gets a second copy via
+            // its WeaponScript composite - harmless, the swap is idempotent
+            // (InternalPropOriginalModelName is written once at creation).
+            "internal_triggered_melee_weapon" => Box::new(CompositeScript::new(vec![
+                Box::new(TriggeredMeleeWeapon::new()),
+                Box::new(InternalSwitchHeldModelScript::new()),
+            ])),
             "pistolmodify" => Box::new(NoopScript::new()),
 
             // TODO: Necessary
