@@ -2,6 +2,7 @@ pub mod audio_log;
 pub mod game_scene;
 pub mod hand_pose;
 pub mod hand_pose_library;
+pub mod hit_feedback;
 pub mod input;
 pub mod input_context;
 pub mod install;
@@ -443,6 +444,25 @@ pub struct Game {
     /// Wall-clock time spent with the simulation suspended, subtracted from the
     /// clock the scene sees. See [`Game::scene_time`].
     time_suspended: std::time::Duration,
+
+    /// The red rim tint shown for a moment after the player takes damage. Like
+    /// the pause menu, it lives here because it is a view-locked layer over
+    /// whichever scene is running. See [`crate::hit_feedback`].
+    hit_feedback: hit_feedback::HitFeedback,
+
+    /// The last head pose a runtime reported, in pawn space - what
+    /// [`Game::hit_feedback`] hangs its layer from. Kept here rather than
+    /// asked of the scene because `render` has no input context.
+    head_pose: (Vector3<f32>, Quaternion<f32>),
+
+    /// How far the host's picture reaches from the view axis on each axis,
+    /// taken from the projection it last handed `render_per_eye`. The hit tint
+    /// is a *rim* effect, so it has to know where the picture ends - and only
+    /// the host knows that (a Quest eye is roughly twice a 45-degree flat
+    /// screen, and much closer to square). Carried a frame, because `render`
+    /// runs before `render_per_eye` and the projection does not change between
+    /// them.
+    view_extents: (f32, f32),
 }
 
 /// Player state for debug introspection. Entity ids use `EntityId::inner() as
@@ -1214,6 +1234,12 @@ impl Game {
             campaign_completed: false,
             pause_menu: pause_menu::PauseMenu::new(),
             time_suspended: std::time::Duration::ZERO,
+            hit_feedback: hit_feedback::HitFeedback::new(),
+            head_pose: (
+                vec3(0.0, input_context::DEFAULT_HEAD_HEIGHT, 0.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            ),
+            view_extents: hit_feedback::DEFAULT_VIEW_EXTENTS,
         }
     }
 
@@ -1232,6 +1258,13 @@ impl Game {
         // (audio log / message trace), so their entries can be stamped
         // without threading `Time` through every record site.
         audio_log::set_sim_time(self.scene_time(time).total.as_secs_f64());
+
+        // The hit tint decays on *wall* time, ahead of every early return in
+        // this function: a hit taken as the player opens the pause menu or
+        // starts a level transition must fade out on its own rather than hang
+        // frozen at full strength until the simulation resumes.
+        self.head_pose = (input_context.head.position, input_context.head.rotation);
+        self.hit_feedback.update(delta_time);
 
         // Drive a background transition: the loading screen animates while the parse
         // runs on its worker thread. Once the parse has finished AND the loading screen
@@ -1681,6 +1714,9 @@ impl Game {
                 self.pending_transition = None;
                 self.set_active_scene(Box::new(DeveloperScene::new()));
             }
+            GlobalEffect::PlayerHit { damage } => {
+                self.hit_feedback.trigger(damage);
+            }
             GlobalEffect::CompleteCampaign => {
                 // Preserve the destroyed head and the rest of the finale state
                 // in the in-memory mission ledger before the cutscene replaces
@@ -1717,6 +1753,10 @@ impl Game {
     fn set_active_scene(&mut self, scene: Box<dyn GameScene>) {
         self.active_game_scene.on_exit(&mut self.audio_context);
         self.active_game_scene = scene;
+        // Whatever hurt the player belongs to the scene being left: a quickload
+        // taken mid-fight must not open on a red rim, and the main menu must
+        // never show one at all.
+        self.hit_feedback.clear();
     }
 
     /// Get hand spotlights for enhanced lighting when experimental flag is enabled
@@ -1778,6 +1818,32 @@ impl Game {
         // aim at it), so it is mapped into world coordinates with the same
         // pawn transform the runtime builds its camera from.
         let pawn_to_world = Matrix4::from_translation(pos) * Matrix4::from(rot);
+
+        // The hit tint, before the pause menu's objects: it is the first
+        // `clear_depth` object when nothing else is up, so it opens the overlay
+        // group and covers the world; and when the menu *is* up it is still
+        // first in that group, so the panel and its dim draw over it rather
+        // than under a red rim. Emitted from `render` (not `render_per_eye`)
+        // for the reason recorded on `hit_feedback::hit_layer`, and identically
+        // in flat and VR - it is view-locked, so only the eye pose differs.
+        let (mut eye_position, eye_forward) =
+            hit_feedback::eye_pose(self.head_pose.0, self.head_pose.1);
+        // Centre the layer on the eye the frame is actually drawn from, which
+        // is NOT the eye the input context reports: both flat runtimes put the
+        // *standing* eye in `head.position` while rendering from a crouch-aware
+        // one, and the VR runtimes clamp the tracked eye to the collider crown.
+        // Crouched, that is 0.56 units of disagreement - enough to swing the
+        // rim by ~13 degrees and drag the ramp onto the crosshair. The same
+        // clamp the cameras use is a no-op standing.
+        eye_position.y = eye_position.y.min(self.player_eye_cap_above_center());
+        if let Some(mut layer) =
+            self.hit_feedback
+                .render(self.view_extents, eye_position, eye_forward)
+        {
+            layer.set_transform(pawn_to_world * layer.get_transform());
+            scene.push(layer);
+        }
+
         scene.extend(
             self.pause_menu
                 .render(&mut self.asset_cache, &self.options, pawn_to_world),
@@ -1800,6 +1866,11 @@ impl Game {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) -> Vec<SceneObject> {
+        // Record how far the host's picture reaches for the next frame's
+        // `render`, which is where the view-locked hit tint is emitted (see
+        // `hit_feedback::view_extents_from_projection`).
+        self.view_extents = hit_feedback::view_extents_from_projection(projection);
+
         // Sample for rendering
         let font = self.asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
         // let text_obj_0_0 =

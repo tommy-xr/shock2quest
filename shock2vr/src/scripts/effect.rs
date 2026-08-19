@@ -72,6 +72,14 @@ pub enum GlobalEffect {
     /// Play the retail ending and enter the campaign's terminal state.
     CompleteCampaign,
 
+    /// The player just lost `damage` hit points. Handled by `Game`, which owns
+    /// the view-locked hit tint (see `crate::hit_feedback`) the same way it
+    /// owns the pause menu - the layer has to sit over whatever scene is
+    /// running, and the tracked head pose it hangs from lives there.
+    PlayerHit {
+        damage: f32,
+    },
+
     // Quit the game (e.g. from the main menu). The runtime is responsible for
     // observing this via `Game::should_quit` and closing its window.
     Quit,

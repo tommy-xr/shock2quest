@@ -168,6 +168,34 @@ pub fn get_rotation_from_matrix(matrix: &Matrix4<f32>) -> Quaternion<f32> {
     rot_matrix.into()
 }
 
+/// Where a tracked head is and what it is looking at, or `None` when the head
+/// is not tracked.
+///
+/// An untracked head arrives as the **ZERO quaternion**, and cgmath's
+/// `rotate_vector` silently returns the input *unrotated* for it - so a caller
+/// that skips this check gets a plausible-looking forward pointing at world
+/// -Z, plus a meaningless position, and hangs its layer somewhere arbitrary.
+/// That is VR rule 7 in the `vr-ui-design` skill; it has cost real bugs
+/// (#994, #997), so it is encoded once here rather than at each view-locked
+/// layer. Callers supply their own fallback for the `None` case, because what
+/// stands in for a missing head differs: the pause dim uses its world-locked
+/// panel, the hit tint uses the pawn's default eye.
+pub fn tracked_gaze(
+    head_position: Vector3<f32>,
+    head_rotation: Quaternion<f32>,
+) -> Option<(Vector3<f32>, Vector3<f32>)> {
+    if head_rotation.magnitude2() < 1e-6 {
+        return None;
+    }
+    use cgmath::Rotation;
+    Some((
+        head_position,
+        head_rotation
+            .normalize()
+            .rotate_vector(vec3(0.0, 0.0, -1.0)),
+    ))
+}
+
 pub fn get_rotation_from_forward_vector(forward: Vector3<f32>) -> Quaternion<f32> {
     let mut default_up = Vector3::new(0.0, 1.0, 0.0);
 
@@ -310,6 +338,8 @@ pub mod render_source {
     pub const FRONTEND_POINTER: &str = "frontend_pointer";
     /// The pause menu's comfort dim, behind its panel.
     pub const PAUSE_DIM: &str = "pause_dim";
+    /// The red rim tint shown for a moment after the player takes damage.
+    pub const HIT_FEEDBACK: &str = "hit_feedback";
 }
 
 /// A tag that records only which render path produced an object.

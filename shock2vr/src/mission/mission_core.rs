@@ -4011,6 +4011,9 @@ impl MissionCore {
             player_info.entity_id
         };
 
+        // At most one player hurt grunt per drain - see the `AdjustHitPoints`
+        // handler.
+        let mut player_grunted = false;
         let mut effects = VecDeque::from(effects);
         while let Some(effect) = effects.pop_front() {
             match effect {
@@ -4046,6 +4049,39 @@ impl MissionCore {
                             delta,
                             hp
                         );
+                        // Tell the player they were hit. This is the one hook
+                        // for it: every source of damage - AI melee,
+                        // projectiles, psi, falls - lands here, and what it
+                        // reads is the loss that was actually *applied*, so
+                        // armour or a resistance that soaked a hit makes the
+                        // feedback smaller rather than lying about it.
+                        // Deliberately after the death check's `previous > 0`
+                        // guard reads `previous`, and skipped for the killing
+                        // blow, which the death path owns.
+                        if entity_id == player_entity && hp < previous {
+                            let damage = (previous - hp) as f32;
+                            // The tint fires for the killing blow too - that
+                            // is the hit the player most needs to see land.
+                            global_effects.push(GlobalEffect::PlayerHit { damage });
+                            // The grunt does not: `begin_player_death` plays
+                            // the death vocalization, and two player voices at
+                            // once is a mess. Nor does a second grunt for a
+                            // second hit drained in the same pass - several
+                            // damage effects can land together (a blast plus a
+                            // follow-up), and the tint coalesces them where
+                            // stacked audio would just be noise.
+                            if hp > 0 && !player_grunted {
+                                player_grunted = true;
+                                effects.push_back(Effect::PlaySound {
+                                    handle: AudioHandle::new(),
+                                    name: crate::hit_feedback::hurt_schema(damage).to_owned(),
+                                    source: Some(player_entity),
+                                    // The player's own voice: at the ears, not
+                                    // at a point in the world they stand on.
+                                    spatial: false,
+                                });
+                            }
+                        }
                         if entity_id == player_entity && previous > 0 && hp == 0 {
                             for death_effect in self.begin_player_death() {
                                 effects.push_back(death_effect);
