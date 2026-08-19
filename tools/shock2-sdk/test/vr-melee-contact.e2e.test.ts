@@ -29,9 +29,11 @@ async function byMissionId(
   return entity;
 }
 
-// `right_hand.position` is pawn-local and the held grip sits 0.4 behind the
-// hand, so the wrench's world z is `player.z + local_z - 0.4`. Staging is
-// expressed relative to the pane rather than as bare magic coordinates.
+// `right_hand.position` is pawn-local, and the held Wrench's contact volume
+// sits wherever its VR grip puts it relative to the hand (for the melee `_h`
+// wield, on the rendered weapon head - see `vr_config::melee_contact_offset`).
+// Staging is expressed relative to the pane rather than as bare magic
+// coordinates; the pane is tall enough that the sweep crosses it either way.
 const HAND_Y = 1.03;
 const HAND_REST: Vec3 = [0.55, HAND_Y, 1.1];
 const HAND_SWEEP: Vec3[] = [
