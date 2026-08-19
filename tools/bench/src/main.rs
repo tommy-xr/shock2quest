@@ -10,7 +10,7 @@
 //!   cargo bn path stats medsci1.mis   # database stats + flag/okBits audit
 //!   cargo bn path bench medsci1.mis   # seeded A* benchmark
 //!   cargo bn path bench --all --json  # all missions, machine-readable
-//!   cargo bn path show medsci1.mis --from " -10,0,5" --to "20,0,30"
+//!   cargo bn path show medsci1.mis --from "-10,0,5" --to "20,0,30"
 //!   cargo bn path cell medsci1.mis --at "20,0,30"
 
 use std::sync::Arc;
@@ -76,26 +76,26 @@ enum PathCommand {
     Show {
         mission: String,
         /// Start position as "x,y,z" (world units, same as debug runtime)
-        #[arg(long)]
-        from: String,
+        #[arg(long, allow_hyphen_values = true, value_parser = parse_vec3)]
+        from: Vector3<f32>,
         /// Goal position as "x,y,z"
-        #[arg(long)]
-        to: String,
+        #[arg(long, allow_hyphen_values = true, value_parser = parse_vec3)]
+        to: Vector3<f32>,
     },
     /// List every cell containing a position, with flags and outgoing links
     Cell {
         mission: String,
         /// Position as "x,y,z"
-        #[arg(long)]
-        at: String,
+        #[arg(long, allow_hyphen_values = true, value_parser = parse_vec3)]
+        at: Vector3<f32>,
     },
     /// Show the walk component containing a position and its frontier links
     /// (how the component connects - or fails to connect - to neighbors)
     Component {
         mission: String,
         /// Position as "x,y,z"
-        #[arg(long)]
-        at: String,
+        #[arg(long, allow_hyphen_values = true, value_parser = parse_vec3)]
+        at: Vector3<f32>,
     },
 }
 
@@ -158,15 +158,15 @@ fn run_path_command(command: PathCommand) -> Result<()> {
         }
         PathCommand::Show { mission, from, to } => {
             let db = load_path_database(&mission)?;
-            dump_path(db, parse_vec3(&from)?, parse_vec3(&to)?);
+            dump_path(db, from, to);
         }
         PathCommand::Cell { mission, at } => {
             let db = load_path_database(&mission)?;
-            dump_cells_at(db, parse_vec3(&at)?);
+            dump_cells_at(db, at);
         }
         PathCommand::Component { mission, at } => {
             let db = load_path_database(&mission)?;
-            dump_component_at(db, parse_vec3(&at)?);
+            dump_component_at(db, at);
         }
     }
 
@@ -888,4 +888,122 @@ fn dump_cells_at(db: PathDatabase, at: Vector3<f32>) {
         "service.cell_from_position would return: {:?}",
         service.cell_from_position(at)
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coordinate_options_accept_space_separated_negative_values() {
+        let invocations: &[&[&str]] = &[
+            &[
+                "bench",
+                "path",
+                "show",
+                "ops4.mis",
+                "--from",
+                "53.5,-8.6,-27.6",
+                "--to",
+                "-9.94,-8.6,-30.0",
+            ],
+            &[
+                "bench",
+                "path",
+                "show",
+                "ops4.mis",
+                "--from",
+                "-9.94,-8.6,-30.0",
+                "--to",
+                "53.5,-8.6,-27.6",
+            ],
+            &[
+                "bench",
+                "path",
+                "cell",
+                "ops4.mis",
+                "--at",
+                "-9.94,-8.6,-30.0",
+            ],
+            &[
+                "bench",
+                "path",
+                "component",
+                "ops4.mis",
+                "--at",
+                "-9.94,-8.6,-30.0",
+            ],
+        ];
+
+        for args in invocations {
+            assert!(
+                Cli::try_parse_from(*args).is_ok(),
+                "failed to parse {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn coordinate_options_keep_accepting_equals_values() {
+        let args = [
+            "bench",
+            "path",
+            "show",
+            "ops4.mis",
+            "--from=53.5,-8.6,-27.6",
+            "--to=-9.94,-8.6,-30.0",
+        ];
+
+        assert!(Cli::try_parse_from(args).is_ok());
+    }
+
+    #[test]
+    fn coordinate_options_reject_malformed_triples() {
+        let invocations: &[&[&str]] = &[
+            &[
+                "bench",
+                "path",
+                "show",
+                "ops4.mis",
+                "--from",
+                "53.5,-8.6",
+                "--to",
+                "-9.94,-8.6,-30.0",
+            ],
+            &[
+                "bench",
+                "path",
+                "show",
+                "ops4.mis",
+                "--from",
+                "53.5,-8.6,-27.6",
+                "--to",
+                "not-a-number,-8.6,-30.0",
+            ],
+            &[
+                "bench",
+                "path",
+                "cell",
+                "ops4.mis",
+                "--at",
+                "-9.94,-8.6,-30.0,4.0",
+            ],
+            &[
+                "bench",
+                "path",
+                "component",
+                "ops4.mis",
+                "--at",
+                "-9.94,,-30.0",
+            ],
+        ];
+
+        for args in invocations {
+            let error = Cli::try_parse_from(*args)
+                .err()
+                .expect("malformed coordinates should fail during CLI parsing");
+            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+            assert!(error.to_string().contains("expected"));
+        }
+    }
 }
