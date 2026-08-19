@@ -6953,6 +6953,39 @@ mod tests {
         ]
     }
 
+    /// A body report has to say how *big* the body is, not only where it is:
+    /// "how large is this weapon's melee damage volume?" was unanswerable from
+    /// `/v1/physics/bodies` and had to be eyeballed from a screenshot.
+    #[test]
+    fn body_info_reports_collider_kind_and_size() {
+        let mut world = PhysicsWorld::new();
+        let handle = world.add_dynamic(
+            EntityId::from_inner(1).unwrap(),
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(2.0, 0.5, 0.25)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+
+        let info = world.debug_body_info(handle, &world.rigid_body_set[handle]);
+        assert_eq!(info.shape, "cuboid");
+        // `PhysicsShape::Cuboid` is authored as the full size, so the reported
+        // AABB extents must come back as that same full size rather than the
+        // half-extents Rapier stores internally.
+        for (axis, (actual, expected)) in
+            info.shape_extents.iter().zip([2.0, 0.5, 0.25]).enumerate()
+        {
+            assert!(
+                (actual - expected).abs() < 1.0e-4,
+                "axis {axis}: expected {expected}, got {actual} ({:?})",
+                info.shape_extents
+            );
+        }
+    }
+
     #[test]
     fn sleeping_dynamic_body_stays_dynamic_and_wakes_on_impulse() {
         let mut world = PhysicsWorld::new();
