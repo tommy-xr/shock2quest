@@ -3532,11 +3532,18 @@ async fn trigger_input_action(
 async fn list_dev_params() -> Json<Value> {
     let params: Vec<Value> = shock2vr::dev_params::all()
         .map(|(id, param)| {
-            let shock2vr::dev_params::DevParamKind::Float { min, max, step } = param.kind;
+            let (kind, min, max, step) = match param.kind {
+                shock2vr::dev_params::DevParamKind::Float { min, max, step } => {
+                    ("float", min, max, step)
+                }
+                // A switch reports the range it really has, so a client can
+                // drive it with the same clamp logic it uses for a float.
+                shock2vr::dev_params::DevParamKind::Bool => ("bool", 0.0, 1.0, 1.0),
+            };
             json!({
                 "key": param.key,
                 "label": param.label,
-                "kind": "float",
+                "kind": kind,
                 "min": min,
                 "max": max,
                 "step": step,

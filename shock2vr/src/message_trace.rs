@@ -45,6 +45,10 @@ const MAX_ENTRIES: usize = 256;
 /// (in 60 Hz frames). See [`record`].
 const COLLIDED_DEDUP_FRAMES: u64 = 30;
 
+/// [`payload_name`] of `MessagePayload::Collided`, which [`record`] evicts
+/// ahead of every other payload when the ring overflows.
+const CONTACT_PAYLOAD: &str = "Collided";
+
 /// Identity of a message endpoint. `entity_id` is only meaningful within one
 /// run (and matches the id space of the debug runtime's entity endpoints);
 /// `template_id` is the stable handle across launches.
@@ -153,8 +157,8 @@ pub(crate) fn record(world: &World, sim_time: f64, to: EntityId, payload: &Messa
     // receiver alone matters: a receiver-only key would let an unrelated
     // contact hide the one being investigated.
     //
-    // This bounds a *chattering* pair, not a broad settling burst across many
-    // distinct pairs, which can still churn the ring - see #1051.
+    // That bounds a *chattering* pair; the overflow rule below bounds a broad
+    // settling burst across many distinct pairs.
     if matches!(payload, MessagePayload::Collided { .. })
         && entries.iter().rev().any(|previous| {
             previous.frame + COLLIDED_DEDUP_FRAMES >= entry.frame
@@ -171,7 +175,30 @@ pub(crate) fn record(world: &World, sim_time: f64, to: EntityId, payload: &Messa
     entry.sequence = *next_sequence;
     entries.push_back(entry);
     if entries.len() > MAX_ENTRIES {
-        entries.pop_front();
+        evict_one(entries);
+    }
+}
+
+/// Make room for one entry, dropping the oldest *contact* before the oldest
+/// anything else.
+///
+/// Contacts are the only traced payload the world emits without an author's
+/// intent, so a level-load settling burst or a pile of debris must never push
+/// out the `TurnOn`/`Frob`/`Damage` history the trace exists for. Not
+/// hypothetical: tracing contacts at all, without this rule, made a melee
+/// damage assertion elsewhere in the e2e suite start failing under load,
+/// because the `Damage` it counted had been evicted before it was read.
+fn evict_one(entries: &mut VecDeque<TracedMessage>) {
+    match entries
+        .iter()
+        .position(|candidate| candidate.payload == CONTACT_PAYLOAD)
+    {
+        Some(index) => {
+            entries.remove(index);
+        }
+        None => {
+            entries.pop_front();
+        }
     }
 }
 
@@ -184,6 +211,49 @@ pub fn recent() -> Vec<TracedMessage> {
 mod tests {
     use super::*;
     use cgmath::{Point2, vec3};
+
+    fn entry(payload: &str) -> TracedMessage {
+        TracedMessage {
+            sequence: 0,
+            sim_time: 0.0,
+            frame: 0,
+            to: MessageEntity {
+                name: "x".into(),
+                entity_id: 1,
+                template_id: None,
+            },
+            payload: payload.into(),
+            from: None,
+        }
+    }
+
+    /// Negative case for the eviction rule: with plain FIFO the `Damage` here
+    /// is the first thing dropped, which is exactly how tracing contacts broke
+    /// a melee damage assertion under load.
+    #[test]
+    fn a_contact_burst_cannot_evict_event_history() {
+        let mut entries: VecDeque<TracedMessage> =
+            [entry("Damage"), entry(CONTACT_PAYLOAD), entry("TurnOn")]
+                .into_iter()
+                .collect();
+
+        evict_one(&mut entries);
+
+        let remaining: Vec<&str> = entries.iter().map(|e| e.payload.as_str()).collect();
+        assert_eq!(remaining, ["Damage", "TurnOn"]);
+    }
+
+    /// ...and with no contact to sacrifice it still bounds the buffer.
+    #[test]
+    fn eviction_falls_back_to_the_oldest_entry() {
+        let mut entries: VecDeque<TracedMessage> =
+            [entry("Damage"), entry("TurnOn")].into_iter().collect();
+
+        evict_one(&mut entries);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].payload, "TurnOn");
+    }
 
     #[test]
     fn payload_names_drop_fields() {

@@ -30,10 +30,15 @@ use std::sync::atomic::{AtomicU32, Ordering};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DevParamKind {
     /// A float clamped to `min..=max`; [`set`] snaps to the nearest multiple
-    /// of `step` from `min` (the grid the future menu's `<`/`>` arrows walk).
+    /// of `step` from `min` (the grid the menu's `<`/`>` arrows walk).
     Float { min: f32, max: f32, step: f32 },
-    // `Bool` and `Enum(&'static [&'static str])` go here when a param needs
-    // them - stored in the same f32 bits as 0.0/1.0 and the variant index.
+    /// An on/off switch, stored in the same f32 bits as 0.0/1.0 (the shape
+    /// this module always anticipated). Any non-zero request stores exactly
+    /// 1.0, so a consumer can compare with `== 1.0` and the menu's two arrows
+    /// both just flip it.
+    Bool,
+    // `Enum(&'static [&'static str])` goes here when a param needs it -
+    // stored in the same bits as the variant index.
 }
 
 /// One registered parameter: a stable string key (HTTP + future persistence),
@@ -52,14 +57,27 @@ pub struct DevParamId(usize);
 
 /// Declares the parameter table. One line per parameter generates its
 /// [`PARAMS`] entry *and* its `pub const` id, so the two cannot drift.
+macro_rules! dev_param_kind {
+    (float($min:expr, $max:expr, $step:expr)) => {
+        DevParamKind::Float {
+            min: $min,
+            max: $max,
+            step: $step,
+        }
+    };
+    (bool()) => {
+        DevParamKind::Bool
+    };
+}
+
 macro_rules! dev_params {
-    ($($(#[$doc:meta])* $id:ident = float($key:literal, $label:literal, $default:expr, $min:expr, $max:expr, $step:expr)),+ $(,)?) => {
+    ($($(#[$doc:meta])* $id:ident = $kind:ident($key:literal, $label:literal, $default:expr $(, $arg:expr)*)),+ $(,)?) => {
         /// Every registered parameter, in declaration order (index == id).
         pub static PARAMS: &[DevParam] = &[
             $(DevParam {
                 key: $key,
                 label: $label,
-                kind: DevParamKind::Float { min: $min, max: $max, step: $step },
+                kind: dev_param_kind!($kind($($arg),*)),
                 default: $default,
             }),+
         ];
@@ -102,14 +120,10 @@ dev_params! {
     /// deferral). Consequently the debug runtime cannot exercise this knob;
     /// it needs a worn check on device.
     EYE_HEIGHT_OFFSET = float("eye_offset", "Eye height (m)", 0.0, -0.5, 0.5, 0.02),
-    /// Draw the melee contact volume as a world-space wireframe (see
-    /// `mission::melee_debug`). A 0/1 knob declared as a float, which is what
-    /// the module's `DevParamKind::Bool` note describes: with `step` equal to
-    /// the whole range, the Developer screen's `<`/`>` arrows already walk it
-    /// as an on/off switch, so no new kind is needed to get a usable control.
-    /// `mission_core` reads it once per rendered frame, satisfying the
-    /// registry's every-frame ground rule.
-    MELEE_VOLUMES = float("melee_volumes", "Melee volumes", 0.0, 0.0, 1.0, 1.0),
+    /// Draw the contact volume of whatever is held as a world-space wireframe
+    /// (see `mission::melee_debug`). `mission_core` reads it once per rendered
+    /// frame, satisfying the registry's every-frame ground rule.
+    MELEE_VOLUMES = bool("melee_volumes", "Melee volumes", 0.0),
 }
 
 /// Every parameter with its id, in declaration order.
@@ -132,6 +146,17 @@ pub fn get(id: DevParamId) -> f32 {
     f32::from_bits(VALUES[id.0].load(Ordering::Relaxed))
 }
 
+/// A [`DevParamKind::Bool`] parameter's current value, as a bool. Consumers
+/// of a switch read this rather than comparing floats at every call site.
+pub fn get_bool(id: DevParamId) -> bool {
+    debug_assert!(
+        matches!(spec(id).kind, DevParamKind::Bool),
+        "get_bool on a non-Bool param: {}",
+        spec(id).key
+    );
+    get(id) != 0.0
+}
+
 /// Set a parameter, clamped into its range and snapped to its step grid.
 /// Returns the value actually applied. A non-finite request is refused
 /// (the current value is returned unchanged) so no consumer can ever read
@@ -152,6 +177,13 @@ fn apply(kind: &DevParamKind, current: f32, value: f32) -> f32 {
         return current;
     }
     match *kind {
+        DevParamKind::Bool => {
+            if value == 0.0 {
+                0.0
+            } else {
+                1.0
+            }
+        }
         DevParamKind::Float { min, max, step } => {
             if step > 0.0 {
                 // Clamp the grid *index*, not the snapped value: clamping
@@ -190,6 +222,28 @@ mod tests {
     // move what consumers render is proven end-to-end by the SDK e2e
     // (`dev-params.e2e.test.ts`), which watches the VR panel move over HTTP.
 
+    /// A switch stores exactly 0.0/1.0 whatever it is handed, so consumers
+    /// can compare it without a tolerance and the menu's two arrows agree.
+    #[test]
+    fn a_bool_param_normalizes_to_zero_or_one() {
+        assert_eq!(apply(&DevParamKind::Bool, 0.0, 1.0), 1.0);
+        assert_eq!(apply(&DevParamKind::Bool, 1.0, 0.0), 0.0);
+        // Anything non-zero is "on" - including values a float grid would
+        // have snapped somewhere else entirely.
+        assert_eq!(apply(&DevParamKind::Bool, 0.0, 0.3), 1.0);
+        assert_eq!(apply(&DevParamKind::Bool, 0.0, -2.0), 1.0);
+        // ...and the registry-wide non-finite guard still wins.
+        assert_eq!(apply(&DevParamKind::Bool, 1.0, f32::NAN), 1.0);
+    }
+
+    /// The overlay must default to off: this PR changes no visible behavior
+    /// until someone turns it on.
+    #[test]
+    fn the_melee_volume_overlay_defaults_off() {
+        assert!(!get_bool(MELEE_VOLUMES));
+        assert!(matches!(spec(MELEE_VOLUMES).kind, DevParamKind::Bool));
+    }
+
     /// The registry replaced two consts; anything but these exact defaults
     /// is a behavior change at launch.
     #[test]
@@ -203,15 +257,26 @@ mod tests {
     #[test]
     fn every_default_is_within_its_declared_range() {
         for (_, param) in all() {
-            let DevParamKind::Float { min, max, step } = param.kind;
-            assert!(param.default.is_finite());
-            assert!(
-                (min..=max).contains(&param.default),
-                "{}: default {} outside {min}..={max}",
-                param.key,
-                param.default
-            );
-            assert!(step >= 0.0, "{}: negative step", param.key);
+            assert!(param.default.is_finite(), "{}", param.key);
+            match param.kind {
+                DevParamKind::Float { min, max, step } => {
+                    assert!(
+                        (min..=max).contains(&param.default),
+                        "{}: default {} outside {min}..={max}",
+                        param.key,
+                        param.default
+                    );
+                    assert!(step >= 0.0, "{}: negative step", param.key);
+                }
+                // A switch's only legal defaults are the two it stores;
+                // anything else would differ from what `set` can produce.
+                DevParamKind::Bool => assert!(
+                    param.default == 0.0 || param.default == 1.0,
+                    "{}: bool default {} is neither off nor on",
+                    param.key,
+                    param.default
+                ),
+            }
         }
     }
 

@@ -178,10 +178,11 @@ fn visible_row_count(rects: PanelRects) -> usize {
 }
 
 /// The value readout: floats as `{:.2}`, the format the step grids are
-/// declared in.
+/// declared in; switches as On/Off, because "1.00" reads as a magnitude.
 fn format_value(kind: &DevParamKind, value: f32) -> String {
     match kind {
         DevParamKind::Float { .. } => format!("{value:.2}"),
+        DevParamKind::Bool => if value == 0.0 { "Off" } else { "On" }.to_string(),
     }
 }
 
@@ -275,11 +276,18 @@ pub fn draw(canvas: &mut UiCanvas, rects: PanelRects, pointer_canvas: Option<Vec
 /// [`DevParamsEvent::Done`] - the one thing the host must act on (leave the
 /// screen); the steps are absorbed here so both hosts stay a one-liner.
 pub fn activate(event: DevParamsEvent) -> bool {
-    let step_by = |id: DevParamId, direction: f32| {
-        let DevParamKind::Float { step, .. } = dev_params::spec(id).kind;
-        // `set` clamps into range and snaps to the step grid, so walking off
-        // either end just pins to it.
-        dev_params::set(id, dev_params::get(id) + direction * step);
+    let step_by = |id: DevParamId, direction: f32| match dev_params::spec(id).kind {
+        DevParamKind::Float { step, .. } => {
+            // `set` clamps into range and snaps to the step grid, so walking
+            // off either end just pins to it.
+            dev_params::set(id, dev_params::get(id) + direction * step);
+        }
+        // A switch has no grid to walk: either arrow flips it, so the row is
+        // usable with whichever side the pointer lands on.
+        DevParamKind::Bool => {
+            let _ = direction;
+            dev_params::set(id, 1.0 - dev_params::get(id));
+        }
     };
     match event {
         DevParamsEvent::Decrement(id) => {
