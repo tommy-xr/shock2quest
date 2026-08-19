@@ -139,9 +139,83 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
     }
 }
 
+/// The VR forearm panel's canvas: the AMMOFULL art with the readout composited
+/// on it. The panel *is* the canvas here, so the readout is emitted at panel
+/// origin (0,0) - flat emits the same elements at its own panel origin. Pure
+/// (no asset/GL access), so it is unit-testable like `build_flat_hud_canvas`.
+pub(crate) fn build_forearm_panel_canvas(readout: &AmmoReadout) -> UiCanvas {
+    let mut canvas = UiCanvas::new(PANEL_SIZE);
+    canvas.image(PANEL, "AMMOFULL.PCX");
+    emit(&mut canvas, vec2(0.0, 0.0), readout);
+    canvas
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn gun(ammo: i32, icon: Option<&str>, ammo_type: Option<&str>) -> AmmoReadout {
+        AmmoReadout {
+            ammo: Some(ammo),
+            ammo_icon: icon.map(str::to_string),
+            ammo_type: ammo_type.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_empty_handed_forearm_panel_is_just_the_backdrop() {
+        let canvas = build_forearm_panel_canvas(&AmmoReadout::default());
+        assert_eq!(canvas.element_count(), 1);
+        assert_eq!(canvas.size(), PANEL_SIZE);
+    }
+
+    #[test]
+    fn a_wielded_gun_adds_its_count_icon_and_type_to_the_forearm() {
+        // Backdrop + count = 2; + icon + type label = 4.
+        assert_eq!(
+            build_forearm_panel_canvas(&gun(12, None, None)).element_count(),
+            2
+        );
+        assert_eq!(
+            build_forearm_panel_canvas(&gun(12, Some("STD_I.PCX"), Some("std"))).element_count(),
+            4
+        );
+    }
+
+    #[test]
+    fn the_forearm_count_tracks_the_clip() {
+        // What the panel actually says, so a consumed round shows up here and
+        // not just in a screenshot.
+        let text_of = |readout| {
+            build_forearm_panel_canvas(&readout)
+                .elements()
+                .iter()
+                .find_map(|element| match element {
+                    crate::ui::UiElement::Text { text, position, .. }
+                        if *position == vec2(COUNT.x, COUNT.y) =>
+                    {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                })
+        };
+        assert_eq!(text_of(gun(12, None, None)).as_deref(), Some("12"));
+        assert_eq!(text_of(gun(11, None, None)).as_deref(), Some("11"));
+        assert_eq!(text_of(AmmoReadout::default()), None);
+    }
+
+    #[test]
+    fn the_psi_amp_shows_its_discipline_on_the_forearm_too() {
+        // Backdrop + tier badge + tier count + discipline name = 4, and the
+        // amp's meaningless clip is suppressed exactly as in flat.
+        let canvas = build_forearm_panel_canvas(&AmmoReadout {
+            psi_power: Some(("Projected Cryokinesis".to_string(), 1)),
+            ammo: Some(0),
+            ..Default::default()
+        });
+        assert_eq!(canvas.element_count(), 4);
+    }
 
     /// Every readout element is authored inside the panel, so the VR forearm
     /// - where the panel IS the whole canvas - shows all of them.

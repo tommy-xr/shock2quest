@@ -445,12 +445,10 @@ fn create_ammo_forearm_panel(
 ) -> Vec<SceneObject> {
     use crate::hud::ammo_panel;
 
-    let mut canvas = crate::ui::UiCanvas::new(ammo_panel::PANEL_SIZE);
-    canvas.image(ammo_panel::PANEL, "AMMOFULL.PCX");
     // No cycle affordance on the forearm: nothing points at this panel yet, and
     // drawing a button nobody can press would be a lie.
     let readout = ammo_panel::AmmoReadout::from_world(world, false);
-    ammo_panel::emit(&mut canvas, cgmath::vec2(0.0, 0.0), &readout);
+    let canvas = ammo_panel::build_forearm_panel_canvas(&readout);
 
     canvas.render_world_space(
         asset_cache,
