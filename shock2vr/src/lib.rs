@@ -2006,6 +2006,15 @@ impl App {
         input_context: &input_context::InputContext,
         action_state: &mut input::InputActionState,
     ) {
+        // The arm-height comfort offset is applied HERE and nowhere else: this
+        // is the single point every runtime hands an `InputContext` in
+        // through, so the Quest and the debug runtime provably read the same
+        // adjusted hands, and every downstream consumer (interaction, the
+        // rendered glove/sleeve, the forearm HUD panels, the frontend pointer,
+        // teleport) inherits it without its own wiring. Read every frame, so a
+        // `set` from the Developer screen lands on the next one.
+        let input_context =
+            &input_context.with_arm_height_offset(dev_params::get(dev_params::ARM_HEIGHT_OFFSET));
         match self {
             App::Ready(game) => game.update(time, input_context, action_state),
             App::MissingAssets(missing) => missing.update(time, input_context),

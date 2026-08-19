@@ -102,6 +102,21 @@ dev_params! {
     /// deferral). Consequently the debug runtime cannot exercise this knob;
     /// it needs a worn check on device.
     EYE_HEIGHT_OFFSET = float("eye_offset", "Eye height (m)", 0.0, -0.5, 0.5, 0.02),
+    /// Vertical offset applied to BOTH tracked hands, in **meters**, relative
+    /// to a head left where it is - the comfort knob for "my in-game arms do
+    /// not sit where my physical arms do". Deliberately the mirror image of
+    /// [`EYE_HEIGHT_OFFSET`]: that one moves the whole stage (head, hands and
+    /// view together); this one moves *only* the hands.
+    ///
+    /// Applied in [`crate::App::update`], the one place every runtime feeds an
+    /// `InputContext` in, so it lands ahead of every consumer - the interacting
+    /// hand, the rendered glove and sleeve, the forearm HUD panels, the
+    /// frontend pointer and teleport - and lands identically on the Quest and
+    /// in the debug runtime. That placement is the whole point: PR #1027
+    /// rejected an offset wired into an accessor the Quest never reads, which
+    /// the debug runtime then "verified" while it was inert on device. This
+    /// one cannot diverge, because there is only one path.
+    ARM_HEIGHT_OFFSET = float("arm_offset", "Arm height (m)", 0.0, -0.5, 0.5, 0.02),
 }
 
 /// Every parameter with its id, in declaration order.
