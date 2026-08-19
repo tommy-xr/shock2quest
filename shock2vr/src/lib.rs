@@ -454,6 +454,14 @@ pub struct Game {
     /// [`Game::hit_feedback`] hangs its layer from. Kept here rather than
     /// asked of the scene because `render` has no input context.
     head_pose: (Vector3<f32>, Quaternion<f32>),
+
+    /// How wide the host's picture is, in degrees off the view axis, taken
+    /// from the projection it last handed `render_per_eye`. The hit tint is a
+    /// *rim* effect, so it has to know where the picture ends - and only the
+    /// host knows that (a Quest eye is roughly twice a 45-degree flat screen).
+    /// Carried a frame, because `render` runs before `render_per_eye` and the
+    /// projection does not change between them.
+    view_half_field_deg: f32,
 }
 
 /// Player state for debug introspection. Entity ids use `EntityId::inner() as
@@ -1230,6 +1238,7 @@ impl Game {
                 vec3(0.0, input_context::DEFAULT_HEAD_HEIGHT, 0.0),
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
             ),
+            view_half_field_deg: hit_feedback::DEFAULT_HALF_FIELD_DEG,
         }
     }
 
@@ -1818,7 +1827,10 @@ impl Game {
         // in flat and VR - it is view-locked, so only the eye pose differs.
         let (eye_position, eye_forward) =
             hit_feedback::eye_pose(self.head_pose.0, self.head_pose.1);
-        if let Some(mut layer) = self.hit_feedback.render(eye_position, eye_forward) {
+        if let Some(mut layer) =
+            self.hit_feedback
+                .render(self.view_half_field_deg, eye_position, eye_forward)
+        {
             layer.set_transform(pawn_to_world * layer.get_transform());
             scene.push(layer);
         }
@@ -1845,6 +1857,11 @@ impl Game {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) -> Vec<SceneObject> {
+        // Record how wide the host's picture is for the next frame's `render`,
+        // which is where the view-locked hit tint is emitted (see
+        // `hit_feedback::half_field_deg_from_projection`).
+        self.view_half_field_deg = hit_feedback::half_field_deg_from_projection(projection);
+
         // Sample for rendering
         let font = self.asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
         // let text_obj_0_0 =

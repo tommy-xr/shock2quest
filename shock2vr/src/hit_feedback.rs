@@ -30,7 +30,7 @@
 //! and how long it lasts scale with the size of the hit, so chip damage is a
 //! flicker and a shotgun blast is unmistakable.
 
-use cgmath::{Deg, Matrix4, Quaternion, Vector3, vec3};
+use cgmath::{Matrix4, Quaternion, Vector3, vec3};
 use engine::scene::SceneObject;
 
 /// Damage that produces a full-strength tint. The player's authored pool is 30
@@ -67,15 +67,42 @@ const LAYER_DISTANCE: f32 = 0.6;
 /// `pause_menu::WORLD_DIM_EXTENT_RATIO`.
 const LAYER_EXTENT_RATIO: f32 = 5.0;
 
-/// Where the tint starts and where it reaches full strength, as half-angles
-/// off the view axis. Everything inside [`CLEAR_HALF_ANGLE_DEG`] is untouched
-/// - that is the part of the field the player is actually aiming and reading
-/// with. These are shared by both presentations: flat's narrower field of view
-/// simply shows more of the clear centre and less of the rim, which is the
-/// correct behaviour for an effect defined in the player's field of view
-/// rather than in pixels.
-const CLEAR_HALF_ANGLE_DEG: f32 = 26.0;
-const FULL_HALF_ANGLE_DEG: f32 = 52.0;
+/// Where the tint starts and where it reaches full strength, as fractions of
+/// how far the presentation's field of view actually reaches. Everything
+/// inside [`CLEAR_FIELD_FRACTION`] is untouched - that is the part of the
+/// field the player aims and reads with - and the tint is at full strength by
+/// the edge of the picture.
+const CLEAR_FIELD_FRACTION: f32 = 0.5;
+const FULL_FIELD_FRACTION: f32 = 1.0;
+
+/// A sane fallback half-field, in degrees, for the frames before any
+/// projection has been seen: the ~29 degrees both flat runtimes' 45-degree
+/// 4:3 `perspective` gives.
+pub const DEFAULT_HALF_FIELD_DEG: f32 = 29.0;
+
+/// How far the picture reaches sideways from the view axis, read straight off
+/// the projection the host is rendering with.
+///
+/// This is why there is **no per-presentation branch in this module**
+/// (AGENTS.md section 3): a rim effect is only a rim effect relative to where
+/// the picture ends, and flat and VR disagree about that by roughly a factor
+/// of two - both flat runtimes build `perspective(Deg(45.0))` while a Quest
+/// eye reaches about 55 degrees. Hardcoding one angle is what the first cut
+/// did, and it made the tint invisible on flat, with the whole ramp past the
+/// edge of the screen. Hardcoding *two* would then have been a lie in the
+/// debug runtime, whose `--vr` mode renders with the flat 45-degree
+/// projection. Asking the projection is right everywhere, including on a
+/// headset whose per-eye frustum is asymmetric.
+///
+/// For any perspective or off-axis frustum, `m[0][0]` is `2n / (r - l)`, so
+/// its reciprocal is the tangent of half the horizontal extent.
+pub fn half_field_deg_from_projection(projection: Matrix4<f32>) -> f32 {
+    let m00 = projection.x.x;
+    if !m00.is_finite() || m00 <= 0.0 {
+        return DEFAULT_HALF_FIELD_DEG;
+    }
+    (1.0 / m00).atan().to_degrees().clamp(5.0, 85.0)
+}
 
 /// Convert a half-angle off the view axis into the shader's radius units,
 /// where 1.0 is the middle of the quad's edge.
@@ -100,20 +127,31 @@ pub fn duration_secs(damage: f32) -> f32 {
 
 /// The schema the player grunts with, by how hard they were hit.
 ///
-/// These are the original game's own player-voice schemas (`SPEECH_PLAYER` ->
-/// `smallouch` / `medouch` / `bigouch`); they carry no environmental-sound
-/// tags, so they are addressed by name the way the retail scripts did rather
-/// than through an `EnvSoundQuery` (verified: `dark_query sound
-/// +creaturetype:player` and `+event:hit` both match nothing). The thresholds
-/// themselves are a port choice - the retail cutoffs were inside compiled
+/// These are the shipped gamesys's own player-damage schemas, resolving to the
+/// `dmgenlo*` / `dmgenme*` / `dmgenhi*` samples in `res/snd/PDamage` - the
+/// original game's player pain grunts. They are addressed **by name**, the way
+/// the retail scripts did, because they carry no environmental-sound tags:
+/// `dark_query sound +creaturetype:player` and `+event:hit` both match
+/// nothing, so an `EnvSoundQuery` cannot reach them.
+///
+/// Two traps are recorded here so nobody re-walks them. First, the obvious
+/// candidates - the `SPEECH_PLAYER` schemas `smallouch` / `medouch` /
+/// `bigouch` - are **dead**: they resolve, but to `pdamlo*` / `pdammed*` /
+/// `pdamhi*` samples that ship in no `.kpf`, so wiring them plays silence.
+/// Second, `PDamage` also holds damage-*type* sets (`dam_bullet_*`,
+/// `dam_elec_*`, `dam_rad_*`, ...); the port does not carry a damage type
+/// through `AdjustHitPoints`, so the generic set is the honest choice, and
+/// picking a type-specific one is the natural follow-up once it does.
+///
+/// The thresholds are a port choice - the retail cutoffs lived in compiled
 /// script - chosen against the player's 30-point pool.
 pub fn hurt_schema(damage: f32) -> &'static str {
     if damage < 5.0 {
-        "smallouch"
+        "dam_gen_lo"
     } else if damage < 12.0 {
-        "medouch"
+        "dam_gen_med"
     } else {
-        "bigouch"
+        "dam_gen_hi"
     }
 }
 
@@ -174,9 +212,11 @@ impl HitFeedback {
     /// `eye_position` and `eye_forward` are in the same space the returned
     /// object is consumed in - `Game` builds them in pawn space and maps the
     /// result with its pawn-to-world transform, exactly as it does for the
-    /// pause panel.
+    /// pause panel. `half_field_deg` comes from the host's own projection -
+    /// see [`half_field_deg_from_projection`].
     pub fn render(
         &self,
+        half_field_deg: f32,
         eye_position: Vector3<f32>,
         eye_forward: Vector3<f32>,
     ) -> Option<SceneObject> {
@@ -184,7 +224,12 @@ impl HitFeedback {
         if intensity <= 0.0 {
             return None;
         }
-        Some(hit_layer(eye_position, eye_forward, intensity))
+        Some(hit_layer(
+            half_field_deg,
+            eye_position,
+            eye_forward,
+            intensity,
+        ))
     }
 }
 
@@ -199,16 +244,23 @@ impl HitFeedback {
 /// us. For the same reason it does not opt into backface culling - the hosts
 /// also disagree about winding, and a culled half was the original #1020 bug.
 ///
-/// Because it is view-locked and defined by an angular ratio, the *same* code
-/// serves flat and VR: the eye pose differs, nothing else does.
-fn hit_layer(eye_position: Vector3<f32>, eye_forward: Vector3<f32>, intensity: f32) -> SceneObject {
+/// Because it is view-locked, the *same* code serves flat and VR: the eye pose
+/// differs, and the ramp is mapped onto whatever field of view the host is
+/// actually rendering (see [`half_field_deg_from_projection`]). Nothing else
+/// does.
+fn hit_layer(
+    half_field: f32,
+    eye_position: Vector3<f32>,
+    eye_forward: Vector3<f32>,
+    intensity: f32,
+) -> SceneObject {
     let extent = LAYER_DISTANCE * LAYER_EXTENT_RATIO;
     let mut object = SceneObject::new(
         engine::scene::vignette_material::create(
             TINT_COLOR,
             intensity,
-            radius_at_half_angle(CLEAR_HALF_ANGLE_DEG),
-            radius_at_half_angle(FULL_HALF_ANGLE_DEG),
+            radius_at_half_angle(half_field * CLEAR_FIELD_FRACTION),
+            radius_at_half_angle(half_field * FULL_FIELD_FRACTION),
         ),
         Box::new(engine::scene::quad::create()),
     );
@@ -261,15 +313,15 @@ pub fn eye_pose(
 }
 
 /// Only used to document the angular constants in tests.
-#[allow(dead_code)]
-fn half_angle_at_radius(radius: f32) -> Deg<f32> {
-    Deg((radius * LAYER_EXTENT_RATIO).atan().to_degrees())
+#[cfg(test)]
+fn half_angle_at_radius(radius: f32) -> cgmath::Deg<f32> {
+    cgmath::Deg((radius * LAYER_EXTENT_RATIO).atan().to_degrees())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::{InnerSpace, Rotation3, Zero};
+    use cgmath::{Deg, InnerSpace, Rotation3, Zero};
 
     #[test]
     fn nothing_shows_until_something_hits_the_player() {
@@ -277,7 +329,7 @@ mod tests {
         assert_eq!(feedback.intensity(), 0.0);
         assert!(
             feedback
-                .render(Vector3::zero(), vec3(0.0, 0.0, -1.0))
+                .render(VR_HALF_FIELD, Vector3::zero(), vec3(0.0, 0.0, -1.0),)
                 .is_none()
         );
     }
@@ -289,7 +341,7 @@ mod tests {
         assert!(feedback.intensity() > 0.0);
         assert!(
             feedback
-                .render(Vector3::zero(), vec3(0.0, 0.0, -1.0))
+                .render(VR_HALF_FIELD, Vector3::zero(), vec3(0.0, 0.0, -1.0),)
                 .is_some()
         );
 
@@ -304,7 +356,7 @@ mod tests {
         assert_eq!(feedback.intensity(), 0.0);
         assert!(
             feedback
-                .render(Vector3::zero(), vec3(0.0, 0.0, -1.0))
+                .render(VR_HALF_FIELD, Vector3::zero(), vec3(0.0, 0.0, -1.0),)
                 .is_none()
         );
     }
@@ -360,36 +412,89 @@ mod tests {
 
     #[test]
     fn the_hurt_grunt_gets_louder_with_the_hit() {
-        assert_eq!(hurt_schema(1.0), "smallouch");
-        assert_eq!(hurt_schema(8.0), "medouch");
-        assert_eq!(hurt_schema(25.0), "bigouch");
+        assert_eq!(hurt_schema(1.0), "dam_gen_lo");
+        assert_eq!(hurt_schema(8.0), "dam_gen_med");
+        assert_eq!(hurt_schema(25.0), "dam_gen_hi");
     }
+
+    /// A Quest eye reaches about this far off-axis; used to stand in for a
+    /// headset in these tests.
+    const VR_HALF_FIELD: f32 = 55.0;
+    /// What both flat runtimes' `perspective(Deg(45.0))` on 4:3 gives.
+    const FLAT_HALF_FIELD: f32 = 29.0;
 
     /// The whole comfort argument is that the middle of the field is left
     /// alone. If the ramp ever started at the view axis this would be the
     /// full-screen flash the design rejects.
+    ///
+    /// And - the bug that shipped in the first cut and was caught by looking at
+    /// a flat screenshot - the ramp has to land *inside the picture*. Sharing
+    /// one absolute angle across both presentations put flat's whole ramp past
+    /// the edge of a 45-degree screen, so a hit rendered as nothing at all.
     #[test]
-    fn the_middle_of_the_view_is_left_clear() {
-        let inner = radius_at_half_angle(CLEAR_HALF_ANGLE_DEG);
-        assert!(inner > 0.0, "the tint must not start on the view axis");
-        assert!(
-            half_angle_at_radius(inner) > Deg(20.0),
-            "the clear centre must cover the part of the field the player reads with"
+    fn the_tint_lands_inside_the_picture_at_any_field_of_view() {
+        for half_field in [FLAT_HALF_FIELD, VR_HALF_FIELD, 75.0] {
+            let inner = radius_at_half_angle(half_field * CLEAR_FIELD_FRACTION);
+            let outer = radius_at_half_angle(half_field * FULL_FIELD_FRACTION);
+            assert!(
+                inner > 0.0,
+                "{half_field}: the tint must not start on the view axis"
+            );
+            assert!(outer > inner, "{half_field}: the ramp must have width");
+            assert!(
+                half_angle_at_radius(inner) < cgmath::Deg(half_field * 0.75),
+                "{half_field}: the ramp starts too near the edge of the picture to be seen"
+            );
+            assert!(
+                half_angle_at_radius(outer) <= cgmath::Deg(half_field + 1.0),
+                "{half_field}: the tint never reaches full strength inside the picture"
+            );
+        }
+    }
+
+    /// Flat and VR must tint the *same fraction* of the picture - that is what
+    /// "renders identically" means for an effect defined in the field of view
+    /// rather than in pixels.
+    #[test]
+    fn every_field_of_view_tints_the_same_fraction_of_the_picture() {
+        let fractions: Vec<f32> = [FLAT_HALF_FIELD, VR_HALF_FIELD]
+            .into_iter()
+            .map(|half_field| {
+                half_angle_at_radius(radius_at_half_angle(half_field * CLEAR_FIELD_FRACTION)).0
+                    / half_field
+            })
+            .collect();
+        assert!((fractions[0] - fractions[1]).abs() < 1e-3, "{fractions:?}");
+    }
+
+    /// The flat runtimes' own projection must come back out as the flat field.
+    #[test]
+    fn the_field_is_read_off_the_projection_the_host_renders_with() {
+        let flat = cgmath::perspective(cgmath::Deg(45.0), 800.0 / 600.0, 0.1, 1000.0);
+        assert!((half_field_deg_from_projection(flat) - FLAT_HALF_FIELD).abs() < 1.0);
+
+        // A wide headset frustum reports a wide field...
+        let wide = cgmath::perspective(cgmath::Deg(90.0), 1.0, 0.1, 1000.0);
+        assert!(half_field_deg_from_projection(wide) > VR_HALF_FIELD * 0.7);
+
+        // ...and a degenerate matrix falls back instead of producing NaN.
+        assert_eq!(
+            half_field_deg_from_projection(Matrix4::from_scale(0.0)),
+            DEFAULT_HALF_FIELD_DEG
         );
-        assert!(radius_at_half_angle(FULL_HALF_ANGLE_DEG) > inner);
     }
 
     /// #1020's bug in miniature: a layer that relies on the host agreeing
     /// about winding covers only part of the view on the Quest.
     #[test]
     fn the_layer_does_not_depend_on_backface_culling() {
-        let object = hit_layer(Vector3::zero(), vec3(0.0, 0.0, -1.0), 0.5);
+        let object = hit_layer(VR_HALF_FIELD, Vector3::zero(), vec3(0.0, 0.0, -1.0), 0.5);
         assert_eq!(object.backface_culling(), None);
     }
 
     #[test]
     fn the_layer_draws_translucent_and_over_the_world() {
-        let object = hit_layer(Vector3::zero(), vec3(0.0, 0.0, -1.0), 0.5);
+        let object = hit_layer(VR_HALF_FIELD, Vector3::zero(), vec3(0.0, 0.0, -1.0), 0.5);
         let transparency = object
             .effective_transparency()
             .expect("the tint must draw translucent, not opaque");
@@ -413,7 +518,7 @@ mod tests {
             vec3(0.0, 1.0, 0.0).normalize(),
             vec3(-0.5, -0.5, 0.7).normalize(),
         ] {
-            let object = hit_layer(eye, forward, 0.5);
+            let object = hit_layer(VR_HALF_FIELD, eye, forward, 0.5);
             let centre = object.get_transform() * cgmath::vec4(0.0, 0.0, 0.0, 1.0);
             let offset = vec3(centre.x, centre.y, centre.z) - eye;
             assert!(
