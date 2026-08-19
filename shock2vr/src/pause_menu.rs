@@ -21,27 +21,35 @@
 //! paused" rule free: `VirtualHand` is never advanced, so nothing is grabbed,
 //! dropped or fired, and whatever was already held is still held on resume.
 
-use std::collections::HashMap;
-
 use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
-use dark::{
-    importers::{STRINGS_IMPORTER, UI_LAYOUT_IMPORTER},
-    map::MapRect,
-};
+#[cfg(test)]
+use dark::map::MapRect;
 use engine::{
     assets::asset_cache::AssetCache,
+    audio::AudioContext,
     scene::{SceneObject, color_material, quad},
 };
+use shipyard::EntityId;
 
 use crate::{
     GameOptions, PresentationMode,
-    input_context::{InputContext, Pointer2D},
+    input_context::InputContext,
     ui::{
-        FrontendPanelAnchor, FrontendPointerPass, HAlign, PointerVisuals, Rect, ScaleMode,
-        UiCanvas, VAlign, VR_COMPONENT_Z_STEP, WorldPanel, dev_params_panel,
-        frontend_panel_distance, pointer_to_canvas, vr_frontend_pointer_pass,
+        FrontendMenu, FrontendMenuItem, HAlign, Rect, ScaleMode, UiCanvas, VAlign, WorldPanel,
+        dev_params_panel, frontend_panel_distance, hit_menu_item,
     },
 };
+
+#[cfg(test)]
+use crate::{
+    input_context::Pointer2D,
+    ui::{
+        resolve_click_at as shell_resolve_click_at, resolve_flat_click, resolve_menu_labels,
+        resolve_menu_rects, vr_frontend_pointer_pass,
+    },
+};
+#[cfg(test)]
+use std::collections::HashMap;
 
 /// The screen is authored on the original 640x480 `SIM.PCX` canvas.
 const CANVAS_W: f32 = 640.0;
@@ -268,38 +276,29 @@ enum PauseMenuEntry {
     Developer,
 }
 
-struct MenuItem {
-    /// Key into `SIM.STR`.
-    string_key: &'static str,
-    /// Label used when `SIM.STR` is absent or missing the key. These match the
-    /// shipped English strings.
-    fallback_label: &'static str,
-    /// `None` for an entry that exists on the original screen but that the port
-    /// does not implement yet - drawn dimmed, and not clickable.
-    action: Option<PauseMenuEntry>,
-    /// Label drawn instead of the string-table text (and the fallback). Used
-    /// by the Developer entry, which repurposes the inert Options slot - see
-    /// the identical field on the main menu's `MenuItem`.
-    label_override: Option<&'static str>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PauseMenuTarget {
+    Root(PauseMenuEntry),
+    Developer(dev_params_panel::DevParamsEvent),
 }
 
 // `SIM.PCX` (native 640x480) has a vertical stack of five buttons down the
 // right side. This list is in screen order, top to bottom, so an item's index
 // is also its rect index in `SIMR.BIN`.
-const MENU_ITEMS: &[MenuItem] = &[
-    MenuItem {
+const MENU_ITEMS: &[FrontendMenuItem<PauseMenuEntry>] = &[
+    FrontendMenuItem {
         string_key: "continue",
         fallback_label: "Continue",
         action: Some(PauseMenuEntry::Action(PauseAction::Resume)),
         label_override: None,
     },
-    MenuItem {
+    FrontendMenuItem {
         string_key: "save_game",
         fallback_label: "Save Game",
         action: None,
         label_override: None,
     },
-    MenuItem {
+    FrontendMenuItem {
         string_key: "load_game",
         fallback_label: "Load Game",
         action: None,
@@ -307,13 +306,13 @@ const MENU_ITEMS: &[MenuItem] = &[
     },
     // The Options slot hosts the Developer page while no real options screen
     // exists, matching the main menu's slot.
-    MenuItem {
+    FrontendMenuItem {
         string_key: "options",
         fallback_label: "Options",
         action: Some(PauseMenuEntry::Developer),
         label_override: Some("Developer"),
     },
-    MenuItem {
+    FrontendMenuItem {
         string_key: "quit",
         fallback_label: "Quit to \\nMain Menu",
         action: Some(PauseMenuEntry::Action(PauseAction::QuitToMainMenu)),
@@ -321,48 +320,51 @@ const MENU_ITEMS: &[MenuItem] = &[
     },
 ];
 
+const FALLBACK_RECTS: [Rect; 5] = [
+    Rect::new(
+        FALLBACK_BUTTON_X,
+        FALLBACK_BUTTON_TOP,
+        FALLBACK_BUTTON_W,
+        FALLBACK_BUTTON_H,
+    ),
+    Rect::new(
+        FALLBACK_BUTTON_X,
+        FALLBACK_BUTTON_TOP + FALLBACK_BUTTON_PITCH,
+        FALLBACK_BUTTON_W,
+        FALLBACK_BUTTON_H,
+    ),
+    Rect::new(
+        FALLBACK_BUTTON_X,
+        FALLBACK_BUTTON_TOP + 2.0 * FALLBACK_BUTTON_PITCH,
+        FALLBACK_BUTTON_W,
+        FALLBACK_BUTTON_H,
+    ),
+    Rect::new(
+        FALLBACK_BUTTON_X,
+        FALLBACK_BUTTON_TOP + 3.0 * FALLBACK_BUTTON_PITCH,
+        FALLBACK_BUTTON_W,
+        FALLBACK_BUTTON_H,
+    ),
+    Rect::new(
+        FALLBACK_BUTTON_X,
+        FALLBACK_BUTTON_TOP + 4.0 * FALLBACK_BUTTON_PITCH,
+        FALLBACK_BUTTON_W,
+        FALLBACK_BUTTON_H,
+    ),
+];
+
 /// Resolve each menu item's canvas rect from the `SIMR.BIN` layout (falling
 /// back to the vanilla geometry if it's absent). Parallel to [`MENU_ITEMS`].
+#[cfg(test)]
 fn menu_rects(layout: Option<&[MapRect]>) -> Vec<Rect> {
-    MENU_ITEMS
-        .iter()
-        .enumerate()
-        .map(
-            |(index, _)| match layout.and_then(|rects| rects.get(index)) {
-                Some(r) => Rect::new(
-                    r.ul_x as f32,
-                    r.ul_y as f32,
-                    r.width() as f32,
-                    r.height() as f32,
-                ),
-                None => Rect::new(
-                    FALLBACK_BUTTON_X,
-                    FALLBACK_BUTTON_TOP + index as f32 * FALLBACK_BUTTON_PITCH,
-                    FALLBACK_BUTTON_W,
-                    FALLBACK_BUTTON_H,
-                ),
-            },
-        )
-        .collect()
+    resolve_menu_rects(layout, &FALLBACK_RECTS)
 }
 
 /// Resolve each menu item's label from `SIM.STR`, falling back to the shipped
 /// English text when the string table is absent. Parallel to [`MENU_ITEMS`].
+#[cfg(test)]
 fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
-    MENU_ITEMS
-        .iter()
-        .map(|item| {
-            if let Some(label) = item.label_override {
-                return label.to_owned();
-            }
-            strings
-                // The strings importer lowercases its keys.
-                .and_then(|s| s.get(item.string_key))
-                .filter(|label| !label.is_empty())
-                .cloned()
-                .unwrap_or_else(|| item.fallback_label.to_owned())
-        })
-        .collect()
+    resolve_menu_labels(strings, MENU_ITEMS)
 }
 
 /// Split a shipped label into the lines it asks for. `SIM.STR`'s quit entry is
@@ -382,55 +384,33 @@ fn label_lines(label: &str) -> Vec<&str> {
 /// highlight go through this, so the two can never disagree about where an
 /// entry is - or about which entries are live at all.
 fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<PauseMenuEntry> {
-    let mut canvas = UiCanvas::<PauseMenuEntry>::with_events(vec2(CANVAS_W, CANVAS_H));
-    for (item, rect) in MENU_ITEMS.iter().zip(rects) {
-        // Unimplemented entries get no hit region at all, so a click over one
-        // falls through as "nothing was clicked".
-        if let Some(action) = item.action {
-            canvas.button(*rect, "", action);
+    hit_menu_item(point, MENU_ITEMS, rects, |_| true)
+}
+
+fn target_at(
+    page: PauseMenuPage,
+    panel_rects: dev_params_panel::PanelRects,
+    rects: &[Rect],
+    point: Vector2<f32>,
+) -> Option<PauseMenuTarget> {
+    match page {
+        PauseMenuPage::Root => hit(point, rects).map(PauseMenuTarget::Root),
+        PauseMenuPage::Developer => {
+            dev_params_panel::hit(panel_rects, point).map(PauseMenuTarget::Developer)
         }
     }
-    canvas.click_at(point)
 }
 
 /// Shared click core: both presentations reduce to "a point on the canvas plus
 /// a pressed flag", so the rising-edge rule and the hit regions live here once.
+#[cfg(test)]
 fn resolve_click_at(
     point: Option<Vector2<f32>>,
     pressed: bool,
     last_pressed: bool,
     rects: &[Rect],
 ) -> (Option<PauseMenuEntry>, bool) {
-    if !pressed || last_pressed {
-        return (None, pressed);
-    }
-    (point.and_then(|p| hit(p, rects)), pressed)
-}
-
-/// Reduce the flat pointer to "a point on the canvas plus a pressed flag" -
-/// the same shape the VR pointer pass yields, so the page routing above them
-/// is shared. No pointer this frame is not a release: on desktop the cursor
-/// is captured for mouse-look until `wants_pointer` flips it on, so the frame
-/// the menu opens has no pointer at all. Clearing the guard there would
-/// re-arm the click edge under a still-held button, hence `last_pressed`
-/// carries through.
-fn flat_pointer_state(
-    pointer: Option<Pointer2D>,
-    last_pressed: bool,
-    screen_size: Vector2<f32>,
-) -> (Option<Vector2<f32>>, bool) {
-    match pointer {
-        Some(p) => (
-            pointer_to_canvas(
-                vec2(CANVAS_W, CANVAS_H),
-                p.position,
-                screen_size,
-                SCALE_MODE,
-            ),
-            p.pressed,
-        ),
-        None => (None, last_pressed),
-    }
+    shell_resolve_click_at(point, pressed, last_pressed, |point| hit(point, rects))
 }
 
 /// Pure click resolution for the flat pointer on the root page: on a rising
@@ -444,9 +424,14 @@ fn resolve_click(
     screen_size: Vector2<f32>,
     rects: &[Rect],
 ) -> (Option<PauseMenuEntry>, bool, Option<Vector2<f32>>) {
-    let (point, pressed) = flat_pointer_state(pointer, last_pressed, screen_size);
-    let (action, pressed) = resolve_click_at(point, pressed, last_pressed, rects);
-    (action, pressed, point)
+    resolve_flat_click(
+        pointer,
+        last_pressed,
+        screen_size,
+        vec2(CANVAS_W, CANVAS_H),
+        SCALE_MODE,
+        |point| hit(point, rects),
+    )
 }
 
 /// The pause overlay. Closed by default; [`PauseMenu::open`] arms it.
@@ -454,28 +439,11 @@ pub struct PauseMenu {
     open: bool,
     /// Which page the overlay is showing; reset to the root on every open.
     page: PauseMenuPage,
-    /// Pointer from the latest update, used for hover highlighting in render.
-    pointer: Option<Pointer2D>,
-    /// Where the VR controller ray last met the panel, in canvas pixels.
-    vr_pointer_canvas: Option<Vector2<f32>>,
-    /// The pointer pass that hit-tested this frame, kept so `render` draws the
-    /// beams and dot from the very rays `update` resolved the highlight from.
-    vr_pointer: FrontendPointerPass,
-    /// The drawn half of that pointer (hands, beams, dot), holding the lazily
-    /// loaded glove model.
-    vr_pointer_visuals: PointerVisuals,
-    /// Where the VR panel hangs: placed from the head when the menu opens and
-    /// world-locked after that, so `render` draws it where `update` hit-tested.
-    panel_anchor: FrontendPanelAnchor,
+    menu: FrontendMenu<PauseMenuTarget>,
     /// The head pose from the latest update. The panel is world-locked, but the
     /// comfort dim follows the gaze, so it needs the live pose rather than the
     /// placement (see [`world_dim_layer`]).
     head: (Vector3<f32>, Quaternion<f32>),
-    /// Whether the pointer was pressed last frame (for rising-edge clicks).
-    last_pressed: bool,
-    /// Screen size from the latest render, so `update` maps the flat pointer
-    /// into canvas space consistently with how the canvas is drawn.
-    last_screen_size: Vector2<f32>,
     /// Set when a click closed the menu, and cleared once that click is
     /// released. See [`PauseMenu::suspends_scene`].
     closed_under_a_held_press: bool,
@@ -495,17 +463,11 @@ impl PauseMenu {
         Self {
             open: false,
             page: PauseMenuPage::Root,
-            pointer: None,
-            vr_pointer_canvas: None,
-            vr_pointer: FrontendPointerPass::default(),
-            vr_pointer_visuals: PointerVisuals::new(),
-            panel_anchor: FrontendPanelAnchor::new(),
+            menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
             head: (
                 Vector3::new(0.0, 0.0, 0.0),
                 Quaternion::new(0.0, 0.0, 0.0, 0.0),
             ),
-            last_pressed: true,
-            last_screen_size: vec2(CANVAS_W, CANVAS_H),
             closed_under_a_held_press: false,
             panel_rects: dev_params_panel::PanelRects::default(),
         }
@@ -556,15 +518,11 @@ impl PauseMenu {
         // Always land on the root page: reopening straight onto a parameter
         // list the player forgot they left would read as a broken menu.
         self.page = PauseMenuPage::Root;
-        self.panel_anchor = FrontendPanelAnchor::new();
+        self.menu.reset_on_entry();
         // Forget the previous session's head: if `render` runs before the first
         // `update` of this one, a stale pose would hang the dim where the player
         // was standing last time. Untracked takes the panel fallback instead.
         self.head = UNTRACKED_HEAD;
-        self.pointer = None;
-        self.vr_pointer_canvas = None;
-        self.vr_pointer = FrontendPointerPass::default();
-        self.last_pressed = true;
     }
 
     /// Close because an entry was clicked - the press that did it is still
@@ -576,9 +534,19 @@ impl PauseMenu {
 
     pub fn close(&mut self) {
         self.open = false;
-        self.pointer = None;
-        self.vr_pointer_canvas = None;
-        self.vr_pointer = FrontendPointerPass::default();
+        self.menu.clear_pointer();
+    }
+
+    pub fn pump_sfx(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        audio_context: &mut AudioContext<EntityId, String>,
+    ) {
+        self.menu.pump_sfx(asset_cache, audio_context);
+    }
+
+    pub fn stop_sfx(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        self.menu.stop_sfx(audio_context);
     }
 
     /// Advance the overlay and report the entry that was clicked, if any.
@@ -600,37 +568,16 @@ impl PauseMenu {
         self.panel_rects = dev_params_panel::rects(asset_cache);
         self.head = (input_context.head.position, input_context.head.rotation);
 
-        // Placed from the head when the menu opens and world-locked after
-        // that; advancing it here keeps the ray and the render agreeing on
-        // where the panel is, in either presentation.
-        let panel = self.panel_anchor.update(
-            input_context.head.position,
-            input_context.head.rotation,
+        let page = self.page;
+        let panel_rects = self.panel_rects;
+        let target = self.menu.update(
             elapsed,
+            input_context,
+            options.presentation_mode,
+            |point| target_at(page, panel_rects, &rects, point),
+            |point| target_at(page, panel_rects, &rects, point),
         );
-
-        // Both presentations reduce to "a point on the canvas plus a pressed
-        // flag"; which page consumes the click is decided after.
-        let (point, pressed) = if options.presentation_mode == PresentationMode::Vr {
-            // VR has no 2D cursor: the pointer is where a controller ray meets
-            // the panel, and the trigger is the button.
-            self.vr_pointer =
-                vr_frontend_pointer_pass(input_context, vec2(CANVAS_W, CANVAS_H), &panel);
-            let (point, pressed) = (self.vr_pointer.point(), self.vr_pointer.pressed);
-            self.vr_pointer_canvas = point;
-            self.pointer = None;
-            (point, pressed)
-        } else {
-            self.pointer = input_context.pointer;
-            self.vr_pointer = FrontendPointerPass::default();
-            flat_pointer_state(
-                input_context.pointer,
-                self.last_pressed,
-                self.last_screen_size,
-            )
-        };
-
-        self.consume_pointer(point, pressed, &rects)
+        self.handle_target(target)
     }
 
     /// Route one frame's resolved pointer state to whichever page is showing,
@@ -643,28 +590,29 @@ impl PauseMenu {
     /// press that leaves the Developer page could otherwise land on Quit the
     /// very next frame. Whichever page consumes the click stores the pressed
     /// flag, so the next frame's rising edge is already spent.
+    #[cfg(test)]
     fn consume_pointer(
         &mut self,
         point: Option<Vector2<f32>>,
         pressed: bool,
         rects: &[Rect],
     ) -> Option<PauseAction> {
-        match self.page {
-            PauseMenuPage::Root => {
-                let (entry, last_pressed) =
-                    resolve_click_at(point, pressed, self.last_pressed, rects);
-                self.last_pressed = last_pressed;
-                self.handle_root_entry(entry)
-            }
-            PauseMenuPage::Developer => {
-                // Same rising-edge rule as the root, over the shared panel's
-                // hit regions instead of the entry rects.
-                let event = (pressed && !self.last_pressed)
-                    .then(|| point.and_then(|p| dev_params_panel::hit(self.panel_rects, p)))
-                    .flatten();
-                self.last_pressed = pressed;
-                self.handle_developer_event(event)
-            }
+        let page = self.page;
+        let panel_rects = self.panel_rects;
+        let target = self.menu.resolve_pointer(
+            point,
+            pressed,
+            |point| target_at(page, panel_rects, rects, point),
+            |point| target_at(page, panel_rects, rects, point),
+        );
+        self.handle_target(target)
+    }
+
+    fn handle_target(&mut self, target: Option<PauseMenuTarget>) -> Option<PauseAction> {
+        match target {
+            Some(PauseMenuTarget::Root(entry)) => self.handle_root_entry(Some(entry)),
+            Some(PauseMenuTarget::Developer(event)) => self.handle_developer_event(Some(event)),
+            None => None,
         }
     }
 
@@ -716,8 +664,8 @@ impl PauseMenu {
         if !self.open || options.presentation_mode != PresentationMode::Vr {
             return Vec::new();
         }
-        let panel = self.panel_anchor.panel();
-        let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
+        let panel = self.menu.panel();
+        let canvas = self.build_canvas(asset_cache, self.menu.pointer_canvas());
         // First in the list, and therefore first in the overlay group: the
         // comfort dim, which the depth clear below rides on.
         let (dim_position, dim_forward) = dim_pose(self.head.0, self.head.1, &panel);
@@ -726,27 +674,13 @@ impl PauseMenu {
             dim_forward,
             dim_distance(dim_position, &panel),
         )];
-        let canvas_objects = canvas.render_world_space(
-            asset_cache,
-            panel.transform(),
-            self.vr_pointer_canvas,
-            None,
-            VR_COMPONENT_Z_STEP,
-        );
+        let canvas_objects = self.menu.render_world_space(asset_cache, canvas);
         // The controllers and their aim rays, drawn from the same pass that
         // resolved the highlight, so the beams can never promise a hover the
         // menu will not give. The canvas objects already in hand are the layer
         // stack the hit dot has to float clear of - the dim is not one of them,
         // it hangs behind the panel rather than on it.
-        let panel_layers = canvas_objects.len();
         objects.extend(canvas_objects);
-        objects.extend(self.vr_pointer_visuals.render(
-            asset_cache,
-            &self.vr_pointer,
-            vec2(CANVAS_W, CANVAS_H),
-            &panel,
-            panel_layers,
-        ));
         // Everything above was built in the tracked play space (where the head,
         // the hands and therefore the panel anchor live). A frontend *scene*
         // has no pawn, so it renders that space directly; the pause menu hangs
@@ -770,25 +704,17 @@ impl PauseMenu {
         screen_size: Vector2<f32>,
         options: &GameOptions,
     ) -> Vec<SceneObject> {
-        self.last_screen_size = screen_size;
         if !self.open || options.presentation_mode == PresentationMode::Vr {
             return Vec::new();
         }
-        let pointer_canvas = self.pointer.and_then(|p| {
-            pointer_to_canvas(
-                vec2(CANVAS_W, CANVAS_H),
-                p.position,
-                screen_size,
-                SCALE_MODE,
-            )
-        });
+        let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
         let canvas = self.build_canvas(asset_cache, pointer_canvas);
-        canvas.render_screen_space(asset_cache, screen_size, SCALE_MODE)
+        self.menu
+            .render_screen_space(asset_cache, canvas, screen_size)
     }
 
     fn rects(&self, asset_cache: &mut AssetCache) -> Vec<Rect> {
-        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
-        menu_rects(layout.as_deref().map(|r| r.as_slice()))
+        self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS)
     }
 
     /// The menu, described once. Screen-space and world-space presentation
@@ -824,8 +750,7 @@ impl PauseMenu {
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
         let rects = self.rects(asset_cache);
-        let strings = asset_cache.get_opt(&STRINGS_IMPORTER, LABELS_FILE);
-        let labels = menu_labels(strings.as_deref());
+        let labels = self.menu.labels(asset_cache, LABELS_FILE, MENU_ITEMS);
         // The highlight resolves through the very same `hit` the click does, so
         // an entry can never light up under a ray that would not activate it.
         let hovered = pointer_canvas.and_then(|p| hit(p, &rects));
@@ -984,7 +909,7 @@ mod tests {
         menu.handle_root_entry(Some(PauseMenuEntry::Developer));
         assert_eq!(menu.page, PauseMenuPage::Developer);
         // Nothing pressed yet, so the next frame is a genuine rising edge.
-        menu.last_pressed = false;
+        menu.menu.set_last_pressed(false);
 
         // Frame 1: press on "Done" - the page turns back to the root.
         assert_eq!(menu.consume_pointer(Some(done), true, &rects), None);
@@ -1014,14 +939,14 @@ mod tests {
         let rects = menu_rects(None);
         let mut menu = PauseMenu::new();
         menu.open();
-        menu.last_pressed = false;
+        menu.menu.set_last_pressed(false);
 
         let developer = rects[OPTIONS_INDEX].center();
         assert_eq!(menu.consume_pointer(Some(developer), true, &rects), None);
         assert_eq!(menu.page, PauseMenuPage::Developer);
         // Still held on the next frame: the edge is already spent, so no
         // panel event is resolved at all.
-        assert!(menu.last_pressed);
+        assert!(menu.menu.last_pressed());
         assert_eq!(menu.consume_pointer(Some(developer), true, &rects), None);
         assert_eq!(menu.page, PauseMenuPage::Developer);
     }
@@ -1181,7 +1106,7 @@ mod tests {
         );
         let (point, pressed) = (pass.point(), pass.pressed);
         assert!(pressed);
-        let (action, last) = resolve_click_at(point, pressed, menu.last_pressed, &rects);
+        let (action, last) = resolve_click_at(point, pressed, true, &rects);
         assert_eq!(action, None, "a carried-over press must not quit the run");
 
         // Releasing and pressing again is a real click.

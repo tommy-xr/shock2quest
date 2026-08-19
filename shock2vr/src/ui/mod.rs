@@ -32,14 +32,23 @@ use shipyard::EntityId;
 use crate::vr_config::Handedness;
 
 pub mod dev_params_panel;
+mod frontend_menu;
 mod frontend_pointer;
+mod frontend_sfx;
 mod panel_anchor;
 mod pointer_visual;
+#[cfg(test)]
+pub use frontend_menu::resolve_flat_click;
+pub use frontend_menu::{
+    FrontendMenu, FrontendMenuItem, flat_pointer_state, hit_menu_item, resolve_click_at,
+    resolve_menu_label, resolve_menu_labels, resolve_menu_rects,
+};
 #[cfg(test)]
 pub use frontend_pointer::test_support;
 pub use frontend_pointer::{
     FrontendPointerPass, FrontendRay, VR_TRIGGER_THRESHOLD, vr_frontend_pointer_pass,
 };
+pub use frontend_sfx::FrontendSfx;
 pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
 pub use pointer_visual::PointerVisuals;
 

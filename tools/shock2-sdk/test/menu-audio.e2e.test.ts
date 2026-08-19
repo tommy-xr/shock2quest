@@ -35,6 +35,11 @@ async function playedSince(game: GameServer, since: number): Promise<string[]> {
   return (await played(game)).filter((s) => s.sequence > since).map((s) => s.sample);
 }
 
+async function frontendSoundsSince(game: GameServer, since: number): Promise<string[]> {
+  const frontend = new Set([HUM, ROLLOVER, SELECT]);
+  return (await playedSince(game, since)).filter((sample) => frontend.has(sample));
+}
+
 async function lastSequence(game: GameServer): Promise<number> {
   const sounds = await played(game);
   return sounds.length === 0 ? 0 : sounds[sounds.length - 1].sequence;
@@ -174,6 +179,43 @@ test(
       (await played(game)).filter((s) => s.sample === HUM).length,
       1,
       "and it must not restart under the mission",
+    );
+  },
+);
+
+test(
+  "the pause overlay uses the same hum, rollover and select lifecycle",
+  { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run" },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_minimal", port: 8125 });
+    await game.step({ frames: 10 });
+
+    // Open over empty backdrop so the bed can be observed separately from a
+    // rollover. Before the shared shell, PauseMenu owned no FrontendSfx at all.
+    await game.input.set("pointer.position", NOTHING);
+    let since = await lastSequence(game);
+    await game.input.trigger("TogglePauseMenu");
+    await game.step({ frames: 10 });
+    assert.deepEqual(await frontendSoundsSince(game, since), [HUM]);
+    const bed = (await played(game)).find((sound) => sound.sample === HUM);
+    assert.ok(bed, "the pause menu should own a looping bed");
+
+    since = await lastSequence(game);
+    await hover(game, NEW_GAME_ENTRY); // pause row 0 occupies the same canvas slot
+    assert.deepEqual(await frontendSoundsSince(game, since), [ROLLOVER]);
+
+    since = await lastSequence(game);
+    await game.input.set("pointer.pressed", 1);
+    await game.step({ frames: 3 });
+    await game.input.set("pointer.pressed", 0);
+    await game.step({ frames: 3 });
+    assert.deepEqual(await frontendSoundsSince(game, since), [SELECT]);
+    assert.equal((await game.info()).paused, false, "Continue should close the overlay");
+
+    const stoppedBed = (await played(game)).find((sound) => sound.sequence === bed.sequence);
+    assert.ok(
+      stoppedBed && stoppedBed.stopped_at_sim_time !== null,
+      "the pause bed must stop when the overlay closes",
     );
   },
 );

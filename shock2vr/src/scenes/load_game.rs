@@ -10,10 +10,9 @@
 //! same backdrop and layout, but offering only the single most recent save.
 
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
-use dark::{
-    importers::{STRINGS_IMPORTER, UI_LAYOUT_IMPORTER},
-    map::MapRect,
-};
+use dark::importers::STRINGS_IMPORTER;
+#[cfg(test)]
+use dark::map::MapRect;
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
@@ -25,15 +24,20 @@ use std::collections::HashMap;
 use crate::{
     GameOptions, PresentationMode,
     game_scene::GameScene,
-    input_context::{InputContext, Pointer2D},
+    input_context::InputContext,
     mission::GlobalContext,
     save_load::{SaveFile, all_saves},
-    scenes::frontend_sfx::FrontendSfx,
     scripts::{Effect, GlobalEffect},
     time::Time,
+    ui::{FrontendMenu, HAlign, Rect, ScaleMode, UiCanvas, VAlign, resolve_menu_label},
+};
+
+#[cfg(test)]
+use crate::{
+    input_context::Pointer2D,
     ui::{
-        FrontendPanelAnchor, FrontendPointerPass, HAlign, PointerVisuals, Rect, ScaleMode,
-        UiCanvas, VAlign, VR_COMPONENT_Z_STEP, pointer_to_canvas, vr_frontend_pointer_pass,
+        resolve_click_at as shell_resolve_click_at, resolve_flat_click, resolve_menu_rects,
+        vr_frontend_pointer_pass,
     },
 };
 
@@ -125,30 +129,15 @@ enum LoadGameAction {
 
 /// Resolve the screen's widget rects from `GAMELODR.BIN`, falling back to the
 /// decoded values when it is absent.
-fn screen_rects(layout: Option<&[MapRect]>) -> [Rect; 4] {
-    let mut rects = FALLBACK_RECTS;
-    for (index, rect) in rects.iter_mut().enumerate() {
-        if let Some(r) = layout.and_then(|rects| rects.get(index)) {
-            *rect = Rect::new(
-                r.ul_x as f32,
-                r.ul_y as f32,
-                r.width() as f32,
-                r.height() as f32,
-            );
-        }
-    }
-    rects
+#[cfg(test)]
+fn screen_rects(layout: Option<&[MapRect]>) -> Vec<Rect> {
+    resolve_menu_rects(layout, &FALLBACK_RECTS)
 }
 
 /// Look a label up in `GAMELOD.STR`, falling back to the shipped English text
 /// when the table (or the key) is missing, or the value is empty.
 fn label(strings: Option<&HashMap<String, String>>, key: &str, fallback: &str) -> String {
-    strings
-        // The strings importer lowercases its keys.
-        .and_then(|s| s.get(key))
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .unwrap_or_else(|| fallback.to_owned())
+    resolve_menu_label(strings, key, fallback)
 }
 
 /// How many save rows fit in the list rect, stopping at the backdrop's painted
@@ -183,59 +172,47 @@ fn row_text_rect(list: Rect, index: usize) -> Rect {
 
 /// Shared click core: both presentations reduce to "a point on the canvas plus
 /// a pressed flag", so the rising-edge rule and the hit regions live here once.
+#[cfg(test)]
 fn resolve_click_at(
     point: Option<Vector2<f32>>,
     pressed: bool,
     last_pressed: bool,
-    rects: &[Rect; 4],
+    rects: &[Rect],
     visible_saves: usize,
     has_selection: bool,
 ) -> (Option<LoadGameAction>, bool) {
-    if !pressed || last_pressed {
-        return (None, pressed);
-    }
-    (
-        point.and_then(|c| hit(c, rects, visible_saves, has_selection)),
-        pressed,
-    )
+    shell_resolve_click_at(point, pressed, last_pressed, |point| {
+        hit(point, rects, visible_saves, has_selection)
+    })
 }
 
 /// Pure click resolution: on a rising press edge, map the pointer to whatever
 /// it is over - a save row, "Load" (only when a save is selected), or "Done".
 /// Also returns the new `last_pressed` to track for the next frame.
+#[cfg(test)]
 fn resolve_click(
     pointer: Option<Pointer2D>,
     last_pressed: bool,
     screen_size: Vector2<f32>,
-    rects: &[Rect; 4],
+    rects: &[Rect],
     visible_saves: usize,
     has_selection: bool,
 ) -> (Option<LoadGameAction>, bool, Option<Vector2<f32>>) {
-    let Some(p) = pointer else {
-        return (None, false, None);
-    };
-    let canvas_point = pointer_to_canvas(
-        vec2(CANVAS_W, CANVAS_H),
-        p.position,
-        screen_size,
-        SCALE_MODE,
-    );
-    let (action, pressed) = resolve_click_at(
-        canvas_point,
-        p.pressed,
+    resolve_flat_click(
+        pointer,
         last_pressed,
-        rects,
-        visible_saves,
-        has_selection,
-    );
-    (action, pressed, canvas_point)
+        screen_size,
+        vec2(CANVAS_W, CANVAS_H),
+        SCALE_MODE,
+        |point| hit(point, rects, visible_saves, has_selection),
+    )
 }
 
 /// What is at a canvas point: a save row, "Load" (only with a selection), or
 /// "Done". Shared by the click and the rollover sound so the two always agree.
 fn hit(
     point: Vector2<f32>,
-    rects: &[Rect; 4],
+    rects: &[Rect],
     visible_saves: usize,
     has_selection: bool,
 ) -> Option<LoadGameAction> {
@@ -259,29 +236,7 @@ pub struct LoadGameScene {
     saves: Vec<SaveFile>,
     /// Index into [`Self::saves`] of the highlighted row, if any.
     selected: Option<usize>,
-    /// Pointer from the latest update, used for hover highlighting in render.
-    pointer: Option<Pointer2D>,
-    /// Where the VR controller ray last met the panel, in canvas pixels. The
-    /// VR counterpart of `pointer`, already in canvas space.
-    vr_pointer_canvas: Option<Vector2<f32>>,
-    /// The pointer pass that hit-tested this frame, kept so `render` draws the
-    /// beams and dot from the very rays `update` resolved the highlight from.
-    vr_pointer: FrontendPointerPass,
-    /// The drawn half of that pointer (hands, beams, dot), holding the lazily
-    /// loaded glove model.
-    vr_pointer_visuals: PointerVisuals,
-
-    /// Where the VR panel is anchored: placed from the head on scene entry
-    /// and world-locked after that, so `render` hangs the panel exactly
-    /// where `update` hit-tested it.
-    panel_anchor: FrontendPanelAnchor,
-    /// Whether the pointer was pressed last frame (for rising-edge clicks).
-    last_pressed: bool,
-    /// Screen size from the latest render, so `update` can map the pointer into
-    /// canvas space consistently with how the canvas is drawn.
-    last_screen_size: Vector2<f32>,
-    /// The frontend's hum, rollover and select sounds.
-    sfx: FrontendSfx<LoadGameAction>,
+    menu: FrontendMenu<LoadGameAction>,
 }
 
 impl LoadGameScene {
@@ -296,19 +251,7 @@ impl LoadGameScene {
             scene_name: "load_game".to_owned(),
             saves,
             selected,
-            pointer: None,
-            vr_pointer_canvas: None,
-            vr_pointer: FrontendPointerPass::default(),
-            vr_pointer_visuals: PointerVisuals::new(),
-            panel_anchor: FrontendPanelAnchor::new(),
-            // A press held across a scene swap must not read as a click
-            // here: both screens sit on the same 640x480 canvas and their
-            // widgets overlap (the load screen's "Done" center falls inside
-            // the menu's "Quit" rect), so starting "already pressed" makes
-            // the next rising edge require a real release first.
-            last_pressed: true,
-            last_screen_size: vec2(CANVAS_W, CANVAS_H),
-            sfx: FrontendSfx::new(),
+            menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
         }
     }
 }
@@ -328,8 +271,7 @@ impl LoadGameScene {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
-        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
-        let rects = screen_rects(layout.as_deref().map(|r| r.as_slice()));
+        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
         let strings = asset_cache.get_opt(&STRINGS_IMPORTER, LABELS_FILE);
         let strings = strings.as_deref();
 
@@ -426,8 +368,7 @@ impl GameScene for LoadGameScene {
             *world_time = time.clone();
         }
 
-        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
-        let rects = screen_rects(layout.as_deref().map(|r| r.as_slice()));
+        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
         let visible = self
             .saves
             .len()
@@ -441,55 +382,15 @@ impl GameScene for LoadGameScene {
         self.selected = self.selected.filter(|index| *index < visible);
         let selected = self.selected;
 
-        // The panel is placed from the head on scene entry and world-locked
-        // after that; advancing it here keeps the ray and the render agreeing
-        // on where the screen is, in either presentation.
-        let panel = self.panel_anchor.update(
-            input_context.head.position,
-            input_context.head.rotation,
+        let action = self.menu.update(
             time.elapsed,
+            input_context,
+            game_options.presentation_mode,
+            |point| hit(point, &rects, visible, selected.is_some()),
+            // Rows are deliberately silent: they highlight on selection
+            // rather than hover, so only visible hover feedback makes noise.
+            |point| hit(point, &rects, 0, selected.is_some()),
         );
-
-        let (action, last_pressed, point) =
-            if game_options.presentation_mode == PresentationMode::Vr {
-                // VR has no 2D cursor: the pointer is where a controller ray meets
-                // the panel, and the trigger is the button.
-                self.vr_pointer =
-                    vr_frontend_pointer_pass(input_context, vec2(CANVAS_W, CANVAS_H), &panel);
-                let (point, pressed) = (self.vr_pointer.point(), self.vr_pointer.pressed);
-                self.vr_pointer_canvas = point;
-                self.pointer = None;
-                let (action, last_pressed) = resolve_click_at(
-                    point,
-                    pressed,
-                    self.last_pressed,
-                    &rects,
-                    visible,
-                    selected.is_some(),
-                );
-                (action, last_pressed, point)
-            } else {
-                self.pointer = input_context.pointer;
-                self.vr_pointer = FrontendPointerPass::default();
-                resolve_click(
-                    input_context.pointer,
-                    self.last_pressed,
-                    self.last_screen_size,
-                    &rects,
-                    visible,
-                    selected.is_some(),
-                )
-            };
-        self.last_pressed = last_pressed;
-
-        // Rows are deliberately silent: they highlight on selection rather
-        // than on hover, so a blip over one would have no visible counterpart.
-        // Passing 0 visible rows is what makes `hit` skip them.
-        self.sfx
-            .hover(point.and_then(|p| hit(p, &rects, 0, selected.is_some())));
-        if action.is_some() {
-            self.sfx.click();
-        }
 
         match action {
             Some(LoadGameAction::Select(index)) => {
@@ -525,26 +426,8 @@ impl GameScene for LoadGameScene {
 
         // In VR there is no screen to draw on, so the same canvas is presented
         // on a world-space panel in front of the player.
-        let panel = self.panel_anchor.panel();
-        let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
-        let mut objects = canvas.render_world_space(
-            asset_cache,
-            panel.transform(),
-            self.vr_pointer_canvas,
-            None,
-            VR_COMPONENT_Z_STEP,
-        );
-        // The controllers and their aim rays, so the player can see where they
-        // are pointing before an entry lights up. The canvas objects already in
-        // hand are the layer stack the hit dot has to float clear of.
-        let panel_layers = objects.len();
-        objects.extend(self.vr_pointer_visuals.render(
-            asset_cache,
-            &self.vr_pointer,
-            vec2(CANVAS_W, CANVAS_H),
-            &panel,
-            panel_layers,
-        ));
+        let canvas = self.build_canvas(asset_cache, self.menu.pointer_canvas());
+        let objects = self.menu.render_world_space(asset_cache, canvas);
         (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
@@ -556,23 +439,16 @@ impl GameScene for LoadGameScene {
         screen_size: Vector2<f32>,
         options: &GameOptions,
     ) -> Vec<SceneObject> {
-        self.last_screen_size = screen_size;
         // In VR the screen lives on a world-space panel drawn by `render`; a
         // screen-space copy here would paste the whole canvas over both eyes
         // and hide it.
         if options.presentation_mode == PresentationMode::Vr {
             return Vec::new();
         }
-        let pointer_canvas = self.pointer.and_then(|p| {
-            pointer_to_canvas(
-                vec2(CANVAS_W, CANVAS_H),
-                p.position,
-                screen_size,
-                SCALE_MODE,
-            )
-        });
+        let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
         let canvas = self.build_canvas(asset_cache, pointer_canvas);
-        canvas.render_screen_space(asset_cache, screen_size, SCALE_MODE)
+        self.menu
+            .render_screen_space(asset_cache, canvas, screen_size)
     }
 
     fn handle_effects(
@@ -583,7 +459,7 @@ impl GameScene for LoadGameScene {
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Vec<GlobalEffect> {
-        self.sfx.pump(asset_cache, audio_context);
+        self.menu.pump_sfx(asset_cache, audio_context);
         effects
             .into_iter()
             .filter_map(|e| match e {
@@ -594,7 +470,7 @@ impl GameScene for LoadGameScene {
     }
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
-        self.sfx.stop(audio_context);
+        self.menu.stop_sfx(audio_context);
     }
 
     fn wants_pointer(&self) -> bool {
@@ -701,10 +577,10 @@ mod tests {
     }
 
     #[test]
-    fn no_pointer_means_no_action() {
+    fn pointer_loss_preserves_a_held_press() {
         let (action, last, _) = resolve_click(None, true, SCREEN, &FALLBACK_RECTS, 3, true);
         assert_eq!(action, None);
-        assert!(!last);
+        assert!(last);
     }
 
     #[test]

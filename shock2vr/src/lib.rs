@@ -1438,7 +1438,7 @@ impl Game {
             // pausable (the player died, a transition started): close rather
             // than strand the player on a panel over a screen that has taken
             // over. The toggle itself is left unhandled - i.e. ignored.
-            self.pause_menu.close();
+            self.close_pause_menu(false);
             return;
         }
 
@@ -1446,7 +1446,7 @@ impl Game {
         // key/button down), so holding the menu button cannot re-toggle.
         if actions.just_triggered(InputAction::TogglePauseMenu) {
             if self.pause_menu.is_open() {
-                self.pause_menu.close();
+                self.close_pause_menu(false);
             } else {
                 self.open_pause_menu();
             }
@@ -1462,14 +1462,25 @@ impl Game {
             &mut self.asset_cache,
             &self.options,
         );
+        self.pause_menu
+            .pump_sfx(&mut self.asset_cache, &mut self.audio_context);
         match action {
-            Some(PauseAction::Resume) => self.pause_menu.close_after_click(),
+            Some(PauseAction::Resume) => self.close_pause_menu(true),
             Some(PauseAction::QuitToMainMenu) => {
-                self.pause_menu.close_after_click();
+                self.close_pause_menu(true);
                 self.handle_global_effect(GlobalEffect::ShowMainMenu);
             }
             None => {}
         }
+    }
+
+    fn close_pause_menu(&mut self, after_click: bool) {
+        if after_click {
+            self.pause_menu.close_after_click();
+        } else {
+            self.pause_menu.close();
+        }
+        self.pause_menu.stop_sfx(&mut self.audio_context);
     }
 
     fn open_pause_menu(&mut self) {
