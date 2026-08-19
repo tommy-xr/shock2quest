@@ -114,18 +114,19 @@ async function measureHeldContactOffset(game: GameServer): Promise<void> {
   const local: Vec3 = [0, 1.0, 0];
   await game.input.set("right_hand.position", local);
   await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
-  await game.step({ frames: 2 });
-  const body = (await game.physics.bodies({ entityId: held })).bodies[0];
+  // Let the pawn settle first: while it is still falling the hand it carries
+  // trails the physics body the reading is compared against.
+  await game.step({ frames: 45 });
+  // Take the pawn from the *same response* as the body. Physics free-runs
+  // between HTTP requests, so a pawn read a request later has already fallen a
+  // little further and the difference lands straight in the offset (measured:
+  // 0.2 of bogus reach).
+  const bodies = await game.physics.bodies({ entityId: held });
+  const body = bodies.bodies[0];
   assert.ok(body, "the held weapon must have a contact body");
-  const info = await game.info();
-  const handWorld = add(
-    info.player.position,
-    qrotate(info.player.rotation, local),
-  );
-  heldContactOffset = qrotate(
-    qconj(info.player.rotation),
-    sub(body.position, handWorld),
-  );
+  const pawnRotation = (await game.info()).player.rotation;
+  const handWorld = add(bodies.player_position, qrotate(pawnRotation, local));
+  heldContactOffset = qrotate(qconj(pawnRotation), sub(body.position, handWorld));
 
   // Staging follows this measurement, so assert its shape or the gesture would
   // silently compensate for a misplaced collider and still pass. The wielded
