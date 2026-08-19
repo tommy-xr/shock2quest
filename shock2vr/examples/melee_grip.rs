@@ -46,12 +46,7 @@ fn main() {
                 println!("  joint {i:2}: ({:8.4}, {:8.4}, {:8.4})", p.x, p.y, p.z);
             }
         }
-        let arm = shock2vr::vr_config::MeleePosedArm {
-            elbow: joints[shock2vr::vr_config::MELEE_ARM_JOINT].w.truncate(),
-            fist: joints[shock2vr::vr_config::MELEE_GRIP_JOINT].w.truncate(),
-            weapon: joints[shock2vr::vr_config::MELEE_WEAPON_JOINT].w.truncate(),
-        };
-        let contact = shock2vr::vr_config::melee_contact_offset(arm);
+        let contact = shock2vr::melee_contact_offset(shock2vr::MeleePosedArm::from_joints(&joints));
         println!(
             "  contact offset (hand-local): vec3({:.3}, {:.3}, {:.3})",
             contact.x, contact.y, contact.z

@@ -7,6 +7,7 @@ export {
   Game,
   headRotationForWorldPoint,
   InputApi,
+  lookQuat,
   PathfindingTestApi,
   PLAYER_EYE_HEIGHT_WORLD,
   PlayerApi,

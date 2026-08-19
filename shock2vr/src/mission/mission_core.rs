@@ -87,7 +87,7 @@ use crate::{
         RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDeathPose,
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
         RuntimePropLaunchedProjectile, RuntimePropReloading, RuntimePropSelectedAmmo,
-        RuntimePropTransform, RuntimePropVhots,
+        RuntimePropTransform, RuntimePropVhots, RuntimePropVrGripOffset,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -5047,6 +5047,11 @@ impl MissionCore {
                         });
                     if let Some(xform) = maybe_xform {
                         let _ext_name = model_name.clone();
+                        // Any model swap invalidates a computed grip; only the
+                        // melee `_h` branch below re-derives one. Without this
+                        // a drop would leave the restored world model wearing
+                        // the wield's contact offset.
+                        self.world.remove::<RuntimePropVrGripOffset>(entity_id);
                         // Was the *outgoing* model a VR-wielded first-person
                         // model? (Read before PropModelName is overwritten
                         // below - identifies the drop-restore swap.)
@@ -5128,33 +5133,35 @@ impl MissionCore {
                                         )
                                     })
                                     .unwrap_or_else(AnimationPlayer::empty);
-                                // Seat the posed arm's baked fist on the
-                                // tracked hand as a model-space (render-only)
-                                // correction - the held body is the melee
-                                // contact collider, so this must not move the
-                                // entity. `apply_local_transform` composes it
-                                // inside the entity transform, which the
-                                // render path re-sets from the hand every
-                                // frame.
-                                if let Some(arm) = new_model.skeleton().map(|skeleton| {
-                                    let joints = player.get_transforms(skeleton);
-                                    crate::vr_config::MeleePosedArm {
-                                        elbow: joints[crate::vr_config::MELEE_ARM_JOINT]
-                                            .w
-                                            .truncate(),
-                                        fist: joints[crate::vr_config::MELEE_GRIP_JOINT]
-                                            .w
-                                            .truncate(),
-                                        weapon: joints[crate::vr_config::MELEE_WEAPON_JOINT]
-                                            .w
-                                            .truncate(),
-                                    }
-                                }) {
+                                // Seat the posed arm on the tracked hand. Two
+                                // halves of one placement, both derived from
+                                // this same posed arm so they cannot drift
+                                // apart: the grip puts the entity - and so the
+                                // melee contact collider, which the held body
+                                // IS - on the rendered weapon head, and the
+                                // model-space correction cancels that same
+                                // offset so the fist still lands in the palm.
+                                // `apply_local_transform` composes inside the
+                                // entity transform, which the render path
+                                // re-sets from the hand every frame.
+                                let arm = new_model.skeleton().and_then(|skeleton| {
+                                    crate::vr_config::MeleePosedArm::from_joints(
+                                        &player.get_transforms(skeleton),
+                                    )
+                                });
+                                if let Some(arm) = arm {
                                     new_model.apply_local_transform(
-                                        crate::vr_config::melee_wield_pose_correction(
-                                            &model_name.to_ascii_lowercase(),
-                                            arm,
+                                        crate::vr_config::melee_wield_pose_correction(arm),
+                                    );
+                                    self.world.add_component(
+                                        entity_id,
+                                        RuntimePropVrGripOffset(
+                                            crate::vr_config::melee_contact_offset(arm),
                                         ),
+                                    );
+                                } else {
+                                    tracing::error!(
+                                        "ChangeModel: '{model_name}' has no melee arm joints - wielding it unseated"
                                     );
                                 }
                                 self.id_to_animation_player.insert(entity_id, player);
@@ -5178,6 +5185,7 @@ impl MissionCore {
                     self.id_to_animation_player.remove(&entity_id);
                     self.world
                         .remove::<(PropModelName, RuntimePropVhots)>(entity_id);
+                    self.world.remove::<RuntimePropVrGripOffset>(entity_id);
                 }
                 Effect::SetVhotsFromModel {
                     entity_id,
@@ -7172,6 +7180,11 @@ impl MissionCore {
                         // is an ordinary dynamic, harmless loose prop again.
                         self.make_un_physical(entity_id);
                     }
+                    // After the body is gone (so this writes the entity's
+                    // transform rather than pushing the outgoing kinematic
+                    // body around) and before the loose prop is rebuilt from
+                    // it.
+                    self.return_held_entity_to_the_hand(entity_id);
                     self.make_physical(entity_id);
 
                     self.script_world.dispatch(Message {
@@ -7185,6 +7198,45 @@ impl MissionCore {
 
     fn is_vr_melee_weapon(&self, entity_id: EntityId) -> bool {
         is_vr_melee_weapon(&self.world, entity_id)
+    }
+
+    /// Undo a computed grip offset before a released item becomes a loose prop
+    /// again.
+    ///
+    /// A melee `_h` wield deliberately parks the entity on the *weapon head* -
+    /// its body is the contact collider, so that is where the damage volume
+    /// belongs - which is up to 1.2 units out of the palm. Respawning the world
+    /// prop there would materialize it over the player's head and drop it from
+    /// height; every other release happens at the hand, so put it back there
+    /// first. No-op for anything without a computed grip.
+    fn return_held_entity_to_the_hand(&mut self, entity_id: EntityId) {
+        use cgmath::Rotation;
+
+        let Some(grip) = self
+            .world
+            .borrow::<View<RuntimePropVrGripOffset>>()
+            .ok()
+            .and_then(|view| view.get(entity_id).ok().map(|grip| grip.0))
+        else {
+            return;
+        };
+
+        let Some((position, rotation)) =
+            self.world
+                .borrow::<View<PropPosition>>()
+                .ok()
+                .and_then(|view| {
+                    view.get(entity_id)
+                        .ok()
+                        .map(|pos| (pos.position, pos.rotation))
+                })
+        else {
+            return;
+        };
+        // The grip is hand-local and the entity carries the hand's rotation
+        // (a computed grip contributes none of its own).
+        let hand = position - rotation.rotate_vector(grip);
+        self.set_entity_position_rotation(entity_id, hand, rotation, vec3(1.0, 1.0, 1.0));
     }
 
     /// Give a held melee weapon the contact body the VR damage window needs.

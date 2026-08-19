@@ -43,10 +43,11 @@ mod test_support;
 pub mod ui;
 mod util;
 mod virtual_hand;
-/// How held models sit on the tracked hands. Public so the `melee_grip`
-/// example can re-measure the melee `_h` contact offsets from the shipped rigs
-/// with the same maths the wield uses.
-pub mod vr_config;
+mod vr_config;
+/// Re-exported (the module itself stays private) so the `melee_grip` example
+/// can re-measure the melee `_h` contact offsets off the shipped rigs with the
+/// same maths the wield uses.
+pub use vr_config::{MeleePosedArm, melee_contact_offset};
 pub mod vr_crouch;
 pub mod zip_asset_path;
 

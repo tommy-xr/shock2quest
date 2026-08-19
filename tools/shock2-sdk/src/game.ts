@@ -477,8 +477,11 @@ function multiplyQuat(a: Quat, b: Quat): Quat {
  * shortest arc from -Z has no roll control, so directions near world +z came
  * out rolled up to ~180 degrees - which silently corrupts screenshots and
  * skews strafing, since locomotion moves along the camera's right axis.
+ *
+ * Exported because the same hazard applies to any rig whose orientation carries
+ * an offset: a spurious roll turns "up out of the fist" into "sideways".
  */
-function lookQuat(direction: Vec3): Quat {
+export function lookQuat(direction: Vec3): Quat {
   const length = Math.hypot(...direction);
   if (length === 0) throw new Error("look-at target must differ from the player's eye position");
   const [dx, dy, dz] = direction.map((value) => value / length) as Vec3;

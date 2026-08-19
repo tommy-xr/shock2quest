@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { GameServer, lookQuat } from "../src/index.js";
 import type {
   EntityDetailResult,
   EntitySummary,
@@ -126,6 +126,22 @@ async function measureHeldContactOffset(game: GameServer): Promise<void> {
     qconj(info.player.rotation),
     sub(body.position, handWorld),
   );
+
+  // Staging follows this measurement, so assert its shape or the gesture would
+  // silently compensate for a misplaced collider and still pass. The wielded
+  // Wrench's contact volume belongs out on the rendered weapon head - roughly
+  // 0.8 units from the palm, standing up out of the fist. A collider left in
+  // the hand (the pre-`_h` melee grips) or parked along the fingers (the old
+  // 0.4 wrench grip) fails here.
+  const reach = Math.sqrt(dot(heldContactOffset, heldContactOffset));
+  assert.ok(
+    reach > 0.6 && reach < 1.0,
+    `the Wrench's contact volume should sit on its head, ~0.8 from the hand: ${JSON.stringify(heldContactOffset)}`,
+  );
+  assert.ok(
+    heldContactOffset[1] > 0.9 * reach,
+    `the Wrench's contact volume should stand up out of the fist: ${JSON.stringify(heldContactOffset)}`,
+  );
 }
 
 // This is the production play-through gesture: orient the physical right hand
@@ -143,7 +159,13 @@ async function poseWrench(
   const pawnQ = info.player.rotation;
   const eye = add(pawn, [0, info.player.camera_offset[1], 0]);
   const toward = norm(sub(target, eye));
-  const worldQ = qFromTo([0, 0, -1], toward);
+  // `lookQuat`, not the file's shortest-arc `qFromTo`: the shortest arc from -Z
+  // has no roll control and rolls up to ~180 degrees for directions near world
+  // +z - which is exactly where these staged targets sit. That was cosmetic
+  // while the rotation only spun the hand; now it also carries the ~0.8-unit
+  // contact offset below, where a spurious roll turns "up out of the fist"
+  // into "sideways" and the swing misses for reasons nothing in the test says.
+  const worldQ = lookQuat(toward);
   // `distance` is the contact volume's distance from the target, so back the
   // hand off by wherever the grip puts that volume.
   const worldHand = sub(
