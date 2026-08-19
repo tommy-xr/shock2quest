@@ -1223,6 +1223,18 @@ impl Game {
         input_context: &input_context::InputContext,
         actions: &mut input::InputActionState,
     ) {
+        // The arm-height comfort offset is applied HERE and nowhere else, so
+        // every downstream consumer (the interacting hand, the rendered glove
+        // and sleeve, the forearm HUD panels, the frontend pointer, teleport)
+        // inherits it without its own wiring. `Game::update` rather than
+        // `App::update` is deliberately the seam: the Quest and the desktop go
+        // through `App`, but the debug runtime drives a `Game` directly, so
+        // applying it one level up would leave the knob inert in the very
+        // harness that is supposed to verify it - the mirror image of the
+        // accessor #1027 rejected for being inert on device. Read every frame,
+        // so a `set` from the Developer screen lands on the next one.
+        let input_context =
+            &input_context.with_arm_height_offset(dev_params::get(dev_params::ARM_HEIGHT_OFFSET));
         let span = span!(Level::INFO, "update");
         let _enter = span.enter();
         let delta_time = time.elapsed.as_secs_f32();
@@ -2006,15 +2018,6 @@ impl App {
         input_context: &input_context::InputContext,
         action_state: &mut input::InputActionState,
     ) {
-        // The arm-height comfort offset is applied HERE and nowhere else: this
-        // is the single point every runtime hands an `InputContext` in
-        // through, so the Quest and the debug runtime provably read the same
-        // adjusted hands, and every downstream consumer (interaction, the
-        // rendered glove/sleeve, the forearm HUD panels, the frontend pointer,
-        // teleport) inherits it without its own wiring. Read every frame, so a
-        // `set` from the Developer screen lands on the next one.
-        let input_context =
-            &input_context.with_arm_height_offset(dev_params::get(dev_params::ARM_HEIGHT_OFFSET));
         match self {
             App::Ready(game) => game.update(time, input_context, action_state),
             App::MissingAssets(missing) => missing.update(time, input_context),
