@@ -200,11 +200,11 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
     }
 
     /// Resolve a screen's item labels through the shell that renders them.
-    pub fn labels(
+    pub fn labels<B>(
         &self,
         asset_cache: &mut AssetCache,
         labels_file: &str,
-        items: &[FrontendMenuItem<A>],
+        items: &[FrontendMenuItem<B>],
     ) -> Vec<String> {
         let strings = asset_cache.get_opt(&STRINGS_IMPORTER, labels_file);
         resolve_menu_labels(strings.as_deref(), items)
@@ -243,6 +243,20 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
         };
         self.pointer_canvas = point;
 
+        self.resolve_pointer(point, pressed, click_hit, hover_hit)
+    }
+
+    /// Consume an already-resolved point/press pair. Reusable overlays call
+    /// this in focused page-turn tests so those tests exercise the same latch
+    /// and sound path as the runtime update.
+    pub fn resolve_pointer(
+        &mut self,
+        point: Option<Vector2<f32>>,
+        pressed: bool,
+        click_hit: impl FnOnce(Vector2<f32>) -> Option<A>,
+        hover_hit: impl FnOnce(Vector2<f32>) -> Option<A>,
+    ) -> Option<A> {
+        self.pointer_canvas = point;
         let (action, pressed) = resolve_click_at(point, pressed, self.last_pressed, click_hit);
         self.last_pressed = pressed;
         self.sfx.hover(point.and_then(hover_hit));
@@ -335,6 +349,16 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
 
     pub fn stop_sfx(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
         self.sfx.stop(audio_context);
+    }
+
+    #[cfg(test)]
+    pub fn set_last_pressed(&mut self, pressed: bool) {
+        self.last_pressed = pressed;
+    }
+
+    #[cfg(test)]
+    pub fn last_pressed(&self) -> bool {
+        self.last_pressed
     }
 }
 
