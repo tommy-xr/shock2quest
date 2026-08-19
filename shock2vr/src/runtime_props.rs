@@ -318,6 +318,19 @@ pub struct RuntimePropFlatAim {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropProjectileRayOrigin(pub Point3<f32>);
 
+/// Marks a fast projectile the *player* fired, so its collision ray skips the
+/// player's own capsule.
+///
+/// Rapier's solid raycast reports a shape containing the ray origin as a hit at
+/// distance 0, so a shot whose ray starts inside the player strikes the shooter
+/// before it can travel. Flat firing starts at the eye - always inside the
+/// capsule - and VR firing starts at the weapon's muzzle, which is inside it
+/// whenever the weapon is held in close to the body (a natural chest/hip hold).
+/// Both are the player shooting; neither may hit the player. AI and turret
+/// projectiles carry no marker and keep hitting the player normally.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropPlayerFiredProjectile;
+
 /// Marks an object created through Dark's `launchProjectile` path. Its
 /// authored physics model owns idle velocity; an empty skeletal animation
 /// must not zero the launch, and save/load must recreate it as a dynamic body.

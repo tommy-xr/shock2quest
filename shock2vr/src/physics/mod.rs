@@ -2264,6 +2264,27 @@ impl CollisionGroup {
         CollisionGroup { collision, solver }
     }
 
+    /// A projectile the *player* fired: an ordinary physical entity that is
+    /// transparent to the player's own capsule.
+    ///
+    /// A slow (physics) projectile leaves the muzzle of a weapon the player is
+    /// holding, and in VR that muzzle is inside the player's own capsule
+    /// whenever the weapon is held in close to the body - a natural chest or
+    /// hip hold. Solid to `PLAYER`, the shot collides on its first step, and a
+    /// `DESTROY_ON_IMPACT` projectile is consumed there and then: the psi bolt
+    /// never leaves the amp, the points are spent, and the player takes their
+    /// own damage. AI and turret projectiles keep `CollisionGroup::entity()`
+    /// and hit the player normally.
+    pub fn player_projectile() -> CollisionGroup {
+        Self::solid(InteractionGroups {
+            memberships: InternalCollisionGroups::ENTITY.bits.into(),
+            filter: (InternalCollisionGroups::ALL_COLLIDABLE.bits
+                & !InternalCollisionGroups::PLAYER.bits)
+                .into(),
+            test_mode: Default::default(),
+        })
+    }
+
     /// Collision behavior for a living creature capsule. It collides exactly
     /// like an ordinary physical entity, but its distinct membership lets
     /// interaction-only fixtures and unsimulated movable debris opt out of

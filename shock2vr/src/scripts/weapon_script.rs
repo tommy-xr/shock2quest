@@ -737,6 +737,7 @@ pub(super) fn create_projectile(
                     force_visible: true,
                     projectile_raycast_origin: Some(aim.origin),
                     shot_modifiers: Some(modifiers),
+                    player_fired_projectile: true,
                     ..CreateEntityOptions::default()
                 },
             };
@@ -761,11 +762,11 @@ pub(super) fn create_projectile(
     // Documented fallback for a model with no vhot at all: the model origin,
     // i.e. the grip. The shot still leaves along the barrel, just from the
     // hand. This is not rare - `empgun_h`, `gren_h`, `fsn_h` and `al_h` ship
-    // with zero vhots, as do most classic-install world models - and a shot
-    // starting at the grip can strike the player when the weapon is held in
-    // close to the body (see #1034). Adding clearance is deliberately left to
-    // that issue: it changes where four more weapons fire from, which is a
-    // separate change from making the vhot-carrying weapons faithful.
+    // with zero vhots, as do most classic-install world models. Where the shot
+    // *starts* is still only as good as the model, and #1034 tracks giving the
+    // vhotless ones a better fire point; what is no longer at stake is the shot
+    // dying on the shooter, because a player-fired projectile's ray skips the
+    // player's capsule (`player_fired_projectile` below).
     let muzzle = vhots
         .first()
         .map(|v| v.point)
@@ -787,6 +788,7 @@ pub(super) fn create_projectile(
         options: CreateEntityOptions {
             force_visible: true,
             shot_modifiers: Some(modifiers),
+            player_fired_projectile: true,
             ..CreateEntityOptions::default()
         },
     }
