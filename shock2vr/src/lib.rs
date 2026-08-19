@@ -1226,15 +1226,23 @@ impl Game {
         // The arm-height comfort offset is applied HERE and nowhere else, so
         // every downstream consumer (the interacting hand, the rendered glove
         // and sleeve, the forearm HUD panels, the frontend pointer, teleport)
-        // inherits it without its own wiring. `Game::update` rather than
-        // `App::update` is deliberately the seam: the Quest and the desktop go
+        // inherits it without its own wiring, and it is read every frame so a
+        // `set` from the Developer screen lands on the next one.
+        //
+        // `Game::update`, not `App::update`: the Quest and the desktop go
         // through `App`, but the debug runtime drives a `Game` directly, so
-        // applying it one level up would leave the knob inert in the very
-        // harness that is supposed to verify it - the mirror image of the
-        // accessor #1027 rejected for being inert on device. Read every frame,
-        // so a `set` from the Developer screen lands on the next one.
-        let input_context =
-            &input_context.with_arm_height_offset(dev_params::get(dev_params::ARM_HEIGHT_OFFSET));
+        // applying it one level up leaves the knob inert in the very harness
+        // meant to verify it - the mirror image of the accessor #1027 rejected
+        // for being inert on device.
+        //
+        // VR only: in flat the hands are synthesized from the camera and never
+        // drawn, so an offset there would move the frob/aim ray origin with no
+        // visual feedback at all.
+        let arm_offset = match self.options.presentation_mode {
+            PresentationMode::Vr => dev_params::get(dev_params::ARM_HEIGHT_OFFSET),
+            PresentationMode::Flat => 0.0,
+        };
+        let input_context = &input_context.with_arm_height_offset(arm_offset);
         let span = span!(Level::INFO, "update");
         let _enter = span.enter();
         let delta_time = time.elapsed.as_secs_f32();

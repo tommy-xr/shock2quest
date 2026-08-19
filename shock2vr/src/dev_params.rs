@@ -108,16 +108,9 @@ dev_params! {
     /// [`EYE_HEIGHT_OFFSET`]: that one moves the whole stage (head, hands and
     /// view together); this one moves *only* the hands.
     ///
-    /// Applied at the top of [`crate::Game::update`], the one place every
-    /// runtime's `InputContext` converges on, so it lands ahead of every
-    /// consumer - the interacting hand, the rendered glove and sleeve, the
-    /// forearm HUD panels, the frontend pointer and teleport - and lands
-    /// identically on the Quest and in the debug runtime. That placement is
-    /// the whole point, and it is `Game` rather than `App` on purpose: the
-    /// Quest and the desktop go through `App::update`, but the debug runtime
-    /// drives a `Game` directly, so applying it at the `App` seam would leave
-    /// the knob inert in the harness meant to verify it - the mirror image of
-    /// the accessor #1027 rejected for being inert on device.
+    /// Applied - VR only, and only there - at the top of
+    /// [`crate::Game::update`], which every runtime's `InputContext` converges
+    /// on; see that call site for why `Game` and not `App` is the seam.
     ARM_HEIGHT_OFFSET = float("arm_offset", "Arm height (m)", 0.0, -0.5, 0.5, 0.02),
 }
 

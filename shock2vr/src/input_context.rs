@@ -55,9 +55,6 @@ impl InputContext {
     /// [`crate::dev_params::ARM_HEIGHT_OFFSET`] supplies the live value.
     pub fn with_arm_height_offset(&self, offset_meters: f32) -> InputContext {
         let mut adjusted = self.clone();
-        if offset_meters == 0.0 {
-            return adjusted;
-        }
         let offset = offset_meters / crate::METERS_PER_WORLD_UNIT;
         adjusted.left_hand.position.y += offset;
         adjusted.right_hand.position.y += offset;
@@ -110,8 +107,8 @@ mod arm_height_tests {
         );
     }
 
-    /// The default must be bit-exactly inert, or every player who never opens
-    /// the Developer screen pays for the knob existing.
+    /// The default must be bit-exactly inert - not merely close - or the hands
+    /// of every player who never opens the Developer screen drift.
     #[test]
     fn the_default_offset_changes_nothing() {
         let raised = sample().with_arm_height_offset(0.0);

@@ -6,17 +6,20 @@ import type { SceneObjectSummary } from "../src/types.js";
 
 // `arm_offset` (shock2vr::dev_params::ARM_HEIGHT_OFFSET) is the VR comfort knob
 // for "my in-game arms do not sit where my physical arms do". It is applied in
-// `App::update`, the single point every runtime - the Quest included - feeds an
-// `InputContext` through, so what this test measures in the debug runtime is
-// the same code path the headset takes. (What it cannot measure is the tracked
-// pose upstream of that; only a worn check covers that half.)
+// `Game::update`, which the Quest reaches through `App::update` and the debug
+// runtime reaches directly, so what this measures here is the same code path
+// the headset takes. (What it cannot measure is the tracked pose upstream of
+// that; only a worn check covers that half.)
 //
 // The claim under test is live-apply on the *rendered* hands: POST a value,
 // step, and the objects the renderer was handed on the `player_hands` path have
-// risen by exactly the POSTed metres, converted into world units.
+// risen by exactly the POSTed metres, converted into world units. The registry
+// protocol itself (metadata, clamping, reset, unknown keys) belongs to
+// `dev-params.e2e.test.ts` and is deliberately not re-proven per knob.
 //
-// Negative-first: with the `with_arm_height_offset` call removed from
-// `App::update`, the hands do not move and the delta assertion fails.
+// Negative-first: with the offset applied one level up in `App::update` - which
+// is where it started, and which the Quest does read - the debug runtime never
+// sees it and the delta assertion fails at 0.000.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 /** shock2vr::METERS_PER_WORLD_UNIT (0.3048 * dark::SCALE_FACTOR). */
@@ -41,7 +44,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8106),
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8231),
       debugFlags: ["--vr"],
     });
     // Long enough for the player to settle on the floor, so the only thing
@@ -51,8 +54,6 @@ test(
     const { params } = await game.devParams.list();
     const armOffset = params.find((p) => p.key === "arm_offset");
     assert.ok(armOffset, "arm_offset must be registered");
-    assert.equal(armOffset.kind, "float");
-    assert.equal(armOffset.value, 0);
     assert.equal(armOffset.default, 0, "the knob must ship inert");
 
     const before = handHeight(await game.scene.fromSource(HANDS));
@@ -77,24 +78,15 @@ test(
         `screenshots: ${shotBefore.full_path} ${shotAfter.full_path}`,
     );
 
-    // The knob lowers as well as raises, and is clamped to its declared range.
-    const clamped = await game.devParams.set("arm_offset", -9.0);
-    assert.ok(Math.abs(clamped.value + 0.5) < 1e-4, "clamped to the -0.5 min");
+    // The knob lowers as well as raises - a sign error would still have passed
+    // the raise assertion if it had been read from the wrong end of the range.
+    await game.devParams.set("arm_offset", -0.3);
     await game.step({ frames: 2 });
     const lowered = handHeight(await game.scene.fromSource(HANDS));
     assert.ok(
-      lowered < before,
-      `a negative offset must lower the hands, got ${lowered.toFixed(3)} vs ${before.toFixed(3)}`,
-    );
-
-    // Reset puts them back exactly where they started.
-    const reset = await game.devParams.reset("arm_offset");
-    assert.equal(reset.value, armOffset.default);
-    await game.step({ frames: 2 });
-    const restored = handHeight(await game.scene.fromSource(HANDS));
-    assert.ok(
-      Math.abs(restored - before) < 0.02,
-      `hands should be back at the default height, got ${restored.toFixed(3)} vs ${before.toFixed(3)}`,
+      Math.abs(before - lowered - expected) < 0.02,
+      `a negative offset must lower the hands by ${expected.toFixed(3)}, ` +
+        `got ${(before - lowered).toFixed(3)}`,
     );
   },
 );
