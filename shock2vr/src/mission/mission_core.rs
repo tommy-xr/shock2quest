@@ -5136,16 +5136,24 @@ impl MissionCore {
                                 // inside the entity transform, which the
                                 // render path re-sets from the hand every
                                 // frame.
-                                if let Some(fist) = new_model.skeleton().map(|skeleton| {
-                                    player.get_transforms(skeleton)
-                                        [crate::vr_config::MELEE_GRIP_JOINT]
-                                        .w
-                                        .truncate()
+                                if let Some(arm) = new_model.skeleton().map(|skeleton| {
+                                    let joints = player.get_transforms(skeleton);
+                                    crate::vr_config::MeleePosedArm {
+                                        elbow: joints[crate::vr_config::MELEE_ARM_JOINT]
+                                            .w
+                                            .truncate(),
+                                        fist: joints[crate::vr_config::MELEE_GRIP_JOINT]
+                                            .w
+                                            .truncate(),
+                                        weapon: joints[crate::vr_config::MELEE_WEAPON_JOINT]
+                                            .w
+                                            .truncate(),
+                                    }
                                 }) {
                                     new_model.apply_local_transform(
                                         crate::vr_config::melee_wield_pose_correction(
                                             &model_name.to_ascii_lowercase(),
-                                            fist,
+                                            arm,
                                         ),
                                     );
                                 }

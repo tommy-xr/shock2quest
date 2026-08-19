@@ -1,10 +1,14 @@
 //! Scratch tool: print the posed joint positions of the melee first-person
 //! (`_h`) skinned meshes at the player-melee idle's final frame - the pose VR
-//! wields them in. The printed hand joint (`MELEE_GRIP_JOINT`) is what
+//! wields them in. The hand joint (`MELEE_GRIP_JOINT`) is what
 //! `vr_config::melee_wield_pose_correction` cancels at runtime so the model's
-//! baked fist lands on the tracked hand; this tool is for eyeballing the rig
-//! (which joint is the fist, how far the arm reaches back), not for producing
-//! constants.
+//! baked fist lands on the tracked hand.
+//!
+//! It also prints each model's `melee_contact_offset` - where the rendered
+//! weapon head lands in hand-local space, which is what the model's
+//! `HAND_MODEL_POSITIONING` entry must be so the contact collider sits on the
+//! weapon the player sees. Re-run this and paste the numbers into
+//! `MELEE_CONTACT_*` if the rigs ever change.
 //!
 //! ```bash
 //! DARK_ASSET_PATH=... cargo run -p shock2vr --example melee_grip
@@ -42,8 +46,15 @@ fn main() {
                 println!("  joint {i:2}: ({:8.4}, {:8.4}, {:8.4})", p.x, p.y, p.z);
             }
         }
-        // MELEE_GRIP_JOINT (vr_config, private module - keep in sync).
-        let f = joints[3].w;
-        println!("  fist joint: ({:.3}, {:.3}, {:.3})", f.x, f.y, f.z);
+        let arm = shock2vr::vr_config::MeleePosedArm {
+            elbow: joints[shock2vr::vr_config::MELEE_ARM_JOINT].w.truncate(),
+            fist: joints[shock2vr::vr_config::MELEE_GRIP_JOINT].w.truncate(),
+            weapon: joints[shock2vr::vr_config::MELEE_WEAPON_JOINT].w.truncate(),
+        };
+        let contact = shock2vr::vr_config::melee_contact_offset(arm);
+        println!(
+            "  contact offset (hand-local): vec3({:.3}, {:.3}, {:.3})",
+            contact.x, contact.y, contact.z
+        );
     }
 }
