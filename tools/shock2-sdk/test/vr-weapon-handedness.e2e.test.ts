@@ -167,10 +167,11 @@ test(
     assert.equal(ammoOf(await game.entities.detail(pistol.id)), 0, "magazine emptied");
     await game.input.trigger("CycleAmmo");
     await game.step({ frames: 3 });
-    assert.notEqual(
+    assert.equal(
       (await game.info()).player.wielded_ammo_type,
-      "std",
-      "CycleAmmo advances the right hand's weapon (was a no-op)",
+      // The debug pistol's authored projectile links, in order: std -> ap.
+      "ap",
+      "CycleAmmo advances the right hand's weapon to its next type (was a no-op)",
     );
 
     // 6. Dropping it puts the forearm back to the bare backdrop.

@@ -22,25 +22,14 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{mission::PlayerInfo, vr_config::Handedness};
 
-/// The entity held in `hand`, weapon or not.
-pub fn held_in_hand(world: &World, hand: Handedness) -> Option<EntityId> {
-    let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
-    match hand {
-        Handedness::Left => player_info.left_hand_entity_id,
-        Handedness::Right => player_info.right_hand_entity_id,
-    }
-}
-
-/// Whether `entity` is held in either hand.
-pub fn is_held(world: &World, entity: EntityId) -> bool {
-    held_in_hand(world, Handedness::Left) == Some(entity)
-        || held_in_hand(world, Handedness::Right) == Some(entity)
-}
-
 /// The weapon held in `hand`, or `None` when that hand is empty or holds
 /// something with no ammo/charge of its own (a medkit, a melee weapon).
 pub fn weapon_in_hand(world: &World, hand: Handedness) -> Option<EntityId> {
-    let held = held_in_hand(world, hand)?;
+    let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+    let held = match hand {
+        Handedness::Left => player_info.left_hand_entity_id,
+        Handedness::Right => player_info.right_hand_entity_id,
+    }?;
     is_weapon(world, held).then_some(held)
 }
 

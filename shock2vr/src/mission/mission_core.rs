@@ -4751,8 +4751,10 @@ impl MissionCore {
                     );
                     if let Some(entity_id) = maybe_weapon
                         // Either hand: in VR the weapon may already be held in
-                        // the right one.
-                        .filter(|entity| !crate::wielded_weapon::is_held(&self.world, *entity))
+                        // the right one. Asked of the interaction controller
+                        // rather than `PlayerInfo`, which only mirrors it once
+                        // per update and so can be stale mid-effect-batch.
+                        .filter(|entity| !self.interaction.is_holding(*entity))
                     {
                         effects.push_front(Effect::GrabEntity {
                             entity_id,

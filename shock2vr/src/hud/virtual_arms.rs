@@ -54,7 +54,6 @@ pub fn create_arm_hud_panels(
         world,
         left_hand_position,
         left_hand_rotation,
-        Handedness::Left,
     );
     scene_objects.append(&mut left_hud_layers);
 
@@ -245,33 +244,23 @@ pub(crate) fn get_wielded_ammo_icon(world: &World) -> Option<String> {
     icons.0.get(&template_id).cloned()
 }
 
-/// Create layered forearm HUD with health and psi bar overlays
+/// Create the left forearm's layered BIOFULL HUD with health and psi bar
+/// overlays. (The right forearm is [`create_ammo_forearm_panel`]'s.)
 fn create_forearm_hud_with_overlays(
     asset_cache: &mut AssetCache,
     world: &World,
     hand_position: Vector3<f32>,
     hand_rotation: Quaternion<f32>,
-    handedness: Handedness,
 ) -> Vec<SceneObject> {
     let mut layers = Vec::new();
 
-    // Only add overlays for left hand (BIOFULL display)
-    if handedness != Handedness::Left {
-        // For right hand, just create basic panel
-        let panel = create_forearm_hud_panel(asset_cache, hand_position, hand_rotation, handedness);
-        layers.push(panel);
-        return layers;
-    }
-
     // Calculate base HUD position and rotation
-    let forearm_position = hand_position + hand_rotation.rotate_vector(FOREARM_OFFSET);
-    let forearm_yaw_rotation = Quaternion::from(Euler::new(Deg(0.0), Deg(90.0), Deg(0.0)));
-    let forearm_tilt_rotation = Quaternion::from(Euler::new(Deg(-90.0), Deg(0.0), Deg(180.0)));
-    let final_rotation = hand_rotation * forearm_yaw_rotation * forearm_tilt_rotation;
+    let (forearm_position, final_rotation) =
+        forearm_pose(hand_position, hand_rotation, Handedness::Left);
 
     // Layer 1: Base BIOFULL panel
     let base_panel =
-        create_forearm_hud_panel(asset_cache, hand_position, hand_rotation, handedness);
+        create_forearm_hud_panel(asset_cache, hand_position, hand_rotation, Handedness::Left);
     layers.push(base_panel);
 
     // Layer 2: Health bar overlay
@@ -357,9 +346,6 @@ fn create_forearm_hud_panel(
     hand_rotation: Quaternion<f32>,
     handedness: Handedness,
 ) -> SceneObject {
-    // Calculate forearm position - offset from hand toward elbow
-    let forearm_position = hand_position + hand_rotation.rotate_vector(FOREARM_OFFSET);
-
     // Load appropriate texture based on handedness
     let texture_options = TextureOptions {
         wrap: false,
@@ -382,61 +368,62 @@ fn create_forearm_hud_panel(
     // Create quad geometry
     let geometry = Box::new(engine::scene::quad::create());
 
-    // Calculate wearable computer orientation
-    // For a forearm-mounted display, we need additional rotations:
-    // 1. Yaw rotation to align with forearm direction
-    // 2. Z rotation to make it lie flat on the forearm like a wrist computer
-    let forearm_yaw_rotation = match handedness {
-        Handedness::Left => Quaternion::from(Euler::new(Deg(0.0), Deg(90.0), Deg(0.0))), // Rotate left panel toward body
-        Handedness::Right => Quaternion::from(Euler::new(Deg(0.0), Deg(-90.0), Deg(0.0))), // Rotate right panel toward body
-    };
-
-    // Z rotation to tilt the panel flat against the forearm (like looking down at a wrist watch)
-    let forearm_tilt_rotation = Quaternion::from(Euler::new(Deg(-90.0), Deg(0.0), Deg(180.0)));
-
-    // Combine all rotations: hand rotation + yaw + tilt
-    let final_rotation = hand_rotation * forearm_yaw_rotation * forearm_tilt_rotation;
-
-    // Calculate transform matrix with proper aspect ratio and wearable orientation
-    let transform = Matrix4::from_translation(forearm_position)
-        * Matrix4::from(final_rotation)
-        * Matrix4::from_nonuniform_scale(HUD_PANEL_WIDTH, HUD_PANEL_HEIGHT, 1.0);
-
-    // Create scene object
+    // Create scene object, placed by the shared forearm pose
     let mut scene_object = SceneObject::new(material, geometry);
-    scene_object.set_transform(transform);
+    scene_object.set_transform(forearm_panel_transform(
+        hand_position,
+        hand_rotation,
+        handedness,
+    ));
 
     scene_object
 }
 
-/// Where the forearm panel hangs, as a root transform for a unit canvas: the
-/// same placement `create_forearm_hud_panel` gives its quad, so the canvas
-/// presenter draws the panel exactly where the plain quad used to.
-fn forearm_panel_transform(
+/// Where a forearm panel hangs: offset from the hand toward the elbow, yawed
+/// toward the body and tilted flat against the arm like a wrist computer.
+/// The single source of forearm placement - the panel quad, its overlays and
+/// the ammo readout canvas all derive from this, so they cannot drift apart.
+fn forearm_pose(
     hand_position: Vector3<f32>,
     hand_rotation: Quaternion<f32>,
     handedness: Handedness,
-) -> Matrix4<f32> {
+) -> (Vector3<f32>, Quaternion<f32>) {
     let forearm_position = hand_position + hand_rotation.rotate_vector(FOREARM_OFFSET);
     let forearm_yaw_rotation = match handedness {
         Handedness::Left => Quaternion::from(Euler::new(Deg(0.0), Deg(90.0), Deg(0.0))),
         Handedness::Right => Quaternion::from(Euler::new(Deg(0.0), Deg(-90.0), Deg(0.0))),
     };
     let forearm_tilt_rotation = Quaternion::from(Euler::new(Deg(-90.0), Deg(0.0), Deg(180.0)));
-    let final_rotation = hand_rotation * forearm_yaw_rotation * forearm_tilt_rotation;
+    (
+        forearm_position,
+        hand_rotation * forearm_yaw_rotation * forearm_tilt_rotation,
+    )
+}
 
-    Matrix4::from_translation(forearm_position)
-        * Matrix4::from(final_rotation)
+/// [`forearm_pose`] as a root transform for a panel-sized canvas, so canvas
+/// elements land exactly on the panel quad.
+fn forearm_panel_transform(
+    hand_position: Vector3<f32>,
+    hand_rotation: Quaternion<f32>,
+    handedness: Handedness,
+) -> Matrix4<f32> {
+    let (position, rotation) = forearm_pose(hand_position, hand_rotation, handedness);
+    Matrix4::from_translation(position)
+        * Matrix4::from(rotation)
         * Matrix4::from_nonuniform_scale(HUD_PANEL_WIDTH, HUD_PANEL_HEIGHT, 1.0)
 }
 
 /// The right forearm's AMMOFULL panel, with the live ammo readout composited
 /// on it - the VR counterpart of the flat HUD's ammo gauge.
 ///
-/// The panel art IS the 260x64 AMMOFULL canvas, so the readout is drawn by the
-/// shared [`crate::hud::ammo_panel`] layout at panel origin (0,0); flat draws
-/// the identical elements at the panel's origin on its 640x480 canvas
-/// (AGENTS.md section 3 - one layout, two presentations).
+/// The backdrop stays the plain panel quad the left forearm uses, so both
+/// forearm panels are lit identically (the canvas presenter draws its elements
+/// fully emissive, which suits a readout but would make this panel glow beside
+/// its BIOFULL twin). The readout itself is a panel-sized canvas laid one
+/// overlay step in front, drawn by the shared [`crate::hud::ammo_panel`]
+/// layout at panel origin (0,0) - flat emits the identical elements at the
+/// panel's origin on its 640x480 canvas (AGENTS.md section 3 - one layout, two
+/// presentations).
 fn create_ammo_forearm_panel(
     asset_cache: &mut AssetCache,
     world: &World,
@@ -445,16 +432,26 @@ fn create_ammo_forearm_panel(
 ) -> Vec<SceneObject> {
     use crate::hud::ammo_panel;
 
+    let mut objects = vec![create_forearm_hud_panel(
+        asset_cache,
+        hand_position,
+        hand_rotation,
+        Handedness::Right,
+    )];
+
     // No cycle affordance on the forearm: nothing points at this panel yet, and
     // drawing a button nobody can press would be a lie.
     let readout = ammo_panel::AmmoReadout::from_world(world, false);
-    let canvas = ammo_panel::build_forearm_panel_canvas(&readout);
+    objects.append(
+        &mut ammo_panel::build_readout_canvas(&readout).render_world_space(
+            asset_cache,
+            forearm_panel_transform(hand_position, hand_rotation, Handedness::Right)
+                * Matrix4::from_translation(vec3(0.0, 0.0, OVERLAY_Z_OFFSET)),
+            None,
+            None,
+            OVERLAY_Z_OFFSET,
+        ),
+    );
 
-    canvas.render_world_space(
-        asset_cache,
-        forearm_panel_transform(hand_position, hand_rotation, Handedness::Right),
-        None,
-        None,
-        OVERLAY_Z_OFFSET,
-    )
+    objects
 }
