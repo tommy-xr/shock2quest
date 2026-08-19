@@ -53,8 +53,8 @@ pub mod vr_crouch;
 pub mod zip_asset_path;
 
 use scenes::{
-    CutscenePlayerScene, GameOverScene, LoadGameScene, MainMenuScene, SceneInitResult,
-    create_initial_scene, load_mission_from_save_data, resolve_ending_cutscene,
+    CutscenePlayerScene, DeveloperScene, GameOverScene, LoadGameScene, MainMenuScene,
+    SceneInitResult, create_initial_scene, load_mission_from_save_data, resolve_ending_cutscene,
 };
 
 pub use mission::SpawnLocation;
@@ -1674,6 +1674,12 @@ impl Game {
             GlobalEffect::ShowMainMenu => {
                 self.pending_transition = None;
                 self.set_active_scene(Box::new(MainMenuScene::new()));
+            }
+            GlobalEffect::ShowDeveloper => {
+                // A frontend screen swap, like ShowLoadGame: no ledger
+                // write-back, and any pending transition is abandoned.
+                self.pending_transition = None;
+                self.set_active_scene(Box::new(DeveloperScene::new()));
             }
             GlobalEffect::CompleteCampaign => {
                 // Preserve the destroyed head and the rest of the finale state

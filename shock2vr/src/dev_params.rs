@@ -85,13 +85,23 @@ dev_params! {
     /// untouched, 1 blacks it out. Default matches the old
     /// `pause_menu::WORLD_DIM_STRENGTH` const.
     WORLD_DIM_STRENGTH = float("dim_strength", "Pause dim", 0.72, 0.0, 1.0, 0.02),
-    // An eye-height offset was considered for this seed set and deliberately
-    // left out: on the Quest the eye is the *tracked pose* (capped in
-    // `oculus_runtime`), which never reads `player_eye_height_for` - so the
-    // knob would be inert exactly where live tuning matters, while the debug
-    // runtime's `--vr` path (which does read it) would falsely "verify" it.
-    // It returns with the Developer screen once the tracked-stage offset is
-    // wired through the runtime (head and hands together).
+    /// Vertical offset applied to the whole tracked stage on the Quest, in
+    /// **meters** (the stage's own unit): head, hands and the per-eye view
+    /// move together, because `oculus_runtime` adds it inside its single
+    /// stage-to-pawn mapping. The per-eye cap that holds a *tracked* head
+    /// inside the collider crown is raised by the same offset, so the knob
+    /// moves the view by exactly what it moves the hands by rather than
+    /// saturating the view a couple of centimeters in (standing headroom above
+    /// the collider center is only ~0.85 m, which an adult's tracked eye
+    /// already nearly fills). At the default 0 the cap is unchanged.
+    /// Deliberately NOT read by
+    /// `player_eye_height_for` (the flat/debug camera): on the Quest the eye
+    /// is the tracked pose, which never goes through that accessor - wiring
+    /// the accessor instead would leave the knob inert exactly where live
+    /// tuning matters while the debug runtime falsely "verified" it (the PR1
+    /// deferral). Consequently the debug runtime cannot exercise this knob;
+    /// it needs a worn check on device.
+    EYE_HEIGHT_OFFSET = float("eye_offset", "Eye height (m)", 0.0, -0.5, 0.5, 0.02),
 }
 
 /// Every parameter with its id, in declaration order.

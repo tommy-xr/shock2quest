@@ -80,6 +80,7 @@ const FALLBACK_BUTTON_PITCH: f32 = 76.0;
 enum MenuAction {
     NewGame,
     LoadGame,
+    Developer,
     Quit,
 }
 
@@ -92,6 +93,13 @@ struct MenuItem {
     /// `None` for an entry that exists on the original screen but that the port
     /// does not implement yet - drawn dimmed, and not clickable.
     action: Option<MenuAction>,
+    /// Label drawn instead of the string-table text (and the fallback). Used
+    /// by the Developer entry, which repurposes the inert Options slot: the
+    /// row must read honestly, and a one-word override is deliberately
+    /// cheaper than teaching the shipped `.STR` machinery a new key. Dropping
+    /// the override is the whole retreat path when a real options screen
+    /// lands.
+    label_override: Option<&'static str>,
 }
 
 // MAIN.PCX (native 640x480) has a vertical stack of six buttons down the right
@@ -105,31 +113,39 @@ const MENU_ITEMS: &[MenuItem] = &[
         string_key: "new_game",
         fallback_label: "New Game",
         action: Some(MenuAction::NewGame),
+        label_override: None,
     },
     MenuItem {
         string_key: "load_game",
         fallback_label: "Load Game",
         action: Some(MenuAction::LoadGame),
+        label_override: None,
     },
+    // The Options slot hosts the Developer screen while no real options
+    // screen exists (see `MenuItem::label_override`).
     MenuItem {
         string_key: "options",
         fallback_label: "Options",
-        action: None,
+        action: Some(MenuAction::Developer),
+        label_override: Some("Developer"),
     },
     MenuItem {
         string_key: "credits",
         fallback_label: "Credits",
         action: None,
+        label_override: None,
     },
     MenuItem {
         string_key: "intro",
         fallback_label: "Intro",
         action: None,
+        label_override: None,
     },
     MenuItem {
         string_key: "quit",
         fallback_label: "Quit",
         action: Some(MenuAction::Quit),
+        label_override: None,
     },
 ];
 
@@ -164,6 +180,9 @@ fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
     MENU_ITEMS
         .iter()
         .map(|item| {
+            if let Some(label) = item.label_override {
+                return label.to_owned();
+            }
             strings
                 // The strings importer lowercases its keys.
                 .and_then(|s| s.get(item.string_key))
@@ -399,6 +418,9 @@ impl GameScene for MainMenuScene {
             }
             Some(MenuAction::LoadGame) => {
                 vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
+            }
+            Some(MenuAction::Developer) => {
+                vec![Effect::GlobalEffect(GlobalEffect::ShowDeveloper)]
             }
             Some(MenuAction::Quit) => vec![Effect::GlobalEffect(GlobalEffect::Quit)],
             None => Vec::new(),
@@ -718,11 +740,21 @@ mod tests {
     }
 
     #[test]
-    fn click_over_an_unimplemented_item_does_nothing() {
-        // Rect 2 is "Options", still unimplemented: canvas y 172..232.
+    fn rising_edge_over_the_developer_slot_activates_it() {
+        // Rect 2 was the inert "Options" slot; it now hosts the Developer
+        // screen (canvas y 172..232).
         let rects = menu_rects(None);
         assert!(rects[2].contains(vec2(512.0, 202.0)));
         let (action, _, _) = resolve_click(pointer_at(0.8, 0.4208, true), false, SCREEN, &rects);
+        assert_eq!(action, Some(MenuAction::Developer));
+    }
+
+    #[test]
+    fn click_over_an_unimplemented_item_does_nothing() {
+        // Rect 3 is "Credits", still unimplemented: canvas y 248..308.
+        let rects = menu_rects(None);
+        assert!(rects[3].contains(vec2(512.0, 278.0)));
+        let (action, _, _) = resolve_click(pointer_at(0.8, 0.5792, true), false, SCREEN, &rects);
         assert_eq!(action, None);
     }
 
@@ -761,6 +793,9 @@ mod tests {
         // Missing key and empty value both fall back to the shipped English.
         assert_eq!(labels[1], "Load Game");
         assert_eq!(labels[4], "Intro");
+        // The repurposed Options slot reads what it does, whatever the string
+        // table says (the override wins even over a shipped "Options").
+        assert_eq!(labels[2], "Developer");
     }
 
     /// The body of the shipped `res/intrface/MAIN.STR`, verbatim (the file is
@@ -794,13 +829,14 @@ mod tests {
         // shipped key would be a prompt to wire up another item.
         assert_eq!(strings.len(), MENU_ITEMS.len());
 
-        // Resolved through the real parser, top to bottom.
+        // Resolved through the real parser, top to bottom - the Options slot
+        // is overridden to read what it now does.
         assert_eq!(
             menu_labels(Some(&strings)),
             vec![
                 "New Game",
                 "Load Game",
-                "Options",
+                "Developer",
                 "Credits",
                 "Intro",
                 "Quit"
@@ -816,7 +852,7 @@ mod tests {
             vec![
                 "New Game",
                 "Load Game",
-                "Options",
+                "Developer",
                 "Credits",
                 "Intro",
                 "Quit"
