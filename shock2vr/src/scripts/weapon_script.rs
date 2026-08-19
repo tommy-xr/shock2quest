@@ -33,6 +33,17 @@ const MELEE_DAMAGE: f32 = 6.0;
 /// guns for now; per-weapon loudness is a follow-up.
 const GUNSHOT_NOISE_RADIUS: f32 = 50.0 / SCALE_FACTOR;
 
+/// Rotation taking the projectile's +Z travel axis onto a Dark gun model's
+/// barrel, which is authored along the model's **-X**. Every VR grip entry's
+/// -90 degree yaw exists to point that same axis out of the hand, and every
+/// wieldable model's muzzle vhot sits at its -X extreme (see the
+/// `vr_config` grip table and its `gun_grips_aim_the_barrel_out_of_the_hand`
+/// test), so this one rotation aims every VR weapon - ballistic, energy and
+/// psi alike - down its own rendered barrel.
+fn barrel_axis_from_forward() -> Quaternion<f32> {
+    Quaternion::from_angle_y(Deg(-90.0))
+}
+
 /// The weapon entity's current world position (from its live transform).
 fn weapon_world_position(world: &World, entity_id: EntityId) -> Option<cgmath::Vector3<f32>> {
     let v_transform = world.borrow::<View<RuntimePropTransform>>().ok()?;
@@ -361,6 +372,10 @@ pub(super) fn create_projectile(
         }
     }
 
+    // VR: the weapon is a physical object in the hand, so the shot is defined
+    // entirely by the *rendered* weapon - it leaves the model's muzzle vhot
+    // travelling down the model's barrel. Both are read from the weapon's own
+    // live transform, so no per-weapon aim correction is involved.
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let v_vhots = world.borrow::<View<RuntimePropVhots>>().unwrap();
 
@@ -368,37 +383,29 @@ pub(super) fn create_projectile(
         .get(entity_id)
         .map(|vhots| vhots.0.clone())
         .unwrap_or_default();
-    let vhot = vhots
-        .get(0)
+    // The fire point is the model's first vhot: every wieldable gun/amp model
+    // authors its muzzle there, at the -X tip of the barrel. Documented
+    // fallback for a model that carries no vhot at all (the classic `laser`
+    // and `lasehand` meshes, for instance): the model origin, i.e. the grip -
+    // the shot still leaves along the barrel, just from the hand.
+    let muzzle = vhots
+        .first()
         .map(|v| v.point)
         .unwrap_or(point3(0.0, 0.0, 0.0));
 
     let transform = v_transform.get(entity_id).unwrap();
 
-    let adjustments = vr_config::get_vr_hand_model_adjustments_from_entity(
-        entity_id,
-        world,
-        // TODO: I guess we don't care about handedness for now,
-        // since it only affects the flipping of the weapon... but truly we should consider it.
-        vr_config::Handedness::Left,
-    );
-
-    let rotation = adjustments.rotation;
-    let projectile_rotation: Matrix4<f32> =
-        vr_config::get_projectile_rotation_from_entity(entity_id, world).into();
-    let rot_matrix: Matrix4<f32> = rotation.into();
-    let inv_rot_matrix: Matrix4<f32> = rotation.invert().into();
-
-    // Adjust the vhot position to be in the same coordinate space as the weapon
-    let position = inv_rot_matrix.transform_point(vhot);
-
     Effect::CreateEntity {
         template_id: projectile_template_id,
-        position,
+        position: point3(0.0, 0.0, 0.0),
         // HACK: Not sure why we need to do this, but seems projectile
         // models are rotated 90 degrees
         orientation: Quaternion::from_angle_y(Deg(90.0)),
-        root_transform: transform.0 * rot_matrix * projectile_rotation,
+        // Projectile velocity is `root_transform * (0, 0, magnitude)`, so put
+        // the muzzle at the origin and aim +Z down the barrel.
+        root_transform: transform.0
+            * Matrix4::from_translation(muzzle.to_vec())
+            * Matrix4::from(barrel_axis_from_forward()),
         options: CreateEntityOptions {
             force_visible: true,
             ..CreateEntityOptions::default()
@@ -469,6 +476,87 @@ mod tests {
                         && matches!(msg.payload, MessagePayload::Damage { .. })
             )
         })
+    }
+
+    /// Where a VR shot starts and which way it flies, in world space, from the
+    /// `CreateEntity` the script returns.
+    fn vr_fire_geometry(
+        transform: Matrix4<f32>,
+        vhots: Vec<dark::ss2_bin_obj_loader::Vhot>,
+    ) -> (cgmath::Vector3<f32>, cgmath::Vector3<f32>) {
+        let mut world = World::new();
+        let weapon = world.add_entity((
+            Links::empty(),
+            RuntimePropTransform(transform),
+            RuntimePropVhots(vhots),
+        ));
+
+        let effect = create_projectile(
+            &world,
+            weapon,
+            -1,
+            &dark::properties::ProjectileOptions {
+                order: 0,
+                setting: 0,
+            },
+        );
+        let Effect::CreateEntity {
+            position,
+            root_transform,
+            ..
+        } = effect
+        else {
+            panic!("firing must create the projectile entity");
+        };
+        // Projectile velocity is root_transform * (0, 0, magnitude).
+        let origin = root_transform.transform_point(position).to_vec();
+        let forward = root_transform.transform_vector(vec3(0.0, 0.0, 1.0));
+        (origin, forward.normalize())
+    }
+
+    fn muzzle_vhot(point: cgmath::Point3<f32>) -> dark::ss2_bin_obj_loader::Vhot {
+        dark::ss2_bin_obj_loader::Vhot {
+            vhot_type: dark::ss2_bin_obj_loader::VhotType::Unknown,
+            point,
+        }
+    }
+
+    /// A VR shot leaves the model's muzzle vhot travelling down the barrel
+    /// (the model's -X), for any pose the hand happens to hold the weapon in.
+    #[test]
+    fn a_vr_shot_leaves_the_muzzle_vhot_along_the_barrel() {
+        // A deliberately awkward pose: yawed, pitched and translated, so a
+        // wrong fire axis cannot coincide with the right one.
+        let rotation = Quaternion::from_angle_y(Deg(35.0)) * Quaternion::from_angle_x(Deg(-20.0));
+        let translation = vec3(3.0, 1.5, -4.0);
+        let transform = Matrix4::from_translation(translation) * Matrix4::from(rotation);
+        let vhot = point3(-0.77, -0.03, 0.06);
+
+        let (origin, forward) = vr_fire_geometry(transform, vec![muzzle_vhot(vhot)]);
+
+        let expected_origin = translation + rotation * vhot.to_vec();
+        let expected_forward = rotation * vec3(-1.0, 0.0, 0.0);
+        assert!(
+            (origin - expected_origin).magnitude() < 1e-5,
+            "shot started at {origin:?}, not at the muzzle {expected_origin:?}"
+        );
+        assert!(
+            (forward - expected_forward).magnitude() < 1e-5,
+            "shot flew {forward:?}, not down the barrel {expected_forward:?}"
+        );
+    }
+
+    /// A model with no vhot at all (the classic `laser` / `lasehand` meshes)
+    /// falls back to the model origin, still firing down the barrel.
+    #[test]
+    fn a_vr_shot_from_a_vhotless_model_falls_back_to_the_model_origin() {
+        let rotation = Quaternion::from_angle_y(Deg(-90.0));
+        let transform = Matrix4::from_translation(vec3(1.0, 2.0, 3.0)) * Matrix4::from(rotation);
+
+        let (origin, forward) = vr_fire_geometry(transform, vec![]);
+
+        assert!((origin - vec3(1.0, 2.0, 3.0)).magnitude() < 1e-5);
+        assert!((forward - rotation * vec3(-1.0, 0.0, 0.0)).magnitude() < 1e-5);
     }
 
     #[test]
