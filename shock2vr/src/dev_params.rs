@@ -102,6 +102,14 @@ dev_params! {
     /// deferral). Consequently the debug runtime cannot exercise this knob;
     /// it needs a worn check on device.
     EYE_HEIGHT_OFFSET = float("eye_offset", "Eye height (m)", 0.0, -0.5, 0.5, 0.02),
+    /// Draw the melee contact volume as a world-space wireframe (see
+    /// `mission::melee_debug`). A 0/1 knob declared as a float, which is what
+    /// the module's `DevParamKind::Bool` note describes: with `step` equal to
+    /// the whole range, the Developer screen's `<`/`>` arrows already walk it
+    /// as an on/off switch, so no new kind is needed to get a usable control.
+    /// `mission_core` reads it once per rendered frame, satisfying the
+    /// registry's every-frame ground rule.
+    MELEE_VOLUMES = float("melee_volumes", "Melee volumes", 0.0, 0.0, 1.0, 1.0),
 }
 
 /// Every parameter with its id, in declaration order.

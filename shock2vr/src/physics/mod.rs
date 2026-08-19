@@ -5283,7 +5283,6 @@ impl PhysicsWorld {
                     shape: DebugColliderShape::from_typed(collider.shape().as_typed_shape()),
                     position: Vector3::new(t.x, t.y, t.z),
                     rotation: Quaternion::new(r.w, r.i, r.j, r.k),
-                    is_sensor: collider.is_sensor(),
                 })
             })
             .collect()
@@ -5617,7 +5616,6 @@ pub struct DebugColliderVolume {
     pub shape: DebugColliderShape,
     pub position: Vector3<f32>,
     pub rotation: Quaternion<f32>,
-    pub is_sensor: bool,
 }
 
 /// Rapier-free description of a rigid body, for debug tooling / HTTP introspection.
@@ -5665,18 +5663,25 @@ pub struct DebugBodyInfo {
 }
 
 /// Name a collider's primitive kind for debug reporting.
+///
+/// The three drawable kinds are named by classifying through
+/// [`DebugColliderShape::from_typed`] rather than by a second `TypedShape`
+/// match, so the name a body reports and the shape the overlay draws cannot
+/// disagree. Only the kinds the overlay does not draw are named here.
 fn shape_kind_name(shape: TypedShape<'_>) -> &'static str {
-    match shape {
-        TypedShape::Ball(_) => "ball",
-        TypedShape::Capsule(_) => "capsule",
-        TypedShape::Cuboid(_) => "cuboid",
-        TypedShape::Cylinder(_) => "cylinder",
-        TypedShape::Cone(_) => "cone",
-        TypedShape::TriMesh(_) => "trimesh",
-        TypedShape::HeightField(_) => "heightfield",
-        TypedShape::Compound(_) => "compound",
-        TypedShape::ConvexPolyhedron(_) => "convex",
-        _ => "other",
+    match DebugColliderShape::from_typed(shape) {
+        DebugColliderShape::Ball { .. } => "ball",
+        DebugColliderShape::Capsule { .. } => "capsule",
+        DebugColliderShape::Cuboid { .. } => "cuboid",
+        DebugColliderShape::Other => match shape {
+            TypedShape::Cylinder(_) => "cylinder",
+            TypedShape::Cone(_) => "cone",
+            TypedShape::TriMesh(_) => "trimesh",
+            TypedShape::HeightField(_) => "heightfield",
+            TypedShape::Compound(_) => "compound",
+            TypedShape::ConvexPolyhedron(_) => "convex",
+            _ => "other",
+        },
     }
 }
 

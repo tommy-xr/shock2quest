@@ -2,7 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer, lookQuat } from "../src/index.js";
-import type { EntitySummary, Vec3 } from "../src/types.js";
+import type { EntitySummary, Quat, Vec3 } from "../src/types.js";
+import {
+  add,
+  normalize,
+  quatConjugate,
+  quatMultiply,
+  quatNormalize,
+  quatRotate,
+  sub,
+} from "./helpers/vr-hand.js";
 
 // Why does a VR melee swing that the e2e suite measures at a reliable 9 HP not
 // land for a player in a headset?
@@ -34,29 +43,6 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const WRENCH_ARCHETYPE = -928;
 const MONKEY = 543;
 
-const add = (a: Vec3, b: Vec3): Vec3 => a.map((x, i) => x + b[i]) as Vec3;
-const sub = (a: Vec3, b: Vec3): Vec3 => a.map((x, i) => x - b[i]) as Vec3;
-const scale = (a: Vec3, f: number): Vec3 => a.map((x) => x * f) as Vec3;
-const dot = (a: number[], b: number[]): number =>
-  a.reduce((sum, x, i) => sum + x * b[i], 0);
-const norm = (a: Vec3): Vec3 => scale(a, 1 / Math.sqrt(dot(a, a)));
-const qconj = ([x, y, z, w]: number[]): number[] => [-x, -y, -z, w];
-function qmul(a: number[], b: number[]): [number, number, number, number] {
-  const [ax, ay, az, aw] = a;
-  const [bx, by, bz, bw] = b;
-  return [
-    aw * bx + ax * bw + ay * bz - az * by,
-    aw * by - ax * bz + ay * bw + az * bx,
-    aw * bz + ax * by - ay * bx + az * bw,
-    aw * bw - ax * bx - ay * by - az * bz,
-  ];
-}
-function qrotate(q: number[], v: Vec3): Vec3 {
-  return qmul(qmul(q, [...v, 0]), qconj(q)).slice(0, 3) as Vec3;
-}
-const qnorm = (q: number[]): [number, number, number, number] =>
-  q.map((v) => v / Math.sqrt(dot(q, q))) as [number, number, number, number];
-
 async function byMissionId(
   game: GameServer,
   name: string,
@@ -76,15 +62,21 @@ async function hitPoints(game: GameServer, id: number): Promise<number> {
   return Number(property.value);
 }
 
-async function payloadsTo(
+/** Payload names delivered to `targetId` since `sequence`, with the other
+ *  party each one names (the sender, or for `Collided` the thing touched). */
+async function messagesTo(
   game: GameServer,
   sequence: number,
   targetId: number,
-): Promise<string[]> {
+): Promise<{ payload: string; fromId: number | null }[]> {
   return (await game.messages.recent()).messages
     .filter((m) => m.sequence > sequence && m.to.entity_id === targetId)
-    .map((m) => m.payload);
+    .map((m) => ({ payload: m.payload, fromId: m.from?.entity_id ?? null }));
 }
+
+const payloadNames = (
+  messages: { payload: string; fromId: number | null }[],
+): string[] => messages.map((m) => m.payload);
 
 const lastSequence = async (game: GameServer): Promise<number> =>
   (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
@@ -122,13 +114,13 @@ test(
     });
     const wrenchBody = wrenchBodies.bodies[0];
     assert.ok(wrenchBody, "the held Wrench must have a contact body");
-    const pawnRotation = (await game.info()).player.rotation;
+    const pawnRotation = (await game.info()).player.rotation as Quat;
     const handWorld = add(
       wrenchBodies.player_position,
-      qrotate(pawnRotation, [0, 1.0, 0]),
+      quatRotate(pawnRotation, [0, 1.0, 0]),
     );
-    const contactOffset = qrotate(
-      qconj(pawnRotation),
+    const contactOffset = quatRotate(
+      quatConjugate(pawnRotation),
       sub(wrenchBody.position, handWorld),
     );
 
@@ -183,9 +175,9 @@ test(
           ?.position as Vec3) ?? (staged.position as Vec3);
       const info = await game.info();
       const pawn = info.player.position as Vec3;
-      const pawnQ = info.player.rotation as number[];
+      const pawnQ = info.player.rotation as Quat;
       const eye = add(pawn, [0, info.player.camera_offset[1], 0]);
-      const weaponQ = lookQuat(norm(sub(torso, eye)));
+      const weaponQ = lookQuat(normalize(sub(torso, eye)));
       await game.input.lookAtWorldPoint(torso, {
         eyeHeight: info.player.camera_offset[1],
       });
@@ -193,14 +185,14 @@ test(
         torso,
         // Place the *contact volume* (not the hand) at a world position.
         placeVolumeAt: async (volumeWorld: Vec3) => {
-          const worldHand = sub(volumeWorld, qrotate(weaponQ, contactOffset));
+          const worldHand = sub(volumeWorld, quatRotate(weaponQ, contactOffset));
           await game.input.set(
             "right_hand.position",
-            qrotate(qconj(pawnQ), sub(worldHand, pawn)),
+            quatRotate(quatConjugate(pawnQ), sub(worldHand, pawn)),
           );
           await game.input.set(
             "right_hand.rotation",
-            qnorm(qmul(qconj(pawnQ), weaponQ)),
+            quatNormalize(quatMultiply(quatConjugate(pawnQ), weaponQ)),
           );
         },
       };
@@ -213,17 +205,24 @@ test(
     const restingSequence = await lastSequence(game);
     await resting.placeVolumeAt(resting.torso);
     await game.step({ frames: 30 });
-    const restingPayloads = await payloadsTo(game, restingSequence, monkey.id);
+    const restingMessages = await messagesTo(game, restingSequence, monkey.id);
     assert.ok(
-      restingPayloads.includes("Collided"),
-      `the volume must genuinely be touching the victim: ${JSON.stringify(restingPayloads)}`,
+      restingMessages.some(
+        (m) => m.payload === "Collided" && m.fromId === wrench.entity_id,
+      ),
+      // Specifically a contact with the WRENCH: the monkey touches the floor
+      // and its neighbours constantly, so a bare "some Collided arrived" would
+      // pass even if the weapon never reached it - and this assertion is the
+      // whole basis for calling the next one an edge-semantics bug rather than
+      // a miss.
+      `the weapon's volume must genuinely be touching the victim: ${JSON.stringify(restingMessages)}`,
     );
 
     const beforeHold = await hitPoints(game, monkey.id);
     const holdSequence = await lastSequence(game);
     await game.input.set("right_hand.trigger", 1);
     await game.step({ frames: 30 });
-    const held = await payloadsTo(game, holdSequence, monkey.id);
+    const held = payloadNames(await messagesTo(game, holdSequence, monkey.id));
     // TODO(#1048): this asserts the BUG. Pulling the trigger with the weapon
     // buried in a creature must hurt it. It does not, because Rapier never
     // re-emits `Started` for a contact that never ended and
@@ -243,35 +242,46 @@ test(
     // --- 2. The same weapon and victim, with contact that begins AFTER it. ---
     // A continuous swing, one sample per simulation frame with no dwell - the
     // gesture the existing suites avoid - driving the contact volume down
-    // through the torso and out the far side at ~9 m/s.
+    // through the torso and out the far side at ~12 m/s.
     await game.input.set("right_hand.trigger", 0);
     await game.step({ frames: 2 });
-    const swing = await aimAtTorso();
+    const windUpAim = await aimAtTorso();
     // Wind up well clear of the victim. This has to clear the *volume*, which
     // is 1.83 units long, so a wind-up that looks generous for a wrench is
     // barely separation at all - retreating only ~1 unit leaves the contact
     // alive and the swing below silently deals nothing.
     const windUp = 3.0;
     const followThrough = -0.9;
-    await swing.placeVolumeAt(add(swing.torso, [0, windUp, 0]));
+    // Every placement re-reads the live victim rather than a torso sampled
+    // once up front. The monkey is a live AI that phase 1 just prodded; a
+    // gesture staged against a position it has since walked away from swings
+    // through empty air, which looks exactly like the bug under test and would
+    // make this a false green. Measured drift over the wind-up alone was 1.13
+    // units - more than half the contact volume - so this is not hypothetical.
+    // Tracking is also the honest gesture: a player swings at where the
+    // creature *is*.
+    await windUpAim.placeVolumeAt(add(windUpAim.torso, [0, windUp, 0]));
     await game.step({ frames: 20 });
+
     const swingSequence = await lastSequence(game);
     await game.input.set("right_hand.trigger", 1);
     await game.step({ frames: 2 });
-    // 20 samples over 3.9 units is ~0.2 units per 60 Hz step: about 12 m/s of
-    // collider travel, a brisk but ordinary swing. Sub-collider steps are not
-    // the point - the volume is never parked on the target, and never dwells.
+    // 21 placements spanning 3.9 units is ~0.2 units per 60 Hz step: about
+    // 12 m/s of collider travel, a brisk but ordinary swing. Sub-collider
+    // steps are not the point - the volume is never parked on the target, and
+    // never dwells.
     const samples = 20;
     for (let i = 0; i <= samples; i++) {
       const t = i / samples;
-      await swing.placeVolumeAt(
-        add(swing.torso, [0, windUp + (followThrough - windUp) * t, 0]),
+      const aim = await aimAtTorso();
+      await aim.placeVolumeAt(
+        add(aim.torso, [0, windUp + (followThrough - windUp) * t, 0]),
       );
       await game.step({ frames: 1 });
     }
     await game.step({ frames: 3 });
 
-    const swung = await payloadsTo(game, swingSequence, monkey.id);
+    const swung = payloadNames(await messagesTo(game, swingSequence, monkey.id));
     assert.equal(
       swung.filter((payload) => payload === "Damage").length,
       1,

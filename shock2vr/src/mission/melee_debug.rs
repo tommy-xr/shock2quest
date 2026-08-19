@@ -11,8 +11,9 @@
 //! - **red**   - the held weapon's live contact volume (what actually deals
 //!   melee damage on contact).
 //!
-//! Toggle it at runtime with the `DebugToggleMeleeVolumes` input action - see
-//! [`crate::debug_toggles`] for why this is not a dev param yet.
+//! Toggle it at runtime with the `melee_volumes` dev param - from the
+//! Developer screen in the pause menu, or `POST /v1/dev-params`. No rebuild,
+//! and on the Quest no redeploy.
 //!
 //! WIP / not yet drawn (see the branch notes): the per-frame *swept* path of
 //! the contact volume, and the victim-side damageable volumes.
@@ -33,10 +34,13 @@ const CONTACT_COLOR: Vector3<f32> = Vector3::new(1.0, 0.15, 0.1);
 /// while reusing that builder rather than growing a parallel one.
 const BALL_SEGMENT_EPSILON: f32 = 1.0e-4;
 
-/// Wireframes for the contact volumes of the entities held in the player's
-/// hands. Empty when nothing is held or the held body has no drawable
-/// primitive collider.
-pub fn draw_melee_contact_volumes(
+/// Wireframes for the contact volumes of whatever the player is holding.
+///
+/// Deliberately not filtered to melee weapons: the question the overlay
+/// answers is "where is the volume this held thing collides with the world
+/// through?", and seeing that a held medkit has one too is information, not
+/// noise. Melee is simply the case it was built for.
+pub fn draw_held_contact_volumes(
     physics: &PhysicsWorld,
     held: (Option<EntityId>, Option<EntityId>),
 ) -> Vec<SceneObject> {
@@ -47,13 +51,13 @@ pub fn draw_melee_contact_volumes(
         .flat_map(|entity_id| physics.debug_entity_collider_volumes(entity_id))
         .collect();
 
-    draw_volumes(&volumes, CONTACT_COLOR)
+    draw_volumes(&volumes)
 }
 
 /// Convert world-space collider volumes into a single wireframe object,
 /// reusing the hitbox overlay's line builders (`dark::hit_box`) rather than
 /// growing a second debug-draw system.
-fn draw_volumes(volumes: &[DebugColliderVolume], color: Vector3<f32>) -> Vec<SceneObject> {
+fn draw_volumes(volumes: &[DebugColliderVolume]) -> Vec<SceneObject> {
     let mut shapes = std::collections::HashMap::new();
     let mut transforms = Vec::new();
 
@@ -68,7 +72,7 @@ fn draw_volumes(volumes: &[DebugColliderVolume], color: Vector3<f32>) -> Vec<Sce
             .push(Matrix4::from_translation(volume.position) * Matrix4::from(volume.rotation));
     }
 
-    draw_debug_hit_box_shapes(&shapes, &transforms, color)
+    draw_debug_hit_box_shapes(&shapes, &transforms, CONTACT_COLOR)
 }
 
 fn to_hit_box_shape(shape: DebugColliderShape) -> Option<HitBoxShape> {
@@ -109,15 +113,11 @@ mod tests {
     fn unsupported_shapes_are_skipped_rather_than_approximated() {
         assert!(to_hit_box_shape(DebugColliderShape::Other).is_none());
         assert!(
-            draw_volumes(
-                &[DebugColliderVolume {
-                    shape: DebugColliderShape::Other,
-                    position: Vector3::new(0.0, 0.0, 0.0),
-                    rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                    is_sensor: false,
-                }],
-                CONTACT_COLOR
-            )
+            draw_volumes(&[DebugColliderVolume {
+                shape: DebugColliderShape::Other,
+                position: Vector3::new(0.0, 0.0, 0.0),
+                rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            }])
             .is_empty()
         );
     }

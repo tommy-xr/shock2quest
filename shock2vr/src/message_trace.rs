@@ -41,6 +41,10 @@ use crate::util::entity_ident;
 
 const MAX_ENTRIES: usize = 256;
 
+/// How long a `Collided` between one pair of entities suppresses further ones
+/// (in 60 Hz frames). See [`record`].
+const COLLIDED_DEDUP_FRAMES: u64 = 30;
+
 /// Identity of a message endpoint. `entity_id` is only meaningful within one
 /// run (and matches the id space of the debug runtime's entity endpoints);
 /// `template_id` is the stable handle across launches.
@@ -62,8 +66,11 @@ pub struct TracedMessage {
     pub to: MessageEntity,
     /// Payload variant name (e.g. "TurnOn", "Frob").
     pub payload: String,
-    /// Sender, for the payloads that carry one (`TurnOn`/`TurnOff`/`Alarm`/
-    /// `Reset`); null otherwise - `Message` has no universal sender.
+    /// The message's *other party*, for the payloads that name one:
+    /// the sender for `TurnOn`/`TurnOff`/`Alarm`/`Reset`, and the thing
+    /// collided with for `Collided`. Null otherwise - `Message` has no
+    /// universal sender. Without it a `Collided` entry says only "this entity
+    /// touched something", which cannot answer "did the *weapon* touch it?".
     pub from: Option<MessageEntity>,
 }
 
@@ -89,6 +96,9 @@ fn sender_of(payload: &MessagePayload) -> Option<EntityId> {
         | MessagePayload::TurnOff { from }
         | MessagePayload::Alarm { from }
         | MessagePayload::Reset { from } => Some(*from),
+        // Not a sender, but the same "who was the other party" slot, and the
+        // only thing that makes a contact entry identifiable.
+        MessagePayload::Collided { with } => Some(*with),
         _ => None,
     }
 }
@@ -129,6 +139,34 @@ pub(crate) fn record(world: &World, sim_time: f64, to: EntityId, payload: &Messa
 
     let mut guard = RECENT.lock().unwrap();
     let (next_sequence, entries) = &mut *guard;
+
+    // `Collided` is the one traced payload that a *persisting* physical
+    // situation can re-emit without limit. It is an edge, not per-frame churn
+    // - but a weapon dragged along geometry, or a settling ragdoll limb, keeps
+    // separating and re-touching, and every collision dispatches to *both*
+    // parties. Left alone that can evict the whole buffer in a second.
+    //
+    // Keeping the first contact per *pair* preserves the entire diagnostic
+    // value (the question is "did these two ever touch?"), so repeats within
+    // half a second are dropped rather than the payload being filtered out
+    // wholesale as it used to be. Keying on the pair rather than on the
+    // receiver alone matters: a receiver-only key would let an unrelated
+    // contact hide the one being investigated.
+    //
+    // This bounds a *chattering* pair, not a broad settling burst across many
+    // distinct pairs, which can still churn the ring - see #1051.
+    if matches!(payload, MessagePayload::Collided { .. })
+        && entries.iter().rev().any(|previous| {
+            previous.frame + COLLIDED_DEDUP_FRAMES >= entry.frame
+                && previous.to.entity_id == entry.to.entity_id
+                && previous.payload == entry.payload
+                && previous.from.as_ref().map(|f| f.entity_id)
+                    == entry.from.as_ref().map(|f| f.entity_id)
+        })
+    {
+        return;
+    }
+
     *next_sequence += 1;
     entry.sequence = *next_sequence;
     entries.push_back(entry);
