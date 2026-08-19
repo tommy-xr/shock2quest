@@ -15,7 +15,13 @@ import { GameServer } from "../src/index.js";
 //
 // The assertions are the two things the player actually experiences - the bolt
 // survives and travels, and the cast costs no health - at a hold close enough
-// to the body that the muzzle is inside the player's capsule.
+// to the body that the muzzle is inside the player's capsule. That closeness is
+// asserted rather than assumed: if a future grip change moved the muzzle clear
+// of the capsule this test would stop covering anything, so it fails loudly
+// instead.
+//
+// Verified negatively: on the commit before the fix this fails with
+// "the bolt cast from a chest hold must survive, not detonate on the player".
 //
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
@@ -26,6 +32,14 @@ const TRAINING_ROOM = { x: 238.0, y: 23.5, z: 189.2 };
 
 /** Barrel yawed so the model's -X points away from the player, not into them. */
 const BARREL_FORWARD = [0, 0.7071068, 0, 0.7071068];
+
+/**
+ * The standing player capsule's radius in world units
+ * (`PLAYER_STANDING_RADIUS / SCALE_FACTOR` = 1.2 / 2.5). A bolt spawning within
+ * this of the pawn's vertical axis starts inside the shooter - the whole
+ * condition this test exists to cover.
+ */
+const PLAYER_CAPSULE_RADIUS = 1.2 / 2.5;
 
 /**
  * Holds that put the amp's muzzle inside the player's own capsule. These are
@@ -86,34 +100,54 @@ test(
       await game.input.set("right_hand.rotation", BARREL_FORWARD);
       await game.step({ frames: 10 });
 
+      assert.equal(
+        (await cryoBolts(game)).length,
+        0,
+        `no bolt from an earlier hold may still be alive before the ${label} cast`,
+      );
+
       const before = (await game.info()).player;
 
       await game.input.set("right_hand.trigger", 1.0);
       await game.step({ frames: 1 });
       await game.input.set("right_hand.trigger", 0.0);
 
-      const boltsAtSpawn = await cryoBolts(game);
+      const spawned = await cryoBolts(game);
+      assert.equal(
+        spawned.length,
+        1,
+        `casting from a ${label} hold should spawn exactly one Cryo PSI bolt`,
+      );
+      const bolt = spawned[0]!;
+      const spawn = bolt.position;
+
+      // Precondition: the shot really does start inside the shooter. Without
+      // this the test could quietly stop exercising the bug.
+      const radial = Math.hypot(
+        spawn[0]! - before.position[0]!,
+        spawn[2]! - before.position[2]!,
+      );
       assert.ok(
-        boltsAtSpawn.length > 0,
-        `casting from a ${label} hold should spawn a Cryo PSI bolt`,
+        radial < PLAYER_CAPSULE_RADIUS,
+        `the ${label} hold must put the muzzle inside the player capsule for this test to mean anything (radial ${radial.toFixed(2)} >= ${PLAYER_CAPSULE_RADIUS})`,
       );
 
       // Eight frames is far longer than the one frame the bolt used to survive
       // when it collided with the shooter, and well short of its lifetime.
       await game.step({ frames: 8 });
 
-      const boltsInFlight = await cryoBolts(game);
+      // Track the SAME entity - a different bolt would make the distance
+      // measurement meaningless.
+      const inFlight = (await cryoBolts(game)).find((e) => e.id === bolt.id);
       assert.ok(
-        boltsInFlight.length > 0,
+        inFlight,
         `the bolt cast from a ${label} hold must survive, not detonate on the player`,
       );
 
-      const spawn = boltsAtSpawn[0]!.position;
-      const flown = boltsInFlight[0]!.position;
       const travelled = Math.hypot(
-        flown[0]! - spawn[0]!,
-        flown[1]! - spawn[1]!,
-        flown[2]! - spawn[2]!,
+        inFlight.position[0]! - spawn[0]!,
+        inFlight.position[1]! - spawn[1]!,
+        inFlight.position[2]! - spawn[2]!,
       );
       assert.ok(
         travelled > 1.0,
@@ -132,8 +166,9 @@ test(
         `a tier 1 cast from a ${label} hold costs exactly one psi point`,
       );
 
-      // Let the bolts clear before the next hold.
-      await game.step({ frames: 90 });
+      // Let the bolts clear before the next hold (asserted at the top of the
+      // next iteration).
+      await game.step({ frames: 120 });
     }
   },
 );

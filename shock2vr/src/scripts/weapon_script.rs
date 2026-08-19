@@ -707,6 +707,15 @@ pub(super) fn create_muzzle_flash(
     }
 }
 
+/// Spawn a shot from a weapon **the player is firing**.
+///
+/// This is the player's fire path only: the sole production senders of
+/// `TriggerPull` are `virtual_hand` (the VR hand) and `flat_player_controller`,
+/// so every projectile created here belongs to the player. AI and turret shots
+/// never reach this function - `ai_util` emits its own `Effect::CreateEntity`.
+/// That is why the shot is unconditionally marked `player_fired_projectile`
+/// below, which makes it transparent to the player's own capsule; an AI shot,
+/// being unmarked, still hits the player normally.
 pub(super) fn create_projectile(
     world: &World,
     entity_id: EntityId,
@@ -718,7 +727,7 @@ pub(super) fn create_projectile(
     // the projectile just ahead of the camera travelling straight along the
     // crosshair, ignoring the offset/rotated barrel transform. This makes both
     // hitscan bullets and slow physics projectiles (grenades) track the
-    // crosshair. VR/AI weapons have no RuntimePropFlatAim and fall through.
+    // crosshair. A VR weapon has no RuntimePropFlatAim and falls through.
     {
         let v_flat_aim = world.borrow::<View<RuntimePropFlatAim>>().unwrap();
         if let Ok(aim) = v_flat_aim.get(entity_id) {

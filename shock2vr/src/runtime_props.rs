@@ -328,6 +328,24 @@ pub struct RuntimePropProjectileRayOrigin(pub Point3<f32>);
 /// whenever the weapon is held in close to the body (a natural chest/hip hold).
 /// Both are the player shooting; neither may hit the player. AI and turret
 /// projectiles carry no marker and keep hitting the player normally.
+///
+/// The marker lasts the projectile's whole flight, not just the frames near the
+/// muzzle, so a player-fired body stays transparent to the shooter for its
+/// entire life: a grenade that rebounds off a wall passes through its thrower
+/// rather than detonating on contact with them. It still detonates on the
+/// surface it hits, and `radius_blast` finds the player by position rather than
+/// by collider, so splash damage reaches them normally. Being permanently
+/// transparent also hides these bodies from the player's own movement queries
+/// (`player_movement_filter`), so the player can walk through their own grenade
+/// at rest - preferred over the alternative of being able to shoot yourself.
+///
+/// Not serialized, like every other runtime prop, and - unlike
+/// `RuntimePropLaunchedProjectile` - deliberately not restored on load either,
+/// matching `RuntimePropProjectileRayOrigin`: in-flight projectile state is
+/// already lossy across a save. The residual case is a save taken during the
+/// frame or two a bolt still overlaps the capsule, which reloads solid to the
+/// player. If that ever proves reachable in practice, mirror the
+/// `launched_projectiles` round-trip in `EntitySaveData`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropPlayerFiredProjectile;
 

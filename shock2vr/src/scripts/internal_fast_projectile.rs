@@ -184,7 +184,7 @@ impl Script for InternalFastProjectileScript {
 fn is_player_fired(world: &World, entity_id: EntityId) -> bool {
     world
         .borrow::<View<RuntimePropPlayerFiredProjectile>>()
-        .is_ok_and(|fired| fired.get(entity_id).is_ok())
+        .is_ok_and(|fired| fired.contains(entity_id))
 }
 
 /// Whether a collider is one of this creature's own hitboxes. Read from the
