@@ -73,6 +73,12 @@ pub struct AnimationPlayer {
     /// `AnimationInfo::cancel_root_motion`). Set for first-person viewmodels,
     /// whose entity transform is re-anchored to the camera every frame.
     cancel_root_motion: bool,
+    /// Rigid model-space transform composed onto every posed joint after
+    /// animation (`get_transforms` returns `post * joint`). Used by the VR
+    /// melee wield to align the posed arm's fist and weapon axis with the
+    /// entity's grip frame without moving the entity (and its contact
+    /// collider). `None` for every ordinary player.
+    post_transform: Option<Matrix4<f32>>,
 }
 
 impl AnimationPlayer {
@@ -87,6 +93,7 @@ impl AnimationPlayer {
             blend_state: None,
             rotation_pos: 0.0,
             cancel_root_motion: false,
+            post_transform: None,
         }
     }
     pub fn from_animation(animation_clip: Rc<AnimationClip>) -> AnimationPlayer {
@@ -101,6 +108,7 @@ impl AnimationPlayer {
             blend_state: None,
             rotation_pos: 0.0,
             cancel_root_motion: false,
+            post_transform: None,
         }
     }
 
@@ -120,6 +128,7 @@ impl AnimationPlayer {
             blend_state: None,
             rotation_pos: 0.0,
             cancel_root_motion: false,
+            post_transform: None,
         }
     }
 
@@ -165,6 +174,7 @@ impl AnimationPlayer {
             blend_state,
             rotation_pos: 0.0,
             cancel_root_motion: player.cancel_root_motion,
+            post_transform: player.post_transform,
         }
     }
 
@@ -237,6 +247,7 @@ impl AnimationPlayer {
             blend_state,
             rotation_pos: 0.0,
             cancel_root_motion: player.cancel_root_motion,
+            post_transform: player.post_transform,
         }
     }
 
@@ -245,6 +256,17 @@ impl AnimationPlayer {
     pub fn with_root_motion_cancelled(player: &AnimationPlayer) -> AnimationPlayer {
         let mut new_player = player.clone();
         new_player.cancel_root_motion = true;
+        new_player
+    }
+
+    /// A copy of `player` whose posed joints are all pre-multiplied by
+    /// `transform` (see the `post_transform` field).
+    pub fn with_post_transform(
+        player: &AnimationPlayer,
+        transform: Matrix4<f32>,
+    ) -> AnimationPlayer {
+        let mut new_player = player.clone();
+        new_player.post_transform = Some(transform);
         new_player
     }
 
@@ -265,6 +287,7 @@ impl AnimationPlayer {
             blend_state: player.blend_state.clone(),
             rotation_pos: player.rotation_pos,
             cancel_root_motion: player.cancel_root_motion,
+            post_transform: player.post_transform,
         }
     }
 
@@ -401,6 +424,7 @@ impl AnimationPlayer {
                                 blend_state,
                                 rotation_pos: raw_end_pos - current_clip.num_frames as f32,
                                 cancel_root_motion: player.cancel_root_motion,
+                                post_transform: player.post_transform,
                             },
                             motion_flags,
                             events,
@@ -438,6 +462,7 @@ impl AnimationPlayer {
                                 // slice is emitted on its first tick.
                                 rotation_pos: 0.0,
                                 cancel_root_motion: player.cancel_root_motion,
+                                post_transform: player.post_transform,
                             },
                             motion_flags,
                             events,
@@ -468,6 +493,7 @@ impl AnimationPlayer {
                         blend_state,
                         rotation_pos: raw_end_pos,
                         cancel_root_motion: player.cancel_root_motion,
+                        post_transform: player.post_transform,
                     },
                     motion_flags,
                     events,
@@ -523,7 +549,7 @@ impl AnimationPlayer {
         if maybe_current_clip.is_none() {
             let animated_skeleton =
                 ss2_skeleton::animate(skeleton, None, &self.additional_joint_transforms);
-            return animated_skeleton.get_transforms();
+            return self.apply_post_transform(animated_skeleton.get_transforms());
         }
 
         let (rc_animation_clip, is_looping, is_last_anim) = maybe_current_clip.unwrap();
@@ -580,7 +606,16 @@ impl AnimationPlayer {
             }
         }
 
-        animated_transforms
+        self.apply_post_transform(animated_transforms)
+    }
+
+    fn apply_post_transform(&self, mut transforms: [Matrix4<f32>; 40]) -> [Matrix4<f32>; 40] {
+        if let Some(post) = self.post_transform {
+            for transform in transforms.iter_mut() {
+                *transform = post * *transform;
+            }
+        }
+        transforms
     }
 
     fn compute_transforms_for_clip(

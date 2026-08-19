@@ -102,12 +102,14 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         .rotate_y(Deg(90.0))
         .with_offset(vec3(0.0, 0.0, -0.4));
 
-    // Orientation for the posed melee _h arms: +120 deg yaw points the
-    // authored ready-stance weapon up-forward from the fist. Offsets cancel
-    // the posed fist joint so the baked fist lands on the tracked hand -
-    // computed by `cargo run -p shock2vr --example melee_grip -- 120`, then
-    // eyeball-adjusted from debug_weapons --vr captures.
-    let melee_h_right = VRHandModelPerHandAdjustments::new().rotate_y(Deg(120.0));
+    // The Rapier, Crystal Shard and PsiSword have no world-model grip entry,
+    // so wielding them must keep the unmapped default (see
+    // `get_vr_hand_model_adjustments_from_model`) exactly.
+    let melee_world_grip = VRHandModelAdjustments::new(
+        VRHandModelPerHandAdjustments::new(),
+        VRHandModelPerHandAdjustments::new(),
+        Quaternion::from_angle_y(Deg(180.0)),
+    );
 
     let held_item_hand = VRHandModelPerHandAdjustments::new().rotate_y(Deg(180.0));
     let held_item = VRHandModelAdjustments::new(
@@ -197,42 +199,18 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
                 .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.))),
         ),
         // Melee first-person models (_h): LGMM skinned meshes posed to the
-        // player-melee idle (see ChangeModel in mission_core). The posed arm
-        // extends behind the grip toward the shoulder; the offsets seat the
-        // model's own baked fist on the tracked hand (fit from debug_weapons
-        // --vr captures, same method as the guns above).
-        (
-            "wrench_h",
-            symmetric(
-                melee_h_right
-                    .clone()
-                    .with_offset(vec3(-0.699, -0.152, -0.147)),
-            ),
-        ),
-        (
-            "rapier_h",
-            symmetric(
-                melee_h_right
-                    .clone()
-                    .with_offset(vec3(-0.717, -0.214, -0.129)),
-            ),
-        ),
-        (
-            "shard_h",
-            symmetric(
-                melee_h_right
-                    .clone()
-                    .with_offset(vec3(-0.717, -0.214, -0.129)),
-            ),
-        ),
-        (
-            "psword_h",
-            symmetric(
-                melee_h_right
-                    .clone()
-                    .with_offset(vec3(-0.707, -0.217, -0.128)),
-            ),
-        ),
+        // player-melee idle (see ChangeModel in mission_core). Unlike the guns
+        // these entries deliberately DO NOT move the model to seat its baked
+        // fist in the palm: the held entity's body *is* the melee contact
+        // collider (#942/#978), so a grip offset here carries the damage
+        // volume off the weapon and silently disarms it. Each melee `_h`
+        // therefore keeps its world model's physical grip, and the posed arm
+        // is seated by a render-only model-space correction instead
+        // (`melee_wield_pose_correction`).
+        ("wrench_h", symmetric(wrench_right.clone())),
+        ("rapier_h", melee_world_grip.clone()),
+        ("shard_h", melee_world_grip.clone()),
+        ("psword_h", melee_world_grip.clone()),
         // Weapons - world models, kept when held in VR (#352): the _h meshes
         // have faces stripped for the fixed flat camera. sg_w/empgun predate
         // this and show the world models grip fine with the same offsets.
@@ -324,6 +302,37 @@ const VR_25AE_VIEW_MODELS: &[&str] = &[
 pub fn is_vr_view_model(model_name: &str) -> bool {
     let name = model_name.to_ascii_lowercase();
     VR_25AE_VIEW_MODELS.contains(&name.as_str())
+}
+
+/// Skeleton joint the melee `_h` rigs pose as the weapon-holding fist (root,
+/// shoulder, elbow, **fist**, weapon tip - see
+/// `cargo run -p shock2vr --example melee_grip`).
+pub const MELEE_GRIP_JOINT: usize = 3;
+
+/// Yaw that points the authored ready-stance weapon up and forward out of the
+/// fist once the arm is anchored on the tracked hand.
+const MELEE_GRIP_YAW: Deg<f32> = Deg(120.0);
+
+/// Model-space transform that seats a posed melee `_h` arm's baked fist
+/// (`posed_fist`, from [`MELEE_GRIP_JOINT`]) on the tracked hand.
+///
+/// This is deliberately a *render* correction rather than a grip offset: the
+/// held entity's rigid body is the melee contact collider, so moving the
+/// entity to align the arm would carry the damage volume ~0.7 units off the
+/// weapon and the wield would look right while doing nothing (#942/#978). The
+/// entity keeps its world model's grip, and this cancels that grip before
+/// applying the arm alignment, so the rendered result is grip-independent.
+pub fn melee_wield_pose_correction(
+    model_name: &str,
+    posed_fist: Vector3<f32>,
+) -> cgmath::Matrix4<f32> {
+    use cgmath::{Matrix4, SquareMatrix};
+
+    let grip = get_vr_hand_model_adjustments_from_model(model_name, Handedness::Right);
+    let grip_matrix = Matrix4::from_translation(grip.offset) * Matrix4::from(grip.rotation);
+    grip_matrix.invert().unwrap_or_else(Matrix4::identity)
+        * Matrix4::from_angle_y(MELEE_GRIP_YAW)
+        * Matrix4::from_translation(-posed_fist)
 }
 
 pub fn get_vr_hand_model_adjustments_from_entity(

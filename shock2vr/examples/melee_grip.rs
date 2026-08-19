@@ -1,8 +1,10 @@
 //! Scratch tool: print the posed joint positions of the melee first-person
 //! (`_h`) skinned meshes at the player-melee idle's final frame - the pose VR
-//! wields them in. The printed hand-joint position is what the `vr_config`
-//! grip offset must cancel so the model's baked fist lands on the tracked
-//! hand.
+//! wields them in. The printed hand joint (`MELEE_GRIP_JOINT`) is what
+//! `vr_config::melee_wield_pose_correction` cancels at runtime so the model's
+//! baked fist lands on the tracked hand; this tool is for eyeballing the rig
+//! (which joint is the fist, how far the arm reaches back), not for producing
+//! constants.
 //!
 //! ```bash
 //! DARK_ASSET_PATH=... cargo run -p shock2vr --example melee_grip
@@ -40,18 +42,8 @@ fn main() {
                 println!("  joint {i:2}: ({:8.4}, {:8.4}, {:8.4})", p.x, p.y, p.z);
             }
         }
-        // Suggested vr_config grip offset: cancel the posed fist joint (3)
-        // under the chosen grip yaw, so the baked fist lands on the hand.
-        let yaw: f32 = std::env::args()
-            .nth(1)
-            .and_then(|a| a.parse().ok())
-            .unwrap_or(120.0);
-        let (s, c) = yaw.to_radians().sin_cos();
+        // MELEE_GRIP_JOINT (vr_config, private module - keep in sync).
         let f = joints[3].w;
-        let rotated = (f.x * c + f.z * s, f.y, -f.x * s + f.z * c);
-        println!(
-            "  grip yaw {yaw:.0}: with_offset(vec3({:.3}, {:.3}, {:.3}))",
-            -rotated.0, -rotated.1, -rotated.2
-        );
+        println!("  fist joint: ({:.3}, {:.3}, {:.3})", f.x, f.y, f.z);
     }
 }

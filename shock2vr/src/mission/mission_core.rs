@@ -5124,6 +5124,26 @@ impl MissionCore {
                                         )
                                     })
                                     .unwrap_or_else(AnimationPlayer::empty);
+                                // Seat the posed arm's baked fist on the
+                                // tracked hand as a render-only correction -
+                                // the held body is the melee contact collider,
+                                // so this must not move the entity.
+                                let player = match new_model.skeleton() {
+                                    Some(skeleton) => {
+                                        let fist = player.get_transforms(skeleton)
+                                            [crate::vr_config::MELEE_GRIP_JOINT]
+                                            .w
+                                            .truncate();
+                                        AnimationPlayer::with_post_transform(
+                                            &player,
+                                            crate::vr_config::melee_wield_pose_correction(
+                                                &model_name.to_ascii_lowercase(),
+                                                fist,
+                                            ),
+                                        )
+                                    }
+                                    None => player,
+                                };
                                 self.id_to_animation_player.insert(entity_id, player);
                             } else {
                                 self.id_to_animation_player
