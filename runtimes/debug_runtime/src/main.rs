@@ -1554,6 +1554,8 @@ fn process_command(
                             velocity: b.velocity,
                             angular_velocity: b.angular_velocity,
                             collision_groups: b.collision_groups,
+                            shape: b.shape,
+                            shape_extents: b.shape_extents,
                             blocks_player: b.blocks_player,
                             blocks_actor: b.blocks_actor,
                             is_sensor: b.is_sensor,

@@ -311,6 +311,15 @@ export interface PhysicsBodySummary {
   angular_velocity: Vec3;
   collision_groups: string[];
   /**
+   * Primitive kind of the body's first collider ("ball", "capsule", "cuboid",
+   * "trimesh", ...), and the full extents of that collider's local AABB in
+   * world units. Every other field says where a body *is*; these say how big
+   * it is - which is what a melee contact volume has to be checked against.
+   * Optional when connected to runtimes predating these fields.
+   */
+  shape?: string;
+  shape_extents?: Vec3;
+  /**
    * Whether this body stops the player capsule. `collision_groups` reports
    * membership only, so debris that keeps `entity` membership while dropping
    * the player from its collider filter looks identical there. Optional when

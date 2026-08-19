@@ -321,6 +321,11 @@ pub struct PhysicsBodySummary {
     pub velocity: [f32; 3],
     pub angular_velocity: [f32; 3],
     pub collision_groups: Vec<String>,
+    /// Primitive kind of the body's first collider, and the full extents of
+    /// that collider's local AABB in world units - the only report of how
+    /// *big* a body is, which a melee contact volume needs.
+    pub shape: String,
+    pub shape_extents: [f32; 3],
     /// Whether this body stops the player capsule (the collider's filter),
     /// which `collision_groups` - membership only - cannot show.
     pub blocks_player: bool,

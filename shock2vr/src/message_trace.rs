@@ -13,11 +13,21 @@
 //!
 //! **Filtering.** Per-frame, high-frequency payloads are dropped so the buffer
 //! holds useful history instead of one second of churn: `Hover`, `GUIHover`,
-//! `SensorBeginIntersect`, `SensorEndIntersect`, `Collided`,
-//! `AnimationFlagTriggered` and `AnimationCompleted` are not traced. (Idle
-//! creature animation alone produces hundreds of the last two per second in a
-//! populated mission.) Event-class payloads (`TurnOn`/`TurnOff`/`Frob`/
-//! `Signal`/`Damage`/`Slay`/...) always are.
+//! `SensorBeginIntersect`, `SensorEndIntersect`, `AnimationFlagTriggered` and
+//! `AnimationCompleted` are not traced. (Idle creature animation alone
+//! produces hundreds of the last two per second in a populated mission.)
+//! Event-class payloads (`TurnOn`/`TurnOff`/`Frob`/`Signal`/`Damage`/`Slay`/
+//! `Collided`/...) always are.
+//!
+//! `Collided` is traced despite sitting next to the sensor payloads above,
+//! because it is not per-frame churn: it is dispatched only on Rapier's
+//! `CollisionStarted` edge, so a resting contact produces exactly one entry
+//! the way a `TurnOn` does. Excluding it made VR melee undiagnosable - a
+//! swing whose contact volume never touched the target and a swing that
+//! touched it but was disallowed from damaging both showed up as *nothing at
+//! all* in `/v1/messages/recent`, since only the resulting `Damage` was
+//! visible. Contact is the input to that decision, so it has to be
+//! observable.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -67,7 +77,6 @@ fn is_traced(payload: &MessagePayload) -> bool {
             | MessagePayload::GUIHover { .. }
             | MessagePayload::SensorBeginIntersect { .. }
             | MessagePayload::SensorEndIntersect { .. }
-            | MessagePayload::Collided { .. }
             | MessagePayload::AnimationFlagTriggered { .. }
             | MessagePayload::AnimationCompleted
     )
@@ -161,7 +170,10 @@ mod tests {
         assert!(is_traced(&MessagePayload::TurnOn {
             from: EntityId::dead()
         }));
-        assert!(!is_traced(&MessagePayload::Collided {
+        // `Collided` is an edge (Rapier `CollisionStarted`), not per-frame
+        // churn, and it is the only observable evidence that a melee contact
+        // volume touched anything at all - so it must survive the filter.
+        assert!(is_traced(&MessagePayload::Collided {
             with: EntityId::dead()
         }));
         assert!(!is_traced(&MessagePayload::GUIHover {

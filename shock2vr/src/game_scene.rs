@@ -340,6 +340,10 @@ pub struct DebugPhysicsBodySummary {
     pub velocity: [f32; 3],
     pub angular_velocity: [f32; 3],
     pub collision_groups: Vec<String>,
+    /// Primitive kind of the body's first collider, and the full extents of
+    /// that collider's local AABB in world units. See `DebugBodyInfo::shape`.
+    pub shape: String,
+    pub shape_extents: [f32; 3],
     /// Whether this body stops the player capsule. `collision_groups` lists
     /// membership only, which cannot distinguish a body that keeps its
     /// `entity` membership while dropping the player from its filter.

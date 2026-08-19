@@ -5463,11 +5463,16 @@ impl PhysicsWorld {
         // Pull shape/group/sensor data from the body's first collider, if any.
         let mut collision_groups = Vec::new();
         let mut is_sensor = false;
+        let mut shape = "none";
+        let mut shape_extents = [0.0; 3];
         if let Some(collider_handle) = body.colliders().first() {
             if let Some(collider) = self.collider_set.get(*collider_handle) {
                 is_sensor = collider.is_sensor();
                 collision_groups =
                     collision_group_names(collider.collision_groups().memberships.bits());
+                shape = shape_kind_name(collider.shape().as_typed_shape());
+                let extents = collider.shape().compute_local_aabb().extents();
+                shape_extents = [extents.x, extents.y, extents.z];
             }
         }
 
@@ -5486,6 +5491,8 @@ impl PhysicsWorld {
             linear_damping: body.linear_damping(),
             angular_damping: body.angular_damping(),
             collision_groups,
+            shape,
+            shape_extents,
             blocks_player: self.collider_blocks_player(handle),
             blocks_actor: self.collider_blocks_actor(handle),
             is_sensor,
@@ -5634,6 +5641,17 @@ pub struct DebugBodyInfo {
     pub linear_damping: f32,
     pub angular_damping: f32,
     pub collision_groups: Vec<String>,
+    /// Primitive kind of the body's first collider ("ball", "capsule",
+    /// "cuboid", "trimesh", ... - "none" for a body with no collider).
+    pub shape: &'static str,
+    /// Full extents of that collider's local AABB, in world units.
+    ///
+    /// Every other field describes where a body *is*; nothing reported how
+    /// big it is, so "what volume actually deals this weapon's melee damage,
+    /// and how large is it?" could not be answered without a screenshot. One
+    /// AABB is deliberately used for all shape kinds so the number means the
+    /// same thing for a ball, a capsule and a cuboid.
+    pub shape_extents: [f32; 3],
     /// Whether this body stops the player capsule. `collision_groups` reports
     /// membership only, so a body that keeps its `entity` membership while
     /// dropping `PLAYER` from its filter looks identical there.
@@ -5644,6 +5662,22 @@ pub struct DebugBodyInfo {
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,
+}
+
+/// Name a collider's primitive kind for debug reporting.
+fn shape_kind_name(shape: TypedShape<'_>) -> &'static str {
+    match shape {
+        TypedShape::Ball(_) => "ball",
+        TypedShape::Capsule(_) => "capsule",
+        TypedShape::Cuboid(_) => "cuboid",
+        TypedShape::Cylinder(_) => "cylinder",
+        TypedShape::Cone(_) => "cone",
+        TypedShape::TriMesh(_) => "trimesh",
+        TypedShape::HeightField(_) => "heightfield",
+        TypedShape::Compound(_) => "compound",
+        TypedShape::ConvexPolyhedron(_) => "convex",
+        _ => "other",
+    }
 }
 
 /// Decode an `InteractionGroups` membership bitmask into human-readable names.

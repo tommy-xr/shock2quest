@@ -8547,6 +8547,8 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     velocity: info.linear_velocity,
                     angular_velocity: info.angular_velocity,
                     collision_groups: info.collision_groups,
+                    shape: info.shape.to_string(),
+                    shape_extents: info.shape_extents,
                     blocks_player: info.blocks_player,
                     blocks_actor: info.blocks_actor,
                     is_sensor: info.is_sensor,
