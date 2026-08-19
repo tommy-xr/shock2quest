@@ -55,59 +55,71 @@ const TINT_COLOR: Vector3<f32> = Vector3 {
     z: 0.02,
 };
 
-/// How far in front of the eyes the layer hangs, in metres. Near enough that
-/// nothing in the world can be between it and the eye in practice; the layer
-/// clears depth anyway, so this only has to stay outside the near plane.
-const LAYER_DISTANCE: f32 = 0.6;
+/// How far in front of the eyes the layer hangs, in metres.
+///
+/// Far rather than near, and for one reason: **stereo**. This is one quad
+/// shared by both eyes, hung from the runtime's head pose, so an eye 32 mm off
+/// that pose sees it shifted by `atan(0.032 / distance)`. At half a metre that
+/// is 3.7 degrees of disagreement between the eyes about where the rim is; out
+/// here it is under a degree, the same margin the pause menu's dim relies on.
+/// Depth is not a consideration - the layer clears depth, so nothing in the
+/// world can occlude it at any distance.
+const LAYER_DISTANCE: f32 = 2.5;
 
-/// Half-edge of the layer quad as a multiple of its distance, so coverage is
-/// an angle and not a size: `atan(5.0)` = 78.7 degrees off-axis in every
-/// direction, against a Quest's ~55 degree half-field. This is the same
-/// argument (and the same number) as the pause menu's comfort dim - see
-/// `pause_menu::WORLD_DIM_EXTENT_RATIO`.
-const LAYER_EXTENT_RATIO: f32 = 5.0;
+/// How much bigger than the frustum the quad is cut. The quad is sized to the
+/// picture exactly (see [`hit_layer`]), so a little slack absorbs a head that
+/// turned between the pose the layer was hung from and the pose the frame is
+/// rendered at, and any small disagreement between a host's reported and
+/// actual frustum. It costs nothing but a few pixels of fully-tinted margin.
+const COVERAGE_MARGIN: f32 = 1.25;
 
 /// Where the tint starts and where it reaches full strength, as fractions of
-/// how far the presentation's field of view actually reaches. Everything
-/// inside [`CLEAR_FIELD_FRACTION`] is untouched - that is the part of the
-/// field the player aims and reads with - and the tint is at full strength by
-/// the edge of the picture.
+/// the way from the view axis to the edge of the picture. Everything inside
+/// [`CLEAR_FIELD_FRACTION`] is untouched - that is the part of the field the
+/// player aims and reads with - and the tint is at full strength by the edge.
+///
+/// Being *fractions of the picture* is what makes this render identically in
+/// flat and VR (AGENTS.md section 3) without a per-presentation branch: the
+/// picture's own extents come from the host's projection matrix, so the same
+/// two numbers describe the same visible effect on a 45-degree monitor and on
+/// a headset's much wider asymmetric per-eye frustum.
 const CLEAR_FIELD_FRACTION: f32 = 0.5;
 const FULL_FIELD_FRACTION: f32 = 1.0;
 
-/// A sane fallback half-field, in degrees, for the frames before any
-/// projection has been seen: the ~29 degrees both flat runtimes' 45-degree
-/// 4:3 `perspective` gives.
-pub const DEFAULT_HALF_FIELD_DEG: f32 = 29.0;
-
-/// How far the picture reaches sideways from the view axis, read straight off
-/// the projection the host is rendering with.
+/// How far the picture reaches from the view axis, as the tangents of the
+/// half-angles on each axis: `(horizontal, vertical)`.
 ///
-/// This is why there is **no per-presentation branch in this module**
-/// (AGENTS.md section 3): a rim effect is only a rim effect relative to where
-/// the picture ends, and flat and VR disagree about that by roughly a factor
-/// of two - both flat runtimes build `perspective(Deg(45.0))` while a Quest
-/// eye reaches about 55 degrees. Hardcoding one angle is what the first cut
-/// did, and it made the tint invisible on flat, with the whole ramp past the
-/// edge of the screen. Hardcoding *two* would then have been a lie in the
-/// debug runtime, whose `--vr` mode renders with the flat 45-degree
-/// projection. Asking the projection is right everywhere, including on a
-/// headset whose per-eye frustum is asymmetric.
-///
-/// For any perspective or off-axis frustum, `m[0][0]` is `2n / (r - l)`, so
-/// its reciprocal is the tangent of half the horizontal extent.
-pub fn half_field_deg_from_projection(projection: Matrix4<f32>) -> f32 {
-    let m00 = projection.x.x;
-    if !m00.is_finite() || m00 <= 0.0 {
-        return DEFAULT_HALF_FIELD_DEG;
-    }
-    (1.0 / m00).atan().to_degrees().clamp(5.0, 85.0)
-}
+/// The fallback is what both flat runtimes' `perspective(Deg(45.0))` on a 4:3
+/// target gives, for the frames before any projection has been seen.
+pub const DEFAULT_VIEW_EXTENTS: (f32, f32) = (0.552_28, 0.414_21);
 
-/// Convert a half-angle off the view axis into the shader's radius units,
-/// where 1.0 is the middle of the quad's edge.
-fn radius_at_half_angle(degrees: f32) -> f32 {
-    degrees.to_radians().tan() / LAYER_EXTENT_RATIO
+/// Read [`DEFAULT_VIEW_EXTENTS`]'s quantity off the projection the host is
+/// actually rendering with.
+///
+/// Hardcoding one angle is what the first cut did, and it made the tint
+/// invisible on flat: the ramp was authored for a headset's ~55 degrees and
+/// the whole of it sat past the edge of a 45-degree screen. Hardcoding *two*
+/// (one per presentation) would then have been a lie in the debug runtime,
+/// whose `--vr` mode renders with the flat projection. Asking the projection
+/// is right everywhere.
+///
+/// For any perspective or off-axis frustum, `m[0][0]` is `2n / (r - l)` and
+/// `m[1][1]` is `2n / (t - b)`, so their reciprocals are the tangents of half
+/// the horizontal and vertical extents. Reading **both** matters: a 4:3 screen
+/// reaches 29 degrees sideways but only 22.5 up, and a single radius would
+/// tint a different fraction of the picture on each axis.
+pub fn view_extents_from_projection(projection: Matrix4<f32>) -> (f32, f32) {
+    let extent = |scale: f32, fallback: f32| {
+        if scale.is_finite() && scale > 0.0 {
+            (1.0 / scale).clamp(0.05, 10.0)
+        } else {
+            fallback
+        }
+    };
+    (
+        extent(projection.x.x, DEFAULT_VIEW_EXTENTS.0),
+        extent(projection.y.y, DEFAULT_VIEW_EXTENTS.1),
+    )
 }
 
 /// Peak rim opacity for a hit of `damage` hit points.
@@ -173,16 +185,18 @@ impl HitFeedback {
 
     /// Record a hit of `damage` applied hit points.
     ///
-    /// A second hit while one is still showing restarts the decay, and never
-    /// makes the tint jump *down*: taking a graze mid-fade from a shotgun
-    /// blast must not look like the blast stopped hurting. So the new peak is
-    /// the stronger of the incoming hit and whatever is on screen right now.
+    /// A second hit while one is still showing restarts the decay, and can
+    /// only ever make the tint *stronger or longer*, never weaker or shorter:
+    /// taking a graze mid-fade from a shotgun blast must not look like the
+    /// blast stopped hurting, and must not cut its fade short either. So both
+    /// the peak and the lifetime are the larger of the incoming hit and what
+    /// is already on screen.
     pub fn trigger(&mut self, damage: f32) {
         if damage <= 0.0 {
             return;
         }
         self.peak = peak_opacity(damage).max(self.intensity());
-        self.duration = duration_secs(damage);
+        self.duration = duration_secs(damage).max(self.remaining);
         self.remaining = self.duration;
     }
 
@@ -212,11 +226,11 @@ impl HitFeedback {
     /// `eye_position` and `eye_forward` are in the same space the returned
     /// object is consumed in - `Game` builds them in pawn space and maps the
     /// result with its pawn-to-world transform, exactly as it does for the
-    /// pause panel. `half_field_deg` comes from the host's own projection -
-    /// see [`half_field_deg_from_projection`].
+    /// pause panel. `view_extents` comes from the host's own projection - see
+    /// [`view_extents_from_projection`].
     pub fn render(
         &self,
-        half_field_deg: f32,
+        view_extents: (f32, f32),
         eye_position: Vector3<f32>,
         eye_forward: Vector3<f32>,
     ) -> Option<SceneObject> {
@@ -225,7 +239,7 @@ impl HitFeedback {
             return None;
         }
         Some(hit_layer(
-            half_field_deg,
+            view_extents,
             eye_position,
             eye_forward,
             intensity,
@@ -245,22 +259,31 @@ impl HitFeedback {
 /// also disagree about winding, and a culled half was the original #1020 bug.
 ///
 /// Because it is view-locked, the *same* code serves flat and VR: the eye pose
-/// differs, and the ramp is mapped onto whatever field of view the host is
-/// actually rendering (see [`half_field_deg_from_projection`]). Nothing else
-/// does.
+/// differs, and the quad is cut to whatever picture the host is rendering (see
+/// [`view_extents_from_projection`]). Nothing else does.
+///
+/// The quad is cut to the frustum on **each axis separately** and the ramp is
+/// then a plain circle in the quad's own UVs, which is what makes the tint
+/// cover the same fraction of the picture sideways and vertically on a 4:3
+/// screen (29 degrees across, 22.5 up) as it does on a near-square headset eye.
 fn hit_layer(
-    half_field: f32,
+    view_extents: (f32, f32),
     eye_position: Vector3<f32>,
     eye_forward: Vector3<f32>,
     intensity: f32,
 ) -> SceneObject {
-    let extent = LAYER_DISTANCE * LAYER_EXTENT_RATIO;
+    let (horizontal, vertical) = view_extents;
+    let width = 2.0 * LAYER_DISTANCE * horizontal * COVERAGE_MARGIN;
+    let height = 2.0 * LAYER_DISTANCE * vertical * COVERAGE_MARGIN;
     let mut object = SceneObject::new(
         engine::scene::vignette_material::create(
             TINT_COLOR,
             intensity,
-            radius_at_half_angle(half_field * CLEAR_FIELD_FRACTION),
-            radius_at_half_angle(half_field * FULL_FIELD_FRACTION),
+            // The quad is `COVERAGE_MARGIN` wider than the picture, so the
+            // edge of the picture sits at `1 / COVERAGE_MARGIN` in the shader's
+            // radius units and the fractions scale down to match.
+            CLEAR_FIELD_FRACTION / COVERAGE_MARGIN,
+            FULL_FIELD_FRACTION / COVERAGE_MARGIN,
         ),
         Box::new(engine::scene::quad::create()),
     );
@@ -269,7 +292,7 @@ fn hit_layer(
             // The quad's +Z faces the viewer once it is turned to look back
             // along the gaze.
             * Matrix4::from(crate::util::get_rotation_from_forward_vector(-eye_forward))
-            * Matrix4::from_scale(extent * 2.0),
+            * Matrix4::from_nonuniform_scale(width, height, 1.0),
     );
     // Translucent: writing depth here would let the layer occlude anything
     // drawn after it in the same overlay group.
@@ -289,33 +312,16 @@ fn hit_layer(
 
 /// The eye pose to hang the layer from, in pawn space.
 ///
-/// An untracked head arrives as the ZERO quaternion, which cgmath's
-/// `rotate_vector` silently returns *unrotated* - so it is treated as "no
-/// pose" and the pawn's own default eye stands in, rather than as a valid
-/// forward that would hang the layer off to one side (VR rule 7).
+/// An untracked head has no usable pose (see [`crate::util::tracked_gaze`]);
+/// the pawn's own default eye, looking straight ahead, stands in for it.
 pub fn eye_pose(
     head_position: Vector3<f32>,
     head_rotation: Quaternion<f32>,
 ) -> (Vector3<f32>, Vector3<f32>) {
-    use cgmath::{InnerSpace, Rotation};
-    if head_rotation.magnitude2() < 1e-6 {
-        return (
-            vec3(0.0, crate::input_context::DEFAULT_HEAD_HEIGHT, 0.0),
-            vec3(0.0, 0.0, -1.0),
-        );
-    }
-    (
-        head_position,
-        head_rotation
-            .normalize()
-            .rotate_vector(vec3(0.0, 0.0, -1.0)),
-    )
-}
-
-/// Only used to document the angular constants in tests.
-#[cfg(test)]
-fn half_angle_at_radius(radius: f32) -> cgmath::Deg<f32> {
-    cgmath::Deg((radius * LAYER_EXTENT_RATIO).atan().to_degrees())
+    crate::util::tracked_gaze(head_position, head_rotation).unwrap_or((
+        vec3(0.0, crate::input_context::DEFAULT_HEAD_HEIGHT, 0.0),
+        vec3(0.0, 0.0, -1.0),
+    ))
 }
 
 #[cfg(test)]
@@ -329,7 +335,7 @@ mod tests {
         assert_eq!(feedback.intensity(), 0.0);
         assert!(
             feedback
-                .render(VR_HALF_FIELD, Vector3::zero(), vec3(0.0, 0.0, -1.0),)
+                .render(VR_EXTENTS, Vector3::zero(), vec3(0.0, 0.0, -1.0),)
                 .is_none()
         );
     }
@@ -341,7 +347,7 @@ mod tests {
         assert!(feedback.intensity() > 0.0);
         assert!(
             feedback
-                .render(VR_HALF_FIELD, Vector3::zero(), vec3(0.0, 0.0, -1.0),)
+                .render(VR_EXTENTS, Vector3::zero(), vec3(0.0, 0.0, -1.0),)
                 .is_some()
         );
 
@@ -356,7 +362,7 @@ mod tests {
         assert_eq!(feedback.intensity(), 0.0);
         assert!(
             feedback
-                .render(VR_HALF_FIELD, Vector3::zero(), vec3(0.0, 0.0, -1.0),)
+                .render(VR_EXTENTS, Vector3::zero(), vec3(0.0, 0.0, -1.0),)
                 .is_none()
         );
     }
@@ -401,6 +407,24 @@ mod tests {
         );
     }
 
+    /// ...and it must not cut the fade short either: a 1-point graze arriving
+    /// a quarter of the way through a shotgun blast's fade would otherwise
+    /// replace 0.64 s of remaining tint with the graze's own 0.39 s.
+    #[test]
+    fn a_graze_mid_fade_never_shortens_the_fade() {
+        let mut feedback = HitFeedback::new();
+        feedback.trigger(12.0);
+        feedback.update(duration_secs(12.0) * 0.25);
+        let remaining_before = feedback.remaining;
+
+        feedback.trigger(1.0);
+        assert!(
+            feedback.remaining >= remaining_before,
+            "a graze cut the fade from {remaining_before} to {}",
+            feedback.remaining
+        );
+    }
+
     #[test]
     fn clearing_removes_a_tint_in_flight() {
         let mut feedback = HitFeedback::new();
@@ -417,70 +441,101 @@ mod tests {
         assert_eq!(hurt_schema(25.0), "dam_gen_hi");
     }
 
-    /// A Quest eye reaches about this far off-axis; used to stand in for a
-    /// headset in these tests.
-    const VR_HALF_FIELD: f32 = 55.0;
-    /// What both flat runtimes' `perspective(Deg(45.0))` on 4:3 gives.
-    const FLAT_HALF_FIELD: f32 = 29.0;
+    /// What both flat runtimes' `perspective(Deg(45.0))` on a 4:3 target
+    /// gives, and roughly what one Quest eye reaches. Used to stand in for a
+    /// monitor and for a headset.
+    const FLAT_EXTENTS: (f32, f32) = DEFAULT_VIEW_EXTENTS;
+    const VR_EXTENTS: (f32, f32) = (1.428, 1.428);
+
+    /// Where the picture's own edge lands in the shader's radius units.
+    const PICTURE_EDGE_RADIUS: f32 = 1.0 / COVERAGE_MARGIN;
 
     /// The whole comfort argument is that the middle of the field is left
     /// alone. If the ramp ever started at the view axis this would be the
     /// full-screen flash the design rejects.
     ///
     /// And - the bug that shipped in the first cut and was caught by looking at
-    /// a flat screenshot - the ramp has to land *inside the picture*. Sharing
-    /// one absolute angle across both presentations put flat's whole ramp past
-    /// the edge of a 45-degree screen, so a hit rendered as nothing at all.
+    /// a flat screenshot - the ramp has to land *inside the picture*. Authoring
+    /// it as an absolute angle put flat's whole ramp past the edge of a
+    /// 45-degree screen, so a hit rendered as nothing at all.
     #[test]
-    fn the_tint_lands_inside_the_picture_at_any_field_of_view() {
-        for half_field in [FLAT_HALF_FIELD, VR_HALF_FIELD, 75.0] {
-            let inner = radius_at_half_angle(half_field * CLEAR_FIELD_FRACTION);
-            let outer = radius_at_half_angle(half_field * FULL_FIELD_FRACTION);
+    fn the_tint_lands_inside_the_picture() {
+        let inner = CLEAR_FIELD_FRACTION / COVERAGE_MARGIN;
+        let outer = FULL_FIELD_FRACTION / COVERAGE_MARGIN;
+        assert!(inner > 0.0, "the tint must not start on the view axis");
+        assert!(outer > inner, "the ramp must have width");
+        assert!(
+            inner < PICTURE_EDGE_RADIUS * 0.75,
+            "the ramp starts too near the edge of the picture to be seen"
+        );
+        assert!(
+            outer <= PICTURE_EDGE_RADIUS,
+            "the tint never reaches full strength inside the picture"
+        );
+    }
+
+    /// The quad has to cover the picture it is cut for - on both axes, and
+    /// with room for the head to have turned since the pose it was hung from.
+    /// A quad that fell short would leave an untinted band at the edge, which
+    /// is exactly where the effect lives.
+    #[test]
+    fn the_quad_covers_the_whole_picture_on_both_axes() {
+        for extents in [FLAT_EXTENTS, VR_EXTENTS] {
+            let object = hit_layer(extents, Vector3::zero(), vec3(0.0, 0.0, -1.0), 0.5);
+            let transform = object.get_transform();
+            // The quad spans -0.5..0.5 before its scale, so a corner maps to
+            // the half-extents.
+            let corner = transform * cgmath::vec4(0.5, 0.5, 0.0, 1.0);
+            let picture_half_width = LAYER_DISTANCE * extents.0;
+            let picture_half_height = LAYER_DISTANCE * extents.1;
             assert!(
-                inner > 0.0,
-                "{half_field}: the tint must not start on the view axis"
+                corner.x.abs() > picture_half_width,
+                "{extents:?}: the quad is narrower than the picture"
             );
-            assert!(outer > inner, "{half_field}: the ramp must have width");
             assert!(
-                half_angle_at_radius(inner) < cgmath::Deg(half_field * 0.75),
-                "{half_field}: the ramp starts too near the edge of the picture to be seen"
-            );
-            assert!(
-                half_angle_at_radius(outer) <= cgmath::Deg(half_field + 1.0),
-                "{half_field}: the tint never reaches full strength inside the picture"
+                corner.y.abs() > picture_half_height,
+                "{extents:?}: the quad is shorter than the picture"
             );
         }
     }
 
-    /// Flat and VR must tint the *same fraction* of the picture - that is what
-    /// "renders identically" means for an effect defined in the field of view
-    /// rather than in pixels.
+    /// A 4:3 monitor reaches further sideways than up, so a quad cut to one
+    /// axis would tint a different fraction of the picture on the other. The
+    /// quad is cut per axis precisely so the circular UV ramp lands at the
+    /// same fraction of the way to the edge everywhere.
     #[test]
-    fn every_field_of_view_tints_the_same_fraction_of_the_picture() {
-        let fractions: Vec<f32> = [FLAT_HALF_FIELD, VR_HALF_FIELD]
-            .into_iter()
-            .map(|half_field| {
-                half_angle_at_radius(radius_at_half_angle(half_field * CLEAR_FIELD_FRACTION)).0
-                    / half_field
-            })
-            .collect();
-        assert!((fractions[0] - fractions[1]).abs() < 1e-3, "{fractions:?}");
+    fn the_quad_is_cut_to_the_pictures_own_aspect() {
+        let object = hit_layer(FLAT_EXTENTS, Vector3::zero(), vec3(0.0, 0.0, -1.0), 0.5);
+        let corner = object.get_transform() * cgmath::vec4(0.5, 0.5, 0.0, 1.0);
+        let quad_aspect = corner.x.abs() / corner.y.abs();
+        let picture_aspect = FLAT_EXTENTS.0 / FLAT_EXTENTS.1;
+        assert!(
+            (quad_aspect - picture_aspect).abs() < 1e-3,
+            "quad aspect {quad_aspect} does not match the picture's {picture_aspect}"
+        );
     }
 
-    /// The flat runtimes' own projection must come back out as the flat field.
+    /// The flat runtimes' own projection must come back out as the flat
+    /// picture, on both axes.
     #[test]
-    fn the_field_is_read_off_the_projection_the_host_renders_with() {
+    fn the_picture_is_read_off_the_projection_the_host_renders_with() {
         let flat = cgmath::perspective(cgmath::Deg(45.0), 800.0 / 600.0, 0.1, 1000.0);
-        assert!((half_field_deg_from_projection(flat) - FLAT_HALF_FIELD).abs() < 1.0);
+        let (horizontal, vertical) = view_extents_from_projection(flat);
+        assert!((horizontal - FLAT_EXTENTS.0).abs() < 0.01);
+        assert!((vertical - FLAT_EXTENTS.1).abs() < 0.01);
+        assert!(
+            horizontal > vertical,
+            "a 4:3 picture is wider than it is tall"
+        );
 
-        // A wide headset frustum reports a wide field...
+        // A wide headset frustum reports a wide picture...
         let wide = cgmath::perspective(cgmath::Deg(90.0), 1.0, 0.1, 1000.0);
-        assert!(half_field_deg_from_projection(wide) > VR_HALF_FIELD * 0.7);
+        assert!(view_extents_from_projection(wide).0 > horizontal * 1.5);
 
         // ...and a degenerate matrix falls back instead of producing NaN.
         assert_eq!(
-            half_field_deg_from_projection(Matrix4::from_scale(0.0)),
-            DEFAULT_HALF_FIELD_DEG
+            view_extents_from_projection(Matrix4::from_scale(0.0)),
+            DEFAULT_VIEW_EXTENTS
         );
     }
 
@@ -488,13 +543,13 @@ mod tests {
     /// about winding covers only part of the view on the Quest.
     #[test]
     fn the_layer_does_not_depend_on_backface_culling() {
-        let object = hit_layer(VR_HALF_FIELD, Vector3::zero(), vec3(0.0, 0.0, -1.0), 0.5);
+        let object = hit_layer(VR_EXTENTS, Vector3::zero(), vec3(0.0, 0.0, -1.0), 0.5);
         assert_eq!(object.backface_culling(), None);
     }
 
     #[test]
     fn the_layer_draws_translucent_and_over_the_world() {
-        let object = hit_layer(VR_HALF_FIELD, Vector3::zero(), vec3(0.0, 0.0, -1.0), 0.5);
+        let object = hit_layer(VR_EXTENTS, Vector3::zero(), vec3(0.0, 0.0, -1.0), 0.5);
         let transparency = object
             .effective_transparency()
             .expect("the tint must draw translucent, not opaque");
@@ -518,7 +573,7 @@ mod tests {
             vec3(0.0, 1.0, 0.0).normalize(),
             vec3(-0.5, -0.5, 0.7).normalize(),
         ] {
-            let object = hit_layer(VR_HALF_FIELD, eye, forward, 0.5);
+            let object = hit_layer(VR_EXTENTS, eye, forward, 0.5);
             let centre = object.get_transform() * cgmath::vec4(0.0, 0.0, 0.0, 1.0);
             let offset = vec3(centre.x, centre.y, centre.z) - eye;
             assert!(
@@ -527,6 +582,31 @@ mod tests {
             );
             assert!((offset.magnitude() - LAYER_DISTANCE).abs() < 1e-3);
         }
+    }
+
+    /// `Game::render` clamps the layer's eye to the same cap the cameras
+    /// clamp theirs to, because the input context reports the *standing* eye
+    /// even while the frame is drawn from a crouched one. Pin that the clamp
+    /// resolves to the flat runtime's crouched eye line, and that it does
+    /// nothing at all while standing.
+    #[test]
+    fn the_layer_eye_is_clamped_to_the_eye_the_camera_renders_from() {
+        let standing = crate::physics::player_eye_cap_above_center(false);
+        let crouched = crate::physics::player_eye_cap_above_center(true);
+        let reported = crate::input_context::DEFAULT_HEAD_HEIGHT;
+
+        assert!(
+            reported.min(standing) == reported,
+            "the clamp must be a no-op standing: reported {reported}, cap {standing}"
+        );
+        assert!(
+            reported.min(crouched) < reported,
+            "crouched, the reported eye must be pulled down to the camera's"
+        );
+        assert!(
+            (crouched - crate::PLAYER_CROUCH_EYE_HEIGHT / dark::SCALE_FACTOR).abs() < 1e-6,
+            "the crouched cap is the flat camera's crouched eye"
+        );
     }
 
     #[test]

@@ -235,18 +235,10 @@ fn dim_pose(
     head_rotation: Quaternion<f32>,
     panel: &WorldPanel,
 ) -> (Vector3<f32>, Vector3<f32>) {
-    if head_rotation.magnitude2() < 1e-6 {
-        return (
-            panel.center + panel.normal() * frontend_panel_distance(),
-            -panel.normal(),
-        );
-    }
-    (
-        head_position,
-        head_rotation
-            .normalize()
-            .rotate_vector(vec3(0.0, 0.0, -1.0)),
-    )
+    crate::util::tracked_gaze(head_position, head_rotation).unwrap_or((
+        panel.center + panel.normal() * frontend_panel_distance(),
+        -panel.normal(),
+    ))
 }
 
 /// What a click on the pause menu asks `Game` to do.

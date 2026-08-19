@@ -455,13 +455,14 @@ pub struct Game {
     /// asked of the scene because `render` has no input context.
     head_pose: (Vector3<f32>, Quaternion<f32>),
 
-    /// How wide the host's picture is, in degrees off the view axis, taken
-    /// from the projection it last handed `render_per_eye`. The hit tint is a
-    /// *rim* effect, so it has to know where the picture ends - and only the
-    /// host knows that (a Quest eye is roughly twice a 45-degree flat screen).
-    /// Carried a frame, because `render` runs before `render_per_eye` and the
-    /// projection does not change between them.
-    view_half_field_deg: f32,
+    /// How far the host's picture reaches from the view axis on each axis,
+    /// taken from the projection it last handed `render_per_eye`. The hit tint
+    /// is a *rim* effect, so it has to know where the picture ends - and only
+    /// the host knows that (a Quest eye is roughly twice a 45-degree flat
+    /// screen, and much closer to square). Carried a frame, because `render`
+    /// runs before `render_per_eye` and the projection does not change between
+    /// them.
+    view_extents: (f32, f32),
 }
 
 /// Player state for debug introspection. Entity ids use `EntityId::inner() as
@@ -1238,7 +1239,7 @@ impl Game {
                 vec3(0.0, input_context::DEFAULT_HEAD_HEIGHT, 0.0),
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
             ),
-            view_half_field_deg: hit_feedback::DEFAULT_HALF_FIELD_DEG,
+            view_extents: hit_feedback::DEFAULT_VIEW_EXTENTS,
         }
     }
 
@@ -1825,11 +1826,19 @@ impl Game {
         // than under a red rim. Emitted from `render` (not `render_per_eye`)
         // for the reason recorded on `hit_feedback::hit_layer`, and identically
         // in flat and VR - it is view-locked, so only the eye pose differs.
-        let (eye_position, eye_forward) =
+        let (mut eye_position, eye_forward) =
             hit_feedback::eye_pose(self.head_pose.0, self.head_pose.1);
+        // Centre the layer on the eye the frame is actually drawn from, which
+        // is NOT the eye the input context reports: both flat runtimes put the
+        // *standing* eye in `head.position` while rendering from a crouch-aware
+        // one, and the VR runtimes clamp the tracked eye to the collider crown.
+        // Crouched, that is 0.56 units of disagreement - enough to swing the
+        // rim by ~13 degrees and drag the ramp onto the crosshair. The same
+        // clamp the cameras use is a no-op standing.
+        eye_position.y = eye_position.y.min(self.player_eye_cap_above_center());
         if let Some(mut layer) =
             self.hit_feedback
-                .render(self.view_half_field_deg, eye_position, eye_forward)
+                .render(self.view_extents, eye_position, eye_forward)
         {
             layer.set_transform(pawn_to_world * layer.get_transform());
             scene.push(layer);
@@ -1857,10 +1866,10 @@ impl Game {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) -> Vec<SceneObject> {
-        // Record how wide the host's picture is for the next frame's `render`,
-        // which is where the view-locked hit tint is emitted (see
-        // `hit_feedback::half_field_deg_from_projection`).
-        self.view_half_field_deg = hit_feedback::half_field_deg_from_projection(projection);
+        // Record how far the host's picture reaches for the next frame's
+        // `render`, which is where the view-locked hit tint is emitted (see
+        // `hit_feedback::view_extents_from_projection`).
+        self.view_extents = hit_feedback::view_extents_from_projection(projection);
 
         // Sample for rendering
         let font = self.asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
