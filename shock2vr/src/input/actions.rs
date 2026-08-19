@@ -36,6 +36,10 @@ pub enum InputAction {
     /// Spawn and wield the next debug weapon, holstering the previous one.
     /// Cycles the full SS2 weapon roster for flat-mode aim/viewmodel testing.
     DebugCycleWeapon,
+    /// Toggle the world-space melee contact-volume overlay (see
+    /// `mission::melee_debug`). Runtime-togglable so the overlay never needs
+    /// a rebuild - or, on the Quest, a redeploy.
+    DebugToggleMeleeVolumes,
     /// Equip the matching weapon from the player's carried inventory. These
     /// mirror System Shock 2's original direct weapon bindings; they never
     /// create a weapon or drop the displaced weapon into the world.
@@ -111,6 +115,7 @@ impl InputAction {
             InputAction::MoveInventory,
             InputAction::DebugHitboxCyclePose,
             InputAction::DebugCycleWeapon,
+            InputAction::DebugToggleMeleeVolumes,
             InputAction::EquipWrench,
             InputAction::EquipPistol,
             InputAction::EquipShotgun,
@@ -149,6 +154,7 @@ impl InputAction {
             InputAction::MoveInventory => "MoveInventory",
             InputAction::DebugHitboxCyclePose => "DebugHitboxCyclePose",
             InputAction::DebugCycleWeapon => "DebugCycleWeapon",
+            InputAction::DebugToggleMeleeVolumes => "DebugToggleMeleeVolumes",
             InputAction::EquipWrench => "EquipWrench",
             InputAction::EquipPistol => "EquipPistol",
             InputAction::EquipShotgun => "EquipShotgun",

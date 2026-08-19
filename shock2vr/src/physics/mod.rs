@@ -5257,6 +5257,38 @@ impl PhysicsWorld {
         Some((min?, max?))
     }
 
+    /// Live world-space geometry of every collider on an entity's primary
+    /// body, for debug overlays.
+    ///
+    /// This reads what Rapier is *actually simulating* rather than
+    /// recomputing what the wield intended, which is the whole point: when
+    /// the drawn weapon and its damage volume diverge (#1032 found gaps of
+    /// 0.61-1.24 units between them), a recomputation would agree with the
+    /// renderer and hide the bug, while this disagrees with it on screen.
+    pub fn debug_entity_collider_volumes(&self, entity_id: EntityId) -> Vec<DebugColliderVolume> {
+        let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
+            return Vec::new();
+        };
+        let Some(body) = self.rigid_body_set.get(handle) else {
+            return Vec::new();
+        };
+        body.colliders()
+            .iter()
+            .filter_map(|collider_handle| {
+                let collider = self.collider_set.get(*collider_handle)?;
+                let iso = collider.position();
+                let t = iso.translation.vector;
+                let r = iso.rotation;
+                Some(DebugColliderVolume {
+                    shape: DebugColliderShape::from_typed(collider.shape().as_typed_shape()),
+                    position: Vector3::new(t.x, t.y, t.z),
+                    rotation: Quaternion::new(r.w, r.i, r.j, r.k),
+                    is_sensor: collider.is_sensor(),
+                })
+            })
+            .collect()
+    }
+
     /// Scan every collider's world AABB for values that break physics queries:
     /// NaN/infinite bounds, degenerate (zero/negative) extents, or bounds far
     /// outside any plausible level. A single bad AABB can make raycasts return
@@ -5519,6 +5551,66 @@ impl ColliderIssueKind {
             ColliderIssueKind::Extreme => "extreme",
         }
     }
+}
+
+/// A collider's shape, reduced to the primitives a wireframe overlay can draw.
+/// Anything else (trimesh level geometry, convex hulls) reports `Other`, which
+/// the overlay skips rather than approximating with a misleading box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DebugColliderShape {
+    Ball {
+        radius: f32,
+    },
+    /// Capsule endpoints in the collider's own local frame.
+    Capsule {
+        a: Vector3<f32>,
+        b: Vector3<f32>,
+        radius: f32,
+    },
+    Cuboid {
+        half_extents: Vector3<f32>,
+    },
+    Other,
+}
+
+impl DebugColliderShape {
+    fn from_typed(shape: TypedShape<'_>) -> DebugColliderShape {
+        match shape {
+            TypedShape::Ball(ball) => DebugColliderShape::Ball {
+                radius: ball.radius,
+            },
+            TypedShape::Capsule(capsule) => DebugColliderShape::Capsule {
+                a: Vector3::new(
+                    capsule.segment.a.x,
+                    capsule.segment.a.y,
+                    capsule.segment.a.z,
+                ),
+                b: Vector3::new(
+                    capsule.segment.b.x,
+                    capsule.segment.b.y,
+                    capsule.segment.b.z,
+                ),
+                radius: capsule.radius,
+            },
+            TypedShape::Cuboid(cuboid) => DebugColliderShape::Cuboid {
+                half_extents: Vector3::new(
+                    cuboid.half_extents.x,
+                    cuboid.half_extents.y,
+                    cuboid.half_extents.z,
+                ),
+            },
+            _ => DebugColliderShape::Other,
+        }
+    }
+}
+
+/// One collider of a body, in world space, for debug drawing.
+#[derive(Clone, Copy, Debug)]
+pub struct DebugColliderVolume {
+    pub shape: DebugColliderShape,
+    pub position: Vector3<f32>,
+    pub rotation: Quaternion<f32>,
+    pub is_sensor: bool,
 }
 
 /// Rapier-free description of a rigid body, for debug tooling / HTTP introspection.

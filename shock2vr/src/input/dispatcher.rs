@@ -96,6 +96,20 @@ impl ActionDispatcher {
                 head_rotation: input_context.head.rotation,
             });
         }
+        // Deliberately *not* an `Effect`: this changes nothing in the world,
+        // only whether a debug wireframe is drawn. The flag is a process-
+        // global atomic (see `crate::debug_toggles`) precisely so it can be
+        // flipped from any thread without a `&mut Game`, which is also what
+        // lets the debug runtime's HTTP action path reach it. Routing it
+        // through the world-effect choke point would buy nothing and would
+        // add a variant that no save/load or script can ever observe.
+        if state.just_triggered(InputAction::DebugToggleMeleeVolumes) {
+            let enabled = crate::debug_toggles::toggle_melee_volumes();
+            // `println!` rather than `info!`: neither desktop_runtime nor
+            // oculus_runtime installs a tracing subscriber, and this line is
+            // the only confirmation the toggle landed on a headset.
+            println!("Melee contact-volume overlay: {enabled}");
+        }
         for &(action, class_template_id) in CARRIED_WEAPON_ACTIONS {
             if state.just_triggered(action) {
                 effects.push(Effect::EquipCarriedWeapon { class_template_id });

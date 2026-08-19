@@ -6820,6 +6820,16 @@ impl MissionCore {
                 HashSet::new()
             };
 
+        // Melee contact-volume overlay. Drawn in the shared world pass (not
+        // per-eye) so flat and VR show the same world-space wireframe, which
+        // is the point: the failure it exists to diagnose was reported in VR.
+        if crate::debug_toggles::melee_volumes() {
+            scene.extend(super::melee_debug::draw_melee_contact_volumes(
+                &self.physics,
+                self.interaction.held_entities(),
+            ));
+        }
+
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;

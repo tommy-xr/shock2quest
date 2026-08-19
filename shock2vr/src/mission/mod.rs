@@ -2,6 +2,7 @@ pub mod entity_creator;
 use tracing::info;
 pub mod entity_populator;
 pub mod flat_ui_host;
+pub mod melee_debug;
 pub mod mission_core;
 pub mod pathfinding_debug;
 pub mod pathfinding_test;
