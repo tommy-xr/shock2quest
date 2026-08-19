@@ -45,6 +45,7 @@ mod util;
 mod virtual_hand;
 mod vr_config;
 pub mod vr_crouch;
+mod wielded_weapon;
 pub mod zip_asset_path;
 
 use scenes::{
@@ -548,7 +549,11 @@ impl Game {
         use crate::runtime_props::RuntimePropReloading;
         let world = self.world();
         let info = world.borrow::<shipyard::UniqueView<PlayerInfo>>().ok()?;
-        let reload = info.left_hand_entity_id.and_then(|weapon| {
+        // Reload/ammo/psi readouts describe the WIELDED weapon, which in VR
+        // may be in either hand (`crate::wielded_weapon`); the raw hand slots
+        // are reported separately below.
+        let wielded = crate::wielded_weapon::wielded_weapon(world);
+        let reload = wielded.and_then(|weapon| {
             world
                 .borrow::<shipyard::View<RuntimePropReloading>>()
                 .ok()
@@ -604,7 +609,7 @@ impl Game {
                     .ok()?;
                 powers.0.get(selection.index).map(|p| p.name.clone())
             })(),
-            psi_charge: info.left_hand_entity_id.and_then(|weapon| {
+            psi_charge: wielded.and_then(|weapon| {
                 use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
                 let v = world
                     .borrow::<shipyard::View<RuntimePropPsiCharge>>()

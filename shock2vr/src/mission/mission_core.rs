@@ -4103,25 +4103,15 @@ impl MissionCore {
                 }
 
                 Effect::ReloadWeapon => {
-                    let wielded = self
-                        .world
-                        .borrow::<UniqueView<PlayerInfo>>()
-                        .unwrap()
-                        .left_hand_entity_id;
-
-                    if let Some(weapon) = wielded {
+                    // Whichever hand holds the gun - the input action is not
+                    // hand-specific (see `crate::wielded_weapon`).
+                    if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world) {
                         self.begin_reload(weapon);
                     }
                 }
 
                 Effect::CycleAmmo => {
-                    let wielded = self
-                        .world
-                        .borrow::<UniqueView<PlayerInfo>>()
-                        .unwrap()
-                        .left_hand_entity_id;
-
-                    if let Some(weapon) = wielded {
+                    if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world) {
                         self.cycle_ammo(weapon);
                     }
                 }
@@ -4759,13 +4749,10 @@ impl MissionCore {
                         &self.world,
                         class_template_id,
                     );
-                    let already_wielded = self
-                        .world
-                        .borrow::<UniqueView<PlayerInfo>>()
-                        .ok()
-                        .and_then(|player| player.left_hand_entity_id);
-                    if let Some(entity_id) =
-                        maybe_weapon.filter(|entity| Some(*entity) != already_wielded)
+                    if let Some(entity_id) = maybe_weapon
+                        // Either hand: in VR the weapon may already be held in
+                        // the right one.
+                        .filter(|entity| !crate::wielded_weapon::is_held(&self.world, *entity))
                     {
                         effects.push_front(Effect::GrabEntity {
                             entity_id,

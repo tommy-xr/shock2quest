@@ -58,14 +58,10 @@ pub fn create_arm_hud_panels(
     );
     scene_objects.append(&mut left_hud_layers);
 
-    // Create right arm HUD (AMMOFULL - for ammo)
-    let right_hud = create_forearm_hud_panel(
-        asset_cache,
-        right_hand_position,
-        right_hand_rotation,
-        Handedness::Right,
-    );
-    scene_objects.push(right_hud);
+    // Create right arm HUD (AMMOFULL) with the live ammo readout on it
+    let mut right_hud_layers =
+        create_ammo_forearm_panel(asset_cache, world, right_hand_position, right_hand_rotation);
+    scene_objects.append(&mut right_hud_layers);
 
     // Part of the player's hand visuals: labelled here rather than at the call
     // sites so the `debug_hud` scene, which emits these without an interaction
@@ -161,16 +157,11 @@ pub(crate) fn get_psi_percentage(world: &World) -> f32 {
 /// `(discipline name, tier)`. `Some` only while the wielded weapon is the
 /// psi amp (class tag `weapontype psiamp`).
 pub(crate) fn get_wielded_psi_power(world: &World) -> Option<(String, i32)> {
-    let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
-    let weapon = player_info.left_hand_entity_id?;
+    let weapon = crate::wielded_weapon::wielded_weapon(world)?;
 
     // Is the wielded weapon the psi amp? Resolved via its template's class
     // tags, the same mechanism as `get_wielded_ammo_type`.
-    let template_id = crate::scripts::script_util::entity_class_template_id(world, weapon)?;
-    let class_tags = world
-        .borrow::<UniqueView<crate::mission::mission_core::GlobalTemplateClassTags>>()
-        .ok()?;
-    if class_tags.0.get(&template_id)?.get("weapontype")? != "psiamp" {
+    if !crate::wielded_weapon::is_psi_amp(world, weapon) {
         return None;
     }
 
@@ -193,8 +184,7 @@ pub(crate) fn get_wielded_psi_power(world: &World) -> Option<(String, i32)> {
 pub(crate) fn get_wielded_psi_charge(
     world: &World,
 ) -> Option<crate::runtime_props::RuntimePropPsiCharge> {
-    let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
-    let weapon = player_info.left_hand_entity_id?;
+    let weapon = crate::wielded_weapon::wielded_weapon(world)?;
     let v_charge = world
         .borrow::<View<crate::runtime_props::RuntimePropPsiCharge>>()
         .ok()?;
@@ -202,12 +192,11 @@ pub(crate) fn get_wielded_psi_charge(
 }
 
 /// Current clip ammo of the wielded weapon, or `None` when unarmed or the held
-/// item has no `PropGunState` (melee / unlimited debug weapons). In flatscreen
-/// mode the wielded weapon is the player's left-hand slot (see
-/// `FlatInteraction::held_entities`).
+/// item has no `PropGunState` (melee / unlimited debug weapons). Which held
+/// entity counts as "the wielded weapon" - in either presentation, in either
+/// hand - is decided by [`crate::wielded_weapon`].
 pub(crate) fn get_wielded_ammo(world: &World) -> Option<i32> {
-    let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
-    let weapon = player_info.left_hand_entity_id?;
+    let weapon = crate::wielded_weapon::wielded_weapon(world)?;
     let v_gun_state = world
         .borrow::<View<dark::properties::PropGunState>>()
         .ok()?;
@@ -218,8 +207,7 @@ pub(crate) fn get_wielded_ammo(world: &World) -> Option<i32> {
 /// (its ammo type), or `None` when unarmed or the weapon has no projectile links
 /// (melee). Honors `RuntimePropSelectedAmmo` (absent = the first link).
 pub(crate) fn wielded_selected_projectile_template(world: &World) -> Option<i32> {
-    let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
-    let weapon = player_info.left_hand_entity_id?;
+    let weapon = crate::wielded_weapon::wielded_weapon(world)?;
     let projectiles = crate::scripts::script_util::ordered_projectile_links(world, weapon);
     if projectiles.is_empty() {
         return None;
@@ -419,4 +407,56 @@ fn create_forearm_hud_panel(
     scene_object.set_transform(transform);
 
     scene_object
+}
+
+/// Where the forearm panel hangs, as a root transform for a unit canvas: the
+/// same placement `create_forearm_hud_panel` gives its quad, so the canvas
+/// presenter draws the panel exactly where the plain quad used to.
+fn forearm_panel_transform(
+    hand_position: Vector3<f32>,
+    hand_rotation: Quaternion<f32>,
+    handedness: Handedness,
+) -> Matrix4<f32> {
+    let forearm_position = hand_position + hand_rotation.rotate_vector(FOREARM_OFFSET);
+    let forearm_yaw_rotation = match handedness {
+        Handedness::Left => Quaternion::from(Euler::new(Deg(0.0), Deg(90.0), Deg(0.0))),
+        Handedness::Right => Quaternion::from(Euler::new(Deg(0.0), Deg(-90.0), Deg(0.0))),
+    };
+    let forearm_tilt_rotation = Quaternion::from(Euler::new(Deg(-90.0), Deg(0.0), Deg(180.0)));
+    let final_rotation = hand_rotation * forearm_yaw_rotation * forearm_tilt_rotation;
+
+    Matrix4::from_translation(forearm_position)
+        * Matrix4::from(final_rotation)
+        * Matrix4::from_nonuniform_scale(HUD_PANEL_WIDTH, HUD_PANEL_HEIGHT, 1.0)
+}
+
+/// The right forearm's AMMOFULL panel, with the live ammo readout composited
+/// on it - the VR counterpart of the flat HUD's ammo gauge.
+///
+/// The panel art IS the 260x64 AMMOFULL canvas, so the readout is drawn by the
+/// shared [`crate::hud::ammo_panel`] layout at panel origin (0,0); flat draws
+/// the identical elements at the panel's origin on its 640x480 canvas
+/// (AGENTS.md section 3 - one layout, two presentations).
+fn create_ammo_forearm_panel(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    hand_position: Vector3<f32>,
+    hand_rotation: Quaternion<f32>,
+) -> Vec<SceneObject> {
+    use crate::hud::ammo_panel;
+
+    let mut canvas = crate::ui::UiCanvas::new(ammo_panel::PANEL_SIZE);
+    canvas.image(ammo_panel::PANEL, "AMMOFULL.PCX");
+    // No cycle affordance on the forearm: nothing points at this panel yet, and
+    // drawing a button nobody can press would be a lie.
+    let readout = ammo_panel::AmmoReadout::from_world(world, false);
+    ammo_panel::emit(&mut canvas, cgmath::vec2(0.0, 0.0), &readout);
+
+    canvas.render_world_space(
+        asset_cache,
+        forearm_panel_transform(hand_position, hand_rotation, Handedness::Right),
+        None,
+        None,
+        OVERLAY_Z_OFFSET,
+    )
 }
