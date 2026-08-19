@@ -30,12 +30,18 @@ async function tint(game: GameServer) {
 }
 
 /**
- * Damage the player through the production message path. The player entity is
- * discovered from `/v1/info` every run - runtime entity ids are not stable.
+ * The player's runtime entity id, discovered every run - runtime entity ids are
+ * not stable across launches.
  */
-async function hitPlayer(game: GameServer, amount: number): Promise<void> {
+async function playerEntityId(game: GameServer): Promise<number> {
   const { player } = await game.info();
-  await game.entities.sendMessage(player.entity_id, { type: "Damage", amount });
+  assert.ok(player.entity_id !== null, "the mission has no player entity");
+  return player.entity_id;
+}
+
+/** Damage the player through the production message path. */
+async function hitPlayer(game: GameServer, amount: number): Promise<void> {
+  await game.entities.sendMessage(await playerEntityId(game), { type: "Damage", amount });
   // Messages are delivered on the next step; the second frame is the one the
   // tint is measured on, so the decay assertion below has somewhere to go.
   await game.step({ frames: 2 });
@@ -143,8 +149,10 @@ test(
     const lastSequence = before.sounds.at(-1)?.sequence ?? 0;
 
     // Negative damage is how the healing path reaches the same applier.
-    const { player } = await game.info();
-    await game.entities.sendMessage(player.entity_id, { type: "Damage", amount: -5 });
+    await game.entities.sendMessage(await playerEntityId(game), {
+      type: "Damage",
+      amount: -5,
+    });
     await game.step({ frames: 5 });
 
     assert.equal(await tint(game), undefined, "being healed tinted the view");
