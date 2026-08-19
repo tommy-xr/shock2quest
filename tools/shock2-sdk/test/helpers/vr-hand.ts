@@ -8,27 +8,27 @@ export const add = (a: Vec3, b: Vec3): Vec3 => [
   a[1] + b[1],
   a[2] + b[2],
 ];
-const sub = (a: Vec3, b: Vec3): Vec3 => [
+export const sub = (a: Vec3, b: Vec3): Vec3 => [
   a[0] - b[0],
   a[1] - b[1],
   a[2] - b[2],
 ];
-const scale = (v: Vec3, amount: number): Vec3 => [
+export const scale = (v: Vec3, amount: number): Vec3 => [
   v[0] * amount,
   v[1] * amount,
   v[2] * amount,
 ];
-const dot = (a: Vec3, b: Vec3): number =>
+export const dot = (a: Vec3, b: Vec3): number =>
   a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const cross = (a: Vec3, b: Vec3): Vec3 => [
+export const cross = (a: Vec3, b: Vec3): Vec3 => [
   a[1] * b[2] - a[2] * b[1],
   a[2] * b[0] - a[0] * b[2],
   a[0] * b[1] - a[1] * b[0],
 ];
-const normalize = (v: Vec3): Vec3 => scale(v, 1 / Math.sqrt(dot(v, v)));
+export const normalize = (v: Vec3): Vec3 => scale(v, 1 / Math.sqrt(dot(v, v)));
 
-const quatConjugate = ([x, y, z, w]: Quat): Quat => [-x, -y, -z, w];
-const quatMultiply = (
+export const quatConjugate = ([x, y, z, w]: Quat): Quat => [-x, -y, -z, w];
+export const quatMultiply = (
   [ax, ay, az, aw]: Quat,
   [bx, by, bz, bw]: Quat,
 ): Quat => [
@@ -37,7 +37,7 @@ const quatMultiply = (
   aw * bz + ax * by - ay * bx + az * bw,
   aw * bw - ax * bx - ay * by - az * bz,
 ];
-const quatNormalize = (q: Quat): Quat => {
+export const quatNormalize = (q: Quat): Quat => {
   const length = Math.sqrt(q.reduce((sum, value) => sum + value * value, 0));
   return q.map((value) => value / length) as Quat;
 };
@@ -48,7 +48,7 @@ export const quatRotate = (q: Quat, v: Vec3): Vec3 =>
     3,
   ) as Vec3;
 
-function quatFromTo(from: Vec3, to: Vec3): Quat {
+export function quatFromTo(from: Vec3, to: Vec3): Quat {
   const a = normalize(from);
   const b = normalize(to);
   const d = dot(a, b);

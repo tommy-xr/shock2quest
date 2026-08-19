@@ -33,13 +33,19 @@ const MELEE_DAMAGE: f32 = 6.0;
 /// guns for now; per-weapon loudness is a follow-up.
 const GUNSHOT_NOISE_RADIUS: f32 = 50.0 / SCALE_FACTOR;
 
-/// Rotation taking the projectile's +Z travel axis onto a Dark gun model's
-/// barrel, which is authored along the model's **-X**. Every VR grip entry's
-/// -90 degree yaw exists to point that same axis out of the hand, and every
-/// wieldable model's muzzle vhot sits at its -X extreme (see the
-/// `vr_config` grip table and its `gun_grips_aim_the_barrel_out_of_the_hand`
-/// test), so this one rotation aims every VR weapon - ballistic, energy and
-/// psi alike - down its own rendered barrel.
+/// Rotation taking the projectile's +Z travel axis onto the barrel of a 25AE
+/// first-person gun model, which is authored along the model's **-X** - that is
+/// where each of those meshes puts its muzzle vhot, and pointing that axis out
+/// of the hand is the whole job of every gun's -90 degree yaw in the
+/// `vr_config` grip table (pinned by its
+/// `gun_grips_aim_the_barrel_out_of_the_hand` test). So this one rotation aims
+/// every VR weapon - ballistic, energy and psi alike - down its own rendered
+/// barrel, with no per-weapon correction.
+///
+/// Caveat, pre-existing and unchanged by this: several *classic-install* world
+/// models (`atek_w`, `ar15_w`, `sg_w`, `gren_w`, `viro_w`, `al_w`) are authored
+/// barrel-along-Z instead, so VR mis-aims them by 90 degrees when the 25AE view
+/// models are unavailable. Tracked in #1034.
 fn barrel_axis_from_forward() -> Quaternion<f32> {
     Quaternion::from_angle_y(Deg(-90.0))
 }
@@ -383,11 +389,18 @@ pub(super) fn create_projectile(
         .get(entity_id)
         .map(|vhots| vhots.0.clone())
         .unwrap_or_default();
-    // The fire point is the model's first vhot: every wieldable gun/amp model
-    // authors its muzzle there, at the -X tip of the barrel. Documented
-    // fallback for a model that carries no vhot at all (the classic `laser`
-    // and `lasehand` meshes, for instance): the model origin, i.e. the grip -
-    // the shot still leaves along the barrel, just from the hand.
+    // The fire point is the model's first vhot, which the 25AE view models that
+    // carry one author at the -X tip of the barrel (atek_h, ar15_h, sg_h,
+    // lasehand, sfg_h, viro_h, amp_h).
+    //
+    // Documented fallback for a model with no vhot at all: the model origin,
+    // i.e. the grip. The shot still leaves along the barrel, just from the
+    // hand. This is not rare - `empgun_h`, `gren_h`, `fsn_h` and `al_h` ship
+    // with zero vhots, as do most classic-install world models - and a shot
+    // starting at the grip can strike the player when the weapon is held in
+    // close to the body (see #1034). Adding clearance is deliberately left to
+    // that issue: it changes where four more weapons fire from, which is a
+    // separate change from making the vhot-carrying weapons faithful.
     let muzzle = vhots
         .first()
         .map(|v| v.point)

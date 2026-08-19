@@ -542,26 +542,30 @@ mod tests {
         }
     }
 
-    /// Every model a VR hand can *fire* must seat with its barrel - the
-    /// model's -X axis, where its muzzle vhot sits - pointing out of the hand
-    /// (-Z). `weapon_script::create_projectile` aims the shot down that axis
-    /// for every weapon rather than carrying per-weapon aim corrections, so an
-    /// entry that seats a gun some other way would silently mis-aim it.
+    /// The 25AE first-person gun models are authored barrel-along -X, and
+    /// `weapon_script::create_projectile` fires every VR weapon down that axis
+    /// rather than carrying per-weapon aim corrections. So each of their grips
+    /// must seat that -X out of the hand (-Z): an entry that seats a gun some
+    /// other way would silently mis-aim it.
+    ///
+    /// Scoped to the 25AE view models on purpose. Several classic world models
+    /// (`atek_w`, `ar15_w`, `sg_w`, `gren_w`, `viro_w`, `al_w`) are authored
+    /// barrel-along Z - their grips satisfy this assertion but their barrels
+    /// do not, which is the pre-existing 90 degree VR mis-aim tracked in #1034.
+    /// Asserting over them would certify that gap as correct.
+    ///
+    /// The melee `_h` are excluded twice over: they fire nothing, and they
+    /// deliberately have no table entry at all (their grip is computed per
+    /// wield - see `melee_view_models_have_no_static_grip`).
     #[test]
     fn gun_grips_aim_the_barrel_out_of_the_hand() {
-        // The 25AE view models VR wields, plus the world models it falls back
-        // to on a classic install. The melee `_h` are excluded twice over:
-        // they fire nothing, and they deliberately have no table entry at all
-        // (see `melee_view_models_have_no_static_grip`).
         let guns = VR_25AE_VIEW_MODELS
             .iter()
             .copied()
-            .filter(|name| !MELEE_VIEW_MODELS.contains(name))
-            .chain([
-                "atek_w", "ar15_w", "sg_w", "laser", "empgun", "gren_w", "fsn_w", "sfg_w", "amp_w",
-                "viro_w", "al_w",
-            ]);
+            .filter(|name| !MELEE_VIEW_MODELS.contains(name));
         for name in guns {
+            // flip_x mirrors only `scale`, so both hands share this rotation -
+            // checking both is what pins that.
             for handedness in [Handedness::Left, Handedness::Right] {
                 let rotation = get_vr_hand_model_adjustments_from_model(name, handedness).rotation;
                 let barrel = rotation * vec3(-1.0, 0.0, 0.0);
