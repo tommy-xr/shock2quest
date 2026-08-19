@@ -59,29 +59,16 @@ impl VRHandModelPerHandAdjustments {
 struct VRHandModelAdjustments {
     left_hand: VRHandModelPerHandAdjustments,
     right_hand: VRHandModelPerHandAdjustments,
-    projectile_rotation: Quaternion<f32>,
 }
 
 impl VRHandModelAdjustments {
     pub fn new(
         left_hand: VRHandModelPerHandAdjustments,
         right_hand: VRHandModelPerHandAdjustments,
-        projectile_rotation: Quaternion<f32>,
     ) -> VRHandModelAdjustments {
         VRHandModelAdjustments {
             left_hand,
             right_hand,
-            projectile_rotation,
-        }
-    }
-
-    pub fn with_projectile_rotation(
-        self,
-        projectile_rotation: Quaternion<f32>,
-    ) -> VRHandModelAdjustments {
-        VRHandModelAdjustments {
-            projectile_rotation,
-            ..self
         }
     }
 }
@@ -91,11 +78,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
 
     let held_weapon_right = VRHandModelPerHandAdjustments::new().rotate_y(Deg(-90.0));
     let held_weapon_left = held_weapon_right.clone().flip_x();
-    let held_weapon = VRHandModelAdjustments::new(
-        held_weapon_left,
-        held_weapon_right.clone(),
-        Quaternion::from_angle_y(Deg(0.0)),
-    );
+    let held_weapon = VRHandModelAdjustments::new(held_weapon_left, held_weapon_right.clone());
 
     // The wrench's long axis runs opposite the guns' after the -90 yaw (its
     // model is authored along X where guns are along Y), so it takes +90 and
@@ -105,11 +88,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         .with_offset(vec3(0.0, 0.0, -0.4));
 
     let held_item_hand = VRHandModelPerHandAdjustments::new().rotate_y(Deg(180.0));
-    let held_item = VRHandModelAdjustments::new(
-        held_item_hand.clone(),
-        held_item_hand,
-        Quaternion::from_angle_y(Deg(0.0)),
-    );
+    let held_item = VRHandModelAdjustments::new(held_item_hand.clone(), held_item_hand);
 
     // Hand model adjustments for VR
     // Specify overrides for particular models with how they should be oriented
@@ -117,11 +96,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
     // A weapon whose left-hand placement is the right-hand adjustments
     // mirrored (flip_x)
     fn symmetric(right: VRHandModelPerHandAdjustments) -> VRHandModelAdjustments {
-        VRHandModelAdjustments::new(
-            right.clone().flip_x(),
-            right,
-            Quaternion::from_angle_y(Deg(0.0)),
-        )
+        VRHandModelAdjustments::new(right.clone().flip_x(), right)
     }
 
     let items = vec![
@@ -188,17 +163,14 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         ),
         (
             "lasehand",
-            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.12, 0.27)))
-                .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.))),
+            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.12, 0.27))),
         ),
         // Melee first-person models (_h) deliberately have NO entry: their
         // grip is not a constant. The held body is the melee contact collider
         // (#942/#978) and has to sit on the *rendered* weapon head, which is
         // only known once the arm is posed - so the wield computes it
         // (`melee_contact_offset`) and stores it per entity as
-        // `RuntimePropVrGripOffset`, which this table defers to. Leaving them
-        // unmapped also keeps the default 180-degree projectile rotation they
-        // had before VR wielded them.
+        // `RuntimePropVrGripOffset`, which this table defers to.
         // Weapons - world models, kept when held in VR (#352): the _h meshes
         // have faces stripped for the fixed flat camera. sg_w/empgun predate
         // this and show the world models grip fine with the same offsets.
@@ -226,12 +198,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
                     .with_offset(vec3(-0.21, 0.0, -0.045)),
             ),
         ),
-        (
-            "laser",
-            held_weapon
-                .clone()
-                .with_projectile_rotation(Quaternion::from_angle_y(Deg(12.))),
-        ),
+        ("laser", held_weapon.clone()),
         ("empgun", held_weapon.clone()),
         ("gren_w", held_weapon.clone()),
         ("fsn_w", held_weapon.clone()),
@@ -406,19 +373,6 @@ pub fn get_vr_hand_model_adjustments_from_entity(
     }
 }
 
-pub fn get_projectile_rotation_from_entity(entity_id: EntityId, world: &World) -> Quaternion<f32> {
-    let v_model_name = world.borrow::<View<PropModelName>>().unwrap();
-    let maybe_model_name = v_model_name
-        .get(entity_id)
-        .map(|sz| sz.0.to_ascii_lowercase());
-
-    if let Ok(model_name) = maybe_model_name {
-        get_vr_projectile_rotation_from_model(&model_name)
-    } else {
-        Quaternion::from_angle_y(Deg(180.0))
-    }
-}
-
 pub fn get_vr_hand_model_adjustments_from_model(
     model_name: &str,
     handedness: Handedness,
@@ -438,18 +392,10 @@ pub fn get_vr_hand_model_adjustments_from_model(
     }
 }
 
-fn get_vr_projectile_rotation_from_model(model_name: &str) -> Quaternion<f32> {
-    let maybe_adjustments = HAND_MODEL_POSITIONING.get(model_name);
-
-    if maybe_adjustments.is_none() {
-        return Quaternion::from_angle_y(Deg(180.0));
-    }
-
-    maybe_adjustments.unwrap().projectile_rotation
-}
-
 #[cfg(test)]
 mod tests {
+    use cgmath::InnerSpace;
+
     use super::*;
 
     /// The melee subset of [`VR_25AE_VIEW_MODELS`]: skinned arm rigs, seated
@@ -495,12 +441,6 @@ mod tests {
             assert!(
                 !HAND_MODEL_POSITIONING.contains_key(name),
                 "{name} must take its grip from the posed rig, not this table"
-            );
-            // ... and stay on the unmapped default projectile rotation they
-            // had before VR wielded them.
-            assert_eq!(
-                get_vr_projectile_rotation_from_model(name),
-                Quaternion::from_angle_y(Deg(180.0))
             );
         }
     }
@@ -599,6 +539,42 @@ mod tests {
                 fist.to_vec().magnitude() < 1e-4,
                 "{name}: rendered fist {fist:?} is off the tracked hand"
             );
+        }
+    }
+
+    /// The 25AE first-person gun models are authored barrel-along -X, and
+    /// `weapon_script::create_projectile` fires every VR weapon down that axis
+    /// rather than carrying per-weapon aim corrections. So each of their grips
+    /// must seat that -X out of the hand (-Z): an entry that seats a gun some
+    /// other way would silently mis-aim it.
+    ///
+    /// Scoped to the 25AE view models on purpose. Several classic world models
+    /// (`atek_w`, `ar15_w`, `sg_w`, `gren_w`, `viro_w`, `al_w`) are authored
+    /// barrel-along Z - their grips satisfy this assertion but their barrels
+    /// do not, which is the pre-existing 90 degree VR mis-aim tracked in #1034.
+    /// Asserting over them would certify that gap as correct.
+    ///
+    /// The melee `_h` are excluded twice over: they fire nothing, and they
+    /// deliberately have no table entry at all (their grip is computed per
+    /// wield - see `melee_view_models_have_no_static_grip`).
+    #[test]
+    fn gun_grips_aim_the_barrel_out_of_the_hand() {
+        let guns = VR_25AE_VIEW_MODELS
+            .iter()
+            .copied()
+            .filter(|name| !MELEE_VIEW_MODELS.contains(name));
+        for name in guns {
+            // flip_x mirrors only `scale`, so both hands share this rotation -
+            // checking both is what pins that.
+            for handedness in [Handedness::Left, Handedness::Right] {
+                let rotation = get_vr_hand_model_adjustments_from_model(name, handedness).rotation;
+                let barrel = rotation * vec3(-1.0, 0.0, 0.0);
+                let hand_forward = vec3(0.0, 0.0, -1.0);
+                assert!(
+                    (barrel - hand_forward).magnitude() < 1e-4,
+                    "{name} ({handedness:?}) points its barrel at {barrel:?}, not out of the hand"
+                );
+            }
         }
     }
 
