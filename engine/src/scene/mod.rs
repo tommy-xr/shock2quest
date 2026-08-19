@@ -71,6 +71,9 @@ pub use basic_material::BasicMaterial;
 pub mod color_material;
 pub use color_material::ColorMaterial;
 
+pub mod vignette_material;
+pub use vignette_material::VignetteMaterial;
+
 pub mod debug_normal_material;
 pub use debug_normal_material::{
     DebugNormalMaterial, DebugNormalSkinnedMaterial, create as create_debug_normal_material,

@@ -310,6 +310,8 @@ pub mod render_source {
     pub const FRONTEND_POINTER: &str = "frontend_pointer";
     /// The pause menu's comfort dim, behind its panel.
     pub const PAUSE_DIM: &str = "pause_dim";
+    /// The red rim tint shown for a moment after the player takes damage.
+    pub const HIT_FEEDBACK: &str = "hit_feedback";
 }
 
 /// A tag that records only which render path produced an object.

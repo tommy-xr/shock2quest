@@ -4046,6 +4046,27 @@ impl MissionCore {
                             delta,
                             hp
                         );
+                        // Tell the player they were hit. This is the one hook
+                        // for it: every source of damage - AI melee,
+                        // projectiles, psi, falls - lands here, and what it
+                        // reads is the loss that was actually *applied*, so
+                        // armour or a resistance that soaked a hit makes the
+                        // feedback smaller rather than lying about it.
+                        // Deliberately after the death check's `previous > 0`
+                        // guard reads `previous`, and skipped for the killing
+                        // blow, which the death path owns.
+                        if entity_id == player_entity && hp < previous && hp > 0 {
+                            let damage = (previous - hp) as f32;
+                            global_effects.push(GlobalEffect::PlayerHit { damage });
+                            effects.push_back(Effect::PlaySound {
+                                handle: AudioHandle::new(),
+                                name: crate::hit_feedback::hurt_schema(damage).to_owned(),
+                                source: Some(player_entity),
+                                // The player's own voice: at the ears, not at
+                                // a point in the world they are standing on.
+                                spatial: false,
+                            });
+                        }
                         if entity_id == player_entity && previous > 0 && hp == 0 {
                             for death_effect in self.begin_player_death() {
                                 effects.push_back(death_effect);
