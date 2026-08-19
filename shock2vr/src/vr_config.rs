@@ -422,6 +422,22 @@ mod tests {
         }
     }
 
+    /// `melee_wield_pose_correction` cancels the *right* hand's grip, but the
+    /// correction is baked into the model once at wield time, which does not
+    /// know which hand took it. That is only sound while both hands share a
+    /// grip - `flip_x` mirrors `scale`, which `SetPositionRotation` discards.
+    /// Give a melee `_h` an asymmetric offset or rotation and the left-hand
+    /// wield silently renders in the wrong place; this catches that.
+    #[test]
+    fn melee_grips_are_hand_symmetric() {
+        for name in ["wrench_h", "rapier_h", "shard_h", "psword_h"] {
+            let left = get_vr_hand_model_adjustments_from_model(name, Handedness::Left);
+            let right = get_vr_hand_model_adjustments_from_model(name, Handedness::Right);
+            assert_eq!(left.offset, right.offset, "{name} grip offset");
+            assert_eq!(left.rotation, right.rotation, "{name} grip rotation");
+        }
+    }
+
     #[test]
     fn vr_view_model_lookup_is_case_insensitive() {
         assert!(is_vr_view_model("ATEK_H"));
