@@ -44,7 +44,13 @@ pub fn parse_strings(content: &[String]) -> HashMap<String, String> {
     let mut current_value = String::new();
 
     for line_str in inner_content {
-        if let Some(pos) = line_str.find(":\"") {
+        let entry = line_str.split_once(':').and_then(|(key, value)| {
+            value
+                .trim_start()
+                .strip_prefix('"')
+                .map(|value| (key, value))
+        });
+        if let Some((key, value)) = entry {
             if let Some(key) = current_key.take() {
                 map.insert(
                     key.to_ascii_lowercase(),
@@ -53,9 +59,8 @@ pub fn parse_strings(content: &[String]) -> HashMap<String, String> {
                 current_value.clear();
             }
 
-            let (key, value) = line_str.split_at(pos);
             current_key = Some(key.trim().to_string());
-            current_value = value[2..].to_string();
+            current_value = value.to_string();
         } else if current_key.is_some() {
             current_value.push_str("\n");
             current_value.push_str(&line_str);
@@ -76,3 +81,18 @@ pub fn parse_strings(content: &[String]) -> HashMap<String, String> {
 
 pub static STRINGS_IMPORTER: Lazy<AssetImporter<Vec<String>, HashMap<String, String>, ()>> =
     Lazy::new(|| AssetImporter::define(import_strings, process_strings));
+
+#[cfg(test)]
+mod tests {
+    use super::parse_strings;
+
+    #[test]
+    fn accepts_whitespace_between_colon_and_opening_quote() {
+        let strings = parse_strings(&[r#"LogText12:  "Glory to the Many!""#.to_string()]);
+
+        assert_eq!(
+            strings.get("logtext12").map(String::as_str),
+            Some("Glory to the Many!")
+        );
+    }
+}
