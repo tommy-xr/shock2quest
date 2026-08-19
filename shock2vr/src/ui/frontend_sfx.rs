@@ -1,4 +1,4 @@
-//! Frontend (menu) sound effects, shared by every 2D screen.
+//! Frontend (menu) sound effects, owned by the shared frontend-menu shell.
 //!
 //! The original frontend is not silent: `res/snd/sfx/` ships the whole set the
 //! menus use - a looping bed (`mloop1`/`mloop2`), a rollover blip played when

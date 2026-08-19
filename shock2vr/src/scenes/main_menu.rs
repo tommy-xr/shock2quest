@@ -15,13 +15,9 @@
 //!
 //! See `projects/flatscreen-and-vr-architecture.md` (Slice 3).
 
-use std::collections::HashMap;
-
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
-use dark::{
-    importers::{STRINGS_IMPORTER, UI_LAYOUT_IMPORTER},
-    map::MapRect,
-};
+#[cfg(test)]
+use dark::map::MapRect;
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
@@ -32,17 +28,25 @@ use shipyard::{EntityId, UniqueViewMut, World};
 use crate::{
     GameOptions, PresentationMode,
     game_scene::GameScene,
-    input_context::{InputContext, Pointer2D},
+    input_context::InputContext,
     mission::GlobalContext,
-    scenes::frontend_sfx::FrontendSfx,
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        FrontendPanelAnchor, FrontendPointerPass, HAlign, PointerVisuals, Rect, ScaleMode,
-        UiCanvas, VAlign, VR_COMPONENT_Z_STEP, WorldPanel, pointer_to_canvas,
-        vr_frontend_pointer_pass,
+        FrontendMenu, FrontendMenuItem, HAlign, Rect, ScaleMode, UiCanvas, VAlign, hit_menu_item,
     },
 };
+
+#[cfg(test)]
+use crate::{
+    input_context::Pointer2D,
+    ui::{
+        WorldPanel, resolve_click_at as shell_resolve_click_at, resolve_flat_click,
+        resolve_menu_labels, resolve_menu_rects, vr_frontend_pointer_pass,
+    },
+};
+#[cfg(test)]
+use std::collections::HashMap;
 
 /// Mission loaded when the player chooses "New Game".
 const NEW_GAME_MISSION: &str = "earth.mis";
@@ -84,38 +88,20 @@ enum MenuAction {
     Quit,
 }
 
-struct MenuItem {
-    /// Key into `MAIN.STR`.
-    string_key: &'static str,
-    /// Label used when `MAIN.STR` is absent or missing the key. These match the
-    /// shipped English strings.
-    fallback_label: &'static str,
-    /// `None` for an entry that exists on the original screen but that the port
-    /// does not implement yet - drawn dimmed, and not clickable.
-    action: Option<MenuAction>,
-    /// Label drawn instead of the string-table text (and the fallback). Used
-    /// by the Developer entry, which repurposes the inert Options slot: the
-    /// row must read honestly, and a one-word override is deliberately
-    /// cheaper than teaching the shipped `.STR` machinery a new key. Dropping
-    /// the override is the whole retreat path when a real options screen
-    /// lands.
-    label_override: Option<&'static str>,
-}
-
 // MAIN.PCX (native 640x480) has a vertical stack of six buttons down the right
 // side. This list is in screen order, top to bottom, so an item's index is also
 // its rect index in `MAINR.BIN`. Labels are centered in the button rect.
 //
 // (`MAIN.STR` itself lists the keys in reverse screen order; the same reversal
 // holds for `SIM.STR` against the known pause-menu order.)
-const MENU_ITEMS: &[MenuItem] = &[
-    MenuItem {
+const MENU_ITEMS: &[FrontendMenuItem<MenuAction>] = &[
+    FrontendMenuItem {
         string_key: "new_game",
         fallback_label: "New Game",
         action: Some(MenuAction::NewGame),
         label_override: None,
     },
-    MenuItem {
+    FrontendMenuItem {
         string_key: "load_game",
         fallback_label: "Load Game",
         action: Some(MenuAction::LoadGame),
@@ -123,25 +109,25 @@ const MENU_ITEMS: &[MenuItem] = &[
     },
     // The Options slot hosts the Developer screen while no real options
     // screen exists (see `MenuItem::label_override`).
-    MenuItem {
+    FrontendMenuItem {
         string_key: "options",
         fallback_label: "Options",
         action: Some(MenuAction::Developer),
         label_override: Some("Developer"),
     },
-    MenuItem {
+    FrontendMenuItem {
         string_key: "credits",
         fallback_label: "Credits",
         action: None,
         label_override: None,
     },
-    MenuItem {
+    FrontendMenuItem {
         string_key: "intro",
         fallback_label: "Intro",
         action: None,
         label_override: None,
     },
-    MenuItem {
+    FrontendMenuItem {
         string_key: "quit",
         fallback_label: "Quit",
         action: Some(MenuAction::Quit),
@@ -149,136 +135,108 @@ const MENU_ITEMS: &[MenuItem] = &[
     },
 ];
 
+const FALLBACK_RECTS: [Rect; 6] = [
+    Rect::new(
+        FALLBACK_BUTTON_X,
+        FALLBACK_BUTTON_TOP,
+        FALLBACK_BUTTON_W,
+        FALLBACK_BUTTON_H,
+    ),
+    Rect::new(
+        FALLBACK_BUTTON_X,
+        FALLBACK_BUTTON_TOP + FALLBACK_BUTTON_PITCH,
+        FALLBACK_BUTTON_W,
+        FALLBACK_BUTTON_H,
+    ),
+    Rect::new(
+        FALLBACK_BUTTON_X,
+        FALLBACK_BUTTON_TOP + 2.0 * FALLBACK_BUTTON_PITCH,
+        FALLBACK_BUTTON_W,
+        FALLBACK_BUTTON_H,
+    ),
+    Rect::new(
+        FALLBACK_BUTTON_X,
+        FALLBACK_BUTTON_TOP + 3.0 * FALLBACK_BUTTON_PITCH,
+        FALLBACK_BUTTON_W,
+        FALLBACK_BUTTON_H,
+    ),
+    Rect::new(
+        FALLBACK_BUTTON_X,
+        FALLBACK_BUTTON_TOP + 4.0 * FALLBACK_BUTTON_PITCH,
+        FALLBACK_BUTTON_W,
+        FALLBACK_BUTTON_H,
+    ),
+    Rect::new(
+        FALLBACK_BUTTON_X,
+        FALLBACK_BUTTON_TOP + 5.0 * FALLBACK_BUTTON_PITCH,
+        FALLBACK_BUTTON_W,
+        FALLBACK_BUTTON_H,
+    ),
+];
+
 /// Resolve each menu item's canvas rect from the `MAINR.BIN` layout (falling
 /// back to the vanilla geometry if it's absent). Parallel to [`MENU_ITEMS`].
+#[cfg(test)]
 fn menu_rects(layout: Option<&[MapRect]>) -> Vec<Rect> {
-    MENU_ITEMS
-        .iter()
-        .enumerate()
-        .map(
-            |(index, _)| match layout.and_then(|rects| rects.get(index)) {
-                Some(r) => Rect::new(
-                    r.ul_x as f32,
-                    r.ul_y as f32,
-                    r.width() as f32,
-                    r.height() as f32,
-                ),
-                None => Rect::new(
-                    FALLBACK_BUTTON_X,
-                    FALLBACK_BUTTON_TOP + index as f32 * FALLBACK_BUTTON_PITCH,
-                    FALLBACK_BUTTON_W,
-                    FALLBACK_BUTTON_H,
-                ),
-            },
-        )
-        .collect()
+    resolve_menu_rects(layout, &FALLBACK_RECTS)
 }
 
 /// Resolve each menu item's label from `MAIN.STR`, falling back to the shipped
 /// English text when the string table is absent. Parallel to [`MENU_ITEMS`].
+#[cfg(test)]
 fn menu_labels(strings: Option<&HashMap<String, String>>) -> Vec<String> {
-    MENU_ITEMS
-        .iter()
-        .map(|item| {
-            if let Some(label) = item.label_override {
-                return label.to_owned();
-            }
-            strings
-                // The strings importer lowercases its keys.
-                .and_then(|s| s.get(item.string_key))
-                .filter(|label| !label.is_empty())
-                .cloned()
-                .unwrap_or_else(|| item.fallback_label.to_owned())
-        })
-        .collect()
+    resolve_menu_labels(strings, MENU_ITEMS)
 }
 
 /// Where the hands are pointing on the menu panel. The rule is the frontend's,
 /// not this screen's, so it lives in [`vr_frontend_pointer_pass`].
-fn vr_pointer(input_context: &InputContext, panel: &WorldPanel) -> FrontendPointerPass {
+#[cfg(test)]
+fn vr_pointer(input_context: &InputContext, panel: &WorldPanel) -> crate::ui::FrontendPointerPass {
     vr_frontend_pointer_pass(input_context, vec2(CANVAS_W, CANVAS_H), panel)
 }
 
 /// Shared click core: both presentations reduce to "a point on the canvas plus
 /// a pressed flag", so the rising-edge rule and the hit regions live here once.
+#[cfg(test)]
 fn resolve_click_at(
     point: Option<Vector2<f32>>,
     pressed: bool,
     last_pressed: bool,
     rects: &[Rect],
 ) -> (Option<MenuAction>, bool) {
-    if !pressed || last_pressed {
-        return (None, pressed);
-    }
-    (point.and_then(|p| hit(p, rects)), pressed)
+    shell_resolve_click_at(point, pressed, last_pressed, |point| hit(point, rects))
 }
 
 /// The menu entry at a canvas point, if any. Shared by the click and the
 /// rollover sound so the two can never disagree about where an entry is.
 fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<MenuAction> {
-    let mut canvas = UiCanvas::<MenuAction>::with_events(vec2(CANVAS_W, CANVAS_H));
-    for (item, rect) in MENU_ITEMS.iter().zip(rects) {
-        // Unimplemented entries get no hit region at all, so a click over one
-        // falls through as "nothing was clicked".
-        if let Some(action) = item.action {
-            // The backdrop already contains the button art; this button is the
-            // shared canvas hit region for its label.
-            canvas.button(*rect, "", action);
-        }
-    }
-    canvas.click_at(point)
+    hit_menu_item(point, MENU_ITEMS, rects, |_| true)
 }
 
 /// Pure click resolution: on a rising press edge over an implemented item
 /// (`rects` is parallel to [`MENU_ITEMS`]), return its action. Also returns the
 /// new `last_pressed` to track for the next frame.
+#[cfg(test)]
 fn resolve_click(
     pointer: Option<Pointer2D>,
     last_pressed: bool,
     screen_size: Vector2<f32>,
     rects: &[Rect],
 ) -> (Option<MenuAction>, bool, Option<Vector2<f32>>) {
-    match pointer {
-        Some(p) => {
-            let point = pointer_to_canvas(
-                vec2(CANVAS_W, CANVAS_H),
-                p.position,
-                screen_size,
-                SCALE_MODE,
-            );
-            let (action, pressed) = resolve_click_at(point, p.pressed, last_pressed, rects);
-            (action, pressed, point)
-        }
-        None => (None, false, None),
-    }
+    resolve_flat_click(
+        pointer,
+        last_pressed,
+        screen_size,
+        vec2(CANVAS_W, CANVAS_H),
+        SCALE_MODE,
+        |point| hit(point, rects),
+    )
 }
 
 pub struct MainMenuScene {
     world: World,
     scene_name: String,
-    /// Pointer from the latest update, used for hover highlighting in render.
-    pointer: Option<Pointer2D>,
-    /// Where the VR controller ray last met the panel, in canvas pixels. The
-    /// VR counterpart of `pointer`, already in canvas space.
-    vr_pointer_canvas: Option<Vector2<f32>>,
-    /// The pointer pass that hit-tested this frame, kept so `render` draws the
-    /// beams and dot from the very rays `update` resolved the highlight from.
-    vr_pointer: FrontendPointerPass,
-    /// The drawn half of that pointer (hands, beams, dot), holding the lazily
-    /// loaded glove model.
-    vr_pointer_visuals: PointerVisuals,
-
-    /// Where the VR panel is anchored. Placed on scene entry from the head
-    /// pose and world-locked after that, so `render` hangs the panel exactly
-    /// where `update` hit-tested it.
-    panel_anchor: FrontendPanelAnchor,
-    /// Whether the pointer was pressed last frame (for rising-edge clicks).
-    last_pressed: bool,
-    /// Screen size from the latest render, so `update` can map the pointer into
-    /// canvas space consistently with how the canvas is drawn.
-    last_screen_size: Vector2<f32>,
-    /// The frontend's hum, rollover and select sounds.
-    sfx: FrontendSfx<MenuAction>,
+    menu: FrontendMenu<MenuAction>,
 }
 
 impl MainMenuScene {
@@ -288,19 +246,7 @@ impl MainMenuScene {
         Self {
             world,
             scene_name: "main_menu".to_owned(),
-            pointer: None,
-            vr_pointer_canvas: None,
-            vr_pointer: FrontendPointerPass::default(),
-            vr_pointer_visuals: PointerVisuals::new(),
-            panel_anchor: FrontendPanelAnchor::new(),
-            // A press held across a scene swap must not read as a click
-            // here: both screens sit on the same 640x480 canvas and their
-            // widgets overlap (the load screen's "Done" center falls inside
-            // the menu's "Quit" rect), so starting "already pressed" makes
-            // the next rising edge require a real release first.
-            last_pressed: true,
-            last_screen_size: vec2(CANVAS_W, CANVAS_H),
-            sfx: FrontendSfx::new(),
+            menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
         }
     }
 }
@@ -325,10 +271,8 @@ impl MainMenuScene {
         // Menu items, centered in their button and brighter when hovered.
         // Button rects come from the original `MAINR.BIN` layout and labels
         // from `MAIN.STR` (both cached by the asset cache after first load).
-        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
-        let rects = menu_rects(layout.as_deref().map(|r| r.as_slice()));
-        let strings = asset_cache.get_opt(&STRINGS_IMPORTER, LABELS_FILE);
-        let labels = menu_labels(strings.as_deref());
+        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
+        let labels = self.menu.labels(asset_cache, LABELS_FILE, MENU_ITEMS);
         for ((item, rect), label) in MENU_ITEMS.iter().zip(&rects).zip(&labels) {
             let opacity = if item.action.is_none() {
                 DISABLED_OPACITY
@@ -364,47 +308,14 @@ impl GameScene for MainMenuScene {
             *world_time = time.clone();
         }
 
-        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
-        let rects = menu_rects(layout.as_deref().map(|r| r.as_slice()));
-
-        // The panel is placed from the head on scene entry and world-locked
-        // after that; advancing it here keeps the ray and the render agreeing
-        // on where the menu is, in either presentation.
-        let panel = self.panel_anchor.update(
-            input_context.head.position,
-            input_context.head.rotation,
+        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
+        let action = self.menu.update(
             time.elapsed,
+            input_context,
+            game_options.presentation_mode,
+            |point| hit(point, &rects),
+            |point| hit(point, &rects),
         );
-
-        let (action, last_pressed, point) =
-            if game_options.presentation_mode == PresentationMode::Vr {
-                // VR has no 2D cursor: the pointer is where a controller ray meets
-                // the menu panel, and the trigger is the button.
-                self.vr_pointer = vr_pointer(input_context, &panel);
-                let (point, pressed) = (self.vr_pointer.point(), self.vr_pointer.pressed);
-                self.vr_pointer_canvas = point;
-                self.pointer = None;
-                let (action, last_pressed) =
-                    resolve_click_at(point, pressed, self.last_pressed, &rects);
-                (action, last_pressed, point)
-            } else {
-                self.pointer = input_context.pointer;
-                self.vr_pointer = FrontendPointerPass::default();
-                resolve_click(
-                    input_context.pointer,
-                    self.last_pressed,
-                    self.last_screen_size,
-                    &rects,
-                )
-            };
-        self.last_pressed = last_pressed;
-
-        // Hover and click feedback, from the same point that drives the
-        // highlight - so a sound plays exactly when an entry lights up.
-        self.sfx.hover(point.and_then(|p| hit(p, &rects)));
-        if action.is_some() {
-            self.sfx.click();
-        }
 
         match action {
             Some(MenuAction::NewGame) => {
@@ -441,26 +352,8 @@ impl GameScene for MainMenuScene {
 
         // In VR there is no screen to draw on, so the same canvas is presented
         // on a world-space panel in front of the player.
-        let panel = self.panel_anchor.panel();
-        let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
-        let mut objects = canvas.render_world_space(
-            asset_cache,
-            panel.transform(),
-            self.vr_pointer_canvas,
-            None,
-            VR_COMPONENT_Z_STEP,
-        );
-        // The controllers and their aim rays, so the player can see where they
-        // are pointing before an entry lights up. The canvas objects already in
-        // hand are the layer stack the hit dot has to float clear of.
-        let panel_layers = objects.len();
-        objects.extend(self.vr_pointer_visuals.render(
-            asset_cache,
-            &self.vr_pointer,
-            vec2(CANVAS_W, CANVAS_H),
-            &panel,
-            panel_layers,
-        ));
+        let canvas = self.build_canvas(asset_cache, self.menu.pointer_canvas());
+        let objects = self.menu.render_world_space(asset_cache, canvas);
         (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
@@ -472,23 +365,16 @@ impl GameScene for MainMenuScene {
         screen_size: Vector2<f32>,
         options: &GameOptions,
     ) -> Vec<SceneObject> {
-        self.last_screen_size = screen_size;
         // In VR the menu lives on a world-space panel drawn by `render`; a
         // screen-space copy here would paste the whole canvas over both eyes
         // and hide it.
         if options.presentation_mode == PresentationMode::Vr {
             return Vec::new();
         }
-        let pointer_canvas = self.pointer.and_then(|p| {
-            pointer_to_canvas(
-                vec2(CANVAS_W, CANVAS_H),
-                p.position,
-                screen_size,
-                SCALE_MODE,
-            )
-        });
+        let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
         let canvas = self.build_canvas(asset_cache, pointer_canvas);
-        canvas.render_screen_space(asset_cache, screen_size, SCALE_MODE)
+        self.menu
+            .render_screen_space(asset_cache, canvas, screen_size)
     }
 
     fn handle_effects(
@@ -499,7 +385,7 @@ impl GameScene for MainMenuScene {
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Vec<GlobalEffect> {
-        self.sfx.pump(asset_cache, audio_context);
+        self.menu.pump_sfx(asset_cache, audio_context);
         effects
             .into_iter()
             .filter_map(|e| match e {
@@ -510,7 +396,7 @@ impl GameScene for MainMenuScene {
     }
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
-        self.sfx.stop(audio_context);
+        self.menu.stop_sfx(audio_context);
     }
 
     fn wants_pointer(&self) -> bool {
@@ -604,18 +490,16 @@ mod tests {
             "this test is only meaningful while the rects overlap"
         );
 
-        let mut scene = MainMenuScene::new();
         let held = pointer_at(574.5 / CANVAS_W, 436.0 / CANVAS_H, true);
 
         // First frame after the swap: the press is held, not new.
-        let (action, last, _) = resolve_click(held, scene.last_pressed, SCREEN, &rects);
+        let (action, last, _) = resolve_click(held, true, SCREEN, &rects);
         assert_eq!(action, None, "a carried-over press must not activate Quit");
-        scene.last_pressed = last;
 
         // Releasing and pressing again is a real click.
         let (_, last, _) = resolve_click(
             pointer_at(574.5 / CANVAS_W, 436.0 / CANVAS_H, false),
-            scene.last_pressed,
+            last,
             SCREEN,
             &rects,
         );
@@ -724,10 +608,10 @@ mod tests {
     }
 
     #[test]
-    fn no_pointer_means_no_action() {
+    fn pointer_loss_does_not_rearm_a_held_press() {
         let (action, last, _) = resolve_click(None, true, SCREEN, &menu_rects(None));
         assert_eq!(action, None);
-        assert!(!last);
+        assert!(last, "a missing pointer is not evidence of a release");
     }
 
     #[test]

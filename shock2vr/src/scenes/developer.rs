@@ -23,12 +23,12 @@ use crate::{
     game_scene::GameScene,
     input_context::{InputContext, Pointer2D},
     mission::GlobalContext,
-    scenes::frontend_sfx::FrontendSfx,
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
         FrontendPanelAnchor,
         FrontendPointerPass,
+        FrontendSfx,
         PointerVisuals,
         Rect,
         ScaleMode,

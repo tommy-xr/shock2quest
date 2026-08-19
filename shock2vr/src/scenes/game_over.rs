@@ -25,12 +25,12 @@ use crate::{
     input_context::{InputContext, Pointer2D},
     mission::{GlobalContext, PlayerLifeState},
     save_load::{SaveFile, latest_save},
-    scenes::frontend_sfx::FrontendSfx,
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        FrontendPanelAnchor, FrontendPointerPass, HAlign, PointerVisuals, Rect, ScaleMode,
-        UiCanvas, VAlign, VR_COMPONENT_Z_STEP, pointer_to_canvas, vr_frontend_pointer_pass,
+        FrontendPanelAnchor, FrontendPointerPass, FrontendSfx, HAlign, PointerVisuals, Rect,
+        ScaleMode, UiCanvas, VAlign, VR_COMPONENT_Z_STEP, pointer_to_canvas,
+        vr_frontend_pointer_pass,
     },
 };
 
