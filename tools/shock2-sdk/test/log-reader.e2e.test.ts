@@ -281,3 +281,49 @@ test(
     );
   },
 );
+
+// Hydro 3's Korenchkin entry is authored as `LogText12:  "..."` in
+// LEVEL03.STR, with two spaces between the colon and opening quote. It follows
+// the same Dark string-table grammar as the compact `Key:"..."` form and must
+// remain available after the disc has been consumed into the PDA.
+test(
+  "hydro3: collected Korenchkin log opens its double-spaced transcript",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "hydro3.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8252),
+    });
+    await game.step({ frames: 5 });
+
+    const [korenchkin] = await game.entities.byTemplate(382);
+    assert.ok(korenchkin, "hydro3 should contain Korenchkin's log (obj 382)");
+
+    await game.entities.sendMessage(korenchkin.id, { type: "Frob" });
+    await game.step({ frames: 5 });
+    assert.deepEqual(
+      (await game.info()).player.collected_logs,
+      [{ deck: 3, log: 12, read: false }],
+      "the Hydro 3 log should be filed unread",
+    );
+
+    await game.input.trigger("ReadLastUnreadLog");
+    await game.step({ frames: 5 });
+
+    const panel = (await game.ui.state()).active_panel;
+    assert.ok(panel, "the collected Hydro 3 log should open in the reader");
+    const transcript = panel.elements
+      .filter((element) => element.kind === "text" && element.text)
+      .map((element) => element.text)
+      .join(" ");
+    assert.ok(
+      transcript.includes("Glory... to the Many"),
+      `the reader should render Korenchkin's transcript (got: ${transcript.slice(0, 160)})`,
+    );
+    assert.deepEqual(
+      (await game.info()).player.collected_logs,
+      [{ deck: 3, log: 12, read: true }],
+      "successfully opening the log should mark it read",
+    );
+  },
+);
