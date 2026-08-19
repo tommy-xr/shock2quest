@@ -11,7 +11,8 @@
 //! driven `GameScene` that emits a `GlobalEffect` on click.
 
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
-use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
+#[cfg(test)]
+use dark::map::MapRect;
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
@@ -22,14 +23,19 @@ use shipyard::{EntityId, UniqueViewMut, World};
 use crate::{
     GameOptions, PresentationMode,
     game_scene::GameScene,
-    input_context::{InputContext, Pointer2D},
+    input_context::InputContext,
     mission::{GlobalContext, PlayerLifeState},
     save_load::{SaveFile, latest_save},
     scripts::{Effect, GlobalEffect},
     time::Time,
+    ui::{FrontendMenu, HAlign, Rect, ScaleMode, UiCanvas, VAlign},
+};
+
+#[cfg(test)]
+use crate::{
+    input_context::Pointer2D,
     ui::{
-        FrontendPanelAnchor, FrontendPointerPass, FrontendSfx, HAlign, PointerVisuals, Rect,
-        ScaleMode, UiCanvas, VAlign, VR_COMPONENT_Z_STEP, pointer_to_canvas,
+        resolve_click_at as shell_resolve_click_at, resolve_flat_click, resolve_menu_rects,
         vr_frontend_pointer_pass,
     },
 };
@@ -80,64 +86,51 @@ const FALLBACK_RECTS: [Rect; 4] = [
 
 /// Resolve the screen's widget rects from `GAMELODR.BIN`, falling back to the
 /// decoded values when it is absent.
-fn screen_rects(layout: Option<&[MapRect]>) -> [Rect; 4] {
-    let mut rects = FALLBACK_RECTS;
-    for (index, rect) in rects.iter_mut().enumerate() {
-        if let Some(r) = layout.and_then(|rects| rects.get(index)) {
-            *rect = Rect::new(
-                r.ul_x as f32,
-                r.ul_y as f32,
-                r.width() as f32,
-                r.height() as f32,
-            );
-        }
-    }
-    rects
+#[cfg(test)]
+fn screen_rects(layout: Option<&[MapRect]>) -> Vec<Rect> {
+    resolve_menu_rects(layout, &FALLBACK_RECTS)
 }
 
 /// Shared click core: both presentations reduce to "a point on the canvas plus
 /// a pressed flag", so the rising-edge rule and the hit regions live here once.
+#[cfg(test)]
 fn resolve_click_at(
     point: Option<Vector2<f32>>,
     pressed: bool,
     last_pressed: bool,
-    rects: &[Rect; 4],
+    rects: &[Rect],
     can_load: bool,
 ) -> (Option<GameOverAction>, bool) {
-    if !pressed || last_pressed {
-        return (None, pressed);
-    }
-    (point.and_then(|c| hit(c, rects, can_load)), pressed)
+    shell_resolve_click_at(point, pressed, last_pressed, |point| {
+        hit(point, rects, can_load)
+    })
 }
 
 /// Pure click resolution: on a rising press edge over an enabled button,
 /// return its action. Also returns the new `last_pressed` for the next frame.
 /// `can_load` disables "Load" when no save exists, so the screen never offers
 /// a recovery it cannot perform.
+#[cfg(test)]
 fn resolve_click(
     pointer: Option<Pointer2D>,
     last_pressed: bool,
     screen_size: Vector2<f32>,
-    rects: &[Rect; 4],
+    rects: &[Rect],
     can_load: bool,
 ) -> (Option<GameOverAction>, bool, Option<Vector2<f32>>) {
-    let Some(p) = pointer else {
-        return (None, false, None);
-    };
-    let canvas_point = pointer_to_canvas(
-        vec2(CANVAS_W, CANVAS_H),
-        p.position,
+    resolve_flat_click(
+        pointer,
+        last_pressed,
         screen_size,
+        vec2(CANVAS_W, CANVAS_H),
         SCALE_MODE,
-    );
-    let (action, pressed) =
-        resolve_click_at(canvas_point, p.pressed, last_pressed, rects, can_load);
-    (action, pressed, canvas_point)
+        |point| hit(point, rects, can_load),
+    )
 }
 
 /// The button at a canvas point, if any. Shared by the click and the rollover
 /// sound so the two always agree on where a button is.
-fn hit(point: Vector2<f32>, rects: &[Rect; 4], can_load: bool) -> Option<GameOverAction> {
+fn hit(point: Vector2<f32>, rects: &[Rect], can_load: bool) -> Option<GameOverAction> {
     if can_load && rects[LOAD_RECT_INDEX].contains(point) {
         Some(GameOverAction::Load)
     } else if rects[QUIT_RECT_INDEX].contains(point) {
@@ -153,29 +146,7 @@ pub struct GameOverScene {
     /// The save offered by "Load", resolved once when the screen opens so the
     /// label and the click agree.
     save: Option<SaveFile>,
-    /// Pointer from the latest update, used for hover highlighting in render.
-    pointer: Option<Pointer2D>,
-    /// Where the VR controller ray last met the panel, in canvas pixels. The
-    /// VR counterpart of `pointer`, already in canvas space.
-    vr_pointer_canvas: Option<Vector2<f32>>,
-    /// The pointer pass that hit-tested this frame, kept so `render` draws the
-    /// beams and dot from the very rays `update` resolved the highlight from.
-    vr_pointer: FrontendPointerPass,
-    /// The drawn half of that pointer (hands, beams, dot), holding the lazily
-    /// loaded glove model.
-    vr_pointer_visuals: PointerVisuals,
-
-    /// Where the VR panel is anchored: placed from the head on scene entry
-    /// and world-locked after that, so `render` hangs the panel exactly
-    /// where `update` hit-tested it.
-    panel_anchor: FrontendPanelAnchor,
-    /// Whether the pointer was pressed last frame (for rising-edge clicks).
-    last_pressed: bool,
-    /// Screen size from the latest render, so `update` maps the pointer into
-    /// canvas space consistently with how the canvas is drawn.
-    last_screen_size: Vector2<f32>,
-    /// The frontend's hum, rollover and select sounds.
-    sfx: FrontendSfx<GameOverAction>,
+    menu: FrontendMenu<GameOverAction>,
 }
 
 impl GameOverScene {
@@ -189,18 +160,7 @@ impl GameOverScene {
             world,
             scene_name: "game_over".to_owned(),
             save: latest_save(),
-            pointer: None,
-            vr_pointer_canvas: None,
-            vr_pointer: FrontendPointerPass::default(),
-            vr_pointer_visuals: PointerVisuals::new(),
-            panel_anchor: FrontendPanelAnchor::new(),
-            // This screen is entered straight out of gameplay - very plausibly
-            // with the VR trigger still held from the shot that preceded the
-            // death - so it starts "already pressed": the next rising edge
-            // requires a real release first, and "Quit" cannot fire itself.
-            last_pressed: true,
-            last_screen_size: vec2(CANVAS_W, CANVAS_H),
-            sfx: FrontendSfx::new(),
+            menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
         }
     }
 }
@@ -220,8 +180,7 @@ impl GameOverScene {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
-        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
-        let rects = screen_rects(layout.as_deref().map(|r| r.as_slice()));
+        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
 
         canvas.text_native(
             rects[HEADER_RECT_INDEX],
@@ -302,53 +261,14 @@ impl GameScene for GameOverScene {
             .filter(|effect| matches!(effect, Effect::GlobalEffect(_)))
             .collect();
 
-        let layout = asset_cache.get_opt(&UI_LAYOUT_IMPORTER, LAYOUT_FILE);
-        let rects = screen_rects(layout.as_deref().map(|r| r.as_slice()));
-
-        // The panel is placed from the head on scene entry and world-locked
-        // after that; advancing it here keeps the ray and the render agreeing
-        // on where the screen is, in either presentation.
-        let panel = self.panel_anchor.update(
-            input_context.head.position,
-            input_context.head.rotation,
+        let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
+        let action = self.menu.update(
             time.elapsed,
+            input_context,
+            game_options.presentation_mode,
+            |point| hit(point, &rects, self.save.is_some()),
+            |point| hit(point, &rects, self.save.is_some()),
         );
-
-        let (action, last_pressed, point) =
-            if game_options.presentation_mode == PresentationMode::Vr {
-                // VR has no 2D cursor: the pointer is where a controller ray meets
-                // the panel, and the trigger is the button.
-                self.vr_pointer =
-                    vr_frontend_pointer_pass(input_context, vec2(CANVAS_W, CANVAS_H), &panel);
-                let (point, pressed) = (self.vr_pointer.point(), self.vr_pointer.pressed);
-                self.vr_pointer_canvas = point;
-                self.pointer = None;
-                let (action, last_pressed) = resolve_click_at(
-                    point,
-                    pressed,
-                    self.last_pressed,
-                    &rects,
-                    self.save.is_some(),
-                );
-                (action, last_pressed, point)
-            } else {
-                self.pointer = input_context.pointer;
-                self.vr_pointer = FrontendPointerPass::default();
-                resolve_click(
-                    input_context.pointer,
-                    self.last_pressed,
-                    self.last_screen_size,
-                    &rects,
-                    self.save.is_some(),
-                )
-            };
-        self.last_pressed = last_pressed;
-
-        self.sfx
-            .hover(point.and_then(|p| hit(p, &rects, self.save.is_some())));
-        if action.is_some() {
-            self.sfx.click();
-        }
 
         match action {
             Some(GameOverAction::Load) => {
@@ -378,26 +298,8 @@ impl GameScene for GameOverScene {
 
         // In VR there is no screen to draw on, so the same canvas is presented
         // on a world-space panel in front of the player.
-        let panel = self.panel_anchor.panel();
-        let canvas = self.build_canvas(asset_cache, self.vr_pointer_canvas);
-        let mut objects = canvas.render_world_space(
-            asset_cache,
-            panel.transform(),
-            self.vr_pointer_canvas,
-            None,
-            VR_COMPONENT_Z_STEP,
-        );
-        // The controllers and their aim rays, so the player can see where they
-        // are pointing before an entry lights up. The canvas objects already in
-        // hand are the layer stack the hit dot has to float clear of.
-        let panel_layers = objects.len();
-        objects.extend(self.vr_pointer_visuals.render(
-            asset_cache,
-            &self.vr_pointer,
-            vec2(CANVAS_W, CANVAS_H),
-            &panel,
-            panel_layers,
-        ));
+        let canvas = self.build_canvas(asset_cache, self.menu.pointer_canvas());
+        let objects = self.menu.render_world_space(asset_cache, canvas);
         (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
@@ -409,23 +311,16 @@ impl GameScene for GameOverScene {
         screen_size: Vector2<f32>,
         options: &GameOptions,
     ) -> Vec<SceneObject> {
-        self.last_screen_size = screen_size;
         // In VR the screen lives on a world-space panel drawn by `render`; a
         // screen-space copy here would paste the whole canvas over both eyes
         // and hide it.
         if options.presentation_mode == PresentationMode::Vr {
             return Vec::new();
         }
-        let pointer_canvas = self.pointer.and_then(|p| {
-            pointer_to_canvas(
-                vec2(CANVAS_W, CANVAS_H),
-                p.position,
-                screen_size,
-                SCALE_MODE,
-            )
-        });
+        let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
         let canvas = self.build_canvas(asset_cache, pointer_canvas);
-        canvas.render_screen_space(asset_cache, screen_size, SCALE_MODE)
+        self.menu
+            .render_screen_space(asset_cache, canvas, screen_size)
     }
 
     fn handle_effects(
@@ -436,7 +331,7 @@ impl GameScene for GameOverScene {
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Vec<GlobalEffect> {
-        self.sfx.pump(asset_cache, audio_context);
+        self.menu.pump_sfx(asset_cache, audio_context);
         effects
             .into_iter()
             .filter_map(|e| match e {
@@ -447,7 +342,7 @@ impl GameScene for GameOverScene {
     }
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
-        self.sfx.stop(audio_context);
+        self.menu.stop_sfx(audio_context);
     }
 
     fn wants_pointer(&self) -> bool {
@@ -612,7 +507,6 @@ mod tests {
         // constructor's `last_pressed: true` that reads as a rising edge over
         // whatever the ray happens to cross - up to and including Quit.
         let rects = screen_rects(None);
-        let scene = GameOverScene::new();
         let pass = vr_frontend_pointer_pass(
             &vr_input(hand_aimed_at(rects[QUIT_RECT_INDEX].center(), 1.0)),
             vec2(CANVAS_W, CANVAS_H),
@@ -620,7 +514,7 @@ mod tests {
         );
         let (point, pressed) = (pass.point(), pass.pressed);
         assert!(pressed);
-        let (action, last) = resolve_click_at(point, pressed, scene.last_pressed, &rects, true);
+        let (action, last) = resolve_click_at(point, pressed, true, &rects, true);
         assert_eq!(action, None, "a carried-over press must not activate Quit");
 
         // Releasing and pressing again is a real click.
