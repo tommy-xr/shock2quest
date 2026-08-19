@@ -310,6 +310,9 @@ pub mod render_source {
     pub const FRONTEND_POINTER: &str = "frontend_pointer";
     /// The pause menu's comfort dim, behind its panel.
     pub const PAUSE_DIM: &str = "pause_dim";
+    /// The narration subtitle text: screen-space lines when flat, the
+    /// head-anchored toast panel in VR (`subtitle_overlay`).
+    pub const SUBTITLE: &str = "subtitle";
 }
 
 /// A tag that records only which render path produced an object.

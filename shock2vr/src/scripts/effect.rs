@@ -66,6 +66,21 @@ pub enum GlobalEffect {
     /// Play the retail ending and enter the campaign's terminal state.
     CompleteCampaign,
 
+    /// Show the subtitle text for a narration voice-over, when the install's
+    /// subtitle database has one (25AE data ships transcripts for the trg/
+    /// brief narrations; classic data has none and this is a no-op). The name
+    /// is the audio *schema* the script asked to play - `Game` resolves it to
+    /// a sample the same way the sound system does and looks that up.
+    ShowSubtitle {
+        audio_schema: String,
+    },
+
+    /// Take a narration's subtitle down early because its sound was stopped
+    /// (TrapSound TurnOff). A no-op when that schema's text is not showing.
+    HideSubtitle {
+        audio_schema: String,
+    },
+
     // Quit the game (e.g. from the main menu). The runtime is responsible for
     // observing this via `Game::should_quit` and closing its window.
     Quit,

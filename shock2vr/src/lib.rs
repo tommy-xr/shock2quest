@@ -33,6 +33,8 @@ pub mod quest_info;
 pub mod research;
 mod runtime_props;
 mod scripts;
+mod subtitle_overlay;
+mod subtitles;
 mod systems;
 #[cfg(test)]
 mod test_support;
@@ -292,6 +294,21 @@ fn build_25th_anniversary_mounts(
         mounts.extend(anniversary_family_mounts(family));
     }
 
+    // Narration subtitles: the KEX cue files (`vbriefs.sub` etc.) and the
+    // localization table their `$` tokens resolve through. Prefixed mounts, so
+    // only those files are exposed - nothing else in `base.kpf` (the KEX
+    // runtime archive) leaks into asset resolution. Classic installs have
+    // neither archive and simply mount nothing (see `subtitles`).
+    for (archive, prefix) in [
+        ("sshock2-subtitles.kpf", "data/res/subtitles/english/"),
+        ("base.kpf", "localization/"),
+    ] {
+        let path = resource_path(archive);
+        if Path::new(&path).exists() {
+            mounts.push(ZipAssetPath::with_prefix(path, prefix));
+        }
+    }
+
     // The gamesys, missions and motiondb - shared with the CLI tools, which
     // need those files without any of the resource families above.
     mounts.extend(data_files::data_file_mounts(paths::data_root()));
@@ -299,6 +316,50 @@ fn build_25th_anniversary_mounts(
     mounts.push(BundleAssetPath::new("".to_owned(), bundle_storage));
     mounts.push(AssetPath::folder("".to_owned()));
     mounts
+}
+
+/// Load the narration subtitle database out of the mounted data.
+///
+/// The cue files and the localization table are mounted only from a 25AE
+/// install's archives (see `build_25th_anniversary_mounts`); a classic install
+/// resolves neither and gets an empty database - faithful to 1999, where these
+/// narrations were audio-only. `vbriefs.sub` carries the earth/station
+/// training and briefing narrations, `vtriggers.sub` the in-mission
+/// Polito/SHODAN voice triggers; both play through `TrapSound`.
+fn load_subtitle_db(asset_cache: &AssetCache) -> subtitles::SubtitleDb {
+    use std::io::Read;
+    let read_text = |name: &str| -> Option<String> {
+        let reader = asset_cache.get_raw_reader(name)?;
+        let mut text = String::new();
+        reader.borrow_mut().read_to_string(&mut text).ok()?;
+        Some(text)
+    };
+    let mut db = subtitles::SubtitleDb::default();
+    match read_text("loc_english.txt") {
+        Some(loc_source) => {
+            let loc = subtitles::Localization::parse(&loc_source);
+            for sub_file in ["vbriefs.sub", "vtriggers.sub"] {
+                if let Some(source) = read_text(sub_file) {
+                    db.add_sub_source(&source, &loc);
+                }
+            }
+        }
+        None => {
+            // Expected on a classic install; on a 25AE install with the cue
+            // files present it means base.kpf is missing/unreadable - say so
+            // rather than silently dropping every subtitle.
+            if read_text("vbriefs.sub").is_some() {
+                println!(
+                    "narration subtitles: cue files found but localization/loc_english.txt is missing - subtitles disabled"
+                );
+            }
+        }
+    }
+    // `println!` like the install summary above: this is the tell-tale for
+    // "why are there no subtitles" and no tracing subscriber runs on the
+    // desktop or Quest.
+    println!("narration subtitles: {} cue tracks", db.len());
+    db
 }
 
 /// Whether a mission file is available to load, in whichever layout is in use.
@@ -442,6 +503,15 @@ pub struct Game {
     /// Wall-clock time spent with the simulation suspended, subtracted from the
     /// clock the scene sees. See [`Game::scene_time`].
     time_suspended: std::time::Duration,
+
+    /// Narration transcripts by sample name (25AE data; empty on classic
+    /// installs). Consulted by `GlobalEffect::ShowSubtitle`.
+    subtitle_db: subtitles::SubtitleDb,
+
+    /// The on-screen text for a playing narration: screen-space lines when
+    /// flat, a head-anchored world panel in VR. Game-level like the pause
+    /// menu, so it rides over any gameplay scene.
+    subtitle_overlay: subtitle_overlay::SubtitleOverlay,
 }
 
 /// Player state for debug introspection. Entity ids use `EntityId::inner() as
@@ -1100,6 +1170,10 @@ impl Game {
 
         let _strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
 
+        // Narration transcripts, when this install ships them (25AE). Loaded
+        // once - the database is tiny (a few hundred cue tracks).
+        let subtitle_db = load_subtitle_db(&asset_cache);
+
         // vhot logging:
         // let atek_file = File::open(resource_path("res/obj/ar15_w.bin")).unwrap();
         // let mut atek_reader = BufReader::new(atek_file);
@@ -1213,6 +1287,8 @@ impl Game {
             campaign_completed: false,
             pause_menu: pause_menu::PauseMenu::new(),
             time_suspended: std::time::Duration::ZERO,
+            subtitle_db,
+            subtitle_overlay: subtitle_overlay::SubtitleOverlay::new(),
         }
     }
 
@@ -1267,6 +1343,11 @@ impl Game {
             return;
         }
         let time = &self.scene_time(time);
+
+        // The subtitle overlay runs on the scene clock (the suspend path above
+        // returned already), so its lines freeze with the world while paused
+        // instead of expiring under the menu.
+        self.subtitle_overlay.update(time.elapsed, input_context);
 
         // Convert triggered actions into effects; triggered actions are
         // consumed here so injected actions (e.g. from the debug runtime)
@@ -1701,6 +1782,26 @@ impl Game {
             GlobalEffect::Quit => {
                 self.should_quit = true;
             }
+            GlobalEffect::ShowSubtitle { audio_schema } => {
+                // Resolve the schema to a sample exactly the way the sound
+                // system will, then try the transcript under either name (a
+                // plain sample name is its own schema miss).
+                let sample = self.resolve_schema(&audio_schema);
+                let cues = self
+                    .subtitle_db
+                    .cues(&sample)
+                    .or_else(|| self.subtitle_db.cues(&audio_schema));
+                if let Some(cues) = cues {
+                    // Keyed by the *schema* name: `resolve_schema` is a random
+                    // draw for multi-sample schemas, so keying on the sample
+                    // would defeat the repeat-while-playing guard when a trap
+                    // re-fires. (Every loaded track today is a 1:1 schema.)
+                    self.subtitle_overlay.post(&audio_schema, cues.to_vec());
+                }
+            }
+            GlobalEffect::HideSubtitle { audio_schema } => {
+                self.subtitle_overlay.clear_sample(&audio_schema);
+            }
         }
     }
 
@@ -1709,6 +1810,10 @@ impl Game {
     /// scene swap goes through here so that hook cannot be forgotten.
     fn set_active_scene(&mut self, scene: Box<dyn GameScene>) {
         self.active_game_scene.on_exit(&mut self.audio_context);
+        // A narration's remaining cues belong to the outgoing scene - they
+        // must not keep drawing over the menu, the loading screen, or the
+        // next level.
+        self.subtitle_overlay.clear();
         self.active_game_scene = scene;
     }
 
@@ -1771,6 +1876,16 @@ impl Game {
         // aim at it), so it is mapped into world coordinates with the same
         // pawn transform the runtime builds its camera from.
         let pawn_to_world = Matrix4::from_translation(pos) * Matrix4::from(rot);
+        // The VR subtitle toast. Suppressed entirely while the pause menu is
+        // up (its clock is frozen anyway): both draw in the renderer's
+        // clear-depth overlay group, and the menu owns that space.
+        if !self.pause_menu.is_open() {
+            scene.extend(self.subtitle_overlay.render(
+                &mut self.asset_cache,
+                &self.options,
+                pawn_to_world,
+            ));
+        }
         scene.extend(
             self.pause_menu
                 .render(&mut self.asset_cache, &self.options, pawn_to_world),
@@ -1820,6 +1935,17 @@ impl Game {
                 &self.options,
             )
         };
+
+        // The flat subtitle lines ride over the scene's own screen-space UI,
+        // and are dropped with it while the pause menu is up (the guard above
+        // already emptied `objs` in that case; keep the toast consistent).
+        if !self.pause_menu.is_open() {
+            objs.extend(self.subtitle_overlay.render_per_eye(
+                &mut self.asset_cache,
+                screen_size,
+                &self.options,
+            ));
+        }
 
         // Drawn last so the pause panel sits over the scene's own screen-space
         // UI (viewmodel, HUD, MFD).
