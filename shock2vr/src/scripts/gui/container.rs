@@ -7,7 +7,7 @@ use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     gui::{Gui, GuiComponent, GuiConfig, GuiCursor},
-    inventory::Inventory,
+    inventory::{Inventory, PlayerInventoryEntity, grid_for},
     scripts::{Message, script_util},
 };
 
@@ -81,6 +81,10 @@ const LOOT_GRID_ORIGIN: Vector2<f32> = Vector2::new(15.0, 153.0);
 /// paperdoll owns everything right of x = 527.
 const BACKPACK_GRID_ORIGIN: Vector2<f32> = Vector2::new(4.0, 17.0);
 
+/// `res/iface/BLOCK.PCX` is authored to cover one cell's 34x32 interior,
+/// leaving the separators in `INVBACK.PCX` visible around it.
+const BLOCK_SIZE: Vector2<f32> = Vector2::new(34.0, 32.0);
+
 impl ContainerGui {
     pub fn loot_container() -> ContainerGui {
         ContainerGui {
@@ -148,10 +152,31 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                 .with_size(vec2(self.width, self.height)),
         ];
 
+        // Resolve the usable grid once in panel pixels. Both flat and VR
+        // presentations consume this same component list, so blocked-cell and
+        // item placement cannot diverge at the presentation boundary.
+        let grid = grid_for(world, entity_id);
+        let is_backpack = world
+            .borrow::<View<PlayerInventoryEntity>>()
+            .is_ok_and(|backpacks| backpacks.get(entity_id).is_ok());
+        if is_backpack {
+            for y in 0..self.num_slots_y {
+                for x in grid.0..self.num_slots_x {
+                    components.push(
+                        gui::image("iface/block.pcx")
+                            .with_position(vec2(
+                                self.inv_offset_x + SLOT_PITCH.x * x as f32,
+                                self.inv_offset_y + SLOT_PITCH.y * y as f32,
+                            ))
+                            .with_size(BLOCK_SIZE),
+                    );
+                }
+            }
+        }
+
         // Items keep the cell stored on their containment link; see
         // `Inventory::from_container`.
-        let inventory =
-            Inventory::from_container(world, entity_id, (self.num_slots_x, self.num_slots_y));
+        let inventory = Inventory::from_container(world, entity_id, grid);
 
         let v_inv_dims = world.borrow::<View<PropInventoryDimensions>>().unwrap();
 
@@ -491,6 +516,40 @@ mod tests {
             ContainerGui::loot_container().get_config().world_offset,
             vec3(0.0, 1.0, 0.0)
         );
+    }
+
+    #[test]
+    fn backpack_covers_every_unusable_cell_with_shipped_block_art() {
+        let mut world = World::new();
+        let backpack = world.add_entity((PlayerInventoryEntity {}, Links::empty()));
+        world.add_unique(crate::quest_info::QuestInfo::new());
+
+        let components = ContainerGui::inv_container().get_components(
+            &None,
+            backpack,
+            &world,
+            &ContainerGuiState {},
+        );
+        let blocks: Vec<_> = components
+            .iter()
+            .filter_map(|component| match component {
+                GuiComponent::Image {
+                    texture,
+                    position,
+                    size,
+                    ..
+                } if texture == "iface/block.pcx" => Some((*position, *size)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            blocks.len(),
+            15,
+            "Strength 1 blocks five columns x three rows"
+        );
+        assert_eq!(blocks[0], (vec2(354.0, 17.0), vec2(34.0, 32.0)));
+        assert_eq!(blocks[14], (vec2(494.0, 85.0), vec2(34.0, 32.0)));
     }
 
     /// Every icon a panel draws for a contained item - the grid buttons and

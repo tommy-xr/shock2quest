@@ -21,10 +21,11 @@
 //! panel-open/close lifecycle to snapshot against). Costs are Normal
 //! difficulty (no difficulty setting exists yet).
 //!
-//! A stat is only sold when it has a live gameplay consumer. Endurance raises
-//! maximum HP and Cyber Affinity feeds hacking odds; Strength, Psionics, and
-//! Agility stay visible but unavailable until their advertised systems exist.
-//! This prevents a stored-only stat bump from consuming irreplaceable modules.
+//! A stat is only sold when it has a live gameplay consumer. Strength expands
+//! the backpack, Endurance raises maximum HP, and Cyber Affinity feeds hacking
+//! odds; Psionics and Agility stay visible but unavailable until their
+//! advertised systems exist. This prevents a stored-only stat bump from
+//! consuming irreplaceable modules.
 
 use cgmath::{Vector2, Vector3, vec2};
 use dark::gamesys::TrainerCostTables;
@@ -70,7 +71,7 @@ pub const ENDURANCE_HP_PER_LEVEL: u32 = 5;
 /// Keep this gate shared by display, immediate feedback, and authoritative
 /// effect handling so a future caller cannot bypass the module-loss guard.
 pub fn stat_upgrade_available(stat: Stat) -> bool {
-    matches!(stat, Stat::Endurance | Stat::CyberAffinity)
+    matches!(stat, Stat::Strength | Stat::Endurance | Stat::CyberAffinity)
 }
 
 /// The cost of buying `target`'s next level given the player's current sheet,
@@ -547,7 +548,12 @@ mod tests {
             upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::CyberAffinity)),
             Some(3)
         );
-        for unsupported in [Stat::Strength, Stat::PsionicAbility, Stat::Agility] {
+        assert_eq!(
+            upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::Strength)),
+            Some(3),
+            "Strength is purchasable once backpack capacity consumes it"
+        );
+        for unsupported in [Stat::PsionicAbility, Stat::Agility] {
             assert_eq!(
                 upgrade_quote(&costs, &stats, TrainerTarget::Stat(unsupported)),
                 None,

@@ -11,8 +11,9 @@ import { teleportVerified } from "./helpers/teleport.js";
 // The four medsci1 trainer machines open category upgrade panels: rows list
 // the current level and the cost of the next level from the gamesys cost
 // tables (STATCOST 3/8/15/30/50 etc.). Only stats with live effects may be
-// bought: Endurance raises maximum HP, Cybernetics feeds the hacking path, and
-// storage-only stats refuse without spending modules.
+// bought: Strength expands the backpack, Endurance raises maximum HP,
+// Cybernetics feeds the hacking path, and storage-only stats refuse without
+// spending modules.
 //
 // Negative-first: on the C1 base, frobbing the Stats Trainer hits the
 // intentional SkillTrainerScript no-op stub (#424) - /v1/ui reports no active
@@ -21,7 +22,7 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8170);
 
 test(
-  "trainer MFD: Endurance 1->4 costs 26 modules and raises max HP persistently",
+  "trainer MFD: Strength expands inventory and Endurance raises max HP persistently",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     const saveName = `trainer_e2e_${Date.now()}`;
@@ -37,11 +38,26 @@ test(
       return s;
     };
 
-    // Provision only the currency; purchases still go through the real MFD,
+    // Provision only currency/items; purchases still go through the real MFD,
     // button messages, effect queue, cost table, and live player properties.
-    const funded = await game.player.setStats({ cyber_modules: 26 });
-    assert.equal(funded.cyber_modules, 26);
+    const funded = await game.player.setStats({ cyber_modules: 29 });
+    assert.equal(funded.cyber_modules, 29);
     assert.equal(funded.endurance, 1, "the regression starts at Endurance 1");
+    await Promise.all([
+      game.player.spawnItem("Nanites"),
+      game.player.spawnItem("Nanites"),
+      game.player.spawnItem("Nanites"),
+    ]);
+    const backpackOrdinals = async () => {
+      const backpackId = (await game.info()).player.inventory_entity_id;
+      assert.ok(backpackId != null);
+      return (await game.entities.detail(backpackId)).outgoing_links
+        .filter((link) => link.link_type.startsWith("Contains"))
+        .map((link) => link.contains_ordinal)
+        .filter((slot): slot is number => slot != null)
+        .sort((a, b) => a - b);
+    };
+    assert.deepEqual(await backpackOrdinals(), [0, 10, 20]);
     const beforePlayer = (await game.info()).player;
     const baseMaxHp = beforePlayer.max_hit_points;
     assert.ok(baseMaxHp != null, "player should have a maximum-HP pool");
@@ -88,7 +104,7 @@ test(
       )}`,
     );
     assert.ok(textEl("unavailable", els), "storage-only stats are marked unavailable");
-    assert.ok(textEl("modules: 26", els), "panel shows the module pool");
+    assert.ok(textEl("modules: 29", els), "panel shows the module pool");
 
     // --- A storage-only stat refuses without taking currency. The same
     // machine then remains usable for a supported purchase. ---
@@ -106,7 +122,7 @@ test(
       await game.input.set("pointer.pressed", 0);
       await game.step({ frames: 2 });
     };
-    await clickElement(rowButton("Strength", els));
+    await clickElement(rowButton("Agility", els));
     await game.step({ frames: 3 });
     assert.deepEqual(await stats(), funded, "refused stat leaves the sheet and modules unchanged");
     assert.equal(
@@ -118,6 +134,25 @@ test(
     assert.ok(
       textEl("Upgrade unavailable", refreshed.active_panel!.elements),
       "the panel explains the refusal",
+    );
+
+    // Strength is now a live purchase: its 1->2 upgrade costs 3 modules and
+    // re-encodes existing row ordinals for the new eleven-column backpack.
+    await clickElement(rowButton("Strength", refreshed.active_panel!.elements));
+    await game.step({ frames: 3 });
+    const afterStrength = await stats();
+    assert.equal(afterStrength.strength, 2);
+    assert.equal(afterStrength.cyber_modules, 26);
+    assert.deepEqual(await backpackOrdinals(), [0, 11, 22]);
+    assert.equal(
+      (await game.info()).player.max_hit_points,
+      baseMaxHp,
+      "Strength does not change live HP",
+    );
+    refreshed = await game.ui.state();
+    assert.ok(
+      textEl("Upgrade complete", refreshed.active_panel!.elements),
+      "the panel confirms the live Strength purchase",
     );
 
     // --- Reproduce issue #813's exact transaction: levels 1->4 cost
@@ -146,6 +181,7 @@ test(
     await game.load(saveName);
     await game.step({ frames: 3 });
     const afterLoad = await stats();
+    assert.equal(afterLoad.strength, 2, "Strength survives save/load");
     assert.equal(afterLoad.endurance, 4, "Endurance survives save/load");
     assert.equal(afterLoad.cyber_modules, 0, "spent balance survives save/load");
     assert.equal(
@@ -157,6 +193,11 @@ test(
     await game.transitionLevel("eng1.mis");
     await game.step({ frames: 3 });
     const afterTransition = await stats();
+    assert.equal(
+      afterTransition.strength,
+      2,
+      "Strength survives a level transition",
+    );
     assert.equal(
       afterTransition.endurance,
       4,
