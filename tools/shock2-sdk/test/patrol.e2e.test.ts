@@ -145,7 +145,8 @@ test(
       mission: "medsci1.mis",
       port: Number(process.env.SHOCK2_E2E_PORT ?? 8163),
     });
-    await game.player.teleport({ x: 300, y: 0, z: 300 });
+    // Leave the player at the authored spawn in the sealed cryo recovery room:
+    // it has valid walkable support and is isolated from this patrol route.
     await game.step({ frames: 2 });
 
     const findPatroller = async () => {
