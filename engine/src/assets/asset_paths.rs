@@ -2,7 +2,7 @@ use std::{
     cell::RefCell,
     fs::File,
     io::{self, BufReader},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use tracing::{debug, trace};
@@ -95,13 +95,9 @@ pub struct AssetPath {
 
 impl AbstractAssetPath for AssetPath {
     fn exists(&self, base_path: String, asset_name: String) -> bool {
-        let path = base_path.to_owned()
-            + "/"
-            + &self.folder_name.to_owned()
-            + "/"
-            + &asset_name.to_string();
-        let exists = Path::new(&path).exists();
-        trace!("Checking exists [{}]:{}", path, exists);
+        let path = self.resolve_path(&base_path, &asset_name);
+        let exists = path.exists();
+        trace!("Checking exists [{}]:{}", path.display(), exists);
         exists
     }
 
@@ -110,12 +106,8 @@ impl AbstractAssetPath for AssetPath {
         base_path: String,
         asset_name: String,
     ) -> Option<RefCell<Box<dyn ReadableAndSeekable>>> {
-        let path = base_path.to_owned()
-            + "/"
-            + &self.folder_name.to_owned()
-            + "/"
-            + &asset_name.to_string();
-        trace!(" -- reading from path: {}", path);
+        let path = self.resolve_path(&base_path, &asset_name);
+        trace!(" -- reading from path: {}", path.display());
 
         let file = File::open(path).unwrap();
         let reader = BufReader::new(file);
@@ -124,6 +116,15 @@ impl AbstractAssetPath for AssetPath {
 }
 
 impl AssetPath {
+    fn resolve_path(&self, base_path: &str, asset_name: &str) -> PathBuf {
+        let folder = Path::new(&self.folder_name);
+        if folder.is_absolute() {
+            folder.join(asset_name)
+        } else {
+            Path::new(base_path).join(folder).join(asset_name)
+        }
+    }
+
     pub fn combine(asset_paths: Vec<Box<dyn AbstractAssetPath>>) -> Box<dyn AbstractAssetPath> {
         Box::new(MultipleAssetPaths { asset_paths })
     }
@@ -135,7 +136,36 @@ impl AssetPath {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        io::Read,
+        path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
+
+    static NEXT_TEMP_DIR: AtomicUsize = AtomicUsize::new(0);
+
+    struct TempAssetTree(PathBuf);
+
+    impl TempAssetTree {
+        fn new(name: &str) -> Self {
+            let sequence = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "shock2quest-{name}-{}-{sequence}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TempAssetTree {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
 
     /// A mount that simply owns a fixed set of names.
     struct FakeMount(Vec<&'static str>);
@@ -214,5 +244,43 @@ mod tests {
             paths.resolve_first(String::new(), &candidates(&["txt16/foo.pcx"])),
             None
         );
+    }
+
+    #[test]
+    fn absolute_folder_mount_resolves_without_prefixing_the_base_path() {
+        let root = TempAssetTree::new("absolute-folder-mount");
+        let folder = root.0.join("res/obj");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("override.bin"), b"loose override").unwrap();
+
+        let path = AssetPath::folder(folder.to_string_lossy().into_owned());
+        let base_path = root.0.to_string_lossy().into_owned();
+
+        assert!(path.exists(base_path.clone(), "override.bin".to_owned()));
+        let reader = path
+            .get_reader(base_path, "override.bin".to_owned())
+            .unwrap();
+        let mut contents = String::new();
+        reader.borrow_mut().read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "loose override");
+    }
+
+    #[test]
+    fn relative_folder_mount_resolves_under_the_base_path() {
+        let root = TempAssetTree::new("relative-folder-mount");
+        let folder = root.0.join("res/obj");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("override.bin"), b"relative override").unwrap();
+
+        let path = AssetPath::folder("res/obj".to_owned());
+        let base_path = root.0.to_string_lossy().into_owned();
+
+        assert!(path.exists(base_path.clone(), "override.bin".to_owned()));
+        let reader = path
+            .get_reader(base_path, "override.bin".to_owned())
+            .unwrap();
+        let mut contents = String::new();
+        reader.borrow_mut().read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "relative override");
     }
 }
