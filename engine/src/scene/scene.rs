@@ -1,5 +1,5 @@
-use crate::scene::light::LightArray;
 pub use crate::scene::scene_object::SceneObject;
+use crate::scene::{RenderLayer, light::LightArray};
 
 /// Legacy scene type - simple vector of scene objects
 pub type LegacyScene = Vec<SceneObject>;
@@ -40,6 +40,14 @@ impl Scene {
     /// Get a reference to the scene objects
     pub fn objects(&self) -> &[SceneObject] {
         &self.objects
+    }
+
+    /// Objects in one explicit composition layer, preserving their authored
+    /// order within that layer regardless of how a host concatenated sources.
+    pub fn objects_in_layer(&self, layer: RenderLayer) -> impl Iterator<Item = &SceneObject> {
+        self.objects
+            .iter()
+            .filter(move |object| object.render_layer() == layer)
     }
 
     /// Get a mutable reference to the scene objects
@@ -105,5 +113,49 @@ impl std::ops::Deref for Scene {
 impl std::ops::DerefMut for Scene {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.objects
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::{color_material, cube};
+    use cgmath::{Matrix4, Vector3};
+
+    fn object(layer: RenderLayer, marker: f32) -> SceneObject {
+        let mut object = SceneObject::new(
+            color_material::create(Vector3::new(1.0, 1.0, 1.0)),
+            Box::new(cube::create()),
+        );
+        object.set_render_layer(layer);
+        object.set_transform(Matrix4::from_translation(Vector3::new(marker, 0.0, 0.0)));
+        object
+    }
+
+    fn render_markers(scene: &Scene) -> Vec<f32> {
+        RenderLayer::ORDERED
+            .into_iter()
+            .flat_map(|layer| scene.objects_in_layer(layer))
+            .map(|object| object.get_transform().w.x)
+            .collect()
+    }
+
+    #[test]
+    fn explicit_layers_make_host_concatenation_order_irrelevant() {
+        let flat = Scene::from_objects(vec![
+            object(RenderLayer::World, 1.0),
+            object(RenderLayer::SceneOverlay, 2.0),
+            object(RenderLayer::SceneUi, 3.0),
+            object(RenderLayer::SystemOverlay, 4.0),
+        ]);
+        let quest = Scene::from_objects(vec![
+            object(RenderLayer::SceneUi, 3.0),
+            object(RenderLayer::SystemOverlay, 4.0),
+            object(RenderLayer::World, 1.0),
+            object(RenderLayer::SceneOverlay, 2.0),
+        ]);
+
+        assert_eq!(render_markers(&flat), vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(render_markers(&quest), vec![1.0, 2.0, 3.0, 4.0]);
     }
 }

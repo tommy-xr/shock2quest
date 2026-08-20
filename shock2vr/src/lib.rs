@@ -130,7 +130,7 @@ use engine::{
     audio::{AudioClip, AudioContext},
     file_system::Storage,
     game_log,
-    scene::SceneObject,
+    scene::{RenderLayer, SceneObject},
 };
 
 use mission::entity_populator::{EntityPopulator, MissionEntityPopulator, SaveFileEntityPopulator};
@@ -1835,13 +1835,9 @@ impl Game {
         // pawn transform the runtime builds its camera from.
         let pawn_to_world = Matrix4::from_translation(pos) * Matrix4::from(rot);
 
-        // The hit tint, before the pause menu's objects: it is the first
-        // `clear_depth` object when nothing else is up, so it opens the overlay
-        // group and covers the world; and when the menu *is* up it is still
-        // first in that group, so the panel and its dim draw over it rather
-        // than under a red rim. Emitted from `render` (not `render_per_eye`)
-        // for the reason recorded on `hit_feedback::hit_layer`, and identically
-        // in flat and VR - it is view-locked, so only the eye pose differs.
+        // The hit tint occupies the explicit scene-overlay layer: over the
+        // world, behind scene UI and the pause menu, identically in flat and
+        // VR. It remains view-locked, so only the eye pose differs.
         let (mut eye_position, eye_forward) =
             hit_feedback::eye_pose(self.head_pose.0, self.head_pose.1);
         // Centre the layer on the eye the frame is actually drawn from, which
@@ -1860,10 +1856,13 @@ impl Game {
             scene.push(layer);
         }
 
-        scene.extend(
+        let mut pause_objects =
             self.pause_menu
-                .render(&mut self.asset_cache, &self.options, pawn_to_world),
-        );
+                .render(&mut self.asset_cache, &self.options, pawn_to_world);
+        for object in &mut pause_objects {
+            object.set_render_layer(RenderLayer::SystemOverlay);
+        }
+        scene.extend(pause_objects);
 
         // let font = File::open(resource_path("res/fonts/mainfont.FON")).unwrap();
         // let mut font_reader = BufReader::new(font);
@@ -1914,14 +1913,19 @@ impl Game {
                 &self.options,
             )
         };
+        for object in &mut objs {
+            if object.render_layer() == RenderLayer::World {
+                object.set_render_layer(RenderLayer::SceneUi);
+            }
+        }
 
-        // Drawn last so the pause panel sits over the scene's own screen-space
-        // UI (viewmodel, HUD, MFD).
-        objs.extend(self.pause_menu.render_per_eye(
-            &mut self.asset_cache,
-            screen_size,
-            &self.options,
-        ));
+        let mut pause_objects =
+            self.pause_menu
+                .render_per_eye(&mut self.asset_cache, screen_size, &self.options);
+        for object in &mut pause_objects {
+            object.set_render_layer(RenderLayer::SystemOverlay);
+        }
+        objs.extend(pause_objects);
 
         let world_position = vec3(0.0, 1.0, 0.0);
         let screen_width = screen_size.x;
@@ -2112,10 +2116,16 @@ impl App {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) -> Vec<SceneObject> {
-        match self {
+        let mut objects = match self {
             App::Ready(game) => game.render_per_eye(view, projection, screen_size),
             App::MissingAssets(missing) => missing.render_per_eye(view, projection, screen_size),
+        };
+        for object in &mut objects {
+            if object.render_layer() == RenderLayer::World {
+                object.set_render_layer(RenderLayer::SceneUi);
+            }
         }
+        objects
     }
 
     pub fn finish_render(

@@ -24,7 +24,7 @@ mod billboard_material;
 pub use billboard_material::*;
 
 pub mod scene_object;
-pub use scene_object::{FrontFaceWinding, SceneObject, SceneObjectDebugTag};
+pub use scene_object::{FrontFaceWinding, RenderLayer, SceneObject, SceneObjectDebugTag};
 
 pub mod renderable;
 pub use renderable::{

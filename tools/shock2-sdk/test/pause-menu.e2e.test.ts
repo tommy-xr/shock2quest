@@ -255,11 +255,10 @@ test(
       dim[0].transparency !== null && dim[0].transparency > 0.02 && dim[0].transparency < 0.98,
       `the dim must actually be translucent, got ${dim[0].transparency}`,
     );
-    // The panel renders over the world unconditionally (#1017's clear-depth
-    // overlay group, explicitly kept). The dim now opens that group, so it has
-    // to carry the clear - otherwise a wall in the player's face would swallow
-    // the dim and leave the menu floating over a bright world.
-    assert.equal(dim[0].clear_depth, true, "the dim opens the overlay group");
+    // The dim is the first system-overlay object, so it reports the renderer's
+    // one depth clear at that layer boundary.
+    assert.equal(dim[0].clear_depth, true, "the dim begins a depth-cleared layer");
+    assert.equal(dim[0].render_layer, "system_overlay");
 
     // Resuming puts the world back exactly as it was.
     await game.input.trigger("TogglePauseMenu");

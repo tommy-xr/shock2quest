@@ -295,6 +295,10 @@ pub struct SceneObjectSummary {
     /// Transparency in effect for this draw (0.0 = opaque, 1.0 = invisible).
     pub transparency: Option<f32>,
     pub depth_write: bool,
+    /// Explicit renderer composition layer.
+    pub render_layer: String,
+    /// Backwards-compatible indication that this object begins a depth-cleared
+    /// layer. Depth is cleared once by the renderer, not by the object.
     pub clear_depth: bool,
     /// Front-face winding used for culling, or absent when double-sided.
     pub backface_culling: Option<String>,

@@ -54,7 +54,8 @@ use engine::{
     audio::{AudioChannel, AudioContext, AudioHandle, AudioPlaybackSettings},
     game_log, profile,
     scene::{
-        BillboardMaterial, ParticleSystem, SceneObject, VertexPosition, light::SpotLight, quad,
+        BillboardMaterial, ParticleSystem, RenderLayer, SceneObject, VertexPosition,
+        light::SpotLight, quad,
     },
     texture::{TextureOptions, TextureTrait, init_from_memory2},
     texture_format::{PixelFormat, RawTextureData},
@@ -6692,12 +6693,9 @@ impl MissionCore {
                     let s = tan_world / tan_vm;
                     let squish =
                         view.invert().unwrap() * Matrix4::from_nonuniform_scale(s, s, 1.0) * view;
-                    for (i, obj) in scene_objs.into_iter().enumerate() {
+                    for obj in scene_objs {
                         let mut o = obj.clone();
                         o.set_transform(squish * xform);
-                        if i == 0 {
-                            o.set_clear_depth(true);
-                        }
                         ret.push(o);
                     }
 
@@ -6763,10 +6761,9 @@ impl MissionCore {
                 screen_size,
                 self.screen_fade_alpha,
             );
-            // Some HUD bars use an opaque screen material and write depth at
-            // the same Z as this quad. Clear that UI depth before the final
-            // transparent pass so full white covers those bars as well.
-            fade.set_clear_depth(true);
+            // A final system layer covers scene UI in both hosts. Its depth is
+            // cleared once by the renderer at the explicit group boundary.
+            fade.set_render_layer(RenderLayer::SystemOverlay);
             ret.push(fade);
         }
 

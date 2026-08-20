@@ -19,7 +19,7 @@ fn init(is_opengl_es: bool, storage: Arc<dyn crate::file_system::Storage>) -> Op
 
 use crate::engine::Engine;
 use crate::engine::EngineRenderContext;
-use crate::scene::scene::Scene;
+use crate::scene::{RenderLayer, scene::Scene};
 
 impl Engine for OpenGLEngine {
     fn get_storage(&self) -> Arc<dyn crate::file_system::Storage> {
@@ -111,39 +111,29 @@ impl Engine for OpenGLEngine {
             // // );
             // floor.draw(&self, render_context, &view);
 
-            // The scene may end with an overlay group (e.g. the first-person
-            // viewmodel + its attachments + HUD): everything from the first
-            // `clear_depth` object onward. It renders AFTER the world's opaque
-            // and transparent passes, so the depth clear does not wipe the
-            // world's depth mid-frame - otherwise the world's transparent pass
-            // depth-tests against an almost-empty buffer and transparent
-            // surfaces (glass, particles) bleed through walls whenever a
-            // viewmodel is up. With no `clear_depth` object (VR, no weapon)
-            // the overlay group is empty and rendering is unchanged.
-            //
-            // NB: this assumes overlay objects come AFTER the world in the
-            // scene list (desktop/debug append per-eye objects last; the
-            // oculus runtime prepends them instead, which is fine only while
-            // nothing in VR sets `clear_depth`).
-            let objects = scene.objects();
-            let overlay_start = objects
-                .iter()
-                .position(|s| s.clear_depth)
-                .unwrap_or(objects.len());
-            let (world, overlay) = objects.split_at(overlay_start);
+            // Composition is keyed explicitly: debug/desktop append per-eye
+            // objects while Oculus prepends them, but both must render world,
+            // scene effects, scene UI, then system UI. Each non-world layer
+            // starts with one depth clear at its group boundary, never from an
+            // individual object mid-pass.
+            for layer in RenderLayer::ORDERED {
+                if scene.objects_in_layer(layer).next().is_none() {
+                    continue;
+                }
+                if layer.clears_depth() {
+                    gl::Clear(gl::DEPTH_BUFFER_BIT);
+                }
 
-            for group in [world, overlay] {
                 // SINGLE-PASS LIGHTING: Opaque pass with all lighting calculated
-                // in shaders. (The overlay group's first object carries the
-                // depth clear, executed in its draw_opaque.)
-                group
-                    .iter()
+                // in shaders.
+                scene
+                    .objects_in_layer(layer)
                     .for_each(|s| s.draw_opaque(self, render_context, &view, scene.lights()));
 
                 // Transparent pass with all lighting calculated in shaders
                 gl::DepthMask(gl::FALSE);
-                group
-                    .iter()
+                scene
+                    .objects_in_layer(layer)
                     .for_each(|s| s.draw_transparent(self, render_context, &view, scene.lights()));
                 gl::DepthMask(gl::TRUE);
             }

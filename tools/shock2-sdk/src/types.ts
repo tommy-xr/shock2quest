@@ -347,6 +347,9 @@ export interface SceneObjectSummary {
   /** Transparency in effect for this draw (0 = opaque, 1 = invisible). */
   transparency: number | null;
   depth_write: boolean;
+  /** Explicit renderer composition layer. */
+  render_layer: "world" | "scene_overlay" | "scene_ui" | "system_overlay";
+  /** True only for the first submitted object in a depth-cleared layer. */
   clear_depth: boolean;
   /** Front-face winding used for culling, or null when double-sided. */
   backface_culling: string | null;
