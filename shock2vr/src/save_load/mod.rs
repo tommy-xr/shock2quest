@@ -254,6 +254,7 @@ pub fn to_save_data_with_scripts(
         entity_in_right_hand: player.right_hand_entity_id.map(|ent| ent.inner()),
         held_entities: held_entity_data,
         inventory_entity: Some(player.inventory_entity_id.inner()),
+        backpack_width: Some(crate::inventory::grid_for(world, player.inventory_entity_id).0),
     };
     (world_entity_data, held_metadata)
 }

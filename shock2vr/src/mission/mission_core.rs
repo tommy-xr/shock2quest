@@ -1460,6 +1460,19 @@ impl MissionCore {
 
         world.add_unique(quest_info);
 
+        // Current saves record the width that encoded their backpack link
+        // ordinals. Pre-#948 saves omit it and used the former fixed width 15;
+        // migrate both shapes before any restored interaction can add items.
+        let current_backpack_width = world
+            .borrow::<UniqueView<QuestInfo>>()
+            .map(|quests| crate::inventory::backpack_width(quests.player_stats()))
+            .unwrap_or(crate::inventory::BACKPACK_GRID.0);
+        let backpack_load_remap = held_item_save_data.remap_instantiated_backpack(
+            &mut world,
+            inventory,
+            current_backpack_width,
+        );
+
         crate::scripts::gui::restore_authored_computer_data(
             &mut world,
             &entity_info_rc,
@@ -1715,6 +1728,9 @@ impl MissionCore {
             screen_fade_alpha: 0.0,
             screen_fade_texture,
         };
+        for (index, entity_id) in backpack_load_remap.overflow.into_iter().enumerate() {
+            mission_core.spill_backpack_overflow(entity_id, index);
+        }
         mission_core.process_virtual_hand_effects(asset_cache, held_restore_effects);
         // Re-run each restored held item's Hold script. Only a fresh world
         // grab dispatches Hold (see `restore_held_item_physics` for the same
