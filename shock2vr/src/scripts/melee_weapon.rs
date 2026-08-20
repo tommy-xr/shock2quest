@@ -73,13 +73,13 @@ impl Script for TriggeredMeleeWeapon {
                 self.hit_entities.clear();
                 Effect::NoEffect
             }
-            MessagePayload::Collided { with }
+            MessagePayload::Collided { with, contact }
                 if self.attack_active && self.hit_entities.insert(*with) =>
             {
                 let Some(amount) = authored_contact_damage(world, entity_id, *with) else {
                     return Effect::NoEffect;
                 };
-                melee_impact(entity_id, *with, world, amount)
+                melee_impact(entity_id, *with, world, amount, *contact)
             }
             _ => Effect::NoEffect,
         }
@@ -108,13 +108,23 @@ fn authored_contact_damage(world: &World, weapon: EntityId, victim: EntityId) ->
     (damage > 0.0).then_some(damage)
 }
 
-fn melee_impact(entity_id: EntityId, with: EntityId, world: &World, amount: f32) -> Effect {
+fn melee_impact(
+    entity_id: EntityId,
+    with: EntityId,
+    world: &World,
+    amount: f32,
+    contact: Option<crate::physics::CollisionContact>,
+) -> Effect {
     let damage_effect = Effect::Send {
         msg: Message {
             to: with,
             payload: MessagePayload::Damage {
                 amount,
-                impact: None,
+                impact: contact.map(|contact| crate::scripts::DamageImpact {
+                    direction: contact.normal,
+                    point: contact.point,
+                    bone: None,
+                }),
             },
         },
     };
@@ -152,7 +162,9 @@ impl Script for MeleeWeapon {
 
         match msg {
             // Legacy literal `wrench` script (Maintenance Tool -2949).
-            MessagePayload::Collided { with } => melee_impact(entity_id, *with, world, 1.0),
+            MessagePayload::Collided { with, contact } => {
+                melee_impact(entity_id, *with, world, 1.0, *contact)
+            }
             _ => Effect::NoEffect,
         }
     }
@@ -235,7 +247,7 @@ mod tests {
                     if msg.to == target
                         && matches!(
                             msg.payload,
-                            MessagePayload::Damage { amount, impact: None }
+                            MessagePayload::Damage { amount, .. }
                                 if (amount - WEAPON_BASH_INTENSITY).abs() < f32::EPSILON
                         )
             )
@@ -271,6 +283,43 @@ mod tests {
         assert!(
             (amount - WEAPON_BASH_INTENSITY).abs() < f32::EPSILON,
             "got {amount}"
+        );
+    }
+
+    /// The physical VR contact must carry the same directional context as the
+    /// flat aim ray so a lethal hit can seed the victim's death ragdoll.
+    #[test]
+    fn a_landed_vr_swing_carries_an_impact_for_the_death_reaction() {
+        let (world, weapon, target) = test_world(PresentationMode::Vr);
+        let mut script = TriggeredMeleeWeapon::new();
+        script.handle_message(
+            weapon,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::TriggerPull,
+        );
+
+        let Effect::Multiple(effects) = collide(&mut script, &world, weapon, target) else {
+            panic!("expected melee impact effects");
+        };
+        let impact = effects.iter().find_map(|effect| match effect {
+            Effect::Send { msg } => match msg.payload {
+                MessagePayload::Damage { impact, .. } => Some(impact),
+                _ => None,
+            },
+            _ => None,
+        });
+        assert!(
+            matches!(
+                impact,
+                Some(Some(crate::scripts::DamageImpact {
+                    direction,
+                    point,
+                    bone: None,
+                })) if direction == vec3(1.0, 0.0, 0.0)
+                    && point == vec3(2.0, 3.0, 4.0)
+            ),
+            "a VR contact damage message must describe its physical impact"
         );
     }
 
@@ -329,7 +378,13 @@ mod tests {
             weapon,
             world,
             &PhysicsWorld::new(),
-            &MessagePayload::Collided { with: target },
+            &MessagePayload::Collided {
+                with: target,
+                contact: Some(crate::physics::CollisionContact {
+                    point: vec3(2.0, 3.0, 4.0),
+                    normal: vec3(1.0, 0.0, 0.0),
+                }),
+            },
         )
     }
 
@@ -414,7 +469,13 @@ mod tests {
             weapon,
             &world,
             &PhysicsWorld::new(),
-            &MessagePayload::Collided { with: target },
+            &MessagePayload::Collided {
+                with: target,
+                contact: Some(crate::physics::CollisionContact {
+                    point: vec3(2.0, 3.0, 4.0),
+                    normal: vec3(1.0, 0.0, 0.0),
+                }),
+            },
         );
 
         assert!(matches!(effect, Effect::NoEffect));

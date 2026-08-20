@@ -3613,8 +3613,8 @@ async fn get_recent_audio() -> Json<Value> {
 }
 
 /// HTTP handler for the recently delivered script messages (receiver, payload
-/// variant, and sender where the payload carries one). Pairs with
-/// `/v1/audio/recent` for debugging "why did all of this fire at once".
+/// variant, Damage impact geometry, and sender where the payload carries one).
+/// Pairs with `/v1/audio/recent` for debugging "why did all of this fire at once".
 /// High-frequency payloads (hover, sensor/collision) are filtered out. Reads a
 /// process-wide log, so no game-loop round-trip is needed.
 async fn get_recent_messages() -> Json<Value> {

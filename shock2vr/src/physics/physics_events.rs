@@ -3,6 +3,8 @@ use std::sync::Mutex;
 use rapier3d::prelude::{ColliderSet, ContactPair, EventHandler, Real, RigidBodySet};
 use shipyard::EntityId;
 
+use super::util::{npoint_to_cgvec, nvec_to_cgmath};
+
 pub struct PhysicsEvents {
     queued_events: Mutex<Vec<super::CollisionEvent>>,
 }
@@ -44,10 +46,31 @@ impl EventHandler for PhysicsEvents {
 
             match &event {
                 rapier3d::prelude::CollisionEvent::Started(_, _, _) => {
+                    // Solver contacts already contain the midpoint in world
+                    // space. Pick the deepest active contact and keep its
+                    // manifold normal, which Rapier orients collider1 ->
+                    // collider2. Some synthetic/degenerate contacts may have
+                    // no solver point, so the payload remains optional.
+                    let contact = contact_pair
+                        .manifolds
+                        .iter()
+                        .flat_map(|manifold| {
+                            manifold
+                                .data
+                                .solver_contacts
+                                .iter()
+                                .map(move |contact| (manifold, contact))
+                        })
+                        .min_by(|(_, a), (_, b)| a.dist.total_cmp(&b.dist))
+                        .map(|(manifold, contact)| super::CollisionContact {
+                            point: npoint_to_cgvec(contact.point),
+                            normal: nvec_to_cgmath(manifold.data.normal),
+                        });
                     self.queued_events.lock().unwrap().push(
                         super::CollisionEvent::CollisionStarted {
                             entity1_id: maybe_entity1_id.unwrap(),
                             entity2_id: maybe_entity2_id.unwrap(),
+                            contact,
                         },
                     )
                 }

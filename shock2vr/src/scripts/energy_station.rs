@@ -38,7 +38,7 @@ impl Script for EnergyStation {
                     Effect::NoEffect
                 }
             }
-            MessagePayload::Collided { with } => do_recharge(world, entity_id, with),
+            MessagePayload::Collided { with, .. } => do_recharge(world, entity_id, with),
             // Flat presentation: frobbing the station sends Recharge to every
             // item the player carries at once (there is no
             // hold-one-item-near-the-station step - that is VR-only, handled by

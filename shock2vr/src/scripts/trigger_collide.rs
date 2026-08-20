@@ -23,7 +23,10 @@ impl Script for TriggerCollide {
             MessagePayload::TurnOn { from } => send_to_all_switch_links_and_self(
                 world,
                 entity_id,
-                MessagePayload::Collided { with: *from },
+                MessagePayload::Collided {
+                    with: *from,
+                    contact: None,
+                },
             ),
             _ => Effect::NoEffect,
         }

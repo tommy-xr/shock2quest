@@ -52,9 +52,21 @@ pub struct TracedMessage {
     pub to: MessageEntity,
     /// Payload variant name (e.g. "TurnOn", "Frob").
     pub payload: String,
+    /// Physical context carried by a `Damage` message, when its source knows
+    /// where and in which direction the blow landed.
+    pub impact: Option<TracedDamageImpact>,
     /// Sender, for the payloads that carry one (`TurnOn`/`TurnOff`/`Alarm`/
     /// `Reset`); null otherwise - `Message` has no universal sender.
     pub from: Option<MessageEntity>,
+}
+
+/// Serializable subset of [`crate::scripts::DamageImpact`] exposed to
+/// headless behavior tests.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct TracedDamageImpact {
+    pub direction: [f32; 3],
+    pub point: [f32; 3],
+    pub bone: Option<u32>,
 }
 
 static RECENT: Mutex<(u64, VecDeque<TracedMessage>)> = Mutex::new((0, VecDeque::new()));
@@ -82,6 +94,21 @@ fn sender_of(payload: &MessagePayload) -> Option<EntityId> {
         | MessagePayload::Reset { from } => Some(*from),
         _ => None,
     }
+}
+
+fn damage_impact_of(payload: &MessagePayload) -> Option<TracedDamageImpact> {
+    let MessagePayload::Damage {
+        impact: Some(impact),
+        ..
+    } = payload
+    else {
+        return None;
+    };
+    Some(TracedDamageImpact {
+        direction: [impact.direction.x, impact.direction.y, impact.direction.z],
+        point: [impact.point.x, impact.point.y, impact.point.z],
+        bone: impact.bone,
+    })
 }
 
 /// Short variant name of a payload, without its (often large) fields.
@@ -115,6 +142,7 @@ pub(crate) fn record(world: &World, sim_time: f64, to: EntityId, payload: &Messa
         frame: frame_of(sim_time),
         to: describe(world, to),
         payload: payload_name(payload),
+        impact: damage_impact_of(payload),
         from: sender_of(payload).map(|from| describe(world, from)),
     };
 
@@ -156,13 +184,42 @@ mod tests {
     }
 
     #[test]
+    fn damage_trace_preserves_impact_geometry() {
+        let payload = MessagePayload::Damage {
+            amount: 9.0,
+            impact: Some(crate::scripts::DamageImpact {
+                direction: vec3(1.0, 0.0, 0.0),
+                point: vec3(2.0, 3.0, 4.0),
+                bone: Some(7),
+            }),
+        };
+
+        assert_eq!(
+            damage_impact_of(&payload),
+            Some(TracedDamageImpact {
+                direction: [1.0, 0.0, 0.0],
+                point: [2.0, 3.0, 4.0],
+                bone: Some(7),
+            })
+        );
+        assert_eq!(
+            damage_impact_of(&MessagePayload::Damage {
+                amount: 3.0,
+                impact: None,
+            }),
+            None
+        );
+    }
+
+    #[test]
     fn high_frequency_payloads_are_filtered() {
         assert!(is_traced(&MessagePayload::Frob));
         assert!(is_traced(&MessagePayload::TurnOn {
             from: EntityId::dead()
         }));
         assert!(!is_traced(&MessagePayload::Collided {
-            with: EntityId::dead()
+            with: EntityId::dead(),
+            contact: None,
         }));
         assert!(!is_traced(&MessagePayload::GUIHover {
             held_entity_id: None,

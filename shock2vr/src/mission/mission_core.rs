@@ -2199,14 +2199,24 @@ impl MissionCore {
                 physics::CollisionEvent::CollisionStarted {
                     entity1_id,
                     entity2_id,
+                    contact,
                 } => {
                     self.script_world.dispatch(Message {
                         to: entity1_id,
-                        payload: MessagePayload::Collided { with: entity2_id },
+                        payload: MessagePayload::Collided {
+                            with: entity2_id,
+                            contact,
+                        },
                     });
                     self.script_world.dispatch(Message {
                         to: entity2_id,
-                        payload: MessagePayload::Collided { with: entity1_id },
+                        payload: MessagePayload::Collided {
+                            with: entity1_id,
+                            contact: contact.map(|contact| physics::CollisionContact {
+                                point: contact.point,
+                                normal: -contact.normal,
+                            }),
+                        },
                     });
                 }
             }
