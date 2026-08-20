@@ -24,7 +24,8 @@
 //! baselines (all careers start from the uniform [`PlayerStats::default`]
 //! baseline for now), and wiring granted psi disciplines into `crate::psi`
 //! known powers. The upgrade UI only sells primary stats with live consumers:
-//! Endurance->maxHP and Cyber Affinity->hacking; see `scripts::gui::trainer`.
+//! Strength->backpack capacity, Endurance->maxHP, and Cyber Affinity->hacking;
+//! see `scripts::gui::trainer`.
 
 use std::collections::BTreeSet;
 

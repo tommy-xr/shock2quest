@@ -3281,6 +3281,68 @@ impl MissionCore {
         moved
     }
 
+    /// Re-encode the backpack's stored cells after effective Strength changes.
+    /// Items that cannot fit even after deterministic reflow are spilled into
+    /// the world, matching retail's `ShockInvResize` -> `ShockInvAddObj` path.
+    fn resize_player_backpack(&mut self, old_width: usize, new_width: usize) {
+        if old_width == new_width {
+            return;
+        }
+        let inventory_entity = match self.world.borrow::<UniqueView<PlayerInfo>>() {
+            Ok(player) => player.inventory_entity_id,
+            Err(_) => return,
+        };
+        let outcome = crate::inventory::remap_container_width(
+            &mut self.world,
+            inventory_entity,
+            (old_width, crate::inventory::BACKPACK_GRID.1),
+            (new_width, crate::inventory::BACKPACK_GRID.1),
+        );
+        for (index, entity_id) in outcome.overflow.into_iter().enumerate() {
+            self.spill_backpack_overflow(entity_id, index);
+        }
+    }
+
+    /// Give one full-pack resize overflow item ordinary world presence beside
+    /// the player. Physicalize before detaching, as the manual throw path does:
+    /// a modelless item remains contained instead of being silently lost.
+    fn spill_backpack_overflow(&mut self, entity_id: EntityId, index: usize) {
+        let player = match self.world.borrow::<UniqueView<PlayerInfo>>() {
+            Ok(player) => player.clone(),
+            Err(_) => return,
+        };
+        self.make_physical(entity_id);
+        if !self.id_to_physics.contains_key(&entity_id) {
+            warn!(
+                "Backpack resize could not spill modelless overflow entity {:?}; preserving its containment link",
+                entity_id
+            );
+            return;
+        }
+
+        self.detach_from_containers(entity_id);
+        let forward = player.rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+        let right = player.rotation.rotate_vector(vec3(1.0, 0.0, 0.0));
+        let lane = (index % 5) as f32 - 2.0;
+        let row = (index / 5) as f32;
+        let position = player.pos
+            + forward * (crate::physics::PLAYER_STANDING_RADIUS_WORLD + 0.6 + row * 0.2)
+            + right * lane * 0.25
+            + vec3(0.0, 0.35 + row * 0.1, 0.0);
+        self.set_entity_position_rotation(
+            entity_id,
+            position,
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(1.0, 1.0, 1.0),
+        );
+        self.physics.set_velocity(entity_id, forward * 1.5);
+        self.world.add_component(entity_id, PropHasRefs(true));
+        self.script_world.dispatch(Message {
+            payload: MessagePayload::Drop,
+            to: entity_id,
+        });
+    }
+
     /// When an entity is replaced (e.g. a dead power cell recharged into a live
     /// one), any container that held the old entity via a `Contains` link should
     /// keep holding the new one - otherwise the replacement is orphaned in the
@@ -5680,9 +5742,11 @@ impl MissionCore {
 
                 Effect::GrantTourReward { career, year, tour } => {
                     let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                    let old_width = crate::inventory::backpack_width(quests.player_stats());
                     let applied = quests
                         .player_stats_mut()
                         .apply_tour_reward(career, year, tour);
+                    let new_width = crate::inventory::backpack_width(quests.player_stats());
                     if applied {
                         info!(
                             "Applied training-tour reward ({:?} year {} tour {}): {:?}",
@@ -5691,6 +5755,10 @@ impl MissionCore {
                             tour,
                             quests.player_stats()
                         );
+                    }
+                    drop(quests);
+                    if applied {
+                        self.resize_player_backpack(old_width, new_width);
                     }
                 }
 
@@ -5724,10 +5792,11 @@ impl MissionCore {
                         .0
                         .clone();
                     if let Some(costs) = costs {
-                        let purchased = {
+                        let (purchased, old_width, new_width) = {
                             let mut quests =
                                 self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                             let stats = quests.player_stats_mut();
+                            let old_width = crate::inventory::backpack_width(stats);
                             match upgrade_quote(&costs, stats, target) {
                                 Some(cost) if stats.spend_cyber_modules(cost) => {
                                     apply_purchase(stats, target);
@@ -5735,24 +5804,27 @@ impl MissionCore {
                                         "Trainer purchase {:?} (-{} modules, balance {})",
                                         target, cost, stats.cyber_modules
                                     );
-                                    true
+                                    (true, old_width, crate::inventory::backpack_width(stats))
                                 }
                                 Some(cost) => {
                                     info!(
                                         "Trainer purchase {:?} refused: costs {}, balance {}",
                                         target, cost, stats.cyber_modules
                                     );
-                                    false
+                                    (false, old_width, old_width)
                                 }
                                 None => {
                                     info!(
                                         "Trainer purchase {:?} refused: maxed/locked/unavailable",
                                         target
                                     );
-                                    false
+                                    (false, old_width, old_width)
                                 }
                             }
                         };
+                        if purchased {
+                            self.resize_player_backpack(old_width, new_width);
+                        }
                         if purchased && endurance_target {
                             increase_player_max_hit_points(
                                 &self.world,
@@ -5832,68 +5904,70 @@ impl MissionCore {
                         .borrow::<View<dark::properties::PropTemplateId>>()
                         .ok()
                         .and_then(|v| v.get(machine).ok().map(|t| t.template_id));
-                    let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
                     // Without a stable machine id the used state could never
                     // be recorded - refuse rather than vend repeatably.
                     let Some(machine_id) = machine_template_id else {
                         warn!("O/S trait {} refused: machine has no template id", trait_id);
                         continue;
                     };
-                    let used = quests
-                        .read_quest_bit_value(&used_bit_name(machine_id))
-                        .bits()
-                        != 0;
-                    if used {
-                        info!("O/S trait {} refused: machine already used", trait_id);
-                    } else if !quests.player_stats_mut().add_os_trait(trait_id) {
-                        info!("O/S trait {} refused: owned or slots full", trait_id);
-                    } else {
-                        quests.set_quest_bit_value(
-                            &used_bit_name(machine_id),
-                            dark::properties::QuestBitValue::COMPLETE,
-                        );
-                        // Live effects for the implemented subset; the rest
-                        // are storage-only (their consumers don't exist yet).
-                        match trait_id {
-                            TRAIT_NATURALLY_ABLE => {
+                    let (acquired, old_width, new_width) = {
+                        let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                        let old_width = crate::inventory::backpack_width(quests.player_stats());
+                        let used = quests
+                            .read_quest_bit_value(&used_bit_name(machine_id))
+                            .bits()
+                            != 0;
+                        if used {
+                            info!("O/S trait {} refused: machine already used", trait_id);
+                            (false, old_width, old_width)
+                        } else if !quests.player_stats_mut().add_os_trait(trait_id) {
+                            info!("O/S trait {} refused: owned or slots full", trait_id);
+                            (false, old_width, old_width)
+                        } else {
+                            quests.set_quest_bit_value(
+                                &used_bit_name(machine_id),
+                                dark::properties::QuestBitValue::COMPLETE,
+                            );
+                            if trait_id == TRAIT_NATURALLY_ABLE {
                                 quests
                                     .player_stats_mut()
                                     .award_cyber_modules(NATURALLY_ABLE_MODULES);
                             }
-                            TRAIT_TANK => {
-                                // Tank (Trait8): the original raises the
-                                // ceiling AND current HP by the bonus (buying
-                                // at 25/30 yields 30/35), clamped to the new
-                                // max. Loads first re-derive the trait-adjusted
-                                // default, then restore the persisted live pool,
-                                // so the grant cannot double-apply.
-                                drop(quests);
-                                let player_entity = self
-                                    .world
-                                    .borrow::<UniqueView<PlayerInfo>>()
-                                    .unwrap()
-                                    .entity_id;
-                                self.world.run(
-                                    |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
-                                     mut v_max: ViewMut<dark::properties::PropMaxHitPoints>| {
-                                        let new_max = (&mut v_max)
-                                            .get(player_entity)
-                                            .map(|max| {
-                                                max.hit_points += TANK_HP_BONUS as u32;
-                                                max.hit_points
-                                            })
-                                            .ok();
-                                        if let Ok(hp) = (&mut v_hp).get(player_entity) {
-                                            hp.hit_points += TANK_HP_BONUS;
-                                            if let Some(new_max) = new_max {
-                                                hp.hit_points =
-                                                    hp.hit_points.min(new_max as i32);
-                                            }
+                            let new_width = crate::inventory::backpack_width(quests.player_stats());
+                            (true, old_width, new_width)
+                        }
+                    };
+
+                    if acquired {
+                        self.resize_player_backpack(old_width, new_width);
+                        if trait_id == TRAIT_TANK {
+                            // Tank (Trait8): the original raises the ceiling
+                            // AND current HP by the bonus. Loads first re-derive
+                            // the trait-adjusted default, so this live grant
+                            // cannot double-apply.
+                            let player_entity = self
+                                .world
+                                .borrow::<UniqueView<PlayerInfo>>()
+                                .unwrap()
+                                .entity_id;
+                            self.world.run(
+                                |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
+                                 mut v_max: ViewMut<dark::properties::PropMaxHitPoints>| {
+                                    let new_max = (&mut v_max)
+                                        .get(player_entity)
+                                        .map(|max| {
+                                            max.hit_points += TANK_HP_BONUS as u32;
+                                            max.hit_points
+                                        })
+                                        .ok();
+                                    if let Ok(hp) = (&mut v_hp).get(player_entity) {
+                                        hp.hit_points += TANK_HP_BONUS;
+                                        if let Some(new_max) = new_max {
+                                            hp.hit_points = hp.hit_points.min(new_max as i32);
                                         }
-                                    },
-                                );
-                            }
-                            _ => {}
+                                    }
+                                },
+                            );
                         }
                         info!(
                             "O/S trait acquired: {} ({}){}",
@@ -8995,6 +9069,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .borrow::<UniqueViewMut<QuestInfo>>()
             .map_err(|_| "scene has no quest info".to_string())?;
         let stats = quests.player_stats_mut();
+        let old_backpack_width = crate::inventory::backpack_width(stats);
 
         let stat_targets = [
             (Stat::Strength, request.strength, "strength"),
@@ -9109,7 +9184,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             stats.award_cyber_modules(target.saturating_sub(stats.cyber_modules));
         }
 
+        let new_backpack_width = crate::inventory::backpack_width(stats);
         let result = stats.clone();
+        drop(quests);
+        self.resize_player_backpack(old_backpack_width, new_backpack_width);
         info!("Debug provisioning set player stats: {:?}", result);
         Ok(result)
     }
