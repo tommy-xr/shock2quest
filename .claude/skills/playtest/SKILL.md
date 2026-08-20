@@ -120,11 +120,51 @@ edge has not tested frobbing — that finding will be rejected at review.
 
 In **VR mode**, exercise the production two-hand path. Place and rotate a hand
 with `{left|right}_hand.position` and `{left|right}_hand.rotation`, aim its ray at
-the object, drive that hand's `squeeze_value` across the 0.5 edge, then step and
-verify the result. Nearby movable items should attach to a hand (check
-`left_hand_entity_id` / `right_hand_entity_id` in `/v1/info`) and release when
-squeeze returns below 0.5. Do not use the flat crosshair/`aimAt` result as proof
-that a VR hand can reach or operate something.
+the target, and choose the input from the hand's state:
+
+| Hand state and input | Production result |
+| --- | --- |
+| Empty hand, `trigger_value` rising edge | Frobs the ray-hit world object once. Use this for fixed controls such as buttons, doors, and terminals. |
+| Empty hand, `squeeze_value > 0.5` | Grabs a ray-hit movable `MOVE` / `USE_AMMO` item. Keep squeeze held; dropping below 0.5 releases it. Squeeze does **not** Frob a fixed world object. |
+| Held item, `trigger_value` rising edge | Uses the held item's authored inventory action: scripted non-weapons receive `Frob`; weapons and the Psi Amp receive `TriggerPull`. Releasing trigger emits `TriggerRelease`; squeeze remains the hold/release state. |
+
+For example, Frob a fixed world control with an empty-hand trigger edge:
+
+```bash
+curl -X POST .../v1/control/input -d '{"right_hand.trigger_value": 0.0}'
+curl -X POST .../v1/step -d '{"frames": 1}'
+curl -X POST .../v1/control/input -d '{"right_hand.trigger_value": 1.0}'
+curl -X POST .../v1/step -d '{"frames": 2}'
+curl -X POST .../v1/control/input -d '{"right_hand.trigger_value": 0.0}'
+curl -X POST .../v1/step -d '{"frames": 2}'
+```
+
+Grab, hold, and release a movable item with squeeze instead:
+
+```bash
+curl -X POST .../v1/control/input -d '{"right_hand.squeeze_value": 0.0}'
+curl -X POST .../v1/step -d '{"frames": 1}'
+curl -X POST .../v1/control/input -d '{"right_hand.squeeze_value": 1.0}'
+curl -X POST .../v1/step -d '{"frames": 2}'
+# Verify right_hand_entity_id in /v1/info while squeeze stays above 0.5.
+curl -X POST .../v1/control/input -d '{"right_hand.squeeze_value": 0.0}'
+curl -X POST .../v1/step -d '{"frames": 2}'
+```
+
+VR world panels are controller-ray interfaces too: aim an empty hand at the
+rendered element and pulse that hand's trigger. Gameplay panels derive their
+`Hover` / `GUIHover` press from `trigger_value`; frontend panels use the shared
+VR frontend pointer pass. `pointer.position` / `pointer.pressed` drive the flat
+canvas path and do not prove that a VR controller can reach or click a world
+panel. Do not use the flat crosshair/`aimAt` result as proof that a VR hand can
+reach or operate any world target.
+
+A review must reject a VR "frob does nothing" finding unless the tester aimed
+an **empty** hand's ray and drove its **trigger** across the rising edge. A
+squeeze-only attempt tested grabbing, and a held-hand trigger tested that held
+item's use/fire path, not fixed-world Frobbing. Conversely, do not reject a
+valid VR Frob because the tester did not squeeze; squeeze is the flat-mode Frob
+gesture, not the VR-mode one.
 
 Use the actual VR forearm/two-hand UI and interaction whenever it is available.
 If `/v1/ui`, pointer input, inventory access, combat, or another debug-runtime
