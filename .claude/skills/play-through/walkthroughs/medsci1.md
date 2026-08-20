@@ -108,16 +108,17 @@ failure rather than setting the bit by hand.
    cryo closet keypad 00000 nearby.)
 10. **Ride the lift up** out of the lower level (Elevator Path pair tmpl 262/263:
    (−27.6, −7.9, −54.5) → (−27.6, −1.7, −54.5)).
-10a. **Detailed ladder detour (not mission critical):** after reaching the
-    upper Science walk network, follow the R&D sign / Watts-window corridor to
-    the **top** landing near (−18.0, −0.4, 13.0). Descend the six-rung `Rick
-    Ladder` stack at (−17.5, −6.0…−2.0, 14.5), inspect or clear the lower hybrid
-    room, then approach the ladder's north face from z ≈ 15.8 and climb back to
-    the upper corridor. This room has no lower door or pre-airshaft entrance;
-    the ladder itself is its authored access, so do not search for it during
-    early Cryo Recovery.
 11. **Take the Science Card** (tmpl 338, (−16.6, 1.2, −68.9)) from the corpse
     near the "ghost"; it opens the card door out.
+11a. **Detailed ladder detour (not mission critical):** after using the Science
+    Card to enter the upper Science walk network, follow the R&D sign /
+    Watts-window corridor to the **top** landing near (−18.0, −0.4, 13.0).
+    Descend the six-rung `Rick Ladder` stack at
+    (−17.5, −6.0…−2.0, 14.5), inspect or clear the lower hybrid room, then
+    approach the ladder's north face from z ≈ 15.8 and climb back to the upper
+    corridor. This room has no lower door or pre-airshaft entrance; the ladder
+    itself is its authored access, so do not search for it during early Cryo
+    Recovery or before acquiring the Science Card.
 12. **First combat: 2 hybrids** past that door. Then a second platform ride up
     to the elevator lobby.
 
