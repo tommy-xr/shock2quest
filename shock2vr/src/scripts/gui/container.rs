@@ -274,6 +274,23 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         !self.require_lootable_creature || creature_is_lootable(world, entity_id)
     }
 
+    /// Keep the offer policy consistent with the loot gate. A living,
+    /// killable creature cannot expose its container, so accepting an item
+    /// here would hide it behind an inaccessible `Contains` link. Claim the
+    /// offer without a transfer; the VR hand's preceding `DropItem` effect
+    /// then leaves the item as an ordinary physical world drop. Corpses,
+    /// invulnerable posed creatures, and plain containers retain the shared
+    /// `DropEntityInfo` fallback by returning `None`.
+    fn on_provide_for_consumption(
+        &self,
+        entity_id: EntityId,
+        world: &World,
+        _provided_entity_id: EntityId,
+    ) -> Option<Effect> {
+        (self.require_lootable_creature && !creature_is_lootable(world, entity_id))
+            .then_some(Effect::NoEffect)
+    }
+
     fn handle_msg(
         &self,
         _entity_id: EntityId,
@@ -387,7 +404,7 @@ mod tests {
     use crate::gui::GuiInputInfo;
     use crate::mission::PlayerInfo;
     use cgmath::{Quaternion, point2, vec3};
-    use dark::properties::{FrobFlag, Links, PropFrobInfo, ToLink, WrappedEntityId};
+    use dark::properties::{FrobFlag, Links, PropFrobInfo, PropHitPoints, ToLink, WrappedEntityId};
 
     /// A world with a loot container holding one iconed, grabbable item,
     /// plus the player-info unique the Take path resolves the backpack
@@ -740,6 +757,50 @@ mod tests {
         assert!(
             matches!(event, ContainerGuiMsg::Frob(e) if e == item),
             "clicking a backpack item should Frob (use) it"
+        );
+    }
+
+    /// A live killable creature keeps its loot panel sealed, so accepting an
+    /// offered VR-hand item into the same container would make the item
+    /// inaccessible. Claim the offer as a no-op and let the hand's ordinary
+    /// DropItem effect leave it in the world instead.
+    #[test]
+    fn live_creature_rejects_offered_items() {
+        let mut world = World::new();
+        let live_creature = world.add_entity((PropHitPoints { hit_points: 10 }, Links::empty()));
+        let item = world.add_entity(());
+
+        let effect =
+            ContainerGui::loot_creature().on_provide_for_consumption(live_creature, &world, item);
+
+        assert!(
+            matches!(effect, Some(Effect::NoEffect)),
+            "a live creature must claim and reject the offer, got {:?}",
+            effect
+        );
+    }
+
+    /// Dead creature containers and ordinary containers remain valid deposit
+    /// targets: returning None selects GuiScript's shared DropEntityInfo
+    /// fallback for both.
+    #[test]
+    fn lootable_and_ordinary_containers_accept_offered_items() {
+        let mut world = World::new();
+        let corpse = world.add_entity((PropHitPoints { hit_points: 0 }, Links::empty()));
+        let ordinary_container = world.add_entity(Links::empty());
+        let item = world.add_entity(());
+
+        assert!(
+            ContainerGui::loot_creature()
+                .on_provide_for_consumption(corpse, &world, item)
+                .is_none(),
+            "a dead creature must preserve the normal deposit fallback",
+        );
+        assert!(
+            ContainerGui::loot_container()
+                .on_provide_for_consumption(ordinary_container, &world, item,)
+                .is_none(),
+            "an ordinary container must preserve the normal deposit fallback",
         );
     }
 }
