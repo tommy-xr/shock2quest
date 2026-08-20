@@ -20,7 +20,7 @@ use dark::{
     model::Model,
     motion::AnimationPlayer,
     properties::{
-        FrobFlag, InternalPropOriginalModelName, Link, Links, PhysicsModelType, PoseType,
+        FrobFlag, InternalPropOriginalModelName, Link, Links, PhysicsModelType, PoseType, PropAI,
         PropClassTag, PropCollisionType, PropCreature, PropCreaturePose, PropFrobInfo,
         PropHUDSelect, PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropLimbModel,
         PropModelName, PropPhysAttr, PropPhysDimensions, PropPhysState, PropPhysType, PropPosition,
@@ -64,6 +64,13 @@ fn needs_internal_simple_health(
 
 fn needs_internal_triggered_melee(has_limb_model: bool) -> bool {
     has_limb_model
+}
+
+fn needs_internal_ai(has_ai: bool, authored_scripts: &[String]) -> bool {
+    has_ai
+        && !authored_scripts
+            .iter()
+            .any(|script| script.eq_ignore_ascii_case("BaseMonster"))
 }
 
 pub fn create_entity_with_position(
@@ -330,6 +337,17 @@ pub fn create_entity_core(
 
     // Create any internal scripts to power some properties
 
+    // Dark's AI/creature service is independent of object-script inheritance.
+    // Most creatures inherit BaseMonster, which is where this port currently
+    // constructs their concrete AI implementation, but mission actors can
+    // deliberately replace their object scripts. Keep PropAI authoritative so
+    // that override does not also erase animation, damage, and signal-response
+    // handling (medsci1 ThreatenOG is the shipped example).
+    let v_ai = world.borrow::<View<PropAI>>().unwrap();
+    if needs_internal_ai(v_ai.get(entity_id).is_ok(), &processed_scripts) {
+        processed_scripts.push("basemonster".to_owned());
+    }
+
     let v_collision_type = world.borrow::<View<PropCollisionType>>().unwrap();
 
     if v_collision_type.get(entity_id).is_ok() {
@@ -407,6 +425,7 @@ pub fn create_entity_core(
     // Release the property views before add_component below needs the world
     // mutably; nothing after this point reads them.
     drop(v_scripts);
+    drop(v_ai);
     drop(v_collision_type);
     drop(v_creature);
     drop(v_hp);
@@ -1557,6 +1576,28 @@ mod tests {
         assert!(
             !needs_internal_triggered_melee(false),
             "Maintenance Tool -2949's literal Wrench script and guns must not gain player melee"
+        );
+    }
+
+    #[test]
+    fn ai_property_survives_an_object_script_inheritance_override() {
+        let threat_en_og_scripts = vec![
+            "TransientCorpse".to_owned(),
+            "triggerdestroy".to_owned(),
+            "creaturecontainer".to_owned(),
+        ];
+
+        assert!(
+            needs_internal_ai(true, &threat_en_og_scripts),
+            "ThreatenOG's explicit non-inheriting scripts must not remove engine AI"
+        );
+        assert!(
+            !needs_internal_ai(true, &["BaseMonster".to_owned()]),
+            "an inherited BaseMonster already owns AI and must not be duplicated"
+        );
+        assert!(
+            !needs_internal_ai(false, &threat_en_og_scripts),
+            "ordinary scripted objects must not gain monster AI"
         );
     }
 
