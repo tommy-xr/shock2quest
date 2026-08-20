@@ -88,8 +88,7 @@ failure rather than setting the bit by hand.
    Wrench element. Contained loot is never world-placed on the floor.
 3. **Smash the debris and climb the ladder** behind the fallen Air Duct (tmpl
    402, (−41.6, −3.9, 17.9)); ladder rungs `Rick Ladder` stacked at
-   (−41.3, −5.8…−2.0, 16.5) → up to the walkway (y ≈ 0). *(A second required
-   ladder stack sits at (−17.5, −6.0…−2.0, 14.5).)*
+   (−41.3, −5.8…−2.0, 16.5) → up to the walkway (y ≈ 0).
 4. **Pick up the Cryo Card** (tmpl 1050, (−24.3, 0.0, −1.4)); use it on the
    card-reader door.
 5. **First corpse: Amanpour audio log id 1608** inside corpse id 1680. Frob the
@@ -109,6 +108,14 @@ failure rather than setting the bit by hand.
    cryo closet keypad 00000 nearby.)
 10. **Ride the lift up** out of the lower level (Elevator Path pair tmpl 262/263:
    (−27.6, −7.9, −54.5) → (−27.6, −1.7, −54.5)).
+10a. **Detailed ladder detour (not mission critical):** after reaching the
+    upper Science walk network, follow the R&D sign / Watts-window corridor to
+    the **top** landing near (−18.0, −0.4, 13.0). Descend the six-rung `Rick
+    Ladder` stack at (−17.5, −6.0…−2.0, 14.5), inspect or clear the lower hybrid
+    room, then approach the ladder's north face from z ≈ 15.8 and climb back to
+    the upper corridor. This room has no lower door or pre-airshaft entrance;
+    the ladder itself is its authored access, so do not search for it during
+    early Cryo Recovery.
 11. **Take the Science Card** (tmpl 338, (−16.6, 1.2, −68.9)) from the corpse
     near the "ghost"; it opens the card door out.
 12. **First combat: 2 hybrids** past that door. Then a second platform ride up
@@ -152,8 +159,12 @@ A MedSci1 pass is valid only if the session evidence shows all of:
 
 - Campaign entry from Station (or a documented frontier resuming already-proven
   play), with character and quest state preserved.
-- Wrench looted from its corpse, blocking debris broken, and both early ladder
-  stacks traversed through normal player movement.
+- Wrench looted from its corpse, blocking debris broken, and the early Cryo
+  ladder traversed through normal player movement.
+- For a detailed pass, the later R&D-overlook ladder detour entered from its
+  upper landing, descended into the lower hybrid room, and climbed back out.
+  This is not an early or pre-airshaft gate and is not required by the mission's
+  critical path.
 - Cryo Card acquired and used at its real reader.
 - Corpse id 1680 opened, Amanpour disc id 1608 clicked through the loot MFD,
   deck 2 / log 20 recorded in `player.collected_logs`, and the in-game reader
