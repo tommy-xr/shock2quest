@@ -71,6 +71,28 @@ eligible pool further.
 
 ## 2. Process the selected issues serially
 
+### 25th Anniversary asset invariant
+
+All game-runtime and SDK E2E verification in this workflow must use an
+explicitly selected **25th Anniversary Remaster** asset root. Before the first
+runtime test in an issue worktree:
+
+1. Resolve and verify a 25AE root (normally the user's shared install) from its
+   remaster sentinel/layout, including `sshock2.kpf` and the remaster `mods/`
+   assets. Do not treat a legacy/unpacked data root as equivalent.
+2. Launch every focused runtime scenario and the full SDK E2E suite with
+   `DARK_ASSET_PATH` explicitly set to that verified root. Do not rely on an
+   inherited environment value or the engine's relative-path fallback.
+3. Report the exact asset root and sentinel used with the test result. If a run
+   used another root, discard it and rerun from clean test state with the
+   verified 25AE root.
+
+Classic/legacy assets may be used only for a separately identified
+compatibility test whose purpose requires them; they never substitute for the
+25AE-backed focused and full E2E evidence. If no verified 25AE root is
+available, return the concrete missing-dependency blocker instead of claiming
+runtime verification from another asset set.
+
 For each selected issue, in emitted order:
 
 1. Re-read it with `gh issue view`, including its author, current state, body,
@@ -198,9 +220,14 @@ FIX: Make the smallest faithful change that resolves the issue through the
 game's real systems. Follow existing patterns. Do not use debug-only shims as
 the product fix. Keep one logical conventional commit.
 
-VERIFY: Run the focused test, the repository's warning-free package checks,
-format checks, and every runtime/SDK/e2e verification required by AGENTS.md for
-the affected area.
+VERIFY: Resolve a verified 25th Anniversary Remaster asset root (including its
+`sshock2.kpf` sentinel and remaster mods), report the exact path, and set
+`DARK_ASSET_PATH` to it explicitly for every focused runtime scenario and the
+full SDK E2E suite. Never count an inherited legacy/unpacked root or relative
+fallback as E2E evidence; discard and rerun any such result. Classic assets are
+allowed only for separately named compatibility checks. Run the focused test,
+the repository's warning-free package checks, format checks, and every
+runtime/SDK/e2e verification required by AGENTS.md for the affected area.
 
 VISUALIZE: Run the pr-visuals skill for every proposed fix. Treat any behavior
 whose result changes a rendered frame or sequence as player-observable even
