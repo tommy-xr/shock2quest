@@ -149,7 +149,7 @@ playing. As soon as the finding is validated:
 1. File its GitHub issue with the same evidence and campaign configuration used
    for blockers.
 2. Immediately delegate an independent fix worker in a separate worktree/branch.
-   The worker follows the same faithful-feature, negative-first, PR, restack,
+   The worker follows the same faithful-feature, negative-first, standalone-PR,
    and green-CI requirements as a blocker fix.
 3. Keep the playtest moving in parallel. Do not wait for that worker or put its
    commit onto `fix_branch` unless the issue later becomes necessary for campaign
@@ -165,11 +165,17 @@ opens; lack of an immediately free slot does not stop the playable session.
 **Opening the PR is not the finish line — the fix agent watches it land green:**
 - `cargo fmt --check --all`. `format` is a separate, fast-failing CI job, and it
   fails on changes that compile and test perfectly.
-- **Restack before finishing.** Fix agents branch off whatever `main` was when
-  they spawned; on a long run `main` moves underneath them (it may even have
-  refactored the very function being fixed). `git fetch origin && git rebase
-  origin/main`, resolve, then **re-run the tests** — a conflict resolution can
-  silently drop a test or revert half a hunk.
+- **Keep review dependencies real.** The cumulative campaign `fix_branch` may
+  stack every unmerged fix needed for playtesting, but that does **not** make
+  the fixes code-dependent. Each independent fix branch must be rebased onto
+  current `origin/main`, pushed, and opened with PR base `main`. Base a PR on
+  another fix branch only when its code or tests genuinely require that
+  unmerged change; state that dependency in the PR body. Once the dependency
+  lands, rebase and retarget the dependent PR to `main`.
+- **Verify the standalone diff before handoff.** Check the PR's `baseRefName`,
+  commits, files, and `gh pr diff`; an independent PR must contain only its own
+  change, not earlier campaign fixes. Re-run tests after every rebase or
+  conflict resolution, which can silently drop a test or revert half a hunk.
 - **Read `gh pr checks <N>`** after pushing, and fix what's red. A PR is done
   when CI is green, not when the push succeeds.
 - **Widen the build check when touching shared types.** AGENTS.md's
@@ -386,9 +392,12 @@ campaign just launches mission 0 with no frontier to load, which is harmless.
    delegate each playable finding immediately on an independent branch. Do not
    batch non-blockers at the end of the session.
 6. **Fix blockers:** assign a fix worker, using a subagent when available, that
-   commits on **`fix_branch`** (stacked) and opens a PR `Fixes #n`. `blocker add`
-   / `blocker set` in the ledger. Parallel playable-finding workers continue on
-   their own branches and do not gate replay.
+   creates a review branch from current `main` and opens a PR `Fixes #n` against
+   `main` unless the fix genuinely depends on another unmerged change. After
+   validation, integrate that commit separately onto the cumulative
+   **`fix_branch`** used for replay. `blocker add` / `blocker set` in the ledger.
+   Parallel playable-finding workers continue on their own branches and do not
+   gate replay.
 7. **Re-validate:** rebuild `fix_branch`, reload the frontier save, confirm the
    playtest now gets **past** the blocker. If it does not, run `blocker fail
    <issue#> [pr#]`. Failures one and two return to triage/fix with the new
@@ -406,8 +415,9 @@ campaign just launches mission 0 with no frontier to load, which is harmless.
 
 - **Merge gate is the human.** Fixes open PRs; *you* merge (or CI+`/xreview` gate).
   The `fix_branch` stack lets the campaign progress while PRs await review — the
-  goal is a reviewable stack, not auto-merge. An open PR awaiting human merge
-  does not stop `--auto`; continue from the stacked fix branch.
+  local campaign stack is for playtesting, not evidence that the PRs depend on
+  one another. Keep independent PRs based on `main`. An open PR awaiting human
+  merge does not stop `--auto`; continue from the cumulative fix branch.
 - **Three failed fixes = pause.** Count every distinct fix or revision that
   fails step 7 with `blocker fail`. Re-triage and revise after failures one and
   two. On failure three, the ledger marks the blocker failed; stop and give the
