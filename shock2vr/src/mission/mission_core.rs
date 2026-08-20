@@ -5094,17 +5094,24 @@ impl MissionCore {
                                 .unwrap_or(false);
                         // A missing model must never take down the frame (or a
                         // load): keep the current model and complain loudly.
-                        let new_model = if vr_held {
-                            asset_cache
-                                .get_opt(
-                                    &dark::importers::VR_HELD_MODELS_IMPORTER,
-                                    &format!("{model_name}.BIN"),
-                                )
-                                .map(|m| Model::transform(&m.as_ref().0, xform))
+                        let (new_model, vr_held_source) = if vr_held {
+                            match asset_cache.get_opt(
+                                &dark::importers::VR_HELD_MODELS_IMPORTER,
+                                &format!("{model_name}.BIN"),
+                            ) {
+                                Some(source) => (
+                                    Some(Model::transform(&source.as_ref().model, xform)),
+                                    Some(source),
+                                ),
+                                None => (None, None),
+                            }
                         } else {
-                            asset_cache
-                                .get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"))
-                                .map(|m| Model::transform(m.as_ref(), xform))
+                            (
+                                asset_cache
+                                    .get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"))
+                                    .map(|m| Model::transform(m.as_ref(), xform)),
+                                None,
+                            )
                         };
                         let Some(mut new_model) = new_model else {
                             tracing::error!(
@@ -5161,29 +5168,42 @@ impl MissionCore {
                                 // Seat the posed arm on the tracked hand. Two
                                 // halves of one placement, both derived from
                                 // this same posed arm so they cannot drift
-                                // apart: the grip puts the entity - and so the
-                                // melee contact collider, which the held body
-                                // IS - on the rendered weapon head, and the
+                                // apart: the grip puts the entity/body origin
+                                // on the rendered weapon head, and the
                                 // model-space correction cancels that same
                                 // offset so the fist still lands in the palm.
-                                // `apply_local_transform` composes inside the
-                                // entity transform, which the render path
-                                // re-sets from the hand every frame.
+                                // The fitted child collider below extends back
+                                // over the rendered weapon without moving that
+                                // controller-driven body origin.
                                 let arm = new_model.skeleton().and_then(|skeleton| {
                                     crate::vr_config::MeleePosedArm::from_joints(
                                         &player.get_transforms(skeleton),
                                     )
                                 });
                                 if let Some(arm) = arm {
-                                    new_model.apply_local_transform(
-                                        crate::vr_config::melee_wield_pose_correction(arm),
-                                    );
+                                    let correction =
+                                        crate::vr_config::melee_wield_pose_correction(arm);
+                                    new_model.apply_local_transform(correction);
                                     self.world.add_component(
                                         entity_id,
                                         RuntimePropVrGripOffset(
                                             crate::vr_config::melee_contact_offset(arm),
                                         ),
                                     );
+                                    if self.interaction.is_holding(entity_id) {
+                                        match vr_held_source.as_ref().and_then(|source| {
+                                            source.posed_weapon_bounds(&player, correction)
+                                        }) {
+                                            Some(bounds) => self.physics.fit_held_melee_cuboid(
+                                                entity_id,
+                                                bounds.size,
+                                                bounds.center,
+                                            ),
+                                            None => tracing::error!(
+                                                "ChangeModel: '{model_name}' has no fittable weapon geometry - retaining its loose-prop collider"
+                                            ),
+                                        }
+                                    }
                                 } else {
                                     tracing::error!(
                                         "ChangeModel: '{model_name}' has no melee arm joints - wielding it unseated"
