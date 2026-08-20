@@ -162,12 +162,12 @@ test(
       );
     }
     assert.ok(
-      textures.includes("amanpour.pcx"),
-      "reader should draw the sender portrait from book.crf",
+      textures.includes("amanpour.pcx") || textures.includes("amanpour.png"),
+      "reader should draw the resolved sender portrait from the book family",
     );
     assert.ok(
-      textures.includes("medicon.pcx"),
-      "reader should draw the deck icon from book.crf",
+      textures.includes("medicon.pcx") || textures.includes("medicon.png"),
+      "reader should draw the resolved deck icon from the book family",
     );
     await game.screenshot("log-reader-open.png");
 

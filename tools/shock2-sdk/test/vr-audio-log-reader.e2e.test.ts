@@ -118,8 +118,8 @@ async function assertAmanpourReader(game: GameServer): Promise<UiPanel> {
     .filter((element) => element.kind === "image")
     .map((element) => element.texture?.toLowerCase());
   assert.ok(textures.includes("iface/log.pcx"));
-  assert.ok(textures.includes("amanpour.pcx"));
-  assert.ok(textures.includes("medicon.pcx"));
+  assert.ok(textures.includes("amanpour.pcx") || textures.includes("amanpour.png"));
+  assert.ok(textures.includes("medicon.pcx") || textures.includes("medicon.png"));
   assert.equal((await uiBodies(game)).length, 1, "reader must replace, not overlap, corpse UI");
   return panel;
 }
