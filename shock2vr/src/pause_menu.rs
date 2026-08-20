@@ -27,7 +27,7 @@ use dark::map::MapRect;
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{SceneObject, color_material, quad},
+    scene::{RenderLayer, SceneObject, color_material, quad},
 };
 use shipyard::EntityId;
 
@@ -219,11 +219,9 @@ fn world_dim_layer(
     object.set_depth_write(false);
     // A modal panel the player cannot read is not a pause menu: world-locked
     // two metres ahead, it lands inside a wall or a console often enough that
-    // depth-testing it against the world is not an option. The renderer treats
-    // everything from the first `clear_depth` object onward as an overlay group
-    // drawn after the world's own passes, and `Game` appends the menu's objects
-    // last, so the group is exactly the dim, the panel and its rays.
-    object.set_clear_depth(true);
+    // depth-testing it against the world is not an option. The renderer clears
+    // depth once at this explicit system-layer boundary.
+    object.set_render_layer(RenderLayer::SystemOverlay);
     object.set_debug_tag(Some(crate::util::render_source_tag(
         crate::util::render_source::PAUSE_DIM,
     )));
@@ -690,9 +688,8 @@ impl PauseMenu {
         for object in &mut objects {
             object.set_transform(pawn_to_world * object.get_transform());
         }
-        // The overlay group starts at `world_dim_layer`'s `clear_depth`, which
-        // is why the dim is emitted first: the group is the dim, the panel and
-        // its rays, all drawn over the world.
+        // Game assigns this whole ordered stack to the system-overlay layer:
+        // dim first, then panel and rays, all over the world and scene UI.
         objects
     }
 
@@ -1423,20 +1420,15 @@ mod tests {
         assert!((position - implied_head).magnitude() < 1e-4);
     }
 
-    /// The overlay group starts at the first `clear_depth` object, and
-    /// everything from there on draws over the world. The dim is emitted first,
-    /// so it is the object that has to carry the clear - otherwise the group
-    /// would start at the panel and a wall in the player's face would swallow
-    /// the dim while leaving the menu floating over a bright world.
+    /// The dim belongs to the explicit system-overlay group, so a wall in the
+    /// player's face cannot swallow it while leaving the menu floating over a
+    /// bright world.
     #[test]
     fn the_dim_layer_is_not_depth_tested_against_the_world() {
         let panel = test_panel();
         let (position, forward) = dim_pose(Vector3::zero(), head_looking(0.0, 0.0), &panel);
         let object = world_dim_layer(position, forward, dim_distance(position, &panel));
-        assert!(
-            object.clear_depth,
-            "the dim opens the overlay group; without the clear, the wall the player is standing against swallows it"
-        );
+        assert_eq!(object.render_layer(), RenderLayer::SystemOverlay);
         assert!(
             !object.depth_write,
             "the dim must not write depth: the panel draws after it"

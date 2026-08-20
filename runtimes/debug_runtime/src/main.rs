@@ -869,11 +869,14 @@ fn run_game_blocking(
 /// Process a command from the HTTP server
 /// Describe the scene objects submitted to the renderer, for `/v1/scene`.
 fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneObjectSummary> {
+    let mut seen_layers = HashSet::new();
     scene
         .iter()
         .map(|obj| {
             let tag = obj.debug_tag();
             let translation = obj.get_transform().w;
+            let render_layer = obj.render_layer();
+            let first_in_layer = seen_layers.insert(render_layer);
             commands::SceneObjectSummary {
                 entity_id: tag.and_then(|t| t.entity_id),
                 name: tag.and_then(|t| t.name.clone()),
@@ -882,7 +885,8 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
                 position: [translation.x, translation.y, translation.z],
                 transparency: obj.effective_transparency(),
                 depth_write: obj.depth_write,
-                clear_depth: obj.clear_depth,
+                render_layer: render_layer.as_str().to_owned(),
+                clear_depth: render_layer.clears_depth() && first_in_layer,
                 backface_culling: obj.backface_culling().map(|w| format!("{w:?}")),
             }
         })
@@ -1603,6 +1607,7 @@ fn process_command(
                     position: o.position,
                     transparency: o.transparency,
                     depth_write: o.depth_write,
+                    render_layer: o.render_layer.clone(),
                     clear_depth: o.clear_depth,
                     backface_culling: o.backface_culling.clone(),
                 })

@@ -36,6 +36,45 @@ pub enum FrontFaceWinding {
     CounterClockwise,
 }
 
+/// The explicit composition layer for a scene object.
+///
+/// Hosts may gather the main scene and per-eye objects in either order. The
+/// renderer therefore consumes this key, rather than vector position, to keep
+/// view-locked effects and UI composited identically on every host.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum RenderLayer {
+    /// Ordinary world geometry, rendered against the frame's initial depth.
+    World,
+    /// View-locked scene effects over the world but behind scene UI.
+    SceneOverlay,
+    /// Viewmodels, HUDs, MFDs, and other scene-owned per-eye UI.
+    SceneUi,
+    /// System-owned UI such as the pause menu and final screen fade.
+    SystemOverlay,
+}
+
+impl RenderLayer {
+    pub const ORDERED: [Self; 4] = [
+        Self::World,
+        Self::SceneOverlay,
+        Self::SceneUi,
+        Self::SystemOverlay,
+    ];
+
+    pub fn clears_depth(self) -> bool {
+        self != Self::World
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::World => "world",
+            Self::SceneOverlay => "scene_overlay",
+            Self::SceneUi => "scene_ui",
+            Self::SystemOverlay => "system_overlay",
+        }
+    }
+}
+
 /// Provenance for a scene object, so tooling can report *what* the renderer was
 /// handed. Never read by the renderer itself; a game layer may filter its own
 /// scene by `source` before submitting it (shock2vr drops the player's hands
@@ -60,11 +99,7 @@ pub struct SceneObject {
     pub local_transform: Matrix4<f32>, //hack...
     pub skinning_data: [Matrix4<f32>; crate::scene::SKINNING_PALETTE_SIZE],
     pub depth_write: bool,
-    /// When true, the depth buffer is cleared *before* drawing this object, so it
-    /// (and anything drawn after it) renders on top of the world while still
-    /// depth-testing normally within itself. Used to draw the flatscreen
-    /// first-person weapon viewmodel without clipping into geometry.
-    pub clear_depth: bool,
+    render_layer: RenderLayer,
     /// Per-object transparency override (0.0 = opaque, 1.0 = invisible).
     /// Materials are shared (`Rc`) across every object using the same model, so
     /// a lasting material-level override would bleed between entities; instead
@@ -247,7 +282,7 @@ impl SceneObject {
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
-            clear_depth: false,
+            render_layer: RenderLayer::World,
             transparency_override: None,
             debug_tag: None,
             backface_culling: None,
@@ -268,11 +303,6 @@ impl SceneObject {
         }
 
         let xform = self.transform * self.local_transform;
-        // Clear the depth buffer first so this (and later objects) draw on top of
-        // the world while still depth-testing normally amongst themselves.
-        if self.clear_depth {
-            unsafe { gl::Clear(gl::DEPTH_BUFFER_BIT) };
-        }
         if !self.depth_write {
             unsafe { gl::DepthMask(gl::FALSE) };
         }
@@ -378,7 +408,7 @@ impl SceneObject {
             local_transform: Matrix4::identity(),
             skinning_data: [Matrix4::identity(); crate::scene::SKINNING_PALETTE_SIZE],
             depth_write: true,
-            clear_depth: false,
+            render_layer: RenderLayer::World,
             transparency_override: None,
             debug_tag: None,
             backface_culling: None,
@@ -393,7 +423,7 @@ impl SceneObject {
             local_transform: self.local_transform,
             skinning_data: self.skinning_data,
             depth_write: self.depth_write,
-            clear_depth: self.clear_depth,
+            render_layer: self.render_layer,
             transparency_override: self.transparency_override,
             debug_tag: self.debug_tag.clone(),
             backface_culling: self.backface_culling,
@@ -404,8 +434,12 @@ impl SceneObject {
         self.depth_write = enabled;
     }
 
-    pub fn set_clear_depth(&mut self, enabled: bool) {
-        self.clear_depth = enabled;
+    pub fn set_render_layer(&mut self, layer: RenderLayer) {
+        self.render_layer = layer;
+    }
+
+    pub fn render_layer(&self) -> RenderLayer {
+        self.render_layer
     }
 
     pub fn set_backface_culling(&mut self, front_face: Option<FrontFaceWinding>) {

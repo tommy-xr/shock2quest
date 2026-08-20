@@ -76,7 +76,12 @@ for (const presentation of ["flat", "vr"] as const) {
       // culled quad covers only part of the view on the Quest, and a
       // depth-tested one only tints what is far away.
       assert.equal(shown.backface_culling, null, "the tint must not opt into culling");
-      assert.equal(shown.clear_depth, true, "the tint must draw over the world");
+      assert.equal(shown.clear_depth, true, "the tint must begin a depth-cleared layer");
+      assert.equal(
+        shown.render_layer,
+        "scene_overlay",
+        "the tint must stay over the world and behind scene UI",
+      );
       assert.equal(shown.depth_write, false, "the tint must not occlude what draws after it");
 
       // A bigger hit reads as bigger.

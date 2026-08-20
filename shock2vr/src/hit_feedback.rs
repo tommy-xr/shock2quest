@@ -31,7 +31,7 @@
 //! flicker and a shotgun blast is unmistakable.
 
 use cgmath::{Matrix4, Quaternion, Vector3, vec3};
-use engine::scene::SceneObject;
+use engine::scene::{RenderLayer, SceneObject};
 
 /// Damage that produces a full-strength tint. The player's authored pool is 30
 /// hit points (`The Player`, `P$HitPoints`), so this is "a bit over a third of
@@ -297,13 +297,10 @@ fn hit_layer(
     // Translucent: writing depth here would let the layer occlude anything
     // drawn after it in the same overlay group.
     object.set_depth_write(false);
-    // The layer must cover the world regardless of what the player is standing
-    // in front of, so it starts an overlay group (see `pause_menu`'s dim - the
-    // renderer treats everything from the first `clear_depth` object onward as
-    // a group drawn after the world's passes). `Game` emits it before the
-    // pause menu's objects, so a hit that lands as the menu opens stays behind
-    // the panel.
-    object.set_clear_depth(true);
+    // The layer covers the world but stays behind scene-owned UI. The renderer
+    // orders this key explicitly, so host concatenation cannot move the tint
+    // over the HUD on Quest or under the world on flat/debug.
+    object.set_render_layer(RenderLayer::SceneOverlay);
     object.set_debug_tag(Some(crate::util::render_source_tag(
         crate::util::render_source::HIT_FEEDBACK,
     )));
@@ -554,10 +551,7 @@ mod tests {
             .effective_transparency()
             .expect("the tint must draw translucent, not opaque");
         assert!(transparency > 0.0 && transparency < 1.0);
-        assert!(
-            object.clear_depth,
-            "a layer depth-tested against the world would only tint what is far away"
-        );
+        assert_eq!(object.render_layer(), RenderLayer::SceneOverlay);
         assert_eq!(
             object.debug_tag().and_then(|tag| tag.source.clone()),
             Some(crate::util::render_source::HIT_FEEDBACK.to_owned())
