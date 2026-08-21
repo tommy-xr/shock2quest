@@ -8,6 +8,7 @@
  * - They are not serialized / deserialized
  */
 use cgmath::{Matrix4, Point3, Vector3};
+use collision::Aabb3;
 use dark::ss2_bin_obj_loader::Vhot;
 use serde::{Deserialize, Deserializer, Serialize};
 use shipyard::Component;
@@ -112,6 +113,12 @@ pub struct RuntimeBitmapAnimationFrameCount(pub u32);
 
 #[derive(Component, Debug)]
 pub struct RuntimePropVhots(pub Vec<Vhot>);
+
+/// The rendered model's authored local-space bounds. Kept beside its vhots so
+/// systems that need model geometry do not have to reach back into the render
+/// cache.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropModelBounds(pub Aabb3<f32>);
 
 // RuntimePropDoNotSerialize - runtime prop to signal that this prop should not be serialized
 #[derive(Component)]

@@ -26,26 +26,38 @@ import type { Quat } from "./helpers/vr-hand.js";
 // the barrel. Fired from a natural hold the bolt then crossed in front of the
 // player and spanged on their own collider instead of reaching the wall.
 //
-// Requires a 25th Anniversary install (DARK_ASSET_PATH): the vhots below are
-// the remastered `mods/sshock2ee.kpf` view models', which is what VR wields.
+// The ordinary matrix requires a 25th Anniversary install (DARK_ASSET_PATH):
+// its viewmodel geometry comes from `mods/sshock2ee.kpf`. The separately gated
+// classic case deliberately runs against an unpacked legacy install.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
+const classicE2eEnabled = e2eEnabled && process.env.SHOCK2_CLASSIC_E2E === "1";
 const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8102);
 
 /** Weapon templates cycled by DebugCycleWeapon (mission_core DEBUG_WEAPONS). */
 const LASER_PISTOL = -22;
+const EMP_RIFLE = -23;
+const GRENADE_LAUNCHER = -21;
 const PSI_AMP = -247;
 
 /** dark::SCALE_FACTOR - model units per world unit. */
 const SCALE_FACTOR = 2.5;
 
 /**
- * The muzzle vhot of each model, in world units (the model's vhot 0, read from
- * the 25AE `obj/*.bin` and divided by SCALE_FACTOR). Both sit at the model's
- * -X extreme, which is the authored barrel direction for these models.
+ * The resolved muzzle point of each model, in world units. Vhot-carrying
+ * models use the authored point; `empgun_h` has none, so its point is the
+ * centre of the -X face of its decoded model bounds. All three are authored
+ * barrel-along -X.
  */
-const MUZZLE_VHOT: Record<string, Vec3> = {
+const MUZZLE_POINT: Record<string, Vec3> = {
   lasehand: [-1.913 / SCALE_FACTOR, -0.0688 / SCALE_FACTOR, 0.16 / SCALE_FACTOR],
+  empgun_h: [-1.5118, 0, 0],
   amp_h: [-1.1072 / SCALE_FACTOR, 0.2719 / SCALE_FACTOR, -0.1199 / SCALE_FACTOR],
+  // Classic-install world model: no vhot, so the centre of its -Z bounds face.
+  gren_w: [0, 0, -1.1999],
+};
+
+const BARREL_AXIS: Record<string, Vec3> = {
+  gren_w: [0, 0, -1],
 };
 
 const len = (v: Vec3): number => Math.sqrt(dot(v, v));
@@ -114,11 +126,13 @@ async function fireAndTrack(
   await game.step({ frames: 5 });
 
   const weapon = await entityTransform(game, weaponId);
-  const vhot = MUZZLE_VHOT[weapon.model];
-  assert.ok(vhot, `VR should wield a view model with a known muzzle vhot, got "${weapon.model}"`);
-  const muzzle = add(weapon.position, quatRotate(weapon.rotation, vhot));
-  // The 25AE view models are authored with the barrel along the model's -X.
-  const barrel = quatRotate(weapon.rotation, [-1, 0, 0]);
+  const muzzlePoint = MUZZLE_POINT[weapon.model];
+  assert.ok(
+    muzzlePoint,
+    `VR should wield a view model with known muzzle geometry, got "${weapon.model}"`,
+  );
+  const muzzle = add(weapon.position, quatRotate(weapon.rotation, muzzlePoint));
+  const barrel = quatRotate(weapon.rotation, BARREL_AXIS[weapon.model] ?? [-1, 0, 0]);
 
   const before = new Set((await game.entities.list()).entities.map((e) => e.id));
   await game.input.set("right_hand.trigger", 1);
@@ -139,14 +153,18 @@ async function fireAndTrack(
   }
   assert.ok(track.length >= 3, "the trigger pull must spawn a travelling projectile");
 
+  const firstStep = sub(track[1], track[0]);
   const travel = sub(track[track.length - 1], track[0]);
-  const heading = normalize(travel);
+  // Initial direction is the barrel rule under test. Using the whole track
+  // would misclassify a correctly-launched physical grenade after gravity has
+  // bent its later trajectory.
+  const heading = normalize(firstStep);
   const muzzleToFirst = sub(track[0], muzzle);
   const axialDistance = dot(muzzleToFirst, heading);
   const lateral = sub(muzzleToFirst, scale(heading, axialDistance));
 
   return {
-    barrelDeviationDeg: angleBetweenDeg(travel, barrel),
+    barrelDeviationDeg: angleBetweenDeg(firstStep, barrel),
     lateralError: len(lateral),
     axialDistance,
     frameStep: len(sub(track[1], track[0])),
@@ -221,12 +239,102 @@ test(
 );
 
 test(
+  "a vhotless VR EMP rifle fires from its model bounds and clears a close hold",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "debug_weapons",
+      port: basePort + 1,
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 30 });
+
+    let emp: EntitySummary | undefined;
+    for (let cycle = 0; cycle < 12 && !emp; cycle += 1) {
+      await game.input.trigger("DebugCycleWeapon");
+      await game.step({ frames: 10 });
+      emp = (await game.entities.list()).entities.find((e) => e.template_id === EMP_RIFLE);
+    }
+    assert.ok(emp, "DebugCycleWeapon must spawn the EMP Rifle");
+
+    await grabWithRightHand(game, emp.position as Vec3);
+    const held = await game.info();
+    assert.equal(held.player.right_hand_entity_id, emp.id, "the hand must hold the EMP rifle");
+
+    const shot = await fireAndTrack(
+      game,
+      emp.id,
+      // The grip itself is in the player capsule. On the old fallback the EMP
+      // shot spawned there and detonated immediately; the bounds-derived tip
+      // sits outside the body and visibly launches down the barrel.
+      [0, 1, 0],
+      [-1, 0, 0],
+      (e) => e.name === "EMP Shot",
+    );
+
+    assertLeftTheMuzzle(shot, "EMP pulse");
+    assert.ok(
+      shot.distanceTravelled > 5,
+      `the EMP pulse must clear the close-held shooter, only travelled ${shot.distanceTravelled.toFixed(2)}`,
+    );
+  },
+);
+
+test(
+  "classic VR: a Z-long vhotless grenade launcher fires down its rendered barrel",
+  {
+    skip: classicE2eEnabled
+      ? false
+      : "set SHOCK2_E2E=1 and SHOCK2_CLASSIC_E2E=1 with classic assets to run",
+  },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "debug_weapons",
+      port: basePort + 3,
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 30 });
+
+    let launcher: EntitySummary | undefined;
+    for (let cycle = 0; cycle < 12 && !launcher; cycle += 1) {
+      await game.input.trigger("DebugCycleWeapon");
+      await game.step({ frames: 10 });
+      launcher = (await game.entities.list()).entities.find(
+        (e) => e.template_id === GRENADE_LAUNCHER,
+      );
+    }
+    assert.ok(launcher, "DebugCycleWeapon must spawn the Grenade Launcher");
+
+    await grabWithRightHand(game, launcher.position as Vec3);
+    const held = await game.info();
+    assert.equal(
+      held.player.right_hand_entity_id,
+      launcher.id,
+      "the hand must hold the grenade launcher",
+    );
+    assert.equal((await entityTransform(game, launcher.id)).model, "gren_w");
+
+    const shot = await fireAndTrack(
+      game,
+      launcher.id,
+      [0, 1, -2],
+      // The classic grip rotates model -Z onto hand +X. Turning the hand back
+      // maps that rendered barrel onto the debug scene's clear -X lane.
+      [0, 0, 1],
+      (e) => e.name.includes("Grenade Proj"),
+    );
+
+    assertLeftTheMuzzle(shot, "classic grenade");
+  },
+);
+
+test(
   "a VR-wielded psi amp casts from its muzzle vhot along the barrel",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" },
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_psi",
-      port: basePort + 1,
+      port: basePort + 2,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });

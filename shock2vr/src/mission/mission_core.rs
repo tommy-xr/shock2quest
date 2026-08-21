@@ -87,8 +87,8 @@ use crate::{
     runtime_props::{
         RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDeathPose,
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
-        RuntimePropLaunchedProjectile, RuntimePropReloading, RuntimePropSelectedAmmo,
-        RuntimePropTransform, RuntimePropVhots, RuntimePropVrGripOffset,
+        RuntimePropLaunchedProjectile, RuntimePropModelBounds, RuntimePropReloading,
+        RuntimePropSelectedAmmo, RuntimePropTransform, RuntimePropVhots, RuntimePropVrGripOffset,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -5193,6 +5193,7 @@ impl MissionCore {
                         };
 
                         let vhots = new_model.vhots();
+                        let bounds = new_model.authored_bounding_box();
                         // An articulated VR-wielded first-person model (hand +
                         // arm + gun as skeleton sub-objects) renders unposed
                         // without a player, so give it the empty bind pose (it
@@ -5282,34 +5283,22 @@ impl MissionCore {
                             .add_component(entity_id, PropModelName(model_name));
 
                         self.world.add_component(entity_id, RuntimePropVhots(vhots));
+                        if let Some(bounds) = bounds {
+                            self.world
+                                .add_component(entity_id, RuntimePropModelBounds(bounds));
+                        } else {
+                            self.world.remove::<RuntimePropModelBounds>(entity_id);
+                        }
                     }
                 }
                 Effect::ClearModel { entity_id } => {
                     self.id_to_model.remove(&entity_id);
                     self.id_to_animation_player.remove(&entity_id);
                     self.world
-                        .remove::<(PropModelName, RuntimePropVhots)>(entity_id);
+                        .remove::<(PropModelName, RuntimePropVhots, RuntimePropModelBounds)>(
+                            entity_id,
+                        );
                     self.world.remove::<RuntimePropVrGripOffset>(entity_id);
-                }
-                Effect::SetVhotsFromModel {
-                    entity_id,
-                    model_name,
-                } => {
-                    if let Some(model) = self.id_to_model.get(&entity_id) {
-                        let xform = model.get_transform();
-                        // Same hazard as ChangeModel above: a missing donor
-                        // model must not panic the frame.
-                        let Some(donor_model) =
-                            asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"))
-                        else {
-                            tracing::error!(
-                                "SetVhotsFromModel: model '{model_name}.BIN' could not be loaded for entity {entity_id:?} - keeping current vhots"
-                            );
-                            continue;
-                        };
-                        let vhots = Model::transform(donor_model.as_ref(), xform).vhots();
-                        self.world.add_component(entity_id, RuntimePropVhots(vhots));
-                    }
                 }
                 Effect::PlayEmail { deck, email, force } => {
                     let email_file = get_email_sound_file(deck, email);

@@ -45,7 +45,10 @@ impl Script for InternalSwitchHeldModelScript {
                     // Otherwise keep the world model: the classic _h meshes
                     // have their never-visible faces stripped for the fixed
                     // flat camera and look broken from VR's free viewpoints
-                    // (#352).
+                    // (#352). Its own bounds and vhots are also the only fire
+                    // geometry that matches the rendered barrel; borrowing
+                    // points from a differently-authored hand model can put an
+                    // X-axis muzzle on a Z-axis world model.
                     let mut effects = Vec::new();
 
                     // Self-heal cross-mode saves: a save made in flat while
@@ -61,16 +64,6 @@ impl Script for InternalSwitchHeldModelScript {
                                 model_name: original,
                             });
                         }
-                    }
-
-                    // The world model stays rendered, but its mesh has no
-                    // vhots - take the fire points (muzzle) from the hand
-                    // model so projectiles/flash don't spawn at the grip.
-                    if let Some(view_model) = get_view_model(world, entity_id) {
-                        effects.push(Effect::SetVhotsFromModel {
-                            entity_id,
-                            model_name: view_model,
-                        });
                     }
 
                     return Effect::Multiple(effects);
