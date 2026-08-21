@@ -615,6 +615,37 @@ pub(crate) fn uses_scripted_world_frob(world: &World, entity_id: EntityId) -> bo
     has_authored_world_script || crate::scripts::script_util::is_always_collected(world, entity_id)
 }
 
+/// Whether an authored script is already the sole owner of this item's
+/// physical fate on world Frob.
+///
+/// Most `MOVE | SCRIPT` objects need both halves of `PropFrobInfo`: their
+/// scripts run side effects while the engine performs `MOVE`. Two established
+/// script paths are exceptions: keycards' injected `internal_keycard` script
+/// and `FrobQB` both deliberately transfer or consume the object themselves.
+/// Giving either the engine move handler as well would reparent or destroy the
+/// same entity twice.
+pub(crate) fn scripted_world_frob_owns_transfer(world: &World, entity_id: EntityId) -> bool {
+    let is_keycard = world
+        .borrow::<View<dark::properties::PropKeySrc>>()
+        .map(|keycards| keycards.get(entity_id).is_ok())
+        .unwrap_or(false);
+    if is_keycard {
+        return true;
+    }
+
+    world
+        .borrow::<View<dark::properties::PropScripts>>()
+        .map(|scripts| {
+            scripts.get(entity_id).is_ok_and(|scripts| {
+                scripts
+                    .scripts
+                    .iter()
+                    .any(|script| script.eq_ignore_ascii_case("frobqb"))
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// Whether an inventory item is a wieldable weapon - a gun (`PropPlayerGun`) or
 /// a melee arm (`PropLimbModel`). Clicking one in the backpack/strip wields it
 /// (`Effect::GrabEntity`) instead of using it; shared by `ContainerGui` and the
