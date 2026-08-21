@@ -132,6 +132,13 @@ pub trait GameScene {
     /// run it (a debug-runtime load, a level transition).
     fn on_exit(&mut self, _audio_context: &mut AudioContext<EntityId, String>) {}
 
+    /// Notify the still-active scene that its requested save load failed.
+    ///
+    /// A successful load replaces the scene, so only the failure result needs
+    /// routing back. Frontend scenes that offer loading can turn this into
+    /// player-visible feedback; every other scene deliberately ignores it.
+    fn on_load_failed(&mut self) {}
+
     /// Whether this scene wants a 2D mouse cursor (e.g. a menu). Flat runtimes
     /// show the OS cursor and populate `InputContext::pointer` when true; by
     /// default scenes capture the mouse for look.

@@ -8,7 +8,7 @@ use crate::quest_info::QuestInfo;
 use crate::scripts::healing_item::ActiveHealing;
 use cgmath::{Quaternion, Vector3};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, io};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct SaveData {
@@ -25,11 +25,11 @@ impl SaveData {
         writer.write_all(save_data_json.as_bytes()).unwrap();
     }
 
-    pub fn read<T: std::io::Read>(reader: &mut T) -> SaveData {
+    pub fn read<T: std::io::Read>(reader: &mut T) -> io::Result<SaveData> {
         let mut save_data_json = String::new();
-        reader.read_to_string(&mut save_data_json).unwrap();
-        let save_data: SaveData = serde_json::from_str(&save_data_json).unwrap();
-        save_data
+        reader.read_to_string(&mut save_data_json)?;
+        serde_json::from_str(&save_data_json)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 }
 
