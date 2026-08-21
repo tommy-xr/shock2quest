@@ -663,6 +663,7 @@ pub struct EntityDetailResult {
     pub properties: Vec<PropertyInfo>,
     pub outgoing_links: Vec<LinkInfo>,
     pub incoming_links: Vec<LinkInfo>,
+    pub contained_by: Option<i32>,
     pub aim_points: Vec<AimPointInfo>,
 }
 
@@ -686,6 +687,7 @@ pub struct PropertyInfo {
 #[derive(Debug, Serialize)]
 pub struct LinkInfo {
     pub link_type: String,
+    /// The target for an outgoing link and the source for an incoming link.
     pub target_id: i32,
     pub target_name: String,
     pub contains_ordinal: Option<u32>,

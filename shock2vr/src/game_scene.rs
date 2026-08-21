@@ -252,6 +252,9 @@ pub struct DebugEntityDetail {
     pub properties: Vec<DebugPropertyInfo>,
     pub outgoing_links: Vec<DebugLinkInfo>,
     pub incoming_links: Vec<DebugLinkInfo>,
+    /// Runtime entity id of the source of an incoming `Contains` link, when
+    /// this entity lives inside a container.
+    pub contained_by: Option<i32>,
     pub aim_points: Vec<DebugAimPoint>,
 }
 
@@ -275,6 +278,8 @@ pub struct DebugPropertyInfo {
 #[derive(Debug, Serialize, Clone)]
 pub struct DebugLinkInfo {
     pub link_type: String,
+    /// The entity at the opposite end of the link: the target for an outgoing
+    /// link and the source for an incoming link.
     pub target_id: i32,
     pub target_name: String,
     /// Inventory cell ordinal for `Contains` links. Kept separate from the

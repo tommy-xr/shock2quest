@@ -124,6 +124,7 @@ export interface PropertyInfo {
 
 export interface LinkInfo {
   link_type: string;
+  /** Opposite endpoint: target for outgoing links, source for incoming links. */
   target_id: number;
   target_name: string;
   /** Exact inventory cell for a Contains link; null for other link types. */
@@ -140,6 +141,8 @@ export interface EntityDetailResult {
   properties: PropertyInfo[];
   outgoing_links: LinkInfo[];
   incoming_links: LinkInfo[];
+  /** Runtime id of the container owning this entity, or null when it is loose. */
+  contained_by?: number | null;
   /**
    * Live classified creature hitboxes. Optional for compatibility with debug
    * runtimes predating the aim-point capability.

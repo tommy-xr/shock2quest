@@ -7991,6 +7991,97 @@ impl MissionCore {
     }
 }
 
+fn debug_link_info(
+    opposite_id: EntityId,
+    link: &ToLink,
+    names: &View<PropSymName>,
+) -> crate::game_scene::DebugLinkInfo {
+    crate::game_scene::DebugLinkInfo {
+        link_type: format!("{:?}", link.link),
+        target_id: opposite_id.inner() as i32,
+        target_name: names
+            .get(opposite_id)
+            .map(|name| name.0.clone())
+            .unwrap_or_else(|_| format!("Entity_{}", opposite_id.inner())),
+        contains_ordinal: match link.link {
+            Link::Contains(ordinal) => Some(ordinal),
+            _ => None,
+        },
+    }
+}
+
+/// Return both directions of every live link touching `id`. `Links` stores
+/// only its outgoing half, so incoming links must be resolved by scanning the
+/// sources. Each [`DebugLinkInfo`](crate::game_scene::DebugLinkInfo) names the
+/// opposite endpoint: destination in `outgoing`, source in `incoming`.
+fn debug_entity_links(
+    id: EntityId,
+    links: &View<Links>,
+    names: &View<PropSymName>,
+) -> (
+    Vec<crate::game_scene::DebugLinkInfo>,
+    Vec<crate::game_scene::DebugLinkInfo>,
+) {
+    let mut outgoing = Vec::new();
+    let mut incoming = Vec::new();
+
+    if let Ok(entity_links) = links.get(id) {
+        for link in &entity_links.to_links {
+            if let Some(target) = link.to_entity_id {
+                outgoing.push(debug_link_info(target.0, link, names));
+            }
+        }
+    }
+
+    for (source_id, source_links) in links.iter().with_id() {
+        for link in &source_links.to_links {
+            if link.to_entity_id.map(|target| target.0) == Some(id) {
+                incoming.push(debug_link_info(source_id, link, names));
+            }
+        }
+    }
+
+    (outgoing, incoming)
+}
+
+#[cfg(test)]
+mod debug_entity_link_tests {
+    use super::*;
+
+    #[test]
+    fn reports_outgoing_targets_and_incoming_sources_with_contains_metadata() {
+        let mut world = World::new();
+        let item = world.add_entity(PropSymName("Hydro Card A".to_owned()));
+        let container = world.add_entity((
+            PropSymName("Hydro Corpse".to_owned()),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 934,
+                    to_entity_id: Some(WrappedEntityId(item)),
+                    link: Link::Contains(7),
+                }],
+            },
+        ));
+
+        world.run(|links: View<Links>, names: View<PropSymName>| {
+            let (container_outgoing, container_incoming) =
+                debug_entity_links(container, &links, &names);
+            assert_eq!(container_incoming.len(), 0);
+            assert_eq!(container_outgoing.len(), 1);
+            assert_eq!(container_outgoing[0].target_id, item.inner() as i32);
+            assert_eq!(container_outgoing[0].target_name, "Hydro Card A");
+            assert_eq!(container_outgoing[0].contains_ordinal, Some(7));
+
+            let (item_outgoing, item_incoming) = debug_entity_links(item, &links, &names);
+            assert_eq!(item_outgoing.len(), 0);
+            assert_eq!(item_incoming.len(), 1);
+            assert_eq!(item_incoming[0].target_id, container.inner() as i32);
+            assert_eq!(item_incoming[0].target_name, "Hydro Corpse");
+            assert_eq!(item_incoming[0].contains_ordinal, Some(7));
+        });
+    }
+}
+
 impl crate::game_scene::DebuggableScene for MissionCore {
     fn list_entities(
         &self,
@@ -8184,9 +8275,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     }
 
     fn entity_detail(&self, id: EntityId) -> Option<crate::game_scene::DebugEntityDetail> {
-        use crate::game_scene::{
-            DebugAimPoint, DebugEntityDetail, DebugLinkInfo, DebugPropertyInfo,
-        };
+        use crate::game_scene::{DebugAimPoint, DebugEntityDetail, DebugPropertyInfo};
         use shipyard::*;
 
         let aim_points = self
@@ -8431,31 +8520,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     });
                 }
 
-                // Build links
-                let mut outgoing_links = Vec::new();
-                let incoming_links = Vec::new();
-
-                if let Ok(links) = v_links.get(id) {
-                    for link in &links.to_links {
-                        if let Some(target_entity) = link.to_entity_id {
-                            outgoing_links.push(DebugLinkInfo {
-                                link_type: format!("{:?}", link.link),
-                                target_id: target_entity.0.inner() as i32,
-                                target_name: v_sym_name
-                                    .get(target_entity.0)
-                                    .map(|s| s.0.clone())
-                                    .unwrap_or_else(|_| {
-                                        format!("Entity_{}", target_entity.0.inner())
-                                    }),
-                                contains_ordinal: match link.link {
-                                    dark::properties::Link::Contains(ordinal) => Some(ordinal),
-                                    _ => None,
-                                },
-                            });
-                        }
-                    }
-                    // TODO: Incoming links require scanning all entities - simplified for now
-                }
+                let (outgoing_links, incoming_links) =
+                    debug_entity_links(id, &v_links, &v_sym_name);
+                let contained_by = incoming_links
+                    .iter()
+                    .find(|link| link.contains_ordinal.is_some())
+                    .map(|link| link.target_id);
 
                 Some(DebugEntityDetail {
                     entity_id: id.inner() as i32,
@@ -8471,6 +8541,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties,
                     outgoing_links,
                     incoming_links,
+                    contained_by,
                     aim_points: aim_points.clone(),
                 })
             },

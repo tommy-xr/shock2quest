@@ -59,6 +59,10 @@ await game.player.setStats({
 // Entities
 const doors = await game.entities.list({ filter: "*Door*", limit: 10 });
 const detail = await game.entities.detail(doors.entities[0].id);
+// Link details expose both directions. `target_*` names the opposite endpoint:
+// destination in `outgoing_links`, source in `incoming_links`. A contained
+// entity also reports its container's runtime id directly.
+const containerId = detail.contained_by; // number, null, or undefined on an older runtime
 
 // Inject a script message into an entity (damage, frob, AI signal)
 await game.entities.sendMessage(doors.entities[0].id, { type: "Damage", amount: 5 });
