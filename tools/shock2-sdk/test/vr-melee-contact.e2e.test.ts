@@ -60,6 +60,13 @@ async function sweepHeldWrench(game: GameServer): Promise<void> {
   }
 }
 
+async function sweepHeldWrenchAcrossXPane(game: GameServer): Promise<void> {
+  for (const x of [-0.4, -0.8, -1.2, -1.6, -1.9, -2.1]) {
+    await game.input.set("right_hand.position", [x, 1.6, 0]);
+    await game.step({ frames: 2 });
+  }
+}
+
 async function paneStillExists(game: GameServer, runtimeId: number): Promise<boolean> {
   return (
     await game.entities.list({ filter: "Window 2", limit: 20 })
@@ -196,6 +203,118 @@ test(
       await paneStillExists(game, dropPane.id),
       true,
       "drop contact must remain harmless",
+    );
+  },
+);
+
+// Regression for #955. TriggerPull is an edge, so an expired or rate-limited
+// pull must never become armed later merely because the level stays held. The
+// shipped one-HP panes let the sequence prove harmless contacts and the next
+// accepted swing without relying on a debug damage shim.
+test(
+  "a held VR melee trigger expires and trigger chatter cannot rearm it",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "command2.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT_SWING_WINDOW ?? 8144),
+      debugFlags: ["--vr"],
+      echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
+    });
+
+    const wrench = await byMissionId(game, "Wrench", WRENCH_MISSION_ID);
+    const pane = await byMissionId(
+      game,
+      "Window 2",
+      BREAKABLE_PANE_MISSION_ID,
+    );
+
+    await game.player.teleport({
+      x: wrench.position[0],
+      y: wrench.position[1] - 1.4,
+      z: wrench.position[2] + 1.2,
+    });
+    await game.input.lookAtWorldPoint(wrench.position);
+    await game.input.set("right_hand.position", [0, 1.4, 0]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    assert.equal((await game.info()).player.right_hand_entity_id, wrench.id);
+
+    await game.player.teleport({
+      x: pane.position[0],
+      y: pane.position[1] - 1.04,
+      z: pane.position[2] - 2.6,
+    });
+    await game.step({ frames: 2 });
+    await game.input.lookAtWorldPoint(pane.position);
+    await game.input.set("right_hand.position", HAND_REST);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 3 });
+
+    // Hold past the 11-frame authored contact duration before touching the
+    // pane. This is the permanent-arm bug from the issue.
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 30 });
+    await sweepHeldWrench(game);
+    assert.equal(
+      await paneStillExists(game, pane.id),
+      true,
+      "contact after the held-trigger attack window expires must be harmless",
+    );
+
+    // A release/re-pull still inside the 31-frame swing cadence is rejected.
+    // Finishing that held contact after the cooldown expires must not arm it
+    // late: only a newly accepted rising edge starts another swing.
+    await game.input.set("right_hand.position", HAND_REST);
+    await game.step({ frames: 10 });
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 2 });
+    await sweepHeldWrench(game);
+    assert.equal(
+      await paneStillExists(game, pane.id),
+      true,
+      "trigger chatter inside one authored swing must not create another hit",
+    );
+
+    // After a complete release, stage at another authored one-HP pane. Using a
+    // fresh physical target avoids asking Rapier to synthesize another
+    // CollisionStarted edge for the thin pane we already crossed twice.
+    await game.input.set("right_hand.trigger", 0);
+    await game.step({ frames: 2 });
+    const freshPane = await byMissionId(
+      game,
+      "Window 2",
+      DROP_PANE_MISSION_ID,
+    );
+    await game.player.teleport({
+      x: freshPane.position[0] + 2,
+      y: freshPane.position[1] - 1.6,
+      z: freshPane.position[2] + 0.4,
+    });
+    await game.input.lookAtWorldPoint(freshPane.position);
+    await game.input.set("right_hand.position", [0, 1.6, 0]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.step({ frames: 5 });
+    const beforeFreshSwing =
+      (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 2 });
+    await sweepHeldWrenchAcrossXPane(game);
+    const freshSwingMessages = (await game.messages.recent()).messages.filter(
+      (message) => message.sequence > beforeFreshSwing,
+    );
+    assert.equal(
+      await paneStillExists(game, freshPane.id),
+      false,
+      `the next accepted swing should damage a fresh pane: ${JSON.stringify(freshSwingMessages)}`,
     );
   },
 );

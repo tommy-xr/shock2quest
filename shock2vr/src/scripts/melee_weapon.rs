@@ -8,6 +8,8 @@ use crate::{
     PresentationMode,
     mission::{GlobalPresentationMode, stim_response::contact_stim_damage},
     physics::PhysicsWorld,
+    player_melee,
+    time::Time,
     util::get_position_from_transform,
 };
 
@@ -29,28 +31,58 @@ impl MeleeWeapon {
 ///
 /// Dark opens melee collision only during an attack window. In VR the trigger
 /// edge is that production attack gesture: contacts before it, after release,
-/// and after dropping the weapon are harmless. A target can be damaged only
-/// once per pull even if the physical swing chatters across several contacts.
+/// after the authored window, and after dropping the weapon are harmless. A
+/// target can be damaged only once per swing even if the physical contact
+/// chatters across several frames.
 ///
 /// Physical contact is *never* the damage trigger outside VR - a flat swing is
 /// `WeaponScript`'s aimed short-range raycast, so bumping a wielded wrench into
 /// scenery must do nothing. The whole script is therefore inert in flat mode
 /// rather than guarding individual messages.
 pub struct TriggeredMeleeWeapon {
-    attack_active: bool,
+    attack_remaining: f32,
+    swing_cooldown_remaining: f32,
     hit_entities: HashSet<EntityId>,
 }
 
 impl TriggeredMeleeWeapon {
     pub fn new() -> Self {
         Self {
-            attack_active: false,
+            attack_remaining: 0.0,
+            swing_cooldown_remaining: 0.0,
             hit_entities: HashSet::new(),
         }
+    }
+
+    fn close_attack(&mut self) {
+        self.attack_remaining = 0.0;
+        self.hit_entities.clear();
     }
 }
 
 impl Script for TriggeredMeleeWeapon {
+    fn update(
+        &mut self,
+        _entity_id: EntityId,
+        world: &World,
+        _physics: &PhysicsWorld,
+        time: &Time,
+    ) -> Effect {
+        if !is_vr(world) {
+            return Effect::NoEffect;
+        }
+
+        let elapsed = time.elapsed.as_secs_f32();
+        self.swing_cooldown_remaining = (self.swing_cooldown_remaining - elapsed).max(0.0);
+        if self.attack_remaining > 0.0 {
+            self.attack_remaining = (self.attack_remaining - elapsed).max(0.0);
+            if self.attack_remaining == 0.0 {
+                self.hit_entities.clear();
+            }
+        }
+        Effect::NoEffect
+    }
+
     fn handle_message(
         &mut self,
         entity_id: EntityId,
@@ -64,17 +96,19 @@ impl Script for TriggeredMeleeWeapon {
 
         match msg {
             MessagePayload::TriggerPull => {
-                self.attack_active = true;
-                self.hit_entities.clear();
+                if self.swing_cooldown_remaining == 0.0 {
+                    self.attack_remaining = player_melee::CONTACT_WINDOW_SECONDS;
+                    self.swing_cooldown_remaining = player_melee::SWING_INTERVAL_SECONDS;
+                    self.hit_entities.clear();
+                }
                 Effect::NoEffect
             }
             MessagePayload::TriggerRelease | MessagePayload::Drop => {
-                self.attack_active = false;
-                self.hit_entities.clear();
+                self.close_attack();
                 Effect::NoEffect
             }
             MessagePayload::Collided { with }
-                if self.attack_active && self.hit_entities.insert(*with) =>
+                if self.attack_remaining > 0.0 && self.hit_entities.insert(*with) =>
             {
                 let Some(amount) = authored_contact_damage(world, entity_id, *with) else {
                     return Effect::NoEffect;
@@ -160,13 +194,13 @@ impl Script for MeleeWeapon {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, time::Duration};
 
     use dark::properties::{
         Link, Links, PropTemplateId, ReceptronEffect, ReceptronOptions, ToLink,
     };
 
-    use crate::mission::stim_response::GlobalContactStims;
+    use crate::{mission::stim_response::GlobalContactStims, time::Time};
 
     use super::*;
 
@@ -333,6 +367,18 @@ mod tests {
         )
     }
 
+    fn advance(script: &mut TriggeredMeleeWeapon, world: &World, seconds: f32) {
+        script.update(
+            EntityId::dead(),
+            world,
+            &PhysicsWorld::new(),
+            &Time {
+                elapsed: Duration::from_secs_f32(seconds),
+                total: Duration::from_secs_f32(seconds),
+            },
+        );
+    }
+
     #[test]
     fn authored_melee_contact_is_harmless_until_vr_trigger_pull() {
         let (world, weapon, target) = test_world(PresentationMode::Vr);
@@ -367,6 +413,74 @@ mod tests {
             collide(&mut script, &world, weapon, target),
             Effect::NoEffect
         ));
+    }
+
+    #[test]
+    fn a_held_vr_trigger_does_not_leave_melee_armed_forever() {
+        let (world, weapon, target) = test_world(PresentationMode::Vr);
+        let mut script = TriggeredMeleeWeapon::new();
+        script.handle_message(
+            weapon,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::TriggerPull,
+        );
+
+        // The authored player-melee impact window has ended well before this.
+        advance(&mut script, &world, 0.5);
+        assert!(matches!(
+            collide(&mut script, &world, weapon, target),
+            Effect::NoEffect
+        ));
+    }
+
+    #[test]
+    fn vr_melee_trigger_spam_waits_for_the_authored_swing_interval() {
+        let (world, weapon, target) = test_world(PresentationMode::Vr);
+        let mut script = TriggeredMeleeWeapon::new();
+
+        script.handle_message(
+            weapon,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::TriggerPull,
+        );
+        assert_damage(collide(&mut script, &world, weapon, target), target);
+        script.handle_message(
+            weapon,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::TriggerRelease,
+        );
+
+        // A fresh edge cannot create a second hit inside one authored swing.
+        script.handle_message(
+            weapon,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::TriggerPull,
+        );
+        assert!(matches!(
+            collide(&mut script, &world, weapon, target),
+            Effect::NoEffect
+        ));
+        script.handle_message(
+            weapon,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::TriggerRelease,
+        );
+
+        // Once the leftswing cadence has elapsed, another pull is a new swing
+        // and the same victim is eligible again.
+        advance(&mut script, &world, 1.1);
+        script.handle_message(
+            weapon,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::TriggerPull,
+        );
+        assert_damage(collide(&mut script, &world, weapon, target), target);
     }
 
     #[test]

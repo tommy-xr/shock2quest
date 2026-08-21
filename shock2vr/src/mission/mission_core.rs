@@ -713,11 +713,6 @@ mod endurance_upgrade_tests {
 /// First-person player-melee idle clip (motiondb ActorType 1, `+plyrmelee:0`),
 /// used to pose the flat melee viewmodel in its ready stance.
 const MELEE_IDLE_CLIP: &str = "ph212203";
-/// First-person player-melee swing clip (motiondb `+plyrmelee:2 +plyrmeleeswing`),
-/// played once on a melee attack then auto-returns to the idle. The shipped game
-/// always uses the medium-left swing.
-const MELEE_SWING_CLIP: &str = "leftswing";
-
 /// Velocity (world units/s) a radius blast adds per point of stim intensity to
 /// a dynamic body at its center (falling off linearly to zero at the radius).
 /// Tuned so a barrel blast (intensity 15) gives nearby props a solid toss.
@@ -6387,9 +6382,10 @@ impl MissionCore {
         if self.flat_melee_anim.is_some() {
             return;
         }
-        if let Some(clip) =
-            asset_cache.get_opt(&ANIMATION_CLIP_IMPORTER, &format!("{MELEE_SWING_CLIP}_.mc"))
-        {
+        if let Some(clip) = asset_cache.get_opt(
+            &ANIMATION_CLIP_IMPORTER,
+            &format!("{}_.mc", crate::player_melee::SWING_CLIP),
+        ) {
             let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip);
             self.flat_melee_anim = Some((entity_id, player));
         }

@@ -29,6 +29,7 @@ pub mod pathfinding;
 pub mod paths;
 pub mod pause_menu;
 mod physics;
+mod player_melee;
 pub mod player_stats;
 mod psi;
 pub mod quest_info;
