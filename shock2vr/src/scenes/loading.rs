@@ -24,13 +24,13 @@ use engine::{
 use shipyard::{EntityId, UniqueViewMut, World};
 
 use crate::{
-    GameOptions, PresentationMode,
+    GameOptions,
     game_scene::GameScene,
     input_context::InputContext,
     mission::GlobalContext,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    ui::{FrontendPanelAnchor, Rect, ScaleMode, UiCanvas, VR_COMPONENT_Z_STEP},
+    ui::{FrontendCanvasPresenter, FrontendPanelAnchor, Rect, ScaleMode, UiCanvas},
 };
 
 /// The loading art is authored on the original 640x480 `LOADING.PCX` canvas.
@@ -190,26 +190,10 @@ impl GameScene for LoadingScene {
         options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
-        // In flat presentation the screen is drawn in screen space in
-        // `render_per_eye` (which has the screen size); the 3D scene is empty.
-        if options.presentation_mode != PresentationMode::Vr {
-            return (Vec::new(), vec3(0.0, 0.0, 0.0), identity);
-        }
-
-        // In VR there is no screen to draw on, so the same canvas is presented
-        // on a world-space panel in front of the player - without which a level
-        // transition in the headset shows nothing at all (#1002). Nothing here
-        // is clickable, so there is no pointer.
         let panel = self.panel_anchor.panel();
-        let objects = self
-            .build_canvas_from_cache(asset_cache)
-            .render_world_space(
-                asset_cache,
-                panel.transform(),
-                None,
-                None,
-                VR_COMPONENT_Z_STEP,
-            );
+        let canvas = self.build_canvas_from_cache(asset_cache);
+        let objects = FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE)
+            .render_world_space(asset_cache, &canvas, &panel, None);
         (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
@@ -221,14 +205,12 @@ impl GameScene for LoadingScene {
         screen_size: Vector2<f32>,
         options: &GameOptions,
     ) -> Vec<SceneObject> {
-        // In VR the screen lives on the world-space panel drawn by `render`; a
-        // screen-space copy here would paste the whole canvas over both eyes
-        // and hide it.
-        if options.presentation_mode == PresentationMode::Vr {
-            return Vec::new();
-        }
-        self.build_canvas_from_cache(asset_cache)
-            .render_screen_space(asset_cache, screen_size, SCALE_MODE)
+        let canvas = self.build_canvas_from_cache(asset_cache);
+        FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE).render_screen_space(
+            asset_cache,
+            &canvas,
+            screen_size,
+        )
     }
 
     fn handle_effects(

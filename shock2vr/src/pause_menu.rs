@@ -32,11 +32,11 @@ use engine::{
 use shipyard::EntityId;
 
 use crate::{
-    GameOptions, PresentationMode,
+    GameOptions,
     input_context::InputContext,
     ui::{
-        FrontendMenu, FrontendMenuItem, HAlign, Rect, ScaleMode, UiCanvas, VAlign, WorldPanel,
-        dev_params_panel, frontend_panel_distance, hit_menu_item,
+        FrontendCanvasPresenter, FrontendMenu, FrontendMenuItem, HAlign, Rect, ScaleMode, UiCanvas,
+        VAlign, WorldPanel, dev_params_panel, frontend_panel_distance, hit_menu_item,
     },
 };
 
@@ -659,38 +659,44 @@ impl PauseMenu {
         options: &GameOptions,
         pawn_to_world: Matrix4<f32>,
     ) -> Vec<SceneObject> {
-        if !self.open || options.presentation_mode != PresentationMode::Vr {
+        if !self.open {
             return Vec::new();
         }
-        let panel = self.menu.panel();
-        let canvas = self.build_canvas(asset_cache, self.menu.pointer_canvas());
-        // First in the list, and therefore first in the overlay group: the
-        // comfort dim, which the depth clear below rides on.
-        let (dim_position, dim_forward) = dim_pose(self.head.0, self.head.1, &panel);
-        let mut objects = vec![world_dim_layer(
-            dim_position,
-            dim_forward,
-            dim_distance(dim_position, &panel),
-        )];
-        let canvas_objects = self.menu.render_world_space(asset_cache, canvas);
-        // The controllers and their aim rays, drawn from the same pass that
-        // resolved the highlight, so the beams can never promise a hover the
-        // menu will not give. The canvas objects already in hand are the layer
-        // stack the hit dot has to float clear of - the dim is not one of them,
-        // it hangs behind the panel rather than on it.
-        objects.extend(canvas_objects);
-        // Everything above was built in the tracked play space (where the head,
-        // the hands and therefore the panel anchor live). A frontend *scene*
-        // has no pawn, so it renders that space directly; the pause menu hangs
-        // over a mission whose pawn is wherever the player is standing, so it
-        // rebases every object into world coordinates here - once, at the
-        // boundary, rather than by anchoring the panel differently.
-        for object in &mut objects {
-            object.set_transform(pawn_to_world * object.get_transform());
-        }
-        // Game assigns this whole ordered stack to the system-overlay layer:
-        // dim first, then panel and rays, all over the world and scene UI.
-        objects
+        FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE).present_world_space(
+            || {
+                let panel = self.menu.panel();
+                let canvas = self.build_canvas(asset_cache, self.menu.pointer_canvas());
+                // First in the list, and therefore first in the overlay group: the
+                // comfort dim, which the depth clear below rides on.
+                let (dim_position, dim_forward) = dim_pose(self.head.0, self.head.1, &panel);
+                let mut objects = vec![world_dim_layer(
+                    dim_position,
+                    dim_forward,
+                    dim_distance(dim_position, &panel),
+                )];
+                let canvas_objects =
+                    self.menu
+                        .render_world_space(asset_cache, canvas, options.presentation_mode);
+                // The controllers and their aim rays, drawn from the same pass that
+                // resolved the highlight, so the beams can never promise a hover the
+                // menu will not give. The canvas objects already in hand are the layer
+                // stack the hit dot has to float clear of - the dim is not one of them,
+                // it hangs behind the panel rather than on it.
+                objects.extend(canvas_objects);
+                // Everything above was built in the tracked play space (where the head,
+                // the hands and therefore the panel anchor live). A frontend *scene*
+                // has no pawn, so it renders that space directly; the pause menu hangs
+                // over a mission whose pawn is wherever the player is standing, so it
+                // rebases every object into world coordinates here - once, at the
+                // boundary, rather than by anchoring the panel differently.
+                for object in &mut objects {
+                    object.set_transform(pawn_to_world * object.get_transform());
+                }
+                // Game assigns this whole ordered stack to the system-overlay layer:
+                // dim first, then panel and rays, all over the world and scene UI.
+                objects
+            },
+        )
     }
 
     /// Screen-space presentation. Empty when closed or in VR (where a
@@ -701,13 +707,21 @@ impl PauseMenu {
         screen_size: Vector2<f32>,
         options: &GameOptions,
     ) -> Vec<SceneObject> {
-        if !self.open || options.presentation_mode == PresentationMode::Vr {
+        if !self.open {
             return Vec::new();
         }
-        let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
-        let canvas = self.build_canvas(asset_cache, pointer_canvas);
-        self.menu
-            .render_screen_space(asset_cache, canvas, screen_size)
+        FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE).present_screen_space(
+            || {
+                let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
+                let canvas = self.build_canvas(asset_cache, pointer_canvas);
+                self.menu.render_screen_space(
+                    asset_cache,
+                    canvas,
+                    screen_size,
+                    options.presentation_mode,
+                )
+            },
+        )
     }
 
     fn rects(&self, asset_cache: &mut AssetCache) -> Vec<Rect> {

@@ -22,8 +22,8 @@ use crate::{
 };
 
 use super::{
-    FrontendPanelAnchor, FrontendPointerPass, PointerVisuals, Rect, ScaleMode, UiCanvas,
-    VR_COMPONENT_Z_STEP, WorldPanel, pointer_to_canvas, vr_frontend_pointer_pass,
+    FrontendCanvasPresenter, FrontendPanelAnchor, FrontendPointerPass, PointerVisuals, Rect,
+    ScaleMode, UiCanvas, WorldPanel, pointer_to_canvas, vr_frontend_pointer_pass,
 };
 
 use super::frontend_sfx::FrontendSfx;
@@ -310,24 +310,25 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
         &mut self,
         asset_cache: &mut AssetCache,
         canvas: UiCanvas,
+        presentation_mode: PresentationMode,
     ) -> Vec<SceneObject> {
         let panel = self.panel();
-        let mut objects = canvas.render_world_space(
+        FrontendCanvasPresenter::new(presentation_mode, self.scale_mode).render_world_space_with(
             asset_cache,
-            panel.transform(),
-            self.pointer_canvas,
-            None,
-            VR_COMPONENT_Z_STEP,
-        );
-        let panel_layers = objects.len();
-        objects.extend(self.vr_pointer_visuals.render(
-            asset_cache,
-            &self.vr_pointer,
-            self.canvas_size,
+            &canvas,
             &panel,
-            panel_layers,
-        ));
-        objects
+            self.pointer_canvas,
+            |asset_cache, objects| {
+                let panel_layers = objects.len();
+                objects.extend(self.vr_pointer_visuals.render(
+                    asset_cache,
+                    &self.vr_pointer,
+                    self.canvas_size,
+                    &panel,
+                    panel_layers,
+                ));
+            },
+        )
     }
 
     pub fn render_screen_space(
@@ -335,8 +336,13 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
         asset_cache: &mut AssetCache,
         canvas: UiCanvas,
         screen_size: Vector2<f32>,
+        presentation_mode: PresentationMode,
     ) -> Vec<SceneObject> {
-        canvas.render_screen_space(asset_cache, screen_size, self.scale_mode)
+        FrontendCanvasPresenter::new(presentation_mode, self.scale_mode).render_screen_space(
+            asset_cache,
+            &canvas,
+            screen_size,
+        )
     }
 
     pub fn pump_sfx(
@@ -366,6 +372,42 @@ impl<A: Copy + PartialEq> FrontendMenu<A> {
 mod tests {
     use super::*;
     use cgmath::vec2;
+
+    use crate::ui::{FrontendCanvasPresenter, VR_COMPONENT_Z_STEP};
+
+    #[test]
+    fn frontend_presenter_selects_one_target_and_keeps_geometry_policy() {
+        let flat = FrontendCanvasPresenter::new(PresentationMode::Flat, ScaleMode::PreserveAspect);
+        assert!(!flat.renders_world_space());
+        assert!(flat.renders_screen_space());
+        assert_eq!(flat.scale_mode(), ScaleMode::PreserveAspect);
+        assert_eq!(flat.component_z_step(), VR_COMPONENT_Z_STEP);
+
+        let vr = FrontendCanvasPresenter::new(PresentationMode::Vr, ScaleMode::PreserveAspect);
+        assert!(vr.renders_world_space());
+        assert!(!vr.renders_screen_space());
+        assert_eq!(vr.scale_mode(), ScaleMode::PreserveAspect);
+        assert_eq!(vr.component_z_step(), VR_COMPONENT_Z_STEP);
+    }
+
+    #[test]
+    fn original_frontend_scenes_do_not_own_presentation_mode_branches() {
+        let consumers = [
+            ("main menu", include_str!("../scenes/main_menu.rs")),
+            ("load game", include_str!("../scenes/load_game.rs")),
+            ("game over", include_str!("../scenes/game_over.rs")),
+            ("loading", include_str!("../scenes/loading.rs")),
+            ("no assets", include_str!("../scenes/no_assets.rs")),
+        ];
+
+        for (name, source) in consumers {
+            assert!(
+                !source.contains("options.presentation_mode != PresentationMode::Vr")
+                    && !source.contains("options.presentation_mode == PresentationMode::Vr"),
+                "{name} must delegate flat/VR presentation selection to FrontendCanvasPresenter"
+            );
+        }
+    }
 
     #[test]
     fn pointer_loss_does_not_rearm_a_held_press() {
