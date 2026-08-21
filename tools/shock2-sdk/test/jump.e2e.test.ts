@@ -210,6 +210,82 @@ test(
   },
 );
 
+// Issue #1085: Engineering's reverse route near Aux Storage 5 has a normal
+// one-foot riser on the upper floor and a disconnected floor about 30.4 SS2
+// feet below the same forward footprint. The old stacked-terrain fallback
+// compressed a crouched player and scripted them through the still-solid upper
+// floor. Setup teleport only stages the campaign-confirmed pre-jump pose; the
+// crossing itself is the exact production VR crouch/jump/locomotion sequence.
+test(
+  "crouched jump at Engineering reverse lip stays on the upper route",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "eng1.mis",
+      port: Number(process.env.SHOCK2_E2E_ENG1_REVERSE_LIP_PORT ?? 8143),
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 5 });
+
+    // Standing center over the authored y=-13.2 start floor. Crouching plants
+    // the feet and produces the campaign-observed center near y=-12.596.
+    await game.player.teleport({ x: 7.75, y: -11.956, z: -128.4 });
+    await game.step({ frames: 30 });
+    await game.input.set("crouch", 1);
+    await game.step({ frames: 5 });
+    const start = await game.player.position();
+
+    // The recorded route first makes an ordinary crouched jump onto the
+    // 0.4-world-unit upper lip. The second, otherwise identical jump is the one
+    // whose forward probe used to select the disconnected lower floor.
+    await game.input.lookAtWorldPoint([
+      start.x,
+      start.y + PLAYER_EYE_HEIGHT_WORLD,
+      start.z - 4,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await pulseJump(game);
+    await game.step({ frames: 7 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+    await game.step({ frames: 120 });
+    const upperLip = await game.player.position();
+    assert.ok(
+      upperLip.y > -12.3 && upperLip.z < -129.2,
+      `first jump must stage the authored upper lip (${JSON.stringify(start)} -> ${JSON.stringify(upperLip)})`,
+    );
+
+    await game.input.lookAtWorldPoint([
+      upperLip.x,
+      upperLip.y + PLAYER_EYE_HEIGHT_WORLD,
+      upperLip.z - 4,
+    ]);
+    await game.input.set("right_hand.thumbstick", [0, 1]);
+    await pulseJump(game);
+    await game.step({ frames: 7 });
+    await game.input.set("right_hand.thumbstick", [0, 0]);
+
+    let minimumCenterY = (await game.player.position()).y;
+    for (let frame = 0; frame < 300; frame += 1) {
+      await game.step({ frames: 1 });
+      minimumCenterY = Math.min(minimumCenterY, (await game.player.position()).y);
+    }
+    const settled = await game.player.position();
+    await game.step({ frames: 120 });
+    const supported = await game.player.position();
+
+    assert.ok(
+      minimumCenterY > -12.8 &&
+        settled.y > -12.8 &&
+        supported.y > -12.8 &&
+        Math.abs(supported.y - settled.y) < 0.05,
+      `ordinary jump must remain above Engineering's solid y=-12.8 upper floor ` +
+        `(${JSON.stringify(start)} -> ${JSON.stringify(upperLip)} -> ` +
+        `${JSON.stringify(settled)} -> ` +
+        `${JSON.stringify(supported)}, minimum center y=${minimumCenterY})`,
+    );
+  },
+);
+
 // Engineering campaign `engineering · none · legacy · seed 1378752978`
 // reached this authored route from a clean playthrough. The shipped walk graph
 // continues through the Cargo 2 crate stack, but the parented mission crates
