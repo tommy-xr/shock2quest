@@ -362,6 +362,9 @@ pub enum MessagePayload {
     TurnOff {
         from: EntityId,
     },
+    /// Complete a temporary scripted seat and restore the player's pre-seat
+    /// transform. Retail routes this to PlayerScript after `GotoSeat`.
+    StandUp,
     /// A security device has raised an alarm; the linked ecology switches to
     /// its alert-column population profile.
     Alarm {
