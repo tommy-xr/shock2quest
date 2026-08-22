@@ -1052,6 +1052,12 @@ impl Game {
                 // Log/email sender portraits + deck icons (the reader panel art).
                 ZipAssetPath::new(resource_path("res/book.crf")),
                 ZipAssetPath::new(resource_path("res/fam.crf")),
+                // The canonical font family. iface.crf also bundles a "fonts/"
+                // subfolder sharing most of these basenames (mostly identical,
+                // but its MAINFONT.FON/MAINAA.FON are stripped copies missing
+                // glyph data for '%' and '&' - a 1px-wide blank cell instead of
+                // the real bitmap), so this must be mounted first to win.
+                ZipAssetPath::new(resource_path("res/fonts.crf")),
                 // Also mounted under the "iface/" namespace: iface.crf shares seven
                 // basenames with the obj/bitmap mounts above (access/block/log/
                 // plant1/repair/stats.pcx + palette1.pal), and first-mount-wins
