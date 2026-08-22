@@ -21,26 +21,28 @@ use shipyard::{EntityId, UniqueViewMut, World};
 use crate::{
     GameOptions, PresentationMode,
     game_scene::GameScene,
-    input_context::{InputContext, Pointer2D},
+    input_context::InputContext,
     mission::GlobalContext,
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        FrontendPanelAnchor,
-        FrontendPointerPass,
-        FrontendSfx,
-        PointerVisuals,
+        FrontendMenu,
         Rect,
         ScaleMode,
         UiCanvas,
-        VR_COMPONENT_Z_STEP,
         dev_params_panel,
         // The archive-database frame: a header line, a dark pane the rows sit
         // in, and framed button art for "Done" - the geometry the panel is
         // laid out against, owned by the panel so both hosts share it.
         dev_params_panel::{BACKDROP_TEXTURE, DevParamsEvent, PanelRects},
-        pointer_to_canvas,
-        vr_frontend_pointer_pass,
+    },
+};
+
+#[cfg(test)]
+use crate::{
+    input_context::Pointer2D,
+    ui::{
+        resolve_click_at as shell_resolve_click_at, resolve_flat_click, vr_frontend_pointer_pass,
     },
 };
 
@@ -53,67 +55,40 @@ const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 /// Shared click core: both presentations reduce to "a point on the canvas plus
 /// a pressed flag", so the rising-edge rule lives here once. The hit regions
 /// themselves are the panel's ([`dev_params_panel::hit`]).
+#[cfg(test)]
 fn resolve_click_at(
     rects: PanelRects,
     point: Option<Vector2<f32>>,
     pressed: bool,
     last_pressed: bool,
 ) -> (Option<DevParamsEvent>, bool) {
-    if !pressed || last_pressed {
-        return (None, pressed);
-    }
-    (point.and_then(|p| dev_params_panel::hit(rects, p)), pressed)
+    shell_resolve_click_at(point, pressed, last_pressed, |point| {
+        dev_params_panel::hit(rects, point)
+    })
 }
 
 /// Pure click resolution for the flat pointer.
+#[cfg(test)]
 fn resolve_click(
     rects: PanelRects,
     pointer: Option<Pointer2D>,
     last_pressed: bool,
     screen_size: Vector2<f32>,
 ) -> (Option<DevParamsEvent>, bool, Option<Vector2<f32>>) {
-    match pointer {
-        Some(p) => {
-            let point = pointer_to_canvas(
-                vec2(CANVAS_W, CANVAS_H),
-                p.position,
-                screen_size,
-                SCALE_MODE,
-            );
-            let (event, pressed) = resolve_click_at(rects, point, p.pressed, last_pressed);
-            (event, pressed, point)
-        }
-        // A frame with no pointer at all carries `last_pressed` through rather
-        // than clearing it: clearing would re-arm the click edge under a
-        // still-held button, so a trigger held across scene entry (which is
-        // exactly why the scene starts with `last_pressed = true`) would fire
-        // the moment the pointer reappears. Same rule the pause overlay keeps.
-        None => (None, last_pressed, None),
-    }
+    resolve_flat_click(
+        pointer,
+        last_pressed,
+        screen_size,
+        vec2(CANVAS_W, CANVAS_H),
+        SCALE_MODE,
+        |point| dev_params_panel::hit(rects, point),
+    )
 }
 
 pub struct DeveloperScene {
     world: World,
     scene_name: String,
-    /// Pointer from the latest update, used for hover highlighting in render.
-    pointer: Option<Pointer2D>,
-    /// Where the VR controller ray last met the panel, in canvas pixels.
-    vr_pointer_canvas: Option<Vector2<f32>>,
-    /// The pointer pass that hit-tested this frame, kept so `render` draws the
-    /// beams and dot from the very rays `update` resolved the highlight from.
-    vr_pointer: FrontendPointerPass,
-    /// The drawn half of that pointer (hands, beams, dot).
-    vr_pointer_visuals: PointerVisuals,
-    /// Where the VR panel is anchored: placed from the head on scene entry
-    /// and world-locked after that.
-    panel_anchor: FrontendPanelAnchor,
-    /// Whether the pointer was pressed last frame (for rising-edge clicks).
-    last_pressed: bool,
-    /// Screen size from the latest render, so `update` can map the pointer
-    /// into canvas space consistently with how the canvas is drawn.
-    last_screen_size: Vector2<f32>,
-    /// The frontend's hum, rollover and select sounds.
-    sfx: FrontendSfx<DevParamsEvent>,
+    menu: FrontendMenu<DevParamsEvent>,
     /// The panel's widget rects, re-resolved from `GAMELODR.BIN` each update
     /// (the render path takes `&self`, so it reads the resolved value here).
     panel_rects: PanelRects,
@@ -124,18 +99,7 @@ impl DeveloperScene {
         Self {
             world: super::ui_scene_world(),
             scene_name: "developer".to_owned(),
-            pointer: None,
-            vr_pointer_canvas: None,
-            vr_pointer: FrontendPointerPass::default(),
-            vr_pointer_visuals: PointerVisuals::new(),
-            panel_anchor: FrontendPanelAnchor::new(),
-            // A press held across a scene swap must not read as a click here:
-            // every frontend screen sits on the same 640x480 canvas and their
-            // widgets overlap, so starting "already pressed" makes the next
-            // rising edge require a real release first.
-            last_pressed: true,
-            last_screen_size: vec2(CANVAS_W, CANVAS_H),
-            sfx: FrontendSfx::new(),
+            menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
             panel_rects: PanelRects::default(),
         }
     }
@@ -175,45 +139,13 @@ impl GameScene for DeveloperScene {
         self.panel_rects = dev_params_panel::rects(asset_cache);
         let rects = self.panel_rects;
 
-        // The panel is placed from the head on scene entry and world-locked
-        // after that; advancing it here keeps the ray and the render agreeing
-        // on where the screen is, in either presentation.
-        let panel = self.panel_anchor.update(
-            input_context.head.position,
-            input_context.head.rotation,
+        let event = self.menu.update(
             time.elapsed,
+            input_context,
+            game_options.presentation_mode,
+            |point| dev_params_panel::hit(rects, point),
+            |point| dev_params_panel::hit(rects, point),
         );
-
-        let (event, last_pressed, point) = if game_options.presentation_mode == PresentationMode::Vr
-        {
-            // VR has no 2D cursor: the pointer is where a controller ray
-            // meets the panel, and the trigger is the button.
-            self.vr_pointer =
-                vr_frontend_pointer_pass(input_context, vec2(CANVAS_W, CANVAS_H), &panel);
-            let (point, pressed) = (self.vr_pointer.point(), self.vr_pointer.pressed);
-            self.vr_pointer_canvas = point;
-            self.pointer = None;
-            let (event, last_pressed) = resolve_click_at(rects, point, pressed, self.last_pressed);
-            (event, last_pressed, point)
-        } else {
-            self.pointer = input_context.pointer;
-            self.vr_pointer = FrontendPointerPass::default();
-            resolve_click(
-                rects,
-                input_context.pointer,
-                self.last_pressed,
-                self.last_screen_size,
-            )
-        };
-        self.last_pressed = last_pressed;
-
-        // Hover and click feedback from the same hit test that resolves the
-        // click, so a sound plays exactly when a button lights up.
-        self.sfx
-            .hover(point.and_then(|p| dev_params_panel::hit(rects, p)));
-        if event.is_some() {
-            self.sfx.click();
-        }
 
         if let Some(event) = event {
             // Steps are applied to the registry here; "Done" returns to the
@@ -239,25 +171,8 @@ impl GameScene for DeveloperScene {
 
         // In VR there is no screen to draw on, so the same canvas is presented
         // on a world-space panel in front of the player.
-        let panel = self.panel_anchor.panel();
-        let canvas = self.build_canvas(self.vr_pointer_canvas);
-        let mut objects = canvas.render_world_space(
-            asset_cache,
-            panel.transform(),
-            self.vr_pointer_canvas,
-            None,
-            VR_COMPONENT_Z_STEP,
-        );
-        // The controllers and their aim rays, so the player can see where they
-        // are pointing before a button lights up.
-        let panel_layers = objects.len();
-        objects.extend(self.vr_pointer_visuals.render(
-            asset_cache,
-            &self.vr_pointer,
-            vec2(CANVAS_W, CANVAS_H),
-            &panel,
-            panel_layers,
-        ));
+        let canvas = self.build_canvas(self.menu.pointer_canvas());
+        let objects = self.menu.render_world_space(asset_cache, canvas);
         (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
@@ -269,23 +184,16 @@ impl GameScene for DeveloperScene {
         screen_size: Vector2<f32>,
         options: &GameOptions,
     ) -> Vec<SceneObject> {
-        self.last_screen_size = screen_size;
         // In VR the screen lives on a world-space panel drawn by `render`; a
         // screen-space copy here would paste the whole canvas over both eyes
         // and hide it.
         if options.presentation_mode == PresentationMode::Vr {
             return Vec::new();
         }
-        let pointer_canvas = self.pointer.and_then(|p| {
-            pointer_to_canvas(
-                vec2(CANVAS_W, CANVAS_H),
-                p.position,
-                screen_size,
-                SCALE_MODE,
-            )
-        });
+        let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
         let canvas = self.build_canvas(pointer_canvas);
-        canvas.render_screen_space(asset_cache, screen_size, SCALE_MODE)
+        self.menu
+            .render_screen_space(asset_cache, canvas, screen_size)
     }
 
     fn handle_effects(
@@ -296,7 +204,7 @@ impl GameScene for DeveloperScene {
         asset_cache: &mut AssetCache,
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Vec<GlobalEffect> {
-        self.sfx.pump(asset_cache, audio_context);
+        self.menu.pump_sfx(asset_cache, audio_context);
         effects
             .into_iter()
             .filter_map(|e| match e {
@@ -307,7 +215,7 @@ impl GameScene for DeveloperScene {
     }
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
-        self.sfx.stop(audio_context);
+        self.menu.stop_sfx(audio_context);
     }
 
     fn wants_pointer(&self) -> bool {
@@ -397,10 +305,19 @@ mod tests {
         let (event, _, _) = resolve_click(
             PanelRects::default(),
             pointer_at(first_increment_point(), true),
-            scene.last_pressed,
+            scene.menu.last_pressed(),
             SCREEN,
         );
         assert_eq!(event, None);
+    }
+
+    /// The frontend shell must own the cross-scene press latch. Keeping a
+    /// second latch on this host is exactly how otherwise-identical screens
+    /// drift when the shared pointer rules change.
+    #[test]
+    fn the_shared_frontend_shell_owns_the_entry_press_guard() {
+        let scene = DeveloperScene::new();
+        assert!(scene.menu.last_pressed());
     }
 
     /// A frame with no pointer must not re-arm the click edge: the scene is
@@ -411,9 +328,13 @@ mod tests {
     #[test]
     fn a_pointerless_frame_keeps_the_held_press_guard() {
         let scene = DeveloperScene::new();
-        assert!(scene.last_pressed);
-        let (event, last, point) =
-            resolve_click(PanelRects::default(), None, scene.last_pressed, SCREEN);
+        assert!(scene.menu.last_pressed());
+        let (event, last, point) = resolve_click(
+            PanelRects::default(),
+            None,
+            scene.menu.last_pressed(),
+            SCREEN,
+        );
         assert_eq!(event, None);
         assert_eq!(point, None);
         assert!(last, "a pointerless frame must carry the guard through");
