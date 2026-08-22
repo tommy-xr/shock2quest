@@ -1,7 +1,11 @@
 use std::io::{Read, Seek};
 use std::{path::PathBuf, rc::Rc};
 
+use cgmath::{Matrix4, Point3, SquareMatrix, Vector3, Vector4};
 use engine::assets::{asset_cache::AssetCache, asset_importer::AssetImporter};
+use engine::scene::{
+    MAX_SKINNED_JOINTS, SKINNING_PALETTE_SIZE, VertexPositionTextureSkinnedNormal,
+};
 use once_cell::sync::Lazy;
 
 use crate::{
@@ -11,7 +15,7 @@ use crate::{
     ss2_skeleton::Skeleton,
 };
 
-use crate::model::Model;
+use crate::{model::Model, motion::AnimationPlayer};
 
 use super::skeleton_importer::SKELETON_IMPORTER;
 
@@ -108,14 +112,177 @@ pub fn is_first_person_arm_material(name: &str) -> bool {
 /// strip kept the sleeve and deleted the gripping hand. Spare-hand stripping
 /// is deliberately dropped (a floating spare hand is the lesser evil); it can
 /// return if a reliable classifier turns up.
-pub struct VrHeldModel(pub Model);
+pub struct VrHeldModel {
+    pub model: Model,
+    weapon_geometry: Option<VrHeldWeaponGeometry>,
+}
+
+#[derive(Clone)]
+struct VrHeldWeaponGeometry {
+    vertices: Vec<VertexPositionTextureSkinnedNormal>,
+    skeleton: Rc<Skeleton>,
+    bind: Option<[Matrix4<f32>; MAX_SKINNED_JOINTS]>,
+}
+
+/// A cuboid fitted around the posed weapon-only geometry, expressed in the
+/// held entity's local frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VrHeldWeaponBounds {
+    pub size: Vector3<f32>,
+    pub center: Vector3<f32>,
+}
+
+impl VrHeldModel {
+    /// Fit a local AABB to the same skinned weapon vertices the renderer uses.
+    /// `local_transform` is the model-space correction applied by the wield,
+    /// so the result and rendered mesh stay in one coordinate system.
+    pub fn posed_weapon_bounds(
+        &self,
+        player: &AnimationPlayer,
+        local_transform: Matrix4<f32>,
+    ) -> Option<VrHeldWeaponBounds> {
+        let geometry = self.weapon_geometry.as_ref()?;
+        let pose = player.get_transforms(&geometry.skeleton);
+        let palette = match &geometry.bind {
+            None => Skeleton::expand_skinning_palette(&pose, &geometry.skeleton),
+            Some(bind) => {
+                let mut palette = [Matrix4::identity(); SKINNING_PALETTE_SIZE];
+                for joint in 0..MAX_SKINNED_JOINTS {
+                    let posed = pose[joint] * bind[joint];
+                    palette[joint] = posed;
+                    palette[MAX_SKINNED_JOINTS + joint] = posed;
+                }
+                palette
+            }
+        };
+
+        bounds_of_skinned_vertices(&geometry.vertices, &palette, local_transform)
+    }
+}
+
+fn is_melee_arm_material(name: &str) -> bool {
+    name.to_ascii_lowercase().contains("melee_arm")
+}
+
+fn rigid_terminal_joint_vertices(
+    vertices: impl IntoIterator<Item = VertexPositionTextureSkinnedNormal>,
+) -> Vec<VertexPositionTextureSkinnedNormal> {
+    let rigid = vertices
+        .into_iter()
+        .filter_map(|vertex| {
+            let mut bindings = vertex
+                .bone_indices
+                .into_iter()
+                .zip(vertex.bone_weights)
+                .filter(|(_, weight)| *weight > 0.0);
+            let (joint, _) = bindings.next()?;
+            (joint < MAX_SKINNED_JOINTS as u32 && bindings.next().is_none())
+                .then_some((joint, vertex))
+        })
+        .collect::<Vec<_>>();
+    let Some(terminal_joint) = rigid.iter().map(|(joint, _)| *joint).max() else {
+        return Vec::new();
+    };
+    rigid
+        .into_iter()
+        .filter_map(|(joint, vertex)| (joint == terminal_joint).then_some(vertex))
+        .collect()
+}
+
+fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometry> {
+    let SystemShockContentModel::Mesh(ai_mesh, skeleton, pmnm) = mesh else {
+        return None;
+    };
+
+    if let Some(pmnm) = pmnm {
+        let runs = pmnm.to_skinned_vertices();
+        let has_named_arm = runs
+            .iter()
+            .any(|(material, _)| is_melee_arm_material(material));
+        let vertices = if has_named_arm {
+            runs.iter()
+                .filter(|(material, _)| !is_melee_arm_material(material))
+                .flat_map(|(_, vertices)| vertices.iter().cloned())
+                .collect::<Vec<_>>()
+        } else {
+            rigid_terminal_joint_vertices(runs.into_iter().flat_map(|(_, vertices)| vertices))
+        };
+        if vertices.is_empty() {
+            return None;
+        }
+        return Some(VrHeldWeaponGeometry {
+            vertices,
+            skeleton: skeleton.clone(),
+            bind: Some(ss2_bin_ai_loader::pmnm_bind_matrices(skeleton)),
+        });
+    }
+
+    // The classic LGMM melee rigs combine hand and weapon under one material.
+    // Their weapon is the rigid geometry on the terminal rendered joint; this
+    // data-derived fallback includes the fist but excludes the forearm instead
+    // of assuming a model name or authored dimension.
+    let vertices = rigid_terminal_joint_vertices(
+        ss2_bin_ai_loader::to_vertices(ai_mesh, skeleton)
+            .0
+            .into_iter()
+            .flat_map(|(_, vertices)| vertices),
+    );
+    (!vertices.is_empty()).then_some(VrHeldWeaponGeometry {
+        vertices,
+        skeleton: skeleton.clone(),
+        bind: None,
+    })
+}
+
+fn bounds_of_skinned_vertices(
+    vertices: &[VertexPositionTextureSkinnedNormal],
+    palette: &[Matrix4<f32>; SKINNING_PALETTE_SIZE],
+    local_transform: Matrix4<f32>,
+) -> Option<VrHeldWeaponBounds> {
+    let mut min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut max = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+
+    for vertex in vertices {
+        let point = Vector4::new(vertex.position.x, vertex.position.y, vertex.position.z, 1.0);
+        let mut skinned = Vector4::new(0.0, 0.0, 0.0, 0.0);
+        let mut total_weight = 0.0;
+        for (joint, weight) in vertex.bone_indices.iter().zip(vertex.bone_weights) {
+            if weight > 0.0 {
+                let matrix = palette.get(*joint as usize)?;
+                skinned += matrix * point * weight;
+                total_weight += weight;
+            }
+        }
+        let skinned = if total_weight > 0.0 { skinned } else { point };
+        let local = local_transform * skinned;
+        let p = Point3::new(local.x, local.y, local.z);
+        if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
+            return None;
+        }
+        min.x = min.x.min(p.x);
+        min.y = min.y.min(p.y);
+        min.z = min.z.min(p.z);
+        max.x = max.x.max(p.x);
+        max.y = max.y.max(p.y);
+        max.z = max.z.max(p.z);
+    }
+
+    (min.x.is_finite() && max.x.is_finite()).then_some(VrHeldWeaponBounds {
+        size: max - min,
+        center: (min + max) * 0.5,
+    })
+}
 
 fn process_vr_held_model(
     mesh: SystemShockContentModel,
     asset_cache: &mut AssetCache,
     _config: &(),
 ) -> VrHeldModel {
-    VrHeldModel(process_model(mesh, asset_cache, &()))
+    let weapon_geometry = weapon_geometry(&mesh);
+    VrHeldModel {
+        model: process_model(mesh, asset_cache, &()),
+        weapon_geometry,
+    }
 }
 
 pub static VR_HELD_MODELS_IMPORTER: Lazy<AssetImporter<SystemShockContentModel, VrHeldModel, ()>> =
@@ -169,3 +336,58 @@ fn process_first_person_hands(
 pub static FIRST_PERSON_HANDS_IMPORTER: Lazy<
     AssetImporter<SystemShockContentModel, FirstPersonHands, ()>,
 > = Lazy::new(|| AssetImporter::define(load_model, process_first_person_hands));
+
+#[cfg(test)]
+mod tests {
+    use cgmath::{Matrix4, SquareMatrix, vec2, vec3};
+
+    use super::*;
+
+    fn vertex(
+        position: Vector3<f32>,
+        bone_indices: [u32; 4],
+        bone_weights: [f32; 4],
+    ) -> VertexPositionTextureSkinnedNormal {
+        VertexPositionTextureSkinnedNormal {
+            position,
+            uv: vec2(0.0, 0.0),
+            normal: vec3(0.0, 0.0, 1.0),
+            bone_indices,
+            bone_weights,
+        }
+    }
+
+    #[test]
+    fn classic_weapon_fallback_keeps_only_the_terminal_rigid_joint() {
+        let hand = vertex(vec3(0.0, 0.0, 0.0), [2, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]);
+        let weapon = vertex(vec3(0.0, 1.0, 0.0), [3, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]);
+        let stretchy = vertex(vec3(0.0, 0.5, 0.0), [3, 43, 0, 0], [0.5, 0.5, 0.0, 0.0]);
+
+        let fitted = rigid_terminal_joint_vertices([hand, weapon.clone(), stretchy]);
+
+        assert_eq!(fitted.len(), 1);
+        assert_eq!(fitted[0].position, weapon.position);
+    }
+
+    #[test]
+    fn posed_bounds_apply_skinning_and_the_renderers_local_correction() {
+        let vertices = [
+            vertex(vec3(-1.0, 0.0, -0.5), [0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]),
+            vertex(vec3(1.0, 2.0, 0.5), [0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]),
+        ];
+        let mut palette = [Matrix4::identity(); SKINNING_PALETTE_SIZE];
+        palette[0] = Matrix4::from_translation(vec3(0.0, 3.0, 0.0));
+        let correction = Matrix4::from_translation(vec3(2.0, -1.0, 4.0));
+
+        let bounds = bounds_of_skinned_vertices(&vertices, &palette, correction).unwrap();
+
+        assert_eq!(bounds.size, vec3(2.0, 2.0, 1.0));
+        assert_eq!(bounds.center, vec3(2.0, 3.0, 4.0));
+    }
+
+    #[test]
+    fn anniversary_melee_arm_material_is_not_weapon_geometry() {
+        assert!(is_melee_arm_material("ND-melee_arm.psd"));
+        assert!(!is_melee_arm_material("ND-wrench.psd"));
+    }
+}

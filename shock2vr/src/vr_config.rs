@@ -318,10 +318,9 @@ fn melee_wield_alignment(arm: MeleePosedArm) -> Quaternion<f32> {
 /// The wield stores it as `RuntimePropVrGripOffset`;
 /// `cargo run -p shock2vr --example melee_grip` prints it per model.
 ///
-/// Known limitation: the authored contact volume is a ~5 cm sphere, so this
-/// arms the weapon's *head* and nothing else along its length. Covering the
-/// whole blade needs a collider shaped like the weapon, which is a bigger
-/// change than putting the existing one in the right place.
+/// The rigid-body origin remains on this weapon joint. `Effect::ChangeModel`
+/// separately fits the body's collider around the rendered weapon vertices,
+/// including the handle/blade extending back from the joint.
 pub fn melee_contact_offset(arm: MeleePosedArm) -> Vector3<f32> {
     use cgmath::Rotation;
 

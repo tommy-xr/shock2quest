@@ -46,7 +46,9 @@ fn main() {
                 println!("  joint {i:2}: ({:8.4}, {:8.4}, {:8.4})", p.x, p.y, p.z);
             }
         }
-        let contact = shock2vr::melee_contact_offset(shock2vr::MeleePosedArm::from_joints(&joints));
+        let arm = shock2vr::MeleePosedArm::from_joints(&joints)
+            .expect("the shipped melee rigs have elbow, fist, and weapon joints");
+        let contact = shock2vr::melee_contact_offset(arm);
         println!(
             "  contact offset (hand-local): vec3({:.3}, {:.3}, {:.3})",
             contact.x, contact.y, contact.z

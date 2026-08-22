@@ -2641,6 +2641,41 @@ impl PhysicsWorld {
         self.set_collision_group(entity_id, CollisionGroup::held_melee());
     }
 
+    /// Replace a held melee body's inherited loose-pickup box with the local
+    /// bounds of the weapon geometry rendered in the hand.
+    ///
+    /// The rigid-body origin stays controller-driven at the authored weapon
+    /// joint; the collider's parent-relative center covers the rest of the
+    /// handle/blade without moving the rendered model or changing the future
+    /// spring-body architecture tracked in #1053.
+    pub fn fit_held_melee_cuboid(
+        &mut self,
+        entity_id: EntityId,
+        size: Vector3<f32>,
+        center: Vector3<f32>,
+    ) {
+        let size = sanitize_collider_size(entity_id, "fit_held_melee_cuboid", size);
+        let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
+            return;
+        };
+        let Some(body) = self.rigid_body_set.get(handle) else {
+            return;
+        };
+        if body.body_type() != RigidBodyType::KinematicPositionBased {
+            return;
+        }
+
+        let collider_handles = body.colliders().to_vec();
+        let shape = SharedShape::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0);
+        let center = vec_to_nvec(center);
+        for collider_handle in collider_handles {
+            if let Some(collider) = self.collider_set.get_mut(collider_handle) {
+                collider.set_shape(shape.clone());
+                collider.set_translation_wrt_parent(center);
+            }
+        }
+    }
+
     /// Resize every cuboid collider attached to a kinematic body. GUI panels
     /// use this when their authored pixel geometry changes while the proxy
     /// entity remains live.
@@ -5633,6 +5668,41 @@ mod tests {
         assert!(
             !collider.solver_groups().test(actor.solver),
             "held melee must not solve impulses against living actors"
+        );
+    }
+
+    /// A held melee body begins life as the loose pickup's model-bounds box.
+    /// Once the rendered first-person weapon has been posed, its fitted bounds
+    /// must replace both that oversized shape and its pickup-space center.
+    #[test]
+    fn held_melee_cuboid_fits_the_rendered_weapon_bounds() {
+        let mut world = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(2).unwrap();
+        let handle = world.add_dynamic(
+            weapon,
+            vec3(0.0, 0.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(1.83, 0.39, 0.20)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        world.set_held_melee(weapon);
+
+        let rendered_size = vec3(0.24, 1.02, 0.18);
+        let rendered_center = vec3(0.0, -0.51, 0.01);
+        world.fit_held_melee_cuboid(weapon, rendered_size, rendered_center);
+
+        assert_eq!(world.cuboid_full_size(handle), Some(rendered_size));
+        let collider = &world.collider_set[world.rigid_body_set[handle].colliders()[0]];
+        assert_eq!(
+            collider.position_wrt_parent().unwrap().translation.vector,
+            vec_to_nvec(rendered_center)
+        );
+        assert_eq!(
+            world.rigid_body_set[handle].body_type(),
+            RigidBodyType::KinematicPositionBased
         );
     }
 

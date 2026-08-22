@@ -147,7 +147,7 @@ async function measureHeldContactOffset(game: GameServer): Promise<void> {
 
 // This is the production play-through gesture: orient the physical right hand
 // along the eye-to-target ray, wind up two units away, pull the trigger, and
-// sweep the weapon's contact volume to 0.33 units. No damage/script message is
+// sweep the rendered weapon head into the target. No damage/script message is
 // injected by the test.
 async function poseWrench(
   game: GameServer,
@@ -167,8 +167,9 @@ async function poseWrench(
   // contact offset below, where a spurious roll turns "up out of the fist"
   // into "sideways" and the swing misses for reasons nothing in the test says.
   const worldQ = lookQuat(toward);
-  // `distance` is the contact volume's distance from the target, so back the
-  // hand off by wherever the grip puts that volume.
+  // `distance` is the rendered weapon head/body origin's distance from the
+  // target, so back the hand off by wherever the grip puts that origin. The
+  // fitted collider extends back along the visible handle/blade from there.
   const worldHand = sub(
     sub(target, scale(toward, distance)),
     qrotate(worldQ, heldContactOffset),
@@ -255,7 +256,7 @@ async function armedSweep(
   await game.step({ frames: 2 });
 
   const afterTeleport = await game.entities.detail(target.id);
-  const targetPoint =
+  let targetPoint =
     afterTeleport.aim_points?.find((point) => point.classification === "torso")
       ?.position ?? afterTeleport.position;
   await poseWrench(game, targetPoint, 4);
@@ -266,14 +267,18 @@ async function armedSweep(
     (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
   await game.input.set("right_hand.trigger", 1);
   await game.step({ frames: 2 });
-  await poseWrench(game, targetPoint, 0.33);
+  const current = await game.entities.detail(target.id);
+  targetPoint =
+    current.aim_points?.find((point) => point.classification === "torso")
+      ?.position ?? current.position;
+  await poseWrench(game, targetPoint, -0.1, 1);
+  await game.step({ frames: 2 });
   return { sequence, targetId: target.id, targetPoint };
 }
 
-// The #984 report/review's live-torso incremental approach, with one necessary
-// correction: the Wrench's full model bounds can already overlap the actor at
-// a 1.5-unit hand-origin pose. Arm from a measured-clear four-unit pose, then
-// reacquire the moving torso for every 1.5 -> 1.0 -> 0.7 -> 0.4 -> 0.2 step.
+// The #984 report/review's live-torso incremental approach. Arm from a
+// measured-clear four-unit pose, then reacquire the moving torso as the
+// rendered weapon head crosses it.
 async function reviewedIncrementalSweep(
   game: GameServer,
   target: EntitySummary,
@@ -298,7 +303,7 @@ async function reviewedIncrementalSweep(
     (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
   await game.input.set("right_hand.trigger", 1);
   await game.step({ frames: 2 });
-  for (const handDistance of [1.5, 1.0, 0.7, 0.4, 0.2]) {
+  for (const handDistance of [1.5, 1.0, 0.5, 0.15, -0.1]) {
     const current = await game.entities.detail(target.id);
     targetPoint =
       current.aim_points?.find((point) => point.classification === "torso")
