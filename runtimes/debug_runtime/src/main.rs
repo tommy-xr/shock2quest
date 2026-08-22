@@ -1456,6 +1456,7 @@ fn process_command(
                                 contains_ordinal: l.contains_ordinal,
                             })
                             .collect(),
+                        contained_by: detail.contained_by,
                         aim_points: detail
                             .aim_points
                             .into_iter()
