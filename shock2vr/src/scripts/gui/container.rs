@@ -344,18 +344,25 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             // Use-only contained objects (notably corpse audio logs) still
             // need their normal Frob behavior when clicked; they are consumed
             // or recorded in place rather than moved into the backpack.
+            // Grabbable `MOVE | SCRIPT` loot needs both authored halves: Frob
+            // runs its scripted acquisition side effect, then DropEntityInfo
+            // performs the engine-owned MOVE. The immediate transfer removes
+            // the panel button, so one press cannot enqueue either half twice.
             ContainerGuiMsg::Take(ent) => {
-                if !crate::virtual_hand::can_grab_item(world, *ent) {
-                    let is_use_only = world
-                        .borrow::<View<PropFrobInfo>>()
-                        .map(|frob| {
-                            frob.get(*ent).is_ok_and(|frob| {
-                                frob.world_action.contains(FrobFlag::SCRIPT)
-                                    || frob.inventory_action.contains(FrobFlag::SCRIPT)
-                            })
+                let (world_frob_is_scripted, inventory_frob_is_scripted) = world
+                    .borrow::<View<PropFrobInfo>>()
+                    .ok()
+                    .and_then(|frob| {
+                        frob.get(*ent).ok().map(|frob| {
+                            (
+                                frob.world_action.contains(FrobFlag::SCRIPT),
+                                frob.inventory_action.contains(FrobFlag::SCRIPT),
+                            )
                         })
-                        .unwrap_or(false);
-                    return if is_use_only {
+                    })
+                    .unwrap_or((false, false));
+                if !crate::virtual_hand::can_grab_item(world, *ent) {
+                    return if world_frob_is_scripted || inventory_frob_is_scripted {
                         (
                             state.clone(),
                             Effect::Send {
@@ -370,10 +377,10 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                     };
                 }
                 // PropKeySrc gets an `internal_keycard` script even when its
-                // retail frob metadata is just MOVE. Scripted loot must run
-                // that Frob before any generic transfer, or the physical card
-                // reaches the backpack without its unlock credential (#583).
-                if crate::virtual_hand::uses_scripted_world_frob(world, *ent) {
+                // retail frob metadata is just MOVE. It remains the sole owner
+                // of both credential acquisition and physical item fate; the
+                // generic transfer below would race its DestroyEntity (#583).
+                if crate::virtual_hand::is_key_source(world, *ent) {
                     return (
                         state.clone(),
                         Effect::Send {
@@ -389,13 +396,26 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                     .map(|player| player.inventory_entity_id)
                     .ok();
                 match inventory_entity {
-                    Some(inventory_entity) => (
-                        state.clone(),
-                        Effect::DropEntityInfo {
+                    Some(inventory_entity) => {
+                        let transfer = Effect::DropEntityInfo {
                             parent_entity_id: inventory_entity,
                             dropped_entity_id: *ent,
-                        },
-                    ),
+                        };
+                        let effect = if world_frob_is_scripted {
+                            Effect::combine(vec![
+                                Effect::Send {
+                                    msg: Message {
+                                        payload: MessagePayload::Frob,
+                                        to: *ent,
+                                    },
+                                },
+                                transfer,
+                            ])
+                        } else {
+                            transfer
+                        };
+                        (state.clone(), effect)
+                    }
                     None => (state.clone(), Effect::NoEffect),
                 }
             }
@@ -442,12 +462,12 @@ mod tests {
     /// A world with a loot container holding one iconed, grabbable item,
     /// plus the player-info unique the Take path resolves the backpack
     /// through.
-    fn loot_world() -> (World, EntityId, EntityId, EntityId) {
+    fn loot_world_with_action(world_action: FrobFlag) -> (World, EntityId, EntityId, EntityId) {
         let mut world = World::new();
         let item = world.add_entity((
             PropObjIcon("icn_psi".to_owned()),
             PropFrobInfo {
-                world_action: FrobFlag::MOVE,
+                world_action,
                 inventory_action: FrobFlag::empty(),
                 tool_action: FrobFlag::empty(),
             },
@@ -470,6 +490,10 @@ mod tests {
             inventory_entity_id: inventory,
         });
         (world, container, item, inventory)
+    }
+
+    fn loot_world() -> (World, EntityId, EntityId, EntityId) {
+        loot_world_with_action(FrobFlag::MOVE)
     }
 
     fn mark_as_keycard(world: &mut World, item: EntityId) {
@@ -617,6 +641,55 @@ mod tests {
                 } if entity_id == ordinary
             ),
             "ordinary MOVE loot must remain grabbable, got {effect:?}"
+        );
+    }
+
+    /// Ops2 Chip A (mission object 554) is authored `MOVE | SCRIPT`: one
+    /// trigger-click must run BaseButton's reward side effect and perform the
+    /// ordinary container-to-backpack transfer, with neither half duplicated.
+    #[test]
+    fn loot_container_click_frobs_and_takes_a_scripted_pickup_once() {
+        let (world, container, item, inventory) =
+            loot_world_with_action(FrobFlag::MOVE | FrobFlag::SCRIPT);
+        let gui = ContainerGui::loot_container();
+
+        let (_state, effect) = gui.handle_msg(
+            container,
+            &world,
+            &ContainerGuiState {},
+            &ContainerGuiMsg::Take(item),
+        );
+        let effects = Effect::flatten(vec![effect]);
+
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| matches!(
+                    effect,
+                    Effect::Send {
+                        msg: Message {
+                            to,
+                            payload: MessagePayload::Frob,
+                        },
+                    } if *to == item
+                ))
+                .count(),
+            1,
+            "taking MOVE | SCRIPT loot must run its authored Frob exactly once: {effects:?}"
+        );
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| matches!(
+                    effect,
+                    Effect::DropEntityInfo {
+                        parent_entity_id,
+                        dropped_entity_id,
+                    } if *parent_entity_id == inventory && *dropped_entity_id == item
+                ))
+                .count(),
+            1,
+            "taking MOVE | SCRIPT loot must transfer it exactly once: {effects:?}"
         );
     }
 
