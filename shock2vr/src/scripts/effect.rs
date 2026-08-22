@@ -343,6 +343,7 @@ pub enum Effect {
     /// shoved outward. Emitted once by `internal_explosion` from the entity's
     /// arSrcDesc data.
     RadiusBlast {
+        source_entity_id: EntityId,
         center: Vector3<f32>,
         radius: f32,
         intensity: f32,

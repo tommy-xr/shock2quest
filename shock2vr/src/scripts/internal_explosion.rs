@@ -81,6 +81,7 @@ impl Script for InternalExplosion {
         let center = point3_to_vec3(transform.0.transform_point(point3(0.0, 0.0, 0.0)));
 
         Effect::RadiusBlast {
+            source_entity_id: entity_id,
             center,
             radius,
             intensity,
