@@ -149,21 +149,25 @@ test(
     });
     await game.step({ frames: 5 });
     await game.input.set("head.look", [0, 0]);
-    await game.input.trigger("MoveInventory");
+    // The cyber-interface use mode presents the same strip canvas in VR
+    // (the old MoveInventory world-quad backpack is gone).
+    await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
 
     const ui = await game.ui.state();
-    assert.ok(ui.active_panel, "MoveInventory opens the physical backpack panel");
+    assert.ok(ui.strip, "use mode binds the backpack strip in VR too");
     assert.equal(
-      ui.active_panel.elements.filter(isBlock).length,
+      ui.strip.elements.filter(isBlock).length,
       15,
       "VR consumes the same five blocked columns x three rows",
     );
-    const blockRects = ui.active_panel.elements.filter(isBlock).map((element) => element.rect);
-    assert.deepEqual(blockRects[0], [354, 17, 34, 32]);
+    // Strip rects are reported on the shared 640x480 canvas: the strip docks
+    // at (2, 0), so panel-local coordinates shift right by 2.
+    const blockRects = ui.strip.elements.filter(isBlock).map((element) => element.rect);
+    assert.deepEqual(blockRects[0], [356, 17, 34, 32]);
     const last = blockRects.at(-1);
     assert.ok(last);
-    assert.ok(Math.abs(last[0] - 494) < 0.001, `last block x: ${last[0]}`);
+    assert.ok(Math.abs(last[0] - 496) < 0.001, `last block x: ${last[0]}`);
     assert.deepEqual(last.slice(1), [85, 34, 32]);
   },
 );

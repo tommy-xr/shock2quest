@@ -179,21 +179,17 @@ test(
     await game.step({ frames: 5 });
     await assertAmanpourReader(game);
 
-    // PR #967's X/backpack affordance stays independent of Y. It replaces the
-    // reader through the same one-panel lifecycle and toggles away cleanly.
-    await game.input.trigger("MoveInventory");
+    // Left-X (now the cyber-interface use-mode toggle - the world-quad
+    // backpack it used to open is gone) stays independent of Y: it brings up
+    // the use-mode strip without disturbing the reader lifecycle, and
+    // toggles away cleanly.
+    await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
-    const backpack = (await game.ui.state()).active_panel;
-    assert.ok(backpack, "Quest X must still open the real backpack panel");
-    assert.ok(
-      backpack.elements.some(
-        (element) => element.kind === "image" && element.texture?.toLowerCase() === "invback.pcx",
-      ),
-      "Quest X must show the authored INVBACK canvas",
-    );
-    assert.equal((await uiBodies(game)).length, 1, "backpack replaces reader without overlap");
-    await game.input.trigger("MoveInventory");
+    const ui = await game.ui.state();
+    assert.equal(ui.mode, "use", "Quest X must open the cyber interface");
+    assert.ok(ui.strip, "the cyber interface must bind the inventory strip");
+    await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
-    assert.equal((await uiBodies(game)).length, 0);
+    assert.equal((await game.ui.state()).mode, "shooter");
   },
 );
