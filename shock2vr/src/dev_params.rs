@@ -105,8 +105,10 @@ dev_params! {
     /// Live override for the flat runtimes' projection FOV, in degrees. `0`
     /// (the default) means "no override - use `Game::desired_fov_deg()`";
     /// any positive value forces that FOV instead, for verifying the
-    /// game-driven FOV seam (issue #1088) without a rebuild. VR is
-    /// untouched: OpenXR view FOVs must be used as-is.
+    /// game-driven FOV seam (issue #1088) without a rebuild. `oculus_runtime`
+    /// is untouched: OpenXR view FOVs must be used as-is. (`debug_runtime`
+    /// shares its single flat projection between flat and `--vr` mode, so this
+    /// override reaches both there.)
     FOV_OVERRIDE_DEG = float("fov_override_deg", "FOV override (deg)", 0.0, 0.0, 120.0, 1.0),
 }
 

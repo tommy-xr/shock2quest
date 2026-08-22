@@ -94,8 +94,21 @@ pub const PLAYER_CROUCH_EYE_HEIGHT: f32 = 1.2;
 /// matrix. `Game::desired_fov_deg` starts here and can be driven game-side
 /// (see `Game::set_desired_fov_deg`) - the planned first consumer is a
 /// "cyber interface" mode that pulls the FOV in while its overlay is up.
-/// VR is untouched: OpenXR view FOVs must be used as-is.
+/// `oculus_runtime` is untouched: OpenXR view FOVs must be used as-is.
 pub const DEFAULT_FOV_DEG: f32 = 45.0;
+
+/// Resolves `base` against `dev_params::FOV_OVERRIDE_DEG`: `0` (its default)
+/// means "no override - use `base`"; any positive value forces that FOV
+/// instead. Shared by `Game::desired_fov_deg` and the `App::MissingAssets`
+/// fallback so the override rule lives in exactly one place.
+fn resolve_fov_deg(base: f32) -> f32 {
+    let override_deg = dev_params::get(dev_params::FOV_OVERRIDE_DEG);
+    if override_deg > 0.0 {
+        override_deg
+    } else {
+        base
+    }
+}
 
 /// Real-world meters per world unit: 1 world unit is `dark::SCALE_FACTOR`
 /// (2.5) SS2 feet, and an SS2 foot is a real foot (0.3048 m). VR runtimes
@@ -469,7 +482,11 @@ pub struct Game {
     /// the host knows that (a Quest eye is roughly twice a 45-degree flat
     /// screen, and much closer to square). Carried a frame, because `render`
     /// runs before `render_per_eye` and the projection does not change between
-    /// them.
+    /// them - true whenever `desired_fov_deg` is held steady, but a caller
+    /// that changes it every frame (a hypothetical unsmoothed FOV animation)
+    /// would see the rim sized one frame stale. Not a concern for the
+    /// dev-param override (a one-off manual poke) or the planned
+    /// cyber-interface consumer (a single step, not a per-frame tween).
     view_extents: (f32, f32),
 
     /// Per-frame desired FOV (vertical, degrees) for the flat runtimes'
@@ -1817,20 +1834,21 @@ impl Game {
     /// VR is explicitly out of scope: OpenXR view FOVs must be used as-is, so
     /// `oculus_runtime` does not read this.
     pub fn desired_fov_deg(&self) -> f32 {
-        let override_deg = dev_params::get(dev_params::FOV_OVERRIDE_DEG);
-        if override_deg > 0.0 {
-            override_deg
-        } else {
-            self.desired_fov_deg
-        }
+        resolve_fov_deg(self.desired_fov_deg)
     }
 
     /// Internal seam for gameplay/UI code to drive [`Game::desired_fov_deg`].
     /// Not called anywhere yet - the first consumer is the planned
     /// cyber-interface mode. Smoothing/easing is the caller's responsibility.
+    /// Rejects non-finite or out-of-range degrees (valid input to
+    /// `cgmath::perspective` is strictly between 0 and 180) by leaving the
+    /// current value unchanged, so a bad caller can't poison the flat
+    /// runtimes' projection into a panic.
     #[allow(dead_code)]
     pub(crate) fn set_desired_fov_deg(&mut self, fov_deg: f32) {
-        self.desired_fov_deg = fov_deg;
+        if fov_deg.is_finite() && fov_deg > 0.0 && fov_deg < 180.0 {
+            self.desired_fov_deg = fov_deg;
+        }
     }
 
     /// Height (world units) of the player collider's center above the surface
@@ -2224,14 +2242,7 @@ impl App {
     pub fn desired_fov_deg(&self) -> f32 {
         match self {
             App::Ready(game) => game.desired_fov_deg(),
-            App::MissingAssets(_) => {
-                let override_deg = dev_params::get(dev_params::FOV_OVERRIDE_DEG);
-                if override_deg > 0.0 {
-                    override_deg
-                } else {
-                    DEFAULT_FOV_DEG
-                }
-            }
+            App::MissingAssets(_) => resolve_fov_deg(DEFAULT_FOV_DEG),
         }
     }
 
