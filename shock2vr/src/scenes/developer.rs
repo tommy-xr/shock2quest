@@ -172,7 +172,9 @@ impl GameScene for DeveloperScene {
         // In VR there is no screen to draw on, so the same canvas is presented
         // on a world-space panel in front of the player.
         let canvas = self.build_canvas(self.menu.pointer_canvas());
-        let objects = self.menu.render_world_space(asset_cache, canvas);
+        let objects = self
+            .menu
+            .render_world_space(asset_cache, canvas, options.presentation_mode);
         (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
@@ -193,7 +195,7 @@ impl GameScene for DeveloperScene {
         let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
         let canvas = self.build_canvas(pointer_canvas);
         self.menu
-            .render_screen_space(asset_cache, canvas, screen_size)
+            .render_screen_space(asset_cache, canvas, screen_size, options.presentation_mode)
     }
 
     fn handle_effects(
