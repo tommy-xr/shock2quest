@@ -45,7 +45,7 @@ impl Script for InternalCollisionType {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::Collided { with } => {
+            MessagePayload::Collided { with, .. } => {
                 // Only impact-payload entities (projectiles / fragile props
                 // flagged to slay or destroy themselves on contact) deal
                 // collision damage. A plain BOUNCE creature must not: any two

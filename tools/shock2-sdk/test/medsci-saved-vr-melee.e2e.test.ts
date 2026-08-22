@@ -6,6 +6,7 @@ import type {
   EntityDetailResult,
   EntitySummary,
   PhysicsBodySummary,
+  TracedMessage,
   Vec3,
 } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
@@ -230,13 +231,13 @@ async function damageMessagesSince(
   game: GameServer,
   sequence: number,
   targetId: number,
-): Promise<number> {
+): Promise<TracedMessage[]> {
   return (await game.messages.recent()).messages.filter(
     (message) =>
       message.sequence > sequence &&
       message.to.entity_id === targetId &&
       message.payload === "Damage",
-  ).length;
+  );
 }
 
 async function armedSweep(
@@ -429,7 +430,7 @@ async function assertNineDamagePull(
 
   const { sequence, targetId, targetPoint } = await armedSweep(game, target);
   assert.equal(
-    await damageMessagesSince(game, sequence, targetId),
+    (await damageMessagesSince(game, sequence, targetId)).length,
     1,
     `one pull must emit exactly one Damage to ${name}`,
   );
@@ -454,7 +455,7 @@ async function killShotgunWithThreeBoundedPulls(
       target,
     );
     assert.equal(
-      await damageMessagesSince(game, sequence, targetId),
+      (await damageMessagesSince(game, sequence, targetId)).length,
       1,
       `shotgun pull ${hit + 1} must emit exactly one Damage`,
     );
@@ -550,7 +551,7 @@ test(
       const fresh = await byMissionId(control, "Blue Monkey", MONKEY);
       const { sequence, targetId } = await armedSweep(control, fresh);
       assert.equal(
-        await damageMessagesSince(control, sequence, targetId),
+        (await damageMessagesSince(control, sequence, targetId)).length,
         1,
         "fresh Wrench should emit one Damage message",
       );
@@ -628,7 +629,10 @@ test(
 
     const pane = await byMissionId(game, "Window 2", BREAKABLE_PANE);
     const { sequence, targetId, targetPoint } = await armedSweep(game, pane);
-    assert.equal(await damageMessagesSince(game, sequence, targetId), 1);
+    assert.equal(
+      (await damageMessagesSince(game, sequence, targetId)).length,
+      1,
+    );
     assert.equal(
       (
         await game.entities.list({ filter: "Window 2", limit: 30 })
@@ -658,6 +662,76 @@ test(
         Number.isFinite,
       ),
       `dropped Wrench physics must remain finite: ${JSON.stringify(droppedSettled)}`,
+    );
+  },
+);
+
+test(
+  "a lethal VR Wrench contact seeds the death ragdoll along the physical swing",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort + 2,
+      repoRoot: process.env.SHOCK2_E2E_REPO_ROOT,
+      debugFlags: ["--vr"],
+      experimental: ["ragdoll"],
+      echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
+    });
+
+    const wrench = await game.player.spawnItem(WRENCH_ARCHETYPE);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.input.trigger("EquipWrench");
+    await game.step({ frames: 3 });
+    assert.equal((await game.info()).player.right_hand_entity_id, wrench.entity_id);
+    await measureHeldContactOffset(game);
+
+    const beforeSpawn = await game.entities.list({ filter: "OG-Pipe", limit: 50 });
+    const known = new Set(beforeSpawn.entities.map((entity) => entity.id));
+    await game.input.trigger("SpawnDebugMonster");
+    await game.step({ frames: 30 });
+    const monster = (
+      await game.entities.list({ filter: "OG-Pipe", limit: 50 })
+    ).entities.find((entity) => !known.has(entity.id));
+    assert.ok(monster, "expected a newly spawned OG-Pipe");
+    assert.equal(hitPoints(await game.entities.detail(monster.id)), 12);
+
+    // Leave exactly one authored 9-point Wrench contact as the killing blow.
+    // The setup damage is deliberately directionless and non-lethal.
+    await game.entities.sendMessage(monster.id, { type: "Damage", amount: 3 });
+    await game.step({ frames: 2 });
+    assert.equal(hitPoints(await game.entities.detail(monster.id)), 9);
+
+    const { sequence, targetId } = await reviewedIncrementalSweep(
+      game,
+      monster,
+    );
+    const lethalMessages = await damageMessagesSince(game, sequence, targetId);
+    assert.equal(
+      lethalMessages.length,
+      1,
+      "the lethal pull must be a real Wrench contact",
+    );
+    const impact = lethalMessages[0].impact;
+    assert.ok(impact, "the physical Wrench contact must carry DamageImpact");
+    assert.ok(
+      Math.abs(dot(impact.direction, impact.direction) - 1) < 1e-4,
+      `the contact direction must be unit length: ${JSON.stringify(impact.direction)}`,
+    );
+    let ragdolls = (await game.physics.ragdolls()).ragdolls;
+    for (let frame = 0; frame < 120 && ragdolls.length === 0; frame++) {
+      await game.step({ frames: 1 });
+      ragdolls = (await game.physics.ragdolls()).ragdolls;
+    }
+    assert.equal(ragdolls.length, 1, "the contact kill should hand off to one ragdoll");
+    await game.step({ frames: 3 });
+    const bodies = await game.physics.bodies({ entityId: ragdolls[0].entity_id });
+    const maxAlongImpact = Math.max(
+      ...bodies.bodies.map((body) => dot(body.velocity, impact.direction)),
+    );
+    assert.ok(
+      maxAlongImpact > 1,
+      `a struck limb should move along DamageImpact, max projection=${maxAlongImpact}`,
     );
   },
 );

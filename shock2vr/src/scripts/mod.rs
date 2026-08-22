@@ -197,8 +197,7 @@ use self::{
 
 /// World-space description of the blow behind a `Damage` message, for physics
 /// reactions (ragdoll seeding). None when the source has no meaningful
-/// direction (scripted damage, collisions; radius blasts shove bodies
-/// directly).
+/// direction (scripted damage; radius blasts shove bodies directly).
 #[derive(Clone, Copy, Debug)]
 pub struct DamageImpact {
     /// Unit direction the blow traveled (attacker toward victim).
@@ -229,6 +228,10 @@ pub enum MessagePayload {
     },
     Collided {
         with: EntityId,
+        /// Exact physical contact geometry when this came from Rapier. The
+        /// normal points from the message receiver toward `with`; synthetic
+        /// script collisions have no contact.
+        contact: Option<crate::physics::CollisionContact>,
     },
 
     // Animation event
@@ -615,7 +618,7 @@ impl Script for UnimplementedScript {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::Collided { with } => {
+            MessagePayload::Collided { with, .. } => {
                 info!("ignoring collision with {:?}", *with);
                 Effect::NoEffect
             }

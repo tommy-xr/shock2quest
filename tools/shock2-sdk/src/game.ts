@@ -691,7 +691,8 @@ export class MessagesApi {
   /**
    * The most recently delivered script messages (oldest first). High-frequency
    * payloads (hover, sensor intersect, collision) are filtered out so the
-   * buffer holds useful event history.
+   * buffer holds useful event history. Damage entries include their physical
+   * impact direction/point when the source supplied them.
    */
   async recent(): Promise<RecentMessagesResult> {
     return this.client.get<RecentMessagesResult>("/v1/messages/recent");

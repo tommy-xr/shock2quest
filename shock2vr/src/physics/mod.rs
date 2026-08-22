@@ -2159,7 +2159,17 @@ pub enum CollisionEvent {
     CollisionStarted {
         entity1_id: EntityId,
         entity2_id: EntityId,
+        contact: Option<CollisionContact>,
     },
+}
+
+/// World-space geometry for a newly-started physical contact.
+#[derive(Clone, Copy, Debug)]
+pub struct CollisionContact {
+    /// Midpoint between the two touching surfaces.
+    pub point: Vector3<f32>,
+    /// Unit normal pointing from `entity1_id` toward `entity2_id`.
+    pub normal: Vector3<f32>,
 }
 
 /// Predicate selecting *only* sensor colliders - the volumes the player's
@@ -5769,10 +5779,39 @@ mod tests {
                 CollisionEvent::CollisionStarted {
                     entity1_id,
                     entity2_id,
+                    ..
                 } if (*entity1_id == weapon && *entity2_id == actor)
                     || (*entity1_id == actor && *entity2_id == weapon)
             )),
             "held melee must keep reporting authentic actor contact"
+        );
+        let weapon_contact = events.iter().find_map(|event| match event {
+            CollisionEvent::CollisionStarted {
+                entity1_id,
+                entity2_id,
+                contact: Some(contact),
+            } if *entity1_id == weapon && *entity2_id == actor => Some(*contact),
+            CollisionEvent::CollisionStarted {
+                entity1_id,
+                entity2_id,
+                contact: Some(contact),
+            } if *entity1_id == actor && *entity2_id == weapon => Some(CollisionContact {
+                point: contact.point,
+                normal: -contact.normal,
+            }),
+            _ => None,
+        });
+        let weapon_contact = weapon_contact.expect("actor contact should carry its manifold");
+        assert!(
+            weapon_contact.point.x.is_finite()
+                && weapon_contact.point.y.is_finite()
+                && weapon_contact.point.z.is_finite(),
+            "contact point should be finite: {weapon_contact:?}"
+        );
+        assert!(
+            (weapon_contact.normal.magnitude() - 1.0).abs() < 1.0e-4
+                && weapon_contact.normal.x > 0.5,
+            "contact normal should point from the left-side weapon toward the actor: {weapon_contact:?}"
         );
         let actor_velocity = world.get_velocity(actor).unwrap();
         let actor_position = world.get_position(actor_handle).unwrap();

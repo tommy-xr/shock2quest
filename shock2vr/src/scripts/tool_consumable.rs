@@ -20,7 +20,7 @@ impl Script for ToolConsumable {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::Collided { with } => Effect::Send {
+            MessagePayload::Collided { with, .. } => Effect::Send {
                 msg: Message {
                     to: *with,
                     payload: MessagePayload::ProvideForConsumption { entity: entity_id },

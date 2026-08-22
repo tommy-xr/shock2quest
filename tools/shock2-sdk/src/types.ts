@@ -775,6 +775,16 @@ export interface TracedMessageEntity {
   template_id: number | null;
 }
 
+/** Physical context carried by a Damage message, when known. */
+export interface TracedDamageImpact {
+  /** Unit direction the blow traveled, attacker toward victim. */
+  direction: Vec3;
+  /** World-space hit point. */
+  point: Vec3;
+  /** Skeleton joint id when damage was forwarded through a creature hitbox. */
+  bone: number | null;
+}
+
 /** One delivered script message (GET /v1/messages/recent). */
 export interface TracedMessage {
   /** Monotonically increasing id - diff against a snapshot to find new ones. */
@@ -786,6 +796,8 @@ export interface TracedMessage {
   to: TracedMessageEntity;
   /** Payload variant name (e.g. "TurnOn", "Frob"). */
   payload: string;
+  /** Physical context for Damage, null for directionless/other messages. */
+  impact: TracedDamageImpact | null;
   /** Sender, for payloads that carry one (TurnOn/TurnOff/Alarm/Reset). */
   from: TracedMessageEntity | null;
 }
