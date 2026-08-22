@@ -839,6 +839,14 @@ fn move_live_entity_into_container_at_slot(
     dropped_entity_id: EntityId,
     requested_slot: Option<u32>,
 ) -> bool {
+    // A container must never contain itself. An attached GUI proxy can forward
+    // a held-item offer back to that same item's GuiScript, so reject the
+    // identity case before removing prior links or clearing HasRefs. This
+    // leaves the hand's preceding physical drop intact.
+    if container_entity_id == dropped_entity_id {
+        return false;
+    }
+
     let is_alive = world
         .borrow::<EntitiesView>()
         .is_ok_and(|entities| entities.is_alive(dropped_entity_id));
@@ -1098,6 +1106,36 @@ mod released_item_world_refs_tests {
                 .unwrap(),
             item,
         ));
+    }
+
+    /// A held item may be offered through an attached GUI proxy that resolves
+    /// back to the item itself. The hand has already restored the physical
+    /// world drop before that offer is applied, so rejecting self-containment
+    /// must preserve those world refs and create no `Contains` cycle.
+    #[test]
+    fn self_container_transfer_is_rejected_after_world_drop() {
+        let mut world = World::new();
+        let item = world.add_entity((PropHasRefs(false), Links::empty()));
+
+        assert!(restore_live_entity_world_refs(&mut world, item));
+        assert!(!move_live_entity_into_container(&mut world, item, item));
+
+        assert!(
+            world
+                .borrow::<View<PropHasRefs>>()
+                .unwrap()
+                .get(item)
+                .unwrap()
+                .0,
+            "the preceding physical world drop must remain referenced"
+        );
+        assert!(
+            !contains(
+                world.borrow::<View<Links>>().unwrap().get(item).unwrap(),
+                item,
+            ),
+            "a rejected self-offer must not create a self-Contains link"
+        );
     }
 
     #[test]
