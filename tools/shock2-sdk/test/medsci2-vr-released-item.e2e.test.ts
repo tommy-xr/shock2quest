@@ -200,6 +200,25 @@ test(
     assert.equal((await game.info()).player.right_hand_entity_id, item.id);
     await assertNoContains(game, item.id);
 
+    // Walk clear of the desk before dropping: its panel auto-closes on
+    // distance (the original's per-overlay `distance`), and a release within
+    // the desk's give range would put the item straight back into the
+    // container. The spot is open floor, so the drop is selectable.
+    await teleportVerified(game, {
+      x: desk.position[0] + 5.0,
+      y: desk.position[1] + 0.5,
+      z: desk.position[2] - 5.0,
+    });
+    await game.step({ frames: 10 });
+    assert.equal(
+      (await game.physics.bodies()).bodies.some((body) =>
+        body.collision_groups.includes("ui"),
+      ),
+      false,
+      "walking away must close the desk panel while squeeze keeps the item held",
+    );
+    assert.equal((await game.info()).player.right_hand_entity_id, item.id);
+
     // First release works on the parent and supplies a real world body.
     await game.input.set("right_hand.squeeze", 0);
     await game.step({ frames: 5 });
