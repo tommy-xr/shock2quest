@@ -630,6 +630,16 @@ The project supports experimental flags for gating in-progress features during d
   default is the only reachable setting without a rebuild. Tell-tale log line:
   `high-detail (PMNM) meshes: true|false`.
 
+- **`ambient_meters`**: prototype VR ambient-meter model (flat HUD untouched).
+  The ammo readout moves onto the wielded weapon - a small AMMOFULL panel
+  anchored to the weapon's live transform, facing the shooter - and the
+  right-forearm ammo panel is retired while the flag is on. The left-forearm
+  health panel stays but renders only when the wrist is glanced at (panel
+  normal vs eye vector, with hysteresis; untracked poses hide it). Layout and
+  tuning knobs (weapon-local offset/tilt/size, glance thresholds) live in
+  `shock2vr/src/hud/ambient_meters.rs`. Without the flag, both forearm panels
+  render exactly as before.
+
 #### Adding New Experimental Features
 
 1. **Gate the feature in code**:
