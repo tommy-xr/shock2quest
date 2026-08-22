@@ -35,10 +35,13 @@ impl DesktopInputMapper {
                 modifier: Modifier::None,
                 action: InputAction::PathfindingTestCycle,
             },
+            // I toggles use mode like Tab: the key kept its inventory
+            // meaning when the world-quad backpack (MoveInventory) was
+            // replaced by the use-mode toggle.
             Binding {
                 key: Key::I,
                 modifier: Modifier::None,
-                action: InputAction::MoveInventory,
+                action: InputAction::ToggleUseMode,
             },
             Binding {
                 key: Key::B,

@@ -338,6 +338,8 @@ pub mod render_source {
     pub const FRONTEND_POINTER: &str = "frontend_pointer";
     /// The pause menu's comfort dim, behind its panel.
     pub const PAUSE_DIM: &str = "pause_dim";
+    /// The VR cyber interface's comfort dim, behind the use-mode panel.
+    pub const USE_MODE_DIM: &str = "use_mode_dim";
     /// The red rim tint shown for a moment after the player takes damage.
     pub const HIT_FEEDBACK: &str = "hit_feedback";
 }

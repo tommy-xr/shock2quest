@@ -349,8 +349,8 @@ fn main() {
         .create_action::<bool>("crouch", "Crouch Toggle", &[])
         .unwrap();
 
-    let inventory_action = action_set
-        .create_action::<bool>("inventory", "Backpack Inventory", &[])
+    let use_mode_action = action_set
+        .create_action::<bool>("use_mode", "Cyber Interface (Use Mode)", &[])
         .unwrap();
 
     let audio_log_action = action_set
@@ -445,12 +445,12 @@ fn main() {
                         .unwrap(),
                 ),
                 xr::Binding::new(
-                    &inventory_action,
+                    &use_mode_action,
                     xr_instance
                         .string_to_path(
-                            shock2vr::input::InputAction::MoveInventory
+                            shock2vr::input::InputAction::ToggleUseMode
                                 .quest_touch_click_path()
-                                .expect("Quest backpack binding"),
+                                .expect("Quest use-mode binding"),
                         )
                         .unwrap(),
                 ),
@@ -665,7 +665,7 @@ fn main() {
                             // otherwise resume invisibly crouched).
                             crouch_toggled = false;
                             crouch_button_was_pressed = false;
-                            action_state.release(shock2vr::input::InputAction::MoveInventory);
+                            action_state.release(shock2vr::input::InputAction::ToggleUseMode);
                             action_state.release(shock2vr::input::InputAction::ReadLastUnreadLog);
                         }
                         xr::SessionState::STOPPING => {
@@ -783,7 +783,7 @@ fn main() {
             .unwrap()
             .current_state;
         let crouch_state = crouch_action.state(&session, xr::Path::NULL).unwrap();
-        let inventory_state = inventory_action.state(&session, xr::Path::NULL).unwrap();
+        let use_mode_state = use_mode_action.state(&session, xr::Path::NULL).unwrap();
         let audio_log_state = audio_log_action.state(&session, xr::Path::NULL).unwrap();
         let menu_state = menu_action.state(&session, xr::Path::NULL).unwrap();
         // Only edge-detect while the action is live: with the session merely
@@ -797,10 +797,10 @@ fn main() {
             crouch_button_was_pressed = crouch_state.current_state;
         }
         action_state.sync_discrete_button(
-            shock2vr::input::InputAction::MoveInventory,
-            inventory_state.is_active,
-            inventory_state.changed_since_last_sync,
-            inventory_state.current_state,
+            shock2vr::input::InputAction::ToggleUseMode,
+            use_mode_state.is_active,
+            use_mode_state.changed_since_last_sync,
+            use_mode_state.current_state,
         );
         action_state.sync_discrete_button(
             shock2vr::input::InputAction::ReadLastUnreadLog,

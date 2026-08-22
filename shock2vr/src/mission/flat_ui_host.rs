@@ -634,15 +634,17 @@ impl FlatUiHost {
     /// Render the inventory strip + active panel + cursor as screen-space
     /// overlay objects on the shared 640x480 canvas (drawn after the flat
     /// HUD).
-    pub fn render(
-        &self,
-        asset_cache: &mut AssetCache,
-        screen_size: Vector2<f32>,
-    ) -> Vec<SceneObject> {
+    /// The host's slots (strip, MFD panel, cursor) described once on the
+    /// shared 640x480 canvas, or `None` when nothing is bound. Both
+    /// presentations render exactly this canvas - flat on screen
+    /// ([`Self::render`]), VR on the cyber-interface world panel
+    /// ([`Self::render_world_space`]) - so their layout cannot drift apart
+    /// (AGENTS.md §3).
+    fn build_canvas(&self) -> Option<UiCanvas> {
         let strip_rect = self.strip_rect();
         let panel_rect = self.panel_rect();
         if strip_rect.is_none() && panel_rect.is_none() {
-            return Vec::new();
+            return None;
         }
         let mut canvas = UiCanvas::new(CANVAS_SIZE);
         if let (Some(strip), Some(rect)) = (self.strip.as_ref(), strip_rect) {
@@ -676,7 +678,43 @@ impl FlatUiHost {
                 ),
             };
         }
-        canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
+        Some(canvas)
+    }
+
+    /// Screen-space presentation (flat): the canvas letterboxed onto the
+    /// render target. Empty when nothing is bound.
+    pub fn render(
+        &self,
+        asset_cache: &mut AssetCache,
+        screen_size: Vector2<f32>,
+    ) -> Vec<SceneObject> {
+        match self.build_canvas() {
+            Some(canvas) => {
+                canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// World-space presentation (the VR cyber interface): the same canvas on
+    /// an already-placed panel. The panel transform is the only
+    /// per-presentation input - placement stays with the caller's
+    /// `FrontendPanelAnchor`, and no layout decision is made here.
+    pub fn render_world_space(
+        &self,
+        asset_cache: &mut AssetCache,
+        panel: &crate::ui::WorldPanel,
+    ) -> Vec<SceneObject> {
+        match self.build_canvas() {
+            Some(canvas) => canvas.render_world_space(
+                asset_cache,
+                panel.transform(),
+                None,
+                None,
+                crate::ui::VR_COMPONENT_Z_STEP,
+            ),
+            None => Vec::new(),
+        }
     }
 
     /// Introspection snapshot of the active panel's elements for `GET /v1/ui`:
