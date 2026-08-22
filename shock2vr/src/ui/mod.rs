@@ -38,6 +38,7 @@ mod frontend_presentation;
 mod frontend_sfx;
 mod panel_anchor;
 mod pointer_visual;
+pub mod world_dim;
 #[cfg(test)]
 pub use frontend_menu::resolve_flat_click;
 pub use frontend_menu::{
