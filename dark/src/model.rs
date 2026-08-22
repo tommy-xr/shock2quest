@@ -62,11 +62,11 @@ pub struct SubObject {
 
 #[derive(Clone)]
 pub struct StaticModel {
-    interaction_triangles: Rc<Vec<[Vector3<f32>; 3]>>,
     scene_objects: Vec<SceneObject>,
     bounding_box: Aabb3<f32>,
     vhots: Vec<Vhot>,
     sub_objects: Vec<SubObject>,
+    interaction_triangles: Rc<Vec<[Vector3<f32>; 3]>>,
 }
 
 impl StaticModel {
@@ -89,11 +89,11 @@ impl StaticModel {
             .collect::<Vec<SceneObject>>();
 
         StaticModel {
-            interaction_triangles: model.interaction_triangles.clone(),
             scene_objects: new_scene_objects,
             bounding_box: model.bounding_box,
             vhots: model.vhots.clone(),
             sub_objects: model.sub_objects.clone(),
+            interaction_triangles: model.interaction_triangles.clone(),
         }
     }
 }
@@ -119,6 +119,7 @@ pub struct AnimatedModel {
     /// Authored LGMD rest bounds, kept separate from posed skeletal bounds.
     object_bounds: Option<Aabb3<f32>>,
     object_articulation: Option<std::sync::Arc<crate::object_articulation::ObjectArticulation>>,
+    interaction_triangles: Rc<Vec<[Vector3<f32>; 3]>>,
 }
 
 /// Build the render palette, undoing the bind pose first when the geometry needs
@@ -246,6 +247,7 @@ impl AnimatedModel {
             object_articulation: self.object_articulation.clone(),
             posed_bounds: joint_box_bounds(&animated_skeleton.get_transforms(), &self.hit_boxes),
             object_bounds: self.object_bounds,
+            interaction_triangles: self.interaction_triangles.clone(),
         }
     }
 
@@ -272,6 +274,7 @@ impl AnimatedModel {
             posed_bounds: model.posed_bounds,
             object_bounds: model.object_bounds,
             object_articulation: model.object_articulation.clone(),
+            interaction_triangles: model.interaction_triangles.clone(),
         }
     }
 
@@ -322,6 +325,7 @@ impl Model {
         static_mesh: SystemShock2ObjectMesh,
         asset_cache: &mut AssetCache,
     ) -> Model {
+        let interaction_triangles = Rc::new(object_interaction_triangles(&static_mesh));
         let (scene_objects, skeleton) =
             ss2_bin_obj_loader::to_scene_objects(&static_mesh, asset_cache);
         let bounding_box = static_mesh.bounding_box;
@@ -362,17 +366,18 @@ impl Model {
                     object_articulation: Some(std::sync::Arc::new(
                         ss2_bin_obj_loader::object_articulation(&static_mesh),
                     )),
+                    interaction_triangles,
                 }),
             }
         } else {
             Model {
                 transform: Matrix4::identity(),
                 inner: InnerModel::Static(StaticModel {
-                    interaction_triangles: Rc::new(object_interaction_triangles(&static_mesh)),
                     scene_objects,
                     bounding_box,
                     vhots: static_mesh.vhots.clone(),
                     sub_objects,
+                    interaction_triangles,
                 }),
             }
         }
@@ -435,6 +440,7 @@ impl Model {
                 posed_bounds: None,
                 object_bounds: None,
                 object_articulation: None,
+                interaction_triangles: Rc::new(Vec::new()),
             }),
         }
     }
@@ -464,6 +470,7 @@ impl Model {
                     posed_bounds: None,
                     object_bounds: None,
                     object_articulation: None,
+                    interaction_triangles: Rc::new(Vec::new()),
                 }),
             }
         } else {
@@ -472,11 +479,11 @@ impl Model {
             Model {
                 transform: Matrix4::identity(),
                 inner: InnerModel::Static(StaticModel {
-                    interaction_triangles: Rc::new(Vec::new()),
                     scene_objects,
                     bounding_box,
                     vhots: vec![],
                     sub_objects: vec![],
+                    interaction_triangles: Rc::new(Vec::new()),
                 }),
             }
         }
@@ -644,6 +651,16 @@ impl Model {
         };
         for obj in objs {
             obj.set_depth_bias(enabled);
+        }
+    }
+
+    /// Triangle soup in object-local bind-pose space for precise interaction
+    /// queries. Physical simulation continues to use the authored PhysType;
+    /// this is only the visible surface the player can point at.
+    pub fn interaction_triangles(&self) -> Rc<Vec<[Vector3<f32>; 3]>> {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => animated_model.interaction_triangles.clone(),
+            InnerModel::Static(static_model) => static_model.interaction_triangles.clone(),
         }
     }
 

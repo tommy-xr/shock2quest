@@ -1078,14 +1078,14 @@ pub(crate) fn interaction_ray_cast(
         let is_not_panel_host = |entity_id| {
             util::resolve_proxy_entity(world, entity_id) != gui_host && permits_pick(entity_id)
         };
-        let blocker = physics.ray_cast2_with_entity_filter(
+        let blocker = physics.ray_cast_interaction(
             ray_start,
             forward,
             ui_distance,
             ordinary_groups,
             entity_to_ignore,
             true,
-            &is_not_panel_host,
+            Some(&is_not_panel_host),
         );
 
         blocker
@@ -1093,14 +1093,14 @@ pub(crate) fn interaction_ray_cast(
             .or(Some(ui_hit))
     } else {
         physics
-            .ray_cast2_with_entity_filter(
+            .ray_cast_interaction(
                 ray_start,
                 forward,
                 FROB_REACH,
                 ordinary_groups | InternalCollisionGroups::UI,
                 entity_to_ignore,
                 true,
-                &permits_pick,
+                Some(&permits_pick),
             )
             .map(|result| resolve_hit_proxy_entity(world, result))
     }
