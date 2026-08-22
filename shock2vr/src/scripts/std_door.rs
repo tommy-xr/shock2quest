@@ -1,7 +1,7 @@
 use cgmath::{InnerSpace, Vector3, Zero};
-use dark::properties::PropTranslatingDoor;
+use dark::properties::{Link, Links, PropKeypadCode, PropTranslatingDoor};
 use engine::audio::AudioHandle;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, IntoIter, View, World};
 use tracing::trace;
 
 use crate::{physics::PhysicsWorld, time::Time};
@@ -10,6 +10,24 @@ use super::{
     Effect, Message, MessagePayload, Script,
     script_util::{is_entity_locked, play_environmental_sound},
 };
+
+/// Whether a numeric keypad owns this door through an authored SwitchLink.
+///
+/// Retail keypad gates put `PropLocked` and the code on the controller, not on
+/// the linked door. The keypad's successful `TurnOn` is therefore the only
+/// player path that may open a closed target; treating the target as an
+/// ordinary unlocked door lets a direct Frob bypass the code entirely.
+fn has_incoming_keypad_switch(world: &World, door: EntityId) -> bool {
+    let links = world.borrow::<View<Links>>().unwrap();
+    let keypad_codes = world.borrow::<View<PropKeypadCode>>().unwrap();
+
+    (&links, &keypad_codes).iter().any(|(links, _code)| {
+        links.to_links.iter().any(|link| {
+            matches!(link.link, Link::SwitchLink)
+                && link.to_entity_id.is_some_and(|target| target.0 == door)
+        })
+    })
+}
 
 pub struct StdDoor {
     audio_handle: AudioHandle,
@@ -252,7 +270,9 @@ impl Script for StdDoor {
                     // while scripted TurnOn below deliberately bypasses locks.
                     if self.target_is_open(&trans_door) {
                         self.close(entity_id, world, &trans_door)
-                    } else if is_entity_locked(world, entity_id) {
+                    } else if is_entity_locked(world, entity_id)
+                        || has_incoming_keypad_switch(world, entity_id)
+                    {
                         // SS2's existing locked-control feedback; the player
                         // still gets a response without changing door state.
                         Effect::PlaySound {
@@ -288,7 +308,10 @@ mod tests {
     use std::time::Duration;
 
     use cgmath::{Matrix4, vec3};
-    use dark::properties::{KeyCard, PropClassTag, PropKeyDst, PropLocked};
+    use dark::properties::{
+        KeyCard, Link, Links, PropClassTag, PropKeyDst, PropKeypadCode, PropLocked, ToLink,
+        WrappedEntityId,
+    };
 
     use crate::{quest_info::QuestInfo, runtime_props::RuntimePropTransform};
 
@@ -335,6 +358,19 @@ mod tests {
         let mut door = StdDoor::new();
         door.initialize(entity_id, world);
         door
+    }
+
+    fn add_keypad_controller(world: &mut World, door: EntityId) -> EntityId {
+        world.add_entity((
+            PropKeypadCode(15061),
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 1091,
+                    to_entity_id: Some(WrappedEntityId(door)),
+                    link: Link::SwitchLink,
+                }],
+            },
+        ))
     }
 
     /// A doorway authored permanently open: no travel, state open (#602).
@@ -384,6 +420,29 @@ mod tests {
         let mut door = initialized_door(entity_id, &world);
 
         door.handle_message(entity_id, &world, &physics, &MessagePayload::Frob);
+
+        assert_eq!(door.desired_position, vec3(1.0, 4.0, 3.0));
+        assert!(door.is_moving);
+    }
+
+    #[test]
+    fn frob_does_not_open_a_closed_door_controlled_by_a_keypad() {
+        let (mut world, entity_id) = test_world(false, false);
+        let keypad = add_keypad_controller(&mut world, entity_id);
+        let physics = PhysicsWorld::new();
+        let mut door = initialized_door(entity_id, &world);
+
+        door.handle_message(entity_id, &world, &physics, &MessagePayload::Frob);
+
+        assert_eq!(door.desired_position, vec3(1.0, 2.0, 3.0));
+        assert!(!door.is_moving);
+
+        door.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: keypad },
+        );
 
         assert_eq!(door.desired_position, vec3(1.0, 4.0, 3.0));
         assert!(door.is_moving);
