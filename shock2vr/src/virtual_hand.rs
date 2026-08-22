@@ -735,7 +735,7 @@ fn interaction_ray_cast(
             .or(Some(ui_hit))
     } else {
         physics
-            .ray_cast2(
+            .ray_cast_interaction(
                 ray_start,
                 forward,
                 FROB_REACH,

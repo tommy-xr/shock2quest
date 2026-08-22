@@ -2213,6 +2213,17 @@ impl CollisionGroup {
         })
     }
 
+    /// A render-faithful surface used only by pointer/frob queries. The
+    /// authored collider on the same body remains responsible for movement,
+    /// projectiles, and ordinary physics rays.
+    pub fn interaction_surface() -> CollisionGroup {
+        Self::solid(InteractionGroups {
+            memberships: InternalCollisionGroups::RAYCAST.bits.into(),
+            filter: InternalCollisionGroups::ALL.bits.into(),
+            test_mode: Default::default(),
+        })
+    }
+
     pub fn ui() -> CollisionGroup {
         Self::solid(InteractionGroups {
             memberships: InternalCollisionGroups::UI.bits.into(),
@@ -6208,6 +6219,32 @@ impl PhysicsWorld {
             entity_to_ignore,
             ignore_sensors,
             None,
+            false,
+        )
+    }
+
+    /// Player interaction ray. A body with a render-faithful `RAYCAST`
+    /// surface is tested against that surface instead of its coarse physical
+    /// `ENTITY` hull; every other collider keeps normal nearest-hit behavior.
+    pub fn ray_cast_interaction(
+        &self,
+        start_point: Point3<f32>,
+        direction: Vector3<f32>,
+        max_toi: f32,
+        collision_groups: InternalCollisionGroups,
+        entity_to_ignore: Option<EntityId>,
+        ignore_sensors: bool,
+    ) -> Option<RayCastResult> {
+        self.ray_cast2_with_memberships(
+            InternalCollisionGroups::ALL,
+            start_point,
+            direction,
+            max_toi,
+            collision_groups,
+            entity_to_ignore,
+            ignore_sensors,
+            None,
+            true,
         )
     }
 
@@ -6232,6 +6269,7 @@ impl PhysicsWorld {
             entity_to_ignore,
             ignore_sensors,
             None,
+            false,
         )
     }
 
@@ -6263,6 +6301,7 @@ impl PhysicsWorld {
             entity_to_ignore,
             ignore_sensors,
             Some(entity_filter),
+            false,
         )
     }
 
@@ -6289,6 +6328,7 @@ impl PhysicsWorld {
             entity_to_ignore,
             ignore_sensors,
             Some(entity_filter),
+            false,
         )
     }
 
@@ -6302,6 +6342,7 @@ impl PhysicsWorld {
         entity_to_ignore: Option<EntityId>,
         ignore_sensors: bool,
         entity_filter: Option<&dyn Fn(EntityId) -> bool>,
+        prefer_interaction_surfaces: bool,
     ) -> Option<RayCastResult> {
         // Guard against degenerate rays. A zero-length direction normalizes to
         // NaN, and a NaN/zero ray direction sends parry's `clip_aabb_line` down
@@ -6350,6 +6391,26 @@ impl PhysicsWorld {
             }
             if let (Some(entity_id), Some(entity_filter)) = (maybe_entity_id, entity_filter)
                 && !entity_filter(entity_id)
+            {
+                return false;
+            }
+            if prefer_interaction_surfaces
+                && collider
+                    .collision_groups()
+                    .memberships
+                    .intersects(InternalCollisionGroups::ENTITY.bits.into())
+                && collider.parent().is_some_and(|parent| {
+                    self.rigid_body_set.get(parent).is_some_and(|body| {
+                        body.colliders().iter().any(|handle| {
+                            self.collider_set.get(*handle).is_some_and(|sibling| {
+                                sibling
+                                    .collision_groups()
+                                    .memberships
+                                    .intersects(InternalCollisionGroups::RAYCAST.bits.into())
+                            })
+                        })
+                    })
+                })
             {
                 return false;
             }
@@ -6923,6 +6984,34 @@ impl PhysicsWorld {
             density,
             collision_group,
         );
+    }
+
+    /// Attach a triangle mesh that participates only in player interaction
+    /// queries. Its parent body's ordinary collider remains unchanged.
+    pub fn attach_interaction_mesh(
+        &mut self,
+        handle: RigidBodyHandle,
+        vertices: Vec<Vector3<f32>>,
+        indices: Vec<[u32; 3]>,
+    ) -> bool {
+        let vertices = vertices.into_iter().map(vec_to_npoint).collect();
+        let Ok(shape) = SharedShape::trimesh(vertices, indices) else {
+            return false;
+        };
+        let user_data = self
+            .rigid_body_set
+            .get(handle)
+            .map(|body| body.user_data)
+            .unwrap_or_default();
+        let group = CollisionGroup::interaction_surface();
+        let mut collider = ColliderBuilder::new(shape)
+            .collision_groups(group.collision)
+            .solver_groups(group.solver)
+            .build();
+        collider.user_data = user_data;
+        self.collider_set
+            .insert_with_parent(collider, handle, &mut self.rigid_body_set);
+        true
     }
 
     /// Attach a collider to a body with a local-space translation offset. Used by
@@ -8006,6 +8095,57 @@ mod tests {
             actor_hit.is_none(),
             "AI movement probes must pass through the obstacle"
         );
+    }
+
+    #[test]
+    fn interaction_ray_uses_detailed_surface_without_weakening_physical_hull() {
+        let mut world = PhysicsWorld::new();
+        let fixture = EntityId::from_inner(44).unwrap();
+        let pickup = EntityId::from_inner(45).unwrap();
+        let fixture_body = world.add_kinematic(
+            fixture,
+            vec3(0.0, 0.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(2.0, 2.0, 2.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        assert!(world.attach_interaction_mesh(
+            fixture_body,
+            vec![
+                vec3(1.0, -1.0, -1.0),
+                vec3(1.0, 1.0, -1.0),
+                vec3(1.0, 0.0, 1.0),
+            ],
+            vec![[0, 1, 2]],
+        ));
+        world.add_kinematic(
+            pickup,
+            vec3(0.0, 0.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.2, 0.2, 0.2),
+            CollisionGroup::selectable(),
+            false,
+        );
+        let mut player =
+            world.create_player(vec3(100.0, 100.0, 100.0), EntityId::from_inner(46).unwrap());
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+        let origin = point3(-3.0, 0.0, 0.0);
+        let groups = InternalCollisionGroups::ENTITIES
+            | InternalCollisionGroups::SELECTABLE
+            | InternalCollisionGroups::RAYCAST;
+        let ordinary = world
+            .ray_cast2(origin, Vector3::unit_x(), 10.0, groups, None, true)
+            .expect("ordinary ray should hit the physical hull");
+        let interaction = world
+            .ray_cast_interaction(origin, Vector3::unit_x(), 10.0, groups, None, true)
+            .expect("interaction ray should reach the nested pickup");
+
+        assert_eq!(ordinary.maybe_entity_id, Some(fixture));
+        assert_eq!(interaction.maybe_entity_id, Some(pickup));
     }
 
     /// A world with a large static floor whose top surface is at `y = 0`, plus a

@@ -158,7 +158,7 @@ impl FlatPlayerController {
         let forward = look.rotate_vector(vec3(0.0, 0.0, -1.0));
         self.last_aim = Some((point3(camera_pos.x, camera_pos.y, camera_pos.z), forward));
         let highlighted = physics
-            .ray_cast2(
+            .ray_cast_interaction(
                 point3(camera_pos.x, camera_pos.y, camera_pos.z),
                 forward,
                 FROB_REACH,
