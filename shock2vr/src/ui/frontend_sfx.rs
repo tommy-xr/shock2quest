@@ -25,9 +25,7 @@
 
 use engine::{
     assets::asset_cache::AssetCache,
-    audio::{
-        AudioContext, AudioHandle, AudioPlaybackSettings, play_audio_with_settings, stop_audio,
-    },
+    audio::{AudioContext, AudioHandle, AudioPlaybackSettings, stop_audio},
 };
 use shipyard::EntityId;
 use tracing::warn;
@@ -186,22 +184,20 @@ impl<TWidget: Copy + PartialEq> FrontendSfx<TWidget> {
             self.unavailable = true;
             return false;
         };
-        let duration = clip.total_duration();
-        let preempted =
-            play_audio_with_settings(audio_context, handle.clone(), None, clip, settings);
-        crate::audio_log::record_stops(&preempted);
-        crate::audio_log::record(crate::audio_log::SoundRecord {
-            sample: name,
-            volume_millibels: None,
-            gain: settings.gain,
-            pan_millibels: None,
-            pan_applied: false,
-            tags: vec![("kind".to_owned(), "menu".to_owned())],
-            position: [0.0, 0.0, 0.0],
-            duration,
-            source_entity: None,
-            handle: Some(handle.id()),
-        });
+        crate::audio_log::play_and_record(
+            audio_context,
+            handle.clone(),
+            None,
+            clip,
+            crate::audio_log::PlayOptions::ListenerRelative(settings),
+            crate::audio_log::PlayRecord {
+                sample: name,
+                volume_millibels: None,
+                pan_millibels: None,
+                tags: vec![("kind".to_owned(), "menu".to_owned())],
+                source_entity: None,
+            },
+        );
         true
     }
 }
