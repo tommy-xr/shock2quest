@@ -63,7 +63,12 @@ pub trait PlayerInteraction {
     /// 3D visuals owned by the controller (VR: hand models + forearm HUD
     /// panels). Flat draws nothing here; its weapon is drawn from
     /// `viewmodel_entity`.
-    fn render(&self, _asset_cache: &mut AssetCache, _world: &World) -> Vec<SceneObject> {
+    fn render(
+        &self,
+        _asset_cache: &mut AssetCache,
+        _world: &World,
+        _options: &GameOptions,
+    ) -> Vec<SceneObject> {
         Vec::new()
     }
 
@@ -115,6 +120,12 @@ pub struct VrInteraction {
     /// `Option` is "have we tried yet" - a glove that failed to load stays
     /// `Some(None)` so we don't hit the asset cache's miss path every frame.
     glove_renderer: RefCell<Option<Option<GloveRenderer>>>,
+    /// Eye position (world space) captured each `update`, so `render` can gate
+    /// the wrist health panel on how well it faces the eye (`ambient_meters`).
+    eye_position: Vector3<f32>,
+    /// Hysteresis latch for the glance-gated wrist health panel. RefCell
+    /// because `render` is `&self` (same pattern as `glove_renderer`).
+    wrist_glance: RefCell<crate::hud::ambient_meters::GlanceState>,
 }
 
 impl VrInteraction {
@@ -123,6 +134,8 @@ impl VrInteraction {
             left_hand: VirtualHand::new(Handedness::Left),
             right_hand: VirtualHand::new(Handedness::Right),
             glove_renderer: RefCell::new(None),
+            eye_position: Vector3::new(0.0, 0.0, 0.0),
+            wrist_glance: RefCell::new(Default::default()),
         }
     }
 }
@@ -161,6 +174,9 @@ impl PlayerInteraction for VrInteraction {
         );
         self.left_hand = left_hand;
 
+        // Captured for the glance gate in `render` (which has no ctx).
+        self.eye_position = ctx.player_pos + Vector3::new(0.0, ctx.eye_height, 0.0);
+
         left_msgs.append(&mut right_msgs);
         left_msgs
     }
@@ -182,7 +198,14 @@ impl PlayerInteraction for VrInteraction {
         .collect()
     }
 
-    fn render(&self, asset_cache: &mut AssetCache, world: &World) -> Vec<SceneObject> {
+    fn render(
+        &self,
+        asset_cache: &mut AssetCache,
+        world: &World,
+        options: &GameOptions,
+    ) -> Vec<SceneObject> {
+        use crate::hud::ambient_meters;
+
         let mut glove_slot = self.glove_renderer.borrow_mut();
         let glove_renderer = glove_slot
             .get_or_insert_with(|| GloveRenderer::new(asset_cache))
@@ -204,6 +227,25 @@ impl PlayerInteraction for VrInteraction {
         // forearm panels carry their own label from `create_arm_hud_panels`,
         // which the `debug_hud` scene emits without going through here.
         crate::util::tag_render_source(&mut objs, crate::util::render_source::PLAYER_HANDS);
+
+        // Prototype `ambient_meters` (experimental): ammo moves onto the
+        // wielded weapon, health stays on the wrist but only when glanced at.
+        let ambient = options
+            .experimental_features
+            .contains(ambient_meters::FEATURE);
+        let visibility = if ambient {
+            let alignment = ambient_meters::wrist_glance_alignment(
+                self.left_hand.get_position(),
+                self.left_hand.get_rotation(),
+                self.eye_position,
+            );
+            crate::hud::ArmPanelVisibility {
+                health: self.wrist_glance.borrow_mut().update(alignment),
+                ammo: false, // retired: the readout lives on the weapon now
+            }
+        } else {
+            crate::hud::ArmPanelVisibility::default()
+        };
         objs.append(&mut create_arm_hud_panels(
             asset_cache,
             world,
@@ -211,7 +253,15 @@ impl PlayerInteraction for VrInteraction {
             self.left_hand.get_rotation(),
             self.right_hand.get_position(),
             self.right_hand.get_rotation(),
+            visibility,
         ));
+        if ambient {
+            let mut meter = ambient_meters::create_weapon_ammo_meter(asset_cache, world);
+            // Same label as the forearm panels, so the pause menu's
+            // player-hands suppression covers the meter too.
+            crate::util::tag_render_source(&mut meter, crate::util::render_source::PLAYER_HANDS);
+            objs.append(&mut meter);
+        }
         objs
     }
 

@@ -207,6 +207,7 @@ impl GameScene for DebugHudScene {
             self.left_hand_rotation,
             self.right_hand_position,
             self.right_hand_rotation,
+            Default::default(),
         );
 
         (hud_panels, self.player_position, self.player_rotation)
