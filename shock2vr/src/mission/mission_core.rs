@@ -7337,8 +7337,9 @@ impl MissionCore {
                     if self.is_vr_melee_weapon(entity_id) {
                         // Held guns/items stay unphysical, but a VR melee
                         // weapon needs its authored collider to report genuine
-                        // controller-driven contacts. Kinematic motion keeps it
-                        // seated in the hand without gravity or solver drift.
+                        // contacts. A joint motor drives its dynamic body
+                        // toward the tracked hand while world contact can hold
+                        // the rendered weapon back.
                         self.attach_held_melee_physics(entity_id);
                     } else {
                         self.make_un_physical(entity_id);

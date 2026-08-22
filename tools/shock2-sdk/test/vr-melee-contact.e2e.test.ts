@@ -34,28 +34,29 @@ async function byMissionId(
 // wield, on the rendered weapon head - see `vr_config::melee_contact_offset`).
 // Staging is expressed relative to the pane rather than as bare magic
 // coordinates; the pane is tall enough that the sweep crosses it either way.
-const HAND_Y = 1.03;
-const HAND_REST: Vec3 = [0.55, HAND_Y, 1.1];
-const HAND_SWEEP: Vec3[] = [
-  [0.5, HAND_Y, 1.4],
-  [0.42, HAND_Y, 1.7],
-  [0.34, HAND_Y, 2.0],
-  [0.26, HAND_Y, 2.3],
-  [0.18, HAND_Y, 2.6],
-  [0.1, HAND_Y, 2.8],
-  [0.05, HAND_Y, 3.0],
-];
+// Aim the weapon's fitted (handle-to-head) volume through the pane center. The
+// old pose-teleported collider could skim the upper frame and still jump into
+// the glass; a solver-driven body correctly stops on that frame instead.
+const HAND_Y = 0.45;
+// Retract far enough that the wrench's full fitted cuboid, not merely its
+// body origin, clears the pane before the next contact edge.
+const HAND_REST: Vec3 = [0.7, HAND_Y, 0.3];
+const HAND_SWEEP_END: Vec3 = [0.05, HAND_Y, 3.4];
+const HAND_SWEEP_FRAMES = 60;
 
 async function sweepHeldWrench(game: GameServer): Promise<void> {
-  for (const hand of HAND_SWEEP) {
+  for (let frame = 1; frame <= HAND_SWEEP_FRAMES; frame += 1) {
+    const t = frame / HAND_SWEEP_FRAMES;
+    const hand: Vec3 = [
+      HAND_REST[0] + (HAND_SWEEP_END[0] - HAND_REST[0]) * t,
+      HAND_Y,
+      HAND_REST[2] + (HAND_SWEEP_END[2] - HAND_REST[2]) * t,
+    ];
     await game.input.set("right_hand.position", hand);
-    // Two frames per sample, not one: the sweep's last sample lands the fitted
-    // weapon box right on the pane plane. At one frame per sample whether the
-    // contact is generated came down to how much physics free-ran between the
-    // HTTP requests - the same swing passed or failed purely on request
-    // latency. Two frames gives the contact a real overlap window instead of a
-    // tangential touch; nothing else about the gesture changes.
-    await game.step({ frames: 2 });
+    // Advance the tracked target every simulation frame, like a real
+    // controller sample. This matters now that the visible/contact weapon is
+    // a spring-driven body instead of a pose-teleported kinematic.
+    await game.step({ frames: 1 });
   }
 }
 
@@ -75,7 +76,6 @@ test(
       debugFlags: ["--vr"],
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
     });
-
     const wrench = await byMissionId(game, "Wrench", WRENCH_MISSION_ID);
     const pane = await byMissionId(
       game,
@@ -121,7 +121,7 @@ test(
     await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
     await game.input.set("right_hand.squeeze", 1);
     await game.input.set("right_hand.trigger", 0);
-    await game.step({ frames: 3 });
+    await game.step({ frames: 30 });
 
     // Negative first: physically sweep through the pane without pulling the
     // trigger. Before the fix the authored Wrench had no collision damage at
@@ -132,11 +132,20 @@ test(
       true,
       "idle held-Wrench contact must remain harmless",
     );
+    const blockedWrench = (await game.physics.bodies({ entityId: wrench.id }))
+      .bodies[0];
+    assert.ok(blockedWrench, "the held Wrench should retain its physics body");
+    assert.ok(
+      blockedWrench.position[2] < pane.position[2] - 0.1,
+      `the physical Wrench should stop on the near side while its tracked target crosses the pane: ${JSON.stringify(blockedWrench)}`,
+    );
 
     // Leave contact, open the attack window with the production VR trigger,
     // then make a fresh controller-driven physics contact.
     await game.input.set("right_hand.position", HAND_REST);
-    await game.step({ frames: 5 });
+    // Unlike the old pose-teleported body, the physical weapon needs time to
+    // spring clear of the pane before Rapier can report the next contact edge.
+    await game.step({ frames: 30 });
     const beforeAttack =
       (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
     await game.input.set("right_hand.trigger", 1);
@@ -247,12 +256,12 @@ test(
     );
 
     // The actual regression: the restored weapon must still have a live,
-    // controller-driven contact body.
+    // spring-driven contact body.
     const bodies = (await game.physics.bodies({ entityId: restoredWrench.id })).bodies;
     assert.equal(
       bodies[0]?.body_type,
-      "kinematic",
-      `a restored held melee weapon must keep its kinematic contact body: ${JSON.stringify(bodies)}`,
+      "dynamic",
+      `a restored held melee weapon must keep its motor-driven contact body: ${JSON.stringify(bodies)}`,
     );
 
     // ...and it must still actually damage an authored one-HP pane.
@@ -326,8 +335,8 @@ test(
     assert.equal(afterRejectedGrab.player.right_hand_entity_id, wrench.id);
     assert.equal(
       (await game.physics.bodies({ entityId: wrench.id })).bodies[0]?.body_type,
-      "kinematic",
-      "a rejected second-hand grab must leave #943's live held-melee body intact",
+      "dynamic",
+      "a rejected second-hand grab must leave the live spring-driven melee body intact",
     );
 
     await game.input.set("left_hand.squeeze", 0);
