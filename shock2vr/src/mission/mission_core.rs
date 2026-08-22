@@ -163,6 +163,9 @@ const LOAD_EVENT_PUMP_ENTITY_INTERVAL: usize = 32;
 const VR_BACKPACK_FORWARD: f32 = 5.0;
 const VR_BACKPACK_UP: f32 = 3.0;
 const VR_BACKPACK_WORLD_SCALE: f32 = 0.55;
+const VR_BACKPACK_CANVAS_SIZE_PX: Vector2<f32> = Vector2::new(635.0, 120.0);
+/// Viewer-side air gap retained after the panel visibility probes find a wall.
+const VR_BACKPACK_WORLD_CLEARANCE: f32 = 0.1;
 
 /// Head-relative authored-space placement for the narrow portrait reader.
 /// After Dark's scale conversion the panel center is 1.5 world units forward
@@ -183,13 +186,52 @@ fn presentation_world_panel_size(
     }
 }
 
+fn vr_backpack_position(
+    physics: &PhysicsWorld,
+    player_position: Vector3<f32>,
+    head_rotation: Quaternion<f32>,
+) -> (Vector3<f32>, Quaternion<f32>) {
+    let intended_distance = VR_BACKPACK_FORWARD / SCALE_FACTOR;
+    let forward = head_rotation * vec3(0.0, 0.0, -1.0);
+    let panel_rotation = Quaternion::from_angle_y(cgmath::Deg(180.0)) * head_rotation;
+    let center_at_viewer =
+        player_position + head_rotation * vec3(0.0, VR_BACKPACK_UP / SCALE_FACTOR, 0.0);
+    let panel_size = presentation_world_panel_size(
+        crate::PresentationMode::Vr,
+        true,
+        VR_BACKPACK_CANVAS_SIZE_PX * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+    );
+    let mut clear_distance = intended_distance;
+    // Moving the fixed-size panel closer changes the corner-ray angles. Re-probe
+    // the new candidate so an obstruction revealed by that angle change also
+    // receives the same viewer-side clearance.
+    for _ in 0..3 {
+        let Some(obstruction) = physics.world_panel_obstruction_distance(
+            vec3_to_point3(center_at_viewer),
+            panel_rotation,
+            panel_size,
+            forward,
+            clear_distance,
+        ) else {
+            break;
+        };
+        let next = (obstruction - VR_BACKPACK_WORLD_CLEARANCE).max(0.0);
+        if next >= clear_distance {
+            break;
+        }
+        clear_distance = next;
+    }
+
+    (center_at_viewer + forward * clear_distance, panel_rotation)
+}
+
 #[cfg(test)]
 mod vr_backpack_panel_tests {
     use super::*;
 
     #[test]
     fn only_vr_scales_the_shared_backpack_canvas_at_the_world_boundary() {
-        let authored = vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE;
+        let authored = VR_BACKPACK_CANVAS_SIZE_PX * crate::gui::GUI_PIXEL_TO_WORLD_SIZE;
         assert_eq!(
             presentation_world_panel_size(crate::PresentationMode::Flat, true, authored),
             authored
@@ -6348,28 +6390,23 @@ impl MissionCore {
                             player.inventory_entity_id,
                         )
                     };
-                    // Keep the wide VR panel within an ordinary arm's reach;
-                    // the old placeholder cube sat farther out and commonly
-                    // landed the new canvas inside a nearby wall. Preserve that
-                    // diagnostic cube's established desktop placement.
-                    let distance = if game_options.presentation_mode == crate::PresentationMode::Vr
-                    {
-                        VR_BACKPACK_FORWARD
-                    } else {
-                        8.0
-                    };
-                    let vertical = if game_options.presentation_mode == crate::PresentationMode::Vr
-                    {
-                        VR_BACKPACK_UP
-                    } else {
-                        0.5
-                    };
-                    let forward =
-                        rot * vec3(0.0, vertical / SCALE_FACTOR, -distance / SCALE_FACTOR);
+                    // Probe the wide VR panel's full visible footprint toward
+                    // the intended 2 m position, stopping on the viewer side
+                    // of level geometry. Preserve the desktop diagnostic
+                    // cube's established placement unchanged.
+                    let (inventory_position, inventory_rotation) =
+                        if game_options.presentation_mode == crate::PresentationMode::Vr {
+                            vr_backpack_position(&self.physics, pos, rot)
+                        } else {
+                            (
+                                pos + rot * vec3(0.0, 0.5 / SCALE_FACTOR, -8.0 / SCALE_FACTOR),
+                                Quaternion::from_angle_y(cgmath::Deg(180.0)) * rot,
+                            )
+                        };
                     PlayerInventoryEntity::set_position_rotation(
                         &mut self.world,
-                        pos + forward,
-                        Quaternion::from_angle_y(cgmath::Deg(180.0)) * rot,
+                        inventory_position,
+                        inventory_rotation,
                     );
 
                     // VR has no cursor/metagame mode: the controller binding

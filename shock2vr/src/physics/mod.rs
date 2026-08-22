@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use util::*;
 
 use bitflags::bitflags;
-use cgmath::{InnerSpace, Point3, Quaternion, Vector3, point3, vec3};
+use cgmath::{InnerSpace, Point3, Quaternion, Vector2, Vector3, point3, vec3};
 use dark::{SCALE_FACTOR, mission::SystemShock2Level};
 use engine::scene::SceneObject;
 use rapier3d::{
@@ -4534,6 +4534,63 @@ impl PhysicsWorld {
         )
     }
 
+    /// Probe a panel-sized visibility fan through level geometry and return
+    /// the nearest obstruction's distance along `direction`.
+    ///
+    /// A center ray is insufficient for wide diegetic UI: a wall or pillar can
+    /// cover a corner while leaving the middle unobstructed. Rays fan from the
+    /// viewer to the center, corners, edge midpoints, and horizontal quarter
+    /// points, conservatively covering the unusually wide backpack footprint
+    /// without requiring the full-width panel to fit beside the viewer before
+    /// it has reached its destination. Only `WORLD` membership is queried, so
+    /// creatures and loose props do not make a player-facing panel jump closer
+    /// when it is placed.
+    pub fn world_panel_obstruction_distance(
+        &self,
+        center: Point3<f32>,
+        rotation: Quaternion<f32>,
+        panel_size: Vector2<f32>,
+        direction: Vector3<f32>,
+        max_distance: f32,
+    ) -> Option<f32> {
+        let direction_length2 = direction.magnitude2();
+        if !self.has_stepped
+            || !direction_length2.is_finite()
+            || direction_length2 == 0.0
+            || !max_distance.is_finite()
+            || max_distance <= 0.0
+            || !panel_size.x.is_finite()
+            || !panel_size.y.is_finite()
+            || panel_size.x <= 0.0
+            || panel_size.y <= 0.0
+        {
+            return None;
+        }
+
+        let forward = direction / direction_length2.sqrt();
+        let mut nearest = None::<f32>;
+        for x in [-0.5, -0.25, 0.0, 0.25, 0.5] {
+            for y in [-0.5, 0.0, 0.5] {
+                let offset = rotation * vec3(panel_size.x * x, panel_size.y * y, 0.0);
+                let target = center + forward * max_distance + offset;
+                let ray = target - center;
+                let Some(hit) = self.ray_cast2(
+                    center,
+                    ray,
+                    ray.magnitude(),
+                    InternalCollisionGroups::WORLD,
+                    None,
+                    true,
+                ) else {
+                    continue;
+                };
+                let distance = (hit.hit_point - center).dot(forward).max(0.0);
+                nearest = Some(nearest.map_or(distance, |current| current.min(distance)));
+            }
+        }
+        nearest
+    }
+
     /// Raycast using a living actor's collision membership. Unlike a generic
     /// interaction/visibility ray (whose membership is `ALL`), this respects
     /// colliders that explicitly opt out of blocking creature movement.
@@ -5639,6 +5696,89 @@ mod tests {
 
     fn identity_quat() -> Quaternion<f32> {
         Quaternion::new(1.0, 0.0, 0.0, 0.0)
+    }
+
+    fn add_world_box(world: &mut PhysicsWorld, center: Vector3<f32>, half: Vector3<f32>) {
+        world.add_kinematic(
+            EntityId::from_inner(1095).unwrap(),
+            center,
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            half * 2.0,
+            CollisionGroup::solid(InteractionGroups::new(
+                InternalCollisionGroups::WORLD.bits.into(),
+                InternalCollisionGroups::ALL.bits.into(),
+                Default::default(),
+            )),
+            false,
+        );
+    }
+
+    #[test]
+    fn world_panel_visibility_preserves_open_distance() {
+        let (mut world, mut player) = world_with_floor();
+        step(&mut world, &mut player, 1);
+
+        assert_eq!(
+            world.world_panel_obstruction_distance(
+                point3(0.0, 2.0, 0.0),
+                identity_quat(),
+                cgmath::vec2(1.4, 0.3),
+                vec3(0.0, 0.0, 1.0),
+                2.0,
+            ),
+            None,
+            "open space must leave the caller's intended distance unchanged"
+        );
+    }
+
+    #[test]
+    fn world_panel_visibility_catches_an_edge_obstruction_that_a_center_ray_misses() {
+        let (mut world, mut player) = world_with_floor();
+        // This narrow pillar covers only the right edge of a 1.4-wide panel.
+        // A center ray at x=0 is clear, so the footprint probes are load-bearing.
+        add_world_box(&mut world, vec3(0.65, 2.0, 1.8), vec3(0.2, 0.5, 0.15));
+        step(&mut world, &mut player, 1);
+
+        assert!(
+            world
+                .ray_cast2(
+                    point3(0.0, 2.0, 0.0),
+                    vec3(0.0, 0.0, 1.0),
+                    2.0,
+                    InternalCollisionGroups::WORLD,
+                    None,
+                    true,
+                )
+                .is_none(),
+            "fixture must not be visible to a center-only probe"
+        );
+        assert!(
+            world
+                .ray_cast2(
+                    point3(0.0, 2.0, 0.0),
+                    vec3(0.7, 0.0, 2.0),
+                    vec3(0.7, 0.0, 2.0).magnitude(),
+                    InternalCollisionGroups::WORLD,
+                    None,
+                    true,
+                )
+                .is_some(),
+            "fixture must cover the panel's right-edge visibility ray"
+        );
+        let obstruction = world
+            .world_panel_obstruction_distance(
+                point3(0.0, 2.0, 0.0),
+                identity_quat(),
+                cgmath::vec2(1.4, 0.3),
+                vec3(0.0, 0.0, 1.0),
+                2.0,
+            )
+            .expect("the wide panel edge must meet the pillar");
+        assert!(
+            (1.5..1.8).contains(&obstruction),
+            "panel edge ray should meet the pillar's near face, got {obstruction}"
+        );
     }
 
     #[test]
