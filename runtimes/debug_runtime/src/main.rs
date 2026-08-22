@@ -780,7 +780,7 @@ fn run_game_blocking(
         // Render the game
         let ratio = SCR_WIDTH as f32 / SCR_HEIGHT as f32;
         let projection_matrix: cgmath::Matrix4<f32> =
-            cgmath::perspective(cgmath::Deg(45.0), ratio, 0.1, 1000.0);
+            cgmath::perspective(cgmath::Deg(game.desired_fov_deg()), ratio, 0.1, 1000.0);
 
         let screen_size = vec2(SCR_WIDTH as f32, SCR_HEIGHT as f32);
 

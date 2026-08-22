@@ -102,6 +102,12 @@ dev_params! {
     /// deferral). Consequently the debug runtime cannot exercise this knob;
     /// it needs a worn check on device.
     EYE_HEIGHT_OFFSET = float("eye_offset", "Eye height (m)", 0.0, -0.5, 0.5, 0.02),
+    /// Live override for the flat runtimes' projection FOV, in degrees. `0`
+    /// (the default) means "no override - use `Game::desired_fov_deg()`";
+    /// any positive value forces that FOV instead, for verifying the
+    /// game-driven FOV seam (issue #1088) without a rebuild. VR is
+    /// untouched: OpenXR view FOVs must be used as-is.
+    FOV_OVERRIDE_DEG = float("fov_override_deg", "FOV override (deg)", 0.0, 0.0, 120.0, 1.0),
 }
 
 /// Every parameter with its id, in declaration order.

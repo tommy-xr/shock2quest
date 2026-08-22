@@ -90,6 +90,13 @@ pub const PLAYER_EYE_HEIGHT: f32 = physics::PLAYER_HEAD_POS + physics::PLAYER_EY
 /// cannot poke through a low ceiling the collider clears.
 pub const PLAYER_CROUCH_EYE_HEIGHT: f32 = 1.2;
 
+/// Default vertical FOV, in degrees, for the flat runtimes' projection
+/// matrix. `Game::desired_fov_deg` starts here and can be driven game-side
+/// (see `Game::set_desired_fov_deg`) - the planned first consumer is a
+/// "cyber interface" mode that pulls the FOV in while its overlay is up.
+/// VR is untouched: OpenXR view FOVs must be used as-is.
+pub const DEFAULT_FOV_DEG: f32 = 45.0;
+
 /// Real-world meters per world unit: 1 world unit is `dark::SCALE_FACTOR`
 /// (2.5) SS2 feet, and an SS2 foot is a real foot (0.3048 m). VR runtimes
 /// divide floor-relative tracked poses (meters) by this before feeding them
@@ -464,6 +471,10 @@ pub struct Game {
     /// runs before `render_per_eye` and the projection does not change between
     /// them.
     view_extents: (f32, f32),
+
+    /// Per-frame desired FOV (vertical, degrees) for the flat runtimes'
+    /// projection matrix. See [`Game::desired_fov_deg`].
+    desired_fov_deg: f32,
 }
 
 /// Player state for debug introspection. Entity ids use `EntityId::inner() as
@@ -1245,6 +1256,7 @@ impl Game {
                 Quaternion::new(1.0, 0.0, 0.0, 0.0),
             ),
             view_extents: hit_feedback::DEFAULT_VIEW_EXTENTS,
+            desired_fov_deg: DEFAULT_FOV_DEG,
         }
     }
 
@@ -1795,6 +1807,32 @@ impl Game {
         player_eye_height_for(self.active_game_scene.player_is_crouched())
     }
 
+    /// Vertical FOV (degrees) the flat runtimes should build their projection
+    /// matrix with this frame. Defaults to [`DEFAULT_FOV_DEG`] and is unset by
+    /// anything today; [`Game::set_desired_fov_deg`] is the internal seam a
+    /// future gameplay/UI mode (e.g. the cyber-interface overlay) will drive
+    /// it from. `dev_params::FOV_OVERRIDE_DEG` can force a value live for
+    /// testing without a rebuild.
+    ///
+    /// VR is explicitly out of scope: OpenXR view FOVs must be used as-is, so
+    /// `oculus_runtime` does not read this.
+    pub fn desired_fov_deg(&self) -> f32 {
+        let override_deg = dev_params::get(dev_params::FOV_OVERRIDE_DEG);
+        if override_deg > 0.0 {
+            override_deg
+        } else {
+            self.desired_fov_deg
+        }
+    }
+
+    /// Internal seam for gameplay/UI code to drive [`Game::desired_fov_deg`].
+    /// Not called anywhere yet - the first consumer is the planned
+    /// cyber-interface mode. Smoothing/easing is the caller's responsibility.
+    #[allow(dead_code)]
+    pub(crate) fn set_desired_fov_deg(&mut self, fov_deg: f32) {
+        self.desired_fov_deg = fov_deg;
+    }
+
     /// Height (world units) of the player collider's center above the surface
     /// it stands on, for the current stance. VR runtimes subtract this from
     /// the pawn position returned by [`Game::render`] to anchor floor-relative
@@ -2179,6 +2217,21 @@ impl App {
         match self {
             App::Ready(game) => game.player_center_above_floor(),
             App::MissingAssets(_) => physics::player_center_above_floor(false),
+        }
+    }
+
+    /// See [`Game::desired_fov_deg`].
+    pub fn desired_fov_deg(&self) -> f32 {
+        match self {
+            App::Ready(game) => game.desired_fov_deg(),
+            App::MissingAssets(_) => {
+                let override_deg = dev_params::get(dev_params::FOV_OVERRIDE_DEG);
+                if override_deg > 0.0 {
+                    override_deg
+                } else {
+                    DEFAULT_FOV_DEG
+                }
+            }
         }
     }
 
