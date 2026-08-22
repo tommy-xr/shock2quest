@@ -302,21 +302,11 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         match msg {
             ContainerGuiMsg::GrabbedWithLeftHand(ent) => (
                 state.clone(),
-                Effect::GrabEntity {
-                    entity_id: *ent,
-                    hand: crate::vr_config::Handedness::Left,
-                    // TODO: Set this up to break link
-                    current_parent_id: None,
-                },
+                panel_grab_effect(world, *ent, crate::vr_config::Handedness::Left),
             ),
             ContainerGuiMsg::GrabbedWithRightHand(ent) => (
                 state.clone(),
-                Effect::GrabEntity {
-                    entity_id: *ent,
-                    hand: crate::vr_config::Handedness::Right,
-                    // TODO: Set this up to break link
-                    current_parent_id: None,
-                },
+                panel_grab_effect(world, *ent, crate::vr_config::Handedness::Right),
             ),
             // Wield-or-use (backpack click): a carried weapon - gun
             // (PropPlayerGun) or melee (PropLimbModel) - is wielded through
@@ -380,6 +370,21 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                         (state.clone(), Effect::NoEffect)
                     };
                 }
+                // PropKeySrc gets an `internal_keycard` script even when its
+                // retail frob metadata is just MOVE. Scripted loot must run
+                // that Frob before any generic transfer, or the physical card
+                // reaches the backpack without its unlock credential (#583).
+                if crate::virtual_hand::uses_scripted_world_frob(world, *ent) {
+                    return (
+                        state.clone(),
+                        Effect::Send {
+                            msg: Message {
+                                payload: MessagePayload::Frob,
+                                to: *ent,
+                            },
+                        },
+                    );
+                }
                 let inventory_entity = world
                     .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
                     .map(|player| player.inventory_entity_id)
@@ -399,13 +404,41 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
     }
 }
 
+/// A squeeze over a panel normally retrieves the icon into that hand. A
+/// keycard is the one semantic exception: it represents a collected access
+/// credential, so every panel (corpse loot and the backpack alike) must route
+/// the gesture through its derived keycard Frob instead of physically holding
+/// an unregistered object.
+fn panel_grab_effect(
+    world: &World,
+    entity_id: EntityId,
+    hand: crate::vr_config::Handedness,
+) -> Effect {
+    if crate::virtual_hand::is_key_source(world, entity_id) {
+        Effect::Send {
+            msg: Message {
+                payload: MessagePayload::Frob,
+                to: entity_id,
+            },
+        }
+    } else {
+        Effect::GrabEntity {
+            entity_id,
+            hand,
+            current_parent_id: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::gui::GuiInputInfo;
     use crate::mission::PlayerInfo;
     use cgmath::{Quaternion, point2, vec3};
-    use dark::properties::{FrobFlag, Links, PropFrobInfo, PropHitPoints, ToLink, WrappedEntityId};
+    use dark::properties::{
+        FrobFlag, KeyCard, Links, PropFrobInfo, PropHitPoints, PropKeySrc, ToLink, WrappedEntityId,
+    };
 
     /// A world with a loot container holding one iconed, grabbable item,
     /// plus the player-info unique the Take path resolves the backpack
@@ -438,6 +471,17 @@ mod tests {
             inventory_entity_id: inventory,
         });
         (world, container, item, inventory)
+    }
+
+    fn mark_as_keycard(world: &mut World, item: EntityId) {
+        world.add_component(
+            item,
+            PropKeySrc(KeyCard {
+                is_master: false,
+                region_id: 128,
+                lock_id: 0,
+            }),
+        );
     }
 
     fn input_at(cursor: cgmath::Point2<f32>, pressed: bool) -> GuiInputInfo {
@@ -491,6 +535,90 @@ mod tests {
             }
             other => panic!("Take should transfer via DropEntityInfo, got {:?}", other),
         }
+    }
+
+    /// Hydro2 Card B is both grabbable (`MOVE`) and a derived key source. A
+    /// loot-panel trigger click must run `internal_keycard` instead of silently
+    /// reparenting the object and skipping the region-128 credential.
+    #[test]
+    fn loot_container_click_frobs_a_keycard() {
+        let (mut world, container, item, _inventory) = loot_world();
+        mark_as_keycard(&mut world, item);
+        let gui = ContainerGui::loot_container();
+
+        let (_state, effect) = gui.handle_msg(
+            container,
+            &world,
+            &ContainerGuiState {},
+            &ContainerGuiMsg::Take(item),
+        );
+
+        assert!(
+            matches!(
+                effect,
+                Effect::Send {
+                    msg: Message {
+                        to,
+                        payload: MessagePayload::Frob,
+                    },
+                } if to == item
+            ),
+            "taking a keycard must collect its credential, got {effect:?}"
+        );
+    }
+
+    /// In VR a squeeze over either a corpse-loot or backpack icon normally
+    /// emits `GrabbedWith*`. Keycards are collected credentials, so that edge
+    /// must Frob them rather than putting an unregistered physical card in the
+    /// hand. Ordinary MOVE loot keeps the existing grab behavior.
+    #[test]
+    fn vr_panel_grab_frobs_only_keycards() {
+        let (mut world, container, keycard, _inventory) = loot_world();
+        mark_as_keycard(&mut world, keycard);
+        let ordinary = world.add_entity(PropFrobInfo {
+            world_action: FrobFlag::MOVE,
+            inventory_action: FrobFlag::empty(),
+            tool_action: FrobFlag::empty(),
+        });
+        let gui = ContainerGui::loot_container();
+
+        for message in [
+            ContainerGuiMsg::GrabbedWithLeftHand(keycard),
+            ContainerGuiMsg::GrabbedWithRightHand(keycard),
+        ] {
+            let (_state, effect) =
+                gui.handle_msg(container, &world, &ContainerGuiState {}, &message);
+            assert!(
+                matches!(
+                    effect,
+                    Effect::Send {
+                        msg: Message {
+                            to,
+                            payload: MessagePayload::Frob,
+                        },
+                    } if to == keycard
+                ),
+                "VR keycard squeeze must collect instead of hold, got {effect:?}"
+            );
+        }
+
+        let (_state, effect) = gui.handle_msg(
+            container,
+            &world,
+            &ContainerGuiState {},
+            &ContainerGuiMsg::GrabbedWithRightHand(ordinary),
+        );
+        assert!(
+            matches!(
+                effect,
+                Effect::GrabEntity {
+                    entity_id,
+                    hand: crate::vr_config::Handedness::Right,
+                    ..
+                } if entity_id == ordinary
+            ),
+            "ordinary MOVE loot must remain grabbable, got {effect:?}"
+        );
     }
 
     /// Both panels' item grids must land on the cell separators authored into
