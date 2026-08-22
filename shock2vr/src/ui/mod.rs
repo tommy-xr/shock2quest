@@ -34,6 +34,7 @@ use crate::vr_config::Handedness;
 pub mod dev_params_panel;
 mod frontend_menu;
 mod frontend_pointer;
+mod frontend_presentation;
 mod frontend_sfx;
 mod panel_anchor;
 mod pointer_visual;
@@ -48,6 +49,7 @@ pub use frontend_pointer::test_support;
 pub use frontend_pointer::{
     FrontendPointerPass, FrontendRay, VR_TRIGGER_THRESHOLD, vr_frontend_pointer_pass,
 };
+pub use frontend_presentation::FrontendCanvasPresenter;
 pub use frontend_sfx::FrontendSfx;
 pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
 pub use pointer_visual::PointerVisuals;

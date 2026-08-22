@@ -28,7 +28,7 @@ use engine::{
 use shipyard::{EntityId, World};
 
 use crate::{
-    GameOptions, PresentationMode,
+    GameOptions,
     game_scene::GameScene,
     input_context::InputContext,
     install::InstallStatus,
@@ -36,8 +36,8 @@ use crate::{
     scripts::{Effect, GlobalEffect},
     time::Time,
     ui::{
-        BUILTIN_FONT, FrontendPanelAnchor, HAlign, Rect, ScaleMode, UiCanvas, VAlign,
-        VR_COMPONENT_Z_STEP,
+        BUILTIN_FONT, FrontendCanvasPresenter, FrontendPanelAnchor, HAlign, Rect, ScaleMode,
+        UiCanvas, VAlign,
     },
 };
 
@@ -276,19 +276,10 @@ impl GameScene for NoAssetsScene {
         options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
-        if options.presentation_mode != PresentationMode::Vr {
-            // Flat draws in screen space from `render_per_eye`, which is where
-            // the screen size is known.
-            return (Vec::new(), vec3(0.0, 0.0, 0.0), identity);
-        }
         let panel = self.panel_anchor.panel();
-        let objects = self.build_canvas().render_world_space(
-            asset_cache,
-            panel.transform(),
-            None,
-            None,
-            VR_COMPONENT_Z_STEP,
-        );
+        let canvas = self.build_canvas();
+        let objects = FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE)
+            .render_world_space(asset_cache, &canvas, &panel, None);
         (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
@@ -300,13 +291,12 @@ impl GameScene for NoAssetsScene {
         screen_size: Vector2<f32>,
         options: &GameOptions,
     ) -> Vec<SceneObject> {
-        if options.presentation_mode == PresentationMode::Vr {
-            // In VR the panel from `render` already carries the canvas; a
-            // screen-space copy would paste it over both eyes and hide it.
-            return Vec::new();
-        }
-        self.build_canvas()
-            .render_screen_space(asset_cache, screen_size, SCALE_MODE)
+        let canvas = self.build_canvas();
+        FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE).render_screen_space(
+            asset_cache,
+            &canvas,
+            screen_size,
+        )
     }
 
     fn handle_effects(

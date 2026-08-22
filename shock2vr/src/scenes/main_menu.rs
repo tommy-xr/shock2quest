@@ -26,7 +26,7 @@ use engine::{
 use shipyard::{EntityId, UniqueViewMut, World};
 
 use crate::{
-    GameOptions, PresentationMode,
+    GameOptions,
     game_scene::GameScene,
     input_context::InputContext,
     mission::GlobalContext,
@@ -344,16 +344,10 @@ impl GameScene for MainMenuScene {
         options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
-        // In flat presentation the menu is drawn in screen space in
-        // `render_per_eye` (which has the screen size); the 3D scene is empty.
-        if options.presentation_mode != PresentationMode::Vr {
-            return (Vec::new(), vec3(0.0, 0.0, 0.0), identity);
-        }
-
-        // In VR there is no screen to draw on, so the same canvas is presented
-        // on a world-space panel in front of the player.
         let canvas = self.build_canvas(asset_cache, self.menu.pointer_canvas());
-        let objects = self.menu.render_world_space(asset_cache, canvas);
+        let objects = self
+            .menu
+            .render_world_space(asset_cache, canvas, options.presentation_mode);
         (objects, vec3(0.0, 0.0, 0.0), identity)
     }
 
@@ -365,16 +359,10 @@ impl GameScene for MainMenuScene {
         screen_size: Vector2<f32>,
         options: &GameOptions,
     ) -> Vec<SceneObject> {
-        // In VR the menu lives on a world-space panel drawn by `render`; a
-        // screen-space copy here would paste the whole canvas over both eyes
-        // and hide it.
-        if options.presentation_mode == PresentationMode::Vr {
-            return Vec::new();
-        }
         let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
         let canvas = self.build_canvas(asset_cache, pointer_canvas);
         self.menu
-            .render_screen_space(asset_cache, canvas, screen_size)
+            .render_screen_space(asset_cache, canvas, screen_size, options.presentation_mode)
     }
 
     fn handle_effects(
