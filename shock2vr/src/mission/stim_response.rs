@@ -302,6 +302,7 @@ mod tests {
             link: Link::StimSource(StimSourceOptions {
                 intensity,
                 propagator,
+                lifecycle: Default::default(),
             }),
         }
     }

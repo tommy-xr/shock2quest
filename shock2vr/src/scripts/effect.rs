@@ -336,6 +336,16 @@ pub enum Effect {
         force: Vector3<f32>,
     },
 
+    /// A radius stimulus without explosion physics (environmental sparks,
+    /// swarms, radiation sources). Entities in range resolve the authored stim
+    /// through their receptrons; dynamic bodies are not pushed.
+    RadiusStim {
+        center: Vector3<f32>,
+        radius: f32,
+        intensity: f32,
+        stim_template_id: i32,
+    },
+
     /// A radius stim blast (explosions): entities within `radius` of `center`
     /// receive the stim at `intensity` with linear distance falloff - damage
     /// is resolved per target through its receptrons for `stim_template_id`
