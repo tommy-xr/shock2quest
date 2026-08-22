@@ -177,14 +177,14 @@ impl Gui<MediaGuiState, MediaGuiMsg> for MediaGui {
         if let Ok(data) = v_data.get(entity_id) {
             if let Some(portrait) = &data.portrait {
                 components.push(
-                    gui::image(&format!("{}.pcx", portrait.to_ascii_lowercase()))
+                    gui::image(portrait)
                         .with_position(vec2(PORTRAIT_POS.0, PORTRAIT_POS.1))
                         .with_size(vec2(PORTRAIT_SIZE.0, PORTRAIT_SIZE.1)),
                 );
             }
             if let Some(icon) = &data.icon {
                 components.push(
-                    gui::image(&format!("{}.pcx", icon.to_ascii_lowercase()))
+                    gui::image(icon)
                         .with_position(vec2(ICON_POS.0, ICON_POS.1))
                         .with_size(vec2(ICON_SIZE.0, ICON_SIZE.1)),
                 );

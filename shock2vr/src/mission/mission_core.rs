@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    path::Path,
     rc::Rc,
     sync::Arc,
     time::{Duration, SystemTime},
@@ -119,6 +120,38 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 /// floor-lying crumple pose doesn't start deeply interpenetrating the level
 /// trimesh (see `spawn_ragdoll`).
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
+
+/// Resolve optional media-reader portrait/icon art before it becomes a shared
+/// UI image. STR tables author extension-less PCX-era names, while replacement
+/// layers may provide the same art under a modern encoding (SCP's Earth
+/// `RamsIcon` is PNG). Missing optional art is omitted here; the shared canvas
+/// renderer remains strict for required UI assets such as the reader backdrop.
+fn resolve_optional_log_art_texture(
+    asset_cache: &AssetCache,
+    deck: u32,
+    log: u32,
+    role: &str,
+    authored: Option<String>,
+) -> Option<String> {
+    let authored = authored?;
+    let authored = authored.trim();
+    if authored.is_empty() {
+        return None;
+    }
+    let requested = if Path::new(authored).extension().is_some() {
+        authored.to_owned()
+    } else {
+        format!("{authored}.pcx")
+    };
+    let resolved = dark::util::resolve_texture_name(asset_cache, &requested);
+    if resolved.is_none() {
+        game_log!(
+            WARN,
+            "audio log {deck}/{log} omits missing optional {role} texture '{requested}'"
+        );
+    }
+    resolved
+}
 /// Cold model loads make entity initialization the longest main-thread load
 /// loop, so periodically let the host service its platform queues.
 const LOAD_EVENT_PUMP_ENTITY_INTERVAL: usize = 32;
@@ -3448,8 +3481,20 @@ impl MissionCore {
         let data = crate::runtime_props::RuntimePropLogData {
             name: get("logname"),
             text: get("logtext"),
-            portrait: get("logportrait"),
-            icon: get("logicon"),
+            portrait: resolve_optional_log_art_texture(
+                asset_cache,
+                deck,
+                log,
+                "portrait",
+                get("logportrait"),
+            ),
+            icon: resolve_optional_log_art_texture(
+                asset_cache,
+                deck,
+                log,
+                "deck icon",
+                get("logicon"),
+            ),
         };
         if data.text.as_deref().is_none_or(str::is_empty) {
             return false;
@@ -9461,6 +9506,83 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
         self.script_world.dispatch(Message { to: id, payload });
         true
+    }
+}
+
+#[cfg(test)]
+mod log_reader_art_tests {
+    use std::{cell::RefCell, collections::HashSet, io::Cursor};
+
+    use engine::assets::asset_paths::{AbstractAssetPath, ReadableAndSeekable};
+
+    use super::*;
+
+    struct FakeAssetPath(HashSet<String>);
+
+    impl AbstractAssetPath for FakeAssetPath {
+        fn exists(&self, _base_path: String, asset_name: String) -> bool {
+            self.0.contains(&asset_name)
+        }
+
+        fn get_reader(
+            &self,
+            _base_path: String,
+            asset_name: String,
+        ) -> Option<RefCell<Box<dyn ReadableAndSeekable>>> {
+            self.exists(String::new(), asset_name)
+                .then(|| RefCell::new(Box::new(Cursor::new(Vec::new())) as _))
+        }
+    }
+
+    fn cache(names: &[&str]) -> AssetCache {
+        AssetCache::new(
+            String::new(),
+            Box::new(FakeAssetPath(
+                names.iter().map(|name| (*name).to_owned()).collect(),
+            )),
+        )
+    }
+
+    #[test]
+    fn optional_log_art_resolves_alternate_encoding_and_omits_missing_keys() {
+        let assets = cache(&["ramsicon.png", "ramsicon.pcx", "bayliss.pcx"]);
+
+        assert_eq!(
+            resolve_optional_log_art_texture(
+                &assets,
+                1,
+                24,
+                "deck icon",
+                Some("RamsIcon".to_owned()),
+            ),
+            Some("ramsicon.png".to_owned()),
+            "the upgraded encoding must win over a same-mount legacy PCX"
+        );
+        assert_eq!(
+            resolve_optional_log_art_texture(
+                &assets,
+                1,
+                24,
+                "portrait",
+                Some("Bayliss".to_owned()),
+            ),
+            Some("bayliss.pcx".to_owned())
+        );
+        assert_eq!(
+            resolve_optional_log_art_texture(
+                &assets,
+                1,
+                24,
+                "deck icon",
+                Some("NotShipped".to_owned()),
+            ),
+            None,
+            "missing optional art must never reach the infallible UI renderer"
+        );
+        assert_eq!(
+            resolve_optional_log_art_texture(&assets, 1, 24, "portrait", Some("  ".to_owned()),),
+            None
+        );
     }
 }
 

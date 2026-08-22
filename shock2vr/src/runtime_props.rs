@@ -291,9 +291,11 @@ pub struct RuntimePropMapData {
     pub explored_rects: Vec<dark::map::MapRect>,
 }
 
-// RuntimePropLogData - the resolved presentation strings for an audio log,
+// RuntimePropLogData - the resolved presentation data for an audio log,
 // attached to the player-owned media host when playback opens. The reader
 // panel (`MediaGui`) reads it to render the portrait/deck-icon/name/transcript.
+// Portrait/icon values are concrete, existing texture keys (including their
+// resolved extension), not the extension-less names authored in the STR file.
 // Not serialized: it is a presentation cache derived from the string tables and
 // is re-resolved the next time the reader opens (the log identity persists in
 // `QuestInfo`).
