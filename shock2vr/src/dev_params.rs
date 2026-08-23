@@ -118,6 +118,30 @@ dev_params! {
     /// `2 * sqrt(stiffness)` is critically damped in Rapier's acceleration-
     /// based motor model; the default is therefore critical at stiffness 900.
     MELEE_SPRING_DAMPING = float("melee_damping", "Melee damping", 60.0, 0.0, 200.0, 5.0),
+    /// Minimum contact speed, in world units per second, at which a held melee
+    /// weapon damages what it touches *without* the trigger being pulled.
+    ///
+    /// `0` (the default) keeps the shipped rule: contact damage happens only
+    /// inside a trigger-held attack window (`TriggeredMeleeWeapon`). Any
+    /// positive value is the physical rule instead - a swing damages because
+    /// it was moving, not because a button was down - with the value acting as
+    /// the swing/graze threshold so a weapon resting against a creature does
+    /// nothing. `debug_melee` turns it on; missions leave it at 0 until the
+    /// physical model is the shipped one.
+    MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Melee free swing", 0.0, 0.0, 20.0, 0.5),
+    /// Draw the tracked-hand glove *in addition to* a wielded weapon's own
+    /// first-person model, instead of letting the weapon model stand in for the
+    /// hand. `0` off, `1` on.
+    ///
+    /// This is the melee grip calibration instrument: the `_h` melee rigs bake
+    /// their own arm and fist, and nothing else in the game shows where that
+    /// baked fist lands relative to where the controller actually is. With both
+    /// drawn at once the offset is directly visible - and directly tunable,
+    /// since the registry reaches a headset without a rebuild.
+    ///
+    /// A 0/1 float because the registry has no `Bool` kind yet; it should
+    /// become one when that lands.
+    MELEE_GLOVE_OVERLAY = float("melee_glove_overlay", "Melee glove overlay", 0.0, 0.0, 1.0, 1.0),
 }
 
 /// Every parameter with its id, in declaration order.
