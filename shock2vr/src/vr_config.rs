@@ -322,9 +322,21 @@ fn melee_wield_alignment(arm: MeleePosedArm) -> Quaternion<f32> {
 /// separately fits the body's collider around the rendered weapon vertices,
 /// including the handle/blade extending back from the joint.
 pub fn melee_contact_offset(arm: MeleePosedArm) -> Vector3<f32> {
+    melee_contact_offset_scaled(arm, melee_wield_scale())
+}
+
+fn melee_contact_offset_scaled(arm: MeleePosedArm, scale: f32) -> Vector3<f32> {
     use cgmath::Rotation;
 
-    melee_wield_alignment(arm).rotate_vector(arm.weapon - arm.fist)
+    scale * melee_wield_alignment(arm).rotate_vector(arm.weapon - arm.fist)
+}
+
+/// Live tuning for how large a wielded melee view model is drawn - see
+/// [`crate::dev_params::MELEE_WIELD_SCALE`]. Both halves of the placement read
+/// it, so the grip and the contact collider scale together and the
+/// "rendered weapon head lands on the collider" invariant is unaffected.
+fn melee_wield_scale() -> f32 {
+    crate::dev_params::get(crate::dev_params::MELEE_WIELD_SCALE)
 }
 
 /// Model-space transform that seats a posed melee `_h` arm's baked fist on the
@@ -337,9 +349,14 @@ pub fn melee_contact_offset(arm: MeleePosedArm) -> Vector3<f32> {
 /// the entity is at `hand + contact`, this cancels that same `contact`, and the
 /// weapon joint therefore renders exactly on the collider for any rig.
 pub fn melee_wield_pose_correction(arm: MeleePosedArm) -> cgmath::Matrix4<f32> {
+    melee_wield_pose_correction_scaled(arm, melee_wield_scale())
+}
+
+fn melee_wield_pose_correction_scaled(arm: MeleePosedArm, scale: f32) -> cgmath::Matrix4<f32> {
     use cgmath::Matrix4;
 
-    Matrix4::from_translation(-melee_contact_offset(arm))
+    Matrix4::from_translation(-melee_contact_offset_scaled(arm, scale))
+        * Matrix4::from_scale(scale)
         * Matrix4::from(melee_wield_alignment(arm))
         * Matrix4::from_translation(-arm.fist)
 }
@@ -538,6 +555,43 @@ mod tests {
                 fist.to_vec().magnitude() < 1e-4,
                 "{name}: rendered fist {fist:?} is off the tracked hand"
             );
+        }
+    }
+
+    /// The wield-scale knob must move the drawn weapon *without* breaking the
+    /// two things the placement guarantees: the baked fist stays on the
+    /// controller and the rendered weapon head stays on the contact collider.
+    /// Exercised through the scale-explicit form rather than the dev-param
+    /// registry, so it neither mutates process-global state other tests
+    /// simulate against nor depends on the default staying 1.0.
+    #[test]
+    fn melee_wield_scale_keeps_the_fist_and_the_collider_honest() {
+        use cgmath::{EuclideanSpace, InnerSpace, Matrix4, Point3, Transform};
+
+        for (name, arm) in posed_melee_arms() {
+            let full = melee_contact_offset_scaled(arm, 1.0).magnitude();
+            for scale in [0.5f32, 1.0, 1.25] {
+                let contact = melee_contact_offset_scaled(arm, scale);
+                assert!(
+                    (contact.magnitude() - scale * full).abs() < 1e-4,
+                    "{name} at {scale}: reach {} is not {scale}x the authored {full}",
+                    contact.magnitude()
+                );
+
+                let entity = Matrix4::from_translation(contact);
+                let rendered = entity * melee_wield_pose_correction_scaled(arm, scale);
+
+                let fist = rendered.transform_point(Point3::from_vec(arm.fist));
+                assert!(
+                    fist.to_vec().magnitude() < 1e-4,
+                    "{name} at {scale}: rendered fist {fist:?} left the tracked hand"
+                );
+                let head = rendered.transform_point(Point3::from_vec(arm.weapon));
+                assert!(
+                    (head - Point3::from_vec(contact)).magnitude() < 1e-4,
+                    "{name} at {scale}: rendered weapon head {head:?} left the collider"
+                );
+            }
         }
     }
 
