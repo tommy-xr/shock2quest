@@ -73,6 +73,11 @@ struct Metrics {
     penetration_m: f32,
     /// Frames to recover to within 2 cm of the hand after the hand withdraws.
     springback_frames: Option<usize>,
+    /// Worst orientation error at any point in the *whole* run, obstruction
+    /// included. A weapon that touches the world must not come away pointing
+    /// somewhere else - that was reported from a headset as the weapon
+    /// spinning out of the hand on contact with a bench.
+    max_any_lag_deg: f32,
     /// Whether the weapon body was asleep at the end of the settle window. An
     /// exactly-zero resting jitter would otherwise be indistinguishable from a
     /// slept body, which is a very different claim.
@@ -245,6 +250,12 @@ fn run(wall: bool, hold_only: bool) -> Metrics {
         }
     }
 
+    let max_any_lag_deg = samples
+        .iter()
+        .filter(|s| is_sane(s.weapon))
+        .map(|s| angle_between(s.hand_rot, s.weapon_rot))
+        .fold(0.0f32, f32::max);
+
     let free = &samples[..swung];
     let mut max_lag = 0.0f32;
     let mut max_lag_deg = 0.0f32;
@@ -265,6 +276,7 @@ fn run(wall: bool, hold_only: bool) -> Metrics {
         diverged,
         penetration_m: penetration,
         springback_frames: springback,
+        max_any_lag_deg,
         slept,
     }
 }
@@ -312,6 +324,14 @@ fn held_melee_is_still_stopped_by_world_geometry() {
     assert!(
         springback < 20,
         "recovering from the obstruction took {springback} frames"
+    );
+    // The regression this drive exists to prevent. A dynamic weapon took
+    // contact impulses through a body origin that sits out on the weapon head,
+    // and spun out of the hand on any touch.
+    assert!(
+        m.max_any_lag_deg < 5.0,
+        "hitting the wall turned the weapon {:.1} degrees off the hand",
+        m.max_any_lag_deg
     );
 }
 

@@ -2294,15 +2294,9 @@ impl PlayerHandle {
     }
 }
 
-/// Shorten `v` to `max` if it is longer, leaving direction alone. A zero or
-/// non-finite vector comes back as zero rather than as a NaN direction.
-fn clamp_magnitude(v: Vector<Real>, max: f32) -> Vector<Real> {
-    let length = v.norm();
-    if !length.is_finite() || length <= 0.0 {
-        return Vector::zeros();
-    }
-    if length > max { v * (max / length) } else { v }
-}
+/// Clearance the held-melee sweep stops short of a surface by, so a weapon
+/// resting against one does not re-report a zero-distance hit every frame.
+const HELD_MELEE_SKIN: f32 = 0.01;
 
 pub struct PhysicsWorld {
     gravity: Vector<Real>,
@@ -2672,15 +2666,18 @@ impl PhysicsWorld {
         }
     }
 
-    /// Turn an existing loose-prop body into a velocity-driven contact shape
+    /// Turn an existing loose-prop body into a swept kinematic contact shape
     /// while a melee weapon is held in VR.
     ///
     /// The hand pose drives an invisible kinematic target; each step the
-    /// visible weapon is given exactly the velocity that lands it on that
-    /// target (see [`Self::drive_held_melee`]). The weapon stays *dynamic*, so
-    /// the solver still stops it against world geometry and still generates
-    /// contacts - what changes versus a joint motor is that in free space it
-    /// arrives, instead of trailing the hand by a spring's time constant.
+    /// visible weapon is *shape-cast* from where it is toward that target and
+    /// stopped at the first world surface in the way (see
+    /// [`Self::drive_held_melee`]). Kinematic, not dynamic: a dynamic weapon
+    /// is subject to contact impulses, and a contact against a body whose
+    /// origin sits out on the weapon head torques it - which in a headset
+    /// read as the weapon spinning out of the player's hand the moment it
+    /// touched anything. A swept kinematic body cannot be spun by the solver,
+    /// cannot tunnel, and still reports every contact.
     pub fn set_held_melee(&mut self, entity_id: EntityId) {
         let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
             return;
@@ -2689,10 +2686,9 @@ impl PhysicsWorld {
             let Some(body) = self.rigid_body_set.get_mut(handle) else {
                 return;
             };
-            body.set_body_type(RigidBodyType::Dynamic, true);
+            body.set_body_type(RigidBodyType::KinematicPositionBased, true);
             body.set_linvel(Vector::zeros(), true);
             body.set_angvel(Vector::zeros(), true);
-            body.set_gravity_scale(0.0, true);
             body.enable_ccd(true);
             (*body.position(), body.colliders().to_vec())
         };
@@ -2714,7 +2710,14 @@ impl PhysicsWorld {
 
         for collider_handle in collider_handles {
             if let Some(collider) = self.collider_set.get_mut(collider_handle) {
-                collider.set_active_collision_types(ActiveCollisionTypes::default());
+                // A kinematic body generates no contacts against fixed world
+                // or other kinematics under Rapier's defaults, and the whole
+                // point of this body is its contacts.
+                collider.set_active_collision_types(
+                    ActiveCollisionTypes::default()
+                        | ActiveCollisionTypes::KINEMATIC_KINEMATIC
+                        | ActiveCollisionTypes::KINEMATIC_FIXED,
+                );
             }
         }
         self.set_collision_group(entity_id, CollisionGroup::held_melee());
@@ -3696,37 +3699,34 @@ impl PhysicsWorld {
         }
     }
 
-    /// Put each held melee weapon onto its tracked-hand target by *velocity*:
-    /// the exact linear and angular velocity that, integrated over one step,
-    /// lands the body on the pose the hand asked for.
+    /// Move each held melee weapon toward its tracked-hand target, stopping it
+    /// at the first world surface in the way.
     ///
-    /// This replaced a six-axis generic-joint position motor, and the reason is
-    /// worth keeping. Rapier solves `AngX`/`AngY`/`AngZ` motors per axis, which
-    /// is not a shortest-arc orientation servo; driven through a body whose
-    /// origin sits on the *weapon head* rather than in the grip, the linear and
-    /// angular motors also torque and translate each other. Measured (see
-    /// `physics::spring_sweep`), that left the weapon trailing a real swing by
-    /// several-fold and its orientation error still *growing* thirteen frames
-    /// after the hand had stopped - felt in a headset as heavy lag and as a
-    /// weapon pivoting about its head instead of about the grip.
+    /// The weapon is a *kinematic* body swept with a shape cast, which is the
+    /// third drive this has had and the first that behaves. A six-axis joint
+    /// motor trailed the hand badly and its orientation error kept growing
+    /// after the hand stopped. Driving a *dynamic* body by velocity fixed the
+    /// tracking, but left the weapon subject to contact impulses: the body's
+    /// origin sits out on the weapon head, so any contact torqued it and the
+    /// weapon spun out of the player's hand the moment it touched a bench.
     ///
-    /// Velocity tracking removes both at once. The pivot is a consequence, not
-    /// a separate fix: rotation about the wrong point is what a *lagging*
-    /// body's residual error looks like, so a drive that converges in one step
-    /// has no wrong pivot to show. The body stays dynamic, so the solver still
-    /// stops it dead against world geometry, still refuses to launch actors
-    /// (`CollisionGroup::held_melee`), and still reports every contact.
+    /// A swept kinematic body has neither failure. The solver applies no
+    /// impulses to it, so nothing can spin it; the sweep is what makes it
+    /// stop at a wall rather than pass through one; and its contacts are still
+    /// generated, which is what the damage rule reads.
     ///
-    /// Velocities are clamped so a discontinuous pose - a teleport that slipped
-    /// past `translate_held_melee_for_player_relocation`, a first frame after a
-    /// restore - cannot become an arbitrarily large impulse into the level.
+    /// Orientation always takes the hand's exactly - it is never swept.
+    /// Rotational sweeps are expensive and ill-defined against thin geometry,
+    /// and the failure they would prevent (turning the blade into a wall) is
+    /// far milder than the one taking the hand's rotation prevents (a weapon
+    /// whose angle is not the angle of the hand holding it).
+    ///
+    /// Only WORLD geometry blocks. Actors deliberately do not: a swing has to
+    /// travel *into* a creature to damage it, and loose props are better
+    /// swept through than treated as walls.
     fn drive_held_melee(&mut self) {
-        let dt = self.integration_parameters.dt;
-        if dt <= 0.0 {
-            return;
-        }
-        let max_linear = crate::dev_params::get(crate::dev_params::MELEE_MAX_SPEED);
-        let max_angular = crate::dev_params::get(crate::dev_params::MELEE_MAX_TURN);
+        let max_step = crate::dev_params::get(crate::dev_params::MELEE_MAX_SPEED)
+            * self.integration_parameters.dt;
         let pairs = self
             .held_melee_drives
             .iter()
@@ -3735,30 +3735,108 @@ impl PhysicsWorld {
         for (weapon, target) in pairs {
             // `next_position`, not `position`: the hand pose arrives through
             // `set_next_kinematic_position`, which Rapier only commits during
-            // the step. Reading the committed pose here would drive the weapon
-            // at where the hand was *last* frame, leaving a permanent
-            // one-frame lag that no amount of gain removes - measured at 0.068
-            // units through a swing, against 0.002 reading the pending pose.
-            let Some(target_pose) = self
+            // the step. Reading the committed pose would aim at where the hand
+            // was last frame, a permanent one-frame lag no gain removes.
+            let Some(desired) = self
                 .rigid_body_set
                 .get(target)
                 .map(|body| *body.next_position())
             else {
                 continue;
             };
-            let Some(body) = self.rigid_body_set.get_mut(weapon) else {
+            let Some(body) = self.rigid_body_set.get(weapon) else {
                 continue;
             };
-            let linear = (target_pose.translation.vector - body.translation()) / dt;
-            // Shortest arc: `q` and `-q` are the same orientation but
-            // `scaled_axis` would read the long way round for the negative one.
-            let mut delta = target_pose.rotation * body.rotation().inverse();
-            if delta.w < 0.0 {
-                delta = UnitQuaternion::new_unchecked(-delta.into_inner());
+            let current = *body.position();
+            let delta = desired.translation.vector - current.translation.vector;
+            let distance = delta.norm();
+
+            // Cap how far one step may carry the weapon, and sweep the capped
+            // distance - never skip the sweep for a long jump. Skipping it is
+            // how a fast hand walks the weapon through a wall, and "fast" is
+            // not a rare case in a test or a hitched frame. A genuine
+            // teleport does not need the bypass either: it carries both motor
+            // endpoints together (`translate_held_melee_for_player_relocation`),
+            // so the error the drive sees is already near zero.
+            let step = distance.min(max_step);
+            let allowed = if distance <= 1.0e-6 {
+                0.0
+            } else {
+                let direction = delta / distance;
+                step * self.held_melee_sweep_fraction(weapon, &current, direction, step)
+            };
+
+            let mut next = desired;
+            next.translation.vector = if distance <= 1.0e-6 {
+                desired.translation.vector
+            } else {
+                current.translation.vector + (delta / distance) * allowed
+            };
+            if let Some(body) = self.rigid_body_set.get_mut(weapon) {
+                body.set_next_kinematic_position(next);
             }
-            let angular = delta.scaled_axis() / dt;
-            body.set_linvel(clamp_magnitude(linear, max_linear), true);
-            body.set_angvel(clamp_magnitude(angular, max_angular), true);
+        }
+    }
+
+    /// How far along `direction * distance` this weapon's colliders may travel
+    /// before one of them meets world geometry, as a fraction in `0..=1`.
+    fn held_melee_sweep_fraction(
+        &self,
+        weapon: RigidBodyHandle,
+        current: &Isometry<Real>,
+        direction: Vector<Real>,
+        distance: Real,
+    ) -> Real {
+        let Some(body) = self.rigid_body_set.get(weapon) else {
+            return 1.0;
+        };
+        let filter = QueryFilter::new()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::ENTITY.bits.into(),
+                InternalCollisionGroups::WORLD.bits.into(),
+                Default::default(),
+            ))
+            .exclude_rigid_body(weapon)
+            .exclude_sensors();
+        let dispatcher = self.narrow_phase.query_dispatcher();
+        let queries = self.broad_phase.as_query_pipeline(
+            dispatcher,
+            &self.rigid_body_set,
+            &self.collider_set,
+            filter,
+        );
+
+        let mut nearest = distance;
+        for collider_handle in body.colliders() {
+            let Some(collider) = self.collider_set.get(*collider_handle) else {
+                continue;
+            };
+            // Sweep from the collider's own world pose: a fitted melee volume
+            // is offset from the body origin, so sweeping the body's origin
+            // would probe empty space beside the weapon.
+            let shape_pose = current * collider.position_wrt_parent().copied().unwrap_or_default();
+            if let Some((_, hit)) = queries.cast_shape(
+                &shape_pose,
+                &direction,
+                collider.shape(),
+                rapier3d::parry::query::ShapeCastOptions {
+                    max_time_of_impact: distance,
+                    // Leave a hair of clearance so a weapon resting on a
+                    // surface does not re-report a zero-distance hit forever.
+                    target_distance: HELD_MELEE_SKIN,
+                    // An already-penetrating start must not pin the weapon in
+                    // place; let it keep sweeping out.
+                    stop_at_penetration: false,
+                    compute_impact_geometry_on_penetration: true,
+                },
+            ) {
+                nearest = nearest.min(hit.time_of_impact);
+            }
+        }
+        if distance <= 0.0 {
+            1.0
+        } else {
+            (nearest / distance).clamp(0.0, 1.0)
         }
     }
 
@@ -5830,7 +5908,7 @@ mod tests {
     }
 
     #[test]
-    fn held_melee_is_spring_driven_contact_without_blocking_player() {
+    fn held_melee_is_swept_kinematic_contact_without_blocking_player() {
         let mut world = PhysicsWorld::new();
         let weapon = EntityId::from_inner(1).unwrap();
         world.add_dynamic(
@@ -5852,13 +5930,13 @@ mod tests {
             .find(|body| body.entity_id == Some(weapon.inner() as i32))
             .unwrap();
         assert_eq!(
-            body.body_type, "dynamic",
-            "the rendered weapon must remain solver-driven instead of teleporting to the hand"
+            body.body_type, "kinematic",
+            "the held weapon must be kinematic, so no contact impulse can spin it out of the hand"
         );
         assert!(!body.blocks_player, "the weapon must ignore its owner");
         assert!(
             body.blocks_actor,
-            "the driven weapon must retain actor contact detection"
+            "the swept weapon must retain actor contact detection"
         );
         assert_eq!(body.linear_velocity, [0.0; 3]);
         assert_eq!(body.angular_velocity, [0.0; 3]);
@@ -5877,15 +5955,13 @@ mod tests {
         );
     }
 
-    /// The visible/contact body reaches the pose the hand asked for, and does
-    /// it through the *solver* rather than by teleporting: it stays dynamic and
-    /// carries the velocity that took it there, which is what lets world
-    /// geometry stop it (asserted separately) and what makes its contacts
-    /// real. An earlier revision drove this with a joint motor and this test
-    /// asserted the opposite - that the weapon must *trail* its target - which
-    /// is what a headset reported as heavy lag.
+    /// In free space the weapon reaches the pose the hand asked for. An
+    /// earlier revision drove this with a joint motor and asserted the
+    /// opposite - that the weapon must *trail* its target - which is what a
+    /// headset reported as heavy lag. Being stopped by geometry is a separate
+    /// assertion; not being stopped by nothing is this one.
     #[test]
-    fn held_melee_weapon_reaches_its_controller_target_through_the_solver() {
+    fn held_melee_weapon_reaches_its_controller_target() {
         let (mut world, mut player) = world_with_floor();
         let weapon = EntityId::from_inner(2).unwrap();
         let handle = world.add_dynamic(
@@ -5902,18 +5978,6 @@ mod tests {
         world.set_position_rotation2(weapon, vec3(-2.0, 1.0, 0.0), identity_quat());
         step(&mut world, &mut player, 1);
         world.set_position_rotation2(weapon, vec3(0.0, 1.0, 0.0), identity_quat());
-
-        // Mid-flight: dynamic, and moving under its own velocity rather than
-        // having been placed.
-        world.update(vec3(0.0, 0.0, 0.0), &mut player);
-        assert_eq!(
-            world.rigid_body_set[handle].body_type(),
-            RigidBodyType::Dynamic
-        );
-        assert!(
-            world.get_velocity(weapon).unwrap().magnitude() > 0.0,
-            "the weapon should be carried by the solver, not repositioned"
-        );
 
         step(&mut world, &mut player, 3);
 
@@ -6066,7 +6130,7 @@ mod tests {
         );
         assert_eq!(
             world.rigid_body_set[handle].body_type(),
-            RigidBodyType::Dynamic
+            RigidBodyType::KinematicPositionBased
         );
     }
 
