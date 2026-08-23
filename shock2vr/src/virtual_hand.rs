@@ -1,6 +1,6 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-use cgmath::{Matrix4, Quaternion, Rotation, Vector3, Zero, point3, vec3};
+use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, Zero, point3, vec3};
 use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
 use engine::scene::SceneObject;
 use engine::script_log;
@@ -10,6 +10,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use tracing::{self, trace};
 
 use crate::{
+    gui::GuiPropProxyEntity,
     input_context::Hand,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     scripts::{Message, MessagePayload},
@@ -209,26 +210,8 @@ impl VirtualHand {
         // Also do a raycast to provide the 'Hover' effect
         let ray_start = point3(hand_position.x, hand_position.y, hand_position.z);
         let forward = hand_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-        let result = physics.ray_cast2(
-            ray_start,
-            forward,
-            100.0,
-            // TODO: Two raycasts...
-            // One for hit damage:
-            //InternalCollisionGroups::HITBOX
-            InternalCollisionGroups::ENTITIES
-                | InternalCollisionGroups::SELECTABLE
-                | InternalCollisionGroups::WORLD
-                | InternalCollisionGroups::UI
-                | InternalCollisionGroups::RAYCAST,
-            prev.get_held_entity(),
-            true,
-            //InternalCollisionGroups::all(),
-            // One for frobbing:
-            //CollisionGroups::WORLD | CollisionGroups::SELECTABLE,
-        );
-
-        let result = result.map(|r| resolve_hit_proxy_entity(world, r));
+        let result =
+            interaction_ray_cast(physics, world, ray_start, forward, prev.get_held_entity());
 
         let (hand, mut effs) = match prev.hand_state {
             HandState::Grabbing { entity_id } => {
@@ -420,24 +403,7 @@ fn handle_empty_hand_state(
 ) -> (VirtualHand, Vec<VirtualHandEffect>) {
     let ray_start = point3(hand_position.x, hand_position.y, hand_position.z);
     let forward = hand_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-    let result = physics.ray_cast2(
-        ray_start,
-        forward,
-        100.0,
-        // TODO: Two raycasts...
-        // One for hit damage,
-        //InternalCollisionGroups::HITBOX
-        InternalCollisionGroups::ENTITIES
-            | InternalCollisionGroups::SELECTABLE
-            | InternalCollisionGroups::WORLD
-            | InternalCollisionGroups::UI
-            | InternalCollisionGroups::RAYCAST,
-        held_by_other_hand,
-        true,
-        // One for frobbing:
-        //CollisionGroups::WORLD | CollisionGroups::SELECTABLE,
-    );
-    let result = result.map(|r| resolve_hit_proxy_entity(world, r));
+    let result = interaction_ray_cast(physics, world, ray_start, forward, held_by_other_hand);
     trace!("ray cast result: {:?}", &result);
     let mut msgs = Vec::new();
     let mut last_frobbed_entity = frobbed_entity;
@@ -644,9 +610,72 @@ fn resolve_hit_proxy_entity(world: &World, ray_cast_result: RayCastResult) -> Ra
     }
 }
 
+fn interaction_ray_cast(
+    physics: &PhysicsWorld,
+    world: &World,
+    ray_start: cgmath::Point3<f32>,
+    forward: Vector3<f32>,
+    entity_to_ignore: Option<EntityId>,
+) -> Option<RayCastResult> {
+    const MAX_INTERACTION_DISTANCE: f32 = 100.0;
+    let ordinary_groups = InternalCollisionGroups::ENTITIES
+        | InternalCollisionGroups::SELECTABLE
+        | InternalCollisionGroups::WORLD
+        | InternalCollisionGroups::RAYCAST;
+    let ui_hit = physics.ray_cast2(
+        ray_start,
+        forward,
+        MAX_INTERACTION_DISTANCE,
+        InternalCollisionGroups::UI,
+        entity_to_ignore,
+        true,
+    );
+
+    let gui_host = ui_hit.as_ref().and_then(|hit| {
+        let proxy = hit.maybe_entity_id?;
+        world
+            .borrow::<View<GuiPropProxyEntity>>()
+            .ok()?
+            .get(proxy)
+            .ok()
+            .map(GuiPropProxyEntity::host_entity)
+    });
+
+    if let (Some(ui_hit), Some(gui_host)) = (ui_hit, gui_host) {
+        let ui_distance = (ui_hit.hit_point - ray_start).magnitude();
+        let is_not_panel_host =
+            |entity_id| util::resolve_proxy_entity(world, entity_id) != gui_host;
+        let blocker = physics.ray_cast2_with_entity_filter(
+            ray_start,
+            forward,
+            ui_distance,
+            ordinary_groups,
+            entity_to_ignore,
+            true,
+            &is_not_panel_host,
+        );
+
+        blocker
+            .map(|result| resolve_hit_proxy_entity(world, result))
+            .or(Some(ui_hit))
+    } else {
+        physics
+            .ray_cast2(
+                ray_start,
+                forward,
+                MAX_INTERACTION_DISTANCE,
+                ordinary_groups | InternalCollisionGroups::UI,
+                entity_to_ignore,
+                true,
+            )
+            .map(|result| resolve_hit_proxy_entity(world, result))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physics::CollisionGroup;
     use dark::properties::{PropFrobInfo, PropPlayerGun};
 
     fn scripted_inventory_use() -> PropFrobInfo {
@@ -696,6 +725,118 @@ mod tests {
                 _ => None,
             })
             .expect("a rising trigger edge should message the actual held entity")
+    }
+
+    fn interaction_fixture() -> (World, PhysicsWorld, EntityId, EntityId) {
+        let mut world = World::new();
+        let host = world.add_entity(());
+        let proxy = world.add_entity(GuiPropProxyEntity::new(host));
+        let mut physics = PhysicsWorld::new();
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+
+        physics.add_kinematic(
+            host,
+            vec3(0.0, 0.0, -1.0),
+            identity,
+            Vector3::zero(),
+            vec3(1.0, 1.0, 0.4),
+            CollisionGroup::selectable(),
+            false,
+        );
+        physics.add_kinematic(
+            proxy,
+            vec3(0.0, 0.0, -1.4),
+            identity,
+            Vector3::zero(),
+            vec3(1.0, 1.0, 0.02),
+            CollisionGroup::ui(),
+            false,
+        );
+
+        let player = world.add_entity(());
+        let mut player_handle = physics.create_player(vec3(100.0, 100.0, 100.0), player);
+        physics.update(Vector3::zero(), &mut player_handle);
+        (world, physics, host, proxy)
+    }
+
+    fn update_queries(world: &mut World, physics: &mut PhysicsWorld) {
+        let player = world.add_entity(());
+        let mut player_handle = physics.create_player(vec3(100.0, 100.0, 100.0), player);
+        physics.update(Vector3::zero(), &mut player_handle);
+    }
+
+    fn add_occluder(
+        world: &mut World,
+        physics: &mut PhysicsWorld,
+        z: f32,
+        collision_group: CollisionGroup,
+    ) -> EntityId {
+        let entity = world.add_entity(());
+        physics.add_kinematic(
+            entity,
+            vec3(0.0, 0.0, z),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Vector3::zero(),
+            vec3(1.0, 1.0, 0.1),
+            collision_group,
+            false,
+        );
+        update_queries(world, physics);
+        entity
+    }
+
+    fn cast_at_fixture(
+        world: &World,
+        physics: &PhysicsWorld,
+        ignored: Option<EntityId>,
+    ) -> Option<EntityId> {
+        interaction_ray_cast(
+            physics,
+            world,
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, -1.0),
+            ignored,
+        )
+        .and_then(|hit| hit.maybe_entity_id)
+    }
+
+    /// Negative-first regression for #1114: the transmitter's selectable
+    /// bounds sit in front of its active keypad plane. Its own host must not
+    /// make that world-panel UI permanently unreachable.
+    #[test]
+    fn world_panel_ui_bypasses_its_own_host_collider() {
+        let (world, physics, _host, proxy) = interaction_fixture();
+
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(proxy));
+    }
+
+    #[test]
+    fn world_geometry_still_occludes_world_panel_ui() {
+        let (mut world, mut physics, _host, _proxy) = interaction_fixture();
+        let wall = add_occluder(
+            &mut world,
+            &mut physics,
+            -0.5,
+            CollisionGroup::world_for_test(),
+        );
+
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(wall));
+    }
+
+    #[test]
+    fn unrelated_selectable_still_occludes_world_panel_ui() {
+        let (mut world, mut physics, _host, _proxy) = interaction_fixture();
+        let selectable = add_occluder(&mut world, &mut physics, -0.5, CollisionGroup::selectable());
+
+        assert_eq!(cast_at_fixture(&world, &physics, None), Some(selectable));
+    }
+
+    #[test]
+    fn held_entity_remains_excluded_from_world_panel_ray() {
+        let (mut world, mut physics, _host, proxy) = interaction_fixture();
+        let held = add_occluder(&mut world, &mut physics, -0.5, CollisionGroup::selectable());
+
+        assert_eq!(cast_at_fixture(&world, &physics, Some(held)), Some(proxy));
     }
 
     /// Negative-first regression for #958: a held retail consumable owns an

@@ -2064,6 +2064,15 @@ impl CollisionGroup {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn world_for_test() -> CollisionGroup {
+        Self::solid(InteractionGroups {
+            memberships: InternalCollisionGroups::WORLD.bits.into(),
+            filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
+            test_mode: Default::default(),
+        })
+    }
+
     /// The same membership as this group, with living characters dropped from
     /// its filter so neither the player nor creature capsules collide with it.
     ///
@@ -4579,6 +4588,32 @@ impl PhysicsWorld {
     ) -> Option<RayCastResult> {
         self.ray_cast2_with_memberships(
             InternalCollisionGroups::ACTOR,
+            start_point,
+            direction,
+            max_toi,
+            collision_groups,
+            entity_to_ignore,
+            ignore_sensors,
+            Some(entity_filter),
+        )
+    }
+
+    /// Generic interaction raycast with a per-entity rejection predicate.
+    /// Ownerless world geometry is always retained. This is intentionally the
+    /// same all-membership query as [`Self::ray_cast2`]; callers use it only
+    /// when a semantic relationship makes one entity transparent to the ray.
+    pub fn ray_cast2_with_entity_filter(
+        &self,
+        start_point: Point3<f32>,
+        direction: Vector3<f32>,
+        max_toi: f32,
+        collision_groups: InternalCollisionGroups,
+        entity_to_ignore: Option<EntityId>,
+        ignore_sensors: bool,
+        entity_filter: &dyn Fn(EntityId) -> bool,
+    ) -> Option<RayCastResult> {
+        self.ray_cast2_with_memberships(
+            InternalCollisionGroups::ALL,
             start_point,
             direction,
             max_toi,
