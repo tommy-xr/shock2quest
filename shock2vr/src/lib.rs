@@ -1376,6 +1376,21 @@ impl Game {
         let action_effects = input::ActionDispatcher::dispatch(actions, input_context);
         actions.clear_triggered();
 
+        // Fly the detached camera, then withhold the channels it consumed from
+        // the scene so the pawn does not sleepwalk off while the sticks are
+        // flying. Everything else in the context still reaches the scene: the
+        // body can be looked at, damaged and scripted as usual - it just does
+        // not walk. Done here, in the one place the scene is updated, so no
+        // runtime has to know the camera exists.
+        self.free_camera.fly(time, input_context);
+        let withheld;
+        let input_context = if self.free_camera.consumes_locomotion() {
+            withheld = free_camera::without_locomotion(input_context);
+            &withheld
+        } else {
+            input_context
+        };
+
         // Update the scene (handles movement, physics, collision, teleport internally)
         let effects = self.active_game_scene.update(
             time,

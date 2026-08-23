@@ -16,12 +16,21 @@
 //!   while detached - the player (default) or the camera. See
 //!   [`FreeCamera::cull_from_camera`].
 //!
-//! Movement is not implemented yet: the camera snaps to the eye it detached
-//! from and holds that pose.
+//! Flying reuses the player's own locomotion channels, so the controls are
+//! the ones the hands already know and no runtime needs its own mapping:
+//! right thumbstick strafes and moves along the view, left thumbstick turns
+//! (x) and rises/falls (y). On the desktop those are `W`/`A`/`S`/`D` and the
+//! arrow keys, and mouse-look aims the camera because the runtimes compose
+//! the head rotation onto the camera pose themselves. While detached those
+//! channels are withheld from the scene (see `Game::update`), so the pawn
+//! stands still rather than sleepwalking off while you fly.
 
-use cgmath::{Matrix4, Quaternion, SquareMatrix, Vector3};
+use cgmath::{Matrix4, Quaternion, Rotation, Rotation3, SquareMatrix, Vector3, vec3};
 
 use crate::dev_params;
+use crate::input_context::InputContext;
+use crate::mission::PLAYER_TURN_RATE;
+use crate::time::Time;
 
 /// A camera pose: where it is, and which way it faces.
 pub type Pose = (Vector3<f32>, Quaternion<f32>);
@@ -96,6 +105,57 @@ impl FreeCamera {
         dev_params::get_bool(dev_params::FREE_CAMERA_CULL_FROM_CAMERA)
     }
 
+    /// Fly the camera for one frame. A no-op while attached, and while the
+    /// pose has not been captured yet (the detach frame), so the camera never
+    /// moves before it has somewhere to move from.
+    ///
+    /// The motion is `mission_core`'s player locomotion with the physics
+    /// removed: the same channels, the same axes, the same turn rate - only
+    /// integrated straight into the pose instead of driven through a
+    /// character controller. That is what makes it noclip, and deliberately
+    /// so: flying through a wall to look at the far side is the tool working.
+    pub fn fly(&mut self, time: &Time, input_context: &InputContext) {
+        let Some((position, rotation)) = self.pose else {
+            return;
+        };
+        let delta_time = time.elapsed.as_secs_f32();
+        if delta_time == 0.0 {
+            // A paused sim must not drift, and the debug runtime pauses by
+            // calling update with a zero dt.
+            return;
+        }
+
+        let turn = input_context.left_hand.thumbstick.x * delta_time * PLAYER_TURN_RATE;
+        let rotation =
+            rotation * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), cgmath::Rad(turn));
+
+        // The head rotation is composed in for the *direction of travel* only.
+        // It is deliberately not stored: the runtimes apply it to the camera
+        // pose themselves when they build the view matrix, so keeping it would
+        // apply a tracked headset's rotation twice.
+        let facing = rotation * input_context.head.rotation;
+        let speed = dev_params::get(dev_params::FREE_CAMERA_SPEED) / dark::SCALE_FACTOR;
+        let step = delta_time * speed;
+        let move_thumbstick = input_context.right_hand.thumbstick;
+        let position = position
+            + facing.rotate_vector(vec3(
+                -step * move_thumbstick.x,
+                0.0,
+                -step * move_thumbstick.y,
+            ))
+            + vec3(0.0, step * input_context.left_hand.thumbstick.y, 0.0);
+
+        self.pose = Some((position, rotation));
+    }
+
+    /// Whether the scene should be denied this frame's locomotion input,
+    /// because the free camera is consuming it. The pawn keeps everything
+    /// else - it can still be looked at, damaged, and scripted - it just does
+    /// not walk while the sticks are flying the camera.
+    pub fn consumes_locomotion(&self) -> bool {
+        self.detached
+    }
+
     /// The pose to render this frame from, given the player's own. Captures
     /// the pawn pose on the first call after a detach.
     pub fn camera_pose(&mut self, pawn: Pose) -> Pose {
@@ -124,6 +184,28 @@ impl FreeCamera {
         let pawn_to_world = Matrix4::from_translation(pawn.0) * Matrix4::from(pawn.1);
         Some(camera_to_world * pawn_to_world.invert()?)
     }
+}
+
+/// The input context with the channels that move the body zeroed - what the
+/// scene sees while the free camera is flying on them. A copy rather than a
+/// mutation so the runtime's own context is left intact for the next frame,
+/// and so the hands keep their poses, triggers and grips: only moving the
+/// body is withheld, and the body can still be aimed, fired and inspected.
+///
+/// `crouch` is withheld along with the sticks, even though it is not
+/// locomotion, because the flat runtimes build their camera `head_offset`
+/// from the crouch-aware [`Game::player_eye_height`]: left through, it would
+/// drop the supposedly frozen camera by the crouch delta. (In VR the tracked
+/// head legitimately moves the view and never goes through that accessor.)
+///
+/// [`Game::player_eye_height`]: crate::Game::player_eye_height
+pub fn without_locomotion(input_context: &InputContext) -> InputContext {
+    let mut withheld = input_context.clone();
+    withheld.left_hand.thumbstick = cgmath::Vector2::new(0.0, 0.0);
+    withheld.right_hand.thumbstick = cgmath::Vector2::new(0.0, 0.0);
+    withheld.jump = false;
+    withheld.crouch = false;
+    withheld
 }
 
 #[cfg(test)]
@@ -202,6 +284,116 @@ mod tests {
         assert!(!FreeCamera::is_enabled());
         camera.sync_gate();
         assert!(!camera.is_detached());
+    }
+
+    fn one_second() -> Time {
+        Time {
+            elapsed: std::time::Duration::from_secs(1),
+            total: std::time::Duration::from_secs(1),
+        }
+    }
+
+    /// A camera detached and flown forward for a second. Returns its pose.
+    fn flown(stick: impl Fn(&mut InputContext)) -> Pose {
+        let mut camera = FreeCamera::new();
+        camera.toggle();
+        camera.camera_pose((vec3(0.0, 0.0, 0.0), Quaternion::from_angle_y(Deg(0.0_f32))));
+        let mut input = InputContext::default();
+        input.head.rotation = Quaternion::from_angle_y(Deg(0.0_f32));
+        stick(&mut input);
+        camera.fly(&one_second(), &input);
+        camera.camera_pose((
+            vec3(99.0, 99.0, 99.0),
+            Quaternion::from_angle_y(Deg(0.0_f32)),
+        ))
+    }
+
+    /// Forward on the right stick moves along -Z, the same axis the player
+    /// walks along in `mission_core`.
+    #[test]
+    fn the_right_stick_flies_along_the_view() {
+        let (position, _) = flown(|input| input.right_hand.thumbstick.y = 1.0);
+        assert!(position.z < -0.1, "expected -Z travel, got {position:?}");
+        assert!(position.x.abs() < 1e-4 && position.y.abs() < 1e-4);
+    }
+
+    /// The left stick's y is vertical, in world space - flying up is up
+    /// however the camera is pitched.
+    #[test]
+    fn the_left_stick_y_flies_vertically() {
+        let (position, _) = flown(|input| input.left_hand.thumbstick.y = 1.0);
+        assert!(position.y > 0.1, "expected +Y travel, got {position:?}");
+        assert!(position.x.abs() < 1e-4 && position.z.abs() < 1e-4);
+    }
+
+    /// The left stick's x turns and does not translate.
+    #[test]
+    fn the_left_stick_x_turns_in_place() {
+        let (position, rotation) = flown(|input| input.left_hand.thumbstick.x = 1.0);
+        assert!(position.magnitude() < 1e-4, "turning must not move");
+        let facing = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+        assert!(facing.x.abs() > 0.1, "expected a yaw, got {facing:?}");
+        assert!(facing.y.abs() < 1e-4, "yaw must not pitch the camera");
+    }
+
+    /// An attached camera ignores the sticks entirely - the player is walking
+    /// on them.
+    #[test]
+    fn an_attached_camera_does_not_fly() {
+        let mut camera = FreeCamera::new();
+        let mut input = InputContext::default();
+        input.right_hand.thumbstick.y = 1.0;
+        camera.fly(&one_second(), &input);
+        assert_eq!(camera.camera_pose(pawn()), pawn());
+    }
+
+    /// A paused sim must not drift: the debug runtime pauses by calling
+    /// update with a zero dt.
+    #[test]
+    fn a_zero_timestep_does_not_move_the_camera() {
+        let mut camera = FreeCamera::new();
+        camera.toggle();
+        camera.camera_pose(pawn());
+        let mut input = InputContext::default();
+        input.right_hand.thumbstick.y = 1.0;
+        camera.fly(
+            &Time {
+                elapsed: std::time::Duration::ZERO,
+                total: std::time::Duration::from_secs(1),
+            },
+            &input,
+        );
+        assert_eq!(camera.camera_pose(pawn()), pawn());
+    }
+
+    /// Withholding must take the channels that move the body and nothing
+    /// else: the hands keep working, so the body can still be aimed and fired
+    /// while the camera watches from outside.
+    #[test]
+    fn withholding_locomotion_keeps_everything_but_walking() {
+        let mut input = InputContext::default();
+        input.left_hand.thumbstick = cgmath::Vector2::new(1.0, 1.0);
+        input.right_hand.thumbstick = cgmath::Vector2::new(1.0, 1.0);
+        input.jump = true;
+        input.crouch = true;
+        input.right_hand.trigger_value = 1.0;
+        input.head.position = vec3(0.0, 5.6, 0.0);
+
+        let withheld = without_locomotion(&input);
+        assert_eq!(
+            withheld.left_hand.thumbstick,
+            cgmath::Vector2::new(0.0, 0.0)
+        );
+        assert_eq!(
+            withheld.right_hand.thumbstick,
+            cgmath::Vector2::new(0.0, 0.0)
+        );
+        assert!(!withheld.jump);
+        // Crouch moves the flat runtimes' camera through the crouch-aware eye
+        // height, so a "frozen" camera must not see it either.
+        assert!(!withheld.crouch);
+        assert_eq!(withheld.right_hand.trigger_value, 1.0);
+        assert_eq!(withheld.head.position, input.head.position);
     }
 
     /// The point of the fixup: composed onto the camera's view matrix it must
