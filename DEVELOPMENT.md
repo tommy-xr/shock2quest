@@ -105,6 +105,52 @@ Example:
 cargo dr --release --experimental teleport
 ```
 
+### Debug & developer keys
+
+Player-facing controls are listed in [README.md](README.md#controls). The keys
+below are development tools; they are bound in
+`runtimes/desktop_runtime/src/input_mapper.rs` (the authoritative list) and, on
+the Quest, in `InputAction::quest_touch_click_path` /
+`quest_touch_chord_paths` (`shock2vr/src/input/actions.rs`).
+
+Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay keys.
+
+| Key | Action | Notes |
+| --- | ------ | ----- |
+| `P` | `PathfindingTestCycle` | set start → set goal → show path |
+| `B` | `DebugCycleWeapon` | spawns and wields the next weapon (unlike the number row) |
+| `T` / `Y` | `CycleAmmo` / `CyclePsiPower` | |
+| `U` | `ReadLastUnreadLog` | Quest: left `Y` |
+| `M` | `ToggleMap` | flat only |
+| `Tab` / `I` | `ToggleUseMode` | the cyber interface; Quest: left `X` |
+| `Esc` | `TogglePauseMenu` | Quest: left `Menu` |
+| `Alt+S` / `Alt+L` | `QuickSave` / `QuickLoad` | |
+| `Alt+G` | `DebugForceChase` | every monster hunts the player, pinned |
+| `Alt+C` | `DebugCalmAll` | clears the pin |
+| `Alt+V` | `ToggleFreeCamera` | requires the **Free camera** developer option; Quest: right `A`+`B` together |
+
+Every action is also triggerable without a keyboard - over HTTP on the debug
+runtime (`POST /v1/input/action`) or through the SDK (`game.input.trigger(...)`).
+`GET /v1/input/actions` lists them.
+
+### Developer options
+
+The **Developer** screen (from the main menu, or the pause overlay's Developer
+page) hosts the live-tunable parameters registered in
+`shock2vr/src/dev_params.rs` - panel distance, pause dim, FOV override, and the
+free-camera switches. Values are read every frame, so a change is live on the
+next one, and the same registry is exposed over HTTP by the debug runtime
+(`GET`/`POST /v1/dev-params`) for headless runs.
+
+**Free camera** detaches the view from the player: the camera stays where it
+was while the pawn stands still, so you can watch the simulation from outside
+without perturbing it. Nothing in the simulation follows it - AI keeps reading
+the player's body position - and by default neither does culling, so flying out
+shows exactly what the *player's* viewpoint decided to draw. Turn on **Cull
+from cam** when you would rather just look at things. The developer option is
+the gate: while it is off the `Alt+V` / `A`+`B` toggle does nothing, and turning
+it off while detached re-attaches the camera.
+
 #### 3b. Oculus Quest 2
 
 ##### Pre-requisites

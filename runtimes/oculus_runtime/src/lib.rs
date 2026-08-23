@@ -845,16 +845,48 @@ fn main() {
             menu_state.changed_since_last_sync,
             menu_state.current_state,
         );
-        action_state.sync_discrete_button(
-            shock2vr::input::InputAction::Reload,
-            reload_state.is_active,
-            reload_state.changed_since_last_sync,
+        // Right A and B carry two meanings: on their own they reload and swap
+        // ammo (#1144), and together they toggle the free camera. There is no
+        // unbound button left on the Touch to give the camera, so it shares
+        // these - and only while its developer option is on, which is the one
+        // time the player is deliberately debugging rather than shooting.
+        //
+        // While the gate is on, a button whose partner is ALREADY held is
+        // suppressed, so completing the chord cannot also swap your ammo. The
+        // first button pressed still fires its own action (its edge lands
+        // before the chord exists), which is why the pair is A-reloads-first
+        // rather than B: an extra reload costs nothing, an ammo swap is a
+        // change you have to undo. With the option off, both behave exactly as
+        // #1144 defines them.
+        let free_camera_gate = shock2vr::free_camera::FreeCamera::is_enabled();
+        let suppress_reload = free_camera_gate && cycle_ammo_state.current_state;
+        let suppress_cycle_ammo = free_camera_gate && reload_state.current_state;
+        if !suppress_reload {
+            action_state.sync_discrete_button(
+                shock2vr::input::InputAction::Reload,
+                reload_state.is_active,
+                reload_state.changed_since_last_sync,
+                reload_state.current_state,
+            );
+        }
+        if !suppress_cycle_ammo {
+            action_state.sync_discrete_button(
+                shock2vr::input::InputAction::CycleAmmo,
+                cycle_ammo_state.is_active,
+                cycle_ammo_state.changed_since_last_sync,
+                cycle_ammo_state.current_state,
+            );
+        }
+        // A chord is edge-detected from the pair's raw states, so it takes
+        // them directly rather than through `sync_discrete_button`. Activity
+        // is passed through rather than folded into the button states: while
+        // the pair is inactive `sync_chord` holds its latch, so refocusing
+        // with both buttons still held cannot mint a toggle nobody pressed -
+        // the same hazard the latched crouch above guards against.
+        action_state.sync_chord(
+            shock2vr::input::InputAction::ToggleFreeCamera,
+            reload_state.is_active && cycle_ammo_state.is_active,
             reload_state.current_state,
-        );
-        action_state.sync_discrete_button(
-            shock2vr::input::InputAction::CycleAmmo,
-            cycle_ammo_state.is_active,
-            cycle_ammo_state.changed_since_last_sync,
             cycle_ammo_state.current_state,
         );
 

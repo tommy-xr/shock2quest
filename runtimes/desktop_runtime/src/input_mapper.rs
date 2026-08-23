@@ -180,6 +180,15 @@ impl DesktopInputMapper {
                 modifier: Modifier::None,
                 action: InputAction::ToggleMap,
             },
+            // Detach/re-attach the debug camera. Alt-modified like the other
+            // debug bindings above, and inert unless the `free_camera` dev
+            // param is on (the gate lives in `Game`, so every runtime and
+            // HTTP injection share one rule). Alt is Option on macOS.
+            Binding {
+                key: Key::V,
+                modifier: Modifier::Alt,
+                action: InputAction::ToggleFreeCamera,
+            },
         ];
 
         Self {

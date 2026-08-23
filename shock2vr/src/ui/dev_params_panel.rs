@@ -269,6 +269,7 @@ fn scroll_rects(rects: PanelRects) -> Option<(Rect, Rect)> {
 fn format_value(kind: &DevParamKind, value: f32) -> String {
     match kind {
         DevParamKind::Float { .. } => format!("{value:.2}"),
+        DevParamKind::Bool => if value != 0.0 { "On" } else { "Off" }.to_owned(),
     }
 }
 
@@ -412,11 +413,17 @@ pub fn draw(
 /// the host must act on (leave the screen); the steps and the scrolling are
 /// absorbed here so both hosts stay a one-liner.
 pub fn activate(rects: PanelRects, event: DevParamsEvent, scroll: &mut usize) -> bool {
-    let step_by = |id: DevParamId, direction: f32| {
-        let DevParamKind::Float { step, .. } = dev_params::spec(id).kind;
-        // `set` clamps into range and snaps to the step grid, so walking off
-        // either end just pins to it.
-        dev_params::set(id, dev_params::get(id) + direction * step);
+    let step_by = |id: DevParamId, direction: f32| match dev_params::spec(id).kind {
+        DevParamKind::Float { step, .. } => {
+            // `set` clamps into range and snaps to the step grid, so walking
+            // off either end just pins to it.
+            dev_params::set(id, dev_params::get(id) + direction * step);
+        }
+        // A switch has no grid to walk: either arrow flips it, so the row
+        // behaves the same whichever side the pointer lands on.
+        DevParamKind::Bool => {
+            dev_params::set(id, if dev_params::get_bool(id) { 0.0 } else { 1.0 });
+        }
     };
     match event {
         DevParamsEvent::Decrement(id) => {
@@ -551,28 +558,41 @@ mod tests {
         assert_eq!(scroll, max_scroll(rects) - 1);
     }
 
-    /// A pane tall enough for the whole registry has no rocker at all: the
-    /// framed art stays empty, exactly as it was before the list scrolled.
+    /// The registry no longer fits any pane this backdrop can authorize, so
+    /// the rocker is always present - even on the tallest pane the canvas
+    /// allows.
+    ///
+    /// This used to assert the opposite ("a pane tall enough has no rocker").
+    /// Rows are capped at `FIELD_TOP_Y / ROW_PITCH` = 11 however tall the
+    /// authored pane is, and the table passed that when the free-camera
+    /// switches landed. The fits-on-one-page branch is still live code and
+    /// still covered, generically, by
+    /// `list_scroll::the_rocker_sits_in_the_gutter_and_its_ends_are_inert`.
     #[test]
-    fn a_pane_that_fits_everything_has_no_rocker() {
+    fn the_tallest_authored_pane_still_needs_the_rocker() {
         let tall = PanelRects::from_layout(Some(&[
             MapRect::new(261, 31, 463, 51),
-            // Starts at the top of the canvas, so it clears FIELD_TOP_Y with
-            // room for more rows than the registry has.
+            // Starts at the top of the canvas, so it reaches FIELD_TOP_Y -
+            // the most rows any authored layout can get.
             MapRect::new(261, 0, 463, 320),
             MapRect::new(527, 161, 623, 223),
             MapRect::new(527, 405, 622, 467),
         ]));
-        assert!(rows_per_page(tall) > dev_params::PARAMS.len());
-        assert_eq!(max_scroll(tall), 0);
-        assert_eq!(scroll_rects(tall), None);
-        // With nothing to scroll, the gutter is not reserved either: a row's
-        // increment runs to the pane's own inset, as it did before scrolling.
+        let cap = (FIELD_TOP_Y / ROW_PITCH).floor() as usize;
+        assert_eq!(rows_per_page(tall), cap);
+        assert!(
+            dev_params::PARAMS.len() > cap,
+            "if the registry ever fits again, restore the no-rocker assertions"
+        );
+        assert!(max_scroll(tall) > 0);
+        assert!(scroll_rects(tall).is_some());
+        // Scrolling means the gutter is reserved: a row's increment stops
+        // short of the pane's inset by the gutter width.
         assert_eq!(
             row_rects(tall, 0).increment.x + ARROW_W,
-            tall.list.x + tall.list.w - TEXT_INSET
+            tall.list.x + tall.list.w - TEXT_INSET - SCROLL_GUTTER_W
         );
-        assert_eq!(visible_rows(tall, 0), 0..dev_params::PARAMS.len());
+        assert_eq!(visible_rows(tall, 0), 0..cap);
     }
 
     #[test]
@@ -717,5 +737,11 @@ mod tests {
         // The snap grid's f32 wobble (0.71999997) must not leak into the UI.
         assert_eq!(format_value(&kind, 0.719_999_97), "0.72");
         assert_eq!(format_value(&kind, 2.0), "2.00");
+    }
+
+    #[test]
+    fn bools_format_as_on_and_off() {
+        assert_eq!(format_value(&DevParamKind::Bool, 1.0), "On");
+        assert_eq!(format_value(&DevParamKind::Bool, 0.0), "Off");
     }
 }

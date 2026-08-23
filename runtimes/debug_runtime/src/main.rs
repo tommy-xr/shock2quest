@@ -364,6 +364,7 @@ async fn start_http_server(
         )
         .route("/v1/entities/:id/animation", get(get_animation_state))
         .route("/v1/player/position", get(get_player_position))
+        .route("/v1/camera", get(get_camera_state))
         .route("/v1/player/teleport", axum::routing::post(teleport_player))
         .route(
             "/v1/player/move",
@@ -439,6 +440,7 @@ async fn start_http_server(
         "  GET  /v1/entities/{{id}}/animation - Animation playback state + posed skeleton (world-space joints)"
     );
     info!("  GET  /v1/player/position  - Get current player position");
+    info!("  GET  /v1/camera           - Get free (debug) camera state");
     info!("  POST /v1/player/teleport  - Teleport player to coordinates (raw, unbounded)");
     info!("  POST /v1/player/move      - Bounded, collision-valid move toward {{x,y,z}}");
     info!("  POST /v1/control/transition-level - Warp to another level {{level, loc?}}");
@@ -1362,6 +1364,19 @@ fn process_command(
             };
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send give-item result - receiver dropped");
+            }
+        }
+        RuntimeCommand::GetCameraState(reply) => {
+            let (detached, pose) = game.free_camera_state();
+            let snapshot = CameraStateSnapshot {
+                detached,
+                enabled: shock2vr::free_camera::FreeCamera::is_enabled(),
+                position: pose.map(|(position, _)| [position.x, position.y, position.z]),
+                rotation: pose
+                    .map(|(_, rotation)| [rotation.s, rotation.v.x, rotation.v.y, rotation.v.z]),
+            };
+            if reply.send(snapshot).is_err() {
+                tracing::warn!("Failed to send camera state - receiver dropped");
             }
         }
         RuntimeCommand::GetPlayerPosition(reply) => {
@@ -2473,6 +2488,32 @@ async fn get_player_position(
         })),
         Err(_) => {
             tracing::error!("Failed to receive player position - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// HTTP handler reporting the free (debug) camera's state. Lets an agent
+/// verify the camera - that it detached, held its pose while the player
+/// moved, flew where it was told, and re-attached on a level change - without
+/// reading pixels out of a screenshot.
+async fn get_camera_state(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<CameraStateSnapshot>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if command_tx
+        .send(RuntimeCommand::GetCameraState(reply_tx))
+        .is_err()
+    {
+        tracing::error!("Failed to send GetCameraState command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+
+    match reply_rx.await {
+        Ok(snapshot) => Ok(Json(snapshot)),
+        Err(_) => {
+            tracing::error!("Failed to receive camera state - sender dropped");
             Err(game_loop_unavailable())
         }
     }
@@ -3673,17 +3714,23 @@ async fn trigger_input_action(
 async fn list_dev_params() -> Json<Value> {
     let params: Vec<Value> = shock2vr::dev_params::all()
         .map(|(id, param)| {
-            let shock2vr::dev_params::DevParamKind::Float { min, max, step } = param.kind;
-            json!({
-                "key": param.key,
-                "label": param.label,
-                "kind": "float",
-                "min": min,
-                "max": max,
-                "step": step,
-                "value": shock2vr::dev_params::get(id),
-                "default": param.default,
-            })
+            // A bool carries no range: reporting one would invite a client to
+            // walk a grid that does not exist. `value`/`default` stay the
+            // registry's own 0.0/1.0 so every kind reads the same way.
+            let key = param.key;
+            let label = param.label;
+            let value = shock2vr::dev_params::get(id);
+            let default = param.default;
+            match param.kind {
+                shock2vr::dev_params::DevParamKind::Float { min, max, step } => json!({
+                    "key": key, "label": label, "value": value, "default": default,
+                    "kind": "float", "min": min, "max": max, "step": step,
+                }),
+                shock2vr::dev_params::DevParamKind::Bool => json!({
+                    "key": key, "label": label, "value": value, "default": default,
+                    "kind": "bool",
+                }),
+            }
         })
         .collect();
     Json(json!({ "params": params }))

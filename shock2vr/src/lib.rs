@@ -19,6 +19,7 @@ pub mod data_files;
 pub mod death_camera;
 pub mod dev_params;
 mod flat_player_controller;
+pub mod free_camera;
 mod gui;
 mod hand_forearm;
 mod hand_glove;
@@ -493,6 +494,17 @@ pub struct Game {
     /// Per-frame desired FOV (vertical, degrees) for the flat runtimes'
     /// projection matrix. See [`Game::desired_fov_deg`].
     desired_fov_deg: f32,
+
+    /// The detached debug camera. Purely a render-layer override: while it is
+    /// detached the pawn stays put and every system that reads the player's
+    /// position keeps reading the body. See [`crate::free_camera`].
+    free_camera: free_camera::FreeCamera,
+
+    /// The correction that turns the camera's view matrix back into the
+    /// player's, carried from `render` to `finish_render` so the visibility
+    /// engine culls from the *player* while the free camera is off flying.
+    /// `None` whenever the two views are the same.
+    free_camera_view_fixup: Option<Matrix4<f32>>,
 }
 
 /// Player state for debug introspection. Entity ids use `EntityId::inner() as
@@ -1281,6 +1293,8 @@ impl Game {
             ),
             view_extents: hit_feedback::DEFAULT_VIEW_EXTENTS,
             desired_fov_deg: DEFAULT_FOV_DEG,
+            free_camera: free_camera::FreeCamera::new(),
+            free_camera_view_fixup: None,
         }
     }
 
@@ -1306,6 +1320,19 @@ impl Game {
         // frozen at full strength until the simulation resumes.
         self.head_pose = (input_context.head.position, input_context.head.rotation);
         self.hit_feedback.update(delta_time);
+
+        // The free camera is consumed here rather than dispatched as an
+        // `Effect`, for the same reason `TogglePauseMenu` is: it is `Game`'s
+        // own render-layer state and deliberately changes nothing in the
+        // world. The gate is enforced here too - once, for every runtime and
+        // for HTTP injection alike, so no input path can drift from the rule
+        // that the toggle is inert until the Developer screen enables it.
+        self.free_camera.sync_gate();
+        if actions.just_triggered(input::InputAction::ToggleFreeCamera)
+            && free_camera::FreeCamera::is_enabled()
+        {
+            self.free_camera.toggle();
+        }
 
         // Drive a background transition: the loading screen animates while the parse
         // runs on its worker thread. Once the parse has finished AND the loading screen
@@ -1835,6 +1862,23 @@ impl Game {
         // taken mid-fight must not open on a red rim, and the main menu must
         // never show one at all.
         self.hit_feedback.clear();
+        // The free camera's pose is in the *outgoing* scene's coordinates, so
+        // carrying it across a level transition, quickload or a return to the
+        // menu would render the new scene from a point inside its geometry or
+        // outside it entirely. Worse, it strands the player: the frontend
+        // panel is pawn-anchored, so a detached camera cannot see the menu it
+        // would take to switch the camera back off.
+        self.free_camera.attach();
+        self.free_camera_view_fixup = None;
+    }
+
+    /// The free camera's observable state: whether it is detached, and the
+    /// pose it is rendering from (`None` while attached, when the camera is
+    /// simply the player's eye). Exposed for the debug runtime's
+    /// `GET /v1/camera`, which is what lets an agent verify the camera
+    /// without reading pixels.
+    pub fn free_camera_state(&self) -> (bool, Option<free_camera::Pose>) {
+        (self.free_camera.is_detached(), self.free_camera.pose())
     }
 
     /// Get hand spotlights for enhanced lighting when experimental flag is enabled
@@ -2041,7 +2085,15 @@ impl Game {
         // let text = SceneObject::world_space_text("test1234567890", font, 0.0);
         // scene.push(RefCell::new(text));
 
-        (scene, pos, rot)
+        // The camera override is applied last, to the returned pose ONLY.
+        // Everything above has already been anchored with `pawn_to_world`, so
+        // the pause panel and the view-locked rim layers stay with the player
+        // - which is what a spectator camera should show: the body's HUD where
+        // the body is.
+        self.free_camera_view_fixup = self.free_camera.view_fixup((pos, rot));
+        let (camera_position, camera_rotation) = self.free_camera.camera_pose((pos, rot));
+
+        (scene, camera_position, camera_rotation)
     }
 
     pub fn render_per_eye(
@@ -2136,6 +2188,14 @@ impl Game {
         projection: Matrix4<f32>,
         screen_size: Vector2<f32>,
     ) {
+        // Culling follows the *player*, not the detached camera: flying out
+        // then shows exactly what the player's viewpoint decided to draw,
+        // which is the whole point of watching from outside. The fixup was
+        // computed in `render`, from the two poses that frame was built with.
+        let view = match self.free_camera_view_fixup {
+            Some(fixup) => view * fixup,
+            None => view,
+        };
         self.active_game_scene
             .finish_render(&mut self.asset_cache, view, projection, screen_size)
     }

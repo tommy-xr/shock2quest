@@ -4,6 +4,7 @@ import type {
   CommandResult,
   DebugEntityMessage,
   DevParamSetResult,
+  CameraState,
   DevParamsListResult,
   EntityDetailResult,
   EntityListResult,
@@ -607,6 +608,21 @@ export class DevParamsApi {
   }
 }
 
+/** The free (debug) camera - a detached view that leaves the pawn alone. */
+export class CameraApi {
+  constructor(private readonly client: HttpClient) {}
+
+  /**
+   * Whether the camera is detached, and the pose it is rendering from. Lets a
+   * test assert what the camera did without reading pixels: that it held its
+   * pose while the player walked, flew where it was told, and re-attached on
+   * a level change.
+   */
+  async state(): Promise<CameraState> {
+    return this.client.get<CameraState>("/v1/camera");
+  }
+}
+
 /** Interactive pathfinding test (visual A* debugging). */
 export class PathfindingTestApi {
   constructor(private readonly client: HttpClient) {}
@@ -739,6 +755,7 @@ export class Game {
   readonly physics: PhysicsApi;
   readonly scene: SceneApi;
   readonly devParams: DevParamsApi;
+  readonly camera: CameraApi;
   readonly quests: QuestsApi;
   readonly ui: UiApi;
   readonly audio: AudioApi;
@@ -753,6 +770,7 @@ export class Game {
     this.physics = new PhysicsApi(client);
     this.scene = new SceneApi(client);
     this.devParams = new DevParamsApi(client);
+    this.camera = new CameraApi(client);
     this.quests = new QuestsApi(client);
     this.ui = new UiApi(client);
     this.audio = new AudioApi(client);
