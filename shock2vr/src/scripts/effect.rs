@@ -747,11 +747,6 @@ pub enum Effect {
         head_rotation: Quaternion<f32>,
     },
 
-    /// Reposition the inventory in front of the player
-    PositionInventoryRelativeToPlayer {
-        head_rotation: Quaternion<f32>,
-    },
-
     /// Advance every creature to its next animation pose. Debug-only, used by the
     /// `debug_hitbox` scene to inspect per-joint hitbox/ragdoll fit across poses.
     DebugCycleHitboxPose,

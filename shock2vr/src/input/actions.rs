@@ -26,10 +26,6 @@ pub enum InputAction {
     /// Spawn a debug monster (og-pipe hybrid) in front of the player
     SpawnDebugMonster,
 
-    /// Reposition the inventory in front of the player. In VR this also
-    /// toggles its physical backpack panel; flat inventory remains Tab/use mode.
-    MoveInventory,
-
     /// Cycle creatures to their next animation pose (debug hitbox/ragdoll inspection)
     DebugHitboxCyclePose,
 
@@ -108,7 +104,6 @@ impl InputAction {
             InputAction::QuickLoad,
             InputAction::SpawnDebugItem,
             InputAction::SpawnDebugMonster,
-            InputAction::MoveInventory,
             InputAction::DebugHitboxCyclePose,
             InputAction::DebugCycleWeapon,
             InputAction::EquipWrench,
@@ -146,7 +141,6 @@ impl InputAction {
             InputAction::QuickLoad => "QuickLoad",
             InputAction::SpawnDebugItem => "SpawnDebugItem",
             InputAction::SpawnDebugMonster => "SpawnDebugMonster",
-            InputAction::MoveInventory => "MoveInventory",
             InputAction::DebugHitboxCyclePose => "DebugHitboxCyclePose",
             InputAction::DebugCycleWeapon => "DebugCycleWeapon",
             InputAction::EquipWrench => "EquipWrench",
@@ -182,8 +176,10 @@ impl InputAction {
     /// mapping host-testable even though that runtime only compiles for Android.
     pub fn quest_touch_click_path(&self) -> Option<&'static str> {
         match self {
-            InputAction::MoveInventory => Some("/user/hand/left/input/x/click"),
             InputAction::ReadLastUnreadLog => Some("/user/hand/left/input/y/click"),
+            // Left X toggles the cyber interface (use mode) - the binding the
+            // removed world-quad backpack (MoveInventory) used to own.
+            InputAction::ToggleUseMode => Some("/user/hand/left/input/x/click"),
             // The right controller's menu button is reserved by the Quest
             // system UI; the left one is the app's.
             InputAction::TogglePauseMenu => Some("/user/hand/left/input/menu/click"),
@@ -246,9 +242,9 @@ mod tests {
     }
 
     #[test]
-    fn quest_touch_keeps_x_for_backpack_and_assigns_y_to_the_log_reader() {
+    fn quest_touch_assigns_x_to_use_mode_and_y_to_the_log_reader() {
         assert_eq!(
-            InputAction::MoveInventory.quest_touch_click_path(),
+            InputAction::ToggleUseMode.quest_touch_click_path(),
             Some("/user/hand/left/input/x/click")
         );
         assert_eq!(

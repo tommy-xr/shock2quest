@@ -160,8 +160,6 @@ const LOAD_EVENT_PUMP_ENTITY_INTERVAL: usize = 32;
 /// After `SCALE_FACTOR` conversion this is 2 world units forward and 1.2 up.
 /// The shared canvas keeps its authored pixels; the physical VR boundary
 /// scales the unusually wide 15-column strip so all of it fits at arm's reach.
-const VR_BACKPACK_FORWARD: f32 = 5.0;
-const VR_BACKPACK_UP: f32 = 3.0;
 const VR_BACKPACK_WORLD_SCALE: f32 = 0.55;
 
 /// Head-relative authored-space placement for the narrow portrait reader.
@@ -957,10 +955,33 @@ pub struct MissionCore {
     /// queued on attack and auto-returns to idle). `None` for guns / no weapon.
     flat_melee_anim: Option<(EntityId, AnimationPlayer)>,
 
-    /// Flat-mode "use" (metagame) mode, toggled by `Effect::ToggleUseMode`
-    /// (Tab). Mode tracking only for now - the cursor + panel presentation
-    /// land with the flat UI host (see `projects/flat-ui.md`). Ignored in VR.
-    pub flat_use_mode: bool,
+    /// "Use" (metagame) mode, toggled by `Effect::ToggleUseMode` (Tab on
+    /// flat; left-controller X in VR). One mode, two presentations: flat
+    /// shows the cursor + top-docked inventory strip on screen
+    /// (`projects/flat-ui.md`); VR presents the same strip canvas on a
+    /// head-anchored world panel - the "cyber interface" - with the world
+    /// dimmed behind it and the wielded weapon safed. Unlike the pause menu,
+    /// the world keeps simulating while it is up.
+    pub use_mode: bool,
+
+    /// Where the VR cyber-interface panel hangs: placed once on entry from
+    /// the tracked head pose, world-locked, lazily recentered (rule 3 of the
+    /// vr-ui-design skill). Reset on every entry so the panel is placed from
+    /// the pose the mode is opened with. Unused in flat presentation.
+    vr_use_mode_anchor: crate::ui::FrontendPanelAnchor,
+
+    /// The head pose from the latest update, in pawn space, for the comfort
+    /// dim behind the VR use-mode panel (the dim follows the live gaze; see
+    /// `crate::ui::world_dim`). Reset to untracked on entry so a stale pose
+    /// can't hang the dim where the player stood last time.
+    vr_use_mode_head: (Vector3<f32>, Quaternion<f32>),
+
+    /// VR weapon-safe latch: while use mode is up the hands see zeroed
+    /// triggers, and this stays set on exit until the player releases the
+    /// trigger - so a trigger held across the exit cannot read as a fresh
+    /// rising edge and fire the wielded weapon (the pause menu's
+    /// `closed_under_a_held_press` rule, applied to the hands).
+    vr_trigger_swallow: bool,
 
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
@@ -1756,7 +1777,10 @@ impl MissionCore {
             debug_pose_index: 0,
             debug_weapon_index: 0,
             flat_melee_anim: None,
-            flat_use_mode: false,
+            use_mode: false,
+            vr_use_mode_anchor: crate::ui::FrontendPanelAnchor::new(),
+            vr_use_mode_head: crate::ui::world_dim::UNTRACKED_HEAD,
+            vr_trigger_swallow: false,
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
@@ -2334,12 +2358,47 @@ impl MissionCore {
             );
         }
 
+        // VR cyber interface (use mode): follow the head for the anchor's
+        // lazy recenter and the comfort dim, and clear the weapon-safe latch
+        // once every trigger is released.
+        if game_options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
+            self.vr_use_mode_head = (input_context.head.position, input_context.head.rotation);
+            self.vr_use_mode_anchor.update(
+                input_context.head.position,
+                input_context.head.rotation,
+                time.elapsed,
+            );
+        }
+        if self.vr_trigger_swallow && !self.use_mode {
+            let held = |hand: &crate::input_context::Hand| {
+                hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD
+            };
+            if !held(&input_context.left_hand) && !held(&input_context.right_hand) {
+                self.vr_trigger_swallow = false;
+            }
+        }
+
+        // VR weapon-safe: while the cyber interface is up (and until a
+        // trigger held across its exit is released) the hands see zeroed
+        // triggers, so the wielded weapon cannot fire - it stays wielded and
+        // visible, and squeeze-driven grab/drop still works. The analog of
+        // the flat runtime's mouse-ownership swallow latch.
+        let weapon_safe_input = (game_options.presentation_mode == crate::PresentationMode::Vr
+            && (self.use_mode || self.vr_trigger_swallow))
+            .then(|| {
+                let mut safe = input_context.clone();
+                safe.left_hand.trigger_value = 0.0;
+                safe.right_hand.trigger_value = 0.0;
+                safe
+            });
+        let hands_input = weapon_safe_input.as_ref().unwrap_or(input_context);
+
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
         let interaction_msgs = self.interaction.update(&InteractionContext {
             physics: &self.physics,
             world: &self.world,
-            input: input_context,
+            input: hands_input,
             player_pos,
             player_rotation: player_rot,
             head_rotation: input_context.head.rotation,
@@ -2383,12 +2442,11 @@ impl MissionCore {
             // Expose the AMMOFULL ammo-cycle button for hit-testing exactly when
             // the flat HUD draws it (the shared visibility predicate, so the
             // clickable rect never diverges from the rendered button).
-            let ammo_button =
-                if crate::hud::ammo_cycle_button_visible(&self.world, self.flat_use_mode) {
-                    Some(crate::hud::AMMO_CYCLE_BUTTON)
-                } else {
-                    None
-                };
+            let ammo_button = if crate::hud::ammo_cycle_button_visible(&self.world, self.use_mode) {
+                Some(crate::hud::AMMO_CYCLE_BUTTON)
+            } else {
+                None
+            };
             self.flat_ui.set_ammo_cycle_button(ammo_button);
 
             let (messages, drag_actions) = self.flat_ui.update(&self.world, input_context.pointer);
@@ -4126,9 +4184,29 @@ impl MissionCore {
     /// Shared by `ToggleUseMode` and `CloseUseMode` so the two exits from use
     /// mode cannot drift apart.
     fn leave_use_mode(&mut self) {
-        self.flat_use_mode = false;
+        self.use_mode = false;
         self.flat_ui.take_cursor_item();
         self.flat_ui.set_strip(None);
+        // VR weapon-safe exit: a trigger still held from inside the mode must
+        // be released before the hands see it again, or leaving the cyber
+        // interface would fire the wielded weapon on a stale press. Inert in
+        // flat (the consumption site is VR-gated) and self-clearing once
+        // nothing is pressed.
+        self.vr_trigger_swallow = true;
+    }
+
+    /// Enter "use" (metagame) mode: bind the top-docked inventory strip to
+    /// the player's `internal_inventory` entity (whose GuiScript already
+    /// emits SetUI every frame). Shared by both presentations - the strip
+    /// canvas is the mode; only where it is presented differs.
+    fn enter_use_mode(&mut self) {
+        self.use_mode = true;
+        let strip_entity = self
+            .world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .ok()
+            .map(|player| player.inventory_entity_id);
+        self.flat_ui.set_strip(strip_entity);
     }
 
     pub fn handle_effects(
@@ -4287,28 +4365,48 @@ impl MissionCore {
                 }
 
                 Effect::ToggleUseMode => {
-                    // Flat-presentation only: VR has no cursor mode to toggle.
-                    if game_options.presentation_mode == crate::PresentationMode::Flat {
-                        // Tab dismisses an open overlay first, as the original
-                        // does - reading a log (or looting a container) and
-                        // pressing Tab should put the panel away, not drop the
-                        // player into shooter mode with it still up.
-                        if self.flat_ui.active_panel().is_some() {
-                            self.flat_ui.close();
-                        } else if self.flat_use_mode {
-                            self.leave_use_mode();
-                        } else {
-                            self.flat_use_mode = true;
-                            // Use mode shows the player's backpack as the
-                            // top-docked inventory strip: bind the strip to the
-                            // `internal_inventory` entity (whose GuiScript
-                            // already emits SetUI every frame).
-                            let strip_entity = self
-                                .world
-                                .borrow::<UniqueView<PlayerInfo>>()
-                                .ok()
-                                .map(|player| player.inventory_entity_id);
-                            self.flat_ui.set_strip(strip_entity);
+                    match game_options.presentation_mode {
+                        crate::PresentationMode::Flat => {
+                            // Tab dismisses an open overlay first, as the
+                            // original does - reading a log (or looting a
+                            // container) and pressing Tab should put the panel
+                            // away, not drop the player into shooter mode with
+                            // it still up.
+                            if self.flat_ui.active_panel().is_some() {
+                                self.flat_ui.close();
+                            } else if self.use_mode {
+                                self.leave_use_mode();
+                            } else {
+                                self.enter_use_mode();
+                            }
+                        }
+                        crate::PresentationMode::Vr => {
+                            // The cyber interface: the same use-mode canvas,
+                            // presented on a head-anchored world panel with the
+                            // world dimmed behind it and the weapon safed. The
+                            // world keeps simulating - unlike the pause menu,
+                            // this is a mode of play, not a suspension of it.
+                            if self.use_mode {
+                                self.leave_use_mode();
+                            } else if self.player_is_alive() {
+                                // Edge policy: no cyber interface over the
+                                // death sequence - that moment belongs to the
+                                // game-over flow (same rule as the pause
+                                // menu's `pause_is_allowed`). The other modal
+                                // owners can't reach this handler at all: the
+                                // pause menu clears triggered actions while
+                                // open, and a level transition replaces this
+                                // scene (taking the mission-owned mode state
+                                // with it).
+                                self.enter_use_mode();
+                                // Place the panel from the pose of *this*
+                                // entry, not wherever the player stood last
+                                // time - and let the anchor wait out an
+                                // untracked (zero-quaternion) head rather than
+                                // locking in a garbage placement.
+                                self.vr_use_mode_anchor = crate::ui::FrontendPanelAnchor::new();
+                                self.vr_use_mode_head = crate::ui::world_dim::UNTRACKED_HEAD;
+                            }
                         }
                     }
                 }
@@ -4318,12 +4416,12 @@ impl MissionCore {
                     // something outside the mission (the pause menu) takes over
                     // the screen: put the overlay away and drop back to shooter
                     // mode, dropping any cursor item back into the backpack it
-                    // was never actually removed from.
-                    if game_options.presentation_mode == crate::PresentationMode::Flat {
-                        self.flat_ui.close();
-                        if self.flat_use_mode {
-                            self.leave_use_mode();
-                        }
+                    // was never actually removed from. Applies in both
+                    // presentations - the pause menu must not open over a live
+                    // cyber interface.
+                    self.flat_ui.close();
+                    if self.use_mode {
+                        self.leave_use_mode();
                     }
                 }
 
@@ -5086,16 +5184,19 @@ impl MissionCore {
                     world_size,
                     components,
                 } => {
-                    // Flat presentation: the active panel's components are
-                    // drawn by the FlatUiHost onto the screen-space canvas.
-                    // Deliberately NOT behind `--experimental gui` - the flat
-                    // MFD is the #435 fix. Default VR accepts only the panel
-                    // explicitly opened through `OpenPanel`; the experimental
-                    // mode retains its legacy all-panels behavior.
-                    if game_options.presentation_mode == crate::PresentationMode::Flat {
-                        self.flat_ui
-                            .on_set_ui(&self.world, parent_entity, world_size, &components);
-                    }
+                    // The FlatUiHost's canvas slots: the flat MFD panel
+                    // (deliberately NOT behind `--experimental gui` - the flat
+                    // MFD is the #435 fix) and the use-mode inventory strip,
+                    // which BOTH presentations stash here - VR presents the
+                    // same strip canvas on the cyber-interface world panel.
+                    // The host only keeps components addressed to its bound
+                    // slots, so this is inert outside those modes. VR's
+                    // object-bound world panel still accepts only the panel
+                    // explicitly opened through `OpenPanel` (below); the
+                    // experimental mode retains its legacy all-panels
+                    // behavior.
+                    self.flat_ui
+                        .on_set_ui(&self.world, parent_entity, world_size, &components);
                     let update_world_panel = game_options.experimental_features.contains("gui")
                         || (game_options.presentation_mode == crate::PresentationMode::Vr
                             && self.gui.active_panel() == Some(parent_entity));
@@ -6339,65 +6440,6 @@ impl MissionCore {
                     let msgs = self.interaction.wield(info.entity_id);
                     self.process_virtual_hand_effects(asset_cache, msgs);
                 }
-                Effect::PositionInventoryRelativeToPlayer { head_rotation } => {
-                    let (pos, rot, inventory_entity) = {
-                        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-                        (
-                            player.pos,
-                            player.rotation * head_rotation,
-                            player.inventory_entity_id,
-                        )
-                    };
-                    // Keep the wide VR panel within an ordinary arm's reach;
-                    // the old placeholder cube sat farther out and commonly
-                    // landed the new canvas inside a nearby wall. Preserve that
-                    // diagnostic cube's established desktop placement.
-                    let distance = if game_options.presentation_mode == crate::PresentationMode::Vr
-                    {
-                        VR_BACKPACK_FORWARD
-                    } else {
-                        8.0
-                    };
-                    let vertical = if game_options.presentation_mode == crate::PresentationMode::Vr
-                    {
-                        VR_BACKPACK_UP
-                    } else {
-                        0.5
-                    };
-                    let forward =
-                        rot * vec3(0.0, vertical / SCALE_FACTOR, -distance / SCALE_FACTOR);
-                    PlayerInventoryEntity::set_position_rotation(
-                        &mut self.world,
-                        pos + forward,
-                        Quaternion::from_angle_y(cgmath::Deg(180.0)) * rot,
-                    );
-
-                    // VR has no cursor/metagame mode: the controller binding
-                    // places and toggles the backpack's existing
-                    // `internal_inventory` GuiScript as a physical world
-                    // panel. Flat keeps its established MoveInventory behavior
-                    // unchanged; its real inventory is the Tab/use-mode strip.
-                    if game_options.presentation_mode == crate::PresentationMode::Vr {
-                        let was_open = self.gui.active_panel() == Some(inventory_entity);
-                        self.gui.toggle_panel(
-                            inventory_entity,
-                            &mut self.world,
-                            &mut self.physics,
-                            &mut self.script_world,
-                            &mut self.id_to_physics,
-                        );
-                        // Only the opening half of the toggle announces itself;
-                        // dispatching PanelOpened on the closing press would
-                        // have the backpack script re-populate a panel that is
-                        // no longer on screen.
-                        if !was_open {
-                            self.script_world.dispatch(Message {
-                                to: inventory_entity,
-                                payload: MessagePayload::PanelOpened,
-                            });
-                        }
-                    }
-                }
                 Effect::TurnOffTweqs { entity_id } => {
                     self.world.run_with_data(turn_off_tweqs, entity_id);
                 }
@@ -6815,9 +6857,9 @@ impl MissionCore {
                 // The crosshair is a shooter-mode overlay; use mode replaces
                 // it with the cursor (the original's ShockOverlayMouseMode
                 // turns kOverlayCrosshair off while the cursor is up).
-                !self.flat_use_mode,
+                !self.use_mode,
                 // Use mode expands the compact readouts to BIOFULL/AMMOFULL.
-                self.flat_use_mode,
+                self.use_mode,
             ));
 
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
@@ -6843,6 +6885,30 @@ impl MissionCore {
         }
 
         ret
+    }
+
+    /// The VR cyber-interface overlay, in tracked pawn space: the comfort dim
+    /// first (the system-overlay group's depth clear rides the first object),
+    /// then the shared use-mode canvas on the anchor's panel. The caller
+    /// assigns the layer and rebases into world coordinates.
+    ///
+    /// Placement comes from [`Self::vr_use_mode_anchor`] alone (placed on
+    /// entry from the tracked head pose, world-locked, lazily recentered);
+    /// the dim follows the live gaze, falling back to the panel while the
+    /// head is untracked (see `crate::ui::world_dim::dim_pose`).
+    fn render_vr_use_mode(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
+        use crate::ui::world_dim;
+        let panel = self.vr_use_mode_anchor.panel();
+        let (head_position, head_rotation) = self.vr_use_mode_head;
+        let (dim_position, dim_forward) = world_dim::dim_pose(head_position, head_rotation, &panel);
+        let mut objects = vec![world_dim::world_dim_layer(
+            dim_position,
+            dim_forward,
+            world_dim::dim_distance(dim_position, &panel),
+            crate::util::render_source::USE_MODE_DIM,
+        )];
+        objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
+        objects
     }
 
     pub fn finish_render(
@@ -7209,6 +7275,24 @@ impl MissionCore {
             scene.extend(self.gui.render_active(asset_cache, &self.world));
         }
 
+        // The VR cyber interface (use mode): the flat use-mode canvas on the
+        // head-anchored panel, over a comfort dim - while the world behind it
+        // keeps simulating. Everything is emitted in one ordered system-
+        // overlay group (dim first, so the group's depth clear rides it, then
+        // the canvas), built in the tracked pawn space and rebased into world
+        // coordinates with the same pawn transform the runtime builds its
+        // camera from.
+        if options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
+            let pawn_to_world =
+                Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
+            let mut use_mode_objects = self.render_vr_use_mode(asset_cache);
+            for object in &mut use_mode_objects {
+                object.set_render_layer(RenderLayer::SystemOverlay);
+                object.set_transform(pawn_to_world * object.get_transform());
+            }
+            scene.extend(use_mode_objects);
+        }
+
         // Note: Hand spotlights for enhanced lighting are now handled in the runtime
         // via get_hand_spotlights() method - they're added to the Scene's lighting system
 
@@ -7241,11 +7325,12 @@ impl MissionCore {
     }
 
     /// Whether the runtime should show a 2D cursor instead of captured
-    /// mouse-look: an MFD panel is open, or Tab "use" mode is active
-    /// (projects/flat-ui.md §5.2). Both are flat-only states, so this is
-    /// inherently false in VR.
+    /// mouse-look: an MFD panel is open, or "use" mode is active
+    /// (projects/flat-ui.md §5.2). Only the flat desktop runtime consults
+    /// this; in VR (where use mode is the cyber interface) no runtime reads
+    /// it, so the mode's truthy answer there is inert.
     pub fn wants_pointer(&self) -> bool {
-        self.flat_ui.active_panel().is_some() || self.flat_use_mode
+        self.flat_ui.active_panel().is_some() || self.use_mode
     }
 
     /// Actual crouch state of the player collider (stand-up can be refused
@@ -8929,7 +9014,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             }
         });
         crate::game_scene::DebugUiState {
-            mode: if self.flat_use_mode {
+            mode: if self.use_mode {
                 "use".to_string()
             } else {
                 "shooter".to_string()

@@ -11,9 +11,14 @@ import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
 // MedSci2 production-VR guard for #974: the whole carry cycle for an ordinary
 // contained prop, player-observable and using no direct Frob/Grab/Give message:
 //
-//   Desk 503 panel click -> Gameboy 72 into the backpack
-//   Quest-X backpack squeeze -> first world release -> world re-grab
+//   Desk 503 loot-panel squeeze -> Gameboy 72 into the hand
+//   first world release -> world re-grab
 //   carry -> second world release -> selectable body -> save/load
+//
+// (The retrieval used to round-trip through the Quest-X backpack world quad;
+// that panel was removed with the cyber-interface use mode, whose panel-side
+// item interaction lands in a later slice - the loot panel's squeeze grab is
+// the same production ContainerGui path.)
 //
 // Every release must leave the exact live entity world-referenced
 // (`HasRefs(true)`), free of residual `Contains` links, and physically
@@ -33,8 +38,6 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const DESK = 503;
 const GAMEBOY = 72;
 const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
-const VR_BACKPACK_WORLD_SCALE = 0.55;
-const BACKPACK_PANEL_SIZE_PX: Vec3 = [635, 120, 0];
 
 function only(matches: EntitySummary[], label: string): EntitySummary {
   assert.equal(matches.length, 1, `expected one ${label}, got ${matches.length}`);
@@ -189,54 +192,30 @@ test(
       1,
       itemButton,
     );
+    // Squeeze the panel's item button: ContainerGui's production grab pulls
+    // the exact Gameboy out of the desk and into the hand.
     await aimVrHandAt(game, itemButtonWorld, 0.35);
-    await game.input.set("right_hand.trigger", 1);
-    await game.step({ frames: 2 });
-    await game.input.set("right_hand.trigger", 0);
-    await game.step({ frames: 30 });
-
-    assert.equal(
-      (await game.player.inventory()).items.find((entry) => entry.entity_id === item.id)
-        ?.location,
-      "inventory",
-      "panel Take must move the physical Gameboy into the backpack",
-    );
-
-    // Put the backpack panel at a clear, level gaze, then retrieve its only
-    // item with the production VR hand ray and squeeze.
-    await game.input.set("head.look", [0, 0]);
-    await game.input.trigger("MoveInventory");
-    await game.step({ frames: 5 });
-    const backpackUi = (await game.ui.state()).active_panel;
-    assert.ok(backpackUi, "MoveInventory must open the physical backpack panel");
-    const backpackItem = backpackUi.elements.find(
-      (element) => element.kind === "button" && element.entity_id === item.id,
-    );
-    assert.ok(backpackItem, "backpack must render the stowed Gameboy");
-    const backpackPanel = (await game.physics.bodies()).bodies.find((body) =>
-      body.collision_groups.includes("ui"),
-    );
-    assert.ok(backpackPanel, "backpack panel must have a production VR collider");
-    const backpackItemWorld = panelElementWorldPoint(
-      backpackPanel,
-      BACKPACK_PANEL_SIZE_PX,
-      VR_BACKPACK_WORLD_SCALE,
-      backpackItem,
-    );
-    await aimVrHandAt(game, backpackItemWorld, 0.35);
     await game.input.set("right_hand.squeeze", 1);
     await game.step({ frames: 5 });
     assert.equal((await game.info()).player.right_hand_entity_id, item.id);
     await assertNoContains(game, item.id);
 
-    await game.input.trigger("MoveInventory");
-    await game.step({ frames: 3 });
+    // Walk clear of the desk before dropping: its panel auto-closes on
+    // distance (the original's per-overlay `distance`), and a release within
+    // the desk's give range would put the item straight back into the
+    // container. The spot is open floor, so the drop is selectable.
+    await teleportVerified(game, {
+      x: desk.position[0] + 5.0,
+      y: desk.position[1] + 0.5,
+      z: desk.position[2] - 5.0,
+    });
+    await game.step({ frames: 10 });
     assert.equal(
       (await game.physics.bodies()).bodies.some((body) =>
         body.collision_groups.includes("ui"),
       ),
       false,
-      "Quest-X must close the backpack while squeeze keeps the item held",
+      "walking away must close the desk panel while squeeze keeps the item held",
     );
     assert.equal((await game.info()).player.right_hand_entity_id, item.id);
 

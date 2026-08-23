@@ -113,20 +113,20 @@ mod tests {
     }
 
     #[test]
-    fn quest_x_backpack_and_y_reader_edges_remain_independent() {
+    fn quest_x_use_mode_and_y_reader_edges_remain_independent() {
         let mut state = InputActionState::new();
 
-        state.sync_discrete_button(InputAction::MoveInventory, true, true, true);
-        assert!(state.just_triggered(InputAction::MoveInventory));
+        state.sync_discrete_button(InputAction::ToggleUseMode, true, true, true);
+        assert!(state.just_triggered(InputAction::ToggleUseMode));
         assert!(!state.just_triggered(InputAction::ReadLastUnreadLog));
         state.clear_triggered();
 
         state.sync_discrete_button(InputAction::ReadLastUnreadLog, true, true, true);
         assert!(state.just_triggered(InputAction::ReadLastUnreadLog));
-        assert!(state.is_held(InputAction::MoveInventory));
+        assert!(state.is_held(InputAction::ToggleUseMode));
 
-        state.sync_discrete_button(InputAction::MoveInventory, true, true, false);
-        assert!(!state.is_held(InputAction::MoveInventory));
+        state.sync_discrete_button(InputAction::ToggleUseMode, true, true, false);
+        assert!(!state.is_held(InputAction::ToggleUseMode));
         assert!(state.is_held(InputAction::ReadLastUnreadLog));
     }
 

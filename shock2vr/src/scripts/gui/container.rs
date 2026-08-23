@@ -258,10 +258,11 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
 
     fn get_config(&self) -> GuiConfig {
         GuiConfig {
-            // MoveInventory positions the wide backpack itself at viewing
-            // height; applying the object-panel lift again would put it above
-            // the player's comfortable field of view. Loot panels remain
-            // lifted beside their physical host.
+            // The player backpack canvas is presented by its host (today
+            // the use-mode strip / cyber-interface panel) at viewing height;
+            // applying the object-panel lift again would put it above the
+            // player's comfortable field of view. Loot panels remain lifted
+            // beside their physical host.
             world_offset: Vector3::new(0.0, if self.take_on_click { 1.0 } else { 0.0 }, 0.0),
             screen_size_in_pixels: Vector2::new(self.width, self.height),
         }

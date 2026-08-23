@@ -4,7 +4,6 @@ export type InputAction =
   | "QuickSave"
   | "QuickLoad"
   | "SpawnDebugItem"
-  | "MoveInventory"
   | "DebugCycleWeapon"
   | "EquipWrench"
   | "EquipPistol"

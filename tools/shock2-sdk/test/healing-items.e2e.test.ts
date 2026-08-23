@@ -11,7 +11,7 @@ import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
 // path before covering the sibling item and flat presentation:
 //
 //   medsci2 Desk 471 --Contains--> Med Patch 1054
-//   hand trigger -> loot panel -> backpack -> MoveInventory -> left squeeze
+//   hand trigger -> loot panel -> hand squeeze retrieval
 //   held-item trigger -> authored Frob -> timed retail healing course
 //
 // Retail allobjs.osm behavior is data-driven by the two script names:
@@ -275,131 +275,30 @@ test(
       "physical loot must sever Desk 471's exact Contains link",
     );
 
-    // Close the Desk panel without releasing the physical patch. Drop it into
-    // the world, then use the ordinary world-trigger pickup path that stores
-    // MOVE items in the backpack. This mirrors the campaign's physical-loot ->
-    // stored-item sequence without a debug Give/provisioning shortcut.
+    // Close the Desk panel without releasing the physical patch: walk away,
+    // and the bound panel's distance auto-close puts it away (the original's
+    // per-overlay `distance`). The old backpack round-trip here - drop,
+    // world-trigger pickup into the backpack, Quest-X retrieval - is gone
+    // with the world-quad backpack; panel-side retrieval returns with the
+    // cyber interface's pointer slice, and the stored-pickup behavior itself
+    // is covered by the flat presentation test below.
     await teleportVerified(game, {
       x: initial.player.position[0],
       y: initial.player.position[1],
       z: initial.player.position[2],
     });
-    await game.step({ frames: 5 });
-    await game.input.set("head.look", [0, 0]);
-    await game.step({ frames: 2 });
-    await game.input.trigger("MoveInventory");
-    await game.step({ frames: 3 });
-    await game.input.trigger("MoveInventory");
-    await game.step({ frames: 3 });
+    await game.step({ frames: 10 });
     assert.equal(
       (await game.physics.bodies()).bodies.filter((body) =>
         body.collision_groups.includes("ui"),
       ).length,
       0,
-      "the production action must close the transient panel before the drop",
+      "walking away must close the transient desk panel before the use",
     );
-    await game.input.set("right_hand.squeeze", 0);
-    await game.step({ frames: 5 });
-    const droppedBody = (await game.physics.bodies({ entityId: patchId }))
-      .bodies;
-    assert.equal(
-      droppedBody.length,
-      1,
-      "the exact released patch must regain one world body",
-    );
-    const pickupAim = await aimVrHandAt(game, droppedBody[0].position, 0.35);
-    const pickupHit = await game.raycast({
-      start: pickupAim.start,
-      end: pickupAim.target,
-      collision_groups: ["entity", "selectable", "world", "raycast"],
-      max_distance: 1,
-      ignore_sensors: true,
-    });
-    assert.equal(
-      pickupHit.entity_id,
-      patchId,
-      "the production ray must select the dropped patch",
-    );
+
+    // Use the patch straight from the holding hand: held-item trigger is the
+    // authored Frob.
     await game.input.set("right_hand.trigger", 1);
-    await game.step({ frames: 2 });
-    await game.input.set("right_hand.trigger", 0);
-    await game.step({ frames: 5 });
-    assert.equal(
-      (await game.player.inventory()).items.find(
-        (item) => item.entity_id === patchId,
-      )?.location,
-      "inventory",
-      "world-trigger pickup must store the exact patch in the backpack",
-    );
-    const backpackId = (await game.info()).player.inventory_entity_id;
-    assert.notEqual(backpackId, null);
-    const backpackLink = (
-      await game.entities.detail(backpackId!)
-    ).outgoing_links.find(
-      (link) =>
-        link.target_id === patchId && link.link_type.startsWith("Contains"),
-    );
-    assert.ok(
-      backpackLink,
-      "the exact patch must own a backpack Contains slot",
-    );
-    assert.equal(typeof backpackLink.contains_ordinal, "number");
-
-    await game.input.set("head.look", [0, 0]);
-    await game.step({ frames: 2 });
-    await game.input.trigger("MoveInventory");
-    await game.step({ frames: 5 });
-    const backpackPanel = await onlyUiPanel(game, "MoveInventory retrieval");
-    const backpackUi = (await game.ui.state()).active_panel;
-    assert.ok(backpackUi, "the backpack world panel must be introspectable");
-    const backpackElement = backpackUi.elements.find(
-      (element) => element.entity_id === patchId,
-    );
-    assert.ok(
-      backpackElement,
-      `the backpack must visibly render exact patch ${patchId}: ${JSON.stringify(backpackUi)}`,
-    );
-    const [backpackX, backpackY, backpackW, backpackH] = backpackElement.rect;
-    const backpackSlot = canvasPointWorld(
-      backpackPanel,
-      BACKPACK_PANEL_SIZE_PX,
-      [backpackX + backpackW / 2, backpackY + backpackH / 2, 0],
-      VR_BACKPACK_SCALE,
-    );
-    const panelAim = await aimVrHandAt(game, backpackSlot, 0.35);
-    const inputResponse = await fetch(`${game.baseUrl}/v1/control/input`);
-    assert.equal(inputResponse.ok, true);
-    const input = (await inputResponse.json()) as {
-      right_hand: {
-        position: Vec3;
-        rotation: [number, number, number, number];
-      };
-    };
-    await game.input.set("left_hand.position", input.right_hand.position);
-    await game.input.set("left_hand.rotation", input.right_hand.rotation);
-    await game.input.set("left_hand.trigger", 0);
-    await game.input.set("left_hand.squeeze", 0);
-    await game.step({ frames: 3 });
-    const panelHit = await game.raycast({
-      start: panelAim.start,
-      end: panelAim.target,
-      collision_groups: ["ui"],
-      max_distance: 1,
-    });
-    assert.equal(panelHit.entity_id, backpackPanel.entity_id);
-    await game.input.set("left_hand.squeeze", 1);
-    await game.step({ frames: 5 });
-    assert.equal(
-      (await game.player.inventory()).items.find(
-        (item) => item.entity_id === patchId,
-      )?.location,
-      "left_hand",
-      "left squeeze must retrieve the exact rendered patch into the left hand",
-    );
-
-    await game.input.trigger("MoveInventory");
-    await game.step({ frames: 3 });
-    await game.input.set("left_hand.trigger", 1);
     await game.step({ frames: 2 });
     const messages = (await game.messages.recent()).messages.filter(
       (message) => message.to.entity_id === patchId,

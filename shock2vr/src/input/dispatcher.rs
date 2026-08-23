@@ -83,11 +83,6 @@ impl ActionDispatcher {
                 auto_wield: false,
             });
         }
-        if state.just_triggered(InputAction::MoveInventory) {
-            effects.push(Effect::PositionInventoryRelativeToPlayer {
-                head_rotation: input_context.head.rotation,
-            });
-        }
         if state.just_triggered(InputAction::DebugHitboxCyclePose) {
             effects.push(Effect::DebugCycleHitboxPose);
         }
