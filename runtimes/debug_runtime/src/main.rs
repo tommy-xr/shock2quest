@@ -1925,6 +1925,15 @@ fn capture_frame_snapshot(
     // TODO: Find player entity specifically
     // TODO: Track frame counter
 
+    // Only the head component is reported, so the pawn is passed as the
+    // identity it is relative to - `resolve_camera` never touches it anyway.
+    let rendered_camera = game.resolve_camera(
+        vec3(0.0, 0.0, 0.0),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
+        current_input.head.rotation,
+    );
+
     FrameSnapshot {
         frame_index: frame_counter,
         time: TimeInfo {
@@ -1954,10 +1963,19 @@ fn capture_frame_snapshot(
                     .as_ref()
                     .map(|s| s.life_state.clone())
                     .unwrap_or_else(|| "alive".to_owned()),
-                // The LIVE eye height, not the standing constant: automation
-                // aims from this, and a crouched player's camera is lower.
-                camera_offset: [0.0, game.player_eye_height() / SCALE_FACTOR, 0.0],
-                camera_rotation: [1.0, 0.0, 0.0, 0.0], // TODO: Get camera rotation
+                // The camera the runtime actually renders from, resolved the
+                // same way the render loop resolves it: the LIVE eye height
+                // (automation aims from this, and a crouched player's camera is
+                // lower), then routed through `resolve_camera` so a death
+                // camera in progress is observable headlessly rather than only
+                // in a screenshot.
+                camera_offset: rendered_camera.head_offset.into(),
+                camera_rotation: [
+                    rendered_camera.head_rotation.s,
+                    rendered_camera.head_rotation.v.x,
+                    rendered_camera.head_rotation.v.y,
+                    rendered_camera.head_rotation.v.z,
+                ],
                 wielded_entity_id: state.as_ref().and_then(|s| s.wielded_entity_id),
                 right_hand_entity_id: state.as_ref().and_then(|s| s.right_hand_entity_id),
                 reloading: state.as_ref().is_some_and(|s| s.reloading),

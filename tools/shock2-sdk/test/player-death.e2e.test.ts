@@ -65,6 +65,109 @@ test(
   },
 );
 
+// `death_camera::FALL_SECONDS`, in fixed-timestep frames.
+const FALL_FRAMES = Math.ceil(0.9 * 60);
+
+/** The camera's up axis in pawn space - `camera_rotation` is `[w, x, y, z]`. */
+function cameraUp([w, x, y, z]: [number, number, number, number]): [number, number, number] {
+  // R * (0, 1, 0)
+  return [2 * (x * y - w * z), 1 - 2 * (x * x + z * z), 2 * (y * z + w * x)];
+}
+
+test(
+  "dying drops the camera to the floor and rolls it onto its side",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort + 4,
+    });
+    await game.step({ frames: 5 });
+
+    const alive = (await game.info()).player;
+    assert.ok(alive.camera_offset[1] > 1.0, "a live player renders from a standing eye");
+    assert.ok(
+      Math.abs(cameraUp(alive.camera_rotation)[1] - 1.0) < 0.01,
+      `a live camera is upright, got up=${JSON.stringify(cameraUp(alive.camera_rotation))}`,
+    );
+
+    await killPlayer(game);
+
+    // The fall ramps in rather than snapping: one frame after death the camera
+    // has barely left the tracked pose.
+    const justDied = (await game.info()).player;
+    assert.equal(lifeState(justDied), "dead");
+    assert.ok(
+      Math.abs(justDied.camera_offset[1] - alive.camera_offset[1]) < 0.05,
+      `the death camera must ease in, not cut: ${justDied.camera_offset[1]} vs ${alive.camera_offset[1]}`,
+    );
+
+    await game.step({ frames: Math.floor(FALL_FRAMES / 2) });
+    const midFall = (await game.info()).player;
+    assert.ok(
+      midFall.camera_offset[1] < alive.camera_offset[1] - 0.2 &&
+        midFall.camera_offset[1] > justDied.camera_offset[1] - alive.camera_offset[1],
+      `mid-fall the camera is between the eye and the floor, got ${midFall.camera_offset[1]}`,
+    );
+
+    await game.step({ frames: FALL_FRAMES });
+    const fallen = (await game.info()).player;
+    assert.equal(lifeState(fallen), "dead", "the fall settles inside the death sequence");
+    assert.ok(
+      fallen.camera_offset[1] < alive.camera_offset[1] - 1.0,
+      `the fallen camera lies near the floor, got ${fallen.camera_offset[1]} (alive ${alive.camera_offset[1]})`,
+    );
+    // Lying on its side: the view's up axis now points along the ground.
+    const up = cameraUp(fallen.camera_rotation);
+    assert.ok(
+      Math.abs(up[1]) < 0.02,
+      `the fallen camera has rolled onto its side, got up=${JSON.stringify(up)}`,
+    );
+    assert.ok(Math.hypot(up[0], up[2]) > 0.98, `and its up axis is horizontal: ${JSON.stringify(up)}`);
+  },
+);
+
+test(
+  "a QBR reconstruction puts the camera back on the player's feet",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort + 5,
+    });
+    await game.step({ frames: 5 });
+
+    await game.player.spawnItem("20 Nanites");
+    const [button] = await game.entities.byTemplate(RESURRECTION_BUTTON);
+    assert.ok(button, "medsci1 should contain its authored QBR scanner button");
+    await game.entities.sendMessage(button.id, { type: "Frob" });
+    await game.step({ frames: 2 });
+
+    const alive = (await game.info()).player;
+    await killPlayer(game);
+    await game.step({ frames: FALL_FRAMES });
+
+    const dying = (await game.info()).player;
+    assert.equal(lifeState(dying), "respawning", "the fall plays for a QBR death too");
+    assert.ok(
+      dying.camera_offset[1] < alive.camera_offset[1] - 1.0,
+      `a reconstructing player still falls, got ${dying.camera_offset[1]}`,
+    );
+
+    await game.step({ frames: RESPAWN_DELAY_FRAMES });
+    const revived = (await game.info()).player;
+    assert.equal(lifeState(revived), "alive");
+    assert.ok(
+      Math.abs(revived.camera_offset[1] - alive.camera_offset[1]) < 0.01,
+      `reconstruction must hand the camera back, got ${revived.camera_offset[1]} (was ${alive.camera_offset[1]})`,
+    );
+    assert.ok(
+      Math.abs(cameraUp(revived.camera_rotation)[1] - 1.0) < 0.01,
+      `and upright, got up=${JSON.stringify(cameraUp(revived.camera_rotation))}`,
+    );
+  },
+);
+
 test(
   "an activated resurrection station revives the player after charging 10 nanites",
   { skip: !e2eEnabled, timeout: 600_000 },

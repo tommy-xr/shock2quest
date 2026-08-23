@@ -411,6 +411,10 @@ export interface PlayerSnapshot {
    * activated QBR), which hands off to the `game_over` screen after three
    * seconds; `respawning` is the five-second QBR reconstruction delay. */
   life_state: "alive" | "dead" | "game_over" | "respawning";
+  /** The eye the runtime actually renders from, relative to the player's
+   * collider centre, and its orientation `[w, x, y, z]`. Live and crouch-aware,
+   * and it carries the death camera: while the player is dying these report the
+   * fall to the floor rather than the upright tracked pose. */
   camera_offset: Vec3;
   camera_rotation: [number, number, number, number];
   /** The wielded/first-person weapon in flatscreen mode; null when unarmed. */
