@@ -142,6 +142,22 @@ dev_params! {
     /// A 0/1 float because the registry has no `Bool` kind yet; it should
     /// become one when that lands.
     MELEE_GLOVE_OVERLAY = float("melee_glove_overlay", "Melee glove overlay", 0.0, 0.0, 1.0, 1.0),
+    /// Uniform scale applied to a wielded melee `_h` view model, about the
+    /// baked fist so the grip stays on the controller.
+    ///
+    /// The 25AE first-person models are authored for a flat camera's own
+    /// projection, where an oversized weapon reads better; VR draws them at
+    /// true world scale, where the same exaggeration is simply a giant weapon.
+    /// Measured on the shipped rigs (logged at every wield): the baked
+    /// hand+forearm is ~57 cm against a real ~45 cm, and the weapons run
+    /// 66-94 cm - a Wrench whose head sits 62 cm out of the fist.
+    ///
+    /// Unlike the rest of this table the value is read at *wield* time rather
+    /// than every frame, because the correction is baked into the posed model
+    /// once. It therefore takes effect on the next grab - one gesture in a
+    /// headset, which is what this knob exists to serve - rather than
+    /// instantly. Default 1.0 changes nothing until it is tuned.
+    MELEE_WIELD_SCALE = float("melee_scale", "Melee wield scale", 1.0, 0.25, 1.5, 0.05),
 }
 
 /// Every parameter with its id, in declaration order.

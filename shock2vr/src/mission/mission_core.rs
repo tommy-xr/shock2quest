@@ -5328,11 +5328,57 @@ impl MissionCore {
                                         match vr_held_source.as_ref().and_then(|source| {
                                             source.posed_weapon_bounds(&player, correction)
                                         }) {
-                                            Some(bounds) => self.physics.fit_held_melee_cuboid(
-                                                entity_id,
-                                                bounds.size,
-                                                bounds.center,
-                                            ),
+                                            Some(bounds) => {
+                                                // The rendered weapon's own
+                                                // measured size. Logged because
+                                                // nothing else reports how big
+                                                // a wielded view model
+                                                // actually is, and "the
+                                                // viewmodels look oversized" is
+                                                // otherwise an eyeball claim.
+                                                let cm = crate::METERS_PER_WORLD_UNIT * 100.0;
+                                                tracing::info!(
+                                                    "wield '{model_name}': rendered weapon {:.2}x{:.2}x{:.2} units ({:.0}x{:.0}x{:.0} cm), grip offset {:.3} units ({:.0} cm)",
+                                                    bounds.size.x,
+                                                    bounds.size.y,
+                                                    bounds.size.z,
+                                                    bounds.size.x * cm,
+                                                    bounds.size.y * cm,
+                                                    bounds.size.z * cm,
+                                                    crate::vr_config::melee_contact_offset(arm)
+                                                        .magnitude(),
+                                                    crate::vr_config::melee_contact_offset(arm)
+                                                        .magnitude()
+                                                        * cm,
+                                                );
+                                                // The baked hand/forearm from
+                                                // the same rig, for scale: a
+                                                // view model authored for a
+                                                // flat camera can exaggerate
+                                                // its weapon without
+                                                // exaggerating the arm, and
+                                                // the ratio decides whether a
+                                                // VR correction is uniform or
+                                                // weapon-only.
+                                                match vr_held_source.as_ref().and_then(|source| {
+                                                    source.posed_arm_bounds(&player, correction)
+                                                }) {
+                                                    Some(arm_bounds) => tracing::info!(
+                                                        "wield '{model_name}': baked arm {:.0}x{:.0}x{:.0} cm",
+                                                        arm_bounds.size.x * cm,
+                                                        arm_bounds.size.y * cm,
+                                                        arm_bounds.size.z * cm,
+                                                    ),
+                                                    None => tracing::info!(
+                                                        "wield '{model_name}': baked arm unmeasured"
+                                                    ),
+                                                }
+                                                self.physics.fit_held_melee_cuboid(
+                                                    entity_id,
+                                                    bounds.size,
+                                                    bounds.center,
+                                                )
+                                            }
                                             None => tracing::error!(
                                                 "ChangeModel: '{model_name}' has no fittable weapon geometry - retaining its loose-prop collider"
                                             ),
