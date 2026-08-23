@@ -109,7 +109,7 @@ dev_params! {
     /// is untouched: OpenXR view FOVs must be used as-is. (`debug_runtime`
     /// shares its single flat projection between flat and `--vr` mode, so this
     /// override reaches both there.)
-    FOV_OVERRIDE_DEG = float("fov_override_deg", "FOV override (deg)", 0.0, 0.0, 120.0, 1.0),
+    FOV_OVERRIDE_DEG = float("fov_override_deg", "FOV override", 0.0, 0.0, 120.0, 1.0),
     /// Ceiling on how fast a physically simulated held melee weapon may be
     /// driven onto its tracked-hand target, in world units per second.
     ///
@@ -120,9 +120,9 @@ dev_params! {
     /// without a ceiling that becomes one enormous impulse into the geometry.
     /// Read before every physics step, so a headset can tune it without a
     /// rebuild.
-    MELEE_MAX_SPEED = float("melee_max_speed", "Melee max speed", 60.0, 1.0, 200.0, 5.0),
+    MELEE_MAX_SPEED = float("melee_max_speed", "Melee speed", 60.0, 1.0, 200.0, 5.0),
     /// The angular counterpart of [`MELEE_MAX_SPEED`], in radians per second.
-    MELEE_MAX_TURN = float("melee_max_turn", "Melee max turn", 60.0, 1.0, 200.0, 5.0),
+    MELEE_MAX_TURN = float("melee_max_turn", "Melee turn", 60.0, 1.0, 200.0, 5.0),
     /// Minimum contact speed, in world units per second, at which a held melee
     /// weapon damages what it touches *without* the trigger being pulled.
     ///
@@ -133,7 +133,7 @@ dev_params! {
     /// the swing/graze threshold so a weapon resting against a creature does
     /// nothing. `debug_melee` turns it on; missions leave it at 0 until the
     /// physical model is the shipped one.
-    MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Melee free swing", 0.0, 0.0, 20.0, 0.5),
+    MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Free swing", 0.0, 0.0, 20.0, 0.5),
     /// Draw the tracked-hand glove *in addition to* a wielded weapon's own
     /// first-person model, instead of letting the weapon model stand in for the
     /// hand. `0` off, `1` on.
@@ -146,7 +146,7 @@ dev_params! {
     ///
     /// A 0/1 float because the registry has no `Bool` kind yet; it should
     /// become one when that lands.
-    MELEE_GLOVE_OVERLAY = float("melee_glove_overlay", "Melee glove overlay", 0.0, 0.0, 1.0, 1.0),
+    MELEE_GLOVE_OVERLAY = float("melee_glove_overlay", "Show hands", 0.0, 0.0, 1.0, 1.0),
     /// Draw the live contact volume of every held melee weapon as a world-space
     /// wireframe. `0` off, `1` on.
     ///
@@ -154,7 +154,7 @@ dev_params! {
     /// where my hand is", this one answers "is the damage volume where the
     /// weapon is". Read out of Rapier at the collider's own isometry, so it
     /// shows what is actually simulated rather than what the wield intended.
-    MELEE_VOLUMES = float("melee_volumes", "Melee volumes", 0.0, 0.0, 1.0, 1.0),
+    MELEE_VOLUMES = float("melee_volumes", "Show hurtbox", 0.0, 0.0, 1.0, 1.0),
     /// Uniform scale applied to a wielded melee `_h` view model, about the
     /// baked fist so the grip stays on the controller.
     ///
@@ -176,7 +176,7 @@ dev_params! {
     /// single scale makes both right. 0.7 draws a 46 cm Wrench on a 40 cm arm;
     /// making the arm exactly life-size (0.79) would leave the Wrench at 52,
     /// and making the Wrench right (~0.5) would leave a child's arm.
-    MELEE_WIELD_SCALE = float("melee_scale", "Melee wield scale", 0.7, 0.25, 1.5, 0.05),
+    MELEE_WIELD_SCALE = float("melee_scale", "Melee scale", 0.7, 0.25, 1.5, 0.05),
 }
 
 /// Every parameter with its id, in declaration order.

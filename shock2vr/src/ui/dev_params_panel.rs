@@ -338,8 +338,14 @@ pub fn draw(
         .enumerate()
     {
         let row = row_rects(rects, slot);
+        // Fitted, not plain: a label is authored text of unbounded length and
+        // `text_native` does not shrink to its rect, so a long one ("FOV
+        // override (deg)", "Melee glove overlay") ran past the label column
+        // and struck the `<` arrow beside it. Ellipsizing keeps the row
+        // legible and the arrow clickable; the registry is free to name a
+        // parameter clearly without measuring it first.
         canvas
-            .text_native(
+            .text_native_fit(
                 row.label,
                 param.label,
                 ROW_FONT,
