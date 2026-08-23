@@ -7187,6 +7187,26 @@ impl MissionCore {
             scene.append(&mut debug_render.clone());
         }
 
+        // Held-melee contact volumes. Emitted in the shared world pass, so
+        // flat and VR draw the identical overlay - required, since the
+        // question it answers ("is the damage volume on the weapon I can
+        // see?") was raised in a headset. A melee wield is the only thing
+        // that carries RuntimePropVrGripOffset, so that component *is* the
+        // set of held melee weapons.
+        if crate::dev_params::get(crate::dev_params::MELEE_VOLUMES) > 0.5 {
+            let held = self
+                .world
+                .borrow::<View<RuntimePropVrGripOffset>>()
+                .map(|grips| grips.iter().with_id().map(|(id, _)| id).collect::<Vec<_>>())
+                .unwrap_or_default();
+            for entity_id in held {
+                scene.extend(
+                    self.physics
+                        .debug_entity_collider_lines(entity_id, vec3(1.0, 0.25, 0.25)),
+                );
+            }
+        }
+
         // Render debug pathfinding
         if options.debug_pathfinding {
             if let Some(ref path_database) = self.path_database {

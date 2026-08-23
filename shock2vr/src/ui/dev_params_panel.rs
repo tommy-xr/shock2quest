@@ -116,8 +116,16 @@ pub fn rects(asset_cache: &mut AssetCache) -> PanelRects {
 /// Vertical distance between row tops, and each row's own height. Taller
 /// than the load list's 19px rows: these rows carry click targets (the
 /// arrows), so they get more air and a bigger hit area.
-const ROW_PITCH: f32 = 28.0;
-const ROW_H: f32 = 24.0;
+///
+/// Tightened from 28/24 when the registry reached ten parameters and the
+/// tenth stopped fitting - which `every_registered_param_fits_in_the_pane`
+/// caught, and which would otherwise have silently hidden the newest knob
+/// (`melee_volumes`) from the screen that exists to reach it. At this pitch
+/// the pane holds exactly ten with nothing to spare, so the *next* parameter
+/// needs the list to scroll rather than another shave; the assertion is what
+/// will say so.
+const ROW_PITCH: f32 = 25.0;
+const ROW_H: f32 = 22.0;
 /// Horizontal inset from the pane's edges, matching the load list's text
 /// inset so the two screens' contents align inside the same art.
 const TEXT_INSET: f32 = 8.0;

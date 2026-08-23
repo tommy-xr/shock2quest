@@ -147,6 +147,14 @@ dev_params! {
     /// A 0/1 float because the registry has no `Bool` kind yet; it should
     /// become one when that lands.
     MELEE_GLOVE_OVERLAY = float("melee_glove_overlay", "Melee glove overlay", 0.0, 0.0, 1.0, 1.0),
+    /// Draw the live contact volume of every held melee weapon as a world-space
+    /// wireframe. `0` off, `1` on.
+    ///
+    /// The companion to [`MELEE_GLOVE_OVERLAY`]: that one answers "is the hand
+    /// where my hand is", this one answers "is the damage volume where the
+    /// weapon is". Read out of Rapier at the collider's own isometry, so it
+    /// shows what is actually simulated rather than what the wield intended.
+    MELEE_VOLUMES = float("melee_volumes", "Melee volumes", 0.0, 0.0, 1.0, 1.0),
     /// Uniform scale applied to a wielded melee `_h` view model, about the
     /// baked fist so the grip stays on the controller.
     ///
