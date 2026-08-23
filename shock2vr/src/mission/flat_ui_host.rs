@@ -229,6 +229,12 @@ pub struct FlatUiHost {
     /// `GET /v1/ui` - so a test can see where the VR ray actually landed on the
     /// canvas instead of inferring it from what lit up.
     last_pointer: Option<CanvasPointer>,
+    /// Whether the grab gesture was down last frame, so a *held* squeeze is
+    /// reported to the panel only on its rising edge. The panel's grab handler
+    /// is level-triggered (`GuiComponent::get_event` reads `is_grabbed`
+    /// directly), so a squeeze held while the ray swept the grid would take
+    /// every slot it crossed.
+    last_pointer_grabbing: bool,
     /// Last known render-target size, for pointer->canvas letterbox mapping
     /// (updated every rendered frame; 4:3 default until the first render).
     screen_size: Vector2<f32>,
@@ -259,6 +265,7 @@ impl FlatUiHost {
             hover_close: false,
             last_pointer_pressed: false,
             last_pointer: None,
+            last_pointer_grabbing: false,
             screen_size: CANVAS_SIZE,
         }
     }
@@ -290,10 +297,13 @@ impl FlatUiHost {
                 canvas: pointer.canvas_pos.map(|p| [p.x, p.y]),
                 pressed: pointer.pressed,
                 grabbing: pointer.grabbing,
-                hand: match pointer.hand {
+                // Only meaningful when something is actually on the canvas: off
+                // it there is no owning hand, and reporting one would invent a
+                // pointer the interface does not have.
+                hand: pointer.canvas_pos.map(|_| match pointer.hand {
                     Handedness::Left => "left".to_string(),
                     Handedness::Right => "right".to_string(),
-                },
+                }),
             })
     }
 
@@ -301,10 +311,10 @@ impl FlatUiHost {
     /// it cannot read as a fresh press-edge on the next frame.
     ///
     /// [`open`](Self::open) does this for the MFD slot (the frob that opened
-    /// the panel is still down); entering use mode needs the same guard - in VR
-    /// the interface can be opened with the trigger held, and rule 6 of the
-    /// vr-ui-design skill is that a screen entered under a held button starts
-    /// "already pressed".
+    /// the panel is still down); entering use mode needs the same guard, in
+    /// both presentations - an LMB overlapping the Tab, or a VR trigger held
+    /// while the interface opens. Rule 6 of the vr-ui-design skill: a screen
+    /// entered under a held button starts "already pressed".
     pub fn guard_held_press(&mut self) {
         self.last_pointer_pressed = true;
     }
@@ -530,7 +540,18 @@ impl FlatUiHost {
         world: &World,
         pointer: Option<CanvasPointer>,
     ) -> (Vec<Message>, Vec<FlatUiDragAction>) {
+        // Edge-detect the grab before anything can return early, so a squeeze
+        // held across frames is one gesture wherever the ray goes.
+        let grabbing = pointer.map(|p| p.grabbing).unwrap_or(false);
+        let grab_edge = grabbing && !self.last_pointer_grabbing;
+        self.last_pointer_grabbing = grabbing;
+        // `/v1/ui` reports the gesture as the player is making it (held or
+        // not); only what reaches the panel is reduced to the edge.
         self.last_pointer = pointer;
+        let pointer = pointer.map(|pointer| CanvasPointer {
+            grabbing: grab_edge,
+            ..pointer
+        });
         let pressed = pointer.map(|p| p.pressed).unwrap_or(false);
         let pressed_edge = pressed && !self.last_pointer_pressed;
         self.last_pointer_pressed = pressed;
@@ -2084,5 +2105,88 @@ mod tests {
             }
             ref other => panic!("expected a GUIHover, got {:?}", other),
         }
+    }
+
+    /// Both controllers on the panel, only the LEFT squeezing: the squeeze is
+    /// what claims the panel, so the grab must be reported for the left hand.
+    /// Trigger-only arbitration would fall back to the idle right hand, read
+    /// its (absent) squeeze, and take nothing - while the real left squeeze
+    /// went to the world instead.
+    #[test]
+    fn a_squeezing_hand_wins_the_panel_over_an_idle_one() {
+        let (world, mut host, _wrench, inventory) = drag_world();
+        let slot = vec2(23.5, 34.0);
+        let squeezing_left = Hand {
+            squeeze_value: 1.0,
+            ..test_support::hand_aimed_at(CANVAS_SIZE, slot, 0.0)
+        };
+        let idle_right = test_support::hand_aimed_at(CANVAS_SIZE, vec2(300.0, 60.0), 0.0);
+        let input = InputContext {
+            right_hand: idle_right,
+            left_hand: squeezing_left,
+            ..InputContext::default()
+        };
+        let pass = crate::ui::vr_pointer_pass(
+            &input,
+            CANVAS_SIZE,
+            &test_support::test_panel(),
+            crate::ui::PointerEngagement::TriggerOrGrab,
+        );
+        let pointer = vr_canvas_pointer(&pass, &input);
+        assert_eq!(pointer.hand, Handedness::Left);
+        assert!(pointer.grabbing);
+
+        let (msgs, _) = host.update_canvas(&world, Some(pointer));
+        let hover = msgs
+            .first()
+            .expect("the squeezing hand should hover a slot");
+        assert_eq!(hover.to, inventory);
+        match hover.payload {
+            MessagePayload::GUIHover {
+                is_grabbing, hand, ..
+            } => {
+                assert!(is_grabbing);
+                assert_eq!(hand, Handedness::Left);
+            }
+            ref other => panic!("expected a GUIHover, got {:?}", other),
+        }
+    }
+
+    /// The panel's grab handler is level-triggered, so a squeeze held while the
+    /// ray sweeps the grid would take every slot it crossed. Only the rising
+    /// edge reaches the panel.
+    #[test]
+    fn a_held_squeeze_grabs_once_however_far_the_ray_sweeps() {
+        let (world, mut host, _wrench, _inv) = drag_world();
+        let grabbing = |canvas: (f32, f32)| CanvasPointer {
+            canvas_pos: Some(vec2(canvas.0, canvas.1)),
+            pressed: false,
+            grabbing: true,
+            hand: Handedness::Right,
+            bare_view: BareViewPress::Ignore,
+        };
+        let grabs = |msgs: Vec<Message>| {
+            msgs.iter()
+                .filter(|m| {
+                    matches!(
+                        m.payload,
+                        MessagePayload::GUIHover {
+                            is_grabbing: true,
+                            ..
+                        }
+                    )
+                })
+                .count()
+        };
+        let (first, _) = host.update_canvas(&world, Some(grabbing((23.5, 34.0))));
+        assert_eq!(grabs(first), 1, "the squeeze's rising edge grabs");
+        let (held, _) = host.update_canvas(&world, Some(grabbing((23.5, 34.0))));
+        assert_eq!(grabs(held), 0, "the same held squeeze must not grab again");
+        let (swept, _) = host.update_canvas(&world, Some(grabbing((58.5, 34.0))));
+        assert_eq!(
+            grabs(swept),
+            0,
+            "sweeping a held squeeze onto another slot must not take it too"
+        );
     }
 }

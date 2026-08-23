@@ -36,6 +36,39 @@ fn held(hand: &Hand) -> bool {
     hand.trigger_value > VR_TRIGGER_THRESHOLD
 }
 
+fn grabbing(hand: &Hand) -> bool {
+    hand.squeeze_value > VR_TRIGGER_THRESHOLD
+}
+
+/// Which gestures make a hand the one a panel is listening to.
+///
+/// The click button is the trigger everywhere. The difference is whether a
+/// *grab* also claims the panel:
+///
+/// - [`Trigger`](Self::Trigger) - the frontend screens. They have no grab
+///   gesture, and a squeeze there means nothing.
+/// - [`TriggerOrGrab`](Self::TriggerOrGrab) - the in-game cyber interface,
+///   where a squeeze on an inventory slot is a real interaction (it takes the
+///   item into that hand). Without it a left hand squeezing on the panel would
+///   lose arbitration to an idle right hand: the panel would read the idle
+///   hand's absent squeeze and take nothing, while the left squeeze went to the
+///   world instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerEngagement {
+    Trigger,
+    TriggerOrGrab,
+}
+
+impl PointerEngagement {
+    /// Whether `hand` is actively working the panel under this policy.
+    fn engaged(self, hand: &Hand) -> bool {
+        match self {
+            Self::Trigger => held(hand),
+            Self::TriggerOrGrab => held(hand) || grabbing(hand),
+        }
+    }
+}
+
 /// One controller's aim ray against a frontend panel: where it starts, where it
 /// points, and where it lands on the canvas (if it lands at all).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -129,6 +162,23 @@ pub fn vr_frontend_pointer_pass(
     canvas_size: Vector2<f32>,
     panel: &WorldPanel,
 ) -> FrontendPointerPass {
+    vr_pointer_pass(
+        input_context,
+        canvas_size,
+        panel,
+        PointerEngagement::Trigger,
+    )
+}
+
+/// [`vr_frontend_pointer_pass`] with an explicit engagement policy, for a panel
+/// whose gestures are richer than a frontend screen's (see
+/// [`PointerEngagement`]).
+pub fn vr_pointer_pass(
+    input_context: &InputContext,
+    canvas_size: Vector2<f32>,
+    panel: &WorldPanel,
+    engagement: PointerEngagement,
+) -> FrontendPointerPass {
     let hands = [&input_context.right_hand, &input_context.left_hand];
     let handedness = [Handedness::Right, Handedness::Left];
 
@@ -142,8 +192,8 @@ pub fn vr_frontend_pointer_pass(
         }
     }
 
-    let any_held = held(hands[0]) || held(hands[1]);
-    let order = if held(hands[1]) && !held(hands[0]) {
+    let any_engaged = engagement.engaged(hands[0]) || engagement.engaged(hands[1]);
+    let order = if engagement.engaged(hands[1]) && !engagement.engaged(hands[0]) {
         [1, 0]
     } else {
         [0, 1]
@@ -151,11 +201,11 @@ pub fn vr_frontend_pointer_pass(
 
     let mut active = None;
     for slot in order {
-        // While a trigger is down, only the hand holding it may supply the
+        // While a hand is working the panel, only that hand may supply the
         // point: otherwise an idle hand resting on the panel would report
         // "not pressed" and clear the held state, so sweeping the pressed hand
         // onto a button would read as a fresh edge and click it.
-        if any_held && !held(hands[slot]) {
+        if any_engaged && !engagement.engaged(hands[slot]) {
             continue;
         }
         let Some(index) = ray_of_hand[slot] else {
@@ -172,8 +222,10 @@ pub fn vr_frontend_pointer_pass(
         active,
         // Nothing may be pointing at the screen; report the trigger anyway so a
         // press that starts off-panel is still consumed as "held" rather than
-        // becoming a fresh edge the moment the ray crosses onto a button.
-        pressed: any_held,
+        // becoming a fresh edge the moment the ray crosses onto a button. This
+        // is the *click* button, so it stays trigger-only whatever the
+        // engagement policy - a squeeze must never read as a click.
+        pressed: held(hands[0]) || held(hands[1]),
     }
 }
 

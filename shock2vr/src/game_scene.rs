@@ -547,8 +547,9 @@ pub struct DebugUiPointer {
     pub pressed: bool,
     /// The grab gesture (VR squeeze) is down.
     pub grabbing: bool,
-    /// "left" or "right" - which hand the gesture belongs to.
-    pub hand: String,
+    /// "left" or "right" - which hand the gesture belongs to, or `null` when
+    /// nothing is on the canvas (no hand owns the pointer).
+    pub hand: Option<String>,
 }
 
 /// The world panel a VR presentation hangs the shared canvas on, in pawn space

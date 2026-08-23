@@ -250,7 +250,7 @@ impl PointerVisuals {
             .glove
             .get_or_insert_with(|| GloveRenderer::new(asset_cache))
             .as_mut();
-        let mut objects = render_pointer_rays(glove, pass, canvas_size, panel, panel_layers);
+        let mut objects = render_pointer_rays(glove, true, pass, canvas_size, panel, panel_layers);
         // The one pair of hands a frontend screen shows. Labelled so a check
         // can assert *both* halves of issue #1018's fix: the scene's hands are
         // gone, and these are still there.
@@ -259,11 +259,32 @@ impl PointerVisuals {
     }
 }
 
+/// The aim beams and hit dot alone, with no hands at the controllers.
+///
+/// For a panel shown *during play* - the VR cyber interface - where the
+/// player's own hands are already rendered by the interaction controller.
+/// Drawing [`PointerVisuals`]' static glove there would stack a second,
+/// empty-handed glove on top of the live one (and over a held weapon), so this
+/// path deliberately shows only where each controller is aiming. It needs no
+/// glove model, and so no asset cache.
+pub fn pointer_beams(
+    pass: &FrontendPointerPass,
+    canvas_size: Vector2<f32>,
+    panel: &WorldPanel,
+    panel_layers: usize,
+) -> Vec<SceneObject> {
+    let mut objects = render_pointer_rays(None, false, pass, canvas_size, panel, panel_layers);
+    crate::util::tag_render_source(&mut objects, crate::util::render_source::USE_MODE_POINTER);
+    objects
+}
+
 /// The pointer's objects for one frame. Split out from [`PointerVisuals`] so
-/// the geometry can be exercised without an asset cache (`glove: None` draws
-/// the fallback proxy, exactly as a missing model does at runtime).
+/// the geometry can be exercised without an asset cache (`glove: None` with
+/// `draw_hand` draws the fallback proxy, exactly as a missing model does at
+/// runtime; `draw_hand: false` draws no hand at all - see [`pointer_beams`]).
 fn render_pointer_rays(
     mut glove: Option<&mut GloveRenderer>,
+    draw_hand: bool,
     pass: &FrontendPointerPass,
     canvas_size: Vector2<f32>,
     panel: &WorldPanel,
@@ -284,7 +305,7 @@ fn render_pointer_rays(
             objects.extend(beam_objects(geometry.start, along, length));
         }
 
-        match glove.as_deref_mut() {
+        match glove.as_deref_mut().filter(|_| draw_hand) {
             Some(glove) => objects.extend(glove.render_static_hand(
                 geometry.start,
                 ray.rotation,
@@ -293,7 +314,7 @@ fn render_pointer_rays(
             )),
             // No glove model: keep a proxy so the player can still see where
             // the controller is, rather than a beam growing out of nothing.
-            None if length >= 1e-4 => objects.push(box_object(
+            None if draw_hand && length >= 1e-4 => objects.push(box_object(
                 geometry.start,
                 CONTROLLER_PROXY_SIZE,
                 Quaternion::from_arc(vec3(0.0, 0.0, 1.0), along / length, None),
@@ -398,7 +419,7 @@ mod tests {
         };
         let pass = pass(untracked.clone(), untracked);
         assert!(pass.rays.is_empty());
-        assert!(render_pointer_rays(None, &pass, CANVAS, &test_panel(), LAYERS).is_empty());
+        assert!(render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS).is_empty());
     }
 
     #[test]
@@ -421,7 +442,7 @@ mod tests {
         // Each hand: a proxy plus its beam segments; the right hand also the
         // one dot.
         assert_eq!(
-            render_pointer_rays(None, &pass, CANVAS, &test_panel(), LAYERS).len(),
+            render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS).len(),
             2 * (BEAM_SEGMENTS + 1) + 1
         );
     }
@@ -457,7 +478,7 @@ mod tests {
             hand_aimed_at(CANVAS, vec2(320.0, 240.0), 0.0),
             hand_aimed_away(0.0),
         );
-        let objects = render_pointer_rays(None, &pass, CANVAS, &test_panel(), LAYERS);
+        let objects = render_pointer_rays(None, true, &pass, CANVAS, &test_panel(), LAYERS);
         let translucent: Vec<_> = objects
             .iter()
             .filter(|object| object.effective_transparency().is_some_and(|t| t > 0.0))
@@ -495,7 +516,7 @@ mod tests {
                 ..Hand::default()
             },
         );
-        let objects = render_pointer_rays(None, &pass, CANVAS, &panel, LAYERS);
+        let objects = render_pointer_rays(None, true, &pass, CANVAS, &panel, LAYERS);
         assert!(
             objects
                 .iter()

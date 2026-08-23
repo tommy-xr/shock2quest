@@ -156,6 +156,43 @@ fn resolve_optional_log_art_texture(
 /// loop, so periodically let the host service its platform queues.
 const LOAD_EVENT_PUMP_ENTITY_INTERVAL: usize = 32;
 
+/// Index of a hand in the per-hand `[left, right]` arrays this module keeps
+/// (the VR grab swallow, the on-panel arbitration). One conversion, so the two
+/// sides of a latch can never disagree about which slot a hand owns.
+fn hand_slot(hand: crate::vr_config::Handedness) -> usize {
+    match hand {
+        crate::vr_config::Handedness::Left => 0,
+        crate::vr_config::Handedness::Right => 1,
+    }
+}
+
+/// Advance the VR grab swallow one frame, per hand (see
+/// [`MissionCore::vr_squeeze_swallow`]).
+///
+/// `claims` is "the cyber interface owns this hand's squeeze right now" - its
+/// ray is on the panel with the interface up. The latch turns that instant into
+/// a gesture: once set it holds until the squeeze is released, so a squeeze
+/// begun on the panel cannot reach the world by sliding off the panel edge or
+/// by the mode closing under it. It also drops the moment the hand is holding
+/// something, because a hand that just took an item off the panel must see its
+/// own squeeze again - masking it would read as a release.
+///
+/// Pure, so the rule is exercised directly rather than through a whole mission.
+fn update_squeeze_swallow(
+    latched: &mut [bool; 2],
+    squeezing: [bool; 2],
+    hand_empty: [bool; 2],
+    claims: [bool; 2],
+) {
+    for slot in 0..latched.len() {
+        if !squeezing[slot] || !hand_empty[slot] {
+            latched[slot] = false;
+        } else if claims[slot] {
+            latched[slot] = true;
+        }
+    }
+}
+
 /// Head-relative authored-space placement for the wide VR backpack canvas.
 /// After `SCALE_FACTOR` conversion this is 2 world units forward and 1.2 up.
 /// The shared canvas keeps its authored pixels; the physical VR boundary
@@ -992,11 +1029,16 @@ pub struct MissionCore {
     /// (rule 5 of the vr-ui-design skill).
     vr_use_mode_pointer: Option<crate::ui::FrontendPointerPass>,
 
-    /// The beam/hand/dot the cyber-interface pointer draws. Holds the lazily
-    /// loaded glove model, like the frontend screens' copy.
-    /// (In a `RefCell` because the render path takes `&self` while the world
-    /// is borrowed - the same shape `VrInteraction` uses for its glove.)
-    vr_use_mode_pointer_visuals: std::cell::RefCell<crate::ui::PointerVisuals>,
+    /// VR grab swallow, per hand (indexed by [`hand_slot`]): while the cyber
+    /// interface masks a hand's squeeze, that hand keeps seeing a released
+    /// squeeze until the player actually lets go. World grabbing is
+    /// *level*-triggered (`VirtualHand` grabs whenever the squeeze is down), so
+    /// without this a squeeze begun on the panel would grab whatever the ray
+    /// hits the instant it slipped off the panel edge - or the moment the mode
+    /// closed. Cleared as soon as the hand releases, or as soon as it is
+    /// holding something: a hand that just took an item off the panel must see
+    /// its own squeeze again, or the eventual release would not drop it.
+    vr_squeeze_swallow: [bool; 2],
 
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
@@ -1797,7 +1839,7 @@ impl MissionCore {
             vr_use_mode_head: crate::ui::world_dim::UNTRACKED_HEAD,
             vr_trigger_swallow: false,
             vr_use_mode_pointer: None,
-            vr_use_mode_pointer_visuals: std::cell::RefCell::new(crate::ui::PointerVisuals::new()),
+            vr_squeeze_swallow: [false; 2],
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
@@ -2388,10 +2430,13 @@ impl MissionCore {
             );
             // The VR ray plays the role of the mouse: one pass resolves where
             // each controller lands on the panel and which one owns it.
-            self.vr_use_mode_pointer = Some(crate::ui::vr_frontend_pointer_pass(
+            self.vr_use_mode_pointer = Some(crate::ui::vr_pointer_pass(
                 input_context,
                 crate::mission::flat_ui_host::CANVAS_SIZE,
                 &panel,
+                // A squeeze claims the panel here, unlike on a frontend screen:
+                // it is how a hand takes an item out of a slot.
+                crate::ui::PointerEngagement::TriggerOrGrab,
             ));
         }
         if self.vr_trigger_swallow && !self.use_mode {
@@ -2403,48 +2448,55 @@ impl MissionCore {
             }
         }
 
-        // Which hand (if any) is currently pointing at the cyber-interface
-        // panel. Per-hand arbitration (cyber-interface plan, owner decision 4):
-        // that hand is a UI pointer this frame; the other stays an ordinary
-        // `VirtualHand` for world grab/drop.
-        let ui_pointer_hand = self
-            .vr_use_mode_pointer
-            .as_ref()
-            .and_then(|pass| pass.active_ray())
-            .map(|ray| ray.handedness);
+        // Per-hand arbitration (cyber-interface plan, owner decision 4): a hand
+        // whose ray is ON the panel is a UI pointer this frame; a hand off it
+        // stays an ordinary `VirtualHand` for world grab/drop. Note this is
+        // *every* hand on the panel, not just the one driving the point - an
+        // idle hand resting on the panel is not the pointer, but its squeeze
+        // must still not reach through the panel into the world.
+        let (left_hand_held, right_hand_held) = self.interaction.held_entities();
+        let hand_empty = [left_hand_held.is_none(), right_hand_held.is_none()];
+        let mut on_panel = [false; 2];
+        if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
+            for ray in pass.rays.iter().filter(|ray| ray.canvas_hit.is_some()) {
+                on_panel[hand_slot(ray.handedness)] = true;
+            }
+        }
+        let squeezing = [
+            input_context.left_hand.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD,
+            input_context.right_hand.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD,
+        ];
+        update_squeeze_swallow(
+            &mut self.vr_squeeze_swallow,
+            squeezing,
+            hand_empty,
+            [self.use_mode && on_panel[0], self.use_mode && on_panel[1]],
+        );
 
         // VR weapon-safe: while the cyber interface is up (and until a
         // trigger held across its exit is released) the hands see zeroed
         // triggers, so the wielded weapon cannot fire - it stays wielded and
         // visible. The analog of the flat runtime's mouse-ownership swallow
-        // latch.
-        //
-        // The squeeze is masked far more narrowly: only for the hand driving
-        // the pointer, and only while it is *empty*. That is what lets a
-        // squeeze on an inventory slot pull the item into that hand (the panel
-        // emits `GrabEntity`) without the same squeeze also grabbing whatever
-        // the hand happens to be aimed at in the world. Masking a hand that is
-        // already holding something would read as a release and drop it.
-        let hands_held = self.interaction.held_entities();
-        let hand_is_empty = |hand: crate::vr_config::Handedness| match hand {
-            crate::vr_config::Handedness::Left => hands_held.0.is_none(),
-            crate::vr_config::Handedness::Right => hands_held.1.is_none(),
-        };
+        // latch. Squeezes are masked only per the latch above, so a squeeze on
+        // an inventory slot pulls the item into that hand (the panel emits
+        // `GrabEntity`) without also grabbing whatever the hand was aimed at.
+        let safe_triggers = self.use_mode || self.vr_trigger_swallow;
         let weapon_safe_input = (game_options.presentation_mode == crate::PresentationMode::Vr
-            && (self.use_mode || self.vr_trigger_swallow))
-            .then(|| {
-                let mut safe = input_context.clone();
+            && (safe_triggers || self.vr_squeeze_swallow.iter().any(|latched| *latched)))
+        .then(|| {
+            let mut safe = input_context.clone();
+            if safe_triggers {
                 safe.left_hand.trigger_value = 0.0;
                 safe.right_hand.trigger_value = 0.0;
-                match ui_pointer_hand.filter(|hand| hand_is_empty(*hand)) {
-                    Some(crate::vr_config::Handedness::Left) => safe.left_hand.squeeze_value = 0.0,
-                    Some(crate::vr_config::Handedness::Right) => {
-                        safe.right_hand.squeeze_value = 0.0
-                    }
-                    None => {}
-                }
-                safe
-            });
+            }
+            if self.vr_squeeze_swallow[hand_slot(crate::vr_config::Handedness::Left)] {
+                safe.left_hand.squeeze_value = 0.0;
+            }
+            if self.vr_squeeze_swallow[hand_slot(crate::vr_config::Handedness::Right)] {
+                safe.right_hand.squeeze_value = 0.0;
+            }
+            safe
+        });
         let hands_input = weapon_safe_input.as_ref().unwrap_or(input_context);
 
         // VR drives two hands; flat drives a single first-person weapon
@@ -2512,12 +2564,17 @@ impl MissionCore {
             // fed to the same host the mouse drives. Everything after this - the
             // hover routing, the cursor-is-the-item drag, grab-to-hand - is the
             // one shared implementation.
-            crate::PresentationMode::Vr => {
+            // Only while the interface is up: outside it the host has nothing
+            // bound in VR, and running its walk-away / bare-view logic against
+            // a pointer that does not exist would be a trap for whatever opens
+            // a host slot in VR next.
+            crate::PresentationMode::Vr if self.use_mode => {
                 let pointer = self.vr_use_mode_pointer.as_ref().map(|pass| {
                     crate::mission::flat_ui_host::vr_canvas_pointer(pass, input_context)
                 });
                 self.flat_ui.update_canvas(&self.world, pointer)
             }
+            crate::PresentationMode::Vr => (Vec::new(), Vec::new()),
         };
         for msg in ui_messages {
             self.script_world.dispatch(msg);
@@ -6969,9 +7026,12 @@ impl MissionCore {
     /// entry from the tracked head pose, world-locked, lazily recentered);
     /// the dim follows the live gaze, falling back to the panel while the
     /// head is untracked (see `crate::ui::world_dim::dim_pose`).
-    /// The pointer (beam, hand, hit dot) is drawn last, from the same pass the
+    /// The pointer (aim beams + hit dot) is drawn last, from the same pass the
     /// canvas was hit-tested with, so the dot can only ever mark the pixel the
-    /// interface actually reacted to.
+    /// interface actually reacted to. Deliberately hand-less: unlike a frontend
+    /// screen this is a mode of play, so the player's own hands are still being
+    /// rendered by the interaction controller, and a second static glove would
+    /// stack on top of them (the defect issue #1018 fixed for the pause menu).
     fn render_vr_use_mode(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
         use crate::ui::world_dim;
         let panel = self.vr_use_mode_anchor.panel();
@@ -6986,8 +7046,7 @@ impl MissionCore {
         objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
         if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
             let panel_layers = objects.len();
-            objects.extend(self.vr_use_mode_pointer_visuals.borrow_mut().render(
-                asset_cache,
+            objects.extend(crate::ui::pointer_beams(
                 pass,
                 crate::mission::flat_ui_host::CANVAS_SIZE,
                 &panel,
@@ -9113,7 +9172,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             // The panel a client aims a controller at, reported straight off
             // the anchor that placed it - so a test cannot aim at a placement
             // the interface does not use.
-            panel_pose: self.vr_use_mode_pointer.as_ref().map(|_| {
+            panel_pose: self.vr_use_mode_pointer.is_some().then(|| {
                 let panel = self.vr_use_mode_anchor.panel();
                 crate::game_scene::DebugUiPanelPose {
                     center: [panel.center.x, panel.center.y, panel.center.z],
@@ -9993,6 +10052,64 @@ mod player_death_tests {
             active_resurrection_target(&world),
             Some((expected_position, expected_rotation))
         );
+    }
+}
+
+#[cfg(test)]
+mod vr_squeeze_swallow_tests {
+    use super::update_squeeze_swallow;
+
+    const LEFT: usize = 0;
+    const RIGHT: usize = 1;
+
+    /// The whole point of the latch: a squeeze that started on the panel keeps
+    /// being swallowed after the ray leaves it (and after the interface
+    /// closes), so it can never reach through into a world grab. Without the
+    /// latch the mask is recomputed per frame and vanishes the instant the
+    /// claim does - while `VirtualHand` grabs on the squeeze *level*.
+    #[test]
+    fn a_squeeze_begun_on_the_panel_never_reaches_the_world() {
+        let mut latched = [false; 2];
+        // On the panel, hand empty, squeezing: claimed.
+        update_squeeze_swallow(&mut latched, [true, false], [true, true], [true, false]);
+        assert!(latched[LEFT]);
+        // Ray slips off the panel - still swallowed.
+        update_squeeze_swallow(&mut latched, [true, false], [true, true], [false, false]);
+        assert!(latched[LEFT]);
+        // The interface closes (nothing claims anything) - still swallowed.
+        update_squeeze_swallow(&mut latched, [true, false], [true, true], [false, false]);
+        assert!(latched[LEFT]);
+        // Released at last: the next squeeze is the player's own again.
+        update_squeeze_swallow(&mut latched, [false, false], [true, true], [false, false]);
+        assert!(!latched[LEFT]);
+        update_squeeze_swallow(&mut latched, [true, false], [true, true], [false, false]);
+        assert!(
+            !latched[LEFT],
+            "a squeeze begun off the panel is the world's"
+        );
+    }
+
+    /// A hand that just took an item off the panel stops being masked, or the
+    /// mask would read as a release and drop what it just took.
+    #[test]
+    fn taking_an_item_hands_the_squeeze_back() {
+        let mut latched = [false; 2];
+        update_squeeze_swallow(&mut latched, [false, true], [true, true], [false, true]);
+        assert!(latched[RIGHT]);
+        // The grab landed: the hand is no longer empty, squeeze still held.
+        update_squeeze_swallow(&mut latched, [false, true], [true, false], [false, true]);
+        assert!(
+            !latched[RIGHT],
+            "a hand holding something must see its own squeeze"
+        );
+    }
+
+    /// Each hand latches on its own: the off-panel hand keeps world grabbing.
+    #[test]
+    fn the_off_panel_hand_is_untouched() {
+        let mut latched = [false; 2];
+        update_squeeze_swallow(&mut latched, [true, true], [true, true], [true, false]);
+        assert_eq!(latched, [true, false]);
     }
 }
 

@@ -721,7 +721,8 @@ export interface UiPointer {
   pressed: boolean;
   /** The grab gesture (VR squeeze) is down. */
   grabbing: boolean;
-  hand: "left" | "right";
+  /** Which hand owns the pointer, or null when nothing is on the canvas. */
+  hand: "left" | "right" | null;
 }
 
 /** The world panel a VR presentation hangs the shared canvas on (pawn space). */
