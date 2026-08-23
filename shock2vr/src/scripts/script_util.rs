@@ -901,7 +901,7 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 mod tests {
     use super::{
         debit_player_nanites, door_blocks_pathfinding, door_is_closed, is_nanite_pickup,
-        plan_stack_payment, player_nanite_total, spend_player_nanites,
+        plan_stack_payment, player_nanite_total, spend_player_nanites, stat_nanite_balance,
     };
     use crate::mission::PlayerInfo;
     use crate::quest_info::QuestInfo;
@@ -1092,6 +1092,68 @@ mod tests {
             inventory_entity_id: inventory,
         });
         (world, stack)
+    }
+
+    /// End-to-end coverage of the authoritative live-mutation path
+    /// (`debit_player_nanites`, the same call `gui::replicator`'s
+    /// `Effect::ReplicatorPurchase` handler in `mission_core` makes) with
+    /// BOTH a stat balance and a carried legacy stack present. Every world
+    /// nanite pickup now collects straight into the stat and never leaves a
+    /// carried entity behind, so a live mission can no longer reach this
+    /// stat-then-legacy-stack crossing without an old save or a debug-spawned
+    /// pile - this is the unit-level stand-in for that scenario.
+    #[test]
+    fn live_nanite_debit_crosses_from_the_stat_into_a_carried_stack_and_exhausts_it() {
+        let (world, stack) = world_with_stat_and_carried_nanites(5, 8);
+
+        // 6 nanites: 5 from the stat, 1 from the carried stack.
+        let exhausted = debit_player_nanites(&world, 6).expect("balance covers the cost");
+        assert!(
+            exhausted.is_empty(),
+            "a partial stack debit must not report the stack as exhausted"
+        );
+        assert_eq!(
+            stat_nanite_balance(&world),
+            0,
+            "the stat should be fully drained before the carried stack is touched"
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropStackCount>>()
+                .unwrap()
+                .get(stack)
+                .unwrap()
+                .0,
+            7,
+            "8 - 1 = 7 remaining in the carried stack"
+        );
+
+        // A further debit of 7 exactly exhausts the carried stack (the stat
+        // is already at zero), so it must be reported for destruction - the
+        // mission's ReplicatorPurchase handler destroys exactly these ids.
+        let exhausted =
+            debit_player_nanites(&world, 7).expect("the remaining carried stack covers this");
+        assert_eq!(
+            exhausted,
+            vec![stack],
+            "an exactly-exhausted carried stack must be returned for destruction"
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropStackCount>>()
+                .unwrap()
+                .get(stack)
+                .unwrap()
+                .0,
+            0
+        );
+
+        // Both the stat and the carried stack are now spent.
+        assert_eq!(
+            debit_player_nanites(&world, 1),
+            None,
+            "a debit against an exhausted stat and stack must be refused"
+        );
     }
 
     #[test]

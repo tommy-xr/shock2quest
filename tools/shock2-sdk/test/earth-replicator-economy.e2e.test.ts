@@ -19,6 +19,15 @@ import { clickUiElement } from "./helpers/ui.js";
 // opens the replicator and a Chips click creates collectible template -92, but
 // the panel exposes neither authored prices nor the carried balance and the
 // both real StackCount entities remain unchanged at 250 + 20.
+//
+// Since #1118, every world nanite pickup collects straight into the player
+// stat rather than a carried StackCount entity, so this scenario (built on
+// ordinary world pickups) only ever spends from the stat - it can no longer
+// reach the legacy stat-then-carried-stack crossing that
+// script_util::debit_player_nanites also handles (pre-existing saves,
+// panel-taken piles). That crossing, including a carried stack that lands on
+// exactly zero and must be destroyed, is covered at the unit level instead:
+// script_util::tests::live_nanite_debit_crosses_from_the_stat_into_a_carried_stack_and_exhausts_it.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const EARTH_NANITES = 257;
@@ -161,8 +170,8 @@ test(
       19,
       "successful purchases should each deduct exactly their authored price",
     );
-    const inventoryAfterCrossStackPayment = await game.player.inventory();
-    const remainingNanites = inventoryAfterCrossStackPayment.items.filter(
+    const inventoryAfterStatPayment = await game.player.inventory();
+    const remainingNanites = inventoryAfterStatPayment.items.filter(
       (item) => item.name?.toLowerCase().includes("nanite"),
     );
     assert.equal(
@@ -177,7 +186,7 @@ test(
     );
     assert.deepEqual(
       new Set(
-        inventoryAfterCrossStackPayment.items.map((item) => item.entity_id),
+        inventoryAfterStatPayment.items.map((item) => item.entity_id),
       ),
       new Set([dispensedChips.id]),
       "only the physically collected Chips should be carried",
