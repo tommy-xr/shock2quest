@@ -53,14 +53,19 @@ pub(crate) const NANITE_PILE_TEMPLATE_IDS: [i32; 3] = [-1589, -1590, -1591];
 /// can't silently drift between them: `mission::entity_creator` (script
 /// attachment, from the load-time `SystemShock2EntityInfo` hierarchy) and
 /// [`is_nanite_pickup`] below (from the runtime `GlobalTemplateHierarchy`
-/// unique, which is that same hierarchy cloned into the `World`).
+/// unique, which is that same hierarchy cloned into the `World`). The
+/// ancestry check itself is shared with `GlobalTemplateHierarchy::
+/// is_or_descends_from` via `mission_core::template_is_or_descends_from`.
 pub(crate) fn is_nanite_pile_template(
     hierarchy: &HashMap<i32, Vec<i32>>,
     template_id: i32,
 ) -> bool {
     NANITE_PILE_TEMPLATE_IDS.iter().any(|class_id| {
-        template_id == *class_id
-            || dark::ss2_entity_info::get_ancestors(hierarchy, &template_id).contains(class_id)
+        crate::mission::mission_core::template_is_or_descends_from(
+            hierarchy,
+            template_id,
+            *class_id,
+        )
     })
 }
 
@@ -443,7 +448,10 @@ fn stat_nanite_balance(world: &World) -> i32 {
 /// `debit_player_nanites` so the two spend paths can't drift on which nanites
 /// get spent first.
 fn stat_first_split(world: &World, amount: i32) -> (i32, i32) {
-    let stat_debit = amount.min(stat_nanite_balance(world));
+    // `.max(0)` guards a corrupt/negative stat balance (e.g. an old save): a
+    // negative `stat_debit` here would inflate `remaining` past `amount` and
+    // overcharge the carried stacks.
+    let stat_debit = amount.min(stat_nanite_balance(world).max(0));
     (stat_debit, amount - stat_debit)
 }
 
@@ -503,6 +511,19 @@ pub fn debit_player_nanites(world: &World, amount: i32) -> Option<Vec<EntityId>>
     let mut stacks = world
         .borrow::<ViewMut<dark::properties::PropStackCount>>()
         .ok()?;
+    // Acquire every fallible borrow up front, before any mutation, so no
+    // ordering of the mutations below can leave one applied and the other
+    // not - a late-failing borrow here must not have already spent the stat
+    // or a stack.
+    let mut quests = if stat_debit > 0 {
+        Some(
+            world
+                .borrow::<UniqueViewMut<crate::quest_info::QuestInfo>>()
+                .ok()?,
+        )
+    } else {
+        None
+    };
 
     // Validate every live stack before applying any mutation.
     for ((entity_id, _), paid) in nanite_stacks.iter().zip(&debits) {
@@ -511,10 +532,6 @@ pub fn debit_player_nanites(world: &World, amount: i32) -> Option<Vec<EntityId>>
         }
     }
 
-    // Apply the stack mutations before the stat debit: if a `.get` here were
-    // ever to fail despite passing validation above, bailing out via `?` must
-    // still leave the stat untouched, matching the doc's "leaves every stack
-    // (and the stat) unchanged" guarantee.
     let mut exhausted = Vec::new();
     for ((entity_id, _), paid) in nanite_stacks.into_iter().zip(debits) {
         if paid == 0 {
@@ -527,10 +544,7 @@ pub fn debit_player_nanites(world: &World, amount: i32) -> Option<Vec<EntityId>>
         }
     }
 
-    if stat_debit > 0 {
-        let mut quests = world
-            .borrow::<UniqueViewMut<crate::quest_info::QuestInfo>>()
-            .ok()?;
+    if let Some(quests) = quests.as_mut() {
         quests.player_stats_mut().spend_nanites(stat_debit);
     }
 

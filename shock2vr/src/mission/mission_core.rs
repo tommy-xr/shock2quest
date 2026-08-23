@@ -907,12 +907,26 @@ pub struct GlobalHrmParams(pub Option<dark::gamesys::HrmParams>);
 #[derive(Unique, Clone)]
 pub struct GlobalSkillParams(pub Option<dark::gamesys::SkillParams>);
 
+/// Whether `template_id` is `class_template_id` or inherits from it, given a
+/// template-inheritance hierarchy (MetaProp parent map). A free function
+/// (rather than only the `GlobalTemplateHierarchy` method below) so callers
+/// that only have the raw hierarchy - e.g. `mission::entity_creator` at
+/// load time, before the `World` and its uniques exist - share the same
+/// ancestry check instead of re-deriving it.
+pub(crate) fn template_is_or_descends_from(
+    hierarchy: &HashMap<i32, Vec<i32>>,
+    template_id: i32,
+    class_template_id: i32,
+) -> bool {
+    template_id == class_template_id
+        || dark::ss2_entity_info::get_ancestors(hierarchy, &template_id)
+            .contains(&class_template_id)
+}
+
 impl GlobalTemplateHierarchy {
     /// Whether `template_id` is `class_template_id` or inherits from it.
     pub fn is_or_descends_from(&self, template_id: i32, class_template_id: i32) -> bool {
-        template_id == class_template_id
-            || dark::ss2_entity_info::get_ancestors(&self.0, &template_id)
-                .contains(&class_template_id)
+        template_is_or_descends_from(&self.0, template_id, class_template_id)
     }
 }
 

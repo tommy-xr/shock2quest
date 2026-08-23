@@ -417,7 +417,7 @@ fn handle_empty_hand_state(
             is_sensor: _,
         }) = result
         {
-            if last_frobbed_entity.is_none() {
+            if last_frobbed_entity != Some(entity) {
                 msgs.push(VirtualHandEffect::OutMessage {
                     message: Message {
                         to: entity,
@@ -465,7 +465,7 @@ fn handle_empty_hand_state(
                 next_hand_state = HandState::Grabbing { entity_id };
             } else if Some(entity_id) != held_by_other_hand
                 && needs_scripted_frob
-                && last_frobbed_entity.is_none()
+                && last_frobbed_entity != Some(entity_id)
             {
                 // Items whose taking must go through a script (nanites
                 // collected straight into the player stat, keycards, ...) are
@@ -793,6 +793,29 @@ mod tests {
         physics.update(Vector3::zero(), &mut player_handle);
     }
 
+    /// Register `entity` as a selectable kinematic body and refresh the
+    /// query pipeline so it is immediately raycastable. Shared by every
+    /// fixture below that plants an entity for the raycast to hit.
+    fn register_kinematic_body(
+        world: &mut World,
+        physics: &mut PhysicsWorld,
+        entity: EntityId,
+        position: Vector3<f32>,
+        size: Vector3<f32>,
+        collision_group: CollisionGroup,
+    ) {
+        physics.add_kinematic(
+            entity,
+            position,
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Vector3::zero(),
+            size,
+            collision_group,
+            false,
+        );
+        update_queries(world, physics);
+    }
+
     fn add_occluder(
         world: &mut World,
         physics: &mut PhysicsWorld,
@@ -800,16 +823,14 @@ mod tests {
         collision_group: CollisionGroup,
     ) -> EntityId {
         let entity = world.add_entity(());
-        physics.add_kinematic(
+        register_kinematic_body(
+            world,
+            physics,
             entity,
             vec3(0.0, 0.0, z),
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            Vector3::zero(),
             vec3(1.0, 1.0, 0.1),
             collision_group,
-            false,
         );
-        update_queries(world, physics);
         entity
     }
 
@@ -916,25 +937,43 @@ mod tests {
         assert!(shows_hand_visual(&world, Some(consumable)));
     }
 
-    fn scripted_world_pickup(world: &mut World, physics: &mut PhysicsWorld) -> EntityId {
+    /// A scripted world pickup (here, a keycard - nanite piles are the
+    /// motivating case) that also carries a `MOVE` frob action, so a test can
+    /// tell the deliberate "route through Frob" branch apart from simply
+    /// never being grabbable (`can_grab_item` alone would already be false
+    /// without it).
+    fn scripted_world_pickup_at(
+        world: &mut World,
+        physics: &mut PhysicsWorld,
+        position: Vector3<f32>,
+    ) -> EntityId {
         use dark::properties::{KeyCard, PropKeySrc};
 
-        let entity = world.add_entity(PropKeySrc(KeyCard {
-            is_master: false,
-            region_id: 0,
-            lock_id: 0,
-        }));
-        physics.add_kinematic(
+        let entity = world.add_entity((
+            PropKeySrc(KeyCard {
+                is_master: false,
+                region_id: 0,
+                lock_id: 0,
+            }),
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+        ));
+        register_kinematic_body(
+            world,
+            physics,
             entity,
-            vec3(0.0, 0.0, -0.5),
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            Vector3::zero(),
+            position,
             vec3(1.0, 1.0, 1.0),
             CollisionGroup::selectable(),
-            false,
         );
-        update_queries(world, physics);
         entity
+    }
+
+    fn scripted_world_pickup(world: &mut World, physics: &mut PhysicsWorld) -> EntityId {
+        scripted_world_pickup_at(world, physics, vec3(0.0, 0.0, -0.5))
     }
 
     fn frob_message_count(effects: &[VirtualHandEffect]) -> usize {
@@ -995,6 +1034,66 @@ mod tests {
             frob_message_count(&effects),
             0,
             "a held squeeze must not re-frob every frame"
+        );
+    }
+
+    /// Negative-first regression: the once-per-hold latch above must be keyed
+    /// by entity, not merely "something was frobbed". A latch keyed only on
+    /// `is_none()` would block Frobbing a *second* pickup the hand sweeps
+    /// onto while squeeze is still held from the first.
+    #[test]
+    fn held_squeeze_sweeping_onto_a_new_scripted_pickup_frobs_it_too() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let first = scripted_world_pickup_at(&mut world, &mut physics, vec3(0.0, 0.0, -0.5));
+        let second = scripted_world_pickup_at(&mut world, &mut physics, vec3(1.0, 0.0, -0.5));
+
+        let mut input = Hand::default();
+        input.squeeze_value = 1.0;
+
+        let (hand, effects) = handle_empty_hand_state(
+            Handedness::Right,
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            None,
+            &world,
+            &physics,
+            &input,
+            None,
+        );
+        assert_eq!(
+            frob_message_count(&effects),
+            1,
+            "the first pickup should be Frobbed"
+        );
+        assert_eq!(hand.last_frobbed_entity, Some(first));
+
+        // Squeeze never releases, but the hand sweeps sideways onto a second
+        // pickup.
+        let (_, effects) = handle_empty_hand_state(
+            Handedness::Right,
+            vec3(1.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            hand.last_frobbed_entity,
+            &world,
+            &physics,
+            &input,
+            None,
+        );
+        let frobbed_second = effects.iter().any(|effect| {
+            matches!(
+                effect,
+                VirtualHandEffect::OutMessage {
+                    message: Message {
+                        to,
+                        payload: MessagePayload::Frob,
+                    }
+                } if *to == second
+            )
+        });
+        assert!(
+            frobbed_second,
+            "a new target under the hand must be Frobbed even though squeeze never released, got {effects:?}"
         );
     }
 }
