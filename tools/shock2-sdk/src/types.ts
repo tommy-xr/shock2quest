@@ -697,6 +697,42 @@ export interface UiState {
    * (Effect::CycleAmmo). null in shooter mode / unarmed / single-ammo weapons.
    */
   ammo_cycle: UiElement | null;
+  /**
+   * Where the pointer last landed on the shared canvas: the mouse on flat, the
+   * controller ray on the VR cyber-interface panel. null when nothing is
+   * driving the canvas this frame.
+   */
+  pointer: UiPointer | null;
+  /**
+   * The VR cyber-interface panel's pose, in pawn space (the same space
+   * `/v1/control/input` hand positions use). Present exactly while the
+   * interface is up in VR; null on flat. Aim a controller at a canvas rect by
+   * mapping it through this pose - see `test/helpers/vr-hand.ts`.
+   */
+  panel_pose: UiPanelPose | null;
+}
+
+/** One frame of pointing at the shared UI canvas. */
+export interface UiPointer {
+  /** Position on the 640x480 canvas, or null when the pointer is off it
+   * (flat: the letterbox bars; VR: the ray missed the panel). */
+  canvas: [number, number] | null;
+  /** The click button (flat LMB / VR trigger) is down. */
+  pressed: boolean;
+  /** The grab gesture (VR squeeze) is down. */
+  grabbing: boolean;
+  hand: "left" | "right";
+}
+
+/** The world panel a VR presentation hangs the shared canvas on (pawn space). */
+export interface UiPanelPose {
+  center: Vec3;
+  /** [x, y, z, w]; the face normal is this applied to +Z and points at the viewer. */
+  rotation: [number, number, number, number];
+  /** Panel size in metres, [width, height]. */
+  size: [number, number];
+  /** The authored canvas the panel presents, in pixels. */
+  canvas: [number, number];
 }
 
 export interface TransitionEntry {

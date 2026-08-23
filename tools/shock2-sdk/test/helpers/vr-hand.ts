@@ -1,5 +1,5 @@
 import type { GameServer } from "../../src/index.js";
-import type { Vec3 } from "../../src/types.js";
+import type { UiPanelPose, Vec3 } from "../../src/types.js";
 
 export type Quat = [number, number, number, number];
 
@@ -60,6 +60,52 @@ export function quatFromTo(from: Vec3, to: Vec3): Quat {
     return [axis[0], axis[1], axis[2], 0];
   }
   return quatNormalize([...cross(a, b), 1 + d]);
+}
+
+/**
+ * Aim a controller at a point on the VR cyber-interface panel's canvas.
+ *
+ * The panel pose comes from `/v1/ui` (`panel_pose`) - the interface's own
+ * placement - and is in pawn space, which is the space `/v1/control/input`
+ * hand positions and rotations are given in, so no world round-trip is needed.
+ * This is the inverse of the runtime's ray -> canvas mapping: stand back along
+ * the panel's normal and look at the target.
+ */
+export async function aimVrHandAtCanvas(
+  game: GameServer,
+  panel: UiPanelPose,
+  canvas: [number, number],
+  {
+    hand = "right",
+    trigger = 0,
+    squeeze = 0,
+    standOff = 0.6,
+    facing = "panel",
+  }: {
+    hand?: "left" | "right";
+    trigger?: number;
+    squeeze?: number;
+    standOff?: number;
+    /** "away" keeps the controller where it is but turns it off the panel,
+     * for exercising the "not pointing at the UI" half of the arbitration. */
+    facing?: "panel" | "away";
+  } = {},
+): Promise<void> {
+  const u = canvas[0] / panel.canvas[0] - 0.5;
+  const v = 0.5 - canvas[1] / panel.canvas[1];
+  const target = add(
+    panel.center,
+    quatRotate(panel.rotation, [u * panel.size[0], v * panel.size[1], 0]),
+  );
+  const normal = quatRotate(panel.rotation, [0, 0, 1]);
+  const position = add(target, scale(normal, standOff));
+  const aim = facing === "panel" ? scale(normal, -1) : normal;
+  const rotation = quatFromTo([0, 0, -1], aim);
+
+  await game.input.set(`${hand}_hand.position`, position);
+  await game.input.set(`${hand}_hand.rotation`, rotation);
+  await game.input.set(`${hand}_hand.trigger`, trigger);
+  await game.input.set(`${hand}_hand.squeeze`, squeeze);
 }
 
 /** Aim the production VR hand ray at a world point without direct entity

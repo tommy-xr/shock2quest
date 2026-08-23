@@ -2514,26 +2514,7 @@ impl MissionCore {
             // one shared implementation.
             crate::PresentationMode::Vr => {
                 let pointer = self.vr_use_mode_pointer.as_ref().map(|pass| {
-                    // A pointer is reported for every frame the mode is up,
-                    // even with nothing on the panel: the trigger must stay
-                    // accounted for while it is held off-panel, or sweeping a
-                    // still-held press onto a slot would read as a fresh edge
-                    // and lift an item nobody clicked.
-                    let handedness = pass
-                        .active_ray()
-                        .map(|ray| ray.handedness)
-                        .unwrap_or(crate::vr_config::Handedness::Right);
-                    let hand = match handedness {
-                        crate::vr_config::Handedness::Left => &input_context.left_hand,
-                        crate::vr_config::Handedness::Right => &input_context.right_hand,
-                    };
-                    crate::mission::flat_ui_host::CanvasPointer {
-                        canvas_pos: pass.point(),
-                        pressed: pass.pressed,
-                        grabbing: hand.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD,
-                        hand: handedness,
-                        bare_view: crate::mission::flat_ui_host::BareViewPress::Ignore,
-                    }
+                    crate::mission::flat_ui_host::vr_canvas_pointer(pass, input_context)
                 });
                 self.flat_ui.update_canvas(&self.world, pointer)
             }
