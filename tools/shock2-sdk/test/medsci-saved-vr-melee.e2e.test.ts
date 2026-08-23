@@ -154,14 +154,23 @@ async function measureHeldContactOffset(game: GameServer): Promise<void> {
 
   // Staging follows this measurement, so assert its shape or the gesture would
   // silently compensate for a misplaced collider and still pass. The wielded
-  // Wrench's contact volume belongs out on the rendered weapon head - roughly
-  // 0.8 units from the palm, standing up out of the fist. A collider left in
-  // the hand (the pre-`_h` melee grips) or parked along the fingers (the old
-  // 0.4 wrench grip) fails here.
+  // Wrench's contact volume belongs out on the rendered weapon head, standing
+  // up out of the fist. A collider left in the hand (the pre-`_h` melee grips)
+  // or parked along the fingers (the old 0.4 wrench grip) fails here.
+  //
+  // The reach is ~0.8 units on the *authored* rig, and `melee_scale` scales
+  // the drawn weapon and its collider together - so the expected reach scales
+  // with it. Read rather than hardcoded: pinning 0.8 would turn every future
+  // change of that default into a failure of this test, which is about where
+  // the volume sits, not how large the weapon is.
+  const meleeScale =
+    (await game.devParams.list()).params.find(
+      (param) => param.key === "melee_scale",
+    )?.value ?? 1;
   const reach = Math.sqrt(dot(heldContactOffset, heldContactOffset));
   assert.ok(
-    reach > 0.6 && reach < 1.0,
-    `the Wrench's contact volume should sit on its head, ~0.8 from the hand: ${JSON.stringify(heldContactOffset)}`,
+    reach > 0.6 * meleeScale && reach < 1.0 * meleeScale,
+    `the Wrench's contact volume should sit on its head, ~${(0.8 * meleeScale).toFixed(2)} from the hand at melee_scale ${meleeScale}: ${JSON.stringify(heldContactOffset)}`,
   );
   assert.ok(
     heldContactOffset[1] > 0.9 * reach,
