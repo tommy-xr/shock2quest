@@ -10,6 +10,7 @@ use std::any::Any;
 
 use crate::{
     GameOptions,
+    death_camera::DeathCameraSample,
     input_context::InputContext,
     mission::GlobalContext,
     quest_info::QuestInfo,
@@ -181,6 +182,17 @@ pub trait GameScene {
     /// locomotion, death, or unsupported space makes a durable save unsafe.
     fn player_save_position(&self) -> Result<Vector3<f32>, PlayerSavePoseError> {
         Err(PlayerSavePoseError::NoPlayer)
+    }
+
+    /// The death camera's contribution to this frame's view, if the player is
+    /// dying. Consumed by [`crate::Game::resolve_camera`], which folds it into
+    /// whatever tracked head pose the runtime resolved, so flat and VR fall the
+    /// same way from one implementation (see `crate::death_camera`).
+    ///
+    /// `None` - the default, and every frame a live player renders - leaves the
+    /// runtime's camera untouched.
+    fn death_camera(&self) -> Option<DeathCameraSample> {
+        None
     }
 
     /// Get lighting information for VR enhancement

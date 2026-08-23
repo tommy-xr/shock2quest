@@ -786,19 +786,30 @@ fn run_game_blocking(
 
         let (mut scene, pawn_offset, pawn_rotation) = profile!("game.render", game.render());
 
-        // Create a simple render context for debug view
-        let render_context = EngineRenderContext {
-            time: actual_game_time, // Use accumulated game time, not real time
-            camera_offset: pawn_offset,
-            camera_rotation: pawn_rotation,
+        // Routed through `resolve_camera` rather than used directly: while the
+        // player is dying the game blends this tracked pose toward the fallen
+        // death pose, once, for every runtime (see `shock2vr::death_camera`).
+        // Alive, it hands back exactly what went in.
+        let camera = game.resolve_camera(
+            pawn_offset,
+            pawn_rotation,
             // Crouch-aware eye height, shared with desktop and the flat
             // controller via Game::player_eye_height, so the debug-runtime
             // camera sits at the same height as desktop and shots land on the
             // crosshair.
-            head_offset: vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
+            vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
             // Same head rotation fed to game.update, so the rendered view and the
             // flat viewmodel agree. Controllable via `/v1/control/input` head.look.
-            head_rotation: current_input.head.rotation,
+            current_input.head.rotation,
+        );
+
+        // Create a simple render context for debug view
+        let render_context = EngineRenderContext {
+            time: actual_game_time, // Use accumulated game time, not real time
+            camera_offset: camera.pawn_position,
+            camera_rotation: camera.pawn_rotation,
+            head_offset: camera.head_offset,
+            head_rotation: camera.head_rotation,
             projection_matrix,
             screen_size,
         };

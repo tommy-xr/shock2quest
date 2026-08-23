@@ -1625,13 +1625,19 @@ fn render_swapchain(
     );
     let projection_matrix = create_projection_matrix(&view.fov, 0.1, 1000.);
     let screen_size = vec2(width as f32, height as f32);
+    // Routed through `resolve_camera` rather than used directly: while the
+    // player is dying the game blends this tracked pose toward the fallen death
+    // pose, once, for every runtime (see `shock2vr::death_camera`) - so the fall
+    // reads the same in VR as it does flat. Alive, it hands back exactly what
+    // went in, per eye.
+    let camera = game.resolve_camera(camera_pos, camera_rot, head_offset, head_rotation);
     let render_context = engine::EngineRenderContext {
         time,
-        camera_offset: camera_pos,
-        camera_rotation: camera_rot,
+        camera_offset: camera.pawn_position,
+        camera_rotation: camera.pawn_rotation,
 
-        head_offset,
-        head_rotation,
+        head_offset: camera.head_offset,
+        head_rotation: camera.head_rotation,
 
         projection_matrix,
 

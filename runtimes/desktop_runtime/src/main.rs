@@ -486,13 +486,23 @@ pub fn main() {
         // is refused without headroom), so the camera can't rise through a
         // ceiling the body still crouches under.
         let head_height = game.player_eye_height();
+        // Routed through `resolve_camera` rather than used directly: while the
+        // player is dying the game blends this tracked pose toward the fallen
+        // death pose, once, for every runtime (see `shock2vr::death_camera`).
+        // Alive, it hands back exactly what went in.
+        let camera = game.resolve_camera(
+            pawn_offset,
+            pawn_rotation,
+            vec3(0.0, head_height / SCALE_FACTOR, 0.0),
+            camera_rotation(&camera_context),
+        );
         let render_context = engine::EngineRenderContext {
             time: glfw.get_time() as f32,
-            camera_offset: pawn_offset,
-            camera_rotation: pawn_rotation,
+            camera_offset: camera.pawn_position,
+            camera_rotation: camera.pawn_rotation,
 
-            head_offset: vec3(0.0, head_height / SCALE_FACTOR, 0.0),
-            head_rotation: camera_rotation(&camera_context),
+            head_offset: camera.head_offset,
+            head_rotation: camera.head_rotation,
 
             projection_matrix,
             screen_size,
