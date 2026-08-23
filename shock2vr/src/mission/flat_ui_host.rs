@@ -34,8 +34,10 @@ use crate::{
     vr_config::Handedness,
 };
 
-/// The shared 640x480 virtual canvas the flat HUD renders on.
-const CANVAS_SIZE: Vector2<f32> = Vector2::new(640.0, 480.0);
+/// The shared 640x480 virtual canvas the flat HUD renders on - and, in VR, the
+/// canvas the cyber-interface panel presents, so a ray is mapped onto exactly
+/// the pixels the host lays its widgets out in.
+pub const CANVAS_SIZE: Vector2<f32> = Vector2::new(640.0, 480.0);
 
 /// The original game's left MFD slot anchor for world-object panels (keypad,
 /// container, ...) on the 640x480 canvas: rect `(2, 124, 188x300)`.
@@ -89,6 +91,55 @@ pub enum FlatUiDragAction {
 const DOUBLE_CLICK_WINDOW_FRAMES: u32 = 20;
 const DOUBLE_CLICK_RADIUS: f32 = 24.0;
 
+/// What a press that lands on neither the strip nor the MFD panel means.
+///
+/// The two presentations genuinely differ here, and only here. On flat the
+/// canvas is drawn over the 3D view, so everything the widgets do not cover
+/// *is* the world: clicking it is the original's exit gesture (close the MFD,
+/// throw the held item). In VR the same canvas is the cyber-interface panel
+/// hanging in front of the player - its empty pixels are still the interface,
+/// and a ray off the panel entirely means that hand is not pointing at the UI
+/// at all (it stays a world hand, see
+/// [`crate::ui::vr_frontend_pointer_pass`]).
+///
+/// This is an input-semantics difference, not a layout one: nothing here moves
+/// or resizes a widget, so the shared canvas still renders identically
+/// (AGENTS.md §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BareViewPress {
+    /// Flat: a press off the widgets is a click on the 3D view behind them.
+    Exit,
+    /// VR: a press off the widgets is not an exit gesture. (Throwing a held
+    /// item into the world from the panel is a later slice.)
+    Ignore,
+}
+
+/// One frame of pointing at the host's canvas, already resolved to canvas
+/// pixels.
+///
+/// The single input contract both presentations feed: flat resolves it from the
+/// mouse through [`pointer_to_canvas`], VR from the controller ray through
+/// [`crate::ui::ray_to_canvas`]. Everything downstream - hover routing, the
+/// close gestures, the cursor-is-the-item drag - runs on this one struct, so
+/// the mouse and the VR ray cannot drift into two different interfaces.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CanvasPointer {
+    /// Where the pointer is on the 640x480 canvas, or `None` when it is off it
+    /// (flat: the letterbox bars; VR: the ray missed the panel).
+    pub canvas_pos: Option<Vector2<f32>>,
+    /// The click button: flat LMB, VR trigger.
+    pub pressed: bool,
+    /// The grab gesture: the VR squeeze. Flat has none, so it is always false
+    /// there - the same `GUIHover` field the hand ray fills, which is what lets
+    /// a squeeze on a panel item pull it into the hand.
+    pub grabbing: bool,
+    /// Which hand the gesture belongs to, for the panel's per-hand edge
+    /// tracking and for `GrabEntity`'s destination hand. Flat reports `Right`.
+    pub hand: Handedness,
+    /// What a press away from the host's widgets means.
+    pub bare_view: BareViewPress,
+}
+
 /// The just-lifted item and where/when it was lifted, so a quick second click
 /// on the same slot reads as a double-click (wield) rather than a place.
 struct LiftMark {
@@ -141,6 +192,10 @@ pub struct FlatUiHost {
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
     last_pointer_pressed: bool,
+    /// The pointer of the latest [`update_canvas`](Self::update_canvas), for
+    /// `GET /v1/ui` - so a test can see where the VR ray actually landed on the
+    /// canvas instead of inferring it from what lit up.
+    last_pointer: Option<CanvasPointer>,
     /// Last known render-target size, for pointer->canvas letterbox mapping
     /// (updated every rendered frame; 4:3 default until the first render).
     screen_size: Vector2<f32>,
@@ -170,6 +225,7 @@ impl FlatUiHost {
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
+            last_pointer: None,
             screen_size: CANVAS_SIZE,
         }
     }
@@ -192,6 +248,32 @@ impl FlatUiHost {
                 entity_id: c.entity.inner() as i32,
                 label: c.label.clone(),
             })
+    }
+
+    /// Where the pointer last landed on the canvas, for `GET /v1/ui`.
+    pub fn pointer_debug(&self) -> Option<crate::game_scene::DebugUiPointer> {
+        self.last_pointer
+            .map(|pointer| crate::game_scene::DebugUiPointer {
+                canvas: pointer.canvas_pos.map(|p| [p.x, p.y]),
+                pressed: pointer.pressed,
+                grabbing: pointer.grabbing,
+                hand: match pointer.hand {
+                    Handedness::Left => "left".to_string(),
+                    Handedness::Right => "right".to_string(),
+                },
+            })
+    }
+
+    /// Swallow a button that is already held as the host takes over input, so
+    /// it cannot read as a fresh press-edge on the next frame.
+    ///
+    /// [`open`](Self::open) does this for the MFD slot (the frob that opened
+    /// the panel is still down); entering use mode needs the same guard - in VR
+    /// the interface can be opened with the trigger held, and rule 6 of the
+    /// vr-ui-design skill is that a screen entered under a held button starts
+    /// "already pressed".
+    pub fn guard_held_press(&mut self) {
+        self.last_pointer_pressed = true;
     }
 
     /// Set (or clear) the AMMOFULL ammo-cycle button's canvas rect for this
@@ -389,6 +471,33 @@ impl FlatUiHost {
         world: &World,
         pointer: Option<Pointer2D>,
     ) -> (Vec<Message>, Vec<FlatUiDragAction>) {
+        // Flat's only job is resolving the mouse onto the canvas; the gestures
+        // themselves live in the shared core below.
+        let pointer = pointer.map(|pointer| CanvasPointer {
+            canvas_pos: pointer_to_canvas(
+                CANVAS_SIZE,
+                pointer.position,
+                self.screen_size,
+                ScaleMode::PreserveAspect,
+            ),
+            pressed: pointer.pressed,
+            grabbing: false,
+            hand: Handedness::Right,
+            bare_view: BareViewPress::Exit,
+        });
+        self.update_canvas(world, pointer)
+    }
+
+    /// The presentation-free core of [`update`](Self::update): the same frame
+    /// of pointing, expressed in canvas pixels. VR's cyber-interface panel
+    /// enters here directly (its ray is already a canvas point), so both
+    /// presentations run one implementation of every gesture.
+    pub fn update_canvas(
+        &mut self,
+        world: &World,
+        pointer: Option<CanvasPointer>,
+    ) -> (Vec<Message>, Vec<FlatUiDragAction>) {
+        self.last_pointer = pointer;
         let pressed = pointer.map(|p| p.pressed).unwrap_or(false);
         let pressed_edge = pressed && !self.last_pointer_pressed;
         self.last_pointer_pressed = pressed;
@@ -442,21 +551,17 @@ impl FlatUiHost {
             self.hover_close = false;
             return (Vec::new(), Vec::new());
         };
-        let canvas_pos = pointer_to_canvas(
-            CANVAS_SIZE,
-            pointer.position,
-            self.screen_size,
-            ScaleMode::PreserveAspect,
-        );
+        let canvas_pos = pointer.canvas_pos;
         self.cursor_canvas = canvas_pos;
         if canvas_pos.is_none() {
             self.hover_close = false;
         }
 
-        // A press fully outside the canvas (letterbox bars) is a bare-view
-        // click: throw a held item, else close the panel.
+        // A press fully outside the canvas (flat: the letterbox bars) is a
+        // bare-view click: throw a held item, else close the panel. In VR the
+        // canvas is the panel, so an off-panel press belongs to the world hand.
         let Some(canvas_pos) = canvas_pos else {
-            if pressed_edge {
+            if pressed_edge && pointer.bare_view == BareViewPress::Exit {
                 if let Some(held) = self.cursor_item.take() {
                     return (Vec::new(), vec![FlatUiDragAction::Throw(held.entity)]);
                 }
@@ -518,10 +623,11 @@ impl FlatUiHost {
                 }
                 return (Vec::new(), Vec::new());
             }
-            if over_panel || over_ammo {
+            if over_panel || over_ammo || pointer.bare_view == BareViewPress::Ignore {
                 // Escape hatch: a click on an open MFD or the AMMOFULL cycle
                 // button keeps the held item (a visible button must not throw
-                // the item you're carrying).
+                // the item you're carrying) - and so does empty panel space in
+                // VR, where there is no 3D view behind the canvas to throw at.
                 return (Vec::new(), Vec::new());
             }
             // Bare 3D view: throw the held item along the view ray.
@@ -562,7 +668,14 @@ impl FlatUiHost {
             }
             let rect = strip_rect.unwrap();
             let entity = self.strip.as_ref().unwrap().entity;
-            return (vec![gui_hover(entity, rect, canvas_pos, false)], Vec::new());
+            // The click (`is_triggered`) is deliberately withheld: the host
+            // owns strip clicks as the cursor-is-the-item drag above. The
+            // squeeze is not - it is how a VR hand takes an item straight out
+            // of the grid, exactly as it does from a loot panel.
+            return (
+                vec![gui_hover(entity, rect, canvas_pos, false, pointer)],
+                Vec::new(),
+            );
         }
 
         let Some(panel) = self.active_panel else {
@@ -586,12 +699,12 @@ impl FlatUiHost {
 
         if rect.contains(canvas_pos) {
             (
-                vec![gui_hover(panel, rect, canvas_pos, pointer.pressed)],
+                vec![gui_hover(panel, rect, canvas_pos, pointer.pressed, pointer)],
                 Vec::new(),
             )
         } else {
             // LMB on the bare 3D view closes the panels (manual p.7).
-            if pressed_edge {
+            if pressed_edge && pointer.bare_view == BareViewPress::Exit {
                 self.close();
             }
             (Vec::new(), Vec::new())
@@ -863,9 +976,16 @@ fn strip_canvas_rect(strip_size_px: Vector2<f32>) -> Rect {
 
 /// A `GUIHover` for `to`, in panel-local normalized coordinates - the same
 /// message the VR hand ray produces, so `GuiScript`'s hit-test/edge-detection
-/// runs unchanged. LMB maps to the right-hand trigger; flat has no grab
-/// gesture yet.
-fn gui_hover(to: EntityId, rect: Rect, canvas_pos: Vector2<f32>, pressed: bool) -> Message {
+/// runs unchanged. The click button maps to LMB on flat and the trigger in VR;
+/// the grab gesture is the VR squeeze (flat has none), and the hand it is
+/// reported for is where a `GrabEntity` from the panel lands.
+fn gui_hover(
+    to: EntityId,
+    rect: Rect,
+    canvas_pos: Vector2<f32>,
+    pressed: bool,
+    pointer: CanvasPointer,
+) -> Message {
     let local = point2(
         (canvas_pos.x - rect.x) / rect.w,
         (canvas_pos.y - rect.y) / rect.h,
@@ -876,8 +996,8 @@ fn gui_hover(to: EntityId, rect: Rect, canvas_pos: Vector2<f32>, pressed: bool) 
             held_entity_id: None,
             screen_coordinates: local,
             is_triggered: pressed,
-            is_grabbing: false,
-            hand: Handedness::Right,
+            is_grabbing: pointer.grabbing,
+            hand: pointer.hand,
         },
     }
 }

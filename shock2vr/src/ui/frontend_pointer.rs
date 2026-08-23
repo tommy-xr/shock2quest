@@ -106,6 +106,16 @@ impl FrontendPointerPass {
     pub fn is_active(&self, index: usize) -> bool {
         self.active == Some(index)
     }
+
+    /// The ray the menu is listening to, when one is on the panel.
+    ///
+    /// Callers that need *which hand* is pointing (per-hand arbitration: the
+    /// pointing hand is a UI pointer, the other stays a world hand) must read
+    /// it off the same pass that decided the point, or the two answers can
+    /// disagree about which controller owns the panel.
+    pub fn active_ray(&self) -> Option<&FrontendRay> {
+        self.active.map(|index| &self.rays[index])
+    }
 }
 
 /// Resolve one frame of frontend pointing.

@@ -983,6 +983,21 @@ pub struct MissionCore {
     /// `closed_under_a_held_press` rule, applied to the hands).
     vr_trigger_swallow: bool,
 
+    /// The cyber interface's pointer for this frame: every tracked
+    /// controller's ray against the panel, and which one the canvas is
+    /// listening to. `None` outside the mode. Resolved once per frame by
+    /// [`crate::ui::vr_frontend_pointer_pass`] - the same pass the frontend
+    /// screens use - so the canvas hit-test, the hand arbitration and the
+    /// drawn beam/dot can never disagree about where the player is pointing
+    /// (rule 5 of the vr-ui-design skill).
+    vr_use_mode_pointer: Option<crate::ui::FrontendPointerPass>,
+
+    /// The beam/hand/dot the cyber-interface pointer draws. Holds the lazily
+    /// loaded glove model, like the frontend screens' copy.
+    /// (In a `RefCell` because the render path takes `&self` while the world
+    /// is borrowed - the same shape `VrInteraction` uses for its glove.)
+    vr_use_mode_pointer_visuals: std::cell::RefCell<crate::ui::PointerVisuals>,
+
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
     /// `GuiManager` for the corresponding object-bound world panel.
@@ -1781,6 +1796,8 @@ impl MissionCore {
             vr_use_mode_anchor: crate::ui::FrontendPanelAnchor::new(),
             vr_use_mode_head: crate::ui::world_dim::UNTRACKED_HEAD,
             vr_trigger_swallow: false,
+            vr_use_mode_pointer: None,
+            vr_use_mode_pointer_visuals: std::cell::RefCell::new(crate::ui::PointerVisuals::new()),
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
@@ -2359,15 +2376,23 @@ impl MissionCore {
         }
 
         // VR cyber interface (use mode): follow the head for the anchor's
-        // lazy recenter and the comfort dim, and clear the weapon-safe latch
-        // once every trigger is released.
+        // lazy recenter and the comfort dim, resolve this frame's pointer, and
+        // clear the weapon-safe latch once every trigger is released.
+        self.vr_use_mode_pointer = None;
         if game_options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
             self.vr_use_mode_head = (input_context.head.position, input_context.head.rotation);
-            self.vr_use_mode_anchor.update(
+            let panel = self.vr_use_mode_anchor.update(
                 input_context.head.position,
                 input_context.head.rotation,
                 time.elapsed,
             );
+            // The VR ray plays the role of the mouse: one pass resolves where
+            // each controller lands on the panel and which one owns it.
+            self.vr_use_mode_pointer = Some(crate::ui::vr_frontend_pointer_pass(
+                input_context,
+                crate::mission::flat_ui_host::CANVAS_SIZE,
+                &panel,
+            ));
         }
         if self.vr_trigger_swallow && !self.use_mode {
             let held = |hand: &crate::input_context::Hand| {
@@ -2378,17 +2403,46 @@ impl MissionCore {
             }
         }
 
+        // Which hand (if any) is currently pointing at the cyber-interface
+        // panel. Per-hand arbitration (cyber-interface plan, owner decision 4):
+        // that hand is a UI pointer this frame; the other stays an ordinary
+        // `VirtualHand` for world grab/drop.
+        let ui_pointer_hand = self
+            .vr_use_mode_pointer
+            .as_ref()
+            .and_then(|pass| pass.active_ray())
+            .map(|ray| ray.handedness);
+
         // VR weapon-safe: while the cyber interface is up (and until a
         // trigger held across its exit is released) the hands see zeroed
         // triggers, so the wielded weapon cannot fire - it stays wielded and
-        // visible, and squeeze-driven grab/drop still works. The analog of
-        // the flat runtime's mouse-ownership swallow latch.
+        // visible. The analog of the flat runtime's mouse-ownership swallow
+        // latch.
+        //
+        // The squeeze is masked far more narrowly: only for the hand driving
+        // the pointer, and only while it is *empty*. That is what lets a
+        // squeeze on an inventory slot pull the item into that hand (the panel
+        // emits `GrabEntity`) without the same squeeze also grabbing whatever
+        // the hand happens to be aimed at in the world. Masking a hand that is
+        // already holding something would read as a release and drop it.
+        let hands_held = self.interaction.held_entities();
+        let hand_is_empty = |hand: crate::vr_config::Handedness| match hand {
+            crate::vr_config::Handedness::Left => hands_held.0.is_none(),
+            crate::vr_config::Handedness::Right => hands_held.1.is_none(),
+        };
         let weapon_safe_input = (game_options.presentation_mode == crate::PresentationMode::Vr
             && (self.use_mode || self.vr_trigger_swallow))
             .then(|| {
                 let mut safe = input_context.clone();
                 safe.left_hand.trigger_value = 0.0;
                 safe.right_hand.trigger_value = 0.0;
+                match ui_pointer_hand.filter(|hand| hand_is_empty(*hand)) {
+                    Some(crate::vr_config::Handedness::Left) => safe.left_hand.squeeze_value = 0.0,
+                    Some(crate::vr_config::Handedness::Right) => {
+                        safe.right_hand.squeeze_value = 0.0
+                    }
+                    None => {}
+                }
                 safe
             });
         let hands_input = weapon_safe_input.as_ref().unwrap_or(input_context);
@@ -2438,25 +2492,58 @@ impl MissionCore {
         // and drive it through the same GUIHover contract the VR hand ray
         // uses. Dispatched before the script update so hovers/clicks are
         // processed this frame.
-        if game_options.presentation_mode == crate::PresentationMode::Flat {
-            // Expose the AMMOFULL ammo-cycle button for hit-testing exactly when
-            // the flat HUD draws it (the shared visibility predicate, so the
-            // clickable rect never diverges from the rendered button).
-            let ammo_button = if crate::hud::ammo_cycle_button_visible(&self.world, self.use_mode) {
-                Some(crate::hud::AMMO_CYCLE_BUTTON)
-            } else {
-                None
-            };
-            self.flat_ui.set_ammo_cycle_button(ammo_button);
-
-            let (messages, drag_actions) = self.flat_ui.update(&self.world, input_context.pointer);
-            for msg in messages {
-                self.script_world.dispatch(msg);
+        let (ui_messages, ui_drag_actions) = match game_options.presentation_mode {
+            crate::PresentationMode::Flat => {
+                // Expose the AMMOFULL ammo-cycle button for hit-testing exactly
+                // when the flat HUD draws it (the shared visibility predicate,
+                // so the clickable rect never diverges from the rendered
+                // button).
+                let ammo_button =
+                    if crate::hud::ammo_cycle_button_visible(&self.world, self.use_mode) {
+                        Some(crate::hud::AMMO_CYCLE_BUTTON)
+                    } else {
+                        None
+                    };
+                self.flat_ui.set_ammo_cycle_button(ammo_button);
+                self.flat_ui.update(&self.world, input_context.pointer)
             }
-            for action in drag_actions {
-                let drag_effects = self.apply_flat_drag_action(action);
-                effects.extend(drag_effects);
+            // The cyber interface's pointer bridge: the controller ray's canvas
+            // hit, the trigger as the click button and the squeeze as the grab,
+            // fed to the same host the mouse drives. Everything after this - the
+            // hover routing, the cursor-is-the-item drag, grab-to-hand - is the
+            // one shared implementation.
+            crate::PresentationMode::Vr => {
+                let pointer = self.vr_use_mode_pointer.as_ref().map(|pass| {
+                    // A pointer is reported for every frame the mode is up,
+                    // even with nothing on the panel: the trigger must stay
+                    // accounted for while it is held off-panel, or sweeping a
+                    // still-held press onto a slot would read as a fresh edge
+                    // and lift an item nobody clicked.
+                    let handedness = pass
+                        .active_ray()
+                        .map(|ray| ray.handedness)
+                        .unwrap_or(crate::vr_config::Handedness::Right);
+                    let hand = match handedness {
+                        crate::vr_config::Handedness::Left => &input_context.left_hand,
+                        crate::vr_config::Handedness::Right => &input_context.right_hand,
+                    };
+                    crate::mission::flat_ui_host::CanvasPointer {
+                        canvas_pos: pass.point(),
+                        pressed: pass.pressed,
+                        grabbing: hand.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD,
+                        hand: handedness,
+                        bare_view: crate::mission::flat_ui_host::BareViewPress::Ignore,
+                    }
+                });
+                self.flat_ui.update_canvas(&self.world, pointer)
             }
+        };
+        for msg in ui_messages {
+            self.script_world.dispatch(msg);
+        }
+        for action in ui_drag_actions {
+            let drag_effects = self.apply_flat_drag_action(action);
+            effects.extend(drag_effects);
         }
 
         // Update scripts
@@ -4207,6 +4294,11 @@ impl MissionCore {
             .ok()
             .map(|player| player.inventory_entity_id);
         self.flat_ui.set_strip(strip_entity);
+        // Entered "already pressed": the button that opened the mode may still
+        // be down (in VR the interface can be opened with the trigger held), and
+        // a held press must never read as a click on whatever the pointer first
+        // crosses (rule 6 of the vr-ui-design skill).
+        self.flat_ui.guard_held_press();
     }
 
     pub fn handle_effects(
@@ -6896,6 +6988,9 @@ impl MissionCore {
     /// entry from the tracked head pose, world-locked, lazily recentered);
     /// the dim follows the live gaze, falling back to the panel while the
     /// head is untracked (see `crate::ui::world_dim::dim_pose`).
+    /// The pointer (beam, hand, hit dot) is drawn last, from the same pass the
+    /// canvas was hit-tested with, so the dot can only ever mark the pixel the
+    /// interface actually reacted to.
     fn render_vr_use_mode(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
         use crate::ui::world_dim;
         let panel = self.vr_use_mode_anchor.panel();
@@ -6908,6 +7003,16 @@ impl MissionCore {
             crate::util::render_source::USE_MODE_DIM,
         )];
         objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
+        if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
+            let panel_layers = objects.len();
+            objects.extend(self.vr_use_mode_pointer_visuals.borrow_mut().render(
+                asset_cache,
+                pass,
+                crate::mission::flat_ui_host::CANVAS_SIZE,
+                &panel,
+                panel_layers,
+            ));
+        }
         objects
     }
 
@@ -9023,6 +9128,27 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             strip,
             cursor: self.flat_ui.cursor_debug(),
             ammo_cycle: self.flat_ui.ammo_cycle_debug(),
+            pointer: self.flat_ui.pointer_debug(),
+            // The panel a client aims a controller at, reported straight off
+            // the anchor that placed it - so a test cannot aim at a placement
+            // the interface does not use.
+            panel_pose: self.vr_use_mode_pointer.as_ref().map(|_| {
+                let panel = self.vr_use_mode_anchor.panel();
+                crate::game_scene::DebugUiPanelPose {
+                    center: [panel.center.x, panel.center.y, panel.center.z],
+                    rotation: [
+                        panel.rotation.v.x,
+                        panel.rotation.v.y,
+                        panel.rotation.v.z,
+                        panel.rotation.s,
+                    ],
+                    size: [panel.size.x, panel.size.y],
+                    canvas: [
+                        crate::mission::flat_ui_host::CANVAS_SIZE.x,
+                        crate::mission::flat_ui_host::CANVAS_SIZE.y,
+                    ],
+                }
+            }),
         }
     }
 
