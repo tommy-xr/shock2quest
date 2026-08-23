@@ -46,6 +46,18 @@ pub struct RuntimePropAITargetAwareness {
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropLocomotionScale(pub f32);
 
+/// Runtime changes to an object's authored metaproperty relations.
+///
+/// The effective Dark properties themselves are saved through the ordinary
+/// property registry. This relation delta is persisted separately by
+/// `EntitySaveData` so a later scripted Add/Remove can still recompose only
+/// the affected component types after a load.
+#[derive(Component, Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RuntimePropMetaProperties {
+    pub added: Vec<i32>,
+    pub removed: Vec<i32>,
+}
+
 #[derive(Component)]
 pub struct RuntimePropJointTransforms(pub [Matrix4<f32>; 40]);
 

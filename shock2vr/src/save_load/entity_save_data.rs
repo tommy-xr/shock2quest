@@ -7,7 +7,7 @@ use shipyard::{EntityId, World};
 
 use crate::runtime_props::{
     RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropLaunchedProjectile,
-    RuntimePropSelectedAmmo,
+    RuntimePropMetaProperties, RuntimePropSelectedAmmo,
 };
 use crate::scripts::SavedScriptState;
 
@@ -39,6 +39,11 @@ pub struct EntitySaveData {
     /// from taking velocity ownership after load.
     #[serde(default)]
     pub launched_projectiles: Vec<u64 /* entity id */>,
+    /// Runtime Add/Remove metaproperty relation deltas. The resulting Dark
+    /// components are already in `properties`; this preserves enough relation
+    /// state for a later scripted metaproperty action to recompose correctly.
+    #[serde(default)]
+    pub meta_properties: HashMap<u64 /* entity id */, RuntimePropMetaProperties>,
     /// Opt-in private state owned by scripts on these entities. Registered ECS
     /// properties and links remain in their existing fields above; this is only
     /// for runtime modes, timers, latches, and similar script internals.
@@ -57,6 +62,7 @@ impl EntitySaveData {
             selected_ammo: HashMap::new(),
             canonical_template_ids: HashMap::new(),
             launched_projectiles: Vec::new(),
+            meta_properties: HashMap::new(),
             script_states: Vec::new(),
         }
     }
@@ -128,6 +134,12 @@ impl EntitySaveData {
                 world.add_component(*new_entity_id, RuntimePropLaunchedProjectile);
             }
         }
+        for (old_entity_id, meta_properties) in &self.meta_properties {
+            let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
+            if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
+                world.add_component(*new_entity_id, meta_properties.clone());
+            }
+        }
         (template_to_entity_id, old_entity_id_to_new_entity_id)
     }
 }
@@ -152,6 +164,33 @@ mod tests {
         .unwrap();
 
         assert!(save.death_poses.is_empty());
+        assert!(save.meta_properties.is_empty());
+    }
+
+    #[test]
+    fn instantiate_restores_runtime_metaproperty_relations() {
+        let old_entity = EntityId::new_from_index_and_gen(22, 1);
+        let mut data = EntitySaveData::empty();
+        data.all_entities.push(old_entity.inner());
+        data.meta_properties.insert(
+            old_entity.inner(),
+            RuntimePropMetaProperties {
+                added: vec![-40],
+                removed: vec![-1073],
+            },
+        );
+
+        let mut world = World::new();
+        let (_, remap) = data.instantiate(&mut world);
+        let restored = remap[&old_entity];
+        let states = world.borrow::<View<RuntimePropMetaProperties>>().unwrap();
+        assert_eq!(
+            states.get(restored).unwrap(),
+            &RuntimePropMetaProperties {
+                added: vec![-40],
+                removed: vec![-1073],
+            }
+        );
     }
 
     #[test]
