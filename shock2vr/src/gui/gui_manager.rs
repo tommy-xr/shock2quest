@@ -63,6 +63,16 @@ pub struct GuiPropProxyEntity {
     entity_id: EntityId,
 }
 
+impl GuiPropProxyEntity {
+    pub(crate) fn new(entity_id: EntityId) -> Self {
+        Self { entity_id }
+    }
+
+    pub(crate) fn host_entity(&self) -> EntityId {
+        self.entity_id
+    }
+}
+
 #[derive(Component, Clone, Copy)]
 pub struct GuiPropProxySize(pub Vector2<f32>);
 
@@ -244,9 +254,7 @@ impl GuiManager {
         {
             // Add proxy entity to world
             let ent = world.add_entity((
-                GuiPropProxyEntity {
-                    entity_id: parent_entity,
-                },
+                GuiPropProxyEntity::new(parent_entity),
                 GuiPropProxySize(world_size),
                 RuntimePropDoNotSerialize,
             ));
