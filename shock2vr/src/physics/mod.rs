@@ -2257,14 +2257,13 @@ pub struct PlayerHandle {
 }
 
 /// The physical-hand seam for one held melee weapon. `target` is an invisible
-/// controller-driven kinematic body; `joint` motors the visible dynamic weapon
-/// toward it on all six degrees of freedom. Keeping the target out of
-/// `entity_id_to_body` makes the weapon remain the entity's one authoritative
-/// rendered/contact body.
+/// controller-driven kinematic body carrying the pose the hand asked for; the
+/// visible dynamic weapon is driven onto it each step by velocity. Keeping the
+/// target out of `entity_id_to_body` makes the weapon remain the entity's one
+/// authoritative rendered/contact body.
 #[derive(Clone, Copy)]
 struct HeldMeleeDrive {
     target: RigidBodyHandle,
-    joint: ImpulseJointHandle,
     /// The loose/restored world body is seated at the first tracked pose once;
     /// later hand poses move only `target` so world contact stays physical.
     seated: bool,
@@ -2293,6 +2292,16 @@ impl PlayerHandle {
     pub fn is_crouched(&self) -> bool {
         self.is_crouched
     }
+}
+
+/// Shorten `v` to `max` if it is longer, leaving direction alone. A zero or
+/// non-finite vector comes back as zero rather than as a NaN direction.
+fn clamp_magnitude(v: Vector<Real>, max: f32) -> Vector<Real> {
+    let length = v.norm();
+    if !length.is_finite() || length <= 0.0 {
+        return Vector::zeros();
+    }
+    if length > max { v * (max / length) } else { v }
 }
 
 pub struct PhysicsWorld {
@@ -2663,14 +2672,15 @@ impl PhysicsWorld {
         }
     }
 
-    /// Turn an existing loose-prop body into a spring-driven contact shape
+    /// Turn an existing loose-prop body into a velocity-driven contact shape
     /// while a melee weapon is held in VR.
     ///
-    /// The hand pose drives an invisible kinematic target. A six-axis generic
-    /// joint motors the visible weapon body toward that target, leaving the
-    /// weapon dynamic so Rapier can stop it against world geometry. This is
-    /// the physical-hand pattern: tracked and rendered poses may disconnect
-    /// under load, then the weapon springs back when the obstruction clears.
+    /// The hand pose drives an invisible kinematic target; each step the
+    /// visible weapon is given exactly the velocity that lands it on that
+    /// target (see [`Self::drive_held_melee`]). The weapon stays *dynamic*, so
+    /// the solver still stops it against world geometry and still generates
+    /// contacts - what changes versus a joint motor is that in free space it
+    /// arrives, instead of trailing the hand by a spring's time constant.
     pub fn set_held_melee(&mut self, entity_id: EntityId) {
         let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
             return;
@@ -2693,27 +2703,10 @@ impl PhysicsWorld {
                     .pose(pose)
                     .build(),
             );
-            let stiffness = crate::dev_params::get(crate::dev_params::MELEE_SPRING_STIFFNESS);
-            let damping = crate::dev_params::get(crate::dev_params::MELEE_SPRING_DAMPING);
-            let mut joint = GenericJointBuilder::new(JointAxesMask::empty());
-            for axis in [
-                JointAxis::LinX,
-                JointAxis::LinY,
-                JointAxis::LinZ,
-                JointAxis::AngX,
-                JointAxis::AngY,
-                JointAxis::AngZ,
-            ] {
-                joint = joint
-                    .motor_model(axis, MotorModel::AccelerationBased)
-                    .motor_position(axis, 0.0, stiffness, damping);
-            }
-            let joint = self.impulse_joint_set.insert(target, handle, joint, true);
             self.held_melee_drives.insert(
                 handle,
                 HeldMeleeDrive {
                     target,
-                    joint,
                     seated: false,
                 },
             );
@@ -3703,26 +3696,69 @@ impl PhysicsWorld {
         }
     }
 
-    /// Refresh the live tuning values on every held-melee motor. The developer
-    /// registry is intentionally read per frame, so a headset can tune feel
-    /// without rebuilding or recreating the held body.
-    fn update_held_melee_motors(&mut self) {
-        let stiffness = crate::dev_params::get(crate::dev_params::MELEE_SPRING_STIFFNESS);
-        let damping = crate::dev_params::get(crate::dev_params::MELEE_SPRING_DAMPING);
-        for drive in self.held_melee_drives.values() {
-            let Some(joint) = self.impulse_joint_set.get_mut(drive.joint, true) else {
+    /// Put each held melee weapon onto its tracked-hand target by *velocity*:
+    /// the exact linear and angular velocity that, integrated over one step,
+    /// lands the body on the pose the hand asked for.
+    ///
+    /// This replaced a six-axis generic-joint position motor, and the reason is
+    /// worth keeping. Rapier solves `AngX`/`AngY`/`AngZ` motors per axis, which
+    /// is not a shortest-arc orientation servo; driven through a body whose
+    /// origin sits on the *weapon head* rather than in the grip, the linear and
+    /// angular motors also torque and translate each other. Measured (see
+    /// `physics::spring_sweep`), that left the weapon trailing a real swing by
+    /// several-fold and its orientation error still *growing* thirteen frames
+    /// after the hand had stopped - felt in a headset as heavy lag and as a
+    /// weapon pivoting about its head instead of about the grip.
+    ///
+    /// Velocity tracking removes both at once. The pivot is a consequence, not
+    /// a separate fix: rotation about the wrong point is what a *lagging*
+    /// body's residual error looks like, so a drive that converges in one step
+    /// has no wrong pivot to show. The body stays dynamic, so the solver still
+    /// stops it dead against world geometry, still refuses to launch actors
+    /// (`CollisionGroup::held_melee`), and still reports every contact.
+    ///
+    /// Velocities are clamped so a discontinuous pose - a teleport that slipped
+    /// past `translate_held_melee_for_player_relocation`, a first frame after a
+    /// restore - cannot become an arbitrarily large impulse into the level.
+    fn drive_held_melee(&mut self) {
+        let dt = self.integration_parameters.dt;
+        if dt <= 0.0 {
+            return;
+        }
+        let max_linear = crate::dev_params::get(crate::dev_params::MELEE_MAX_SPEED);
+        let max_angular = crate::dev_params::get(crate::dev_params::MELEE_MAX_TURN);
+        let pairs = self
+            .held_melee_drives
+            .iter()
+            .map(|(weapon, drive)| (*weapon, drive.target))
+            .collect::<Vec<_>>();
+        for (weapon, target) in pairs {
+            // `next_position`, not `position`: the hand pose arrives through
+            // `set_next_kinematic_position`, which Rapier only commits during
+            // the step. Reading the committed pose here would drive the weapon
+            // at where the hand was *last* frame, leaving a permanent
+            // one-frame lag that no amount of gain removes - measured at 0.068
+            // units through a swing, against 0.002 reading the pending pose.
+            let Some(target_pose) = self
+                .rigid_body_set
+                .get(target)
+                .map(|body| *body.next_position())
+            else {
                 continue;
             };
-            for axis in [
-                JointAxis::LinX,
-                JointAxis::LinY,
-                JointAxis::LinZ,
-                JointAxis::AngX,
-                JointAxis::AngY,
-                JointAxis::AngZ,
-            ] {
-                joint.data.set_motor_position(axis, 0.0, stiffness, damping);
+            let Some(body) = self.rigid_body_set.get_mut(weapon) else {
+                continue;
+            };
+            let linear = (target_pose.translation.vector - body.translation()) / dt;
+            // Shortest arc: `q` and `-q` are the same orientation but
+            // `scaled_axis` would read the long way round for the negative one.
+            let mut delta = target_pose.rotation * body.rotation().inverse();
+            if delta.w < 0.0 {
+                delta = UnitQuaternion::new_unchecked(-delta.into_inner());
             }
+            let angular = delta.scaled_axis() / dt;
+            body.set_linvel(clamp_magnitude(linear, max_linear), true);
+            body.set_angvel(clamp_magnitude(angular, max_angular), true);
         }
     }
 
@@ -3742,7 +3778,6 @@ impl PhysicsWorld {
             .filter_map(|handle| self.held_melee_drives.remove(handle))
             .collect::<Vec<_>>();
         for drive in drives_to_remove {
-            self.impulse_joint_set.remove(drive.joint, true);
             self.rigid_body_set.remove(
                 drive.target,
                 &mut self.island_manager,
@@ -4153,7 +4188,7 @@ impl PhysicsWorld {
         // (tram floor + walls/buttons) therefore advance as one physical body,
         // matching Dark's source->destination attachment flow.
         self.update_kinematic_attachments();
-        self.update_held_melee_motors();
+        self.drive_held_melee();
 
         // Attribute any non-finite body state to its entity before the step
         // consumes it (see report_nonfinite_rigid_body_state) - by the time
@@ -5780,7 +5815,7 @@ fn collision_group_names(bits: u32) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod spring_sweep;
+mod held_melee_drive;
 
 #[cfg(test)]
 mod tests {
@@ -5823,7 +5858,7 @@ mod tests {
         assert!(!body.blocks_player, "the weapon must ignore its owner");
         assert!(
             body.blocks_actor,
-            "the spring-driven weapon must retain actor contact detection"
+            "the driven weapon must retain actor contact detection"
         );
         assert_eq!(body.linear_velocity, [0.0; 3]);
         assert_eq!(body.angular_velocity, [0.0; 3]);
@@ -5842,10 +5877,15 @@ mod tests {
         );
     }
 
-    /// The controller target may move instantly, but the visible/contact body
-    /// must travel through simulation instead of adopting that pose verbatim.
+    /// The visible/contact body reaches the pose the hand asked for, and does
+    /// it through the *solver* rather than by teleporting: it stays dynamic and
+    /// carries the velocity that took it there, which is what lets world
+    /// geometry stop it (asserted separately) and what makes its contacts
+    /// real. An earlier revision drove this with a joint motor and this test
+    /// asserted the opposite - that the weapon must *trail* its target - which
+    /// is what a headset reported as heavy lag.
     #[test]
-    fn held_melee_weapon_lags_behind_its_controller_target() {
+    fn held_melee_weapon_reaches_its_controller_target_through_the_solver() {
         let (mut world, mut player) = world_with_floor();
         let weapon = EntityId::from_inner(2).unwrap();
         let handle = world.add_dynamic(
@@ -5863,12 +5903,24 @@ mod tests {
         step(&mut world, &mut player, 1);
         world.set_position_rotation2(weapon, vec3(0.0, 1.0, 0.0), identity_quat());
 
+        // Mid-flight: dynamic, and moving under its own velocity rather than
+        // having been placed.
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        assert_eq!(
+            world.rigid_body_set[handle].body_type(),
+            RigidBodyType::Dynamic
+        );
+        assert!(
+            world.get_velocity(weapon).unwrap().magnitude() > 0.0,
+            "the weapon should be carried by the solver, not repositioned"
+        );
+
         step(&mut world, &mut player, 3);
 
         let weapon_x = world.get_position(handle).unwrap().x;
         assert!(
-            weapon_x > -2.0 && weapon_x < 0.5 && weapon_x.abs() > 0.01,
-            "the motor should advance without snapping to the target: x={weapon_x}"
+            (weapon_x - 0.0).abs() < 0.02,
+            "the weapon should arrive on the tracked hand: x={weapon_x}"
         );
         let target = world.held_melee_drives[&handle].target;
         assert!((world.get_position(target).unwrap().x - 0.0).abs() < 1.0e-4);
