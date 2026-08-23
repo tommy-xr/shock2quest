@@ -91,10 +91,10 @@ pub const PLAYER_EYE_HEIGHT: f32 = physics::PLAYER_HEAD_POS + physics::PLAYER_EY
 pub const PLAYER_CROUCH_EYE_HEIGHT: f32 = 1.2;
 
 /// Default vertical FOV, in degrees, for the flat runtimes' projection
-/// matrix. `Game::desired_fov_deg` starts here and can be driven game-side
-/// (see `Game::set_desired_fov_deg`) - the planned first consumer is a
-/// "cyber interface" mode that pulls the FOV in while its overlay is up.
-/// `oculus_runtime` is untouched: OpenXR view FOVs must be used as-is.
+/// matrix. `Game::desired_fov_deg` starts here and is driven game-side each
+/// frame (see `Game::set_desired_fov_deg`) by the cyber interface's FOV pull
+/// while its overlay is open. `oculus_runtime` is untouched: OpenXR view
+/// FOVs must be used as-is.
 pub const DEFAULT_FOV_DEG: f32 = 45.0;
 
 /// Resolves `base` against `dev_params::FOV_OVERRIDE_DEG`: `0` (its default)
@@ -1357,6 +1357,15 @@ impl Game {
             action_effects,
         );
 
+        // A personal-UI mode (the cyber interface) can pull the flat FOV in a
+        // little while it is open, eased over its own entry/exit ramp -
+        // `fov_pull_deg` already smooths this, so nothing further is needed
+        // here. VR scenes return 0 (OpenXR view FOVs are used as-is), making
+        // this a no-op there.
+        self.set_desired_fov_deg(
+            DEFAULT_FOV_DEG - self.active_game_scene.fov_pull_deg(&self.options),
+        );
+
         // Handle ambient audio
         let ambient_state = self.active_game_scene.ambient_audio_state();
         let player_pose = self
@@ -1831,11 +1840,11 @@ impl Game {
     }
 
     /// Vertical FOV (degrees) the flat runtimes should build their projection
-    /// matrix with this frame. Defaults to [`DEFAULT_FOV_DEG`] and is unset by
-    /// anything today; [`Game::set_desired_fov_deg`] is the internal seam a
-    /// future gameplay/UI mode (e.g. the cyber-interface overlay) will drive
-    /// it from. `dev_params::FOV_OVERRIDE_DEG` can force a value live for
-    /// testing without a rebuild.
+    /// matrix with this frame. Defaults to [`DEFAULT_FOV_DEG`] and is driven
+    /// each frame by [`Game::set_desired_fov_deg`] - the active scene's
+    /// `GameScene::fov_pull_deg` (the cyber-interface overlay's FOV pull is
+    /// the first consumer). `dev_params::FOV_OVERRIDE_DEG` can force a value
+    /// live for testing without a rebuild.
     ///
     /// VR is explicitly out of scope: OpenXR view FOVs must be used as-is, so
     /// `oculus_runtime` does not read this.
@@ -1844,13 +1853,13 @@ impl Game {
     }
 
     /// Internal seam for gameplay/UI code to drive [`Game::desired_fov_deg`].
-    /// Not called anywhere yet - the first consumer is the planned
-    /// cyber-interface mode. Smoothing/easing is the caller's responsibility.
+    /// Driven once per frame from [`Game::update`] by the active scene's
+    /// `GameScene::fov_pull_deg` (the cyber interface's entry/exit ramp is
+    /// the first consumer). Smoothing/easing is the caller's responsibility.
     /// Rejects non-finite or out-of-range degrees (valid input to
     /// `cgmath::perspective` is strictly between 0 and 180) by leaving the
     /// current value unchanged, so a bad caller can't poison the flat
     /// runtimes' projection into a panic.
-    #[allow(dead_code)]
     pub(crate) fn set_desired_fov_deg(&mut self, fov_deg: f32) {
         if fov_deg.is_finite() && fov_deg > 0.0 && fov_deg < 180.0 {
             self.desired_fov_deg = fov_deg;
@@ -1897,9 +1906,10 @@ impl Game {
         // pawn transform the runtime builds its camera from.
         let pawn_to_world = Matrix4::from_translation(pos) * Matrix4::from(rot);
 
-        // The hit tint occupies the explicit scene-overlay layer: over the
-        // world, behind scene UI and the pause menu, identically in flat and
-        // VR. It remains view-locked, so only the eye pose differs.
+        // Eye pose shared by both view-locked rim layers below (the hit tint
+        // and the cyber interface's vignette) - both occupy the explicit
+        // scene-overlay layer: over the world, behind scene UI and the pause
+        // menu, identically in flat and VR.
         let (mut eye_position, eye_forward) =
             hit_feedback::eye_pose(self.head_pose.0, self.head_pose.1);
         // Centre the layer on the eye the frame is actually drawn from, which
@@ -1910,6 +1920,33 @@ impl Game {
         // rim by ~13 degrees and drag the ramp onto the crosshair. The same
         // clamp the cameras use is a no-op standing.
         eye_position.y = eye_position.y.min(self.player_eye_cap_above_center());
+
+        // The cyber interface's own entry/exit vignette: a second, separately
+        // colored rim layer rather than merged into the hit tint's intensity,
+        // so a hit still reads while the interface is open or easing shut.
+        // Same view-locked geometry as the hit tint
+        // (`hit_feedback::vignette_layer`), identically in flat and VR - only
+        // the eye pose differs. Pushed *before* the hit tint below: within one
+        // render layer the renderer draws in push order (`gl_engine.rs`), so
+        // the damage red always ends up painted on top of the interface cyan
+        // rather than the reverse.
+        let use_mode_vignette = self.active_game_scene.use_mode_vignette_intensity();
+        if use_mode_vignette > 0.0 {
+            let mut layer = hit_feedback::vignette_layer(
+                self.view_extents,
+                eye_position,
+                eye_forward,
+                ui::entry_ramp::VIGNETTE_COLOR,
+                use_mode_vignette,
+                util::render_source::USE_MODE_VIGNETTE,
+            );
+            layer.set_transform(pawn_to_world * layer.get_transform());
+            scene.push(layer);
+        }
+
+        // The hit tint occupies the explicit scene-overlay layer: over the
+        // world, behind scene UI and the pause menu, identically in flat and
+        // VR. It remains view-locked, so only the eye pose differs.
         if let Some(mut layer) =
             self.hit_feedback
                 .render(self.view_extents, eye_position, eye_forward)

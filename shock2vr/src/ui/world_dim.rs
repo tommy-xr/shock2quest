@@ -118,6 +118,22 @@ pub fn world_dim_layer(
     distance: f32,
     source: &str,
 ) -> SceneObject {
+    world_dim_layer_scaled(head_position, head_forward, distance, 1.0, source)
+}
+
+/// Same as [`world_dim_layer`], but [`world_dim_strength`] is scaled by
+/// `ramp` (0..1, clamped) first - lets a caller with an entry/exit ramp (the
+/// cyber interface's [`crate::ui::entry_ramp`]) fade the dim in and out
+/// instead of snapping to full strength the instant the overlay opens. The
+/// pause menu has no such ramp and always gets full strength via
+/// [`world_dim_layer`].
+pub fn world_dim_layer_scaled(
+    head_position: Vector3<f32>,
+    head_forward: Vector3<f32>,
+    distance: f32,
+    ramp: f32,
+    source: &str,
+) -> SceneObject {
     let extent = distance * WORLD_DIM_EXTENT_RATIO;
     let mut object = SceneObject::new(
         color_material::create(WORLD_DIM_COLOR),
@@ -132,7 +148,7 @@ pub fn world_dim_layer(
     );
     // The material speaks in transparency (0 = opaque), the strength in "how
     // dark does the world go" - the direction a human tunes in.
-    object.set_transparency(Some(1.0 - world_dim_strength()));
+    object.set_transparency(Some(1.0 - world_dim_strength() * ramp.clamp(0.0, 1.0)));
     // Translucent, and drawn before the panel: writing depth here would let the
     // dim occlude the canvas that draws over it.
     object.set_depth_write(false);
@@ -162,4 +178,66 @@ pub fn dim_pose(
         panel.center + panel.normal() * frontend_panel_distance(),
         -panel.normal(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Negative test: at `ramp = 1.0` the scaled layer must be identical to
+    /// the unscaled one the pause menu still uses - only a `ramp < 1.0`
+    /// caller (the cyber interface, mid-fade) should ever see it differ.
+    #[test]
+    fn full_ramp_matches_the_unscaled_layer() {
+        let head = vec3(0.0, 1.7, 0.0);
+        let forward = vec3(0.0, 0.0, -1.0);
+        let full = world_dim_layer(head, forward, 3.0, "test");
+        let scaled = world_dim_layer_scaled(head, forward, 3.0, 1.0, "test");
+        assert_eq!(
+            full.effective_transparency(),
+            scaled.effective_transparency()
+        );
+    }
+
+    /// A ramp partway open must dim the world less than full strength, and a
+    /// ramp of zero must not dim it at all (fully transparent).
+    #[test]
+    fn a_partial_ramp_dims_less_than_full_strength() {
+        let head = vec3(0.0, 1.7, 0.0);
+        let forward = vec3(0.0, 0.0, -1.0);
+        let full = world_dim_layer_scaled(head, forward, 3.0, 1.0, "test")
+            .effective_transparency()
+            .unwrap();
+        let half = world_dim_layer_scaled(head, forward, 3.0, 0.5, "test")
+            .effective_transparency()
+            .unwrap();
+        let none = world_dim_layer_scaled(head, forward, 3.0, 0.0, "test")
+            .effective_transparency()
+            .unwrap();
+        // Transparency is `1 - dim`, so a weaker dim reads as MORE transparent.
+        assert!(none > half && half > full);
+        assert_eq!(none, 1.0, "a zero ramp must leave the world untouched");
+    }
+
+    /// An out-of-range ramp must clamp rather than invert the dim or panic.
+    #[test]
+    fn ramp_is_clamped_to_0_1() {
+        let head = vec3(0.0, 1.7, 0.0);
+        let forward = vec3(0.0, 0.0, -1.0);
+        let over = world_dim_layer_scaled(head, forward, 3.0, 5.0, "test")
+            .effective_transparency()
+            .unwrap();
+        let full = world_dim_layer_scaled(head, forward, 3.0, 1.0, "test")
+            .effective_transparency()
+            .unwrap();
+        assert_eq!(over, full);
+
+        let under = world_dim_layer_scaled(head, forward, 3.0, -5.0, "test")
+            .effective_transparency()
+            .unwrap();
+        let none = world_dim_layer_scaled(head, forward, 3.0, 0.0, "test")
+            .effective_transparency()
+            .unwrap();
+        assert_eq!(under, none);
+    }
 }

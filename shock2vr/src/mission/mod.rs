@@ -265,6 +265,14 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.player_is_crouched()
     }
 
+    fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
+        self.mission_core.fov_pull_deg(game_options)
+    }
+
+    fn use_mode_vignette_intensity(&self) -> f32 {
+        self.mission_core.use_mode_vignette_intensity()
+    }
+
     fn player_save_position(&self) -> Result<Vector3<f32>, crate::game_scene::PlayerSavePoseError> {
         self.mission_core.player_save_position()
     }

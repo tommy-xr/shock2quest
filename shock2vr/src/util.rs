@@ -347,6 +347,10 @@ pub mod render_source {
     pub const USE_MODE_POINTER: &str = "use_mode_pointer";
     /// The red rim tint shown for a moment after the player takes damage.
     pub const HIT_FEEDBACK: &str = "hit_feedback";
+    /// The cyber interface's own rim vignette, eased in/out with its
+    /// entry/exit ramp - layered alongside (not merged with) [`HIT_FEEDBACK`],
+    /// so a hit still reads while the interface is open.
+    pub const USE_MODE_VIGNETTE: &str = "use_mode_vignette";
 }
 
 /// A tag that records only which render path produced an object.

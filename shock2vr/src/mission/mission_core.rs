@@ -206,6 +206,16 @@ const VR_BACKPACK_WORLD_SCALE: f32 = 0.55;
 const VR_MEDIA_FORWARD: f32 = 3.75;
 const VR_MEDIA_UP: f32 = 3.5;
 
+/// The use-mode ("cyber interface") open/close sting: the shipped gamesys's
+/// own `UI_SCH` schema pair for opening/closing the game's main panel
+/// (`cargo dq templates 610`/`611`) - a faithful "interface open/close"
+/// chime, addressed by symbolic name like `repfail`/`hackfail` elsewhere in
+/// this file, rather than an invented sound. Played from the single
+/// `enter_use_mode`/`leave_use_mode` pair both presentations share, so flat
+/// and VR always sound the same.
+const USE_MODE_OPEN_SOUND: &str = "mainpanel_op";
+const USE_MODE_CLOSE_SOUND: &str = "mainpanel_cl";
+
 fn presentation_world_panel_size(
     presentation: crate::PresentationMode,
     is_player_backpack: bool,
@@ -1000,6 +1010,13 @@ pub struct MissionCore {
     /// dimmed behind it and the wielded weapon safed. Unlike the pause menu,
     /// the world keeps simulating while it is up.
     pub use_mode: bool,
+
+    /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the rim
+    /// vignette (both presentations), the VR comfort dim's strength, and the
+    /// flat FOV pull - see [`crate::ui::entry_ramp`]. Advanced every update
+    /// regardless of presentation or `use_mode` itself, so it keeps easing
+    /// out after the panel has already been put away.
+    use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp,
 
     /// Where the VR cyber-interface panel hangs: placed once on entry from
     /// the tracked head pose, world-locked, lazily recentered (rule 3 of the
@@ -1835,6 +1852,7 @@ impl MissionCore {
             debug_weapon_index: 0,
             flat_melee_anim: None,
             use_mode: false,
+            use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp::new(),
             vr_use_mode_anchor: crate::ui::FrontendPanelAnchor::new(),
             vr_use_mode_head: crate::ui::world_dim::UNTRACKED_HEAD,
             vr_trigger_swallow: false,
@@ -2417,12 +2435,27 @@ impl MissionCore {
             );
         }
 
+        // Entry/exit ramp: advanced every update regardless of presentation
+        // or `use_mode` itself, so the vignette/dim/FOV pull keeps easing out
+        // after the panel has already been put away (see `render`'s
+        // `is_settled_closed()` gate).
+        self.use_mode_ramp.update(time.elapsed.as_secs_f32());
+
         // VR cyber interface (use mode): follow the head for the anchor's
         // lazy recenter and the comfort dim, resolve this frame's pointer, and
         // clear the weapon-safe latch once every trigger is released.
         self.vr_use_mode_pointer = None;
-        if game_options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
+        // The dim is drawn (see `render`) for the trailing exit-ramp window
+        // too, after `use_mode` has already gone false - it must keep
+        // following the live head there as well, or a head turn during the
+        // release exposes its edge (`world_dim`'s own invariant: "locked to
+        // the live head pose ... not to the panel").
+        if game_options.presentation_mode == crate::PresentationMode::Vr
+            && (self.use_mode || !self.use_mode_ramp.is_settled_closed())
+        {
             self.vr_use_mode_head = (input_context.head.position, input_context.head.rotation);
+        }
+        if game_options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
             let panel = self.vr_use_mode_anchor.update(
                 input_context.head.position,
                 input_context.head.rotation,
@@ -4308,7 +4341,7 @@ impl MissionCore {
     ///
     /// Shared by `ToggleUseMode` and `CloseUseMode` so the two exits from use
     /// mode cannot drift apart.
-    fn leave_use_mode(&mut self) {
+    fn leave_use_mode(&mut self) -> Effect {
         self.use_mode = false;
         self.flat_ui.take_cursor_item();
         self.flat_ui.set_strip(None);
@@ -4318,13 +4351,23 @@ impl MissionCore {
         // flat (the consumption site is VR-gated) and self-clearing once
         // nothing is pressed.
         self.vr_trigger_swallow = true;
+        // The panel disappears immediately; the ramp keeps easing the
+        // vignette/dim/FOV pull back to nothing on its own release timing
+        // (see `render`'s `use_mode_ramp.is_settled_closed()` gate).
+        self.use_mode_ramp.close();
+        Effect::PlaySound {
+            handle: AudioHandle::new(),
+            source: None,
+            name: USE_MODE_CLOSE_SOUND.to_owned(),
+            spatial: false,
+        }
     }
 
     /// Enter "use" (metagame) mode: bind the top-docked inventory strip to
     /// the player's `internal_inventory` entity (whose GuiScript already
     /// emits SetUI every frame). Shared by both presentations - the strip
     /// canvas is the mode; only where it is presented differs.
-    fn enter_use_mode(&mut self) {
+    fn enter_use_mode(&mut self) -> Effect {
         self.use_mode = true;
         let strip_entity = self
             .world
@@ -4337,6 +4380,14 @@ impl MissionCore {
         // a held press must never read as a click on whatever the pointer first
         // crosses (rule 6 of the vr-ui-design skill).
         self.flat_ui.guard_held_press();
+        self.use_mode_ramp
+            .open(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT);
+        Effect::PlaySound {
+            handle: AudioHandle::new(),
+            source: None,
+            name: USE_MODE_OPEN_SOUND.to_owned(),
+            spatial: false,
+        }
     }
 
     pub fn handle_effects(
@@ -4505,9 +4556,9 @@ impl MissionCore {
                             if self.flat_ui.active_panel().is_some() {
                                 self.flat_ui.close();
                             } else if self.use_mode {
-                                self.leave_use_mode();
+                                effects.push_front(self.leave_use_mode());
                             } else {
-                                self.enter_use_mode();
+                                effects.push_front(self.enter_use_mode());
                             }
                         }
                         crate::PresentationMode::Vr => {
@@ -4517,7 +4568,7 @@ impl MissionCore {
                             // world keeps simulating - unlike the pause menu,
                             // this is a mode of play, not a suspension of it.
                             if self.use_mode {
-                                self.leave_use_mode();
+                                effects.push_front(self.leave_use_mode());
                             } else if self.player_is_alive() {
                                 // Edge policy: no cyber interface over the
                                 // death sequence - that moment belongs to the
@@ -4528,7 +4579,7 @@ impl MissionCore {
                                 // open, and a level transition replaces this
                                 // scene (taking the mission-owned mode state
                                 // with it).
-                                self.enter_use_mode();
+                                effects.push_front(self.enter_use_mode());
                                 // Place the panel from the pose of *this*
                                 // entry, not wherever the player stood last
                                 // time - and let the anchor wait out an
@@ -4551,7 +4602,15 @@ impl MissionCore {
                     // cyber interface.
                     self.flat_ui.close();
                     if self.use_mode {
-                        self.leave_use_mode();
+                        effects.push_front(self.leave_use_mode());
+                        // A takeover, not the deliberate two-way toggle: snap
+                        // the ramp shut rather than ease it. The pause menu
+                        // suspends the scene from the next frame, so nothing
+                        // would call `use_mode_ramp.update` again until it
+                        // closes - a graceful release would otherwise hang
+                        // the vignette/dim/FOV pull at whatever strength they
+                        // were at for the whole pause.
+                        self.use_mode_ramp.snap_closed();
                     }
                 }
 
@@ -7025,7 +7084,13 @@ impl MissionCore {
     /// Placement comes from [`Self::vr_use_mode_anchor`] alone (placed on
     /// entry from the tracked head pose, world-locked, lazily recentered);
     /// the dim follows the live gaze, falling back to the panel while the
-    /// head is untracked (see `crate::ui::world_dim::dim_pose`).
+    /// head is untracked (see `crate::ui::world_dim::dim_pose`). Its strength
+    /// is scaled by [`Self::use_mode_ramp`]'s eased progress, so it fades in
+    /// on entry and keeps fading out after `use_mode` itself has already gone
+    /// false (the caller keeps calling this for exactly that trailing window
+    /// - see `render`'s `is_settled_closed()` gate). The canvas itself is
+    /// empty once the strip has been cleared on exit, so only the dim
+    /// actually lingers.
     /// The pointer (aim beams + hit dot) is drawn last, from the same pass the
     /// canvas was hit-tested with, so the dot can only ever mark the pixel the
     /// interface actually reacted to. Deliberately hand-less: unlike a frontend
@@ -7037,10 +7102,11 @@ impl MissionCore {
         let panel = self.vr_use_mode_anchor.panel();
         let (head_position, head_rotation) = self.vr_use_mode_head;
         let (dim_position, dim_forward) = world_dim::dim_pose(head_position, head_rotation, &panel);
-        let mut objects = vec![world_dim::world_dim_layer(
+        let mut objects = vec![world_dim::world_dim_layer_scaled(
             dim_position,
             dim_forward,
             world_dim::dim_distance(dim_position, &panel),
+            self.use_mode_ramp.eased(),
             crate::util::render_source::USE_MODE_DIM,
         )];
         objects.extend(self.flat_ui.render_world_space(asset_cache, &panel));
@@ -7427,7 +7493,12 @@ impl MissionCore {
         // the canvas), built in the tracked pawn space and rebased into world
         // coordinates with the same pawn transform the runtime builds its
         // camera from.
-        if options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
+        // Kept up (dim only, once `use_mode` itself has gone false) until the
+        // exit ramp finishes releasing, so the comfort dim eases out instead
+        // of vanishing the instant the panel does.
+        if options.presentation_mode == crate::PresentationMode::Vr
+            && (self.use_mode || !self.use_mode_ramp.is_settled_closed())
+        {
             let pawn_to_world =
                 Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
             let mut use_mode_objects = self.render_vr_use_mode(asset_cache);
@@ -7476,6 +7547,22 @@ impl MissionCore {
     /// it, so the mode's truthy answer there is inert.
     pub fn wants_pointer(&self) -> bool {
         self.flat_ui.active_panel().is_some() || self.use_mode
+    }
+
+    /// See [`crate::game_scene::GameScene::fov_pull_deg`]. VR must not react
+    /// to the cyber interface's ramp - OpenXR view FOVs are used as-is - so
+    /// this is gated on presentation even though the ramp itself runs in
+    /// both.
+    pub fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
+        if game_options.presentation_mode == crate::PresentationMode::Vr {
+            return 0.0;
+        }
+        self.use_mode_ramp.fov_pull_deg()
+    }
+
+    /// See [`crate::game_scene::GameScene::use_mode_vignette_intensity`].
+    pub fn use_mode_vignette_intensity(&self) -> f32 {
+        self.use_mode_ramp.vignette_intensity()
     }
 
     /// Actual crouch state of the player collider (stand-up can be refused
