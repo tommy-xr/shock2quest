@@ -83,8 +83,8 @@ const COVERAGE_MARGIN: f32 = 1.25;
 /// picture's own extents come from the host's projection matrix, so the same
 /// two numbers describe the same visible effect on a 45-degree monitor and on
 /// a headset's much wider asymmetric per-eye frustum.
-pub const CLEAR_FIELD_FRACTION: f32 = 0.5;
-pub const FULL_FIELD_FRACTION: f32 = 1.0;
+const CLEAR_FIELD_FRACTION: f32 = 0.5;
+const FULL_FIELD_FRACTION: f32 = 1.0;
 
 /// How far the picture reaches from the view axis, as the tangents of the
 /// half-angles on each axis: `(horizontal, vertical)`.
@@ -278,8 +278,6 @@ fn hit_layer(
         eye_forward,
         TINT_COLOR,
         intensity,
-        CLEAR_FIELD_FRACTION,
-        FULL_FIELD_FRACTION,
         crate::util::render_source::HIT_FEEDBACK,
     )
 }
@@ -289,20 +287,15 @@ fn hit_layer(
 /// entry/exit vignette ([`crate::ui::entry_ramp`]). The two are drawn as
 /// separate layers with their own color/intensity rather than merged into one
 /// number, so a hit still reads while the interface is open (they blend
-/// naturally, being translucent).
-///
-/// See [`hit_layer`]'s callers for what each parameter means; `clear_field`
-/// and `full_field` are fractions of the picture (0..1) the same way
-/// [`CLEAR_FIELD_FRACTION`]/[`FULL_FIELD_FRACTION`] are.
-#[allow(clippy::too_many_arguments)]
+/// naturally, being translucent). Both callers want the same field-of-view
+/// geometry ([`CLEAR_FIELD_FRACTION`]/[`FULL_FIELD_FRACTION`]) - only the
+/// color and intensity differ, so those two stay the only variables.
 pub fn vignette_layer(
     view_extents: (f32, f32),
     eye_position: Vector3<f32>,
     eye_forward: Vector3<f32>,
     color: Vector3<f32>,
     intensity: f32,
-    clear_field: f32,
-    full_field: f32,
     source: &str,
 ) -> SceneObject {
     let (horizontal, vertical) = view_extents;
@@ -315,8 +308,8 @@ pub fn vignette_layer(
             // The quad is `COVERAGE_MARGIN` wider than the picture, so the
             // edge of the picture sits at `1 / COVERAGE_MARGIN` in the shader's
             // radius units and the fractions scale down to match.
-            clear_field / COVERAGE_MARGIN,
-            full_field / COVERAGE_MARGIN,
+            CLEAR_FIELD_FRACTION / COVERAGE_MARGIN,
+            FULL_FIELD_FRACTION / COVERAGE_MARGIN,
         ),
         Box::new(engine::scene::quad::create()),
     );
@@ -658,8 +651,6 @@ mod tests {
             vec3(0.0, 0.0, -1.0),
             color,
             0.4,
-            0.3,
-            0.9,
             "use_mode_vignette",
         );
         assert_eq!(

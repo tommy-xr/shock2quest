@@ -81,6 +81,17 @@ impl EntryExitRamp {
         self.target = 0.0;
     }
 
+    /// Close instantly, skipping the release entirely - for a takeover
+    /// rather than a graceful exit (the pause menu forcing the interface
+    /// shut via `Effect::CloseUseMode`). Without this the release keeps
+    /// `update` un-advanced while the scene is suspended for the pause, so
+    /// the vignette/dim/FOV pull would otherwise hang at whatever strength
+    /// they were at for the entire pause.
+    pub fn snap_closed(&mut self) {
+        self.progress = 0.0;
+        self.target = 0.0;
+    }
+
     /// Advance by `delta_time_secs`. Negative or non-finite deltas are
     /// treated as no time passing, so a bad caller can't push `progress`
     /// outside 0..1 or send it the wrong way.
@@ -227,6 +238,27 @@ mod tests {
         assert_eq!(ramp.progress(), before);
         ramp.update(0.01);
         assert!(ramp.progress() < before);
+    }
+
+    /// A takeover (`CloseUseMode`) must not leave the ramp mid-release for a
+    /// scene that has stopped calling `update` (the pause menu suspends the
+    /// scene) - `snap_closed` has to reach 0 immediately, not just retarget.
+    #[test]
+    fn snap_closed_settles_immediately_even_mid_open() {
+        let mut ramp = EntryExitRamp::new();
+        ramp.open(FAST);
+        ramp.update(FAST.attack_secs * 0.5);
+        assert!(ramp.progress() > 0.0);
+
+        ramp.snap_closed();
+        assert_eq!(ramp.progress(), 0.0);
+        assert_eq!(ramp.eased(), 0.0);
+        assert!(ramp.is_settled_closed());
+
+        // And a caller that never calls `update` again (the exact pause
+        // scenario) must not see it drift back open on its own.
+        ramp.update(10.0);
+        assert!(ramp.is_settled_closed());
     }
 
     #[test]

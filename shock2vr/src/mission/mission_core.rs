@@ -2445,8 +2445,17 @@ impl MissionCore {
         // lazy recenter and the comfort dim, resolve this frame's pointer, and
         // clear the weapon-safe latch once every trigger is released.
         self.vr_use_mode_pointer = None;
-        if game_options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
+        // The dim is drawn (see `render`) for the trailing exit-ramp window
+        // too, after `use_mode` has already gone false - it must keep
+        // following the live head there as well, or a head turn during the
+        // release exposes its edge (`world_dim`'s own invariant: "locked to
+        // the live head pose ... not to the panel").
+        if game_options.presentation_mode == crate::PresentationMode::Vr
+            && (self.use_mode || !self.use_mode_ramp.is_settled_closed())
+        {
             self.vr_use_mode_head = (input_context.head.position, input_context.head.rotation);
+        }
+        if game_options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
             let panel = self.vr_use_mode_anchor.update(
                 input_context.head.position,
                 input_context.head.rotation,
@@ -4594,6 +4603,14 @@ impl MissionCore {
                     self.flat_ui.close();
                     if self.use_mode {
                         effects.push_front(self.leave_use_mode());
+                        // A takeover, not the deliberate two-way toggle: snap
+                        // the ramp shut rather than ease it. The pause menu
+                        // suspends the scene from the next frame, so nothing
+                        // would call `use_mode_ramp.update` again until it
+                        // closes - a graceful release would otherwise hang
+                        // the vignette/dim/FOV pull at whatever strength they
+                        // were at for the whole pause.
+                        self.use_mode_ramp.snap_closed();
                     }
                 }
 
