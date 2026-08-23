@@ -194,6 +194,15 @@ pub struct PlayerStats {
     /// keeps saves written before this field existed loadable.
     #[serde(default)]
     pub software: SoftwareVersions,
+    /// Nanites: the game's money. Collected directly into this counter by
+    /// world nanite pickups (`scripts::internal_nanites_script`) rather than
+    /// living as carried inventory items - mirrors `cyber_modules` above.
+    /// Legacy carried nanite stacks (pre-existing saves, panel-taken piles)
+    /// remain spendable too; see `scripts::script_util::player_nanite_total`.
+    /// `#[serde(default)]` keeps saves written before this field existed
+    /// loadable (they load with 0 stat nanites, carried stacks unaffected).
+    #[serde(default)]
+    pub nanites: i32,
 }
 
 /// The player has four O/S trait slots (one per single-use machine in the game).
@@ -217,6 +226,7 @@ impl Default for PlayerStats {
             psi_tier: 0,
             os_traits: Vec::new(),
             software: SoftwareVersions::default(),
+            nanites: 0,
         }
     }
 }
@@ -249,6 +259,27 @@ impl PlayerStats {
         } else {
             false
         }
+    }
+
+    /// Award nanites (the game's money). Negative or zero amounts are
+    /// ignored - awards only ever add. Returns the new balance.
+    pub fn award_nanites(&mut self, amount: i32) -> i32 {
+        if amount > 0 {
+            self.nanites = self.nanites.saturating_add(amount);
+        }
+        self.nanites
+    }
+
+    /// Spend up to `amount` nanites from the stat balance, clamped at 0 (never
+    /// goes negative). Returns the amount actually debited from the stat, so
+    /// a caller can fall back to legacy carried stacks for the remainder.
+    pub fn spend_nanites(&mut self, amount: i32) -> i32 {
+        if amount <= 0 {
+            return 0;
+        }
+        let spent = amount.min(self.nanites);
+        self.nanites -= spent;
+        spent
     }
 
     /// Current level of a primary stat.
@@ -609,6 +640,36 @@ mod tests {
         let legacy = r#"{"strength":1,"endurance":1,"agility":1,"psionic_ability":1,"cyber_affinity":1,"skills":{"standard_weapons":0,"energy_weapons":0,"heavy_weapons":0,"exotic_weapons":0,"hack":0,"repair":0,"modify":0,"maintenance":0,"research":0},"psi_disciplines":[],"granted_years":[]}"#;
         let loaded: PlayerStats = serde_json::from_str(legacy).unwrap();
         assert_eq!(loaded.cyber_modules, 0);
+    }
+
+    #[test]
+    fn nanites_award_and_spend_clamp_at_zero() {
+        let mut stats = PlayerStats::new();
+        assert_eq!(stats.nanites, 0);
+        assert_eq!(stats.award_nanites(20), 20);
+        // Non-positive awards are ignored.
+        assert_eq!(stats.award_nanites(0), 20);
+        assert_eq!(stats.award_nanites(-5), 20);
+
+        // Spending more than the balance clamps at 0 and reports what was
+        // actually debited, rather than going negative.
+        assert_eq!(stats.spend_nanites(25), 20);
+        assert_eq!(stats.nanites, 0);
+        assert_eq!(stats.spend_nanites(5), 0);
+    }
+
+    #[test]
+    fn nanites_survive_serde_and_default_for_old_saves() {
+        let mut stats = PlayerStats::new();
+        stats.award_nanites(30);
+        let json = serde_json::to_string(&stats).unwrap();
+        let back: PlayerStats = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.nanites, 30);
+        // A save written before this field existed (no `nanites` key) loads
+        // with the serde default of 0.
+        let legacy = r#"{"strength":1,"endurance":1,"agility":1,"psionic_ability":1,"cyber_affinity":1,"skills":{"standard_weapons":0,"energy_weapons":0,"heavy_weapons":0,"exotic_weapons":0,"hack":0,"repair":0,"modify":0,"maintenance":0,"research":0},"psi_disciplines":[],"granted_years":[]}"#;
+        let loaded: PlayerStats = serde_json::from_str(legacy).unwrap();
+        assert_eq!(loaded.nanites, 0);
     }
 
     #[test]

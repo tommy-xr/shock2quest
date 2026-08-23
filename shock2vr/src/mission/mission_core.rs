@@ -5120,6 +5120,22 @@ impl MissionCore {
                     }
                 }
 
+                Effect::AwardNanites { amount } => {
+                    let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                    let balance = quests.player_stats_mut().award_nanites(amount);
+                    if amount > 0 {
+                        info!("Awarded {} nanites (stat balance now {})", amount, balance);
+                    }
+                }
+
+                Effect::SpendNanites { amount } => {
+                    let mut quests = self.world.borrow::<UniqueViewMut<QuestInfo>>().unwrap();
+                    let spent = quests.player_stats_mut().spend_nanites(amount);
+                    if spent > 0 {
+                        info!("Spent {} nanites from the stat balance", spent);
+                    }
+                }
+
                 Effect::DrawDebugLines { lines } => {
                     if game_options.debug_draw {
                         for line in lines {

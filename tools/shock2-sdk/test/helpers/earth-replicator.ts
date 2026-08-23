@@ -4,10 +4,17 @@ import type { GameServer } from "../../src/index.js";
 import type { EntitySummary } from "../../src/types.js";
 import { teleportVerified } from "./teleport.js";
 
-/** Total every real carried nanite StackCount exposed through inventory. */
+/**
+ * The player's total spendable nanite balance: the persistent stat balance
+ * (world nanite pickups collect straight into it, never inventory) plus any
+ * legacy carried nanite StackCount entities exposed through inventory
+ * (pre-existing saves, panel-taken piles). Mirrors
+ * `script_util::player_nanite_total` on the Rust side.
+ */
 export async function carriedNaniteTotal(game: GameServer): Promise<number> {
+  const stat = (await game.info()).player.stats?.nanites ?? 0;
   const inventory = await game.player.inventory();
-  let total = 0;
+  let total = stat;
   for (const item of inventory.items) {
     if (!item.name?.toLowerCase().includes("nanite")) continue;
     const detail = await game.entities.detail(item.entity_id);
