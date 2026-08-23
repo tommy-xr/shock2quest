@@ -48,12 +48,13 @@ pub use frontend_menu::{
 #[cfg(test)]
 pub use frontend_pointer::test_support;
 pub use frontend_pointer::{
-    FrontendPointerPass, FrontendRay, VR_TRIGGER_THRESHOLD, vr_frontend_pointer_pass,
+    FrontendPointerPass, FrontendRay, PointerEngagement, VR_TRIGGER_THRESHOLD,
+    vr_frontend_pointer_pass, vr_pointer_pass,
 };
 pub use frontend_presentation::FrontendCanvasPresenter;
 pub use frontend_sfx::FrontendSfx;
 pub use panel_anchor::{FrontendPanelAnchor, PanelPlacement};
-pub use pointer_visual::PointerVisuals;
+pub use pointer_visual::{PointerVisuals, pointer_beams};
 
 /// Font name that resolves to the engine's compiled-in font rather than a
 /// `.FON` asset.

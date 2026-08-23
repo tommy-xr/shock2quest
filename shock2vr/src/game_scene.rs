@@ -528,6 +528,43 @@ pub struct DebugUiState {
     /// wielded); clicking it cycles the wielded weapon's ammo type. `None`
     /// otherwise.
     pub ammo_cycle: Option<DebugUiElement>,
+    /// Where the pointer last landed on the shared canvas (flat: the mouse;
+    /// VR: the controller ray on the cyber-interface panel).
+    pub pointer: Option<DebugUiPointer>,
+    /// The VR cyber-interface panel's pose, in pawn space - `Some` exactly
+    /// while the interface is up in VR. Lets a client aim a controller at a
+    /// canvas rect without re-deriving the panel's placement.
+    pub panel_pose: Option<DebugUiPanelPose>,
+}
+
+/// One frame of pointing at the shared UI canvas.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugUiPointer {
+    /// Position on the 640x480 canvas, or `null` when the pointer is off it
+    /// (flat: the letterbox bars; VR: the ray missed the panel).
+    pub canvas: Option<[f32; 2]>,
+    /// The click button (flat LMB / VR trigger) is down.
+    pub pressed: bool,
+    /// The grab gesture (VR squeeze) is down.
+    pub grabbing: bool,
+    /// "left" or "right" - which hand the gesture belongs to, or `null` when
+    /// nothing is on the canvas (no hand owns the pointer).
+    pub hand: Option<String>,
+}
+
+/// The world panel a VR presentation hangs the shared canvas on, in pawn space
+/// (the same space `/v1/control/input` hand positions are given in).
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugUiPanelPose {
+    /// Panel center.
+    pub center: [f32; 3],
+    /// Panel orientation as `[x, y, z, w]`; the face normal is this applied to
+    /// `+Z`, and it points at the viewer.
+    pub rotation: [f32; 4],
+    /// Panel size in metres, `[width, height]`.
+    pub size: [f32; 2],
+    /// The authored canvas the panel presents, in pixels.
+    pub canvas: [f32; 2],
 }
 
 /// The item currently riding the cursor (a lifted inventory item): its runtime
@@ -820,6 +857,8 @@ pub trait DebuggableScene {
             strip: None,
             cursor: None,
             ammo_cycle: None,
+            pointer: None,
+            panel_pose: None,
         }
     }
 
