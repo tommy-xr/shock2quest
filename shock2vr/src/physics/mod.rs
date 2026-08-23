@@ -5780,6 +5780,9 @@ fn collision_group_names(bits: u32) -> Vec<String> {
 }
 
 #[cfg(test)]
+mod spring_sweep;
+
+#[cfg(test)]
 mod tests {
     //! Verify that per-object `DynamicPhysicsOptions` actually drive the Rapier
     //! simulation. These are deterministic, headless physics tests (fixed 1/60
