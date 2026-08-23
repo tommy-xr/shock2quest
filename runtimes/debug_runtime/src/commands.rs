@@ -586,6 +586,13 @@ pub struct UiStateResult {
     /// The AMMOFULL ammo-cycle button (use mode + multi-ammo weapon); `Some`
     /// when shown. Click it to cycle the wielded weapon's ammo type.
     pub ammo_cycle: Option<shock2vr::game_scene::DebugUiElement>,
+    /// Where the pointer last landed on the shared canvas (flat: the mouse;
+    /// VR: the controller ray on the cyber-interface panel).
+    pub pointer: Option<shock2vr::game_scene::DebugUiPointer>,
+    /// The VR cyber-interface panel's pose, in pawn space; `Some` exactly
+    /// while the interface is up in VR. Aim a controller at a canvas rect by
+    /// mapping it through this.
+    pub panel_pose: Option<shock2vr::game_scene::DebugUiPanelPose>,
 }
 
 /// A single carried item.

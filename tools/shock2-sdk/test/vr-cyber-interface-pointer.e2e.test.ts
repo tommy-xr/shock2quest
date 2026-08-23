@@ -68,6 +68,14 @@ test(
     const panel = requirePanel(ui);
     assert.deepEqual(panel.canvas, [640, 480], "the panel presents the shared canvas");
 
+    // Park the left controller off the panel so this scenario is about one
+    // hand. Per-hand arbitration means an idle hand resting on the panel is a
+    // pointer too - which the "aiming away" step below would otherwise pick up.
+    await aimVrHandAtCanvas(game, panel, [320, 240], {
+      hand: "left",
+      facing: "away",
+    });
+
     const slot = slotFor(ui, wrench.entity_id);
     assert.ok(slot, "the provisioned wrench must occupy a strip slot");
     const slotCenter = center(slot);
