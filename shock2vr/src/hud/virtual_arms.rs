@@ -35,7 +35,7 @@ const PSI_BAR_START: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 8.0, 17.0 + BAR_VERTI
 const PSI_BAR_END: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 88.0, 31.0 + BAR_VERTICAL_OFFSET);
 
 /// Z-offset for overlay layers to ensure proper rendering order
-const OVERLAY_Z_OFFSET: f32 = 0.001;
+pub(crate) const OVERLAY_Z_OFFSET: f32 = 0.001;
 
 /// Which forearm panels to draw. The default (both) is the shipped behavior;
 /// the `ambient_meters` experiment retires the right-forearm ammo panel (the

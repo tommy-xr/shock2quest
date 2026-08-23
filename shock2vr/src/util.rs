@@ -209,6 +209,13 @@ pub fn smoothstep(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Whether a pose rotation is a real tracked pose: untracked poses arrive as
+/// the ZERO quaternion (see [`tracked_gaze`]'s docs - VR rule 7). The single
+/// home for the check, so view-locked layers cannot each grow their own copy.
+pub fn is_tracked_rotation(rotation: Quaternion<f32>) -> bool {
+    rotation.magnitude2() >= 1e-6
+}
+
 pub fn get_rotation_from_forward_vector(forward: Vector3<f32>) -> Quaternion<f32> {
     let mut default_up = Vector3::new(0.0, 1.0, 0.0);
 

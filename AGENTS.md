@@ -631,14 +631,17 @@ The project supports experimental flags for gating in-progress features during d
   `high-detail (PMNM) meshes: true|false`.
 
 - **`ambient_meters`**: prototype VR ambient-meter model (flat HUD untouched).
-  The ammo readout moves onto the wielded weapon - a small AMMOFULL panel
-  anchored to the weapon's live transform, facing the shooter - and the
-  right-forearm ammo panel is retired while the flag is on. The left-forearm
-  health panel stays but renders only when the wrist is glanced at (panel
-  normal vs eye vector, with hysteresis; untracked poses hide it). Layout and
-  tuning knobs (weapon-local offset/tilt/size, glance thresholds) live in
-  `shock2vr/src/hud/ambient_meters.rs`. Without the flag, both forearm panels
-  render exactly as before.
+  The ammo readout moves onto the wielded weapon - the compact AMMOBACK square
+  (round count + ammo type, the same gauge the flat HUD shows outside use
+  mode), anchored to the weapon's live transform and facing the shooter like a
+  rear-sight status tag - and the right-forearm ammo panel is retired while the
+  flag is on. The left-forearm health panel stays but renders only when the
+  wrist is glanced at (panel normal vs eye vector, with hysteresis; untracked
+  poses hide it). Panel shape/tilt/size and the glance thresholds live in
+  `shock2vr/src/hud/ammo_panel.rs` + `shock2vr/src/hud/ambient_meters.rs`; the
+  per-weapon anchor (where the tag hangs in the weapon's own frame) lives in
+  `vr_config::weapon_meter_anchor_*`, beside the grip-offset table. Without the
+  flag, both forearm panels render exactly as before.
 
 #### Adding New Experimental Features
 

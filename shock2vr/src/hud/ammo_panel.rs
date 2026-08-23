@@ -40,6 +40,63 @@ pub(crate) const fn at(origin: Vector2<f32>, rect: Rect) -> Rect {
     Rect::new(origin.x + rect.x, origin.y + rect.y, rect.w, rect.h)
 }
 
+/// The compact readout is the AMMOBACK crop of the AMMOFULL panel: the right
+/// 94x64 (the gauge footprint the flat HUD shows outside use mode). Elements
+/// authored inside that crop - the round count and the type label - keep their
+/// AMMOFULL positions, re-origined by this offset, so the compact and full
+/// readouts can never drift apart.
+pub(crate) const COMPACT_ORIGIN: Vector2<f32> = vec2(166.0, 0.0);
+pub(crate) const COMPACT_W: f32 = PANEL_W - COMPACT_ORIGIN.x;
+pub(crate) const COMPACT_H: f32 = PANEL_H;
+pub(crate) const COMPACT_SIZE: Vector2<f32> = vec2(COMPACT_W, COMPACT_H);
+
+/// Emit the compact (AMMOBACK-sized) readout: the round count and type label
+/// - the elements of [`emit`] that are authored inside the AMMOBACK crop -
+/// with the crop's upper-left at `origin`. The psi amp shows its tier where a
+/// gun shows its clip (its badge/name are authored outside the crop and are a
+/// full-panel affordance).
+pub(crate) fn emit_compact(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoReadout) {
+    // Re-origin so an AMMOFULL-authored rect lands crop-local.
+    let origin = vec2(origin.x - COMPACT_ORIGIN.x, origin.y - COMPACT_ORIGIN.y);
+    if let Some((_, tier)) = &readout.psi_power {
+        canvas.text_native(
+            at(origin, COUNT),
+            &format!("{tier}"),
+            "mainfont.fon",
+            HAlign::Center,
+            VAlign::Middle,
+        );
+        return;
+    }
+    let Some(rounds) = readout.ammo else {
+        return;
+    };
+    canvas.text_native(
+        at(origin, COUNT),
+        &format!("{rounds}"),
+        "mainfont.fon",
+        HAlign::Center,
+        VAlign::Middle,
+    );
+    if let Some(ammo_type) = &readout.ammo_type {
+        canvas.text_native(
+            at(origin, TYPE_LABEL),
+            &ammo_type.to_ascii_uppercase(),
+            "mainfont.fon",
+            HAlign::Center,
+            VAlign::Middle,
+        );
+    }
+}
+
+/// The compact readout as a canvas the size of the AMMOBACK crop - what the
+/// on-weapon ammo meter lays over its AMMOBACK backdrop quad.
+pub(crate) fn build_compact_readout_canvas(readout: &AmmoReadout) -> UiCanvas {
+    let mut canvas = UiCanvas::new(COMPACT_SIZE);
+    emit_compact(&mut canvas, vec2(0.0, 0.0), readout);
+    canvas
+}
+
 /// What the ammo readout says this frame. Presentation-agnostic: both the flat
 /// HUD and the VR forearm panel build one of these from the world.
 #[derive(Debug, Clone, Default, PartialEq)]

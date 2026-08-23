@@ -361,6 +361,70 @@ fn melee_wield_pose_correction_scaled(arm: MeleePosedArm, scale: f32) -> cgmath:
         * Matrix4::from_translation(-arm.fist)
 }
 
+// --- On-weapon ammo meter anchors --------------------------------------------
+//
+// Where the `ambient_meters` ammo tag hangs in the *weapon's* local frame (see
+// `hud::ambient_meters` for the panel's shape/orientation). Same authored
+// frame the grip table above works in: the wielded gun models run barrel along
+// -X, so +X is back toward the shooter, +Y up out of the gun body, +Z across
+// it. Units are world units (1 unit = 0.762 m), the space
+// `RuntimePropTransform` lives in.
+//
+// The tag reads like a rear-sight status plate: sat on the receiver, behind
+// the body of the gun, just high enough to clear the top line of the model.
+
+/// Anchor for a weapon with no entry below: over the receiver, a little back
+/// from the model origin and above a typical gun body.
+const WEAPON_METER_ANCHOR_DEFAULT: Vector3<f32> = vec3(0.16, 0.29, 0.0);
+
+/// Per-model anchor overrides, keyed like [`HAND_MODEL_POSITIONING`]
+/// (lowercased `PropModelName`). Entries cover [`VR_25AE_VIEW_MODELS`]'s guns
+/// - the models VR actually wields - and are derived from each model's
+/// authored bounding box: back along the barrel by 30% of the model's
+/// half-length, and clear of the top of its body (half-height + a small
+/// margin), so the tag sits over the receiver instead of inside it. A weapon
+/// with no entry (a classic install's world model) takes the default.
+static WEAPON_METER_ANCHORS: Lazy<HashMap<&str, Vector3<f32>>> = Lazy::new(|| {
+    HashMap::from([
+        ("atek_h", vec3(0.24, 0.27, 0.0)),
+        ("ar15_h", vec3(0.14, 0.35, 0.0)),
+        ("sg_h", vec3(0.35, 0.29, 0.0)),
+        ("empgun_h", vec3(0.18, 0.22, 0.0)),
+        ("lasehand", vec3(0.22, 0.27, 0.0)),
+        ("gren_h", vec3(0.33, 0.42, 0.0)),
+        ("sfg_h", vec3(0.17, 0.67, 0.0)),
+        ("fsn_h", vec3(0.13, 0.26, 0.0)),
+        ("al_h", vec3(0.15, 0.39, 0.0)),
+        ("viro_h", vec3(0.18, 0.35, 0.0)),
+        ("amp_h", vec3(0.15, 0.34, 0.0)),
+    ])
+});
+
+/// Where the on-weapon ammo meter hangs on `entity_id`'s model. Mirrors
+/// [`get_vr_hand_model_adjustments_from_entity`]'s lookup: the entity's
+/// `PropModelName`, lowercased, against the anchor table, falling back to
+/// [`WEAPON_METER_ANCHOR_DEFAULT`].
+pub fn weapon_meter_anchor_from_entity(world: &World, entity_id: EntityId) -> Vector3<f32> {
+    let Ok(v_model_name) = world.borrow::<View<PropModelName>>() else {
+        return WEAPON_METER_ANCHOR_DEFAULT;
+    };
+    let Ok(model_name) = v_model_name
+        .get(entity_id)
+        .map(|sz| sz.0.to_ascii_lowercase())
+    else {
+        return WEAPON_METER_ANCHOR_DEFAULT;
+    };
+    weapon_meter_anchor_from_model(&model_name)
+}
+
+/// [`weapon_meter_anchor_from_entity`] by model name.
+pub fn weapon_meter_anchor_from_model(model_name: &str) -> Vector3<f32> {
+    WEAPON_METER_ANCHORS
+        .get(model_name)
+        .copied()
+        .unwrap_or(WEAPON_METER_ANCHOR_DEFAULT)
+}
+
 pub fn get_vr_hand_model_adjustments_from_entity(
     entity_id: EntityId,
     world: &World,
@@ -432,6 +496,37 @@ mod tests {
                 "missing HAND_MODEL_POSITIONING entry for {name}"
             );
         }
+    }
+
+    /// A typo'd anchor key would silently fall back to the default instead of
+    /// failing, so pin every key to a model the grip table already knows.
+    #[test]
+    fn every_meter_anchor_names_a_known_weapon_model() {
+        for name in WEAPON_METER_ANCHORS.keys() {
+            assert!(
+                HAND_MODEL_POSITIONING.contains_key(name),
+                "WEAPON_METER_ANCHORS key {name} is not a known weapon model"
+            );
+        }
+    }
+
+    /// An unknown model still gets a usable tag rather than one buried at the
+    /// grip.
+    #[test]
+    fn an_unknown_weapon_model_falls_back_to_the_default_anchor() {
+        assert_eq!(
+            weapon_meter_anchor_from_model("not_a_weapon"),
+            WEAPON_METER_ANCHOR_DEFAULT
+        );
+        // ...and a model WITH an entry gets that entry, not the default.
+        assert_eq!(
+            weapon_meter_anchor_from_model("ar15_h"),
+            WEAPON_METER_ANCHORS["ar15_h"]
+        );
+        assert_ne!(
+            weapon_meter_anchor_from_model("ar15_h"),
+            WEAPON_METER_ANCHOR_DEFAULT
+        );
     }
 
     /// Flat's wield swap is frozen: growing the VR grip table must not change
