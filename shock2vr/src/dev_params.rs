@@ -134,19 +134,6 @@ dev_params! {
     /// nothing. `debug_melee` turns it on; missions leave it at 0 until the
     /// physical model is the shipped one.
     MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Melee free swing", 0.0, 0.0, 20.0, 0.5),
-    /// Draw the tracked-hand glove *in addition to* a wielded weapon's own
-    /// first-person model, instead of letting the weapon model stand in for the
-    /// hand. `0` off, `1` on.
-    ///
-    /// This is the melee grip calibration instrument: the `_h` melee rigs bake
-    /// their own arm and fist, and nothing else in the game shows where that
-    /// baked fist lands relative to where the controller actually is. With both
-    /// drawn at once the offset is directly visible - and directly tunable,
-    /// since the registry reaches a headset without a rebuild.
-    ///
-    /// A 0/1 float because the registry has no `Bool` kind yet; it should
-    /// become one when that lands.
-    MELEE_GLOVE_OVERLAY = float("melee_glove_overlay", "Melee glove overlay", 0.0, 0.0, 1.0, 1.0),
     /// Uniform scale applied to a wielded melee `_h` view model, about the
     /// baked fist so the grip stays on the controller.
     ///
