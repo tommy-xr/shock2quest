@@ -682,6 +682,14 @@ pub enum Effect {
         update: AIPropertyUpdate,
     },
 
+    /// Add or remove one named Dark metaproperty and recompose only the
+    /// component types contributed by that metaproperty's inheritance branch.
+    SetMetaProperty {
+        entity_id: EntityId,
+        name: String,
+        add: bool,
+    },
+
     /// Replace Dark's runtime-only `AICurrentPatrol` relation for one AI.
     /// `None` removes the relation when patrol stops or gives up.
     SetAICurrentPatrol {

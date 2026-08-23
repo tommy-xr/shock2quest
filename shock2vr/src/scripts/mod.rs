@@ -263,6 +263,10 @@ pub enum MessagePayload {
         name: String,
     },
 
+    /// A metaproperty mutation changed authored AI configuration components;
+    /// rebuild the script's cached view after the effect applier updates ECS.
+    RefreshAIProperties,
+
     // Debug: force an AI's alertness level (clamped by its alert cap).
     // `pin` holds it against decay (and tracks the live player) until a
     // non-pinned SetAlertness clears it.
