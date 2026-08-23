@@ -1185,7 +1185,7 @@ fn main() {
             (views[0].pose.position.y + views[1].pose.position.y) / 2.0,
             (views[0].pose.position.z + views[1].pose.position.z) / 2.0,
         );
-        let (left_eye_elapsed, _, left_rendered_pose) = render_swapchain(
+        let (left_eye_elapsed, _) = render_swapchain(
             &mut game,
             &engine,
             camera_pos,
@@ -1198,7 +1198,7 @@ fn main() {
             &scene,
             false,
         );
-        let (right_eye_elapsed, finish_elapsed, right_rendered_pose) = render_swapchain(
+        let (right_eye_elapsed, finish_elapsed) = render_swapchain(
             &mut game,
             &engine,
             camera_pos,
@@ -1239,21 +1239,31 @@ fn main() {
             xr_frame_state.predicted_display_time,
             environment_blend_mode,
             &[
-                // The RENDERED pose, not the tracked one. Late-stage
-                // reprojection corrects a submitted frame in the frame of the
-                // pose it was told the frame came from, so while the death
-                // camera holds the view rolled and displaced away from the
-                // tracked head, submitting `views[i].pose` would have the
-                // compositor shear every reprojected frame about the wrong
-                // axis - judder exactly when the discrepancy is largest. Alive,
-                // these are the tracked poses round-tripped unchanged.
+                // The TRACKED pose, even while the death camera is rendering
+                // from somewhere else entirely. This looks like a bug and is
+                // not: reprojection warps a submitted frame toward the real
+                // head pose at display time, so declaring "this frame was
+                // rendered from down on the floor, on its side" makes the
+                // compositor correct out precisely the displacement the death
+                // camera just introduced. Measured on a Quest 3: submitting the
+                // rendered pose drags the image out of the display frustum and
+                // the fraction of non-black pixels falls 0.83 -> 0.00 (left)
+                // and 0.13 (right) as the fall lands, then holds there for the
+                // whole death window - a black screen for the entire death.
+                // With the tracked pose the same death renders correctly
+                // (0.74-0.75, symmetric, holds to game-over).
+                //
+                // The cost is a small reprojection seam at the image edge
+                // during the 0.9 s fall, when rendered and tracked poses
+                // disagree most. That is the accepted trade: a fraction of a
+                // second of edge artifact, against a three-second blackout.
                 &xr::CompositionLayerProjection::new().space(&stage).views(&[
                     xr::CompositionLayerProjectionView::new()
-                        .pose(left_rendered_pose)
+                        .pose(views[0].pose)
                         .fov(views[0].fov)
                         .sub_image(sub1),
                     xr::CompositionLayerProjectionView::new()
-                        .pose(right_rendered_pose)
+                        .pose(views[1].pose)
                         .fov(views[1].fov)
                         .sub_image(sub2),
                 ]),
@@ -1602,7 +1612,7 @@ fn render_swapchain(
     _log: bool,
     scene: &Vec<SceneObject>,
     is_last: bool,
-) -> (Duration, Duration, xr::Posef) {
+) -> (Duration, Duration) {
     let eye_started = Instant::now();
     let mut xr_swapchain = swapchain.handle.borrow_mut();
     let image_index1 = xr_swapchain.acquire_image().unwrap();
@@ -1712,40 +1722,7 @@ fn render_swapchain(
     (
         eye_started.elapsed().saturating_sub(finish_elapsed),
         finish_elapsed,
-        // The pose this eye was ACTUALLY rendered from, back in stage space, so
-        // the compositor is told the truth (see the layer submission).
-        xr::Posef {
-            position: to_xr_vector(pawn_to_stage(
-                camera.head_offset,
-                game.player_center_above_floor(),
-            )),
-            orientation: to_xr_quaternion(camera.head_rotation),
-        },
     )
-}
-
-/// Inverse of [`stage_to_pawn`]: a pawn-space position back into the stage
-/// space the compositor's layer poses are expressed in.
-fn pawn_to_stage(position_pawn: Vector3<f32>, center_above_floor: f32) -> Vector3<f32> {
-    (position_pawn + vec3(0.0, center_above_floor, 0.0)) * shock2vr::METERS_PER_WORLD_UNIT
-        - vec3(0.0, stage_offset_meters(), 0.0)
-}
-
-fn to_xr_vector(v: Vector3<f32>) -> xr::Vector3f {
-    xr::Vector3f {
-        x: v.x,
-        y: v.y,
-        z: v.z,
-    }
-}
-
-fn to_xr_quaternion(q: Quaternion<f32>) -> xr::Quaternionf {
-    xr::Quaternionf {
-        x: q.v.x,
-        y: q.v.y,
-        z: q.v.z,
-        w: q.s,
-    }
 }
 
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
