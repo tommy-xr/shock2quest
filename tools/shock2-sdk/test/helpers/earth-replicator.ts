@@ -1,31 +1,10 @@
-import assert from "node:assert/strict";
-
 import type { GameServer } from "../../src/index.js";
 import type { EntitySummary } from "../../src/types.js";
 import { teleportVerified } from "./teleport.js";
 
-/**
- * The player's total spendable nanite balance: the persistent stat balance
- * (world nanite pickups collect straight into it, never inventory) plus any
- * legacy carried nanite StackCount entities exposed through inventory
- * (pre-existing saves, panel-taken piles). Mirrors
- * `script_util::player_nanite_total` on the Rust side.
- */
-export async function carriedNaniteTotal(game: GameServer): Promise<number> {
-  const stat = (await game.info()).player.stats?.nanites ?? 0;
-  const inventory = await game.player.inventory();
-  let total = stat;
-  for (const item of inventory.items) {
-    if (!item.name?.toLowerCase().includes("nanite")) continue;
-    const detail = await game.entities.detail(item.entity_id);
-    const stack = detail.properties.find(
-      (property) => property.name === "StackCount",
-    );
-    assert.ok(stack, `carried nanite entity ${item.entity_id} needs StackCount`);
-    total += Number(stack.value);
-  }
-  return total;
-}
+// Re-exported for existing importers - the balance helper itself is not
+// replicator-specific, so it lives in ./nanites.js alongside stackCount.
+export { carriedNaniteTotal } from "./nanites.js";
 
 /**
  * Stage at Earth Technical Training's clear standing point and physically frob

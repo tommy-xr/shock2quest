@@ -2,13 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { stackCount } from "./helpers/nanites.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-
-function stackCount(properties: { name: string; value: string }[]): number | undefined {
-  const stack = properties.find((property) => property.name === "StackCount");
-  return stack === undefined ? undefined : Number(stack.value);
-}
 
 test(
   "Earth nanite world-label visual smoke preserves the authored stack",

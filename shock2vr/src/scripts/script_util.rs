@@ -47,12 +47,33 @@ pub(crate) fn entity_class_template_id(world: &World, entity: EntityId) -> Optio
 /// authored pile placed directly) while excluding that decoy.
 pub(crate) const NANITE_PILE_TEMPLATE_IDS: [i32; 3] = [-1589, -1590, -1591];
 
+/// Whether `template_id` is one of [`NANITE_PILE_TEMPLATE_IDS`] or descends
+/// from one, given a template-inheritance hierarchy (MetaProp parent map).
+/// The single predicate both call sites consult so "is this a nanite pile"
+/// can't silently drift between them: `mission::entity_creator` (script
+/// attachment, from the load-time `SystemShock2EntityInfo` hierarchy) and
+/// [`is_nanite_pickup`] below (from the runtime `GlobalTemplateHierarchy`
+/// unique, which is that same hierarchy cloned into the `World`). The
+/// ancestry check itself is shared with `GlobalTemplateHierarchy::
+/// is_or_descends_from` via `mission_core::template_is_or_descends_from`.
+pub(crate) fn is_nanite_pile_template(
+    hierarchy: &HashMap<i32, Vec<i32>>,
+    template_id: i32,
+) -> bool {
+    NANITE_PILE_TEMPLATE_IDS.iter().any(|class_id| {
+        crate::mission::mission_core::template_is_or_descends_from(
+            hierarchy,
+            template_id,
+            *class_id,
+        )
+    })
+}
+
 /// Whether `entity` is a real world nanite pickup, identified via the runtime
-/// template hierarchy (see [`NANITE_PILE_TEMPLATE_IDS`]) rather than the
-/// legacy `nan_ic` icon check below (which also matches the `FakeNanites`
-/// decoy). Used to route VR squeeze / flat pickup through Frob instead of a
-/// physical grab - see `virtual_hand::uses_scripted_world_frob` and its flat
-/// call site.
+/// template hierarchy rather than the legacy `nan_ic` icon check below (which
+/// also matches the `FakeNanites` decoy). Used to route VR squeeze / flat
+/// pickup through Frob instead of a physical grab - see
+/// `virtual_hand::uses_scripted_world_frob` and its flat call site.
 pub(crate) fn is_nanite_pickup(world: &World, entity: EntityId) -> bool {
     let Ok(hierarchy) = world.borrow::<UniqueView<GlobalTemplateHierarchy>>() else {
         return false;
@@ -60,9 +81,7 @@ pub(crate) fn is_nanite_pickup(world: &World, entity: EntityId) -> bool {
     let Some(template_id) = entity_class_template_id(world, entity) else {
         return false;
     };
-    NANITE_PILE_TEMPLATE_IDS
-        .iter()
-        .any(|class_id| hierarchy.is_or_descends_from(template_id, *class_id))
+    is_nanite_pile_template(&hierarchy.0, template_id)
 }
 
 pub fn is_message_turnon_or_turnoff(msg: &MessagePayload) -> bool {
@@ -424,6 +443,18 @@ fn stat_nanite_balance(world: &World) -> i32 {
         .unwrap_or(0)
 }
 
+/// Split `amount` (assumed positive) into the stat-first debit and the
+/// legacy-stack remainder. Shared by `spend_player_nanites` and
+/// `debit_player_nanites` so the two spend paths can't drift on which nanites
+/// get spent first.
+fn stat_first_split(world: &World, amount: i32) -> (i32, i32) {
+    // `.max(0)` guards a corrupt/negative stat balance (e.g. an old save): a
+    // negative `stat_debit` here would inflate `remaining` past `amount` and
+    // overcharge the carried stacks.
+    let stat_debit = amount.min(stat_nanite_balance(world).max(0));
+    (stat_debit, amount - stat_debit)
+}
+
 /// Build the effects that pay `amount` nanites: debits the player's stat
 /// balance first (`Effect::SpendNanites`), then any legacy carried stacks
 /// (identified by their inherited inventory icon `nan_ic` - pre-existing
@@ -434,8 +465,7 @@ pub fn spend_player_nanites(world: &World, amount: i32) -> Option<Effect> {
         return Some(Effect::NoEffect);
     }
 
-    let stat_debit = amount.min(stat_nanite_balance(world)).max(0);
-    let remaining = amount - stat_debit;
+    let (stat_debit, remaining) = stat_first_split(world, amount);
 
     let mut effects = Vec::new();
     if stat_debit > 0 {
@@ -470,8 +500,7 @@ pub fn debit_player_nanites(world: &World, amount: i32) -> Option<Vec<EntityId>>
         return None;
     }
 
-    let stat_debit = amount.min(stat_nanite_balance(world)).max(0);
-    let remaining = amount - stat_debit;
+    let (stat_debit, remaining) = stat_first_split(world, amount);
 
     let (nanite_stacks, debits) = if remaining > 0 {
         player_nanite_payment_plan(world, remaining)?
@@ -482,19 +511,25 @@ pub fn debit_player_nanites(world: &World, amount: i32) -> Option<Vec<EntityId>>
     let mut stacks = world
         .borrow::<ViewMut<dark::properties::PropStackCount>>()
         .ok()?;
+    // Acquire every fallible borrow up front, before any mutation, so no
+    // ordering of the mutations below can leave one applied and the other
+    // not - a late-failing borrow here must not have already spent the stat
+    // or a stack.
+    let mut quests = if stat_debit > 0 {
+        Some(
+            world
+                .borrow::<UniqueViewMut<crate::quest_info::QuestInfo>>()
+                .ok()?,
+        )
+    } else {
+        None
+    };
 
     // Validate every live stack before applying any mutation.
     for ((entity_id, _), paid) in nanite_stacks.iter().zip(&debits) {
         if *paid > 0 && stacks.get(*entity_id).ok()?.0 < *paid {
             return None;
         }
-    }
-
-    if stat_debit > 0 {
-        let mut quests = world
-            .borrow::<UniqueViewMut<crate::quest_info::QuestInfo>>()
-            .ok()?;
-        quests.player_stats_mut().spend_nanites(stat_debit);
     }
 
     let mut exhausted = Vec::new();
@@ -508,6 +543,11 @@ pub fn debit_player_nanites(world: &World, amount: i32) -> Option<Vec<EntityId>>
             exhausted.push(entity_id);
         }
     }
+
+    if let Some(quests) = quests.as_mut() {
+        quests.player_stats_mut().spend_nanites(stat_debit);
+    }
+
     Some(exhausted)
 }
 
@@ -517,12 +557,13 @@ pub fn debit_player_nanites(world: &World, amount: i32) -> Option<Vec<EntityId>>
 /// legacy half of [`spend_player_nanites`], so the UI balance and the debit
 /// path cannot disagree.
 pub fn player_nanite_total(world: &World) -> i32 {
-    stat_nanite_balance(world)
-        + player_nanite_stacks(world)
+    stat_nanite_balance(world).saturating_add(
+        player_nanite_stacks(world)
             .unwrap_or_default()
             .into_iter()
             .map(|(_, stack)| stack)
-            .fold(0, i32::saturating_add)
+            .fold(0, i32::saturating_add),
+    )
 }
 
 fn player_nanite_payment_plan(
@@ -874,7 +915,7 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 mod tests {
     use super::{
         debit_player_nanites, door_blocks_pathfinding, door_is_closed, is_nanite_pickup,
-        plan_stack_payment, player_nanite_total, spend_player_nanites,
+        plan_stack_payment, player_nanite_total, spend_player_nanites, stat_nanite_balance,
     };
     use crate::mission::PlayerInfo;
     use crate::quest_info::QuestInfo;
@@ -1035,14 +1076,23 @@ mod tests {
         world
     }
 
-    #[test]
-    fn player_nanite_total_combines_stat_and_legacy_carried_stacks() {
-        let mut world = world_with_stat_nanites(15);
-        let first = world.add_entity((PropObjIcon("nan_ic".to_owned()), PropStackCount(2)));
+    /// As [`world_with_stat_nanites`], plus one legacy carried nanite stack
+    /// (in the player's backpack) of `carried_amount` - the setup shared by
+    /// every test that exercises the stat-then-legacy-stack split. Returns
+    /// the stack entity so callers can assert on it directly.
+    fn world_with_stat_and_carried_nanites(
+        stat_amount: i32,
+        carried_amount: i32,
+    ) -> (World, EntityId) {
+        let mut world = world_with_stat_nanites(stat_amount);
+        let stack = world.add_entity((
+            PropObjIcon("nan_ic".to_owned()),
+            PropStackCount(carried_amount),
+        ));
         let inventory = world.add_entity(Links {
             to_links: vec![ToLink {
                 to_template_id: 0,
-                to_entity_id: Some(WrappedEntityId(first)),
+                to_entity_id: Some(WrappedEntityId(stack)),
                 link: Link::Contains(0),
             }],
         });
@@ -1055,30 +1105,81 @@ mod tests {
             right_hand_entity_id: None,
             inventory_entity_id: inventory,
         });
+        (world, stack)
+    }
+
+    /// End-to-end coverage of the authoritative live-mutation path
+    /// (`debit_player_nanites`, the same call `gui::replicator`'s
+    /// `Effect::ReplicatorPurchase` handler in `mission_core` makes) with
+    /// BOTH a stat balance and a carried legacy stack present. Every world
+    /// nanite pickup now collects straight into the stat and never leaves a
+    /// carried entity behind, so a live mission can no longer reach this
+    /// stat-then-legacy-stack crossing without an old save or a debug-spawned
+    /// pile - this is the unit-level stand-in for that scenario.
+    #[test]
+    fn live_nanite_debit_crosses_from_the_stat_into_a_carried_stack_and_exhausts_it() {
+        let (world, stack) = world_with_stat_and_carried_nanites(5, 8);
+
+        // 6 nanites: 5 from the stat, 1 from the carried stack.
+        let exhausted = debit_player_nanites(&world, 6).expect("balance covers the cost");
+        assert!(
+            exhausted.is_empty(),
+            "a partial stack debit must not report the stack as exhausted"
+        );
+        assert_eq!(
+            stat_nanite_balance(&world),
+            0,
+            "the stat should be fully drained before the carried stack is touched"
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropStackCount>>()
+                .unwrap()
+                .get(stack)
+                .unwrap()
+                .0,
+            7,
+            "8 - 1 = 7 remaining in the carried stack"
+        );
+
+        // A further debit of 7 exactly exhausts the carried stack (the stat
+        // is already at zero), so it must be reported for destruction - the
+        // mission's ReplicatorPurchase handler destroys exactly these ids.
+        let exhausted =
+            debit_player_nanites(&world, 7).expect("the remaining carried stack covers this");
+        assert_eq!(
+            exhausted,
+            vec![stack],
+            "an exactly-exhausted carried stack must be returned for destruction"
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropStackCount>>()
+                .unwrap()
+                .get(stack)
+                .unwrap()
+                .0,
+            0
+        );
+
+        // Both the stat and the carried stack are now spent.
+        assert_eq!(
+            debit_player_nanites(&world, 1),
+            None,
+            "a debit against an exhausted stat and stack must be refused"
+        );
+    }
+
+    #[test]
+    fn player_nanite_total_combines_stat_and_legacy_carried_stacks() {
+        let (world, _first) = world_with_stat_and_carried_nanites(15, 2);
 
         assert_eq!(player_nanite_total(&world), 17);
     }
 
     #[test]
     fn spend_player_nanites_debits_the_stat_before_legacy_stacks() {
-        let mut world = world_with_stat_nanites(5);
-        let first = world.add_entity((PropObjIcon("nan_ic".to_owned()), PropStackCount(2)));
-        let inventory = world.add_entity(Links {
-            to_links: vec![ToLink {
-                to_template_id: 0,
-                to_entity_id: Some(WrappedEntityId(first)),
-                link: Link::Contains(0),
-            }],
-        });
-        let player = world.add_entity(());
-        world.add_unique(PlayerInfo {
-            pos: vec3(0.0, 0.0, 0.0),
-            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            entity_id: player,
-            left_hand_entity_id: None,
-            right_hand_entity_id: None,
-            inventory_entity_id: inventory,
-        });
+        let (world, first) = world_with_stat_and_carried_nanites(5, 2);
 
         // 6 nanites: 5 come from the stat, 1 from the legacy stack.
         let effect = spend_player_nanites(&world, 6).expect("balance covers the cost");

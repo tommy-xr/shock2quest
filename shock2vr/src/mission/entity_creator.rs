@@ -80,12 +80,10 @@ fn is_nanite_pickup_template(
     entity_info: &ss2_entity_info::SystemShock2EntityInfo,
     template_id: i32,
 ) -> bool {
-    let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
-    let mut ancestors = ss2_entity_info::get_ancestors(hierarchy, &template_id);
-    ancestors.push(template_id);
-    ancestors
-        .iter()
-        .any(|id| crate::scripts::script_util::NANITE_PILE_TEMPLATE_IDS.contains(id))
+    crate::scripts::script_util::is_nanite_pile_template(
+        ss2_entity_info::get_hierarchy(entity_info),
+        template_id,
+    )
 }
 
 pub fn create_entity_with_position(
@@ -409,14 +407,17 @@ pub fn create_entity_core(
     // such as Med Patches and armor only inherit that flag, so give them the
     // internal handler that moves them into the backpack on Frob. Objects that
     // also request SCRIPT keep their existing authored ownership (notably
-    // FrobQB's circuit-board/quest-item transfer).
+    // FrobQB's circuit-board/quest-item transfer). Nanite piles also inherit
+    // MOVE but must go exclusively through `internal_nanites` above - a
+    // second Frob handler here would race it to move the pile into the
+    // backpack instead of awarding+destroying it.
     let needs_frob_move = {
         let v_frob_info = world.borrow::<View<PropFrobInfo>>().unwrap();
         v_frob_info.get(entity_id).is_ok_and(|frob| {
             !frob.world_action.contains(FrobFlag::SCRIPT)
                 && (frob.world_action.contains(FrobFlag::MOVE)
                     || frob.world_action.contains(FrobFlag::USE_AMMO))
-        })
+        }) && !is_nanite_pickup_template(entity_info, template_id)
     };
     if needs_frob_move {
         processed_scripts.push("internal_frob_move".to_owned());

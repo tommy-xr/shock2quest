@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { UiElement, UiPanel } from "../src/types.js";
+import { carriedNaniteTotal } from "./helpers/nanites.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { clickUiElement } from "./helpers/ui.js";
 
@@ -60,19 +61,6 @@ async function frobCrate(game: GameServer, crateId: number): Promise<void> {
   await game.step({ frames: 3 });
   await game.entities.sendMessage(crateId, { type: "Frob" });
   await game.step({ frames: 5 });
-}
-
-/** Total every carried nanite StackCount exposed through inventory. */
-async function carriedNanites(game: GameServer): Promise<number> {
-  const inventory = await game.player.inventory();
-  let total = 0;
-  for (const item of inventory.items) {
-    if (!item.name?.toLowerCase().includes("nanite")) continue;
-    const detail = await game.entities.detail(item.entity_id);
-    const stack = detail.properties.find((p) => p.name === "StackCount");
-    if (stack) total += Number(stack.value);
-  }
-  return total;
 }
 
 async function containsLinks(game: GameServer, entityId: number) {
@@ -177,7 +165,7 @@ test(
     // pays the authored per-attempt cost. ---
     await game.player.setStats({ cyber_affinity: 6, skills: { hack: 6 } });
     await game.player.spawnItem(BIG_NANITE_PILE);
-    const nanitesBefore = await carriedNanites(game);
+    const nanitesBefore = await carriedNaniteTotal(game);
     assert.ok(nanitesBefore > 0, "the test wallet should hold nanites");
 
     // --- KEY (#811): frobbing the crate opens the shared retail HRM board.
@@ -209,7 +197,7 @@ test(
     // --- Genuinely play the board; the first START charges the cost. ---
     await clickUiElement(game, button(board, "start-hack"));
     assert.equal(
-      await carriedNanites(game),
+      await carriedNaniteTotal(game),
       nanitesBefore - 5,
       "starting a hack should charge exactly the authored cost",
     );

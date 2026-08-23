@@ -20,11 +20,20 @@ const NANITE_PICKUP_SOUND: &str = "linebeep";
 /// squeezing) a world nanite pile awards its stack count straight to the
 /// player's persistent nanite balance and removes the object - it never
 /// enters the inventory grid or the physical hand.
-pub struct InternalNanitesScript {}
+pub struct InternalNanitesScript {
+    // The entity is destroyed the same frame it is first collected (effects
+    // apply after the whole message batch), so a second Frob delivered in
+    // that same batch - both VR hands squeezing the same pile, or trigger and
+    // squeeze from different hands - would otherwise still see it alive and
+    // award nanites twice while only one DestroyEntity is ever queued. Latch
+    // in-memory on the first award; the entity is gone by the next frame, so
+    // this never needs to survive a save.
+    collected: bool,
+}
 
 impl InternalNanitesScript {
     pub fn new() -> InternalNanitesScript {
-        InternalNanitesScript {}
+        InternalNanitesScript { collected: false }
     }
 }
 
@@ -37,7 +46,9 @@ impl Script for InternalNanitesScript {
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
-            MessagePayload::Frob => {
+            MessagePayload::Frob if !self.collected => {
+                self.collected = true;
+
                 let amount = world
                     .borrow::<View<PropStackCount>>()
                     .ok()
@@ -95,6 +106,45 @@ mod tests {
             effects
                 .iter()
                 .any(|e| matches!(e, Effect::DestroyEntity { entity_id } if *entity_id == entity))
+        );
+    }
+
+    /// Negative-first regression: the destroy effect only applies after the
+    /// whole message batch, so a second Frob in the same batch - both VR
+    /// hands squeezing the same pile, or trigger and squeeze from different
+    /// hands - still finds the entity alive. Without the `collected` latch,
+    /// this would award nanites twice for one pickup.
+    #[test]
+    fn a_second_frob_in_the_same_batch_awards_nothing_more() {
+        let mut world = World::new();
+        let entity = world.add_entity(PropStackCount(20));
+        let mut script = InternalNanitesScript::new();
+
+        let first =
+            script.handle_message(entity, &world, &PhysicsWorld::new(), &MessagePayload::Frob);
+        let second =
+            script.handle_message(entity, &world, &PhysicsWorld::new(), &MessagePayload::Frob);
+
+        let award_count = |effect: &Effect| -> usize {
+            match effect {
+                Effect::Combined { effects } => effects
+                    .iter()
+                    .filter(|e| matches!(e, Effect::AwardNanites { .. }))
+                    .count(),
+                Effect::AwardNanites { .. } => 1,
+                _ => 0,
+            }
+        };
+
+        assert_eq!(award_count(&first), 1, "first Frob should award nanites");
+        assert_eq!(
+            award_count(&second),
+            0,
+            "second Frob in the same batch must not award nanites again"
+        );
+        assert!(
+            matches!(second, Effect::NoEffect),
+            "second Frob should be a no-op, got {second:?}"
         );
     }
 
