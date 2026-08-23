@@ -129,6 +129,63 @@ test(
   },
 );
 
+// `death_camera::LOOK_RECOVERY_SECONDS`, in fixed-timestep frames.
+const LOOK_RECOVERY_FRAMES = Math.ceil(0.6 * 60);
+
+/** Angle (degrees) between two unit quaternions `[w, x, y, z]`. */
+function angleBetween(
+  a: [number, number, number, number],
+  b: [number, number, number, number],
+): number {
+  const dot = Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]);
+  return (2 * Math.acos(Math.min(1, dot)) * 180) / Math.PI;
+}
+
+test(
+  "the fall ignores head movement, then hands looking back to the player",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort + 6,
+    });
+    await game.step({ frames: 5 });
+    await game.input.set("head.look", [0, 0]);
+    await game.step({ frames: 2 });
+
+    await killPlayer(game);
+    // The moment the fall lands, the camera belongs to the death and not to the
+    // head: the recovery ramp has not started, so turning the head does nothing.
+    // (Earlier in the fall the tracked head still holds its share of the blend -
+    // that is the fall easing in, not the player steering it.)
+    await game.step({ frames: FALL_FRAMES });
+    const landed = (await game.info()).player.camera_rotation;
+    await game.input.set("head.look", [90, 0]);
+    await game.step({ frames: 1 });
+    const stillPinned = (await game.info()).player.camera_rotation;
+    assert.ok(
+      angleBetween(landed, stillPinned) < 15,
+      `a 90 degree head turn must not move the just-landed camera, moved ${angleBetween(landed, stillPinned).toFixed(1)} degrees`,
+    );
+
+    // Once it has landed and the recovery ramp has run, head movement moves the
+    // view again - relative to the fallen frame. A camera welded to the death
+    // pose is the most nauseating state in VR, so it must not stay welded.
+    await game.input.set("head.look", [0, 0]);
+    await game.step({ frames: FALL_FRAMES + LOOK_RECOVERY_FRAMES });
+    const settled = (await game.info()).player.camera_rotation;
+    await game.input.set("head.look", [90, 0]);
+    await game.step({ frames: 2 });
+    const looked = (await game.info()).player.camera_rotation;
+    const turned = angleBetween(settled, looked);
+    assert.ok(
+      turned > 80 && turned < 100,
+      `a settled death camera should follow a 90 degree head turn, got ${turned.toFixed(1)} degrees`,
+    );
+    assert.equal(lifeState((await game.info()).player), "dead", "still dead, just able to look");
+  },
+);
+
 test(
   "a QBR reconstruction puts the camera back on the player's feet",
   { skip: !e2eEnabled, timeout: 600_000 },

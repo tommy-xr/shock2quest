@@ -1918,7 +1918,15 @@ impl Game {
         // scene that emits hands is covered, present and future, and nothing is
         // left latched when the menu closes. The same `is_open()` gate drops the
         // scene's screen-space UI in `render_per_eye`.
-        if self.pause_menu.is_open() {
+        // The same drop covers the death camera: the hands stay anchored to the
+        // play space while the view falls away from it, so a dying player would
+        // watch their own hands hang in the air above them. Once the camera is
+        // no longer theirs to move, the hands are no longer theirs to see.
+        let dying = self
+            .active_game_scene
+            .death_camera()
+            .is_some_and(|sample| sample.weight > 0.0);
+        if self.pause_menu.is_open() || dying {
             scene.retain(|object| {
                 object.debug_tag().and_then(|tag| tag.source.as_deref())
                     != Some(util::render_source::PLAYER_HANDS)
