@@ -242,13 +242,14 @@ fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<PauseMenuEntry> {
 fn target_at(
     page: PauseMenuPage,
     panel_rects: dev_params_panel::PanelRects,
+    panel_scroll: usize,
     rects: &[Rect],
     point: Vector2<f32>,
 ) -> Option<PauseMenuTarget> {
     match page {
         PauseMenuPage::Root => hit(point, rects).map(PauseMenuTarget::Root),
         PauseMenuPage::Developer => {
-            dev_params_panel::hit(panel_rects, point).map(PauseMenuTarget::Developer)
+            dev_params_panel::hit(panel_rects, panel_scroll, point).map(PauseMenuTarget::Developer)
         }
     }
 }
@@ -302,6 +303,10 @@ pub struct PauseMenu {
     /// The Developer page's widget rects, re-resolved from `GAMELODR.BIN`
     /// each update (the render path takes `&self`, so it reads them here).
     panel_rects: dev_params_panel::PanelRects,
+    /// Index of the registry parameter in the Developer page's top row. The
+    /// panel is stateless, so its scroll position lives here and is handed to
+    /// the hit test and the render alike.
+    panel_scroll: usize,
 }
 
 impl Default for PauseMenu {
@@ -322,6 +327,7 @@ impl PauseMenu {
             ),
             closed_under_a_held_press: false,
             panel_rects: dev_params_panel::PanelRects::default(),
+            panel_scroll: 0,
         }
     }
 
@@ -422,12 +428,13 @@ impl PauseMenu {
 
         let page = self.page;
         let panel_rects = self.panel_rects;
+        let panel_scroll = self.panel_scroll;
         let target = self.menu.update(
             elapsed,
             input_context,
             options.presentation_mode,
-            |point| target_at(page, panel_rects, &rects, point),
-            |point| target_at(page, panel_rects, &rects, point),
+            |point| target_at(page, panel_rects, panel_scroll, &rects, point),
+            |point| target_at(page, panel_rects, panel_scroll, &rects, point),
         );
         self.handle_target(target)
     }
@@ -451,11 +458,12 @@ impl PauseMenu {
     ) -> Option<PauseAction> {
         let page = self.page;
         let panel_rects = self.panel_rects;
+        let panel_scroll = self.panel_scroll;
         let target = self.menu.resolve_pointer(
             point,
             pressed,
-            |point| target_at(page, panel_rects, rects, point),
-            |point| target_at(page, panel_rects, rects, point),
+            |point| target_at(page, panel_rects, panel_scroll, rects, point),
+            |point| target_at(page, panel_rects, panel_scroll, rects, point),
         );
         self.handle_target(target)
     }
@@ -489,7 +497,7 @@ impl PauseMenu {
         event: Option<dev_params_panel::DevParamsEvent>,
     ) -> Option<PauseAction> {
         if let Some(event) = event {
-            if dev_params_panel::activate(event) {
+            if dev_params_panel::activate(self.panel_rects, event, &mut self.panel_scroll) {
                 self.page = PauseMenuPage::Root;
             }
         }
@@ -602,7 +610,12 @@ impl PauseMenu {
                 Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H),
                 DEVELOPER_BACKDROP_TEXTURE,
             );
-            dev_params_panel::draw(&mut canvas, self.panel_rects, pointer_canvas);
+            dev_params_panel::draw(
+                &mut canvas,
+                self.panel_rects,
+                self.panel_scroll,
+                pointer_canvas,
+            );
             return canvas;
         }
 

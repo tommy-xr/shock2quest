@@ -4118,6 +4118,65 @@ impl PhysicsWorld {
         }
     }
 
+    /// A line wireframe of every collider on `entity_id`'s primary body, read
+    /// straight out of Rapier at each collider's own live world isometry.
+    ///
+    /// Deliberately *not* a recomputation of what the wield intended: a
+    /// recomputation would agree with the renderer by construction and so
+    /// could never show the case worth seeing, which is the simulated volume
+    /// sitting somewhere other than the drawn weapon. Reuses `dark::hit_box`'s
+    /// existing builders rather than growing a second debug-draw path.
+    pub fn debug_entity_collider_lines(
+        &self,
+        entity_id: EntityId,
+        color: Vector3<f32>,
+    ) -> Vec<SceneObject> {
+        let Some(handle) = self.entity_id_to_body.get(&entity_id) else {
+            return Vec::new();
+        };
+        let Some(body) = self.rigid_body_set.get(*handle) else {
+            return Vec::new();
+        };
+        let mut objects = Vec::new();
+        for collider_handle in body.colliders() {
+            let Some(collider) = self.collider_set.get(*collider_handle) else {
+                continue;
+            };
+            let shape = match collider.shape().as_typed_shape() {
+                TypedShape::Cuboid(cuboid) => dark::hit_box::HitBoxShape::Cuboid {
+                    half_extents: nvec_to_cgmath(cuboid.half_extents),
+                    center: Vector3::new(0.0, 0.0, 0.0),
+                },
+                TypedShape::Ball(ball) => dark::hit_box::HitBoxShape::Cuboid {
+                    half_extents: Vector3::new(ball.radius, ball.radius, ball.radius),
+                    center: Vector3::new(0.0, 0.0, 0.0),
+                },
+                TypedShape::Capsule(capsule) => dark::hit_box::HitBoxShape::Capsule {
+                    a: nvec_to_cgmath(capsule.segment.a.coords),
+                    b: nvec_to_cgmath(capsule.segment.b.coords),
+                    radius: capsule.radius,
+                },
+                // Compounds and meshes have no single primitive to draw; a
+                // held melee weapon never has one, and silently drawing an
+                // approximation would be worse than drawing nothing.
+                _ => continue,
+            };
+            let isometry = collider.position();
+            let rotation = isometry.rotation;
+            let world: cgmath::Matrix4<f32> =
+                cgmath::Matrix4::from_translation(nvec_to_cgmath(isometry.translation.vector))
+                    * cgmath::Matrix4::from(Quaternion::new(
+                        rotation.w, rotation.i, rotation.j, rotation.k,
+                    ));
+            objects.extend(dark::hit_box::draw_debug_hit_box_shapes(
+                &std::collections::HashMap::from([(0u32, shape)]),
+                &[world],
+                color,
+            ));
+        }
+        objects
+    }
+
     pub fn debug_render(&mut self) -> Vec<SceneObject> {
         let mut debug_renderer = DebugRenderer::new();
 

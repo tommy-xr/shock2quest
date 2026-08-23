@@ -24,8 +24,18 @@ const DEVELOPER_ENTRY = menuEntry(2);
 // pane starting at y=54 on a 28px pitch (24px tall), arrows 20px wide ending
 // 8px inside the pane's right edge at x=463, "Done" on the GAMELODR button
 // art. Row 0 is `panel_distance` (declaration order of the registry).
-const ROW0_INCREMENT: [number, number] = [463 - 8 - 10, 54 + 12];
-const ROW0_DECREMENT: [number, number] = [463 - 8 - 20 - 48 - 10, 54 + 12];
+//
+// The list now scrolls, and its rocker takes a 26px gutter off the pane's
+// right edge whenever there is something to scroll - which shifts every row's
+// arrows left by that much. Written as its own term rather than folded into
+// the numbers, so the next person can see why these are not simply the pane
+// edge minus the inset.
+const SCROLL_GUTTER = 26;
+const ROW0_INCREMENT: [number, number] = [463 - 8 - SCROLL_GUTTER - 10, 54 + 12];
+const ROW0_DECREMENT: [number, number] = [
+  463 - 8 - SCROLL_GUTTER - 20 - 48 - 10,
+  54 + 12,
+];
 const DONE: [number, number] = [527 + 95 / 2, 405 + 62 / 2];
 
 /** SIMR.BIN pause entries: five 179x76 buttons at x=400, top 20, 92px pitch. */
