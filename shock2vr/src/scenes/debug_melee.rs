@@ -212,6 +212,16 @@ struct MeleeHooks {
     populated: bool,
 }
 
+impl Drop for MeleeHooks {
+    /// Put the registry back on the way out. The scene raises a *global*
+    /// tuning parameter, and a level transition in the same process would
+    /// otherwise carry trigger-free melee damage into a real mission -
+    /// contradicting the parameter's own contract that missions leave it at 0.
+    fn drop(&mut self) {
+        dev_params::reset(dev_params::MELEE_FREE_SWING_SPEED);
+    }
+}
+
 impl DebugSceneHooks for MeleeHooks {
     fn before_handle_effects(
         &mut self,

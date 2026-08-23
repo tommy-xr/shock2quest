@@ -11,10 +11,12 @@
 //! cargo test -p shock2vr --release --lib spring_sweep -- --ignored --nocapture
 //! ```
 //!
-//! `held_melee_drive_stays_bounded_across_the_tuning_range` is *not* ignored:
-//! it is the regression guard that every reachable dev-param setting keeps the
-//! weapon finite, penetration bounded, and resting jitter below the visible
-//! threshold. The sweep proper prints the table a human tunes from.
+//! Both entry points are `#[ignore]`d, which is itself a finding rather than a
+//! convenience: the drive reads its tuning from the process-global
+//! [`dev_params`] registry every step, so any test that exercises the range
+//! changes the simulation other tests in the same process are running. Held
+//! melee cannot have a stability regression test in the ordinary suite until
+//! that tuning is owned by `PhysicsWorld`.
 
 use cgmath::{Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector3, vec3};
 use rapier3d::prelude::*;
@@ -61,6 +63,10 @@ struct Metrics {
     penetration_m: f32,
     /// Frames to recover to within 2 cm of the hand after the hand withdraws.
     springback_frames: Option<usize>,
+    /// Whether the weapon body was asleep at the end of the settle window.
+    /// Without this a slept body reports perfect stillness and reads as a
+    /// perfectly damped spring - a very different claim.
+    slept: bool,
 }
 
 struct Sample {
@@ -233,6 +239,11 @@ fn run(stiffness: f32, damping: f32, wall_at: Option<f32>, hold_only: bool) -> M
         }
     }
 
+    let slept = world
+        .rigid_body_set
+        .get(handle)
+        .is_some_and(|body| body.is_sleeping());
+
     let free = &samples[..swung];
     let mut max_lag = 0.0f32;
     let mut max_lag_deg = 0.0f32;
@@ -260,6 +271,7 @@ fn run(stiffness: f32, damping: f32, wall_at: Option<f32>, hold_only: bool) -> M
         diverged,
         penetration_m: penetration,
         springback_frames: springback,
+        slept,
     }
 }
 
@@ -335,18 +347,19 @@ fn spring_sweep_table() {
 
     println!("\n== stationary hand (resting jitter) ==");
     println!(
-        "{:>7} {:>7} {:>6} {:>9} {:>9}",
-        "stiff", "damp", "zeta", "settle_m", "jitter"
+        "{:>7} {:>7} {:>6} {:>9} {:>9} {:>7}",
+        "stiff", "damp", "zeta", "settle_m", "jitter", "slept"
     );
     for (k, c) in grid() {
         let m = run(k, c, None, true);
         println!(
-            "{:>7.0} {:>7.1} {:>6.2} {:>9.4} {:>9.6}{}",
+            "{:>7.0} {:>7.1} {:>6.2} {:>9.4} {:>9.6} {:>7}{}",
             k,
             c,
             c / (2.0 * k.sqrt()),
             m.settled_error_m,
             m.jitter,
+            m.slept,
             if m.diverged { "  DIVERGED" } else { "" }
         );
     }
