@@ -374,7 +374,12 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                 // retail frob metadata is just MOVE. Scripted loot must run
                 // that Frob before any generic transfer, or the physical card
                 // reaches the backpack without its unlock credential (#583).
-                if crate::virtual_hand::uses_scripted_world_frob(world, *ent) {
+                // Gated on `is_key_source` specifically (not the broader
+                // `uses_scripted_world_frob`, which also matches authored
+                // MOVE|SCRIPT items like eng1's circuit board) so other
+                // scripted-but-grabbable loot keeps its pre-existing Take
+                // behavior - the same predicate `panel_grab_effect` uses below.
+                if crate::virtual_hand::is_key_source(world, *ent) {
                     return (
                         state.clone(),
                         Effect::Send {
