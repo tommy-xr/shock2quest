@@ -120,6 +120,13 @@ pub struct VrHeldModel {
 #[derive(Clone)]
 struct VrHeldWeaponGeometry {
     vertices: Vec<VertexPositionTextureSkinnedNormal>,
+    /// The complement of `vertices` - the baked hand and forearm. Kept only so
+    /// the arm can be *measured* against the weapon it holds: a first-person
+    /// view model is authored for a flat camera's own projection, where an
+    /// exaggerated weapon reads better, and VR draws it at true world scale.
+    /// Whether a wield needs a uniform correction or a weapon-only one is
+    /// exactly the ratio between these two.
+    arm_vertices: Vec<VertexPositionTextureSkinnedNormal>,
     skeleton: Rc<Skeleton>,
     bind: Option<[Matrix4<f32>; MAX_SKINNED_JOINTS]>,
 }
@@ -158,35 +165,64 @@ impl VrHeldModel {
 
         bounds_of_skinned_vertices(&geometry.vertices, &palette, local_transform)
     }
+
+    /// The same fit over the baked hand/forearm instead of the weapon. Purely
+    /// diagnostic: comparing it against [`Self::posed_weapon_bounds`] says
+    /// whether a view model is uniformly oversized for VR or only its weapon
+    /// is.
+    pub fn posed_arm_bounds(
+        &self,
+        player: &AnimationPlayer,
+        local_transform: Matrix4<f32>,
+    ) -> Option<VrHeldWeaponBounds> {
+        let geometry = self.weapon_geometry.as_ref()?;
+        if geometry.arm_vertices.is_empty() {
+            return None;
+        }
+        let pose = player.get_transforms(&geometry.skeleton);
+        let palette = match &geometry.bind {
+            None => Skeleton::expand_skinning_palette(&pose, &geometry.skeleton),
+            Some(bind) => {
+                let mut palette = [Matrix4::identity(); SKINNING_PALETTE_SIZE];
+                for joint in 0..MAX_SKINNED_JOINTS {
+                    let posed = pose[joint] * bind[joint];
+                    palette[joint] = posed;
+                    palette[MAX_SKINNED_JOINTS + joint] = posed;
+                }
+                palette
+            }
+        };
+        bounds_of_skinned_vertices(&geometry.arm_vertices, &palette, local_transform)
+    }
 }
 
 fn is_melee_arm_material(name: &str) -> bool {
     name.to_ascii_lowercase().contains("melee_arm")
 }
 
-fn rigid_terminal_joint_vertices(
+/// Split geometry into (terminal-joint weapon, everything else). The weapon is
+/// the rigid geometry on the last rendered joint; the remainder is the arm.
+fn split_at_terminal_joint(
     vertices: impl IntoIterator<Item = VertexPositionTextureSkinnedNormal>,
-) -> Vec<VertexPositionTextureSkinnedNormal> {
-    let rigid = vertices
-        .into_iter()
-        .filter_map(|vertex| {
-            let mut bindings = vertex
-                .bone_indices
-                .into_iter()
-                .zip(vertex.bone_weights)
-                .filter(|(_, weight)| *weight > 0.0);
-            let (joint, _) = bindings.next()?;
-            (joint < MAX_SKINNED_JOINTS as u32 && bindings.next().is_none())
-                .then_some((joint, vertex))
-        })
-        .collect::<Vec<_>>();
-    let Some(terminal_joint) = rigid.iter().map(|(joint, _)| *joint).max() else {
-        return Vec::new();
+) -> (
+    Vec<VertexPositionTextureSkinnedNormal>,
+    Vec<VertexPositionTextureSkinnedNormal>,
+) {
+    let all = vertices.into_iter().collect::<Vec<_>>();
+    let rigid_joint = |vertex: &VertexPositionTextureSkinnedNormal| {
+        let mut bindings = vertex
+            .bone_indices
+            .into_iter()
+            .zip(vertex.bone_weights)
+            .filter(|(_, weight)| *weight > 0.0);
+        let (joint, _) = bindings.next()?;
+        (joint < MAX_SKINNED_JOINTS as u32 && bindings.next().is_none()).then_some(joint)
     };
-    rigid
-        .into_iter()
-        .filter_map(|(joint, vertex)| (joint == terminal_joint).then_some(vertex))
-        .collect()
+    let Some(terminal_joint) = all.iter().filter_map(rigid_joint).max() else {
+        return (Vec::new(), all);
+    };
+    all.into_iter()
+        .partition(|vertex| rigid_joint(vertex) == Some(terminal_joint))
 }
 
 fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometry> {
@@ -199,19 +235,25 @@ fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometr
         let has_named_arm = runs
             .iter()
             .any(|(material, _)| is_melee_arm_material(material));
-        let vertices = if has_named_arm {
-            runs.iter()
-                .filter(|(material, _)| !is_melee_arm_material(material))
-                .flat_map(|(_, vertices)| vertices.iter().cloned())
-                .collect::<Vec<_>>()
+        let (vertices, arm_vertices) = if has_named_arm {
+            let (arm, weapon): (Vec<_>, Vec<_>) = runs
+                .into_iter()
+                .partition(|(material, _)| is_melee_arm_material(material));
+            let flatten = |runs: Vec<(String, Vec<VertexPositionTextureSkinnedNormal>)>| {
+                runs.into_iter()
+                    .flat_map(|(_, vertices)| vertices)
+                    .collect::<Vec<_>>()
+            };
+            (flatten(weapon), flatten(arm))
         } else {
-            rigid_terminal_joint_vertices(runs.into_iter().flat_map(|(_, vertices)| vertices))
+            split_at_terminal_joint(runs.into_iter().flat_map(|(_, vertices)| vertices))
         };
         if vertices.is_empty() {
             return None;
         }
         return Some(VrHeldWeaponGeometry {
             vertices,
+            arm_vertices,
             skeleton: skeleton.clone(),
             bind: Some(ss2_bin_ai_loader::pmnm_bind_matrices(skeleton)),
         });
@@ -221,7 +263,7 @@ fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometr
     // Their weapon is the rigid geometry on the terminal rendered joint; this
     // data-derived fallback includes the fist but excludes the forearm instead
     // of assuming a model name or authored dimension.
-    let vertices = rigid_terminal_joint_vertices(
+    let (vertices, arm_vertices) = split_at_terminal_joint(
         ss2_bin_ai_loader::to_vertices(ai_mesh, skeleton)
             .0
             .into_iter()
@@ -229,6 +271,7 @@ fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometr
     );
     (!vertices.is_empty()).then_some(VrHeldWeaponGeometry {
         vertices,
+        arm_vertices,
         skeleton: skeleton.clone(),
         bind: None,
     })
@@ -363,10 +406,16 @@ mod tests {
         let weapon = vertex(vec3(0.0, 1.0, 0.0), [3, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]);
         let stretchy = vertex(vec3(0.0, 0.5, 0.0), [3, 43, 0, 0], [0.5, 0.5, 0.0, 0.0]);
 
-        let fitted = rigid_terminal_joint_vertices([hand, weapon.clone(), stretchy]);
+        let (fitted, arm) =
+            split_at_terminal_joint([hand.clone(), weapon.clone(), stretchy.clone()]);
 
         assert_eq!(fitted.len(), 1);
         assert_eq!(fitted[0].position, weapon.position);
+        // The remainder is the arm side: everything the weapon fit excludes,
+        // stretchy multi-joint vertices included.
+        assert_eq!(arm.len(), 2);
+        assert!(arm.iter().any(|v| v.position == hand.position));
+        assert!(arm.iter().any(|v| v.position == stretchy.position));
     }
 
     #[test]

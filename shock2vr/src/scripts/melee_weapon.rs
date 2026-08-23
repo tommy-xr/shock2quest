@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use cgmath::{EuclideanSpace, vec3};
+use cgmath::{EuclideanSpace, InnerSpace, vec3};
 use dark::properties::{CollisionType, PropCollisionType};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -39,6 +39,10 @@ impl MeleeWeapon {
 pub struct TriggeredMeleeWeapon {
     attack_active: bool,
     hit_entities: HashSet<EntityId>,
+    /// Remaining seconds before each already-hit victim may be hit again.
+    /// Only used by the free-swing rule: the trigger rule re-arms on the next
+    /// pull instead, so it has nothing to expire.
+    free_swing_cooldowns: HashMap<EntityId, f32>,
 }
 
 impl TriggeredMeleeWeapon {
@@ -46,16 +50,49 @@ impl TriggeredMeleeWeapon {
         Self {
             attack_active: false,
             hit_entities: HashSet::new(),
+            free_swing_cooldowns: HashMap::new(),
         }
     }
 }
 
+/// How long one victim is immune to a further free swing from the same weapon.
+/// A single controller swing crosses a body over several frames, so without
+/// this a swing bills once per contact frame; long enough to cost one hit per
+/// swing, short enough not to eat a genuine second swing.
+const FREE_SWING_COOLDOWN_SECONDS: f32 = 0.4;
+
+/// The physical alternative to the trigger window: a swing damages because it
+/// was *moving*, not because a button was down. `None` when the shipped
+/// trigger rule is in force.
+fn free_swing_speed_threshold() -> Option<f32> {
+    let threshold = crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED);
+    (threshold > 0.0).then_some(threshold)
+}
+
 impl Script for TriggeredMeleeWeapon {
+    /// Expire free-swing cooldowns. Nothing to do under the trigger rule.
+    fn update(
+        &mut self,
+        _entity_id: EntityId,
+        _world: &World,
+        _physics: &PhysicsWorld,
+        time: &crate::time::Time,
+    ) -> Effect {
+        if !self.free_swing_cooldowns.is_empty() {
+            let elapsed = time.elapsed.as_secs_f32();
+            self.free_swing_cooldowns.retain(|_, remaining| {
+                *remaining -= elapsed;
+                *remaining > 0.0
+            });
+        }
+        Effect::NoEffect
+    }
+
     fn handle_message(
         &mut self,
         entity_id: EntityId,
         world: &World,
-        _physics: &PhysicsWorld,
+        physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
         if !is_vr(world) {
@@ -71,11 +108,13 @@ impl Script for TriggeredMeleeWeapon {
             MessagePayload::TriggerRelease | MessagePayload::Drop => {
                 self.attack_active = false;
                 self.hit_entities.clear();
+                self.free_swing_cooldowns.clear();
                 Effect::NoEffect
             }
-            MessagePayload::Collided { with, contact }
-                if self.attack_active && self.hit_entities.insert(*with) =>
-            {
+            MessagePayload::Collided { with, contact } => {
+                if !self.may_damage(entity_id, *with, physics) {
+                    return Effect::NoEffect;
+                }
                 let Some(amount) = authored_contact_damage(world, entity_id, *with) else {
                     return Effect::NoEffect;
                 };
@@ -83,6 +122,35 @@ impl Script for TriggeredMeleeWeapon {
             }
             _ => Effect::NoEffect,
         }
+    }
+}
+
+impl TriggeredMeleeWeapon {
+    /// Whether this contact opens a hit, under whichever rule is in force.
+    ///
+    /// Both rules bill a victim at most once per swing; they differ in what a
+    /// swing *is*. Under the trigger rule it is the window a pull opens, and
+    /// the next pull re-arms it. Under the free-swing rule it is the weapon
+    /// actually moving at contact, and a short cooldown stands in for the
+    /// release edge that no longer exists - otherwise a weapon left leaning on
+    /// a creature would bill every frame it stayed there.
+    fn may_damage(&mut self, entity_id: EntityId, with: EntityId, physics: &PhysicsWorld) -> bool {
+        let Some(threshold) = free_swing_speed_threshold() else {
+            return self.attack_active && self.hit_entities.insert(with);
+        };
+        if self.free_swing_cooldowns.contains_key(&with) {
+            return false;
+        }
+        let speed = physics
+            .get_velocity(entity_id)
+            .map(|velocity| velocity.magnitude())
+            .unwrap_or(0.0);
+        if speed < threshold {
+            return false;
+        }
+        self.free_swing_cooldowns
+            .insert(with, FREE_SWING_COOLDOWN_SECONDS);
+        true
     }
 }
 

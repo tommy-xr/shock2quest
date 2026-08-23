@@ -110,14 +110,52 @@ dev_params! {
     /// shares its single flat projection between flat and `--vr` mode, so this
     /// override reaches both there.)
     FOV_OVERRIDE_DEG = float("fov_override_deg", "FOV override (deg)", 0.0, 0.0, 120.0, 1.0),
-    /// Acceleration-based stiffness for all six axes of the motor joining a
-    /// physically simulated held melee weapon to its tracked-hand target.
-    /// Read before every physics step so headset tuning needs no rebuild.
-    MELEE_SPRING_STIFFNESS = float("melee_spring", "Melee spring", 900.0, 0.0, 3000.0, 50.0),
-    /// Damping paired with [`MELEE_SPRING_STIFFNESS`]. A value near
-    /// `2 * sqrt(stiffness)` is critically damped in Rapier's acceleration-
-    /// based motor model; the default is therefore critical at stiffness 900.
-    MELEE_SPRING_DAMPING = float("melee_damping", "Melee damping", 60.0, 0.0, 200.0, 5.0),
+    /// Ceiling on how fast a physically simulated held melee weapon may be
+    /// driven onto its tracked-hand target, in world units per second.
+    ///
+    /// The drive asks for exactly the velocity that lands the weapon on the
+    /// hand this step, so in ordinary use the clamp never binds - a very fast
+    /// human swing is well under it. It exists for the discontinuous case: a
+    /// teleport or a restore can put the target a whole level away, and
+    /// without a ceiling that becomes one enormous impulse into the geometry.
+    /// Read before every physics step, so a headset can tune it without a
+    /// rebuild.
+    MELEE_MAX_SPEED = float("melee_max_speed", "Melee max speed", 60.0, 1.0, 200.0, 5.0),
+    /// The angular counterpart of [`MELEE_MAX_SPEED`], in radians per second.
+    MELEE_MAX_TURN = float("melee_max_turn", "Melee max turn", 60.0, 1.0, 200.0, 5.0),
+    /// Minimum contact speed, in world units per second, at which a held melee
+    /// weapon damages what it touches *without* the trigger being pulled.
+    ///
+    /// `0` (the default) keeps the shipped rule: contact damage happens only
+    /// inside a trigger-held attack window (`TriggeredMeleeWeapon`). Any
+    /// positive value is the physical rule instead - a swing damages because
+    /// it was moving, not because a button was down - with the value acting as
+    /// the swing/graze threshold so a weapon resting against a creature does
+    /// nothing. `debug_melee` turns it on; missions leave it at 0 until the
+    /// physical model is the shipped one.
+    MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Melee free swing", 0.0, 0.0, 20.0, 0.5),
+    /// Uniform scale applied to a wielded melee `_h` view model, about the
+    /// baked fist so the grip stays on the controller.
+    ///
+    /// The 25AE first-person models are authored for a flat camera's own
+    /// projection, where an oversized weapon reads better; VR draws them at
+    /// true world scale, where the same exaggeration is simply a giant weapon.
+    /// Measured on the shipped rigs (logged at every wield): the baked
+    /// hand+forearm is ~57 cm against a real ~45 cm, and the weapons run
+    /// 66-94 cm - a Wrench whose head sits 62 cm out of the fist.
+    ///
+    /// Unlike the rest of this table the value is read at *wield* time rather
+    /// than every frame, because the correction is baked into the posed model
+    /// once. It therefore takes effect on the next grab - one gesture in a
+    /// headset, which is what this knob exists to serve - rather than
+    /// instantly.
+    ///
+    /// The default is the balance point between the two, not a fit to either:
+    /// the arm and the weapon are exaggerated by *different* factors, so no
+    /// single scale makes both right. 0.7 draws a 46 cm Wrench on a 40 cm arm;
+    /// making the arm exactly life-size (0.79) would leave the Wrench at 52,
+    /// and making the Wrench right (~0.5) would leave a child's arm.
+    MELEE_WIELD_SCALE = float("melee_scale", "Melee wield scale", 0.7, 0.25, 1.5, 0.05),
 }
 
 /// Every parameter with its id, in declaration order.
@@ -204,8 +242,8 @@ mod tests {
     fn defaults_equal_the_consts_they_replaced() {
         assert_eq!(get(FRONTEND_PANEL_DISTANCE), 2.0);
         assert_eq!(get(WORLD_DIM_STRENGTH), 0.72);
-        assert_eq!(get(MELEE_SPRING_STIFFNESS), 900.0);
-        assert_eq!(get(MELEE_SPRING_DAMPING), 60.0);
+        assert_eq!(get(MELEE_MAX_SPEED), 60.0);
+        assert_eq!(get(MELEE_MAX_TURN), 60.0);
     }
 
     /// Every declared default must be finite and inside its own range, or
