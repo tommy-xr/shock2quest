@@ -386,7 +386,7 @@ const WEAPON_METER_ANCHOR_DEFAULT: Vector3<f32> = vec3(0.16, 0.29, 0.0);
 /// with no entry (a classic install's world model) takes the default.
 static WEAPON_METER_ANCHORS: Lazy<HashMap<&str, Vector3<f32>>> = Lazy::new(|| {
     HashMap::from([
-        ("atek_h", vec3(0.24, 0.27, 0.0)),
+        ("atek_h", vec3(0.10, 0.15, 0.0)),
         ("ar15_h", vec3(0.14, 0.35, 0.0)),
         ("sg_h", vec3(0.35, 0.29, 0.0)),
         ("empgun_h", vec3(0.18, 0.22, 0.0)),
