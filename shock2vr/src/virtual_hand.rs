@@ -516,6 +516,13 @@ fn get_held_position_orientation(
 /// protocol even though the Weapon archetype also inherits that inventory
 /// flag. The decision stays tied to Dark's production frob metadata.
 fn held_trigger_press_payload(world: &World, entity_id: EntityId) -> MessagePayload {
+    // PropKeySrc injects `internal_keycard` at runtime even though retail ID
+    // cards do not author an inventory SCRIPT flag. A physical card held by an
+    // older save therefore still needs the production trigger to collect it.
+    if is_key_source(world, entity_id) {
+        return MessagePayload::Frob;
+    }
+
     let has_scripted_inventory_use = world
         .borrow::<View<PropFrobInfo>>()
         .map(|frob_info| {
@@ -546,6 +553,16 @@ pub(crate) fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
     false
 }
 
+/// Whether this object is a key source. Every PropKeySrc receives the derived
+/// `internal_keycard` script, whose Frob records the credential and consumes
+/// the pickup; bypassing it creates a physical card that cannot unlock doors.
+pub(crate) fn is_key_source(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<dark::properties::PropKeySrc>>()
+        .map(|keycards| keycards.get(entity_id).is_ok())
+        .unwrap_or(false)
+}
+
 /// Whether taking this world item must go through a script before the physical
 /// transfer. An authored `SCRIPT` world action owns its side effects and item
 /// fate (for example `FrobQB` awards a quest bit and moves the item exactly
@@ -563,13 +580,8 @@ pub(crate) fn uses_scripted_world_frob(world: &World, entity_id: EntityId) -> bo
                 .is_ok_and(|frob_info| frob_info.world_action.contains(FrobFlag::SCRIPT))
         })
         .unwrap_or(false);
-    let has_derived_keycard_script = world
-        .borrow::<View<dark::properties::PropKeySrc>>()
-        .map(|keycards| keycards.get(entity_id).is_ok())
-        .unwrap_or(false);
-
     has_authored_world_script
-        || has_derived_keycard_script
+        || is_key_source(world, entity_id)
         || crate::scripts::script_util::is_nanite_pickup(world, entity_id)
 }
 
@@ -704,7 +716,7 @@ fn interaction_ray_cast(
 mod tests {
     use super::*;
     use crate::physics::CollisionGroup;
-    use dark::properties::{PropFrobInfo, PropPlayerGun};
+    use dark::properties::{KeyCard, PropFrobInfo, PropKeySrc, PropPlayerGun};
 
     fn scripted_inventory_use() -> PropFrobInfo {
         PropFrobInfo {
@@ -913,6 +925,32 @@ mod tests {
         assert!(matches!(
             held_trigger_payload(&world, weapon_or_psi_amp),
             MessagePayload::TriggerPull
+        ));
+    }
+
+    /// A keycard physically held by an older save or a pre-fix backpack grab
+    /// must still be recoverable through the production VR trigger gesture.
+    /// Its inventory metadata has no SCRIPT bit, so PropKeySrc is the semantic
+    /// source of truth.
+    #[test]
+    fn held_keycard_trigger_collects_it_through_frob() {
+        let mut world = World::new();
+        let keycard = world.add_entity((
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+            PropKeySrc(KeyCard {
+                is_master: false,
+                region_id: 128,
+                lock_id: 0,
+            }),
+        ));
+
+        assert!(matches!(
+            held_trigger_payload(&world, keycard),
+            MessagePayload::Frob
         ));
     }
 
