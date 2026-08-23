@@ -55,10 +55,26 @@ const MELEE_WEAPONS: &[(i32, &str)] = &[
 /// resolves through the authored stim/receptron path rather than a stand-in.
 const TARGET_CREATURE: i32 = -397;
 
-/// Distances (world units) ahead of the player for the target row. The first
-/// is a step away, the others need walking to - spaced so a swing can only
-/// ever reach one of them.
-const TARGET_DISTANCES: &[f32] = &[4.0, 6.0, 8.0];
+/// Distances (world units) ahead of the player for the target row, inside the
+/// pen. Spaced so a swing can only ever reach one of them.
+const TARGET_DISTANCES: &[f32] = &[8.0, 10.0, 12.0];
+
+/// The creatures stand in a walled corridor that opens toward the player. They
+/// are live AI and will charge, which is the point - but the walls keep them
+/// from scattering across the floor, and the corridor's length buys a clear
+/// bay at the spawn for reading the weapon before they arrive.
+///
+/// Deliberately *not* fenced off behind a barrier: a physically simulated
+/// weapon is stopped by world geometry, so anything between the player and a
+/// creature blocks the swing as well as the creature. A melee bench cannot
+/// have a fence.
+/// The barrier is deliberately waist high: tall enough that a creature will
+/// not walk over it, low enough that the player can stand at it and swing
+/// across - which is the melee test bench, not an obstacle.
+const PEN_NEAR: f32 = 5.0;
+const PEN_FAR: f32 = 12.5;
+const PEN_HALF_WIDTH: f32 = 2.5;
+const PEN_WALL_HEIGHT: f32 = 4.0;
 
 /// Contact speed a swing must carry to damage, in world units per second.
 /// Resting a weapon against a creature does nothing; a deliberate swing does.
@@ -71,8 +87,9 @@ const TARGET_DISTANCES: &[f32] = &[4.0, 6.0, 8.0];
 /// swinging figure.
 const FREE_SWING_SPEED: f32 = 0.5;
 
-/// Distance to the wall the player can swing into, straight ahead.
-const WALL_DISTANCE: f32 = 12.0;
+/// Distance to the wall the player can swing into, straight ahead. Also the
+/// pen's back wall.
+const WALL_DISTANCE: f32 = 13.0;
 
 /// Where the weapon rack's top surface sits, and how far ahead of the player.
 /// Within a seated arm's reach (a world unit is 0.76 m), so a weapon can be
@@ -98,50 +115,77 @@ pub fn create_debug_melee_scene(
     // Contact damages on its own here - see the module docs.
     dev_params::set(dev_params::MELEE_FREE_SWING_SPEED, FREE_SWING_SPEED);
 
-    // Same controlled shell as debug_weapons: floor underfoot, wall ahead.
     // The unit cube spans [-0.5, 0.5], so a nonuniform scale is twice the
-    // matching collider half-extent.
-    let floor = cube_object(
-        vec3(0.18, 0.18, 0.22),
-        vec3(0.0, -0.5, 0.0),
-        vec3(40.0, 1.0, 40.0),
-    );
-    let wall = cube_object(
-        vec3(0.45, 0.45, 0.5),
-        vec3(-WALL_DISTANCE, 5.0, 0.0),
-        vec3(1.0, 30.0, 30.0),
-    );
-    let rack = cube_object(
-        vec3(0.30, 0.26, 0.20),
-        vec3(-RACK_DISTANCE, RACK_HEIGHT / 2.0, 0.0),
-        vec3(0.6, RACK_HEIGHT, 3.0),
-    );
+    // matching collider half-extent. Every piece is a (visual, collider) pair
+    // built from one box so the two cannot drift.
+    let mut boxes: Vec<(Vector3<f32>, Vector3<f32>, Vector3<f32>)> = vec![
+        // floor
+        (
+            vec3(0.18, 0.18, 0.22),
+            vec3(0.0, -0.5, 0.0),
+            vec3(40.0, 1.0, 40.0),
+        ),
+        // weapon rack, across the player's front
+        (
+            vec3(0.30, 0.26, 0.20),
+            vec3(-RACK_DISTANCE, RACK_HEIGHT / 2.0, 0.0),
+            vec3(0.6, RACK_HEIGHT, 3.0),
+        ),
+        // corridor: back wall (also the surface to swing into) and two sides
+        (
+            vec3(0.45, 0.45, 0.5),
+            vec3(-WALL_DISTANCE, PEN_WALL_HEIGHT / 2.0, 0.0),
+            vec3(1.0, PEN_WALL_HEIGHT, 2.0 * PEN_HALF_WIDTH),
+        ),
+        (
+            vec3(0.40, 0.40, 0.45),
+            vec3(
+                -(PEN_NEAR + PEN_FAR) / 2.0,
+                PEN_WALL_HEIGHT / 2.0,
+                -PEN_HALF_WIDTH,
+            ),
+            vec3(PEN_FAR - PEN_NEAR, PEN_WALL_HEIGHT, 1.0),
+        ),
+        (
+            vec3(0.40, 0.40, 0.45),
+            vec3(
+                -(PEN_NEAR + PEN_FAR) / 2.0,
+                PEN_WALL_HEIGHT / 2.0,
+                PEN_HALF_WIDTH,
+            ),
+            vec3(PEN_FAR - PEN_NEAR, PEN_WALL_HEIGHT, 1.0),
+        ),
+    ];
 
-    let collider = ColliderBuilder::compound(vec![
-        (
-            Isometry::translation(0.0, -0.5, 0.0),
-            SharedShape::cuboid(20.0, 0.5, 20.0),
-        ),
-        (
-            Isometry::translation(-WALL_DISTANCE, 5.0, 0.0),
-            SharedShape::cuboid(0.5, 15.0, 15.0),
-        ),
-        (
-            Isometry::translation(-RACK_DISTANCE, RACK_HEIGHT / 2.0, 0.0),
-            SharedShape::cuboid(0.3, RACK_HEIGHT / 2.0, 1.5),
-        ),
-    ])
+    let scene_objects = boxes
+        .iter()
+        .map(|(color, translation, scale)| cube_object(*color, *translation, *scale))
+        .collect::<Vec<_>>();
+    let collider = ColliderBuilder::compound(
+        boxes
+            .drain(..)
+            .map(|(_, translation, scale)| {
+                (
+                    Isometry::translation(translation.x, translation.y, translation.z),
+                    SharedShape::cuboid(scale.x / 2.0, scale.y / 2.0, scale.z / 2.0),
+                )
+            })
+            .collect(),
+    )
     .build();
 
-    let builder = DebugSceneBuilder::new("debug_melee")
+    // Laid out along -X, the default view forward with an identity spawn yaw
+    // in both presentations (same convention as `debug_weapons`). Verified by
+    // rendering, not assumed: a +Z layout put the whole bench off-camera.
+    let mut builder = DebugSceneBuilder::new("debug_melee")
         .with_spawn_location(SpawnLocation::PositionRotation(
             vec3(0.0, 2.0, 0.0),
             Quaternion::from_angle_y(Deg(0.0)),
         ))
-        .with_physics_geometry(collider)
-        .add_scene_object(floor)
-        .add_scene_object(wall)
-        .add_scene_object(rack);
+        .with_physics_geometry(collider);
+    for scene_object in scene_objects {
+        builder = builder.add_scene_object(scene_object);
+    }
 
     let core = builder.build_core(DebugSceneBuildOptions {
         global_context,
@@ -152,11 +196,12 @@ pub fn create_debug_melee_scene(
 
     println!(
         "[debug_melee] A rack of every player melee weapon is within reach ahead;\n\
-         grab one (squeeze) and swing at the creatures beyond it. Contact damages\n\
-         on its own above {FREE_SWING_SPEED} units/s - no trigger needed.\n\
-         Set `melee_glove_overlay` to 1 (Developer screen, or POST /v1/dev-params)\n\
-         to draw the tracked-hand glove alongside the weapon's own arm model and\n\
-         see how far the `_h` fist is from where the controller actually is."
+         grab one (squeeze) and swing at the creatures that come down the corridor.\n\
+         Contact damages on its own above {FREE_SWING_SPEED} units/s - no trigger needed.\n\
+         `melee_scale` sizes the wielded view model (takes effect on the next grab);\n\
+         `melee_glove_overlay` = 1 draws the tracked-hand glove alongside the weapon's\n\
+         own arm, so the `_h` fist can be compared against the controller pose.\n\
+         Both live on the Developer screen and at POST /v1/dev-params."
     );
 
     Box::new(HookedDebugScene::new(core, MeleeHooks::default()))

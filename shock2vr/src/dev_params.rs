@@ -156,8 +156,14 @@ dev_params! {
     /// than every frame, because the correction is baked into the posed model
     /// once. It therefore takes effect on the next grab - one gesture in a
     /// headset, which is what this knob exists to serve - rather than
-    /// instantly. Default 1.0 changes nothing until it is tuned.
-    MELEE_WIELD_SCALE = float("melee_scale", "Melee wield scale", 1.0, 0.25, 1.5, 0.05),
+    /// instantly.
+    ///
+    /// The default is the balance point between the two, not a fit to either:
+    /// the arm and the weapon are exaggerated by *different* factors, so no
+    /// single scale makes both right. 0.7 draws a 46 cm Wrench on a 40 cm arm;
+    /// making the arm exactly life-size (0.79) would leave the Wrench at 52,
+    /// and making the Wrench right (~0.5) would leave a child's arm.
+    MELEE_WIELD_SCALE = float("melee_scale", "Melee wield scale", 0.7, 0.25, 1.5, 0.05),
 }
 
 /// Every parameter with its id, in declaration order.
