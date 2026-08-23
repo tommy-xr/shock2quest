@@ -205,8 +205,6 @@ fn update_squeeze_swallow(
 /// frob a door or an item with the panel open. So the mask is per hand, and
 /// keyed on what that hand holds:
 ///
-/// - `swallow_all` - a trigger still held from before the interface closed -
-///   masks both hands until it is released, unchanged.
 /// - A hand whose ray is on the panel is a UI pointer this frame: its trigger
 ///   is the UI click and must not also reach through into the world.
 /// - A hand holding a wieldable weapon is safed - it stays wielded and visible
@@ -214,20 +212,54 @@ fn update_squeeze_swallow(
 /// - Any other hand off the panel keeps its own trigger, so an empty hand can
 ///   still Frob the world and a held consumable still works.
 ///
+/// This is the per-frame decision only; [`latch_trigger_safe`] freezes it for
+/// the length of a pull, and the caller ORs in `vr_trigger_swallow` afterwards.
+///
 /// Pure, so the matrix is exercised directly rather than through a mission.
-fn trigger_safe_mask(
-    use_mode: bool,
-    swallow_all: bool,
-    on_panel: [bool; 2],
-    holds_weapon: [bool; 2],
-) -> [bool; 2] {
-    let mut mask = [swallow_all; 2];
+fn trigger_safe_mask(use_mode: bool, on_panel: [bool; 2], holds_weapon: [bool; 2]) -> [bool; 2] {
+    let mut mask = [false; 2];
     if use_mode {
         for slot in 0..mask.len() {
-            mask[slot] |= on_panel[slot] || holds_weapon[slot];
+            mask[slot] = on_panel[slot] || holds_weapon[slot];
         }
     }
     mask
+}
+
+/// Freeze each hand's trigger mask for the length of one pull.
+///
+/// [`trigger_safe_mask`] is a per-frame decision, but a trigger pull is a
+/// *gesture*, and `VirtualHand` edge-detects it (`prev.trigger_value < 0.5 &&
+/// input > 0.5`). A mask that flips mid-pull therefore manufactures a brand new
+/// press out of a trigger the player never released - and `on_panel` really
+/// does flip mid-pull, because the panel is head-anchored: a head turn alone
+/// slides it out from under a motionless hand.
+///
+/// Both directions are bugs without this latch. A UI click begun on the panel
+/// would become a world `Frob` the moment the ray slipped off the edge (the
+/// hazard [`update_squeeze_swallow`] already guards for the squeeze). And a
+/// `Frob` begun off the panel would be re-fired every time the ray swept back
+/// across the panel, because masking a hand mid-pull makes
+/// `handle_empty_hand_state` clear its `last_frobbed_entity` debounce - worse
+/// for a held consumable, whose `Grabbing` arm has no debounce at all and would
+/// spend one item per crossing.
+///
+/// So the decision taken when the trigger crossed the threshold is the decision
+/// that pull keeps until it is released. `None` means "no pull in flight".
+fn latch_trigger_safe(
+    latched: &mut [Option<bool>; 2],
+    pressed: [bool; 2],
+    mask: [bool; 2],
+) -> [bool; 2] {
+    let mut effective = mask;
+    for slot in 0..effective.len() {
+        if pressed[slot] {
+            effective[slot] = *latched[slot].get_or_insert(mask[slot]);
+        } else {
+            latched[slot] = None;
+        }
+    }
+    effective
 }
 
 /// Head-relative authored-space placement for the wide VR backpack canvas.
@@ -1108,6 +1140,14 @@ pub struct MissionCore {
     /// its own squeeze again, or the eventual release would not drop it.
     vr_squeeze_swallow: [bool; 2],
 
+    /// The trigger-safe decision in flight for each hand (indexed by
+    /// [`hand_slot`]), or `None` when that hand's trigger is released. The
+    /// squeeze counterpart above latches because grabbing is *level*-triggered;
+    /// this one latches because firing and frobbing are *edge*-triggered, so a
+    /// mask that changes under a held trigger fabricates a press the player
+    /// never made. See [`latch_trigger_safe`].
+    vr_trigger_safe_latch: [Option<bool>; 2],
+
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
     /// `GuiManager` for the corresponding object-bound world panel.
@@ -1909,6 +1949,7 @@ impl MissionCore {
             vr_trigger_swallow: false,
             vr_use_mode_pointer: None,
             vr_squeeze_swallow: [false; 2],
+            vr_trigger_safe_latch: [None; 2],
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
@@ -2573,12 +2614,21 @@ impl MissionCore {
                 crate::virtual_hand::is_wieldable_weapon(&self.world, entity_id)
             })
         });
-        let trigger_safe = trigger_safe_mask(
-            self.use_mode,
-            self.vr_trigger_swallow,
-            on_panel,
-            holds_weapon,
+        // Decide, latch for the length of the pull, then OR in the
+        // across-exit swallow - which is deliberately *outside* the latch, so
+        // closing the interface under a held trigger always safes it.
+        let pressed = [
+            input_context.left_hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
+            input_context.right_hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD,
+        ];
+        let mut trigger_safe = latch_trigger_safe(
+            &mut self.vr_trigger_safe_latch,
+            pressed,
+            trigger_safe_mask(self.use_mode, on_panel, holds_weapon),
         );
+        for safe in trigger_safe.iter_mut() {
+            *safe |= self.vr_trigger_swallow;
+        }
         let weapon_safe_input = (game_options.presentation_mode == crate::PresentationMode::Vr
             && (trigger_safe.iter().any(|safe| *safe)
                 || self.vr_squeeze_swallow.iter().any(|latched| *latched)))
@@ -10333,12 +10383,13 @@ mod vr_squeeze_swallow_tests {
 
 #[cfg(test)]
 mod vr_trigger_safe_tests {
-    use super::trigger_safe_mask;
+    use super::{latch_trigger_safe, trigger_safe_mask};
 
     const LEFT: usize = 0;
     const RIGHT: usize = 1;
 
     const NEITHER: [bool; 2] = [false, false];
+    const BOTH: [bool; 2] = [true, true];
 
     /// The bug this rule exists to fix: with the interface up, a hand that is
     /// not pointing at the panel and is not holding a weapon must keep its
@@ -10347,7 +10398,7 @@ mod vr_trigger_safe_tests {
     /// the interact with it.
     #[test]
     fn an_off_panel_empty_hand_keeps_its_trigger() {
-        let mask = trigger_safe_mask(true, false, NEITHER, NEITHER);
+        let mask = trigger_safe_mask(true, NEITHER, NEITHER);
         assert_eq!(
             mask, NEITHER,
             "an empty hand off the panel must still be able to frob the world"
@@ -10358,8 +10409,10 @@ mod vr_trigger_safe_tests {
     /// is the click and must not also reach through into the world.
     #[test]
     fn a_hand_on_the_panel_is_masked() {
-        let mask = trigger_safe_mask(true, false, [true, false], NEITHER);
-        assert_eq!(mask, [true, false]);
+        assert_eq!(
+            trigger_safe_mask(true, [true, false], NEITHER),
+            [true, false]
+        );
     }
 
     /// Weapons stay safed - wielded and visible, but they cannot fire while
@@ -10367,11 +10420,11 @@ mod vr_trigger_safe_tests {
     #[test]
     fn a_wielding_hand_is_safed_wherever_it_points() {
         assert_eq!(
-            trigger_safe_mask(true, false, NEITHER, [false, true]),
+            trigger_safe_mask(true, NEITHER, [false, true]),
             [false, true]
         );
         assert_eq!(
-            trigger_safe_mask(true, false, [false, true], [false, true]),
+            trigger_safe_mask(true, [false, true], [false, true]),
             [false, true]
         );
     }
@@ -10380,25 +10433,75 @@ mod vr_trigger_safe_tests {
     #[test]
     fn the_hands_are_masked_independently() {
         // Left wields a weapon, right is empty and off the panel.
-        let mask = trigger_safe_mask(true, false, NEITHER, [true, false]);
+        let mask = trigger_safe_mask(true, NEITHER, [true, false]);
         assert!(mask[LEFT], "the wielding hand cannot fire");
         assert!(!mask[RIGHT], "the free hand can still frob");
     }
 
-    /// The trigger-held-across-exit edge is unchanged: both hands stay
-    /// swallowed until the trigger is released, even with the mode closed, so
-    /// closing the interface on a held trigger cannot fire or frob.
-    #[test]
-    fn a_trigger_held_across_the_exit_is_swallowed_on_both_hands() {
-        assert_eq!(trigger_safe_mask(false, true, NEITHER, NEITHER), [true; 2]);
-    }
-
-    /// With the interface closed and nothing held over, nothing is masked.
+    /// With the interface closed nothing is masked by the mode itself (the
+    /// across-exit swallow is ORed in by the caller, outside this rule).
     #[test]
     fn a_closed_interface_masks_nothing() {
+        assert_eq!(trigger_safe_mask(false, BOTH, BOTH), NEITHER);
+    }
+
+    /// The latch's reason to exist: a click begun on the panel keeps being
+    /// masked after the ray leaves it, so it can never turn into a world Frob
+    /// partway through. Without it the hand sees a fresh rising edge - the
+    /// player never released the trigger - and frobs whatever it now points at.
+    #[test]
+    fn a_pull_begun_on_the_panel_never_reaches_the_world() {
+        let mut latched = [None; 2];
+        // Pull starts with the ray on the panel: masked.
+        assert!(latch_trigger_safe(&mut latched, [true, false], [true, false])[LEFT]);
+        // Ray slides off the panel, trigger still held - still masked.
+        assert!(latch_trigger_safe(&mut latched, [true, false], NEITHER)[LEFT]);
+        // Released: the latch drops and the next pull is judged fresh.
+        assert!(!latch_trigger_safe(&mut latched, NEITHER, NEITHER)[LEFT]);
+        assert_eq!(latched[LEFT], None);
+        assert!(
+            !latch_trigger_safe(&mut latched, [true, false], NEITHER)[LEFT],
+            "a pull begun off the panel is the world's"
+        );
+    }
+
+    /// The other direction: a Frob begun off the panel must not be re-fired
+    /// every time the ray sweeps across the head-anchored panel. Masking a hand
+    /// mid-pull would clear `handle_empty_hand_state`'s `last_frobbed_entity`
+    /// debounce, and a held consumable would be spent once per crossing.
+    #[test]
+    fn a_pull_begun_off_the_panel_survives_crossing_it() {
+        let mut latched = [None; 2];
+        assert!(!latch_trigger_safe(&mut latched, [false, true], NEITHER)[RIGHT]);
+        assert!(
+            !latch_trigger_safe(&mut latched, [false, true], [false, true])[RIGHT],
+            "sweeping across the panel mid-pull must not re-mask the hand"
+        );
+    }
+
+    /// An untouched trigger is judged fresh every frame - the latch only ever
+    /// speaks for a pull that is actually in flight.
+    #[test]
+    fn a_released_hand_tracks_the_live_decision() {
+        let mut latched = [None; 2];
+        assert_eq!(latch_trigger_safe(&mut latched, NEITHER, BOTH), BOTH);
+        assert_eq!(latched, [None, None]);
+        assert_eq!(latch_trigger_safe(&mut latched, NEITHER, NEITHER), NEITHER);
+    }
+
+    /// Each hand latches its own pull.
+    #[test]
+    fn the_hands_latch_independently() {
+        let mut latched = [None; 2];
+        // Left pulls on the panel; right is not pulling at all.
         assert_eq!(
-            trigger_safe_mask(false, false, [true, true], [true, true]),
-            NEITHER
+            latch_trigger_safe(&mut latched, [true, false], [true, false]),
+            [true, false]
+        );
+        // Left slides off (still latched), right now pulls off-panel.
+        assert_eq!(
+            latch_trigger_safe(&mut latched, BOTH, NEITHER),
+            [true, false]
         );
     }
 }

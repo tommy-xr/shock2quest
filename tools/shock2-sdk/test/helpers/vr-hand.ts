@@ -109,12 +109,15 @@ export async function aimVrHandAtCanvas(
 }
 
 /** Aim the production VR hand ray at a world point without direct entity
- * messages. Pass `squeeze = 1` to preserve an already-held item while aiming. */
+ * messages. Pass `squeeze = 1` to preserve an already-held item while aiming,
+ * and `trigger = 1` to keep a pull in flight across the re-aim (releasing it
+ * would end the gesture, which matters wherever a latch spans the movement). */
 export async function aimVrHandAt(
   game: GameServer,
   target: Vec3,
   standOff = 0.45,
   squeeze = 0,
+  trigger = 0,
 ): Promise<{ start: Vec3; target: Vec3 }> {
   const snapshot = await game.info();
   const pawn = snapshot.player.position;
@@ -137,7 +140,7 @@ export async function aimVrHandAt(
   });
   await game.input.set("right_hand.position", localHand);
   await game.input.set("right_hand.rotation", localHandRotation);
-  await game.input.set("right_hand.trigger", 0);
+  await game.input.set("right_hand.trigger", trigger);
   await game.input.set("right_hand.squeeze", squeeze);
   await game.step({ frames: 3 });
   return { start: worldHand, target };
