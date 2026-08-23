@@ -655,6 +655,19 @@ export interface UiElement {
   screen_rect: [number, number, number, number];
 }
 
+/**
+ * A panel's placement in world space: center, orientation, and physical size
+ * in metres. Lets a client compute where an element's `rect` lands in 3D
+ * (e.g. to aim a hand ray at it) without re-deriving the anchor math.
+ */
+export interface UiWorldTransform {
+  position: [number, number, number];
+  /** Orientation quaternion [x, y, z, w]. */
+  rotation: [number, number, number, number];
+  /** Panel size in metres (width, height). */
+  size: [number, number];
+}
+
 /** The open MFD or VR world panel (opened by a production UI action/frob). */
 export interface UiPanel {
   /** Runtime entity id of the bound object (NOT stable across runs). */
@@ -663,6 +676,14 @@ export interface UiPanel {
   template_id: number;
   name: string | null;
   elements: UiElement[];
+  /**
+   * Where the canvas is physically hung in world space, for a VR
+   * head-anchored panel (the cyber-interface use-mode strip). `null` when
+   * the panel has no such placement (flat presentation, or a panel kind this
+   * isn't wired up for yet) - do not assume a VR panel exists just because
+   * this is absent.
+   */
+  world_transform: UiWorldTransform | null;
 }
 
 /**

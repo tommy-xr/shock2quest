@@ -550,6 +550,25 @@ pub struct DebugUiPanel {
     pub template_id: i32,
     pub name: Option<String>,
     pub elements: Vec<DebugUiElement>,
+    /// Where the canvas is physically hung in world space, for a VR
+    /// head-anchored panel (the cyber-interface use-mode strip). `None` when
+    /// the panel has no such placement (flat presentation, or a panel kind
+    /// this field isn't wired up for yet) - the caller must not assume a VR
+    /// panel exists just because this is absent.
+    pub world_transform: Option<DebugWorldTransform>,
+}
+
+/// A panel's placement in world space: center, orientation, and physical size
+/// in metres. Lets a client compute where an element's `rect` lands in 3D
+/// (e.g. to aim a hand ray at it) without re-deriving the anchor math.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugWorldTransform {
+    pub position: [f32; 3],
+    /// Orientation quaternion `[x, y, z, w]`. The panel's face normal is this
+    /// rotation applied to local +Z.
+    pub rotation: [f32; 4],
+    /// Panel size in metres (width, height).
+    pub size: [f32; 2],
 }
 
 /// One drawn element of the active panel. `label` gives clickable elements a

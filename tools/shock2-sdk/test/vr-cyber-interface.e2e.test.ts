@@ -213,3 +213,61 @@ test(
     assert.ok(afterRelease >= 1, "a fresh pull after release must fire again");
   },
 );
+
+test(
+  "the cyber interface reports the strip panel's world transform in VR only",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" },
+  async () => {
+    // Negative-first (flat): `strip.world_transform` must stay null - flat
+    // has no physical panel to place, so an agent must not be able to derive
+    // a bogus 3D position for it.
+    await using flatGame = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort + 2,
+    });
+    await flatGame.step({ frames: 20 });
+    await openCyberInterface(flatGame);
+    assert.equal(await uiMode(flatGame), "use");
+    const flatStrip = (await flatGame.ui.state()).strip;
+    assert.ok(flatStrip, "flat use mode must still bind the strip");
+    assert.equal(
+      flatStrip.world_transform,
+      null,
+      "flat presentation has no physical panel to place in world space",
+    );
+
+    // VR: the strip's world_transform must be a real, live placement - close
+    // to the player (an arm's reach, not the origin or some stale value) and
+    // reported in the same world-space frame as /v1/info's player position.
+    await using vrGame = await GameServer.launch({
+      mission: "medsci1.mis",
+      port: basePort + 3,
+      debugFlags: ["--vr"],
+    });
+    await vrGame.step({ frames: 30 });
+    await openCyberInterface(vrGame);
+    assert.equal(await uiMode(vrGame), "use");
+    const vrStrip = (await vrGame.ui.state()).strip;
+    assert.ok(vrStrip, "VR use mode must bind the strip");
+    const transform = vrStrip.world_transform;
+    assert.ok(transform, "VR must report the strip panel's world_transform");
+
+    const playerPos = (await vrGame.info()).player.position;
+    const distance = Math.hypot(
+      transform.position[0] - playerPos[0],
+      transform.position[1] - playerPos[1],
+      transform.position[2] - playerPos[2],
+    );
+    assert.ok(
+      distance > 0.5 && distance < 5,
+      `the panel must sit an arm's reach from the player, got ${distance.toFixed(2)}m`,
+    );
+    const [qx, qy, qz, qw] = transform.rotation;
+    const quatMagnitude = Math.hypot(qx, qy, qz, qw);
+    assert.ok(
+      Math.abs(quatMagnitude - 1) < 1e-3,
+      `the reported orientation must be a unit quaternion, got magnitude ${quatMagnitude}`,
+    );
+    assert.ok(transform.size[0] > 0 && transform.size[1] > 0, "the panel must report a real size");
+  },
+);

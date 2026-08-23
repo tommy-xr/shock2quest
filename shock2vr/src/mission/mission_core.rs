@@ -9000,10 +9000,42 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     } else {
                         self.gui.debug_active_elements(&self.world)
                     },
+                    // Not wired up for the MFD/object-bound panel yet - only
+                    // the cyber-interface strip reports a placement below.
+                    world_transform: None,
                 }
             });
         // The top-docked inventory strip (Tab metagame mode), same element
-        // contract as the MFD panel.
+        // contract as the MFD panel. In VR, the strip is presented on the
+        // head-anchored cyber-interface panel: report where that panel
+        // actually is in world space so a client can locate/aim at its
+        // elements without re-deriving the anchor math. `vr_use_mode_head`
+        // is only ever set from the tracked head pose while the VR branch of
+        // `update` is live (see its ZERO-quaternion `UNTRACKED_HEAD`
+        // sentinel), so its being non-sentinel here is exactly "the VR panel
+        // placement below is real, not flat's untouched default".
+        let strip_world_transform = (self.vr_use_mode_head.1
+            != Quaternion::new(0.0, 0.0, 0.0, 0.0))
+        .then(|| {
+            let panel = self.vr_use_mode_anchor.panel();
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().ok()?;
+            // Rebase the anchor's pawn-space placement into world space
+            // with the same transform `finish_render` applies to the
+            // rendered objects.
+            let world_center = player.pos + player.rotation.rotate_vector(panel.center);
+            let world_rotation = player.rotation * panel.rotation;
+            Some(crate::game_scene::DebugWorldTransform {
+                position: [world_center.x, world_center.y, world_center.z],
+                rotation: [
+                    world_rotation.v.x,
+                    world_rotation.v.y,
+                    world_rotation.v.z,
+                    world_rotation.s,
+                ],
+                size: [panel.size.x, panel.size.y],
+            })
+        })
+        .flatten();
         let strip = self.flat_ui.strip_entity().map(|entity| {
             let (name, template_id) = panel_identity(entity);
             crate::game_scene::DebugUiPanel {
@@ -9011,6 +9043,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 template_id,
                 name,
                 elements: self.flat_ui.strip_debug_elements(&self.world),
+                world_transform: strip_world_transform,
             }
         });
         crate::game_scene::DebugUiState {
