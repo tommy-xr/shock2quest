@@ -134,10 +134,10 @@ test(
     );
 
     await physicallyOpenEarthReplicator(game, replicator);
-    // Spend through both carried StackCounts. After Chips, 267 - 6*40 - 2*4
-    // leaves 19; the second Juice crosses the remaining balance of the first
-    // stack, so exact payment must remove that exhausted entity and continue
-    // into the other real stack.
+    // Spend down the pooled nanite stat. After Chips, 267 - 6*40 - 2*4 = 19;
+    // both nanite piles were collected straight into the stat balance
+    // (nothing is left as a carried inventory entity), so every purchase
+    // debits that one counter rather than crossing physical stacks.
     for (let purchase = 0; purchase < 6; purchase++) {
       const panel = (await game.ui.state()).active_panel;
       assert.ok(panel, `panel should remain open before clip purchase ${purchase + 1}`);
@@ -167,28 +167,20 @@ test(
     );
     assert.equal(
       remainingNanites.length,
-      1,
-      "cross-stack payment should remove the exhausted nanite entity",
+      0,
+      "nanites are collected straight into the player stat, never left as a carried inventory entity",
     );
-    const remainingStack = (
-      await game.entities.detail(remainingNanites[0].entity_id)
-    ).properties.find((property) => property.name === "StackCount");
     assert.equal(
-      Number(remainingStack?.value),
+      (await game.info()).player.stats?.nanites,
       19,
-      "cross-stack payment should leave the exact remainder on the live stack",
-    );
-    assert.equal(
-      inventoryAfterCrossStackPayment.count,
-      2,
-      "destroyed stack cleanup must remove its Contains link before a dispensed entity can recycle the id",
+      "the pooled stat balance should hold the exact remainder",
     );
     assert.deepEqual(
       new Set(
         inventoryAfterCrossStackPayment.items.map((item) => item.entity_id),
       ),
-      new Set([dispensedChips.id, remainingNanites[0].entity_id]),
-      "only the physically collected Chips and live nanite remainder should be carried",
+      new Set([dispensedChips.id]),
+      "only the physically collected Chips should be carried",
     );
 
     const clipsBeforeRefusal = await game.entities.list({

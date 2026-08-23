@@ -502,6 +502,12 @@ export interface PlayerStats {
   /** Installed software versions, raised by picking up a soft (softs
    * auto-install and never enter inventory). 0 = none installed. */
   software: SoftwareVersions;
+  /** Nanites: the game's money, collected directly into this counter by
+   * world nanite pickups (never inventory items). Legacy carried nanite
+   * stacks (pre-existing saves, panel-taken piles) remain separately
+   * spendable; see `player_nanite_total` in the Rust source. Defaults to 0
+   * for saves written before the stat existed. */
+  nanites: number;
 }
 
 /** Installed software versions, one per soft class. Installing keeps the
