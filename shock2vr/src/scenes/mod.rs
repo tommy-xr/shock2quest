@@ -27,6 +27,7 @@ pub mod debug_hitbox;
 pub mod debug_hud;
 pub mod debug_joint_constraint;
 pub mod debug_map;
+pub mod debug_melee;
 pub mod debug_minimal;
 pub mod debug_particles;
 pub mod debug_protocol_droid;
@@ -50,6 +51,7 @@ pub use debug_hitbox::DebugHitboxScene;
 pub use debug_hud::DebugHudScene;
 pub use debug_joint_constraint::DebugJointConstraintScene;
 pub use debug_map::DebugMapScene;
+pub use debug_melee::create_debug_melee_scene;
 pub use debug_minimal::DebugMinimalScene;
 pub use debug_particles::DebugParticlesScene;
 pub use debug_protocol_droid::DebugProtocolDroidScene;
@@ -197,6 +199,13 @@ pub fn create_initial_scene(
                 asset_cache,
                 audio_context,
             )),
+            mission_save_data: HashMap::new(),
+        };
+    }
+
+    if options.mission.eq_ignore_ascii_case("debug_melee") {
+        return SceneInitResult {
+            scene: create_debug_melee_scene(global_context, options, asset_cache, audio_context),
             mission_save_data: HashMap::new(),
         };
     }

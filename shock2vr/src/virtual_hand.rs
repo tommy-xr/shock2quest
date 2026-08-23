@@ -603,6 +603,12 @@ pub(crate) fn is_wieldable_weapon(world: &World, entity_id: EntityId) -> bool {
 /// otherwise the weapon's world model is drawn. Anything else - an empty hand,
 /// or a held object that is not a wieldable weapon - keeps the hand.
 pub(crate) fn shows_hand_visual(world: &World, held_entity: Option<EntityId>) -> bool {
+    // Calibration override: draw the glove *as well as* the weapon model, so
+    // the `_h` rig's baked fist can be compared against where the controller
+    // actually is. See `dev_params::MELEE_GLOVE_OVERLAY`.
+    if crate::dev_params::get(crate::dev_params::MELEE_GLOVE_OVERLAY) > 0.5 {
+        return true;
+    }
     match held_entity {
         None => true,
         Some(entity_id) => !is_wieldable_weapon(world, entity_id),
