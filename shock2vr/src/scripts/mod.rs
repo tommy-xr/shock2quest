@@ -32,6 +32,7 @@ mod internal_explosion;
 pub mod internal_fast_projectile;
 mod internal_frob_move;
 mod internal_keycard_script;
+mod internal_nanites_script;
 mod internal_simple_health;
 mod internal_switch_held_model;
 mod level_change_button;
@@ -152,6 +153,7 @@ use self::{
     internal_collision_type::InternalCollisionType,
     internal_explosion::InternalExplosion,
     internal_keycard_script::KeyCardScript,
+    internal_nanites_script::InternalNanitesScript,
     internal_simple_health::InternalSimpleHealth,
     level_change_button::LevelChangeButton,
     many_ride::{ParalyzePlayers, SitDownRightNow, StandUpAgain, WhiteOut},
@@ -943,6 +945,7 @@ impl ScriptWorld {
             "internal_explosion" => Box::new(InternalExplosion::new()),
             "internal_frob_move" => Box::new(InternalFrobMove::new()),
             "internal_keycard" => Box::new(KeyCardScript::new()),
+            "internal_nanites" => Box::new(InternalNanitesScript::new()),
             "internal_room_trigger" => Box::new(RoomTrigger::new()),
             "internal_simple_health" => Box::new(InternalSimpleHealth::new()),
             // Implemented

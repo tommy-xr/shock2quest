@@ -73,6 +73,21 @@ fn needs_internal_ai(has_ai: bool, authored_scripts: &[String]) -> bool {
             .any(|script| script.eq_ignore_ascii_case("BaseMonster"))
 }
 
+/// Whether `template_id` (or an ancestor) is one of the nanite-pile
+/// templates - see `scripts::script_util::NANITE_PILE_TEMPLATE_IDS` for why
+/// this is narrower than the shared `Nanites` base template.
+fn is_nanite_pickup_template(
+    entity_info: &ss2_entity_info::SystemShock2EntityInfo,
+    template_id: i32,
+) -> bool {
+    let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
+    let mut ancestors = ss2_entity_info::get_ancestors(hierarchy, &template_id);
+    ancestors.push(template_id);
+    ancestors
+        .iter()
+        .any(|id| crate::scripts::script_util::NANITE_PILE_TEMPLATE_IDS.contains(id))
+}
+
 pub fn create_entity_with_position(
     template_id: i32,
     position: Point3<f32>,
@@ -370,6 +385,15 @@ pub fn create_entity_core(
     let v_keysrc = world.borrow::<View<PropKeySrc>>().unwrap();
     if v_keysrc.get(entity_id).is_ok() {
         processed_scripts.push("internal_keycard".to_owned());
+    }
+
+    // Nanites (the game's money) are collected straight into a player stat
+    // rather than the inventory - see `internal_nanites_script`. Identified
+    // via template ancestry rather than the shared `nan_ic` icon: the icon is
+    // also inherited by the `FakeNanites` bomb-trap decoy, which must keep
+    // going through the ordinary pickup path instead of being auto-collected.
+    if is_nanite_pickup_template(entity_info, template_id) {
+        processed_scripts.push("internal_nanites".to_owned());
     }
 
     // Player melee weapons are authored by their first-person limb model, not

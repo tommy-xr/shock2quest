@@ -449,12 +449,30 @@ fn handle_empty_hand_state(
             is_sensor: _,
         }) = result
         {
-            if Some(entity_id) != held_by_other_hand && can_grab_item(world, entity_id) {
+            let is_nanite_pickup = crate::scripts::script_util::is_nanite_pickup(world, entity_id);
+            if Some(entity_id) != held_by_other_hand
+                && can_grab_item(world, entity_id)
+                && !is_nanite_pickup
+            {
                 let position = &physics.get_position(rigid_body_handle).unwrap();
                 let _dir = hand_position - position;
                 msgs.push(VirtualHandEffect::HoldItem { entity_id });
 
                 next_hand_state = HandState::Grabbing { entity_id };
+            } else if Some(entity_id) != held_by_other_hand
+                && is_nanite_pickup
+                && last_frobbed_entity.is_none()
+            {
+                // Nanites are always collected via Frob (straight into the
+                // player stat), never squeeze-grabbed into the hand - see
+                // `scripts::internal_nanites_script`.
+                msgs.push(VirtualHandEffect::OutMessage {
+                    message: Message {
+                        to: entity_id,
+                        payload: MessagePayload::Frob,
+                    },
+                });
+                last_frobbed_entity = Some(entity_id);
             }
         }
     }

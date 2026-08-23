@@ -127,6 +127,21 @@ pub enum Effect {
         amount: i32,
     },
 
+    /// Award nanites (the game's money) directly to the player's persistent
+    /// stat balance - the collect side of the "nanites as a player stat"
+    /// model. Emitted by `internal_nanites_script` on Frob.
+    AwardNanites {
+        amount: i32,
+    },
+
+    /// Debit nanites from the player's persistent stat balance, clamped at 0.
+    /// Spend paths debit the stat first, falling back to legacy carried
+    /// nanite stacks (`AdjustStackCount`/`DestroyEntity`) for any remainder -
+    /// see `scripts::script_util::spend_player_nanites`.
+    SpendNanites {
+        amount: i32,
+    },
+
     AdjustHitPoints {
         entity_id: EntityId,
         delta: i32,
