@@ -1891,6 +1891,21 @@ impl Game {
     /// presentations instead of once per runtime (AGENTS.md section 3).
     ///
     /// While the player is alive this returns its inputs verbatim.
+    /// Whether the player's own body - VR hands in [`Game::render`], the flat
+    /// weapon viewmodel and HUD in [`Game::render_per_eye`] - should be dropped
+    /// this frame because the death camera has taken the view.
+    ///
+    /// The hands and the viewmodel stay anchored to the play space while the
+    /// camera falls away from it, so a dying player would watch their own hands
+    /// hang in the air above them. Once the camera is no longer theirs to move,
+    /// their body is no longer theirs to see. One predicate, used by both emit
+    /// paths, so the two presentations cannot drift apart here.
+    fn player_visuals_hidden(&self) -> bool {
+        self.active_game_scene
+            .death_camera()
+            .is_some_and(|sample| sample.weight > 0.0)
+    }
+
     pub fn resolve_camera(
         &self,
         pawn_position: Vector3<f32>,
@@ -1918,15 +1933,8 @@ impl Game {
         // scene that emits hands is covered, present and future, and nothing is
         // left latched when the menu closes. The same `is_open()` gate drops the
         // scene's screen-space UI in `render_per_eye`.
-        // The same drop covers the death camera: the hands stay anchored to the
-        // play space while the view falls away from it, so a dying player would
-        // watch their own hands hang in the air above them. Once the camera is
-        // no longer theirs to move, the hands are no longer theirs to see.
-        let dying = self
-            .active_game_scene
-            .death_camera()
-            .is_some_and(|sample| sample.weight > 0.0);
-        if self.pause_menu.is_open() || dying {
+        // The same drop covers the death camera - see `player_visuals_hidden`.
+        if self.pause_menu.is_open() || self.player_visuals_hidden() {
             scene.retain(|object| {
                 object.debug_tag().and_then(|tag| tag.source.as_deref())
                     != Some(util::render_source::PLAYER_HANDS)
@@ -2046,7 +2054,13 @@ impl Game {
         // the list (the debug runtime appends, the oculus runtime prepends), so
         // leaving them in would depth-fight the panel on one host only. The 3D
         // world is unaffected - `render` still emits it every frame.
-        let mut objs = if self.pause_menu.is_open() {
+        // ...and the same drop covers the death camera, for the SAME reason it
+        // covers the VR hands in `render`: the flat weapon viewmodel is emitted
+        // here, not there, so gating only on `render` would leave a flat player
+        // with a gun welded to their face while the camera rolled onto the
+        // floor - the two presentations diverging on exactly the beat this
+        // feature exists for (AGENTS.md section 3).
+        let mut objs = if self.pause_menu.is_open() || self.player_visuals_hidden() {
             Vec::new()
         } else {
             self.active_game_scene.render_per_eye(

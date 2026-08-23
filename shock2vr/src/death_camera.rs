@@ -71,8 +71,7 @@ const FALL_LATERAL: f32 = 0.75;
 /// jolt, but the corpse then lies there for the rest of the death window, so
 /// the tracked head is let back in as a *delta* on the fallen frame - the
 /// player can look around from where they fell, and the punishing part (being
-/// on the floor, on your side, unable to act) is untouched. Flat runtimes are
-/// unaffected: their look input is already suppressed while dead.
+/// on the floor, on your side, unable to act) is untouched.
 const LOOK_RECOVERY_SECONDS: f32 = 0.6;
 
 /// An eye pose in pawn space: the same space the runtimes' `head_offset` and
@@ -279,10 +278,17 @@ fn fallen_rotation(
     };
     let delta = slerp_safe(
         Quaternion::one(),
-        look_frame.conjugate() * tracked,
+        tracked * look_frame.conjugate(),
         recovery,
     );
-    sample.eye.rotation * delta
+    // LEFT-multiplied, deliberately. Right-multiplying would apply the turn in
+    // the fallen view's own frame, where the roll has taken "up" onto a
+    // horizontal axis - so the player's real yaw (which their inner ear feels
+    // as rotation about world up) would come back as visual ROLL. That
+    // vestibular-visual axis mismatch is a stronger nausea source than the
+    // pinned camera this recovery exists to avoid. Left-multiplying keeps head
+    // yaw producing view yaw about world up.
+    delta * sample.eye.rotation
 }
 
 /// The unit form of a rotation, or `None` for a degenerate one that carries no
@@ -378,7 +384,15 @@ pub fn reapply_eye_offset(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::{AbsDiffEq, Deg, Rotation, Rotation3, Zero};
+    use cgmath::{AbsDiffEq, Deg, Rad, Rotation, Rotation3, Zero};
+
+    /// Angle between two rotations, in degrees. Compared this way rather than
+    /// componentwise because `q` and `-q` are the same rotation, and `slerp`
+    /// is free to return either.
+    fn angle_between(a: Quaternion<f32>, b: Quaternion<f32>) -> f32 {
+        let dot = (a.normalize().dot(b.normalize())).abs().min(1.0);
+        Deg::from(Rad(2.0 * dot.acos())).0
+    }
 
     fn live_eye() -> EyePose {
         EyePose {
@@ -656,7 +670,7 @@ mod tests {
 
     #[test]
     fn the_fall_ignores_head_movement_while_it_plays() {
-        let death = DeathCamera::begin(live_eye(), -1.6, 7);
+        let death = DeathCamera::begin(live_eye(), -1.6, 7, FALL_LATERAL);
         let settled = DeathCameraSample {
             weight: 1.0,
             look_recovery: 0.0,
@@ -672,9 +686,7 @@ mod tests {
                 Some(settled),
             );
             assert!(
-                resolved
-                    .head_rotation
-                    .abs_diff_eq(&settled.eye.rotation, 1.0e-5),
+                angle_between(resolved.head_rotation, settled.eye.rotation) < 0.01,
                 "turn {turn} steered the fall"
             );
         }
@@ -682,7 +694,7 @@ mod tests {
 
     #[test]
     fn once_settled_the_player_can_look_around_from_where_they_fell() {
-        let mut death = DeathCamera::begin(live_eye(), -1.6, 7);
+        let mut death = DeathCamera::begin(live_eye(), -1.6, 7, FALL_LATERAL);
         death.advance(FALL_SECONDS + LOOK_RECOVERY_SECONDS);
         let sample = death.sample();
         assert_eq!(sample.weight, 1.0);
@@ -702,8 +714,10 @@ mod tests {
                 .abs_diff_eq(&sample.eye.rotation, 1.0e-5)
         );
 
-        // Turning the head 90 degrees turns the view by 90 degrees - about the
-        // fallen frame's own axis, not the world's.
+        // Turning the head 90 degrees turns the view by 90 degrees about WORLD
+        // UP - the axis the player's inner ear felt it about. Applying it in
+        // the fallen frame instead would come back as roll, which is the
+        // vestibular mismatch this whole ramp exists to avoid.
         let turned = resolve(
             Vector3::zero(),
             Quaternion::one(),
@@ -711,16 +725,20 @@ mod tests {
             live_eye().rotation * Quaternion::from_angle_y(Deg(90.0)),
             Some(sample),
         );
-        let relative = sample.eye.rotation.conjugate() * turned.head_rotation;
+        let applied = turned.head_rotation * sample.eye.rotation.conjugate();
         assert!(
-            relative.abs_diff_eq(&Quaternion::from_angle_y(Deg(90.0)), 1.0e-4),
-            "expected a 90 degree turn in the fallen frame, got {relative:?}"
+            angle_between(applied, Quaternion::from_angle_y(Deg(90.0))) < 0.05,
+            "expected a 90 degree turn about world up, got {applied:?}"
         );
+        // ...and the fallen horizon is still where the body left it: the view
+        // yawed, it did not roll further.
+        let up = turned.head_rotation.rotate_vector(vec3(0.0, 1.0, 0.0));
+        assert!(up.y.abs() < 1.0e-3, "the turn rolled the view: up {up:?}");
     }
 
     #[test]
     fn the_look_recovery_only_starts_once_the_fall_has_landed() {
-        let mut death = DeathCamera::begin(live_eye(), -1.6, 7);
+        let mut death = DeathCamera::begin(live_eye(), -1.6, 7, FALL_LATERAL);
         assert_eq!(death.sample().look_recovery, 0.0);
         death.advance(FALL_SECONDS);
         assert_eq!(death.sample().look_recovery, 0.0);
@@ -733,7 +751,7 @@ mod tests {
 
     #[test]
     fn a_degenerate_look_frame_leaves_the_fallen_view_alone() {
-        let mut death = DeathCamera::begin(live_eye(), -1.6, 7);
+        let mut death = DeathCamera::begin(live_eye(), -1.6, 7, FALL_LATERAL);
         death.advance(FALL_SECONDS + LOOK_RECOVERY_SECONDS);
         let sample = DeathCameraSample {
             look_frame: Quaternion::zero(),

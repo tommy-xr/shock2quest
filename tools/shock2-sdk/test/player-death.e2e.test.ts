@@ -187,6 +187,57 @@ test(
 );
 
 test(
+  "the player's own body stops being drawn in BOTH presentations while they fall",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    // Flat: the weapon viewmodel and HUD come from `render_per_eye` and land on
+    // the scene-UI layer.
+    {
+      await using game = await GameServer.launch({
+        mission: "medsci1.mis",
+        port: basePort + 7,
+      });
+      await game.step({ frames: 30 });
+      const sceneUi = async () =>
+        (await game.scene.objects()).objects.filter((object) => object.render_layer === "scene_ui")
+          .length;
+      assert.ok((await sceneUi()) > 0, "a live flat player draws a viewmodel/HUD");
+
+      await killPlayer(game);
+      await game.step({ frames: FALL_FRAMES });
+      assert.equal(
+        await sceneUi(),
+        0,
+        "a flat player must not keep a gun welded to their face while the camera rolls onto the floor",
+      );
+    }
+
+    // VR: the hands come from `render`, a different emit path - which is
+    // exactly why one shared predicate gates both (AGENTS.md section 3).
+    {
+      await using game = await GameServer.launch({
+        mission: "medsci1.mis",
+        port: basePort + 8,
+        debugFlags: ["--vr"],
+      });
+      await game.step({ frames: 30 });
+      const hands = async () =>
+        (await game.scene.objects()).objects.filter((object) => object.source === "player_hands")
+          .length;
+      assert.ok((await hands()) > 0, "a live VR player has hands");
+
+      await killPlayer(game);
+      await game.step({ frames: FALL_FRAMES });
+      assert.equal(
+        await hands(),
+        0,
+        "a dying VR player must not watch their own hands hang in the air above them",
+      );
+    }
+  },
+);
+
+test(
   "a QBR reconstruction puts the camera back on the player's feet",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
