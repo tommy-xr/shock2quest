@@ -193,6 +193,43 @@ fn update_squeeze_swallow(
     }
 }
 
+/// Which hands must not see their own trigger this frame, while the VR cyber
+/// interface is up (see [`MissionCore::vr_trigger_swallow`]).
+///
+/// The trigger is overloaded: for a hand holding a weapon it is fire, and for
+/// an empty hand it is the universal world "interact" (`MessagePayload::Frob`)
+/// - the two diverge in `VirtualHand::update`, between the `Grabbing` arm's
+/// `held_trigger_press_payload` and `handle_empty_hand_state`. Safing the
+/// weapon while the interface is up must therefore not be done by zeroing both
+/// triggers, or it takes the interact gesture with it and the player cannot
+/// frob a door or an item with the panel open. So the mask is per hand, and
+/// keyed on what that hand holds:
+///
+/// - `swallow_all` - a trigger still held from before the interface closed -
+///   masks both hands until it is released, unchanged.
+/// - A hand whose ray is on the panel is a UI pointer this frame: its trigger
+///   is the UI click and must not also reach through into the world.
+/// - A hand holding a wieldable weapon is safed - it stays wielded and visible
+///   but cannot fire.
+/// - Any other hand off the panel keeps its own trigger, so an empty hand can
+///   still Frob the world and a held consumable still works.
+///
+/// Pure, so the matrix is exercised directly rather than through a mission.
+fn trigger_safe_mask(
+    use_mode: bool,
+    swallow_all: bool,
+    on_panel: [bool; 2],
+    holds_weapon: [bool; 2],
+) -> [bool; 2] {
+    let mut mask = [swallow_all; 2];
+    if use_mode {
+        for slot in 0..mask.len() {
+            mask[slot] |= on_panel[slot] || holds_weapon[slot];
+        }
+    }
+    mask
+}
+
 /// Head-relative authored-space placement for the wide VR backpack canvas.
 /// After `SCALE_FACTOR` conversion this is 2 world units forward and 1.2 up.
 /// The shared canvas keeps its authored pixels; the physical VR boundary
@@ -2520,20 +2557,37 @@ impl MissionCore {
             [self.use_mode && on_panel[0], self.use_mode && on_panel[1]],
         );
 
-        // VR weapon-safe: while the cyber interface is up (and until a
-        // trigger held across its exit is released) the hands see zeroed
-        // triggers, so the wielded weapon cannot fire - it stays wielded and
-        // visible. The analog of the flat runtime's mouse-ownership swallow
-        // latch. Squeezes are masked only per the latch above, so a squeeze on
-        // an inventory slot pulls the item into that hand (the panel emits
-        // `GrabEntity`) without also grabbing whatever the hand was aimed at.
-        let safe_triggers = self.use_mode || self.vr_trigger_swallow;
+        // VR weapon-safe: while the cyber interface is up (and until a trigger
+        // held across its exit is released) a wielding hand sees a zeroed
+        // trigger, so the weapon cannot fire - it stays wielded and visible.
+        // The analog of the flat runtime's mouse-ownership swallow latch. The
+        // mask is per hand (see `trigger_safe_mask`) because the trigger is
+        // also the world interact gesture: a hand that is neither pointing at
+        // the panel nor holding a weapon keeps its trigger, so the player can
+        // still frob doors and items with the interface open. Squeezes are
+        // masked only per the latch above, so a squeeze on an inventory slot
+        // pulls the item into that hand (the panel emits `GrabEntity`) without
+        // also grabbing whatever the hand was aimed at.
+        let holds_weapon = [left_hand_held, right_hand_held].map(|held| {
+            held.is_some_and(|entity_id| {
+                crate::virtual_hand::is_wieldable_weapon(&self.world, entity_id)
+            })
+        });
+        let trigger_safe = trigger_safe_mask(
+            self.use_mode,
+            self.vr_trigger_swallow,
+            on_panel,
+            holds_weapon,
+        );
         let weapon_safe_input = (game_options.presentation_mode == crate::PresentationMode::Vr
-            && (safe_triggers || self.vr_squeeze_swallow.iter().any(|latched| *latched)))
+            && (trigger_safe.iter().any(|safe| *safe)
+                || self.vr_squeeze_swallow.iter().any(|latched| *latched)))
         .then(|| {
             let mut safe = input_context.clone();
-            if safe_triggers {
+            if trigger_safe[hand_slot(crate::vr_config::Handedness::Left)] {
                 safe.left_hand.trigger_value = 0.0;
+            }
+            if trigger_safe[hand_slot(crate::vr_config::Handedness::Right)] {
                 safe.right_hand.trigger_value = 0.0;
             }
             if self.vr_squeeze_swallow[hand_slot(crate::vr_config::Handedness::Left)] {
@@ -10274,6 +10328,78 @@ mod vr_squeeze_swallow_tests {
         let mut latched = [false; 2];
         update_squeeze_swallow(&mut latched, [true, true], [true, true], [true, false]);
         assert_eq!(latched, [true, false]);
+    }
+}
+
+#[cfg(test)]
+mod vr_trigger_safe_tests {
+    use super::trigger_safe_mask;
+
+    const LEFT: usize = 0;
+    const RIGHT: usize = 1;
+
+    const NEITHER: [bool; 2] = [false, false];
+
+    /// The bug this rule exists to fix: with the interface up, a hand that is
+    /// not pointing at the panel and is not holding a weapon must keep its
+    /// trigger, because that trigger is the world interact (Frob) gesture -
+    /// not only weapon fire. Safing the weapon by zeroing both triggers took
+    /// the interact with it.
+    #[test]
+    fn an_off_panel_empty_hand_keeps_its_trigger() {
+        let mask = trigger_safe_mask(true, false, NEITHER, NEITHER);
+        assert_eq!(
+            mask, NEITHER,
+            "an empty hand off the panel must still be able to frob the world"
+        );
+    }
+
+    /// The pointer bridge: a hand on the panel is a UI pointer, so its trigger
+    /// is the click and must not also reach through into the world.
+    #[test]
+    fn a_hand_on_the_panel_is_masked() {
+        let mask = trigger_safe_mask(true, false, [true, false], NEITHER);
+        assert_eq!(mask, [true, false]);
+    }
+
+    /// Weapons stay safed - wielded and visible, but they cannot fire while
+    /// the interface is up, on the panel or off it.
+    #[test]
+    fn a_wielding_hand_is_safed_wherever_it_points() {
+        assert_eq!(
+            trigger_safe_mask(true, false, NEITHER, [false, true]),
+            [false, true]
+        );
+        assert_eq!(
+            trigger_safe_mask(true, false, [false, true], [false, true]),
+            [false, true]
+        );
+    }
+
+    /// Per hand: one hand may be safed while the other still interacts.
+    #[test]
+    fn the_hands_are_masked_independently() {
+        // Left wields a weapon, right is empty and off the panel.
+        let mask = trigger_safe_mask(true, false, NEITHER, [true, false]);
+        assert!(mask[LEFT], "the wielding hand cannot fire");
+        assert!(!mask[RIGHT], "the free hand can still frob");
+    }
+
+    /// The trigger-held-across-exit edge is unchanged: both hands stay
+    /// swallowed until the trigger is released, even with the mode closed, so
+    /// closing the interface on a held trigger cannot fire or frob.
+    #[test]
+    fn a_trigger_held_across_the_exit_is_swallowed_on_both_hands() {
+        assert_eq!(trigger_safe_mask(false, true, NEITHER, NEITHER), [true; 2]);
+    }
+
+    /// With the interface closed and nothing held over, nothing is masked.
+    #[test]
+    fn a_closed_interface_masks_nothing() {
+        assert_eq!(
+            trigger_safe_mask(false, false, [true, true], [true, true]),
+            NEITHER
+        );
     }
 }
 
