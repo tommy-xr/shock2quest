@@ -47,12 +47,28 @@ pub(crate) fn entity_class_template_id(world: &World, entity: EntityId) -> Optio
 /// authored pile placed directly) while excluding that decoy.
 pub(crate) const NANITE_PILE_TEMPLATE_IDS: [i32; 3] = [-1589, -1590, -1591];
 
+/// Whether `template_id` is one of [`NANITE_PILE_TEMPLATE_IDS`] or descends
+/// from one, given a template-inheritance hierarchy (MetaProp parent map).
+/// The single predicate both call sites consult so "is this a nanite pile"
+/// can't silently drift between them: `mission::entity_creator` (script
+/// attachment, from the load-time `SystemShock2EntityInfo` hierarchy) and
+/// [`is_nanite_pickup`] below (from the runtime `GlobalTemplateHierarchy`
+/// unique, which is that same hierarchy cloned into the `World`).
+pub(crate) fn is_nanite_pile_template(
+    hierarchy: &HashMap<i32, Vec<i32>>,
+    template_id: i32,
+) -> bool {
+    NANITE_PILE_TEMPLATE_IDS.iter().any(|class_id| {
+        template_id == *class_id
+            || dark::ss2_entity_info::get_ancestors(hierarchy, &template_id).contains(class_id)
+    })
+}
+
 /// Whether `entity` is a real world nanite pickup, identified via the runtime
-/// template hierarchy (see [`NANITE_PILE_TEMPLATE_IDS`]) rather than the
-/// legacy `nan_ic` icon check below (which also matches the `FakeNanites`
-/// decoy). Used to route VR squeeze / flat pickup through Frob instead of a
-/// physical grab - see `virtual_hand::uses_scripted_world_frob` and its flat
-/// call site.
+/// template hierarchy rather than the legacy `nan_ic` icon check below (which
+/// also matches the `FakeNanites` decoy). Used to route VR squeeze / flat
+/// pickup through Frob instead of a physical grab - see
+/// `virtual_hand::uses_scripted_world_frob` and its flat call site.
 pub(crate) fn is_nanite_pickup(world: &World, entity: EntityId) -> bool {
     let Ok(hierarchy) = world.borrow::<UniqueView<GlobalTemplateHierarchy>>() else {
         return false;
@@ -60,9 +76,7 @@ pub(crate) fn is_nanite_pickup(world: &World, entity: EntityId) -> bool {
     let Some(template_id) = entity_class_template_id(world, entity) else {
         return false;
     };
-    NANITE_PILE_TEMPLATE_IDS
-        .iter()
-        .any(|class_id| hierarchy.is_or_descends_from(template_id, *class_id))
+    is_nanite_pile_template(&hierarchy.0, template_id)
 }
 
 pub fn is_message_turnon_or_turnoff(msg: &MessagePayload) -> bool {

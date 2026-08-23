@@ -127,9 +127,7 @@ impl FlatPlayerController {
     /// Apply the original flat pickup split: weapons become the first-person
     /// viewmodel, while ordinary loot goes straight into the backpack.
     fn pick_up(&mut self, world: &World, entity_id: EntityId) -> Vec<VirtualHandEffect> {
-        if uses_scripted_world_frob(world, entity_id)
-            || crate::scripts::script_util::is_nanite_pickup(world, entity_id)
-        {
+        if uses_scripted_world_frob(world, entity_id) {
             vec![out_message(entity_id, MessagePayload::Frob)]
         } else if is_wieldable_weapon(world, entity_id) {
             self.wield(entity_id)

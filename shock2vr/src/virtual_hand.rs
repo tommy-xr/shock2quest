@@ -436,7 +436,11 @@ fn handle_empty_hand_state(
                 // Also, frob any items that may be nearby...
             }
         }
-    } else {
+    } else if input_hand.squeeze_value <= 0.5 {
+        // Only clear the latch once neither trigger nor squeeze is engaged -
+        // otherwise a squeeze held across frames (below) would see the latch
+        // cleared every frame the trigger is idle and re-frob the same
+        // entity every tick it survives.
         last_frobbed_entity = None
     }
 
@@ -449,10 +453,10 @@ fn handle_empty_hand_state(
             is_sensor: _,
         }) = result
         {
-            let is_nanite_pickup = crate::scripts::script_util::is_nanite_pickup(world, entity_id);
+            let needs_scripted_frob = uses_scripted_world_frob(world, entity_id);
             if Some(entity_id) != held_by_other_hand
                 && can_grab_item(world, entity_id)
-                && !is_nanite_pickup
+                && !needs_scripted_frob
             {
                 let position = &physics.get_position(rigid_body_handle).unwrap();
                 let _dir = hand_position - position;
@@ -460,12 +464,13 @@ fn handle_empty_hand_state(
 
                 next_hand_state = HandState::Grabbing { entity_id };
             } else if Some(entity_id) != held_by_other_hand
-                && is_nanite_pickup
+                && needs_scripted_frob
                 && last_frobbed_entity.is_none()
             {
-                // Nanites are always collected via Frob (straight into the
-                // player stat), never squeeze-grabbed into the hand - see
-                // `scripts::internal_nanites_script`.
+                // Items whose taking must go through a script (nanites
+                // collected straight into the player stat, keycards, ...) are
+                // always Frob'd, never squeeze-grabbed into the hand - see
+                // `uses_scripted_world_frob`.
                 msgs.push(VirtualHandEffect::OutMessage {
                     message: Message {
                         to: entity_id,
@@ -545,7 +550,10 @@ pub(crate) fn can_grab_item(world: &World, entity_id: EntityId) -> bool {
 /// transfer. An authored `SCRIPT` world action owns its side effects and item
 /// fate (for example `FrobQB` awards a quest bit and moves the item exactly
 /// once). `PropKeySrc` items also receive an `internal_keycard` script at
-/// runtime even when their authored world action is only `MOVE`.
+/// runtime even when their authored world action is only `MOVE`, and nanite
+/// piles receive `internal_nanites` the same way (see
+/// `scripts::script_util::is_nanite_pickup`) - both must route through Frob
+/// rather than a physical grab in every presentation.
 pub(crate) fn uses_scripted_world_frob(world: &World, entity_id: EntityId) -> bool {
     let has_authored_world_script = world
         .borrow::<View<PropFrobInfo>>()
@@ -560,7 +568,9 @@ pub(crate) fn uses_scripted_world_frob(world: &World, entity_id: EntityId) -> bo
         .map(|keycards| keycards.get(entity_id).is_ok())
         .unwrap_or(false);
 
-    has_authored_world_script || has_derived_keycard_script
+    has_authored_world_script
+        || has_derived_keycard_script
+        || crate::scripts::script_util::is_nanite_pickup(world, entity_id)
 }
 
 /// Whether an inventory item is a wieldable weapon - a gun (`PropPlayerGun`) or
@@ -904,5 +914,87 @@ mod tests {
 
         assert!(shows_hand_visual(&world, None));
         assert!(shows_hand_visual(&world, Some(consumable)));
+    }
+
+    fn scripted_world_pickup(world: &mut World, physics: &mut PhysicsWorld) -> EntityId {
+        use dark::properties::{KeyCard, PropKeySrc};
+
+        let entity = world.add_entity(PropKeySrc(KeyCard {
+            is_master: false,
+            region_id: 0,
+            lock_id: 0,
+        }));
+        physics.add_kinematic(
+            entity,
+            vec3(0.0, 0.0, -0.5),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Vector3::zero(),
+            vec3(1.0, 1.0, 1.0),
+            CollisionGroup::selectable(),
+            false,
+        );
+        update_queries(world, physics);
+        entity
+    }
+
+    fn frob_message_count(effects: &[VirtualHandEffect]) -> usize {
+        effects
+            .iter()
+            .filter(|effect| {
+                matches!(
+                    effect,
+                    VirtualHandEffect::OutMessage {
+                        message: Message {
+                            payload: MessagePayload::Frob,
+                            ..
+                        }
+                    }
+                )
+            })
+            .count()
+    }
+
+    /// Negative-first regression: a scripted world pickup (here, a keycard -
+    /// nanite piles are the motivating case) is not physically grabbable, so
+    /// squeeze routes it through Frob (see `uses_scripted_world_frob`). The
+    /// trigger-idle branch used to clear the frob latch unconditionally every
+    /// frame, so a squeeze held across frames re-sent Frob every tick the
+    /// entity survived instead of just once on the rising edge.
+    #[test]
+    fn held_squeeze_frobs_a_scripted_pickup_only_once() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        scripted_world_pickup(&mut world, &mut physics);
+
+        let mut input = Hand::default();
+        input.squeeze_value = 1.0;
+
+        let (hand, effects) = handle_empty_hand_state(
+            Handedness::Right,
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            None,
+            &world,
+            &physics,
+            &input,
+            None,
+        );
+        assert_eq!(frob_message_count(&effects), 1, "first frame should Frob");
+
+        let (_, effects) = handle_empty_hand_state(
+            Handedness::Right,
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            hand.last_frobbed_entity,
+            &world,
+            &physics,
+            &input,
+            None,
+        );
+        assert_eq!(
+            frob_message_count(&effects),
+            0,
+            "a held squeeze must not re-frob every frame"
+        );
     }
 }
