@@ -83,8 +83,8 @@ const COVERAGE_MARGIN: f32 = 1.25;
 /// picture's own extents come from the host's projection matrix, so the same
 /// two numbers describe the same visible effect on a 45-degree monitor and on
 /// a headset's much wider asymmetric per-eye frustum.
-const CLEAR_FIELD_FRACTION: f32 = 0.5;
-const FULL_FIELD_FRACTION: f32 = 1.0;
+pub const CLEAR_FIELD_FRACTION: f32 = 0.5;
+pub const FULL_FIELD_FRACTION: f32 = 1.0;
 
 /// How far the picture reaches from the view axis, as the tangents of the
 /// half-angles on each axis: `(horizontal, vertical)`.
@@ -272,18 +272,51 @@ fn hit_layer(
     eye_forward: Vector3<f32>,
     intensity: f32,
 ) -> SceneObject {
+    vignette_layer(
+        view_extents,
+        eye_position,
+        eye_forward,
+        TINT_COLOR,
+        intensity,
+        CLEAR_FIELD_FRACTION,
+        FULL_FIELD_FRACTION,
+        crate::util::render_source::HIT_FEEDBACK,
+    )
+}
+
+/// One view-locked, double-sided rim-vignette quad - the shared geometry
+/// behind both [`hit_layer`] (the damage tint) and the cyber interface's own
+/// entry/exit vignette ([`crate::ui::entry_ramp`]). The two are drawn as
+/// separate layers with their own color/intensity rather than merged into one
+/// number, so a hit still reads while the interface is open (they blend
+/// naturally, being translucent).
+///
+/// See [`hit_layer`]'s callers for what each parameter means; `clear_field`
+/// and `full_field` are fractions of the picture (0..1) the same way
+/// [`CLEAR_FIELD_FRACTION`]/[`FULL_FIELD_FRACTION`] are.
+#[allow(clippy::too_many_arguments)]
+pub fn vignette_layer(
+    view_extents: (f32, f32),
+    eye_position: Vector3<f32>,
+    eye_forward: Vector3<f32>,
+    color: Vector3<f32>,
+    intensity: f32,
+    clear_field: f32,
+    full_field: f32,
+    source: &str,
+) -> SceneObject {
     let (horizontal, vertical) = view_extents;
     let width = 2.0 * LAYER_DISTANCE * horizontal * COVERAGE_MARGIN;
     let height = 2.0 * LAYER_DISTANCE * vertical * COVERAGE_MARGIN;
     let mut object = SceneObject::new(
         engine::scene::vignette_material::create(
-            TINT_COLOR,
+            color,
             intensity,
             // The quad is `COVERAGE_MARGIN` wider than the picture, so the
             // edge of the picture sits at `1 / COVERAGE_MARGIN` in the shader's
             // radius units and the fractions scale down to match.
-            CLEAR_FIELD_FRACTION / COVERAGE_MARGIN,
-            FULL_FIELD_FRACTION / COVERAGE_MARGIN,
+            clear_field / COVERAGE_MARGIN,
+            full_field / COVERAGE_MARGIN,
         ),
         Box::new(engine::scene::quad::create()),
     );
@@ -301,9 +334,7 @@ fn hit_layer(
     // orders this key explicitly, so host concatenation cannot move the tint
     // over the HUD on Quest or under the world on flat/debug.
     object.set_render_layer(RenderLayer::SceneOverlay);
-    object.set_debug_tag(Some(crate::util::render_source_tag(
-        crate::util::render_source::HIT_FEEDBACK,
-    )));
+    object.set_debug_tag(Some(crate::util::render_source_tag(source)));
     object
 }
 
@@ -612,6 +643,33 @@ mod tests {
             vec3(0.0, crate::input_context::DEFAULT_HEAD_HEIGHT, 0.0)
         );
         assert_eq!(forward, vec3(0.0, 0.0, -1.0));
+    }
+
+    /// [`vignette_layer`] is the shared geometry `hit_layer` and the cyber
+    /// interface's own rim tint both build on - a caller with different
+    /// color/fractions/source gets a layer tagged and colored as its own,
+    /// not silently relabeled as hit feedback.
+    #[test]
+    fn vignette_layer_carries_the_callers_own_color_and_source() {
+        let color = vec3(0.05, 0.35, 0.55);
+        let object = vignette_layer(
+            VR_EXTENTS,
+            Vector3::zero(),
+            vec3(0.0, 0.0, -1.0),
+            color,
+            0.4,
+            0.3,
+            0.9,
+            "use_mode_vignette",
+        );
+        assert_eq!(
+            object.debug_tag().and_then(|tag| tag.source.clone()),
+            Some("use_mode_vignette".to_owned())
+        );
+        let transparency = object
+            .effective_transparency()
+            .expect("must draw translucent");
+        assert!((transparency - 0.6).abs() < 1e-5);
     }
 
     #[test]

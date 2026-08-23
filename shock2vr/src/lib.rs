@@ -1357,6 +1357,15 @@ impl Game {
             action_effects,
         );
 
+        // A personal-UI mode (the cyber interface) can pull the flat FOV in a
+        // little while it is open, eased over its own entry/exit ramp -
+        // `fov_pull_deg` already smooths this, so nothing further is needed
+        // here. VR scenes return 0 (OpenXR view FOVs are used as-is), making
+        // this a no-op there.
+        self.set_desired_fov_deg(
+            DEFAULT_FOV_DEG - self.active_game_scene.fov_pull_deg(&self.options),
+        );
+
         // Handle ambient audio
         let ambient_state = self.active_game_scene.ambient_audio_state();
         let player_pose = self
@@ -1844,13 +1853,13 @@ impl Game {
     }
 
     /// Internal seam for gameplay/UI code to drive [`Game::desired_fov_deg`].
-    /// Not called anywhere yet - the first consumer is the planned
-    /// cyber-interface mode. Smoothing/easing is the caller's responsibility.
+    /// Driven once per frame from [`Game::update`] by the active scene's
+    /// `GameScene::fov_pull_deg` (the cyber interface's entry/exit ramp is
+    /// the first consumer). Smoothing/easing is the caller's responsibility.
     /// Rejects non-finite or out-of-range degrees (valid input to
     /// `cgmath::perspective` is strictly between 0 and 180) by leaving the
     /// current value unchanged, so a bad caller can't poison the flat
     /// runtimes' projection into a panic.
-    #[allow(dead_code)]
     pub(crate) fn set_desired_fov_deg(&mut self, fov_deg: f32) {
         if fov_deg.is_finite() && fov_deg > 0.0 && fov_deg < 180.0 {
             self.desired_fov_deg = fov_deg;
@@ -1914,6 +1923,28 @@ impl Game {
             self.hit_feedback
                 .render(self.view_extents, eye_position, eye_forward)
         {
+            layer.set_transform(pawn_to_world * layer.get_transform());
+            scene.push(layer);
+        }
+
+        // The cyber interface's own entry/exit vignette: a second, separately
+        // colored rim layer rather than merged into the hit tint's intensity,
+        // so a hit still reads (as red, on top of the cyan) while the
+        // interface is open or easing shut. Same view-locked geometry as the
+        // hit tint (`hit_feedback::vignette_layer`), identically in flat and
+        // VR - only the eye pose differs.
+        let use_mode_vignette = self.active_game_scene.use_mode_vignette_intensity();
+        if use_mode_vignette > 0.0 {
+            let mut layer = hit_feedback::vignette_layer(
+                self.view_extents,
+                eye_position,
+                eye_forward,
+                ui::entry_ramp::VIGNETTE_COLOR,
+                use_mode_vignette,
+                hit_feedback::CLEAR_FIELD_FRACTION,
+                hit_feedback::FULL_FIELD_FRACTION,
+                util::render_source::USE_MODE_VIGNETTE,
+            );
             layer.set_transform(pawn_to_world * layer.get_transform());
             scene.push(layer);
         }

@@ -157,6 +157,25 @@ pub trait GameScene {
         false
     }
 
+    /// Degrees to pull the flat FOV in by this frame (subtracted from the
+    /// base FOV), eased over a personal-UI mode's entry/exit ramp - see the
+    /// cyber interface's `ui::entry_ramp`. Implementations must return 0 in
+    /// VR: OpenXR view FOVs are used as-is, and rendering at a different FOV
+    /// than submitted causes compositor reprojection warping. Default: no
+    /// pull (non-mission scenes have no such mode).
+    fn fov_pull_deg(&self, _game_options: &GameOptions) -> f32 {
+        0.0
+    }
+
+    /// Peak rim-vignette intensity (0..1) this scene wants blended in this
+    /// frame, on top of (not merged with) `HitFeedback`'s own damage tint -
+    /// see the cyber interface's `ui::entry_ramp`. The two are drawn as
+    /// separate layered quads with their own colors, so a hit still reads
+    /// while a personal-UI mode is open. Default: none.
+    fn use_mode_vignette_intensity(&self) -> f32 {
+        0.0
+    }
+
     /// Collision-valid, supported position to serialize for the player.
     /// Mission scenes return a specific refusal reason while transient
     /// locomotion, death, or unsupported space makes a durable save unsafe.
