@@ -112,6 +112,99 @@ pub struct SceneInitResult {
 
 const ENDING_CUTSCENE_CANDIDATES: &[&str] = &["enhanced/cs3.ogv", "cs3.avi", "cs3.ogv"];
 
+/// How a debug scene is built. Every entry in [`DEBUG_SCENES`] has this shape,
+/// so a scene that needs none of the arguments simply ignores them.
+type DebugSceneCtor = fn(
+    &GlobalContext,
+    &GameOptions,
+    &mut AssetCache,
+    &mut AudioContext<EntityId, String>,
+) -> Box<dyn GameScene>;
+
+/// Every debug scene, by the name that launches it.
+///
+/// The single source of truth: [`create_debug_scene`] dispatches from this
+/// table and the Developer screen's launcher lists it, so a scene added here
+/// is both reachable by name (`--mission debug_x`) and offered in the launcher
+/// - they cannot drift apart the way a hand-copied menu list would.
+const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
+    // Visual-only scene to inspect the missing-assets screen. The real one is
+    // shown by the runtimes *instead of* a `Game`, since it exists precisely
+    // when there is no gamesys to build one from - which also means it cannot
+    // be reached on a machine that has the data. This entry renders the same
+    // scene against a stand-in status so the screen can be render-verified in
+    // both presentations without uninstalling the game.
+    ("debug_no_assets", |_global, _options, _assets, _audio| {
+        // A stand-in root, deliberately NOT the real one. On a machine that has
+        // the data, `paths::data_root()` points at a directory that is not in
+        // fact missing anything, so the message would be nonsense - and it puts
+        // a local home-directory path (with the developer's username) into every
+        // screenshot taken of this scene.
+        let status = crate::install::InstallStatus {
+            data_root: std::path::PathBuf::from("/sdcard/shock2quest"),
+            kind: crate::install::InstallKind::Missing,
+            found: Vec::new(),
+            missing_mods: Vec::new(),
+        };
+        Box::new(NoAssetsScene::new(&status))
+    }),
+    // Visual-only scene to inspect the loading screen UI
+    // (projects/loading-screen.md, PR 1) independent of any real loading.
+    ("debug_loading", |_global, _options, _assets, _audio| {
+        Box::new(LoadingScene::new_demo())
+    }),
+    ("debug_minimal", |global, options, assets, audio| {
+        Box::new(DebugMinimalScene::create(global, options, assets, audio))
+    }),
+    ("debug_weapons", |global, options, assets, audio| {
+        Box::new(create_debug_weapons_scene(global, options, assets, audio))
+    }),
+    ("debug_melee", create_debug_melee_scene),
+    ("debug_psi", create_debug_psi_scene),
+    ("debug_teleport", |global, options, assets, audio| {
+        Box::new(DebugTeleportScene::create(global, options, assets, audio))
+    }),
+    ("debug_camera", DebugCameraScene::new),
+    ("debug_protocol_droid", DebugProtocolDroidScene::new),
+    ("debug_turret", DebugTurretScene::new),
+    ("debug_hud", |_global, _options, _assets, _audio| {
+        Box::new(DebugHudScene::new())
+    }),
+    ("debug_gloves", DebugGlovesScene::new),
+    ("debug_hand_poses", DebugHandPosesScene::new),
+    ("debug_joint_constraint", DebugJointConstraintScene::new),
+    ("debug_map", |_global, _options, _assets, _audio| {
+        Box::new(DebugMapScene::new())
+    }),
+    ("debug_ragdoll", DebugRagdollScene::new),
+    ("debug_particles", DebugParticlesScene::new),
+    ("debug_hitbox", DebugHitboxScene::new),
+];
+
+/// The debug scenes' names, in the order the launcher lists them.
+pub fn debug_scene_names() -> impl Iterator<Item = &'static str> {
+    DEBUG_SCENES.iter().map(|(name, _)| *name)
+}
+
+/// Build the debug scene called `name`, or `None` if it is not one.
+///
+/// Both entry points come through here: the runtime's `--mission debug_x` (via
+/// [`create_initial_scene`]) and the Developer screen's launcher
+/// (`GlobalEffect::LaunchDebugScene`), so a scene behaves identically however
+/// it was started.
+pub fn create_debug_scene(
+    name: &str,
+    global_context: &GlobalContext,
+    options: &GameOptions,
+    asset_cache: &mut AssetCache,
+    audio_context: &mut AudioContext<EntityId, String>,
+) -> Option<Box<dyn GameScene>> {
+    DEBUG_SCENES
+        .iter()
+        .find(|(scene_name, _)| name.eq_ignore_ascii_case(scene_name))
+        .map(|(_, create)| create(global_context, options, asset_cache, audio_context))
+}
+
 pub fn create_initial_scene(
     asset_cache: &mut AssetCache,
     audio_context: &mut AudioContext<EntityId, String>,
@@ -146,175 +239,15 @@ pub fn create_initial_scene(
         };
     }
 
-    // Visual-only scene to inspect the missing-assets screen. The real one is
-    // shown by the runtimes *instead of* a `Game`, since it exists precisely
-    // when there is no gamesys to build one from - which also means it cannot
-    // be reached on a machine that has the data. This entry renders the same
-    // scene against a stand-in status so the screen can be render-verified in
-    // both presentations without uninstalling the game.
-    if options.mission.eq_ignore_ascii_case("debug_no_assets") {
-        // A stand-in root, deliberately NOT the real one. On a machine that has
-        // the data, `paths::data_root()` points at a directory that is not in
-        // fact missing anything, so the message would be nonsense - and it puts
-        // a local home-directory path (with the developer's username) into every
-        // screenshot taken of this scene.
-        let status = crate::install::InstallStatus {
-            data_root: std::path::PathBuf::from("/sdcard/shock2quest"),
-            kind: crate::install::InstallKind::Missing,
-            found: Vec::new(),
-            missing_mods: Vec::new(),
-        };
+    if let Some(scene) = create_debug_scene(
+        &options.mission,
+        global_context,
+        options,
+        asset_cache,
+        audio_context,
+    ) {
         return SceneInitResult {
-            scene: Box::new(NoAssetsScene::new(&status)),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    // Visual-only scene to inspect the loading screen UI (projects/loading-screen.md,
-    // PR 1) independent of any real loading.
-    if options.mission.eq_ignore_ascii_case("debug_loading") {
-        return SceneInitResult {
-            scene: Box::new(LoadingScene::new_demo()),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_minimal") {
-        return SceneInitResult {
-            scene: Box::new(DebugMinimalScene::create(
-                global_context,
-                options,
-                asset_cache,
-                audio_context,
-            )),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_weapons") {
-        return SceneInitResult {
-            scene: Box::new(create_debug_weapons_scene(
-                global_context,
-                options,
-                asset_cache,
-                audio_context,
-            )),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_melee") {
-        return SceneInitResult {
-            scene: create_debug_melee_scene(global_context, options, asset_cache, audio_context),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_psi") {
-        return SceneInitResult {
-            scene: create_debug_psi_scene(global_context, options, asset_cache, audio_context),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_teleport") {
-        return SceneInitResult {
-            scene: Box::new(DebugTeleportScene::create(
-                global_context,
-                options,
-                asset_cache,
-                audio_context,
-            )),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_camera") {
-        return SceneInitResult {
-            scene: DebugCameraScene::new(global_context, options, asset_cache, audio_context),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_protocol_droid") {
-        return SceneInitResult {
-            scene: DebugProtocolDroidScene::new(
-                global_context,
-                options,
-                asset_cache,
-                audio_context,
-            ),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_turret") {
-        return SceneInitResult {
-            scene: DebugTurretScene::new(global_context, options, asset_cache, audio_context),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_hud") {
-        return SceneInitResult {
-            scene: Box::new(DebugHudScene::new()),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_gloves") {
-        return SceneInitResult {
-            scene: DebugGlovesScene::new(global_context, options, asset_cache, audio_context),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_hand_poses") {
-        return SceneInitResult {
-            scene: DebugHandPosesScene::new(global_context, options, asset_cache, audio_context),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options
-        .mission
-        .eq_ignore_ascii_case("debug_joint_constraint")
-    {
-        return SceneInitResult {
-            scene: DebugJointConstraintScene::new(
-                global_context,
-                options,
-                asset_cache,
-                audio_context,
-            ),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_map") {
-        return SceneInitResult {
-            scene: Box::new(DebugMapScene::new()),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_ragdoll") {
-        return SceneInitResult {
-            scene: DebugRagdollScene::new(global_context, options, asset_cache, audio_context),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_particles") {
-        return SceneInitResult {
-            scene: DebugParticlesScene::new(global_context, options, asset_cache, audio_context),
-            mission_save_data: HashMap::new(),
-        };
-    }
-
-    if options.mission.eq_ignore_ascii_case("debug_hitbox") {
-        return SceneInitResult {
-            scene: DebugHitboxScene::new(global_context, options, asset_cache, audio_context),
+            scene,
             mission_save_data: HashMap::new(),
         };
     }
@@ -473,6 +406,39 @@ pub(crate) fn resolve_ending_cutscene() -> (String, PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The launcher offers exactly what the dispatcher can build, and every
+    /// name is a distinct `debug_` name the CLI accepts too.
+    #[test]
+    fn the_debug_scene_registry_is_one_list_of_distinct_launchable_names() {
+        let names: Vec<&str> = debug_scene_names().collect();
+        assert_eq!(names.len(), DEBUG_SCENES.len());
+        assert!(names.len() > 1);
+        for name in &names {
+            assert!(name.starts_with("debug_"), "'{name}' is not a debug scene");
+            assert_eq!(
+                names.iter().filter(|other| *other == name).count(),
+                1,
+                "'{name}' is listed twice"
+            );
+        }
+        // A few the docs promise by name, so a rename shows up here.
+        for expected in ["debug_ragdoll", "debug_hud", "debug_weapons"] {
+            assert!(names.contains(&expected), "'{expected}' is missing");
+        }
+        // Nothing else answers to a debug name: an unknown one is not a scene,
+        // and the lookup is case-insensitive like the rest of the dispatcher.
+        assert!(
+            DEBUG_SCENES
+                .iter()
+                .any(|(name, _)| "DEBUG_Ragdoll".eq_ignore_ascii_case(name))
+        );
+        assert!(
+            !DEBUG_SCENES
+                .iter()
+                .any(|(name, _)| "debug_nonexistent".eq_ignore_ascii_case(name))
+        );
+    }
 
     #[test]
     fn recognizes_classic_and_enhanced_cutscene_extensions() {

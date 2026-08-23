@@ -23,7 +23,10 @@ use cgmath::{Vector2, vec2};
 use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
 use engine::assets::asset_cache::AssetCache;
 
-use super::{HAlign, Rect, UiCanvas, VAlign};
+use super::{
+    HAlign, Rect, UiCanvas, VAlign,
+    list_scroll::{self, ScrollHalf},
+};
 use crate::dev_params::{self, DevParamId, DevParamKind};
 
 /// The frontend screens are authored on the original 640x480 canvas.
@@ -40,22 +43,26 @@ const ROW_FONT: &str = "mainfont.fon";
 pub const BACKDROP_TEXTURE: &str = "GAMELOD.PCX";
 const LAYOUT_FILE: &str = "GAMELODR.BIN";
 
-/// Indices into `GAMELODR.BIN`: header line, the dark list pane, (2 is the
-/// load screen's "Load" button, still unused here) and the bottom-right
-/// button art.
+/// Indices into `GAMELODR.BIN`: header line, the dark list pane, the upper
+/// framed button (the load screen's "Load"; the Developer screen puts its
+/// debug-scene launcher there) and the bottom-right button art.
 const HEADER_RECT_INDEX: usize = 0;
 const LIST_RECT_INDEX: usize = 1;
+const ACTION_RECT_INDEX: usize = 2;
 const DONE_RECT_INDEX: usize = 3;
 
 /// Decoded `GAMELODR.BIN` values, used when the layout file is absent - the
 /// same fallbacks the load screen carries for the same art.
 const FALLBACK_HEADER: Rect = Rect::new(261.0, 31.0, 202.0, 20.0);
 const FALLBACK_LIST: Rect = Rect::new(261.0, 54.0, 202.0, 290.0);
+const FALLBACK_ACTION: Rect = Rect::new(527.0, 161.0, 96.0, 62.0);
 const FALLBACK_DONE: Rect = Rect::new(527.0, 405.0, 95.0, 62.0);
 
 /// Canvas y where the backdrop paints its bordered name-entry field; rows
-/// stop above it (see the sibling constant on the load screen).
-const FIELD_TOP_Y: f32 = 323.0;
+/// stop above it (see the sibling constant on the load screen). Public so the
+/// other page drawn on this backdrop - the Developer screen's debug-scene
+/// launcher - stops its own rows at the same painted border.
+pub const FIELD_TOP_Y: f32 = 323.0;
 
 /// The panel's widget rects, resolved from `GAMELODR.BIN`.
 ///
@@ -68,6 +75,7 @@ const FIELD_TOP_Y: f32 = 323.0;
 pub struct PanelRects {
     header: Rect,
     list: Rect,
+    action: Rect,
     done: Rect,
 }
 
@@ -76,6 +84,7 @@ impl Default for PanelRects {
         Self {
             header: FALLBACK_HEADER,
             list: FALLBACK_LIST,
+            action: FALLBACK_ACTION,
             done: FALLBACK_DONE,
         }
     }
@@ -99,6 +108,7 @@ impl PanelRects {
         Self {
             header: at(HEADER_RECT_INDEX, FALLBACK_HEADER),
             list: at(LIST_RECT_INDEX, FALLBACK_LIST),
+            action: at(ACTION_RECT_INDEX, FALLBACK_ACTION),
             done: at(DONE_RECT_INDEX, FALLBACK_DONE),
         }
     }
@@ -108,6 +118,26 @@ impl PanelRects {
     /// asserts that its "Quit" button sits under it).
     pub fn done_center(&self) -> Vector2<f32> {
         self.done.center()
+    }
+
+    /// The header line, the list pane and the upper framed button, for a host
+    /// that draws its own page on this same backdrop (the Developer screen's
+    /// debug-scene launcher). Read here rather than re-resolved so every page
+    /// of that screen rides one set of authored rects.
+    pub fn header_rect(&self) -> Rect {
+        self.header
+    }
+
+    pub fn list_rect(&self) -> Rect {
+        self.list
+    }
+
+    pub fn action_rect(&self) -> Rect {
+        self.action
+    }
+
+    pub fn done_rect(&self) -> Rect {
+        self.done
     }
 }
 
@@ -133,16 +163,13 @@ const TEXT_INSET: f32 = 8.0;
 const ARROW_W: f32 = 20.0;
 /// Width of the value readout between the arrows.
 const VALUE_W: f32 = 48.0;
-/// The scroll gutter down the list pane's right edge, and the height of each
-/// of its two buttons.
-const SCROLL_GUTTER_W: f32 = 26.0;
-const SCROLL_BUTTON_H: f32 = 20.0;
+/// The scroll gutter down the list pane's right edge. The rocker itself - its
+/// geometry, its labels and its "an end that cannot move is inert" rule - is
+/// [`list_scroll`]'s, shared with the debug-scene launcher.
+const SCROLL_GUTTER_W: f32 = list_scroll::GUTTER_W;
 
 /// Opacity for an element the pointer is not over.
 const IDLE_OPACITY: f32 = 0.65;
-/// Opacity for a scroll button that cannot move any further, matching the
-/// load screen's inert "Load". Such a button is not hit-testable either.
-const DISABLED_OPACITY: f32 = 0.3;
 /// Opacity for the element under the pointer.
 const HOVER_OPACITY: f32 = 1.0;
 /// Labels and values are readouts, not click targets: drawn steady, between
@@ -198,18 +225,14 @@ fn row_rects(rects: PanelRects, index: usize) -> RowRects {
 /// How many rows fit in the pane above the backdrop's painted field - the
 /// size of one page of the list, however long the registry is.
 fn rows_per_page(rects: PanelRects) -> usize {
-    let list = rects.list;
-    let usable = (list.y + list.h).min(FIELD_TOP_Y) - list.y;
-    (usable / ROW_PITCH).floor().max(0.0) as usize
+    list_scroll::rows_per_page(rects.list, FIELD_TOP_Y, ROW_PITCH)
 }
 
 /// The furthest the list can scroll: the first-row index that puts the tail
 /// of the registry against the bottom of the pane. Zero when everything fits
 /// at once, which is also what hides the scroll rocker.
 fn max_scroll(rects: PanelRects) -> usize {
-    dev_params::PARAMS
-        .len()
-        .saturating_sub(rows_per_page(rects))
+    list_scroll::max_scroll(dev_params::PARAMS.len(), rows_per_page(rects))
 }
 
 /// The registry indices on screen at `scroll`, with `scroll` clamped to what
@@ -220,9 +243,7 @@ fn max_scroll(rects: PanelRects) -> usize {
 /// *step* another's - the failure a positional row index invites the moment
 /// the list scrolls.
 fn visible_rows(rects: PanelRects, scroll: usize) -> Range<usize> {
-    let first = scroll.min(max_scroll(rects));
-    let count = rows_per_page(rects).min(dev_params::PARAMS.len() - first);
-    first..first + count
+    list_scroll::visible_rows(dev_params::PARAMS.len(), rows_per_page(rects), scroll)
 }
 
 /// The scroll rocker's two halves - "Up" and "Down" - in a gutter down the
@@ -230,25 +251,17 @@ fn visible_rows(rects: PanelRects, scroll: usize) -> Range<usize> {
 /// registry fits on one page.
 ///
 /// Deliberately *not* on the upper framed button: that is the load screen's
-/// "Load" frame, the only other authored click target on this backdrop, and
-/// it is wanted for a debug-scene launcher. Scrolling belongs against its own
-/// list anyway - a scrollbar's place is beside what it scrolls, not across
-/// the screen from it.
+/// "Load" frame, which the Developer screen now spends on its debug-scene
+/// launcher ([`ACTION_RECT_INDEX`]). Scrolling belongs against its own list
+/// anyway - a scrollbar's place is beside what it scrolls, not across the
+/// screen from it.
+fn rocker(rects: PanelRects) -> Option<list_scroll::Rocker> {
+    list_scroll::rocker(rects.list, FIELD_TOP_Y, max_scroll(rects) > 0)
+}
+
+#[cfg(test)]
 fn scroll_rects(rects: PanelRects) -> Option<(Rect, Rect)> {
-    (max_scroll(rects) > 0).then(|| {
-        let list = rects.list;
-        let x = list.x + list.w - SCROLL_GUTTER_W;
-        let bottom = (list.y + list.h).min(FIELD_TOP_Y);
-        (
-            Rect::new(x, list.y, SCROLL_GUTTER_W, SCROLL_BUTTON_H),
-            Rect::new(
-                x,
-                bottom - SCROLL_BUTTON_H,
-                SCROLL_GUTTER_W,
-                SCROLL_BUTTON_H,
-            ),
-        )
-    })
+    rocker(rects).map(|r| (r.up, r.down))
 }
 
 /// The value readout: floats as `{:.2}`, the format the step grids are
@@ -277,16 +290,17 @@ pub fn hit(rects: PanelRects, scroll: usize, point: Vector2<f32>) -> Option<DevP
         canvas.button(row.decrement, "", DevParamsEvent::Decrement(id));
         canvas.button(row.increment, "", DevParamsEvent::Increment(id));
     }
-    if let Some((up, down)) = scroll_rects(rects) {
-        // A rocker half that cannot move is inert, not just dimmed.
-        if rows.start > 0 {
-            canvas.button(up, "", DevParamsEvent::ScrollUp);
-        }
-        if rows.start < max_scroll(rects) {
-            canvas.button(down, "", DevParamsEvent::ScrollDown);
+    canvas.button(rects.done, "", DevParamsEvent::Done);
+    // A rocker half that cannot move is inert, not just dimmed - the rule lives
+    // in `list_scroll`, so every scrolling list obeys the same one.
+    if let Some(rocker) = rocker(rects) {
+        if let Some(half) = list_scroll::hit(&rocker, rows.start, max_scroll(rects), point) {
+            return Some(match half {
+                ScrollHalf::Up => DevParamsEvent::ScrollUp,
+                ScrollHalf::Down => DevParamsEvent::ScrollDown,
+            });
         }
     }
-    canvas.button(rects.done, "", DevParamsEvent::Done);
     canvas.click_at(point)
 }
 
@@ -362,29 +376,18 @@ pub fn draw(
             .opacity(hover_opacity(DevParamsEvent::Increment(id)));
     }
 
-    if let Some((up, down)) = scroll_rects(rects) {
-        for (rect, text, event, enabled) in [
-            (up, "Up", DevParamsEvent::ScrollUp, rows.start > 0),
-            (
-                down,
-                "Dn",
-                DevParamsEvent::ScrollDown,
-                rows.start < max_scroll(rects),
-            ),
-        ] {
-            // The row font, and "Dn" rather than "Down": `text_native` does
-            // not shrink to its rect, so the display font's "Up"/"Down"
-            // overhung the gutter and drew across the values beside them.
-            // Render-verified rather than assumed - that overlap is exactly
-            // what a screenshot catches and a layout assertion does not.
-            canvas
-                .text_native(rect, text, ROW_FONT, HAlign::Center, VAlign::Middle)
-                .opacity(if enabled {
-                    hover_opacity(event)
-                } else {
-                    DISABLED_OPACITY
-                });
-        }
+    if let Some(rocker) = rocker(rects) {
+        list_scroll::draw(
+            canvas,
+            &rocker,
+            rows.start,
+            max_scroll(rects),
+            match hovered {
+                Some(DevParamsEvent::ScrollUp) => Some(ScrollHalf::Up),
+                Some(DevParamsEvent::ScrollDown) => Some(ScrollHalf::Down),
+                _ => None,
+            },
+        );
     }
 
     canvas
@@ -419,11 +422,11 @@ pub fn activate(rects: PanelRects, event: DevParamsEvent, scroll: &mut usize) ->
             false
         }
         DevParamsEvent::ScrollUp => {
-            *scroll = scroll.saturating_sub(1);
+            list_scroll::apply(ScrollHalf::Up, scroll, max_scroll(rects));
             false
         }
         DevParamsEvent::ScrollDown => {
-            *scroll = (*scroll + 1).min(max_scroll(rects));
+            list_scroll::apply(ScrollHalf::Down, scroll, max_scroll(rects));
             false
         }
         DevParamsEvent::Done => true,

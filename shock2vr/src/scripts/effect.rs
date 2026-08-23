@@ -69,6 +69,14 @@ pub enum GlobalEffect {
     /// unloaded to reach it.
     ShowDeveloper,
 
+    /// Launch the named debug scene (see `scenes::DEBUG_SCENES`), replacing
+    /// whatever scene is active. Reached from the Developer screen's launcher:
+    /// on a headset the runtime picks its scene from a file at startup, so
+    /// without an in-game entry point a scene change costs an APK relaunch.
+    LaunchDebugScene {
+        name: String,
+    },
+
     /// Play the retail ending and enter the campaign's terminal state.
     CompleteCampaign,
 

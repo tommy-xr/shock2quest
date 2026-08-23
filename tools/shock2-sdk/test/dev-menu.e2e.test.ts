@@ -38,6 +38,18 @@ const ROW0_DECREMENT: [number, number] = [
 ];
 const DONE: [number, number] = [527 + 95 / 2, 405 + 62 / 2];
 
+// The upper framed button (`GAMELODR.BIN` rect 2 - the load screen's "Load"
+// frame): the debug-scene launcher's door on the parameters page, and the
+// launch itself on the launcher page.
+const ACTION: [number, number] = [527 + 96 / 2, 161 + 62 / 2];
+/**
+ * A row of the launcher's list: 19px rows from the pane top (y=54), x well
+ * inside the pane and clear of the scroll gutter. Row 2 is `debug_minimal` -
+ * the cheapest scene to actually start.
+ */
+const sceneRow = (index: number): [number, number] => [330, 54 + index * 19 + 9];
+const DEBUG_MINIMAL_ROW = 2;
+
 /** SIMR.BIN pause entries: five 179x76 buttons at x=400, top 20, 92px pitch. */
 const pauseEntry = (index: number): [number, number] =>
   norm(400 + 179 / 2, 20 + index * 92 + 76 / 2);
@@ -228,5 +240,77 @@ test(
     await game.input.set("pointer.pressed", 0);
     await game.step({ frames: 5 });
     assert.equal((await game.info()).paused, false, "Continue on the root resumes");
+  },
+);
+
+// The debug-scene launcher (`scenes/developer.rs`). On a headset the runtime
+// picks its scene from a file read at startup, so without this page a change
+// of debug scene - or a death inside one - costs an APK relaunch. Both
+// presentations drive the same page through the same hit test.
+//
+// Negative-first: before the launcher existed the upper framed button was
+// inert, so the first assertion of each test (the page turn away from the
+// parameter rows) fails - the screen stays on the rows.
+
+test(
+  "the flat Developer screen launches a debug scene and can back out of the list",
+  { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "main_menu", port: 8134 });
+    await game.step({ frames: 10 });
+    await click(game, [489, 202]);
+    assert.equal((await game.info()).mission, "developer");
+
+    // The upper framed button turns the page - it does not swap the scene.
+    await click(game, ACTION);
+    assert.equal((await game.info()).mission, "developer");
+    await game.screenshot("dev-scenes-flat.png");
+
+    // "Done" on the launcher goes back to the parameters, not to the menu...
+    await click(game, DONE);
+    assert.equal((await game.info()).mission, "developer");
+    // ...and the parameter rows really are back: `>` steps a value again.
+    const before = await paramValue(game, "panel_distance");
+    await click(game, ROW0_INCREMENT);
+    assert.ok(
+      Math.abs((await paramValue(game, "panel_distance")) - (before + 0.1)) < 1e-4,
+      "Done on the launcher must return to the parameter rows",
+    );
+    await click(game, ROW0_DECREMENT);
+
+    // Select a scene and launch it.
+    await click(game, ACTION);
+    await click(game, sceneRow(DEBUG_MINIMAL_ROW));
+    await click(game, ACTION);
+    assert.equal(
+      (await game.info()).mission,
+      "debug_minimal",
+      "Launch must start the selected scene",
+    );
+  },
+);
+
+test(
+  "the VR Developer screen launches a debug scene through the controller ray",
+  { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "main_menu",
+      port: 8135,
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 10 });
+    await vrClick(game, [400 + 179 / 2, 20 + 2 * 76 + 30]);
+    assert.equal((await game.info()).mission, "developer");
+
+    // The same canvas points as the flat run, reached by the ray.
+    await vrClick(game, ACTION);
+    assert.equal((await game.info()).mission, "developer");
+    await game.step({ frames: 5 });
+    await game.screenshot("dev-scenes-vr.png");
+
+    await vrClick(game, sceneRow(DEBUG_MINIMAL_ROW));
+    await vrClick(game, ACTION);
+    assert.equal((await game.info()).mission, "debug_minimal");
   },
 );

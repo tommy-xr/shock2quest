@@ -37,6 +37,7 @@ mod frontend_menu;
 mod frontend_pointer;
 mod frontend_presentation;
 mod frontend_sfx;
+pub mod list_scroll;
 mod panel_anchor;
 mod pointer_visual;
 pub mod world_dim;
