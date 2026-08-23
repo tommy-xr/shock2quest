@@ -2,17 +2,23 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { EntitySummary, UiElement, Vec3 } from "../src/types.js";
+import type { EntitySummary, UiElement, UiPanelPose, UiState, Vec3 } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import { add, aimVrHandAt, aimVrHandAtCanvas, quatRotate } from "./helpers/vr-hand.js";
 
 // Authentic Hydro2 Card B chain for #583:
 //   corpse 754 --Contains--> card 942 (PropKeySrc region 128)
 //   card slots 1120/1122 --SwitchLink--> HydroSectorB door 1127
 //
-// Both cases use default VR and production hand input. The backpack case uses
-// /give only to stage the authored card in the backpack; credential acquisition
-// itself must come from squeezing the rendered slot, not an injected Frob.
+// Both cases use default VR and production hand input. With the fix, a
+// keycard can never come to rest in the backpack strip through any live
+// squeeze path - `panel_grab_effect` Frobs it (collecting the credential)
+// instead of holding it, on the corpse's real loot panel and the use-mode
+// strip alike. The second scenario stages a card directly into the backpack
+// (bypassing every fixed path, the way an old save or the still-open flat
+// cursor-drag gap - #583's deferred M2 - could) and verifies the strip
+// squeeze still recovers the credential rather than leaving an inert card
+// sitting in the grid.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const CORPSE = 754;
 const CARD = 942;
@@ -21,8 +27,6 @@ const DOOR = 1127;
 const CARD_ARCHETYPE = -1495;
 const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
 const LOOT_PANEL_SIZE_PX: Vec3 = [188, 296, 0];
-const BACKPACK_PANEL_SIZE_PX: Vec3 = [635, 120, 0];
-const VR_BACKPACK_WORLD_SCALE = 0.55;
 
 function only(matches: EntitySummary[], label: string): EntitySummary {
   assert.equal(matches.length, 1, `expected one ${label}, got ${matches.length}`);
@@ -66,6 +70,16 @@ async function squeezeWorldPanelElement(
   await game.step({ frames: 4 });
   await game.input.set("right_hand.squeeze", 0);
   await game.step({ frames: 8 });
+}
+
+/** The strip element bound to `entityId`, or undefined once it has left the grid. */
+function stripSlotFor(ui: UiState, entityId: number): UiElement | undefined {
+  return ui.strip?.elements.find((element) => element.entity_id === entityId);
+}
+
+function requirePanel(ui: UiState): UiPanelPose {
+  assert.ok(ui.panel_pose, "the VR cyber interface must report its panel pose");
+  return ui.panel_pose;
 }
 
 async function assertCardCollectedAndDoorOpens(
@@ -151,7 +165,7 @@ test(
 );
 
 test(
-  "Hydro2 VR backpack squeeze repairs an unregistered carried Card B",
+  "Hydro2 VR strip squeeze recovers an already-inventoried Card B instead of holding it",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -160,6 +174,12 @@ test(
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 5 });
+
+    // Stage the authored card directly in the backpack, bypassing every
+    // squeeze/click path this PR fixes - the state an old save (or the
+    // still-open flat cursor-drag gap, #583's deferred M2) could leave
+    // behind. The fix's contract is that this card is never left inert:
+    // squeezing it out of the strip must still Frob it, not lift it.
     const card = await game.player.spawnItem(CARD_ARCHETYPE);
     assert.equal(
       (await game.player.inventory()).items.find((item) => item.entity_id === card.entity_id)
@@ -169,19 +189,39 @@ test(
     );
 
     await game.input.set("head.look", [0, 0]);
-    await game.input.trigger("MoveInventory");
+    await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 8 });
-    const active = (await game.ui.state()).active_panel;
-    const cardElement = active?.elements.find(
-      (element) => element.kind === "button" && element.entity_id === card.entity_id,
+    let ui = await game.ui.state();
+    assert.equal(ui.mode, "use", "ToggleUseMode must open the cyber interface in VR");
+    const panel = requirePanel(ui);
+    const cardSlot = stripSlotFor(ui, card.entity_id);
+    assert.ok(cardSlot, "the staged Card B must occupy a strip slot");
+    const [x, y, width, height] = cardSlot.rect;
+    const slotCenter: [number, number] = [x + width / 2, y + height / 2];
+
+    await aimVrHandAtCanvas(game, panel, slotCenter, { squeeze: 0 });
+    await game.step({ frames: 3 });
+    await aimVrHandAtCanvas(game, panel, slotCenter, { squeeze: 1 });
+    await game.step({ frames: 8 });
+
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      null,
+      "a keycard squeeze must Frob the credential, never land it in the hand",
     );
-    assert.ok(cardElement, "VR backpack must expose the staged Card B button");
-    await squeezeWorldPanelElement(
-      game,
-      BACKPACK_PANEL_SIZE_PX,
-      VR_BACKPACK_WORLD_SCALE,
-      cardElement,
+    ui = await game.ui.state();
+    assert.equal(
+      stripSlotFor(ui, card.entity_id),
+      undefined,
+      "the collected card must leave the strip grid",
     );
+
+    // Leave the cyber interface - it swallows the world trigger while open,
+    // so the reader interaction below needs the ordinary shooter-mode hand.
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    assert.equal((await game.ui.state()).mode, "shooter");
+
     await assertCardCollectedAndDoorOpens(game, CARD_ARCHETYPE);
   },
 );
