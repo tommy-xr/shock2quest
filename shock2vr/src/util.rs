@@ -184,16 +184,29 @@ pub fn tracked_gaze(
     head_position: Vector3<f32>,
     head_rotation: Quaternion<f32>,
 ) -> Option<(Vector3<f32>, Vector3<f32>)> {
-    if head_rotation.magnitude2() < 1e-6 {
-        return None;
-    }
     use cgmath::Rotation;
-    Some((
-        head_position,
-        head_rotation
-            .normalize()
-            .rotate_vector(vec3(0.0, 0.0, -1.0)),
-    ))
+    let rotation = tracked_rotation(head_rotation)?;
+    Some((head_position, rotation.rotate_vector(vec3(0.0, 0.0, -1.0))))
+}
+
+/// The unit form of a tracked rotation, or `None` when it carries no rotation
+/// information (a zero quaternion - an untracked head, or a default-constructed
+/// pose). The same rule [`tracked_gaze`] applies, exposed for callers that need
+/// the rotation itself rather than a gaze ray: normalizing a zero quaternion
+/// yields NaN, and a NaN rotation poisons whatever matrix it reaches.
+pub fn tracked_rotation(rotation: Quaternion<f32>) -> Option<Quaternion<f32>> {
+    (rotation.magnitude2() >= 1e-6).then(|| rotation.normalize())
+}
+
+/// Smoothstep over `t`, clamped to `[0, 1]`: no velocity discontinuity at
+/// either end, which is what makes a timed ease read as a move rather than a
+/// jump. Shared by the UI panel re-placement ease and the death camera's fall.
+pub fn smoothstep(t: f32) -> f32 {
+    if !t.is_finite() || t <= 0.0 {
+        return 0.0;
+    }
+    let t = t.min(1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 pub fn get_rotation_from_forward_vector(forward: Vector3<f32>) -> Quaternion<f32> {

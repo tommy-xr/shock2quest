@@ -1178,7 +1178,14 @@ fn main() {
 
         // Render to each eye
         let time = now.elapsed().as_secs_f32();
-        let (left_eye_elapsed, _) = render_swapchain(
+        // The midpoint of the two eyes: what the death camera resolves from, so
+        // it cannot pull the eyes together (see `render_swapchain`).
+        let head_centre_stage = vec3(
+            (views[0].pose.position.x + views[1].pose.position.x) / 2.0,
+            (views[0].pose.position.y + views[1].pose.position.y) / 2.0,
+            (views[0].pose.position.z + views[1].pose.position.z) / 2.0,
+        );
+        let (left_eye_elapsed, _, left_rendered_pose) = render_swapchain(
             &mut game,
             &engine,
             camera_pos,
@@ -1186,11 +1193,12 @@ fn main() {
             &swapchain[0],
             time,
             &views[0],
+            head_centre_stage,
             true,
             &scene,
             false,
         );
-        let (right_eye_elapsed, finish_elapsed) = render_swapchain(
+        let (right_eye_elapsed, finish_elapsed, right_rendered_pose) = render_swapchain(
             &mut game,
             &engine,
             camera_pos,
@@ -1198,6 +1206,7 @@ fn main() {
             &swapchain[1],
             time,
             &views[1],
+            head_centre_stage,
             true,
             &scene,
             true,
@@ -1230,13 +1239,21 @@ fn main() {
             xr_frame_state.predicted_display_time,
             environment_blend_mode,
             &[
+                // The RENDERED pose, not the tracked one. Late-stage
+                // reprojection corrects a submitted frame in the frame of the
+                // pose it was told the frame came from, so while the death
+                // camera holds the view rolled and displaced away from the
+                // tracked head, submitting `views[i].pose` would have the
+                // compositor shear every reprojected frame about the wrong
+                // axis - judder exactly when the discrepancy is largest. Alive,
+                // these are the tracked poses round-tripped unchanged.
                 &xr::CompositionLayerProjection::new().space(&stage).views(&[
                     xr::CompositionLayerProjectionView::new()
-                        .pose(views[0].pose)
+                        .pose(left_rendered_pose)
                         .fov(views[0].fov)
                         .sub_image(sub1),
                     xr::CompositionLayerProjectionView::new()
-                        .pose(views[1].pose)
+                        .pose(right_rendered_pose)
                         .fov(views[1].fov)
                         .sub_image(sub2),
                 ]),
@@ -1579,10 +1596,13 @@ fn render_swapchain(
     swapchain: &Swapchain,
     time: f32,
     view: &xr::View,
+    // Midpoint of the two eyes in STAGE space. The death camera resolves from
+    // the head centre, never per eye - see the comment on `camera` below.
+    head_centre_stage: Vector3<f32>,
     _log: bool,
     scene: &Vec<SceneObject>,
     is_last: bool,
-) -> (Duration, Duration) {
+) -> (Duration, Duration, xr::Posef) {
     let eye_started = Instant::now();
     let mut xr_swapchain = swapchain.handle.borrow_mut();
     let image_index1 = xr_swapchain.acquire_image().unwrap();
@@ -1629,20 +1649,21 @@ fn render_swapchain(
     // player is dying the game blends this tracked pose toward the fallen death
     // pose, once, for every runtime (see `shock2vr::death_camera`) - so the fall
     // reads the same in VR as it does flat. Alive, it hands back exactly what
-    // went in, per eye.
-    let camera = game.resolve_camera(camera_pos, camera_rot, head_offset, head_rotation);
-    let render_context = engine::EngineRenderContext {
-        time,
-        camera_offset: camera.pawn_position,
-        camera_rotation: camera.pawn_rotation,
-
-        head_offset: camera.head_offset,
-        head_rotation: camera.head_rotation,
-
-        projection_matrix,
-
-        screen_size,
-    };
+    // went in.
+    //
+    // Resolved from the HEAD CENTRE, not from this eye. The fallen target is a
+    // single eye-independent point, so resolving per eye would walk both eyes
+    // onto it and collapse the IPD to zero over the fall - a stereo view going
+    // monoscopic while the horizon rolls. Instead the eye's own displacement is
+    // re-applied afterwards, carried into the fallen camera's frame so the eyes
+    // roll with the new horizon rather than staying level with the room.
+    let head_centre_pawn = stage_to_pawn(head_centre_stage, game.player_center_above_floor());
+    let camera = shock2vr::death_camera::reapply_eye_offset(
+        game.resolve_camera(camera_pos, camera_rot, head_centre_pawn, head_rotation),
+        head_offset - head_centre_pawn,
+        head_rotation,
+    );
+    let render_context = camera.into_render_context(time, projection_matrix, screen_size);
 
     let view_matrix = engine::util::compute_view_matrix_from_render_context(&render_context);
     let mut all_scene_objs = game.render_per_eye(view_matrix, projection_matrix, screen_size);
@@ -1691,7 +1712,40 @@ fn render_swapchain(
     (
         eye_started.elapsed().saturating_sub(finish_elapsed),
         finish_elapsed,
+        // The pose this eye was ACTUALLY rendered from, back in stage space, so
+        // the compositor is told the truth (see the layer submission).
+        xr::Posef {
+            position: to_xr_vector(pawn_to_stage(
+                camera.head_offset,
+                game.player_center_above_floor(),
+            )),
+            orientation: to_xr_quaternion(camera.head_rotation),
+        },
     )
+}
+
+/// Inverse of [`stage_to_pawn`]: a pawn-space position back into the stage
+/// space the compositor's layer poses are expressed in.
+fn pawn_to_stage(position_pawn: Vector3<f32>, center_above_floor: f32) -> Vector3<f32> {
+    (position_pawn + vec3(0.0, center_above_floor, 0.0)) * shock2vr::METERS_PER_WORLD_UNIT
+        - vec3(0.0, stage_offset_meters(), 0.0)
+}
+
+fn to_xr_vector(v: Vector3<f32>) -> xr::Vector3f {
+    xr::Vector3f {
+        x: v.x,
+        y: v.y,
+        z: v.z,
+    }
+}
+
+fn to_xr_quaternion(q: Quaternion<f32>) -> xr::Quaternionf {
+    xr::Quaternionf {
+        x: q.v.x,
+        y: q.v.y,
+        z: q.v.z,
+        w: q.s,
+    }
 }
 
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;

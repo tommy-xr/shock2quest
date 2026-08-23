@@ -490,23 +490,14 @@ pub fn main() {
         // player is dying the game blends this tracked pose toward the fallen
         // death pose, once, for every runtime (see `shock2vr::death_camera`).
         // Alive, it hands back exactly what went in.
-        let camera = game.resolve_camera(
-            pawn_offset,
-            pawn_rotation,
-            vec3(0.0, head_height / SCALE_FACTOR, 0.0),
-            camera_rotation(&camera_context),
-        );
-        let render_context = engine::EngineRenderContext {
-            time: glfw.get_time() as f32,
-            camera_offset: camera.pawn_position,
-            camera_rotation: camera.pawn_rotation,
-
-            head_offset: camera.head_offset,
-            head_rotation: camera.head_rotation,
-
-            projection_matrix,
-            screen_size,
-        };
+        let render_context = game
+            .resolve_camera(
+                pawn_offset,
+                pawn_rotation,
+                vec3(0.0, head_height / SCALE_FACTOR, 0.0),
+                camera_rotation(&camera_context),
+            )
+            .into_render_context(glfw.get_time() as f32, projection_matrix, screen_size);
 
         let view = compute_view_matrix_from_render_context(&render_context);
         let per_eye_scene = profile!(

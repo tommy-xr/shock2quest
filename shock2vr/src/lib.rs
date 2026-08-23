@@ -2337,13 +2337,13 @@ impl App {
                 tracked_head_offset,
                 tracked_head_rotation,
             ),
-            App::MissingAssets(_) => death_camera::resolve(
+            // Nothing here can die, so the tracked camera IS the camera.
+            App::MissingAssets(_) => death_camera::CameraPose {
                 pawn_position,
                 pawn_rotation,
-                tracked_head_offset,
-                tracked_head_rotation,
-                None,
-            ),
+                head_offset: tracked_head_offset,
+                head_rotation: tracked_head_rotation,
+            },
         }
     }
 }

@@ -31,8 +31,22 @@
 //! the runtime's tracked pose is untouched (bit-identical passthrough, which is
 //! every frame the player is alive), at 1 the camera is pinned to the fallen
 //! pose.
+//!
+//! # Stereo
+//!
+//! [`resolve`] takes the head *centre*, not a per-eye pose. A stereo runtime
+//! renders two eyes displaced from that centre by half the IPD, and the fallen
+//! target is a single eye-independent point - so blending each eye toward it
+//! directly would converge them, shrinking the IPD to zero over the fall and
+//! leaving the settled corpse view monoscopic. A depth cue dissolving under you
+//! is its own discomfort trigger, on top of losing stereo exactly when the view
+//! is most disorienting. So VR resolves once from the centre and re-applies its
+//! eye offset with [`reapply_eye_offset`], which rotates with the camera so the
+//! eyes stay level with the fallen horizon.
 
-use cgmath::{InnerSpace, Matrix3, One, Quaternion, Rad, Vector3, VectorSpace, vec3};
+use cgmath::{
+    InnerSpace, Matrix3, Matrix4, One, Quaternion, Rotation, Vector2, Vector3, VectorSpace, vec3,
+};
 
 /// How long the fall to the floor takes, in seconds. Comfortably inside the
 /// shortest death window it plays in (the 3 s terminal-death sequence), so the
@@ -66,6 +80,30 @@ pub struct CameraPose {
     pub head_rotation: Quaternion<f32>,
 }
 
+impl CameraPose {
+    /// Build the render context a runtime submits for this camera. The four
+    /// fields of a `CameraPose` *are* the first four of an
+    /// `EngineRenderContext`, and every runtime pairs them with the same three
+    /// per-frame values, so the unpack lives here once rather than being
+    /// retyped (and drifting) in each runtime.
+    pub fn into_render_context(
+        self,
+        time: f32,
+        projection_matrix: Matrix4<f32>,
+        screen_size: Vector2<f32>,
+    ) -> engine::EngineRenderContext {
+        engine::EngineRenderContext {
+            time,
+            camera_offset: self.pawn_position,
+            camera_rotation: self.pawn_rotation,
+            head_offset: self.head_offset,
+            head_rotation: self.head_rotation,
+            projection_matrix,
+            screen_size,
+        }
+    }
+}
+
 /// One frame of the death camera: where the fallen eye sits, and how much
 /// authority it has over the runtime's tracked head pose.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -95,15 +133,18 @@ impl DeathCamera {
     /// and is the only source of randomness, so a replayed death - a captured
     /// screenshot sequence, an e2e assertion - falls exactly the same way.
     pub fn begin(live_eye: EyePose, floor_y: f32, seed: u64) -> Self {
-        let azimuth = Rad(unit_from_seed(seed) * std::f32::consts::TAU);
-        let (sin, cos) = azimuth.0.sin_cos();
-
-        // "Up" ends up pointing along a random horizontal direction: the view
-        // rolls onto its side as the body topples. Forward stays horizontal
-        // (world up crossed with the new up), so the fallen camera looks along
-        // the floor rather than into it.
-        let up = vec3(sin, 0.0, cos);
-        let forward = vec3(cos, 0.0, -sin);
+        // The body topples SIDEWAYS from where the player was looking, rather
+        // than onto a freely random heading: whatever killed you stays in
+        // frame while you go down. A random heading reads as the view being
+        // yanked away from the fight, and hides the one thing the player most
+        // wants to see. The seed picks which side you fall on - that is the
+        // randomness, and it is what keeps two deaths from looking identical.
+        let forward = death_facing(live_eye.rotation);
+        let side = if seed_is_left(seed) { 1.0 } else { -1.0 };
+        // Up leaves world-up for the horizontal perpendicular to the gaze: the
+        // view rolls onto its side. Forward stays horizontal, so the fallen
+        // camera looks along the floor rather than into it.
+        let up = vec3(-forward.z, 0.0, forward.x) * side;
         let right = forward.cross(up);
         // `head_rotation` maps head-local axes into pawn space, and cgmath's
         // camera convention looks down local -Z.
@@ -193,25 +234,62 @@ fn slerp_safe(from: Quaternion<f32>, to: Quaternion<f32>, weight: f32) -> Quater
     }
 }
 
-/// Smoothstep over the normalized fall. Named rather than inlined so the feel
-/// (a settle bounce at the end) can be tuned in one place.
+/// The fall's ease over its normalized duration. Named rather than inlined so
+/// the feel (a settle bounce at the end) can be tuned in one place.
 fn ease_in_out(t: f32) -> f32 {
-    if !t.is_finite() || t <= 0.0 {
-        return 0.0;
-    }
-    let t = t.min(1.0);
-    t * t * (3.0 - 2.0 * t)
+    crate::util::smoothstep(t)
 }
 
-/// A deterministic [0, 1) draw from a seed - splitmix64, avalanched and taken
-/// from the high bits. Keeps the fall direction reproducible without pulling a
-/// seedable RNG (and its cargo feature) in for a single number.
-fn unit_from_seed(seed: u64) -> f32 {
+/// Which side the body falls on, from the seed - splitmix64 avalanched down to
+/// its top bit. A seedable RNG (and its cargo feature) would be a lot of
+/// machinery for one coin flip.
+fn seed_is_left(seed: u64) -> bool {
     let mut z = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     z ^= z >> 31;
-    ((z >> 40) as f32) / ((1u32 << 24) as f32)
+    z >> 63 == 1
+}
+
+/// The horizontal direction the player was facing when they died. A gaze that
+/// is straight up or down (or an untracked head) has no horizontal component to
+/// fall away from, so it falls back to the pawn's forward axis rather than
+/// normalizing a zero vector into NaN.
+fn death_facing(head_rotation: Quaternion<f32>) -> Vector3<f32> {
+    let fallback = vec3(0.0, 0.0, -1.0);
+    let Some(rotation) = crate::util::tracked_rotation(head_rotation) else {
+        return fallback;
+    };
+    let gaze = rotation.rotate_vector(fallback);
+    let flat = vec3(gaze.x, 0.0, gaze.z);
+    if flat.magnitude2() < 1.0e-6 {
+        fallback
+    } else {
+        flat.normalize()
+    }
+}
+
+/// Re-apply a stereo eye's displacement from the head centre to a resolved
+/// camera, so the two eyes keep their separation through the fall instead of
+/// converging on one point (see the module's Stereo section).
+///
+/// `eye_offset_from_centre` is the eye's displacement in the same space the
+/// tracked head pose was given in; it is carried into the resolved camera's
+/// frame so the eyes roll with the fallen horizon rather than staying level
+/// with the room.
+pub fn reapply_eye_offset(
+    camera: CameraPose,
+    eye_offset_from_centre: Vector3<f32>,
+    tracked_head_rotation: Quaternion<f32>,
+) -> CameraPose {
+    let Some(tracked) = crate::util::tracked_rotation(tracked_head_rotation) else {
+        return camera;
+    };
+    let in_head_space = tracked.invert().rotate_vector(eye_offset_from_centre);
+    CameraPose {
+        head_offset: camera.head_offset + camera.head_rotation.rotate_vector(in_head_space),
+        ..camera
+    }
 }
 
 /// The eye pose a live, upright player renders from, for callers that need a
@@ -362,12 +440,140 @@ mod tests {
         let b = DeathCamera::begin(live_eye(), -1.6, 11);
         assert_eq!(a, b);
 
-        let directions: Vec<f32> = (0..32)
-            .map(|seed| DeathCamera::begin(live_eye(), -1.6, seed).target.position.x)
-            .collect();
-        let spread = directions.iter().cloned().fold(f32::MIN, f32::max).max(0.0)
-            - directions.iter().cloned().fold(f32::MAX, f32::min).min(0.0);
-        assert!(spread > FALL_LATERAL, "fall directions barely vary");
+        // The seed is a coin flip over which side the body lands on, and both
+        // sides have to come up - a seed that always fell the same way would
+        // make every death look identical.
+        let sides: Vec<bool> = (0..32).map(seed_is_left).collect();
+        assert!(sides.iter().any(|&left| left), "never falls left");
+        assert!(sides.iter().any(|&left| !left), "never falls right");
+    }
+
+    #[test]
+    fn the_body_topples_sideways_so_the_killer_stays_in_frame() {
+        // Looking along +X when killed.
+        let facing = Quaternion::from_angle_y(Deg(-90.0));
+        let eye = EyePose {
+            position: vec3(0.0, 2.6, 0.0),
+            rotation: facing,
+        };
+        for seed in 0..32 {
+            let death = DeathCamera::begin(eye, -1.6, seed);
+            let gaze = death
+                .sample()
+                .eye
+                .rotation
+                .rotate_vector(vec3(0.0, 0.0, -1.0));
+            // Still looking where they were looking - the roll is sideways.
+            assert!(
+                (gaze.x - 1.0).abs() < 1.0e-4 && gaze.y.abs() < 1.0e-4,
+                "seed {seed}: fell away from the killer, gaze {gaze:?}"
+            );
+            // ...and the body went over to one side of that gaze, not along it.
+            let drift = death.target.position - eye.position;
+            assert!(
+                drift.x.abs() < 1.0e-4 && drift.z.abs() > 0.1,
+                "seed {seed}: toppled along the gaze rather than across it, drift {drift:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_vertical_or_untracked_gaze_still_produces_a_finite_fall() {
+        for rotation in [
+            Quaternion::from_angle_x(Deg(90.0)),
+            Quaternion::from_angle_x(Deg(-90.0)),
+            Quaternion::zero(),
+        ] {
+            let eye = EyePose {
+                position: vec3(0.0, 2.6, 0.0),
+                rotation,
+            };
+            let target = DeathCamera::begin(eye, -1.6, 3).target;
+            assert!(
+                target.position.x.is_finite()
+                    && target.position.z.is_finite()
+                    && (target.rotation.magnitude() - 1.0).abs() < 1.0e-4,
+                "degenerate gaze {rotation:?} produced {target:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stereo_pair_keeps_its_separation_all_the_way_through_the_fall() {
+        // Two eyes half an IPD either side of the tracked head centre.
+        let ipd = 0.2_f32;
+        let centre = vec3(0.0, 2.6, 0.0);
+        let tracked_rotation = Quaternion::from_angle_y(Deg(20.0));
+        let offsets = [
+            tracked_rotation.rotate_vector(vec3(-ipd / 2.0, 0.0, 0.0)),
+            tracked_rotation.rotate_vector(vec3(ipd / 2.0, 0.0, 0.0)),
+        ];
+
+        let mut death = DeathCamera::begin(
+            EyePose {
+                position: centre,
+                rotation: tracked_rotation,
+            },
+            -1.6,
+            5,
+        );
+        for _ in 0..=60 {
+            let resolved = resolve(
+                Vector3::zero(),
+                Quaternion::one(),
+                centre,
+                tracked_rotation,
+                Some(death.sample()),
+            );
+            let eyes: Vec<Vector3<f32>> = offsets
+                .iter()
+                .map(|offset| reapply_eye_offset(resolved, *offset, tracked_rotation).head_offset)
+                .collect();
+            let separation = (eyes[1] - eyes[0]).magnitude();
+            assert!(
+                (separation - ipd).abs() < 1.0e-4,
+                "stereo separation drifted to {separation} (want {ipd})"
+            );
+            death.advance(FALL_SECONDS / 60.0);
+        }
+    }
+
+    #[test]
+    fn the_stereo_eyes_roll_with_the_fallen_horizon() {
+        let mut death = DeathCamera::begin(live_eye(), -1.6, 5);
+        death.advance(FALL_SECONDS * 2.0);
+        let resolved = resolve(
+            Vector3::zero(),
+            Quaternion::one(),
+            live_eye().position,
+            live_eye().rotation,
+            Some(death.sample()),
+        );
+        // A settled camera lying on its side separates its eyes vertically: the
+        // interocular axis has rolled with the view, so the two images stay
+        // level with the fallen horizon rather than with the room.
+        let right_eye = reapply_eye_offset(resolved, vec3(0.5, 0.0, 0.0), live_eye().rotation);
+        let displacement = right_eye.head_offset - resolved.head_offset;
+        assert!(
+            displacement.y.abs() > 0.49,
+            "the eye offset did not roll with the camera: {displacement:?}"
+        );
+    }
+
+    #[test]
+    fn an_untracked_head_leaves_the_stereo_offset_alone() {
+        let death = DeathCamera::begin(live_eye(), -1.6, 5);
+        let resolved = resolve(
+            Vector3::zero(),
+            Quaternion::one(),
+            live_eye().position,
+            live_eye().rotation,
+            Some(death.sample()),
+        );
+        assert_eq!(
+            reapply_eye_offset(resolved, vec3(0.5, 0.0, 0.0), Quaternion::zero()),
+            resolved
+        );
     }
 
     #[test]

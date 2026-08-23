@@ -27,9 +27,7 @@ extern crate glfw;
 use self::glfw::{Context, WindowEvent};
 use cgmath::{Quaternion, Rotation3, vec2, vec3};
 use dark::SCALE_FACTOR;
-use engine::{
-    EngineRenderContext, profile, scene::Scene, util::compute_view_matrix_from_render_context,
-};
+use engine::{profile, scene::Scene, util::compute_view_matrix_from_render_context};
 use shock2vr::{
     Game, GameOptions, SpawnLocation,
     input::{InputAction, InputActionState, remote as remote_input},
@@ -790,29 +788,22 @@ fn run_game_blocking(
         // player is dying the game blends this tracked pose toward the fallen
         // death pose, once, for every runtime (see `shock2vr::death_camera`).
         // Alive, it hands back exactly what went in.
-        let camera = game.resolve_camera(
-            pawn_offset,
-            pawn_rotation,
-            // Crouch-aware eye height, shared with desktop and the flat
-            // controller via Game::player_eye_height, so the debug-runtime
-            // camera sits at the same height as desktop and shots land on the
-            // crosshair.
-            vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
-            // Same head rotation fed to game.update, so the rendered view and the
-            // flat viewmodel agree. Controllable via `/v1/control/input` head.look.
-            current_input.head.rotation,
-        );
-
-        // Create a simple render context for debug view
-        let render_context = EngineRenderContext {
-            time: actual_game_time, // Use accumulated game time, not real time
-            camera_offset: camera.pawn_position,
-            camera_rotation: camera.pawn_rotation,
-            head_offset: camera.head_offset,
-            head_rotation: camera.head_rotation,
-            projection_matrix,
-            screen_size,
-        };
+        let render_context = game
+            .resolve_camera(
+                pawn_offset,
+                pawn_rotation,
+                // Crouch-aware eye height, shared with desktop and the flat
+                // controller via Game::player_eye_height, so the debug-runtime
+                // camera sits at the same height as desktop and shots land on
+                // the crosshair.
+                vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
+                // Same head rotation fed to game.update, so the rendered view
+                // and the flat viewmodel agree. Controllable via
+                // `/v1/control/input` head.look.
+                current_input.head.rotation,
+            )
+            // Accumulated game time, not real time.
+            .into_render_context(actual_game_time, projection_matrix, screen_size);
 
         let view = compute_view_matrix_from_render_context(&render_context);
 
