@@ -110,14 +110,19 @@ dev_params! {
     /// shares its single flat projection between flat and `--vr` mode, so this
     /// override reaches both there.)
     FOV_OVERRIDE_DEG = float("fov_override_deg", "FOV override (deg)", 0.0, 0.0, 120.0, 1.0),
-    /// Acceleration-based stiffness for all six axes of the motor joining a
-    /// physically simulated held melee weapon to its tracked-hand target.
-    /// Read before every physics step so headset tuning needs no rebuild.
-    MELEE_SPRING_STIFFNESS = float("melee_spring", "Melee spring", 900.0, 0.0, 3000.0, 50.0),
-    /// Damping paired with [`MELEE_SPRING_STIFFNESS`]. A value near
-    /// `2 * sqrt(stiffness)` is critically damped in Rapier's acceleration-
-    /// based motor model; the default is therefore critical at stiffness 900.
-    MELEE_SPRING_DAMPING = float("melee_damping", "Melee damping", 60.0, 0.0, 200.0, 5.0),
+    /// Ceiling on how fast a physically simulated held melee weapon may be
+    /// driven onto its tracked-hand target, in world units per second.
+    ///
+    /// The drive asks for exactly the velocity that lands the weapon on the
+    /// hand this step, so in ordinary use the clamp never binds - a very fast
+    /// human swing is well under it. It exists for the discontinuous case: a
+    /// teleport or a restore can put the target a whole level away, and
+    /// without a ceiling that becomes one enormous impulse into the geometry.
+    /// Read before every physics step, so a headset can tune it without a
+    /// rebuild.
+    MELEE_MAX_SPEED = float("melee_max_speed", "Melee max speed", 60.0, 1.0, 200.0, 5.0),
+    /// The angular counterpart of [`MELEE_MAX_SPEED`], in radians per second.
+    MELEE_MAX_TURN = float("melee_max_turn", "Melee max turn", 60.0, 1.0, 200.0, 5.0),
     /// Minimum contact speed, in world units per second, at which a held melee
     /// weapon damages what it touches *without* the trigger being pulled.
     ///
@@ -250,8 +255,8 @@ mod tests {
     fn defaults_equal_the_consts_they_replaced() {
         assert_eq!(get(FRONTEND_PANEL_DISTANCE), 2.0);
         assert_eq!(get(WORLD_DIM_STRENGTH), 0.72);
-        assert_eq!(get(MELEE_SPRING_STIFFNESS), 900.0);
-        assert_eq!(get(MELEE_SPRING_DAMPING), 60.0);
+        assert_eq!(get(MELEE_MAX_SPEED), 60.0);
+        assert_eq!(get(MELEE_MAX_TURN), 60.0);
     }
 
     /// Every declared default must be finite and inside its own range, or
