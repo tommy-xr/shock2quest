@@ -788,20 +788,7 @@ fn run_game_blocking(
         // player is dying the game blends this tracked pose toward the fallen
         // death pose, once, for every runtime (see `shock2vr::death_camera`).
         // Alive, it hands back exactly what went in.
-        let render_context = game
-            .resolve_camera(
-                pawn_offset,
-                pawn_rotation,
-                // Crouch-aware eye height, shared with desktop and the flat
-                // controller via Game::player_eye_height, so the debug-runtime
-                // camera sits at the same height as desktop and shots land on
-                // the crosshair.
-                vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
-                // Same head rotation fed to game.update, so the rendered view
-                // and the flat viewmodel agree. Controllable via
-                // `/v1/control/input` head.look.
-                current_input.head.rotation,
-            )
+        let render_context = resolved_camera(&game, pawn_offset, pawn_rotation, &current_input)
             // Accumulated game time, not real time.
             .into_render_context(actual_game_time, projection_matrix, screen_size);
 
@@ -1861,6 +1848,32 @@ fn input_snapshot_from_context(input: &InputContext) -> InputSnapshot {
     }
 }
 
+/// The camera this frame renders from: the crouch-aware eye height shared with
+/// desktop and the flat controller via `Game::player_eye_height` (so the
+/// debug-runtime camera sits at the same height as desktop and shots land on
+/// the crosshair), the same head rotation fed to `game.update` (so the rendered
+/// view and the flat viewmodel agree; controllable via `/v1/control/input`
+/// head.look), routed through `resolve_camera` so a death camera in progress
+/// moves the view.
+///
+/// Shared with `/v1/info` rather than written twice: the snapshot reports the
+/// camera the runtime actually rendered from, which is what makes the death
+/// camera observable headlessly, and a second copy of this expression would
+/// drift from the one that matters.
+fn resolved_camera(
+    game: &Game,
+    pawn_offset: Vector3<f32>,
+    pawn_rotation: Quaternion<f32>,
+    input: &InputContext,
+) -> shock2vr::death_camera::CameraPose {
+    game.resolve_camera(
+        pawn_offset,
+        pawn_rotation,
+        vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
+        input.head.rotation,
+    )
+}
+
 /// Capture current game state as a frame snapshot
 fn capture_frame_snapshot(
     game: &Game,
@@ -1927,11 +1940,11 @@ fn capture_frame_snapshot(
 
     // Only the head component is reported, so the pawn is passed as the
     // identity it is relative to - `resolve_camera` never touches it anyway.
-    let rendered_camera = game.resolve_camera(
+    let rendered_camera = resolved_camera(
+        game,
         vec3(0.0, 0.0, 0.0),
         Quaternion::new(1.0, 0.0, 0.0, 0.0),
-        vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
-        current_input.head.rotation,
+        current_input,
     );
 
     FrameSnapshot {

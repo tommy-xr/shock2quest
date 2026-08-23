@@ -103,15 +103,17 @@ test(
     );
 
     await game.step({ frames: Math.floor(FALL_FRAMES / 2) });
-    const midFall = (await game.info()).player;
-    assert.ok(
-      midFall.camera_offset[1] < alive.camera_offset[1] - 0.2 &&
-        midFall.camera_offset[1] > justDied.camera_offset[1] - alive.camera_offset[1],
-      `mid-fall the camera is between the eye and the floor, got ${midFall.camera_offset[1]}`,
-    );
+    const midFall = (await game.info()).player.camera_offset[1];
 
     await game.step({ frames: FALL_FRAMES });
     const fallen = (await game.info()).player;
+    // Strictly between the standing eye and where it settles - the fall is a
+    // ramp, not a cut. (Compared against the settled height, which is only
+    // known after the fall lands, so this assertion runs here.)
+    assert.ok(
+      midFall < alive.camera_offset[1] - 0.2 && midFall > fallen.camera_offset[1] + 0.05,
+      `mid-fall the camera should be between the standing eye ${alive.camera_offset[1]} and the settled ${fallen.camera_offset[1]}, got ${midFall}`,
+    );
     assert.equal(lifeState(fallen), "dead", "the fall settles inside the death sequence");
     assert.ok(
       fallen.camera_offset[1] < alive.camera_offset[1] - 1.0,

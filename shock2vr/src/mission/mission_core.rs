@@ -1097,6 +1097,12 @@ pub struct MissionCore {
     screen_fade_alpha: f32,
     screen_fade_texture: Rc<dyn TextureTrait>,
 
+    /// The tracked head rotation this frame. The death camera needs the gaze
+    /// the player died with, and a death arriving through `handle_effects` sees
+    /// no input context - so it is recorded here each update rather than
+    /// threaded through the effect path.
+    last_head_rotation: Quaternion<f32>,
+
     /// The fall to the floor that plays while the player is dying, or `None`
     /// while they are alive. Runtime-only, like [`PlayerLifeState`] itself: a
     /// dead game cannot be saved, so there is no death mid-fall to restore.
@@ -1893,6 +1899,7 @@ impl MissionCore {
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
             screen_fade_texture,
+            last_head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             death_camera: None,
         };
         for (index, entity_id) in backpack_load_remap.overflow.into_iter().enumerate() {
@@ -1985,19 +1992,62 @@ impl MissionCore {
     /// screenshot sequence, an e2e assertion - falls exactly the same way,
     /// while two deaths in different places do not topple identically.
     fn begin_death_camera(&self) -> DeathCamera {
-        let (position, eye_height) = {
+        let (position, player_rotation, player_entity) = {
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-            (
-                player.pos,
-                crate::player_eye_height_for(self.player_is_crouched()),
-            )
+            (player.pos, player.rotation, player.entity_id)
         };
         // The eye and the floor are both expressed relative to the pawn (the
         // collider center), which is the space the runtimes' `head_offset`
         // lives in - see `crate::death_camera`.
-        let live_eye = death_camera::upright_eye(eye_height / SCALE_FACTOR);
+        let eye_height = crate::player_eye_height_for(self.player_is_crouched());
+        let live_eye = death_camera::EyePose {
+            position: cgmath::vec3(0.0, eye_height / SCALE_FACTOR, 0.0),
+            // Where the player was actually looking: the body topples sideways
+            // from their gaze, so whatever killed them stays in frame.
+            rotation: self.last_head_rotation,
+        };
         let floor_y = -physics::player_center_above_floor(self.player_is_crouched());
-        DeathCamera::begin(live_eye, floor_y, death_seed(position))
+        let seed = death_seed(position);
+        let lateral =
+            self.clear_topple_distance(position, player_rotation, player_entity, seed, floor_y);
+        DeathCamera::begin(live_eye, floor_y, seed, lateral)
+    }
+
+    /// How far the body may topple before something stops it. Dying backed into
+    /// a wall is the common case when cornered, and an unclamped drift would
+    /// leave the camera inside the geometry. The path is swept at the height the
+    /// eye actually ends at - walls run floor to ceiling, but a waist-high crate
+    /// does not, and the fallen eye is low.
+    fn clear_topple_distance(
+        &self,
+        player_position: Vector3<f32>,
+        player_rotation: Quaternion<f32>,
+        player_entity: EntityId,
+        seed: u64,
+        floor_y: f32,
+    ) -> f32 {
+        // Keep the camera off whatever surface it stops against.
+        const CLEARANCE: f32 = 0.15;
+
+        let direction =
+            player_rotation * death_camera::topple_direction(self.last_head_rotation, seed);
+        let start = Point3::from_vec(
+            player_position + cgmath::vec3(0.0, floor_y + death_camera::FALLEN_EYE_HEIGHT, 0.0),
+        );
+        let blocked = self
+            .physics
+            .ray_cast2(
+                start,
+                direction,
+                death_camera::MAX_FALL_LATERAL,
+                physics::InternalCollisionGroups::ALL,
+                Some(player_entity),
+                true,
+            )
+            .map(|hit| (hit.hit_point - start).magnitude() - CLEARANCE);
+        blocked
+            .unwrap_or(death_camera::MAX_FALL_LATERAL)
+            .clamp(0.0, death_camera::MAX_FALL_LATERAL)
     }
 
     /// Drive the fall, and end it when the player is no longer dying. A QBR
@@ -2140,6 +2190,7 @@ impl MissionCore {
                 })
                 .unwrap_or(false)
         };
+        self.last_head_rotation = input_context.head.rotation;
         let mut life_state_effects = Vec::new();
         if self.player_is_alive() && player_health_depleted {
             life_state_effects.append(&mut self.begin_player_death());
