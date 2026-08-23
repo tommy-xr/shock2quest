@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
+import { stackCount as rawStackCount } from "./helpers/nanites.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
@@ -12,9 +13,9 @@ const FROB_PILE_OBJ = 257;
 const SQUEEZE_PILE_OBJ = 292;
 
 function stackCount(properties: { name: string; value: string }[]): number {
-  const stack = properties.find((property) => property.name === "StackCount");
-  assert.ok(stack, "expected an authored StackCount");
-  return Number(stack.value);
+  const stack = rawStackCount(properties);
+  assert.ok(stack !== undefined, "expected an authored StackCount");
+  return stack;
 }
 
 test(
