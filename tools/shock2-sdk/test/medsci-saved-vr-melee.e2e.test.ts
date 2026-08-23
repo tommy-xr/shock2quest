@@ -29,6 +29,9 @@ const SHOTGUN_HYBRID = 1392;
 const BREAKABLE_PANE = 237;
 const PANEL_SIZE_PX: Vec3 = [188, 296, 0];
 const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
+const WRENCH_WINDUP_DISTANCE = 1.5;
+const WRENCH_SWEEP_END_DISTANCE = -0.75;
+const WRENCH_SWEEP_FRAMES = 45;
 
 const add = (a: Vec3, b: Vec3): Vec3 => a.map((x, i) => x + b[i]) as Vec3;
 const sub = (a: Vec3, b: Vec3): Vec3 => a.map((x, i) => x - b[i]) as Vec3;
@@ -118,16 +121,36 @@ async function measureHeldContactOffset(game: GameServer): Promise<void> {
   // Let the pawn settle first: while it is still falling the hand it carries
   // trails the physics body the reading is compared against.
   await game.step({ frames: 45 });
-  // Take the pawn from the *same response* as the body. Physics free-runs
+  // Take the pawn from the *same response* as the bodies. Physics free-runs
   // between HTTP requests, so a pawn read a request later has already fallen a
   // little further and the difference lands straight in the offset (measured:
   // 0.2 of bogus reach).
-  const bodies = await game.physics.bodies({ entityId: held });
-  const body = bodies.bodies[0];
+  const bodies = await game.physics.bodies();
+  const body = bodies.bodies.find((candidate) => candidate.entity_id === held);
   assert.ok(body, "the held weapon must have a contact body");
   const pawnRotation = (await game.info()).player.rotation;
   const handWorld = add(bodies.player_position, qrotate(pawnRotation, local));
-  heldContactOffset = qrotate(qconj(pawnRotation), sub(body.position, handWorld));
+  // The visible dynamic body may be held back by world contact—that separation
+  // is the feature under test. Measure the intended grip from its colliderless
+  // kinematic motor target instead (the nearest anonymous kinematic body to
+  // the hand), while every damage assertion below still uses the dynamic body.
+  const driveTarget = bodies.bodies
+    .filter(
+      (candidate) =>
+        candidate.entity_id === null &&
+        candidate.body_type === "kinematic" &&
+        candidate.collision_groups.length === 0,
+    )
+    .sort(
+      (a, b) =>
+        Math.sqrt(dot(sub(a.position, handWorld), sub(a.position, handWorld))) -
+        Math.sqrt(dot(sub(b.position, handWorld), sub(b.position, handWorld))),
+    )[0];
+  assert.ok(driveTarget, "the held weapon must have a controller target");
+  heldContactOffset = qrotate(
+    qconj(pawnRotation),
+    sub(driveTarget.position, handWorld),
+  );
 
   // Staging follows this measurement, so assert its shape or the gesture would
   // silently compensate for a misplaced collider and still pass. The wielded
@@ -147,7 +170,7 @@ async function measureHeldContactOffset(game: GameServer): Promise<void> {
 }
 
 // This is the production play-through gesture: orient the physical right hand
-// along the eye-to-target ray, wind up two units away, pull the trigger, and
+// along the eye-to-target ray, wind up clear of contact, pull the trigger, and
 // sweep the rendered weapon head into the target. No damage/script message is
 // injected by the test.
 async function poseWrench(
@@ -185,6 +208,42 @@ async function poseWrench(
   await game.input.set("right_hand.rotation", localRotation);
   await game.input.set("right_hand.squeeze", 1);
   await game.step({ frames });
+}
+
+// Feed one tracked-hand pose per physics frame, matching the controller path
+// that drives the spring target in production. The former kinematic body could
+// jump from the four-unit wind-up straight into the victim; a dynamic weapon
+// must travel the intervening distance and make an authentic contact.
+async function sweepWrenchThrough(
+  game: GameServer,
+  target: EntitySummary,
+  initialTargetPoint: Vec3,
+): Promise<Vec3> {
+  const startDistance = WRENCH_WINDUP_DISTANCE;
+  const endDistance = WRENCH_SWEEP_END_DISTANCE;
+  const sweepFrames = WRENCH_SWEEP_FRAMES;
+  let targetPoint = initialTargetPoint;
+  for (let frame = 1; frame <= sweepFrames; frame += 1) {
+    // Reacquire a moving torso every frame without turning a pane that breaks
+    // during the sweep into a failed entity-detail request.
+    try {
+      const current = await game.entities.detail(target.id);
+      targetPoint =
+        current.aim_points?.find(
+          (point) => point.classification === "torso",
+        )?.position ?? current.position;
+    } catch {
+      // A breakable world target may already have been slain by this swing.
+    }
+    const t = frame / sweepFrames;
+    await poseWrench(
+      game,
+      targetPoint,
+      startDistance + (endDistance - startDistance) * t,
+      1,
+    );
+  }
+  return targetPoint;
 }
 
 async function bodyFor(
@@ -248,7 +307,7 @@ async function armedSweep(
   await game.player.teleport({
     x: live.position[0] + 0.815,
     y: live.position[1] + 0.236,
-    z: live.position[2] - 2.245,
+    z: live.position[2] + 2.245,
   });
   await game.entities.sendMessage(target.id, {
     type: "SetAlertness",
@@ -260,25 +319,19 @@ async function armedSweep(
   let targetPoint =
     afterTeleport.aim_points?.find((point) => point.classification === "torso")
       ?.position ?? afterTeleport.position;
-  await poseWrench(game, targetPoint, 4);
-  await game.step({ frames: 4 });
+  await poseWrench(game, targetPoint, WRENCH_WINDUP_DISTANCE, 45);
   await game.input.set("right_hand.trigger", 0);
   await game.step({ frames: 2 });
   const sequence =
     (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
   await game.input.set("right_hand.trigger", 1);
   await game.step({ frames: 2 });
-  const current = await game.entities.detail(target.id);
-  targetPoint =
-    current.aim_points?.find((point) => point.classification === "torso")
-      ?.position ?? current.position;
-  await poseWrench(game, targetPoint, -0.1, 1);
-  await game.step({ frames: 2 });
+  targetPoint = await sweepWrenchThrough(game, target, targetPoint);
   return { sequence, targetId: target.id, targetPoint };
 }
 
 // The #984 report/review's live-torso incremental approach. Arm from a
-// measured-clear four-unit pose, then reacquire the moving torso as the
+// measured-clear wind-up pose, then reacquire the moving torso as the
 // rendered weapon head crosses it.
 async function reviewedIncrementalSweep(
   game: GameServer,
@@ -286,7 +339,7 @@ async function reviewedIncrementalSweep(
 ): Promise<{ sequence: number; targetId: number; targetPoint: Vec3 }> {
   const live = await game.entities.detail(target.id);
   await game.player.teleport({
-    x: live.position[0] + 0.815,
+    x: live.position[0] - 0.815,
     y: live.position[1] + 0.236,
     z: live.position[2] - 2.245,
   });
@@ -298,20 +351,13 @@ async function reviewedIncrementalSweep(
   let targetPoint =
     live.aim_points?.find((point) => point.classification === "torso")
       ?.position ?? live.position;
-  await poseWrench(game, targetPoint, 4, 4);
+  await poseWrench(game, targetPoint, WRENCH_WINDUP_DISTANCE, 45);
 
   const sequence =
     (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
   await game.input.set("right_hand.trigger", 1);
   await game.step({ frames: 2 });
-  for (const handDistance of [1.5, 1.0, 0.5, 0.15, -0.1]) {
-    const current = await game.entities.detail(target.id);
-    targetPoint =
-      current.aim_points?.find((point) => point.classification === "torso")
-        ?.position ?? current.position;
-    await poseWrench(game, targetPoint, handDistance, 1);
-  }
-  await game.step({ frames: 2 });
+  targetPoint = await sweepWrenchThrough(game, target, targetPoint);
   return { sequence, targetId: target.id, targetPoint };
 }
 
@@ -322,7 +368,7 @@ async function releaseTrigger(
   await game.input.set("right_hand.trigger", 0);
   await game.step({ frames: 2 });
   if (targetPoint) {
-    await poseWrench(game, targetPoint, 4);
+    await poseWrench(game, targetPoint, WRENCH_WINDUP_DISTANCE, 30);
   }
 }
 
@@ -437,7 +483,7 @@ async function assertNineDamagePull(
   assert.equal(
     hitPoints(await game.entities.detail(targetId)),
     initialHp - 9,
-    `${name} must take exactly 9 HP during the four-frame contact pose`,
+    `${name} must take exactly 9 HP during the physical controller sweep`,
   );
   await releaseTrigger(game, targetPoint);
 }
@@ -599,7 +645,7 @@ test(
     assert.equal(
       (await game.physics.bodies({ entityId: restoredWrench.id })).bodies[0]
         ?.body_type,
-      "kinematic",
+      "dynamic",
     );
 
     const combatBaseline = `medsci_saved_vr_melee_combat_baseline_${stamp}`;
@@ -643,7 +689,7 @@ test(
     await releaseTrigger(game, targetPoint);
 
     // Drop through the real VR squeeze edge. The held-only solver filter must
-    // leave with the old kinematic body: the recreated world Wrench is again a
+    // leave with the old motor-driven body: the recreated world Wrench is a
     // normal dynamic, actor-solid loose prop and remains finite under gravity.
     await game.input.set("right_hand.position", [0, 0.6, -0.6]);
     await game.input.set("right_hand.squeeze", 1);
@@ -702,10 +748,10 @@ test(
     await game.step({ frames: 2 });
     assert.equal(hitPoints(await game.entities.detail(monster.id)), 9);
 
-    const { sequence, targetId } = await reviewedIncrementalSweep(
-      game,
-      monster,
-    );
+    // This debug-spawn point sits against the opposite side of the MedSci
+    // corridor from the shipped shotgun doorway; use the clear-side staging
+    // shared by the single-contact targets above.
+    const { sequence, targetId } = await armedSweep(game, monster);
     const lethalMessages = await damageMessagesSince(game, sequence, targetId);
     assert.equal(
       lethalMessages.length,

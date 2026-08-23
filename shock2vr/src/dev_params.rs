@@ -110,6 +110,14 @@ dev_params! {
     /// shares its single flat projection between flat and `--vr` mode, so this
     /// override reaches both there.)
     FOV_OVERRIDE_DEG = float("fov_override_deg", "FOV override (deg)", 0.0, 0.0, 120.0, 1.0),
+    /// Acceleration-based stiffness for all six axes of the motor joining a
+    /// physically simulated held melee weapon to its tracked-hand target.
+    /// Read before every physics step so headset tuning needs no rebuild.
+    MELEE_SPRING_STIFFNESS = float("melee_spring", "Melee spring", 900.0, 0.0, 3000.0, 50.0),
+    /// Damping paired with [`MELEE_SPRING_STIFFNESS`]. A value near
+    /// `2 * sqrt(stiffness)` is critically damped in Rapier's acceleration-
+    /// based motor model; the default is therefore critical at stiffness 900.
+    MELEE_SPRING_DAMPING = float("melee_damping", "Melee damping", 60.0, 0.0, 200.0, 5.0),
 }
 
 /// Every parameter with its id, in declaration order.
@@ -196,6 +204,8 @@ mod tests {
     fn defaults_equal_the_consts_they_replaced() {
         assert_eq!(get(FRONTEND_PANEL_DISTANCE), 2.0);
         assert_eq!(get(WORLD_DIM_STRENGTH), 0.72);
+        assert_eq!(get(MELEE_SPRING_STIFFNESS), 900.0);
+        assert_eq!(get(MELEE_SPRING_DAMPING), 60.0);
     }
 
     /// Every declared default must be finite and inside its own range, or
