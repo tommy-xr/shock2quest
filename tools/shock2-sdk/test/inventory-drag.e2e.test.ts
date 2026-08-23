@@ -44,15 +44,16 @@ test(
     };
     // A discrete click at a screen point: hover (an unpressed frame so the
     // press is an edge), press, release.
-    const clickAt = async (screen: [number, number]) => {
+    const clickAt = async (screen: [number, number], phaseFrames = 2) => {
       await setPointer(screen, 0);
-      await game.step({ frames: 2 });
+      await game.step({ frames: phaseFrames });
       await setPointer(screen, 1);
-      await game.step({ frames: 2 });
+      await game.step({ frames: phaseFrames });
       await setPointer(screen, 0);
-      await game.step({ frames: 2 });
+      await game.step({ frames: phaseFrames });
     };
-    const clickElement = (el: UiElement) => clickAt(center(el));
+    const clickElement = (el: UiElement, phaseFrames = 2) =>
+      clickAt(center(el), phaseFrames);
 
     // Loot an item honestly through a PR-3 loot MFD (frob corpse -> take).
     const lootFromCorpse = async (template: number, itemName: string) => {
@@ -157,8 +158,11 @@ test(
     // --- WIELD: a DOUBLE-click on the Wrench equips it (single=lift,
     // double=wield - the faithful single-button mapping) ---
     const wrenchEl2 = stripItem(await game.ui.state(), "Wrench")!;
-    await clickElement(wrenchEl2); // first click lifts...
-    await clickElement(wrenchEl2); // ...quick second click on the same slot wields
+    // Six stepped frames per phase put the two press edges 18 simulation
+    // frames apart: inside the documented 20-frame window, while exercising
+    // a natural multi-frame hold/release rather than one-frame pulses.
+    await clickElement(wrenchEl2, 6); // first click lifts...
+    await clickElement(wrenchEl2, 6); // ...quick second click on the same slot wields
     ui = await game.ui.state();
     assert.ok(!ui.cursor, "wielding clears the cursor");
     const afterWield = await game.player.inventory();
