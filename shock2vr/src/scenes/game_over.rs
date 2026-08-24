@@ -67,6 +67,11 @@ const NO_SAVE_LABEL: &str = "< EMPTY >";
 enum GameOverAction {
     /// Reload the most recent save and resume play.
     Load,
+    /// Leave this game. The main menu, *not* the process: dying is not a
+    /// reason to be thrown out of the application, and the menu is where the
+    /// other recovery paths (a different save, a new game) live. On the Quest
+    /// this was the difference between a death costing one click and costing
+    /// a relaunch of the APK.
     Quit,
 }
 
@@ -75,6 +80,24 @@ const HEADER_RECT_INDEX: usize = 0;
 const LIST_RECT_INDEX: usize = 1;
 const LOAD_RECT_INDEX: usize = 2;
 const QUIT_RECT_INDEX: usize = 3;
+
+/// What a clicked button does. Split out of `update` so the mapping can be
+/// asserted without standing up a scene - the Quit destination in particular
+/// is easy to regress and expensive to notice, since noticing it means dying.
+fn effects_for(action: Option<GameOverAction>, save: Option<&SaveFile>) -> Vec<Effect> {
+    match action {
+        Some(GameOverAction::Load) => save
+            .map(|save| {
+                Effect::GlobalEffect(GlobalEffect::Load {
+                    file_name: save.path.to_string_lossy().into_owned(),
+                })
+            })
+            .into_iter()
+            .collect(),
+        Some(GameOverAction::Quit) => vec![Effect::GlobalEffect(GlobalEffect::ShowMainMenu)],
+        None => Vec::new(),
+    }
+}
 
 /// Decoded `GAMELODR.BIN` values, used when the layout file is absent.
 const FALLBACK_RECTS: [Rect; 4] = [
@@ -270,17 +293,7 @@ impl GameScene for GameOverScene {
             |point| hit(point, &rects, self.save.is_some()),
         );
 
-        match action {
-            Some(GameOverAction::Load) => {
-                if let Some(save) = &self.save {
-                    effects.push(Effect::GlobalEffect(GlobalEffect::Load {
-                        file_name: save.path.to_string_lossy().into_owned(),
-                    }));
-                }
-            }
-            Some(GameOverAction::Quit) => effects.push(Effect::GlobalEffect(GlobalEffect::Quit)),
-            None => {}
-        }
+        effects.extend(effects_for(action, self.save.as_ref()));
         effects
     }
 
@@ -391,6 +404,23 @@ mod tests {
             false,
         );
         assert_eq!(action, None);
+    }
+
+    /// Dying must not be able to close the game. On the Quest, `GlobalEffect::Quit`
+    /// here meant every death ended the session and cost a relaunch of the APK -
+    /// the screen's own doc calls this the "load/quit recovery path", and a
+    /// recovery path that exits the process recovers nothing.
+    #[test]
+    fn quit_returns_to_the_main_menu_rather_than_closing_the_game() {
+        let effects = effects_for(Some(GameOverAction::Quit), None);
+
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [Effect::GlobalEffect(GlobalEffect::ShowMainMenu)]
+            ),
+            "game-over Quit should return to the main menu: {effects:?}"
+        );
     }
 
     #[test]
