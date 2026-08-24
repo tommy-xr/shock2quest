@@ -50,13 +50,14 @@ async function shot(game, name) {
   return `(screenshot ${name} unavailable)`;
 }
 
-async function sweepMission(mission, index) {
-  const port = 8140 + index;
+async function sweepMission(mission) {
+  // No port: the runtime binds an ephemeral one and the SDK reads it back, so
+  // a leftover runtime can never collide with this sweep.
   const lines = [`\n## ${mission}`];
   let loaded = false;
   let game;
   try {
-    game = await GameServer.launch({ mission: `${mission}.mis`, port });
+    game = await GameServer.launch({ mission: `${mission}.mis` });
   } catch (e) {
     lines.push(`- **LOAD FAILED** — \`${String(e.message).slice(0, 200)}\``);
     lines.push(`- GAP [functionality]: ${mission} did not launch/become ready.`);
@@ -130,7 +131,7 @@ async function sweepMission(mission, index) {
 
 console.log(`Sweeping ${MISSIONS.length} missions...`);
 for (let i = 0; i < MISSIONS.length; i++) {
-  await sweepMission(MISSIONS[i], i);
+  await sweepMission(MISSIONS[i]);
 }
 
 // Assemble report
