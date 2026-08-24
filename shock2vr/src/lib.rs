@@ -1909,6 +1909,25 @@ impl Game {
         (self.free_camera.is_detached(), self.free_camera.pose())
     }
 
+    /// Detach the free camera and put it at an explicit *camera* pose - the
+    /// write side of [`free_camera_state`], for a caller with no stick to fly
+    /// it with (the debug runtime's `POST /v1/camera`).
+    ///
+    /// The pose is the one a runtime composes its tracked head offset/rotation
+    /// onto, not the eye pose; [`free_camera::pose_for_eye`] converts.
+    ///
+    /// [`free_camera_state`]: Self::free_camera_state
+    pub fn place_free_camera(&mut self, pose: free_camera::Pose) {
+        self.free_camera.place(pose);
+    }
+
+    /// Re-attach the free camera to the player. The pawn never moved, so there
+    /// is nothing to restore beyond dropping the override.
+    pub fn attach_free_camera(&mut self) {
+        self.free_camera.attach();
+        self.free_camera_view_fixup = None;
+    }
+
     /// Get hand spotlights for enhanced lighting when experimental flag is enabled
     pub fn get_hand_spotlights(&self) -> Vec<engine::scene::light::SpotLight> {
         // The lights belong to the hands: with the hands suppressed they would
