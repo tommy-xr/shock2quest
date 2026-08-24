@@ -301,6 +301,11 @@ fn strip_deposit_entities(
 /// rather than stored, so the credential is recorded instead of an inert card
 /// being banked.
 ///
+/// `store` pairs each stored item with the strip cell its release was over,
+/// when one resolved - the deposit becomes a [`VirtualHandEffect::StoreItemAtCell`]
+/// there, falling back to the first-free [`VirtualHandEffect::StoreItem`]
+/// only when no cell resolved.
+///
 /// The `ProvideForConsumption` offer goes too. It is what the hand offers to
 /// whatever its release raycast hit, and because the panel is not physical
 /// that ray reaches straight through it - so a container standing behind the
@@ -308,13 +313,15 @@ fn strip_deposit_entities(
 /// twice. Everything else the hand emitted this frame is untouched.
 fn rewrite_strip_release(
     effects: &mut Vec<VirtualHandEffect>,
-    store: &[EntityId],
+    store: &[(EntityId, Option<(usize, usize)>)],
     collect: &[EntityId],
 ) {
     if store.is_empty() && collect.is_empty() {
         return;
     }
-    let claimed = |entity_id: &EntityId| store.contains(entity_id) || collect.contains(entity_id);
+    let claimed = |entity_id: &EntityId| {
+        store.iter().any(|(item, _)| item == entity_id) || collect.contains(entity_id)
+    };
     let mut rewritten = Vec::with_capacity(effects.len());
     for effect in effects.drain(..) {
         match effect {
@@ -333,7 +340,13 @@ fn rewrite_strip_release(
                         },
                     }
                 } else {
-                    VirtualHandEffect::StoreItem { entity_id }
+                    match store.iter().find(|(item, _)| *item == entity_id) {
+                        Some((_, Some(cell))) => VirtualHandEffect::StoreItemAtCell {
+                            entity_id,
+                            cell: *cell,
+                        },
+                        _ => VirtualHandEffect::StoreItem { entity_id },
+                    }
                 });
             }
             VirtualHandEffect::OutMessage {
@@ -669,6 +682,85 @@ fn move_live_entity_into_container(
     container_entity_id: EntityId,
     dropped_entity_id: EntityId,
 ) -> bool {
+    move_live_entity_into_container_at_slot(world, container_entity_id, dropped_entity_id, None)
+}
+
+/// Like [`move_live_entity_into_container`], but prefers the cell
+/// `target_cell` names when it exists and can fit the item, and falls back to
+/// the first free cell otherwise (a cell held by another item, or outside the
+/// grid entirely) - retail drops an item where the player is pointing rather
+/// than always at the first free slot.
+fn move_live_entity_into_container_at_cell(
+    world: &mut World,
+    container_entity_id: EntityId,
+    dropped_entity_id: EntityId,
+    target_cell: (usize, usize),
+) -> bool {
+    let fits = {
+        let grid = crate::inventory::grid_for(world, container_entity_id);
+        let occupied =
+            crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+        let dims = world
+            .borrow::<View<dark::properties::PropInventoryDimensions>>()
+            .ok()
+            .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
+            .unwrap_or((1, 1));
+        occupied.has_capacity(
+            target_cell.0,
+            target_cell.1,
+            dims.0 as usize,
+            dims.1 as usize,
+        )
+    };
+    let grid = crate::inventory::grid_for(world, container_entity_id);
+    let slot = fits.then(|| (target_cell.1 * grid.0 + target_cell.0) as u32);
+    move_live_entity_into_container_at_slot(world, container_entity_id, dropped_entity_id, slot)
+}
+
+/// The occupant of `target_cell` in `container_entity_id`'s grid, if that
+/// occupant shares `dropped_entity_id`'s template and both carry a
+/// `PropStackCount` - the "matching stackable" a targeted deposit merges
+/// into instead of claiming a cell of its own. `None` when the cell is empty,
+/// off the grid, or holds an item that cannot be merged with.
+fn matching_stack_at_cell(
+    world: &World,
+    container_entity_id: EntityId,
+    dropped_entity_id: EntityId,
+    target_cell: (usize, usize),
+) -> Option<EntityId> {
+    let grid = crate::inventory::grid_for(world, container_entity_id);
+    let occupied = crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    let occupant = occupied.entity_at(target_cell.0, target_cell.1)?;
+    if occupant == dropped_entity_id {
+        return None;
+    }
+    let v_template = world
+        .borrow::<View<dark::properties::PropTemplateId>>()
+        .ok()?;
+    let v_stacks = world
+        .borrow::<View<dark::properties::PropStackCount>>()
+        .ok()?;
+    let dropped_template = v_template.get(dropped_entity_id).ok()?.template_id;
+    let occupant_template = v_template.get(occupant).ok()?.template_id;
+    if dropped_template != occupant_template {
+        return None;
+    }
+    v_stacks
+        .get(occupant)
+        .ok()
+        .and_then(|_| v_stacks.get(dropped_entity_id).ok())
+        .map(|_| occupant)
+}
+
+/// Shared placement body for [`move_live_entity_into_container`] and
+/// [`move_live_entity_into_container_at_cell`]: `requested_slot` names the
+/// exact ordinal to claim, or `None` for the first free cell.
+fn move_live_entity_into_container_at_slot(
+    world: &mut World,
+    container_entity_id: EntityId,
+    dropped_entity_id: EntityId,
+    requested_slot: Option<u32>,
+) -> bool {
     let is_alive = world
         .borrow::<EntitiesView>()
         .is_ok_and(|entities| entities.is_alive(dropped_entity_id));
@@ -680,20 +772,23 @@ fn move_live_entity_into_container(
     // was put instead of being repacked on every draw. Computed before
     // the borrow below, and *after* the item's own links are irrelevant -
     // it is not in the container yet, so it cannot occupy a cell here.
-    let slot = {
-        let grid = crate::inventory::grid_for(world, container_entity_id);
-        let occupied =
-            crate::inventory::Inventory::from_container(world, container_entity_id, grid);
-        let dims = world
-            .borrow::<View<dark::properties::PropInventoryDimensions>>()
-            .ok()
-            .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
-            .unwrap_or((1, 1));
-        // A full container still takes the item (the drop is already
-        // permitted by the caller); it just has no cell to remember.
-        occupied
-            .first_free_slot(dims.0 as usize, dims.1 as usize)
-            .unwrap_or(0)
+    let slot = match requested_slot {
+        Some(slot) => slot,
+        None => {
+            let grid = crate::inventory::grid_for(world, container_entity_id);
+            let occupied =
+                crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+            let dims = world
+                .borrow::<View<dark::properties::PropInventoryDimensions>>()
+                .ok()
+                .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
+                .unwrap_or((1, 1));
+            // A full container still takes the item (the drop is already
+            // permitted by the caller); it just has no cell to remember.
+            occupied
+                .first_free_slot(dims.0 as usize, dims.1 as usize)
+                .unwrap_or(0)
+        }
     };
 
     let mut was_able_to_drop = false;
@@ -927,6 +1022,204 @@ mod released_item_world_refs_tests {
 
         assert!(!restore_live_entity_world_refs(&mut world, item));
         assert!(!world.borrow::<EntitiesView>().unwrap().is_alive(item));
+    }
+}
+
+#[cfg(test)]
+mod cell_deposit_tests {
+    use dark::properties::{PropInventoryDimensions, PropStackCount, PropTemplateId};
+
+    use super::*;
+
+    fn container_with_item_at(
+        occupant_cell: Option<(u32, u32)>,
+    ) -> (World, EntityId, Option<EntityId>) {
+        let mut world = World::new();
+        let occupant = occupant_cell.map(|_| world.add_entity((PropHasRefs(false),)));
+        let to_links = match (occupant, occupant_cell) {
+            (Some(occupant), Some((x, y))) => vec![ToLink {
+                link: Link::Contains(y * crate::inventory::CONTAINER_GRID.0 as u32 + x),
+                to_entity_id: Some(WrappedEntityId(occupant)),
+                to_template_id: 0,
+            }],
+            _ => Vec::new(),
+        };
+        let container = world.add_entity(Links { to_links });
+        (world, container, occupant)
+    }
+
+    /// The reported bug: a targeted deposit over an empty cell must land
+    /// exactly there, not at the grid's first free slot. Fails on main, where
+    /// only `move_live_entity_into_container`'s always-first-free placement
+    /// exists.
+    #[test]
+    fn an_empty_target_cell_is_claimed_exactly() {
+        let (mut world, container, _occupant) = container_with_item_at(None);
+        let item = world.add_entity(PropHasRefs(false));
+
+        assert!(move_live_entity_into_container_at_cell(
+            &mut world,
+            container,
+            item,
+            (3, 1),
+        ));
+
+        let links = world.borrow::<View<Links>>().unwrap();
+        let slot = links
+            .get(container)
+            .unwrap()
+            .to_links
+            .iter()
+            .find_map(|link| {
+                (link.to_entity_id.map(|w| w.0) == Some(item))
+                    .then_some(link.link.clone())
+                    .and_then(|l| match l {
+                        Link::Contains(slot) => Some(slot),
+                        _ => None,
+                    })
+            })
+            .expect("item should be linked into the container");
+        assert_eq!(
+            slot,
+            1 * crate::inventory::CONTAINER_GRID.0 as u32 + 3,
+            "must land at (3,1), not the first free cell"
+        );
+    }
+
+    /// A cell already claimed by a different (non-matching) item falls back
+    /// to the ordinary first-free placement rather than evicting or swapping.
+    #[test]
+    fn an_occupied_target_cell_falls_back_to_first_free() {
+        let (mut world, container, occupant) = container_with_item_at(Some((0, 0)));
+        let item = world.add_entity(PropHasRefs(false));
+
+        assert!(move_live_entity_into_container_at_cell(
+            &mut world,
+            container,
+            item,
+            (0, 0),
+        ));
+
+        let links = world.borrow::<View<Links>>().unwrap();
+        let slot = links
+            .get(container)
+            .unwrap()
+            .to_links
+            .iter()
+            .find_map(|link| {
+                (link.to_entity_id.map(|w| w.0) == Some(item))
+                    .then_some(link.link.clone())
+                    .and_then(|l| match l {
+                        Link::Contains(slot) => Some(slot),
+                        _ => None,
+                    })
+            })
+            .expect("item should still be linked into the container");
+        assert_ne!(
+            slot, 0,
+            "cell 0 is taken by another item; the deposit must not overwrite it"
+        );
+        assert!(occupant.is_some());
+    }
+
+    /// A target cell holding a same-template stack is a merge candidate, not
+    /// a claim - `MissionCore::drop_entity_into_container_at_cell` sums the
+    /// counts and destroys the dropped entity instead of placing it.
+    #[test]
+    fn a_matching_stack_at_the_cell_is_detected_as_a_merge_target() {
+        let mut world = World::new();
+        let occupant = world.add_entity((
+            PropHasRefs(false),
+            PropTemplateId { template_id: 42 },
+            PropStackCount(3),
+        ));
+        let container = world.add_entity(Links {
+            to_links: vec![ToLink {
+                link: Link::Contains(0),
+                to_entity_id: Some(WrappedEntityId(occupant)),
+                to_template_id: 0,
+            }],
+        });
+        let dropped = world.add_entity((
+            PropHasRefs(false),
+            PropTemplateId { template_id: 42 },
+            PropStackCount(2),
+        ));
+
+        assert_eq!(
+            matching_stack_at_cell(&world, container, dropped, (0, 0)),
+            Some(occupant)
+        );
+    }
+
+    /// A same-cell item with a different template is an ordinary occupant,
+    /// not a merge target - the deposit must fall back to first-free instead
+    /// of silently folding unrelated items together.
+    #[test]
+    fn a_different_template_at_the_cell_is_not_a_merge_target() {
+        let mut world = World::new();
+        let occupant = world.add_entity((
+            PropHasRefs(false),
+            PropTemplateId { template_id: 42 },
+            PropStackCount(3),
+        ));
+        let container = world.add_entity(Links {
+            to_links: vec![ToLink {
+                link: Link::Contains(0),
+                to_entity_id: Some(WrappedEntityId(occupant)),
+                to_template_id: 0,
+            }],
+        });
+        let dropped = world.add_entity((
+            PropHasRefs(false),
+            PropTemplateId { template_id: 43 },
+            PropStackCount(2),
+        ));
+
+        assert_eq!(
+            matching_stack_at_cell(&world, container, dropped, (0, 0)),
+            None
+        );
+    }
+
+    /// A multi-cell item's target still respects capacity: a target cell that
+    /// cannot fit the item's authored footprint is not claimed, even empty.
+    #[test]
+    fn a_target_cell_too_small_for_the_items_footprint_falls_back() {
+        let (mut world, container, _occupant) = container_with_item_at(None);
+        let item = world.add_entity((
+            PropHasRefs(false),
+            PropInventoryDimensions {
+                width: 1,
+                height: 3,
+            },
+        ));
+
+        // (0, 3) is the last row of a 4-tall grid - a 1x3 item cannot fit
+        // starting there.
+        assert!(move_live_entity_into_container_at_cell(
+            &mut world,
+            container,
+            item,
+            (0, 3),
+        ));
+
+        let links = world.borrow::<View<Links>>().unwrap();
+        let slot = links
+            .get(container)
+            .unwrap()
+            .to_links
+            .iter()
+            .find_map(|link| {
+                (link.to_entity_id.map(|w| w.0) == Some(item))
+                    .then_some(link.link.clone())
+                    .and_then(|l| match l {
+                        Link::Contains(slot) => Some(slot),
+                        _ => None,
+                    })
+            })
+            .expect("item should be linked into the container");
+        assert_eq!(slot, 0, "falls back to the first free cell, (0,0)");
     }
 }
 
@@ -2870,6 +3163,10 @@ impl MissionCore {
         // the canvas is not a drop target, so a release there stays an
         // ordinary world drop.
         let mut on_strip = [false; 2];
+        // The strip cell each on-strip hand's ray currently lands on, for the
+        // release-deposit below - retail drops the item into the cell the
+        // player is pointing at rather than always the first free one.
+        let mut strip_cell: [Option<(usize, usize)>; 2] = [None; 2];
         if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
             for ray in pass.rays.iter() {
                 let Some(canvas_hit) = ray.canvas_hit else {
@@ -2885,6 +3182,8 @@ impl MissionCore {
                     && self.flat_ui.strip_contains(canvas_hit)
                 {
                     on_strip[hand_slot(ray.handedness)] = true;
+                    strip_cell[hand_slot(ray.handedness)] =
+                        self.flat_ui.strip_cell_at(canvas_hit, &self.world);
                 }
             }
         }
@@ -2977,15 +3276,30 @@ impl MissionCore {
             crate::scripts::script_util::is_always_collected(&self.world, **entity_id)
         });
         let collect: Vec<_> = collect.into_iter().copied().collect();
+        // The cell the depositing hand's ray was over, for a stored item -
+        // whichever on-strip slot actually held it. `None` (a ray gone off
+        // the strip between resolving `strip_cell` and here, or generally
+        // defensive) falls back to `StoreItem`'s first-free placement.
+        let cell_for = |entity_id: EntityId| -> Option<(usize, usize)> {
+            (0..2).find_map(|slot| {
+                (on_strip[slot] && [left_hand_held, right_hand_held][slot] == Some(entity_id))
+                    .then_some(strip_cell[slot])
+                    .flatten()
+            })
+        };
         // A stored item needs backpack room, so nothing is claimed unless the
         // backpack can actually take it - a release is never suppressed into an
         // item that lands nowhere. A collected one never enters the pack (its
         // Frob awards and destroys it), so it is claimed either way.
-        let store: Vec<_> = if backpack_accepts_deposit(&self.world) {
-            store.into_iter().copied().collect()
-        } else {
-            Vec::new()
-        };
+        let store: Vec<(EntityId, Option<(usize, usize)>)> =
+            if backpack_accepts_deposit(&self.world) {
+                store
+                    .into_iter()
+                    .map(|entity_id| (*entity_id, cell_for(*entity_id)))
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
@@ -4022,6 +4336,58 @@ impl MissionCore {
             &mut self.world,
             container_entity_id,
             dropped_entity_id,
+        );
+        if moved {
+            self.make_un_physical(dropped_entity_id);
+        }
+        moved
+    }
+
+    /// Like [`Self::drop_entity_into_container`], but targets `target_cell`
+    /// (the cyber-interface strip deposit, released over the grid cell the
+    /// player is pointing at) instead of always the first free cell.
+    ///
+    /// A cell already holding a matching stack merges into it - the dropped
+    /// entity is consumed rather than claiming a cell of its own - matching
+    /// the retail "drop onto a like stack" behavior. Any other occupied cell,
+    /// or a cell off the grid, falls back to the ordinary first-free
+    /// placement (no swap semantics for a VR release).
+    pub fn drop_entity_into_container_at_cell(
+        &mut self,
+        container_entity_id: EntityId,
+        dropped_entity_id: EntityId,
+        target_cell: (usize, usize),
+    ) -> bool {
+        if let Some(occupant) = matching_stack_at_cell(
+            &self.world,
+            container_entity_id,
+            dropped_entity_id,
+            target_cell,
+        ) {
+            let dropped_count = self
+                .world
+                .borrow::<View<dark::properties::PropStackCount>>()
+                .unwrap()
+                .get(dropped_entity_id)
+                .unwrap()
+                .0;
+            if let Ok(mut stacks) = self
+                .world
+                .borrow::<ViewMut<dark::properties::PropStackCount>>()
+            {
+                if let Ok(occupant_stack) = (&mut stacks).get(occupant) {
+                    occupant_stack.0 += dropped_count;
+                }
+            }
+            self.destroy_entity(dropped_entity_id);
+            return true;
+        }
+
+        let moved = move_live_entity_into_container_at_cell(
+            &mut self.world,
+            container_entity_id,
+            dropped_entity_id,
+            target_cell,
         );
         if moved {
             self.make_un_physical(dropped_entity_id);
@@ -8363,6 +8729,16 @@ impl MissionCore {
                         self.drop_entity_into_container(inventory_entity, entity_id);
                     }
                 }
+                VirtualHandEffect::StoreItemAtCell { entity_id, cell } => {
+                    let inventory_entity = self
+                        .world
+                        .borrow::<UniqueView<PlayerInfo>>()
+                        .map(|player| player.inventory_entity_id)
+                        .ok();
+                    if let Some(inventory_entity) = inventory_entity {
+                        self.drop_entity_into_container_at_cell(inventory_entity, entity_id, cell);
+                    }
+                }
                 VirtualHandEffect::DropItem { entity_id } => {
                     if !restore_live_entity_world_refs(&mut self.world, entity_id) {
                         continue;
@@ -11062,7 +11438,7 @@ mod strip_deposit_tests {
             VirtualHandEffect::DropItem { entity_id: item },
             VirtualHandEffect::DropItem { entity_id: other },
         ];
-        rewrite_strip_release(&mut effects, &[item], &[]);
+        rewrite_strip_release(&mut effects, &[(item, None)], &[]);
         assert!(
             matches!(
                 effects.as_slice(),
@@ -11078,6 +11454,33 @@ mod strip_deposit_tests {
                         entity_id: untouched
                     },
                 ] if *to == item && *entity_id == item && *untouched == other
+            ),
+            "got {effects:?}"
+        );
+    }
+
+    /// A resolved strip cell becomes a targeted store, not the first-free
+    /// one - retail drops the item into the cell the player is pointing at.
+    #[test]
+    fn a_claimed_release_with_a_resolved_cell_targets_it() {
+        let (_world, item, _other) = two_entities();
+        let mut effects = vec![VirtualHandEffect::DropItem { entity_id: item }];
+        rewrite_strip_release(&mut effects, &[(item, Some((3, 1)))], &[]);
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [
+                    VirtualHandEffect::OutMessage {
+                        message: Message {
+                            payload: MessagePayload::Drop,
+                            ..
+                        }
+                    },
+                    VirtualHandEffect::StoreItemAtCell {
+                        entity_id,
+                        cell: (3, 1)
+                    },
+                ] if *entity_id == item
             ),
             "got {effects:?}"
         );
@@ -11124,7 +11527,7 @@ mod strip_deposit_tests {
                 payload: MessagePayload::ProvideForConsumption { entity: item },
             },
         }];
-        rewrite_strip_release(&mut effects, &[item], &[]);
+        rewrite_strip_release(&mut effects, &[(item, None)], &[]);
         assert!(effects.is_empty(), "got {effects:?}");
     }
 
@@ -11143,7 +11546,7 @@ mod strip_deposit_tests {
             },
             VirtualHandEffect::HoldItem { entity_id: item },
         ];
-        rewrite_strip_release(&mut effects, &[item], &[]);
+        rewrite_strip_release(&mut effects, &[(item, None)], &[]);
         assert!(
             matches!(
                 effects.as_slice(),

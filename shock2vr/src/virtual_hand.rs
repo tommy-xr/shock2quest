@@ -77,6 +77,15 @@ pub enum VirtualHandEffect {
     StoreItem {
         entity_id: EntityId,
     },
+    /// Like [`Self::StoreItem`], but for a VR release aimed at a specific
+    /// backpack grid cell (the cyber-interface strip deposit): retail drops
+    /// the item into the cell the player is pointing at rather than always
+    /// the first free one. Carries the same held-item `Drop`-first contract
+    /// as `StoreItem`.
+    StoreItemAtCell {
+        entity_id: EntityId,
+        cell: (usize, usize),
+    },
     /// Eject an item into the world (it regains physics + its world model).
     /// This is an explicit drop only: VR opening its hand. Losing an item to a
     /// wield swap is a `StoreItem`, not a drop (#777).

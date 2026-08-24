@@ -85,6 +85,23 @@ const BACKPACK_GRID_ORIGIN: Vector2<f32> = Vector2::new(4.0, 17.0);
 /// leaving the separators in `INVBACK.PCX` visible around it.
 const BLOCK_SIZE: Vector2<f32> = Vector2::new(34.0, 32.0);
 
+/// The backpack grid cell a panel-local pixel position (in `invback.pcx`'s
+/// own 635x120 pixel space, the same space [`get_components`] lays items out
+/// in) lands in - the inverse of that layout, so a pointer position and an
+/// item's own position can never resolve to different cells. `grid` is the
+/// usable width/height from `grid_for` (strength-capped columns are not
+/// targetable). Returns `None` off the grid entirely, including a
+/// blocked/capped column.
+pub fn backpack_cell_at(panel_pos: Vector2<f32>, grid: (usize, usize)) -> Option<(usize, usize)> {
+    let local = panel_pos - BACKPACK_GRID_ORIGIN;
+    if local.x < 0.0 || local.y < 0.0 {
+        return None;
+    }
+    let x = (local.x / SLOT_PITCH.x) as usize;
+    let y = (local.y / SLOT_PITCH.y) as usize;
+    (x < grid.0 && y < grid.1).then_some((x, y))
+}
+
 impl ContainerGui {
     pub fn loot_container() -> ContainerGui {
         ContainerGui {
