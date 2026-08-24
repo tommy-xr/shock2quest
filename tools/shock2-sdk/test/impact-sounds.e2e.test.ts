@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { PlayedSound } from "../src/types.js";
+import {
+  collisionSoundsSince,
+  describeSounds as describe,
+  tagValue,
+} from "./helpers/audio.js";
 
 // End-to-end test for weapon impact sounds: a bullet hit plays the
 // material-tagged collision schema (event=collision + the projectile's
@@ -28,22 +32,6 @@ import type { PlayedSound } from "../src/types.js";
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-
-function tagValue(sound: PlayedSound, tag: string): string | undefined {
-  return sound.tags.find(([t]) => t === tag)?.[1];
-}
-
-function collisionSoundsSince(sounds: PlayedSound[], sequence: number): PlayedSound[] {
-  return sounds.filter(
-    (s) => s.sequence > sequence && tagValue(s, "event") === "collision",
-  );
-}
-
-function describe(sounds: PlayedSound[]): string {
-  return JSON.stringify(
-    sounds.map((s) => ({ sample: s.sample, tags: s.tags })),
-  );
-}
 
 test(
   "bullet impacts play material-tagged collision schemas (flesh vs terrain)",

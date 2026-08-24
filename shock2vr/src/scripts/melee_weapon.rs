@@ -36,6 +36,11 @@ impl MeleeWeapon {
 /// `WeaponScript`'s aimed short-range raycast, so bumping a wielded wrench into
 /// scenery must do nothing. The whole script is therefore inert in flat mode
 /// rather than guarding individual messages.
+///
+/// The impact *sound*, unlike the damage, is not gated on the attack window or
+/// on the weapon being held: a wrench meeting a bulkhead, a bench or the floor
+/// makes a noise either way, and a dropped one clatters when it lands. That is
+/// intentional - the silence was the complaint.
 pub struct TriggeredMeleeWeapon {
     attack_active: bool,
     hit_entities: HashSet<EntityId>,
@@ -43,6 +48,10 @@ pub struct TriggeredMeleeWeapon {
     /// Only used by the free-swing rule: the trigger rule re-arms on the next
     /// pull instead, so it has nothing to expire.
     free_swing_cooldowns: HashMap<EntityId, f32>,
+    /// Remaining seconds before this weapon may thud against the same contact
+    /// partner again. Independent of the damage cooldowns above: a wall makes
+    /// a noise whether or not the contact is billable.
+    sound_cooldowns: HashMap<EntityId, f32>,
 }
 
 impl TriggeredMeleeWeapon {
@@ -51,6 +60,7 @@ impl TriggeredMeleeWeapon {
             attack_active: false,
             hit_entities: HashSet::new(),
             free_swing_cooldowns: HashMap::new(),
+            sound_cooldowns: HashMap::new(),
         }
     }
 }
@@ -61,6 +71,29 @@ impl TriggeredMeleeWeapon {
 /// swing, short enough not to eat a genuine second swing.
 const FREE_SWING_COOLDOWN_SECONDS: f32 = 0.4;
 
+/// How long one contact partner stays silent after this weapon thuds against
+/// it. Rapier reports a fresh contact edge every time the solver separates and
+/// re-touches, so a weapon chattering against a wall would otherwise
+/// machine-gun impact sounds. Shorter than [`FREE_SWING_COOLDOWN_SECONDS`] on
+/// purpose: two deliberate taps in quick succession should both be audible
+/// even though only the first one is billed.
+///
+/// Note the key is an *entity*, and a mission's entire static geometry is one
+/// collider owning one entity - so this is one thud per 0.15 s for the whole
+/// level, plus one per prop. That is the right granularity for an impact
+/// sound, and deliberately coarser than "per surface" would be.
+const IMPACT_SOUND_COOLDOWN_SECONDS: f32 = 0.15;
+
+/// Approach speed below which a contact makes no sound at all, in world units
+/// per second. Only something that arrived *at* the surface clangs: a weapon
+/// resting against one, or dragged along one, is silent.
+///
+/// Measured in `debug_melee` (see its module docs): a held weapon at rest
+/// reads ~0.005 and a brisk controller sweep peaks at ~1.6. This sits well
+/// clear of rest while staying far below the free-swing *damage* threshold
+/// (0.5 in that scene), so a light tap that does no damage still clinks.
+const IMPACT_SOUND_MIN_SPEED: f32 = 0.1;
+
 /// The physical alternative to the trigger window: a swing damages because it
 /// was *moving*, not because a button was down. `None` when the shipped
 /// trigger rule is in force.
@@ -70,7 +103,7 @@ fn free_swing_speed_threshold() -> Option<f32> {
 }
 
 impl Script for TriggeredMeleeWeapon {
-    /// Expire free-swing cooldowns. Nothing to do under the trigger rule.
+    /// Expire the per-victim cooldowns (free-swing damage, impact sound).
     fn update(
         &mut self,
         _entity_id: EntityId,
@@ -78,9 +111,9 @@ impl Script for TriggeredMeleeWeapon {
         _physics: &PhysicsWorld,
         time: &crate::time::Time,
     ) -> Effect {
-        if !self.free_swing_cooldowns.is_empty() {
-            let elapsed = time.elapsed.as_secs_f32();
-            self.free_swing_cooldowns.retain(|_, remaining| {
+        let elapsed = time.elapsed.as_secs_f32();
+        for cooldowns in [&mut self.free_swing_cooldowns, &mut self.sound_cooldowns] {
+            cooldowns.retain(|_, remaining| {
                 *remaining -= elapsed;
                 *remaining > 0.0
             });
@@ -109,16 +142,42 @@ impl Script for TriggeredMeleeWeapon {
                 self.attack_active = false;
                 self.hit_entities.clear();
                 self.free_swing_cooldowns.clear();
+                // `sound_cooldowns` is deliberately NOT cleared: releasing the
+                // trigger mid-contact is no reason to re-clang, and a dropped
+                // weapon lands under the same rate limit as any other contact.
                 Effect::NoEffect
             }
             MessagePayload::Collided { with, contact } => {
-                if !self.may_damage(entity_id, *with, physics) {
-                    return Effect::NoEffect;
+                // Damage and sound are separate questions. Damage stays gated
+                // by the attack window and the victim's authored receptrons;
+                // *hitting something* is audible regardless - a wrench on a
+                // bulkhead or a bench does nothing but must still clang.
+                let damage = self
+                    .may_damage(entity_id, *with, physics)
+                    .then(|| authored_contact_damage(world, entity_id, *with))
+                    .flatten();
+
+                let mut effects = Vec::new();
+                if let Some(amount) = damage {
+                    effects.push(contact_damage_effect(*with, amount, *contact));
                 }
-                let Some(amount) = authored_contact_damage(world, entity_id, *with) else {
-                    return Effect::NoEffect;
-                };
-                melee_impact(entity_id, *with, world, amount, *contact)
+                // A blow that lands is always audible, as it always was. The
+                // operator is a bitwise `|`, not `||`, so the guard still runs
+                // (and arms the cooldown) even when damage forces the sound.
+                if self.may_play_impact_sound(entity_id, *with, physics, *contact)
+                    | damage.is_some()
+                {
+                    let sound = impact_sound_effect(entity_id, *with, world);
+                    if !matches!(sound, Effect::NoEffect) {
+                        effects.push(sound);
+                    }
+                }
+
+                if effects.is_empty() {
+                    Effect::NoEffect
+                } else {
+                    Effect::Multiple(effects)
+                }
             }
             _ => Effect::NoEffect,
         }
@@ -152,6 +211,47 @@ impl TriggeredMeleeWeapon {
             .insert(with, FREE_SWING_COOLDOWN_SECONDS);
         true
     }
+
+    /// Whether this contact should be heard. Contacts repeat while a weapon
+    /// rests on or scrapes along a surface, and the damage path's own dedupe
+    /// does not cover the (much more common) contacts that deal no damage - so
+    /// the sound carries its own guard: the weapon must have been closing on
+    /// what it hit, and that partner then stays quiet for a moment.
+    ///
+    /// The speed is taken *along the contact normal*, not as a raw magnitude.
+    /// A held weapon carries the player's whole locomotion velocity, so a
+    /// wrench brushing a corridor wall while walking reads fast by magnitude
+    /// while barely closing on the wall at all - and would otherwise clang
+    /// every 0.15 s for the length of the corridor. `abs` because the normal's
+    /// orientation depends on which collider Rapier listed first.
+    ///
+    /// Deliberately a different measure from the free-swing *damage* rule
+    /// above, which stays on raw magnitude: this must not change when a swing
+    /// damages.
+    fn may_play_impact_sound(
+        &mut self,
+        entity_id: EntityId,
+        with: EntityId,
+        physics: &PhysicsWorld,
+        contact: Option<crate::physics::CollisionContact>,
+    ) -> bool {
+        if self.sound_cooldowns.contains_key(&with) {
+            return false;
+        }
+        let velocity = physics
+            .get_velocity(entity_id)
+            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
+        let speed = match contact {
+            Some(contact) => velocity.dot(contact.normal).abs(),
+            None => velocity.magnitude(),
+        };
+        if speed < IMPACT_SOUND_MIN_SPEED {
+            return false;
+        }
+        self.sound_cooldowns
+            .insert(with, IMPACT_SOUND_COOLDOWN_SECONDS);
+        true
+    }
 }
 
 fn is_vr(world: &World) -> bool {
@@ -176,14 +276,12 @@ fn authored_contact_damage(world: &World, weapon: EntityId, victim: EntityId) ->
     (damage > 0.0).then_some(damage)
 }
 
-fn melee_impact(
-    entity_id: EntityId,
+fn contact_damage_effect(
     with: EntityId,
-    world: &World,
     amount: f32,
     contact: Option<crate::physics::CollisionContact>,
 ) -> Effect {
-    let damage_effect = Effect::Send {
+    Effect::Send {
         msg: Message {
             to: with,
             payload: MessagePayload::Damage {
@@ -195,22 +293,37 @@ fn melee_impact(
                 }),
             },
         },
-    };
-    // Impact sound: the weapon's collision schema (weapontype class tag + hit
-    // material - wrench on metal clangs, on a creature thuds), unless its
-    // collision type opts out.
+    }
+}
+
+/// Impact sound for a contact: the weapon's collision schema (weapontype class
+/// tag + hit material - wrench on metal clangs, on a creature thuds), unless
+/// its collision type opts out. Needs no damage value: unmaterialed surfaces
+/// (world geometry, a bench) fall back to the default material tag.
+fn impact_sound_effect(entity_id: EntityId, with: EntityId, world: &World) -> Effect {
     let no_sound = world
         .borrow::<View<PropCollisionType>>()
         .ok()
         .and_then(|v| v.get(entity_id).ok().map(|c| c.collision_type))
         .is_some_and(|flags| flags.contains(CollisionType::NO_COLLISION_SOUND));
-    let sound_effect = if no_sound {
-        Effect::NoEffect
-    } else {
-        let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
-        play_impact_sound(world, entity_id, with, position.to_vec())
-    };
-    Effect::Multiple(vec![damage_effect, sound_effect])
+    if no_sound {
+        return Effect::NoEffect;
+    }
+    let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
+    play_impact_sound(world, entity_id, with, position.to_vec())
+}
+
+fn melee_impact(
+    entity_id: EntityId,
+    with: EntityId,
+    world: &World,
+    amount: f32,
+    contact: Option<crate::physics::CollisionContact>,
+) -> Effect {
+    Effect::Multiple(vec![
+        contact_damage_effect(with, amount, contact),
+        impact_sound_effect(entity_id, with, world),
+    ])
 }
 
 impl Script for MeleeWeapon {
@@ -243,7 +356,7 @@ mod tests {
     use std::collections::HashMap;
 
     use dark::properties::{
-        Link, Links, PropTemplateId, ReceptronEffect, ReceptronOptions, ToLink,
+        Link, Links, PropClassTag, PropTemplateId, ReceptronEffect, ReceptronOptions, ToLink,
     };
 
     use crate::mission::stim_response::GlobalContactStims;
@@ -442,10 +555,20 @@ mod tests {
         weapon: EntityId,
         target: EntityId,
     ) -> Effect {
+        collide_at_speed(script, world, weapon, target, &PhysicsWorld::new())
+    }
+
+    fn collide_at_speed(
+        script: &mut TriggeredMeleeWeapon,
+        world: &World,
+        weapon: EntityId,
+        target: EntityId,
+        physics: &PhysicsWorld,
+    ) -> Effect {
         script.handle_message(
             weapon,
             world,
-            &PhysicsWorld::new(),
+            physics,
             &MessagePayload::Collided {
                 with: target,
                 contact: Some(crate::physics::CollisionContact {
@@ -454,6 +577,187 @@ mod tests {
                 }),
             },
         )
+    }
+
+    /// A weapon that is audible on contact: `test_world`'s weapon deliberately
+    /// opts out of collision sound, and the schema lookup is keyed on the
+    /// weapon's class tag.
+    fn audible_weapon(world: &mut World, weapon: EntityId) {
+        world.add_component(
+            weapon,
+            (
+                PropCollisionType {
+                    collision_type: CollisionType::empty(),
+                },
+                PropClassTag::from_string("WeaponType Sword"),
+            ),
+        );
+    }
+
+    /// A physics world in which `weapon` is a body moving at `speed`, so the
+    /// impact-sound speed floor can be exercised without a running game.
+    fn physics_with_weapon_speed(weapon: EntityId, speed: f32) -> PhysicsWorld {
+        let mut physics = PhysicsWorld::new();
+        physics.add_dynamic(
+            weapon,
+            vec3(0.0, 0.0, 0.0),
+            cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            crate::physics::PhysicsShape::Cuboid(vec3(1.0, 1.0, 1.0)),
+            crate::physics::CollisionGroup::entity(),
+            false,
+            crate::physics::DynamicPhysicsOptions::default(),
+        );
+        physics.set_velocity(weapon, vec3(speed, 0.0, 0.0));
+        physics
+    }
+
+    fn swinging(weapon: EntityId) -> PhysicsWorld {
+        physics_with_weapon_speed(weapon, 1.0)
+    }
+
+    fn count_effects(effect: &Effect, matching: impl Fn(&Effect) -> bool) -> usize {
+        let Effect::Multiple(effects) = effect else {
+            return 0;
+        };
+        effects.iter().filter(|effect| matching(effect)).count()
+    }
+
+    fn sound_count(effect: &Effect) -> usize {
+        count_effects(effect, |effect| {
+            matches!(effect, Effect::PlayEnvironmentalSound { .. })
+        })
+    }
+
+    fn damage_count(effect: &Effect) -> usize {
+        count_effects(
+            effect,
+            |effect| matches!(effect, Effect::Send { msg } if matches!(msg.payload, MessagePayload::Damage { .. })),
+        )
+    }
+
+    /// The report: hitting a wall, a bench, or anything else that takes no
+    /// authored contact damage was completely silent, because the sound was
+    /// emitted only from the damage path.
+    #[test]
+    fn a_contact_that_deals_no_damage_still_makes_an_impact_sound() {
+        let (mut world, weapon, target) =
+            test_world_with_victim_receptrons(PresentationMode::Vr, Vec::new());
+        audible_weapon(&mut world, weapon);
+        let physics = swinging(weapon);
+        let mut script = TriggeredMeleeWeapon::new();
+        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerPull);
+
+        let effect = collide_at_speed(&mut script, &world, weapon, target, &physics);
+        assert_eq!(sound_count(&effect), 1, "got {effect:?}");
+        assert_eq!(damage_count(&effect), 0, "got {effect:?}");
+    }
+
+    /// ...and a contact that *does* damage still does both.
+    #[test]
+    fn a_damaging_contact_makes_both_damage_and_an_impact_sound() {
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        audible_weapon(&mut world, weapon);
+        let physics = swinging(weapon);
+        let mut script = TriggeredMeleeWeapon::new();
+        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerPull);
+
+        let effect = collide_at_speed(&mut script, &world, weapon, target, &physics);
+        assert_eq!(sound_count(&effect), 1, "got {effect:?}");
+        assert_eq!(damage_count(&effect), 1, "got {effect:?}");
+    }
+
+    /// A weapon resting on (or dragged along) a surface re-contacts every
+    /// frame. Without a guard of its own the sound would machine-gun, so the
+    /// same surface stays quiet until the cooldown expires.
+    #[test]
+    fn repeated_contact_with_one_surface_makes_only_one_impact_sound() {
+        let (mut world, weapon, target) =
+            test_world_with_victim_receptrons(PresentationMode::Vr, Vec::new());
+        audible_weapon(&mut world, weapon);
+        let physics = swinging(weapon);
+        let mut script = TriggeredMeleeWeapon::new();
+
+        let first = collide_at_speed(&mut script, &world, weapon, target, &physics);
+        assert_eq!(sound_count(&first), 1, "got {first:?}");
+        for _ in 0..5 {
+            let repeat = collide_at_speed(&mut script, &world, weapon, target, &physics);
+            assert_eq!(sound_count(&repeat), 0, "got {repeat:?}");
+        }
+
+        // ...and a later swing at the same surface is audible again.
+        script.update(
+            weapon,
+            &world,
+            &physics,
+            &crate::time::Time {
+                elapsed: std::time::Duration::from_millis(200),
+                total: std::time::Duration::from_millis(200),
+            },
+        );
+        let later = collide_at_speed(&mut script, &world, weapon, target, &physics);
+        assert_eq!(sound_count(&later), 1, "got {later:?}");
+    }
+
+    /// The trigger rule does not speed-gate damage, so a slow press that still
+    /// bills a hit must not fall through the sound's speed floor: a blow that
+    /// lands was always audible and must stay that way.
+    #[test]
+    fn a_slow_contact_that_still_damages_is_audible() {
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        audible_weapon(&mut world, weapon);
+        let physics = physics_with_weapon_speed(weapon, 0.005);
+        let mut script = TriggeredMeleeWeapon::new();
+        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerPull);
+
+        let effect = collide_at_speed(&mut script, &world, weapon, target, &physics);
+        assert_eq!(damage_count(&effect), 1, "got {effect:?}");
+        assert_eq!(sound_count(&effect), 1, "got {effect:?}");
+    }
+
+    /// A held weapon carries the player's locomotion velocity, so speed is
+    /// measured along the contact normal: sliding a wrench *along* a wall
+    /// while walking closes on nothing and must stay silent.
+    #[test]
+    fn a_weapon_moving_along_a_surface_makes_no_impact_sound() {
+        let (mut world, weapon, target) =
+            test_world_with_victim_receptrons(PresentationMode::Vr, Vec::new());
+        audible_weapon(&mut world, weapon);
+        // The collide helper's contact normal is +X; move fast, but across it.
+        let mut physics = PhysicsWorld::new();
+        physics.add_dynamic(
+            weapon,
+            vec3(0.0, 0.0, 0.0),
+            cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            crate::physics::PhysicsShape::Cuboid(vec3(1.0, 1.0, 1.0)),
+            crate::physics::CollisionGroup::entity(),
+            false,
+            crate::physics::DynamicPhysicsOptions::default(),
+        );
+        physics.set_velocity(weapon, vec3(0.0, 0.0, 5.0));
+        let mut script = TriggeredMeleeWeapon::new();
+
+        assert!(matches!(
+            collide_at_speed(&mut script, &world, weapon, target, &physics),
+            Effect::NoEffect
+        ));
+    }
+
+    /// A weapon left leaning against a surface is silent: the contact repeats
+    /// but nothing is moving.
+    #[test]
+    fn a_resting_weapon_makes_no_impact_sound() {
+        let (mut world, weapon, target) =
+            test_world_with_victim_receptrons(PresentationMode::Vr, Vec::new());
+        audible_weapon(&mut world, weapon);
+        let physics = physics_with_weapon_speed(weapon, 0.005);
+        let mut script = TriggeredMeleeWeapon::new();
+
+        assert!(matches!(
+            collide_at_speed(&mut script, &world, weapon, target, &physics),
+            Effect::NoEffect
+        ));
     }
 
     #[test]
