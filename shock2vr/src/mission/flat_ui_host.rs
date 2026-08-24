@@ -280,6 +280,18 @@ impl FlatUiHost {
         self.strip.as_ref().map(|s| s.entity)
     }
 
+    /// Whether `canvas_pos` lands on the top-docked inventory strip.
+    ///
+    /// The strip is the interface's "put it in the backpack" surface, so a VR
+    /// hand releasing a held item over it deposits rather than drops (see
+    /// `MissionCore::strip_deposit_entities`). Answered from the same
+    /// [`strip_rect`](Self::strip_rect) the host hit-tests its own gestures
+    /// against, so the drop target can never drift from the drawn strip.
+    pub fn strip_contains(&self, canvas_pos: Vector2<f32>) -> bool {
+        self.strip_rect()
+            .is_some_and(|rect| rect.contains(canvas_pos))
+    }
+
     /// The item currently held on the cursor mid-drag (for `/v1/ui` `cursor`).
     pub fn cursor_debug(&self) -> Option<crate::game_scene::DebugUiCursor> {
         self.cursor_item
