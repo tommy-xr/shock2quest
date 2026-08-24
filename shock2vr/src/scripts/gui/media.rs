@@ -113,10 +113,6 @@ pub(super) fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
     lines
 }
 
-/// The disc's readable `(deck, log)` pair, if its `PropLog` names a real log.
-/// Log discs carry `PropLog {deck, email:33, log:N}` - the reader keys off the
-/// `log` field; 33 (the empty-bitmask sentinel) in either field means "not
-/// set", so such a disc has nothing to read.
 /// The data's own name for the disc pickup script; `MediaGui` is bound to it in
 /// `scripts::mod`.
 const LOG_DISC_SCRIPT: &str = "logdiscscript";
@@ -134,6 +130,10 @@ pub(crate) fn is_collectable_log(world: &World, entity_id: EntityId) -> bool {
         && crate::scripts::script_util::entity_has_script(world, entity_id, LOG_DISC_SCRIPT)
 }
 
+/// The disc's readable `(deck, log)` pair, if its `PropLog` names a real log.
+/// Log discs carry `PropLog {deck, email:33, log:N}` - the reader keys off the
+/// `log` field; 33 (the empty-bitmask sentinel) in either field means "not
+/// set", so such a disc has nothing to read.
 fn readable_log(world: &World, entity_id: EntityId) -> Option<(u32, u32)> {
     let v_log = world.borrow::<View<PropLog>>().unwrap();
     match v_log.get(entity_id) {

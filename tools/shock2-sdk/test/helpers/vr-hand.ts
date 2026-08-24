@@ -145,3 +145,57 @@ export async function aimVrHandAt(
   await game.step({ frames: 3 });
   return { start: worldHand, target };
 }
+
+/** One canvas pixel of a world panel in world units (`gui::GUI_PIXEL_TO_WORLD_SIZE`). */
+export const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
+
+/** The retail MFD canvas the loot panel is drawn on. */
+export const LOOT_PANEL_SIZE_PX: Vec3 = [188, 296, 0];
+
+/**
+ * Squeeze one element of an open world panel with the production VR hand.
+ *
+ * Aims at the element's own spot on the panel's collider - in VR the panel is a
+ * physical quad, so this is the gesture a player makes - and confirms the ray
+ * actually lands on it before squeezing. A panel can carry more than one UI
+ * collider at the same pose, so the check is "the ray hit one of them", not
+ * "there is exactly one".
+ */
+export async function squeezeWorldPanelElement(
+  game: GameServer,
+  panelSizePx: Vec3,
+  worldScale: number,
+  element: { screen_rect: [number, number, number, number] },
+): Promise<void> {
+  const panels = (await game.physics.bodies()).bodies.filter((body) =>
+    body.collision_groups.includes("ui"),
+  );
+  if (panels.length === 0) {
+    throw new Error("no production VR panel collider to aim at");
+  }
+  const [x, y, width, height] = element.screen_rect;
+  const u = x + width / 2;
+  const v = y + height / 2;
+  const panelSize: Vec3 = [
+    panelSizePx[0] * GUI_PIXEL_TO_WORLD_SIZE * worldScale,
+    panelSizePx[1] * GUI_PIXEL_TO_WORLD_SIZE * worldScale,
+    0,
+  ];
+  const local: Vec3 = [panelSize[0] * (0.5 - u), panelSize[1] * (0.5 - v), 0];
+  const target = add(panels[0].position, quatRotate(panels[0].rotation, local));
+  const aim = await aimVrHandAt(game, target, 0.35);
+  const hit = await game.raycast({
+    start: aim.start,
+    end: aim.target,
+    collision_groups: ["ui"],
+    max_distance: 1,
+  });
+  if (!panels.some((panel) => panel.entity_id === hit.entity_id)) {
+    throw new Error("the production hand ray must land on the panel");
+  }
+
+  await game.input.set("right_hand.squeeze", 1);
+  await game.step({ frames: 4 });
+  await game.input.set("right_hand.squeeze", 0);
+  await game.step({ frames: 8 });
+}

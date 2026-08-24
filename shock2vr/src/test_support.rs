@@ -102,8 +102,10 @@ pub fn spawn_ordinary_loot(world: &mut World) -> EntityId {
     })
 }
 
-/// `Small Nanite Pile`, one of the base pile templates.
-const NANITE_PILE_TEMPLATE_ID: i32 = -1589;
+/// One of the base pile templates the predicate under test owns, taken from it
+/// rather than restated - a fixture pinned to a stale id would silently stop
+/// testing a pile.
+const NANITE_PILE_TEMPLATE_ID: i32 = crate::scripts::script_util::NANITE_PILE_TEMPLATE_IDS[0];
 
 /// Nanite piles are recognized through the runtime template hierarchy, so a
 /// test world needs one. Registered once per world; adding the unique twice

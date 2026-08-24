@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { EntitySummary, UiElement, Vec3 } from "../src/types.js";
+import type { EntitySummary } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import { LOOT_PANEL_SIZE_PX, squeezeWorldPanelElement } from "./helpers/vr-hand.js";
 
 // Keycards, cyber modules, nanite piles and audio/data logs are collected, not
 // carried. This covers the two gestures that used to acquire them the wrong
@@ -34,56 +34,9 @@ const LOG_NUMBER = 14;
 /** A real pile archetype - `is_always_collected` excludes the FakeNanites decoy. */
 const NANITE_PILE = "Big Nanite Pile";
 
-const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
-const LOOT_PANEL_SIZE_PX: Vec3 = [188, 296, 0];
-
 function only(matches: EntitySummary[], label: string): EntitySummary {
   assert.equal(matches.length, 1, `expected one ${label}, got ${matches.length}`);
   return matches[0];
-}
-
-/**
- * Squeeze one element of the VR loot panel with the production hand, by aiming
- * at the element's own spot on the panel's collider (as `hydro2-vr-keycard`
- * does).
- */
-async function squeezeWorldPanelElement(
-  game: GameServer,
-  element: UiElement,
-): Promise<void> {
-  // The open panel's colliders are anonymous quads sharing one pose, so aim at
-  // the pose rather than at a particular body, and confirm the ray lands on one
-  // of them before squeezing.
-  const panels = (await game.physics.bodies()).bodies.filter((body) =>
-    body.collision_groups.includes("ui"),
-  );
-  assert.ok(panels.length > 0, "the open loot panel must have a UI collider to aim at");
-  const [x, y, width, height] = element.screen_rect;
-  const u = x + width / 2;
-  const v = y + height / 2;
-  const panelSize: Vec3 = [
-    LOOT_PANEL_SIZE_PX[0] * GUI_PIXEL_TO_WORLD_SIZE,
-    LOOT_PANEL_SIZE_PX[1] * GUI_PIXEL_TO_WORLD_SIZE,
-    0,
-  ];
-  const local: Vec3 = [panelSize[0] * (0.5 - u), panelSize[1] * (0.5 - v), 0];
-  const target = add(panels[0].position, quatRotate(panels[0].rotation, local));
-  const aim = await aimVrHandAt(game, target, 0.35);
-  const hit = await game.raycast({
-    start: aim.start,
-    end: aim.target,
-    collision_groups: ["ui"],
-    max_distance: 1,
-  });
-  assert.ok(
-    panels.some((panel) => panel.entity_id === hit.entity_id),
-    "the production hand ray must land on the panel",
-  );
-
-  await game.input.set("right_hand.squeeze", 1);
-  await game.step({ frames: 4 });
-  await game.input.set("right_hand.squeeze", 0);
-  await game.step({ frames: 8 });
 }
 
 test(
@@ -121,7 +74,7 @@ test(
     );
     assert.ok(discElement, "the loot panel must expose a button for the contained disc");
 
-    await squeezeWorldPanelElement(game, discElement);
+    await squeezeWorldPanelElement(game, LOOT_PANEL_SIZE_PX, 1, discElement);
 
     assert.deepEqual(
       (await game.info()).player.collected_logs,
@@ -151,12 +104,13 @@ test(
     });
     await game.step({ frames: 5 });
 
-    // Stage the pile directly in the backpack, bypassing every acquisition path
-    // - the state an old save leaves behind, and the one the strip click had no
-    // way to recover from.
-    const pile = await game.player.spawnItem(NANITE_PILE);
+    // Stage the pile directly in the backpack, bypassing every acquisition
+    // path, then round-trip it through a save: the state this recovers is a
+    // *deserialized* backpack item, whose derived `internal_nanites` script is
+    // re-attached at load - so the save/load is the point, not incidental.
+    const staged = await game.player.spawnItem(NANITE_PILE);
     const stack = Number(
-      (await game.entities.detail(pile.entity_id)).properties.find(
+      (await game.entities.detail(staged.entity_id)).properties.find(
         (property) => property.name === "StackCount",
       )?.value,
     );
@@ -166,6 +120,14 @@ test(
       0,
       "a fresh medsci1 character starts with no stat nanites",
     );
+    await game.save("always-collected-strip-e2e");
+    await game.load("always-collected-strip-e2e");
+    await game.step({ frames: 5 });
+
+    // Entity ids do not survive the reload; find the restored pile by name.
+    const carried = (await game.player.inventory()).items;
+    const pile = carried.find((item) => item.name?.includes("Nanites"));
+    assert.ok(pile, `the reloaded backpack must still hold the pile: ${JSON.stringify(carried)}`);
 
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 8 });
