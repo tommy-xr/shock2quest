@@ -56,7 +56,7 @@ pub const FALL_SECONDS: f32 = 0.9;
 /// Where the fallen eye ends up above the floor, in world units. Kept well
 /// clear of the 0.1 world-unit near plane so the floor does not clip through
 /// the camera once it lands.
-const FALLEN_EYE_HEIGHT: f32 = 0.45;
+pub const FALLEN_EYE_HEIGHT: f32 = 0.45;
 
 /// How far the eye drifts horizontally as it falls, in world units - the body
 /// toppling over rather than sinking straight down.
@@ -132,7 +132,7 @@ impl DeathCamera {
     /// (`-Game::player_center_above_floor()`). `seed` picks the fall direction
     /// and is the only source of randomness, so a replayed death - a captured
     /// screenshot sequence, an e2e assertion - falls exactly the same way.
-    pub fn begin(live_eye: EyePose, floor_y: f32, seed: u64) -> Self {
+    pub fn begin(live_eye: EyePose, floor_y: f32, seed: u64, lateral: f32) -> Self {
         // The body topples SIDEWAYS from where the player was looking, rather
         // than onto a freely random heading: whatever killed you stays in
         // frame while you go down. A random heading reads as the view being
@@ -140,21 +140,30 @@ impl DeathCamera {
         // wants to see. The seed picks which side you fall on - that is the
         // randomness, and it is what keeps two deaths from looking identical.
         let forward = death_facing(live_eye.rotation);
-        let side = if seed_is_left(seed) { 1.0 } else { -1.0 };
         // Up leaves world-up for the horizontal perpendicular to the gaze: the
         // view rolls onto its side. Forward stays horizontal, so the fallen
         // camera looks along the floor rather than into it.
-        let up = vec3(-forward.z, 0.0, forward.x) * side;
+        let up = topple_direction(live_eye.rotation, seed);
         let right = forward.cross(up);
         // `head_rotation` maps head-local axes into pawn space, and cgmath's
         // camera convention looks down local -Z.
         let rotation = Quaternion::from(Matrix3::from_cols(right, up, -forward));
 
+        // `lateral` is how far the body may actually topple - the caller
+        // shortens it when something is in the way (see
+        // `MissionCore::begin_death_camera`). Dying with your back to a wall is
+        // the common case when cornered, and an unclamped drift would put the
+        // camera inside it.
+        let lateral = if lateral.is_finite() {
+            lateral.clamp(0.0, FALL_LATERAL)
+        } else {
+            0.0
+        };
         let target = EyePose {
             position: vec3(
-                live_eye.position.x + up.x * FALL_LATERAL,
+                live_eye.position.x + up.x * lateral,
                 floor_y + FALLEN_EYE_HEIGHT,
-                live_eye.position.z + up.z * FALL_LATERAL,
+                live_eye.position.z + up.z * lateral,
             ),
             rotation,
         };
@@ -251,6 +260,19 @@ fn seed_is_left(seed: u64) -> bool {
     z >> 63 == 1
 }
 
+/// The horizontal direction the body topples in: perpendicular to where the
+/// player was looking, on the side the seed picks. Public so the caller can
+/// sweep it for obstructions before deciding how far the fall may carry (see
+/// [`DeathCamera::begin`]'s `lateral`).
+pub fn topple_direction(head_rotation: Quaternion<f32>, seed: u64) -> Vector3<f32> {
+    let forward = death_facing(head_rotation);
+    let side = if seed_is_left(seed) { 1.0 } else { -1.0 };
+    vec3(-forward.z, 0.0, forward.x) * side
+}
+
+/// How far the body topples when nothing is in the way, in world units.
+pub const MAX_FALL_LATERAL: f32 = FALL_LATERAL;
+
 /// The horizontal direction the player was facing when they died. A gaze that
 /// is straight up or down (or an untracked head) has no horizontal component to
 /// fall away from, so it falls back to the pawn's forward axis rather than
@@ -331,7 +353,7 @@ mod tests {
 
     #[test]
     fn a_zero_weight_sample_is_also_an_exact_passthrough() {
-        let death = DeathCamera::begin(live_eye(), -1.6, 7);
+        let death = DeathCamera::begin(live_eye(), -1.6, 7, FALL_LATERAL);
         let sample = DeathCameraSample {
             weight: 0.0,
             ..death.sample()
@@ -341,7 +363,7 @@ mod tests {
 
     #[test]
     fn a_non_finite_weight_falls_back_to_the_tracked_camera() {
-        let death = DeathCamera::begin(live_eye(), -1.6, 7);
+        let death = DeathCamera::begin(live_eye(), -1.6, 7, FALL_LATERAL);
         for weight in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
             let sample = DeathCameraSample {
                 weight,
@@ -353,7 +375,7 @@ mod tests {
 
     #[test]
     fn full_weight_pins_the_head_to_the_fallen_eye() {
-        let death = DeathCamera::begin(live_eye(), -1.6, 7);
+        let death = DeathCamera::begin(live_eye(), -1.6, 7, FALL_LATERAL);
         let sample = DeathCameraSample {
             weight: 1.0,
             ..death.sample()
@@ -373,7 +395,7 @@ mod tests {
 
     #[test]
     fn the_pawn_transform_is_never_touched() {
-        let death = DeathCamera::begin(live_eye(), -1.6, 7);
+        let death = DeathCamera::begin(live_eye(), -1.6, 7, FALL_LATERAL);
         for weight in [0.0, 0.25, 0.5, 1.0] {
             let resolved = camera(Some(DeathCameraSample {
                 weight,
@@ -386,7 +408,7 @@ mod tests {
 
     #[test]
     fn the_eye_falls_monotonically_toward_the_floor() {
-        let mut death = DeathCamera::begin(live_eye(), -1.6, 7);
+        let mut death = DeathCamera::begin(live_eye(), -1.6, 7, FALL_LATERAL);
         let mut previous = camera(Some(death.sample())).head_offset.y;
         for _ in 0..60 {
             death.advance(FALL_SECONDS / 60.0);
@@ -405,7 +427,7 @@ mod tests {
 
     #[test]
     fn the_weight_saturates_rather_than_overshooting() {
-        let mut death = DeathCamera::begin(live_eye(), -1.6, 7);
+        let mut death = DeathCamera::begin(live_eye(), -1.6, 7, FALL_LATERAL);
         death.advance(FALL_SECONDS * 10.0);
         assert_eq!(death.sample().weight, 1.0);
     }
@@ -413,7 +435,7 @@ mod tests {
     #[test]
     fn the_fallen_eye_stays_clear_of_the_near_plane() {
         for seed in 0..64 {
-            let death = DeathCamera::begin(live_eye(), -1.6, seed);
+            let death = DeathCamera::begin(live_eye(), -1.6, seed, FALL_LATERAL);
             assert!(death.sample().eye.position.y > -1.6 + 0.1);
         }
     }
@@ -421,7 +443,7 @@ mod tests {
     #[test]
     fn the_fallen_view_lies_on_its_side_looking_along_the_floor() {
         for seed in 0..64 {
-            let death = DeathCamera::begin(live_eye(), -1.6, seed);
+            let death = DeathCamera::begin(live_eye(), -1.6, seed, FALL_LATERAL);
             let rotation = death.sample().eye.rotation;
             let up = rotation.rotate_vector(vec3(0.0, 1.0, 0.0));
             let forward = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
@@ -436,8 +458,8 @@ mod tests {
 
     #[test]
     fn the_fall_direction_is_seeded_and_reproducible() {
-        let a = DeathCamera::begin(live_eye(), -1.6, 11);
-        let b = DeathCamera::begin(live_eye(), -1.6, 11);
+        let a = DeathCamera::begin(live_eye(), -1.6, 11, FALL_LATERAL);
+        let b = DeathCamera::begin(live_eye(), -1.6, 11, FALL_LATERAL);
         assert_eq!(a, b);
 
         // The seed is a coin flip over which side the body lands on, and both
@@ -457,7 +479,7 @@ mod tests {
             rotation: facing,
         };
         for seed in 0..32 {
-            let death = DeathCamera::begin(eye, -1.6, seed);
+            let death = DeathCamera::begin(eye, -1.6, seed, FALL_LATERAL);
             let gaze = death
                 .sample()
                 .eye
@@ -488,7 +510,7 @@ mod tests {
                 position: vec3(0.0, 2.6, 0.0),
                 rotation,
             };
-            let target = DeathCamera::begin(eye, -1.6, 3).target;
+            let target = DeathCamera::begin(eye, -1.6, 3, FALL_LATERAL).target;
             assert!(
                 target.position.x.is_finite()
                     && target.position.z.is_finite()
@@ -516,6 +538,7 @@ mod tests {
             },
             -1.6,
             5,
+            FALL_LATERAL,
         );
         for _ in 0..=60 {
             let resolved = resolve(
@@ -540,7 +563,7 @@ mod tests {
 
     #[test]
     fn the_stereo_eyes_roll_with_the_fallen_horizon() {
-        let mut death = DeathCamera::begin(live_eye(), -1.6, 5);
+        let mut death = DeathCamera::begin(live_eye(), -1.6, 5, FALL_LATERAL);
         death.advance(FALL_SECONDS * 2.0);
         let resolved = resolve(
             Vector3::zero(),
@@ -562,7 +585,7 @@ mod tests {
 
     #[test]
     fn an_untracked_head_leaves_the_stereo_offset_alone() {
-        let death = DeathCamera::begin(live_eye(), -1.6, 5);
+        let death = DeathCamera::begin(live_eye(), -1.6, 5, FALL_LATERAL);
         let resolved = resolve(
             Vector3::zero(),
             Quaternion::one(),
@@ -578,7 +601,7 @@ mod tests {
 
     #[test]
     fn a_degenerate_tracked_rotation_does_not_poison_the_blend() {
-        let death = DeathCamera::begin(live_eye(), -1.6, 7);
+        let death = DeathCamera::begin(live_eye(), -1.6, 7, FALL_LATERAL);
         let resolved = resolve(
             Vector3::zero(),
             Quaternion::one(),

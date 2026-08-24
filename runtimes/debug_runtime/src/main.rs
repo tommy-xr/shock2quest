@@ -888,20 +888,7 @@ fn run_game_blocking(
         // player is dying the game blends this tracked pose toward the fallen
         // death pose, once, for every runtime (see `shock2vr::death_camera`).
         // Alive, it hands back exactly what went in.
-        let render_context = game
-            .resolve_camera(
-                pawn_offset,
-                pawn_rotation,
-                // Crouch-aware eye height, shared with desktop and the flat
-                // controller via Game::player_eye_height, so the debug-runtime
-                // camera sits at the same height as desktop and shots land on
-                // the crosshair.
-                vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
-                // Same head rotation fed to game.update, so the rendered view
-                // and the flat viewmodel agree. Controllable via
-                // `/v1/control/input` head.look.
-                current_input.head.rotation,
-            )
+        let render_context = resolved_camera(&game, pawn_offset, pawn_rotation, &current_input)
             // Accumulated game time, not real time.
             .into_render_context(actual_game_time, projection_matrix, screen_size);
 
@@ -1961,6 +1948,32 @@ fn input_snapshot_from_context(input: &InputContext) -> InputSnapshot {
     }
 }
 
+/// The camera this frame renders from: the crouch-aware eye height shared with
+/// desktop and the flat controller via `Game::player_eye_height` (so the
+/// debug-runtime camera sits at the same height as desktop and shots land on
+/// the crosshair), the same head rotation fed to `game.update` (so the rendered
+/// view and the flat viewmodel agree; controllable via `/v1/control/input`
+/// head.look), routed through `resolve_camera` so a death camera in progress
+/// moves the view.
+///
+/// Shared with `/v1/info` rather than written twice: the snapshot reports the
+/// camera the runtime actually rendered from, which is what makes the death
+/// camera observable headlessly, and a second copy of this expression would
+/// drift from the one that matters.
+fn resolved_camera(
+    game: &Game,
+    pawn_offset: Vector3<f32>,
+    pawn_rotation: Quaternion<f32>,
+    input: &InputContext,
+) -> shock2vr::death_camera::CameraPose {
+    game.resolve_camera(
+        pawn_offset,
+        pawn_rotation,
+        vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
+        input.head.rotation,
+    )
+}
+
 /// Capture current game state as a frame snapshot
 fn capture_frame_snapshot(
     game: &Game,
@@ -2025,6 +2038,15 @@ fn capture_frame_snapshot(
     // TODO: Find player entity specifically
     // TODO: Track frame counter
 
+    // Only the head component is reported, so the pawn is passed as the
+    // identity it is relative to - `resolve_camera` never touches it anyway.
+    let rendered_camera = resolved_camera(
+        game,
+        vec3(0.0, 0.0, 0.0),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        current_input,
+    );
+
     FrameSnapshot {
         frame_index: frame_counter,
         time: TimeInfo {
@@ -2054,10 +2076,19 @@ fn capture_frame_snapshot(
                     .as_ref()
                     .map(|s| s.life_state.clone())
                     .unwrap_or_else(|| "alive".to_owned()),
-                // The LIVE eye height, not the standing constant: automation
-                // aims from this, and a crouched player's camera is lower.
-                camera_offset: [0.0, game.player_eye_height() / SCALE_FACTOR, 0.0],
-                camera_rotation: [1.0, 0.0, 0.0, 0.0], // TODO: Get camera rotation
+                // The camera the runtime actually renders from, resolved the
+                // same way the render loop resolves it: the LIVE eye height
+                // (automation aims from this, and a crouched player's camera is
+                // lower), then routed through `resolve_camera` so a death
+                // camera in progress is observable headlessly rather than only
+                // in a screenshot.
+                camera_offset: rendered_camera.head_offset.into(),
+                camera_rotation: [
+                    rendered_camera.head_rotation.s,
+                    rendered_camera.head_rotation.v.x,
+                    rendered_camera.head_rotation.v.y,
+                    rendered_camera.head_rotation.v.z,
+                ],
                 wielded_entity_id: state.as_ref().and_then(|s| s.wielded_entity_id),
                 right_hand_entity_id: state.as_ref().and_then(|s| s.right_hand_entity_id),
                 reloading: state.as_ref().is_some_and(|s| s.reloading),

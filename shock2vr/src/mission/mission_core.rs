@@ -75,6 +75,7 @@ use tracing::{info, trace, warn};
 use crate::{
     GameOptions,
     creature::{HitBoxManager, RagDollManager, get_creature_definition},
+    death_camera::{self, DeathCamera, DeathCameraSample},
     game_scene::AmbientAudioState,
     game_scene::PlayerSavePoseError,
     gui::GuiManager,
@@ -324,6 +325,17 @@ impl PlayerLifeState {
     pub fn is_alive(&self) -> bool {
         matches!(self, PlayerLifeState::Alive)
     }
+}
+
+/// Seed the death camera's fall direction from where the player died, so a
+/// replayed death topples the same way while two deaths in different places do
+/// not. The float bits are mixed rather than the value quantized: neighbouring
+/// positions should give unrelated directions, not the same one.
+fn death_seed(position: Vector3<f32>) -> u64 {
+    let mix = |seed: u64, value: f32| {
+        seed.rotate_left(17) ^ u64::from(value.to_bits()).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+    };
+    mix(mix(mix(0, position.x), position.y), position.z)
 }
 
 const PLAYER_RESPAWN_DELAY_SECONDS: f32 = 5.0;
@@ -1084,6 +1096,17 @@ pub struct MissionCore {
     /// White transition cover shared by both flat and per-eye VR rendering.
     screen_fade_alpha: f32,
     screen_fade_texture: Rc<dyn TextureTrait>,
+
+    /// The tracked head rotation this frame. The death camera needs the gaze
+    /// the player died with, and a death arriving through `handle_effects` sees
+    /// no input context - so it is recorded here each update rather than
+    /// threaded through the effect path.
+    last_head_rotation: Quaternion<f32>,
+
+    /// The fall to the floor that plays while the player is dying, or `None`
+    /// while they are alive. Runtime-only, like [`PlayerLifeState`] itself: a
+    /// dead game cannot be saved, so there is no death mid-fall to restore.
+    death_camera: Option<DeathCamera>,
 }
 
 pub struct GlobalContext {
@@ -1876,6 +1899,8 @@ impl MissionCore {
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
             screen_fade_texture,
+            last_head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            death_camera: None,
         };
         for (index, entity_id) in backpack_load_remap.overflow.into_iter().enumerate() {
             mission_core.spill_backpack_overflow(entity_id, index);
@@ -1949,6 +1974,8 @@ impl MissionCore {
             .borrow::<UniqueViewMut<PlayerLifeState>>()
             .unwrap() = next_state;
 
+        self.death_camera = Some(self.begin_death_camera());
+
         vec![Effect::PlaySound {
             handle: AudioHandle::new(),
             source: None,
@@ -1958,6 +1985,88 @@ impl MissionCore {
                 .to_string(),
             spatial: false,
         }]
+    }
+
+    /// Choose where this death lands. The fall direction is seeded from the
+    /// position the player died at, so a reproducible death - a captured
+    /// screenshot sequence, an e2e assertion - falls exactly the same way,
+    /// while two deaths in different places do not topple identically.
+    fn begin_death_camera(&self) -> DeathCamera {
+        let (position, player_rotation, player_entity) = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            (player.pos, player.rotation, player.entity_id)
+        };
+        // The eye and the floor are both expressed relative to the pawn (the
+        // collider center), which is the space the runtimes' `head_offset`
+        // lives in - see `crate::death_camera`.
+        let eye_height = crate::player_eye_height_for(self.player_is_crouched());
+        let live_eye = death_camera::EyePose {
+            position: cgmath::vec3(0.0, eye_height / SCALE_FACTOR, 0.0),
+            // Where the player was actually looking: the body topples sideways
+            // from their gaze, so whatever killed them stays in frame.
+            rotation: self.last_head_rotation,
+        };
+        let floor_y = -physics::player_center_above_floor(self.player_is_crouched());
+        let seed = death_seed(position);
+        let lateral =
+            self.clear_topple_distance(position, player_rotation, player_entity, seed, floor_y);
+        DeathCamera::begin(live_eye, floor_y, seed, lateral)
+    }
+
+    /// How far the body may topple before something stops it. Dying backed into
+    /// a wall is the common case when cornered, and an unclamped drift would
+    /// leave the camera inside the geometry. The path is swept at the height the
+    /// eye actually ends at - walls run floor to ceiling, but a waist-high crate
+    /// does not, and the fallen eye is low.
+    fn clear_topple_distance(
+        &self,
+        player_position: Vector3<f32>,
+        player_rotation: Quaternion<f32>,
+        player_entity: EntityId,
+        seed: u64,
+        floor_y: f32,
+    ) -> f32 {
+        // Keep the camera off whatever surface it stops against.
+        const CLEARANCE: f32 = 0.15;
+
+        let direction =
+            player_rotation * death_camera::topple_direction(self.last_head_rotation, seed);
+        let start = Point3::from_vec(
+            player_position + cgmath::vec3(0.0, floor_y + death_camera::FALLEN_EYE_HEIGHT, 0.0),
+        );
+        let blocked = self
+            .physics
+            .ray_cast2(
+                start,
+                direction,
+                death_camera::MAX_FALL_LATERAL,
+                physics::InternalCollisionGroups::ALL,
+                Some(player_entity),
+                true,
+            )
+            .map(|hit| (hit.hit_point - start).magnitude() - CLEARANCE);
+        blocked
+            .unwrap_or(death_camera::MAX_FALL_LATERAL)
+            .clamp(0.0, death_camera::MAX_FALL_LATERAL)
+    }
+
+    /// Drive the fall, and end it when the player is no longer dying. A QBR
+    /// reconstruction puts a live player back on their feet, so the camera has
+    /// to be back under their control the same frame - otherwise the
+    /// reconstructed body renders from the floor where the old one fell.
+    fn advance_death_camera(&mut self, elapsed_seconds: f32) {
+        if self.player_is_alive() {
+            self.death_camera = None;
+            return;
+        }
+        if let Some(death_camera) = &mut self.death_camera {
+            death_camera.advance(elapsed_seconds);
+        }
+    }
+
+    /// This frame's death-camera contribution, for [`crate::Game::resolve_camera`].
+    pub fn death_camera(&self) -> Option<DeathCameraSample> {
+        self.death_camera.as_ref().map(DeathCamera::sample)
     }
 
     /// Advance the death pause: perform the QBR reconstruction once its retail
@@ -2081,11 +2190,13 @@ impl MissionCore {
                 })
                 .unwrap_or(false)
         };
+        self.last_head_rotation = input_context.head.rotation;
         let mut life_state_effects = Vec::new();
         if self.player_is_alive() && player_health_depleted {
             life_state_effects.append(&mut self.begin_player_death());
         }
         life_state_effects.append(&mut self.update_player_life_state(time.elapsed.as_secs_f32()));
+        self.advance_death_camera(time.elapsed.as_secs_f32());
 
         // A dead player's physical head can still look around in VR, but all
         // actionable movement, hand, trigger, crouch, and pointer channels are

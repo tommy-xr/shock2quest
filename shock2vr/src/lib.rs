@@ -1935,8 +1935,20 @@ impl Game {
         // and the cyber interface's vignette) - both occupy the explicit
         // scene-overlay layer: over the world, behind scene UI and the pause
         // menu, identically in flat and VR.
+        // Through the death camera first: these layers are view-LOCKED, and
+        // while the player is dying the rendered view is no longer the tracked
+        // head. Anchored to the raw tracked pose, the damage tint would slide
+        // off to the side as the camera falls away from it - and the killing
+        // blow is exactly when it is on screen.
+        let rendered_eye = death_camera::resolve(
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            self.head_pose.0,
+            self.head_pose.1,
+            self.active_game_scene.death_camera(),
+        );
         let (mut eye_position, eye_forward) =
-            hit_feedback::eye_pose(self.head_pose.0, self.head_pose.1);
+            hit_feedback::eye_pose(rendered_eye.head_offset, rendered_eye.head_rotation);
         // Centre the layer on the eye the frame is actually drawn from, which
         // is NOT the eye the input context reports: both flat runtimes put the
         // *standing* eye in `head.position` while rendering from a crouch-aware

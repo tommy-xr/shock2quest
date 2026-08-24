@@ -273,6 +273,10 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.use_mode_vignette_intensity()
     }
 
+    fn death_camera(&self) -> Option<crate::death_camera::DeathCameraSample> {
+        self.mission_core.death_camera()
+    }
+
     fn player_save_position(&self) -> Result<Vector3<f32>, crate::game_scene::PlayerSavePoseError> {
         self.mission_core.player_save_position()
     }
