@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use cgmath::{Deg, EuclideanSpace, InnerSpace, Matrix4, Vector2, Vector3, vec3};
 
-use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
+use engine::{
+    assets::asset_cache::AssetCache,
+    scene::{RenderLayer, SceneObject},
+};
 use rapier3d::prelude::RigidBodyHandle;
 use shipyard::{Component, EntitiesView, EntityId, Get, UniqueView, View, World};
 
@@ -443,7 +446,20 @@ impl GuiManager {
             let canvas = UiCanvas::from_elements(size_px, elements);
             let z_step =
                 COMPONENT_Z_STEP.min(PANEL_DEPTH_BUDGET / canvas.element_count().max(1) as f32);
-            ret.extend(canvas.render_world_space(asset_cache, root_transform, None, None, z_step));
+            let mut panel_objects =
+                canvas.render_world_space(asset_cache, root_transform, None, None, z_step);
+            // Draw over everything the panel's own host mesh might otherwise
+            // occlude it with (issue #1100: a wide host like Hydro3 Desk #2
+            // encloses the panel plane, burying it behind the desk's own
+            // geometry). `SceneUi` is the same "draw over the world" layer the
+            // per-eye HUD/viewmodel are bumped into (see `lib.rs`); it clears
+            // depth at its own group boundary and is drawn before
+            // `SystemOverlay`, so the pause menu and cyber interface still
+            // draw over an open panel.
+            for object in &mut panel_objects {
+                object.set_render_layer(RenderLayer::SceneUi);
+            }
+            ret.extend(panel_objects);
 
             // gui_obj.set_local_transform(
             //     Matrix4::from_translation(info.offset)
