@@ -54,6 +54,9 @@ pub struct AnimatedModel {
     scene_objects: Vec<SceneObject>,
     hit_boxes: Rc<HashMap<u32, Aabb3<f32>>>,
     hit_box_shapes: Rc<HashMap<u32, HitBoxShape>>,
+    /// LGMD object meshes can be articulated while still carrying authored
+    /// object-space bounds. AI meshes do not currently expose an equivalent.
+    bounding_box: Option<Aabb3<f32>>,
     vhots: Vec<Vhot>,
     /// Set only for a `PMNM` mesh, whose vertices are in bind-pose model space
     /// rather than joint-local space. Holds `bind_inverse[j] * bind_correction`,
@@ -137,6 +140,7 @@ impl AnimatedModel {
             scene_objects: new_scene_objects,
             hit_boxes: self.hit_boxes.clone(),
             hit_box_shapes: self.hit_box_shapes.clone(),
+            bounding_box: self.bounding_box,
             vhots: self.vhots.clone(),
             bind: self.bind.clone(),
         }
@@ -159,6 +163,7 @@ impl AnimatedModel {
             scene_objects: new_scene_objects,
             hit_boxes: model.hit_boxes.clone(),
             hit_box_shapes: model.hit_box_shapes.clone(),
+            bounding_box: model.bounding_box,
             vhots: model.vhots.clone(),
             bind: model.bind.clone(),
         }
@@ -199,6 +204,7 @@ impl Model {
                     scene_objects,
                     hit_boxes: Rc::new(hit_boxes),
                     hit_box_shapes: Rc::new(HashMap::new()),
+                    bounding_box: Some(bounding_box),
                     vhots: static_mesh.vhots.clone(),
                     bind: None,
                 }),
@@ -266,6 +272,7 @@ impl Model {
                 scene_objects,
                 hit_boxes: Rc::new(hit_boxes),
                 hit_box_shapes: Rc::new(hit_box_shapes),
+                bounding_box: None,
                 vhots: vec![],
                 bind,
             }),
@@ -291,6 +298,7 @@ impl Model {
                     scene_objects,
                     hit_boxes: Rc::new(hit_boxes),
                     hit_box_shapes: Rc::new(HashMap::new()),
+                    bounding_box: Some(bounding_box),
                     vhots: vec![],
                     bind: None,
                 }),
@@ -374,7 +382,20 @@ impl Model {
 
     pub fn bounding_box(&self) -> Option<Aabb3<f32>> {
         match &self.inner {
-            InnerModel::Animated(_animated_model) => None,
+            InnerModel::Animated(_) => None,
+            InnerModel::Static(static_model) => Some(static_model.bounding_box),
+        }
+    }
+
+    /// Authored local-space bounds even when an LGMD object is articulated.
+    ///
+    /// `bounding_box` historically means "static-model bounds" to physics
+    /// fallback callers, so widening it would also invent colliders for
+    /// animated objects. Weapon fire geometry needs the underlying object
+    /// header without changing that behavior.
+    pub fn authored_bounding_box(&self) -> Option<Aabb3<f32>> {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => animated_model.bounding_box,
             InnerModel::Static(static_model) => Some(static_model.bounding_box),
         }
     }

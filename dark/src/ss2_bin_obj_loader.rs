@@ -828,7 +828,6 @@ pub fn read_vhots<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<
             vhots.push(Vhot::read(reader));
         }
     }
-    vhots.sort_by(|a, b| a.vhot_type.cmp(&b.vhot_type));
     vhots
 }
 
@@ -1319,6 +1318,32 @@ mod tests {
             offset_lights: 0,
             offset_normals: 0,
         }
+    }
+
+    /// A GunFlash vhot is an authored file index. Sorting this table by type
+    /// makes that index name a different point (ar15_w is the shipped example:
+    /// its type-1 muzzle precedes its type-0 breech in the file).
+    #[test]
+    fn vhots_keep_authored_file_order_for_indexed_properties() {
+        let mut header = header_with_mat_extra(8);
+        header.num_vhots = 2;
+        let mut bytes = Vec::new();
+        for (kind, point) in [
+            (VhotType::LightSource, point3(1.0, 2.0, 3.0)),
+            (VhotType::Unknown, point3(4.0, 5.0, 6.0)),
+        ] {
+            bytes.extend_from_slice(&(kind as u32).to_le_bytes());
+            for value in [point.x, point.y, point.z] {
+                bytes.extend_from_slice(&(value * SCALE_FACTOR).to_le_bytes());
+            }
+        }
+
+        let vhots = read_vhots(&header, &mut Cursor::new(bytes));
+
+        assert_eq!(vhots[0].vhot_type, VhotType::LightSource);
+        assert_eq!(vhots[0].point, point3(-1.0, 3.0, 2.0));
+        assert_eq!(vhots[1].vhot_type, VhotType::Unknown);
+        assert_eq!(vhots[1].point, point3(-4.0, 6.0, 5.0));
     }
 
     fn extra_chunk(records: &[(f32, f32)], stride: usize) -> Vec<u8> {

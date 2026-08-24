@@ -12,8 +12,8 @@ use crate::{
     mission::{entity_creator::CreateEntityOptions, mission_core::GlobalTemplateClassTags},
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::{
-        RuntimePropFlatAim, RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropTransform,
-        RuntimePropVhots,
+        RuntimePropFlatAim, RuntimePropModelBounds, RuntimePropReloading, RuntimePropSelectedAmmo,
+        RuntimePropTransform, RuntimePropVhots,
     },
     util::{get_rotation_from_forward_vector, resolve_proxy_entity},
     vr_config,
@@ -33,21 +33,55 @@ const MELEE_DAMAGE: f32 = 6.0;
 /// guns for now; per-weapon loudness is a follow-up.
 const GUNSHOT_NOISE_RADIUS: f32 = 50.0 / SCALE_FACTOR;
 
-/// Rotation taking the projectile's +Z travel axis onto the barrel of a 25AE
-/// first-person gun model, which is authored along the model's **-X** - that is
-/// where each of those meshes puts its muzzle vhot, and pointing that axis out
-/// of the hand is the whole job of every gun's -90 degree yaw in the
-/// `vr_config` grip table (pinned by its
-/// `gun_grips_aim_the_barrel_out_of_the_hand` test). So this one rotation aims
-/// every VR weapon - ballistic, energy and psi alike - down its own rendered
-/// barrel, with no per-weapon correction.
-///
-/// Caveat, pre-existing and unchanged by this: several *classic-install* world
-/// models (`atek_w`, `ar15_w`, `sg_w`, `gren_w`, `viro_w`, `al_w`) are authored
-/// barrel-along-Z instead, so VR mis-aims them by 90 degrees when the 25AE view
-/// models are unavailable. Tracked in #1034.
-fn barrel_axis_from_forward() -> Quaternion<f32> {
-    Quaternion::from_angle_y(Deg(-90.0))
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MuzzleGeometry {
+    point: cgmath::Point3<f32>,
+    axis: cgmath::Vector3<f32>,
+}
+
+/// Resolve the fire point and direction from the same local-space geometry the
+/// renderer uses. Dark's guns are authored lengthwise on either X (25AE hand
+/// models and several classic models) or Z (the other classic world models),
+/// always toward the negative end. A real vhot wins for the fire point, chosen
+/// geometrically rather than by type/file position; a model without one uses
+/// the centre of its front bounding-box face instead of the grip.
+fn resolve_muzzle_geometry(
+    bounds: Option<collision::Aabb3<f32>>,
+    vhots: &[dark::ss2_bin_obj_loader::Vhot],
+) -> MuzzleGeometry {
+    let axis = bounds
+        .map(|bounds| {
+            let dimensions = bounds.max - bounds.min;
+            if dimensions.z > dimensions.x {
+                -cgmath::Vector3::unit_z()
+            } else {
+                -cgmath::Vector3::unit_x()
+            }
+        })
+        .unwrap_or_else(|| -cgmath::Vector3::unit_x());
+
+    let point = vhots
+        .iter()
+        .max_by(|a, b| {
+            a.point
+                .to_vec()
+                .dot(axis)
+                .total_cmp(&b.point.to_vec().dot(axis))
+        })
+        .map(|vhot| vhot.point)
+        .or_else(|| {
+            bounds.map(|bounds| {
+                let centre = bounds.min + (bounds.max - bounds.min) / 2.0;
+                if axis.x != 0.0 {
+                    point3(bounds.min.x, centre.y, centre.z)
+                } else {
+                    point3(centre.x, centre.y, bounds.min.z)
+                }
+            })
+        })
+        .unwrap_or_else(|| point3(0.0, 0.0, 0.0));
+
+    MuzzleGeometry { point, axis }
 }
 
 /// The weapon entity's current world position (from its live transform).
@@ -315,10 +349,16 @@ pub(super) fn create_muzzle_flash(
         .map(|vhots| vhots.0.clone())
         .unwrap_or_default();
 
+    let bounds = world
+        .borrow::<View<RuntimePropModelBounds>>()
+        .ok()
+        .and_then(|bounds| bounds.get(entity_id).ok().map(|bounds| bounds.0));
+    let fallback = resolve_muzzle_geometry(bounds, &vhots).point;
+
     let vhot_offset = vhots
         .get(options.vhot as usize)
         .map(|v| v.point)
-        .unwrap_or(point3(0.0, 0.0, 0.0));
+        .unwrap_or(fallback);
 
     let transform = v_transform.get(entity_id).unwrap();
 
@@ -389,22 +429,11 @@ pub(super) fn create_projectile(
         .get(entity_id)
         .map(|vhots| vhots.0.clone())
         .unwrap_or_default();
-    // The fire point is the model's first vhot, which the 25AE view models that
-    // carry one author at the -X tip of the barrel (atek_h, ar15_h, sg_h,
-    // lasehand, sfg_h, viro_h, amp_h).
-    //
-    // Documented fallback for a model with no vhot at all: the model origin,
-    // i.e. the grip. The shot still leaves along the barrel, just from the
-    // hand. This is not rare - `empgun_h`, `gren_h`, `fsn_h` and `al_h` ship
-    // with zero vhots, as do most classic-install world models - and a shot
-    // starting at the grip can strike the player when the weapon is held in
-    // close to the body (see #1034). Adding clearance is deliberately left to
-    // that issue: it changes where four more weapons fire from, which is a
-    // separate change from making the vhot-carrying weapons faithful.
-    let muzzle = vhots
-        .first()
-        .map(|v| v.point)
-        .unwrap_or(point3(0.0, 0.0, 0.0));
+    let bounds = world
+        .borrow::<View<RuntimePropModelBounds>>()
+        .ok()
+        .and_then(|bounds| bounds.get(entity_id).ok().map(|bounds| bounds.0));
+    let muzzle = resolve_muzzle_geometry(bounds, &vhots);
 
     let transform = v_transform.get(entity_id).unwrap();
 
@@ -417,8 +446,8 @@ pub(super) fn create_projectile(
         // Projectile velocity is `root_transform * (0, 0, magnitude)`, so put
         // the muzzle at the origin and aim +Z down the barrel.
         root_transform: transform.0
-            * Matrix4::from_translation(muzzle.to_vec())
-            * Matrix4::from(barrel_axis_from_forward()),
+            * Matrix4::from_translation(muzzle.point.to_vec())
+            * Matrix4::from(get_rotation_from_forward_vector(muzzle.axis)),
         options: CreateEntityOptions {
             force_visible: true,
             ..CreateEntityOptions::default()
@@ -495,12 +524,14 @@ mod tests {
     /// `CreateEntity` the script returns.
     fn vr_fire_geometry(
         transform: Matrix4<f32>,
+        bounds: collision::Aabb3<f32>,
         vhots: Vec<dark::ss2_bin_obj_loader::Vhot>,
     ) -> (cgmath::Vector3<f32>, cgmath::Vector3<f32>) {
         let mut world = World::new();
         let weapon = world.add_entity((
             Links::empty(),
             RuntimePropTransform(transform),
+            RuntimePropModelBounds(bounds),
             RuntimePropVhots(vhots),
         ));
 
@@ -534,6 +565,34 @@ mod tests {
         }
     }
 
+    fn muzzle_flash_offset(
+        bounds: collision::Aabb3<f32>,
+        vhots: Vec<dark::ss2_bin_obj_loader::Vhot>,
+        index: u32,
+    ) -> cgmath::Point3<f32> {
+        let mut world = World::new();
+        let weapon = world.add_entity((
+            Links::empty(),
+            dark::properties::PropModelName("test_weapon".to_owned()),
+            RuntimePropTransform(Matrix4::from_scale(1.0)),
+            RuntimePropModelBounds(bounds),
+            RuntimePropVhots(vhots),
+        ));
+        let effect = create_muzzle_flash(
+            &world,
+            weapon,
+            -1,
+            &GunFlashOptions {
+                vhot: index,
+                flags: 0,
+            },
+        );
+        let Effect::CreateEntity { position, .. } = effect else {
+            panic!("a muzzle flash link must create its effect");
+        };
+        position
+    }
+
     /// A VR shot leaves the model's muzzle vhot travelling down the barrel
     /// (the model's -X), for any pose the hand happens to hold the weapon in.
     #[test]
@@ -545,7 +604,8 @@ mod tests {
         let transform = Matrix4::from_translation(translation) * Matrix4::from(rotation);
         let vhot = point3(-0.77, -0.03, 0.06);
 
-        let (origin, forward) = vr_fire_geometry(transform, vec![muzzle_vhot(vhot)]);
+        let bounds = collision::Aabb3::new(point3(-0.8, -0.3, -0.2), point3(0.8, 0.3, 0.2));
+        let (origin, forward) = vr_fire_geometry(transform, bounds, vec![muzzle_vhot(vhot)]);
 
         let expected_origin = translation + rotation * vhot.to_vec();
         let expected_forward = rotation * vec3(-1.0, 0.0, 0.0);
@@ -559,17 +619,69 @@ mod tests {
         );
     }
 
-    /// A model with no vhot at all (the classic `laser` / `lasehand` meshes)
-    /// falls back to the model origin, still firing down the barrel.
+    /// A no-vhot viewmodel fires from the end of its actual barrel geometry,
+    /// not from the grip at the model origin.
     #[test]
-    fn a_vr_shot_from_a_vhotless_model_falls_back_to_the_model_origin() {
+    fn a_vr_shot_from_a_vhotless_model_falls_back_to_the_barrel_tip() {
         let rotation = Quaternion::from_angle_y(Deg(-90.0));
         let transform = Matrix4::from_translation(vec3(1.0, 2.0, 3.0)) * Matrix4::from(rotation);
+        let bounds = collision::Aabb3::new(point3(-1.2, -0.2, -0.4), point3(0.6, 0.2, 0.4));
 
-        let (origin, forward) = vr_fire_geometry(transform, vec![]);
+        let (origin, forward) = vr_fire_geometry(transform, bounds, vec![]);
 
-        assert!((origin - vec3(1.0, 2.0, 3.0)).magnitude() < 1e-5);
+        let expected_origin = transform.transform_point(point3(-1.2, 0.0, 0.0)).to_vec();
+        assert!((origin - expected_origin).magnitude() < 1e-5);
         assert!((forward - rotation * vec3(-1.0, 0.0, 0.0)).magnitude() < 1e-5);
+    }
+
+    /// Classic world models such as ar15_w are Z-long. Their muzzle vhot is
+    /// not necessarily first by type, so both the barrel axis and muzzle choice
+    /// come from geometry rather than list position.
+    #[test]
+    fn a_classic_z_long_weapon_uses_the_frontmost_vhot_and_z_barrel() {
+        let rotation = Quaternion::from_angle_y(Deg(23.0));
+        let translation = vec3(-2.0, 1.0, 4.0);
+        let transform = Matrix4::from_translation(translation) * Matrix4::from(rotation);
+        let bounds = collision::Aabb3::new(point3(-0.1, -0.4, -1.2), point3(0.1, 0.4, 1.2));
+        let breech = dark::ss2_bin_obj_loader::Vhot {
+            vhot_type: dark::ss2_bin_obj_loader::VhotType::Unknown,
+            point: point3(0.11, 0.2, -0.1),
+        };
+        let muzzle = dark::ss2_bin_obj_loader::Vhot {
+            vhot_type: dark::ss2_bin_obj_loader::VhotType::LightSource,
+            point: point3(0.0, 0.2, -1.24),
+        };
+
+        let (origin, forward) = vr_fire_geometry(transform, bounds, vec![breech, muzzle.clone()]);
+
+        assert!((origin - (translation + rotation * muzzle.point.to_vec())).magnitude() < 1e-5);
+        assert!((forward - rotation * vec3(0.0, 0.0, -1.0)).magnitude() < 1e-5);
+    }
+
+    /// A no-vhot weapon's projectile and flash must share the geometry-derived
+    /// fire point; otherwise the shot leaves the barrel while the visible flash
+    /// remains behind at the grip.
+    #[test]
+    fn a_vhotless_muzzle_flash_uses_the_barrel_tip_fallback() {
+        let bounds = collision::Aabb3::new(point3(-1.4, -0.3, -0.2), point3(0.7, 0.3, 0.2));
+
+        let flash = muzzle_flash_offset(bounds, vec![], 0);
+
+        assert_eq!(flash, point3(-1.4, 0.0, 0.0));
+    }
+
+    /// An in-range GunFlash vhot remains a literal authored file index. The
+    /// projectile's geometric "frontmost" selection must not rewrite casing
+    /// and flash attachment semantics.
+    #[test]
+    fn a_muzzle_flash_uses_its_authored_vhot_index() {
+        let bounds = collision::Aabb3::new(point3(-0.1, -0.4, -1.2), point3(0.1, 0.4, 1.2));
+        let muzzle = muzzle_vhot(point3(0.0, 0.2, -1.24));
+        let breech = muzzle_vhot(point3(0.11, 0.2, -0.1));
+
+        let casing = muzzle_flash_offset(bounds, vec![muzzle, breech.clone()], 1);
+
+        assert_eq!(casing, breech.point);
     }
 
     #[test]

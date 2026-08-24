@@ -385,14 +385,6 @@ pub enum Effect {
     ClearModel {
         entity_id: EntityId,
     },
-    /// Replace the entity's fire-point vhots with those of `model_name`
-    /// without changing the rendered model. Used by the VR held-weapon path:
-    /// the world model stays rendered (#352), but its mesh has no vhots -
-    /// the muzzle points live in the _h viewmodel.
-    SetVhotsFromModel {
-        entity_id: EntityId,
-        model_name: String,
-    },
     CreateEntityByTemplateName {
         source_entity_id: EntityId,
         template_name: String,

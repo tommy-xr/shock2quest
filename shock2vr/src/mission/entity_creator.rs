@@ -595,6 +595,7 @@ fn create_model(
         _v_rendertype,
         v_scale,
         mut rv_vhots,
+        mut rv_model_bounds,
     ) = world
         .borrow::<(
             EntitiesView,
@@ -606,6 +607,7 @@ fn create_model(
             View<PropRenderType>,
             View<PropScale>,
             ViewMut<RuntimePropVhots>,
+            ViewMut<RuntimePropModelBounds>,
         )>()
         .unwrap();
 
@@ -620,6 +622,13 @@ fn create_model(
 
         let vhots = model.vhots();
         entities.add_component(entity_id, &mut rv_vhots, RuntimePropVhots(vhots));
+        if let Some(bounds) = model.authored_bounding_box() {
+            entities.add_component(
+                entity_id,
+                &mut rv_model_bounds,
+                RuntimePropModelBounds(bounds),
+            );
+        }
 
         let qrotation = pos.rotation;
         let rotation = Matrix4::<f32>::from(qrotation);
