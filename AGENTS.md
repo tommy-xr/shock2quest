@@ -262,6 +262,18 @@ For debugging visual/rendering changes without a full interactive session:
 
    # With no --mission it boots the main menu (same entry point as the flat
    # desktop runtime), so always pass one when a scene/mission is what you want.
+   #
+   # --port binds EXACTLY the port given and fails loudly if it is taken (a
+   # silent move to another port would leave callers talking to somebody
+   # else's runtime). For a throwaway capture, pass `--port 0` to get an
+   # OS-assigned port. Either way the runtime prints the port it bound before
+   # it serves anything, so read it rather than assume it:
+   #   SHOCK2QUEST_PORT port=54321 requested=0 address=127.0.0.1:54321
+   #
+   # The runtime also exits by itself after 30 minutes with NO HTTP request
+   # (`--idle-timeout-secs`, 0 disables), logging SHOCK2QUEST_IDLE_EXIT, so a
+   # runtime orphaned by a dead session stops holding ~700 MB and a port. Any
+   # request resets the timer; a request in flight never counts as idle.
 
    # Control via HTTP
    curl http://127.0.0.1:8080/v1/step -X POST -d '{"frames": 10}'

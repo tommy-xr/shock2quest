@@ -15,12 +15,20 @@ use cgmath::Vector3;
 use clap::Parser;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::HashSet, net::SocketAddr, thread, time::Duration};
+use std::{
+    collections::HashSet,
+    net::SocketAddr,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 use tokio::{signal, sync::mpsc, sync::oneshot};
 use tracing::info;
 
 mod commands;
+mod lifecycle;
 use commands::*;
+use lifecycle::{DEFAULT_IDLE_TIMEOUT_SECS, IDLE_POLL_INTERVAL, IdleWatchdog};
 
 // Game engine imports
 extern crate glfw;
@@ -86,9 +94,21 @@ struct Args {
     #[arg(short, long, default_value = "main_menu")]
     mission: String,
 
-    /// Port to bind HTTP server to
+    /// Port to bind the HTTP server to. Bound exactly as given: a taken port
+    /// is a hard, loud failure rather than a silent move to another port,
+    /// because a caller that then talks to the old port would be driving
+    /// somebody else's runtime. Pass `0` to bind an OS-assigned ephemeral
+    /// port instead - the runtime always prints the port it actually bound as
+    /// `SHOCK2QUEST_PORT port=<n>`, so a caller can read it rather than guess.
     #[arg(short, long, default_value = "8080")]
     port: u16,
+
+    /// Exit after this many seconds with no HTTP request at all (0 disables).
+    /// Keeps an orphaned runtime - one whose owning agent or session died -
+    /// from holding ~700 MB and a port indefinitely. Any request resets the
+    /// timer, and a request in flight never counts as idle.
+    #[arg(long, default_value_t = DEFAULT_IDLE_TIMEOUT_SECS)]
+    idle_timeout_secs: u64,
 
     /// Enable debug physics rendering
     #[arg(long)]
@@ -234,8 +254,25 @@ fn main() -> anyhow::Result<()> {
         .block_on(tokio::net::TcpListener::bind(addr))
         .map_err(|e| anyhow::anyhow!("failed to bind {}: {}", addr, e))?;
 
+    // Announce the bound port before the server can serve anything, so a
+    // caller can block on this line and then use the address - essential with
+    // `--port 0`, where only the OS knows the port. println! (not tracing) so
+    // it survives any RUST_LOG filter, matching the other SHOCK2QUEST_*
+    // markers.
+    let bound_addr = listener.local_addr()?;
+    println!("{}", lifecycle::port_marker_line(bound_addr, args.port));
+
+    let idle_timeout =
+        (args.idle_timeout_secs > 0).then(|| Duration::from_secs(args.idle_timeout_secs));
+    let watchdog = Arc::new(IdleWatchdog::new(idle_timeout, Instant::now()));
+
     // Start the HTTP server in a background task
-    let server_handle = rt.spawn(start_http_server(listener, command_tx));
+    let server_handle = rt.spawn(start_http_server(
+        listener,
+        command_tx.clone(),
+        watchdog.clone(),
+    ));
+    rt.spawn(run_idle_watchdog(watchdog, command_tx));
 
     // Run the game on the main thread (required for GLFW)
     let game_result = run_game_blocking(args, command_rx);
@@ -248,11 +285,56 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Watch for a quiet period and shut the runtime down when it passes.
+///
+/// This is the only thing that reclaims an *orphaned* runtime: if the agent or
+/// session that launched it dies, nothing else will ever send it a
+/// `/v1/shutdown`, and it would otherwise sit on ~700 MB and a port until the
+/// machine reboots. It routes through the same `Shutdown` command the HTTP
+/// endpoint uses, so the game loop tears down normally.
+async fn run_idle_watchdog(
+    watchdog: Arc<IdleWatchdog>,
+    command_tx: mpsc::UnboundedSender<RuntimeCommand>,
+) {
+    let Some(timeout) = watchdog.timeout() else {
+        info!("Idle watchdog disabled (--idle-timeout-secs 0)");
+        return;
+    };
+    info!(
+        "Idle watchdog armed: exiting after {}s with no HTTP request",
+        timeout.as_secs()
+    );
+
+    loop {
+        tokio::time::sleep(IDLE_POLL_INTERVAL).await;
+        if let Some(idle) = watchdog.expired(Instant::now()) {
+            println!("{}", lifecycle::idle_exit_marker_line(idle, timeout));
+            request_game_loop_shutdown(&command_tx);
+            return;
+        }
+    }
+}
+
+/// Note every request against the idle watchdog, so that any traffic - not
+/// just stepping - keeps the runtime alive, and so a long request in flight
+/// (a big `/v1/step`) is never mistaken for idleness.
+async fn track_http_activity(
+    State(watchdog): State<Arc<IdleWatchdog>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    watchdog.request_started(Instant::now());
+    let response = next.run(request).await;
+    watchdog.request_finished(Instant::now());
+    response
+}
+
 /// Start the HTTP server on an already-bound listener (binding happens in
 /// main so a taken port fails the process fast)
 async fn start_http_server(
     listener: tokio::net::TcpListener,
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
+    watchdog: Arc<IdleWatchdog>,
 ) -> anyhow::Result<()> {
     let signal_command_tx = command_tx.clone();
 
@@ -318,7 +400,11 @@ async fn start_http_server(
         .route("/v1/audio/recent", get(get_recent_audio))
         .route("/v1/messages/recent", get(get_recent_messages))
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
-        .with_state(command_tx);
+        .with_state(command_tx)
+        .layer(axum::middleware::from_fn_with_state(
+            watchdog,
+            track_http_activity,
+        ));
 
     let addr = listener.local_addr()?;
     info!("Debug runtime listening on http://{}", addr);
