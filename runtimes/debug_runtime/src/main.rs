@@ -103,10 +103,12 @@ struct Args {
     #[arg(short, long, default_value = "8080")]
     port: u16,
 
-    /// Exit after this many seconds with no HTTP request at all (0 disables).
-    /// Keeps an orphaned runtime - one whose owning agent or session died -
-    /// from holding ~700 MB and a port indefinitely. Any request resets the
-    /// timer, and a request in flight never counts as idle.
+    /// Exit after this many seconds with no HTTP request at all. Keeps an
+    /// orphaned runtime - one whose owning agent or session died - from
+    /// holding ~700 MB and a port indefinitely. Any request resets the timer,
+    /// and a request in flight never counts as idle. Pass 0 to disable: the
+    /// case that needs it is watching a `--visible` free-running scene by
+    /// hand, where no HTTP traffic happens for a long time.
     #[arg(long, default_value_t = DEFAULT_IDLE_TIMEOUT_SECS)]
     idle_timeout_secs: u64,
 
@@ -260,7 +262,10 @@ fn main() -> anyhow::Result<()> {
     // it survives any RUST_LOG filter, matching the other SHOCK2QUEST_*
     // markers.
     let bound_addr = listener.local_addr()?;
-    println!("{}", lifecycle::port_marker_line(bound_addr, args.port));
+    println!(
+        "{}",
+        lifecycle::port_marker_line(bound_addr, std::process::id(), args.instance_id.as_deref())
+    );
 
     let idle_timeout =
         (args.idle_timeout_secs > 0).then(|| Duration::from_secs(args.idle_timeout_secs));
@@ -291,7 +296,15 @@ fn main() -> anyhow::Result<()> {
 /// session that launched it dies, nothing else will ever send it a
 /// `/v1/shutdown`, and it would otherwise sit on ~700 MB and a port until the
 /// machine reboots. It routes through the same `Shutdown` command the HTTP
-/// endpoint uses, so the game loop tears down normally.
+/// endpoint uses, so the game loop tears down normally - GLFW owns the main
+/// thread, so exiting the process from this task would skip that teardown.
+///
+/// Two deliberate limits, both matching what `/v1/shutdown` already does:
+/// a game loop wedged elsewhere (a hung level load) will not act on the
+/// command until it is unwedged, and the idle clock starts when the socket
+/// binds rather than when the mission finishes loading - so a very short
+/// `--idle-timeout-secs` can expire during a cold load. Neither matters at the
+/// 30-minute default.
 async fn run_idle_watchdog(
     watchdog: Arc<IdleWatchdog>,
     command_tx: mpsc::UnboundedSender<RuntimeCommand>,
@@ -323,10 +336,11 @@ async fn track_http_activity(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    watchdog.request_started(Instant::now());
-    let response = next.run(request).await;
-    watchdog.request_finished(Instant::now());
-    response
+    // The guard releases on Drop, so a request the client abandons mid-flight
+    // still ends its claim (a plain "decrement after the await" would not run
+    // when the response future is dropped, wedging the runtime "busy").
+    let _activity = watchdog.request_scope(Instant::now());
+    next.run(request).await
 }
 
 /// Start the HTTP server on an already-bound listener (binding happens in

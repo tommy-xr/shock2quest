@@ -267,8 +267,9 @@ For debugging visual/rendering changes without a full interactive session:
    # silent move to another port would leave callers talking to somebody
    # else's runtime). For a throwaway capture, pass `--port 0` to get an
    # OS-assigned port. Either way the runtime prints the port it bound before
-   # it serves anything, so read it rather than assume it:
-   #   SHOCK2QUEST_PORT port=54321 requested=0 address=127.0.0.1:54321
+   # it serves anything, so read it rather than assume it (the pid and
+   # instance_id answer "what is running, and is it mine?" without lsof):
+   #   SHOCK2QUEST_PORT port=54321 pid=8123 instance_id= address=127.0.0.1:54321
    #
    # The runtime also exits by itself after 30 minutes with NO HTTP request
    # (`--idle-timeout-secs`, 0 disables), logging SHOCK2QUEST_IDLE_EXIT, so a

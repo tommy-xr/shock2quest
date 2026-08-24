@@ -42,20 +42,33 @@ function spawnRuntime(args: string[]): Runtime {
 
   const lines: string[] = [];
   const waiters: { pattern: RegExp; resolve: (line: string) => void }[] = [];
-  const capture = (chunk: Buffer) => {
-    for (const line of chunk.toString().split("\n")) {
-      if (line.length === 0) continue;
-      lines.push(line);
-      for (const waiter of [...waiters]) {
-        if (waiter.pattern.test(line)) {
-          waiters.splice(waiters.indexOf(waiter), 1);
-          waiter.resolve(line);
-        }
+  const emit = (line: string) => {
+    if (line.length === 0) return;
+    lines.push(line);
+    for (const waiter of [...waiters]) {
+      if (waiter.pattern.test(line)) {
+        waiters.splice(waiters.indexOf(waiter), 1);
+        waiter.resolve(line);
       }
     }
   };
-  child.stdout?.on("data", capture);
-  child.stderr?.on("data", capture);
+  // A chunk can split mid-line (and the marker line is exactly what we wait
+  // for), so carry the tail of each stream between chunks instead of assuming
+  // whole lines arrive together.
+  const captureFrom = (stream: NodeJS.ReadableStream | null) => {
+    let carry = "";
+    stream?.on("data", (chunk: Buffer) => {
+      const parts = (carry + chunk.toString()).split("\n");
+      carry = parts.pop() ?? "";
+      for (const line of parts) emit(line);
+    });
+    stream?.on("end", () => {
+      emit(carry);
+      carry = "";
+    });
+  };
+  captureFrom(child.stdout);
+  captureFrom(child.stderr);
 
   let exited = false;
   const exitWaiters: (() => void)[] = [];
@@ -72,6 +85,17 @@ function spawnRuntime(args: string[]): Runtime {
       // Already gone.
     }
   };
+
+  // These runtimes are spawned raw (not via GameServer, which needs a ready
+  // instance we deliberately do not have here), so they are not covered by the
+  // SDK's own signal cleanup. Without this, Ctrl-C of the test runner would
+  // orphan exactly the kind of runtime this file exists to test.
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      kill();
+      process.kill(process.pid, signal);
+    });
+  }
 
   return {
     child,
@@ -121,14 +145,23 @@ function spawnRuntime(args: string[]): Runtime {
   };
 }
 
-/** Bind a port and hold it, so the runtime cannot have it. */
-function occupyPort(port: number): Promise<() => void> {
+/**
+ * Hold an OS-chosen port, so the runtime cannot have it. Deliberately not a
+ * fixed port: the test only needs *a* taken one, and a hardcoded port is the
+ * very collision this file is about.
+ */
+function occupyAnyPort(): Promise<{ port: number; release: () => void }> {
   return new Promise((resolve, reject) => {
     const squatter = createServer();
     squatter.once("error", reject);
-    squatter.listen({ port, host: "127.0.0.1" }, () =>
-      resolve(() => squatter.close()),
-    );
+    squatter.listen({ port: 0, host: "127.0.0.1" }, () => {
+      const address = squatter.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("squatter did not report a TCP port"));
+        return;
+      }
+      resolve({ port: address.port, release: () => squatter.close() });
+    });
   });
 }
 
@@ -153,6 +186,13 @@ test(
       const port = parseBoundPort(marker);
       assert.notEqual(port, 0, "must report the resolved port, not the request");
       assert.ok(port > 1024, `expected an ephemeral port, got ${port}`);
+      // The marker also answers "what is running, and is it mine?".
+      assert.match(marker, /pid=\d+/, "marker should carry the pid");
+      assert.match(
+        marker,
+        /instance_id=/,
+        "the instance_id field is present even when unset (hand launch)",
+      );
 
       const health = await fetch(`http://127.0.0.1:${port}/v1/health`);
       assert.equal(health.status, 200);
@@ -168,8 +208,7 @@ test(
   "an explicit --port that is taken fails loudly instead of drifting",
   { skip: !e2eEnabled, timeout: 360_000 },
   async () => {
-    const port = Number(process.env.SHOCK2_E2E_PORT ?? 8504);
-    const release = await occupyPort(port);
+    const { port, release } = await occupyAnyPort();
     const runtime = spawnRuntime(["--port", String(port)]);
     try {
       await runtime.waitForExit(LAUNCH_TIMEOUT_MS);

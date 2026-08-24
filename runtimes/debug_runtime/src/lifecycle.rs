@@ -7,7 +7,7 @@
 //! talking to somebody else's runtime.
 
 use std::net::SocketAddr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Default idle timeout before the runtime exits by itself.
@@ -22,10 +22,16 @@ use std::time::{Duration, Instant};
 ///   day - by then several have piled up, each holding ~700 MB.
 ///
 /// 30 minutes is comfortably above any plausible think-time gap and still
-/// bounds a leak to half an hour. Note the runtime is paused by default and
-/// only advances on `/v1/step`, so "no HTTP request at all" is a sound
-/// liveness signal; "not stepping" would NOT be (someone watching a
-/// free-running scene never steps).
+/// bounds a leak to half an hour. It is on by DEFAULT deliberately: the
+/// callers most likely to orphan a runtime (a `curl`-driven agent, a hand
+/// launch) are exactly the ones who would never pass an opt-in flag.
+///
+/// Note the runtime is paused by default and only advances on `/v1/step`, so
+/// "no HTTP request at all" is a sound liveness signal; "not stepping" would
+/// NOT be. The one real false positive follows from that: a human running
+/// `--visible`, free-running a scene and watching it for half an hour without
+/// touching HTTP, gets shut down. `--idle-timeout-secs 0` is the escape hatch
+/// (it is named in the flag's help text for exactly that moment).
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 30 * 60;
 
 /// How often the watchdog task re-checks. Small relative to any sane timeout,
@@ -34,13 +40,33 @@ pub const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// The line printed once the HTTP server is bound - before it is usable - so
 /// any caller (shell, agent, CI) can read the real port instead of assuming
-/// it. `requested` is the value passed to `--port` (0 = "any free port"), so
-/// the log shows which of the two the caller asked for.
-pub fn port_marker_line(addr: SocketAddr, requested: u16) -> String {
+/// it.
+///
+/// It carries the identity of the process too, because "where do I connect"
+/// is only half the discovery question; the other half is "what is running,
+/// and is it mine?", which today is answered with `lsof` and guesswork.
+/// `instance_id` is empty when the launcher did not pass one (a hand launch
+/// rather than the SDK) - the field is always present so a parser can rely on
+/// it.
+pub fn port_marker_line(addr: SocketAddr, pid: u32, instance_id: Option<&str>) -> String {
+    // --instance-id is opaque caller-supplied text; keep it to characters that
+    // cannot break the `key=value` framing (or forge a second marker line).
+    let instance_id: String = instance_id
+        .unwrap_or("")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '?'
+            }
+        })
+        .collect();
     format!(
-        "SHOCK2QUEST_PORT port={} requested={} address={}",
+        "SHOCK2QUEST_PORT port={} pid={} instance_id={} address={}",
         addr.port(),
-        requested,
+        pid,
+        instance_id,
         addr
     )
 }
@@ -89,13 +115,28 @@ impl IdleWatchdog {
         self.timeout
     }
 
-    pub fn request_started(&self, now: Instant) {
+    /// Mark a request as in flight until the returned guard is dropped.
+    ///
+    /// The guard exists because a client can vanish mid-request (curl Ctrl-C,
+    /// an aborted fetch, a killed session - exactly the orphan case this
+    /// watchdog is for), in which case the server future is dropped rather
+    /// than run to completion. A hand-written "decrement afterwards" would
+    /// then never run and leave the runtime permanently "busy", silently
+    /// disabling the watchdog forever.
+    pub fn request_scope(self: &Arc<Self>, now: Instant) -> ActivityGuard {
+        self.request_started(now);
+        ActivityGuard {
+            watchdog: Arc::clone(self),
+        }
+    }
+
+    fn request_started(&self, now: Instant) {
         let mut state = self.state.lock().unwrap();
         state.last_activity = now;
         state.in_flight += 1;
     }
 
-    pub fn request_finished(&self, now: Instant) {
+    fn request_finished(&self, now: Instant) {
         let mut state = self.state.lock().unwrap();
         state.last_activity = now;
         state.in_flight = state.in_flight.saturating_sub(1);
@@ -103,7 +144,7 @@ impl IdleWatchdog {
 
     /// How long the runtime has been idle, or `None` while a request is in
     /// flight (a runtime serving a request is by definition not idle).
-    pub fn idle_for(&self, now: Instant) -> Option<Duration> {
+    fn idle_for(&self, now: Instant) -> Option<Duration> {
         let state = self.state.lock().unwrap();
         if state.in_flight > 0 {
             return None;
@@ -116,6 +157,19 @@ impl IdleWatchdog {
         let timeout = self.timeout?;
         let idle = self.idle_for(now)?;
         (idle >= timeout).then_some(idle)
+    }
+}
+
+/// Keeps the runtime marked busy for as long as one request lives. Dropping
+/// it - normally, or because the request was cancelled - ends that request's
+/// claim and restarts the idle clock.
+pub struct ActivityGuard {
+    watchdog: Arc<IdleWatchdog>,
+}
+
+impl Drop for ActivityGuard {
+    fn drop(&mut self) {
+        self.watchdog.request_finished(Instant::now());
     }
 }
 
@@ -195,6 +249,22 @@ mod tests {
     }
 
     #[test]
+    fn dropping_a_request_scope_releases_the_runtime() {
+        // A cancelled request (client hung up mid-request) unwinds by dropping
+        // the response future, so the release must ride on Drop - otherwise
+        // one aborted request would wedge the runtime "busy" forever and
+        // silently disable the watchdog.
+        let start = Instant::now();
+        let watchdog = Arc::new(IdleWatchdog::new(Some(Duration::from_secs(60)), start));
+
+        let guard = watchdog.request_scope(start);
+        assert_eq!(watchdog.idle_for(start + Duration::from_secs(600)), None);
+
+        drop(guard);
+        assert!(watchdog.idle_for(Instant::now()).is_some());
+    }
+
+    #[test]
     fn a_zero_timeout_disables_the_watchdog() {
         let start = Instant::now();
         let watchdog = IdleWatchdog::new(None, start);
@@ -207,8 +277,30 @@ mod tests {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 54321);
 
         assert_eq!(
-            port_marker_line(addr, 0),
-            "SHOCK2QUEST_PORT port=54321 requested=0 address=127.0.0.1:54321"
+            port_marker_line(addr, 4242, Some("abc-123")),
+            "SHOCK2QUEST_PORT port=54321 pid=4242 instance_id=abc-123 address=127.0.0.1:54321"
+        );
+    }
+
+    #[test]
+    fn port_marker_neutralizes_an_instance_id_that_would_break_parsing() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+
+        assert_eq!(
+            port_marker_line(addr, 7, Some("a b\nSHOCK2QUEST_PORT port=1")),
+            "SHOCK2QUEST_PORT port=8080 pid=7 instance_id=a?b?SHOCK2QUEST_PORT?port?1 address=127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn port_marker_keeps_the_instance_id_field_when_there_is_none() {
+        // A hand launch passes no --instance-id; the field stays present (and
+        // empty) so a parser never has to special-case a missing key.
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+
+        assert_eq!(
+            port_marker_line(addr, 7, None),
+            "SHOCK2QUEST_PORT port=8080 pid=7 instance_id= address=127.0.0.1:8080"
         );
     }
 
