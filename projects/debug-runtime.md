@@ -230,7 +230,7 @@ GET  /v1/control/input    - Get input state
 POST /v1/control/input    - Set input channel
 POST /v1/player/spawn-item - Provision an item template into the inventory
 POST /v1/player/stats     - Provision skills/stats/psi tier/cyber modules
-POST /v1/screenshot       - Capture screenshot
+POST /v1/screenshot       - Capture screenshot (800x600; {max_width} to override)
 GET  /v1/dev-params       - List live-tunable dev params (key, label, range, value, default)
 POST /v1/dev-params       - Set a dev param {key, value} (clamped + snapped) or restore its exact default {key, reset: true}; 404 on unknown key
 ```
@@ -353,7 +353,10 @@ pass `"ignore_sensors": false` to probe sensor volumes deliberately.
 - Screenshots saved to `/tmp/claude/` directory
 - Input overrides persist until reset
 - Frame counter tracks actual game frames (not wall time)
-- macOS Retina displays: viewport size auto-detected for correct screenshots
+- Screenshots are saved at the declared 800x600, downscaled from a HiDPI
+  framebuffer if there is one, so the file matches the reported `resolution`.
+  Pass `max_width` (aspect-preserving, never upscales) for a different size -
+  a large value such as `4000` gets the native framebuffer back.
 
 ## Input Action Injection ✅ COMPLETE
 

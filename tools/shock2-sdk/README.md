@@ -112,7 +112,8 @@ await game.waitFor(
 );
 
 // Screenshots and physics
-await game.screenshot("test.png");
+await game.screenshot("test.png"); // 800x600; pass a max width for more detail
+await game.screenshot("detail.png", 4000);
 await game.raycast({
   start: [0, 0, 0],
   end: [10, 0, 0],

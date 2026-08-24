@@ -238,6 +238,8 @@ pub struct StepResult {
 #[derive(Debug, Deserialize)]
 pub struct ScreenshotSpec {
     pub filename: Option<String>,
+    /// Cap the saved PNG's width (aspect-preserving, never upscales).
+    pub max_width: Option<u32>,
 }
 
 /// Result of taking a screenshot
