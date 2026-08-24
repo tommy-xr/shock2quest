@@ -1423,6 +1423,17 @@ impl Script for AnimatedMonsterAI {
                         return Effect::NoEffect;
                     }
                     super::ai_util::melee_contact_attack(world, entity_id, physics)
+                } else if motion_flags
+                    .intersects(MotionFlags::LEFT_FOOT_STEP | MotionFlags::RIGHT_FOOT_STEP)
+                {
+                    // A foot reached its authored plant frame. This is not
+                    // gated on locomotion or on life: the shipped clips author
+                    // foot plants on idle weight-shifts, turns, staggers and
+                    // death collapses too, and each is a real foot hitting the
+                    // deck. The walk/run clips are per-half-step (`ogpwlklt` /
+                    // `ogpwlkrt`), one plant each, so a walk cycle produces
+                    // exactly two footsteps.
+                    crate::scripts::script_util::play_footstep_sound(world, entity_id)
                 // } else if motion_flags.contains(MotionFlags::END) {
                 //     Effect::QueueAnimationBySchema {
                 //         entity_id,
@@ -1957,5 +1968,90 @@ mod tests {
         assert_eq!(locomotion_scale_for_heading_error(Deg(90.0)), 0.33);
         assert_eq!(locomotion_scale_for_heading_error(Deg(180.0)), 0.33);
         assert_eq!(locomotion_scale_for_heading_error(Deg(-135.0)), 0.33);
+    }
+
+    /// Every environmental-sound query in `effect`, as its (tag, value) pairs.
+    fn sound_queries(effect: &Effect) -> Vec<Vec<(String, String)>> {
+        Effect::flatten(vec![effect.clone()])
+            .iter()
+            .filter_map(|e| match e {
+                Effect::PlayEnvironmentalSound { query, .. } => Some(query.tag_values()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The shipped locomotion clips are per-half-step and author exactly one
+    /// foot-plant flag each, so a creature's walk cycle should hand the schema
+    /// one `event=footstep` query per foot, keyed by its creature type.
+    #[test]
+    fn a_foot_plant_frame_plays_a_footstep_for_the_creature_type() {
+        let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+
+        let effect = monster.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::AnimationFlagTriggered {
+                motion_flags: MotionFlags::LEFT_FOOT_STEP,
+            },
+        );
+
+        let queries = sound_queries(&effect);
+        assert_eq!(queries.len(), 1, "one plant, one footstep: {queries:?}");
+        let query = &queries[0];
+        assert!(
+            query.contains(&("event".to_owned(), "footstep".to_owned())),
+            "footsteps resolve on event=footstep: {query:?}"
+        );
+        assert!(
+            query.contains(&("creaturetype".to_owned(), "hybrid".to_owned())),
+            "a hybrid must not sound like a monkey: {query:?}"
+        );
+    }
+
+    /// The right foot is the same event - both flags land in the same schema
+    /// query, they just alternate across the two half-step clips.
+    #[test]
+    fn the_right_foot_plants_too() {
+        let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+
+        let effect = monster.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::AnimationFlagTriggered {
+                motion_flags: MotionFlags::RIGHT_FOOT_STEP,
+            },
+        );
+
+        assert_eq!(sound_queries(&effect).len(), 1);
+    }
+
+    /// Flags that are not foot plants must stay silent, or every animated
+    /// frame of a creature turns into a footstep.
+    #[test]
+    fn a_non_foot_flag_plays_no_footstep() {
+        let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
+        let physics = PhysicsWorld::new();
+        let mut monster = AnimatedMonsterAI::new();
+        monster.initialize(entity_id, &world);
+
+        let effect = monster.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::AnimationFlagTriggered {
+                motion_flags: MotionFlags::INTERRUPTIBLE,
+            },
+        );
+
+        assert!(sound_queries(&effect).is_empty());
     }
 }

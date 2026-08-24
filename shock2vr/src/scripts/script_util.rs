@@ -842,6 +842,34 @@ fn get_impact_material(world: &World, hit_entity_id: EntityId) -> String {
         .unwrap_or_else(|| DEFAULT_IMPACT_MATERIAL.to_owned())
 }
 
+/// Footstep sound for a creature whose animation just reached an authored
+/// foot-plant frame (`MotionFlags::LEFT_FOOT_STEP` / `RIGHT_FOOT_STEP`).
+///
+/// The schema keys footsteps on `event=footstep` plus the creature's class
+/// tags (`creaturetype=oncegrunt`, `=monkey`, `=droid`, ...); most creature
+/// types resolve on those alone to a four-sample set (`ft_monk1..4`). Hybrids
+/// (`oncegrunt`) branch further on `material` - the creature's *own* material,
+/// i.e. what its feet are made of - and `material2`, the surface underfoot.
+/// The port has no per-texture lookup for world geometry, so `material2` is
+/// the default bulkhead metal, which is what most of the ship is; on a hybrid
+/// that resolves to `ft_ogm*`.
+///
+/// Creature types the schema authors no footsteps for (swarms, apparitions,
+/// SHODAN) resolve to nothing and fall through silently.
+pub fn play_footstep_sound(world: &World, entity_id: EntityId) -> Effect {
+    let own_material = get_impact_material(world, entity_id);
+    play_environmental_sound(
+        world,
+        entity_id,
+        "footstep",
+        vec![
+            ("material", &own_material),
+            ("material2", DEFAULT_IMPACT_MATERIAL),
+        ],
+        AudioHandle::new(),
+    )
+}
+
 /// Impact/collision sound for `entity_id` (a projectile or melee weapon)
 /// hitting `hit_entity_id`, played at the impact point. The schema query is
 /// the entity's class tags (ammotype for bullets, weapontype for melee) plus
