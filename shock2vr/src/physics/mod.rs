@@ -2304,6 +2304,43 @@ struct HeldItemDrive {
     /// The loose/restored world body is seated at the first tracked pose once;
     /// later hand poses move only `target` so world contact stays physical.
     seated: bool,
+    /// Whether a block found by this item's sweep should be reported as a
+    /// collision.
+    ///
+    /// True only for an *inert* held item ([`CollisionGroup::held_inert`]),
+    /// and that is the whole condition: an inert item takes part in no
+    /// narrow-phase collision, so the sweep that stops it at a wall is the
+    /// only evidence anywhere in the engine that it touched something. A held
+    /// melee weapon is deliberately not inert - Rapier already reports that
+    /// same touch as a contact - so synthesizing one here as well would fire
+    /// every collision consumer (damage, sound) twice for one hit.
+    reports_sweep_blocks: bool,
+    /// The entity this item's sweep is currently held back by.
+    ///
+    /// A block is reported only on the *edge* into this state, which is what
+    /// makes it a `CollisionStarted` rather than a per-frame poll: an item
+    /// pressed against a wall is blocked on every one of the sixty frames it
+    /// stays there, and that is one collision.
+    blocked_by: Option<EntityId>,
+}
+
+/// What a held item's sweep found in its way this step.
+struct HeldItemSweep {
+    /// Fraction of the requested travel the item may take, in `0..=1`.
+    fraction: Real,
+    /// The nearest blocking world surface, when one is in range.
+    block: Option<HeldItemBlock>,
+}
+
+/// The world surface a held item's sweep stopped against.
+#[derive(Clone, Copy)]
+struct HeldItemBlock {
+    entity_id: EntityId,
+    /// World-space point on the blocking surface.
+    point: Vector3<f32>,
+    /// World-space unit normal of that surface, pointing out of the blocker
+    /// and toward the held item.
+    normal: Vector3<f32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2380,6 +2417,11 @@ pub struct PhysicsWorld {
     // Rapier joint motors. Keyed by the weapon body handle so the normal
     // set_position_rotation path can redirect hand poses to the target.
     held_item_drives: HashMap<RigidBodyHandle, HeldItemDrive>,
+
+    // Collisions synthesized by `drive_held_items` from the held-item sweep,
+    // for items that generate no contacts of their own. Drained into the
+    // frame's collision events beside Rapier's own.
+    pending_sweep_collision_events: Vec<CollisionEvent>,
 
     // TODO:
     // physics_hooks: Box<dyn PhysicsHooks>,
@@ -2746,8 +2788,15 @@ impl PhysicsWorld {
                 HeldItemDrive {
                     target,
                     seated: false,
+                    reports_sweep_blocks: false,
+                    blocked_by: None,
                 },
             );
+        }
+        // Re-derived rather than set once: the save/load restore path re-holds
+        // an existing item, and it may come back in a different group.
+        if let Some(drive) = self.held_item_drives.get_mut(&handle) {
+            drive.reports_sweep_blocks = group.is_inert();
         }
 
         for collider_handle in collider_handles {
@@ -2763,6 +2812,16 @@ impl PhysicsWorld {
             }
         }
         self.set_collision_group(entity_id, group);
+    }
+
+    /// Whether this entity is currently held as an *inert* physical item -
+    /// the state in which it takes part in no narrow-phase collision and the
+    /// only contacts reported for it are the blocks its drive's sweep finds.
+    pub fn is_held_inert(&self, entity_id: EntityId) -> bool {
+        self.entity_id_to_body
+            .get(&entity_id)
+            .and_then(|handle| self.held_item_drives.get(handle))
+            .is_some_and(|drive| drive.reports_sweep_blocks)
     }
 
     /// Replace a held melee body's inherited loose-pickup box with the local
@@ -3775,9 +3834,10 @@ impl PhysicsWorld {
         let pairs = self
             .held_item_drives
             .iter()
-            .map(|(weapon, drive)| (*weapon, drive.target))
+            .map(|(weapon, drive)| (*weapon, drive.target, drive.reports_sweep_blocks))
             .collect::<Vec<_>>();
-        for (weapon, target) in pairs {
+        let mut sweep_events = Vec::new();
+        for (weapon, target, reports_sweep_blocks) in pairs {
             // `next_position`, not `position`: the hand pose arrives through
             // `set_next_kinematic_position`, which Rapier only commits during
             // the step. Reading the committed pose would aim at where the hand
@@ -3804,12 +3864,52 @@ impl PhysicsWorld {
             // endpoints together (`translate_held_items_for_player_relocation`),
             // so the error the drive sees is already near zero.
             let step = distance.min(max_step);
-            let allowed = if distance <= 1.0e-6 {
-                0.0
+            // A held item that is not being asked to move is not being pushed
+            // into anything, so no sweep runs - and `None` here leaves the
+            // block state it already has standing rather than clearing it.
+            // Clearing would let an item resting against a wall re-report the
+            // same block on the next tremor of the hand.
+            let (allowed, sweep) = if distance <= 1.0e-6 {
+                (0.0, None)
             } else {
                 let direction = delta / distance;
-                step * self.held_item_sweep_fraction(weapon, &current, direction, step)
+                let sweep = self.held_item_sweep_fraction(weapon, &current, direction, step);
+                (step * sweep.fraction, Some(sweep.block))
             };
+
+            if let Some(block) = sweep {
+                let held_entity = self
+                    .rigid_body_set
+                    .get(weapon)
+                    .and_then(|body| EntityId::from_inner(body.user_data as u64));
+                let previously_blocked_by = self
+                    .held_item_drives
+                    .get(&weapon)
+                    .and_then(|drive| drive.blocked_by);
+                // Only an item that generates no contacts of its own reports
+                // here - see `HeldItemDrive::reports_sweep_blocks` - and only
+                // on the edge into being blocked by this particular entity.
+                if let (true, Some(block), Some(held_entity)) =
+                    (reports_sweep_blocks, block, held_entity)
+                    && previously_blocked_by != Some(block.entity_id)
+                {
+                    // `entity1` is the blocker and `entity2` the held item,
+                    // which is the orientation `CollisionContact::normal`
+                    // documents (entity1 -> entity2) and the one the sweep
+                    // hands back.
+                    sweep_events.push(CollisionEvent::CollisionStarted {
+                        entity1_id: block.entity_id,
+                        entity2_id: held_entity,
+                        contact: Some(CollisionContact {
+                            point: block.point,
+                            normal: block.normal,
+                        }),
+                    });
+                }
+                if let Some(drive) = self.held_item_drives.get_mut(&weapon) {
+                    drive.blocked_by = block.map(|block| block.entity_id);
+                }
+            }
 
             let mut next = desired;
             next.translation.vector = if distance <= 1.0e-6 {
@@ -3821,19 +3921,30 @@ impl PhysicsWorld {
                 body.set_next_kinematic_position(next);
             }
         }
+        self.pending_sweep_collision_events
+            .append(&mut sweep_events);
     }
 
     /// How far along `direction * distance` this weapon's colliders may travel
-    /// before one of them meets world geometry, as a fraction in `0..=1`.
+    /// before one of them meets world geometry, plus what stopped them.
+    ///
+    /// The blocking hit is kept, not just its distance: for a held item that
+    /// generates no contacts of its own, this cast is the *only* place the
+    /// engine learns that the item touched the level, and the hit already
+    /// carries the witness point and surface normal a [`CollisionContact`]
+    /// needs.
     fn held_item_sweep_fraction(
         &self,
         weapon: RigidBodyHandle,
         current: &Isometry<Real>,
         direction: Vector<Real>,
         distance: Real,
-    ) -> Real {
+    ) -> HeldItemSweep {
         let Some(body) = self.rigid_body_set.get(weapon) else {
-            return 1.0;
+            return HeldItemSweep {
+                fraction: 1.0,
+                block: None,
+            };
         };
         let filter = QueryFilter::new()
             .groups(InteractionGroups::new(
@@ -3852,6 +3963,7 @@ impl PhysicsWorld {
         );
 
         let mut nearest = distance;
+        let mut block = None;
         for collider_handle in body.colliders() {
             let Some(collider) = self.collider_set.get(*collider_handle) else {
                 continue;
@@ -3860,7 +3972,7 @@ impl PhysicsWorld {
             // is offset from the body origin, so sweeping the body's origin
             // would probe empty space beside the weapon.
             let shape_pose = current * collider.position_wrt_parent().copied().unwrap_or_default();
-            if let Some((_, hit)) = queries.cast_shape(
+            if let Some((hit_collider, hit)) = queries.cast_shape(
                 &shape_pose,
                 &direction,
                 collider.shape(),
@@ -3875,14 +3987,29 @@ impl PhysicsWorld {
                     compute_impact_geometry_on_penetration: true,
                 },
             ) {
-                nearest = nearest.min(hit.time_of_impact);
+                if hit.time_of_impact <= nearest {
+                    nearest = hit.time_of_impact;
+                    // The query pipeline is the *composite* side of this cast,
+                    // so witness/normal 1 belong to the world collider that was
+                    // hit and are already in world space.
+                    block = self
+                        .collider_set
+                        .get(hit_collider)
+                        .and_then(|collider| EntityId::from_inner(collider.user_data as u64))
+                        .map(|entity_id| HeldItemBlock {
+                            entity_id,
+                            point: npoint_to_cgvec(hit.witness1),
+                            normal: nvec_to_cgmath(hit.normal1.into_inner()),
+                        });
+                }
             }
         }
-        if distance <= 0.0 {
+        let fraction = if distance <= 0.0 {
             1.0
         } else {
             (nearest / distance).clamp(0.0, 1.0)
-        }
+        };
+        HeldItemSweep { fraction, block }
     }
 
     pub fn remove(&mut self, entity_id: EntityId) {
@@ -4142,6 +4269,7 @@ impl PhysicsWorld {
             pending_player_push_velocity: HashMap::new(),
             kinematic_attachments: HashMap::new(),
             held_item_drives: HashMap::new(),
+            pending_sweep_collision_events: Vec::new(),
 
             debug_pipeline,
 
@@ -4406,6 +4534,12 @@ impl PhysicsWorld {
         let mut additional_collision_events = { self.events.get_and_clear_events() };
 
         collision_events.append(&mut additional_collision_events);
+        // Blocks the held-item sweep found before the step. They are collisions
+        // in every sense a script cares about, and for an inert held item they
+        // are the only ones there will ever be.
+        collision_events.append(&mut std::mem::take(
+            &mut self.pending_sweep_collision_events,
+        ));
 
         // Output result
         (translation, collision_events)
@@ -6208,6 +6342,123 @@ mod tests {
     #[test]
     fn an_inert_held_item_is_still_stopped_by_world_geometry() {
         held_item_pushed_into_a_wall_then_withdrawn(CollisionGroup::held_inert());
+    }
+
+    /// Drive a held body of `group` from x=-1 at a fixed wall at x=0 and
+    /// return, per frame, the collisions that pair the held body with the
+    /// wall.
+    fn frames_of_wall_collisions(group: CollisionGroup) -> Vec<Vec<CollisionContact>> {
+        let (mut world, mut player) = world_with_floor();
+        let wall = EntityId::from_inner(2).unwrap();
+        // `active_events`, unlike the other held-item wall tests: it is the
+        // wall's own narrow-phase contact that the melee case is compared
+        // against, and a collider that reports none would make this
+        // comparison pass for the wrong reason.
+        world.add_collider(
+            wall,
+            ColliderBuilder::cuboid(0.05, 1.0, 1.0)
+                .translation(vector![0.0, 1.0, 0.0])
+                .active_events(ActiveEvents::COLLISION_EVENTS)
+                .build(),
+        );
+        let held = EntityId::from_inner(3).unwrap();
+        world.add_dynamic(
+            held,
+            vec3(-1.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.4, 0.4, 0.4)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        world.set_held_item_physical(held, group);
+        world.set_position_rotation2(held, vec3(-1.0, 1.0, 0.0), identity_quat());
+        step(&mut world, &mut player, 1);
+        world.set_position_rotation2(held, vec3(1.0, 1.0, 0.0), identity_quat());
+
+        (0..120)
+            .map(|_| {
+                let (_, events) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+                events
+                    .iter()
+                    .filter_map(|event| match event {
+                        CollisionEvent::CollisionStarted {
+                            entity1_id,
+                            entity2_id,
+                            contact,
+                        } if [*entity1_id, *entity2_id].contains(&held)
+                            && [*entity1_id, *entity2_id].contains(&wall) =>
+                        {
+                            Some(contact.unwrap_or(CollisionContact {
+                                point: vec3(0.0, 0.0, 0.0),
+                                normal: vec3(0.0, 0.0, 0.0),
+                            }))
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The complaint this exists to fix: an inert held item stops at the wall
+    /// (see above) but said nothing while doing it, so nothing downstream -
+    /// the impact sound above all - could know it had touched the level.
+    ///
+    /// One collision, not sixty: the block is reported on the edge into being
+    /// blocked, so an item held against a wall does not re-report every frame.
+    #[test]
+    fn an_inert_held_item_reports_the_block_that_stops_it() {
+        let frames = frames_of_wall_collisions(CollisionGroup::held_inert());
+        let total: usize = frames.iter().map(Vec::len).sum();
+        assert_eq!(
+            total,
+            1,
+            "expected exactly one reported block, got {total} across {} frames",
+            frames.len()
+        );
+
+        let contact = frames.iter().flatten().next().copied().unwrap();
+        // The wall faces -X, the item came from -X, and the normal is oriented
+        // blocker -> held item.
+        assert!(
+            (contact.normal - vec3(-1.0, 0.0, 0.0)).magnitude() < 1.0e-3,
+            "the reported normal is not the wall's facing: {:?}",
+            contact.normal
+        );
+        assert!(
+            (contact.point.x - -0.05).abs() < 0.05,
+            "the reported point is not on the wall face: {:?}",
+            contact.point
+        );
+    }
+
+    /// ...and a *melee* weapon must not be told about it twice. It is not
+    /// inert, so Rapier already reports contact for it; a sweep-derived event
+    /// beside that would double every consumer, damage included.
+    ///
+    /// Same gesture, so the sweep finds the same block on the same frame - and
+    /// the melee weapon hears nothing about it. (Its own narrow-phase contact
+    /// does not appear in this gesture either: the sweep leaves a hair of
+    /// clearance at the surface, so what puts a real weapon in contact with a
+    /// wall is the hand *rotation* the drive applies unswept, and this
+    /// gesture is axis-aligned. That is beside the point being made here,
+    /// which is only that the sweep adds nothing for a weapon that has its
+    /// own contacts.)
+    #[test]
+    fn a_held_melee_weapon_is_not_told_about_its_block_twice() {
+        let inert = frames_of_wall_collisions(CollisionGroup::held_inert());
+        let melee = frames_of_wall_collisions(CollisionGroup::held_melee());
+
+        let blocked_on = inert
+            .iter()
+            .position(|frame| !frame.is_empty())
+            .expect("the inert run must report the block this compares against");
+        assert!(
+            melee[blocked_on].is_empty(),
+            "the sweep synthesized a collision for a weapon that generates its own"
+        );
     }
 
     /// ...and it touches nothing while it does. A held gun swept through a
