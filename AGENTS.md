@@ -354,6 +354,26 @@ For debugging visual/rendering changes without a full interactive session:
    # (Teleporting into a trigger volume fires it, same as walking in.)
    curl -X POST http://127.0.0.1:8080/v1/control/input -d '{"right_hand.thumbstick": [0.0, 1.0]}'
 
+   # Place the debug (free) camera anywhere and aim it - the only way to
+   # photograph something the player's own eye cannot see, the player and
+   # whatever they are holding included. `position` is the world-space EYE
+   # position (the head composition is divided back out for you), and
+   # `look_at` aims at a world point; pass `rotation` [w,x,y,z] instead for an
+   # explicit orientation. Then step and screenshot as usual.
+   curl -X POST http://127.0.0.1:8080/v1/camera \
+     -d '{"position": [-32, 1, 21], "look_at": [-35, 0, 21]}'
+   curl http://127.0.0.1:8080/v1/camera            # read it back (eye_position/eye_rotation)
+   curl -X POST http://127.0.0.1:8080/v1/camera -d '{"detached": false}'   # back to the player
+   #
+   # Notes: placing turns the `free_camera` developer option on (nothing else
+   # would keep the placement past the next /v1/step, which re-attaches while
+   # the option is off). The pawn is NOT moved and nothing that reads the
+   # player's position notices - but while detached the locomotion sticks fly
+   # the camera instead of walking the player, so re-attach before driving.
+   # Culling still follows the *player* by default, so a camera placed in
+   # another room may see culled-away geometry; set the `free_camera_cull`
+   # dev param (POST /v1/dev-params) when framing from far away.
+
    # IMPORTANT: Always shut down when done to avoid interfering with user's session
    curl -X POST http://127.0.0.1:8080/v1/shutdown
    ```

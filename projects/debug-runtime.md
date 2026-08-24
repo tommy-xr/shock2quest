@@ -337,15 +337,31 @@ pass `"ignore_sensors": false` to probe sensor volumes deliberately.
 4. **Phase 7: CLI Tool** - Build out `debug_command` with all subcommands
 5. **Error Handling** - Standardize error responses with codes and suggestions
 6. **Documentation** - Add OpenAPI spec and usage examples
-7. **Aimable debug camera** - Let callers point the debug camera at an arbitrary
-   world position/orientation, so agents can frame whatever they're inspecting
-   (e.g. wherever a ragdoll lands) instead of relying on a fixed default view.
-   Either a new `/v1/camera` endpoint (set position + look-at target, or
-   position + rotation) or by honoring the head rotation already present in
-   `POST /v1/control/input`. Today the debug runtime hardcodes the camera head
-   rotation to the desktop default (`default_camera_head_rotation()` in
-   `runtimes/debug_runtime/src/main.rs`, looking toward -X); screenshots are only
-   representative when the subject happens to be in that default view.
+## Aimable Debug Camera ✅ COMPLETE
+
+`POST /v1/camera` places and aims the free (debug) camera, so a capture can
+frame whatever is being inspected - including the player and what they are
+holding, which the player-anchored eye cannot see at all.
+
+```bash
+curl -X POST .../v1/camera -d '{"position": [-32, 1, 21], "look_at": [-35, 0, 21]}'
+curl -X POST .../v1/camera -d '{"position": [-32, 1, 21], "rotation": [1, 0, 0, 0]}'
+curl -X POST .../v1/camera -d '{"detached": false}'   # back to the player
+curl .../v1/camera                                    # read it back
+```
+
+Poses are the world-space **eye** pose. The runtime builds its view as
+`(camera * head)^-1`, so the tracked head offset/rotation is divided back out
+of the request (`shock2vr::free_camera::pose_for_eye`) and multiplied back in
+for the read-back (`eye_for_pose`, reported as `eye_position`/`eye_rotation`) -
+otherwise a placement would render an eye-height above the requested point,
+yawed by the default view rotation.
+
+Placing turns the `free_camera` dev param on, because `Game::update` re-attaches
+the camera every frame while that option is off and there is no human at a
+Developer screen in a headless runtime. Culling still follows the *player*
+(`free_camera_cull`, off by default), so a camera placed in another room can see
+culled-away geometry - flip that dev param when framing from far away.
 
 ## Technical Notes
 

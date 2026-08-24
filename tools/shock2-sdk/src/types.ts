@@ -411,6 +411,31 @@ export interface CameraState {
   position: [number, number, number] | null;
   /** Rotation as [w, x, y, z]. */
   rotation: [number, number, number, number] | null;
+  /**
+   * Where the *eye* actually ends up, once the runtime composes its tracked
+   * head offset/rotation onto the camera pose above. This is the pose
+   * `camera.set()` takes and the one a screenshot is taken from, so it is the
+   * one to assert against.
+   */
+  eye_position: [number, number, number] | null;
+  /** Eye rotation as [w, x, y, z]. */
+  eye_rotation: [number, number, number, number] | null;
+}
+
+/**
+ * Where to put the free (debug) camera (POST /v1/camera).
+ *
+ * Poses are the *eye* pose in world space - where the picture is taken from.
+ * `lookAt` and `rotation` are two ways to say the same thing; pass one.
+ * Omitting a field keeps what the camera already has, so an already-placed
+ * camera can be re-aimed with `{ lookAt }` alone.
+ */
+export interface CameraPlacement {
+  position?: [number, number, number];
+  /** A world point to aim at - the ergonomic way to frame an entity. */
+  lookAt?: [number, number, number];
+  /** An explicit orientation as [w, x, y, z], instead of `lookAt`. */
+  rotation?: [number, number, number, number];
 }
 
 /** What a POST /v1/dev-params actually applied (after clamp/snap). */
