@@ -1,7 +1,6 @@
 use cgmath::{Vector2, Vector3, vec2};
 use dark::properties::{
-    FrobFlag, Link, PhysicsModelType, PropFrobInfo, PropInventoryDimensions, PropObjIcon,
-    PropPhysDimensions, PropPhysType, ReceptronEffect,
+    FrobFlag, Link, PropFrobInfo, PropInventoryDimensions, PropObjIcon, ReceptronEffect,
 };
 
 use shipyard::{EntityId, Get, View, World};
@@ -85,12 +84,6 @@ const BACKPACK_GRID_ORIGIN: Vector2<f32> = Vector2::new(4.0, 17.0);
 /// `res/iface/BLOCK.PCX` is authored to cover one cell's 34x32 interior,
 /// leaving the separators in `INVBACK.PCX` visible around it.
 const BLOCK_SIZE: Vector2<f32> = Vector2::new(34.0, 32.0);
-
-/// Keep the thin world-panel collider wholly outside an authored host OBB.
-/// Rapier clamps its zero authored depth to 0.01 world units; this leaves a
-/// further half-thickness of air so the host can never win the hand ray at
-/// coincident surfaces.
-const LOOT_PANEL_HOST_CLEARANCE: f32 = 0.01;
 
 impl ContainerGui {
     pub fn loot_container() -> ContainerGui {
@@ -273,37 +266,6 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             world_offset: Vector3::new(0.0, if self.take_on_click { 1.0 } else { 0.0 }, 0.0),
             screen_size_in_pixels: Vector2::new(self.width, self.height),
         }
-    }
-
-    fn get_config_for(
-        &self,
-        entity_id: EntityId,
-        world: &World,
-        _state: &ContainerGuiState,
-    ) -> GuiConfig {
-        let mut config = self.get_config();
-        if !self.take_on_click {
-            return config;
-        }
-
-        // The canvas rects are shared by flat and VR. This named hosting
-        // conversion only places the already-resolved loot canvas on the
-        // physical object's local front surface in VR. Without it, wide hosts
-        // such as Hydro3 Desk #2 enclose the panel plane and occlude its lower
-        // rows from the production controller ray.
-        if let Ok((dimensions, phys_types)) =
-            world.borrow::<(View<PropPhysDimensions>, View<PropPhysType>)>()
-            && let (Ok(dimensions), Ok(phys_type)) =
-                (dimensions.get(entity_id), phys_types.get(entity_id))
-            && phys_type.phys_type == PhysicsModelType::ORIENTED_BOUNDING_BOX
-            && dimensions.offset0.z.is_finite()
-            && dimensions.size.z.is_finite()
-            && dimensions.size.z != 0.0
-        {
-            config.world_offset.z =
-                dimensions.offset0.z - dimensions.size.z.abs() / 2.0 - LOOT_PANEL_HOST_CLEARANCE;
-        }
-        config
     }
 
     /// A creature's loot panel opens on frob only when it is lootable (corpse
@@ -704,50 +666,6 @@ mod tests {
         assert_eq!(
             ContainerGui::loot_container().get_config().world_offset,
             vec3(0.0, 1.0, 0.0)
-        );
-    }
-
-    #[test]
-    fn loot_panel_sits_in_front_of_the_hosts_authored_collider() {
-        let mut world = World::new();
-        let desk_dimensions = PropPhysDimensions {
-            radius0: 0.0,
-            radius1: 0.0,
-            offset0: vec3(0.0, -0.072, 0.0),
-            offset1: vec3(0.0, 0.0, 0.0),
-            size: vec3(-3.2, 1.28, 1.2),
-            unk1: 0,
-            unk2: 0,
-        };
-        let desk = world.add_entity((
-            desk_dimensions.clone(),
-            PropPhysType {
-                phys_type: PhysicsModelType::ORIENTED_BOUNDING_BOX,
-                num_submodels: 6,
-                remove_on_sleep: false,
-                is_special: false,
-            },
-        ));
-
-        let config =
-            ContainerGui::loot_container().get_config_for(desk, &world, &ContainerGuiState {});
-        let front_face = desk_dimensions.offset0.z - desk_dimensions.size.z.abs() / 2.0;
-
-        assert_eq!(
-            config.world_offset.y, 1.0,
-            "keep the authored loot-panel lift"
-        );
-        assert!(
-            config.world_offset.z < front_face,
-            "the panel plane at z={} must clear the host front face at z={front_face}",
-            config.world_offset.z
-        );
-        assert_eq!(
-            ContainerGui::inv_container()
-                .get_config_for(desk, &world, &ContainerGuiState {})
-                .world_offset,
-            vec3(0.0, 0.0, 0.0),
-            "the player backpack is head-positioned, not hosted on the desk"
         );
     }
 
