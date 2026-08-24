@@ -21,10 +21,11 @@ import { GameServer } from "@shock2vr/sdk";
 
 // Spawns `cargo run -p debug_runtime`, waits for /v1/health, captures logs.
 // `await using` shuts the runtime down automatically at scope exit.
-await using game = await GameServer.launch({
-  mission: "medsci1.mis",
-  port: 8091,
-});
+// No port: the runtime binds an OS-assigned one and announces it, so
+// concurrent launches never collide. `game.baseUrl` reports it.
+// Pass `port` only when something outside the SDK must know it up front
+// (`adb forward`, a hand-run `curl`) - then it binds that port or fails loudly.
+await using game = await GameServer.launch({ mission: "medsci1.mis" });
 
 // The game starts paused; advance it explicitly.
 await game.step({ frames: 10 });
@@ -147,6 +148,11 @@ const game = await GameServer.connect("http://127.0.0.1:8080");
 - `GameServer.launch` finds the cargo workspace by walking up from `cwd`;
   pass `repoRoot` to override. First launch may take minutes while cargo
   compiles; the default readiness timeout is 5 minutes.
+- SDK-launched runtimes get `--idle-timeout-secs 600`: if the owning process is
+  SIGKILLed (so neither `shutdown()` nor the SIGINT/SIGTERM hook runs), the
+  runtime exits by itself after ten quiet minutes instead of holding ~700 MB.
+  In-flight requests - including a long `step({ duration: "600s" })` - count as
+  activity.
 - Injected actions apply on the next game update, which runs even while
   paused (with zero delta time).
 - `game.logs()` returns recent runtime output (also included in launch
@@ -157,9 +163,11 @@ const game = await GameServer.connect("http://127.0.0.1:8080");
 - Writing a new scenario test: copy `test/pathfinding.e2e.test.ts`. Gate
   long-running tests behind `SHOCK2_E2E=1` so `npm test` stays fast.
 - The e2e suite runs **serially** (`--test-concurrency=1`): each test spawns its
-  own heavy debug runtime, so one-at-a-time avoids port/resource contention
-  without hand-syncing ports across files (a unique default port per file is
-  still kept as a courtesy for running files individually).
+  own heavy debug runtime, so one-at-a-time avoids resource contention. Ports
+  no longer need hand-syncing across files - omit `port` and each runtime gets
+  its own ephemeral one. (Existing tests still pass a fixed port; that is now
+  an exact request, so a leftover runtime on it fails the launch loudly instead
+  of silently drifting to the next port.)
 - Reliability runs (catch flakiness in timing-sensitive tests): `npm run
   test:e2e:reliability` runs the e2e suite 10x (also serial). Target one test
   with `node scripts/reliability.mjs <count> "<name pattern>"`, e.g.

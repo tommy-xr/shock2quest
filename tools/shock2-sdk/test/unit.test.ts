@@ -3,7 +3,11 @@ import { test } from "node:test";
 
 import { Game, findRepoRoot } from "../src/index.js";
 import { HttpClient } from "../src/client.js";
-import { formatCrashOutput } from "../src/server.js";
+import {
+  createLineAssembler,
+  formatCrashOutput,
+  parsePortMarker,
+} from "../src/server.js";
 
 test("formatCrashOutput keeps the panic message and backtrace together", () => {
   const lines = [
@@ -57,22 +61,85 @@ test("waitFor times out with a descriptive error", async () => {
   );
 });
 
-test("findFreePort skips ports that are already bound", async () => {
-  const { findFreePort } = await import("../src/server.js");
-  const { createServer } = await import("node:net");
-
-  // Occupy a port, then ask for it: the next one up should come back.
-  const blocker = createServer();
-  await new Promise<void>((resolve) =>
-    blocker.listen({ port: 0, host: "127.0.0.1" }, resolve),
+test("parsePortMarker reads the port, pid and instance id the runtime bound", () => {
+  const marker = parsePortMarker(
+    "SHOCK2QUEST_PORT port=54321 pid=8123 instance_id=abc-123 address=127.0.0.1:54321",
   );
-  const address = blocker.address();
-  assert.ok(address && typeof address === "object");
-  const taken = address.port;
-  try {
-    const free = await findFreePort(taken);
-    assert.ok(free > taken, `expected a port above ${taken}, got ${free}`);
-  } finally {
-    await new Promise((resolve) => blocker.close(resolve));
+  assert.deepEqual(marker, {
+    port: 54321,
+    instanceId: "abc-123",
+    pid: 8123,
+    address: "127.0.0.1:54321",
+  });
+});
+
+test("parsePortMarker accepts an empty instance id (a hand launch)", () => {
+  const marker = parsePortMarker(
+    "SHOCK2QUEST_PORT port=8080 pid=7 instance_id= address=127.0.0.1:8080",
+  );
+  assert.equal(marker?.instanceId, "");
+  assert.equal(marker?.port, 8080);
+});
+
+test("parsePortMarker ignores lines that are not the marker", () => {
+  for (const line of [
+    "INFO Starting debug runtime on port 0 with mission: debug_minimal",
+    "",
+    "SHOCK2QUEST_IDLE_EXIT idle_secs=1800.4 timeout_secs=1800",
+  ]) {
+    assert.equal(parsePortMarker(line), undefined, line);
   }
+});
+
+test("parsePortMarker rejects a marker whose port or instance id is unusable", () => {
+  // The two fields the SDK acts on: half-reading either would point the client
+  // at the wrong runtime.
+  for (const line of [
+    "SHOCK2QUEST_PORT pid=8123 instance_id= address=127.0.0.1:1",
+    "SHOCK2QUEST_PORT port=notanumber pid=8123 instance_id= address=x",
+    "SHOCK2QUEST_PORT port=0 pid=8123 instance_id= address=127.0.0.1:0",
+    "SHOCK2QUEST_PORT port=99999 pid=8123 instance_id= address=x",
+    "SHOCK2QUEST_PORT port=8080 pid=8123 address=127.0.0.1:8080",
+  ]) {
+    assert.equal(parsePortMarker(line), undefined, line);
+  }
+});
+
+test("parsePortMarker tolerates missing pid/address, which the SDK never uses", () => {
+  // Reported for humans only - a future change to them must not break every
+  // launch.
+  const marker = parsePortMarker("SHOCK2QUEST_PORT port=8080 instance_id=abc");
+  assert.equal(marker?.port, 8080);
+  assert.equal(marker?.instanceId, "abc");
+  assert.equal(marker?.pid, undefined);
+  assert.equal(marker?.address, undefined);
+});
+
+test("a marker split across stdout chunks is still read as one line", () => {
+  const lines: string[] = [];
+  const assembler = createLineAssembler((line) => lines.push(line));
+  // A chunk boundary can fall anywhere, including mid-marker.
+  assembler.push("INFO warming up\nSHOCK2QUEST_PORT port=543");
+  assert.equal(
+    lines.filter((line) => parsePortMarker(line) !== undefined).length,
+    0,
+    "half a marker must not parse",
+  );
+  assembler.push("21 pid=8123 instance_id=abc address=127.0.0.1:54321\nINFO ready\n");
+
+  const markers = lines.map(parsePortMarker).filter((m) => m !== undefined);
+  assert.equal(markers.length, 1);
+  assert.equal(markers[0]?.port, 54321);
+  assert.equal(markers[0]?.instanceId, "abc");
+});
+
+test("createLineAssembler emits a final unterminated line on flush", () => {
+  const lines: string[] = [];
+  const assembler = createLineAssembler((line) => lines.push(line));
+  assembler.push("tail with no newline");
+  assert.deepEqual(lines, []);
+  assembler.flush();
+  assert.deepEqual(lines, ["tail with no newline"]);
+  assembler.flush();
+  assert.deepEqual(lines, ["tail with no newline"], "flush is not repeatable");
 });

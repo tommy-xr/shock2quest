@@ -3,7 +3,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { test } from "node:test";
 
-import { findRepoRoot } from "../src/server.js";
+import { createLineAssembler, findRepoRoot, parsePortMarker } from "../src/server.js";
 
 // Real-process coverage for the debug runtime's lifecycle contract:
 //  - it always announces the port it actually bound (SHOCK2QUEST_PORT), so a
@@ -53,19 +53,12 @@ function spawnRuntime(args: string[]): Runtime {
     }
   };
   // A chunk can split mid-line (and the marker line is exactly what we wait
-  // for), so carry the tail of each stream between chunks instead of assuming
-  // whole lines arrive together.
+  // for), so use the same line assembler the SDK's own launch path uses rather
+  // than assuming whole lines arrive together.
   const captureFrom = (stream: NodeJS.ReadableStream | null) => {
-    let carry = "";
-    stream?.on("data", (chunk: Buffer) => {
-      const parts = (carry + chunk.toString()).split("\n");
-      carry = parts.pop() ?? "";
-      for (const line of parts) emit(line);
-    });
-    stream?.on("end", () => {
-      emit(carry);
-      carry = "";
-    });
+    const assembler = createLineAssembler(emit);
+    stream?.on("data", (chunk: Buffer) => assembler.push(chunk.toString()));
+    stream?.on("end", () => assembler.flush());
   };
   captureFrom(child.stdout);
   captureFrom(child.stderr);
@@ -166,9 +159,11 @@ function occupyAnyPort(): Promise<{ port: number; release: () => void }> {
 }
 
 function parseBoundPort(markerLine: string): number {
-  const match = /SHOCK2QUEST_PORT port=(\d+)/.exec(markerLine);
-  assert.ok(match, `marker line has no port=: ${markerLine}`);
-  return Number(match[1]);
+  // Parsed with the SDK's own parser, so this test covers the code the SDK
+  // actually depends on rather than a lookalike regex.
+  const marker = parsePortMarker(markerLine);
+  assert.ok(marker, `not a well-formed port marker: ${markerLine}`);
+  return marker.port;
 }
 
 const LAUNCH_TIMEOUT_MS = 300_000;
