@@ -796,19 +796,21 @@ pub fn play_environmental_sound(
     let maybe_env_sound_query =
         get_environmental_sound_query(world, entity_id, event_type, additional_tags);
 
-    if let Some(query) = maybe_env_sound_query {
-        let position = v_transform
-            .get(entity_id)
-            .unwrap()
-            .0
-            .transform_point(point3(0.0, 0.0, 0.0));
+    // An entity can be animating without owning a physics transform (the
+    // animation players and `id_to_physics` are separate maps, and ownership
+    // changes hands around death), so a missing transform is a silent no-sound
+    // rather than a panic - there is nowhere to place the sound.
+    let (Some(query), Ok(transform)) = (maybe_env_sound_query, v_transform.get(entity_id)) else {
+        return Effect::NoEffect;
+    };
+
+    {
+        let position = transform.0.transform_point(point3(0.0, 0.0, 0.0));
         Effect::PlayEnvironmentalSound {
             audio_handle,
             query,
             position: point3_to_vec3(position),
         }
-    } else {
-        Effect::NoEffect
     }
 }
 
@@ -840,6 +842,34 @@ fn get_impact_material(world: &World, hit_entity_id: EntityId) -> String {
             None
         })
         .unwrap_or_else(|| DEFAULT_IMPACT_MATERIAL.to_owned())
+}
+
+/// Footstep sound for a creature whose animation just reached an authored
+/// foot-plant frame (`MotionFlags::LEFT_FOOT_STEP` / `RIGHT_FOOT_STEP`).
+///
+/// The schema keys footsteps on `event=footstep` plus the creature's class
+/// tags (`creaturetype=oncegrunt`, `=monkey`, `=droid`, ...); most creature
+/// types resolve on those alone to a four-sample set (`ft_monk1..4`). Hybrids
+/// (`oncegrunt`) branch further on `material` - the creature's *own* material,
+/// i.e. what its feet are made of - and `material2`, the surface underfoot.
+/// The port has no per-texture lookup for world geometry, so `material2` is
+/// the default bulkhead metal, which is what most of the ship is; on a hybrid
+/// that resolves to `ft_ogm*`.
+///
+/// Creature types the schema authors no footsteps for (swarms, apparitions,
+/// SHODAN) resolve to nothing and fall through silently.
+pub fn play_footstep_sound(world: &World, entity_id: EntityId) -> Effect {
+    let own_material = get_impact_material(world, entity_id);
+    play_environmental_sound(
+        world,
+        entity_id,
+        "footstep",
+        vec![
+            ("material", &own_material),
+            ("material2", DEFAULT_IMPACT_MATERIAL),
+        ],
+        AudioHandle::new(),
+    )
 }
 
 /// Impact/collision sound for `entity_id` (a projectile or melee weapon)
