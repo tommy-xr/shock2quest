@@ -677,6 +677,22 @@ impl FlatUiHost {
                 // Dropping onto another item swaps by lifting that occupant.
                 self.last_lift = None;
                 match self.strip_item_at(canvas_pos) {
+                    // An always-collected occupant is collected rather than
+                    // swapped onto the cursor - the same rule as a plain click
+                    // below, so the swap can't be a back door into carrying one.
+                    Some(target)
+                        if target != held
+                            && crate::scripts::script_util::is_always_collected(world, target) =>
+                    {
+                        self.cursor_item = None;
+                        return (
+                            vec![Message {
+                                to: target,
+                                payload: MessagePayload::Frob,
+                            }],
+                            Vec::new(),
+                        );
+                    }
                     Some(target) if target != held => {
                         self.cursor_item = Some(make_cursor_item(world, target));
                         self.last_lift = Some(LiftMark {
@@ -722,6 +738,22 @@ impl FlatUiHost {
             self.hover_close = false;
             if pressed_edge {
                 if let Some(item) = self.strip_item_at(canvas_pos) {
+                    // An always-collected item is never carried on the cursor:
+                    // it collects, exactly as it would from the world or a loot
+                    // panel. Reachable only for one already sitting in the
+                    // backpack - a save made before its category collected on
+                    // pickup - which is the one way it can be in the grid at
+                    // all, and otherwise the one way it could never be
+                    // collected.
+                    if crate::scripts::script_util::is_always_collected(world, item) {
+                        return (
+                            vec![Message {
+                                to: item,
+                                payload: MessagePayload::Frob,
+                            }],
+                            Vec::new(),
+                        );
+                    }
                     self.cursor_item = Some(make_cursor_item(world, item));
                     self.last_lift = Some(LiftMark {
                         entity: item,
@@ -1614,6 +1646,28 @@ mod tests {
         }
     }
 
+    /// [`press_edge`], keeping the messages the press emitted as well.
+    fn press_edge_with_messages(
+        host: &mut FlatUiHost,
+        world: &World,
+        canvas: (f32, f32),
+    ) -> (Vec<Message>, Vec<FlatUiDragAction>) {
+        host.update(
+            world,
+            Some(Pointer2D {
+                position: norm(canvas.0, canvas.1),
+                pressed: false,
+            }),
+        );
+        host.update(
+            world,
+            Some(Pointer2D {
+                position: norm(canvas.0, canvas.1),
+                pressed: true,
+            }),
+        )
+    }
+
     fn press_edge(
         host: &mut FlatUiHost,
         world: &World,
@@ -1676,6 +1730,116 @@ mod tests {
             "the lifted item leaves the strip grid",
         );
         assert_eq!(host.strip_item_at(vec2(23.5, 34.0)), None);
+    }
+
+    /// An always-collected item that an older save left in the backpack is the
+    /// one case where the grid holds one at all - and, before this, the one
+    /// place it could never be collected: the host owns strip clicks as the
+    /// cursor drag, so the click never reached `ContainerGui`'s frob. Clicking
+    /// one collects it instead of lifting it onto the cursor.
+    #[test]
+    fn clicking_an_always_collected_strip_item_collects_it() {
+        use crate::test_support::{CollectedKind, spawn_collected, spawn_ordinary_loot};
+
+        for kind in CollectedKind::ALL {
+            let mut world = World::new();
+            let pickup = spawn_collected(&mut world, kind);
+            let inventory = world.add_entity(());
+            let mut host = FlatUiHost::new();
+            host.set_strip(Some(inventory));
+            host.on_set_ui(
+                &world,
+                inventory,
+                vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+                &[strip_item(pickup, 0)],
+            );
+
+            // Slot 0 center, as in `lmb_on_a_strip_item_lifts_it_onto_the_cursor`.
+            host.update(
+                &world,
+                Some(Pointer2D {
+                    position: norm(23.5, 34.0),
+                    pressed: false,
+                }),
+            );
+            let (msgs, actions) = host.update(
+                &world,
+                Some(Pointer2D {
+                    position: norm(23.5, 34.0),
+                    pressed: true,
+                }),
+            );
+
+            assert!(
+                msgs.iter()
+                    .any(|msg| msg.to == pickup && matches!(msg.payload, MessagePayload::Frob)),
+                "{kind:?} clicked in the strip must be frobbed, got {msgs:?}"
+            );
+            assert!(
+                actions.is_empty(),
+                "{kind:?} must not throw or wield, got {actions:?}"
+            );
+            assert!(
+                host.cursor_debug().is_none(),
+                "{kind:?} must never ride the cursor"
+            );
+        }
+
+        // The control: ordinary loot still lifts onto the cursor.
+        let mut world = World::new();
+        let loot = spawn_ordinary_loot(&mut world);
+        let inventory = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+        host.on_set_ui(
+            &world,
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[strip_item(loot, 0)],
+        );
+        press_edge(&mut host, &world, (23.5, 34.0));
+        assert!(
+            host.cursor_debug().is_some(),
+            "ordinary loot must still lift onto the cursor"
+        );
+    }
+
+    /// The swap is the same gesture family as the click above: dropping a held
+    /// item onto an always-collected occupant must collect that occupant, not
+    /// lift it onto the cursor - otherwise the swap is a back door into
+    /// carrying one.
+    #[test]
+    fn swapping_onto_an_always_collected_strip_item_collects_it() {
+        use crate::test_support::{CollectedKind, spawn_collected, spawn_ordinary_loot};
+
+        let mut world = World::new();
+        let held = spawn_ordinary_loot(&mut world);
+        let pickup = spawn_collected(&mut world, CollectedKind::KeyCard);
+        let inventory = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+        host.on_set_ui(
+            &world,
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[strip_item(held, 0), strip_item(pickup, 1)],
+        );
+
+        // Lift the ordinary item out of slot 0, then press on slot 1's card.
+        press_edge(&mut host, &world, (23.5, 34.0));
+        assert!(host.cursor_debug().is_some(), "slot 0 lifts as usual");
+        let (msgs, actions) = press_edge_with_messages(&mut host, &world, (58.5, 34.0));
+
+        assert!(
+            msgs.iter()
+                .any(|msg| msg.to == pickup && matches!(msg.payload, MessagePayload::Frob)),
+            "the occupant must be collected, got {msgs:?}"
+        );
+        assert!(actions.is_empty(), "collecting is not a world action");
+        assert!(
+            host.cursor_debug().is_none(),
+            "neither item may stay on the cursor"
+        );
     }
 
     #[test]

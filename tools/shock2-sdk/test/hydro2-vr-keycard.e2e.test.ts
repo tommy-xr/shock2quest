@@ -4,7 +4,12 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { EntitySummary, UiElement, UiPanelPose, UiState, Vec3 } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { add, aimVrHandAt, aimVrHandAtCanvas, quatRotate } from "./helpers/vr-hand.js";
+import {
+  LOOT_PANEL_SIZE_PX,
+  aimVrHandAt,
+  aimVrHandAtCanvas,
+  squeezeWorldPanelElement,
+} from "./helpers/vr-hand.js";
 
 // Authentic Hydro2 Card B chain for #583:
 //   corpse 754 --Contains--> card 942 (PropKeySrc region 128)
@@ -25,8 +30,6 @@ const CARD = 942;
 const CARD_SLOT = 1120;
 const DOOR = 1127;
 const CARD_ARCHETYPE = -1495;
-const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
-const LOOT_PANEL_SIZE_PX: Vec3 = [188, 296, 0];
 
 function only(matches: EntitySummary[], label: string): EntitySummary {
   assert.equal(matches.length, 1, `expected one ${label}, got ${matches.length}`);
@@ -35,41 +38,6 @@ function only(matches: EntitySummary[], label: string): EntitySummary {
 
 function distance(a: Vec3, b: Vec3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-}
-
-async function squeezeWorldPanelElement(
-  game: GameServer,
-  panelSizePx: Vec3,
-  worldScale: number,
-  element: UiElement,
-): Promise<void> {
-  const panel = (await game.physics.bodies()).bodies.filter((body) =>
-    body.collision_groups.includes("ui"),
-  );
-  assert.equal(panel.length, 1, "expected exactly one production VR panel collider");
-  const [x, y, width, height] = element.screen_rect;
-  const u = x + width / 2;
-  const v = y + height / 2;
-  const panelSize: Vec3 = [
-    panelSizePx[0] * GUI_PIXEL_TO_WORLD_SIZE * worldScale,
-    panelSizePx[1] * GUI_PIXEL_TO_WORLD_SIZE * worldScale,
-    0,
-  ];
-  const local: Vec3 = [panelSize[0] * (0.5 - u), panelSize[1] * (0.5 - v), 0];
-  const target = add(panel[0].position, quatRotate(panel[0].rotation, local));
-  const aim = await aimVrHandAt(game, target, 0.35);
-  const hit = await game.raycast({
-    start: aim.start,
-    end: aim.target,
-    collision_groups: ["ui"],
-    max_distance: 1,
-  });
-  assert.equal(hit.entity_id, panel[0].entity_id, "production hand ray must hit the panel");
-
-  await game.input.set("right_hand.squeeze", 1);
-  await game.step({ frames: 4 });
-  await game.input.set("right_hand.squeeze", 0);
-  await game.step({ frames: 8 });
 }
 
 /** The strip element bound to `entityId`, or undefined once it has left the grid. */

@@ -2958,32 +2958,34 @@ impl MissionCore {
         // its squeeze swallowed - `update_squeeze_swallow` drops the latch the
         // moment the hand is full - so this cannot fire on a masked squeeze.)
         //
-        // Nothing is claimed unless the backpack can actually take it, so a
-        // release is never suppressed into an item that lands nowhere.
-        let strip_deposits = if backpack_accepts_deposit(&self.world) {
-            strip_deposit_entities(
-                on_strip,
-                [left_hand_held, right_hand_held],
-                [
-                    hands_input.left_hand.squeeze_value < crate::ui::VR_TRIGGER_THRESHOLD,
-                    hands_input.right_hand.squeeze_value < crate::ui::VR_TRIGGER_THRESHOLD,
-                ],
-            )
+        let strip_deposits = strip_deposit_entities(
+            on_strip,
+            [left_hand_held, right_hand_held],
+            [
+                hands_input.left_hand.squeeze_value < crate::ui::VR_TRIGGER_THRESHOLD,
+                hands_input.right_hand.squeeze_value < crate::ui::VR_TRIGGER_THRESHOLD,
+            ],
+        );
+        // The always-collected exception, the same one `ContainerGui`'s own
+        // `Take` and squeeze make on the same predicate: a keycard's Frob is
+        // what records the credential, a pile's what credits the nanites, so
+        // banking any of them bodily would put an object in the pack that
+        // unlocks or buys nothing. Reachable only for one restored into a hand
+        // by an older save - acquiring one routes through Frob - which is
+        // exactly why `held_trigger_press_payload` keeps its own arm.
+        let (collect, store): (Vec<_>, Vec<_>) = strip_deposits.iter().partition(|entity_id| {
+            crate::scripts::script_util::is_always_collected(&self.world, **entity_id)
+        });
+        let collect: Vec<_> = collect.into_iter().copied().collect();
+        // A stored item needs backpack room, so nothing is claimed unless the
+        // backpack can actually take it - a release is never suppressed into an
+        // item that lands nowhere. A collected one never enters the pack (its
+        // Frob awards and destroys it), so it is claimed either way.
+        let store: Vec<_> = if backpack_accepts_deposit(&self.world) {
+            store.into_iter().copied().collect()
         } else {
             Vec::new()
         };
-        // The keycard exception, the same one `ContainerGui`'s own `Take`
-        // makes on the same predicate: a `PropKeySrc` carries a runtime
-        // `internal_keycard` script whose Frob records the credential, so
-        // banking the card bodily would put an object in the pack that unlocks
-        // nothing. Reachable only for a card restored into a hand by an older
-        // save - grabbing one routes through Frob - which is exactly why
-        // `held_trigger_press_payload` keeps its own keycard arm.
-        let (collect, store): (Vec<_>, Vec<_>) = strip_deposits
-            .iter()
-            .partition(|entity_id| crate::virtual_hand::is_key_source(&self.world, **entity_id));
-        let collect: Vec<_> = collect.into_iter().copied().collect();
-        let store: Vec<_> = store.into_iter().copied().collect();
 
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.

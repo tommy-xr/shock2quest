@@ -26,9 +26,9 @@
 //! held item is released onto a target - via [`Gui::on_provide_for_consumption`],
 //! so the pick opens the crate instead of being deposited into it.
 
-use dark::properties::{ObjectState, PropScripts};
+use dark::properties::ObjectState;
 use engine::audio::AudioHandle;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, World};
 
 use crate::gui::{Gui, GuiComponent, GuiConfig, GuiCursor};
 use crate::scripts::Effect;
@@ -117,15 +117,7 @@ fn crate_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
 /// Whether `entity_id` is an ICE Pick - an object the data marks with the
 /// `FreeHack` script.
 fn is_free_hack_tool(world: &World, entity_id: EntityId) -> bool {
-    world
-        .borrow::<View<PropScripts>>()
-        .ok()
-        .and_then(|scripts| scripts.get(entity_id).ok().map(|s| s.scripts.clone()))
-        .is_some_and(|scripts| {
-            scripts
-                .iter()
-                .any(|script| script.eq_ignore_ascii_case(FREE_HACK_SCRIPT))
-        })
+    crate::scripts::script_util::entity_has_script(world, entity_id, FREE_HACK_SCRIPT)
 }
 
 impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
@@ -274,6 +266,7 @@ mod tests {
     use super::*;
     use crate::scripts::MessagePayload;
     use cgmath::{Quaternion, vec3};
+    use dark::properties::PropScripts;
     use dark::properties::{
         FrobFlag, Link, Links, PropFrobInfo, PropObjIcon, ToLink, WrappedEntityId,
     };
