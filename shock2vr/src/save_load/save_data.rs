@@ -6,6 +6,7 @@
 use super::{EntitySaveData, HeldItemSaveData, PlayerVitals};
 use crate::quest_info::QuestInfo;
 use crate::scripts::healing_item::ActiveHealing;
+use crate::scripts::radiation::ActiveRadiation;
 use cgmath::{Quaternion, Vector3};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -52,6 +53,9 @@ pub struct GlobalData {
     /// Ordinary level transitions intentionally start with an empty queue.
     #[serde(default)]
     pub active_healing: ActiveHealing,
+    /// Accumulated player radiation and its retail damage/recovery clock.
+    #[serde(default)]
+    pub active_radiation: ActiveRadiation,
     pub active_mission: String,
     /// Whether the player was crouched at save time. Defaults false for
     /// saves that predate crouch.
@@ -73,6 +77,7 @@ mod tests {
             held_items: HeldItemSaveData::empty(),
             player_vitals,
             active_healing: ActiveHealing::default(),
+            active_radiation: ActiveRadiation::default(),
             active_mission: "earth.mis".to_owned(),
             is_crouched: false,
         }
@@ -130,5 +135,24 @@ mod tests {
             .unwrap();
         let decoded: GlobalData = serde_json::from_value(legacy).unwrap();
         assert_eq!(decoded.active_healing, ActiveHealing::default());
+    }
+
+    #[test]
+    fn active_radiation_round_trips_and_older_saves_default_clear() {
+        let mut original = global_data(Some(sample_vitals()));
+        assert!(original.active_radiation.observe_ambient(8.0));
+        assert_eq!(original.active_radiation.advance(0.1, 8.0, 3.0), 0);
+        let encoded = serde_json::to_value(&original).unwrap();
+        let decoded: GlobalData = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(decoded.active_radiation, original.active_radiation);
+
+        let mut legacy = encoded;
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("active_radiation")
+            .unwrap();
+        let decoded: GlobalData = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.active_radiation, ActiveRadiation::default());
     }
 }

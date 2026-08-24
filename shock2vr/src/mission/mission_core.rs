@@ -496,6 +496,13 @@ enum HealingItemUseOutcome {
     DestroyEntity,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RadiationPatchUseOutcome {
+    NotUsed,
+    DecrementedStack,
+    DestroyEntity,
+}
+
 fn update_player_psi_points(world: &World, update: impl FnOnce(i32) -> i32) -> bool {
     let player_entity = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
     let mut psi_states = world
@@ -669,6 +676,48 @@ fn apply_healing_item_use(
         HealingItemUseOutcome::DecrementedStack
     } else {
         HealingItemUseOutcome::DestroyEntity
+    }
+}
+
+/// Clear live player radiation and consume exactly one carried patch. Status
+/// mutation and stack lifetime resolve atomically in the effect pass, so a
+/// duplicate use cannot clear twice or consume an already-destroyed source.
+fn apply_radiation_patch_use(
+    world: &World,
+    entity_id: EntityId,
+    amount: f32,
+) -> RadiationPatchUseOutcome {
+    let is_alive = world
+        .borrow::<EntitiesView>()
+        .is_ok_and(|entities| entities.is_alive(entity_id));
+    if !is_alive || !crate::scripts::script_util::player_carried_items(world).contains(&entity_id) {
+        return RadiationPatchUseOutcome::NotUsed;
+    }
+    let stack_count = world
+        .borrow::<View<dark::properties::PropStackCount>>()
+        .ok()
+        .and_then(|stacks| stacks.get(entity_id).ok().map(|stack| stack.0));
+    if stack_count.is_some_and(|stack| stack <= 0) {
+        return RadiationPatchUseOutcome::NotUsed;
+    }
+
+    let cleared = world
+        .borrow::<UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+        .is_ok_and(|mut radiation| radiation.clear(amount));
+    if !cleared {
+        return RadiationPatchUseOutcome::NotUsed;
+    }
+
+    if stack_count.is_some_and(|stack| stack > 1) {
+        let mut stacks = world
+            .borrow::<ViewMut<dark::properties::PropStackCount>>()
+            .unwrap();
+        if let Ok(stack) = (&mut stacks).get(entity_id) {
+            stack.0 -= 1;
+        }
+        RadiationPatchUseOutcome::DecrementedStack
+    } else {
+        RadiationPatchUseOutcome::DestroyEntity
     }
 }
 
@@ -1449,6 +1498,7 @@ impl MissionCore {
         world.add_unique(known_powers);
         world.add_unique(crate::psi::ActivePsiPowers::default());
         world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
+        world.add_unique(crate::scripts::radiation::ActiveRadiation::default());
 
         // ** Entity creation
 
@@ -2396,6 +2446,12 @@ impl MissionCore {
             time.elapsed.as_secs_f32(),
         ) {
             effects.push(healing);
+        }
+        if let Some(radiation) = crate::scripts::radiation::tick_player_radiation(
+            &self.world,
+            time.elapsed.as_secs_f32(),
+        ) {
+            effects.push(radiation);
         }
         effects.extend(command_effects);
 
@@ -3482,12 +3538,27 @@ impl MissionCore {
         did_slay
     }
 
-    /// Apply a radius stim blast (Effect::RadiusBlast): every entity with hit
-    /// points in range receives the stim at linear-falloff intensity, and its
-    /// receptrons decide the damage (no receptron for the stim = no response -
-    /// the type-effectiveness mechanism: EMP does nothing to organics).
-    /// Dynamic bodies in range are shoved outward regardless.
+    /// Apply a radius stim blast and its physical impulse.
     fn radius_blast(
+        &mut self,
+        center: Vector3<f32>,
+        radius: f32,
+        intensity: f32,
+        stim_template_id: i32,
+    ) {
+        self.apply_radius_stimulus(center, radius, intensity, stim_template_id);
+        self.physics.apply_radial_impulse(
+            center,
+            radius,
+            intensity * BLAST_PUSH_SPEED_PER_INTENSITY,
+        );
+    }
+
+    /// Apply a radius stimulus: every entity with hit points in range receives
+    /// linear-falloff intensity, and authored receptrons decide damage or
+    /// radiation status. Persistent environmental sources call this without
+    /// the explosion-only physical impulse.
+    fn apply_radius_stimulus(
         &mut self,
         center: Vector3<f32>,
         radius: f32,
@@ -3537,6 +3608,13 @@ impl MissionCore {
                 stim_template_id,
                 felt_intensity,
             );
+            crate::scripts::radiation::apply_player_stimulus(
+                &self.world,
+                entity_id,
+                &receptrons,
+                stim_template_id,
+                felt_intensity,
+            );
             // Explosions only ever deal damage: dispatch a Damage message only
             // for a positive result. A zero amount (fully shielded) would still
             // read as "took damage" and aggro AI; a negative one (a heal
@@ -3555,12 +3633,6 @@ impl MissionCore {
                 }
             }
         }
-
-        self.physics.apply_radial_impulse(
-            center,
-            radius,
-            intensity * BLAST_PUSH_SPEED_PER_INTENSITY,
-        );
     }
 
     /// Propagate a noise (Effect::RaiseNoise): every creature within `radius`
@@ -4756,6 +4828,15 @@ impl MissionCore {
                     self.radius_blast(center, radius, intensity, stim_template_id);
                 }
 
+                Effect::RadiusStim {
+                    center,
+                    radius,
+                    intensity,
+                    stim_template_id,
+                } => {
+                    self.apply_radius_stimulus(center, radius, intensity, stim_template_id);
+                }
+
                 Effect::RaiseNoise { origin, radius } => {
                     self.raise_noise(origin, radius);
                 }
@@ -5264,6 +5345,28 @@ impl MissionCore {
                         AudioHandle::new(),
                     );
                     if outcome == HealingItemUseOutcome::DestroyEntity {
+                        self.destroy_entity(entity_id);
+                    }
+                    if !matches!(sound, Effect::NoEffect) {
+                        effects.push_front(sound);
+                    }
+                }
+
+                Effect::UseRadiationPatch { entity_id, amount } => {
+                    let outcome = apply_radiation_patch_use(&self.world, entity_id, amount);
+                    if outcome == RadiationPatchUseOutcome::NotUsed {
+                        game_log!(INFO, "No current radiation to remove.");
+                        continue;
+                    }
+
+                    let sound = crate::scripts::script_util::play_environmental_sound(
+                        &self.world,
+                        entity_id,
+                        "activate",
+                        vec![],
+                        AudioHandle::new(),
+                    );
+                    if outcome == RadiationPatchUseOutcome::DestroyEntity {
                         self.destroy_entity(entity_id);
                     }
                     if !matches!(sound, Effect::NoEffect) {
@@ -11077,6 +11180,138 @@ mod healing_item_use_tests {
                 .unwrap()
                 .advance(0.1, 8, 30),
             2
+        );
+    }
+}
+
+#[cfg(test)]
+mod radiation_patch_use_tests {
+    use dark::properties::{Link, Links, PropStackCount, ToLink, WrappedEntityId};
+    use shipyard::{EntitiesView, Get, UniqueView, View};
+
+    use super::*;
+    use crate::scripts::radiation::ActiveRadiation;
+
+    fn world_with_patch(stack: i32, carried: bool) -> (World, EntityId) {
+        let mut world = World::new();
+        let patch = world.add_entity(PropStackCount(stack));
+        let inventory = world.add_entity(if carried {
+            Links {
+                to_links: vec![ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(patch)),
+                    link: Link::Contains(0),
+                }],
+            }
+        } else {
+            Links::empty()
+        });
+        let player = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: vec3(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: None,
+            inventory_entity_id: inventory,
+        });
+        world.add_unique(ActiveRadiation::default());
+        (world, patch)
+    }
+
+    fn set_radiation_level(world: &World, level: f32) {
+        let mut radiation = world
+            .borrow::<shipyard::UniqueViewMut<ActiveRadiation>>()
+            .unwrap();
+        assert!(radiation.observe_ambient(level));
+        assert_eq!(radiation.advance(0.1, level, 3.0), 0);
+    }
+
+    #[test]
+    fn irradiated_player_clears_level_and_consumes_one_stack_unit() {
+        let (world, patch) = world_with_patch(2, true);
+        set_radiation_level(&world, 8.0);
+
+        assert_eq!(
+            apply_radiation_patch_use(&world, patch, 6.0),
+            RadiationPatchUseOutcome::DecrementedStack
+        );
+        assert_eq!(
+            world
+                .borrow::<UniqueView<ActiveRadiation>>()
+                .unwrap()
+                .level(),
+            2.0
+        );
+        assert_eq!(
+            world
+                .borrow::<View<PropStackCount>>()
+                .unwrap()
+                .get(patch)
+                .unwrap()
+                .0,
+            1
+        );
+    }
+
+    #[test]
+    fn clear_player_refuses_without_consuming() {
+        let (world, patch) = world_with_patch(1, true);
+
+        assert_eq!(
+            apply_radiation_patch_use(&world, patch, 6.0),
+            RadiationPatchUseOutcome::NotUsed
+        );
+        assert!(world.borrow::<EntitiesView>().unwrap().is_alive(patch));
+        assert_eq!(
+            world
+                .borrow::<View<PropStackCount>>()
+                .unwrap()
+                .get(patch)
+                .unwrap()
+                .0,
+            1
+        );
+    }
+
+    #[test]
+    fn world_object_cannot_bypass_inventory_use() {
+        let (world, patch) = world_with_patch(1, false);
+        set_radiation_level(&world, 8.0);
+
+        assert_eq!(
+            apply_radiation_patch_use(&world, patch, 6.0),
+            RadiationPatchUseOutcome::NotUsed
+        );
+        assert_eq!(
+            world
+                .borrow::<UniqueView<ActiveRadiation>>()
+                .unwrap()
+                .level(),
+            8.0
+        );
+    }
+
+    #[test]
+    fn duplicate_use_of_destroyed_source_cannot_clear_twice() {
+        let (mut world, patch) = world_with_patch(1, true);
+        set_radiation_level(&world, 12.0);
+        assert_eq!(
+            apply_radiation_patch_use(&world, patch, 6.0),
+            RadiationPatchUseOutcome::DestroyEntity
+        );
+        world.delete_entity(patch);
+
+        assert_eq!(
+            apply_radiation_patch_use(&world, patch, 6.0),
+            RadiationPatchUseOutcome::NotUsed
+        );
+        assert_eq!(
+            world
+                .borrow::<UniqueView<ActiveRadiation>>()
+                .unwrap()
+                .level(),
+            6.0
         );
     }
 }

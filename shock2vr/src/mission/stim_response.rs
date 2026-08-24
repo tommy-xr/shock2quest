@@ -151,11 +151,43 @@ pub fn resolve_stim_damage(
                     flat_damage += multiplier;
                 }
             }
+            ReceptronEffect::Radiate { .. } => {}
             ReceptronEffect::Unhandled(_) => {}
         }
     }
 
     has_damage.then(|| flat_damage + intensity * amplify * intensity_multiplier)
+}
+
+/// Resolve a radiation reaction through the same act/react chain as damage.
+/// `Radiate` is an authored receptron effect (The Player -> Radiation), so a
+/// source without that response remains inert and Amplify/Abort modifiers keep
+/// their normal meaning.
+pub fn resolve_stim_radiation(
+    receptrons: &[(i32, ReceptronOptions)],
+    stim_template_id: i32,
+    intensity: f32,
+) -> Option<f32> {
+    let mut amplify = 1.0;
+    let mut multiplier = 0.0;
+    let mut has_radiate = false;
+
+    for (_, options) in receptrons
+        .iter()
+        .filter(|(stim, _)| *stim == stim_template_id)
+    {
+        match &options.effect {
+            ReceptronEffect::Abort => return None,
+            ReceptronEffect::Amplify { factor } => amplify *= factor,
+            ReceptronEffect::Radiate { multiplier: factor } => {
+                has_radiate = true;
+                multiplier += factor;
+            }
+            ReceptronEffect::Damage { .. } | ReceptronEffect::Unhandled(_) => {}
+        }
+    }
+
+    has_radiate.then_some(intensity * amplify * multiplier)
 }
 
 #[cfg(test)]
@@ -247,6 +279,24 @@ mod tests {
             resolve_stim_damage(&invulnerable, HIGH_EXPLOSIVE, 10.0),
             None
         );
+    }
+
+    #[test]
+    fn authored_radiate_reaction_accumulates_amplified_exposure() {
+        const RADIATION: i32 = -386;
+        let player = vec![
+            (
+                RADIATION,
+                receptron(69, ReceptronEffect::Radiate { multiplier: 1.0 }),
+            ),
+            (
+                RADIATION,
+                receptron(80, ReceptronEffect::Amplify { factor: 0.5 }),
+            ),
+        ];
+
+        assert_eq!(resolve_stim_radiation(&player, RADIATION, 8.0), Some(4.0));
+        assert_eq!(resolve_stim_damage(&player, RADIATION, 8.0), None);
     }
 
     #[test]

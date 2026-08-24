@@ -534,6 +534,9 @@ pub struct PlayerStateSnapshot {
     /// The player's psi pool (current, max), or `None` when the player has no
     /// psi state (e.g. gamesys not loaded).
     pub psi_points: Option<(i32, i32)>,
+    /// Accumulated retail `RadLevel` after ambient absorption. Zero when the
+    /// player has no active radiation status.
+    pub radiation_level: f32,
     /// The gamesys name of the currently selected psi power (what the psi amp
     /// casts), e.g. "Cryokinesis".
     pub selected_psi_power: Option<String>,
@@ -654,6 +657,10 @@ impl Game {
                         .ok()
                         .map(|p| (p.psi_points, p.max_psi_points))
                 }),
+            radiation_level: world
+                .borrow::<shipyard::UniqueView<crate::scripts::radiation::ActiveRadiation>>()
+                .map(|radiation| radiation.level())
+                .unwrap_or(0.0),
             selected_psi_power: (|| {
                 let powers = world
                     .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
@@ -1679,6 +1686,12 @@ impl Game {
                 .active_game_scene
                 .world()
                 .borrow::<UniqueView<crate::scripts::healing_item::ActiveHealing>>()
+                .map(|active| active.clone())
+                .unwrap_or_default(),
+            active_radiation: self
+                .active_game_scene
+                .world()
+                .borrow::<UniqueView<crate::scripts::radiation::ActiveRadiation>>()
                 .map(|active| active.clone())
                 .unwrap_or_default(),
             active_mission: self.active_game_scene.scene_name().to_string(),

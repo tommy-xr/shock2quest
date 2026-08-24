@@ -315,6 +315,20 @@ impl PropMotionActorTags {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropSelfIllumination(pub f32);
 
+/// How quickly the player's stored radiation level is reduced after leaving
+/// an irradiated environment. Authored on `The Player` as `P$RadRecove`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropRadiationRecovery(pub f32);
+
+/// How quickly ambient radiation is absorbed into the player's stored level.
+/// Authored on `The Player` as `P$RadAbsorb`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropRadiationAbsorb(pub f32);
+
+/// Retail radiation-drain tuning authored on `The Player` as `P$RadDrain`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropRadiationDrain(pub f32);
+
 /// A container's inventory grid, in cells. The `Contains` link's ordinal is
 /// `y * width + x` against *this* width, so it is what makes a stored cell
 /// mean anything.
@@ -760,8 +774,11 @@ pub enum ReceptronEffect {
     Amplify { factor: f32 },
     /// Swallow the stim entirely (Invulnerable).
     Abort,
+    /// Add radiation exposure scaled by `multiplier`. The player authors this
+    /// response to the Radiation stimulus with a multiplier of 1.
+    Radiate { multiplier: f32 },
     /// An effect the game does not implement yet (EnvSound, add_metaprop,
-    /// radiate, Freeze, Stun, toxin, ...).
+    /// Freeze, Stun, toxin, ...).
     Unhandled(String),
 }
 
@@ -810,6 +827,9 @@ impl ReceptronOptions {
             },
             "Amplify" => ReceptronEffect::Amplify { factor: param_56 },
             "Abort" => ReceptronEffect::Abort,
+            "radiate" => ReceptronEffect::Radiate {
+                multiplier: param_56,
+            },
             _ => ReceptronEffect::Unhandled(name),
         };
 
@@ -1684,6 +1704,24 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$RadAbsorb",
+            |reader, _len| read_single(reader),
+            PropRadiationAbsorb,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RadDrain",
+            |reader, _len| read_single(reader),
+            PropRadiationDrain,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$RadRecove",
+            |reader, _len| read_single(reader),
+            PropRadiationRecovery,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$Position",
             read_prop_position,
             identity,
@@ -2509,6 +2547,14 @@ mod tests {
             other.effect,
             ReceptronEffect::Unhandled("EnvSound".to_string())
         );
+    }
+
+    #[test]
+    fn receptron_radiate_keeps_the_authored_exposure_multiplier() {
+        // The Player -> Radiation in shock2.gam: `radiate` x1. The multiplier
+        // lives at +56, just like the original reaction implementation reads.
+        let opts = read_receptron(receptron_payload(69, "radiate", 1.0, 0.0, 0));
+        assert_eq!(opts.effect, ReceptronEffect::Radiate { multiplier: 1.0 });
     }
 
     fn scale_definition() -> Box<dyn PropertyDefinition<Box<dyn ReadAndSeek>>> {

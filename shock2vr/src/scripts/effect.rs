@@ -302,6 +302,14 @@ pub enum Effect {
         pulse_interval_secs: f32,
     },
 
+    /// Atomically subtract one retail Rad Patch dose from the live player's
+    /// accumulated radiation and consume one source unit. A zero-radiation
+    /// use leaves the item untouched.
+    UseRadiationPatch {
+        entity_id: EntityId,
+        amount: f32,
+    },
+
     /// Install a soft on the character sheet and consume the object it came
     /// from. Emitted by `scripts::auto_install_soft` when a soft is frobbed in
     /// the world or taken from a container. The applier does the atomic
@@ -358,6 +366,16 @@ pub enum Effect {
     /// shoved outward. Emitted once by `internal_explosion` from the entity's
     /// arSrcDesc data.
     RadiusBlast {
+        center: Vector3<f32>,
+        radius: f32,
+        intensity: f32,
+        stim_template_id: i32,
+    },
+
+    /// Persistent radius stimulus without an explosion's physical impulse.
+    /// Radiation sources refresh this every frame while their player is in
+    /// range; the player status integrates the ambient exposure separately.
+    RadiusStim {
         center: Vector3<f32>,
         radius: f32,
         intensity: f32,

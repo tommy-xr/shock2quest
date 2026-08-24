@@ -437,6 +437,8 @@ export interface PlayerSnapshot {
    * no psi pool. */
   psi_points: number | null;
   max_psi_points: number | null;
+  /** Accumulated retail radiation level (zero when clear). */
+  radiation_level: number;
   /** The gamesys name of the selected psi power (what the psi amp casts),
    * e.g. "Cryokinesis". Cycle with the CyclePsiPower input action. */
   selected_psi_power: string | null;
