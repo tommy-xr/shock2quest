@@ -79,7 +79,7 @@ use crate::{
     game_scene::AmbientAudioState,
     game_scene::PlayerSavePoseError,
     gui::GuiManager,
-    hud::{draw_item_name, draw_item_outline, hud_selectable_entities},
+    hud::{draw_item_name, draw_item_outline, is_hud_selectable},
     input_context::{self, InputContext},
     interaction::{FlatInteraction, InteractionContext, PlayerInteraction, VrInteraction},
     inventory::PlayerInventoryEntity,
@@ -7511,10 +7511,18 @@ impl MissionCore {
         let mut ret = vec![];
         // The interaction layer reports what the reticle / hand rays picked;
         // whether that pick may be *highlighted* is a separate, data-driven
-        // question (`P$HUDSelect`), answered here so flat and VR share one
-        // answer. The pick itself stays frobbable either way.
-        let highlighted =
-            hud_selectable_entities(&self.world, self.interaction.highlighted_entities());
+        // question (`P$HUDSelect`), answered once here so the flat and VR
+        // presentations cannot give different answers. (Flat additionally
+        // narrows its own pick to frobbable entities, upstream in
+        // `FlatPlayerController`; that is the frob target, not the highlight.)
+        // `debug_show_ids` piggybacks on the rollover label to read out an
+        // object's runtime entity id, which has no other in-world readout and
+        // is most needed for exactly the fixtures the gate excludes - so the
+        // debug overlay deliberately bypasses it.
+        let mut highlighted = self.interaction.highlighted_entities();
+        if !options.debug_show_ids {
+            highlighted.retain(|e| is_hud_selectable(&self.world, *e));
+        }
         for hit_entity in highlighted {
             ret.extend(draw_item_outline(
                 asset_cache,

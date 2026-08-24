@@ -23,21 +23,11 @@ use crate::physics::PhysicsWorld;
 /// This deliberately says nothing about whether the object can be *frobbed*:
 /// frob eligibility stays `P$FrobInfo`-based, so a console with no
 /// `P$HUDSelect` still uses/hacks normally, it just draws no brackets.
-pub fn is_hud_selectable(world: &World, entity_id: EntityId) -> bool {
+pub(crate) fn is_hud_selectable(world: &World, entity_id: EntityId) -> bool {
     world
         .borrow::<View<PropHUDSelect>>()
         .map(|v| v.get(entity_id).map(|p| p.0).unwrap_or(false))
         .unwrap_or(false)
-}
-
-/// Narrow the entities picked by the interaction layer (reticle / VR hand
-/// rays) to the ones the HUD may highlight. Applied once, on the shared
-/// render path, so flat and VR cannot diverge.
-pub fn hud_selectable_entities(world: &World, picked: Vec<EntityId>) -> Vec<EntityId> {
-    picked
-        .into_iter()
-        .filter(|e| is_hud_selectable(world, *e))
-        .collect()
 }
 
 fn format_stack_aware_item_name(item_name: &str, stack_count: Option<i32>) -> String {
@@ -128,6 +118,7 @@ pub fn draw_item_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flat_player_controller::is_frobbable;
     use dark::properties::{FrobFlag, PropFrobInfo};
 
     fn frob_info() -> PropFrobInfo {
@@ -138,15 +129,16 @@ mod tests {
         }
     }
 
-    /// A frobbable object with no `P$HUDSelect` (a `Tech`-family console's
-    /// ancestors before the property is authored) must not be highlighted -
-    /// frobbability alone never earned the brackets in the original.
+    /// The false positive this gate removes, and the invariant that makes it
+    /// safe: an object can be frobbable and still not highlightable. A `Tech`
+    /// console keeps working when you use it, it just stops drawing brackets.
     #[test]
     fn frobbable_without_hud_select_is_not_highlighted() {
         let mut world = World::new();
         let id = world.add_entity(frob_info());
+
+        assert!(is_frobbable(&world, id), "frob eligibility is unchanged");
         assert!(!is_hud_selectable(&world, id));
-        assert!(hud_selectable_entities(&world, vec![id]).is_empty());
     }
 
     #[test]
@@ -155,32 +147,29 @@ mod tests {
         let id = world.add_entity(frob_info());
         world.add_component(id, PropHUDSelect(true));
         assert!(is_hud_selectable(&world, id));
-        assert_eq!(hud_selectable_entities(&world, vec![id]), vec![id]);
     }
 
     /// The shipped `Tech` family sets `P$HUDSelect` explicitly false; an
-    /// explicit false is as unhighlightable as an absent property.
+    /// explicit false is as unhighlightable as an absent property, and is
+    /// likewise still frobbable.
     #[test]
-    fn hud_select_false_is_not_highlighted() {
+    fn hud_select_false_is_not_highlighted_but_stays_frobbable() {
         let mut world = World::new();
         let id = world.add_entity(frob_info());
         world.add_component(id, PropHUDSelect(false));
+
+        assert!(is_frobbable(&world, id), "frob eligibility is unchanged");
         assert!(!is_hud_selectable(&world, id));
-        assert!(hud_selectable_entities(&world, vec![id]).is_empty());
     }
 
+    /// Plain world geometry - no frob info, no `P$HUDSelect` - is neither.
     #[test]
-    fn only_the_hud_selectable_picks_survive() {
+    fn world_geometry_is_neither_frobbable_nor_highlighted() {
         let mut world = World::new();
-        let console = world.add_entity(frob_info());
-        world.add_component(console, PropHUDSelect(false));
-        let pistol = world.add_entity(frob_info());
-        world.add_component(pistol, PropHUDSelect(true));
+        let id = world.add_entity(PropHitPoints { hit_points: 1 });
 
-        assert_eq!(
-            hud_selectable_entities(&world, vec![console, pistol]),
-            vec![pistol]
-        );
+        assert!(!is_frobbable(&world, id));
+        assert!(!is_hud_selectable(&world, id));
     }
 
     #[test]
