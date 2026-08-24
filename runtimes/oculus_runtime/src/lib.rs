@@ -363,6 +363,15 @@ fn main() {
         .create_action::<bool>("menu", "Pause Menu", &[])
         .unwrap();
 
+    // The gun hand's two face buttons: A reloads, B swaps ammo type.
+    let reload_action = action_set
+        .create_action::<bool>("reload", "Reload Weapon", &[])
+        .unwrap();
+
+    let cycle_ammo_action = action_set
+        .create_action::<bool>("cycle_ammo", "Cycle Ammo Type", &[])
+        .unwrap();
+
     // Bind our actions to input devices using the given profile
     // If you want to access inputs specific to a particular device you may specify a different
     // interaction profile
@@ -471,6 +480,26 @@ fn main() {
                             shock2vr::input::InputAction::TogglePauseMenu
                                 .quest_touch_click_path()
                                 .expect("Quest pause-menu binding"),
+                        )
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &reload_action,
+                    xr_instance
+                        .string_to_path(
+                            shock2vr::input::InputAction::Reload
+                                .quest_touch_click_path()
+                                .expect("Quest reload binding"),
+                        )
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &cycle_ammo_action,
+                    xr_instance
+                        .string_to_path(
+                            shock2vr::input::InputAction::CycleAmmo
+                                .quest_touch_click_path()
+                                .expect("Quest cycle-ammo binding"),
                         )
                         .unwrap(),
                 ),
@@ -786,6 +815,8 @@ fn main() {
         let use_mode_state = use_mode_action.state(&session, xr::Path::NULL).unwrap();
         let audio_log_state = audio_log_action.state(&session, xr::Path::NULL).unwrap();
         let menu_state = menu_action.state(&session, xr::Path::NULL).unwrap();
+        let reload_state = reload_action.state(&session, xr::Path::NULL).unwrap();
+        let cycle_ammo_state = cycle_ammo_action.state(&session, xr::Path::NULL).unwrap();
         // Only edge-detect while the action is live: with the session merely
         // VISIBLE (system overlay up), current_state reads false even though
         // the button may still be physically held, and treating that as a
@@ -813,6 +844,18 @@ fn main() {
             menu_state.is_active,
             menu_state.changed_since_last_sync,
             menu_state.current_state,
+        );
+        action_state.sync_discrete_button(
+            shock2vr::input::InputAction::Reload,
+            reload_state.is_active,
+            reload_state.changed_since_last_sync,
+            reload_state.current_state,
+        );
+        action_state.sync_discrete_button(
+            shock2vr::input::InputAction::CycleAmmo,
+            cycle_ammo_state.is_active,
+            cycle_ammo_state.changed_since_last_sync,
+            cycle_ammo_state.current_state,
         );
 
         let left_trigger_value = left_trigger
