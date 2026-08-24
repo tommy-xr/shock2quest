@@ -11,10 +11,13 @@
 //! The geometry rides the `GAMELOD.PCX` backdrop both hosts use for this
 //! page: the header line, the dark list pane, and the framed button art in
 //! the bottom-right corner (the decoded `GAMELODR.BIN` rects, shared with
-//! [`crate::scenes::LoadGameScene`]). Rows live inside the pane; "Done" sits
-//! on the button art.
+//! [`crate::scenes::LoadGameScene`]). Rows live inside the pane, scrolling in
+//! a gutter down its right edge so a registry larger than the pane stays
+//! fully reachable; "Done" sits on the button art.
 //!
 //! [`DeveloperScene`]: crate::scenes::DeveloperScene
+
+use std::ops::Range;
 
 use cgmath::{Vector2, vec2};
 use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
@@ -38,7 +41,8 @@ pub const BACKDROP_TEXTURE: &str = "GAMELOD.PCX";
 const LAYOUT_FILE: &str = "GAMELODR.BIN";
 
 /// Indices into `GAMELODR.BIN`: header line, the dark list pane, (2 is the
-/// load screen's "Load" button, unused here) and the bottom-right button art.
+/// load screen's "Load" button, still unused here) and the bottom-right
+/// button art.
 const HEADER_RECT_INDEX: usize = 0;
 const LIST_RECT_INDEX: usize = 1;
 const DONE_RECT_INDEX: usize = 3;
@@ -116,6 +120,10 @@ pub fn rects(asset_cache: &mut AssetCache) -> PanelRects {
 /// Vertical distance between row tops, and each row's own height. Taller
 /// than the load list's 19px rows: these rows carry click targets (the
 /// arrows), so they get more air and a bigger hit area.
+///
+/// These were briefly shaved to 25/22 to squeeze a tenth parameter into the
+/// pane. That trade is gone: the list scrolls, so the pane holds whatever it
+/// comfortably can and the registry may grow without touching the pitch.
 const ROW_PITCH: f32 = 28.0;
 const ROW_H: f32 = 24.0;
 /// Horizontal inset from the pane's edges, matching the load list's text
@@ -125,9 +133,16 @@ const TEXT_INSET: f32 = 8.0;
 const ARROW_W: f32 = 20.0;
 /// Width of the value readout between the arrows.
 const VALUE_W: f32 = 48.0;
+/// The scroll gutter down the list pane's right edge, and the height of each
+/// of its two buttons.
+const SCROLL_GUTTER_W: f32 = 26.0;
+const SCROLL_BUTTON_H: f32 = 20.0;
 
 /// Opacity for an element the pointer is not over.
 const IDLE_OPACITY: f32 = 0.65;
+/// Opacity for a scroll button that cannot move any further, matching the
+/// load screen's inert "Load". Such a button is not hit-testable either.
+const DISABLED_OPACITY: f32 = 0.3;
 /// Opacity for the element under the pointer.
 const HOVER_OPACITY: f32 = 1.0;
 /// Labels and values are readouts, not click targets: drawn steady, between
@@ -141,6 +156,10 @@ const READOUT_OPACITY: f32 = 0.85;
 pub enum DevParamsEvent {
     Decrement(DevParamId),
     Increment(DevParamId),
+    /// Scroll the list one row towards the top of the registry.
+    ScrollUp,
+    /// Scroll the list one row towards its end.
+    ScrollDown,
     Done,
 }
 
@@ -155,7 +174,15 @@ struct RowRects {
 fn row_rects(rects: PanelRects, index: usize) -> RowRects {
     let list = rects.list;
     let y = list.y + index as f32 * ROW_PITCH;
-    let right = list.x + list.w - TEXT_INSET;
+    // Leave the scroll gutter clear whenever it is in use, so a row's `>`
+    // never sits under the rocker (they resolve through one hit test, so an
+    // overlap is a genuine ambiguity, not just a visual one).
+    let gutter = if max_scroll(rects) > 0 {
+        SCROLL_GUTTER_W
+    } else {
+        0.0
+    };
+    let right = list.x + list.w - TEXT_INSET - gutter;
     let increment_x = right - ARROW_W;
     let value_x = increment_x - VALUE_W;
     let decrement_x = value_x - ARROW_W;
@@ -168,13 +195,60 @@ fn row_rects(rects: PanelRects, index: usize) -> RowRects {
     }
 }
 
-/// How many rows fit in the pane above the backdrop's painted field. The
-/// registry is expected to stay well under this; the cap only keeps a grown
-/// table from drawing rows through the art.
-fn visible_row_count(rects: PanelRects) -> usize {
+/// How many rows fit in the pane above the backdrop's painted field - the
+/// size of one page of the list, however long the registry is.
+fn rows_per_page(rects: PanelRects) -> usize {
     let list = rects.list;
     let usable = (list.y + list.h).min(FIELD_TOP_Y) - list.y;
-    ((usable / ROW_PITCH).floor().max(0.0) as usize).min(dev_params::PARAMS.len())
+    (usable / ROW_PITCH).floor().max(0.0) as usize
+}
+
+/// The furthest the list can scroll: the first-row index that puts the tail
+/// of the registry against the bottom of the pane. Zero when everything fits
+/// at once, which is also what hides the scroll rocker.
+fn max_scroll(rects: PanelRects) -> usize {
+    dev_params::PARAMS
+        .len()
+        .saturating_sub(rows_per_page(rects))
+}
+
+/// The registry indices on screen at `scroll`, with `scroll` clamped to what
+/// the pane can actually show.
+///
+/// The one place a screen row is tied to a parameter: [`draw`] and [`hit`]
+/// both walk this range, so a row can never *show* one parameter's value and
+/// *step* another's - the failure a positional row index invites the moment
+/// the list scrolls.
+fn visible_rows(rects: PanelRects, scroll: usize) -> Range<usize> {
+    let first = scroll.min(max_scroll(rects));
+    let count = rows_per_page(rects).min(dev_params::PARAMS.len() - first);
+    first..first + count
+}
+
+/// The scroll rocker's two halves - "Up" and "Down" - in a gutter down the
+/// list pane's right edge, beside the rows they scroll. `None` when the whole
+/// registry fits on one page.
+///
+/// Deliberately *not* on the upper framed button: that is the load screen's
+/// "Load" frame, the only other authored click target on this backdrop, and
+/// it is wanted for a debug-scene launcher. Scrolling belongs against its own
+/// list anyway - a scrollbar's place is beside what it scrolls, not across
+/// the screen from it.
+fn scroll_rects(rects: PanelRects) -> Option<(Rect, Rect)> {
+    (max_scroll(rects) > 0).then(|| {
+        let list = rects.list;
+        let x = list.x + list.w - SCROLL_GUTTER_W;
+        let bottom = (list.y + list.h).min(FIELD_TOP_Y);
+        (
+            Rect::new(x, list.y, SCROLL_GUTTER_W, SCROLL_BUTTON_H),
+            Rect::new(
+                x,
+                bottom - SCROLL_BUTTON_H,
+                SCROLL_GUTTER_W,
+                SCROLL_BUTTON_H,
+            ),
+        )
+    })
 }
 
 /// The value readout: floats as `{:.2}`, the format the step grids are
@@ -187,12 +261,30 @@ fn format_value(kind: &DevParamKind, value: f32) -> String {
 
 /// The event at a canvas point, if any. Shared by the click and the hover
 /// highlight, so the two can never disagree about where a button is.
-pub fn hit(rects: PanelRects, point: Vector2<f32>) -> Option<DevParamsEvent> {
+pub fn hit(rects: PanelRects, scroll: usize, point: Vector2<f32>) -> Option<DevParamsEvent> {
     let mut canvas = UiCanvas::<DevParamsEvent>::with_events(vec2(CANVAS_W, CANVAS_H));
-    for (index, (id, _)) in dev_params::all().take(visible_row_count(rects)).enumerate() {
-        let row = row_rects(rects, index);
+    // Rows are addressed by *screen slot* but carry the id of the registry
+    // entry scrolled into that slot. Resolving the slot from anything other
+    // than this same offset is the bug this whole seam invites: the panel
+    // would draw one parameter and the click would change another.
+    let rows = visible_rows(rects, scroll);
+    for (slot, (id, _)) in dev_params::all()
+        .skip(rows.start)
+        .take(rows.len())
+        .enumerate()
+    {
+        let row = row_rects(rects, slot);
         canvas.button(row.decrement, "", DevParamsEvent::Decrement(id));
         canvas.button(row.increment, "", DevParamsEvent::Increment(id));
+    }
+    if let Some((up, down)) = scroll_rects(rects) {
+        // A rocker half that cannot move is inert, not just dimmed.
+        if rows.start > 0 {
+            canvas.button(up, "", DevParamsEvent::ScrollUp);
+        }
+        if rows.start < max_scroll(rects) {
+            canvas.button(down, "", DevParamsEvent::ScrollDown);
+        }
     }
     canvas.button(rects.done, "", DevParamsEvent::Done);
     canvas.click_at(point)
@@ -202,8 +294,13 @@ pub fn hit(rects: PanelRects, point: Vector2<f32>) -> Option<DevParamsEvent> {
 /// and "Done". `pointer_canvas` is the hover position in canvas pixels,
 /// whatever produced it - the mouse or a VR controller ray; the highlight
 /// resolves through the very same [`hit`] the click does.
-pub fn draw(canvas: &mut UiCanvas, rects: PanelRects, pointer_canvas: Option<Vector2<f32>>) {
-    let hovered = pointer_canvas.and_then(|point| hit(rects, point));
+pub fn draw(
+    canvas: &mut UiCanvas,
+    rects: PanelRects,
+    scroll: usize,
+    pointer_canvas: Option<Vector2<f32>>,
+) {
+    let hovered = pointer_canvas.and_then(|point| hit(rects, scroll, point));
     let hover_opacity = |event: DevParamsEvent| {
         if hovered == Some(event) {
             HOVER_OPACITY
@@ -220,8 +317,13 @@ pub fn draw(canvas: &mut UiCanvas, rects: PanelRects, pointer_canvas: Option<Vec
         VAlign::Middle,
     );
 
-    for (index, (id, param)) in dev_params::all().take(visible_row_count(rects)).enumerate() {
-        let row = row_rects(rects, index);
+    let rows = visible_rows(rects, scroll);
+    for (slot, (id, param)) in dev_params::all()
+        .skip(rows.start)
+        .take(rows.len())
+        .enumerate()
+    {
+        let row = row_rects(rects, slot);
         canvas
             .text_native(
                 row.label,
@@ -260,6 +362,31 @@ pub fn draw(canvas: &mut UiCanvas, rects: PanelRects, pointer_canvas: Option<Vec
             .opacity(hover_opacity(DevParamsEvent::Increment(id)));
     }
 
+    if let Some((up, down)) = scroll_rects(rects) {
+        for (rect, text, event, enabled) in [
+            (up, "Up", DevParamsEvent::ScrollUp, rows.start > 0),
+            (
+                down,
+                "Dn",
+                DevParamsEvent::ScrollDown,
+                rows.start < max_scroll(rects),
+            ),
+        ] {
+            // The row font, and "Dn" rather than "Down": `text_native` does
+            // not shrink to its rect, so the display font's "Up"/"Down"
+            // overhung the gutter and drew across the values beside them.
+            // Render-verified rather than assumed - that overlap is exactly
+            // what a screenshot catches and a layout assertion does not.
+            canvas
+                .text_native(rect, text, ROW_FONT, HAlign::Center, VAlign::Middle)
+                .opacity(if enabled {
+                    hover_opacity(event)
+                } else {
+                    DISABLED_OPACITY
+                });
+        }
+    }
+
     canvas
         .text_native(
             rects.done,
@@ -271,10 +398,11 @@ pub fn draw(canvas: &mut UiCanvas, rects: PanelRects, pointer_canvas: Option<Vec
         .opacity(hover_opacity(DevParamsEvent::Done));
 }
 
-/// Apply a clicked event to the registry. Returns `true` when the event was
-/// [`DevParamsEvent::Done`] - the one thing the host must act on (leave the
-/// screen); the steps are absorbed here so both hosts stay a one-liner.
-pub fn activate(event: DevParamsEvent) -> bool {
+/// Apply a clicked event to the registry, or to the host's `scroll` offset.
+/// Returns `true` when the event was [`DevParamsEvent::Done`] - the one thing
+/// the host must act on (leave the screen); the steps and the scrolling are
+/// absorbed here so both hosts stay a one-liner.
+pub fn activate(rects: PanelRects, event: DevParamsEvent, scroll: &mut usize) -> bool {
     let step_by = |id: DevParamId, direction: f32| {
         let DevParamKind::Float { step, .. } = dev_params::spec(id).kind;
         // `set` clamps into range and snaps to the step grid, so walking off
@@ -290,6 +418,14 @@ pub fn activate(event: DevParamsEvent) -> bool {
             step_by(id, 1.0);
             false
         }
+        DevParamsEvent::ScrollUp => {
+            *scroll = scroll.saturating_sub(1);
+            false
+        }
+        DevParamsEvent::ScrollDown => {
+            *scroll = (*scroll + 1).min(max_scroll(rects));
+            false
+        }
         DevParamsEvent::Done => true,
     }
 }
@@ -302,15 +438,132 @@ mod tests {
         dev_params::all().map(|(id, _)| id).collect()
     }
 
-    /// Every registered parameter must actually fit on the screen - a row
-    /// drawn below the cap would be visible art damage AND an unreachable
-    /// control, so growth past the pane is a test failure, not a truncation.
+    /// Every registered parameter must be *reachable*: whatever the registry
+    /// grows to, some scroll offset puts it on screen with working arrows.
+    /// (Its predecessor asserted every param fit on one page, which is what
+    /// forced a pitch shave per new knob; the list scrolls now, so the
+    /// invariant is reachability, not fitting.)
     #[test]
-    fn every_registered_param_fits_in_the_pane() {
+    fn every_registered_param_is_reachable_by_scrolling() {
         let rects = PanelRects::default();
-        assert_eq!(visible_row_count(rects), dev_params::PARAMS.len());
-        let last = row_rects(rects, dev_params::PARAMS.len() - 1);
-        assert!(last.label.y + ROW_H <= FIELD_TOP_Y);
+        let ids = param_ids();
+        for (index, id) in ids.iter().enumerate() {
+            // Scrolling to a param's own index always shows it (clamped when
+            // it is inside the last page).
+            let scroll = index;
+            let rows = visible_rows(rects, scroll);
+            assert!(
+                rows.contains(&index),
+                "param {index} is not on screen at scroll {scroll}"
+            );
+            let row = row_rects(rects, index - rows.start);
+            assert_eq!(
+                hit(rects, scroll, row.increment.center()),
+                Some(DevParamsEvent::Increment(*id)),
+                "param {index} > at scroll {scroll}"
+            );
+        }
+    }
+
+    /// The last parameter in particular: it is only reachable at the bottom
+    /// of the scroll, which is the offset a clamp bug lands one short of.
+    #[test]
+    fn the_last_param_is_reachable_at_the_bottom_of_the_scroll() {
+        let rects = PanelRects::default();
+        let last_index = dev_params::PARAMS.len() - 1;
+        let last_id = *param_ids().last().unwrap();
+        let bottom = max_scroll(rects);
+        let rows = visible_rows(rects, bottom);
+        assert_eq!(rows.end, dev_params::PARAMS.len());
+        let row = row_rects(rects, last_index - rows.start);
+        assert_eq!(
+            hit(rects, bottom, row.decrement.center()),
+            Some(DevParamsEvent::Decrement(last_id))
+        );
+        // ...and every drawn row clears the backdrop's painted field.
+        assert!(row.label.y + ROW_H <= FIELD_TOP_Y);
+        // An over-scroll cannot walk the list off its end.
+        assert_eq!(visible_rows(rects, bottom + 99), rows);
+    }
+
+    /// The bug a scrolling list invites: the rows move but the hit test still
+    /// indexes the registry positionally, so clicking a row steps whatever
+    /// parameter *used* to be there. Slot 0 must belong to the first VISIBLE
+    /// param, not to `PARAMS[0]`.
+    #[test]
+    fn the_hit_test_follows_the_scroll_offset() {
+        let rects = PanelRects::default();
+        let ids = param_ids();
+        assert!(max_scroll(rects) > 0, "the pane must be scrollable to test");
+        for scroll in 1..=max_scroll(rects) {
+            let slot0 = row_rects(rects, 0);
+            assert_eq!(
+                hit(rects, scroll, slot0.increment.center()),
+                Some(DevParamsEvent::Increment(ids[scroll])),
+                "top row at scroll {scroll}"
+            );
+            assert_eq!(
+                hit(rects, scroll, slot0.decrement.center()),
+                Some(DevParamsEvent::Decrement(ids[scroll])),
+                "top row at scroll {scroll}"
+            );
+            // The param that was on top before is now off screen entirely.
+            assert!(!visible_rows(rects, scroll).contains(&(scroll - 1)));
+        }
+    }
+
+    #[test]
+    fn the_rocker_scrolls_and_stops_at_both_ends() {
+        let rects = PanelRects::default();
+        let (up, down) = scroll_rects(rects).expect("the shipped registry scrolls");
+        let mut scroll = 0;
+
+        // At the top the "Up" half is inert - and stays inert if activated.
+        assert_eq!(hit(rects, scroll, up.center()), None);
+        assert_eq!(
+            hit(rects, scroll, down.center()),
+            Some(DevParamsEvent::ScrollDown)
+        );
+        assert!(!activate(rects, DevParamsEvent::ScrollUp, &mut scroll));
+        assert_eq!(scroll, 0);
+
+        // Walking down stops at the bottom rather than scrolling past the end.
+        for _ in 0..max_scroll(rects) + 3 {
+            activate(rects, DevParamsEvent::ScrollDown, &mut scroll);
+        }
+        assert_eq!(scroll, max_scroll(rects));
+        assert_eq!(hit(rects, scroll, down.center()), None);
+        assert_eq!(
+            hit(rects, scroll, up.center()),
+            Some(DevParamsEvent::ScrollUp)
+        );
+
+        activate(rects, DevParamsEvent::ScrollUp, &mut scroll);
+        assert_eq!(scroll, max_scroll(rects) - 1);
+    }
+
+    /// A pane tall enough for the whole registry has no rocker at all: the
+    /// framed art stays empty, exactly as it was before the list scrolled.
+    #[test]
+    fn a_pane_that_fits_everything_has_no_rocker() {
+        let tall = PanelRects::from_layout(Some(&[
+            MapRect::new(261, 31, 463, 51),
+            // Starts at the top of the canvas, so it clears FIELD_TOP_Y with
+            // room for more rows than the registry has.
+            MapRect::new(261, 0, 463, 320),
+            MapRect::new(527, 161, 623, 223),
+            MapRect::new(527, 405, 622, 467),
+        ]));
+        assert!(rows_per_page(tall) > dev_params::PARAMS.len());
+        assert_eq!(max_scroll(tall), 0);
+        assert_eq!(scroll_rects(tall), None);
+        // With nothing to scroll, the gutter is not reserved either: a row's
+        // increment runs to the pane's own inset, as it did before scrolling.
+        assert_eq!(
+            row_rects(tall, 0).increment.x + ARROW_W,
+            tall.list.x + tall.list.w - TEXT_INSET
+        );
+        assert_eq!(visible_rows(tall, 0), 0..dev_params::PARAMS.len());
     }
 
     #[test]
@@ -332,25 +585,29 @@ mod tests {
     fn the_arrows_and_done_hit_test() {
         let rects = PanelRects::default();
         let ids = param_ids();
-        for (index, id) in ids.iter().enumerate() {
+        // Unscrolled, slot N is param N for every row the pane shows.
+        for (index, id) in ids.iter().enumerate().take(rows_per_page(rects)) {
             let row = row_rects(rects, index);
             assert_eq!(
-                hit(rects, row.decrement.center()),
+                hit(rects, 0, row.decrement.center()),
                 Some(DevParamsEvent::Decrement(*id)),
                 "row {index} <"
             );
             assert_eq!(
-                hit(rects, row.increment.center()),
+                hit(rects, 0, row.increment.center()),
                 Some(DevParamsEvent::Increment(*id)),
                 "row {index} >"
             );
             // The label and the value are readouts, not buttons.
-            assert_eq!(hit(rects, row.label.center()), None);
-            assert_eq!(hit(rects, row.value.center()), None);
+            assert_eq!(hit(rects, 0, row.label.center()), None);
+            assert_eq!(hit(rects, 0, row.value.center()), None);
         }
-        assert_eq!(hit(rects, rects.done.center()), Some(DevParamsEvent::Done));
+        assert_eq!(
+            hit(rects, 0, rects.done.center()),
+            Some(DevParamsEvent::Done)
+        );
         // Bare backdrop is not a control.
-        assert_eq!(hit(rects, vec2(50.0, 50.0)), None);
+        assert_eq!(hit(rects, 0, vec2(50.0, 50.0)), None);
     }
 
     /// The rows follow the layout FILE, not the decoded fallbacks: an
@@ -372,10 +629,10 @@ mod tests {
                 lr_y: 300,
             },
             MapRect {
-                ul_x: 0,
-                ul_y: 0,
-                lr_x: 1,
-                lr_y: 1,
+                ul_x: 350,
+                ul_y: 100,
+                lr_x: 396,
+                lr_y: 160,
             },
             MapRect {
                 ul_x: 400,
@@ -392,8 +649,29 @@ mod tests {
         let row = row_rects(rects, 0);
         assert_eq!(row.label.x, 20.0 + TEXT_INSET);
         assert_eq!(row.label.y, 60.0);
-        assert_eq!(hit(rects, rects.done.center()), Some(DevParamsEvent::Done));
-        assert_eq!(hit(rects, FALLBACK_DONE.center()), None);
+        assert_eq!(
+            hit(rects, 0, rects.done.center()),
+            Some(DevParamsEvent::Done)
+        );
+        assert_eq!(hit(rects, 0, FALLBACK_DONE.center()), None);
+        // The rocker rides the authored *list pane*, so a moved backdrop takes
+        // it along with the rows it scrolls - and the rows shorten to keep
+        // their `>` out from under it.
+        let (up, down) = scroll_rects(rects).expect("this pane is too short to fit the registry");
+        let list_right = 20.0 + 280.0;
+        assert_eq!(up.x, list_right - SCROLL_GUTTER_W);
+        assert_eq!(up.y, 60.0);
+        assert_eq!(down.x, up.x);
+        assert!(down.y > up.y, "the rocker's halves must not overlap");
+        assert!(
+            row.increment.x + row.increment.w <= up.x,
+            "a row's increment must stay clear of the scroll gutter"
+        );
+        assert_eq!(
+            hit(rects, 0, down.center()),
+            Some(DevParamsEvent::ScrollDown)
+        );
+        assert_eq!(hit(rects, 0, FALLBACK_LIST.center()), None);
     }
 
     /// A missing layout file leaves every rect on the decoded fallback.
@@ -410,7 +688,13 @@ mod tests {
         // `get + step` through `set`'s tested clamp/snap; that a click
         // really moves a value is proven by the SDK e2e
         // (`dev-menu.e2e.test.ts`).
-        assert!(activate(DevParamsEvent::Done));
+        let mut scroll = 0;
+        assert!(activate(
+            PanelRects::default(),
+            DevParamsEvent::Done,
+            &mut scroll
+        ));
+        assert_eq!(scroll, 0, "leaving the screen must not scroll it");
     }
 
     #[test]

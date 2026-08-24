@@ -114,6 +114,12 @@ pub fn create_debug_melee_scene(
 ) -> Box<dyn GameScene> {
     // Contact damages on its own here - see the module docs.
     dev_params::set(dev_params::MELEE_FREE_SWING_SPEED, FREE_SWING_SPEED);
+    // Both calibration overlays default ON in this scene: it exists to answer
+    // "is the hand where my hand is" and "is the damage volume on the weapon I
+    // can see", and neither question can be asked with them off. They stay off
+    // by default everywhere else, and both are on the Developer page.
+    dev_params::set(dev_params::MELEE_GLOVE_OVERLAY, 1.0);
+    dev_params::set(dev_params::MELEE_VOLUMES, 1.0);
 
     // The unit cube spans [-0.5, 0.5], so a nonuniform scale is twice the
     // matching collider half-extent. Every piece is a (visual, collider) pair
@@ -198,10 +204,11 @@ pub fn create_debug_melee_scene(
         "[debug_melee] A rack of every player melee weapon is within reach ahead;\n\
          grab one (squeeze) and swing at the creatures that come down the corridor.\n\
          Contact damages on its own above {FREE_SWING_SPEED} units/s - no trigger needed.\n\
-         `melee_scale` sizes the wielded view model (takes effect on the next grab);\n\
-         `melee_glove_overlay` = 1 draws the tracked-hand glove alongside the weapon's\n\
-         own arm, so the `_h` fist can be compared against the controller pose.\n\
-         Both live on the Developer screen and at POST /v1/dev-params."
+         The tracked-hand glove and the live contact volume are both drawn here by\n\
+         default (`melee_glove_overlay`, `melee_volumes`) so the wield can be compared\n\
+         against where the controller and the damage box actually are.\n\
+         `melee_scale` sizes the view model - it takes effect on the NEXT grab.\n\
+         All three live on the Developer screen and at POST /v1/dev-params."
     );
 
     Box::new(HookedDebugScene::new(core, MeleeHooks::default()))
@@ -219,6 +226,8 @@ impl Drop for MeleeHooks {
     /// contradicting the parameter's own contract that missions leave it at 0.
     fn drop(&mut self) {
         dev_params::reset(dev_params::MELEE_FREE_SWING_SPEED);
+        dev_params::reset(dev_params::MELEE_GLOVE_OVERLAY);
+        dev_params::reset(dev_params::MELEE_VOLUMES);
     }
 }
 

@@ -58,12 +58,13 @@ const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 #[cfg(test)]
 fn resolve_click_at(
     rects: PanelRects,
+    scroll: usize,
     point: Option<Vector2<f32>>,
     pressed: bool,
     last_pressed: bool,
 ) -> (Option<DevParamsEvent>, bool) {
     shell_resolve_click_at(point, pressed, last_pressed, |point| {
-        dev_params_panel::hit(rects, point)
+        dev_params_panel::hit(rects, scroll, point)
     })
 }
 
@@ -71,6 +72,7 @@ fn resolve_click_at(
 #[cfg(test)]
 fn resolve_click(
     rects: PanelRects,
+    scroll: usize,
     pointer: Option<Pointer2D>,
     last_pressed: bool,
     screen_size: Vector2<f32>,
@@ -81,7 +83,7 @@ fn resolve_click(
         screen_size,
         vec2(CANVAS_W, CANVAS_H),
         SCALE_MODE,
-        |point| dev_params_panel::hit(rects, point),
+        |point| dev_params_panel::hit(rects, scroll, point),
     )
 }
 
@@ -92,6 +94,10 @@ pub struct DeveloperScene {
     /// The panel's widget rects, re-resolved from `GAMELODR.BIN` each update
     /// (the render path takes `&self`, so it reads the resolved value here).
     panel_rects: PanelRects,
+    /// Index of the registry parameter drawn in the pane's top row. The panel
+    /// itself is stateless, so the scroll position lives with the host and is
+    /// handed to the hit test and the render alike.
+    scroll: usize,
 }
 
 impl DeveloperScene {
@@ -101,6 +107,7 @@ impl DeveloperScene {
             scene_name: "developer".to_owned(),
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
             panel_rects: PanelRects::default(),
+            scroll: 0,
         }
     }
 
@@ -109,7 +116,7 @@ impl DeveloperScene {
     fn build_canvas(&self, pointer_canvas: Option<Vector2<f32>>) -> UiCanvas {
         let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
         canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
-        dev_params_panel::draw(&mut canvas, self.panel_rects, pointer_canvas);
+        dev_params_panel::draw(&mut canvas, self.panel_rects, self.scroll, pointer_canvas);
         canvas
     }
 }
@@ -138,19 +145,20 @@ impl GameScene for DeveloperScene {
         // `dev_params_panel::PanelRects`).
         self.panel_rects = dev_params_panel::rects(asset_cache);
         let rects = self.panel_rects;
+        let scroll = self.scroll;
 
         let event = self.menu.update(
             time.elapsed,
             input_context,
             game_options.presentation_mode,
-            |point| dev_params_panel::hit(rects, point),
-            |point| dev_params_panel::hit(rects, point),
+            |point| dev_params_panel::hit(rects, scroll, point),
+            |point| dev_params_panel::hit(rects, scroll, point),
         );
 
         if let Some(event) = event {
-            // Steps are applied to the registry here; "Done" returns to the
-            // main menu.
-            if dev_params_panel::activate(event) {
+            // Steps are applied to the registry here, scrolling moves the
+            // list, and "Done" returns to the main menu.
+            if dev_params_panel::activate(rects, event, &mut self.scroll) {
                 return vec![Effect::GlobalEffect(GlobalEffect::ShowMainMenu)];
             }
         }
@@ -262,7 +270,7 @@ mod tests {
         for y in (0..480).step_by(2) {
             for x in (0..640).step_by(2) {
                 let p = vec2(x as f32, y as f32);
-                if dev_params_panel::hit(PanelRects::default(), p)
+                if dev_params_panel::hit(PanelRects::default(), 0, p)
                     == Some(DevParamsEvent::Increment(id))
                 {
                     return p;
@@ -277,6 +285,7 @@ mod tests {
         let (id, _) = dev_params::all().next().unwrap();
         let (event, last, _) = resolve_click(
             PanelRects::default(),
+            0,
             pointer_at(first_increment_point(), true),
             false,
             SCREEN,
@@ -289,6 +298,7 @@ mod tests {
     fn held_press_does_not_re_activate() {
         let (event, last, _) = resolve_click(
             PanelRects::default(),
+            0,
             pointer_at(first_increment_point(), true),
             true,
             SCREEN,
@@ -306,6 +316,7 @@ mod tests {
         let scene = DeveloperScene::new();
         let (event, _, _) = resolve_click(
             PanelRects::default(),
+            0,
             pointer_at(first_increment_point(), true),
             scene.menu.last_pressed(),
             SCREEN,
@@ -333,6 +344,7 @@ mod tests {
         assert!(scene.menu.last_pressed());
         let (event, last, point) = resolve_click(
             PanelRects::default(),
+            0,
             None,
             scene.menu.last_pressed(),
             SCREEN,
@@ -344,6 +356,7 @@ mod tests {
         // ...so the press reappearing still resolves to nothing.
         let (event, _, _) = resolve_click(
             PanelRects::default(),
+            0,
             pointer_at(first_increment_point(), true),
             last,
             SCREEN,
@@ -355,6 +368,7 @@ mod tests {
     fn click_on_bare_backdrop_does_nothing() {
         let (event, _, _) = resolve_click(
             PanelRects::default(),
+            0,
             pointer_at(vec2(50.0, 50.0), true),
             false,
             SCREEN,
@@ -378,7 +392,14 @@ mod tests {
         let ray_point = pass.point().expect("the ray should land on the panel");
         let (id, _) = dev_params::all().next().unwrap();
         assert_eq!(
-            resolve_click_at(PanelRects::default(), Some(ray_point), pass.pressed, false).0,
+            resolve_click_at(
+                PanelRects::default(),
+                0,
+                Some(ray_point),
+                pass.pressed,
+                false
+            )
+            .0,
             Some(DevParamsEvent::Increment(id))
         );
     }
