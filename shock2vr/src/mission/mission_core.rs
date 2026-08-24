@@ -2826,9 +2826,10 @@ impl MissionCore {
         // `VirtualHand` performs. (A hand that is holding something never has
         // its squeeze swallowed - `update_squeeze_swallow` drops the latch the
         // moment the hand is full - so this cannot fire on a masked squeeze.)
-        // Resolved up front: without a backpack to deposit into there is
-        // nothing to claim, and the ordinary world drop must stay intact
-        // rather than be suppressed into an item that goes nowhere.
+        //
+        // The backpack is resolved first, and nothing is claimed without one:
+        // the ordinary world drop must stay intact rather than be suppressed
+        // into an item that goes nowhere.
         let player_inventory = self
             .world
             .borrow::<UniqueView<PlayerInfo>>()
