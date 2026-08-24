@@ -151,6 +151,29 @@ from cam** when you would rather just look at things. The developer option is
 the gate: while it is off the `Alt+V` / `A`+`B` toggle does nothing, and turning
 it off while detached re-attaches the camera.
 
+Flying uses the ordinary locomotion controls, so they are the ones your hands
+already know - and while the camera has them, the player stands still rather
+than sleepwalking off:
+
+| Control | Desktop | Effect |
+| ------- | ------- | ------ |
+| Right thumbstick | `W` `A` `S` `D` | fly along the view / strafe |
+| Left thumbstick x | `←` `→` | turn |
+| Left thumbstick y | `↑` `↓` | rise / fall |
+| Head / mouse | mouse | aim (the camera is a freeze-frame of the eye, so looking works as it always does) |
+| — | `Shift` | double speed |
+
+The camera noclips - flying through a wall to look at the far side is the tool
+working, not a bug. **Cam speed** sets the pace in the player's own speed
+units - the default *is* the player's walk speed. Those are pre-scale SS2
+units, not world units per second (the default 25 travels 10 world units a
+second), because the camera divides by `dark::SCALE_FACTOR` exactly as
+locomotion does.
+
+Headlessly, `GET /v1/camera` reports whether the camera is detached and the
+pose it is rendering from, so a test can check what the camera did without
+reading pixels - see `tools/shock2-sdk/test/free-camera.e2e.test.ts`.
+
 #### 3b. Oculus Quest 2
 
 ##### Pre-requisites

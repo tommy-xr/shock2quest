@@ -12,8 +12,9 @@ import { GameServer } from "../src/index.js";
 // Negative-first, per assertion:
 //   - "the gate withholds the toggle" fails if the gate check is removed from
 //     `Game::update` (the camera detaches with the developer option off).
-//   - "the camera holds its pose" fails against a build that returns the pawn
-//     pose unconditionally from `Game::render`.
+//   - "flying moves the camera, not the pawn" fails both ways without this
+//     change: with no override the camera does not fly, and without
+//     `without_locomotion` the pawn walks off on the same stick.
 //   - "a level reload re-attaches" fails against the first version of this
 //     change, which left `free_camera` untouched in `set_active_scene` and so
 //     carried a stale pose (and `detached: true`) into the new scene.
@@ -53,7 +54,7 @@ test("the free camera is inert until the developer option enables it", { skip },
   assert.equal((await game.camera.state()).detached, false);
 });
 
-test("a detached camera holds its pose while the player walks", { skip }, async () => {
+test("flying the camera moves it and leaves the pawn standing", { skip }, async () => {
   await using game = await GameServer.launch({
     mission: "medsci1.mis",
     port: 8114,
@@ -68,8 +69,8 @@ test("a detached camera holds its pose while the player walks", { skip }, async 
   assert.ok(camera.position, "expected a captured camera pose");
   const playerBefore = await game.player.position();
 
-  // Walk the player away. The camera must not follow: it is a render-layer
-  // override, and the simulation underneath it is untouched.
+  // Push forward on the stick. The camera flies; the pawn must NOT walk,
+  // because the camera is holding those channels.
   await game.input.set("right_hand.thumbstick", [0, 1]);
   await game.step({ frames: 90 });
   await game.input.set("right_hand.thumbstick", [0, 0]);
@@ -77,21 +78,21 @@ test("a detached camera holds its pose while the player walks", { skip }, async 
 
   const after = await game.camera.state();
   assert.ok(after.position);
-  for (let axis = 0; axis < 3; axis++) {
-    assert.ok(
-      Math.abs(after.position[axis] - camera.position[axis]) < 1e-3,
-      `camera drifted on axis ${axis}: ${camera.position} -> ${after.position}`,
-    );
-  }
+  const flew = Math.hypot(
+    after.position[0] - camera.position[0],
+    after.position[2] - camera.position[2],
+  );
+  assert.ok(flew > 1, `expected the camera to fly (moved ${flew})`);
 
-  // ...and the player really did move, so the camera holding still is a
-  // decoupled camera rather than a frozen simulation.
   const playerAfter = await game.player.position();
   const walked = Math.hypot(
     playerAfter.x - playerBefore.x,
     playerAfter.z - playerBefore.z,
   );
-  assert.ok(walked > 1, `expected the pawn to walk away (moved ${walked})`);
+  assert.ok(
+    walked < 0.1,
+    `the pawn must not walk while the camera flies (moved ${walked})`,
+  );
 });
 
 test("a level reload re-attaches the camera", { skip }, async () => {

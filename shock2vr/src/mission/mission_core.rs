@@ -1185,6 +1185,18 @@ struct FailedAnimationGuard {
     completion_owed: bool,
 }
 
+/// How fast the player turns on the left thumbstick, in radians per second at
+/// full deflection. Shared with the free camera ([`crate::free_camera`]) so
+/// the detached view turns at the rate the body does; retuning one retunes
+/// both, rather than the two silently drifting apart.
+pub const PLAYER_TURN_RATE: f32 = 2.0;
+
+/// How fast the player walks, in SS2 units per second at full deflection
+/// (divided by `dark::SCALE_FACTOR` at the point of use). Shared with the
+/// free camera, whose speed dev param defaults to it so "walking pace" stays
+/// the same pace.
+pub const PLAYER_MOVE_SPEED: f32 = 25.0;
+
 pub struct MissionCore {
     pub level_name: String,
     pub gui: GuiManager,
@@ -2576,10 +2588,9 @@ impl MissionCore {
                     .update(input_context, player.pos, player.rotation, delta_time);
             effects.extend(teleport_effects);
         }
-        let rot_speed = 2.0;
         let additional_rotation = cgmath::Quaternion::from_axis_angle(
             cgmath::vec3(0.0, 1.0, 0.0),
-            cgmath::Rad(input_context.left_hand.thumbstick.x * delta_time * rot_speed),
+            cgmath::Rad(input_context.left_hand.thumbstick.x * delta_time * PLAYER_TURN_RATE),
         );
 
         let new_rotation = player.rotation * additional_rotation;
@@ -2588,9 +2599,9 @@ impl MissionCore {
         let facing = dir.rotate_vector(cgmath::vec3(0.0, 0.0, -1.0));
         let move_thumbstick_value = input_context.right_hand.thumbstick;
         let forward = dir.rotate_vector(cgmath::vec3(
-            -delta_time * move_thumbstick_value.x * 25. / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.x * PLAYER_MOVE_SPEED / dark::SCALE_FACTOR,
             0.0,
-            -delta_time * move_thumbstick_value.y * 25. / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.y * PLAYER_MOVE_SPEED / dark::SCALE_FACTOR,
         ));
 
         let up_value = input_context.left_hand.thumbstick.y / dark::SCALE_FACTOR;
