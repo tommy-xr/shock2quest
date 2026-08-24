@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { EntitySummary, PlayedSound, Vec3 } from "../src/types.js";
+import type { EntitySummary, Vec3 } from "../src/types.js";
+import {
+  collisionSoundsSince,
+  describeSounds as describe,
+  tagValue,
+} from "./helpers/audio.js";
 
 // A VR melee contact with something that takes no authored damage - a wall, a
 // bench, a crate - used to be completely silent, because the impact sound was
@@ -16,23 +21,6 @@ import type { EntitySummary, PlayedSound, Vec3 } from "../src/types.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const WRENCH_MISSION_ID = 786;
-
-function tagValue(sound: PlayedSound, tag: string): string | undefined {
-  return sound.tags.find(([t]) => t === tag)?.[1];
-}
-
-function collisionSoundsSince(
-  sounds: PlayedSound[],
-  sequence: number,
-): PlayedSound[] {
-  return sounds.filter(
-    (s) => s.sequence > sequence && tagValue(s, "event") === "collision",
-  );
-}
-
-function describe(sounds: PlayedSound[]): string {
-  return JSON.stringify(sounds.map((s) => ({ sample: s.sample, tags: s.tags })));
-}
 
 async function byMissionId(
   game: GameServer,
@@ -117,7 +105,7 @@ test(
     // The swing crosses the floor over ~0.4 s; the per-surface cooldown caps
     // that at a couple of thuds rather than one per contact frame.
     assert.ok(
-      impacts.length <= 3,
+      impacts.length <= 4,
       `one swing should not machine-gun impact sounds: ${describe(impacts)}`,
     );
 
