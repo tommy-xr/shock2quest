@@ -79,7 +79,7 @@ use crate::{
     game_scene::AmbientAudioState,
     game_scene::PlayerSavePoseError,
     gui::GuiManager,
-    hud::{draw_item_name, draw_item_outline},
+    hud::{draw_item_name, draw_item_outline, hud_selectable_entities},
     input_context::{self, InputContext},
     interaction::{FlatInteraction, InteractionContext, PlayerInteraction, VrInteraction},
     inventory::PlayerInventoryEntity,
@@ -7509,7 +7509,13 @@ impl MissionCore {
         options: &crate::GameOptions,
     ) -> Vec<SceneObject> {
         let mut ret = vec![];
-        for hit_entity in self.interaction.highlighted_entities() {
+        // The interaction layer reports what the reticle / hand rays picked;
+        // whether that pick may be *highlighted* is a separate, data-driven
+        // question (`P$HUDSelect`), answered here so flat and VR share one
+        // answer. The pick itself stays frobbable either way.
+        let highlighted =
+            hud_selectable_entities(&self.world, self.interaction.highlighted_entities());
+        for hit_entity in highlighted {
             ret.extend(draw_item_outline(
                 asset_cache,
                 &self.physics,
