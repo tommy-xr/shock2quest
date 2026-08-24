@@ -216,8 +216,9 @@ pub(crate) fn create_flat_hud(
     canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
 }
 
-/// Whether the wielded weapon may cycle ammo (empty, with 2+ selectable
-/// projectile types). Uses the same predicate as `cycle_ammo`.
+/// Whether the wielded weapon may cycle ammo (2+ selectable projectile types,
+/// and a magazine that can be ejected if it is loaded). Uses the same predicate
+/// as `cycle_ammo`.
 pub(crate) fn can_cycle_wielded_ammo(world: &World) -> bool {
     let Some(weapon) = crate::wielded_weapon::wielded_weapon(world) else {
         return false;
@@ -228,9 +229,10 @@ pub(crate) fn can_cycle_wielded_ammo(world: &World) -> bool {
 /// The single source of truth for whether the AMMOFULL ammo-cycle button is
 /// shown/active this frame - used for BOTH rendering (via `create_flat_hud`'s
 /// `can_cycle_ammo`) and pointer hit-testing (`mission_core`), so the drawn and
-/// clickable regions never diverge. Requires use mode, a wielded gun with a
-/// empty clip, 2+ ammo types, and no psi-amp display (which replaces the ammo
-/// section - `build_flat_hud_canvas`'s psi-power early return).
+/// clickable regions never diverge. Requires use mode, a wielded gun that may
+/// cycle (2+ ammo types, and an ejectable magazine when loaded), and no psi-amp
+/// display (which replaces the ammo section - `build_flat_hud_canvas`'s
+/// psi-power early return).
 pub(crate) fn ammo_cycle_button_visible(world: &World, use_mode: bool) -> bool {
     use_mode
         && get_wielded_psi_power(world).is_none()

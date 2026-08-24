@@ -7,6 +7,7 @@ import { fireOnce } from "./helpers/weapon.js";
 // End-to-end regression test for ammo-type cycling (InputAction::CycleAmmo). The
 // pistol carries three Projectile links (std / he / ap); cycling advances the
 // selected one and wraps. Observable headlessly via /v1/info.wielded_ammo_type.
+// What a cycle does to a LOADED magazine is weapon-ammo-eject's subject.
 //
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
@@ -23,7 +24,7 @@ function ammoOf(detail: { properties: { name: string; value: string }[] }): numb
 }
 
 test(
-  "cycling requires an empty magazine, then advances and wraps",
+  "cycling advances the selected ammo type and wraps",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -42,13 +43,11 @@ test(
     const pistolId = (await game.info()).player.wielded_entity_id;
     assert.ok(pistolId !== null, "pistol should be wielded");
 
-    // A loaded magazine has an established projectile identity. Cycling it
-    // would otherwise turn standard rounds into AP/HE for free.
+    // Cycling a LOADED magazine ejects it to the backpack first, which is
+    // weapon-ammo-eject's subject. This test is about the selection ORDER, so
+    // fire the magazine off and cycle from empty.
     const loaded = ammoOf(await game.entities.detail(pistolId));
     assert.ok(loaded > 0, "debug pistol starts loaded");
-    await game.input.trigger("CycleAmmo");
-    await game.step({ frames: 2 });
-    assert.equal(await ammoType(game), "std", "loaded pistol cannot change ammo type");
     for (let i = 0; i < loaded; i++) await fireOnce(game);
     assert.equal(ammoOf(await game.entities.detail(pistolId)), 0, "pistol is empty");
 
