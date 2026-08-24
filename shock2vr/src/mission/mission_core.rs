@@ -263,6 +263,55 @@ fn latch_trigger_safe(
     effective
 }
 
+/// Which held entities are being released onto the cyber interface's inventory
+/// strip this frame, and so belong in the backpack rather than on the floor.
+///
+/// `VirtualHand` knows exactly one release: opening the hand ejects the item as
+/// a loose world prop, and offers it to whatever the release raycast hit (that
+/// is how a physical container is fed). The strip cannot be hit by that ray -
+/// it is a head-anchored UI quad with no collider - so a release over it would
+/// otherwise land the item on the floor in front of the player. This turns that
+/// release into the deposit the player meant.
+///
+/// Pure, so the rule is exercised directly rather than through a mission.
+fn strip_deposit_entities(
+    on_strip: [bool; 2],
+    held: [Option<EntityId>; 2],
+    releasing: [bool; 2],
+) -> Vec<EntityId> {
+    (0..held.len())
+        .filter(|&slot| on_strip[slot] && releasing[slot])
+        .filter_map(|slot| held[slot])
+        .collect()
+}
+
+/// Take the world-drop half out of a release that [`strip_deposit_entities`]
+/// claimed as a deposit.
+///
+/// Two effects have to go. `DropItem` is the world drop itself - it restores
+/// the item's world refs and rebuilds its physics body, which is the very
+/// outcome the deposit replaces. And `ProvideForConsumption` is the offer the
+/// hand makes to whatever its release raycast hit: because the panel is not
+/// physical that ray reaches straight through it, so a container standing
+/// behind the interface would otherwise take the item as well and the deposit
+/// would land twice. Everything else the hand emitted this frame is untouched.
+fn suppress_world_drop(effects: &mut Vec<VirtualHandEffect>, deposits: &[EntityId]) {
+    if deposits.is_empty() {
+        return;
+    }
+    effects.retain(|effect| match effect {
+        VirtualHandEffect::DropItem { entity_id } => !deposits.contains(entity_id),
+        VirtualHandEffect::OutMessage {
+            message:
+                Message {
+                    payload: MessagePayload::ProvideForConsumption { entity },
+                    ..
+                },
+        } => !deposits.contains(entity),
+        _ => true,
+    });
+}
+
 /// Head-relative authored-space placement for the wide VR backpack canvas.
 /// After `SCALE_FACTOR` conversion this is 2 world units forward and 1.2 up.
 /// The shared canvas keeps its authored pixels; the physical VR boundary
@@ -2693,9 +2742,19 @@ impl MissionCore {
         let (left_hand_held, right_hand_held) = self.interaction.held_entities();
         let hand_empty = [left_hand_held.is_none(), right_hand_held.is_none()];
         let mut on_panel = [false; 2];
+        // The strip specifically, for the release-deposit below: the rest of
+        // the canvas is not a drop target, so a release there stays an
+        // ordinary world drop.
+        let mut on_strip = [false; 2];
         if let Some(pass) = self.vr_use_mode_pointer.as_ref() {
-            for ray in pass.rays.iter().filter(|ray| ray.canvas_hit.is_some()) {
+            for ray in pass.rays.iter() {
+                let Some(canvas_hit) = ray.canvas_hit else {
+                    continue;
+                };
                 on_panel[hand_slot(ray.handedness)] = true;
+                if self.use_mode && self.flat_ui.strip_contains(canvas_hit) {
+                    on_strip[hand_slot(ray.handedness)] = true;
+                }
             }
         }
         let squeezing = [
@@ -2761,9 +2820,36 @@ impl MissionCore {
         });
         let hands_input = weapon_safe_input.as_ref().unwrap_or(input_context);
 
+        // Opening a hand over the inventory strip puts the item in the
+        // backpack instead of on the floor. Decided from the input the hands
+        // are about to see, so the release this claims is exactly the release
+        // `VirtualHand` performs. (A hand that is holding something never has
+        // its squeeze swallowed - `update_squeeze_swallow` drops the latch the
+        // moment the hand is full - so this cannot fire on a masked squeeze.)
+        // Resolved up front: without a backpack to deposit into there is
+        // nothing to claim, and the ordinary world drop must stay intact
+        // rather than be suppressed into an item that goes nowhere.
+        let player_inventory = self
+            .world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .map(|player| player.inventory_entity_id)
+            .ok();
+        let strip_deposits = player_inventory
+            .map(|_| {
+                strip_deposit_entities(
+                    on_strip,
+                    [left_hand_held, right_hand_held],
+                    [
+                        hands_input.left_hand.squeeze_value < crate::ui::VR_TRIGGER_THRESHOLD,
+                        hands_input.right_hand.squeeze_value < crate::ui::VR_TRIGGER_THRESHOLD,
+                    ],
+                )
+            })
+            .unwrap_or_default();
+
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
-        let interaction_msgs = self.interaction.update(&InteractionContext {
+        let mut interaction_msgs = self.interaction.update(&InteractionContext {
             physics: &self.physics,
             world: &self.world,
             input: hands_input,
@@ -2772,7 +2858,11 @@ impl MissionCore {
             head_rotation: input_context.head.rotation,
             eye_height: crate::player_eye_height_for(self.player_handle.is_crouched()),
         });
+        suppress_world_drop(&mut interaction_msgs, &strip_deposits);
         self.process_virtual_hand_effects(asset_cache, interaction_msgs);
+        if let Some(inventory_entity) = player_inventory.filter(|_| !strip_deposits.is_empty()) {
+            effects.extend(self.strip_deposit_effects(inventory_entity, &strip_deposits));
+        }
 
         // Tag the wielded weapon with the flat camera/crosshair fire ray so its
         // firing scripts spawn projectiles along the crosshair (camera-origin
@@ -3784,6 +3874,55 @@ impl MissionCore {
             self.make_un_physical(dropped_entity_id);
         }
         moved
+    }
+
+    /// Put the items released onto the cyber interface's inventory strip into
+    /// the player's backpack (see [`strip_deposit_entities`]).
+    ///
+    /// Each one gets the `Drop` its release always owes it - the world-model
+    /// restore and psi-charge cancel that [`VirtualHandEffect::StoreItem`]
+    /// documents must precede storing a *held* item - and then the transfer
+    /// itself. A key source takes the panel's own exception: `PropKeySrc`
+    /// carries a runtime `internal_keycard` script whose Frob records the
+    /// credential, so moving the card bodily into the backpack would bank an
+    /// object that unlocks nothing (the same call `ContainerGui`'s `Take`
+    /// makes, on the same `is_key_source` predicate).
+    ///
+    /// No capacity check: `drop_entity_into_container` accepts into a full
+    /// pack, and this path deliberately does not change that.
+    fn strip_deposit_effects(
+        &self,
+        inventory_entity: EntityId,
+        deposits: &[EntityId],
+    ) -> Vec<Effect> {
+        deposits
+            .iter()
+            .flat_map(|entity_id| {
+                let entity_id = *entity_id;
+                let transfer = if crate::virtual_hand::is_key_source(&self.world, entity_id) {
+                    Effect::Send {
+                        msg: Message {
+                            payload: MessagePayload::Frob,
+                            to: entity_id,
+                        },
+                    }
+                } else {
+                    Effect::DropEntityInfo {
+                        parent_entity_id: inventory_entity,
+                        dropped_entity_id: entity_id,
+                    }
+                };
+                [
+                    Effect::Send {
+                        msg: Message {
+                            payload: MessagePayload::Drop,
+                            to: entity_id,
+                        },
+                    },
+                    transfer,
+                ]
+            })
+            .collect()
     }
 
     /// Re-encode the backpack's stored cells after effective Strength changes.
@@ -10634,6 +10773,135 @@ mod vr_trigger_safe_tests {
             latch_trigger_safe(&mut latched, BOTH, NEITHER),
             [true, false]
         );
+    }
+}
+
+#[cfg(test)]
+mod strip_deposit_tests {
+    use super::*;
+
+    const LEFT: usize = 0;
+
+    fn two_entities() -> (World, EntityId, EntityId) {
+        let mut world = World::new();
+        let item = world.add_entity(PropHasRefs(false));
+        let other = world.add_entity(PropHasRefs(false));
+        (world, item, other)
+    }
+
+    /// The bug: opening the hand over the inventory strip drops the item on
+    /// the floor, because the strip is a head-anchored UI quad with no
+    /// collider and `VirtualHand` only ever knows the world drop.
+    #[test]
+    fn a_release_over_the_strip_is_a_deposit() {
+        let (_world, item, _other) = two_entities();
+        assert_eq!(
+            strip_deposit_entities([true, false], [Some(item), None], [true, false]),
+            vec![item],
+            "a held item released with the hand on the strip belongs in the backpack"
+        );
+    }
+
+    /// Off the strip nothing changes: that release is still the ordinary
+    /// world drop, including feeding a physical container.
+    #[test]
+    fn a_release_off_the_strip_is_left_alone() {
+        let (_world, item, _other) = two_entities();
+        assert!(
+            strip_deposit_entities([false, false], [Some(item), None], [true, false]).is_empty()
+        );
+    }
+
+    /// Still squeezing is still holding - the deposit is the *release*.
+    #[test]
+    fn a_hand_still_holding_deposits_nothing() {
+        let (_world, item, _other) = two_entities();
+        assert!(
+            strip_deposit_entities([true, false], [Some(item), None], [false, false]).is_empty()
+        );
+    }
+
+    /// An empty hand sweeping the strip has nothing to deposit.
+    #[test]
+    fn an_empty_hand_deposits_nothing() {
+        assert!(strip_deposit_entities([true, true], [None, None], [true, true]).is_empty());
+    }
+
+    /// Each hand is judged on its own: one may deposit while the other drops.
+    #[test]
+    fn the_hands_deposit_independently() {
+        let (_world, item, other) = two_entities();
+        assert_eq!(
+            strip_deposit_entities([true, false], [Some(item), Some(other)], [true, true]),
+            vec![item],
+            "only the hand on the strip deposits"
+        );
+    }
+
+    /// The world-drop half of a claimed release has to go, or the item is
+    /// both banked and spawned as a loose prop.
+    #[test]
+    fn a_claimed_release_loses_its_world_drop() {
+        let (_world, item, other) = two_entities();
+        let mut effects = vec![
+            VirtualHandEffect::DropItem { entity_id: item },
+            VirtualHandEffect::DropItem { entity_id: other },
+        ];
+        suppress_world_drop(&mut effects, &[item]);
+        assert!(
+            matches!(effects.as_slice(), [VirtualHandEffect::DropItem { entity_id }] if *entity_id == other),
+            "only the deposited item's world drop is suppressed, got {effects:?}"
+        );
+    }
+
+    /// The panel is not physical, so the release raycast reaches straight
+    /// through it: a container standing behind the interface would take the
+    /// item too, and the deposit would land twice.
+    #[test]
+    fn a_claimed_release_loses_its_consumption_offer() {
+        let (_world, item, container) = two_entities();
+        let mut effects = vec![VirtualHandEffect::OutMessage {
+            message: Message {
+                to: container,
+                payload: MessagePayload::ProvideForConsumption { entity: item },
+            },
+        }];
+        suppress_world_drop(&mut effects, &[item]);
+        assert!(effects.is_empty(), "got {effects:?}");
+    }
+
+    /// Everything else the hand emitted this frame is none of this rule's
+    /// business - notably the `Hover` every frame carries.
+    #[test]
+    fn unrelated_hand_effects_survive() {
+        let (_world, item, other) = two_entities();
+        let mut effects = vec![
+            VirtualHandEffect::OutMessage {
+                message: Message {
+                    to: other,
+                    payload: MessagePayload::TriggerRelease,
+                },
+            },
+            VirtualHandEffect::HoldItem { entity_id: item },
+        ];
+        suppress_world_drop(&mut effects, &[item]);
+        assert_eq!(effects.len(), 2, "got {effects:?}");
+    }
+
+    /// With nothing claimed the frame is untouched, whatever it holds.
+    #[test]
+    fn an_unclaimed_frame_is_untouched() {
+        let (_world, item, _other) = two_entities();
+        let mut effects = vec![VirtualHandEffect::DropItem { entity_id: item }];
+        suppress_world_drop(&mut effects, &[]);
+        assert_eq!(effects.len(), 1);
+    }
+
+    /// `LEFT` is the slot the rest of this module indexes by, so the arrays
+    /// this rule reads cannot silently disagree with `hand_slot`.
+    #[test]
+    fn the_left_slot_matches_hand_slot() {
+        assert_eq!(hand_slot(crate::vr_config::Handedness::Left), LEFT);
     }
 }
 
