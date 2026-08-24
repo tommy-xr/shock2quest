@@ -1,7 +1,10 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
 use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, Zero, point3, vec3};
-use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
+use dark::{
+    SCALE_FACTOR,
+    properties::{FrobFlag, PropFrobInfo, PropModelName},
+};
 use engine::scene::SceneObject;
 use engine::script_log;
 
@@ -19,6 +22,12 @@ use crate::{
 };
 
 const HAND_OFFSET: Vector3<f32> = vec3(0.0, 0.0, 0.0);
+
+/// Maximum world-space distance from the hand/eye to a frob target's visible
+/// surface. Retail `shock2.gam` authors `GAMEPARAM.Frob Dist = 50`; the
+/// original `PickSetFocus` treats that as squared SS2 units, while this engine
+/// divides authored world geometry by [`SCALE_FACTOR`].
+pub(crate) const FROB_REACH: f32 = 7.071_068 / SCALE_FACTOR;
 
 #[derive(Clone)]
 pub struct VirtualHand {
@@ -673,7 +682,6 @@ fn interaction_ray_cast(
     forward: Vector3<f32>,
     entity_to_ignore: Option<EntityId>,
 ) -> Option<RayCastResult> {
-    const MAX_INTERACTION_DISTANCE: f32 = 100.0;
     let ordinary_groups = InternalCollisionGroups::ENTITIES
         | InternalCollisionGroups::SELECTABLE
         | InternalCollisionGroups::WORLD
@@ -681,7 +689,7 @@ fn interaction_ray_cast(
     let ui_hit = physics.ray_cast2(
         ray_start,
         forward,
-        MAX_INTERACTION_DISTANCE,
+        FROB_REACH,
         InternalCollisionGroups::UI,
         entity_to_ignore,
         true,
@@ -719,7 +727,7 @@ fn interaction_ray_cast(
             .ray_cast2(
                 ray_start,
                 forward,
-                MAX_INTERACTION_DISTANCE,
+                FROB_REACH,
                 ordinary_groups | InternalCollisionGroups::UI,
                 entity_to_ignore,
                 true,
@@ -1148,6 +1156,83 @@ mod tests {
         assert!(
             frobbed_second,
             "a new target under the hand must be Frobbed even though squeeze never released, got {effects:?}"
+        );
+    }
+
+    fn frob_fixture(distance: f32) -> (World, PhysicsWorld, EntityId) {
+        let mut world = World::new();
+        let target = world.add_entity(PropFrobInfo {
+            world_action: FrobFlag::SCRIPT,
+            inventory_action: FrobFlag::empty(),
+            tool_action: FrobFlag::empty(),
+        });
+        let mut physics = PhysicsWorld::new();
+        physics.add_kinematic(
+            target,
+            vec3(0.0, 0.0, -distance),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.2, 0.2, 0.2),
+            CollisionGroup::selectable(),
+            false,
+        );
+        let mut player = physics.create_player(
+            vec3(100.0, 100.0, 100.0),
+            EntityId::from_inner(1000).unwrap(),
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        (world, physics, target)
+    }
+
+    /// Retail `GAMEPARAM` authors `Frob Dist = 50`, which the original picker
+    /// treats as squared SS2 units. After this engine's 2.5 world-scale divide,
+    /// a surface farther than `sqrt(50) / 2.5` must not highlight or frob.
+    #[test]
+    fn vr_hand_only_frobs_within_retail_reach() {
+        let input = Hand {
+            trigger_value: 1.0,
+            ..Hand::default()
+        };
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+
+        let (far_world, far_physics, _) = frob_fixture(4.0);
+        let (far_hand, far_effects) = VirtualHand::update(
+            &VirtualHand::new(Handedness::Right),
+            &far_physics,
+            &far_world,
+            vec3(0.0, 0.0, 0.0),
+            identity,
+            &input,
+            None,
+        );
+        assert_eq!(far_hand.get_raytraced_entity(), None);
+        assert!(
+            far_effects.is_empty(),
+            "an out-of-reach VR trigger must not frob, got {far_effects:?}"
+        );
+
+        let (near_world, near_physics, near_target) = frob_fixture(2.5);
+        let (near_hand, near_effects) = VirtualHand::update(
+            &VirtualHand::new(Handedness::Right),
+            &near_physics,
+            &near_world,
+            vec3(0.0, 0.0, 0.0),
+            identity,
+            &input,
+            None,
+        );
+        assert_eq!(near_hand.get_raytraced_entity(), Some(near_target));
+        assert!(
+            near_effects.iter().any(|effect| matches!(
+                effect,
+                VirtualHandEffect::OutMessage {
+                    message: Message {
+                        to,
+                        payload: MessagePayload::Frob,
+                    },
+                } if *to == near_target
+            )),
+            "an in-reach VR trigger should preserve frob behavior, got {near_effects:?}"
         );
     }
 }

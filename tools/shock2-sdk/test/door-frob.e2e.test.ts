@@ -22,6 +22,15 @@ function distanceSquared(entity: EntitySummary, target: Vec3): number {
   );
 }
 
+async function distanceFromCamera(game: GameServer, point: Vec3): Promise<number> {
+  const { player } = await game.info();
+  return Math.hypot(
+    point[0] - player.position[0],
+    point[1] - (player.position[1] + player.camera_offset[1]),
+    point[2] - player.position[2],
+  );
+}
+
 test(
   "earth.mis: StdDoor Frob opens and closes its collider",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -61,9 +70,14 @@ test(
     const beforeBodies = (await game.physics.bodies({ entityId: door.id })).bodies;
     assert.equal(beforeBodies.length, 1, "the door should own one kinematic body");
 
-    const aim = await game.player.aimAt(door);
+    const aim = await game.player.aimAt(door, { visibility: "required" });
     assert.equal(aim.classification, "surface", JSON.stringify(aim));
     assert.equal(aim.entity_id, door.id);
+    assert.equal(aim.target_confirmed, true, JSON.stringify(aim));
+    assert.ok(
+      (await distanceFromCamera(game, aim.world_point)) < 2.83,
+      `closed door surface must be inside retail frob reach: ${JSON.stringify(aim)}`,
+    );
     await game.input.set("right_hand.squeeze_value", 1);
     await game.step({ frames: 2 });
     await game.input.set("right_hand.squeeze_value", 0);
@@ -80,7 +94,18 @@ test(
       "the kinematic collider must follow the opened door transform",
     );
 
-    await game.player.aimAt(door);
+    // The original staging point is over the recruitment-center pit once the
+    // leaf opens, so the player falls away during the one-second door motion.
+    // Restage just outside the open collider before testing the reverse frob.
+    await game.player.teleport({ x: 5.0, y: 24.0, z: 55.8 });
+    const openAim = await game.player.aimAt(door, { visibility: "required" });
+    assert.equal(openAim.classification, "surface", JSON.stringify(openAim));
+    assert.equal(openAim.entity_id, door.id);
+    assert.equal(openAim.target_confirmed, true, JSON.stringify(openAim));
+    assert.ok(
+      (await distanceFromCamera(game, openAim.world_point)) < 2.83,
+      `open door surface must be inside retail frob reach: ${JSON.stringify(openAim)}`,
+    );
     await game.input.set("right_hand.squeeze_value", 1);
     await game.step({ frames: 2 });
     await game.input.set("right_hand.squeeze_value", 0);

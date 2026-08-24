@@ -34,9 +34,10 @@ async function frobThroughReticle(
   entity: { id: number; position: [number, number, number] },
 ): Promise<void> {
   // This side of rec1's picture has an unobstructed selectable surface. The
-  // teleport only stages the player; aim and frob use production paths.
+  // teleport only stages the player inside retail frob reach; aim and frob
+  // use production paths.
   await game.player.teleport({
-    x: entity.position[0] + 3,
+    x: entity.position[0] + 2.5,
     y: entity.position[1] - 1,
     z: entity.position[2],
   });
