@@ -132,8 +132,9 @@ async function measureHeldContactOffset(game: GameServer): Promise<void> {
   const handWorld = add(bodies.player_position, qrotate(pawnRotation, local));
   // The visible dynamic body may be held back by world contact—that separation
   // is the feature under test. Measure the intended grip from its colliderless
-  // kinematic motor target instead (the nearest anonymous kinematic body to
-  // the hand), while every damage assertion below still uses the dynamic body.
+  // kinematic drive target instead - the nearest body with NO entity id, which
+  // is what distinguishes it from the weapon (the weapon is kinematic too since
+  // the swept drive, so body type alone no longer tells them apart).
   const driveTarget = bodies.bodies
     .filter(
       (candidate) =>
@@ -654,7 +655,8 @@ test(
     assert.equal(
       (await game.physics.bodies({ entityId: restoredWrench.id })).bodies[0]
         ?.body_type,
-      "dynamic",
+      "kinematic",
+      "a wielded melee weapon is the swept kinematic contact body",
     );
 
     const combatBaseline = `medsci_saved_vr_melee_combat_baseline_${stamp}`;

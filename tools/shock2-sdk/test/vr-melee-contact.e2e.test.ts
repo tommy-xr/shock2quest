@@ -132,19 +132,27 @@ test(
       true,
       "idle held-Wrench contact must remain harmless",
     );
-    const blockedWrench = (await game.physics.bodies({ entityId: wrench.id }))
+    const sweptWrench = (await game.physics.bodies({ entityId: wrench.id }))
       .bodies[0];
-    assert.ok(blockedWrench, "the held Wrench should retain its physics body");
+    assert.ok(sweptWrench, "the held Wrench should retain its physics body");
+    // The swept drive stops the weapon on WORLD geometry only. A breakable
+    // pane is an entity, and deliberately does not block: a swing has to
+    // travel *into* what it is hitting, and a pane you are meant to smash
+    // would otherwise stop the swing dead. So the weapon reaches its tracked
+    // target here - being harmless without the trigger is what the assertion
+    // above already proves.
+    //
+    // An earlier revision drove a fully dynamic body and asserted the
+    // opposite (that the pane held the weapon back). That drive spun the
+    // weapon out of the player's hand on any contact and was replaced.
     assert.ok(
-      blockedWrench.position[2] < pane.position[2] - 0.1,
-      `the physical Wrench should stop on the near side while its tracked target crosses the pane: ${JSON.stringify(blockedWrench)}`,
+      sweptWrench.position[2] > pane.position[2] - 0.1,
+      `the swept Wrench should reach its tracked target through a non-world pane: ${JSON.stringify(sweptWrench)}`,
     );
 
     // Leave contact, open the attack window with the production VR trigger,
     // then make a fresh controller-driven physics contact.
     await game.input.set("right_hand.position", HAND_REST);
-    // Unlike the old pose-teleported body, the physical weapon needs time to
-    // spring clear of the pane before Rapier can report the next contact edge.
     await game.step({ frames: 30 });
     const beforeAttack =
       (await game.messages.recent()).messages.at(-1)?.sequence ?? 0;
@@ -256,12 +264,12 @@ test(
     );
 
     // The actual regression: the restored weapon must still have a live,
-    // spring-driven contact body.
+    // swept contact body.
     const bodies = (await game.physics.bodies({ entityId: restoredWrench.id })).bodies;
     assert.equal(
       bodies[0]?.body_type,
-      "dynamic",
-      `a restored held melee weapon must keep its motor-driven contact body: ${JSON.stringify(bodies)}`,
+      "kinematic",
+      `a restored held melee weapon must keep its swept contact body: ${JSON.stringify(bodies)}`,
     );
 
     // ...and it must still actually damage an authored one-HP pane.
@@ -335,8 +343,8 @@ test(
     assert.equal(afterRejectedGrab.player.right_hand_entity_id, wrench.id);
     assert.equal(
       (await game.physics.bodies({ entityId: wrench.id })).bodies[0]?.body_type,
-      "dynamic",
-      "a rejected second-hand grab must leave the live spring-driven melee body intact",
+      "kinematic",
+      "a rejected second-hand grab must leave the live swept melee body intact",
     );
 
     await game.input.set("left_hand.squeeze", 0);
