@@ -447,6 +447,25 @@ pub fn create_entity_core(
                 })
             })
     };
+    // `Rad Burst` is the persistent corpse effect spawned by a destroyed
+    // radioactive barrel. Its radius source is ambient (no explosion push),
+    // and must refresh the player's authored Radiate receptron while in range.
+    let has_radiation_source = {
+        let v_links = world.borrow::<View<Links>>().unwrap();
+        v_links.get(entity_id).is_ok_and(|links| {
+            links.to_links.iter().any(|link| {
+                link.to_template_id
+                    == crate::scripts::internal_radiation_source::RADIATION_STIM_TEMPLATE_ID
+                    && matches!(
+                        link.link,
+                        Link::StimSource(StimSourceOptions {
+                            propagator: StimPropagator::Radius { .. },
+                            ..
+                        })
+                    )
+            })
+        })
+    };
     // Release the property views before add_component below needs the world
     // mutably; nothing after this point reads them.
     drop(v_scripts);
@@ -463,6 +482,8 @@ pub fn create_entity_core(
         // (has_fired) is not persisted, so a saved mid-animation explosion
         // would re-detonate on every load.
         world.add_component(entity_id, RuntimePropDoNotSerialize);
+    } else if has_radiation_source {
+        processed_scripts.push("internal_radiation_source".to_owned());
     }
 
     // ...and remove any duplicates!

@@ -296,6 +296,7 @@ pub fn load_mission_from_save_data(
 ) -> (Mission, HashMap<String, EntitySaveData>) {
     let current_mission = save_data.global_data.active_mission.clone();
     let active_healing = save_data.global_data.active_healing.clone();
+    let active_radiation = save_data.global_data.active_radiation.clone();
 
     let populator: Box<dyn EntityPopulator> = {
         if let Some(save_data) = save_data
@@ -336,6 +337,13 @@ pub fn load_mission_from_save_data(
         .borrow::<shipyard::UniqueViewMut<crate::scripts::healing_item::ActiveHealing>>()
     {
         *healing = active_healing;
+    }
+    if let Ok(mut radiation) = active_mission
+        .mission_core
+        .world
+        .borrow::<shipyard::UniqueViewMut<crate::scripts::radiation::ActiveRadiation>>()
+    {
+        *radiation = active_radiation;
     }
 
     // A loaded mission rebuilds Rapier from scratch. Mark the restored player

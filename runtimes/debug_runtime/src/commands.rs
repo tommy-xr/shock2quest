@@ -761,6 +761,8 @@ pub struct PlayerInfo {
     /// no psi pool. See `shock2vr::PlayerStateSnapshot`.
     pub psi_points: Option<i32>,
     pub max_psi_points: Option<i32>,
+    /// Accumulated retail radiation level (0 when clear).
+    pub radiation_level: f32,
     /// The gamesys name of the selected psi power (what the psi amp casts),
     /// e.g. "Cryokinesis". Cycle with the `CyclePsiPower` input action.
     pub selected_psi_power: Option<String>,

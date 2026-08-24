@@ -33,6 +33,7 @@ pub mod internal_fast_projectile;
 mod internal_frob_move;
 mod internal_keycard_script;
 mod internal_nanites_script;
+pub(crate) mod internal_radiation_source;
 mod internal_simple_health;
 mod internal_switch_held_model;
 mod level_change_button;
@@ -46,6 +47,7 @@ pub mod player_script;
 mod psi_amp_script;
 mod psi_kit;
 mod put_bomb_in_replicator;
+pub mod radiation;
 mod reduce_psi;
 mod reroute_elevator_button;
 mod researchable;
@@ -126,6 +128,7 @@ use self::picture_swap::PictureSwap;
 use self::psi_amp_script::PsiAmpScript;
 use self::psi_kit::PsiKitScript;
 use self::put_bomb_in_replicator::PutBombInReplicator;
+use self::radiation::RadPatchScript;
 use self::reduce_psi::ReducePsi;
 use self::reroute_elevator_button::RerouteElevatorButton;
 use self::researchable::ResearchableScript;
@@ -154,6 +157,7 @@ use self::{
     internal_explosion::InternalExplosion,
     internal_keycard_script::KeyCardScript,
     internal_nanites_script::InternalNanitesScript,
+    internal_radiation_source::InternalRadiationSource,
     internal_simple_health::InternalSimpleHealth,
     level_change_button::LevelChangeButton,
     many_ride::{ParalyzePlayers, SitDownRightNow, StandUpAgain, WhiteOut},
@@ -943,6 +947,7 @@ impl ScriptWorld {
             "internal_media" => gui_script(Box::new(MediaGui)),
             // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
             "internal_explosion" => Box::new(InternalExplosion::new()),
+            "internal_radiation_source" => Box::new(InternalRadiationSource),
             "internal_frob_move" => Box::new(InternalFrobMove::new()),
             "internal_keycard" => Box::new(KeyCardScript::new()),
             "internal_nanites" => Box::new(InternalNanitesScript::new()),
@@ -1064,7 +1069,7 @@ impl ScriptWorld {
             "expcookie" => Box::new(ExpCookie::new()), // cyber modules
             "medkitscript" => Box::new(HealingItemScript::new(HealingItemKind::MedicalKit)),
             "speedpatch" => Box::new(UnimplementedScript::new(&script_name)), // speed boost
-            "radpatch" => Box::new(UnimplementedScript::new(&script_name)),   // speed boost
+            "radpatch" => Box::new(RadPatchScript),
             "autoinstallsoft" => Box::new(AutoInstallSoft::new()), // auto install software
             "strboost" => Box::new(UnimplementedScript::new(&script_name)), // strength boost
             "intboost" => Box::new(UnimplementedScript::new(&script_name)),
