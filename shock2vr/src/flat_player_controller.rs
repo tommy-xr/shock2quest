@@ -286,9 +286,11 @@ fn out_message(to: EntityId, payload: MessagePayload) -> VirtualHandEffect {
     }
 }
 
-/// Whether an entity is worth highlighting / interacting with (it has frob
-/// info), which excludes plain world geometry the ray also hits.
-fn is_frobbable(world: &World, entity_id: EntityId) -> bool {
+/// Whether an entity is worth *interacting* with (it has frob info), which
+/// excludes plain world geometry the ray also hits. Note this is not the
+/// highlight test: whether the HUD draws brackets over the pick is a separate,
+/// data-driven question answered by `hud::is_hud_selectable` (`P$HUDSelect`).
+pub(crate) fn is_frobbable(world: &World, entity_id: EntityId) -> bool {
     world
         .borrow::<View<PropFrobInfo>>()
         .map(|v| v.get(entity_id).is_ok())

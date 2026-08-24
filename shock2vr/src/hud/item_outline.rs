@@ -2,12 +2,33 @@ use cgmath::{Matrix4, Vector2, point2, vec2, vec3};
 use collision::{Aabb2, Aabb3};
 use dark::{
     importers::{FONT_IMPORTER, TEXTURE_IMPORTER},
-    properties::{PropHitPoints, PropObjName, PropStackCount, PropTemplateId},
+    properties::{PropHUDSelect, PropHitPoints, PropObjName, PropStackCount, PropTemplateId},
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
 use shipyard::{EntityId, Get, View, World};
 
 use crate::physics::PhysicsWorld;
+
+/// Whether the highlight overlay (corner brackets + rollover name) may be
+/// drawn for `entity_id`.
+///
+/// The original gates the overlay on an opt-in "HUD Selectable?" boolean
+/// (`P$HUDSelect`) rather than on frobbability: the shipped data marks the
+/// families the player is meant to be able to pick out of the scene (weapons,
+/// creatures, loot) `true`, and marks fixed set dressing that is nevertheless
+/// frobbable - the `Tech` family of consoles, force-field emitters and
+/// speakers - explicitly `false`. An object with no `P$HUDSelect` at all
+/// (inheritance-resolved) is *not* highlighted.
+///
+/// This deliberately says nothing about whether the object can be *frobbed*:
+/// frob eligibility stays `P$FrobInfo`-based, so a console with no
+/// `P$HUDSelect` still uses/hacks normally, it just draws no brackets.
+pub(crate) fn is_hud_selectable(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<PropHUDSelect>>()
+        .map(|v| v.get(entity_id).map(|p| p.0).unwrap_or(false))
+        .unwrap_or(false)
+}
 
 fn format_stack_aware_item_name(item_name: &str, stack_count: Option<i32>) -> String {
     match stack_count {
@@ -96,7 +117,60 @@ pub fn draw_item_name(
 
 #[cfg(test)]
 mod tests {
-    use super::format_stack_aware_item_name;
+    use super::*;
+    use crate::flat_player_controller::is_frobbable;
+    use dark::properties::{FrobFlag, PropFrobInfo};
+
+    fn frob_info() -> PropFrobInfo {
+        PropFrobInfo {
+            world_action: FrobFlag::SCRIPT,
+            inventory_action: FrobFlag::empty(),
+            tool_action: FrobFlag::empty(),
+        }
+    }
+
+    /// The false positive this gate removes, and the invariant that makes it
+    /// safe: an object can be frobbable and still not highlightable. A `Tech`
+    /// console keeps working when you use it, it just stops drawing brackets.
+    #[test]
+    fn frobbable_without_hud_select_is_not_highlighted() {
+        let mut world = World::new();
+        let id = world.add_entity(frob_info());
+
+        assert!(is_frobbable(&world, id), "frob eligibility is unchanged");
+        assert!(!is_hud_selectable(&world, id));
+    }
+
+    #[test]
+    fn hud_select_true_is_highlighted() {
+        let mut world = World::new();
+        let id = world.add_entity(frob_info());
+        world.add_component(id, PropHUDSelect(true));
+        assert!(is_hud_selectable(&world, id));
+    }
+
+    /// The shipped `Tech` family sets `P$HUDSelect` explicitly false; an
+    /// explicit false is as unhighlightable as an absent property, and is
+    /// likewise still frobbable.
+    #[test]
+    fn hud_select_false_is_not_highlighted_but_stays_frobbable() {
+        let mut world = World::new();
+        let id = world.add_entity(frob_info());
+        world.add_component(id, PropHUDSelect(false));
+
+        assert!(is_frobbable(&world, id), "frob eligibility is unchanged");
+        assert!(!is_hud_selectable(&world, id));
+    }
+
+    /// Plain world geometry - no frob info, no `P$HUDSelect` - is neither.
+    #[test]
+    fn world_geometry_is_neither_frobbable_nor_highlighted() {
+        let mut world = World::new();
+        let id = world.add_entity(PropHitPoints { hit_points: 1 });
+
+        assert!(!is_frobbable(&world, id));
+        assert!(!is_hud_selectable(&world, id));
+    }
 
     #[test]
     fn stack_count_replaces_object_name_decimal_placeholder() {
