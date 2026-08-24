@@ -171,7 +171,8 @@ impl InputAction {
         }
     }
 
-    /// Production Meta Quest Touch binding for the two player-owned panels.
+    /// Production Meta Quest Touch binding for the player-owned panels and the
+    /// weapon-handling actions.
     /// Keeping these paths beside their semantic actions makes the Oculus
     /// mapping host-testable even though that runtime only compiles for Android.
     pub fn quest_touch_click_path(&self) -> Option<&'static str> {
@@ -183,6 +184,10 @@ impl InputAction {
             // The right controller's menu button is reserved by the Quest
             // system UI; the left one is the app's.
             InputAction::TogglePauseMenu => Some("/user/hand/left/input/menu/click"),
+            // The right controller holds the gun, so its two face buttons own
+            // the two gun-handling actions - A reloads, B swaps ammo type.
+            InputAction::Reload => Some("/user/hand/right/input/a/click"),
+            InputAction::CycleAmmo => Some("/user/hand/right/input/b/click"),
             _ => None,
         }
     }
@@ -255,6 +260,30 @@ mod tests {
             InputAction::TogglePauseMenu.quest_touch_click_path(),
             Some("/user/hand/left/input/menu/click")
         );
+    }
+
+    #[test]
+    fn quest_touch_assigns_the_right_face_buttons_to_gun_handling() {
+        assert_eq!(
+            InputAction::Reload.quest_touch_click_path(),
+            Some("/user/hand/right/input/a/click")
+        );
+        assert_eq!(
+            InputAction::CycleAmmo.quest_touch_click_path(),
+            Some("/user/hand/right/input/b/click")
+        );
+    }
+
+    #[test]
+    fn quest_touch_click_paths_are_unique() {
+        let mut paths: Vec<&'static str> = InputAction::all()
+            .iter()
+            .filter_map(|action| action.quest_touch_click_path())
+            .collect();
+        let total = paths.len();
+        paths.sort_unstable();
+        paths.dedup();
+        assert_eq!(paths.len(), total, "two actions share a Quest binding");
     }
 
     #[test]

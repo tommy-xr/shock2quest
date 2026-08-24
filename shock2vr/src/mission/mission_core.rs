@@ -4764,7 +4764,8 @@ impl MissionCore {
                     // Whichever hand holds the gun - the input action is not
                     // hand-specific (see `crate::wielded_weapon`).
                     if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world) {
-                        self.begin_reload(weapon);
+                        let cue = self.begin_reload(weapon);
+                        effects.push_back(cue);
                     }
                 }
 
@@ -7002,7 +7003,13 @@ impl MissionCore {
     /// time (`PropBaseGunDesc.reload_time_ms`). No-op for non-guns (no
     /// `PropBaseGunDesc`), while a reload is already in progress, or when no
     /// compatible reserve rounds are available.
-    fn begin_reload(&mut self, weapon: EntityId) {
+    ///
+    /// Returns the reload's audible cue (the weapon's schema "reload" event),
+    /// or `Effect::NoEffect` when nothing was reloaded. The cue is what tells a
+    /// VR player the reload started at all: the pitch animation below is a
+    /// first-person viewmodel tilt, which a hand-held VR weapon never shows.
+    #[must_use]
+    fn begin_reload(&mut self, weapon: EntityId) -> Effect {
         // Sensible fallbacks used only when a gun has no PropPlayerGun at all, so
         // the reload is still visible.
         const FALLBACK_PEAK_DEG: f32 = -45.0;
@@ -7024,12 +7031,12 @@ impl MissionCore {
                 .borrow::<View<dark::properties::PropBaseGunDesc>>();
             match v_desc.as_ref().ok().and_then(|v| v.get(weapon).ok()) {
                 Some(d) => (d.clip, d.reload_time_ms as f32 / 1000.0),
-                None => return,
+                None => return Effect::NoEffect,
             }
         };
         if let Ok(v) = self.world.borrow::<View<RuntimePropReloading>>() {
             if v.get(weapon).is_ok_and(|r| !r.is_done()) {
-                return;
+                return Effect::NoEffect;
             }
         }
 
@@ -7058,7 +7065,7 @@ impl MissionCore {
         // backpack. Multiple small stacks may contribute to one magazine.
         let reload = crate::mission::reload::load_from_reserve(&self.world, weapon, clip);
         if reload.rounds_loaded == 0 {
-            return;
+            return Effect::NoEffect;
         }
         for item in reload.depleted_items {
             self.interaction.on_entity_destroyed(item);
@@ -7077,6 +7084,18 @@ impl MissionCore {
                 peak_deg,
             },
         );
+
+        // Audible confirmation the reload began, from the weapon's own sound
+        // schema (the "reload" event, resolved from its class tags exactly like
+        // "shoot"/"dryfire"). Best-effort: a weapon with no matching schema
+        // simply stays silent.
+        crate::scripts::script_util::play_environmental_sound(
+            &self.world,
+            weapon,
+            "reload",
+            vec![],
+            AudioHandle::new(),
+        )
     }
 
     /// Cycle `weapon` to its next ammo type (next `Projectile` link). No-op when
