@@ -37,7 +37,7 @@ use super::{
 
 /// A wrench-scale fitted melee volume. The body origin sits on the rendered
 /// weapon head and the fitted cuboid extends back over the handle, which is
-/// what production builds via `fit_held_melee_cuboid`; the offset, elongated
+/// what production builds via `fit_held_item_cuboid`; the offset, elongated
 /// shape is the inertia-awkward case a drive has to hold.
 const WEAPON_HALF_EXTENTS: Vector3<f32> = Vector3::new(0.045, 0.30, 0.045);
 const WEAPON_COLLIDER_CENTER: Vector3<f32> = Vector3::new(0.0, -0.30, 0.0);
@@ -126,8 +126,8 @@ fn spawn_held_wrench(world: &mut PhysicsWorld, at: Vector3<f32>) -> (EntityId, R
         false,
         DynamicPhysicsOptions::default(),
     );
-    world.set_held_melee(weapon);
-    world.fit_held_melee_cuboid(weapon, WEAPON_HALF_EXTENTS * 2.0, WEAPON_COLLIDER_CENTER);
+    world.set_held_item_physical(weapon);
+    world.fit_held_item_cuboid(weapon, WEAPON_HALF_EXTENTS * 2.0, WEAPON_COLLIDER_CENTER);
     (weapon, handle)
 }
 

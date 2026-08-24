@@ -5645,7 +5645,7 @@ impl MissionCore {
                         // too - otherwise a weapon equipped this way is held
                         // without a collider and never reports contacts.
                         if self.is_vr_melee_weapon(entity_id) {
-                            self.attach_held_melee_physics(entity_id);
+                            self.attach_held_item_physics(entity_id);
                         }
 
                         // Let the scripts know we are now holding the item..
@@ -6067,7 +6067,7 @@ impl MissionCore {
                                                         "wield '{model_name}': baked arm unmeasured"
                                                     ),
                                                 }
-                                                self.physics.fit_held_melee_cuboid(
+                                                self.physics.fit_held_item_cuboid(
                                                     entity_id,
                                                     bounds.size,
                                                     bounds.center,
@@ -8228,7 +8228,7 @@ impl MissionCore {
                         // contacts. A joint motor drives its dynamic body
                         // toward the tracked hand while world contact can hold
                         // the rendered weapon back.
-                        self.attach_held_melee_physics(entity_id);
+                        self.attach_held_item_physics(entity_id);
                     } else {
                         self.make_un_physical(entity_id);
                     }
@@ -8318,9 +8318,9 @@ impl MissionCore {
     /// Give a held melee weapon the contact body the VR damage window needs.
     /// Idempotent: `make_physical` no-ops when the body already exists, so this
     /// is safe on both a fresh grab and a restore.
-    fn attach_held_melee_physics(&mut self, entity_id: EntityId) {
+    fn attach_held_item_physics(&mut self, entity_id: EntityId) {
         self.make_physical(entity_id);
-        self.physics.set_held_melee(entity_id);
+        self.physics.set_held_item_physical(entity_id);
     }
 
     /// Queue an entity to be triggered after scripts are initialized
@@ -8771,7 +8771,7 @@ fn restore_held_item_physics(
     entity_id: EntityId,
 ) {
     if is_vr_melee_weapon(world, entity_id) {
-        physics.set_held_melee(entity_id);
+        physics.set_held_item_physical(entity_id);
     } else {
         make_un_physical2(id_to_physics, physics, entity_id);
     }
