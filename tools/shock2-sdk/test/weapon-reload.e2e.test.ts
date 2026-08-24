@@ -114,13 +114,9 @@ test(
       6,
       "reload stops once the magazine is full",
     );
-    await game.input.trigger("CycleAmmo");
-    await game.step({ frames: 2 });
-    assert.equal(
-      (await game.info()).player.wielded_ammo_type,
-      "std",
-      "loaded standard rounds cannot be converted to another ammo type",
-    );
+    // (What a cycle does to this full magazine - eject it back to reserve
+    // rather than convert it - is weapon-ammo-eject's subject; leave the
+    // magazine alone here so the reserve accounting below stays readable.)
 
     // Let the fire-gating animation finish, then exercise a partial reload.
     await game.step({ frames: 130 });

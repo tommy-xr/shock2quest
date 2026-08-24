@@ -162,7 +162,7 @@ test(
 );
 
 test(
-  "a VR-held empty pistol cycles through its ammo types",
+  "a VR-held pistol cycles through its ammo types",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" },
   async () => {
     await using game = await GameServer.launch({
@@ -175,20 +175,20 @@ test(
     const pistol = await grabPistol(game);
     assert.equal((await game.info()).player.wielded_ammo_type, "std");
 
-    // Loaded rounds have an established projectile identity, so cycling is
-    // refused until the magazine is empty.
+    // The first swap is made on a LOADED gun, which ejects the magazine back
+    // to the backpack rather than converting it (weapon-ammo-eject covers where
+    // the rounds land; here it just has to work from the VR hand).
+    assert.ok(ammoOf(await game.entities.detail(pistol.id)) > 0, "the pistol starts loaded");
     await game.input.trigger("CycleAmmo");
     await game.step({ frames: 2 });
     assert.equal(
-      (await game.info()).player.wielded_ammo_type,
-      "std",
-      "a loaded VR-held pistol cannot change ammo type",
+      ammoOf(await game.entities.detail(pistol.id)),
+      0,
+      "swapping ammo type ejects the magazine",
     );
 
-    await emptyTheMagazine(game, pistol);
-
-    const sequence: (string | null)[] = [];
-    for (let i = 0; i < 3; i += 1) {
+    const sequence: (string | null)[] = [(await game.info()).player.wielded_ammo_type];
+    for (let i = 0; i < 2; i += 1) {
       await game.input.trigger("CycleAmmo");
       await game.step({ frames: 2 });
       sequence.push((await game.info()).player.wielded_ammo_type);
