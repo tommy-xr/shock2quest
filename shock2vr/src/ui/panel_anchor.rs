@@ -142,9 +142,7 @@ impl PanelPlacement {
 /// endpoints are exactly `from` and `to`.
 fn lerp_placement(from: PanelPlacement, to: PanelPlacement, t: f32) -> PanelPlacement {
     let t = t.clamp(0.0, 1.0);
-    // Smoothstep: no velocity discontinuity at either end, which is what makes
-    // the re-placement read as a move rather than a jump.
-    let s = t * t * (3.0 - 2.0 * t);
+    let s = crate::util::smoothstep(t);
     let head_position = from.head_position + (to.head_position - from.head_position) * s;
     // Turn along the shortest arc at a constant rate. Blending the direction
     // vectors instead would stall near the start of a half-turn and snap

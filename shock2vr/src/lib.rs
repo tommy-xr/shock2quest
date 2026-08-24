@@ -16,6 +16,7 @@ pub mod time;
 pub mod career;
 mod creature;
 pub mod data_files;
+pub mod death_camera;
 pub mod dev_params;
 mod flat_player_controller;
 mod gui;
@@ -1882,6 +1883,30 @@ impl Game {
         physics::player_eye_cap_above_center(self.active_game_scene.player_is_crouched())
     }
 
+    /// Fold the death camera into the camera a runtime is about to render
+    /// from. Every runtime resolves its own tracked head pose - the flat ones
+    /// from [`Game::player_eye_height`] plus their look rotation, the VR one
+    /// from the OpenXR view pose - then routes it through here on the way into
+    /// `EngineRenderContext`, so the fall to the floor is decided once for both
+    /// presentations instead of once per runtime (AGENTS.md section 3).
+    ///
+    /// While the player is alive this returns its inputs verbatim.
+    pub fn resolve_camera(
+        &self,
+        pawn_position: Vector3<f32>,
+        pawn_rotation: Quaternion<f32>,
+        tracked_head_offset: Vector3<f32>,
+        tracked_head_rotation: Quaternion<f32>,
+    ) -> death_camera::CameraPose {
+        death_camera::resolve(
+            pawn_position,
+            pawn_rotation,
+            tracked_head_offset,
+            tracked_head_rotation,
+            self.active_game_scene.death_camera(),
+        )
+    }
+
     pub fn render(&mut self) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         let (mut scene, pos, rot) = self
             .active_game_scene
@@ -2293,6 +2318,32 @@ impl App {
         match self {
             App::Ready(game) => game.player_eye_cap_above_center(),
             App::MissingAssets(_) => physics::player_eye_cap_above_center(false),
+        }
+    }
+
+    /// See [`Game::resolve_camera`]. The missing-assets screen has no player
+    /// to kill, so it renders from the tracked camera unchanged.
+    pub fn resolve_camera(
+        &self,
+        pawn_position: Vector3<f32>,
+        pawn_rotation: Quaternion<f32>,
+        tracked_head_offset: Vector3<f32>,
+        tracked_head_rotation: Quaternion<f32>,
+    ) -> death_camera::CameraPose {
+        match self {
+            App::Ready(game) => game.resolve_camera(
+                pawn_position,
+                pawn_rotation,
+                tracked_head_offset,
+                tracked_head_rotation,
+            ),
+            // Nothing here can die, so the tracked camera IS the camera.
+            App::MissingAssets(_) => death_camera::CameraPose {
+                pawn_position,
+                pawn_rotation,
+                head_offset: tracked_head_offset,
+                head_rotation: tracked_head_rotation,
+            },
         }
     }
 }

@@ -1178,6 +1178,13 @@ fn main() {
 
         // Render to each eye
         let time = now.elapsed().as_secs_f32();
+        // The midpoint of the two eyes: what the death camera resolves from, so
+        // it cannot pull the eyes together (see `render_swapchain`).
+        let head_centre_stage = vec3(
+            (views[0].pose.position.x + views[1].pose.position.x) / 2.0,
+            (views[0].pose.position.y + views[1].pose.position.y) / 2.0,
+            (views[0].pose.position.z + views[1].pose.position.z) / 2.0,
+        );
         let (left_eye_elapsed, _) = render_swapchain(
             &mut game,
             &engine,
@@ -1186,6 +1193,7 @@ fn main() {
             &swapchain[0],
             time,
             &views[0],
+            head_centre_stage,
             true,
             &scene,
             false,
@@ -1198,6 +1206,7 @@ fn main() {
             &swapchain[1],
             time,
             &views[1],
+            head_centre_stage,
             true,
             &scene,
             true,
@@ -1230,6 +1239,24 @@ fn main() {
             xr_frame_state.predicted_display_time,
             environment_blend_mode,
             &[
+                // The TRACKED pose, even while the death camera is rendering
+                // from somewhere else entirely. This looks like a bug and is
+                // not: reprojection warps a submitted frame toward the real
+                // head pose at display time, so declaring "this frame was
+                // rendered from down on the floor, on its side" makes the
+                // compositor correct out precisely the displacement the death
+                // camera just introduced. Measured on a Quest 3: submitting the
+                // rendered pose drags the image out of the display frustum and
+                // the fraction of non-black pixels falls 0.83 -> 0.00 (left)
+                // and 0.13 (right) as the fall lands, then holds there for the
+                // whole death window - a black screen for the entire death.
+                // With the tracked pose the same death renders correctly
+                // (0.74-0.75, symmetric, holds to game-over).
+                //
+                // The cost is a small reprojection seam at the image edge
+                // during the 0.9 s fall, when rendered and tracked poses
+                // disagree most. That is the accepted trade: a fraction of a
+                // second of edge artifact, against a three-second blackout.
                 &xr::CompositionLayerProjection::new().space(&stage).views(&[
                     xr::CompositionLayerProjectionView::new()
                         .pose(views[0].pose)
@@ -1579,6 +1606,9 @@ fn render_swapchain(
     swapchain: &Swapchain,
     time: f32,
     view: &xr::View,
+    // Midpoint of the two eyes in STAGE space. The death camera resolves from
+    // the head centre, never per eye - see the comment on `camera` below.
+    head_centre_stage: Vector3<f32>,
     _log: bool,
     scene: &Vec<SceneObject>,
     is_last: bool,
@@ -1625,18 +1655,25 @@ fn render_swapchain(
     );
     let projection_matrix = create_projection_matrix(&view.fov, 0.1, 1000.);
     let screen_size = vec2(width as f32, height as f32);
-    let render_context = engine::EngineRenderContext {
-        time,
-        camera_offset: camera_pos,
-        camera_rotation: camera_rot,
-
-        head_offset,
+    // Routed through `resolve_camera` rather than used directly: while the
+    // player is dying the game blends this tracked pose toward the fallen death
+    // pose, once, for every runtime (see `shock2vr::death_camera`) - so the fall
+    // reads the same in VR as it does flat. Alive, it hands back exactly what
+    // went in.
+    //
+    // Resolved from the HEAD CENTRE, not from this eye. The fallen target is a
+    // single eye-independent point, so resolving per eye would walk both eyes
+    // onto it and collapse the IPD to zero over the fall - a stereo view going
+    // monoscopic while the horizon rolls. Instead the eye's own displacement is
+    // re-applied afterwards, carried into the fallen camera's frame so the eyes
+    // roll with the new horizon rather than staying level with the room.
+    let head_centre_pawn = stage_to_pawn(head_centre_stage, game.player_center_above_floor());
+    let camera = shock2vr::death_camera::reapply_eye_offset(
+        game.resolve_camera(camera_pos, camera_rot, head_centre_pawn, head_rotation),
+        head_offset - head_centre_pawn,
         head_rotation,
-
-        projection_matrix,
-
-        screen_size,
-    };
+    );
+    let render_context = camera.into_render_context(time, projection_matrix, screen_size);
 
     let view_matrix = engine::util::compute_view_matrix_from_render_context(&render_context);
     let mut all_scene_objs = game.render_per_eye(view_matrix, projection_matrix, screen_size);
