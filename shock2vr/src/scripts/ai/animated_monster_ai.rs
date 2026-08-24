@@ -1981,24 +1981,29 @@ mod tests {
             .collect()
     }
 
-    /// The shipped locomotion clips are per-half-step and author exactly one
-    /// foot-plant flag each, so a creature's walk cycle should hand the schema
-    /// one `event=footstep` query per foot, keyed by its creature type.
-    #[test]
-    fn a_foot_plant_frame_plays_a_footstep_for_the_creature_type() {
+    /// The effect a live hybrid returns when its animation crosses `flags`.
+    fn effect_of_animation_flags(flags: MotionFlags) -> Effect {
         let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
         let physics = PhysicsWorld::new();
         let mut monster = AnimatedMonsterAI::new();
         monster.initialize(entity_id, &world);
 
-        let effect = monster.handle_message(
+        monster.handle_message(
             entity_id,
             &world,
             &physics,
             &MessagePayload::AnimationFlagTriggered {
-                motion_flags: MotionFlags::LEFT_FOOT_STEP,
+                motion_flags: flags,
             },
-        );
+        )
+    }
+
+    /// The shipped locomotion clips are per-half-step and author exactly one
+    /// foot-plant flag each, so a creature's walk cycle should hand the schema
+    /// one `event=footstep` query per foot, keyed by its creature type.
+    #[test]
+    fn a_foot_plant_frame_plays_a_footstep_for_the_creature_type() {
+        let effect = effect_of_animation_flags(MotionFlags::LEFT_FOOT_STEP);
 
         let queries = sound_queries(&effect);
         assert_eq!(queries.len(), 1, "one plant, one footstep: {queries:?}");
@@ -2017,19 +2022,7 @@ mod tests {
     /// query, they just alternate across the two half-step clips.
     #[test]
     fn the_right_foot_plants_too() {
-        let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
-        let physics = PhysicsWorld::new();
-        let mut monster = AnimatedMonsterAI::new();
-        monster.initialize(entity_id, &world);
-
-        let effect = monster.handle_message(
-            entity_id,
-            &world,
-            &physics,
-            &MessagePayload::AnimationFlagTriggered {
-                motion_flags: MotionFlags::RIGHT_FOOT_STEP,
-            },
-        );
+        let effect = effect_of_animation_flags(MotionFlags::RIGHT_FOOT_STEP);
 
         assert_eq!(sound_queries(&effect).len(), 1);
     }
@@ -2038,19 +2031,7 @@ mod tests {
     /// frame of a creature turns into a footstep.
     #[test]
     fn a_non_foot_flag_plays_no_footstep() {
-        let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
-        let physics = PhysicsWorld::new();
-        let mut monster = AnimatedMonsterAI::new();
-        monster.initialize(entity_id, &world);
-
-        let effect = monster.handle_message(
-            entity_id,
-            &world,
-            &physics,
-            &MessagePayload::AnimationFlagTriggered {
-                motion_flags: MotionFlags::INTERRUPTIBLE,
-            },
-        );
+        let effect = effect_of_animation_flags(MotionFlags::INTERRUPTIBLE);
 
         assert!(sound_queries(&effect).is_empty());
     }
