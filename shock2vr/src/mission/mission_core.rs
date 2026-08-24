@@ -7111,9 +7111,24 @@ impl MissionCore {
         if !crate::scripts::script_util::can_cycle_ammo(&self.world, weapon) {
             return;
         }
-        let ejected = crate::mission::reload::unload_to_reserve(&self.world, weapon);
-        if let Some((clip_template, rounds)) = ejected.spawn_clip {
+        if let Some((clip_template, rounds)) =
+            crate::mission::reload::unload_to_reserve(&self.world, weapon).spawn_clip
+        {
             self.give_ejected_clip(asset_cache, weapon, clip_template, rounds);
+        }
+        // The switch is earned by an empty magazine, never assumed. Every way an
+        // eject can fall short - the fresh clip refused by the backpack, a
+        // borrow that did not come through - leaves rounds loaded, and switching
+        // then would convert them to the next type for free, which is the exact
+        // thing this ejection exists to prevent.
+        let still_loaded = self
+            .world
+            .borrow::<View<dark::properties::PropGunState>>()
+            .ok()
+            .and_then(|states| states.get(weapon).ok().map(|state| state.ammo > 0))
+            .unwrap_or(false);
+        if still_loaded {
+            return;
         }
         let count =
             crate::scripts::script_util::ordered_projectile_links(&self.world, weapon).len();
@@ -7131,8 +7146,9 @@ impl MissionCore {
     /// an ejection [`reload::unload_to_reserve`] cannot do itself, since
     /// instantiating an entity needs the entity creator.
     ///
-    /// If the fresh clip cannot be carried the rounds go back into `weapon`
-    /// rather than vanishing, leaving the magazine exactly as it was.
+    /// The magazine is emptied only AFTER the fresh clip is genuinely carried,
+    /// so the rounds exist in exactly one place at every instant: a refused
+    /// clip simply leaves the weapon loaded and the swap unearned.
     fn give_ejected_clip(
         &mut self,
         asset_cache: &mut AssetCache,
@@ -7140,36 +7156,49 @@ impl MissionCore {
         clip_template: i32,
         rounds: i32,
     ) {
-        // Containment makes the clip non-physical immediately, so the spawn
-        // point is never observed - it only has to be valid for instantiation.
+        let entity_id = match self.spawn_into_backpack(asset_cache, clip_template) {
+            Ok(entity_id) => entity_id,
+            Err(e) => {
+                game_log!(WARN, "Ejected clip could not be carried: {e}");
+                return;
+            }
+        };
+        // The archetype carries its authored stack size; this clip holds
+        // exactly what came out of the magazine.
+        self.world
+            .add_component(entity_id, dark::properties::PropStackCount(rounds));
+        crate::mission::reload::empty_magazine(&self.world, weapon);
+    }
+
+    /// Instantiate `template_id` and route it through the ordinary pickup path
+    /// into the backpack, destroying it again if it is refused so a failure
+    /// leaves nothing behind.
+    ///
+    /// Spawned at the player's position: containment makes the item
+    /// non-physical immediately, so the spawn point is never observed - it just
+    /// has to be somewhere valid for instantiation.
+    fn spawn_into_backpack(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        template_id: i32,
+    ) -> Result<EntityId, String> {
         let (position, rotation) = {
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             (vec3_to_point3(player.pos), player.rotation)
         };
         let info = self.create_entity_with_position(
             asset_cache,
-            clip_template,
+            template_id,
             position,
             rotation,
             Matrix4::identity(),
             CreateEntityOptions::default(),
         );
-        // The archetype carries its authored stack size; this clip holds
-        // exactly what came out of the magazine.
-        self.world
-            .add_component(info.entity_id, dark::properties::PropStackCount(rounds));
         if let Err(e) = self.give_item(info.entity_id) {
-            game_log!(WARN, "Ejected clip could not be carried: {e}");
             self.destroy_entity(info.entity_id);
-            if let Ok(mut states) = self
-                .world
-                .borrow::<ViewMut<dark::properties::PropGunState>>()
-            {
-                if let Ok(state) = (&mut states).get(weapon) {
-                    state.ammo = rounds;
-                }
-            }
+            return Err(e);
         }
+        Ok(info.entity_id)
     }
 
     /// Advance any in-progress reload by `dt` and clear it when complete.
@@ -9893,37 +9922,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             return Err(format!("unknown template id {}", template_id));
         }
 
-        // Spawn at the player's position: containment immediately makes the
-        // item non-physical, so the spawn point is never observed - it just has
-        // to be somewhere valid for instantiation.
-        let (position, rotation) = {
-            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-            (vec3_to_point3(player.pos), player.rotation)
-        };
-        let info = self.create_entity_with_position(
-            asset_cache,
-            template_id,
-            position,
-            rotation,
-            Matrix4::identity(),
-            CreateEntityOptions::default(),
-        );
-        let entity_id = info.entity_id;
-
-        // Route the fresh entity through the very same pickup path as an item
-        // found in the world, so provisioning inherits its eligibility rule:
-        // only genuine pickup items land in the backpack. A creature or door
-        // template is rejected here - and destroyed again, so a refused request
-        // leaves nothing behind.
-        if let Err(e) = self.give_item(entity_id) {
-            self.destroy_entity(entity_id);
-            // Report the template, not the entity: the instance is gone, and the
-            // caller never saw its id.
-            return Err(format!(
-                "template {} is not a pickup item ({})",
-                template_id, e
-            ));
-        }
+        // Provisioning inherits the ordinary pickup path's eligibility rule:
+        // only genuine pickup items land in the backpack, so a creature or door
+        // template is refused here. Report the TEMPLATE, not the entity - the
+        // instance is gone again and the caller never saw its id.
+        let entity_id = self
+            .spawn_into_backpack(asset_cache, template_id)
+            .map_err(|e| format!("template {} is not a pickup item ({})", template_id, e))?;
 
         let name = self
             .world

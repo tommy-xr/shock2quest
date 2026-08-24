@@ -24,6 +24,10 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 /** The pistol's standard clip - the archetype an ejected std magazine becomes. */
 const STD_CLIP = -31;
+/** The Assault Rifle's *first* authored standard clip, which is the SMALL one -
+ * the reverse of the pistol's preference, and the case that catches an eject
+ * minting a family-wide default instead of the weapon's own authored choice. */
+const SMALL_STD_CLIP = -1358;
 
 function propOf(
   detail: { properties: { name: string; value: string }[] },
@@ -45,14 +49,22 @@ function stackOf(detail: { properties: { name: string; value: string }[] }): num
   return value;
 }
 
-/** Every standard clip the player is carrying, by runtime id. */
-async function carriedStandardClips(game: GameServer): Promise<EntitySummary[]> {
+/** Every carried clip of `template`, by runtime id. */
+async function carriedClips(
+  game: GameServer,
+  template: number,
+): Promise<EntitySummary[]> {
   const carried = new Set(
     (await game.player.inventory()).items.map((item) => item.entity_id),
   );
   return (await game.entities.list()).entities.filter(
-    (entity) => entity.template_id === STD_CLIP && carried.has(entity.id),
+    (entity) => entity.template_id === template && carried.has(entity.id),
   );
+}
+
+/** Every standard clip the player is carrying, by runtime id. */
+async function carriedStandardClips(game: GameServer): Promise<EntitySummary[]> {
+  return carriedClips(game, STD_CLIP);
 }
 
 /** Total standard rounds held in reserve (across however many stacks). */
@@ -146,5 +158,49 @@ test(
 
     // (Save/load of the selection an eject leaves behind is `weapon-reload`'s,
     // on earth.mis - debug scenes have no serializable level to save into.)
+  },
+);
+
+test(
+  "the ejected clip is the weapon's own authored archetype, not a family default",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    // The pistol's standard bullet authors [Standard Clip, Small Standard Clip];
+    // the ASSAULT RIFLE's authors those two the other way round. Each weapon's
+    // own first choice must win, so an eject that reached for a shared family
+    // default - or that let an inherited relation outrank the projectile's own -
+    // would mint the wrong archetype here while still looking right for the
+    // pistol.
+    await using game = await GameServer.launch({
+      mission: "debug_weapons",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8415),
+    });
+
+    await game.step({ frames: 5 });
+    // DebugCycleWeapon's roster is Pistol, then Assault Rifle.
+    await game.input.trigger("DebugCycleWeapon");
+    await game.step({ frames: 5 });
+    await game.input.trigger("DebugCycleWeapon");
+    await game.step({ frames: 5 });
+
+    const rifle = (await game.info()).player.wielded_entity_id;
+    assert.ok(rifle !== null, "the assault rifle should be wielded");
+    assert.equal((await game.info()).player.wielded_ammo_type, "std");
+    const loaded = ammoOf(await game.entities.detail(rifle));
+    assert.ok(loaded > 0, "the debug assault rifle starts loaded");
+
+    await game.input.trigger("CycleAmmo");
+    await game.step({ frames: 2 });
+    assert.equal(ammoOf(await game.entities.detail(rifle)), 0, "the magazine was ejected");
+
+    const small = await carriedClips(game, SMALL_STD_CLIP);
+    const full = await carriedClips(game, STD_CLIP);
+    assert.equal(
+      full.length,
+      0,
+      "the pistol's full-size Standard Clip is NOT the assault rifle's choice",
+    );
+    assert.equal(small.length, 1, "the assault rifle ejects into its own Small Standard Clip");
+    assert.equal(stackOf(await game.entities.detail(small[0].id)), loaded);
   },
 );
