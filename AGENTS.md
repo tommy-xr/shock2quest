@@ -65,6 +65,36 @@ interaction, deterministic fixed-timestep), assembles the GIF, hosts the
 binaries in a gist, and embeds them in the PR body. Run the capture in a
 subagent when the active agent supports delegation; otherwise run it inline.
 
+### 5. Token-Efficient Tool Output
+
+A 30-day audit of agent sessions (the `audit-our-commands` skill) showed most
+tool-result tokens go to *reading habits*, not to game tooling — `sed`-paging
+source files (much of it re-paging files already read that session), whole-file
+reads, wide greps, and full diffs. The debug runtime's HTTP responses and
+`dark_query` are already cheap. Rules, ranked by measured savings:
+
+- **Outline before paging any file over ~800 lines.** Grep its structure first
+  (`grep -nE '^\s*(pub )?(fn|struct|impl|enum|trait)' <file>`), then make one
+  targeted Read with `offset`/`limit` at the section you need. Don't page
+  through a large file in serial `sed -n 'A,Bp'` windows — on `mission_core.rs`
+  an outline is ~30x smaller than the file, and serial paging tends to re-fetch
+  the same regions.
+- **Never re-read what is already in context.** Repeat Reads of the same path,
+  repeat searches, and `cat` followed by `cat -n` of the same file measured at
+  ~6% of all tool-result tokens. If you saved a diff/log to a file yourself,
+  grep it for what you need — don't page your own dump back into context.
+- **`git diff --stat` first.** Only after the stat, diff the specific files you
+  care about. Never `git diff | head -1200`-style truncation — you pay for the
+  head and still might not see the file you needed.
+- **Keep greps narrow.** `-A/-B/-C` context and unanchored patterns are where
+  grep cost concentrates; scope by path and tighten the pattern before adding
+  context lines. Never `grep -n "" file` as a substitute for reading a range.
+  If the `rtk` proxy is installed, `rtk grep` is a large win for deliberately
+  wide greps (it caps at 200 hits / 80-char lines, so don't use it when the
+  exact hit count or long lines matter, and skip it for small greps — it's
+  measurably worse there). Do **not** use `rtk git diff` for review — it drops
+  hunks.
+
 ## Project Documentation
 
 ### Essential Reading
