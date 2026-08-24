@@ -126,7 +126,7 @@ test(
 
     // Entity ids do not survive the reload; find the restored pile by name.
     const carried = (await game.player.inventory()).items;
-    const pile = carried.find((item) => item.name?.includes("Nanites"));
+    const pile = carried.find((item) => item.name === NANITE_PILE);
     assert.ok(pile, `the reloaded backpack must still hold the pile: ${JSON.stringify(carried)}`);
 
     await game.input.trigger("ToggleUseMode");
