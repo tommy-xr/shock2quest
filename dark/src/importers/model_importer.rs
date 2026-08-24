@@ -225,9 +225,40 @@ fn split_at_terminal_joint(
         .partition(|vertex| rigid_joint(vertex) == Some(terminal_joint))
 }
 
+/// The weapon-only geometry of an LGMD first-person model (the 25AE gun `_h`
+/// meshes, and any classic world model wielded as-is).
+///
+/// These carry no skeleton of their own: the "joints" are the sub-object
+/// hierarchy, which is how a slide or a magazine moves, and the renderer poses
+/// them through exactly the skeleton [`ss2_bin_obj_loader::build_skeleton`]
+/// builds. The weapon/arm split is by material rather than by terminal joint -
+/// a gun's arm is not a joint, it is `ND-arm*` geometry that can ride any
+/// sub-object (see [`is_first_person_arm_material`]).
+fn obj_weapon_geometry(obj: &SystemShock2ObjectMesh) -> Option<VrHeldWeaponGeometry> {
+    let mut vertices = Vec::new();
+    let mut arm_vertices = Vec::new();
+    for (material, run) in ss2_bin_obj_loader::to_vertices_by_material(obj) {
+        if is_first_person_arm_material(&material) {
+            arm_vertices.extend(run);
+        } else {
+            vertices.extend(run);
+        }
+    }
+
+    (!vertices.is_empty()).then(|| VrHeldWeaponGeometry {
+        vertices,
+        arm_vertices,
+        skeleton: Rc::new(ss2_bin_obj_loader::build_skeleton(obj)),
+        bind: None,
+    })
+}
+
 fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometry> {
     let SystemShockContentModel::Mesh(ai_mesh, skeleton, pmnm) = mesh else {
-        return None;
+        let SystemShockContentModel::Obj(obj) = mesh else {
+            return None;
+        };
+        return obj_weapon_geometry(obj);
     };
 
     if let Some(pmnm) = pmnm {

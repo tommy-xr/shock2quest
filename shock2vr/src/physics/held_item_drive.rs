@@ -126,7 +126,7 @@ fn spawn_held_wrench(world: &mut PhysicsWorld, at: Vector3<f32>) -> (EntityId, R
         false,
         DynamicPhysicsOptions::default(),
     );
-    world.set_held_item_physical(weapon);
+    world.set_held_item_physical(weapon, CollisionGroup::held_melee());
     world.fit_held_item_cuboid(weapon, WEAPON_HALF_EXTENTS * 2.0, WEAPON_COLLIDER_CENTER);
     (weapon, handle)
 }

@@ -999,6 +999,14 @@ pub struct DebugOptions {
 #[derive(Unique, Clone, Copy)]
 pub struct GlobalPresentationMode(pub crate::PresentationMode);
 
+/// Whether `--experimental physical_held_items` is on: a VR-held gun keeps a
+/// swept body, like a held melee weapon, so it stops at the level's geometry
+/// instead of passing through it. Accessible from the paths that establish
+/// held-item physics without `GameOptions` in hand (the restore path, the
+/// virtual-hand effects).
+#[derive(Unique, Clone, Copy)]
+pub struct GlobalPhysicalHeldItems(pub bool);
+
 /// Pathfinding service accessible from scripts (steering strategies) via
 /// UniqueView. None when the mission has no AIPATH data (e.g. debug scenes).
 #[derive(Unique, Clone)]
@@ -1455,6 +1463,11 @@ impl MissionCore {
             debug_ai: game_options.debug_ai,
         });
         world.add_unique(GlobalPresentationMode(game_options.presentation_mode));
+        world.add_unique(GlobalPhysicalHeldItems(
+            game_options
+                .experimental_features
+                .contains("physical_held_items"),
+        ));
         let template_class_tags = create_template_class_tag_map(&entity_info_rc);
         world.add_unique(GlobalTemplateClassTags(template_class_tags));
         world.add_unique(
@@ -5641,11 +5654,11 @@ impl MissionCore {
                     if self.interaction.is_holding(entity_id) {
                         // A grab routed through this effect (equip a carried
                         // weapon, a backpack double-click) never emits
-                        // `HoldItem`, so establish the melee contact body here
-                        // too - otherwise a weapon equipped this way is held
-                        // without a collider and never reports contacts.
-                        if self.is_vr_melee_weapon(entity_id) {
-                            self.attach_held_item_physics(entity_id);
+                        // `HoldItem`, so establish the held body here too -
+                        // otherwise a weapon equipped this way is held without
+                        // a collider and never reports contacts.
+                        if let Some(group) = self.held_item_collision_group(entity_id) {
+                            self.attach_held_item_physics(entity_id, group);
                         }
 
                         // Let the scripts know we are now holding the item..
@@ -6091,6 +6104,51 @@ impl MissionCore {
                             }
                         } else if was_vr_held && !new_model.is_animated() {
                             self.id_to_animation_player.remove(&entity_id);
+                        }
+
+                        // A physically held gun (`physical_held_items`) is
+                        // swept against the level with a cuboid fitted to the
+                        // *rendered* view model, exactly as a melee weapon is.
+                        // Without this it would keep the loose-prop box, which
+                        // is the size of the WORLD model and centred on the
+                        // grip rather than on the barrel - so the weapon would
+                        // stop at the wrong distance from a wall, in both
+                        // directions. Guns author no grip correction (their
+                        // offset moves the entity, not the mesh), so model
+                        // space is the body's own frame and the fit needs no
+                        // transform. Melee took its own fit above, with the
+                        // posed arm's correction.
+                        let is_physical_gun = vr_held
+                            && !is_vr_melee_weapon(&self.world, entity_id)
+                            && self.interaction.is_holding(entity_id)
+                            && self.held_item_collision_group(entity_id).is_some();
+                        if is_physical_gun {
+                            // The same player the model is rendered with, so
+                            // the fit measures the pose the player sees.
+                            let player = self
+                                .id_to_animation_player
+                                .get(&entity_id)
+                                .cloned()
+                                .unwrap_or_else(AnimationPlayer::empty);
+                            if let Some(bounds) = vr_held_source.as_ref().and_then(|source| {
+                                source.posed_weapon_bounds(&player, Matrix4::identity())
+                            }) {
+                                let cm = crate::METERS_PER_WORLD_UNIT * 100.0;
+                                tracing::info!(
+                                    "wield '{model_name}': rendered weapon {:.0}x{:.0}x{:.0} cm, center ({:.3}, {:.3}, {:.3})",
+                                    bounds.size.x * cm,
+                                    bounds.size.y * cm,
+                                    bounds.size.z * cm,
+                                    bounds.center.x,
+                                    bounds.center.y,
+                                    bounds.center.z,
+                                );
+                                self.physics.fit_held_item_cuboid(
+                                    entity_id,
+                                    bounds.size,
+                                    bounds.center,
+                                );
+                            }
                         }
                         self.id_to_model.insert(entity_id, new_model);
                         self.world
@@ -8222,13 +8280,13 @@ impl MissionCore {
                     );
                 }
                 VirtualHandEffect::HoldItem { entity_id } => {
-                    if self.is_vr_melee_weapon(entity_id) {
-                        // Held guns/items stay unphysical, but a VR melee
-                        // weapon needs its authored collider to report genuine
-                        // contacts. A joint motor drives its dynamic body
-                        // toward the tracked hand while world contact can hold
-                        // the rendered weapon back.
-                        self.attach_held_item_physics(entity_id);
+                    // Most held items stay unphysical and pass through
+                    // everything. A VR melee weapon needs its collider to
+                    // report genuine contacts; with `physical_held_items` a
+                    // held gun keeps one too, purely so world geometry can
+                    // hold the rendered weapon back.
+                    if let Some(group) = self.held_item_collision_group(entity_id) {
+                        self.attach_held_item_physics(entity_id, group);
                     } else {
                         self.make_un_physical(entity_id);
                     }
@@ -8251,9 +8309,11 @@ impl MissionCore {
                     if !restore_live_entity_world_refs(&mut self.world, entity_id) {
                         continue;
                     }
-                    if self.is_vr_melee_weapon(entity_id) {
+                    if self.held_item_collision_group(entity_id).is_some() {
                         // Recreate from authored physics so the released item
-                        // is an ordinary dynamic, harmless loose prop again.
+                        // is an ordinary dynamic, harmless loose prop again -
+                        // the held body is a swept kinematic with a fitted
+                        // collider and must not survive the drop.
                         self.make_un_physical(entity_id);
                     }
                     // After the body is gone (so this writes the entity's
@@ -8272,8 +8332,10 @@ impl MissionCore {
         }
     }
 
-    fn is_vr_melee_weapon(&self, entity_id: EntityId) -> bool {
-        is_vr_melee_weapon(&self.world, entity_id)
+    /// The collision group this entity is held with, or `None` when it is
+    /// held with no body (see [`held_item_collision_group`]).
+    fn held_item_collision_group(&self, entity_id: EntityId) -> Option<CollisionGroup> {
+        held_item_collision_group(&self.world, entity_id)
     }
 
     /// Undo a computed grip offset before a released item becomes a loose prop
@@ -8315,12 +8377,13 @@ impl MissionCore {
         self.set_entity_position_rotation(entity_id, hand, rotation, vec3(1.0, 1.0, 1.0));
     }
 
-    /// Give a held melee weapon the contact body the VR damage window needs.
-    /// Idempotent: `make_physical` no-ops when the body already exists, so this
-    /// is safe on both a fresh grab and a restore.
-    fn attach_held_item_physics(&mut self, entity_id: EntityId) {
+    /// Give a held item the swept body its wield needs - the contact volume a
+    /// melee weapon damages with, or the inert one that keeps a gun out of the
+    /// level's geometry. Idempotent: `make_physical` no-ops when the body
+    /// already exists, so this is safe on both a fresh grab and a restore.
+    fn attach_held_item_physics(&mut self, entity_id: EntityId, group: CollisionGroup) {
         self.make_physical(entity_id);
-        self.physics.set_held_item_physical(entity_id);
+        self.physics.set_held_item_physical(entity_id, group);
     }
 
     /// Queue an entity to be triggered after scripts are initialized
@@ -8757,6 +8820,34 @@ pub fn is_vr_melee_weapon(world: &World, entity_id: EntityId) -> bool {
             .is_ok_and(|limb_models| limb_models.get(entity_id).is_ok())
 }
 
+/// How this entity behaves physically while held in a VR hand, or `None` if it
+/// is held with no body at all (which is what every held item did before the
+/// melee weapons needed contacts).
+///
+/// Two cases, and the difference is what the body is *for*:
+/// - a melee weapon's body is its damage volume, so it must generate contacts;
+/// - a gun's body only has to stop the weapon travelling into the level, so it
+///   takes part in no collision at all (see [`CollisionGroup::held_inert`]).
+///   Opt-in, because a weapon the world can hold back is a change to how
+///   aiming and firing feel, not just to how the wield looks.
+pub fn held_item_collision_group(world: &World, entity_id: EntityId) -> Option<CollisionGroup> {
+    if is_vr_melee_weapon(world, entity_id) {
+        return Some(CollisionGroup::held_melee());
+    }
+
+    let is_vr = world
+        .borrow::<UniqueView<GlobalPresentationMode>>()
+        .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr);
+    let physical_held_items = world
+        .borrow::<UniqueView<GlobalPhysicalHeldItems>>()
+        .is_ok_and(|enabled| enabled.0);
+    let is_gun = world
+        .borrow::<View<dark::properties::PropPlayerGun>>()
+        .is_ok_and(|guns| guns.get(entity_id).is_ok());
+
+    (is_vr && physical_held_items && is_gun).then(CollisionGroup::held_inert)
+}
+
 /// Physics for an item restored into a hand by save/load or a level change.
 ///
 /// The restore path cannot reuse `VirtualHandEffect::HoldItem` - only a fresh
@@ -8770,10 +8861,9 @@ fn restore_held_item_physics(
     physics: &mut PhysicsWorld,
     entity_id: EntityId,
 ) {
-    if is_vr_melee_weapon(world, entity_id) {
-        physics.set_held_item_physical(entity_id);
-    } else {
-        make_un_physical2(id_to_physics, physics, entity_id);
+    match held_item_collision_group(world, entity_id) {
+        Some(group) => physics.set_held_item_physical(entity_id, group),
+        None => make_un_physical2(id_to_physics, physics, entity_id),
     }
 }
 
@@ -11644,5 +11734,84 @@ impl crate::game_scene::GameScene for MissionCore {
 
     fn wants_pointer(&self) -> bool {
         self.wants_pointer()
+    }
+}
+
+#[cfg(test)]
+mod held_item_physics_tests {
+    use super::*;
+    use dark::properties::{PropLimbModel, PropPlayerGun};
+
+    fn world_with(mode: crate::PresentationMode, physical_held_items: bool) -> World {
+        let world = World::new();
+        world.add_unique(GlobalPresentationMode(mode));
+        world.add_unique(GlobalPhysicalHeldItems(physical_held_items));
+        world
+    }
+
+    fn gun(world: &mut World) -> EntityId {
+        world.add_entity((PropPlayerGun {
+            flags: 0,
+            hand_model: "atek_h".to_owned(),
+            icon_file: String::new(),
+            model_offset: cgmath::Vector3::new(0.0, 0.0, 0.0),
+            fire_offset: cgmath::Vector3::new(0.0, 0.0, 0.0),
+            heading: 0,
+            reload_pitch: 0,
+            reload_rate: 0,
+            gun_type: 0,
+        },))
+    }
+
+    fn melee(world: &mut World) -> EntityId {
+        world.add_entity((PropLimbModel("wrench_h".to_owned()),))
+    }
+
+    /// The shipped behavior: a VR-held gun has no body at all, so it passes
+    /// through the level exactly as it always has.
+    #[test]
+    fn a_held_gun_is_unphysical_without_the_experimental_flag() {
+        let mut world = world_with(crate::PresentationMode::Vr, false);
+        let gun = gun(&mut world);
+
+        assert!(held_item_collision_group(&world, gun).is_none());
+    }
+
+    /// With the flag, it gets a body - and an *inert* one: the point is world
+    /// geometry holding the weapon back, not the weapon touching anything.
+    #[test]
+    fn a_held_gun_takes_an_inert_body_with_the_experimental_flag() {
+        let mut world = world_with(crate::PresentationMode::Vr, true);
+        let gun = gun(&mut world);
+
+        let group =
+            held_item_collision_group(&world, gun).expect("a held gun should take a swept body");
+        assert!(group.is_inert(), "a held gun must not generate contacts");
+    }
+
+    /// A melee weapon is unaffected by the flag in either direction: its body
+    /// is its damage volume and must keep reporting contacts.
+    #[test]
+    fn a_held_melee_weapon_keeps_its_contact_body_either_way() {
+        for physical_held_items in [false, true] {
+            let mut world = world_with(crate::PresentationMode::Vr, physical_held_items);
+            let wrench = melee(&mut world);
+
+            let group = held_item_collision_group(&world, wrench)
+                .expect("a held melee weapon always takes a contact body");
+            assert!(!group.is_inert());
+        }
+    }
+
+    /// Flat swings and flat shots are raycasts against the world; nothing in
+    /// the flat presentation wants a body in the player's hand.
+    #[test]
+    fn nothing_is_held_physically_in_the_flat_presentation() {
+        let mut world = world_with(crate::PresentationMode::Flat, true);
+        let gun = gun(&mut world);
+        let wrench = melee(&mut world);
+
+        assert!(held_item_collision_group(&world, gun).is_none());
+        assert!(held_item_collision_group(&world, wrench).is_none());
     }
 }

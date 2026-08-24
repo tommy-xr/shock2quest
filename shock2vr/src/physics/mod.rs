@@ -2018,6 +2018,32 @@ impl CollisionGroup {
         CollisionGroup { collision, solver }
     }
 
+    /// A held item that must only stop passing through the level: it takes
+    /// part in no collision at all.
+    ///
+    /// The swept drive stops a held item at world geometry through its own
+    /// query (see `held_item_sweep_fraction`), which does not consult the
+    /// body's groups - so an item whose *only* requirement is "don't go into
+    /// the wall" needs no memberships and no filter. That is deliberately
+    /// stronger than a narrow filter for a held gun: with no membership it is
+    /// also invisible to the projectile raycast, which starts inside the
+    /// weapon's own barrel (`internal_fast_projectile`) and would otherwise
+    /// report a hit on the gun in the player's hand at distance zero, and
+    /// nothing spawned at the muzzle - a grenade, say - can be shoved by it.
+    pub fn held_inert() -> CollisionGroup {
+        Self::solid(InteractionGroups {
+            memberships: Group::empty(),
+            filter: Group::empty(),
+            test_mode: Default::default(),
+        })
+    }
+
+    /// Whether this group takes part in no collision at all
+    /// ([`Self::held_inert`]).
+    pub fn is_inert(&self) -> bool {
+        self.collision.memberships.is_empty() && self.collision.filter.is_empty()
+    }
+
     /// Collision behavior for a living creature capsule. It collides exactly
     /// like an ordinary physical entity, but its distinct membership lets
     /// interaction-only fixtures and unsimulated movable debris opt out of
@@ -2675,8 +2701,13 @@ impl PhysicsWorld {
         }
     }
 
-    /// Turn an existing loose-prop body into a swept kinematic contact shape
-    /// while a melee weapon is held in VR.
+    /// Turn an existing loose-prop body into a swept kinematic shape while the
+    /// item is held in VR, so it cannot travel through the level.
+    ///
+    /// `group` decides what the held body is to everything else: a melee
+    /// weapon takes [`CollisionGroup::held_melee`] (contacts, so the
+    /// trigger-gated damage script sees them), a merely physical held item
+    /// takes [`CollisionGroup::held_inert`].
     ///
     /// The hand pose drives an invisible kinematic target; each step the
     /// visible weapon is *shape-cast* from where it is toward that target and
@@ -2687,7 +2718,7 @@ impl PhysicsWorld {
     /// read as the weapon spinning out of the player's hand the moment it
     /// touched anything. A swept kinematic body cannot be spun by the solver,
     /// cannot tunnel, and still reports every contact.
-    pub fn set_held_item_physical(&mut self, entity_id: EntityId) {
+    pub fn set_held_item_physical(&mut self, entity_id: EntityId, group: CollisionGroup) {
         let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
             return;
         };
@@ -2729,7 +2760,7 @@ impl PhysicsWorld {
                 );
             }
         }
-        self.set_collision_group(entity_id, CollisionGroup::held_melee());
+        self.set_collision_group(entity_id, group);
     }
 
     /// Replace a held melee body's inherited loose-pickup box with the local
@@ -6016,7 +6047,7 @@ mod tests {
             DynamicPhysicsOptions::default(),
         );
 
-        world.set_held_item_physical(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         let body = world
             .debug_list_bodies()
@@ -6068,7 +6099,7 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_item_physical(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
         world.set_position_rotation2(weapon, vec3(-2.0, 1.0, 0.0), identity_quat());
         step(&mut world, &mut player, 1);
         world.set_position_rotation2(weapon, vec3(0.0, 1.0, 0.0), identity_quat());
@@ -6101,7 +6132,7 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_item_physical(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         let tracked_pose = vec3(3.0, 1.0, -4.0);
         world.set_position_rotation2(weapon, tracked_pose, identity_quat());
@@ -6135,7 +6166,7 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_item_physical(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
         world.set_position_rotation2(weapon, vec3(-1.0, 1.0, 0.0), identity_quat());
         step(&mut world, &mut player, 1);
         world.set_position_rotation2(weapon, vec3(1.0, 1.0, 0.0), identity_quat());
@@ -6157,6 +6188,121 @@ mod tests {
         );
     }
 
+    /// The `physical_held_items` case: a held gun only has to stop travelling
+    /// into the level, so it is held with no collision membership and no
+    /// filter at all. The sweep that stops it runs its own query, which does
+    /// not consult the body's groups - this is the test that says so, because
+    /// the whole design rests on it.
+    #[test]
+    fn an_inert_held_item_is_still_stopped_by_world_geometry() {
+        let (mut world, mut player) = world_with_floor();
+        world.add_collider(
+            EntityId::from_inner(2).unwrap(),
+            ColliderBuilder::cuboid(0.05, 1.0, 1.0)
+                .translation(vector![0.0, 1.0, 0.0])
+                .build(),
+        );
+        let gun = EntityId::from_inner(3).unwrap();
+        let handle = world.add_dynamic(
+            gun,
+            vec3(-1.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.4, 0.4, 0.4)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+        world.set_held_item_physical(gun, CollisionGroup::held_inert());
+        world.set_position_rotation2(gun, vec3(-1.0, 1.0, 0.0), identity_quat());
+        step(&mut world, &mut player, 1);
+        world.set_position_rotation2(gun, vec3(1.0, 1.0, 0.0), identity_quat());
+
+        step(&mut world, &mut player, 120);
+
+        let blocked_x = world.get_position(handle).unwrap().x;
+        assert!(
+            blocked_x < -0.20,
+            "an inert held item crossed the fixed wall instead of stopping: x={blocked_x}"
+        );
+
+        world.set_position_rotation2(gun, vec3(-1.0, 1.0, 0.0), identity_quat());
+        step(&mut world, &mut player, 60);
+        let returned_x = world.get_position(handle).unwrap().x;
+        assert!(
+            returned_x < -0.8,
+            "the item did not return once the target cleared the wall: x={returned_x}"
+        );
+    }
+
+    /// ...and it touches nothing while it does. A held gun swept through a
+    /// creature must report no contact: contact is what bills melee damage
+    /// (`TriggeredMeleeWeapon`), and a gun that bludgeons by touch would be a
+    /// nasty surprise from a change that is only about walls. The same sweep
+    /// with `held_melee` reports the contact (see
+    /// `held_melee_contacts_live_actor_without_solver_launch`).
+    #[test]
+    fn an_inert_held_item_touches_nothing_it_sweeps_through() {
+        let (mut world, mut player) = world_with_floor();
+        let gun = EntityId::from_inner(2).unwrap();
+        let actor = EntityId::from_inner(3).unwrap();
+
+        world.add_dynamic(
+            actor,
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Capsule {
+                height: 0.8,
+                radius: 0.4,
+            },
+            CollisionGroup::actor(),
+            false,
+            DynamicPhysicsOptions {
+                gravity_scale: 0.0,
+                restitution: 0.0,
+                friction: 0.0,
+            },
+        );
+        world.set_enabled_rotations(actor, false, false, false);
+        world.add_dynamic(
+            gun,
+            vec3(-2.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.3, 0.1, 0.1)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions {
+                gravity_scale: 0.0,
+                restitution: 0.0,
+                friction: 0.0,
+            },
+        );
+        world.set_held_item_physical(gun, CollisionGroup::held_inert());
+
+        world.set_position_rotation2(gun, vec3(-2.0, 1.0, 0.0), identity_quat());
+        step(&mut world, &mut player, 1);
+        world.set_position_rotation2(gun, vec3(0.0, 1.0, 0.0), identity_quat());
+        let mut events = Vec::new();
+        for _ in 0..30 {
+            let (_, mut frame_events) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+            events.append(&mut frame_events);
+        }
+
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                CollisionEvent::CollisionStarted {
+                    entity1_id,
+                    entity2_id,
+                    ..
+                } if *entity1_id == gun || *entity2_id == gun
+            )),
+            "an inert held item reported a contact"
+        );
+    }
+
     /// A player teleport moves the tracked stage, not the hand relative to the
     /// player. Carry both motor endpoints by the same delta so the weapon does
     /// not attempt to traverse the intervening level geometry.
@@ -6174,7 +6320,7 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_item_physical(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
         let target_handle = world.held_item_drives[&weapon_handle].target;
         let weapon_before = world.get_position(weapon_handle).unwrap();
         let target_before = world.get_position(target_handle).unwrap();
@@ -6210,7 +6356,7 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_item_physical(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         let rendered_size = vec3(0.24, 1.02, 0.18);
         let rendered_center = vec3(0.0, -0.51, 0.01);
@@ -6273,7 +6419,7 @@ mod tests {
                 friction: 0.0,
             },
         );
-        world.set_held_item_physical(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         // Seat the just-held body at its first tracked pose, establish the
         // broad phase, then put only the hand target beyond the actor. The
@@ -6355,7 +6501,7 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_item_physical(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
         let held_handle = world.entity_id_to_body[&weapon];
         let target_handle = world.held_item_drives[&held_handle].target;
         let held_collider = &world.collider_set[world.rigid_body_set[held_handle].colliders()[0]];
