@@ -25,6 +25,10 @@ const CLIP_OBJ = 249;
  * 636x121 on the shared 640x480 canvas, so this is comfortably inside it. */
 const STRIP_CANVAS: [number, number] = [320, 60];
 
+/** On the panel but well below the strip: the boundary the rule narrows to,
+ * and the case a ray aimed off the panel entirely cannot cover. */
+const BELOW_STRIP_CANVAS: [number, number] = [320, 400];
+
 async function launchWithHeldClip(port: number): Promise<{
   game: GameServer;
   clip: EntitySummary;
@@ -160,6 +164,102 @@ test(
     assert.ok(
       (await game.physics.bodies({ entityId: clip.id })).bodies.length > 0,
       "an off-strip release must leave a loose world prop",
+    );
+  },
+);
+
+test(
+  "releasing a held item on the cyber-interface canvas below the strip still drops it into the world",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async () => {
+    const { game, clip } = await launchWithHeldClip(basePort + 2);
+    await using _game = game;
+
+    // The actual boundary the rule draws: the hand IS on the panel (it owns
+    // the canvas pointer), but not on the strip - which is the only drop
+    // target. Aiming off the panel entirely cannot exercise this.
+    const pose = (await game.ui.state()).panel_pose!;
+    await aimVrHandAtCanvas(game, pose, BELOW_STRIP_CANVAS, { squeeze: 1 });
+    await game.step({ frames: 5 });
+    assert.equal(
+      (await game.ui.state()).pointer?.hand ?? null,
+      "right",
+      "this release must genuinely be on the panel, just not on the strip",
+    );
+
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 10 });
+
+    assert.equal((await game.info()).player.right_hand_entity_id, null);
+    assert.equal(
+      (await game.player.inventory()).items.find(
+        (item) => item.entity_id === clip.id,
+      )?.location,
+      undefined,
+      "the rest of the canvas is not a drop target",
+    );
+    assert.ok(
+      (await game.physics.bodies({ entityId: clip.id })).bodies.length > 0,
+      "a below-strip release must leave a loose world prop",
+    );
+  },
+);
+
+test(
+  "an item squeezed out of a strip slot and released in place returns to the backpack",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async () => {
+    // The other direction through the same rule: the strip's own squeeze-grab
+    // pulls an item into the hand, and letting go without moving off the slot
+    // puts it back rather than dropping it on the floor. (Before this change
+    // that release littered the item at the player's feet.)
+    //
+    // A fresh earth character carries nothing, so deposit the clip first - the
+    // scenario above, which is now the setup for the round trip.
+    const { game, clip } = await launchWithHeldClip(basePort + 3);
+    await using _game = game;
+    const item = clip.id;
+
+    const pose = (await game.ui.state()).panel_pose!;
+    await aimVrHandAtCanvas(game, pose, STRIP_CANVAS, { squeeze: 1 });
+    await game.step({ frames: 5 });
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 10 });
+
+    const slot = (await game.ui.state()).strip?.elements.find(
+      (element) => element.entity_id === item,
+    );
+    assert.ok(slot, "the deposited clip must have a strip slot to grab back");
+    const slotCanvas: [number, number] = [
+      slot.rect[0] + slot.rect[2] / 2,
+      slot.rect[1] + slot.rect[3] / 2,
+    ];
+
+    // Squeeze the slot: ContainerGui's production grab pulls it into the hand.
+    await aimVrHandAtCanvas(game, pose, slotCanvas, { squeeze: 1 });
+    await game.step({ frames: 5 });
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      item,
+      "a squeeze on a strip slot must pull that item into the hand",
+    );
+
+    // Let go without leaving the slot.
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 10 });
+
+    assert.equal((await game.info()).player.right_hand_entity_id, null);
+    assert.equal(
+      (await game.player.inventory()).items.find(
+        (entry) => entry.entity_id === item,
+      )?.location,
+      "inventory",
+      "releasing over the strip must put it back, not litter it",
+    );
+    assert.equal(
+      (await game.physics.bodies({ entityId: item })).bodies.length,
+      0,
+      "the item must not become a loose world prop",
     );
   },
 );

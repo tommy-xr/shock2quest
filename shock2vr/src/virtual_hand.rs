@@ -64,14 +64,16 @@ pub enum VirtualHandEffect {
     HoldItem {
         entity_id: EntityId,
     },
-    /// Flat-only: move an item into the player's backpack - a world pickup of
-    /// ordinary loot, or the weapon a wield swap displaced. VR preserves its
-    /// physical hand-grab path and never emits this.
+    /// Move an item into the player's backpack - a flat world pickup of
+    /// ordinary loot, the weapon a wield swap displaced, or a VR hand opened
+    /// over the cyber interface's inventory strip. VR's ordinary release is
+    /// still the physical `DropItem`; only the strip claims one.
     ///
     /// Storing an item that was HELD must be paired with a preceding
-    /// `MessagePayload::Drop` to it (see `FlatPlayerController::wield`): unlike
-    /// `DropItem`, this variant does not dispatch one, so the world-model
-    /// restore and psi-charge cancel would otherwise be skipped.
+    /// `MessagePayload::Drop` to it (see `FlatPlayerController::wield` and
+    /// `mission_core`'s `rewrite_strip_release`): unlike `DropItem`, this
+    /// variant does not dispatch one, so the world-model restore and
+    /// psi-charge cancel would otherwise be skipped.
     StoreItem {
         entity_id: EntityId,
     },
