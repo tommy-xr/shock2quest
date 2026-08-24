@@ -235,16 +235,22 @@ pub fn ordered_projectile_links(world: &World, weapon: EntityId) -> Vec<(i32, Pr
     links
 }
 
-/// Whether `weapon` may select a different projectile type. Until magazine
-/// unload semantics exist, a gun must be empty so loaded rounds cannot be
-/// converted to a different ammo type for free.
+/// Whether `weapon` may select a different projectile type: it needs two or
+/// more selectable projectiles, and any rounds already loaded must be
+/// returnable to the backpack, since `cycle_ammo` ejects the magazine first.
+/// Loaded rounds are never converted - they go back as the ammo type they are -
+/// so an unreturnable magazine (a projectile with no clip archetype) is the one
+/// case that still has to be fired off before the type can change.
 pub fn can_cycle_ammo(world: &World, weapon: EntityId) -> bool {
+    if ordered_projectile_links(world, weapon).len() < 2 {
+        return false;
+    }
     let is_empty = world
         .borrow::<View<PropGunState>>()
         .ok()
         .and_then(|states| states.get(weapon).ok().map(|state| state.ammo <= 0))
         .unwrap_or(false);
-    is_empty && ordered_projectile_links(world, weapon).len() >= 2
+    is_empty || crate::mission::reload::can_unload(world, weapon)
 }
 
 pub fn get_first_link_with_template_and_data<TData: Clone>(

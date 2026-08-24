@@ -4771,7 +4771,7 @@ impl MissionCore {
 
                 Effect::CycleAmmo => {
                     if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world) {
-                        self.cycle_ammo(weapon);
+                        self.cycle_ammo(asset_cache, weapon);
                     }
                 }
 
@@ -7099,12 +7099,21 @@ impl MissionCore {
     }
 
     /// Cycle `weapon` to its next ammo type (next `Projectile` link). No-op when
-    /// the weapon has fewer than two projectile links or still has loaded
-    /// rounds; until magazine-unload semantics exist, requiring an empty gun
-    /// prevents standard rounds from turning into AP/HE rounds for free.
-    fn cycle_ammo(&mut self, weapon: EntityId) {
+    /// the weapon has fewer than two projectile links.
+    ///
+    /// A loaded magazine is EJECTED first, as the original does: the rounds go
+    /// back to the backpack as clips of the ammo type they already are, so a
+    /// mid-magazine swap costs the player a reload rather than converting
+    /// standard rounds into AP for free. The only magazine that still has to be
+    /// fired off is one whose projectile has no clip archetype to return to
+    /// (`can_cycle_ammo`).
+    fn cycle_ammo(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) {
         if !crate::scripts::script_util::can_cycle_ammo(&self.world, weapon) {
             return;
+        }
+        let ejected = crate::mission::reload::unload_to_reserve(&self.world, weapon);
+        if let Some((clip_template, rounds)) = ejected.spawn_clip {
+            self.give_ejected_clip(asset_cache, weapon, clip_template, rounds);
         }
         let count =
             crate::scripts::script_util::ordered_projectile_links(&self.world, weapon).len();
@@ -7116,6 +7125,51 @@ impl MissionCore {
             .unwrap_or(0);
         self.world
             .add_component(weapon, RuntimePropSelectedAmmo((current + 1) % count));
+    }
+
+    /// Mint `rounds` rounds of `clip_template` into the backpack - the half of
+    /// an ejection [`reload::unload_to_reserve`] cannot do itself, since
+    /// instantiating an entity needs the entity creator.
+    ///
+    /// If the fresh clip cannot be carried the rounds go back into `weapon`
+    /// rather than vanishing, leaving the magazine exactly as it was.
+    fn give_ejected_clip(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        weapon: EntityId,
+        clip_template: i32,
+        rounds: i32,
+    ) {
+        // Containment makes the clip non-physical immediately, so the spawn
+        // point is never observed - it only has to be valid for instantiation.
+        let (position, rotation) = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            (vec3_to_point3(player.pos), player.rotation)
+        };
+        let info = self.create_entity_with_position(
+            asset_cache,
+            clip_template,
+            position,
+            rotation,
+            Matrix4::identity(),
+            CreateEntityOptions::default(),
+        );
+        // The archetype carries its authored stack size; this clip holds
+        // exactly what came out of the magazine.
+        self.world
+            .add_component(info.entity_id, dark::properties::PropStackCount(rounds));
+        if let Err(e) = self.give_item(info.entity_id) {
+            game_log!(WARN, "Ejected clip could not be carried: {e}");
+            self.destroy_entity(info.entity_id);
+            if let Ok(mut states) = self
+                .world
+                .borrow::<ViewMut<dark::properties::PropGunState>>()
+            {
+                if let Ok(state) = (&mut states).get(weapon) {
+                    state.ammo = rounds;
+                }
+            }
+        }
     }
 
     /// Advance any in-progress reload by `dt` and clear it when complete.

@@ -77,7 +77,7 @@ const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
 pub enum FlatUiDragAction {
     Throw(EntityId),
     Wield(EntityId),
-    /// Cycle the empty wielded weapon's ammo type (the AMMOFULL cycle button
+    /// Cycle the wielded weapon's ammo type (the AMMOFULL cycle button
     /// was clicked). Not tied to a cursor item - the caller maps it to
     /// `Effect::CycleAmmo`, which acts on the wielded weapon.
     CycleAmmo,

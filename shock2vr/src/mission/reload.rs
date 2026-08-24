@@ -52,6 +52,74 @@ pub(crate) struct ReloadOutcome {
     pub depleted_items: Vec<EntityId>,
 }
 
+/// The clip archetypes that hold `weapon`'s CURRENTLY selected ammo, in the
+/// order the data's `Clip` relation authors them. `None` when the weapon has no
+/// projectile links at all, or the selected projectile has no clip archetype -
+/// which is also what makes its rounds unreturnable (see [`can_unload`]).
+fn selected_clip_templates(world: &World, weapon: EntityId) -> Option<Vec<i32>> {
+    let projectiles = crate::scripts::script_util::ordered_projectile_links(world, weapon);
+    if projectiles.is_empty() {
+        return None;
+    }
+    let selected = world
+        .borrow::<View<crate::runtime_props::RuntimePropSelectedAmmo>>()
+        .ok()
+        .and_then(|selected| selected.get(weapon).ok().map(|selected| selected.0))
+        .unwrap_or(0);
+    let projectile_template = projectiles[selected % projectiles.len()].0;
+    world
+        .borrow::<UniqueView<GlobalProjectileClips>>()
+        .ok()
+        .and_then(|clips| clips.0.get(&projectile_template).cloned())
+        .filter(|clips| !clips.is_empty())
+}
+
+/// The backpack's stackable items whose class descends from one of
+/// `clip_templates` - the reserve a reload draws from and an unload merges into.
+fn compatible_reserve_items(world: &World, clip_templates: &[i32]) -> Vec<EntityId> {
+    let Ok(inventory) = world
+        .borrow::<UniqueView<crate::mission::PlayerInfo>>()
+        .map(|player| player.inventory_entity_id)
+    else {
+        return Vec::new();
+    };
+    let reserve_items: Vec<EntityId> = {
+        let Ok(links) = world.borrow::<View<Links>>() else {
+            return Vec::new();
+        };
+        let Ok(inventory_links) = links.get(inventory) else {
+            return Vec::new();
+        };
+        inventory_links
+            .to_links
+            .iter()
+            .filter(|link| matches!(link.link, Link::Contains(_)))
+            .filter_map(|link| link.to_entity_id.map(|id| id.0))
+            .collect()
+    };
+
+    let Ok((stacks, hierarchy)) = world.borrow::<(
+        View<PropStackCount>,
+        UniqueView<crate::mission::GlobalTemplateHierarchy>,
+    )>() else {
+        return Vec::new();
+    };
+    reserve_items
+        .into_iter()
+        .filter(|item| {
+            let Some(class_template_id) =
+                crate::scripts::script_util::entity_class_template_id(world, *item)
+            else {
+                return false;
+            };
+            stacks.get(*item).is_ok()
+                && clip_templates.iter().any(|clip_template| {
+                    hierarchy.is_or_descends_from(class_template_id, *clip_template)
+                })
+        })
+        .collect()
+}
+
 /// Move matching reserve rounds from the backpack into `weapon`.
 ///
 pub(crate) fn load_from_reserve(world: &World, weapon: EntityId, capacity: i32) -> ReloadOutcome {
@@ -67,65 +135,10 @@ pub(crate) fn load_from_reserve(world: &World, weapon: EntityId, capacity: i32) 
         return ReloadOutcome::default();
     }
 
-    let projectiles = crate::scripts::script_util::ordered_projectile_links(world, weapon);
-    if projectiles.is_empty() {
-        return ReloadOutcome::default();
-    }
-    let selected = world
-        .borrow::<View<crate::runtime_props::RuntimePropSelectedAmmo>>()
-        .ok()
-        .and_then(|selected| selected.get(weapon).ok().map(|selected| selected.0))
-        .unwrap_or(0);
-    let projectile_template = projectiles[selected % projectiles.len()].0;
-    let compatible_clip_templates = world
-        .borrow::<UniqueView<GlobalProjectileClips>>()
-        .ok()
-        .and_then(|clips| clips.0.get(&projectile_template).cloned());
-    let Some(compatible_clip_templates) = compatible_clip_templates else {
+    let Some(compatible_clip_templates) = selected_clip_templates(world, weapon) else {
         return ReloadOutcome::default();
     };
-
-    let inventory = match world.borrow::<UniqueView<crate::mission::PlayerInfo>>() {
-        Ok(player) => player.inventory_entity_id,
-        Err(_) => return ReloadOutcome::default(),
-    };
-    let reserve_items: Vec<EntityId> = {
-        let Ok(links) = world.borrow::<View<Links>>() else {
-            return ReloadOutcome::default();
-        };
-        let Ok(inventory_links) = links.get(inventory) else {
-            return ReloadOutcome::default();
-        };
-        inventory_links
-            .to_links
-            .iter()
-            .filter(|link| matches!(link.link, Link::Contains(_)))
-            .filter_map(|link| link.to_entity_id.map(|id| id.0))
-            .collect()
-    };
-
-    let matching_reserve: Vec<EntityId> = {
-        let Ok((stacks, hierarchy)) = world.borrow::<(
-            View<PropStackCount>,
-            UniqueView<crate::mission::GlobalTemplateHierarchy>,
-        )>() else {
-            return ReloadOutcome::default();
-        };
-        reserve_items
-            .into_iter()
-            .filter(|item| {
-                let Some(class_template_id) =
-                    crate::scripts::script_util::entity_class_template_id(world, *item)
-                else {
-                    return false;
-                };
-                let compatible = compatible_clip_templates.iter().any(|clip_template| {
-                    hierarchy.is_or_descends_from(class_template_id, *clip_template)
-                });
-                compatible && stacks.get(*item).is_ok_and(|stack| stack.0 > 0)
-            })
-            .collect()
-    };
+    let matching_reserve = compatible_reserve_items(world, &compatible_clip_templates);
 
     let mut outcome = ReloadOutcome::default();
     {
@@ -135,6 +148,11 @@ pub(crate) fn load_from_reserve(world: &World, weapon: EntityId, capacity: i32) 
         for item in matching_reserve {
             if rounds_needed == 0 {
                 break;
+            }
+            // An empty stack is destroyed on depletion, so this only guards
+            // against one that somehow survived at zero.
+            if (&stacks).get(item).is_ok_and(|stack| stack.0 <= 0) {
+                continue;
             }
             let Ok(stack) = (&mut stacks).get(item) else {
                 continue;
@@ -154,6 +172,79 @@ pub(crate) fn load_from_reserve(world: &World, weapon: EntityId, capacity: i32) 
         if let Ok(state) = (&mut states).get(weapon) {
             state.ammo = (state.ammo.max(0) + outcome.rounds_loaded).min(capacity.max(0));
         }
+    }
+    outcome
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct UnloadOutcome {
+    /// Rounds taken out of the magazine (0 when nothing was unloaded).
+    pub rounds_unloaded: i32,
+    /// The clip archetype the caller must instantiate into the backpack, and
+    /// how many rounds it carries. `None` when the rounds merged into a stack
+    /// the player already had.
+    pub spawn_clip: Option<(i32, i32)>,
+}
+
+/// Whether `weapon`'s loaded rounds could be returned to the backpack. A
+/// projectile with no authored clip archetype has no reserve representation, so
+/// its rounds can only be fired.
+pub(crate) fn can_unload(world: &World, weapon: EntityId) -> bool {
+    selected_clip_templates(world, weapon).is_some()
+}
+
+/// Return `weapon`'s loaded rounds to the backpack as clips of the ammo type
+/// they actually are - the reverse of [`load_from_reserve`], and what lets a
+/// player swap ammo type without the loaded rounds either vanishing or being
+/// silently converted.
+///
+/// Rounds merge into the first compatible reserve stack; with no such stack the
+/// outcome asks the CALLER to mint the clip archetype, because instantiating an
+/// entity needs the mission's entity creator, which this module has no access
+/// to. The magazine is emptied here either way, so a caller that cannot place
+/// `spawn_clip` must put the rounds back.
+///
+/// Reserve stacks have no capacity ceiling in this port - `load_from_reserve`
+/// drains them without one and the game never caps them on pickup - so the
+/// merge is unconditional rather than spilling into a second stack.
+pub(crate) fn unload_to_reserve(world: &World, weapon: EntityId) -> UnloadOutcome {
+    let loaded = world
+        .borrow::<View<PropGunState>>()
+        .ok()
+        .and_then(|states| states.get(weapon).ok().map(|state| state.ammo))
+        .unwrap_or(0);
+    if loaded <= 0 {
+        return UnloadOutcome::default();
+    }
+    let Some(compatible_clip_templates) = selected_clip_templates(world, weapon) else {
+        return UnloadOutcome::default();
+    };
+
+    let destination = compatible_reserve_items(world, &compatible_clip_templates)
+        .into_iter()
+        .next();
+
+    let mut outcome = UnloadOutcome {
+        rounds_unloaded: loaded,
+        spawn_clip: None,
+    };
+    match destination {
+        Some(item) => {
+            let Ok(mut stacks) = world.borrow::<ViewMut<PropStackCount>>() else {
+                return UnloadOutcome::default();
+            };
+            let Ok(stack) = (&mut stacks).get(item) else {
+                return UnloadOutcome::default();
+            };
+            stack.0 += loaded;
+        }
+        // The first authored clip is the ammo type's canonical archetype.
+        None => outcome.spawn_clip = Some((compatible_clip_templates[0], loaded)),
+    }
+
+    let mut states = world.borrow::<ViewMut<PropGunState>>().unwrap();
+    if let Ok(state) = (&mut states).get(weapon) {
+        state.ammo = 0;
     }
     outcome
 }
@@ -513,5 +604,126 @@ mod tests {
         assert_eq!(fixture.ammo(), 6);
         assert_eq!(first.rounds_loaded, 6);
         assert_eq!(second, ReloadOutcome::default());
+    }
+
+    /// A projectile the data authors no `Clip` relation for: its rounds have no
+    /// reserve representation, so they can never be ejected.
+    const CLIPLESS_PROJECTILE: i32 = -9999;
+
+    #[test]
+    fn ejecting_an_empty_magazine_does_nothing() {
+        let fixture = Fixture::new(0, 0);
+
+        let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
+
+        assert_eq!(outcome, UnloadOutcome::default());
+        assert_eq!(fixture.ammo(), 0);
+    }
+
+    #[test]
+    fn ejecting_merges_into_a_matching_reserve_stack() {
+        let mut fixture = Fixture::new(5, 0);
+        let reserve = fixture.reserve(EARTH_SMALL_STD_CLIP, 6);
+
+        let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
+
+        assert_eq!(
+            outcome,
+            UnloadOutcome {
+                rounds_unloaded: 5,
+                spawn_clip: None,
+            }
+        );
+        assert_eq!(fixture.ammo(), 0);
+        assert_eq!(
+            fixture.rounds(reserve),
+            11,
+            "the stack absorbs the magazine"
+        );
+    }
+
+    #[test]
+    fn ejecting_without_a_matching_stack_asks_for_a_fresh_clip() {
+        let mut fixture = Fixture::new(5, 0);
+        // Carrying only HE, while standard is loaded and selected.
+        let mismatched = fixture.reserve(HE_CLIP, 6);
+
+        let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
+
+        assert_eq!(
+            outcome,
+            UnloadOutcome {
+                rounds_unloaded: 5,
+                // The first authored clip for the standard projectile.
+                spawn_clip: Some((STD_CLIP, 5)),
+            }
+        );
+        assert_eq!(fixture.ammo(), 0);
+        assert_eq!(fixture.rounds(mismatched), 6, "HE reserve is untouched");
+    }
+
+    #[test]
+    fn ejecting_returns_the_selected_ammo_type_not_the_first() {
+        // HE selected, HE loaded: the rounds must come back as HE even though
+        // standard is the weapon's first projectile link.
+        let mut fixture = Fixture::new(4, 1);
+        let he = fixture.reserve(HE_CLIP, 2);
+
+        let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
+
+        assert_eq!(outcome.rounds_unloaded, 4);
+        assert_eq!(outcome.spawn_clip, None);
+        assert_eq!(fixture.rounds(he), 6);
+    }
+
+    #[test]
+    fn a_magazine_with_no_clip_archetype_is_not_ejected() {
+        let mut fixture = Fixture::new(5, 0);
+        fixture.set_standard_projectile(CLIPLESS_PROJECTILE);
+
+        let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
+
+        assert_eq!(outcome, UnloadOutcome::default());
+        assert_eq!(fixture.ammo(), 5, "unreturnable rounds stay loaded");
+    }
+
+    // `can_cycle_ammo` lives in `script_util`, but its contract is this
+    // module's: cycling is allowed exactly when a loaded magazine could be
+    // ejected. Tested here because the eject fixture is what it needs.
+    use crate::scripts::script_util::can_cycle_ammo;
+
+    #[test]
+    fn a_loaded_multi_ammo_weapon_may_cycle_because_it_can_eject() {
+        let fixture = Fixture::new(5, 0);
+
+        assert!(can_cycle_ammo(&fixture.world, fixture.weapon));
+    }
+
+    #[test]
+    fn a_loaded_weapon_whose_rounds_cannot_be_returned_still_refuses_to_cycle() {
+        let mut fixture = Fixture::new(5, 0);
+        fixture.set_standard_projectile(CLIPLESS_PROJECTILE);
+
+        assert!(!can_cycle_ammo(&fixture.world, fixture.weapon));
+    }
+
+    #[test]
+    fn a_single_ammo_weapon_still_refuses_to_cycle() {
+        let fixture = Fixture::new(0, 0);
+        {
+            let mut links = fixture.world.borrow::<ViewMut<Links>>().unwrap();
+            (&mut links)
+                .get(fixture.weapon)
+                .unwrap()
+                .to_links
+                .retain(|link| {
+                    !matches!(
+                        link.link,
+                        Link::Projectile(ProjectileOptions { order: 1, .. })
+                    )
+                });
+        }
+
+        assert!(!can_cycle_ammo(&fixture.world, fixture.weapon));
     }
 }
