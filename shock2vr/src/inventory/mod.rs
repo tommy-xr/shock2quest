@@ -376,6 +376,15 @@ impl Inventory {
         true
     }
 
+    /// The entity occupying `(x, y)`, if any - including a cell a multi-cell
+    /// item merely extends into, not just its anchor.
+    pub fn entity_at(&self, x: usize, y: usize) -> Option<EntityId> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        self.grid[self.get_index(x, y)]
+    }
+
     pub fn remove_entity(&mut self, entity: EntityId) {
         for item in self.grid.iter_mut() {
             if let Some(contained_entity) = item {

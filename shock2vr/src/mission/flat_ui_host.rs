@@ -292,6 +292,26 @@ impl FlatUiHost {
             .is_some_and(|rect| rect.contains(canvas_pos))
     }
 
+    /// The backpack grid cell `canvas_pos` lands in, or `None` when it is off
+    /// the strip (including a blocked/strength-capped column) - the deposit
+    /// target for a VR release aimed at the strip (see
+    /// `MissionCore::strip_deposit_entities`). The strip is drawn at 1:1
+    /// scale onto the canvas (`strip_canvas_rect` reuses `size_px` directly),
+    /// so the canvas offset alone recovers the panel-local pixel position
+    /// [`crate::scripts::gui::backpack_cell_at`] lays items out in - the same
+    /// inverse the strip's own rendering uses, so the resolved cell can never
+    /// drift from what is drawn.
+    pub fn strip_cell_at(&self, canvas_pos: Vector2<f32>, world: &World) -> Option<(usize, usize)> {
+        let strip = self.strip.as_ref()?;
+        let rect = self.strip_rect()?;
+        if !rect.contains(canvas_pos) {
+            return None;
+        }
+        let panel_pos = canvas_pos - Vector2::new(rect.x, rect.y);
+        let grid = crate::inventory::grid_for(world, strip.entity);
+        crate::scripts::gui::backpack_cell_at(panel_pos, grid)
+    }
+
     /// The item currently held on the cursor mid-drag (for `/v1/ui` `cursor`).
     pub fn cursor_debug(&self) -> Option<crate::game_scene::DebugUiCursor> {
         self.cursor_item

@@ -29,6 +29,26 @@ const STRIP_CANVAS: [number, number] = [320, 60];
  * and the case a ray aimed off the panel entirely cannot cover. */
 const BELOW_STRIP_CANVAS: [number, number] = [320, 400];
 
+/** The backpack grid's layout constants (shock2vr's `container.rs`:
+ * `BACKPACK_GRID_ORIGIN` (4, 17), `SLOT_PITCH` (35, 34)), plus the strip's
+ * canvas anchor (2, 0) - mirrored here so the test can compute a cell's
+ * expected canvas rect independently of the code under test. */
+const STRIP_ANCHOR: [number, number] = [2, 0];
+const BACKPACK_GRID_ORIGIN: [number, number] = [4, 17];
+const SLOT_PITCH: [number, number] = [35, 34];
+
+function cellTopLeft(cellX: number, cellY: number): [number, number] {
+  return [
+    STRIP_ANCHOR[0] + BACKPACK_GRID_ORIGIN[0] + SLOT_PITCH[0] * cellX,
+    STRIP_ANCHOR[1] + BACKPACK_GRID_ORIGIN[1] + SLOT_PITCH[1] * cellY,
+  ];
+}
+
+function cellCenter(cellX: number, cellY: number): [number, number] {
+  const [x, y] = cellTopLeft(cellX, cellY);
+  return [x + SLOT_PITCH[0] / 2, y + SLOT_PITCH[1] / 2];
+}
+
 async function launchWithHeldClip(port: number): Promise<{
   game: GameServer;
   clip: EntitySummary;
@@ -260,6 +280,56 @@ test(
       (await game.physics.bodies({ entityId: item })).bodies.length,
       0,
       "the item must not become a loose world prop",
+    );
+  },
+);
+
+test(
+  "releasing a held item over a specific empty strip cell deposits it there, not at the first free slot",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async () => {
+    // Retail drops a dragged item into the cell the player is pointing at.
+    // Negative-first: on the parent this lands at the backpack's first free
+    // cell (0, 0) regardless of where the release ray was aimed.
+    const { game, clip } = await launchWithHeldClip(basePort + 4);
+    await using _game = game;
+    // A middle cell, well clear of (0, 0) - a fresh earth character's
+    // backpack is empty, so first-free would also land at (0, 0).
+    const targetCell: [number, number] = [5, 1];
+
+    const pose = (await game.ui.state()).panel_pose!;
+    await aimVrHandAtCanvas(game, pose, cellCenter(...targetCell), {
+      squeeze: 1,
+    });
+    await game.step({ frames: 5 });
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      clip.id,
+      "aiming at the panel must not by itself drop the item",
+    );
+
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 10 });
+
+    assert.equal((await game.info()).player.right_hand_entity_id, null);
+    assert.equal(
+      (await game.player.inventory()).items.find(
+        (item) => item.entity_id === clip.id,
+      )?.location,
+      "inventory",
+      "the clip must be in the backpack",
+    );
+
+    const strip = (await game.ui.state()).strip;
+    const slot = strip?.elements.find(
+      (element) => element.entity_id === clip.id,
+    );
+    assert.ok(slot, `the deposited clip must have a strip slot: ${JSON.stringify(strip?.elements)}`);
+    const [expectedX, expectedY] = cellTopLeft(...targetCell);
+    assert.deepEqual(
+      [slot.rect[0], slot.rect[1]],
+      [expectedX, expectedY],
+      `the clip must land at cell (${targetCell.join(",")}) = (${expectedX}, ${expectedY}), got rect ${JSON.stringify(slot.rect)}`,
     );
   },
 );
