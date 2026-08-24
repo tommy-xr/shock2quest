@@ -696,24 +696,20 @@ fn move_live_entity_into_container_at_cell(
     dropped_entity_id: EntityId,
     target_cell: (usize, usize),
 ) -> bool {
-    let fits = {
-        let grid = crate::inventory::grid_for(world, container_entity_id);
-        let occupied =
-            crate::inventory::Inventory::from_container(world, container_entity_id, grid);
-        let dims = world
-            .borrow::<View<dark::properties::PropInventoryDimensions>>()
-            .ok()
-            .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
-            .unwrap_or((1, 1));
-        occupied.has_capacity(
-            target_cell.0,
-            target_cell.1,
-            dims.0 as usize,
-            dims.1 as usize,
-        )
-    };
     let grid = crate::inventory::grid_for(world, container_entity_id);
-    let slot = fits.then(|| (target_cell.1 * grid.0 + target_cell.0) as u32);
+    let occupied = crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    let dims = world
+        .borrow::<View<dark::properties::PropInventoryDimensions>>()
+        .ok()
+        .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
+        .unwrap_or((1, 1));
+    let fits = occupied.has_capacity(
+        target_cell.0,
+        target_cell.1,
+        dims.0 as usize,
+        dims.1 as usize,
+    );
+    let slot = fits.then(|| occupied.slot_at(target_cell.0, target_cell.1));
     move_live_entity_into_container_at_slot(world, container_entity_id, dropped_entity_id, slot)
 }
 
@@ -1031,41 +1027,29 @@ mod cell_deposit_tests {
 
     use super::*;
 
-    fn container_with_item_at(
-        occupant_cell: Option<(u32, u32)>,
-    ) -> (World, EntityId, Option<EntityId>) {
+    fn container_with_item_at(occupant_cell: Option<(u32, u32)>) -> (World, EntityId) {
         let mut world = World::new();
-        let occupant = occupant_cell.map(|_| world.add_entity((PropHasRefs(false),)));
-        let to_links = match (occupant, occupant_cell) {
-            (Some(occupant), Some((x, y))) => vec![ToLink {
-                link: Link::Contains(y * crate::inventory::CONTAINER_GRID.0 as u32 + x),
-                to_entity_id: Some(WrappedEntityId(occupant)),
-                to_template_id: 0,
-            }],
-            _ => Vec::new(),
-        };
+        let to_links = occupant_cell
+            .map(|(x, y)| {
+                let occupant = world.add_entity((PropHasRefs(false),));
+                vec![ToLink {
+                    link: Link::Contains(y * crate::inventory::CONTAINER_GRID.0 as u32 + x),
+                    to_entity_id: Some(WrappedEntityId(occupant)),
+                    to_template_id: 0,
+                }]
+            })
+            .unwrap_or_default();
         let container = world.add_entity(Links { to_links });
-        (world, container, occupant)
+        (world, container)
     }
 
-    /// The reported bug: a targeted deposit over an empty cell must land
-    /// exactly there, not at the grid's first free slot. Fails on main, where
-    /// only `move_live_entity_into_container`'s always-first-free placement
-    /// exists.
-    #[test]
-    fn an_empty_target_cell_is_claimed_exactly() {
-        let (mut world, container, _occupant) = container_with_item_at(None);
-        let item = world.add_entity(PropHasRefs(false));
-
-        assert!(move_live_entity_into_container_at_cell(
-            &mut world,
-            container,
-            item,
-            (3, 1),
-        ));
-
-        let links = world.borrow::<View<Links>>().unwrap();
-        let slot = links
+    /// The `Contains` slot `item` is linked into `container` at, panicking if
+    /// it is not linked at all - the shared assertion every placement test
+    /// below reads its result through.
+    fn contains_slot(world: &World, container: EntityId, item: EntityId) -> u32 {
+        world
+            .borrow::<View<Links>>()
+            .unwrap()
             .get(container)
             .unwrap()
             .to_links
@@ -1078,55 +1062,13 @@ mod cell_deposit_tests {
                         _ => None,
                     })
             })
-            .expect("item should be linked into the container");
-        assert_eq!(
-            slot,
-            1 * crate::inventory::CONTAINER_GRID.0 as u32 + 3,
-            "must land at (3,1), not the first free cell"
-        );
+            .expect("item should be linked into the container")
     }
 
-    /// A cell already claimed by a different (non-matching) item falls back
-    /// to the ordinary first-free placement rather than evicting or swapping.
-    #[test]
-    fn an_occupied_target_cell_falls_back_to_first_free() {
-        let (mut world, container, occupant) = container_with_item_at(Some((0, 0)));
-        let item = world.add_entity(PropHasRefs(false));
-
-        assert!(move_live_entity_into_container_at_cell(
-            &mut world,
-            container,
-            item,
-            (0, 0),
-        ));
-
-        let links = world.borrow::<View<Links>>().unwrap();
-        let slot = links
-            .get(container)
-            .unwrap()
-            .to_links
-            .iter()
-            .find_map(|link| {
-                (link.to_entity_id.map(|w| w.0) == Some(item))
-                    .then_some(link.link.clone())
-                    .and_then(|l| match l {
-                        Link::Contains(slot) => Some(slot),
-                        _ => None,
-                    })
-            })
-            .expect("item should still be linked into the container");
-        assert_ne!(
-            slot, 0,
-            "cell 0 is taken by another item; the deposit must not overwrite it"
-        );
-        assert!(occupant.is_some());
-    }
-
-    /// A target cell holding a same-template stack is a merge candidate, not
-    /// a claim - `MissionCore::drop_entity_into_container_at_cell` sums the
-    /// counts and destroys the dropped entity instead of placing it.
-    #[test]
-    fn a_matching_stack_at_the_cell_is_detected_as_a_merge_target() {
+    /// A container holding one stackable occupant at cell (0,0), plus a
+    /// dropped entity carrying `dropped_template_id` - the shared setup for
+    /// `matching_stack_at_cell`'s matching/non-matching cases.
+    fn stack_world(dropped_template_id: i32) -> (World, EntityId, EntityId, EntityId) {
         let mut world = World::new();
         let occupant = world.add_entity((
             PropHasRefs(false),
@@ -1142,9 +1084,66 @@ mod cell_deposit_tests {
         });
         let dropped = world.add_entity((
             PropHasRefs(false),
-            PropTemplateId { template_id: 42 },
+            PropTemplateId {
+                template_id: dropped_template_id,
+            },
             PropStackCount(2),
         ));
+        (world, container, occupant, dropped)
+    }
+
+    /// The reported bug: a targeted deposit over an empty cell must land
+    /// exactly there, not at the grid's first free slot. Fails on main, where
+    /// only `move_live_entity_into_container`'s always-first-free placement
+    /// exists.
+    #[test]
+    fn an_empty_target_cell_is_claimed_exactly() {
+        let (mut world, container) = container_with_item_at(None);
+        let item = world.add_entity(PropHasRefs(false));
+
+        assert!(move_live_entity_into_container_at_cell(
+            &mut world,
+            container,
+            item,
+            (3, 1),
+        ));
+
+        assert_eq!(
+            contains_slot(&world, container, item),
+            crate::inventory::CONTAINER_GRID.0 as u32 + 3,
+            "must land at (3,1), not the first free cell"
+        );
+    }
+
+    /// A cell already claimed by a different (non-matching) item falls back
+    /// to the ordinary first-free placement rather than evicting or swapping.
+    #[test]
+    fn an_occupied_target_cell_falls_back_to_first_free() {
+        let (mut world, container) = container_with_item_at(Some((0, 0)));
+        let item = world.add_entity(PropHasRefs(false));
+
+        assert!(move_live_entity_into_container_at_cell(
+            &mut world,
+            container,
+            item,
+            (0, 0),
+        ));
+
+        // Column-major first-fit skips the occupied (0,0) and lands at
+        // (0,1) - slot 4 in the 4-wide `CONTAINER_GRID`.
+        assert_eq!(
+            contains_slot(&world, container, item),
+            crate::inventory::CONTAINER_GRID.0 as u32,
+            "cell 0 is taken by another item; the deposit must land at the next free cell"
+        );
+    }
+
+    /// A target cell holding a same-template stack is a merge candidate, not
+    /// a claim - `MissionCore::drop_entity_into_container_at_cell` sums the
+    /// counts and destroys the dropped entity instead of placing it.
+    #[test]
+    fn a_matching_stack_at_the_cell_is_detected_as_a_merge_target() {
+        let (world, container, occupant, dropped) = stack_world(42);
 
         assert_eq!(
             matching_stack_at_cell(&world, container, dropped, (0, 0)),
@@ -1157,24 +1156,7 @@ mod cell_deposit_tests {
     /// of silently folding unrelated items together.
     #[test]
     fn a_different_template_at_the_cell_is_not_a_merge_target() {
-        let mut world = World::new();
-        let occupant = world.add_entity((
-            PropHasRefs(false),
-            PropTemplateId { template_id: 42 },
-            PropStackCount(3),
-        ));
-        let container = world.add_entity(Links {
-            to_links: vec![ToLink {
-                link: Link::Contains(0),
-                to_entity_id: Some(WrappedEntityId(occupant)),
-                to_template_id: 0,
-            }],
-        });
-        let dropped = world.add_entity((
-            PropHasRefs(false),
-            PropTemplateId { template_id: 43 },
-            PropStackCount(2),
-        ));
+        let (world, container, _occupant, dropped) = stack_world(43);
 
         assert_eq!(
             matching_stack_at_cell(&world, container, dropped, (0, 0)),
@@ -1186,7 +1168,7 @@ mod cell_deposit_tests {
     /// cannot fit the item's authored footprint is not claimed, even empty.
     #[test]
     fn a_target_cell_too_small_for_the_items_footprint_falls_back() {
-        let (mut world, container, _occupant) = container_with_item_at(None);
+        let (mut world, container) = container_with_item_at(None);
         let item = world.add_entity((
             PropHasRefs(false),
             PropInventoryDimensions {
@@ -1204,22 +1186,11 @@ mod cell_deposit_tests {
             (0, 3),
         ));
 
-        let links = world.borrow::<View<Links>>().unwrap();
-        let slot = links
-            .get(container)
-            .unwrap()
-            .to_links
-            .iter()
-            .find_map(|link| {
-                (link.to_entity_id.map(|w| w.0) == Some(item))
-                    .then_some(link.link.clone())
-                    .and_then(|l| match l {
-                        Link::Contains(slot) => Some(slot),
-                        _ => None,
-                    })
-            })
-            .expect("item should be linked into the container");
-        assert_eq!(slot, 0, "falls back to the first free cell, (0,0)");
+        assert_eq!(
+            contains_slot(&world, container, item),
+            0,
+            "falls back to the first free cell, (0,0)"
+        );
     }
 }
 
@@ -3281,8 +3252,10 @@ impl MissionCore {
         // the strip between resolving `strip_cell` and here, or generally
         // defensive) falls back to `StoreItem`'s first-free placement.
         let cell_for = |entity_id: EntityId| -> Option<(usize, usize)> {
+            // `strip_cell[slot]` is only ever set alongside `on_strip[slot]`
+            // (see above), so matching on it alone is enough.
             (0..2).find_map(|slot| {
-                (on_strip[slot] && [left_hand_held, right_hand_held][slot] == Some(entity_id))
+                ([left_hand_held, right_hand_held][slot] == Some(entity_id))
                     .then_some(strip_cell[slot])
                     .flatten()
             })

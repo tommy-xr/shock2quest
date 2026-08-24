@@ -465,6 +465,49 @@ mod tests {
         FrobFlag, KeyCard, Links, PropFrobInfo, PropHitPoints, PropKeySrc, ToLink, WrappedEntityId,
     };
 
+    /// The load-bearing invariant `backpack_cell_at`'s doc comment claims: it
+    /// must be the exact inverse of the pixel position `get_components` draws
+    /// each cell's item at, or a pointer position and an item's own drawn
+    /// position could resolve to different cells.
+    #[test]
+    fn backpack_cell_at_inverts_the_item_layout_formula() {
+        let grid = (10, 3);
+        for y in 0..grid.1 {
+            for x in 0..grid.0 {
+                // The pixel `get_components` places this cell's item icon at,
+                // offset into the cell's interior so it isn't sitting exactly
+                // on a boundary.
+                let drawn = BACKPACK_GRID_ORIGIN
+                    + Vector2::new(SLOT_PITCH.x * x as f32, SLOT_PITCH.y * y as f32)
+                    + Vector2::new(1.0, 1.0);
+                assert_eq!(
+                    backpack_cell_at(drawn, grid),
+                    Some((x, y)),
+                    "cell ({x},{y})'s own drawn position must resolve back to it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn backpack_cell_at_rejects_off_grid_and_capped_columns() {
+        let grid = (10, 3);
+        assert_eq!(
+            backpack_cell_at(BACKPACK_GRID_ORIGIN - vec2(1.0, 0.0), grid),
+            None,
+            "left of the grid"
+        );
+        assert_eq!(
+            backpack_cell_at(BACKPACK_GRID_ORIGIN - vec2(0.0, 1.0), grid),
+            None,
+            "above the grid"
+        );
+        // Column 10 is a strength-capped column beyond a 10-wide usable grid,
+        // even though it is still inside the panel's full 15-column art.
+        let capped = BACKPACK_GRID_ORIGIN + Vector2::new(SLOT_PITCH.x * 10.0, 0.0);
+        assert_eq!(backpack_cell_at(capped, grid), None, "capped column");
+    }
+
     /// A world with a loot container holding one iconed, grabbable item,
     /// plus the player-info unique the Take path resolves the backpack
     /// through.
