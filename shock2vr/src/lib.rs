@@ -1775,6 +1775,23 @@ impl Game {
                 self.pending_transition = None;
                 self.set_active_scene(Box::new(DeveloperScene::new()));
             }
+            GlobalEffect::LaunchDebugScene { name } => {
+                // A scene swap like the frontend ones: no ledger write-back,
+                // and any pending transition is abandoned. Built through the
+                // same registry `--mission debug_x` dispatches from, so a scene
+                // started here is the scene the CLI would have started.
+                self.pending_transition = None;
+                match scenes::create_debug_scene(
+                    &name,
+                    &self.global_context,
+                    &self.options,
+                    &mut self.asset_cache,
+                    &mut self.audio_context,
+                ) {
+                    Some(scene) => self.set_active_scene(scene),
+                    None => warn!("Unknown debug scene '{}'", name),
+                }
+            }
             GlobalEffect::PlayerHit { damage } => {
                 self.hit_feedback.trigger(damage);
             }
