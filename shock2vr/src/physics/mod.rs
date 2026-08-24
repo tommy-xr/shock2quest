@@ -3593,6 +3593,32 @@ impl PhysicsWorld {
         handle
     }
 
+    /// Create a kinematic body carrying an arbitrary shape, instead of the
+    /// axis-aligned cuboid `add_kinematic` builds. The creature hitbox proxies
+    /// use it so their collider is the *fitted* per-joint shape (capsule along
+    /// the bone / box) shared with the ragdoll, which covers the body far
+    /// better than a per-joint AABB.
+    pub fn add_kinematic_shape(
+        &mut self,
+        entity_id: EntityId,
+        pos: Vector3<f32>,
+        facing: Quaternion<f32>,
+        shape: SharedShape,
+        collision_groups: CollisionGroup,
+    ) -> RigidBodyHandle {
+        let handle = self.add_kinematic_anchor(entity_id, pos, facing);
+        let mut collider = ColliderBuilder::new(shape).restitution(0.7).build();
+
+        collider.set_enabled(true);
+        collider.user_data = entity_id.inner() as u128;
+        collider.set_collision_groups(collision_groups.collision);
+        collider.set_solver_groups(collision_groups.solver);
+
+        self.collider_set
+            .insert_with_parent(collider, handle, &mut self.rigid_body_set);
+        handle
+    }
+
     /// Create a kinematic transform anchor without collision geometry.
     ///
     /// Zero-volume PhysAttach objects (notably `Lift 1 Walls`) still own a

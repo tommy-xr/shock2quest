@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 
-use cgmath::{EuclideanSpace, Matrix4, vec3};
-use collision::{Aabb, Aabb3};
-use dark::{model::Model, motion::JointId, properties::PropPosition};
-use rapier3d::prelude::RigidBodyHandle;
+use cgmath::{EuclideanSpace, Matrix4, Vector3};
+use collision::Aabb;
+use dark::{hit_box::HitBoxShape, model::Model, motion::JointId, properties::PropPosition};
+use rapier3d::{
+    na::Point3 as NaPoint3,
+    prelude::{RigidBodyHandle, SharedShape},
+};
 use shipyard::{Component, EntitiesViewMut, EntityId, IntoIter, IntoWithId, View, ViewMut, World};
 
 use crate::{
@@ -33,6 +36,71 @@ pub enum HitBoxType {
     Extremity,
     #[allow(dead_code)]
     NoDamage,
+}
+
+/// Minimum collider half-extent, so a degenerate joint shape (e.g. a joint with
+/// a single skinned vertex) still yields a valid, non-zero box.
+const MIN_HALF_EXTENT: f32 = 0.01;
+
+/// The per-joint collision shapes to build hitbox proxies from: the *fitted*
+/// shapes (capsule spanning the bone toward its child, box otherwise) shared
+/// with the ragdoll, falling back to the raw per-joint vertex AABB for any joint
+/// (or model) that has no fitted shape.
+///
+/// Fitted shapes matter here because these proxies are what melee/projectile
+/// damage AND frob/selection raycasts hit: per-joint AABBs cluster around the
+/// joint origins and leave the bone segments between them uncovered, which made
+/// creatures - corpses especially - fiddly to aim at and to loot.
+fn joint_hit_box_shapes(model: &Model) -> HashMap<JointId, HitBoxShape> {
+    let mut out: HashMap<JointId, HitBoxShape> = model
+        .get_hit_boxes()
+        .iter()
+        .map(|(joint_id, bbox)| {
+            let half = bbox.dim() * 0.5;
+            (
+                *joint_id,
+                HitBoxShape::Cuboid {
+                    half_extents: half,
+                    center: bbox.center().to_vec(),
+                },
+            )
+        })
+        .collect();
+
+    for (joint_id, shape) in model.hit_box_shapes().iter() {
+        out.insert(*joint_id, shape.clone());
+    }
+
+    out
+}
+
+/// Centroid of a fitted shape, in joint-local space.
+fn shape_center(shape: &HitBoxShape) -> Vector3<f32> {
+    match shape {
+        HitBoxShape::Cuboid { center, .. } => *center,
+        HitBoxShape::Capsule { a, b, .. } => (*a + *b) * 0.5,
+    }
+}
+
+/// The rapier collider for a fitted shape, expressed relative to `center` (the
+/// proxy body's origin).
+fn shape_to_collider(shape: &HitBoxShape, center: Vector3<f32>) -> SharedShape {
+    match shape {
+        HitBoxShape::Cuboid { half_extents, .. } => SharedShape::cuboid(
+            half_extents.x.max(MIN_HALF_EXTENT),
+            half_extents.y.max(MIN_HALF_EXTENT),
+            half_extents.z.max(MIN_HALF_EXTENT),
+        ),
+        HitBoxShape::Capsule { a, b, radius } => {
+            let a = *a - center;
+            let b = *b - center;
+            SharedShape::capsule(
+                NaPoint3::new(a.x, a.y, a.z),
+                NaPoint3::new(b.x, b.y, b.z),
+                radius.max(MIN_HALF_EXTENT),
+            )
+        }
+    }
 }
 
 pub struct HitBoxManager {
@@ -83,13 +151,13 @@ impl HitBoxManager {
                     continue;
                 }
 
-                let hit_boxes = maybe_model.unwrap().get_hit_boxes();
+                let hit_boxes = joint_hit_box_shapes(maybe_model.unwrap());
                 let creature_type = maybe_creature_type.unwrap();
 
                 let hit_box_map = self.hit_boxes.entry(parent_entity_id).or_insert_with(|| {
                     let mut out_hit_boxes = HashMap::new();
 
-                    for (joint_id, _bbox) in hit_boxes.iter() {
+                    for (joint_id, _shape) in hit_boxes.iter() {
                         let maybe_hitbox_type = creature_type.get_hitbox_type(*joint_id);
                         if maybe_hitbox_type.is_none() {
                             continue;
@@ -146,11 +214,7 @@ impl HitBoxManager {
 
                 let mut joint_index = 0;
                 for joint_xform in joint_xforms.0 {
-                    let bbox = hit_boxes
-                        .get(&joint_index)
-                        .copied()
-                        .unwrap_or(Aabb3::zero());
-                    let sizes = bbox.dim() * 1.0;
+                    let maybe_shape = hit_boxes.get(&joint_index);
 
                     let maybe_hitbox_type = creature_type.get_hitbox_type(joint_index);
 
@@ -165,22 +229,27 @@ impl HitBoxManager {
                         continue;
                     };
                     let hit_box_entry = maybe_entry.unwrap();
-                    let joint_xform =
-                        xform.0 * joint_xform * Matrix4::from_translation(bbox.center().to_vec());
-                    //* Matrix4::from_nonuniform_scale(sizes.x, sizes.y, sizes.z);
+                    let Some(shape) = maybe_shape else {
+                        joint_index += 1;
+                        continue;
+                    };
+                    // The proxy body sits at the fitted shape's centroid (as it
+                    // used to sit at the joint AABB's center) so a debug aim
+                    // point keeps pointing at the middle of the volume; the
+                    // collider is then built centered on that origin.
+                    let center = shape_center(shape);
+                    let joint_xform = xform.0 * joint_xform * Matrix4::from_translation(center);
 
                     let pos = point3_to_vec3(get_position_from_matrix(&joint_xform));
                     let rotation = get_rotation_from_matrix(&joint_xform);
                     // If there is not a physics entity yet, create one
                     if !id_to_physics.contains_key(hit_box_entry) {
-                        let physics_handle = physics.add_kinematic(
+                        let physics_handle = physics.add_kinematic_shape(
                             *hit_box_entry,
                             pos,
                             rotation,
-                            vec3(0.0, 0.0, 0.0),
-                            vec3(sizes.x, sizes.y, sizes.z),
+                            shape_to_collider(shape, center),
                             crate::physics::CollisionGroup::hitbox(),
-                            false,
                         );
                         id_to_physics.insert(*hit_box_entry, physics_handle);
                     } else {
