@@ -33,7 +33,6 @@ test(
     try {
       await using game = await GameServer.launch({
         mission: "debug_minimal",
-        port: Number(process.env.SHOCK2_E2E_PORT ?? 8137),
       });
 
       await game.input.trigger("QuickLoad");

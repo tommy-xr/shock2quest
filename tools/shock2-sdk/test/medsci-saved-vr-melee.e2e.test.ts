@@ -18,7 +18,6 @@ import { aimVrHandAt } from "./helpers/vr-hand.js";
 // identity split that made the campaign weapon physically shove creatures
 // without sending Damage.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8585);
 
 const MEDSCI1_WRENCH = 990;
 const WRENCH_CORPSE = 1177;
@@ -590,7 +589,6 @@ test(
     {
       await using control = await GameServer.launch({
         mission: "medsci2.mis",
-        port: basePort + 1,
         debugFlags: ["--vr"],
         echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
       });
@@ -617,7 +615,6 @@ test(
 
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort,
       debugFlags: ["--vr"],
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
     });
@@ -729,7 +726,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 2,
       repoRoot: process.env.SHOCK2_E2E_REPO_ROOT,
       debugFlags: ["--vr"],
       experimental: ["ragdoll"],

@@ -13,7 +13,6 @@ import { teleportVerified } from "./helpers/teleport.js";
 // BLOCK art, and stores the four column-major items at 0,15,30,1 rather than
 // the Strength-1 width's 0,10,20,1.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8608);
 
 const isBlock = (element: UiElement) =>
   element.kind === "image" &&
@@ -64,7 +63,6 @@ test(
     const saveName = `inventory_strength_${Date.now()}`;
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort,
     });
     await game.step({ frames: 5 });
 
@@ -144,7 +142,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 1,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 5 });
@@ -179,7 +176,6 @@ test(
     const saveName = `inventory_pack_rat_${Date.now()}`;
     await using game = await GameServer.launch({
       mission: "medsci2.mis",
-      port: basePort + 2,
     });
     await game.step({ frames: 5 });
     await Promise.all([

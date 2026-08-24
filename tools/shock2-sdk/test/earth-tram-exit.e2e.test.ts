@@ -23,7 +23,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8112),
     });
     await game.step({ frames: 30 }); // settle onto the tram floor
 

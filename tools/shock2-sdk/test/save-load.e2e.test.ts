@@ -22,8 +22,6 @@ import { earthWorldUse } from "./helpers/earth-world-use.js";
 // restored - which is impossible without the endpoints (the save call 404s).
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8101);
-
 interface PlayerVitals {
   hitPoints: number;
   maxHitPoints: number;
@@ -86,7 +84,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "medsci1.mis",
-        port: basePort,
       });
 
       await game.step({ frames: 2 });
@@ -120,7 +117,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "eng1.mis",
-        port: basePort + 1,
       });
 
       await game.step({ frames: 2 });
@@ -199,7 +195,6 @@ test(
 
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 2,
     });
     await game.step({ frames: 2 });
 
@@ -238,7 +233,6 @@ test(
 
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 5,
     });
     await game.step({ frames: 5 });
 
@@ -298,7 +292,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "earth.mis",
-        port: basePort + 3,
       });
       await game.step({ frames: 5 });
 
@@ -346,7 +339,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "eng1.mis",
-        port: basePort + 4,
       });
       await game.step({ frames: 2 });
       assert.equal((await game.info()).mission, "eng1.mis");

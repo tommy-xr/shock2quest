@@ -39,7 +39,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8123),
     });
 
     // Wield the pistol (first DebugCycleWeapon roster entry).

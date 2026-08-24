@@ -54,7 +54,7 @@ test(
   "the frontend plays the original hum, rollover and select sounds",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run" },
   async () => {
-    await using game = await GameServer.launch({ mission: "main_menu", port: 8122 });
+    await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 10 });
 
     // The bed starts with the screen and loops under it.
@@ -116,7 +116,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "main_menu",
-      port: 8123,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 10 });
@@ -157,7 +156,7 @@ test(
   "the bed stops when the menu is replaced without going through a click",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run" },
   async () => {
-    await using game = await GameServer.launch({ mission: "main_menu", port: 8124 });
+    await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 10 });
 
     const before = (await played(game)).find((s) => s.sample === HUM);
@@ -187,7 +186,7 @@ test(
   "the pause overlay uses the same hum, rollover and select lifecycle",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run" },
   async () => {
-    await using game = await GameServer.launch({ mission: "debug_minimal", port: 8125 });
+    await using game = await GameServer.launch({ mission: "debug_minimal" });
     await game.step({ frames: 10 });
 
     // Open over empty backdrop so the bed can be observed separately from a

@@ -72,7 +72,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "shodan.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8474),
     });
     await game.step({ frames: 10 });
 
@@ -93,7 +92,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "shodan.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8474) + 1,
     });
     await game.load(avatarSave!);
     await game.step({ frames: 10 });

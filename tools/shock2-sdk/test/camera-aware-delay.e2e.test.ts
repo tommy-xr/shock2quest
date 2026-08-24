@@ -5,7 +5,6 @@ import { GameServer } from "../src/index.js";
 import type { EntityDetailResult } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8223);
 
 // MedSci1 object 102 is a Security Camera with an unobstructed view from the
 // authored floor position used below. Runtime entity ids vary between runs.
@@ -21,7 +20,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort,
     });
 
     const [camera] = await game.entities.byTemplate(CAMERA_TEMPLATE_ID);

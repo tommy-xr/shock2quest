@@ -55,7 +55,6 @@ test(
 
     await using game = await GameServer.launch({
       mission: "hydro2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8237),
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
     });
     await game.step({ frames: 10 });

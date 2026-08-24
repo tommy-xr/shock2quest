@@ -5,7 +5,6 @@ import { GameServer } from "../src/index.js";
 import type { EntityDetailResult, EntitySummary } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8482);
 
 // One complete authored medsci1 security ecology:
 //
@@ -51,7 +50,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort,
     });
     await game.step({ frames: 10 });
 

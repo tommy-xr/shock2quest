@@ -75,7 +75,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8225),
       repoRoot: process.env.SHOCK2_E2E_REPO_ROOT,
     });
     await game.step({ frames: 5 });
@@ -158,7 +157,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8226),
       repoRoot: process.env.SHOCK2_E2E_REPO_ROOT,
       debugFlags: ["--vr"],
     });

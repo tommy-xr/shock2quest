@@ -20,7 +20,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8106),
       experimental: ["ragdoll"],
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
     });
@@ -117,7 +116,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8107),
       experimental: ["ragdoll"],
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
     });

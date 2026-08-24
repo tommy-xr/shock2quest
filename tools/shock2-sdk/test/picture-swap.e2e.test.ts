@@ -58,7 +58,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "rec1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8153),
     });
     await game.step({ frames: 5 });
     const supportedSavePosition = await game.player.position();

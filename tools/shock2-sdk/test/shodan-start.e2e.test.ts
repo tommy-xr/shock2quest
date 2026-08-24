@@ -20,7 +20,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "shodan.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8233),
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
     });
 
@@ -74,7 +73,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "shodan.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8233) + 1,
     });
 
     // Resume the reviewed campaign frontier immediately before the portal.

@@ -37,16 +37,13 @@ const MISSIONS = [
   "shodan.mis",
 ];
 
-const BASE_PORT = Number(process.env.SHOCK2_E2E_PORT ?? 8100);
-
-MISSIONS.forEach((mission, index) => {
+MISSIONS.forEach((mission) => {
   test(
     `mission loads: ${mission}`,
     { skip: !e2eEnabled, timeout: 300_000 },
     async () => {
       await using game = await GameServer.launch({
         mission,
-        port: BASE_PORT + index,
       });
 
       // Simulation advances without crashing.

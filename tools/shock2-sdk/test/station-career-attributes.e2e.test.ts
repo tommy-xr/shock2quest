@@ -47,9 +47,8 @@ function dist2(a: Vec3, b: Vec3): number {
  */
 async function playCareer(
   branch: keyof typeof MARKERS,
-  port: number,
 ): Promise<{ maxHp: number; maxPsi: number }> {
-  await using game = await GameServer.launch({ mission: "earth.mis", port });
+  await using game = await GameServer.launch({ mission: "earth.mis" });
   await game.step({ frames: 5 });
 
   // Guard: selection must go through station's own entities, not the removed
@@ -104,10 +103,9 @@ test(
   "career: branches chosen at the recruitment intro deploy with distinct attributes",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
-    const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8117);
-    const marine = await playCareer("marine", basePort);
-    const navy = await playCareer("navy", basePort + 1);
-    const osa = await playCareer("osa", basePort + 2);
+    const marine = await playCareer("marine");
+    const navy = await playCareer("navy");
+    const osa = await playCareer("osa");
 
     // Hit points differ across all three branches (Marines tankiest, OSA least).
     assert.notEqual(marine.maxHp, navy.maxHp, "Marine vs Navy HP should differ");

@@ -86,7 +86,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "rec1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8198),
     });
     assert.ok(arrivalSave);
     assert.equal((await game.load(arrivalSave)).success, true);
@@ -182,7 +181,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "command1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8198),
     });
     assert.ok(commandArrivalSave);
     assert.equal((await game.load(commandArrivalSave)).success, true);

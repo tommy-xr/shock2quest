@@ -18,7 +18,6 @@ import { GameServer } from "../src/index.js";
 // Negative-first: without the feature, (1) and (3) both fail - `/v1/scene` has
 // no `hit_feedback` object at all and the damage plays no sound whatsoever.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8101);
 
 const HIT_FEEDBACK_SOURCE = "hit_feedback";
 
@@ -54,7 +53,6 @@ for (const presentation of ["flat", "vr"] as const) {
     async () => {
       await using game = await GameServer.launch({
         mission: "medsci1.mis",
-        port: basePort,
         debugFlags: presentation === "vr" ? ["--vr"] : [],
       });
       await game.step({ frames: 60 });
@@ -107,7 +105,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 1,
     });
     await game.step({ frames: 60 });
 
@@ -142,7 +139,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 2,
     });
     await game.step({ frames: 60 });
 

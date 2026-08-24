@@ -19,7 +19,6 @@ import { GameServer } from "../src/index.js";
 // keeps `Game::render` gated the world stops drawing - which is the VR
 // comfort/compositor bug (#1002/#1003) this design exists to avoid.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8210);
 
 const CANVAS_W = 640;
 const CANVAS_H = 480;
@@ -57,7 +56,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort,
     });
     await game.step({ frames: 30 });
 
@@ -113,7 +111,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 1,
     });
     await game.step({ frames: 30 });
 
@@ -146,7 +143,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_minimal",
-      port: basePort + 2,
     });
     await game.step({ frames: 30 });
 
@@ -172,7 +168,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 3,
     });
     await game.step({ frames: 30 });
 
@@ -218,7 +213,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 4,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -281,7 +275,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 5,
     });
     await game.step({ frames: 30 });
     await game.input.trigger("TogglePauseMenu");

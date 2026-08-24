@@ -30,7 +30,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8096),
       // Flat is the debug runtime's default presentation; the flat path drives
       // the first-person fire loop.
     });

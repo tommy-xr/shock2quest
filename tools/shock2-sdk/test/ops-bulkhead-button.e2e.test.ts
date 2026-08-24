@@ -48,7 +48,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "ops2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8128),
     });
     await game.step({ frames: 2 });
     assert.equal(await game.quests.get("ShodanRoom"), "unknown");
@@ -80,7 +79,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "ops1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8129),
     });
     await game.step({ frames: 2 });
 
@@ -136,7 +134,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "ops2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8125),
     });
     await game.step({ frames: 2 });
     assert.equal(
@@ -173,7 +170,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "ops3.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8126),
     });
     await game.step({ frames: 2 });
 
@@ -204,7 +200,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "ops4.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8127),
     });
     await game.step({ frames: 2 });
 

@@ -149,7 +149,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8668),
       repoRoot: process.env.SHOCK2_E2E_REPO_ROOT,
       debugFlags: ["--vr"],
     });
@@ -362,7 +361,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8669),
       repoRoot: process.env.SHOCK2_E2E_REPO_ROOT,
     });
     await game.step({ frames: 5 });
@@ -442,7 +440,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8670),
       repoRoot: process.env.SHOCK2_E2E_REPO_ROOT,
     });
     await game.step({ frames: 5 });

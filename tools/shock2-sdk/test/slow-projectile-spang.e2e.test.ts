@@ -24,7 +24,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8123),
     });
 
     // Cycle to the laser pistol (4th roster entry).

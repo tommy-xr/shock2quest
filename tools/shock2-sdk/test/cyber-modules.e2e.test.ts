@@ -18,7 +18,6 @@ import type { EntitySummary } from "../src/types.js";
 // Negative-first: on main, info().stats has no `cyber_modules` field (undefined,
 // so the `=== 0` baseline assert fails) and TurnOn'ing the trap changes nothing.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8169);
 
 /** Read the property `name`'s integer value from an entity's detail, or null. */
 async function propInt(
@@ -43,7 +42,6 @@ test(
     const saveName = `cyber_modules_e2e_${Date.now()}`;
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort,
     });
     await game.step({ frames: 5 });
 

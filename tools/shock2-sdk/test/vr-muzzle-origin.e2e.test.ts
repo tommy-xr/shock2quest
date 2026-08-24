@@ -29,7 +29,6 @@ import type { Quat } from "./helpers/vr-hand.js";
 // Requires a 25th Anniversary install (DARK_ASSET_PATH): the vhots below are
 // the remastered `mods/sshock2ee.kpf` view models', which is what VR wields.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8102);
 
 /** Weapon templates cycled by DebugCycleWeapon (mission_core DEBUG_WEAPONS). */
 const LASER_PISTOL = -22;
@@ -182,7 +181,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -226,7 +224,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_psi",
-      port: basePort + 1,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });

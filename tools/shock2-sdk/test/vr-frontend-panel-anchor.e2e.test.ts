@@ -131,7 +131,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "main_menu",
-      port: 8171,
       debugFlags: ["--vr"],
     });
     // Scene entry places the panel from the default head (yaw 0).
@@ -166,7 +165,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "main_menu",
-      port: 8172,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 10 });
@@ -203,7 +201,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "main_menu",
-      port: 8173,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 10 });

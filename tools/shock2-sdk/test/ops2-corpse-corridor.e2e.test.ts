@@ -22,7 +22,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "ops2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8491),
     });
 
     const loaded = await game.load(saveName!);

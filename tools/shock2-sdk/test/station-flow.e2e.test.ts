@@ -118,7 +118,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8130),
     });
     await game.step({ frames: 5 });
     await game.screenshot("station-flow-earth.png");
@@ -293,7 +292,6 @@ test(
  */
 async function enlist(
   branch: keyof typeof CAREER_DOORS,
-  port: number,
 ): Promise<{
   bit: string;
   hitPoints: number | null;
@@ -302,7 +300,7 @@ async function enlist(
   maxPsi: number | null;
 }> {
   const door = CAREER_DOORS[branch];
-  await using game = await GameServer.launch({ mission: "earth.mis", port });
+  await using game = await GameServer.launch({ mission: "earth.mis" });
   await game.step({ frames: 5 });
 
   await teleportTo(game, door.trip);
@@ -327,18 +325,16 @@ test(
   "station flow: Navy and OSA doors map to the correct career bit and loadout",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
-    const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8131);
-
     // Navy: the door whose tripwire switches the mislabeled "SendToMarines"
     // marker (P$Service=1). Correct engine behavior yields the Navy career.
-    const navy = await enlist("navy", basePort);
+    const navy = await enlist("navy");
     assert.equal(navy.bit, "complete", "Navy door should set career_navy (despite the 'SendToMarines' misnomer)");
     assert.equal(navy.hitPoints, CAREER_DOORS.navy.maxHp, "Navy starts at full career HP");
     assert.equal(navy.maxHp, CAREER_DOORS.navy.maxHp, "Navy deploys with 35 max HP");
     assert.equal(navy.psiPoints, CAREER_DOORS.navy.maxPsi, "Navy starts at full career psi");
     assert.equal(navy.maxPsi, CAREER_DOORS.navy.maxPsi, "Navy deploys with 35 max psi");
 
-    const osa = await enlist("osa", basePort + 1);
+    const osa = await enlist("osa");
     assert.equal(osa.bit, "complete", "OSA door should set career_osa");
     assert.equal(osa.hitPoints, CAREER_DOORS.osa.maxHp, "OSA starts at full career HP");
     assert.equal(osa.maxHp, CAREER_DOORS.osa.maxHp, "OSA deploys with 30 max HP");

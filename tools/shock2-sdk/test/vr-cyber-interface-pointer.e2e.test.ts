@@ -14,7 +14,6 @@ import { aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 // reports no `panel_pose` and no `pointer`, so aiming at a slot changes
 // nothing and every assertion below fails there.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8581);
 
 const center = (el: UiElement): [number, number] => [
   el.rect[0] + el.rect[2] / 2,
@@ -57,7 +56,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -150,7 +148,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 1,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });

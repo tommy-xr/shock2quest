@@ -15,7 +15,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_minimal",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8115),
     });
 
     // Keep the rejection handled from the moment the request is launched:

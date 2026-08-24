@@ -73,7 +73,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8103),
       debugFlags: ["--vr"],
     });
 

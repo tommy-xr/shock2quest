@@ -137,7 +137,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "hydro1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 9101),
       rustLog: "debug_runtime=info,shock2vr=debug",
     });
     await game.step({ frames: 5 });

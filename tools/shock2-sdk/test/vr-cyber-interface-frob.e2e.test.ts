@@ -15,7 +15,6 @@ import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 // Negative-first: on the parent this fails at the "collected" assertion -
 // the pile is still sitting there with the stat unchanged.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8577);
 
 /** Stable earth.mis mission object: a "Big Nanite Pile" (see
  * nanite-player-stat.e2e.test.ts). Collecting it moves a known amount into
@@ -30,7 +29,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: basePort,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -100,7 +98,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: basePort + 1,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
