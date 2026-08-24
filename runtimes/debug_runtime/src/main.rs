@@ -3353,6 +3353,10 @@ async fn audit_colliders(
 #[derive(serde::Deserialize)]
 struct ScreenshotRequest {
     filename: Option<String>,
+    /// Cap the saved PNG's width (aspect-preserving, never upscales). Omitted,
+    /// the capture is downscaled to the declared logical size (`SCR_WIDTH`), so
+    /// a HiDPI framebuffer doesn't quadruple the pixel count.
+    max_width: Option<u32>,
 }
 
 /// HTTP handler for taking screenshots
@@ -3364,6 +3368,7 @@ async fn take_screenshot(
 
     let spec = ScreenshotSpec {
         filename: request.filename,
+        max_width: request.max_width,
     };
 
     // Send screenshot command to game loop
@@ -3409,13 +3414,13 @@ fn capture_screenshot_to_result(spec: ScreenshotSpec) -> ScreenshotResult {
     });
     let full_path = screenshots_dir.join(&filename);
 
-    match capture_screenshot(&full_path, SCR_WIDTH, SCR_HEIGHT) {
-        Ok(size_bytes) => {
+    match capture_screenshot(&full_path, SCR_WIDTH, SCR_HEIGHT, spec.max_width) {
+        Ok((size_bytes, resolution)) => {
             tracing::info!("Screenshot saved to: {}", full_path.display());
             ScreenshotResult {
                 filename,
                 full_path: full_path.to_string_lossy().to_string(),
-                resolution: [SCR_WIDTH, SCR_HEIGHT],
+                resolution,
                 size_bytes,
             }
         }
@@ -3431,12 +3436,52 @@ fn capture_screenshot_to_result(spec: ScreenshotSpec) -> ScreenshotResult {
     }
 }
 
-/// Capture the current OpenGL framebuffer and save it as a PNG
+/// Pick the dimensions the saved PNG should have.
+///
+/// The framebuffer can be larger than the declared logical size (2x on a HiDPI
+/// display), so by default we shrink back to fit the declared box: what callers
+/// asked for, and a quarter of the pixels (which matters for LLM consumers, who
+/// pay per image pixel). `max_width` replaces that box with a width-only cap.
+/// Aspect is always the framebuffer's, so nothing is distorted, and the result
+/// never exceeds the framebuffer (no upscaling).
+fn screenshot_target_size(
+    fb_width: u32,
+    fb_height: u32,
+    logical_width: u32,
+    logical_height: u32,
+    max_width: Option<u32>,
+) -> (u32, u32) {
+    if fb_width == 0 || fb_height == 0 {
+        return (fb_width, fb_height);
+    }
+
+    // Scale factor that fits the framebuffer into the requested bounds. Without
+    // `max_width` that's the declared box, so a window resized to a different
+    // aspect still lands inside 800x600 rather than only under 800 wide.
+    let scale = match max_width.filter(|w| *w > 0) {
+        Some(max_width) => max_width as f64 / fb_width as f64,
+        None => {
+            (logical_width as f64 / fb_width as f64).min(logical_height as f64 / fb_height as f64)
+        }
+    };
+    if scale >= 1.0 {
+        return (fb_width, fb_height);
+    }
+
+    let target_width = ((fb_width as f64 * scale).round() as u32).max(1);
+    let target_height = ((fb_height as f64 * scale).round() as u32).max(1);
+    (target_width, target_height)
+}
+
+/// Capture the current OpenGL framebuffer and save it as a PNG.
+///
+/// Returns the file size and the true dimensions of the saved image.
 fn capture_screenshot(
     path: &std::path::Path,
     width: u32,
     height: u32,
-) -> Result<u64, Box<dyn std::error::Error>> {
+    max_width: Option<u32>,
+) -> Result<(u64, [u32; 2]), Box<dyn std::error::Error>> {
     unsafe {
         // Ensure all rendering for this frame has completed before reading back,
         // so we never capture a partially-drawn buffer.
@@ -3504,11 +3549,30 @@ fn capture_screenshot(
         let img = image::RgbImage::from_vec(actual_width, actual_height, flipped_pixels)
             .ok_or("Failed to create image from pixel data")?;
 
+        // Downscale to the declared (or requested) size so the saved PNG matches
+        // the resolution we report, even when the framebuffer is HiDPI.
+        // `Triangle` rather than `Lanczos3`: the runtime is normally run from the
+        // dev profile, where the higher-order filter costs the game loop nearly a
+        // second per capture, and this is a plain area reduction where the
+        // difference is not visible.
+        let (target_width, target_height) =
+            screenshot_target_size(actual_width, actual_height, width, height, max_width);
+        let img = if (target_width, target_height) == (actual_width, actual_height) {
+            img
+        } else {
+            image::imageops::resize(
+                &img,
+                target_width,
+                target_height,
+                image::imageops::FilterType::Triangle,
+            )
+        };
+
         img.save(path)?;
 
         // Calculate file size
         let metadata = std::fs::metadata(path)?;
-        Ok(metadata.len())
+        Ok((metadata.len(), [target_width, target_height]))
     }
 }
 
@@ -3841,6 +3905,85 @@ async fn shutdown_signal(command_tx: mpsc::UnboundedSender<RuntimeCommand>) {
 fn request_game_loop_shutdown(command_tx: &mpsc::UnboundedSender<RuntimeCommand>) {
     if command_tx.send(RuntimeCommand::Shutdown).is_err() {
         info!("Game loop already stopped while handling shutdown signal");
+    }
+}
+
+#[cfg(test)]
+mod screenshot_size_tests {
+    use super::screenshot_target_size;
+
+    #[test]
+    fn hidpi_framebuffer_downscales_to_logical_size() {
+        assert_eq!(
+            screenshot_target_size(1600, 1200, 800, 600, None),
+            (800, 600)
+        );
+    }
+
+    #[test]
+    fn non_hidpi_framebuffer_is_untouched() {
+        assert_eq!(screenshot_target_size(800, 600, 800, 600, None), (800, 600));
+    }
+
+    #[test]
+    fn max_width_raises_the_cap_but_never_upscales() {
+        assert_eq!(
+            screenshot_target_size(1600, 1200, 800, 600, Some(1600)),
+            (1600, 1200)
+        );
+        assert_eq!(
+            screenshot_target_size(1600, 1200, 800, 600, Some(4000)),
+            (1600, 1200)
+        );
+        assert_eq!(
+            screenshot_target_size(800, 600, 800, 600, Some(4000)),
+            (800, 600)
+        );
+    }
+
+    #[test]
+    fn max_width_below_logical_size_shrinks_further() {
+        assert_eq!(
+            screenshot_target_size(1600, 1200, 800, 600, Some(400)),
+            (400, 300)
+        );
+    }
+
+    #[test]
+    fn a_resized_window_still_fits_inside_the_declared_box() {
+        // The debug window is resizable, so the framebuffer aspect can differ
+        // from the declared one. Fit inside 800x600 rather than capping width
+        // alone, which would have saved a PNG taller than the declared size.
+        assert_eq!(
+            screenshot_target_size(1600, 2000, 800, 600, None),
+            (480, 600)
+        );
+        // ...and the aspect is never distorted to fill the box exactly.
+        assert_eq!(
+            screenshot_target_size(2000, 1000, 800, 600, None),
+            (800, 400)
+        );
+    }
+
+    #[test]
+    fn max_width_is_a_width_only_cap() {
+        // Asking for a width explicitly means exactly that; the declared height
+        // no longer constrains the result.
+        assert_eq!(
+            screenshot_target_size(1600, 2000, 800, 600, Some(800)),
+            (800, 1000)
+        );
+    }
+
+    #[test]
+    fn degenerate_inputs_do_not_panic() {
+        assert_eq!(screenshot_target_size(0, 0, 800, 600, None), (0, 0));
+        // A zero cap is meaningless, so it falls back to the declared box
+        // rather than writing a 1x1 PNG.
+        assert_eq!(
+            screenshot_target_size(1600, 1200, 800, 600, Some(0)),
+            (800, 600)
+        );
     }
 }
 

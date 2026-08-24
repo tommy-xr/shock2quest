@@ -62,6 +62,9 @@ curl -s -X POST http://127.0.0.1:8085/v1/shutdown
 - **The screenshot path must be ABSOLUTE and its directory must already exist** —
   the endpoint won't `mkdir`, and `curl` exits 0 on the error response, so a
   missing dir fails silently. Echo the JSON response instead of `> /dev/null`.
+- **Captures are 800x600** — the declared logical size, regardless of a HiDPI
+  framebuffer. Pass a large `{"max_width": 4000}` when a detail (small HUD text,
+  a thin seam) needs the native framebuffer resolution; it never upscales.
 - `/v1/step` is a **fixed 60 Hz timestep** and blocks until the frames ran;
   `/v1/screenshot` captures the fully-rendered frame. The same request sequence
   from a fresh launch produces **byte-identical** images — that determinism is

@@ -77,6 +77,10 @@ DARK_ASSET_PATH="$HOME/ss2-25th" cargo dbgr --mission <m>.mis --port <p> --vr
 `/v1/step {frames:N}` after each action so it takes effect (deterministic; no
 sleeps). Tripwires fire on entry; bulkhead buttons fire on Frob.
 
+Screenshots come back at **800x600** (the declared size, regardless of a HiDPI
+framebuffer) — cheap to read often. Add a large `{"max_width": 4000}` on the rare
+shot where you need the native framebuffer detail; it never upscales.
+
 ### Player-authentic interaction differs by presentation
 
 `POST /v1/entities/:id/message {type:"Frob"}` is a **debug injection**: it drives

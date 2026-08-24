@@ -794,8 +794,15 @@ export class Game {
     return this.client.post<StepResult>("/v1/step", spec);
   }
 
-  async screenshot(filename?: string): Promise<ScreenshotResult> {
-    return this.client.post<ScreenshotResult>("/v1/screenshot", { filename });
+  /**
+   * Capture the current frame. Saved at the runtime's declared 800x600 by
+   * default (even on a HiDPI framebuffer); pass `maxWidth` for more detail.
+   */
+  async screenshot(filename?: string, maxWidth?: number): Promise<ScreenshotResult> {
+    return this.client.post<ScreenshotResult>("/v1/screenshot", {
+      filename,
+      max_width: maxWidth,
+    });
   }
 
   async raycast(request: RayCastRequest): Promise<RayCastResult> {
