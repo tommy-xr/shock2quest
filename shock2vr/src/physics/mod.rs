@@ -3759,7 +3759,10 @@ impl PhysicsWorld {
     /// Rotational sweeps are expensive and ill-defined against thin geometry,
     /// and the failure they would prevent (turning the blade into a wall) is
     /// far milder than the one taking the hand's rotation prevents (a weapon
-    /// whose angle is not the angle of the hand holding it).
+    /// whose angle is not the angle of the hand holding it). A held gun makes
+    /// that more visible than a wrench does - a long barrel can be *turned*
+    /// into a wall it cannot be *pushed* into - but the tradeoff is the same
+    /// one, and the same choice.
     ///
     /// Only WORLD geometry blocks. Actors deliberately do not: a swing has to
     /// travel *into* a creature to damage it, and loose props are better
@@ -6144,10 +6147,10 @@ mod tests {
         assert!(world.get_velocity(weapon).unwrap().magnitude() < 1.0e-4);
     }
 
-    /// World solver contact must win over the hand motor, then releasing that
-    /// obstruction must let the weapon return to the tracked pose.
-    #[test]
-    fn held_melee_weapon_stops_at_world_geometry_then_springs_back() {
+    /// Drive a held body of `group` from x=-1 at a fixed wall at x=0, then let
+    /// the hand retreat. Shared by the melee and inert cases: what the level
+    /// does to a held body must not depend on which group it is held with.
+    fn held_item_pushed_into_a_wall_then_withdrawn(group: CollisionGroup) {
         let (mut world, mut player) = world_with_floor();
         world.add_collider(
             EntityId::from_inner(2).unwrap(),
@@ -6166,7 +6169,7 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
+        world.set_held_item_physical(weapon, group);
         world.set_position_rotation2(weapon, vec3(-1.0, 1.0, 0.0), identity_quat());
         step(&mut world, &mut player, 1);
         world.set_position_rotation2(weapon, vec3(1.0, 1.0, 0.0), identity_quat());
@@ -6176,7 +6179,7 @@ mod tests {
         let blocked_x = world.get_position(handle).unwrap().x;
         assert!(
             blocked_x < -0.20,
-            "the dynamic weapon crossed the fixed wall instead of stopping: x={blocked_x}"
+            "the held body crossed the fixed wall instead of stopping: x={blocked_x}"
         );
 
         world.set_position_rotation2(weapon, vec3(-1.0, 1.0, 0.0), identity_quat());
@@ -6184,8 +6187,15 @@ mod tests {
         let returned_x = world.get_position(handle).unwrap().x;
         assert!(
             returned_x < -0.8,
-            "the weapon did not spring back after the target cleared the wall: x={returned_x}"
+            "the held body did not spring back after the target cleared the wall: x={returned_x}"
         );
+    }
+
+    /// World solver contact must win over the hand motor, then releasing that
+    /// obstruction must let the weapon return to the tracked pose.
+    #[test]
+    fn held_melee_weapon_stops_at_world_geometry_then_springs_back() {
+        held_item_pushed_into_a_wall_then_withdrawn(CollisionGroup::held_melee());
     }
 
     /// The `physical_held_items` case: a held gun only has to stop travelling
@@ -6195,44 +6205,7 @@ mod tests {
     /// the whole design rests on it.
     #[test]
     fn an_inert_held_item_is_still_stopped_by_world_geometry() {
-        let (mut world, mut player) = world_with_floor();
-        world.add_collider(
-            EntityId::from_inner(2).unwrap(),
-            ColliderBuilder::cuboid(0.05, 1.0, 1.0)
-                .translation(vector![0.0, 1.0, 0.0])
-                .build(),
-        );
-        let gun = EntityId::from_inner(3).unwrap();
-        let handle = world.add_dynamic(
-            gun,
-            vec3(-1.0, 1.0, 0.0),
-            identity_quat(),
-            vec3(0.0, 0.0, 0.0),
-            PhysicsShape::Cuboid(vec3(0.4, 0.4, 0.4)),
-            CollisionGroup::entity(),
-            false,
-            DynamicPhysicsOptions::default(),
-        );
-        world.set_held_item_physical(gun, CollisionGroup::held_inert());
-        world.set_position_rotation2(gun, vec3(-1.0, 1.0, 0.0), identity_quat());
-        step(&mut world, &mut player, 1);
-        world.set_position_rotation2(gun, vec3(1.0, 1.0, 0.0), identity_quat());
-
-        step(&mut world, &mut player, 120);
-
-        let blocked_x = world.get_position(handle).unwrap().x;
-        assert!(
-            blocked_x < -0.20,
-            "an inert held item crossed the fixed wall instead of stopping: x={blocked_x}"
-        );
-
-        world.set_position_rotation2(gun, vec3(-1.0, 1.0, 0.0), identity_quat());
-        step(&mut world, &mut player, 60);
-        let returned_x = world.get_position(handle).unwrap().x;
-        assert!(
-            returned_x < -0.8,
-            "the item did not return once the target cleared the wall: x={returned_x}"
-        );
+        held_item_pushed_into_a_wall_then_withdrawn(CollisionGroup::held_inert());
     }
 
     /// ...and it touches nothing while it does. A held gun swept through a

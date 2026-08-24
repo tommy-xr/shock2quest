@@ -234,6 +234,13 @@ fn split_at_terminal_joint(
 /// builds. The weapon/arm split is by material rather than by terminal joint -
 /// a gun's arm is not a joint, it is `ND-arm*` geometry that can ride any
 /// sub-object (see [`is_first_person_arm_material`]).
+///
+/// Like both skinned branches below, this measures the *authored* geometry: the
+/// renderer additionally drops any slot whose texture will not resolve, and
+/// this fit does not. A model missing a texture would therefore be fitted
+/// slightly larger than it draws - which is the safe direction (the weapon
+/// stops short rather than sinking in), and is how the melee fit has always
+/// behaved.
 fn obj_weapon_geometry(obj: &SystemShock2ObjectMesh) -> Option<VrHeldWeaponGeometry> {
     let mut vertices = Vec::new();
     let mut arm_vertices = Vec::new();
