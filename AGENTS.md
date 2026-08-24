@@ -171,8 +171,14 @@ Discrete, non-contextual inputs (quick save/load, debug spawns, pathfinding test
 ```
 Desktop:  GLFW polling → DesktopInputMapper → InputActionState → ActionDispatcher → Effects
 Debug:    HTTP POST /v1/input/action      → InputActionState → ActionDispatcher → Effects
-Oculus:   (no mapper yet - passes an empty InputActionState)
+Oculus:   OpenXR action states            → InputActionState → ActionDispatcher → Effects
 ```
+
+Quest button/chord paths live beside their actions in
+`InputAction::quest_touch_click_path` / `quest_touch_chord_paths`, so the
+mapping is host-testable even though `oculus_runtime` only builds for Android.
+The current key and controller bindings are listed in
+[DEVELOPMENT.md](DEVELOPMENT.md#debug--developer-keys).
 
 - **`InputAction`** (`input/actions.rs`) - serde-enabled enum of all discrete actions
 - **`InputActionState`** (`input/state.rs`) - edge-triggered action state, consumed once per `Game::update`

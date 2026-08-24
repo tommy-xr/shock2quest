@@ -41,11 +41,9 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `Q` `E` - control left hand or right hand, respectively. Mouse look will move the hand, left click will 'trigger', and right click will 'grab'.
 - `Ctrl` - crouch
 - `Space` - jump
-- `I` - move the floating inventory in front of you
+- `Tab` / `I` - toggle the cyber interface ("use" mode): a cursor-driven UI over the 3D view
 - `Alt+S` / `Alt+L` - quick save / quick load
-- `P` - cycle the pathfinding test (set start → set goal → show path)
-- Quest VR: press the left controller's `X` button to place/toggle the backpack;
-  point at a stored item and squeeze to retrieve it into that hand.
+- Quest VR: press the left controller's `X` button to toggle the cyber interface.
 - Quest VR: press the left controller's `Y` button to open the newest unread
   audio log. Press `Y` again to close it; after every log is read, `Y` replays
   the most recently collected log.
@@ -54,6 +52,9 @@ However, you can play with a keyboard and a mouse, using the following hard-code
   `6` EMP Rifle, `7` Electro Shock, `8` Grenade Launcher, `9` Stasis Field
   Generator, `0` Fusion Cannon, `-` Crystal Shard, `=` Viral Proliferator,
   `\` Worm Launcher, and `` ` `` / `~` Psi Amp
+
+Development builds carry additional debug keys and a Developer options screen -
+see [DEVELOPMENT.md](DEVELOPMENT.md#debug--developer-keys).
 
 ## Building
 
