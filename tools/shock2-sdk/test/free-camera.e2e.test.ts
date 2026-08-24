@@ -153,10 +153,8 @@ test("a placed camera renders from where it was put", { skip }, async () => {
     player.y + 2.5,
     player.z + 3,
   ];
-  const placed = await game.camera.set({
-    position: eye,
-    lookAt: [player.x, player.y + 1, player.z],
-  });
+  const target: [number, number, number] = [player.x, player.y + 1, player.z];
+  const placed = await game.camera.set({ position: eye, lookAt: target });
 
   assert.equal(placed.detached, true);
   assert.equal(
@@ -169,6 +167,27 @@ test("a placed camera renders from where it was put", { skip }, async () => {
     assert.ok(
       Math.abs(placed.eye_position[axis] - eye[axis]) < 1e-3,
       `eye landed at ${placed.eye_position}, wanted ${eye}`,
+    );
+  }
+
+  // ...and it is AIMED where it was told. Asserting only the position would
+  // pass a look-at that quietly points somewhere else - the composition
+  // (look_at -> pose_for_eye -> stored -> eye_for_pose) is what this closes.
+  assert.ok(placed.eye_rotation);
+  const [w, qx, qy, qz] = placed.eye_rotation;
+  // Rotate (0, 0, -1) by the reported quaternion - i.e. negate the rotation
+  // matrix's third column - to recover the camera's view direction.
+  const forward = [
+    -2 * (qx * qz + w * qy),
+    -2 * (qy * qz - w * qx),
+    -(1 - 2 * (qx * qx + qy * qy)),
+  ];
+  const toTarget = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+  const length = Math.hypot(...toTarget);
+  for (const axis of [0, 1, 2]) {
+    assert.ok(
+      Math.abs(forward[axis] - toTarget[axis] / length) < 1e-3,
+      `camera aimed ${forward}, wanted ${toTarget.map((v) => v / length)}`,
     );
   }
 
@@ -229,8 +248,10 @@ test("a nonsense camera placement is refused, not half-applied", { skip }, async
     /direction/,
   );
 
-  // None of that placed anything.
+  // None of that placed anything - including the developer gate, which is the
+  // side effect that would leak from a request applied halfway.
   const state = await game.camera.state();
   assert.equal(state.detached, false);
   assert.equal(state.position, null);
+  assert.equal(state.enabled, false, "a refused placement must not open the gate");
 });

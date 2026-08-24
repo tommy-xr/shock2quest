@@ -1896,8 +1896,7 @@ impl Game {
         // outside it entirely. Worse, it strands the player: the frontend
         // panel is pawn-anchored, so a detached camera cannot see the menu it
         // would take to switch the camera back off.
-        self.free_camera.attach();
-        self.free_camera_view_fixup = None;
+        self.attach_free_camera();
     }
 
     /// The free camera's observable state: whether it is detached, and the

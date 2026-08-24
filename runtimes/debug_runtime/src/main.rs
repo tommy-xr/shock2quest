@@ -1974,11 +1974,8 @@ fn input_snapshot_from_context(input: &InputContext) -> InputSnapshot {
 /// camera the runtime actually rendered from, which is what makes the death
 /// camera observable headlessly, and a second copy of this expression would
 /// drift from the one that matters.
-/// The tracked head this runtime composes onto the camera pose every frame -
-/// the offset `resolved_camera` passes and the rotation the input context
-/// holds. `POST /v1/camera` has to divide it back out (and `GET /v1/camera`
-/// multiply it back in) so the pose a caller names is the pose the picture is
-/// actually taken from.
+/// The *tracked* head this runtime reports: the crouch-aware eye height and
+/// whatever `/v1/control/input` last aimed the head at.
 fn tracked_head(game: &Game, input: &InputContext) -> (Vector3<f32>, Quaternion<f32>) {
     (
         vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
@@ -1986,10 +1983,32 @@ fn tracked_head(game: &Game, input: &InputContext) -> (Vector3<f32>, Quaternion<
     )
 }
 
+/// The head the renderer actually composes onto the camera pose this frame.
+///
+/// Not the tracked pair: while the player is dying the death camera *replaces*
+/// both components with the fallen eye (`death_camera::resolve`), and it does
+/// so with a full position, not a small delta. Dividing out the tracked pair
+/// instead would land a placement made during the fall metres away and have
+/// `GET /v1/camera` confidently report a pose that was never rendered - and
+/// "watch where the ragdoll landed" is exactly when an agent reaches for this.
+///
+/// The pawn is passed as the identity it is relative to, the same trick
+/// `capture_frame_snapshot` uses: `resolve` never touches the pawn half.
+fn composed_head(game: &Game, input: &InputContext) -> (Vector3<f32>, Quaternion<f32>) {
+    let (head_offset, head_rotation) = tracked_head(game, input);
+    let resolved = game.resolve_camera(
+        vec3(0.0, 0.0, 0.0),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        head_offset,
+        head_rotation,
+    );
+    (resolved.head_offset, resolved.head_rotation)
+}
+
 /// The free camera's state as `GET /v1/camera` (and the reply to a placement)
 /// reports it: the stored camera pose, plus the eye pose it renders as.
 fn camera_snapshot(game: &Game, input: &InputContext) -> CameraStateSnapshot {
-    let (head_offset, head_rotation) = tracked_head(game, input);
+    let (head_offset, head_rotation) = composed_head(game, input);
     let (detached, pose) = game.free_camera_state();
     let eye =
         pose.map(|pose| shock2vr::free_camera::eye_for_pose(pose, head_offset, head_rotation));
@@ -2013,8 +2032,8 @@ fn camera_snapshot(game: &Game, input: &InputContext) -> CameraStateSnapshot {
 /// * **The head composition.** The view is `(camera * head)^-1`, so a pose
 ///   handed straight to the free camera would render an eye-height above the
 ///   requested point, rotated by whatever the head last reported. It is divided
-///   out here (`free_camera::pose_for_eye`) against the same head
-///   `resolved_camera` uses.
+///   out here (`free_camera::pose_for_eye`) against `composed_head` - the head
+///   the renderer really composes, death-camera blend included.
 /// * **The developer gate.** `Game::update` re-attaches the camera every frame
 ///   while the `free_camera` dev param is off, so a placement made without it
 ///   would survive exactly until the next `/v1/step`. There is no human at a
@@ -2022,13 +2041,24 @@ fn camera_snapshot(game: &Game, input: &InputContext) -> CameraStateSnapshot {
 ///   turns the gate on itself (and `GET /v1/camera` reports it as `enabled`).
 ///   Re-attaching deliberately leaves the gate alone: the caller may have set
 ///   it on purpose, and re-attaching is already the full way back to the body.
+///   One consequence worth knowing: the gate stays on for the rest of the
+///   process, so the `ToggleFreeCamera` chord is live from the first placement.
+///
+/// The compensation is a snapshot of a live quantity, so a later
+/// `POST /v1/control/input` that patches `head.rotation` (or a crouch, which
+/// moves the eye height) swings a placed camera off its target - `GET` still
+/// reports the truth, because it recomputes, but the picture is no longer the
+/// one that was asked for. Re-issue the placement after aiming the head.
 fn apply_camera_request(
     game: &mut Game,
     input: &InputContext,
     request: &SetCameraRequest,
 ) -> Result<(), String> {
+    fn all_finite(values: &[f32]) -> bool {
+        values.iter().all(|v| v.is_finite())
+    }
     fn finite(label: &str, values: [f32; 3]) -> Result<Vector3<f32>, String> {
-        if values.iter().any(|v| !v.is_finite()) {
+        if !all_finite(&values) {
             return Err(format!(
                 "'{label}' must be three finite numbers, got {values:?}"
             ));
@@ -2054,7 +2084,7 @@ fn apply_camera_request(
         );
     }
 
-    let (head_offset, head_rotation) = tracked_head(game, input);
+    let (head_offset, head_rotation) = composed_head(game, input);
     // Patch semantics are against the *eye* pose, which is the pose the caller
     // named last time - not the compensated one stored underneath.
     let current_eye = game
@@ -2085,7 +2115,7 @@ fn apply_camera_request(
         })?
     } else if let Some([w, x, y, z]) = request.rotation {
         let quaternion = Quaternion::new(w, x, y, z);
-        if ![w, x, y, z].iter().all(|v| v.is_finite()) || quaternion.magnitude() < 1e-6 {
+        if !all_finite(&[w, x, y, z]) || quaternion.magnitude() < 1e-6 {
             return Err(format!(
                 "'rotation' must be a non-degenerate [w, x, y, z] quaternion, got {:?}",
                 [w, x, y, z]
@@ -2117,12 +2147,12 @@ fn resolved_camera(
     pawn_rotation: Quaternion<f32>,
     input: &InputContext,
 ) -> shock2vr::death_camera::CameraPose {
-    game.resolve_camera(
-        pawn_offset,
-        pawn_rotation,
-        vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
-        input.head.rotation,
-    )
+    // The head pair comes from `tracked_head` rather than being spelled out
+    // again here: `composed_head` - what `POST /v1/camera` divides back out -
+    // is this same pair put through the same `resolve_camera`, and the
+    // placement is only correct while the two agree.
+    let (head_offset, head_rotation) = tracked_head(game, input);
+    game.resolve_camera(pawn_offset, pawn_rotation, head_offset, head_rotation)
 }
 
 /// Capture current game state as a frame snapshot

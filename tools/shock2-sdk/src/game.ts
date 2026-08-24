@@ -637,6 +637,10 @@ export class CameraApi {
    * `free_camera` developer option on (nothing else would keep the placement
    * past the next step), and while the camera is detached the pawn will not
    * walk - the locomotion sticks fly the camera instead.
+   *
+   * Aim the head AFTER this and the camera swings off its target: the runtime
+   * composes the tracked head onto the camera pose, and this divides out the
+   * head as it is now. Place the camera last, or re-issue the placement.
    */
   async set(placement: CameraPlacement): Promise<CameraState> {
     return this.client.post<CameraState>("/v1/camera", {

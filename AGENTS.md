@@ -370,6 +370,10 @@ For debugging visual/rendering changes without a full interactive session:
    # the option is off). The pawn is NOT moved and nothing that reads the
    # player's position notices - but while detached the locomotion sticks fly
    # the camera instead of walking the player, so re-attach before driving.
+   # Aim the head (/v1/control/input head.look) BEFORE placing: the runtime
+   # composes the tracked head onto the camera pose, and the placement divides
+   # out the head as it was at request time, so a later head patch swings the
+   # camera off its look_at. Re-POST the placement if you re-aim.
    # Culling still follows the *player* by default, so a camera placed in
    # another room may see culled-away geometry; set the `free_camera_cull`
    # dev param (POST /v1/dev-params) when framing from far away.

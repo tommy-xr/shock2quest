@@ -434,7 +434,11 @@ export interface CameraPlacement {
   position?: [number, number, number];
   /** A world point to aim at - the ergonomic way to frame an entity. */
   lookAt?: [number, number, number];
-  /** An explicit orientation as [w, x, y, z], instead of `lookAt`. */
+  /**
+   * An explicit orientation as **[w, x, y, z]**, instead of `lookAt`. Note the
+   * order: it matches what `camera.state()` reports back, NOT the `[x, y, z, w]`
+   * the `head.rotation` input channel takes.
+   */
   rotation?: [number, number, number, number];
 }
 

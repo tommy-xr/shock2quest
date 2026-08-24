@@ -25,9 +25,7 @@
 //! channels are withheld from the scene (see `Game::update`), so the pawn
 //! stands still rather than sleepwalking off while you fly.
 
-use cgmath::{
-    InnerSpace, Matrix3, Matrix4, Quaternion, Rotation, Rotation3, SquareMatrix, Vector3, vec3,
-};
+use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Rotation3, SquareMatrix, Vector3, vec3};
 
 use crate::dev_params;
 use crate::input_context::InputContext;
@@ -237,8 +235,15 @@ pub fn without_locomotion(input_context: &InputContext) -> InputContext {
 /// them is not finite - rather than a silently arbitrary orientation.
 ///
 /// Looking straight up or down has no roll-free "up" to level against, so the
-/// world up is swapped for a horizontal reference there; the result still faces
-/// the target exactly, which is the property callers depend on.
+/// basis is leveled against a horizontal reference there instead; the result
+/// still faces the target exactly, which is the property callers depend on.
+///
+/// The basis itself is [`crate::util::get_rotation_from_forward_vector`] - the
+/// repo's one "aim a rotation along a direction" - fed the *negated* direction,
+/// which is the same call the panel anchor and the hit-feedback rim already
+/// make to turn a gaze direction into a camera-convention rotation. All this
+/// adds is the guard: a target on top of the eye has no direction, and a
+/// normalize there would hand back a NaN rotation.
 pub fn look_at_rotation(eye: Vector3<f32>, target: Vector3<f32>) -> Option<Quaternion<f32>> {
     let delta = target - eye;
     if !delta.x.is_finite() || !delta.y.is_finite() || !delta.z.is_finite() {
@@ -247,21 +252,10 @@ pub fn look_at_rotation(eye: Vector3<f32>, target: Vector3<f32>) -> Option<Quate
     if delta.magnitude2() < 1e-12 {
         return None;
     }
-    let forward = delta.normalize();
     // The camera's own +Z points *backwards* along the view direction.
-    let back = -forward;
-    let world_up = vec3(0.0, 1.0, 0.0);
-    // Straight up/down: `world_up` is parallel to the view, so it cannot
-    // define "right". Level against world -Z instead, which keeps the picture
-    // upright in the same sense as looking at the horizon toward -Z.
-    let reference_up = if forward.cross(world_up).magnitude2() < 1e-6 {
-        vec3(0.0, 0.0, -1.0)
-    } else {
-        world_up
-    };
-    let right = reference_up.cross(back).normalize();
-    let up = back.cross(right);
-    Some(Quaternion::from(Matrix3::from_cols(right, up, back)))
+    Some(crate::util::get_rotation_from_forward_vector(
+        -delta.normalize(),
+    ))
 }
 
 /// The camera pose that renders the eye at exactly `eye`, given the tracked
