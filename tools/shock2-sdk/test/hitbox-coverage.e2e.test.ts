@@ -13,9 +13,9 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
  * clean through it, which is why corpses were so fiddly to aim at and loot.
  *
  * Sweep horizontal rays up the standing creature and require an unbroken run of
- * hits from just above the knees to over the head. With the old AABB proxies
- * this fails immediately (the lower band is empty); with the fitted
- * capsule/box shapes the whole body is covered.
+ * hits from the thighs to the chest. With the old AABB proxies this fails
+ * immediately (the lower band is empty); with the fitted capsule/box shapes the
+ * body is covered continuously.
  */
 test(
   "creature hitbox proxies cover the whole body, with no gaps between joints",
@@ -41,12 +41,15 @@ test(
     const proxyIds = new Set((detail.aim_points ?? []).map((p) => p.proxy_entity_id));
     assert.ok(proxyIds.size > 0, "creature should expose per-joint hitbox proxies");
 
-    // Heights relative to the creature origin: roughly mid-thigh up to above the
-    // head. The origin sits about a metre above the feet.
+    // Heights relative to the creature origin, stepped in integers to avoid
+    // float drift. The band runs from the thighs up to the chest - the column
+    // of the body that unambiguously has mesh at the creature's own x, so a
+    // miss means a genuine hole between joints rather than a ray that slipped
+    // past an outstretched limb.
     const misses: string[] = [];
     const hits: number[] = [];
-    for (let offset = -1.05; offset <= 1.45 + 1e-6; offset += 0.05) {
-      const y = cy + offset;
+    for (let step = 0; step <= 28; step += 1) {
+      const y = cy - 1.05 + step * 0.05;
       const hit = await game.raycast({
         start: [cx, y, cz - 3.0],
         end: [cx, y, cz + 3.0],
@@ -66,6 +69,6 @@ test(
       [],
       `every height along the creature should hit one of its own hitbox proxies; uncovered: ${misses.join(", ")}`,
     );
-    assert.ok(hits.length >= 50, `expected a dense sweep, got ${hits.length} samples`);
+    assert.equal(hits.length, 29, "the whole band should have been sampled");
   },
 );

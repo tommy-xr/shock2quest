@@ -3571,30 +3571,20 @@ impl PhysicsWorld {
         collision_groups: CollisionGroup,
         is_sensor: bool,
     ) -> RigidBodyHandle {
-        //for (pos, size, facing, id, is_sensor) in &phys_objs {
-        let handle = self.add_kinematic_anchor(entity_id, pos, facing);
         let size = sanitize_collider_size(entity_id, "add_kinematic", size);
-        let mut collider = ColliderBuilder::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0)
-            //.rotation(vector!(angles.0, angles.1, angles.2))
-            //.rotation(vector!(facing.z, facing.x, facing.y))
-            .translation(vec_to_nvec(offset))
-            //.position(test)
-            .restitution(0.7)
-            .build();
-
-        collider.set_enabled(true);
-        collider.set_sensor(is_sensor);
-        collider.user_data = entity_id.inner() as u128;
-        collider.set_collision_groups(collision_groups.collision);
-        collider.set_solver_groups(collision_groups.solver);
-
-        self.collider_set
-            .insert_with_parent(collider, handle, &mut self.rigid_body_set);
-        handle
+        self.add_kinematic_shape(
+            entity_id,
+            pos,
+            facing,
+            SharedShape::cuboid(size.x / 2.0, size.y / 2.0, size.z / 2.0),
+            offset,
+            collision_groups,
+            is_sensor,
+        )
     }
 
-    /// Create a kinematic body carrying an arbitrary shape, instead of the
-    /// axis-aligned cuboid `add_kinematic` builds. The creature hitbox proxies
+    /// Create a kinematic body carrying an arbitrary shape, rather than the
+    /// axis-aligned cuboid `add_kinematic` passes. The creature hitbox proxies
     /// use it so their collider is the *fitted* per-joint shape (capsule along
     /// the bone / box) shared with the ragdoll, which covers the body far
     /// better than a per-joint AABB.
@@ -3604,12 +3594,18 @@ impl PhysicsWorld {
         pos: Vector3<f32>,
         facing: Quaternion<f32>,
         shape: SharedShape,
+        offset: Vector3<f32>,
         collision_groups: CollisionGroup,
+        is_sensor: bool,
     ) -> RigidBodyHandle {
         let handle = self.add_kinematic_anchor(entity_id, pos, facing);
-        let mut collider = ColliderBuilder::new(shape).restitution(0.7).build();
+        let mut collider = ColliderBuilder::new(shape)
+            .translation(vec_to_nvec(offset))
+            .restitution(0.7)
+            .build();
 
         collider.set_enabled(true);
+        collider.set_sensor(is_sensor);
         collider.user_data = entity_id.inner() as u128;
         collider.set_collision_groups(collision_groups.collision);
         collider.set_solver_groups(collision_groups.solver);
