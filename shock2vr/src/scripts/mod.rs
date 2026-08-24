@@ -34,7 +34,7 @@ mod internal_frob_move;
 mod internal_keycard_script;
 mod internal_nanites_script;
 mod internal_simple_health;
-mod internal_switch_held_model;
+pub(crate) mod internal_switch_held_model;
 mod level_change_button;
 mod many_ride;
 mod melee_weapon;

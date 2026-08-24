@@ -2041,7 +2041,9 @@ impl CollisionGroup {
     /// Whether this group takes part in no collision at all
     /// ([`Self::held_inert`]).
     pub fn is_inert(&self) -> bool {
-        self.collision.memberships.is_empty() && self.collision.filter.is_empty()
+        [self.collision, self.solver]
+            .iter()
+            .all(|groups| groups.memberships.is_empty() && groups.filter.is_empty())
     }
 
     /// Collision behavior for a living creature capsule. It collides exactly

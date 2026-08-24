@@ -261,13 +261,21 @@ fn obj_weapon_geometry(obj: &SystemShock2ObjectMesh) -> Option<VrHeldWeaponGeome
 }
 
 fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometry> {
-    let SystemShockContentModel::Mesh(ai_mesh, skeleton, pmnm) = mesh else {
-        let SystemShockContentModel::Obj(obj) = mesh else {
-            return None;
-        };
-        return obj_weapon_geometry(obj);
-    };
+    match mesh {
+        SystemShockContentModel::Obj(obj) => obj_weapon_geometry(obj),
+        SystemShockContentModel::Mesh(ai_mesh, skeleton, pmnm) => {
+            skinned_weapon_geometry(ai_mesh, skeleton, pmnm)
+        }
+    }
+}
 
+/// The weapon-only geometry of an LGMM skinned first-person model - the melee
+/// `_h` rigs, with or without a 25AE high-detail `PMNM` chunk.
+fn skinned_weapon_geometry(
+    ai_mesh: &SystemShock2AIMesh,
+    skeleton: &Rc<Skeleton>,
+    pmnm: &Option<crate::ss2_bin_pmnm::PmnmMesh>,
+) -> Option<VrHeldWeaponGeometry> {
     if let Some(pmnm) = pmnm {
         let runs = pmnm.to_skinned_vertices();
         let has_named_arm = runs

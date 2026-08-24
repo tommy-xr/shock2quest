@@ -643,10 +643,14 @@ pub fn to_vertices_by_material(
     by_slot
         .into_iter()
         .filter_map(|(slot, vertices)| {
+            // Last entry wins on a duplicated slot, matching the map
+            // `to_scene_objects` builds - so a caller selecting geometry by
+            // material selects what the renderer draws with.
             let material = mesh
                 .materials
                 .iter()
-                .find(|material| material.slot_num as u16 == slot)?;
+                .filter(|material| material.slot_num as u16 == slot)
+                .next_back()?;
             Some((material.name.clone(), vertices))
         })
         .collect()

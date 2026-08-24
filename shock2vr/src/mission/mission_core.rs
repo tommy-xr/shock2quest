@@ -6119,9 +6119,10 @@ impl MissionCore {
                         // transform. Melee took its own fit above, with the
                         // posed arm's correction.
                         let is_physical_gun = vr_held
-                            && !is_vr_melee_weapon(&self.world, entity_id)
                             && self.interaction.is_holding(entity_id)
-                            && self.held_item_collision_group(entity_id).is_some();
+                            && self
+                                .held_item_collision_group(entity_id)
+                                .is_some_and(|group| group.is_inert());
                         if is_physical_gun {
                             // The same player the model is rendered with, so
                             // the fit measures the pose the player sees.
@@ -8830,6 +8831,13 @@ pub fn is_vr_melee_weapon(world: &World, entity_id: EntityId) -> bool {
 ///   takes part in no collision at all (see [`CollisionGroup::held_inert`]).
 ///   Opt-in, because a weapon the world can hold back is a change to how
 ///   aiming and firing feel, not just to how the wield looks.
+///
+/// A gun additionally has to be one VR actually wields as a first-person `_h`
+/// model, which is the same condition `InternalSwitchHeldModelScript` swaps on.
+/// On a classic install VR deliberately keeps the *world* model, so no `_h`
+/// wield happens and there is nothing to fit a collider to - the gun would
+/// sweep the inherited loose-pickup box, sized and centred for a different
+/// mesh, and stop at the wrong distance from every wall. No fit, no body.
 pub fn held_item_collision_group(world: &World, entity_id: EntityId) -> Option<CollisionGroup> {
     if is_vr_melee_weapon(world, entity_id) {
         return Some(CollisionGroup::held_melee());
@@ -8844,8 +8852,11 @@ pub fn held_item_collision_group(world: &World, entity_id: EntityId) -> Option<C
     let is_gun = world
         .borrow::<View<dark::properties::PropPlayerGun>>()
         .is_ok_and(|guns| guns.get(entity_id).is_ok());
+    let wields_a_view_model = crate::is_25th_anniversary_install()
+        && crate::scripts::internal_switch_held_model::get_raw_view_model(world, entity_id)
+            .is_some_and(|model| crate::vr_config::is_vr_view_model(&model));
 
-    (is_vr && physical_held_items && is_gun).then(CollisionGroup::held_inert)
+    (is_vr && physical_held_items && is_gun && wields_a_view_model).then(CollisionGroup::held_inert)
 }
 
 /// Physics for an item restored into a hand by save/load or a level change.
@@ -11784,9 +11795,20 @@ mod held_item_physics_tests {
         let mut world = world_with(crate::PresentationMode::Vr, true);
         let gun = gun(&mut world);
 
-        let group =
-            held_item_collision_group(&world, gun).expect("a held gun should take a swept body");
-        assert!(group.is_inert(), "a held gun must not generate contacts");
+        let group = held_item_collision_group(&world, gun);
+
+        // The swept body needs a collider fitted to the `_h` view model, which
+        // only a 25AE install wields - so on a classic install the correct
+        // answer is still "no body", and this asserts that rather than
+        // skipping.
+        assert_eq!(
+            group.is_some(),
+            crate::is_25th_anniversary_install(),
+            "a held gun is swept exactly when VR wields its view model"
+        );
+        if let Some(group) = group {
+            assert!(group.is_inert(), "a held gun must not generate contacts");
+        }
     }
 
     /// A melee weapon is unaffected by the flag in either direction: its body
