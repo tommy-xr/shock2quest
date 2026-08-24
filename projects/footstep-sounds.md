@@ -85,14 +85,29 @@ exactly one foot-plant flag. A walk cycle is therefore exactly two footsteps,
 paced by the animation, at whatever speed the creature is actually moving. No
 accumulator, no cooldown, no speed threshold.
 
-**Why it is not gated on "is this a locomotion clip".** Scanning the 589 clips
-referenced by the shipped motion schemas, 219 carry foot-plant flags — and they
-include idle clips (`ogpidle2`, `ogsidle2`), turns (`ogpturn`), staggers
-(`ogprecwd`) and death collapses (`ogpdie2`, `humdie2`). Those are authored, not
-accidental: a hybrid shifting its weight while standing *does* plant a foot. So
-the handler fires on the flag wherever it appears, including from a dying
-creature, and deliberately does not consult `is_dead` the way the `FIRE` and
-melee arms must.
+**Why it is not gated on "is this a locomotion clip".** Scanning the 589 distinct
+clips referenced by the human motion schema (`references/animation_0.spew`; the
+wider scan across `animation_{0,2,4}.spew` covers 997), 219 carry foot-plant
+flags — and they include idle clips (`ogpidle2`, `ogsidle2`), turns
+(`ogpturn`), staggers (`ogprecwd`) and death collapses (`ogpdie2`, `humdie2`).
+Those are authored, not accidental: a hybrid shifting its weight while standing
+*does* plant a foot. So the handler fires on the flag wherever it appears,
+including from a dying creature, and deliberately does not consult `is_dead` the
+way the `FIRE` and melee arms must.
+
+**Foot plants do not always arrive alone.** `AnimationPlayer::update` unions
+every flag frame crossed in a tick, so on a hitch one `AnimationFlagTriggered`
+can carry `FIRE | LEFT_FOOT_STEP`. The footstep is therefore resolved
+*independently* of the attack arms rather than as another `else if` — otherwise
+the step is dropped, or (worse) suppressed by the dying-creature guard on an arm
+that has nothing to say about where a creature's feet are.
+
+**Open question: idle cadence.** `ogpidle2` is 5.53 s long with 5 foot plants
+(~0.9/s), which is about the same rate as walking. A standing creature therefore
+keeps ticking, and standing is not audibly distinguishable from walking. That is
+what the data authors, and in a live medsci1 run no idle creature produced a
+single footstep (they animate only once alerted) — but if it proves annoying in
+practice the fix is a per-creature cooldown, not a locomotion gate.
 
 **Terrain material.** The port has no per-texture material lookup for world
 geometry (`script_util::DEFAULT_IMPACT_MATERIAL`), so `material2` is the default

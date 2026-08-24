@@ -1409,44 +1409,42 @@ impl Script for AnimatedMonsterAI {
                 }
             }
             MessagePayload::AnimationFlagTriggered { motion_flags } => {
-                if motion_flags.contains(MotionFlags::FIRE) {
-                    // A killed monster's in-flight attack clip keeps playing
-                    // until the death is processed - don't let it fire
-                    if self.is_dead || is_killed(entity_id, world) {
-                        return Effect::NoEffect;
-                    }
-                    fire_ranged_projectile(world, physics, entity_id)
-                } else if motion_flags.contains(MotionFlags::MELEE_CONTACT_START) {
-                    // The swing reached its authored contact frame - resolve
-                    // the hit through the attacker's melee weapon archetype.
-                    if self.is_dead || is_killed(entity_id, world) {
-                        return Effect::NoEffect;
-                    }
-                    super::ai_util::melee_contact_attack(world, entity_id, physics)
-                } else if motion_flags
+                // A foot reached its authored plant frame. Resolved outside the
+                // chain below because `AnimationPlayer::update` unions every
+                // flag frame crossed in the tick: on a hitch one message can
+                // carry `FIRE | LEFT_FOOT_STEP`, and an `else if` would drop
+                // the step - or, worse, suppress it via the dead-creature guard
+                // on an arm that has nothing to do with footsteps.
+                //
+                // Deliberately gated on neither locomotion nor life: the
+                // shipped clips author foot plants on idle weight-shifts,
+                // turns, staggers and death collapses too, and each is a real
+                // foot hitting the deck. The walk/run clips are per-half-step
+                // (`ogpwlklt` / `ogpwlkrt`), one plant each, so a walk cycle
+                // produces exactly two footsteps.
+                let footstep = if motion_flags
                     .intersects(MotionFlags::LEFT_FOOT_STEP | MotionFlags::RIGHT_FOOT_STEP)
                 {
-                    // A foot reached its authored plant frame. This is not
-                    // gated on locomotion or on life: the shipped clips author
-                    // foot plants on idle weight-shifts, turns, staggers and
-                    // death collapses too, and each is a real foot hitting the
-                    // deck. The walk/run clips are per-half-step (`ogpwlklt` /
-                    // `ogpwlkrt`), one plant each, so a walk cycle produces
-                    // exactly two footsteps.
-                    crate::scripts::script_util::play_footstep_sound(world, entity_id)
-                // } else if motion_flags.contains(MotionFlags::END) {
-                //     Effect::QueueAnimationBySchema {
-                //         entity_id,
-                //         motion_query_items: vec![MotionQueryItem::new("rangedcombat")],
-                //         //     MotionQueryItem::new("rangedcombat".to_owned())),
-                //         //     // "rangedcombat".to_owned(),
-                //         //     // "attack".to_owned(),
-                //         //     //"direction".to_owned(),
-                //         // ],
-                //     }
+                    script_util::play_footstep_sound(world, entity_id)
                 } else {
                     Effect::NoEffect
-                }
+                };
+
+                // A killed monster's in-flight attack clip keeps playing until
+                // the death is processed - don't let it fire or connect.
+                let can_act = !(self.is_dead || is_killed(entity_id, world));
+
+                let acted = if motion_flags.contains(MotionFlags::FIRE) && can_act {
+                    fire_ranged_projectile(world, physics, entity_id)
+                } else if motion_flags.contains(MotionFlags::MELEE_CONTACT_START) && can_act {
+                    // The swing reached its authored contact frame - resolve
+                    // the hit through the attacker's melee weapon archetype.
+                    super::ai_util::melee_contact_attack(world, entity_id, physics)
+                } else {
+                    Effect::NoEffect
+                };
+
+                Effect::combine(vec![acted, footstep])
             }
             _ => Effect::NoEffect,
         }
@@ -1504,6 +1502,9 @@ mod tests {
         let entity_id = world.add_entity((
             dark::properties::PropHitPoints { hit_points: 12 },
             dark::properties::PropClassTag::from_string(class_tag),
+            // The shipped flesh-creature archetypes all carry this; the
+            // footstep schema reads it as the creature's own foot material.
+            dark::properties::PropMaterial("Material FleshTarget".to_owned()),
             dark::properties::PropPosition {
                 position: vec3(0.0, 0.0, 0.0),
                 rotation,
@@ -1982,8 +1983,13 @@ mod tests {
     }
 
     /// The effect a live hybrid returns when its animation crosses `flags`.
+    ///
+    /// `oncegrunt`, not `hybrid`: `oncegrunt` is the value the shipped schema
+    /// actually keys hybrids on, and an unknown tag *value* is silently dropped
+    /// from the query rather than failing it - so a fixture using the wrong
+    /// name would assert on a query that resolves to nothing in the real game.
     fn effect_of_animation_flags(flags: MotionFlags) -> Effect {
-        let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
+        let (world, entity_id) = world_with_creature_and_player(Deg(0.0), "creaturetype oncegrunt");
         let physics = PhysicsWorld::new();
         let mut monster = AnimatedMonsterAI::new();
         monster.initialize(entity_id, &world);
@@ -2013,8 +2019,19 @@ mod tests {
             "footsteps resolve on event=footstep: {query:?}"
         );
         assert!(
-            query.contains(&("creaturetype".to_owned(), "hybrid".to_owned())),
+            query.contains(&("creaturetype".to_owned(), "oncegrunt".to_owned())),
             "a hybrid must not sound like a monkey: {query:?}"
+        );
+        // The hybrid branch is the one creature type that needs both
+        // refinements and resolves to silence without them: `material` is the
+        // creature's own foot material, `material2` the surface underfoot.
+        assert!(
+            query.contains(&("material".to_owned(), "fleshtarget".to_owned())),
+            "material is the creature's own, not the ground's: {query:?}"
+        );
+        assert!(
+            query.contains(&("material2".to_owned(), "metal".to_owned())),
+            "material2 is the surface underfoot: {query:?}"
         );
     }
 
@@ -2025,6 +2042,22 @@ mod tests {
         let effect = effect_of_animation_flags(MotionFlags::RIGHT_FOOT_STEP);
 
         assert_eq!(sound_queries(&effect).len(), 1);
+    }
+
+    /// `AnimationPlayer::update` unions every flag frame crossed in a tick, so
+    /// on a hitch one message can carry an attack flag *and* a foot plant. The
+    /// step must survive that - including when the attack half is suppressed
+    /// because the creature is dying, a guard that has nothing to say about
+    /// where its feet are.
+    #[test]
+    fn a_foot_plant_sharing_a_tick_with_an_attack_flag_still_sounds() {
+        let effect = effect_of_animation_flags(MotionFlags::FIRE | MotionFlags::LEFT_FOOT_STEP);
+
+        assert_eq!(
+            sound_queries(&effect).len(),
+            1,
+            "the footstep must not be swallowed by the attack arm"
+        );
     }
 
     /// Flags that are not foot plants must stay silent, or every animated

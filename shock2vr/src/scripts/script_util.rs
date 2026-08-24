@@ -796,19 +796,21 @@ pub fn play_environmental_sound(
     let maybe_env_sound_query =
         get_environmental_sound_query(world, entity_id, event_type, additional_tags);
 
-    if let Some(query) = maybe_env_sound_query {
-        let position = v_transform
-            .get(entity_id)
-            .unwrap()
-            .0
-            .transform_point(point3(0.0, 0.0, 0.0));
+    // An entity can be animating without owning a physics transform (the
+    // animation players and `id_to_physics` are separate maps, and ownership
+    // changes hands around death), so a missing transform is a silent no-sound
+    // rather than a panic - there is nowhere to place the sound.
+    let (Some(query), Ok(transform)) = (maybe_env_sound_query, v_transform.get(entity_id)) else {
+        return Effect::NoEffect;
+    };
+
+    {
+        let position = transform.0.transform_point(point3(0.0, 0.0, 0.0));
         Effect::PlayEnvironmentalSound {
             audio_handle,
             query,
             position: point3_to_vec3(position),
         }
-    } else {
-        Effect::NoEffect
     }
 }
 
