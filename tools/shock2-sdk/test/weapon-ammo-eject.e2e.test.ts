@@ -88,7 +88,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8414),
     });
 
     await game.step({ frames: 5 });
@@ -173,7 +172,6 @@ test(
     // pistol.
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8415),
     });
 
     await game.step({ frames: 5 });

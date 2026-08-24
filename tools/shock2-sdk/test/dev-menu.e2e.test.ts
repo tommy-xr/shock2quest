@@ -255,7 +255,7 @@ test(
   "the flat Developer screen launches a debug scene and can back out of the list",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
   async () => {
-    await using game = await GameServer.launch({ mission: "main_menu", port: 8134 });
+    await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 10 });
     await click(game, [489, 202]);
     assert.equal((await game.info()).mission, "developer");
@@ -295,7 +295,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "main_menu",
-      port: 8135,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 10 });
