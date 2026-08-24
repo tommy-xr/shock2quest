@@ -32,8 +32,12 @@ pub enum DevParamKind {
     /// A float clamped to `min..=max`; [`set`] snaps to the nearest multiple
     /// of `step` from `min` (the grid the future menu's `<`/`>` arrows walk).
     Float { min: f32, max: f32, step: f32 },
-    // `Bool` and `Enum(&'static [&'static str])` go here when a param needs
-    // them - stored in the same f32 bits as 0.0/1.0 and the variant index.
+    /// An on/off switch, stored in the same f32 bits as 0.0/1.0. Anything
+    /// non-zero [`set`] receives becomes 1.0, so a caller cannot store a
+    /// third state.
+    Bool,
+    // `Enum(&'static [&'static str])` goes here when a param needs it -
+    // stored as the variant index in the same bits.
 }
 
 /// One registered parameter: a stable string key (HTTP + future persistence),
@@ -52,23 +56,55 @@ pub struct DevParamId(usize);
 
 /// Declares the parameter table. One line per parameter generates its
 /// [`PARAMS`] entry *and* its `pub const` id, so the two cannot drift.
+/// One declaration's [`DevParam`] entry. Split out of [`dev_params!`] so the
+/// table can mix kinds: the outer macro matches each line as
+/// `kind(args...)` and defers the shape of `args` to these arms.
+macro_rules! dev_param_entry {
+    (float($key:literal, $label:literal, $default:expr, $min:expr, $max:expr, $step:expr)) => {
+        DevParam {
+            key: $key,
+            label: $label,
+            kind: DevParamKind::Float {
+                min: $min,
+                max: $max,
+                step: $step,
+            },
+            default: dev_param_default!(float($key, $label, $default, $min, $max, $step)),
+        }
+    };
+    (bool($key:literal, $label:literal, $default:expr)) => {
+        DevParam {
+            key: $key,
+            label: $label,
+            kind: DevParamKind::Bool,
+            default: dev_param_default!(bool($key, $label, $default)),
+        }
+    };
+}
+
+/// One declaration's default, as the `f32` the value table stores. A `bool`
+/// cannot be `as f32`, and this is the one place that conversion belongs.
+macro_rules! dev_param_default {
+    (float($key:literal, $label:literal, $default:expr, $min:expr, $max:expr, $step:expr)) => {
+        ($default as f32)
+    };
+    (bool($key:literal, $label:literal, $default:expr)) => {
+        if $default { 1.0f32 } else { 0.0f32 }
+    };
+}
+
 macro_rules! dev_params {
-    ($($(#[$doc:meta])* $id:ident = float($key:literal, $label:literal, $default:expr, $min:expr, $max:expr, $step:expr)),+ $(,)?) => {
+    ($($(#[$doc:meta])* $id:ident = $kind:ident ( $($args:tt)* )),+ $(,)?) => {
         /// Every registered parameter, in declaration order (index == id).
         pub static PARAMS: &[DevParam] = &[
-            $(DevParam {
-                key: $key,
-                label: $label,
-                kind: DevParamKind::Float { min: $min, max: $max, step: $step },
-                default: $default,
-            }),+
+            $(dev_param_entry!($kind($($args)*))),+
         ];
 
         /// Current values, as `f32` bits, seeded with the defaults. A sized
         /// array, not a `&[_]` slice: a borrow of interior-mutable data
         /// cannot be promoted to `'static` (E0492).
-        static VALUES: [AtomicU32; [$(($default as f32)),+].len()] =
-            [$(AtomicU32::new(($default as f32).to_bits())),+];
+        static VALUES: [AtomicU32; [$(dev_param_default!($kind($($args)*))),+].len()] =
+            [$(AtomicU32::new(dev_param_default!($kind($($args)*)).to_bits())),+];
 
         #[allow(non_camel_case_types, clippy::upper_case_acronyms, dead_code)]
         enum __DevParamIndex { $($id),+ }
@@ -177,6 +213,20 @@ dev_params! {
     /// making the arm exactly life-size (0.79) would leave the Wrench at 52,
     /// and making the Wrench right (~0.5) would leave a child's arm.
     MELEE_WIELD_SCALE = float("melee_scale", "Melee scale", 0.7, 0.25, 1.5, 0.05),
+    /// Enables the detached debug ("free") camera. This is the *gate*, not
+    /// the camera's own on/off: while it is false the toggle input is not
+    /// even read, so a stray `Alt+V` (or controller chord) during normal play
+    /// cannot detach the view. Turning it back off while detached also
+    /// re-attaches the camera, so the switch is always a way out.
+    FREE_CAMERA = bool("free_camera", "Free camera", false),
+    /// Which pose the visibility engine culls from while the free camera is
+    /// detached. Off (the default) culls from the *player*, so flying out
+    /// shows exactly what the player's viewpoint decided - cells the player
+    /// cannot see are genuinely absent, which is the point of the tool. On
+    /// culls from the free camera instead, for when you just want to look at
+    /// something. Inert while the camera is attached (the two poses are the
+    /// same pose).
+    FREE_CAMERA_CULL_FROM_CAMERA = bool("free_camera_cull", "Cull from cam", false),
 }
 
 /// Every parameter with its id, in declaration order.
@@ -199,6 +249,13 @@ pub fn get(id: DevParamId) -> f32 {
     f32::from_bits(VALUES[id.0].load(Ordering::Relaxed))
 }
 
+/// A [`DevParamKind::Bool`] parameter's current value. Any non-zero reading
+/// is true, so this is also correct for a value written before the registry
+/// normalized it.
+pub fn get_bool(id: DevParamId) -> bool {
+    get(id) != 0.0
+}
+
 /// Set a parameter, clamped into its range and snapped to its step grid.
 /// Returns the value actually applied. A non-finite request is refused
 /// (the current value is returned unchanged) so no consumer can ever read
@@ -219,6 +276,13 @@ fn apply(kind: &DevParamKind, current: f32, value: f32) -> f32 {
         return current;
     }
     match *kind {
+        DevParamKind::Bool => {
+            if value == 0.0 {
+                0.0
+            } else {
+                1.0
+            }
+        }
         DevParamKind::Float { min, max, step } => {
             if step > 0.0 {
                 // Clamp the grid *index*, not the snapped value: clamping
@@ -272,15 +336,24 @@ mod tests {
     #[test]
     fn every_default_is_within_its_declared_range() {
         for (_, param) in all() {
-            let DevParamKind::Float { min, max, step } = param.kind;
             assert!(param.default.is_finite());
-            assert!(
-                (min..=max).contains(&param.default),
-                "{}: default {} outside {min}..={max}",
-                param.key,
-                param.default
-            );
-            assert!(step >= 0.0, "{}: negative step", param.key);
+            match param.kind {
+                DevParamKind::Float { min, max, step } => {
+                    assert!(
+                        (min..=max).contains(&param.default),
+                        "{}: default {} outside {min}..={max}",
+                        param.key,
+                        param.default
+                    );
+                    assert!(step >= 0.0, "{}: negative step", param.key);
+                }
+                DevParamKind::Bool => assert!(
+                    param.default == 0.0 || param.default == 1.0,
+                    "{}: bool default {} is neither 0 nor 1",
+                    param.key,
+                    param.default
+                ),
+            }
         }
     }
 
@@ -343,6 +416,29 @@ mod tests {
         assert_eq!(apply(&GRID, 2.0, f32::NAN), 2.0);
         assert_eq!(apply(&GRID, 2.0, f32::INFINITY), 2.0);
         assert_eq!(apply(&GRID, 2.0, f32::NEG_INFINITY), 2.0);
+    }
+
+    /// A bool normalizes to exactly 0.0/1.0, so no consumer can read a third
+    /// state out of the registry (and `get_bool`'s `!= 0.0` can never see a
+    /// value the panel would then format inconsistently).
+    #[test]
+    fn apply_normalizes_a_bool_to_zero_or_one() {
+        assert_eq!(apply(&DevParamKind::Bool, 0.0, 1.0), 1.0);
+        assert_eq!(apply(&DevParamKind::Bool, 1.0, 0.0), 0.0);
+        assert_eq!(apply(&DevParamKind::Bool, 0.0, 0.5), 1.0);
+        assert_eq!(apply(&DevParamKind::Bool, 0.0, -3.0), 1.0);
+    }
+
+    #[test]
+    fn a_non_finite_bool_is_refused() {
+        assert_eq!(apply(&DevParamKind::Bool, 1.0, f32::NAN), 1.0);
+    }
+
+    /// The free camera is a debug tool: it must be off until asked for.
+    #[test]
+    fn the_free_camera_gate_defaults_off() {
+        assert!(!get_bool(FREE_CAMERA));
+        assert!(!get_bool(FREE_CAMERA_CULL_FROM_CAMERA));
     }
 
     #[test]

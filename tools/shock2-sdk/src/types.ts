@@ -364,20 +364,53 @@ export interface SceneListResult {
   frame_index: number;
 }
 
-/** One live-tunable developer parameter (GET /v1/dev-params). */
-export interface DevParamSummary {
+/** What every developer parameter reports, whatever its kind. */
+export interface DevParamCommon {
   key: string;
   label: string;
-  kind: "float";
-  min: number;
-  max: number;
-  step: number;
+  /** Current value. Bools are 0 or 1, the registry's own representation. */
   value: number;
   default: number;
 }
 
+/** A float parameter, clamped to `min..=max` and snapped to `step`. */
+export interface DevParamFloat extends DevParamCommon {
+  kind: "float";
+  min: number;
+  max: number;
+  step: number;
+}
+
+/** A bool parameter. It carries no range - `value` is 0 or 1. */
+export interface DevParamBool extends DevParamCommon {
+  kind: "bool";
+}
+
+/**
+ * One live-tunable developer parameter (GET /v1/dev-params).
+ *
+ * A discriminated union on `kind`: narrow before reading `min`/`max`/`step`,
+ * which only a float carries.
+ */
+export type DevParamSummary = DevParamFloat | DevParamBool;
+
 export interface DevParamsListResult {
   params: DevParamSummary[];
+}
+
+/**
+ * The free (debug) camera's state (GET /v1/camera).
+ *
+ * `position`/`rotation` are null while the camera is attached - there is no
+ * separate camera pose then, only the player's eye.
+ */
+export interface CameraState {
+  detached: boolean;
+  /** Whether the developer option that gates the camera is on. */
+  enabled: boolean;
+  position: [number, number, number] | null;
+  /** Rotation as [w, x, y, z]. */
+  rotation: [number, number, number, number] | null;
 }
 
 /** What a POST /v1/dev-params actually applied (after clamp/snap). */

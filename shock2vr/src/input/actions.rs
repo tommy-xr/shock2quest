@@ -88,6 +88,15 @@ pub enum InputAction {
     /// an effect routed through the scene could never close the menu again.
     TogglePauseMenu,
 
+    /// Toggle the detached debug ("free") camera. Like `TogglePauseMenu`
+    /// this is consumed by `Game` itself rather than becoming an `Effect`:
+    /// the free camera is render-layer state that deliberately leaves the
+    /// simulation untouched (the pawn stays put, AI keeps reading its
+    /// position), so routing it through the world would be both wrong and
+    /// unnecessary. Ignored unless the `free_camera` dev param is on, so a
+    /// stray press during normal play cannot detach the view.
+    ToggleFreeCamera,
+
     /// Open/play the newest unread audio log (the original's
     /// `play_unread_log`), or replay the newest collected log once all are read.
     /// Collecting a disc only files it in the PDA, so this is how it is read.
@@ -131,6 +140,7 @@ impl InputAction {
             InputAction::ReadLastUnreadLog,
             InputAction::ToggleMap,
             InputAction::TogglePauseMenu,
+            InputAction::ToggleFreeCamera,
         ]
     }
 
@@ -168,6 +178,7 @@ impl InputAction {
             InputAction::ReadLastUnreadLog => "ReadLastUnreadLog",
             InputAction::ToggleMap => "ToggleMap",
             InputAction::TogglePauseMenu => "TogglePauseMenu",
+            InputAction::ToggleFreeCamera => "ToggleFreeCamera",
         }
     }
 
@@ -188,6 +199,33 @@ impl InputAction {
             // the two gun-handling actions - A reloads, B swaps ammo type.
             InputAction::Reload => Some("/user/hand/right/input/a/click"),
             InputAction::CycleAmmo => Some("/user/hand/right/input/b/click"),
+            _ => None,
+        }
+    }
+
+    /// Production Meta Quest Touch binding for actions reached by a two-button
+    /// **chord** rather than a button of their own.
+    ///
+    /// The Touch has no button left to give: `X`, `Y` and the left `Menu` are
+    /// taken, both thumbstick clicks are jump and crouch, right `A` and `B`
+    /// are reload and swap-ammo, and the right `Menu` belongs to the Quest
+    /// system UI. So a debug toggle *shares* a pair rather than owning one -
+    /// here right `A`+`B`, whose own actions only matter with a weapon in
+    /// hand. The pair's edge is resolved by [`InputActionState::sync_chord`].
+    ///
+    /// Sharing is safe because the chord is dead unless the free camera's
+    /// developer option is on. While it IS on, `oculus_runtime` suppresses
+    /// whichever button is pressed *second*, so completing the chord cannot
+    /// also swap your ammo; the first press still fires its own action, which
+    /// is why the harmless one (`Reload`) is the natural opener.
+    ///
+    /// [`InputActionState::sync_chord`]: crate::input::InputActionState::sync_chord
+    pub fn quest_touch_chord_paths(&self) -> Option<(&'static str, &'static str)> {
+        match self {
+            InputAction::ToggleFreeCamera => Some((
+                "/user/hand/right/input/a/click",
+                "/user/hand/right/input/b/click",
+            )),
             _ => None,
         }
     }
@@ -260,6 +298,43 @@ mod tests {
             InputAction::TogglePauseMenu.quest_touch_click_path(),
             Some("/user/hand/left/input/menu/click")
         );
+    }
+
+    /// The free camera is a chord, not a button, and must never quietly
+    /// become one: a single-path binding here would consume a face button the
+    /// Touch does not have to spare.
+    ///
+    /// Its two halves deliberately DO collide with `Reload` and `CycleAmmo`
+    /// (#1144) - there is no unbound button left - which is exactly why
+    /// `oculus_runtime` suppresses the second press while the developer
+    /// option is on. Pinning that here means a future rebinding of either gun
+    /// action has to come back and re-read the suppression rule rather than
+    /// silently making the chord fire both.
+    #[test]
+    fn the_free_camera_chord_shares_the_two_gun_buttons() {
+        assert_eq!(InputAction::ToggleFreeCamera.quest_touch_click_path(), None);
+        let (first, second) = InputAction::ToggleFreeCamera
+            .quest_touch_chord_paths()
+            .expect("free camera chord binding");
+        assert_eq!(first, InputAction::Reload.quest_touch_click_path().unwrap());
+        assert_eq!(
+            second,
+            InputAction::CycleAmmo.quest_touch_click_path().unwrap()
+        );
+        assert_eq!(first, "/user/hand/right/input/a/click");
+        assert_eq!(second, "/user/hand/right/input/b/click");
+    }
+
+    /// Every action is reachable by exactly one kind of binding, or none.
+    #[test]
+    fn no_action_is_both_a_button_and_a_chord() {
+        for action in InputAction::all() {
+            assert!(
+                action.quest_touch_click_path().is_none()
+                    || action.quest_touch_chord_paths().is_none(),
+                "{action}"
+            );
+        }
     }
 
     #[test]

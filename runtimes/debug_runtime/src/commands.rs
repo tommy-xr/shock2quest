@@ -108,6 +108,10 @@ pub enum RuntimeCommand {
     /// Get current player position
     GetPlayerPosition(oneshot::Sender<Vector3<f32>>),
 
+    /// Get the free (debug) camera's state: detached, and the pose it is
+    /// rendering from when it is.
+    GetCameraState(oneshot::Sender<CameraStateSnapshot>),
+
     /// Pathfinding test command (set_start, set_goal, reset)
     PathfindingTest(String, oneshot::Sender<CommandResult>),
 
@@ -698,6 +702,22 @@ pub struct LinkInfo {
     pub target_id: i32,
     pub target_name: String,
     pub contains_ordinal: Option<u32>,
+}
+
+/// The free (debug) camera's state, as `GET /v1/camera` reports it.
+///
+/// `position`/`rotation` are `None` while the camera is attached: there is no
+/// separate camera pose then, only the player's eye, which
+/// `GET /v1/player/position` already reports.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CameraStateSnapshot {
+    /// Whether the camera is detached from the player.
+    pub detached: bool,
+    /// Whether the free camera is enabled at all (the developer option).
+    pub enabled: bool,
+    pub position: Option<[f32; 3]>,
+    /// Rotation as `[w, x, y, z]`.
+    pub rotation: Option<[f32; 4]>,
 }
 
 /// Current state of the game

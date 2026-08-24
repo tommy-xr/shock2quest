@@ -67,6 +67,46 @@ impl InputActionState {
             self.release(action);
         }
     }
+
+    /// Feed a two-button chord into semantic input state: the action fires on
+    /// the frame both buttons are down and does not fire again until at least
+    /// one is released. The held set is the latch, so a chord needs no state
+    /// of its own - and, unlike [`sync_discrete_button`], this takes the raw
+    /// current states rather than OpenXR edges, because the chord's edge is a
+    /// property of the *pair* and neither button's own edge implies it.
+    ///
+    /// `is_active` must be false unless BOTH halves are live. While the pair
+    /// is inactive the latch is left exactly as it was and nothing is minted:
+    /// with the session merely VISIBLE (a system overlay up) OpenXR reports
+    /// `current_state` false even for a physically held button, so treating
+    /// that as a release would re-arm the chord and fire a second, unpressed
+    /// toggle the moment focus came back with both buttons still down. This
+    /// is the same hazard the runtime's latched crouch guards against.
+    ///
+    /// Chords exist so a debug toggle can be reachable on a headset without
+    /// consuming a face button that gameplay may want later: each half stays
+    /// individually unbound.
+    ///
+    /// [`sync_discrete_button`]: Self::sync_discrete_button
+    pub fn sync_chord(
+        &mut self,
+        action: InputAction,
+        is_active: bool,
+        first_down: bool,
+        second_down: bool,
+    ) {
+        if !is_active {
+            return;
+        }
+        let chord_down = first_down && second_down;
+        if chord_down {
+            if !self.is_held(action) {
+                self.trigger(action);
+            }
+        } else {
+            self.release(action);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -102,6 +142,78 @@ mod tests {
 
         state.release(InputAction::QuickSave);
         assert!(!state.is_held(InputAction::QuickSave));
+    }
+
+    /// The chord fires once, not every frame it is held - the defect a naive
+    /// `a && b -> trigger` would have.
+    #[test]
+    fn a_chord_fires_once_per_press() {
+        let mut state = InputActionState::new();
+
+        state.sync_chord(InputAction::ToggleFreeCamera, true, true, true);
+        assert!(state.just_triggered(InputAction::ToggleFreeCamera));
+
+        // Still held on the next frame: no new edge.
+        state.clear_triggered();
+        state.sync_chord(InputAction::ToggleFreeCamera, true, true, true);
+        assert!(!state.just_triggered(InputAction::ToggleFreeCamera));
+        assert!(state.is_held(InputAction::ToggleFreeCamera));
+    }
+
+    /// Releasing either half re-arms it; neither half alone fires it.
+    #[test]
+    fn a_chord_rearms_when_either_half_releases() {
+        let mut state = InputActionState::new();
+        state.sync_chord(InputAction::ToggleFreeCamera, true, true, true);
+        state.clear_triggered();
+
+        state.sync_chord(InputAction::ToggleFreeCamera, true, true, false);
+        assert!(!state.is_held(InputAction::ToggleFreeCamera));
+        assert!(!state.just_triggered(InputAction::ToggleFreeCamera));
+
+        state.sync_chord(InputAction::ToggleFreeCamera, true, true, true);
+        assert!(state.just_triggered(InputAction::ToggleFreeCamera));
+    }
+
+    #[test]
+    fn one_half_of_a_chord_never_fires_it() {
+        let mut state = InputActionState::new();
+        state.sync_chord(InputAction::ToggleFreeCamera, true, true, false);
+        state.sync_chord(InputAction::ToggleFreeCamera, true, false, true);
+        assert!(!state.just_triggered(InputAction::ToggleFreeCamera));
+        assert!(!state.is_held(InputAction::ToggleFreeCamera));
+    }
+
+    /// Losing focus with the chord held must not mint a second toggle when
+    /// focus returns: OpenXR reports a held button as `current_state` false
+    /// while the action is inactive, so an unguarded chord would read that as
+    /// a release, re-arm, and fire again on reactivation.
+    #[test]
+    fn an_inactive_chord_keeps_its_latch_and_mints_nothing() {
+        let mut state = InputActionState::new();
+        state.sync_chord(InputAction::ToggleFreeCamera, true, true, true);
+        assert!(state.just_triggered(InputAction::ToggleFreeCamera));
+        state.clear_triggered();
+
+        // System overlay up: inactive, and OpenXR reports both as up.
+        state.sync_chord(InputAction::ToggleFreeCamera, false, false, false);
+        assert!(
+            state.is_held(InputAction::ToggleFreeCamera),
+            "the latch must survive an inactive frame"
+        );
+        assert!(!state.just_triggered(InputAction::ToggleFreeCamera));
+
+        // Focus returns with both buttons still physically held.
+        state.sync_chord(InputAction::ToggleFreeCamera, true, true, true);
+        assert!(
+            !state.just_triggered(InputAction::ToggleFreeCamera),
+            "refocusing on a held chord must not toggle"
+        );
+
+        // A genuine release still re-arms it.
+        state.sync_chord(InputAction::ToggleFreeCamera, true, false, false);
+        state.sync_chord(InputAction::ToggleFreeCamera, true, true, true);
+        assert!(state.just_triggered(InputAction::ToggleFreeCamera));
     }
 
     #[test]
