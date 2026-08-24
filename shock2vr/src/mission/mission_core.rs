@@ -2905,16 +2905,16 @@ impl MissionCore {
         } else {
             Vec::new()
         };
-        // The keycard exception, the same one `ContainerGui`'s own `Take`
-        // makes on the same predicate: a `PropKeySrc` carries a runtime
-        // `internal_keycard` script whose Frob records the credential, so
-        // banking the card bodily would put an object in the pack that unlocks
-        // nothing. Reachable only for a card restored into a hand by an older
-        // save - grabbing one routes through Frob - which is exactly why
-        // `held_trigger_press_payload` keeps its own keycard arm.
-        let (collect, store): (Vec<_>, Vec<_>) = strip_deposits
-            .iter()
-            .partition(|entity_id| crate::virtual_hand::is_key_source(&self.world, **entity_id));
+        // The always-collected exception, the same one `ContainerGui`'s own
+        // `Take` and squeeze make on the same predicate: a keycard's Frob is
+        // what records the credential, a pile's what credits the nanites, so
+        // banking any of them bodily would put an object in the pack that
+        // unlocks or buys nothing. Reachable only for one restored into a hand
+        // by an older save - acquiring one routes through Frob - which is
+        // exactly why `held_trigger_press_payload` keeps its own arm.
+        let (collect, store): (Vec<_>, Vec<_>) = strip_deposits.iter().partition(|entity_id| {
+            crate::scripts::script_util::is_always_collected(&self.world, **entity_id)
+        });
         let collect: Vec<_> = collect.into_iter().copied().collect();
         let store: Vec<_> = store.into_iter().copied().collect();
 

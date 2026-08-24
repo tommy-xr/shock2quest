@@ -518,10 +518,11 @@ fn get_held_position_orientation(
 /// protocol even though the Weapon archetype also inherits that inventory
 /// flag. The decision stays tied to Dark's production frob metadata.
 fn held_trigger_press_payload(world: &World, entity_id: EntityId) -> MessagePayload {
-    // PropKeySrc injects `internal_keycard` at runtime even though retail ID
-    // cards do not author an inventory SCRIPT flag. A physical card held by an
-    // older save therefore still needs the production trigger to collect it.
-    if is_key_source(world, entity_id) {
+    // An always-collected item can only be in a hand at all if an older save put
+    // it there, and it must still collect rather than act: PropKeySrc injects
+    // `internal_keycard` at runtime even though retail ID cards author no
+    // inventory SCRIPT flag, so the metadata check below would miss a card.
+    if crate::scripts::script_util::is_always_collected(world, entity_id) {
         return MessagePayload::Frob;
     }
 
@@ -568,11 +569,11 @@ pub(crate) fn is_key_source(world: &World, entity_id: EntityId) -> bool {
 /// Whether taking this world item must go through a script before the physical
 /// transfer. An authored `SCRIPT` world action owns its side effects and item
 /// fate (for example `FrobQB` awards a quest bit and moves the item exactly
-/// once). `PropKeySrc` items also receive an `internal_keycard` script at
-/// runtime even when their authored world action is only `MOVE`, and nanite
-/// piles receive `internal_nanites` the same way (see
-/// `scripts::script_util::is_nanite_pickup`) - both must route through Frob
-/// rather than a physical grab in every presentation.
+/// once). The always-collected categories - keycards, nanite piles, cyber
+/// modules and logs - must route through Frob rather than a physical grab in
+/// every presentation and on every path, even where their authored world action
+/// is only `MOVE` (see `scripts::script_util::is_always_collected`, the shared
+/// predicate every acquisition site consults).
 pub(crate) fn uses_scripted_world_frob(world: &World, entity_id: EntityId) -> bool {
     let has_authored_world_script = world
         .borrow::<View<PropFrobInfo>>()
@@ -582,9 +583,7 @@ pub(crate) fn uses_scripted_world_frob(world: &World, entity_id: EntityId) -> bo
                 .is_ok_and(|frob_info| frob_info.world_action.contains(FrobFlag::SCRIPT))
         })
         .unwrap_or(false);
-    has_authored_world_script
-        || is_key_source(world, entity_id)
-        || crate::scripts::script_util::is_nanite_pickup(world, entity_id)
+    has_authored_world_script || crate::scripts::script_util::is_always_collected(world, entity_id)
 }
 
 /// Whether an inventory item is a wieldable weapon - a gun (`PropPlayerGun`) or

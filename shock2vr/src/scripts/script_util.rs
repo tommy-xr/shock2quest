@@ -84,6 +84,54 @@ pub(crate) fn is_nanite_pickup(world: &World, entity: EntityId) -> bool {
     is_nanite_pile_template(&hierarchy.0, template_id)
 }
 
+/// Whether `entity`'s object scripts include `script`. Case-insensitive: the
+/// data authors these names in mixed case (`ExpCookie`, `LogDiscScript`) while
+/// the port's own derived scripts are lowercase.
+pub(crate) fn entity_has_script(world: &World, entity: EntityId, script: &str) -> bool {
+    world
+        .borrow::<View<dark::properties::PropScripts>>()
+        .ok()
+        .is_some_and(|scripts| {
+            scripts.get(entity).is_ok_and(|entity_scripts| {
+                entity_scripts
+                    .scripts
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(script))
+            })
+        })
+}
+
+/// The cyber-module pickup script (`scripts::exp_cookie`), authored on the
+/// `EXP Cookies` archetype and inherited by every module pile.
+const EXP_COOKIE_SCRIPT: &str = "expcookie";
+
+/// Whether `entity` is a cyber-module pickup, identified by the pickup script
+/// that actually awards the modules rather than by template ancestry - the
+/// script is the thing whose Frob does the collecting.
+pub(crate) fn is_cyber_module(world: &World, entity: EntityId) -> bool {
+    entity_has_script(world, entity, EXP_COOKIE_SCRIPT)
+}
+
+/// Whether `entity` belongs to a category the game *collects* rather than
+/// carries: keycards, nanite piles, cyber modules and audio/data logs.
+///
+/// These four never become a physically-held prop and never occupy an inventory
+/// slot - their value goes straight into a player stat, the credential list or
+/// the PDA, and their scripts' side effects (SwitchLinks, quest bits, awards)
+/// only fire on Frob. So *every* acquisition gesture, on every path - world
+/// frob, world squeeze, a loot panel's take arm or squeeze, a click on the
+/// inventory strip - must route through Frob instead of a grab or a transfer.
+///
+/// The single predicate all of those sites consult, so the category cannot
+/// drift between them. Each arm delegates to the per-type predicate that owns
+/// that type's identity rather than re-deriving it here.
+pub(crate) fn is_always_collected(world: &World, entity: EntityId) -> bool {
+    crate::virtual_hand::is_key_source(world, entity)
+        || is_nanite_pickup(world, entity)
+        || is_cyber_module(world, entity)
+        || crate::scripts::gui::is_collectable_log(world, entity)
+}
+
 pub fn is_message_turnon_or_turnoff(msg: &MessagePayload) -> bool {
     match msg {
         MessagePayload::TurnOn { from: _ } => true,
@@ -920,8 +968,9 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 #[cfg(test)]
 mod tests {
     use super::{
-        debit_player_nanites, door_blocks_pathfinding, door_is_closed, is_nanite_pickup,
-        plan_stack_payment, player_nanite_total, spend_player_nanites, stat_nanite_balance,
+        debit_player_nanites, door_blocks_pathfinding, door_is_closed, is_always_collected,
+        is_nanite_pickup, plan_stack_payment, player_nanite_total, spend_player_nanites,
+        stat_nanite_balance,
     };
     use crate::mission::PlayerInfo;
     use crate::quest_info::QuestInfo;
@@ -1216,5 +1265,45 @@ mod tests {
         let mut world = World::new();
         let entity = world.add_entity(());
         assert!(!is_nanite_pickup(&world, entity));
+    }
+
+    /// The category, and the world paths that read it: a squeeze at a pickup
+    /// (and the flat crosshair pickup, which shares
+    /// `uses_scripted_world_frob`) must Frob all four rather than grab them.
+    #[test]
+    fn every_always_collected_category_frobs_in_the_world() {
+        use crate::test_support::{CollectedKind, spawn_collected, spawn_ordinary_loot};
+
+        for kind in CollectedKind::ALL {
+            let mut world = World::new();
+            let pickup = spawn_collected(&mut world, kind);
+            assert!(
+                is_always_collected(&world, pickup),
+                "{kind:?} belongs to the always-collected category"
+            );
+            assert!(
+                crate::virtual_hand::uses_scripted_world_frob(&world, pickup),
+                "{kind:?} must be taken through its script in the world"
+            );
+        }
+
+        let mut world = World::new();
+        let loot = spawn_ordinary_loot(&mut world);
+        assert!(!is_always_collected(&world, loot));
+        assert!(!crate::virtual_hand::uses_scripted_world_frob(&world, loot));
+    }
+
+    /// A disc whose log slot is unset - the gamesys archetypes, and anything
+    /// spawned from them without one - frobs to nothing, so it must keep the
+    /// ordinary pickup path instead of being routed at a collect that would
+    /// silently strand it.
+    #[test]
+    fn a_disc_without_a_readable_log_is_not_always_collected() {
+        let mut world = World::new();
+        let disc = world.add_entity(dark::properties::PropScripts {
+            scripts: vec!["LogDiscScript".to_owned()],
+            inherits: true,
+        });
+        assert!(!is_always_collected(&world, disc));
     }
 }

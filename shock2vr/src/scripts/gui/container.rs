@@ -129,7 +129,7 @@ impl ContainerGui {
 #[derive(Clone, Debug, Default)]
 pub struct ContainerGuiState {}
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ContainerGuiMsg {
     GrabbedWithLeftHand(EntityId),
     GrabbedWithRightHand(EntityId),
@@ -346,6 +346,23 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             // need their normal Frob behavior when clicked; they are consumed
             // or recorded in place rather than moved into the backpack.
             ContainerGuiMsg::Take(ent) => {
+                // The always-collected categories are decided before anything
+                // physical is considered: a nanite pile is grabbable metadata-
+                // wise (`MOVE`), so without this it would be banked as an inert
+                // can instead of being credited. Keycards, modules and logs took
+                // the Frob branches below already; routing all four here is what
+                // makes the rule one rule (#583, and the M2 recovery path).
+                if crate::scripts::script_util::is_always_collected(world, *ent) {
+                    return (
+                        state.clone(),
+                        Effect::Send {
+                            msg: Message {
+                                payload: MessagePayload::Frob,
+                                to: *ent,
+                            },
+                        },
+                    );
+                }
                 if !crate::virtual_hand::can_grab_item(world, *ent) {
                     let is_use_only = world
                         .borrow::<View<PropFrobInfo>>()
@@ -370,26 +387,10 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                         (state.clone(), Effect::NoEffect)
                     };
                 }
-                // PropKeySrc gets an `internal_keycard` script even when its
-                // retail frob metadata is just MOVE. Scripted loot must run
-                // that Frob before any generic transfer, or the physical card
-                // reaches the backpack without its unlock credential (#583).
-                // Gated on `is_key_source` specifically (not the broader
-                // `uses_scripted_world_frob`, which also matches authored
-                // MOVE|SCRIPT items like eng1's circuit board) so other
-                // scripted-but-grabbable loot keeps its pre-existing Take
-                // behavior - the same predicate `panel_grab_effect` uses below.
-                if crate::virtual_hand::is_key_source(world, *ent) {
-                    return (
-                        state.clone(),
-                        Effect::Send {
-                            msg: Message {
-                                payload: MessagePayload::Frob,
-                                to: *ent,
-                            },
-                        },
-                    );
-                }
+                // Deliberately *not* gated on the broader
+                // `uses_scripted_world_frob`: that also matches authored
+                // MOVE|SCRIPT items like eng1's circuit board, which keep their
+                // pre-existing Take behavior of moving into the backpack.
                 let inventory_entity = world
                     .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
                     .map(|player| player.inventory_entity_id)
@@ -409,17 +410,19 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
     }
 }
 
-/// A squeeze over a panel normally retrieves the icon into that hand. A
-/// keycard is the one semantic exception: it represents a collected access
-/// credential, so every panel (corpse loot and the backpack alike) must route
-/// the gesture through its derived keycard Frob instead of physically holding
-/// an unregistered object.
+/// A squeeze over a panel normally retrieves the icon into that hand. The
+/// always-collected categories are the semantic exception: a keycard is an
+/// access credential, a pile is currency, a module is an upgrade and a disc is a
+/// PDA entry - none of them is an object you can hold. Every panel (corpse loot,
+/// the backpack, the cyber interface's strip) therefore routes the gesture
+/// through their collecting Frob instead of physically holding an unregistered
+/// object.
 fn panel_grab_effect(
     world: &World,
     entity_id: EntityId,
     hand: crate::vr_config::Handedness,
 ) -> Effect {
-    if crate::virtual_hand::is_key_source(world, entity_id) {
+    if crate::scripts::script_util::is_always_collected(world, entity_id) {
         Effect::Send {
             msg: Message {
                 payload: MessagePayload::Frob,
@@ -624,6 +627,43 @@ mod tests {
             ),
             "ordinary MOVE loot must remain grabbable, got {effect:?}"
         );
+    }
+
+    /// Keycards, nanite piles, cyber modules and audio logs are collected, never
+    /// carried: neither of the panel's two acquisition gestures - the take
+    /// click and the VR squeeze - may put one in the backpack grid or in a hand.
+    /// Their scripts' Frob is the only thing that records the credential,
+    /// credits the nanites, awards the modules or files the log.
+    #[test]
+    fn every_always_collected_category_frobs_from_a_panel() {
+        use crate::test_support::{CollectedKind, spawn_collected};
+
+        for kind in CollectedKind::ALL {
+            let (mut world, container, _item, _inventory) = loot_world();
+            let pickup = spawn_collected(&mut world, kind);
+            let gui = ContainerGui::loot_container();
+
+            for message in [
+                ContainerGuiMsg::Take(pickup),
+                ContainerGuiMsg::GrabbedWithLeftHand(pickup),
+                ContainerGuiMsg::GrabbedWithRightHand(pickup),
+            ] {
+                let (_state, effect) =
+                    gui.handle_msg(container, &world, &ContainerGuiState {}, &message);
+                assert!(
+                    matches!(
+                        effect,
+                        Effect::Send {
+                            msg: Message {
+                                to,
+                                payload: MessagePayload::Frob,
+                            },
+                        } if to == pickup
+                    ),
+                    "{kind:?} via {message:?} must collect, got {effect:?}"
+                );
+            }
+        }
     }
 
     /// Both panels' item grids must land on the cell separators authored into

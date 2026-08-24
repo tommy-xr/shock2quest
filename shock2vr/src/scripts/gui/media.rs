@@ -117,6 +117,23 @@ pub(super) fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
 /// Log discs carry `PropLog {deck, email:33, log:N}` - the reader keys off the
 /// `log` field; 33 (the empty-bitmask sentinel) in either field means "not
 /// set", so such a disc has nothing to read.
+/// The data's own name for the disc pickup script; `MediaGui` is bound to it in
+/// `scripts::mod`.
+const LOG_DISC_SCRIPT: &str = "logdiscscript";
+
+/// Whether frobbing `entity_id` files a log in the PDA - it carries the disc
+/// script *and* a readable `(deck, log)`, which is exactly the pair
+/// [`MediaGui::on_frob`] needs to emit `Effect::CollectLog`. Both halves matter:
+/// a disc template with its log slot unset (the gamesys archetypes) frobs to
+/// nothing, so routing it as collected would strand it.
+///
+/// This is the "log" arm of `script_util::is_always_collected`; it lives beside
+/// the frob it predicts so the two cannot drift.
+pub(crate) fn is_collectable_log(world: &World, entity_id: EntityId) -> bool {
+    readable_log(world, entity_id).is_some()
+        && crate::scripts::script_util::entity_has_script(world, entity_id, LOG_DISC_SCRIPT)
+}
+
 fn readable_log(world: &World, entity_id: EntityId) -> Option<(u32, u32)> {
     let v_log = world.borrow::<View<PropLog>>().unwrap();
     match v_log.get(entity_id) {
