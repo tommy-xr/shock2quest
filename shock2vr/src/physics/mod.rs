@@ -2263,6 +2263,11 @@ pub struct PlayerHandle {
     jump_velocity: Option<Real>,
     // Held-button edge state: one press launches at most one jump.
     jump_was_pressed: bool,
+    // The player's OWN translation from the last movement frame - this
+    // frame's total travel minus the moving-support carry - so a rider
+    // standing still on an elevator reports zero. Purely derived per-frame
+    // state, recomputed by every `move_player`, so nothing saves it.
+    self_translation: Vector3<f32>,
 }
 
 /// The physical-hand seam for one held melee weapon. `target` is an invisible
@@ -2300,6 +2305,22 @@ impl PlayerHandle {
     /// the requested input.
     pub fn is_crouched(&self) -> bool {
         self.is_crouched
+    }
+
+    /// Ground contact reported by the last movement frame. Unlike a support
+    /// probe this includes immutable level terrain, so it is what "standing on
+    /// the deck" means.
+    pub fn is_grounded(&self) -> bool {
+        self.is_grounded
+    }
+
+    /// How far the player moved themselves on the last movement frame, with
+    /// any moving-platform carry removed (see [`PlayerSupport`]). This is the
+    /// displacement footstep pacing accumulates: a player carried by an
+    /// elevator, or relocated by a teleport (which never runs a movement
+    /// frame), contributes nothing.
+    pub fn self_translation(&self) -> Vector3<f32> {
+        self.self_translation
     }
 }
 
@@ -3954,6 +3975,7 @@ impl PhysicsWorld {
             is_grounded: false,
             jump_velocity: None,
             jump_was_pressed: false,
+            self_translation: Vector3::new(0.0, 0.0, 0.0),
         }
     }
 
@@ -4805,6 +4827,11 @@ impl PhysicsWorld {
         } else {
             player_handle.is_grounded = mvt.grounded;
         }
+
+        // `mvt.translation` includes the platform carry applied first inside
+        // `step_player_movement`; remove it so what is left is what the player
+        // did under their own power (see `PlayerHandle::self_translation`).
+        player_handle.self_translation = nvec_to_cgmath(mvt.translation - carry);
 
         // Edges already observed along a swept `move_player_validated` hop come
         // first: they happened before this frame's pose. They also leave
