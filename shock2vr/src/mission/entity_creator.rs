@@ -1094,34 +1094,55 @@ fn create_physics_representation_with_options(
         }
 
         let qrotation = pos.rotation;
-
-        let _is_sensor = true;
-
-        // let dimensions = v_phys_dimensions
-        //     .get(id)
-        //     .map(|d| d.size)
-        //     .ok()
-        //     .or_else(|| {
-        //         id_to_model.get(&id).and_then(|model| {
-        //             model.bounding_box().map(|bbox| bbox.max - bbox.min)
-        //         })
-        //     })
-        //     .unwrap_or(default_size);
-
-        // TODO: Add dynamic rigid body for some items?
-        // let shape = if let (Ok(phys_type), Ok(dimensions)) =
-        //     (v_phys_type.get(entity_id), v_phys_dimensions.get(entity_id))
-        // {
-        //     match phys_type.phys_type {
-        //         PhysicsModelType::OrientedBoundingBox => PhysicsShape::Cuboid(abs_dimensions),
-        //         PhysicsModelType::Sphere => {
-        //             PhysicsShape::Sphere(dimensions.radius0.abs().max(dimensions.radius1.abs()))
-        //         }
-        //         _ => panic!("unhandled physics type: {:?}", phys_type),
-        //     }
-        // } else {
-        //     PhysicsShape::Cuboid(abs_dimensions)
-        // };
+        // Only *fixtures* read their authored shape here. A MOVE frob is a
+        // carryable item, and those keep the dynamic model-bounds body they
+        // have always had: an item's authored sphere is a point-sized marble
+        // (the Wrench's is 0.046 across) that Dark rests through its own
+        // sleep/support bookkeeping, which this port does not model - dropped
+        // into rapier it starts unsupported and sinks through the surface the
+        // item was authored on (see the Korenchin Log and Modify Soft V2 in
+        // command2, which fall out of the level entirely).
+        let authored_physics = match (
+            v_phys_type.get(entity_id).ok(),
+            v_phys_dimensions.get(entity_id).ok(),
+        ) {
+            (Some(phys_type), Some(dimensions))
+                if !frob_info.world_action.contains(FrobFlag::MOVE) =>
+            {
+                // `P$PhysType` and `P$PhysDims` are inherited independently, so
+                // an object can end up declaring a shape its dimensions never
+                // describe - medsci2 ships a fixture whose authored OBB `size`
+                // is all zeros. A degenerate authored shape is no shape at all:
+                // fall through to the model bounds (the #597 dimensionless
+                // rule) rather than let the collider sanitizer floor a solid
+                // fixture at a 1 cm cube the player walks through.
+                let shape = match phys_type.phys_type {
+                    PhysicsModelType::ORIENTED_BOUNDING_BOX => {
+                        let size = vec3(
+                            dimensions.size.x.abs(),
+                            dimensions.size.y.abs(),
+                            dimensions.size.z.abs(),
+                        );
+                        (size.x > 0.0 && size.y > 0.0 && size.z > 0.0)
+                            .then_some(PhysicsShape::Cuboid(size))
+                    }
+                    PhysicsModelType::SPHERE => {
+                        let radius = dimensions.radius0.abs().max(dimensions.radius1.abs());
+                        (radius > 0.0).then_some(PhysicsShape::Sphere(radius))
+                    }
+                    _ => None,
+                };
+                shape.map(|shape| (shape, dimensions.offset0))
+            }
+            _ => None,
+        };
+        let mut frob_group = CollisionGroup::entity();
+        if v_hud_select
+            .get(entity_id)
+            .is_ok_and(|hud_select| hud_select.0)
+        {
+            frob_group = CollisionGroup::selectable();
+        }
 
         let rigid_body_handle;
         // Is a creature - so we need special handling for their bounding box
@@ -1146,6 +1167,33 @@ fn create_physics_representation_with_options(
                 dynamics_options,
             );
             physics.set_enabled_rotations(entity_id, false, false, false);
+        } else if let Some((shape, offset)) = authored_physics {
+            // FrobInfo controls interaction, not collision geometry. When a
+            // visible fixture also carries an explicit physical model,
+            // preserve that authored shape instead of replacing it with the
+            // render bounds used only for selection. The fixture stays where
+            // it was authored, exactly as the render-bounds box it replaces.
+            rigid_body_handle = physics.add_kinematic_shape(
+                entity_id,
+                pos.position,
+                qrotation,
+                offset,
+                shape,
+                CollisionGroup::entity(),
+                false,
+            );
+            // Dark selects frobbable objects from rendered model geometry,
+            // independently of their physics model. Keep the model bounds as
+            // a massless ray-only collider on the same body: interaction keeps
+            // its broad visible surface, while contacts use only the authored
+            // sphere/OBB above.
+            physics.add_interaction_cuboid(
+                rigid_body_handle,
+                entity_id,
+                Vector3::zero(),
+                abs_dimensions,
+                frob_group,
+            );
         } else if frob_info.world_action.contains(FrobFlag::MOVE) {
             let shape = PhysicsShape::Cuboid(abs_dimensions * 1.0);
             rigid_body_handle = physics.add_dynamic(
@@ -1161,13 +1209,6 @@ fn create_physics_representation_with_options(
                 dynamics_options,
             );
         } else {
-            let mut group = CollisionGroup::entity();
-            if let Ok(hud_select) = v_hud_select.get(entity_id) {
-                // HACK: Remove pick bias around fluidics computer
-                if hud_select.0 {
-                    group = CollisionGroup::selectable();
-                }
-            }
             // This collider is the *model bounding box*, built only so the
             // object can be frobbed and raycast - it is not an authored
             // collision volume. Dark makes an object physical by giving it a
@@ -1178,7 +1219,7 @@ fn create_physics_representation_with_options(
             // 2.2 x 4.0 x 2.5 box the player must stand inside - and wedges
             // the capsule against its faces with no way out (#801).
             if v_phys_type.get(entity_id).is_err() {
-                group = group.non_solid_to_characters();
+                frob_group = frob_group.non_solid_to_characters();
             }
             rigid_body_handle = physics.add_kinematic(
                 entity_id,
@@ -1188,7 +1229,7 @@ fn create_physics_representation_with_options(
                 abs_dimensions,
                 // TODO: Kinematic experiment
                 //is_sensor,
-                group,
+                frob_group,
                 false,
             );
         }
@@ -2028,6 +2069,270 @@ mod tests {
         assert_eq!(bodies[0].body_type, "dynamic");
         assert_eq!(bodies[0].linear_velocity, [-10.0, 0.0, 0.0]);
         assert!(bodies[0].collision_groups.iter().any(|g| g == "entity"));
+    }
+
+    /// Command1's Floor Pod 1520 is a SCRIPT-frobbable object with an
+    /// explicitly authored SPHERE model and radius. Selection must not replace
+    /// that small sphere with the much larger render-model bounds: the
+    /// synthetic box fills the only route through path cells 3799 -> 3798.
+    #[test]
+    fn ordinary_frobbable_sphere_uses_authored_physics() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let radius = 0.391_980_92;
+        let offset = vec3(0.0, 0.125, -0.25);
+        let entity_id = world.add_entity((
+            PropPosition {
+                position: vec3(-288.220_46, -7.601_908_7, 87.673_706),
+                cell: 0,
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            },
+            PropFrobInfo {
+                world_action: FrobFlag::SCRIPT,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+            PropHUDSelect(true),
+            PropPhysType {
+                phys_type: PhysicsModelType::SPHERE,
+                num_submodels: 1,
+                remove_on_sleep: false,
+                is_special: false,
+            },
+            PropPhysDimensions {
+                radius0: radius,
+                radius1: 0.0,
+                offset0: offset,
+                offset1: Vector3::zero(),
+                size: Vector3::zero(),
+                unk1: 0,
+                unk2: 0,
+            },
+        ));
+
+        let handle = create_physics_representation(
+            &mut world,
+            &mut physics,
+            &Some(&ladder_model()),
+            entity_id,
+        )
+        .expect("an authored frobbable sphere should get a body");
+
+        assert_eq!(
+            physics.debug_list_bodies()[0].body_type,
+            "kinematic",
+            "a fixture stays put; only its geometry comes from the authored model"
+        );
+        let actual_radius = physics
+            .sphere_radius(handle)
+            .expect("authored sphere must not become a model-bounds cuboid");
+        assert!((actual_radius - radius).abs() < 1.0e-5);
+        let actual_offset = physics
+            .collider_local_translation(handle)
+            .expect("authored collider should remain attached to its body");
+        assert!((actual_offset - offset).magnitude() < 1.0e-5);
+        assert!(physics.collider_blocks_player(handle));
+        assert!(physics.collider_blocks_actor(handle));
+        assert_eq!(
+            physics.collider_count(handle),
+            2,
+            "authored physics and render-model selection need separate colliders"
+        );
+        let selection_size = physics
+            .secondary_cuboid_full_size(handle)
+            .expect("the model bounds should remain available for frob rays");
+        assert!((selection_size - vec3(LADDER_SIZE.x, LADDER_SIZE.y, 0.2)).magnitude() < 0.01);
+    }
+
+    /// Both authored shapes survive on a fixture, whether or not it is
+    /// explicitly immobile. A MOVE frob is *not* a fixture: a carryable item
+    /// keeps the dynamic model-bounds body it has always had, because its
+    /// authored sphere is a point-sized marble that only Dark's own support
+    /// and sleep bookkeeping can rest on a shelf - dropped into rapier it
+    /// sinks through whatever it was authored standing on.
+    #[test]
+    fn frobbable_authored_shapes_preserve_geometry_and_mobility() {
+        for (phys_type, frob_action, immobile, expected_body_type, expect_authored_shape) in [
+            (
+                PhysicsModelType::SPHERE,
+                FrobFlag::SCRIPT,
+                true,
+                "kinematic",
+                true,
+            ),
+            (
+                PhysicsModelType::SPHERE,
+                FrobFlag::SCRIPT,
+                false,
+                "kinematic",
+                true,
+            ),
+            (
+                PhysicsModelType::ORIENTED_BOUNDING_BOX,
+                FrobFlag::SCRIPT,
+                true,
+                "kinematic",
+                true,
+            ),
+            (
+                PhysicsModelType::ORIENTED_BOUNDING_BOX,
+                FrobFlag::MOVE,
+                false,
+                "dynamic",
+                false,
+            ),
+            (
+                PhysicsModelType::SPHERE,
+                FrobFlag::MOVE,
+                false,
+                "dynamic",
+                false,
+            ),
+        ] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let size = vec3(0.3, 0.4, 0.5);
+            let radius = 0.25;
+            let offset = vec3(0.1, -0.2, 0.3);
+            let entity_id = world.add_entity((
+                PropPosition {
+                    position: vec3(1.0, 2.0, 3.0),
+                    cell: 0,
+                    rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                },
+                PropFrobInfo {
+                    world_action: frob_action,
+                    inventory_action: FrobFlag::empty(),
+                    tool_action: FrobFlag::empty(),
+                },
+                PropPhysType {
+                    phys_type,
+                    num_submodels: 1,
+                    remove_on_sleep: false,
+                    is_special: false,
+                },
+                PropPhysDimensions {
+                    radius0: radius,
+                    radius1: 0.0,
+                    offset0: offset,
+                    offset1: Vector3::zero(),
+                    size,
+                    unk1: 0,
+                    unk2: 0,
+                },
+            ));
+            if immobile {
+                world.add_component(entity_id, PropImmobile(true));
+            }
+
+            let handle = create_physics_representation(
+                &mut world,
+                &mut physics,
+                &Some(&ladder_model()),
+                entity_id,
+            )
+            .expect("an authored frobbable shape should get a body");
+            assert_eq!(
+                physics.debug_list_bodies()[0].body_type,
+                expected_body_type,
+                "unexpected mobility for {phys_type:?} / {frob_action:?} / immobile={immobile}"
+            );
+            if !expect_authored_shape {
+                assert!(
+                    physics.sphere_radius(handle).is_none(),
+                    "a carryable item keeps its model-bounds body, not the authored marble"
+                );
+                let model_bounds = vec3(LADDER_SIZE.x, LADDER_SIZE.y, 0.2);
+                assert!(
+                    (physics.cuboid_full_size(handle).unwrap() - model_bounds).magnitude() < 0.01,
+                    "a carryable item's collider should stay the model bounds"
+                );
+                continue;
+            }
+            match phys_type {
+                PhysicsModelType::SPHERE => assert!(
+                    (physics.sphere_radius(handle).unwrap() - radius).abs() < 1.0e-5,
+                    "authored sphere radius should survive"
+                ),
+                PhysicsModelType::ORIENTED_BOUNDING_BOX => assert!(
+                    (physics.cuboid_full_size(handle).unwrap() - size).magnitude() < 1.0e-5,
+                    "authored OBB dimensions should survive"
+                ),
+                _ => unreachable!(),
+            }
+            assert!(
+                (physics.collider_local_translation(handle).unwrap() - offset).magnitude() < 1.0e-5
+            );
+        }
+    }
+
+    /// `P$PhysType` and `P$PhysDims` are inherited independently, so a fixture
+    /// can declare a shape its dimensions never fill in - medsci2 ships one
+    /// whose authored OBB `size` is all zeros. Reading that literally shrinks a
+    /// solid fixture to the 1 cm cube the collider sanitizer floors it at,
+    /// which the player walks straight through; a degenerate authored shape
+    /// must fall back to the model bounds instead.
+    #[test]
+    fn degenerate_authored_dimensions_fall_back_to_model_bounds() {
+        for (phys_type, radius, size) in [
+            (
+                PhysicsModelType::ORIENTED_BOUNDING_BOX,
+                0.0,
+                Vector3::zero(),
+            ),
+            (PhysicsModelType::SPHERE, 0.0, vec3(1.5, 1.6, 1.3)),
+        ] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity_id = world.add_entity((
+                PropPosition {
+                    position: vec3(1.0, 2.0, 3.0),
+                    cell: 0,
+                    rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                },
+                PropFrobInfo {
+                    world_action: FrobFlag::SCRIPT,
+                    inventory_action: FrobFlag::empty(),
+                    tool_action: FrobFlag::empty(),
+                },
+                PropPhysType {
+                    phys_type,
+                    num_submodels: 1,
+                    remove_on_sleep: false,
+                    is_special: false,
+                },
+                PropPhysDimensions {
+                    radius0: radius,
+                    radius1: 0.0,
+                    offset0: Vector3::zero(),
+                    offset1: Vector3::zero(),
+                    size,
+                    unk1: 0,
+                    unk2: 0,
+                },
+            ));
+
+            let handle = create_physics_representation(
+                &mut world,
+                &mut physics,
+                &Some(&ladder_model()),
+                entity_id,
+            )
+            .expect("a frobbable fixture should still get a body");
+
+            assert_eq!(
+                physics.collider_count(handle),
+                1,
+                "the model-bounds fallback is the body's only collider"
+            );
+            let bounds = physics
+                .cuboid_full_size(handle)
+                .expect("a degenerate authored shape should fall back to model bounds");
+            assert!(
+                (bounds - vec3(LADDER_SIZE.x, LADDER_SIZE.y, 0.2)).magnitude() < 0.01,
+                "expected model bounds for {phys_type:?}, got {bounds:?}"
+            );
+        }
     }
 
     /// A non-frobbable object with a physics type but no `P$PhysDims` - the

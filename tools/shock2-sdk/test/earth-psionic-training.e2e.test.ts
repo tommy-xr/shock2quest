@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { GameServer } from "../src/index.js";
+import { GameServer, PLAYER_EYE_HEIGHT_WORLD } from "../src/index.js";
 import type { EntitySummary, UiElement } from "../src/types.js";
 import { crossEarthTrainingTripwire } from "./helpers/earth-tripwire.js";
 import { earthWorldUse } from "./helpers/earth-world-use.js";
@@ -410,7 +410,14 @@ test(
     const boosters: EntitySummary[] = [];
     for (const templateId of PSI_BOOSTERS) {
       const booster = await exactlyOne(game, templateId, "authored Psi Booster");
-      await earthWorldUse(game, booster);
+      // Authored SPHERE physics leaves the nearby booth floor, rather than a
+      // synthetic model-bounds box, supporting the player. Let that placement
+      // resolve before deriving the production crosshair ray.
+      await earthWorldUse(game, booster, {
+        horizontalOffset: 0.1,
+        verticalOffset: -PLAYER_EYE_HEIGHT_WORLD,
+        settleFrames: 1,
+      });
       assert.ok(
         (await game.player.inventory()).items.some(
           (item) => item.entity_id === booster.id,

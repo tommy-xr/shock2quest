@@ -268,7 +268,7 @@ impl HitBoxManager {
                     let rotation = get_rotation_from_matrix(&joint_xform);
                     // If there is not a physics entity yet, create one
                     if !id_to_physics.contains_key(hit_box_entry) {
-                        let physics_handle = physics.add_kinematic_shape(
+                        let physics_handle = physics.add_kinematic_shared_shape(
                             *hit_box_entry,
                             pos,
                             rotation,

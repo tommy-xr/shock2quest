@@ -125,15 +125,29 @@ test(
     });
     assert.notEqual(openRay.entity_id, door.id, "open door must clear its doorway");
 
-    // Return to the unobstructed control point after proving that the authored
-    // open pose cleared the same ray; ordinary awareness must still resume.
-    await game.player.teleport({ x: 17.2, y: 0.5, z: -107.0 });
+    // Stand in the clear again, on the monkey's side of the door it just
+    // opened; ordinary awareness must still resume. Reappearing at the *same*
+    // control point cannot show that: a republished last-known and a stale one
+    // read identically there, so this reacquires a couple of units away and
+    // asserts the published coordinate tracks the player - the assertion the
+    // old "just not the hidden value" comparison was reaching for.
+    const reacquirePoint = { x: 16.0, y: 0.5, z: -108.5 };
+    await game.player.teleport(reacquirePoint);
     await game.entities.sendMessage(monkey.id, {
       type: "SetAlertness",
       level: "High",
     });
     const reacquired = await waitForVisible(game, monkey.id, true, 180);
-    assert.notEqual(property(reacquired, "AILastKnown"), hiddenLastKnown);
+    const republished = property(reacquired, "AILastKnown");
+    assert.notEqual(republished, hiddenLastKnown);
+    const [lastX, , lastZ] = (republished ?? "")
+      .replace(/[[\]]/g, "")
+      .split(",")
+      .map(Number);
+    assert.ok(
+      Math.hypot(lastX - reacquirePoint.x, lastZ - reacquirePoint.z) < 0.5,
+      `awareness should republish the player's new position, got ${republished}`,
+    );
   },
 );
 
