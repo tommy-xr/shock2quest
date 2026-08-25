@@ -26,11 +26,12 @@ use engine::audio::AudioHandle;
 
 use crate::scripts::Effect;
 
-/// How far the player walks per footstep, in Dark units. Paired with
-/// `PLAYER_MOVE_SPEED` (25 Dark units/second) this paces a full-speed walk at
-/// roughly 3.5 steps/second - the same cadence the creature half measured for
-/// a jogging hybrid.
-const STRIDE_DISTANCE: f32 = 7.0 / SCALE_FACTOR;
+/// How far the player walks per footstep, in Dark units. Full-speed walking
+/// measured at ~1.8 world units/second in medsci1 (one world unit is 2.5 Dark
+/// units, so that is a real walking pace of ~1.4 m/s), which this paces at
+/// ~1.8 footsteps/second - a human's cadence at that speed, and the same
+/// order as the ~3.5/s the creature half measured for a *jogging* hybrid.
+const STRIDE_DISTANCE: f32 = 2.5 / SCALE_FACTOR;
 
 /// Crouched stride multiplier. Crouching does not slow the player down in this
 /// port, and the schema authors no quieter crouch sample (and volume is
