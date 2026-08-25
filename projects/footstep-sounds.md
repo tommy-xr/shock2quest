@@ -114,7 +114,35 @@ geometry (`script_util::DEFAULT_IMPACT_MATERIAL`), so `material2` is the default
 bulkhead metal. For hybrids that resolves `ft_ogm*` rather than `ft_og*`, which
 is right for most of the ship and wrong on Hydroponics carpet/soil. See §4.
 
-## 3. The player — plan, not implemented
+## 3. The player — implemented
+
+Built as designed below (`shock2vr/src/mission/player_footsteps.rs`), with
+four corrections the plan did not anticipate:
+
+- **`landing=true` was inert.** The schema authors it, but the resolver takes
+  the *shallowest* matched node, so a landing query resolved to the ordinary
+  `ftmet1..4` rather than `ftmetj`. `EnvSoundQuery::most_specific()` is an
+  opt-in selector used only by the landing query.
+- **Ladders.** A ladder descent is neither walking nor falling, but the climb
+  branch reports ungrounded with a negative per-frame `y`, so a descent
+  accrued the whole shaft as fall distance and thudded at the bottom.
+  `PlayerHandle::is_climbing()` gates both the stride and the fall.
+- **The carry is not folded in by every branch.** Only the walk pass adds the
+  platform carry to its translation; the scripted mantle, top-out and ladder
+  branches do not, so each branch reports its own `self_translation` rather
+  than the caller subtracting a carry that was never applied.
+- **An arrival can be in mid-air.** A spawn point above the floor (or a
+  teleport onto a lip) settles after the relocation, which read as a fall, so
+  `reset()` also swallows the next touchdown.
+
+Cadence is calibrated from `PLAYER_MOVE_SPEED` and a named target of 3.5
+footsteps/second: the port's player moves at ~9.7 world units/second in the
+open, which is a run rather than a stroll. Beware measuring that speed by
+walking a mission for several seconds - the player spends most of it pressed
+against geometry, which reads as ~1.8 wu/s and mis-calibrates the stride by
+5x.
+
+### The original plan
 
 The player has no creature animation, so there is no foot flag to consume. A
 footstep has to be derived from locomotion. Rough size: **a day** for a good

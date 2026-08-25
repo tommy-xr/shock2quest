@@ -14,6 +14,15 @@ pub struct EnvSoundQueryItem {
 #[derive(Clone, Debug)]
 pub struct EnvSoundQuery {
     items: Vec<EnvSoundQueryItem>,
+    /// Take the *last* schema node the match visited rather than the first.
+    /// The schema is a specificity tree and a match collects every node it
+    /// reaches, so a query that refines an already-resolving node
+    /// (`material=metal` -> `landing=true`) otherwise resolves to the parent's
+    /// samples and the refinement is silently inert. Only meaningful for a
+    /// fully-specified query that descends one path (see
+    /// `Gamesys::get_random_environmental_sound`). Off by default so existing
+    /// lookups keep resolving exactly as they did.
+    prefer_most_specific: bool,
 }
 
 impl EnvSoundQueryItem {
@@ -28,11 +37,17 @@ impl EnvSoundQueryItem {
 
 impl EnvSoundQuery {
     pub fn new() -> Self {
-        Self { items: Vec::new() }
+        Self {
+            items: Vec::new(),
+            prefer_most_specific: false,
+        }
     }
 
     pub fn from_items(items: Vec<EnvSoundQueryItem>) -> Self {
-        Self { items }
+        Self {
+            items,
+            prefer_most_specific: false,
+        }
     }
 
     pub fn from_tag_values(items: Vec<(&str, &str)>) -> Self {
@@ -41,7 +56,19 @@ impl EnvSoundQuery {
                 .into_iter()
                 .map(|(tag, value)| EnvSoundQueryItem::new(tag, value))
                 .collect(),
+            prefer_most_specific: false,
         }
+    }
+
+    /// Resolve to the deepest matched schema node instead of the shallowest -
+    /// see [`EnvSoundQuery::prefer_most_specific`].
+    pub fn most_specific(mut self) -> Self {
+        self.prefer_most_specific = true;
+        self
+    }
+
+    pub fn prefers_most_specific(&self) -> bool {
+        self.prefer_most_specific
     }
 
     /// The (tag, value) pairs of this query, e.g. for logging/introspection.

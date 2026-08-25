@@ -1523,6 +1523,12 @@ pub struct MissionCore {
     /// next weapon in `DEBUG_WEAPONS` (flat-mode aim/viewmodel testing).
     pub debug_weapon_index: usize,
 
+    /// Distance-paced player footsteps, fed by the movement call below. The
+    /// player has no locomotion animation to hang foot-plant flags on, so
+    /// their footsteps are derived from how far they walked - see
+    /// [`crate::mission::player_footsteps`].
+    player_footsteps: crate::mission::player_footsteps::PlayerFootsteps,
+
     /// First-person animation for the flat melee viewmodel: the wielded melee
     /// entity and its motion player (loops the player-melee idle; a swing is
     /// queued on attack and auto-returns to idle). `None` for guns / no weapon.
@@ -2396,6 +2402,7 @@ impl MissionCore {
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
             debug_pose_index: 0,
             debug_weapon_index: 0,
+            player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
             flat_melee_anim: None,
             use_mode: false,
             use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp::new(),
@@ -2902,6 +2909,26 @@ impl MissionCore {
         };
 
         if !time.elapsed.is_zero() {
+            // Player footsteps, paced by the distance the player just walked
+            // under their own power (platform carry already removed). Only on
+            // a frame that actually ran the movement pass: a paused frame
+            // moved nobody, and `self_translation` still holds the last real
+            // frame's travel.
+            let footstep =
+                self.player_footsteps
+                    .update(crate::mission::player_footsteps::FootstepFrame {
+                        self_translation: self.player_handle.self_translation(),
+                        is_grounded: self.player_handle.is_grounded(),
+                        is_crouched: self.player_handle.is_crouched(),
+                        is_climbing: self.player_handle.is_climbing(),
+                    });
+            if let Some(footstep) = footstep {
+                effects.push(crate::mission::player_footsteps::player_footstep_effect(
+                    footstep,
+                    new_character_pos,
+                ));
+            }
+
             let player_id = self
                 .world
                 .borrow::<UniqueView<PlayerInfo>>()
@@ -6899,6 +6926,11 @@ impl MissionCore {
                 } => {
                     self.physics
                         .set_player_translation(position, &mut self.player_handle);
+                    // Teleport locomotion, level load and quickload all land
+                    // here, and none of them ran a movement frame: forget the
+                    // stride and the fall in progress so the arrival is silent
+                    // rather than a burst of steps or a phantom thud.
+                    self.player_footsteps.reset();
                     if is_teleport {
                         self.world
                             .add_component(player_entity, PropTeleported::with_source(source))
@@ -10069,6 +10101,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         // Apply the teleportation using the same logic as Effect::SetPlayerPosition
         self.physics
             .set_player_translation(position, &mut self.player_handle);
+        self.player_footsteps.reset();
 
         // Keep PlayerInfo.pos consistent with the body immediately. It otherwise
         // only re-syncs from the physics body on the next update(), so a query

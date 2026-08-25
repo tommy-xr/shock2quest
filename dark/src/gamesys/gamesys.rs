@@ -29,11 +29,19 @@ impl Gamesys {
     ) -> Option<ResolvedSoundSchema> {
         let tag_query = query.to_tag_query(&self.speech_db.tag_map, &self.speech_db.value_map);
         let result = self.env_tag_map.query_match_all(&tag_query);
-        if result.is_empty() {
-            return None;
-        }
+        // `query_match_all` appends the data of every node it matched, in
+        // depth-first order, so the shallowest match on the path comes first
+        // and the deepest-visited one last. With a fully-specified query that
+        // descends a single path - which is what `most_specific` is for - the
+        // last id is that path's refinement; it is NOT a general "most
+        // specific" selector across several matching sibling branches.
+        let id = if query.prefers_most_specific() {
+            result.last()
+        } else {
+            result.first()
+        }?;
 
-        self.sound_schema.resolve_id(result[0])
+        self.sound_schema.resolve_id(*id)
     }
 
     pub fn speech_db(&self) -> &SpeechDB {
