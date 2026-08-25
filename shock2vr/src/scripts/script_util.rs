@@ -792,25 +792,12 @@ pub fn play_environmental_sound(
     additional_tags: Vec<(&str, &str)>,
     audio_handle: AudioHandle,
 ) -> Effect {
-    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let maybe_env_sound_query =
         get_environmental_sound_query(world, entity_id, event_type, additional_tags);
 
-    // An entity can be animating without owning a physics transform (the
-    // animation players and `id_to_physics` are separate maps, and ownership
-    // changes hands around death), so a missing transform is a silent no-sound
-    // rather than a panic - there is nowhere to place the sound.
-    let (Some(query), Ok(transform)) = (maybe_env_sound_query, v_transform.get(entity_id)) else {
-        return Effect::NoEffect;
-    };
-
-    {
-        let position = transform.0.transform_point(point3(0.0, 0.0, 0.0));
-        Effect::PlayEnvironmentalSound {
-            audio_handle,
-            query,
-            position: point3_to_vec3(position),
-        }
+    match maybe_env_sound_query {
+        Some(query) => emit_environmental_sound(world, entity_id, query, audio_handle),
+        None => Effect::NoEffect,
     }
 }
 
@@ -856,6 +843,13 @@ fn get_impact_material(world: &World, hit_entity_id: EntityId) -> String {
 /// so naming the real surface can resolve to *nothing* where the old fixed
 /// `metal` resolved to a sample. A truer material must never buy silence, so
 /// every material-tagged query keeps the default as its fallback.
+///
+/// The tag layer's own relaxation (`TagQueryItem`'s optional flag, which drops
+/// an item that matches nothing) cannot serve here: the schema branches on
+/// material *before* it reaches a sample, so dropping the tag resolves to
+/// nothing at all - `+event:collision +ammotype:std` and a materialless
+/// footstep both match no sample. Substituting the default is what actually
+/// keeps a sound, and it is the exact sound that played before.
 fn query_with_material_fallback(
     world: &World,
     entity_id: EntityId,
@@ -889,6 +883,12 @@ fn query_with_material_fallback(
 }
 
 /// Emit an already-built environmental sound query at `entity_id`'s position.
+///
+/// An entity can be animating without owning a physics transform (the
+/// animation players and `id_to_physics` are separate maps, and ownership
+/// changes hands around death), so a missing transform is a silent no-sound
+/// rather than a panic - there is nowhere to place the sound. Footsteps come
+/// from foot-plant frames of the death collapse too, so this is a live path.
 fn emit_environmental_sound(
     world: &World,
     entity_id: EntityId,
@@ -896,15 +896,14 @@ fn emit_environmental_sound(
     audio_handle: AudioHandle,
 ) -> Effect {
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
-    let position = v_transform
-        .get(entity_id)
-        .unwrap()
-        .0
-        .transform_point(point3(0.0, 0.0, 0.0));
+    let Ok(transform) = v_transform.get(entity_id) else {
+        return Effect::NoEffect;
+    };
+
     Effect::PlayEnvironmentalSound {
         audio_handle,
         query,
-        position: point3_to_vec3(position),
+        position: point3_to_vec3(transform.0.transform_point(point3(0.0, 0.0, 0.0))),
     }
 }
 
@@ -1163,6 +1162,23 @@ mod tests {
             panic!("expected an environmental sound, got {effect:?}");
         };
         assert!(query.fallback().is_none());
+    }
+
+    /// A creature can plant a foot while it owns no physics transform - the
+    /// animation player and `id_to_physics` are separate maps, and ownership
+    /// changes hands around death. There is nowhere to place the sound, so it
+    /// is silent rather than a panic.
+    #[test]
+    fn a_footstep_without_a_transform_is_silent() {
+        use super::play_footstep_sound;
+        use dark::properties::PropClassTag;
+
+        let mut world = World::new();
+        let creature = world.add_entity((PropClassTag::from_string("CreatureType OnceGrunt"),));
+
+        let effect = play_footstep_sound(&world, creature, Some("plasticrete"));
+
+        assert!(matches!(effect, crate::scripts::Effect::NoEffect));
     }
 
     /// Footsteps relax the *ground* (`material2`), not the creature's own
