@@ -102,8 +102,8 @@ test(
     assert.equal(podBodies.length, 1, "Floor Pod 1520 should own one physics body");
     assert.equal(
       podBodies[0].body_type,
-      "dynamic",
-      "an explicitly authored SPHERE must use Dark's simulated body",
+      "kinematic",
+      "the pod is a fixture: only its geometry comes from the authored model",
     );
     assert.equal(podBodies[0].blocks_player, true, "the live pod remains solid");
   },
