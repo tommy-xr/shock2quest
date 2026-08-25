@@ -112,7 +112,9 @@ impl Script for InternalSwitchHeldModelScript {
 
 /// The entity's authored first-person model name, unfiltered:
 /// `PropPlayerGun.hand_model` for guns, `PropLimbModel` for melee.
-fn get_raw_view_model(world: &World, entity_id: EntityId) -> Option<String> {
+/// The first-person model this weapon authors, whether or not VR will wield it
+/// (`PropPlayerGun.hand_model` for a gun, `PropLimbModel` for melee).
+pub(crate) fn get_raw_view_model(world: &World, entity_id: EntityId) -> Option<String> {
     let v_player_gun = world.borrow::<View<PropPlayerGun>>().unwrap();
     let v_melee_weapon = world.borrow::<View<PropLimbModel>>().unwrap();
 

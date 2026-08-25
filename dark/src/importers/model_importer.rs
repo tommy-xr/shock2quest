@@ -225,11 +225,57 @@ fn split_at_terminal_joint(
         .partition(|vertex| rigid_joint(vertex) == Some(terminal_joint))
 }
 
-fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometry> {
-    let SystemShockContentModel::Mesh(ai_mesh, skeleton, pmnm) = mesh else {
-        return None;
-    };
+/// The weapon-only geometry of an LGMD first-person model (the 25AE gun `_h`
+/// meshes, and any classic world model wielded as-is).
+///
+/// These carry no skeleton of their own: the "joints" are the sub-object
+/// hierarchy, which is how a slide or a magazine moves, and the renderer poses
+/// them through exactly the skeleton [`ss2_bin_obj_loader::build_skeleton`]
+/// builds. The weapon/arm split is by material rather than by terminal joint -
+/// a gun's arm is not a joint, it is `ND-arm*` geometry that can ride any
+/// sub-object (see [`is_first_person_arm_material`]).
+///
+/// Like both skinned branches below, this measures the *authored* geometry: the
+/// renderer additionally drops any slot whose texture will not resolve, and
+/// this fit does not. A model missing a texture would therefore be fitted
+/// slightly larger than it draws - which is the safe direction (the weapon
+/// stops short rather than sinking in), and is how the melee fit has always
+/// behaved.
+fn obj_weapon_geometry(obj: &SystemShock2ObjectMesh) -> Option<VrHeldWeaponGeometry> {
+    let mut vertices = Vec::new();
+    let mut arm_vertices = Vec::new();
+    for (material, run) in ss2_bin_obj_loader::to_vertices_by_material(obj) {
+        if is_first_person_arm_material(&material) {
+            arm_vertices.extend(run);
+        } else {
+            vertices.extend(run);
+        }
+    }
 
+    (!vertices.is_empty()).then(|| VrHeldWeaponGeometry {
+        vertices,
+        arm_vertices,
+        skeleton: Rc::new(ss2_bin_obj_loader::build_skeleton(obj)),
+        bind: None,
+    })
+}
+
+fn weapon_geometry(mesh: &SystemShockContentModel) -> Option<VrHeldWeaponGeometry> {
+    match mesh {
+        SystemShockContentModel::Obj(obj) => obj_weapon_geometry(obj),
+        SystemShockContentModel::Mesh(ai_mesh, skeleton, pmnm) => {
+            skinned_weapon_geometry(ai_mesh, skeleton, pmnm)
+        }
+    }
+}
+
+/// The weapon-only geometry of an LGMM skinned first-person model - the melee
+/// `_h` rigs, with or without a 25AE high-detail `PMNM` chunk.
+fn skinned_weapon_geometry(
+    ai_mesh: &SystemShock2AIMesh,
+    skeleton: &Rc<Skeleton>,
+    pmnm: &Option<crate::ss2_bin_pmnm::PmnmMesh>,
+) -> Option<VrHeldWeaponGeometry> {
     if let Some(pmnm) = pmnm {
         let runs = pmnm.to_skinned_vertices();
         let has_named_arm = runs

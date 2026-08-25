@@ -630,6 +630,20 @@ The project supports experimental flags for gating in-progress features during d
   default is the only reachable setting without a rebuild. Tell-tale log line:
   `high-detail (PMNM) meshes: true|false`.
 
+- **`physical_held_items`**: give a VR-held **gun** the same movement
+  properties a held melee weapon has had since #1121 - a swept kinematic body
+  that stops at world geometry instead of sliding through it. The collider is
+  fitted to the rendered `_h` view model (arm geometry excluded, by material),
+  and the held body is **inert**: no memberships, no filter, so it generates no
+  contacts, is invisible to the projectile raycast that starts inside its own
+  barrel, and cannot shove anything spawned at the muzzle. Only the level holds
+  it back. Melee weapons are unaffected either way (their body is their damage
+  volume and keeps `CollisionGroup::held_melee`), and the flat presentation is
+  untouched. Note a blocked weapon *renders* where its body is, so the shot -
+  which leaves the rendered muzzle vhot - leaves from the held-back position
+  too. VR only; without the flag a held gun has no body at all, exactly as
+  before. Tell-tale log line: `wield '<model>': rendered weapon WxHxD cm`.
+
 #### Adding New Experimental Features
 
 1. **Gate the feature in code**:
