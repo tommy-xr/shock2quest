@@ -48,7 +48,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_psi",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8120),
     });
 
     // The scene auto-equips the Psi Amp on the first update.
@@ -95,7 +94,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "debug_camera",
-        port: Number(process.env.SHOCK2_E2E_PORT ?? 8121),
       });
       await game.step({ frames: 10 });
       const camera = (await game.entities.list({ filter: "Security Camera", limit: 5 }))
@@ -121,7 +119,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "debug_camera",
-        port: Number(process.env.SHOCK2_E2E_PORT ?? 8122),
       });
       await game.step({ frames: 10 });
       const camera = (await game.entities.list({ filter: "Security Camera", limit: 5 }))

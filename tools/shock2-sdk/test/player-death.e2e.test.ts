@@ -5,7 +5,6 @@ import { GameServer } from "../src/index.js";
 import { carriedNaniteTotal } from "./helpers/earth-replicator.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8198);
 
 const RESURRECTION_BUTTON = 909;
 const RESURRECTION_TARGET = 187;
@@ -35,7 +34,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort,
     });
     await game.step({ frames: 5 });
 
@@ -80,7 +78,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 4,
     });
     await game.step({ frames: 5 });
 
@@ -147,7 +144,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 6,
     });
     await game.step({ frames: 5 });
     await game.input.set("head.look", [0, 0]);
@@ -195,7 +191,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "medsci1.mis",
-        port: basePort + 7,
       });
       await game.step({ frames: 30 });
       const sceneUi = async () =>
@@ -217,7 +212,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "medsci1.mis",
-        port: basePort + 8,
         debugFlags: ["--vr"],
       });
       await game.step({ frames: 30 });
@@ -243,7 +237,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 5,
     });
     await game.step({ frames: 5 });
 
@@ -284,7 +277,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 1,
     });
     await game.step({ frames: 5 });
 
@@ -360,7 +352,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 2,
     });
     await game.step({ frames: 5 });
 
@@ -416,7 +407,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort + 3,
     });
     await game.step({ frames: 5 });
 

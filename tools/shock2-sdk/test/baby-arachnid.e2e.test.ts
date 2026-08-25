@@ -6,7 +6,6 @@ import type { EntityDetailResult, EntitySummary } from "../src/index.js";
 import { fireOnce } from "./helpers/weapon.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8491);
 
 // Stable Hydro3 mission object/template ids, never runtime entity ids.
 const NORTH_ARACHNID = 372;
@@ -36,7 +35,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "hydro3.mis",
-      port: basePort,
     });
     await game.step({ frames: 10 });
 

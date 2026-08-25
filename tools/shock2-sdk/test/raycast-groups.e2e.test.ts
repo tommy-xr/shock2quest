@@ -22,7 +22,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "hydro2.mis",
-      port: Number(process.env.SHOCK2_E2E_RAYCAST_PORT ?? 8260),
     });
     // The first physics update populates Rapier's query broad phase.
     await game.step({ frames: 1 });

@@ -5,7 +5,6 @@ import { GameServer } from "../src/index.js";
 import type { EntitySummary, Vec3 } from "../src/types.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const PORT = Number(process.env.SHOCK2_E2E_PORT ?? 8147);
 
 function onlyEntity(entities: EntitySummary[], authoredId: number): EntitySummary {
   assert.equal(
@@ -31,7 +30,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "command1.mis",
-      port: PORT,
     });
 
     // Runtime ids vary every launch; resolve all four mission objects from

@@ -23,7 +23,7 @@ test(
   "clicking Quit in the flat menu requests a quit without killing the runtime",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run" },
   async () => {
-    await using game = await GameServer.launch({ mission: "main_menu", port: 8126 });
+    await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 10 });
 
     assert.equal(
@@ -61,7 +61,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "main_menu",
-      port: 8127,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 10 });

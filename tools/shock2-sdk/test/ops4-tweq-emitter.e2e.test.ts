@@ -4,7 +4,6 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8188);
 
 const TRIPWIRE = 662;
 const EMITTER = 682;
@@ -35,7 +34,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "ops4.mis",
-        port: basePort,
       });
       await game.step({ frames: 5 });
 
@@ -123,7 +121,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "ops1.mis",
-        port: basePort + 1,
       });
       assert.equal((await game.load(midBurstSave)).success, true);
       assert.equal((await game.info()).mission, "ops4.mis");
@@ -157,7 +154,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "ops1.mis",
-        port: basePort + 2,
       });
       assert.equal((await game.load(completedSave)).success, true);
       assert.equal((await game.entities.byTemplate(EMITTER)).length, 0);

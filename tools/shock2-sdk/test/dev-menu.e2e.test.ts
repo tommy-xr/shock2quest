@@ -78,7 +78,7 @@ test(
   "the flat Developer screen steps a param with < and > and leaves with Done",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
   async () => {
-    await using game = await GameServer.launch({ mission: "main_menu", port: 8131 });
+    await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 10 });
 
     // The repurposed Options slot now swaps to the Developer scene.
@@ -156,7 +156,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "main_menu",
-      port: 8132,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 10 });
@@ -200,7 +199,7 @@ test(
   "the pause overlay's Developer page tunes without leaving the mission",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 600_000 },
   async () => {
-    await using game = await GameServer.launch({ mission: "medsci1.mis", port: 8133 });
+    await using game = await GameServer.launch({ mission: "medsci1.mis" });
     await game.step({ frames: 30 });
 
     await game.input.trigger("TogglePauseMenu");
@@ -256,7 +255,7 @@ test(
   "the flat Developer screen launches a debug scene and can back out of the list",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 300_000 },
   async () => {
-    await using game = await GameServer.launch({ mission: "main_menu", port: 8134 });
+    await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 10 });
     await click(game, [489, 202]);
     assert.equal((await game.info()).mission, "developer");
@@ -296,7 +295,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "main_menu",
-      port: 8135,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 10 });

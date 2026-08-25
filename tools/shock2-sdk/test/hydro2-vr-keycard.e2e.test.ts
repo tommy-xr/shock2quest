@@ -102,7 +102,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "hydro2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8620),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 5 });
@@ -138,7 +137,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "hydro2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8622),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 5 });

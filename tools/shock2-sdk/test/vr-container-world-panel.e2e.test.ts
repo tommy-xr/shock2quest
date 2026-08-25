@@ -29,7 +29,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8540),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 5 });

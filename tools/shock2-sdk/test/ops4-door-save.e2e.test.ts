@@ -4,7 +4,6 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8184);
 
 test(
   "ops4.mis: tripwire door 676 stays open across a fresh-process save load",
@@ -16,7 +15,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "ops4.mis",
-        port: basePort,
       });
       await game.step({ frames: 5 });
       const door = (
@@ -43,7 +41,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "ops1.mis",
-        port: basePort + 1,
       });
       assert.equal((await game.load(saveName)).success, true);
       assert.equal((await game.info()).mission, "ops4.mis");

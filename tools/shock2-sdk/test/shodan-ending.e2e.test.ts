@@ -22,7 +22,6 @@ test(
     assert.ok(endingSave);
     await using game = await GameServer.launch({
       mission: "shodan.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8251),
       debugFlags: ["--save-file", endingSave],
       rustLog: "debug_runtime=info,shock2vr=debug",
     });

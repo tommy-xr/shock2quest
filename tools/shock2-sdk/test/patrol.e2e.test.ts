@@ -52,7 +52,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "eng1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8161),
     });
 
     // Let the level's AIs instantiate.
@@ -143,7 +142,6 @@ test(
 
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8163),
     });
     // Leave the player at the authored spawn in the sealed cryo recovery room:
     // it has valid walkable support and is isolated from this patrol route.
@@ -242,7 +240,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8162),
     });
 
     // Move the player off the deck before anything can be seen, so the run is
@@ -347,7 +344,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "eng1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8164),
     });
 
     // Keep the player far away: this is about an AI nobody ever alerted.

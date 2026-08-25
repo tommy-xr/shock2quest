@@ -4,7 +4,6 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8534);
 
 // earth.mis's basic-training stand:
 //
@@ -32,7 +31,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: basePort,
     });
     await game.step({ frames: 10 });
 

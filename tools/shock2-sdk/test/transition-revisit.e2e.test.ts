@@ -51,7 +51,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8118),
     });
 
     await game.step({ frames: 2 });
@@ -81,7 +80,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "hydro2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8118),
     });
 
     await game.step({ frames: 2 });

@@ -19,7 +19,6 @@ import { teleportVerified } from "./helpers/teleport.js";
 // intentional SkillTrainerScript no-op stub (#424) - /v1/ui reports no active
 // panel, so the "panel opened" assertion fails.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8170);
 
 test(
   "trainer MFD: Strength expands inventory and Endurance raises max HP persistently",
@@ -28,7 +27,6 @@ test(
     const saveName = `trainer_e2e_${Date.now()}`;
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: basePort,
     });
     await game.step({ frames: 5 });
 

@@ -137,7 +137,6 @@ test(
 
     await using game = await GameServer.launch({
       mission: "medsci2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8602),
       debugFlags: ["--vr"],
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
     });

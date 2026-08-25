@@ -17,8 +17,6 @@ import type { EntityDetailResult, EntitySummary } from "../src/index.js";
 // fails (the runtime never comes back with the restored mission).
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8203);
-
 // medsci1 object 102 - a Security Camera (`cameraalert` script) with a clear
 // line of sight to the vantage point used below. Template ids are stable
 // across runs; runtime entity ids are not.
@@ -44,7 +42,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "medsci1.mis",
-        port: basePort,
       });
       await game.step({ frames: 10 });
 
@@ -79,7 +76,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "eng1.mis",
-        port: basePort + 1,
       });
       await game.step({ frames: 2 });
 

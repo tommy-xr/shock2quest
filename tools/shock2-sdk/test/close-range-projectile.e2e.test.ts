@@ -16,7 +16,6 @@ import { fireOnce } from "./helpers/weapon.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const TRAINING_DROID = 593;
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8469);
 
 function hitPoints(detail: EntityDetailResult): number {
   const property = detail.properties.find(
@@ -67,7 +66,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: basePort,
     });
     await game.step({ frames: 5 });
 
@@ -118,7 +116,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort + 1,
     });
     await game.step({ frames: 5 });
 
@@ -184,7 +181,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort + 2,
     });
     await game.step({ frames: 5 });
 

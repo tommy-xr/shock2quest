@@ -72,7 +72,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "command2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8138),
       debugFlags: ["--vr"],
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
     });
@@ -229,7 +228,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "command2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT_SAVE ?? 8139),
       debugFlags: ["--vr"],
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
     });
@@ -305,7 +303,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "command2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT_HELD_RAY ?? 8140),
       debugFlags: ["--vr"],
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
     });

@@ -23,7 +23,6 @@ test(
     // no corresponding mission asset exists.
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8221),
     });
     await game.step({ frames: 5 });
     // Provision and auto-wield the same loaded pistol used by the debug action.

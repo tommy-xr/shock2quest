@@ -5,7 +5,6 @@ import { GameServer } from "../src/index.js";
 import type { EntityDetailResult, EntitySummary, Vec3 } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8560);
 
 // Stable MedSci2 mission-object identities. Runtime entity ids are assigned
 // afresh on every launch and are deliberately discovered below.
@@ -55,7 +54,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci2.mis",
-      port: basePort,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 5 });
@@ -145,7 +143,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci2.mis",
-      port: basePort + 1,
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 5 });

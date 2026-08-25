@@ -38,7 +38,6 @@ test(
     // state is a fresh character with nothing.
     await using game = await GameServer.launch({
       mission: "command1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8348),
     });
     await game.step({ frames: 5 });
 

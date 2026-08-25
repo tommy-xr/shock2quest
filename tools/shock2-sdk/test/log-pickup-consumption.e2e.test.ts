@@ -16,7 +16,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "command2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8247),
     });
     await game.step({ frames: 5 });
 

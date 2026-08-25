@@ -129,7 +129,6 @@ test(
     const saveName = `hydro_research_${Date.now()}`;
     await using game = await GameServer.launch({
       mission: "hydro2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8233),
     });
     await game.step({ frames: 5 });
     const supportedSavePosition = await game.player.position();

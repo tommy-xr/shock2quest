@@ -44,7 +44,6 @@ test(
     const saveName = `command_shuttle_b_destroyed_${Date.now()}`;
     await using game = await GameServer.launch({
       mission: "command1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8618),
     });
     await game.step({ frames: 5 });
 

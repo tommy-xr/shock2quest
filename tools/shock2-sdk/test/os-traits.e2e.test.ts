@@ -20,7 +20,6 @@ import { teleportVerified } from "./helpers/teleport.js";
 // medsci2's Trait Machine (mission id 133) opens nothing, so the "panel
 // opened" assertion fails.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8171);
 
 /** Find the level's Trait Machine by stable mission object id. */
 async function findMachine(game: GameServer, missionId: number) {
@@ -74,7 +73,6 @@ test(
     const saveName = `os_traits_e2e_${Date.now()}`;
     await using game = await GameServer.launch({
       mission: "medsci2.mis",
-      port: basePort,
     });
     await game.step({ frames: 5 });
 

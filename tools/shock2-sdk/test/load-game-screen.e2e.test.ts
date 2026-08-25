@@ -48,8 +48,8 @@ async function entityCount(game: GameServer): Promise<number> {
  * save directory, so a machine that has never saved would otherwise show
  * "< EMPTY >" and the load assertions would be vacuous.
  */
-async function seedSave(port: number): Promise<void> {
-  await using game = await GameServer.launch({ mission: "medsci1.mis", port });
+async function seedSave(): Promise<void> {
+  await using game = await GameServer.launch({ mission: "medsci1.mis" });
   await game.step({ frames: 30 });
   await game.input.trigger("QuickSave");
   await game.step({ frames: 30 });
@@ -59,8 +59,8 @@ test(
   "the load screen opens from the menu and Done returns to it",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run" },
   async () => {
-    await seedSave(8120);
-    await using game = await GameServer.launch({ mission: "main_menu", port: 8121 });
+    await seedSave();
+    await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 5 });
 
     // A frontend scene has no world entities.
@@ -94,8 +94,8 @@ test(
   "loading a save from the list restores a mission",
   { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run" },
   async () => {
-    await seedSave(8123);
-    await using game = await GameServer.launch({ mission: "main_menu", port: 8122 });
+    await seedSave();
+    await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 5 });
     assert.equal(await entityCount(game), 0);
 

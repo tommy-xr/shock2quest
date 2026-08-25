@@ -83,7 +83,6 @@ test(
     );
     await using game = await GameServer.launch({
       mission: "rick1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8290),
       debugFlags: ["--save-file", reproSave],
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
       repoRoot: process.env.SHOCK2_REPO_ROOT,

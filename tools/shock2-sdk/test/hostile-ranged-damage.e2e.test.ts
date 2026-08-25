@@ -11,7 +11,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_turret",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8574),
     });
 
     const hpBefore = (await game.info()).player.hit_points;

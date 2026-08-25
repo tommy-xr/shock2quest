@@ -28,7 +28,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8102),
       debugFlags: ["--vr"],
     });
 
@@ -85,7 +84,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8106),
       debugFlags: ["--vr"],
     });
 
@@ -142,7 +140,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8107),
       debugFlags: ["--vr"],
     });
 
@@ -232,7 +229,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "earth.mis",
-        port: Number(process.env.SHOCK2_E2E_PORT ?? 8104),
       });
       await game.step({ frames: 10 });
 
@@ -263,7 +259,6 @@ test(
     // Without that dispatch the restored pistol keeps its saved world model.
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8105),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 5 });
@@ -286,7 +281,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8103),
     });
 
     // In flat, DebugCycleWeapon spawns AND wields (sends Hold), which swaps the

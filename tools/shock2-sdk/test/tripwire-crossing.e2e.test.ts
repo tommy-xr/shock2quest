@@ -27,7 +27,6 @@ import type { Position } from "../src/index.js";
 // grants the Note_6_1 objective. Entities are discovered by stable mission
 // object id / name - runtime entity ids differ every launch.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8222);
 
 const TRIPWIRE_OBJECT_ID = 2308;
 const OBJECTIVE = "note_6_1";
@@ -97,7 +96,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "command1.mis",
-      port: basePort,
     });
     const { wire, start } = await arriveAtTripwire(game);
 
@@ -128,7 +126,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "command1.mis",
-      port: basePort + 1,
     });
     const { wire, start } = await arriveAtTripwire(game);
 
@@ -163,7 +160,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "command1.mis",
-      port: basePort + 2,
     });
     const { wire, start } = await arriveAtTripwire(game);
 

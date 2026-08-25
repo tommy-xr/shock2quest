@@ -17,7 +17,6 @@ import { carriedNaniteTotal } from "./helpers/earth-replicator.js";
 // Negative-first: on main both the raw-input and bounded-move assertions below
 // report 0 at the wedge coordinates from the issue.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8206);
 
 // Stable mission-object ids (`template_id`), not runtime entity ids.
 const RESURRECTION_STATION = 423;
@@ -82,7 +81,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "hydro2.mis",
-      port: basePort,
     });
     await game.step({ frames: 5 });
 
@@ -142,7 +140,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "hydro2.mis",
-      port: basePort + 1,
     });
     await game.step({ frames: 5 });
 

@@ -30,7 +30,6 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_protocol_droid",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8137),
     });
 
     await game.step({ frames: 10 });

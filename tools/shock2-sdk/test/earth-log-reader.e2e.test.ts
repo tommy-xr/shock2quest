@@ -33,13 +33,9 @@ const panelText = (panel: UiPanel): string =>
     .map((element) => element.text)
     .join(" ");
 
-async function verifyEarthLogReader(
-  presentation: "flat" | "vr",
-  port: number,
-): Promise<void> {
+async function verifyEarthLogReader(presentation: "flat" | "vr"): Promise<void> {
   await using game = await GameServer.launch({
     mission: "earth.mis",
-    port,
     debugFlags: presentation === "vr" ? ["--vr"] : [],
   });
   await game.step({ frames: 5 });
@@ -96,13 +92,7 @@ test(
   "25AE Earth log 1/24 collects, reads and renders in flat and VR",
   { skip: !has25thScp, timeout: 600_000 },
   async () => {
-    await verifyEarthLogReader(
-      "flat",
-      Number(process.env.SHOCK2_E2E_PORT ?? 8861),
-    );
-    await verifyEarthLogReader(
-      "vr",
-      Number(process.env.SHOCK2_E2E_PORT ?? 8862),
-    );
+    await verifyEarthLogReader("flat");
+    await verifyEarthLogReader("vr");
   },
 );
