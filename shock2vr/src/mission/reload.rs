@@ -180,6 +180,15 @@ pub(crate) fn clip_projectile_index(
     })
 }
 
+/// How many rounds a clip entity still carries (0 for anything with no stack).
+pub(crate) fn clip_rounds(world: &World, clip: EntityId) -> i32 {
+    world
+        .borrow::<View<PropStackCount>>()
+        .ok()
+        .and_then(|stacks| stacks.get(clip).ok().map(|stack| stack.0))
+        .unwrap_or(0)
+}
+
 /// Move rounds from ONE clip entity the player is physically holding into
 /// `weapon`'s magazine - the physical VR reload's counterpart to
 /// [`load_from_reserve`], which draws from the backpack instead.

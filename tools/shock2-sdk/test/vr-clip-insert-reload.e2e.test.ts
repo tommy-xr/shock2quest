@@ -274,8 +274,12 @@ test(
     await game.step({ frames: 30 });
 
     const pistol = await grabPistol(game);
+    // The debug pistol spawns with a FULL magazine, so what it holds now is its
+    // capacity - the number the insert has to restore. Pinned as a precondition
+    // rather than assumed, so a data change fails here and not three asserts
+    // later with a confusing count.
     const capacity = ammoOf(await game.entities.detail(pistol.id));
-    assert.ok(capacity > 0, "the debug pistol starts loaded");
+    assert.ok(capacity > 0, "the debug pistol starts loaded, and starts full");
 
     // Empty it, so the insert has somewhere to put rounds.
     for (let shot = 0; shot < 40; shot += 1) {
@@ -438,15 +442,20 @@ test(
       "the magazine holds the new type's rounds",
     );
 
-    // The standard rounds that were loaded come BACK as standard ammo - the
-    // swap costs a reload, it does not convert them.
+    // The standard rounds that were loaded come BACK as standard ammo, all of
+    // them - the swap costs a reload, it neither converts nor loses rounds.
     const inventory = await game.player.inventory();
     const returned = inventory.items.filter((item) =>
       (item.name ?? "").includes("Standard"),
     );
-    assert.ok(
-      returned.length > 0,
-      `the ejected standard rounds must be in the pack: ${JSON.stringify(inventory.items)}`,
+    let returnedRounds = 0;
+    for (const item of returned) {
+      returnedRounds += stackOf(await game.entities.detail(item.entity_id));
+    }
+    assert.equal(
+      returnedRounds,
+      loaded,
+      `every ejected standard round must be in the pack: ${JSON.stringify(inventory.items)}`,
     );
   },
 );

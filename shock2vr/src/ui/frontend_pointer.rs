@@ -56,15 +56,27 @@ fn grabbing(hand: &Hand) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerEngagement {
     Trigger,
-    TriggerOrGrab,
+    TriggerOrGrab {
+        /// Which hands are already CARRYING something, by
+        /// [`crate::vr_config::hand_slot`].
+        ///
+        /// A carrying hand squeezes to keep hold of its object, for as long as
+        /// it carries it - that squeeze is not a gesture aimed at the panel and
+        /// must not claim it, or a player with a gun in one hand can never
+        /// reach the inventory strip with the other. Its TRIGGER still claims
+        /// the panel normally.
+        carrying: [bool; 2],
+    },
 }
 
 impl PointerEngagement {
-    /// Whether `hand` is actively working the panel under this policy.
-    fn engaged(self, hand: &Hand) -> bool {
+    /// Whether `hand` is making a gesture the panel should listen to.
+    fn engaged(self, hand: &Hand, handedness: Handedness) -> bool {
         match self {
             Self::Trigger => held(hand),
-            Self::TriggerOrGrab => held(hand) || grabbing(hand),
+            Self::TriggerOrGrab { carrying } => {
+                held(hand) || (grabbing(hand) && !carrying[crate::vr_config::hand_slot(handedness)])
+            }
         }
     }
 }
@@ -208,7 +220,7 @@ pub fn vr_pointer_pass(
     // flight for an idle hand to land.
     let working_the_panel = |slot: usize| {
         held(hands[slot])
-            || (engagement.engaged(hands[slot])
+            || (engagement.engaged(hands[slot], handedness[slot])
                 && ray_of_hand[slot].is_some_and(|index| rays[index].canvas_hit.is_some()))
     };
     let any_engaged = working_the_panel(0) || working_the_panel(1);
@@ -404,7 +416,9 @@ mod tests {
             &vr_input(carrying_right, reaching_left),
             CANVAS,
             &test_panel(),
-            PointerEngagement::TriggerOrGrab,
+            PointerEngagement::TriggerOrGrab {
+                carrying: [false; 2],
+            },
         );
 
         assert_eq!(
@@ -413,6 +427,68 @@ mod tests {
             "the free hand must own the panel"
         );
         assert!(pass.point().is_some(), "and it must supply a point");
+    }
+
+    /// The harder half of the same problem: the panel is head-anchored, so the
+    /// gun hand's ray crosses it constantly. Its permanently-held squeeze must
+    /// not claim the panel THERE either, or the free hand loses the tie (the
+    /// right hand wins ties) and can still never reach a slot.
+    #[test]
+    fn a_carrying_hand_does_not_claim_the_panel_its_ray_happens_to_cross() {
+        let slot = vec2(23.5, 34.0);
+        let carrying_right = Hand {
+            squeeze_value: 1.0,
+            ..hand_aimed_at(CANVAS, vec2(400.0, 200.0), 0.0)
+        };
+        let reaching_left = Hand {
+            squeeze_value: 1.0,
+            ..hand_aimed_at(CANVAS, slot, 0.0)
+        };
+        let mut carrying = [false; 2];
+        carrying[crate::vr_config::hand_slot(Handedness::Right)] = true;
+
+        let pass = vr_pointer_pass(
+            &vr_input(carrying_right, reaching_left),
+            CANVAS,
+            &test_panel(),
+            PointerEngagement::TriggerOrGrab { carrying },
+        );
+
+        assert_eq!(
+            pass.active_ray().map(|ray| ray.handedness),
+            Some(Handedness::Left),
+            "the empty hand's squeeze must outrank the carrying hand's"
+        );
+        let point = pass.point().expect("the free hand must supply a point");
+        assert!(
+            (point.x - slot.x).abs() < 1.0 && (point.y - slot.y).abs() < 1.0,
+            "and it must be the slot it aimed at, got {point:?}"
+        );
+    }
+
+    /// ...but a hand carrying nothing keeps its squeeze claim, which is what
+    /// takes an item out of a slot in the first place.
+    #[test]
+    fn an_empty_hands_squeeze_still_claims_the_panel() {
+        let pass = vr_pointer_pass(
+            &vr_input(
+                Hand {
+                    squeeze_value: 1.0,
+                    ..hand_aimed_at(CANVAS, vec2(23.5, 34.0), 0.0)
+                },
+                hand_aimed_at(CANVAS, vec2(400.0, 200.0), 0.0),
+            ),
+            CANVAS,
+            &test_panel(),
+            PointerEngagement::TriggerOrGrab {
+                carrying: [false; 2],
+            },
+        );
+
+        assert_eq!(
+            pass.active_ray().map(|ray| ray.handedness),
+            Some(Handedness::Right)
+        );
     }
 
     /// The trigger half is the opposite: a press in flight is reported for
@@ -428,7 +504,9 @@ mod tests {
             ),
             CANVAS,
             &test_panel(),
-            PointerEngagement::TriggerOrGrab,
+            PointerEngagement::TriggerOrGrab {
+                carrying: [false; 2],
+            },
         );
 
         assert_eq!(pass.point(), None);

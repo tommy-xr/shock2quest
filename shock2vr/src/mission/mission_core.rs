@@ -161,14 +161,9 @@ fn resolve_optional_log_art_texture(
 const LOAD_EVENT_PUMP_ENTITY_INTERVAL: usize = 32;
 
 /// Index of a hand in the per-hand `[left, right]` arrays this module keeps
-/// (the VR grab swallow, the on-panel arbitration). One conversion, so the two
-/// sides of a latch can never disagree about which slot a hand owns.
-pub(crate) fn hand_slot(hand: crate::vr_config::Handedness) -> usize {
-    match hand {
-        crate::vr_config::Handedness::Left => 0,
-        crate::vr_config::Handedness::Right => 1,
-    }
-}
+/// (the VR grab swallow, the on-panel arbitration). The crate-wide conversion,
+/// so a per-hand array built here reads correctly wherever it is consumed.
+use crate::vr_config::hand_slot;
 
 /// Advance the VR grab swallow one frame, per hand (see
 /// [`MissionCore::vr_squeeze_swallow`]).
@@ -1626,6 +1621,11 @@ pub struct MissionCore {
     /// other hand's weapon magazine zone. The physical reload fires on the
     /// rising edge of this - see [`update_clip_insert_gesture`] - so a clip
     /// resting against the gun inserts once rather than every frame.
+    ///
+    /// Not saved, like its neighbours above: a save taken with a clip already
+    /// touching the gun restores with the latch clear and inserts on the first
+    /// frame. That is the same insert the player was one frame away from
+    /// making, so it is left as the cheaper behaviour rather than persisted.
     ///
     /// [`update_clip_insert_gesture`]: MissionCore::update_clip_insert_gesture
     vr_clip_insert_engaged: [bool; 2],
@@ -3211,13 +3211,18 @@ impl MissionCore {
             );
             // The VR ray plays the role of the mouse: one pass resolves where
             // each controller lands on the panel and which one owns it.
+            let (left_carrying, right_carrying) = self.interaction.held_entities();
+            let mut carrying = [false; 2];
+            carrying[hand_slot(crate::vr_config::Handedness::Left)] = left_carrying.is_some();
+            carrying[hand_slot(crate::vr_config::Handedness::Right)] = right_carrying.is_some();
             self.vr_use_mode_pointer = Some(crate::ui::vr_pointer_pass(
                 input_context,
                 crate::mission::flat_ui_host::CANVAS_SIZE,
                 &panel,
                 // A squeeze claims the panel here, unlike on a frontend screen:
-                // it is how a hand takes an item out of a slot.
-                crate::ui::PointerEngagement::TriggerOrGrab,
+                // it is how a hand takes an item out of a slot - but only from a
+                // hand that is not already using its squeeze to hold something.
+                crate::ui::PointerEngagement::TriggerOrGrab { carrying },
             ));
         }
         if self.vr_trigger_swallow && !self.use_mode {
@@ -8010,13 +8015,13 @@ impl MissionCore {
             // holds a gun, so dual wielding inserts into the gun the clip
             // actually reached.
             let pair = match (held[slot], held[1 - slot]) {
-                (Some(clip), Some(weapon)) if self.magazine_capacity(weapon).is_some() => {
-                    Some((clip, weapon))
-                }
+                (Some(clip), Some(weapon)) => self
+                    .magazine_capacity(weapon)
+                    .map(|capacity| (clip, weapon, capacity)),
                 _ => None,
             };
             let engaged = pair
-                .and_then(|(clip, weapon)| {
+                .and_then(|(clip, weapon, _)| {
                     let clip_position = self.entity_world_position(clip)?;
                     let weapon_position = self.entity_world_position(weapon)?;
                     Some(crate::mission::reload::clip_insert_zone_engaged(
@@ -8027,8 +8032,8 @@ impl MissionCore {
                 .unwrap_or(false);
             let entered = engaged && !self.vr_clip_insert_engaged[slot];
             self.vr_clip_insert_engaged[slot] = engaged;
-            if let (true, Some((clip, weapon))) = (entered, pair) {
-                cues.extend(self.insert_held_clip(asset_cache, weapon, clip));
+            if let (true, Some((clip, weapon, capacity))) = (entered, pair) {
+                cues.extend(self.insert_held_clip(asset_cache, weapon, clip, capacity));
             }
         }
         cues
@@ -8062,17 +8067,23 @@ impl MissionCore {
         asset_cache: &mut AssetCache,
         weapon: EntityId,
         clip: EntityId,
+        capacity: i32,
     ) -> Vec<Effect> {
         if !crate::mission::reload::is_ammo_clip(&self.world, clip) {
             return Vec::new();
         }
-        let Some(capacity) = self.magazine_capacity(weapon) else {
-            return Vec::new();
-        };
         let Some(index) = crate::mission::reload::clip_projectile_index(&self.world, weapon, clip)
         else {
             return vec![self.refuse_clip_insert(weapon)];
         };
+        // Nothing below may run unless rounds could actually MOVE. Both halves
+        // of the swap - the eject and the selection change - are committed
+        // before the load, so a gun that cannot hold a round (`clip: 0`) or an
+        // empty clip entity would otherwise dump the magazine and switch the
+        // ammo type having loaded nothing at all.
+        if capacity <= 0 || crate::mission::reload::clip_rounds(&self.world, clip) <= 0 {
+            return vec![self.refuse_clip_insert(weapon)];
+        }
 
         if index != crate::mission::reload::selected_ammo_index(&self.world, weapon) {
             // A different ammo type: the loaded rounds go back to the backpack

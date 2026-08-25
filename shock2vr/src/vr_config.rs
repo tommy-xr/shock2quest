@@ -51,6 +51,19 @@ impl Handedness {
     }
 }
 
+/// The index a hand occupies in a `[_; 2]` of per-hand state.
+///
+/// One conversion, crate-wide, so per-hand arrays built in one module can be
+/// read in another. Anything that pairs the hands in an array (latches,
+/// per-hand gestures) uses THIS ordering; a local array in some other order
+/// must not be indexed with it.
+pub fn hand_slot(hand: Handedness) -> usize {
+    match hand {
+        Handedness::Left => 0,
+        Handedness::Right => 1,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct VRHandModelPerHandAdjustments {
     pub offset: Vector3<f32>,

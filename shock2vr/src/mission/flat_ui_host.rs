@@ -136,7 +136,7 @@ pub struct CanvasPointer {
     /// into the hand.
     pub grabbing: bool,
     /// BOTH controllers' squeeze this frame, indexed by
-    /// [`crate::mission::mission_core::hand_slot`].
+    /// [`crate::vr_config::hand_slot`].
     ///
     /// The panel edge-detects each hand separately, and it needs both hands to
     /// do it: a VR player holds a gun by holding that hand's squeeze DOWN, so a
@@ -176,14 +176,14 @@ pub fn vr_canvas_pointer(
         input_hand.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD
     };
     let mut grabbing_hands = [false; 2];
-    grabbing_hands[crate::mission::mission_core::hand_slot(Handedness::Left)] =
+    grabbing_hands[crate::vr_config::hand_slot(Handedness::Left)] =
         squeezing(&input_context.left_hand);
-    grabbing_hands[crate::mission::mission_core::hand_slot(Handedness::Right)] =
+    grabbing_hands[crate::vr_config::hand_slot(Handedness::Right)] =
         squeezing(&input_context.right_hand);
     CanvasPointer {
         canvas_pos: pass.point(),
         pressed: pass.pressed,
-        grabbing: grabbing_hands[crate::mission::mission_core::hand_slot(hand)],
+        grabbing: grabbing_hands[crate::vr_config::hand_slot(hand)],
         grabbing_hands,
         hand,
         bare_view: BareViewPress::Ignore,
@@ -606,12 +606,21 @@ impl FlatUiHost {
         // POINTING hand's own: the other hand's squeeze is very often held for
         // the whole session (that is how a VR player keeps hold of a gun) and
         // must not stand in for a gesture it did not make.
-        let grabbing_hands = pointer.map(|p| p.grabbing_hands).unwrap_or([false; 2]);
-        let grab_edge = pointer.is_some_and(|p| {
-            let slot = crate::mission::mission_core::hand_slot(p.hand);
-            grabbing_hands[slot] && !self.last_pointer_grabbing[slot]
-        });
-        self.last_pointer_grabbing = grabbing_hands;
+        //
+        // A frame with NO pointer at all (the VR pass is still coming up, flat
+        // with the cursor off the window) leaves the latches ALONE rather than
+        // clearing them: a hand that has been squeezing throughout would
+        // otherwise read as a rising edge on the first frame a pointer exists
+        // and grab whatever slot it happened to be over.
+        let grab_edge = match pointer {
+            Some(pointer) => {
+                let slot = crate::vr_config::hand_slot(pointer.hand);
+                let edge = pointer.grabbing_hands[slot] && !self.last_pointer_grabbing[slot];
+                self.last_pointer_grabbing = pointer.grabbing_hands;
+                edge
+            }
+            None => false,
+        };
         // `/v1/ui` reports the gesture as the player is making it (held or
         // not); only what reaches the panel is reduced to the edge.
         self.last_pointer = pointer;
@@ -2398,7 +2407,9 @@ mod tests {
             &input,
             CANVAS_SIZE,
             &test_support::test_panel(),
-            crate::ui::PointerEngagement::TriggerOrGrab,
+            crate::ui::PointerEngagement::TriggerOrGrab {
+                carrying: [false; 2],
+            },
         );
         let pointer = vr_canvas_pointer(&pass, &input);
         assert_eq!(pointer.hand, Handedness::Left);
@@ -2447,7 +2458,9 @@ mod tests {
                 &input,
                 CANVAS_SIZE,
                 &test_support::test_panel(),
-                crate::ui::PointerEngagement::TriggerOrGrab,
+                crate::ui::PointerEngagement::TriggerOrGrab {
+                    carrying: [false; 2],
+                },
             );
             vr_canvas_pointer(&pass, &input)
         };
