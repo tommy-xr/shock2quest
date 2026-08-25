@@ -3016,6 +3016,7 @@ impl MissionCore {
                             contact: contact.map(|contact| physics::CollisionContact {
                                 point: contact.point,
                                 normal: -contact.normal,
+                                surface_material: contact.surface_material,
                             }),
                         },
                     });
@@ -9408,7 +9409,20 @@ fn play_environmental_sound(
     audio_handle: AudioHandle,
     position: Vector3<f32>,
 ) {
-    if let Some(resolved) = gamesys.get_random_environmental_sound(&query) {
+    // A query may carry less specific fallbacks (see `EnvSoundQuery::
+    // with_fallback`): the schema authors no bullet sound for glass, and
+    // playing nothing there is worse than playing the default impact.
+    let mut resolved_with_query = None;
+    let mut candidate = Some(&query);
+    while let Some(query) = candidate {
+        if let Some(resolved) = gamesys.get_random_environmental_sound(query) {
+            resolved_with_query = Some((resolved, query));
+            break;
+        }
+        candidate = query.fallback();
+    }
+
+    if let Some((resolved, query)) = resolved_with_query {
         let audio_clip = asset_cache.get(&AUDIO_IMPORTER, &format!("{}.wav", resolved.sample_name));
 
         info!(
@@ -10081,6 +10095,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     body_id,
                     collision_group,
                     is_sensor: hit.is_sensor,
+                    surface_material: hit
+                        .surface_material
+                        .and_then(|material| self.physics.surface_material_name(material))
+                        .map(|material| material.to_owned()),
                 }
             }
             None => DebugRayHit {
@@ -10093,6 +10111,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 body_id: None,
                 collision_group: None,
                 is_sensor: false,
+                surface_material: None,
             },
         }
     }

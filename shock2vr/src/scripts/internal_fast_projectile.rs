@@ -85,6 +85,7 @@ impl Script for InternalFastProjectileScript {
             hit_normal,
             maybe_rigid_body_handle: _,
             is_sensor: _,
+            surface_material,
         }) = maybe_hit_spot
         {
             // Effect::SetPosition {
@@ -129,7 +130,13 @@ impl Script for InternalFastProjectileScript {
                 Effect::DestroyEntity { entity_id },
                 // Impact sound: the projectile's collision schema, tagged with
                 // the material of what was hit (flesh thud vs metal clang).
-                play_impact_sound(world, entity_id, hit_entity_id, hit_point.to_vec()),
+                play_impact_sound(
+                    world,
+                    entity_id,
+                    hit_entity_id,
+                    hit_point.to_vec(),
+                    surface_material.and_then(|material| physics.surface_material_name(material)),
+                ),
             ];
 
             // Impact effect, from the projectile's authored spang links

@@ -2160,6 +2160,9 @@ pub struct RayCastResult {
     pub maybe_entity_id: Option<EntityId>,
     pub maybe_rigid_body_handle: Option<RigidBodyHandle>,
     pub is_sensor: bool,
+    /// The material of the world surface hit, when the hit was level geometry.
+    /// Resolve to a schema tag with [`PhysicsWorld::surface_material_name`].
+    pub surface_material: Option<SurfaceMaterialId>,
     // TODO:
     // entity_id
 }
@@ -2209,6 +2212,128 @@ pub struct CollisionContact {
     pub point: Vector3<f32>,
     /// Unit normal pointing from `entity1_id` toward `entity2_id`.
     pub normal: Vector3<f32>,
+    /// The material of the world surface touched, when one side of the contact
+    /// was level geometry. Resolve to a schema tag with
+    /// [`PhysicsWorld::surface_material_name`].
+    pub surface_material: Option<SurfaceMaterialId>,
+}
+
+/// An interned world-surface material. Copy, so it rides along on contacts and
+/// ray hits; the tag string itself lives in the level's material table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SurfaceMaterialId(u16);
+
+/// How far above a footstep position the ground probe starts, so a foot
+/// planted level with (or slightly inside) the floor still finds it.
+const GROUND_MATERIAL_PROBE_LIFT: f32 = 0.25;
+
+/// How far below a footstep position the ground probe reaches. Generous enough
+/// to cover a creature whose origin floats a little above the deck, short
+/// enough that a creature in mid-air finds nothing.
+const GROUND_MATERIAL_PROBE_DROP: f32 = 1.5;
+
+/// Sentinel triangle entry for "this triangle's texture has no material tag".
+const NO_SURFACE_MATERIAL: u16 = u16::MAX;
+
+/// Per-triangle materials for the one level-geometry trimesh, so a ray hit or a
+/// contact on world geometry can name the surface it touched (carpet, tile,
+/// bulkhead) instead of falling back to a single default.
+///
+/// Keyed by triangle index, which is sound because `add_level_geometry` pushes
+/// exactly one triangle per three vertices in order and parry's `TriMesh::new`
+/// preserves the index buffer verbatim (no merging, welding, or dropping of
+/// degenerate triangles). The build asserts the two stay the same length.
+#[derive(Debug)]
+pub struct LevelSurfaceMaterials {
+    /// The single collider these triangles belong to.
+    collider: ColliderHandle,
+    /// Index into `names` per trimesh triangle, or [`NO_SURFACE_MATERIAL`].
+    per_triangle: Vec<u16>,
+    /// Distinct material tags ("metal", "fabric", ...), already lowercased.
+    names: Vec<String>,
+}
+
+impl LevelSurfaceMaterials {
+    /// The material of `triangle`, folding parry's backface encoding: a hit on
+    /// the back of triangle `i` is reported as `Face(i + triangle_count)`.
+    fn material_for_triangle(&self, triangle: u32) -> Option<SurfaceMaterialId> {
+        let count = self.per_triangle.len() as u32;
+        let index = if triangle >= count {
+            triangle.checked_sub(count)?
+        } else {
+            triangle
+        };
+        match self.per_triangle.get(index as usize).copied() {
+            Some(NO_SURFACE_MATERIAL) | None => None,
+            Some(material) => Some(SurfaceMaterialId(material)),
+        }
+    }
+
+    /// The material of `triangle` when `collider` is the level trimesh.
+    fn material_for_triangle_on(
+        &self,
+        collider: ColliderHandle,
+        triangle: u32,
+    ) -> Option<SurfaceMaterialId> {
+        if collider != self.collider {
+            return None;
+        }
+        self.material_for_triangle(triangle)
+    }
+
+    /// The material a ray hit on `collider` landed on. Anything but a triangle
+    /// face - another collider, or a feature parry could not name - has none.
+    fn material_for_feature(
+        &self,
+        collider: ColliderHandle,
+        feature: FeatureId,
+    ) -> Option<SurfaceMaterialId> {
+        match feature {
+            FeatureId::Face(triangle) => self.material_for_triangle_on(collider, triangle),
+            _ => None,
+        }
+    }
+
+    /// The schema tag for an interned material.
+    fn name(&self, id: SurfaceMaterialId) -> Option<&str> {
+        self.names.get(id.0 as usize).map(|name| name.as_str())
+    }
+}
+
+/// Build the per-triangle material table for a level's geometry, in the same
+/// order [`PhysicsWorld::add_level_geometry`] pushes triangles into the trimesh.
+///
+/// Pure, so the mapping is testable without a physics world.
+fn build_surface_material_table(
+    geometry: &[dark::mission::SystemShock2Geometry],
+    textures: &[dark::mission::texture_list::SystemShock2Texture],
+) -> (Vec<u16>, Vec<String>) {
+    let mut per_triangle = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+
+    for geo in geometry {
+        let material = textures
+            .get(geo.texture_idx as usize)
+            .and_then(|texture| texture.material.as_deref());
+        let entry = match material {
+            Some(material) => {
+                let index = names
+                    .iter()
+                    .position(|name| name == material)
+                    .unwrap_or_else(|| {
+                        names.push(material.to_owned());
+                        names.len() - 1
+                    });
+                // More distinct materials than the sentinel allows is not
+                // representable; the shipped data has a handful.
+                u16::try_from(index).unwrap_or(NO_SURFACE_MATERIAL)
+            }
+            None => NO_SURFACE_MATERIAL,
+        };
+        per_triangle.extend(std::iter::repeat_n(entry, geo.verts.len() / 3));
+    }
+
+    (per_triangle, names)
 }
 
 /// Predicate selecting *only* sensor colliders - the volumes the player's
@@ -2392,6 +2517,11 @@ pub struct PhysicsWorld {
 
     rigid_bodies_with_forces: Vec<RigidBodyHandle>,
 
+    /// Per-triangle materials for the level trimesh, once one has been added.
+    /// Shared with the collision-event handler so contacts and ray hits name
+    /// the same surface. Debug scenes build their own trimeshes and have none.
+    level_surface_materials: Option<std::sync::Arc<LevelSurfaceMaterials>>,
+
     entity_id_to_body: HashMap<EntityId, RigidBodyHandle>,
 
     // Short-lived recovery state created only while a living, gravity-driven
@@ -2532,6 +2662,14 @@ impl PhysicsWorld {
             }
         }
 
+        let (per_triangle, material_names) =
+            build_surface_material_table(&level.all_geometry, &level.textures.0);
+        assert_eq!(
+            per_triangle.len(),
+            indices.len(),
+            "one material entry per level triangle"
+        );
+
         let mut collider = ColliderBuilder::trimesh(vertices, indices)
             .expect("level geometry trimesh")
             .build();
@@ -2541,7 +2679,45 @@ impl PhysicsWorld {
             filter: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
             test_mode: Default::default(),
         });
-        self.collider_set.insert(collider);
+        let handle = self.collider_set.insert(collider);
+
+        let materials = std::sync::Arc::new(LevelSurfaceMaterials {
+            collider: handle,
+            per_triangle,
+            names: material_names,
+        });
+        self.events.set_level_surface_materials(materials.clone());
+        self.level_surface_materials = Some(materials);
+    }
+
+    /// The sound-schema tag of the world surface directly under `position` -
+    /// what a foot planted there lands on. Casts a short ray down, so a floor
+    /// the creature is standing on answers and open air does not.
+    ///
+    /// Shared by every footstep caller so a creature's step and the player's
+    /// resolve the same surface the same way.
+    pub fn ground_surface_material(&self, position: Vector3<f32>) -> Option<&str> {
+        let hit = self.ray_cast2(
+            point3(
+                position.x,
+                position.y + GROUND_MATERIAL_PROBE_LIFT,
+                position.z,
+            ),
+            vec3(0.0, -1.0, 0.0),
+            GROUND_MATERIAL_PROBE_LIFT + GROUND_MATERIAL_PROBE_DROP,
+            InternalCollisionGroups::WORLD,
+            None,
+            true,
+        )?;
+        self.surface_material_name(hit.surface_material?)
+    }
+
+    /// The sound-schema tag ("metal", "fabric", ...) for a surface material
+    /// reported by a ray hit or a contact.
+    pub fn surface_material_name(&self, id: SurfaceMaterialId) -> Option<&str> {
+        self.level_surface_materials
+            .as_ref()
+            .and_then(|materials| materials.name(id))
     }
 
     pub fn add_collider(&mut self, entity_id: EntityId, mut collider: Collider) {
@@ -4292,6 +4468,7 @@ impl PhysicsWorld {
             ccd_solver,
             rigid_body_set,
             no_bodies: RigidBodySet::new(),
+            level_surface_materials: None,
             rigid_bodies_with_forces: Vec::new(),
             // TODO:
             // physics_hooks: Box::new(physics_hooks),
@@ -5256,10 +5433,16 @@ impl PhysicsWorld {
             //     handle, hit_point, hit_normal, data
             // );
 
+            let surface_material = self
+                .level_surface_materials
+                .as_ref()
+                .and_then(|materials| materials.material_for_feature(handle, intersection.feature));
+
             Some(RayCastResult {
                 hit_point: npoint_to_cgmath(hit_point),
                 hit_normal: nvec_to_cgmath(hit_normal),
                 maybe_entity_id,
+                surface_material,
                 maybe_rigid_body_handle,
                 is_sensor: collider.is_sensor(),
             })
@@ -6515,6 +6698,7 @@ mod tests {
             } if *entity1_id == actor && *entity2_id == weapon => Some(CollisionContact {
                 point: contact.point,
                 normal: -contact.normal,
+                surface_material: contact.surface_material,
             }),
             _ => None,
         });
@@ -10124,6 +10308,139 @@ mod tests {
         assert!(
             capped < 0.1,
             "a step under a low ceiling must be refused, rose {capped}"
+        );
+    }
+
+    // ---- world surface materials ----
+
+    /// Geometry with `triangles` triangles, all textured `texture_idx`.
+    fn geometry_with(texture_idx: u16, triangles: usize) -> dark::mission::SystemShock2Geometry {
+        use engine::scene::VertexPositionTextureLightmapAtlasNormal;
+
+        let vertex = VertexPositionTextureLightmapAtlasNormal {
+            position: vec3(0.0, 0.0, 0.0),
+            uv: cgmath::vec2(0.0, 0.0),
+            lightmap_uv: cgmath::vec2(0.0, 0.0),
+            lightmap_atlas: cgmath::vec4(0.0, 0.0, 0.0, 0.0),
+            normal: vec3(0.0, 1.0, 0.0),
+        };
+        dark::mission::SystemShock2Geometry {
+            verts: vec![vertex; triangles * 3],
+            texture_idx,
+            cell_idx: 0,
+            poly_idx: 0,
+            lightmap_pack_result: engine::texture_atlas::TexturePackResult::DEFAULT,
+        }
+    }
+
+    fn texture_with(material: Option<&str>) -> dark::mission::texture_list::SystemShock2Texture {
+        dark::mission::texture_list::SystemShock2Texture {
+            family: "fam".to_owned(),
+            texture_filename: "tex".to_owned(),
+            render_type: dark::properties::RenderType::Normal,
+            animation_info: None,
+            material: material.map(|material| material.to_owned()),
+        }
+    }
+
+    /// Every triangle gets its own texture's material, in push order - the
+    /// invariant the whole lookup rests on.
+    #[test]
+    fn surface_material_table_follows_triangle_order() {
+        let geometry = vec![
+            geometry_with(0, 2), // metal
+            geometry_with(1, 1), // fabric
+            geometry_with(2, 3), // no material
+        ];
+        let textures = vec![
+            texture_with(Some("metal")),
+            texture_with(Some("fabric")),
+            texture_with(None),
+        ];
+
+        let (per_triangle, names) = build_surface_material_table(&geometry, &textures);
+
+        assert_eq!(per_triangle.len(), 6, "one entry per triangle");
+        assert_eq!(names, vec!["metal".to_owned(), "fabric".to_owned()]);
+        assert_eq!(per_triangle[0], 0);
+        assert_eq!(per_triangle[1], 0);
+        assert_eq!(per_triangle[2], 1);
+        assert_eq!(per_triangle[3], NO_SURFACE_MATERIAL);
+        assert_eq!(per_triangle[5], NO_SURFACE_MATERIAL);
+    }
+
+    /// Parry reports a hit on the *back* of triangle `i` as
+    /// `Face(i + triangle_count)`. Without folding that, every backface hit
+    /// reads out of range and silently loses its material.
+    #[test]
+    fn backface_triangle_resolves_to_the_same_material() {
+        let materials = LevelSurfaceMaterials {
+            collider: ColliderHandle::invalid(),
+            per_triangle: vec![0, NO_SURFACE_MATERIAL, 1],
+            names: vec!["metal".to_owned(), "fabric".to_owned()],
+        };
+
+        let front = materials.material_for_triangle(2).expect("front face");
+        let back = materials.material_for_triangle(2 + 3).expect("back face");
+        assert_eq!(front, back);
+        assert_eq!(materials.name(front), Some("fabric"));
+
+        assert_eq!(materials.material_for_triangle(1), None, "untagged texture");
+        assert_eq!(materials.material_for_triangle(99), None, "out of range");
+    }
+
+    /// The shipped textures really do carry more than one material, and the
+    /// archetype hierarchy really does resolve to the *metaproperty's* value
+    /// (`MatMetal` -> metal) rather than the `Texture` base archetype's
+    /// "plasticrete" default. If inheritance order ever flipped, medsci1 would
+    /// come back all-plasticrete and every surface would sound the same again.
+    #[test]
+    fn medsci_textures_resolve_several_distinct_materials() {
+        let Some(level) = try_load_level("medsci1.mis") else {
+            return;
+        };
+        let (per_triangle, names) =
+            build_surface_material_table(&level.all_geometry, &level.textures.0);
+
+        eprintln!("medsci1 surface materials: {names:?}");
+        assert!(
+            names.len() > 1,
+            "expected several distinct surface materials, got {names:?}"
+        );
+        assert!(
+            names.iter().any(|name| name == "metal"),
+            "expected metal among {names:?}"
+        );
+        let tagged = per_triangle
+            .iter()
+            .filter(|entry| **entry != NO_SURFACE_MATERIAL)
+            .count();
+        assert!(
+            tagged * 2 > per_triangle.len(),
+            "most of the level should have a material, {tagged} of {}",
+            per_triangle.len()
+        );
+    }
+
+    /// End to end through the physics world: a ray down onto MedSci's deck
+    /// names the material of the floor it lands on.
+    #[test]
+    fn ray_onto_medsci_floor_reports_its_material() {
+        let Some(level) = try_load_level("medsci1.mis") else {
+            return;
+        };
+        let mut world = PhysicsWorld::new();
+        world.add_level_geometry(EntityId::from_inner(1).unwrap(), &level);
+        let mut player = world.create_player(
+            vec3(-22.294, -0.596, -17.1),
+            EntityId::from_inner(2).unwrap(),
+        );
+        step(&mut world, &mut player, 5);
+
+        let material = world.ground_surface_material(vec3(-22.294, -0.596, -17.1));
+        assert!(
+            material.is_some(),
+            "the deck under the player should name a material"
         );
     }
 

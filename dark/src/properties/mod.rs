@@ -277,6 +277,22 @@ impl PropMapRef {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropMaterial(pub String);
 
+impl PropMaterial {
+    /// The collision/footstep-schema material tag for this property, e.g.
+    /// `"Material FleshTarget"` -> `"fleshtarget"`. Authored values are a
+    /// `Material <tag>` pair (via archetypes such as `MatFlesh` / `MatMetal`);
+    /// anything that does not follow that shape has no tag.
+    pub fn tag(&self) -> Option<String> {
+        let mut tokens = self.0.split_whitespace();
+        while let Some(token) = tokens.next() {
+            if token.eq_ignore_ascii_case("material") {
+                return tokens.next().map(|value| value.to_ascii_lowercase());
+            }
+        }
+        None
+    }
+}
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropMapText(pub String);
 

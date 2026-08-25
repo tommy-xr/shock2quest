@@ -1048,6 +1048,7 @@ fn process_command(
                     body_id: hit.body_id,
                     collision_group: hit.collision_group,
                     is_sensor: hit.is_sensor,
+                    surface_material: hit.surface_material,
                 }
             } else {
                 tracing::error!("No debug scene available for raycast");
@@ -1061,6 +1062,7 @@ fn process_command(
                     body_id: None,
                     collision_group: None,
                     is_sensor: false,
+                    surface_material: None,
                 }
             };
 
@@ -3341,6 +3343,7 @@ async fn perform_raycast(
             body_id: None,
             collision_group: None,
             is_sensor: false,
+            surface_material: None,
         }));
     }
 
@@ -3359,6 +3362,7 @@ async fn perform_raycast(
                 body_id: None,
                 collision_group: None,
                 is_sensor: false,
+                surface_material: None,
             }))
         }
     }
