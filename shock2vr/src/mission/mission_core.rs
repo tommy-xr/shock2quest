@@ -1312,6 +1312,14 @@ pub struct DebugOptions {
 #[derive(Unique, Clone, Copy)]
 pub struct GlobalPresentationMode(pub crate::PresentationMode);
 
+/// Whether the `ambient_meters` experimental flag is on, accessible from
+/// scripts via UniqueView. `PsiAmpScript` needs this: hold-to-overload must
+/// only run where a meter can render it (flat always has one; VR only draws
+/// the on-amp psi meter behind this flag), or a VR player would charge -
+/// and possibly burn out - completely blind.
+#[derive(Unique, Clone, Copy)]
+pub struct GlobalAmbientMetersEnabled(pub bool);
+
 /// Pathfinding service accessible from scripts (steering strategies) via
 /// UniqueView. None when the mission has no AIPATH data (e.g. debug scenes).
 #[derive(Unique, Clone)]
@@ -1786,6 +1794,11 @@ impl MissionCore {
             debug_ai: game_options.debug_ai,
         });
         world.add_unique(GlobalPresentationMode(game_options.presentation_mode));
+        world.add_unique(GlobalAmbientMetersEnabled(
+            game_options
+                .experimental_features
+                .contains(crate::hud::ambient_meters::FEATURE),
+        ));
         let template_class_tags = create_template_class_tag_map(&entity_info_rc);
         world.add_unique(GlobalTemplateClassTags(template_class_tags));
         world.add_unique(

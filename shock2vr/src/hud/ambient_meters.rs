@@ -64,34 +64,24 @@ pub(crate) fn weapon_meter_transform(
 
 // --- On-amp psi meter placement -------------------------------------------
 //
-// The psi pool / overload meter hangs directly below the on-weapon tag
-// (which already shows the amp's selected tier - `create_weapon_ammo_meter`
-// draws for the amp too, since `AmmoReadout::psi_power` replaces the ammo
-// clip). Same weapon-local frame and anchor table entry (`amp_h` in
-// `vr_config::WEAPON_METER_ANCHORS`) as the tag; only the vertical offset and
-// panel aspect differ.
+// The amp_h model is a compact sphere (not an elongated gun body), so the
+// psi meter gets its own anchor rather than reusing the on-weapon tag's -
+// tuned directly against the amp mesh: level with its lit indicator strip
+// and just off its near side, so it reads like a status readout on the
+// device itself.
 
-/// Gap between the tag's bottom edge and the psi meter's top edge.
-const AMP_METER_GAP: f32 = 0.015;
-/// Same width as the on-weapon tag, so the two stack flush.
-const AMP_METER_WIDTH: f32 = WEAPON_METER_WIDTH;
+const AMP_METER_ANCHOR: Vector3<f32> = vec3(-0.03, 0.05, 0.0);
+/// Panel size in world units, preserving the psi panel's authored 80x32
+/// aspect.
+const AMP_METER_WIDTH: f32 = 0.08;
 const AMP_METER_HEIGHT: f32 = AMP_METER_WIDTH * (psi_amp_panel::PANEL_H / psi_amp_panel::PANEL_W);
 
-/// Root transform for the on-amp psi meter: the same weapon-local frame and
-/// tag anchor as [`weapon_meter_transform`], shifted down by the tag's own
-/// height plus a gap so the two panels stack without overlapping.
-pub(crate) fn amp_meter_transform(
-    weapon_transform: Matrix4<f32>,
-    tag_anchor: Vector3<f32>,
-) -> Matrix4<f32> {
-    let anchor = tag_anchor
-        - vec3(
-            0.0,
-            WEAPON_METER_HEIGHT / 2.0 + AMP_METER_GAP + AMP_METER_HEIGHT / 2.0,
-            0.0,
-        );
+/// Root transform for the on-amp psi meter: same canvas convention as
+/// [`weapon_meter_transform`] (+Z at the viewer), hung at [`AMP_METER_ANCHOR`]
+/// in the amp's local frame.
+pub(crate) fn amp_meter_transform(weapon_transform: Matrix4<f32>) -> Matrix4<f32> {
     weapon_transform
-        * Matrix4::from_translation(anchor)
+        * Matrix4::from_translation(AMP_METER_ANCHOR)
         * Matrix4::from_angle_y(Deg(90.0))
         * Matrix4::from_angle_x(WEAPON_METER_TILT)
         * Matrix4::from_nonuniform_scale(AMP_METER_WIDTH, AMP_METER_HEIGHT, 1.0)
@@ -119,8 +109,7 @@ pub(crate) fn amp_psi_meter_root(
         .ok()?
         .0;
 
-    let tag_anchor = crate::vr_config::weapon_meter_anchor_from_entity(world, weapon);
-    let root = amp_meter_transform(without_scale(weapon_transform), tag_anchor);
+    let root = amp_meter_transform(without_scale(weapon_transform));
     Some((readout, root))
 }
 
@@ -336,26 +325,18 @@ mod tests {
     }
 
     #[test]
-    fn the_amp_meter_hangs_below_the_tag_not_on_top_of_it() {
-        // Negative-first: at the tag's own anchor, the amp meter's centre
-        // must NOT coincide with it - the two panels would overlap.
-        let tag_anchor = vec3(0.15, 0.34, 0.0);
-        let tag_root = weapon_meter_transform(Matrix4::identity(), tag_anchor);
-        let amp_root = amp_meter_transform(Matrix4::identity(), tag_anchor);
-        let tag_center = vec3(tag_root.w.x, tag_root.w.y, tag_root.w.z);
-        let amp_center = vec3(amp_root.w.x, amp_root.w.y, amp_root.w.z);
-        assert_ne!(tag_center, amp_center);
-        // The amp meter sits strictly below the tag (lower weapon-local Y)...
-        assert!(amp_center.y < tag_center.y);
-        // ...separated by at least both panels' half-heights plus the gap, so
-        // they never overlap.
-        let min_gap = WEAPON_METER_HEIGHT / 2.0 + AMP_METER_GAP + AMP_METER_HEIGHT / 2.0;
-        assert!((tag_center.y - amp_center.y - min_gap).abs() < 1e-5);
+    fn the_amp_meter_hangs_at_its_anchor() {
+        let root = amp_meter_transform(Matrix4::identity());
+        assert_eq!(
+            vec3(root.w.x, root.w.y, root.w.z),
+            AMP_METER_ANCHOR,
+            "panel centre must sit at the amp-local anchor"
+        );
     }
 
     #[test]
     fn the_amp_meter_preserves_its_authored_aspect() {
-        let root = amp_meter_transform(Matrix4::identity(), vec3(0.0, 0.0, 0.0));
+        let root = amp_meter_transform(Matrix4::identity());
         let width_axis = (root * vec4(1.0, 0.0, 0.0, 0.0)).truncate().magnitude();
         let height_axis = (root * vec4(0.0, 1.0, 0.0, 0.0)).truncate().magnitude();
         assert!((width_axis - AMP_METER_WIDTH).abs() < 1e-5);
