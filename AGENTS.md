@@ -630,18 +630,31 @@ The project supports experimental flags for gating in-progress features during d
   default is the only reachable setting without a rebuild. Tell-tale log line:
   `high-detail (PMNM) meshes: true|false`.
 
-- **`ambient_meters`**: prototype VR ambient-meter model (flat HUD untouched).
-  The ammo readout moves onto the wielded weapon - the compact AMMOBACK square
-  (round count + ammo type, the same gauge the flat HUD shows outside use
-  mode), anchored to the weapon's live transform and facing the shooter like a
-  rear-sight status tag - and the right-forearm ammo panel is retired while the
-  flag is on. The left-forearm health panel stays but renders only when the
-  wrist is glanced at (panel normal vs eye vector, with hysteresis; untracked
-  poses hide it). Panel shape/tilt/size and the glance thresholds live in
+- **`ambient_meters`**: prototype ambient-meter model. In VR, the ammo readout
+  moves onto the wielded weapon - the compact AMMOBACK square (round count +
+  ammo type, the same gauge the flat HUD shows outside use mode), anchored to
+  the weapon's live transform and facing the shooter like a rear-sight status
+  tag - and the right-forearm ammo panel is retired while the flag is on. The
+  left-forearm health panel stays but renders only when the wrist is glanced
+  at (panel normal vs eye vector, with hysteresis; untracked poses hide it).
+  Panel shape/tilt/size and the glance thresholds live in
   `shock2vr/src/hud/ammo_panel.rs` + `shock2vr/src/hud/ambient_meters.rs`; the
   per-weapon anchor (where the tag hangs in the weapon's own frame) lives in
-  `vr_config::weapon_meter_anchor_*`, beside the grip-offset table. Without the
-  flag, both forearm panels render exactly as before.
+  `vr_config::weapon_meter_anchor_*`, beside the grip-offset table. Without
+  the flag, both forearm panels render exactly as before.
+
+  The flag also puts a psi pool bar + hold-to-overload meter directly on the
+  wielded psi amp, in **both** presentations (flat's existing bio-monitor psi
+  bar and center-screen overload meter are unaffected - this is additive).
+  Layout lives in `shock2vr/src/hud/psi_amp_panel.rs`; placement in
+  `hud::ambient_meters::amp_meter_transform`/`amp_psi_meter_root` (flat
+  premultiplies the same root transform by the viewmodel's FOV `squish`, VR
+  hangs it directly off the amp). The amp's hold-to-overload charge is itself
+  gated to `is_flat || ambient_meters_enabled` in `PsiAmpScript` (a
+  `GlobalAmbientMetersEnabled` Unique resource next to
+  `GlobalPresentationMode`) - VR only gets the real hold gesture where a
+  meter exists to show it, or a player would charge (and risk a damaging
+  burnout) with no feedback.
 
 #### Adding New Experimental Features
 
