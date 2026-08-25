@@ -205,6 +205,98 @@ test(
   },
 );
 
+test(
+  "VR: either hand wields the melee arm, and the contact collider lands identically",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "debug_weapons",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 8108),
+      debugFlags: ["--vr"],
+    });
+
+    // The melee `_h` rigs are authored as a RIGHT arm, so a left-hand wield
+    // renders them mirrored. Nothing exercised a left-hand melee wield at all
+    // before, which is how it went unnoticed that it drew a right arm; this is
+    // the live half of that coverage - both hands complete the wield, and the
+    // held body (the melee damage volume) ends up in the same world place from
+    // the same hand pose, because the contact point sits on the hand's own
+    // centreline. The geometry of the mirror itself is asserted in
+    // `vr_config`'s unit tests, which can see the transform.
+    await game.step({ frames: 10 });
+    let wrench;
+    for (let i = 0; i < 20 && !wrench; i++) {
+      await game.input.trigger("DebugCycleWeapon");
+      await game.step({ frames: 5 });
+      wrench = (await game.entities.list({ limit: 100 })).entities.find(
+        (e) => e.name === "Wrench",
+      );
+    }
+    assert.ok(wrench, "wrench should have spawned");
+    await game.step({ frames: 120 });
+
+    // One pose, used for both hands, so the two results are comparable.
+    const held: Record<string, number[]> = {};
+    const pawn = (await game.info()).player.position;
+    const holdAt: [number, number, number] = [-1.7, 0.95, -0.2];
+    const yaw45: [number, number, number, number] = [
+      0, 0.3826834, 0, 0.9238795,
+    ];
+
+    for (const hand of ["right", "left"] as const) {
+      const other = hand === "right" ? "left" : "right";
+      await game.input.set(`${other}_hand.position`, [3, -3, 3]);
+
+      const resting = (await game.entities.list({ limit: 100 })).entities.find(
+        (e) => e.id === wrench!.id,
+      )!.position;
+      await game.input.set(`${hand}_hand.position`, [
+        resting[0] - pawn[0],
+        resting[1] - pawn[1],
+        resting[2] - pawn[2],
+      ]);
+      await game.input.set(`${hand}_hand.rotation`, yaw45);
+      await game.input.set(`${hand}_hand.squeeze`, 0.0);
+      await game.step({ frames: 10 });
+      await game.input.set(`${hand}_hand.squeeze`, 1.0);
+      await game.step({ frames: 30 });
+
+      assert.equal(
+        modelOf(await game.entities.detail(wrench.id)),
+        "wrench_h",
+        `${hand} hand should wield the first-person melee rig`,
+      );
+
+      await game.input.set(`${hand}_hand.position`, holdAt);
+      await game.step({ frames: 20 });
+
+      held[hand] = (await game.entities.list({ limit: 100 })).entities.find(
+        (e) => e.id === wrench!.id,
+      )!.position;
+
+      // The entity origin IS the contact collider's body origin.
+      const bodies = await game.physics.bodies({ entityId: wrench.id });
+      assert.equal(bodies.bodies.length, 1, `${hand}: one held melee body`);
+      for (let axis = 0; axis < 3; axis++) {
+        assert.ok(
+          Math.abs(bodies.bodies[0].position[axis] - held[hand][axis]) < 1e-4,
+          `${hand}: the contact body is off the rendered weapon's entity origin`,
+        );
+      }
+
+      await game.input.set(`${hand}_hand.squeeze`, 0.0);
+      await game.step({ frames: 200 });
+    }
+
+    for (let axis = 0; axis < 3; axis++) {
+      assert.ok(
+        Math.abs(held.left[axis] - held.right[axis]) < 1e-4,
+        `the melee contact volume moved between hands: ${JSON.stringify(held)}`,
+      );
+    }
+  },
+);
+
 function findSavePath(saveName: string): string | undefined {
   const repoRoot = findRepoRoot(process.cwd()) ?? process.cwd();
   const roots = [
