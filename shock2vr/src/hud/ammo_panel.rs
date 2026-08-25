@@ -79,7 +79,7 @@ pub(crate) fn emit_compact(canvas: &mut UiCanvas, origin: Vector2<f32>, readout:
         VAlign::Middle,
     );
     if let Some(ammo_type) = &readout.ammo_type {
-        canvas.text_native(
+        canvas.text_native_fit(
             at(origin, TYPE_LABEL),
             &ammo_type.to_ascii_uppercase(),
             "mainfont.fon",
@@ -181,7 +181,7 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
         canvas.image(at(origin, ICON), icon);
     }
     if let Some(ammo_type) = &readout.ammo_type {
-        canvas.text_native(
+        canvas.text_native_fit(
             at(origin, TYPE_LABEL),
             &ammo_type.to_ascii_uppercase(),
             "mainfont.fon",
@@ -297,6 +297,48 @@ mod tests {
                 "{rect:?} overflows the panel height"
             );
         }
+    }
+
+    /// Long ammo-type names ("lasershot", "annelid") are wider than the
+    /// 94px `TYPE_LABEL` rect shared by flat and VR, so the label must be
+    /// ellipsized to fit rather than overflow it - in both the full and
+    /// compact (AMMOBACK) readouts.
+    #[test]
+    fn a_long_ammo_type_name_fits_the_label_rect() {
+        let fit_to_rect_of_at = |canvas: &UiCanvas, target: Vector2<f32>| {
+            canvas.elements().iter().find_map(|element| {
+                if let crate::ui::UiElement::Text {
+                    position,
+                    fit_to_rect,
+                    ..
+                } = element
+                {
+                    if *position == target {
+                        return Some(*fit_to_rect);
+                    }
+                }
+                None
+            })
+        };
+
+        let readout = gun(12, None, Some("lasershot"));
+        assert_eq!(
+            fit_to_rect_of_at(
+                &build_readout_canvas(&readout),
+                vec2(TYPE_LABEL.x, TYPE_LABEL.y)
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            fit_to_rect_of_at(
+                &build_compact_readout_canvas(&readout),
+                vec2(
+                    TYPE_LABEL.x - COMPACT_ORIGIN.x,
+                    TYPE_LABEL.y - COMPACT_ORIGIN.y
+                )
+            ),
+            Some(true)
+        );
     }
 
     #[test]
