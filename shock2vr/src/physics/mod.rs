@@ -2330,6 +2330,9 @@ impl LevelGeometry {
 }
 
 /// Build a level's collision geometry. `None` when the level has no geometry.
+///
+/// The trimesh and its per-triangle materials are pushed together in one pass,
+/// so "one material entry per triangle" is structural rather than asserted.
 pub fn build_level_geometry(level: &SystemShock2Level) -> Option<LevelGeometry> {
     if level.all_geometry.is_empty() {
         return None;
@@ -2337,13 +2340,24 @@ pub fn build_level_geometry(level: &SystemShock2Level) -> Option<LevelGeometry> 
 
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    for geo in &level.all_geometry {
-        let verts = &geo.verts;
+    let mut per_triangle_material = Vec::new();
+    let mut material_names: Vec<String> = Vec::new();
 
+    for geo in &level.all_geometry {
+        let material = intern_surface_material(
+            level
+                .textures
+                .0
+                .get(geo.texture_idx as usize)
+                .and_then(|texture| texture.material.as_deref()),
+            &mut material_names,
+        );
+
+        let verts = &geo.verts;
         let mut idx = 0;
         let len = verts.len();
 
-        while idx < len {
+        while idx + 2 < len {
             let dest_idx = vertices.len() as u32;
 
             vertices.push(vec_to_npoint(verts[idx].position));
@@ -2351,18 +2365,11 @@ pub fn build_level_geometry(level: &SystemShock2Level) -> Option<LevelGeometry> 
             vertices.push(vec_to_npoint(verts[idx + 2].position));
 
             indices.push([dest_idx, dest_idx + 1, dest_idx + 2]);
+            per_triangle_material.push(material);
 
             idx += 3;
         }
     }
-
-    let (per_triangle_material, material_names) =
-        build_surface_material_table(&level.all_geometry, &level.textures.0);
-    assert_eq!(
-        per_triangle_material.len(),
-        indices.len(),
-        "one material entry per level triangle"
-    );
 
     let collider = ColliderBuilder::trimesh(vertices, indices).ok()?.build();
 
@@ -2373,10 +2380,37 @@ pub fn build_level_geometry(level: &SystemShock2Level) -> Option<LevelGeometry> 
     })
 }
 
-/// Build the per-triangle material table for a level's geometry, in the same
-/// order [`PhysicsWorld::add_level_geometry`] pushes triangles into the trimesh.
+/// The table entry for a texture's material, interning its tag in `names`.
 ///
-/// Pure, so the mapping is testable without a physics world.
+/// `NO_SURFACE_MATERIAL` is both the "untagged" entry and the ceiling on how
+/// many distinct materials are addressable, so a level that somehow authored
+/// that many leaves the remainder untagged - falling back to the default
+/// impact material - rather than aliasing onto the sentinel.
+fn intern_surface_material(material: Option<&str>, names: &mut Vec<String>) -> u16 {
+    let Some(material) = material else {
+        return NO_SURFACE_MATERIAL;
+    };
+
+    if let Some(index) = names.iter().position(|name| name == material) {
+        return index as u16;
+    }
+    if names.len() >= NO_SURFACE_MATERIAL as usize {
+        tracing::warn!(
+            "more than {NO_SURFACE_MATERIAL} distinct surface materials; '{material}' untagged"
+        );
+        return NO_SURFACE_MATERIAL;
+    }
+
+    names.push(material.to_owned());
+    (names.len() - 1) as u16
+}
+
+/// The per-triangle material table for a level's geometry, in the same order
+/// [`build_level_geometry`] pushes triangles into the trimesh.
+///
+/// Pure, so the ordering contract is testable without building a trimesh; the
+/// shipped path interleaves the same interning with the trimesh build.
+#[cfg(test)]
 fn build_surface_material_table(
     geometry: &[dark::mission::SystemShock2Geometry],
     textures: &[dark::mission::texture_list::SystemShock2Texture],
@@ -2385,25 +2419,13 @@ fn build_surface_material_table(
     let mut names: Vec<String> = Vec::new();
 
     for geo in geometry {
-        let material = textures
-            .get(geo.texture_idx as usize)
-            .and_then(|texture| texture.material.as_deref());
-        let entry = match material {
-            Some(material) => {
-                let index = names
-                    .iter()
-                    .position(|name| name == material)
-                    .unwrap_or_else(|| {
-                        names.push(material.to_owned());
-                        names.len() - 1
-                    });
-                // More distinct materials than the sentinel allows is not
-                // representable; the shipped data has a handful.
-                u16::try_from(index).unwrap_or(NO_SURFACE_MATERIAL)
-            }
-            None => NO_SURFACE_MATERIAL,
-        };
-        per_triangle.extend(std::iter::repeat_n(entry, geo.verts.len() / 3));
+        let material = intern_surface_material(
+            textures
+                .get(geo.texture_idx as usize)
+                .and_then(|texture| texture.material.as_deref()),
+            &mut names,
+        );
+        per_triangle.extend(std::iter::repeat_n(material, geo.verts.len() / 3));
     }
 
     (per_triangle, names)
@@ -2737,8 +2759,14 @@ impl PhysicsWorld {
     }
 
     /// The sound-schema tag of the world surface directly under `position` -
-    /// what a foot planted there lands on. Casts a short ray down, so a floor
-    /// the creature is standing on answers and open air does not.
+    /// what a foot planted there lands on. Casts a ray down, so a floor the
+    /// creature is standing on answers and open air does not.
+    ///
+    /// World geometry only: a creature riding a lift or standing on a crate
+    /// (entities, not level brushes) names the deck under it rather than the
+    /// thing it is on. Only footstep flavor rides on this, and the deck is a
+    /// better guess than nothing; entities carry their own `PropMaterial` if
+    /// this ever needs to resolve them.
     ///
     /// Shared by every footstep caller so a creature's step and the player's
     /// resolve the same surface the same way.

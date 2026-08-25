@@ -821,20 +821,6 @@ fn get_impact_material(world: &World, hit_entity_id: EntityId) -> String {
         .unwrap_or_else(|| DEFAULT_IMPACT_MATERIAL.to_owned())
 }
 
-/// Footstep sound for a creature whose animation just reached an authored
-/// foot-plant frame (`MotionFlags::LEFT_FOOT_STEP` / `RIGHT_FOOT_STEP`).
-///
-/// The schema keys footsteps on `event=footstep` plus the creature's class
-/// tags (`creaturetype=oncegrunt`, `=monkey`, `=droid`, ...); most creature
-/// types resolve on those alone to a four-sample set (`ft_monk1..4`). Hybrids
-/// (`oncegrunt`) branch further on `material` - the creature's *own* material,
-/// i.e. what its feet are made of - and `material2`, the surface underfoot.
-/// The port has no per-texture lookup for world geometry, so `material2` is
-/// the default bulkhead metal, which is what most of the ship is; on a hybrid
-/// that resolves to `ft_ogm*`.
-///
-/// Creature types the schema authors no footsteps for (swarms, apparitions,
-/// SHODAN) resolve to nothing and fall through silently.
 /// A sound query over `tags`, with a less specific one to fall back on when
 /// `relaxed_tag`'s material has no entry in the schema.
 ///
@@ -907,6 +893,21 @@ fn emit_environmental_sound(
     }
 }
 
+/// Footstep sound for a creature whose animation just reached an authored
+/// foot-plant frame (`MotionFlags::LEFT_FOOT_STEP` / `RIGHT_FOOT_STEP`).
+///
+/// The schema keys footsteps on `event=footstep` plus the creature's class
+/// tags (`creaturetype=oncegrunt`, `=monkey`, `=droid`, ...); most creature
+/// types resolve on those alone to a four-sample set (`ft_monk1..4`). Hybrids
+/// (`oncegrunt`) branch further on `material` - the creature's *own* material,
+/// i.e. what its feet are made of - and `material2`, the surface underfoot,
+/// which is `ground_material`: the deck the foot was planted on, probed from
+/// the world geometry's own texture material. A hybrid on MedSci's plasticrete
+/// deck resolves `ft_og*`, on metal plating `ft_ogm*`. `None` (no ground
+/// found, or a surface with no material) keeps the default bulkhead metal.
+///
+/// Creature types the schema authors no footsteps for (swarms, apparitions,
+/// SHODAN) resolve to nothing and fall through silently.
 pub fn play_footstep_sound(
     world: &World,
     entity_id: EntityId,
@@ -953,14 +954,25 @@ pub fn play_impact_sound(
     surface_material: Option<&str>,
 ) -> Effect {
     let entity_material = get_impact_material(world, hit_entity_id);
-    let material = surface_material.unwrap_or(&entity_material);
-    let maybe_query = query_with_material_fallback(
-        world,
-        entity_id,
-        "collision",
-        vec![("material", material)],
-        "material",
-    );
+    let maybe_query = match surface_material {
+        // A world surface is newly able to name itself, so it keeps the
+        // default it replaced as a fallback.
+        Some(surface_material) => query_with_material_fallback(
+            world,
+            entity_id,
+            "collision",
+            vec![("material", surface_material)],
+            "material",
+        ),
+        // An entity's own material is what was hit, and resolves exactly as it
+        // always has - no fallback, so a hit that was silent stays silent.
+        None => get_environmental_sound_query(
+            world,
+            entity_id,
+            "collision",
+            vec![("material", &entity_material)],
+        ),
+    };
 
     if let Some(query) = maybe_query {
         Effect::PlayEnvironmentalSound {
