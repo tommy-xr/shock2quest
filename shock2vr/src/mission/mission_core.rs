@@ -8086,6 +8086,30 @@ impl MissionCore {
                             }
                         }
                     }
+
+                    // On-amp psi meter (experimental `ambient_meters`): drawn
+                    // with the same FOV `squish` as the viewmodel above, so it
+                    // hangs on the amp instead of floating off it - see
+                    // `hud::ambient_meters::amp_psi_meter_root`'s doc comment.
+                    if options
+                        .experimental_features
+                        .contains(crate::hud::ambient_meters::FEATURE)
+                    {
+                        if let Some((readout, root)) =
+                            crate::hud::ambient_meters::amp_psi_meter_root(&self.world)
+                        {
+                            ret.extend(
+                                crate::hud::psi_amp_panel::build_readout_canvas(&readout)
+                                    .render_world_space(
+                                        asset_cache,
+                                        squish * root,
+                                        None,
+                                        None,
+                                        crate::hud::OVERLAY_Z_OFFSET,
+                                    ),
+                            );
+                        }
+                    }
                 }
             }
 

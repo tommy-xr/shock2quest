@@ -1,11 +1,15 @@
 //! Prototype "ambient meters" (experimental flag [`FEATURE`]): ammo lives on
 //! the wielded weapon, health stays on the left wrist but only shows when the
-//! wrist is glanced at (rotated toward the face).
+//! wrist is glanced at (rotated toward the face), and the psi amp carries its
+//! own pool/overload meter.
 //!
-//! Layout/placement decisions live HERE (and in [`super::ammo_panel`], which
-//! authors the readout's pixels) - a presentation supplies only a root
-//! transform (AGENTS.md section 3). Only the VR presentation consumes these
-//! today; the flat HUD is untouched by the flag.
+//! Layout/placement decisions live HERE (and in [`super::ammo_panel`] /
+//! [`super::psi_amp_panel`], which author the readouts' pixels) - a
+//! presentation supplies only a root transform (AGENTS.md section 3). The
+//! on-weapon ammo tag and glance-gated wrist health are VR-only (the flat HUD
+//! is untouched by the flag for those); the on-amp psi meter draws in BOTH
+//! presentations - see [`amp_psi_meter_root`] and `mission_core`'s flat
+//! viewmodel draw.
 
 use cgmath::{Deg, InnerSpace, Matrix4, Quaternion, Rotation, Vector3, vec3};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
@@ -15,6 +19,7 @@ use crate::runtime_props::RuntimePropTransform;
 use crate::vr_config::Handedness;
 
 use super::ammo_panel;
+use super::psi_amp_panel;
 use super::virtual_arms;
 use virtual_arms::OVERLAY_Z_OFFSET;
 
@@ -55,6 +60,88 @@ pub(crate) fn weapon_meter_transform(
         * Matrix4::from_angle_y(Deg(90.0))
         * Matrix4::from_angle_x(WEAPON_METER_TILT)
         * Matrix4::from_nonuniform_scale(WEAPON_METER_WIDTH, WEAPON_METER_HEIGHT, 1.0)
+}
+
+// --- On-amp psi meter placement -------------------------------------------
+//
+// The psi pool / overload meter hangs directly below the on-weapon tag
+// (which already shows the amp's selected tier - `create_weapon_ammo_meter`
+// draws for the amp too, since `AmmoReadout::psi_power` replaces the ammo
+// clip). Same weapon-local frame and anchor table entry (`amp_h` in
+// `vr_config::WEAPON_METER_ANCHORS`) as the tag; only the vertical offset and
+// panel aspect differ.
+
+/// Gap between the tag's bottom edge and the psi meter's top edge.
+const AMP_METER_GAP: f32 = 0.015;
+/// Same width as the on-weapon tag, so the two stack flush.
+const AMP_METER_WIDTH: f32 = WEAPON_METER_WIDTH;
+const AMP_METER_HEIGHT: f32 = AMP_METER_WIDTH * (psi_amp_panel::PANEL_H / psi_amp_panel::PANEL_W);
+
+/// Root transform for the on-amp psi meter: the same weapon-local frame and
+/// tag anchor as [`weapon_meter_transform`], shifted down by the tag's own
+/// height plus a gap so the two panels stack without overlapping.
+pub(crate) fn amp_meter_transform(
+    weapon_transform: Matrix4<f32>,
+    tag_anchor: Vector3<f32>,
+) -> Matrix4<f32> {
+    let anchor = tag_anchor
+        - vec3(
+            0.0,
+            WEAPON_METER_HEIGHT / 2.0 + AMP_METER_GAP + AMP_METER_HEIGHT / 2.0,
+            0.0,
+        );
+    weapon_transform
+        * Matrix4::from_translation(anchor)
+        * Matrix4::from_angle_y(Deg(90.0))
+        * Matrix4::from_angle_x(WEAPON_METER_TILT)
+        * Matrix4::from_nonuniform_scale(AMP_METER_WIDTH, AMP_METER_HEIGHT, 1.0)
+}
+
+/// The on-amp psi meter's root transform, or `None` when the psi amp is not
+/// wielded, has nothing to show, or has no transform. Shared by both
+/// presentations - VR hangs it directly off the amp; flat premultiplies it by
+/// the viewmodel's FOV `squish` (see `mission_core`'s flat viewmodel draw).
+pub(crate) fn amp_psi_meter_root(
+    world: &World,
+) -> Option<(psi_amp_panel::PsiAmpReadout, Matrix4<f32>)> {
+    let weapon = crate::wielded_weapon::wielded_weapon(world)?;
+    if !crate::wielded_weapon::is_psi_amp(world, weapon) {
+        return None;
+    }
+    let readout = psi_amp_panel::PsiAmpReadout::from_world(world);
+    if readout.is_empty() {
+        return None;
+    }
+    let weapon_transform = world
+        .borrow::<View<RuntimePropTransform>>()
+        .ok()?
+        .get(weapon)
+        .ok()?
+        .0;
+
+    let tag_anchor = crate::vr_config::weapon_meter_anchor_from_entity(world, weapon);
+    let root = amp_meter_transform(without_scale(weapon_transform), tag_anchor);
+    Some((readout, root))
+}
+
+/// The on-amp psi meter: the psi pool bar and (while charging) the
+/// hold-to-overload meter, laid out once in [`psi_amp_panel`], hung off the
+/// wielded psi amp's live `RuntimePropTransform` below its ammo/tier tag.
+/// Empty when the psi amp is not wielded or has no transform.
+pub(crate) fn create_amp_psi_meter(
+    asset_cache: &mut AssetCache,
+    world: &World,
+) -> Vec<SceneObject> {
+    let Some((readout, root)) = amp_psi_meter_root(world) else {
+        return Vec::new();
+    };
+    psi_amp_panel::build_readout_canvas(&readout).render_world_space(
+        asset_cache,
+        root,
+        None,
+        None,
+        OVERLAY_Z_OFFSET,
+    )
 }
 
 /// A transform's translation + rotation with any (positive) scale stripped:
@@ -246,5 +333,32 @@ mod tests {
         // ...and the panel's world width stays the authored width.
         let width_axis = root * vec4(1.0, 0.0, 0.0, 0.0);
         assert!((width_axis.truncate().magnitude() - WEAPON_METER_WIDTH).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_amp_meter_hangs_below_the_tag_not_on_top_of_it() {
+        // Negative-first: at the tag's own anchor, the amp meter's centre
+        // must NOT coincide with it - the two panels would overlap.
+        let tag_anchor = vec3(0.15, 0.34, 0.0);
+        let tag_root = weapon_meter_transform(Matrix4::identity(), tag_anchor);
+        let amp_root = amp_meter_transform(Matrix4::identity(), tag_anchor);
+        let tag_center = vec3(tag_root.w.x, tag_root.w.y, tag_root.w.z);
+        let amp_center = vec3(amp_root.w.x, amp_root.w.y, amp_root.w.z);
+        assert_ne!(tag_center, amp_center);
+        // The amp meter sits strictly below the tag (lower weapon-local Y)...
+        assert!(amp_center.y < tag_center.y);
+        // ...separated by at least both panels' half-heights plus the gap, so
+        // they never overlap.
+        let min_gap = WEAPON_METER_HEIGHT / 2.0 + AMP_METER_GAP + AMP_METER_HEIGHT / 2.0;
+        assert!((tag_center.y - amp_center.y - min_gap).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_amp_meter_preserves_its_authored_aspect() {
+        let root = amp_meter_transform(Matrix4::identity(), vec3(0.0, 0.0, 0.0));
+        let width_axis = (root * vec4(1.0, 0.0, 0.0, 0.0)).truncate().magnitude();
+        let height_axis = (root * vec4(0.0, 1.0, 0.0, 0.0)).truncate().magnitude();
+        assert!((width_axis - AMP_METER_WIDTH).abs() < 1e-5);
+        assert!((height_axis - AMP_METER_HEIGHT).abs() < 1e-5);
     }
 }

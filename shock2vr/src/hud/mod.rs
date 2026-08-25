@@ -6,6 +6,7 @@ pub use virtual_arms::*;
 
 pub(crate) mod ambient_meters;
 pub(crate) mod ammo_panel;
+pub(crate) mod psi_amp_panel;
 
 mod flat_hud;
 pub(crate) use flat_hud::*;
