@@ -666,6 +666,16 @@ struct ClimbTopOut {
 
 struct PlayerMovement {
     movement: EffectiveCharacterMovement,
+    /// `movement.translation` with the moving-platform carry removed, i.e.
+    /// what the player did under their own power. Only the ordinary walk pass
+    /// folds a carry in at all, so the scripted mantle and ladder branches
+    /// report their translation unchanged - subtracting a carry there would
+    /// fabricate motion the player never made.
+    self_translation: Vector<Real>,
+    /// This frame was a ladder climb or a scripted mantle rather than walking
+    /// on a floor. The player is on a surface they are holding, so they are
+    /// neither striding nor free-falling however far they travel.
+    is_climbing: bool,
     top_out: Option<ClimbTopOut>,
     /// Horizontal part of a gravity-induced slope slide, carried into the
     /// next gravity pass so a seam does not erase the player's momentum.
@@ -1224,6 +1234,8 @@ fn plan_climb_top_out(
 
     Some(PlayerMovement {
         movement: scripted_character_movement(first_step),
+        self_translation: first_step,
+        is_climbing: true,
         top_out: Some(ClimbTopOut {
             waypoints,
             next_waypoint: 0,
@@ -1488,8 +1500,11 @@ fn plan_jump_mantle(
         }
     }
 
+    let first_movement = first_movement?;
     Some(PlayerMovement {
-        movement: scripted_character_movement(first_movement?),
+        movement: scripted_character_movement(first_movement),
+        self_translation: first_movement,
+        is_climbing: true,
         top_out: Some(ClimbTopOut {
             waypoints,
             next_waypoint: 0,
@@ -1669,7 +1684,9 @@ fn step_player_movement(
         let climbed = mvt.translation.y * climb.y.signum();
         if climbed > CLIMB_MIN_PROGRESS_FRACTION * climb.y.abs() {
             return PlayerMovement {
+                self_translation: mvt.translation,
                 movement: mvt,
+                is_climbing: true,
                 top_out: None,
                 slope_displacement: Vector::zeros(),
                 actor_collisions: Vec::new(),
@@ -1856,7 +1873,9 @@ fn step_player_movement(
     // measures from the carried pose) is done.
     mvt.translation += carried;
     PlayerMovement {
+        self_translation: mvt.translation - carried,
         movement: mvt,
+        is_climbing: false,
         top_out: None,
         slope_displacement: next_slope_displacement,
         actor_collisions: walk_collisions,
@@ -2268,6 +2287,9 @@ pub struct PlayerHandle {
     // standing still on an elevator reports zero. Purely derived per-frame
     // state, recomputed by every `move_player`, so nothing saves it.
     self_translation: Vector3<f32>,
+    // Whether that frame was a ladder climb or a scripted mantle rather than
+    // ordinary walking. Also purely derived per-frame state.
+    is_climbing: bool,
 }
 
 /// The physical-hand seam for one held melee weapon. `target` is an invisible
@@ -2321,6 +2343,13 @@ impl PlayerHandle {
     /// frame), contributes nothing.
     pub fn self_translation(&self) -> Vector3<f32> {
         self.self_translation
+    }
+
+    /// Whether the last movement frame was a ladder climb or a scripted
+    /// mantle. Such a player is holding a surface: they are neither striding
+    /// along a floor nor falling, however far they travel vertically.
+    pub fn is_climbing(&self) -> bool {
+        self.is_climbing
     }
 }
 
@@ -3976,6 +4005,7 @@ impl PhysicsWorld {
             jump_velocity: None,
             jump_was_pressed: false,
             self_translation: Vector3::new(0.0, 0.0, 0.0),
+            is_climbing: false,
         }
     }
 
@@ -4657,7 +4687,9 @@ impl PhysicsWorld {
                     self.integration_parameters.dt,
                 );
                 PlayerMovement {
+                    self_translation: movement.translation,
                     movement,
+                    is_climbing: true,
                     top_out,
                     slope_displacement: Vector::zeros(),
                     actor_collisions: Vec::new(),
@@ -4709,6 +4741,11 @@ impl PhysicsWorld {
             }
         });
         let was_top_out = player_handle.top_out.is_some();
+        // Recorded by whichever branch produced the movement, because only the
+        // walk pass folds the platform carry in (see `PlayerMovement`).
+        let self_translation = player_movement.self_translation;
+        player_handle.self_translation = nvec_to_cgmath(self_translation);
+        player_handle.is_climbing = player_movement.is_climbing;
         player_handle.top_out = player_movement.top_out;
         player_handle.slope_displacement = player_movement.slope_displacement;
         let is_top_out = player_handle.top_out.is_some();
@@ -4808,7 +4845,7 @@ impl PhysicsWorld {
             player_handle.is_grounded = false;
         } else if let Some(mut velocity) = player_handle.jump_velocity {
             let requested_vertical = velocity * self.integration_parameters.dt;
-            let applied_vertical = mvt.translation.y - carry.y;
+            let applied_vertical = self_translation.y;
             if mvt.grounded && requested_vertical <= 0.0 {
                 player_handle.jump_velocity = None;
                 player_handle.is_grounded = true;
@@ -4827,11 +4864,6 @@ impl PhysicsWorld {
         } else {
             player_handle.is_grounded = mvt.grounded;
         }
-
-        // `mvt.translation` includes the platform carry applied first inside
-        // `step_player_movement`; remove it so what is left is what the player
-        // did under their own power (see `PlayerHandle::self_translation`).
-        player_handle.self_translation = nvec_to_cgmath(mvt.translation - carry);
 
         // Edges already observed along a swept `move_player_validated` hop come
         // first: they happened before this frame's pose. They also leave

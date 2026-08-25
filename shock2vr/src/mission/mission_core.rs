@@ -2908,17 +2908,19 @@ impl MissionCore {
             )
         };
 
-        // Player footsteps, paced by the distance the player just walked under
-        // their own power (platform carry already removed). Only on a frame
-        // that actually ran the movement pass: a paused frame moved nobody,
-        // and `self_translation` still holds the last real frame's travel.
         if !time.elapsed.is_zero() {
+            // Player footsteps, paced by the distance the player just walked
+            // under their own power (platform carry already removed). Only on
+            // a frame that actually ran the movement pass: a paused frame
+            // moved nobody, and `self_translation` still holds the last real
+            // frame's travel.
             let footstep =
                 self.player_footsteps
                     .update(crate::mission::player_footsteps::FootstepFrame {
                         self_translation: self.player_handle.self_translation(),
                         is_grounded: self.player_handle.is_grounded(),
                         is_crouched: self.player_handle.is_crouched(),
+                        is_climbing: self.player_handle.is_climbing(),
                     });
             if let Some(footstep) = footstep {
                 effects.push(crate::mission::player_footsteps::player_footstep_effect(
@@ -2926,9 +2928,7 @@ impl MissionCore {
                     new_character_pos,
                 ));
             }
-        }
 
-        if !time.elapsed.is_zero() {
             let player_id = self
                 .world
                 .borrow::<UniqueView<PlayerInfo>>()

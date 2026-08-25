@@ -14,12 +14,14 @@ pub struct EnvSoundQueryItem {
 #[derive(Clone, Debug)]
 pub struct EnvSoundQuery {
     items: Vec<EnvSoundQueryItem>,
-    /// Take the *deepest* schema node the query reached rather than the
-    /// shallowest. The schema is a specificity tree and a match collects every
-    /// node along the path, so a query that refines an already-resolving node
+    /// Take the *last* schema node the match visited rather than the first.
+    /// The schema is a specificity tree and a match collects every node it
+    /// reaches, so a query that refines an already-resolving node
     /// (`material=metal` -> `landing=true`) otherwise resolves to the parent's
-    /// samples and the refinement is silently inert. Off by default so
-    /// existing lookups keep resolving exactly as they did.
+    /// samples and the refinement is silently inert. Only meaningful for a
+    /// fully-specified query that descends one path (see
+    /// `Gamesys::get_random_environmental_sound`). Off by default so existing
+    /// lookups keep resolving exactly as they did.
     prefer_most_specific: bool,
 }
 

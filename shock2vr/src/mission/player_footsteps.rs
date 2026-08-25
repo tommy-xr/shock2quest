@@ -15,23 +15,31 @@
 //! the body without running a movement frame at all - cannot burst a run of
 //! footsteps out of one frame.
 //!
-//! Known gap: room-scale VR walking never moves the capsule (headset
-//! translation only places the camera), so physically stepping in the
-//! playspace is silent. That is deliberate - the deck is not moving under the
-//! player - rather than an oversight.
+//! Two known gaps, both deliberate. Room-scale VR walking never moves the
+//! capsule (headset translation only places the camera), so physically
+//! stepping in the playspace is silent - the deck is not moving under the
+//! player. And "own power" here means only "not carried by a platform": motion
+//! the walk pass produces without the player asking for it - sliding down a
+//! slope, being shoved by a door - still paces steps.
 
 use cgmath::{InnerSpace, Vector3};
 use dark::SCALE_FACTOR;
 use engine::audio::AudioHandle;
 
-use crate::scripts::Effect;
+use crate::{mission::PLAYER_MOVE_SPEED, scripts::Effect, scripts::script_util};
 
-/// How far the player walks per footstep, in Dark units. Full-speed walking
-/// measured at ~1.8 world units/second in medsci1 (one world unit is 2.5 Dark
-/// units, so that is a real walking pace of ~1.4 m/s), which this paces at
-/// ~1.8 footsteps/second - a human's cadence at that speed, and the same
-/// order as the ~3.5/s the creature half measured for a *jogging* hybrid.
-const STRIDE_DISTANCE: f32 = 2.5 / SCALE_FACTOR;
+/// Footsteps per second the stride below is calibrated for, at unobstructed
+/// full-speed movement. The port's player travels ~9.7 world units/second
+/// (measured walking medsci1 in the open), which is a run rather than a walk,
+/// so this matches the ~3.5/s the creature half measured for a jogging hybrid
+/// rather than a strolling pace.
+const TARGET_FOOTSTEPS_PER_SECOND: f32 = 3.5;
+
+/// How far the player walks per footstep, in world units. Derived from the
+/// movement speed so the cadence cannot drift if that is retuned; a player
+/// moving at any other speed simply steps proportionally more or less often,
+/// which is the whole point of pacing on distance.
+const STRIDE_DISTANCE: f32 = PLAYER_MOVE_SPEED / SCALE_FACTOR / TARGET_FOOTSTEPS_PER_SECOND;
 
 /// Crouched stride multiplier. Crouching does not slow the player down in this
 /// port, and the schema authors no quieter crouch sample (and volume is
@@ -44,12 +52,6 @@ const CROUCH_STRIDE_MULTIPLIER: f32 = 1.6;
 /// `landing=true` sample, in Dark units. Below this a landing is just the
 /// player walking off a lip and is left to the ordinary stride.
 const LANDING_MIN_FALL: f32 = 2.0 / SCALE_FACTOR;
-
-/// Material tag every player footstep resolves under until world geometry
-/// carries a per-texture material (`RayCastResult` has no surface id - see
-/// `projects/footstep-sounds.md` §4). The ship is mostly metal bulkheads, so
-/// this is right more often than not and wrong on carpet and soil.
-const DEFAULT_GROUND_MATERIAL: &str = "metal";
 
 /// What the accumulator decided this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +70,10 @@ pub struct FootstepFrame {
     pub self_translation: Vector3<f32>,
     pub is_grounded: bool,
     pub is_crouched: bool,
+    /// A ladder climb or a scripted mantle. Such a player is holding a
+    /// surface rather than walking on one - and, crucially, is not falling
+    /// however far down the shaft they travel.
+    pub is_climbing: bool,
 }
 
 /// Distance-paced player footsteps. Purely derived per-frame state: a save
@@ -79,6 +85,11 @@ pub struct PlayerFootsteps {
     /// Downward distance travelled since leaving the ground, in world units.
     fall_distance: f32,
     was_grounded: bool,
+    /// Swallow the next touchdown. Set by [`PlayerFootsteps::reset`], because
+    /// a relocation can put the player in the air (a spawn point above the
+    /// floor, a teleport onto a lip) and the settle that follows is the
+    /// engine placing them, not a fall they took.
+    suppress_next_landing: bool,
 }
 
 impl PlayerFootsteps {
@@ -90,6 +101,7 @@ impl PlayerFootsteps {
             // not have their first movement frame read as a touchdown, which
             // would swallow the first stride.
             was_grounded: true,
+            suppress_next_landing: true,
         }
     }
 
@@ -99,8 +111,10 @@ impl PlayerFootsteps {
     pub fn reset(&mut self) {
         self.distance = 0.0;
         self.fall_distance = 0.0;
-        // Assume grounded so the arrival frame is not read as a landing.
+        // Assume grounded so the arrival frame is not read as a landing, and
+        // swallow the touchdown that follows an arrival made in mid-air.
         self.was_grounded = true;
+        self.suppress_next_landing = true;
     }
 
     /// Advance one movement frame, returning the footstep it produced (at most
@@ -108,6 +122,16 @@ impl PlayerFootsteps {
     pub fn update(&mut self, frame: FootstepFrame) -> Option<PlayerFootstep> {
         let was_grounded = self.was_grounded;
         self.was_grounded = frame.is_grounded;
+
+        if frame.is_climbing {
+            // A ladder is held, not walked or fallen down. Without this a
+            // descent accrues the whole shaft as fall distance and thuds at
+            // the bottom, and a climb past a grounded pose near the foot of
+            // the ladder paces strides out of vertical travel.
+            self.fall_distance = 0.0;
+            self.distance = 0.0;
+            return None;
+        }
 
         if !frame.is_grounded {
             // Airborne: a jump or a fall keeps accruing horizontal distance,
@@ -123,9 +147,12 @@ impl PlayerFootsteps {
             // Touchdown. Either way the stride restarts here, so a landing is
             // not immediately followed by a half-stride step.
             let fall_distance = self.fall_distance;
+            let suppressed = self.suppress_next_landing;
             self.fall_distance = 0.0;
             self.distance = 0.0;
-            return (fall_distance >= LANDING_MIN_FALL).then_some(PlayerFootstep::Landing);
+            self.suppress_next_landing = false;
+            return (!suppressed && fall_distance >= LANDING_MIN_FALL)
+                .then_some(PlayerFootstep::Landing);
         }
 
         let stride = if frame.is_crouched {
@@ -133,17 +160,22 @@ impl PlayerFootsteps {
         } else {
             STRIDE_DISTANCE
         };
+        // Walking proves the player is on the floor: whatever arrival the
+        // reset was guarding against is over, so a later fall thuds normally.
+        self.suppress_next_landing = false;
         let horizontal =
             cgmath::vec2(frame.self_translation.x, frame.self_translation.z).magnitude();
         self.distance += horizontal;
         if self.distance < stride {
             return None;
         }
-        // Subtract rather than zero, so a frame long enough to cross a whole
-        // stride does not lose the remainder and drift the cadence. One step
-        // per frame is plenty - a single frame covering several strides is a
-        // hitch, and a burst of footsteps is the wrong way to report one.
-        self.distance = (self.distance - stride).min(stride);
+        // Subtract rather than zero, so an ordinary frame does not lose its
+        // remainder and drift the cadence. One step per frame is plenty - a
+        // single frame covering several strides is a hitch, and a burst of
+        // footsteps is the wrong way to report one - so a remainder bigger
+        // than the stride is banked as a *part* stride rather than kept whole,
+        // which would fire again on the very next frame that moves at all.
+        self.distance = (self.distance - stride).min(stride * 0.5);
         Some(PlayerFootstep::Step)
     }
 }
@@ -161,7 +193,7 @@ pub fn player_footstep_effect(footstep: PlayerFootstep, position: Vector3<f32>) 
     let mut tags = vec![
         ("event", "footstep"),
         ("creaturetype", "player"),
-        ("material", DEFAULT_GROUND_MATERIAL),
+        ("material", script_util::DEFAULT_IMPACT_MATERIAL),
     ];
     if footstep == PlayerFootstep::Landing {
         tags.push(("landing", "true"));
@@ -190,6 +222,42 @@ mod tests {
             self_translation: vec3(0.0, 0.0, distance),
             is_grounded: true,
             is_crouched: false,
+            is_climbing: false,
+        }
+    }
+
+    fn crouch_walking(distance: f32) -> FootstepFrame {
+        FootstepFrame {
+            is_crouched: true,
+            ..walking(distance)
+        }
+    }
+
+    /// One airborne frame dropping `drop` world units.
+    fn falling(drop: f32) -> FootstepFrame {
+        FootstepFrame {
+            self_translation: vec3(0.0, -drop, 0.0),
+            is_grounded: false,
+            is_crouched: false,
+            is_climbing: false,
+        }
+    }
+
+    /// The frame that touches down at the end of a `drop`-unit descent.
+    fn landed(drop: f32) -> FootstepFrame {
+        FootstepFrame {
+            is_grounded: true,
+            ..falling(drop)
+        }
+    }
+
+    /// One frame of ladder climbing, moving `travel` world units vertically.
+    fn climbing(travel: f32) -> FootstepFrame {
+        FootstepFrame {
+            self_translation: vec3(0.0, travel, 0.0),
+            is_grounded: false,
+            is_crouched: false,
+            is_climbing: true,
         }
     }
 
@@ -208,6 +276,19 @@ mod tests {
         let mut footsteps = PlayerFootsteps::new();
         let steps = count_steps(&mut footsteps, 11, STRIDE_DISTANCE / 10.0);
         assert_eq!(steps, 1);
+    }
+
+    #[test]
+    fn full_speed_walking_paces_the_target_cadence() {
+        // The absolute check: one second of unobstructed full-speed movement,
+        // fed frame by frame exactly as `MissionCore::update` builds it.
+        let mut footsteps = PlayerFootsteps::new();
+        let per_frame = PLAYER_MOVE_SPEED / SCALE_FACTOR / 60.0;
+        let steps = count_steps(&mut footsteps, 60, per_frame);
+        assert!(
+            (3..=4).contains(&steps),
+            "expected ~{TARGET_FOOTSTEPS_PER_SECOND} footsteps in a second of full-speed walking, got {steps}"
+        );
     }
 
     #[test]
@@ -232,12 +313,7 @@ mod tests {
         // A rider standing still on a moving platform has a zero SELF
         // translation, however far the world moves them.
         let mut footsteps = PlayerFootsteps::new();
-        let carried = FootstepFrame {
-            self_translation: vec3(0.0, 0.0, 0.0),
-            is_grounded: true,
-            is_crouched: false,
-        };
-        assert!((0..600).all(|_| footsteps.update(carried).is_none()));
+        assert!((0..600).all(|_| footsteps.update(walking(0.0)).is_none()));
     }
 
     #[test]
@@ -247,6 +323,7 @@ mod tests {
             self_translation: vec3(0.0, 0.1, STRIDE_DISTANCE),
             is_grounded: false,
             is_crouched: false,
+            is_climbing: false,
         };
         assert!((0..60).all(|_| footsteps.update(jumping).is_none()));
     }
@@ -254,19 +331,14 @@ mod tests {
     #[test]
     fn landing_after_a_fall_fires_once() {
         let mut footsteps = PlayerFootsteps::new();
-        let falling = FootstepFrame {
-            self_translation: vec3(0.0, -LANDING_MIN_FALL, 0.0),
-            is_grounded: false,
-            is_crouched: false,
-        };
-        assert_eq!(footsteps.update(falling), None);
-
-        let landed = FootstepFrame {
-            self_translation: vec3(0.0, -LANDING_MIN_FALL, 0.0),
-            is_grounded: true,
-            is_crouched: false,
-        };
-        assert_eq!(footsteps.update(landed), Some(PlayerFootstep::Landing));
+        // Walk first: an arrival is only suppressed until the player is seen
+        // standing on something.
+        assert_eq!(footsteps.update(walking(0.0)), None);
+        assert_eq!(footsteps.update(falling(LANDING_MIN_FALL)), None);
+        assert_eq!(
+            footsteps.update(landed(LANDING_MIN_FALL)),
+            Some(PlayerFootstep::Landing)
+        );
         // The next grounded frame is an ordinary standing frame, not a second
         // landing.
         assert_eq!(footsteps.update(walking(0.0)), None);
@@ -275,12 +347,8 @@ mod tests {
     #[test]
     fn stepping_off_a_lip_does_not_thud() {
         let mut footsteps = PlayerFootsteps::new();
-        let hop = FootstepFrame {
-            self_translation: vec3(0.0, -LANDING_MIN_FALL * 0.2, 0.0),
-            is_grounded: false,
-            is_crouched: false,
-        };
-        assert_eq!(footsteps.update(hop), None);
+        assert_eq!(footsteps.update(walking(0.0)), None);
+        assert_eq!(footsteps.update(falling(LANDING_MIN_FALL * 0.2)), None);
         assert_eq!(footsteps.update(walking(0.0)), None);
     }
 
@@ -289,20 +357,35 @@ mod tests {
         let mut footsteps = PlayerFootsteps::new();
         // Almost a full stride, then a fall.
         assert_eq!(footsteps.update(walking(STRIDE_DISTANCE * 0.9)), None);
-        let falling = FootstepFrame {
-            self_translation: vec3(0.0, -LANDING_MIN_FALL, 0.0),
-            is_grounded: false,
-            is_crouched: false,
-        };
-        assert_eq!(footsteps.update(falling), None);
-        let landed = FootstepFrame {
-            self_translation: vec3(0.0, -LANDING_MIN_FALL, 0.0),
-            is_grounded: true,
-            is_crouched: false,
-        };
-        assert_eq!(footsteps.update(landed), Some(PlayerFootstep::Landing));
+        assert_eq!(footsteps.update(falling(LANDING_MIN_FALL)), None);
+        assert_eq!(
+            footsteps.update(landed(LANDING_MIN_FALL)),
+            Some(PlayerFootstep::Landing)
+        );
         // The banked 0.9 stride is gone, so one more short frame is silent.
         assert_eq!(footsteps.update(walking(STRIDE_DISTANCE * 0.2)), None);
+    }
+
+    #[test]
+    fn a_hitch_frame_does_not_fire_twice_in_a_row() {
+        // A frame covering several strides reports one footstep, and does not
+        // leave a full stride banked that fires again immediately.
+        let mut footsteps = PlayerFootsteps::new();
+        assert_eq!(
+            footsteps.update(walking(STRIDE_DISTANCE * 5.0)),
+            Some(PlayerFootstep::Step)
+        );
+        assert_eq!(footsteps.update(walking(STRIDE_DISTANCE * 0.1)), None);
+    }
+
+    #[test]
+    fn climbing_a_ladder_neither_steps_nor_thuds() {
+        let mut footsteps = PlayerFootsteps::new();
+        assert_eq!(footsteps.update(walking(0.0)), None);
+        // A long descent: without the climb gate this accrues the whole shaft
+        // as fall distance and thuds when the player reaches the bottom.
+        assert!((0..120).all(|_| footsteps.update(climbing(-LANDING_MIN_FALL)).is_none()));
+        assert_eq!(footsteps.update(walking(0.0)), None);
     }
 
     #[test]
@@ -313,11 +396,8 @@ mod tests {
         let mut crouched = PlayerFootsteps::new();
         let crouched_steps = (0..1005)
             .filter(|_| {
-                crouched.update(FootstepFrame {
-                    self_translation: vec3(0.0, 0.0, STRIDE_DISTANCE / 100.0),
-                    is_grounded: true,
-                    is_crouched: true,
-                }) == Some(PlayerFootstep::Step)
+                crouched.update(crouch_walking(STRIDE_DISTANCE / 100.0))
+                    == Some(PlayerFootstep::Step)
             })
             .count();
 
@@ -336,16 +416,20 @@ mod tests {
     }
 
     #[test]
-    fn a_reset_mid_fall_does_not_thud_on_arrival() {
+    fn a_relocation_that_lands_in_mid_air_does_not_thud_on_arrival() {
+        // Level load / quickload / a teleport onto a lip: the settle that
+        // follows the arrival is the engine placing the player, not a fall.
         let mut footsteps = PlayerFootsteps::new();
-        let falling = FootstepFrame {
-            self_translation: vec3(0.0, -LANDING_MIN_FALL * 10.0, 0.0),
-            is_grounded: false,
-            is_crouched: false,
-        };
-        assert_eq!(footsteps.update(falling), None);
         footsteps.reset();
+        assert!((0..30).all(|_| footsteps.update(falling(LANDING_MIN_FALL)).is_none()));
+        assert_eq!(footsteps.update(landed(LANDING_MIN_FALL)), None);
+        // A genuine fall afterwards still thuds.
         assert_eq!(footsteps.update(walking(0.0)), None);
+        assert_eq!(footsteps.update(falling(LANDING_MIN_FALL)), None);
+        assert_eq!(
+            footsteps.update(landed(LANDING_MIN_FALL)),
+            Some(PlayerFootstep::Landing)
+        );
     }
 
     #[test]

@@ -818,7 +818,7 @@ pub fn play_environmental_sound(
 /// resolvable material. World geometry has no per-texture material lookup in
 /// the port yet, so terrain hits (and entities without material tags) all
 /// sound like the ship's metal bulkheads.
-const DEFAULT_IMPACT_MATERIAL: &str = "metal";
+pub const DEFAULT_IMPACT_MATERIAL: &str = "metal";
 
 /// The collision-schema material tag ("fleshtarget", "metal", ...) for
 /// whatever was hit: the victim's inherited `PropMaterial` (a tag string like
