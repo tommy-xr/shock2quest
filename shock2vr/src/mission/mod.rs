@@ -18,7 +18,6 @@ pub use spawn_location::*;
 pub use visibility_engine::*;
 
 use cgmath::{Matrix4, Quaternion, Vector2, Vector3};
-use rapier3d::prelude::{Collider, ColliderBuilder};
 
 use engine::{
     assets::{asset_cache::AssetCache, asset_paths::AbstractAssetPath},
@@ -93,7 +92,7 @@ impl Mission {
         let song_params = level.song_params.clone();
         let room_db = level.room_database.clone();
         let map_params = level.map_params;
-        let physics_geometry = create_physics_collider(&level);
+        let physics_geometry = crate::physics::build_level_geometry(&level);
         engine::platform::service_events();
         let spatial_data = LevelSpatialData::from_level(&level);
         engine::platform::service_events();
@@ -462,51 +461,4 @@ impl crate::game_scene::DebuggableScene for Mission {
     ) -> bool {
         self.mission_core.send_entity_message(id, message)
     }
-}
-
-/// Creates a physics collider from level geometry
-/// This allows mission loading code to create physics geometry independently of the physics system
-pub fn create_physics_collider(level: &dark::mission::SystemShock2Level) -> Option<Collider> {
-    if level.all_geometry.is_empty() {
-        return None;
-    }
-
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
-
-    for geo in &level.all_geometry {
-        let verts = &geo.verts;
-
-        let mut idx = 0;
-        let len = verts.len();
-
-        while idx < len {
-            let dest_idx = vertices.len() as u32;
-
-            // Convert vertex positions to rapier3d format
-            vertices.push(rapier3d::prelude::Point::new(
-                verts[idx].position.x,
-                verts[idx].position.y,
-                verts[idx].position.z,
-            ));
-            vertices.push(rapier3d::prelude::Point::new(
-                verts[idx + 1].position.x,
-                verts[idx + 1].position.y,
-                verts[idx + 1].position.z,
-            ));
-            vertices.push(rapier3d::prelude::Point::new(
-                verts[idx + 2].position.x,
-                verts[idx + 2].position.y,
-                verts[idx + 2].position.z,
-            ));
-
-            indices.push([dest_idx, dest_idx + 1, dest_idx + 2]);
-
-            idx += 3;
-        }
-    }
-
-    ColliderBuilder::trimesh(vertices, indices)
-        .ok()
-        .map(|builder| builder.build())
 }

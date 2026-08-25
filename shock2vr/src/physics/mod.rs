@@ -2227,10 +2227,15 @@ pub struct SurfaceMaterialId(u16);
 /// planted level with (or slightly inside) the floor still finds it.
 const GROUND_MATERIAL_PROBE_LIFT: f32 = 0.25;
 
-/// How far below a footstep position the ground probe reaches. Generous enough
-/// to cover a creature whose origin floats a little above the deck, short
-/// enough that a creature in mid-air finds nothing.
-const GROUND_MATERIAL_PROBE_DROP: f32 = 1.5;
+/// How far below a footstep position the ground probe reaches.
+///
+/// Deliberately generous: a footstep is reported at the creature's *origin*,
+/// which sits around body centre - a MedSci hybrid's is ~2.1 above the deck it
+/// is standing on, and larger creatures sit higher still. The probe takes the
+/// nearest hit, so a longer reach never picks the wrong floor; it only lets a
+/// creature that is genuinely airborne name the deck below, which is the right
+/// answer for a foot plant anyway.
+const GROUND_MATERIAL_PROBE_DROP: f32 = 8.0;
 
 /// Sentinel triangle entry for "this triangle's texture has no material tag".
 const NO_SURFACE_MATERIAL: u16 = u16::MAX;
@@ -2298,6 +2303,74 @@ impl LevelSurfaceMaterials {
     fn name(&self, id: SurfaceMaterialId) -> Option<&str> {
         self.names.get(id.0 as usize).map(|name| name.as_str())
     }
+}
+
+/// A level's collision geometry: the world trimesh plus the material of each
+/// of its triangles, built together so the two can never fall out of step.
+///
+/// Built at load time (off the mission's `SystemShock2Level`) and installed
+/// with [`PhysicsWorld::add_level_geometry`].
+pub struct LevelGeometry {
+    collider: Collider,
+    per_triangle_material: Vec<u16>,
+    material_names: Vec<String>,
+}
+
+impl LevelGeometry {
+    /// Collision geometry with no surface materials - a debug scene's floor,
+    /// which has no textures to take a material from. Hits on it fall back to
+    /// the default impact material, exactly as they did before.
+    pub fn untextured(collider: Collider) -> Self {
+        Self {
+            collider,
+            per_triangle_material: Vec::new(),
+            material_names: Vec::new(),
+        }
+    }
+}
+
+/// Build a level's collision geometry. `None` when the level has no geometry.
+pub fn build_level_geometry(level: &SystemShock2Level) -> Option<LevelGeometry> {
+    if level.all_geometry.is_empty() {
+        return None;
+    }
+
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for geo in &level.all_geometry {
+        let verts = &geo.verts;
+
+        let mut idx = 0;
+        let len = verts.len();
+
+        while idx < len {
+            let dest_idx = vertices.len() as u32;
+
+            vertices.push(vec_to_npoint(verts[idx].position));
+            vertices.push(vec_to_npoint(verts[idx + 1].position));
+            vertices.push(vec_to_npoint(verts[idx + 2].position));
+
+            indices.push([dest_idx, dest_idx + 1, dest_idx + 2]);
+
+            idx += 3;
+        }
+    }
+
+    let (per_triangle_material, material_names) =
+        build_surface_material_table(&level.all_geometry, &level.textures.0);
+    assert_eq!(
+        per_triangle_material.len(),
+        indices.len(),
+        "one material entry per level triangle"
+    );
+
+    let collider = ColliderBuilder::trimesh(vertices, indices).ok()?.build();
+
+    Some(LevelGeometry {
+        collider,
+        per_triangle_material,
+        material_names,
+    })
 }
 
 /// Build the per-triangle material table for a level's geometry, in the same
@@ -2637,42 +2710,15 @@ fn sanitize_collider_radius(entity_id: EntityId, context: &str, radius: f32) -> 
 }
 
 impl PhysicsWorld {
-    pub fn add_level_geometry(&mut self, entity_id: EntityId, level: &SystemShock2Level) {
-        /* Create the ground. */
-        //let collider = ColliderBuilder::cuboid(100.0, 0.1, 100.0).build();
+    /// Install a level's collision geometry, built at load time by
+    /// [`build_level_geometry`], as the world collider owned by `entity_id`.
+    pub fn add_level_geometry(&mut self, entity_id: EntityId, geometry: LevelGeometry) {
+        let LevelGeometry {
+            mut collider,
+            per_triangle_material,
+            material_names,
+        } = geometry;
 
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        for geo in &level.all_geometry {
-            let verts = &geo.verts;
-
-            let mut idx = 0;
-            let len = verts.len();
-
-            while idx < len {
-                let dest_idx = vertices.len() as u32;
-
-                vertices.push(vec_to_npoint(verts[idx].position));
-                vertices.push(vec_to_npoint(verts[idx + 1].position));
-                vertices.push(vec_to_npoint(verts[idx + 2].position));
-
-                indices.push([dest_idx, dest_idx + 1, dest_idx + 2]);
-
-                idx += 3;
-            }
-        }
-
-        let (per_triangle, material_names) =
-            build_surface_material_table(&level.all_geometry, &level.textures.0);
-        assert_eq!(
-            per_triangle.len(),
-            indices.len(),
-            "one material entry per level triangle"
-        );
-
-        let mut collider = ColliderBuilder::trimesh(vertices, indices)
-            .expect("level geometry trimesh")
-            .build();
         collider.user_data = entity_id.inner() as u128;
         collider.set_collision_groups(InteractionGroups {
             memberships: InternalCollisionGroups::ALL_COLLIDABLE.bits.into(),
@@ -2683,7 +2729,7 @@ impl PhysicsWorld {
 
         let materials = std::sync::Arc::new(LevelSurfaceMaterials {
             collider: handle,
-            per_triangle,
+            per_triangle: per_triangle_material,
             names: material_names,
         });
         self.events.set_level_surface_materials(materials.clone());
@@ -10430,7 +10476,10 @@ mod tests {
             return;
         };
         let mut world = PhysicsWorld::new();
-        world.add_level_geometry(EntityId::from_inner(1).unwrap(), &level);
+        world.add_level_geometry(
+            EntityId::from_inner(1).unwrap(),
+            build_level_geometry(&level).expect("level geometry"),
+        );
         let mut player = world.create_player(
             vec3(-22.294, -0.596, -17.1),
             EntityId::from_inner(2).unwrap(),
@@ -10495,7 +10544,10 @@ mod tests {
             return;
         };
         let mut world = PhysicsWorld::new();
-        world.add_level_geometry(EntityId::from_inner(1).unwrap(), &level);
+        world.add_level_geometry(
+            EntityId::from_inner(1).unwrap(),
+            build_level_geometry(&level).expect("level geometry"),
+        );
         let mut player = world.create_player(
             vec3(-22.294, -0.596, -17.1),
             EntityId::from_inner(2).unwrap(),
@@ -10688,7 +10740,10 @@ mod tests {
             return;
         };
         let mut world = PhysicsWorld::new();
-        world.add_level_geometry(EntityId::from_inner(1).unwrap(), &level);
+        world.add_level_geometry(
+            EntityId::from_inner(1).unwrap(),
+            build_level_geometry(&level).expect("level geometry"),
+        );
         let mut player = world.create_player(
             vec3(84.37742, 4.044117, 20.42488),
             EntityId::from_inner(2).unwrap(),
@@ -10731,7 +10786,10 @@ mod tests {
             return;
         };
         let mut world = PhysicsWorld::new();
-        world.add_level_geometry(EntityId::from_inner(1).unwrap(), &level);
+        world.add_level_geometry(
+            EntityId::from_inner(1).unwrap(),
+            build_level_geometry(&level).expect("level geometry"),
+        );
         let mut player =
             world.create_player(vec3(13.38, -3.8, 6.4), EntityId::from_inner(2).unwrap());
         for _ in 0..30 {

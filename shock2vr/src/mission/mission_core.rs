@@ -65,7 +65,7 @@ use physics::PhysicsWorld;
 use rand::{
     Rng, distributions::WeightedIndex, prelude::Distribution, seq::SliceRandom, thread_rng,
 };
-use rapier3d::prelude::{Collider, RigidBodyHandle};
+use rapier3d::prelude::RigidBodyHandle;
 use scripts::ScriptWorld;
 
 use shipyard::*;
@@ -1688,7 +1688,7 @@ pub struct AbstractMission {
     pub song_params: SongParams,
     pub room_db: RoomDatabase,
     pub map_params: dark::mission::MapParams,
-    pub physics_geometry: Option<Collider>,
+    pub physics_geometry: Option<crate::physics::LevelGeometry>,
     pub spatial_data: Option<Box<dyn SpatialQueryEngine>>,
     pub entity_info: SystemShock2EntityInfo,
     pub obj_map: HashMap<i32, String>,
@@ -2057,8 +2057,8 @@ impl MissionCore {
         );
 
         let world_entity_id = world.add_entity(RuntimePropDoNotSerialize {});
-        if let Some(collider) = abstract_mission.physics_geometry {
-            physics.add_collider(world_entity_id, collider);
+        if let Some(geometry) = abstract_mission.physics_geometry {
+            physics.add_level_geometry(world_entity_id, geometry);
         }
 
         // Finally, instantiate these entities
