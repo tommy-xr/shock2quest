@@ -257,6 +257,10 @@ impl PlayerInteraction for VrInteraction {
         ));
         if ambient {
             let mut meter = ambient_meters::create_weapon_ammo_meter(asset_cache, world);
+            meter.append(&mut ambient_meters::create_amp_psi_meter(
+                asset_cache,
+                world,
+            ));
             // Same label as the forearm panels, so the pause menu's
             // player-hands suppression covers the meter too.
             crate::util::tag_render_source(&mut meter, crate::util::render_source::PLAYER_HANDS);

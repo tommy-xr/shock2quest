@@ -84,16 +84,21 @@ impl Script for PsiAmpScript {
                     game_log!(INFO, "Psi power {} is not trained", power.name);
                     return Effect::NoEffect;
                 }
-                // Hold-to-overload runs only in flat presentation (the meter
-                // renders on the flat HUD; a flat-aimed amp carries
-                // RuntimePropFlatAim). In VR the amp keeps cast-on-pull until
-                // a VR meter exists - charging blind would spend points with
-                // no feedback.
+                // Hold-to-overload runs wherever a meter can render it: flat
+                // always has one (the HUD's `OVERLOAD_METER`); VR only draws
+                // the on-amp psi meter behind the `ambient_meters`
+                // experimental flag, so VR keeps the old cast-on-pull
+                // fallback while it is off - charging blind would spend
+                // points (and risk a damaging burnout) with no feedback.
                 let is_flat = world
                     .borrow::<View<crate::runtime_props::RuntimePropFlatAim>>()
                     .map(|v| v.get(entity_id).is_ok())
                     .unwrap_or(false);
-                if power.overloadable && is_flat {
+                let ambient_meters_enabled = world
+                    .borrow::<UniqueView<crate::mission::GlobalAmbientMetersEnabled>>()
+                    .map(|flag| flag.0)
+                    .unwrap_or(false);
+                if power.overloadable && (is_flat || ambient_meters_enabled) {
                     // No points, no charge: gate up front so a broke caster
                     // can't charge into a burnout (which spends points and
                     // deals damage) they couldn't afford as a cast.
