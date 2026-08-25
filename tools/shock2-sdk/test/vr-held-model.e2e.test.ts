@@ -206,7 +206,7 @@ test(
 );
 
 test(
-  "VR: either hand wields the melee arm, and the contact collider lands identically",
+  "VR: the LEFT hand can wield a melee weapon, with its damage volume attached",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -215,14 +215,17 @@ test(
       debugFlags: ["--vr"],
     });
 
-    // The melee `_h` rigs are authored as a RIGHT arm, so a left-hand wield
-    // renders them mirrored. Nothing exercised a left-hand melee wield at all
-    // before, which is how it went unnoticed that it drew a right arm; this is
-    // the live half of that coverage - both hands complete the wield, and the
-    // held body (the melee damage volume) ends up in the same world place from
-    // the same hand pose, because the contact point sits on the hand's own
-    // centreline. The geometry of the mirror itself is asserted in
-    // `vr_config`'s unit tests, which can see the transform.
+    // Nothing exercised a left-hand melee wield at all before, which is how it
+    // went unnoticed that it drew a right arm. This is a smoke test for that
+    // gap: the left hand completes the whole wield (model swap to the `_h` rig,
+    // contact body attached and tracking it) exactly as the right does.
+    //
+    // It deliberately does NOT try to assert the mirror. The mirror lives in a
+    // model-space transform that no HTTP endpoint reports, and the melee rigs
+    // are drawn double-sided (`/v1/scene` shows `backface_culling: null`), so
+    // there is nothing observable here that a mirror regression would change.
+    // The mirror's geometry is asserted in `vr_config`'s unit tests, which can
+    // see the transform.
     await game.step({ frames: 10 });
     let wrench;
     for (let i = 0; i < 20 && !wrench; i++) {
@@ -288,6 +291,11 @@ test(
       await game.step({ frames: 200 });
     }
 
+    // Both hands put the damage volume in the same place. That is by
+    // construction (the contact point is on the hand's centreline, which is the
+    // axis the mirror reflects across - see `the_contact_point_is_on_the_hands_
+    // centreline`), so this is a live check of that reasoning, not of the
+    // mirror.
     for (let axis = 0; axis < 3; axis++) {
       assert.ok(
         Math.abs(held.left[axis] - held.right[axis]) < 1e-4,

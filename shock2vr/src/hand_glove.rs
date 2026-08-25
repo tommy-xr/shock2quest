@@ -251,7 +251,9 @@ impl GloveRenderer {
         retarget.apply(pose, model);
 
         // The right-hand model is mirrored across the hand's local X for the
-        // left hand (same trick as vr_config::flip_x for held weapons). The
+        // left hand - `Handedness::mirror`, the one definition of "the other
+        // hand", shared with the melee wield so the glove and the arm rig
+        // cannot disagree about which way round the left hand is. The
         // glove's fingers point along the model's +Z; the hand frame's
         // forward is -Z (the raycast/aim direction, see VirtualHand::update),
         // so the grip alignment yaws the model 180 degrees to line the
@@ -259,10 +261,7 @@ impl GloveRenderer {
         // raycast hit markers in-game; on-headset fine tuning would adjust
         // this rotation.
         let grip = Matrix4::from_angle_y(cgmath::Deg(180.0));
-        let mirror = match handedness {
-            Handedness::Right => Matrix4::from_scale(1.0),
-            Handedness::Left => Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0),
-        };
+        let mirror = handedness.mirror();
         let world = Matrix4::from_translation(position)
             * Matrix4::from(rotation)
             * mirror

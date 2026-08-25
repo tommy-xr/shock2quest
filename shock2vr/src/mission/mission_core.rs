@@ -6485,7 +6485,7 @@ impl MissionCore {
                                     self.world.add_component(
                                         entity_id,
                                         RuntimePropVrGripOffset(
-                                            crate::vr_config::melee_contact_offset(arm, hand),
+                                            crate::vr_config::melee_contact_offset(arm),
                                         ),
                                     );
                                     if self.interaction.is_holding(entity_id) {
@@ -6509,14 +6509,10 @@ impl MissionCore {
                                                     bounds.size.x * cm,
                                                     bounds.size.y * cm,
                                                     bounds.size.z * cm,
-                                                    crate::vr_config::melee_contact_offset(
-                                                        arm, hand
-                                                    )
-                                                    .magnitude(),
-                                                    crate::vr_config::melee_contact_offset(
-                                                        arm, hand
-                                                    )
-                                                    .magnitude()
+                                                    crate::vr_config::melee_contact_offset(arm)
+                                                        .magnitude(),
+                                                    crate::vr_config::melee_contact_offset(arm)
+                                                        .magnitude()
                                                         * cm,
                                                 );
                                                 // The baked hand/forearm from

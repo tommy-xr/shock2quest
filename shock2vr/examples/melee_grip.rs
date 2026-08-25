@@ -48,11 +48,9 @@ fn main() {
         }
         let arm = shock2vr::MeleePosedArm::from_joints(&joints)
             .expect("the shipped melee rigs have elbow, fist, and weapon joints");
-        // Right-handed: the authored orientation of every `_h` rig. A
-        // left-hand wield mirrors this across X.
-        let contact = shock2vr::melee_contact_offset(arm, shock2vr::Handedness::Right);
+        let contact = shock2vr::melee_contact_offset(arm);
         println!(
-            "  contact offset (hand-local, right hand): vec3({:.3}, {:.3}, {:.3})",
+            "  contact offset (hand-local): vec3({:.3}, {:.3}, {:.3})",
             contact.x, contact.y, contact.z
         );
     }
