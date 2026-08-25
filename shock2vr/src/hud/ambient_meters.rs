@@ -66,9 +66,9 @@ pub(crate) fn weapon_meter_transform(
 //
 // The amp_h model is a compact sphere (not an elongated gun body), so the
 // psi meter gets its own anchor rather than reusing the on-weapon tag's -
-// tuned directly against the amp mesh: level with its lit indicator strip
-// and just off its near side, so it reads like a status readout on the
-// device itself.
+// tuned directly against the amp mesh, near its cable/base on the side
+// facing the shooter, so it reads like a status readout on the device
+// itself rather than a tag floating off it.
 
 const AMP_METER_ANCHOR: Vector3<f32> = vec3(-0.03, 0.05, 0.0);
 /// Panel size in world units, preserving the psi panel's authored 80x32
