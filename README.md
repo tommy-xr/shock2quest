@@ -47,7 +47,10 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - Quest VR: reload by hand. Pull a clip out of the cyber interface's inventory
   strip with your free hand and bring it to the gun the other hand is holding -
   the clip goes in and the weapon is loaded. A clip of a different ammo type
-  swaps the type over, returning the rounds already loaded to your pack.
+  swaps the type over, returning the rounds already loaded to your pack - that
+  insert is the only way to change ammo type in the headset, so the types you
+  can select are the ones you are carrying clips for. There is no reload or
+  ammo-swap button on the controllers; the gesture is the control.
 - Quest VR: press the left controller's `Y` button to open the newest unread
   audio log. Press `Y` again to close it; after every log is read, `Y` replays
   the most recently collected log.
