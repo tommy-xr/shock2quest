@@ -163,7 +163,7 @@ const LOAD_EVENT_PUMP_ENTITY_INTERVAL: usize = 32;
 /// Index of a hand in the per-hand `[left, right]` arrays this module keeps
 /// (the VR grab swallow, the on-panel arbitration). One conversion, so the two
 /// sides of a latch can never disagree about which slot a hand owns.
-fn hand_slot(hand: crate::vr_config::Handedness) -> usize {
+pub(crate) fn hand_slot(hand: crate::vr_config::Handedness) -> usize {
     match hand {
         crate::vr_config::Handedness::Left => 0,
         crate::vr_config::Handedness::Right => 1,
@@ -8124,16 +8124,18 @@ impl MissionCore {
         )]
     }
 
-    /// The insert-refused cue: the gun's own dry-fire click, the refusal sound
-    /// the player already associates with "this weapon will not do that".
+    /// The insert-refused cue: `repfail`, the game's own "that request is not
+    /// going to happen" chime (the replicator plays it for an unaffordable
+    /// purchase). Deliberately NOT the weapon's dry-fire schema - most guns,
+    /// the pistol included, author no `dryfire` event at all, so the refusal
+    /// would be silent on exactly the weapons a player reloads most.
     fn refuse_clip_insert(&self, weapon: EntityId) -> Effect {
-        crate::scripts::script_util::play_environmental_sound(
-            &self.world,
-            weapon,
-            "dryfire",
-            vec![],
-            AudioHandle::new(),
-        )
+        Effect::PlaySound {
+            handle: AudioHandle::new(),
+            source: Some(weapon),
+            name: "repfail".to_owned(),
+            spatial: false,
+        }
     }
 
     /// Cycle `weapon` to its next ammo type (next `Projectile` link). No-op when
