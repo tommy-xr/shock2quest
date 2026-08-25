@@ -317,6 +317,11 @@ pub struct RuntimePropLogData {
 // exactly coincident for any rig, instead of pinning them together with
 // hand-measured constants that a modded or updated mesh would silently break.
 //
+// Hand-specific: the rigs are authored right-handed, so a left-hand wield
+// draws the arm mirrored and its weapon head lands on the mirrored offset. The
+// same `Effect::ChangeModel` that bakes the mirror into the model computes this
+// with the matching handedness, so the collider follows the arm that is drawn.
+//
 // Not serialized: the wield's `Effect::ChangeModel` recomputes it whenever the
 // first-person model is (re)applied, including on load.
 #[derive(Component, Clone, Copy, Debug)]

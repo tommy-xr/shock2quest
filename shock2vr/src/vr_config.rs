@@ -321,14 +321,49 @@ fn melee_wield_alignment(arm: MeleePosedArm) -> Quaternion<f32> {
 /// The rigid-body origin remains on this weapon joint. `Effect::ChangeModel`
 /// separately fits the body's collider around the rendered weapon vertices,
 /// including the handle/blade extending back from the joint.
-pub fn melee_contact_offset(arm: MeleePosedArm) -> Vector3<f32> {
-    melee_contact_offset_scaled(arm, melee_wield_scale())
+pub fn melee_contact_offset(arm: MeleePosedArm, handedness: Handedness) -> Vector3<f32> {
+    melee_contact_offset_scaled(arm, melee_wield_scale(), handedness)
 }
 
-fn melee_contact_offset_scaled(arm: MeleePosedArm, scale: f32) -> Vector3<f32> {
+fn melee_contact_offset_scaled(
+    arm: MeleePosedArm,
+    scale: f32,
+    handedness: Handedness,
+) -> Vector3<f32> {
     use cgmath::Rotation;
 
-    scale * melee_wield_alignment(arm).rotate_vector(arm.weapon - arm.fist)
+    let right = scale * melee_wield_alignment(arm).rotate_vector(arm.weapon - arm.fist);
+    mirror_for_hand(right, handedness)
+}
+
+/// The reflection that turns the right-handed wield into the left-handed one.
+///
+/// Every melee `_h` rig is authored as a **right** arm - there is no left-arm
+/// mesh to load - so a left-hand wield draws the mirror image, reflected across
+/// the hand frame's own X. That is the same axis
+/// [`VRHandModelPerHandAdjustments::flip_x`] names for held models and
+/// [`crate::hand_glove`] mirrors the glove across, so the arm, the glove and a
+/// held gun all agree on what "the other hand" means.
+///
+/// Reflecting in the *hand* frame rather than in model space is what makes this
+/// safe: [`melee_wield_alignment`] has already put the forearm on +Z and the
+/// weapon in the +Y half of the YZ plane, and a reflection across X leaves both
+/// of those where they are. Only the arm's chirality changes.
+fn melee_hand_mirror(handedness: Handedness) -> cgmath::Matrix4<f32> {
+    use cgmath::{Matrix4, SquareMatrix};
+
+    match handedness {
+        Handedness::Right => Matrix4::identity(),
+        Handedness::Left => Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0),
+    }
+}
+
+/// [`melee_hand_mirror`] applied to a hand-local point.
+fn mirror_for_hand(v: Vector3<f32>, handedness: Handedness) -> Vector3<f32> {
+    match handedness {
+        Handedness::Right => v,
+        Handedness::Left => vec3(-v.x, v.y, v.z),
+    }
 }
 
 /// Live tuning for how large a wielded melee view model is drawn - see
@@ -348,14 +383,31 @@ fn melee_wield_scale() -> f32 {
 /// one placement and are derived from the same posed arm, so they cannot drift:
 /// the entity is at `hand + contact`, this cancels that same `contact`, and the
 /// weapon joint therefore renders exactly on the collider for any rig.
-pub fn melee_wield_pose_correction(arm: MeleePosedArm) -> cgmath::Matrix4<f32> {
-    melee_wield_pose_correction_scaled(arm, melee_wield_scale())
+///
+/// `handedness` picks which arm is drawn: the rigs are authored right-handed,
+/// so the left hand gets the whole seated arm reflected by
+/// [`melee_hand_mirror`]. That reflection is the outermost factor here and the
+/// same one [`melee_contact_offset`] applies to the contact point, so both
+/// halves move together and the invariant above is handed-neutral. The negative
+/// determinant it introduces is what
+/// [`dark::model::Model::apply_local_transform`] flips the front-face winding
+/// for, so the mirrored arm is not drawn inside-out.
+pub fn melee_wield_pose_correction(
+    arm: MeleePosedArm,
+    handedness: Handedness,
+) -> cgmath::Matrix4<f32> {
+    melee_wield_pose_correction_scaled(arm, melee_wield_scale(), handedness)
 }
 
-fn melee_wield_pose_correction_scaled(arm: MeleePosedArm, scale: f32) -> cgmath::Matrix4<f32> {
+fn melee_wield_pose_correction_scaled(
+    arm: MeleePosedArm,
+    scale: f32,
+    handedness: Handedness,
+) -> cgmath::Matrix4<f32> {
     use cgmath::Matrix4;
 
-    Matrix4::from_translation(-melee_contact_offset_scaled(arm, scale))
+    melee_hand_mirror(handedness)
+        * Matrix4::from_translation(-melee_contact_offset_scaled(arm, scale, Handedness::Right))
         * Matrix4::from_scale(scale)
         * Matrix4::from(melee_wield_alignment(arm))
         * Matrix4::from_translation(-arm.fist)
@@ -368,7 +420,10 @@ pub fn get_vr_hand_model_adjustments_from_entity(
 ) -> VRHandModelPerHandAdjustments {
     // A wield that had to compute its own grip (melee `_h`: the collider goes
     // on the rendered weapon head, which is only known once the arm is posed)
-    // stored it on the entity. It is hand-agnostic by construction.
+    // stored it on the entity, already reflected for the hand that is holding
+    // it - the wield knows that hand and bakes the matching mirror into the
+    // model at the same moment (`Effect::ChangeModel`), so the two can't
+    // disagree. `handedness` is therefore not consulted here.
     if let Some(grip) = world
         .borrow::<View<RuntimePropVrGripOffset>>()
         .ok()
@@ -533,27 +588,112 @@ mod tests {
     /// hand. Checked as composed matrices, for every shipped rig - this is what
     /// makes "what you see is what you hit" a property rather than a
     /// measurement someone has to keep up to date.
+    /// Both hands: the rigs are authored right-handed and the left hand draws
+    /// them mirrored, so this is exactly the assertion a mirror could silently
+    /// break - a reflection applied to the model but not to the contact offset
+    /// would leave the damage volume on the wrong side of the hand while the
+    /// weapon still looked right.
     #[test]
     fn the_rendered_weapon_head_lands_on_the_contact_collider() {
         use cgmath::{EuclideanSpace, InnerSpace, Matrix4, Point3, Transform};
 
         for (name, arm) in posed_melee_arms() {
-            // What `VirtualHand::SetPositionRotation` composes for a hand at
-            // the origin with no rotation: entity = T(grip.offset).
-            let entity = Matrix4::from_translation(melee_contact_offset(arm));
-            let rendered = entity * melee_wield_pose_correction(arm);
+            for hand in [Handedness::Right, Handedness::Left] {
+                // What `VirtualHand::SetPositionRotation` composes for a hand
+                // at the origin with no rotation: entity = T(grip.offset).
+                let entity = Matrix4::from_translation(melee_contact_offset(arm, hand));
+                let rendered = entity * melee_wield_pose_correction(arm, hand);
 
-            let head = rendered.transform_point(Point3::from_vec(arm.weapon));
-            let collider = Point3::from_vec(melee_contact_offset(arm));
+                let head = rendered.transform_point(Point3::from_vec(arm.weapon));
+                let collider = Point3::from_vec(melee_contact_offset(arm, hand));
+                assert!(
+                    (head - collider).magnitude() < 1e-4,
+                    "{name} ({hand:?}): rendered weapon head {head:?} is off the collider {collider:?}"
+                );
+
+                let fist = rendered.transform_point(Point3::from_vec(arm.fist));
+                assert!(
+                    fist.to_vec().magnitude() < 1e-4,
+                    "{name} ({hand:?}): rendered fist {fist:?} is off the tracked hand"
+                );
+            }
+        }
+    }
+
+    /// A mirror that silently no-ops is the likely failure mode, so pin that
+    /// the left hand really is drawn as the reflection of the right: a
+    /// negative-determinant transform (which is also what flips the winding)
+    /// that maps every mesh vertex to the right hand's with X negated.
+    ///
+    /// Note the three *joints* cannot witness this: `melee_wield_alignment`
+    /// seats the whole rig on the hand's x=0 plane by construction (fist at the
+    /// origin, forearm along +Z, weapon in the YZ plane), so they land in the
+    /// same place either way. It is the arm and weapon geometry *around* that
+    /// plane which swaps sides - hence the off-axis probes, which stand in for
+    /// mesh vertices.
+    #[test]
+    fn the_left_hand_wields_the_mirror_image_of_the_right() {
+        use cgmath::{EuclideanSpace, InnerSpace, Point3, SquareMatrix, Transform};
+
+        for (name, arm) in posed_melee_arms() {
+            let right = melee_wield_pose_correction(arm, Handedness::Right);
+            let left = melee_wield_pose_correction(arm, Handedness::Left);
+
             assert!(
-                (head - collider).magnitude() < 1e-4,
-                "{name}: rendered weapon head {head:?} is off the collider {collider:?}"
+                right.determinant() > 0.0,
+                "{name}: the right hand must not be mirrored"
+            );
+            assert!(
+                left.determinant() < 0.0,
+                "{name}: the left hand is not mirrored - the arm would render right-handed"
             );
 
-            let fist = rendered.transform_point(Point3::from_vec(arm.fist));
+            let probes = [
+                arm.fist + vec3(0.1, 0.0, 0.0),
+                arm.fist + vec3(0.0, 0.1, 0.0),
+                arm.fist + vec3(0.0, 0.0, 0.1),
+                arm.elbow + vec3(0.05, -0.05, 0.05),
+                arm.weapon + vec3(-0.05, 0.05, 0.05),
+            ];
+            let mut saw_a_difference = false;
+            for probe in probes {
+                let probe = Point3::from_vec(probe);
+                let r = right.transform_point(probe);
+                let l = left.transform_point(probe);
+                let mirrored = Point3::new(-r.x, r.y, r.z);
+                assert!(
+                    (l - mirrored).magnitude() < 1e-4,
+                    "{name}: left-hand vertex {l:?} is not the right hand's {r:?} mirrored"
+                );
+                saw_a_difference |= (l - r).magnitude() > 1e-3;
+            }
             assert!(
-                fist.to_vec().magnitude() < 1e-4,
-                "{name}: rendered fist {fist:?} is off the tracked hand"
+                saw_a_difference,
+                "{name}: the left hand renders identically to the right - the mirror no-opped"
+            );
+
+            // The contact point is on the hand's own centreline (the alignment
+            // rolls the weapon into the YZ plane), so it is mirror-invariant -
+            // and must stay so, since it is where the damage volume goes.
+            let r_contact = melee_contact_offset(arm, Handedness::Right);
+            let l_contact = melee_contact_offset(arm, Handedness::Left);
+            assert!(
+                (l_contact - vec3(-r_contact.x, r_contact.y, r_contact.z)).magnitude() < 1e-4,
+                "{name}: the contact offset did not follow the mirror"
+            );
+
+            // The properties the alignment guarantees survive the reflection:
+            // the forearm still runs back along the hand's +Z, and the weapon
+            // still stands up out of the fist.
+            let forearm = left.transform_point(Point3::from_vec(arm.elbow))
+                - left.transform_point(Point3::from_vec(arm.fist));
+            assert!(
+                forearm.normalize().dot(Vector3::unit_z()) > 0.999,
+                "{name}: the mirrored forearm left the hand's arm axis"
+            );
+            assert!(
+                l_contact.y > 0.0,
+                "{name}: the mirrored weapon points down out of the fist"
             );
         }
     }
@@ -569,28 +709,30 @@ mod tests {
         use cgmath::{EuclideanSpace, InnerSpace, Matrix4, Point3, Transform};
 
         for (name, arm) in posed_melee_arms() {
-            let full = melee_contact_offset_scaled(arm, 1.0).magnitude();
-            for scale in [0.5f32, 1.0, 1.25] {
-                let contact = melee_contact_offset_scaled(arm, scale);
-                assert!(
-                    (contact.magnitude() - scale * full).abs() < 1e-4,
-                    "{name} at {scale}: reach {} is not {scale}x the authored {full}",
-                    contact.magnitude()
-                );
+            for hand in [Handedness::Right, Handedness::Left] {
+                let full = melee_contact_offset_scaled(arm, 1.0, hand).magnitude();
+                for scale in [0.5f32, 1.0, 1.25] {
+                    let contact = melee_contact_offset_scaled(arm, scale, hand);
+                    assert!(
+                        (contact.magnitude() - scale * full).abs() < 1e-4,
+                        "{name} ({hand:?}) at {scale}: reach {} is not {scale}x the authored {full}",
+                        contact.magnitude()
+                    );
 
-                let entity = Matrix4::from_translation(contact);
-                let rendered = entity * melee_wield_pose_correction_scaled(arm, scale);
+                    let entity = Matrix4::from_translation(contact);
+                    let rendered = entity * melee_wield_pose_correction_scaled(arm, scale, hand);
 
-                let fist = rendered.transform_point(Point3::from_vec(arm.fist));
-                assert!(
-                    fist.to_vec().magnitude() < 1e-4,
-                    "{name} at {scale}: rendered fist {fist:?} left the tracked hand"
-                );
-                let head = rendered.transform_point(Point3::from_vec(arm.weapon));
-                assert!(
-                    (head - Point3::from_vec(contact)).magnitude() < 1e-4,
-                    "{name} at {scale}: rendered weapon head {head:?} left the collider"
-                );
+                    let fist = rendered.transform_point(Point3::from_vec(arm.fist));
+                    assert!(
+                        fist.to_vec().magnitude() < 1e-4,
+                        "{name} ({hand:?}) at {scale}: rendered fist {fist:?} left the tracked hand"
+                    );
+                    let head = rendered.transform_point(Point3::from_vec(arm.weapon));
+                    assert!(
+                        (head - Point3::from_vec(contact)).magnitude() < 1e-4,
+                        "{name} ({hand:?}) at {scale}: rendered weapon head {head:?} left the collider"
+                    );
+                }
             }
         }
     }

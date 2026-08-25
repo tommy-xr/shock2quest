@@ -91,6 +91,12 @@ pub trait PlayerInteraction {
     /// Whether `entity_id` is currently held.
     fn is_holding(&self, entity_id: EntityId) -> bool;
 
+    /// Which hand is holding `entity_id`, if any. A VR wield needs this to
+    /// pick which way round to draw a first-person arm rig (they are all
+    /// authored right-handed). Flat has one wield hand and reports it as the
+    /// right, matching the right-hand trigger it fires with.
+    fn holding_hand(&self, entity_id: EntityId) -> Option<Handedness>;
+
     /// Wield `entity_id` as the first-person weapon (flat); no-op for VR.
     fn wield(&mut self, _entity_id: EntityId) -> Vec<VirtualHandEffect> {
         Vec::new()
@@ -266,6 +272,16 @@ impl PlayerInteraction for VrInteraction {
     fn is_holding(&self, entity_id: EntityId) -> bool {
         self.left_hand.is_holding(entity_id) || self.right_hand.is_holding(entity_id)
     }
+
+    fn holding_hand(&self, entity_id: EntityId) -> Option<Handedness> {
+        if self.left_hand.is_holding(entity_id) {
+            Some(Handedness::Left)
+        } else if self.right_hand.is_holding(entity_id) {
+            Some(Handedness::Right)
+        } else {
+            None
+        }
+    }
 }
 
 /// Flatscreen interaction: a single first-person weapon controller.
@@ -335,6 +351,10 @@ impl PlayerInteraction for FlatInteraction {
 
     fn is_holding(&self, entity_id: EntityId) -> bool {
         self.controller.wielded_entity() == Some(entity_id)
+    }
+
+    fn holding_hand(&self, entity_id: EntityId) -> Option<Handedness> {
+        self.is_holding(entity_id).then_some(Handedness::Right)
     }
 
     fn wield(&mut self, entity_id: EntityId) -> Vec<VirtualHandEffect> {
