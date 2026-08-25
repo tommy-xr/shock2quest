@@ -1109,15 +1109,27 @@ fn create_physics_representation_with_options(
             (Some(phys_type), Some(dimensions))
                 if !frob_info.world_action.contains(FrobFlag::MOVE) =>
             {
+                // `P$PhysType` and `P$PhysDims` are inherited independently, so
+                // an object can end up declaring a shape its dimensions never
+                // describe - medsci2 ships a fixture whose authored OBB `size`
+                // is all zeros. A degenerate authored shape is no shape at all:
+                // fall through to the model bounds (the #597 dimensionless
+                // rule) rather than let the collider sanitizer floor a solid
+                // fixture at a 1 cm cube the player walks through.
                 let shape = match phys_type.phys_type {
-                    PhysicsModelType::ORIENTED_BOUNDING_BOX => Some(PhysicsShape::Cuboid(vec3(
-                        dimensions.size.x.abs(),
-                        dimensions.size.y.abs(),
-                        dimensions.size.z.abs(),
-                    ))),
-                    PhysicsModelType::SPHERE => Some(PhysicsShape::Sphere(
-                        dimensions.radius0.abs().max(dimensions.radius1.abs()),
-                    )),
+                    PhysicsModelType::ORIENTED_BOUNDING_BOX => {
+                        let size = vec3(
+                            dimensions.size.x.abs(),
+                            dimensions.size.y.abs(),
+                            dimensions.size.z.abs(),
+                        );
+                        (size.x > 0.0 && size.y > 0.0 && size.z > 0.0)
+                            .then_some(PhysicsShape::Cuboid(size))
+                    }
+                    PhysicsModelType::SPHERE => {
+                        let radius = dimensions.radius0.abs().max(dimensions.radius1.abs());
+                        (radius > 0.0).then_some(PhysicsShape::Sphere(radius))
+                    }
                     _ => None,
                 };
                 shape.map(|shape| (shape, dimensions.offset0))
@@ -2250,6 +2262,75 @@ mod tests {
             }
             assert!(
                 (physics.collider_local_translation(handle).unwrap() - offset).magnitude() < 1.0e-5
+            );
+        }
+    }
+
+    /// `P$PhysType` and `P$PhysDims` are inherited independently, so a fixture
+    /// can declare a shape its dimensions never fill in - medsci2 ships one
+    /// whose authored OBB `size` is all zeros. Reading that literally shrinks a
+    /// solid fixture to the 1 cm cube the collider sanitizer floors it at,
+    /// which the player walks straight through; a degenerate authored shape
+    /// must fall back to the model bounds instead.
+    #[test]
+    fn degenerate_authored_dimensions_fall_back_to_model_bounds() {
+        for (phys_type, radius, size) in [
+            (
+                PhysicsModelType::ORIENTED_BOUNDING_BOX,
+                0.0,
+                Vector3::zero(),
+            ),
+            (PhysicsModelType::SPHERE, 0.0, vec3(1.5, 1.6, 1.3)),
+        ] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity_id = world.add_entity((
+                PropPosition {
+                    position: vec3(1.0, 2.0, 3.0),
+                    cell: 0,
+                    rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                },
+                PropFrobInfo {
+                    world_action: FrobFlag::SCRIPT,
+                    inventory_action: FrobFlag::empty(),
+                    tool_action: FrobFlag::empty(),
+                },
+                PropPhysType {
+                    phys_type,
+                    num_submodels: 1,
+                    remove_on_sleep: false,
+                    is_special: false,
+                },
+                PropPhysDimensions {
+                    radius0: radius,
+                    radius1: 0.0,
+                    offset0: Vector3::zero(),
+                    offset1: Vector3::zero(),
+                    size,
+                    unk1: 0,
+                    unk2: 0,
+                },
+            ));
+
+            let handle = create_physics_representation(
+                &mut world,
+                &mut physics,
+                &Some(&ladder_model()),
+                entity_id,
+            )
+            .expect("a frobbable fixture should still get a body");
+
+            assert_eq!(
+                physics.collider_count(handle),
+                1,
+                "the model-bounds fallback is the body's only collider"
+            );
+            let bounds = physics
+                .cuboid_full_size(handle)
+                .expect("a degenerate authored shape should fall back to model bounds");
+            assert!(
+                (bounds - vec3(LADDER_SIZE.x, LADDER_SIZE.y, 0.2)).magnitude() < 0.01,
+                "expected model bounds for {phys_type:?}, got {bounds:?}"
             );
         }
     }
