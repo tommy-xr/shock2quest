@@ -228,6 +228,23 @@ test(
     await game.input.trigger("ReadLastUnreadLog");
     await game.step({ frames: 5 });
     await assertAmanpourReader(game);
+    // X out with the reader still bound: leaving the mode must release the
+    // panel slot too, or `/v1/ui` keeps reporting a reader nothing presents.
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    const exited = await game.ui.state();
+    assert.equal(exited.mode, "shooter");
+    assert.equal(
+      exited.active_panel,
+      null,
+      "leaving the interface must not orphan the reader in the panel slot",
+    );
+
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    await game.input.trigger("ReadLastUnreadLog");
+    await game.step({ frames: 5 });
+    await assertAmanpourReader(game);
     await game.input.trigger("ReadLastUnreadLog");
     await game.step({ frames: 5 });
     const backToStrip = await game.ui.state();

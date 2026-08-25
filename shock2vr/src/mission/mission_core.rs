@@ -1563,6 +1563,11 @@ pub struct MissionCore {
     /// it, and only puts the reader away - back to the inventory strip - when
     /// the player was already in the interface. Transient like `use_mode`
     /// itself (not serialized: a load leaves the mode closed).
+    ///
+    /// Only Y consults it. Dismissing the reader with the canvas's own close
+    /// button is the host's generic "put this panel away" and leaves the
+    /// interface up on the inventory strip however it was opened; X or Y
+    /// still exits from there.
     use_mode_from_log_reader: bool,
 
     /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the rim
@@ -5716,14 +5721,23 @@ impl MissionCore {
                     // mode retains its historical all-panels presentation.
                     match game_options.presentation_mode {
                         crate::PresentationMode::Flat => self.flat_ui.open(entity),
-                        crate::PresentationMode::Vr => self.gui.open_panel(
-                            entity,
-                            game_options.experimental_features.contains("gui"),
-                            &mut self.world,
-                            &mut self.physics,
-                            &mut self.script_world,
-                            &mut self.id_to_physics,
-                        ),
+                        crate::PresentationMode::Vr => {
+                            // The other half of "one UI at a time": a world
+                            // panel replaces an open log reader, exactly as the
+                            // reader replaces a world panel. Both used to share
+                            // `GuiManager`'s single slot, so this was free; now
+                            // the reader lives in the flat host and the
+                            // symmetry has to be written down.
+                            self.flat_ui.close();
+                            self.gui.open_panel(
+                                entity,
+                                game_options.experimental_features.contains("gui"),
+                                &mut self.world,
+                                &mut self.physics,
+                                &mut self.script_world,
+                                &mut self.id_to_physics,
+                            )
+                        }
                     }
                     // Give the gui its per-open state (the reader's scroll
                     // reset) however the panel was reached.
@@ -5849,11 +5863,16 @@ impl MissionCore {
                         continue;
                     }
 
-                    // Edge policy: no cyber interface over the death sequence,
-                    // the same rule `ToggleUseMode` applies - that moment
-                    // belongs to the game-over flow. Flat is untouched: its
-                    // reader is an MFD, not a mode.
-                    if is_vr && !self.use_mode && !self.player_is_alive() {
+                    // Edge policy: nothing new over the death sequence - the
+                    // same rule `ToggleUseMode` applies, that moment belongs to
+                    // the game-over flow. This sits *after* the dismiss branch
+                    // on purpose: a player who died with the reader up must
+                    // still be able to put it away. It also covers dying while
+                    // already inside the interface, where binding a fresh
+                    // reader would mark a log read and start its audio over the
+                    // death sequence. Flat is untouched: its reader is an MFD,
+                    // not a mode.
+                    if is_vr && !self.player_is_alive() {
                         continue;
                     }
 
@@ -5912,26 +5931,26 @@ impl MissionCore {
                         // The reader replaces whatever world quad was up - the
                         // corpse the log was just looted from - rather than
                         // hanging in front of it. It is the same "one UI at a
-                        // time" contract the world-quad reader had when it
-                        // took the `GuiManager` slot itself.
-                        if self.gui.active_panel().is_some() {
-                            self.gui.close_panel(
-                                &mut self.world,
-                                &mut self.physics,
-                                &mut self.script_world,
-                                &mut self.id_to_physics,
-                            );
-                        }
-                    }
-                    if is_vr && !self.use_mode {
-                        // Y is a shortcut into the interface, not a second
-                        // interface: enter the one mode, with a lighter ramp
-                        // than the deliberate open (see `LOG_READER_ENTRY_EXIT`).
-                        effects.push_front(
-                            self.enter_use_mode(crate::ui::entry_ramp::LOG_READER_ENTRY_EXIT),
+                        // time" contract the world-quad reader had when it took
+                        // the `GuiManager` slot itself (a no-op when nothing is
+                        // open).
+                        self.gui.close_panel(
+                            &mut self.world,
+                            &mut self.physics,
+                            &mut self.script_world,
+                            &mut self.id_to_physics,
                         );
-                        self.reset_vr_use_mode_placement();
-                        self.use_mode_from_log_reader = true;
+                        if !self.use_mode {
+                            // Y is a shortcut into the interface, not a second
+                            // interface: enter the one mode, with a lighter
+                            // ramp than the deliberate open (see
+                            // `LOG_READER_ENTRY_EXIT`).
+                            effects.push_front(
+                                self.enter_use_mode(crate::ui::entry_ramp::LOG_READER_ENTRY_EXIT),
+                            );
+                            self.reset_vr_use_mode_placement();
+                            self.use_mode_from_log_reader = true;
+                        }
                     }
                     self.flat_ui.open_unbound(panel_entity);
 
