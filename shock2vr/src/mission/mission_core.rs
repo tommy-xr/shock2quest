@@ -5908,6 +5908,21 @@ impl MissionCore {
                     // interface panel in VR. `open_unbound` because the reader
                     // is player-owned and has no world object to walk away
                     // from - it closes only explicitly.
+                    if is_vr {
+                        // The reader replaces whatever world quad was up - the
+                        // corpse the log was just looted from - rather than
+                        // hanging in front of it. It is the same "one UI at a
+                        // time" contract the world-quad reader had when it
+                        // took the `GuiManager` slot itself.
+                        if self.gui.active_panel().is_some() {
+                            self.gui.close_panel(
+                                &mut self.world,
+                                &mut self.physics,
+                                &mut self.script_world,
+                                &mut self.id_to_physics,
+                            );
+                        }
+                    }
                     if is_vr && !self.use_mode {
                         // Y is a shortcut into the interface, not a second
                         // interface: enter the one mode, with a lighter ramp
