@@ -153,7 +153,7 @@ impl Script for TriggeredMeleeWeapon {
                 // *hitting something* is audible regardless - a wrench on a
                 // bulkhead or a bench does nothing but must still clang.
                 let damage = self
-                    .may_damage(entity_id, *with, physics)
+                    .may_damage(entity_id, *with, physics, *contact)
                     .then(|| authored_contact_damage(world, entity_id, *with))
                     .flatten();
 
@@ -193,18 +193,20 @@ impl TriggeredMeleeWeapon {
     /// actually moving at contact, and a short cooldown stands in for the
     /// release edge that no longer exists - otherwise a weapon left leaning on
     /// a creature would bill every frame it stayed there.
-    fn may_damage(&mut self, entity_id: EntityId, with: EntityId, physics: &PhysicsWorld) -> bool {
+    fn may_damage(
+        &mut self,
+        entity_id: EntityId,
+        with: EntityId,
+        physics: &PhysicsWorld,
+        contact: Option<crate::physics::CollisionContact>,
+    ) -> bool {
         let Some(threshold) = free_swing_speed_threshold() else {
             return self.attack_active && self.hit_entities.insert(with);
         };
         if self.free_swing_cooldowns.contains_key(&with) {
             return false;
         }
-        let speed = physics
-            .get_velocity(entity_id)
-            .map(|velocity| velocity.magnitude())
-            .unwrap_or(0.0);
-        if speed < threshold {
+        if closing_speed(entity_id, with, physics, contact) < threshold {
             return false;
         }
         self.free_swing_cooldowns
@@ -225,9 +227,11 @@ impl TriggeredMeleeWeapon {
     /// every 0.15 s for the length of the corridor. `abs` because the normal's
     /// orientation depends on which collider Rapier listed first.
     ///
-    /// Deliberately a different measure from the free-swing *damage* rule
-    /// above, which stays on raw magnitude: this must not change when a swing
-    /// damages.
+    /// The damage rule above now measures the same way, via [`closing_speed`],
+    /// which additionally subtracts the victim's own motion. The two stay
+    /// separate functions because they answer different questions at different
+    /// thresholds - audible is a much lower bar than damaging, and a contact
+    /// that is too gentle to bill should still clink.
     fn may_play_impact_sound(
         &mut self,
         entity_id: EntityId,
@@ -259,6 +263,48 @@ fn is_vr(world: &World) -> bool {
         .borrow::<UniqueView<GlobalPresentationMode>>()
         .map(|mode| mode.0 == PresentationMode::Vr)
         .unwrap_or(false)
+}
+
+/// How fast the two bodies were closing on each other, at the point where they
+/// touched, along the surface they touched on.
+///
+/// Three things this is not, each of which was wrong in a way that showed:
+///
+/// - **Not the weapon's centre-of-mass velocity.** A weapon swung about the
+///   wrist moves its *head* fast while its centre barely moves, so a wrist
+///   flick under-read badly. `velocity_at_point` carries the `omega x r` term.
+/// - **Not the weapon's velocity alone.** A held weapon rides the player, so
+///   walking into a creature read as a full-speed swing and billed a free hit.
+///   Subtracting the victim's velocity also makes a creature that charges onto
+///   a held blade impale itself, which is the same rule read the other way and
+///   is worth having.
+/// - **Not a raw magnitude.** Sliding a weapon *along* a surface is fast but
+///   closes on nothing.
+///
+/// `abs` because the normal's orientation depends on which collider Rapier
+/// listed first. With no contact geometry there is no surface to project onto,
+/// so the relative speed is taken whole.
+fn closing_speed(
+    weapon: EntityId,
+    victim: EntityId,
+    physics: &PhysicsWorld,
+    contact: Option<crate::physics::CollisionContact>,
+) -> f32 {
+    let Some(contact) = contact else {
+        let weapon_velocity = physics
+            .get_velocity(weapon)
+            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
+        let victim_velocity = physics
+            .get_velocity(victim)
+            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
+        return (weapon_velocity - victim_velocity).magnitude();
+    };
+    let at = |entity| {
+        physics
+            .velocity_at_point(entity, contact.point)
+            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0))
+    };
+    (at(weapon) - at(victim)).dot(contact.normal).abs()
 }
 
 /// Damage the weapon's own authored `Contact` stims deal to this victim,
@@ -372,6 +418,147 @@ mod tests {
 
     /// A world where the weapon's authored contact stim resolves against the
     /// target's receptron - so a landed swing costs WEAPON_BASH_INTENSITY.
+    /// A body at `velocity`, so `closing_speed` can be exercised against real
+    /// Rapier bodies rather than a stub - the `omega x r` term is the point,
+    /// and a stub would not have one.
+    fn moving_body(
+        physics: &mut PhysicsWorld,
+        entity: EntityId,
+        position: cgmath::Vector3<f32>,
+        velocity: cgmath::Vector3<f32>,
+    ) {
+        physics.add_dynamic(
+            entity,
+            position,
+            cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            velocity,
+            crate::physics::PhysicsShape::Cuboid(vec3(0.1, 0.1, 0.1)),
+            crate::physics::CollisionGroup::entity(),
+            false,
+            crate::physics::DynamicPhysicsOptions::default(),
+        );
+        physics.set_velocity(entity, velocity);
+    }
+
+    fn head_on_contact(point: cgmath::Vector3<f32>) -> Option<crate::physics::CollisionContact> {
+        Some(crate::physics::CollisionContact {
+            point,
+            normal: vec3(1.0, 0.0, 0.0),
+        })
+    }
+
+    /// The bug this rule exists to fix: a held weapon rides the player, so
+    /// walking into something billed a free hit on anything it brushed.
+    ///
+    /// Note what this does and does not prove. It guards the *threshold*, not
+    /// the measure - walking reads ~1.8 either way, so it passes against the
+    /// old centre-of-mass magnitude too. What it catches is the shipped gate
+    /// dropping back under walking pace, which is what the original 0.5 did.
+    /// It reads the real constant so it cannot drift from what ships; the
+    /// measure itself is covered by the two tests below, which do fail
+    /// against the old one.
+    #[test]
+    fn carrying_a_weapon_at_walking_pace_is_not_a_swing() {
+        let gate = crate::scenes::debug_melee::FREE_SWING_SPEED;
+        let mut physics = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        // 1.8 u/s is the walking figure measured in held_melee_drive.
+        moving_body(
+            &mut physics,
+            weapon,
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.8, 0.0, 0.0),
+        );
+        moving_body(
+            &mut physics,
+            victim,
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+        );
+
+        let speed = closing_speed(
+            weapon,
+            victim,
+            &physics,
+            head_on_contact(vec3(0.5, 0.0, 0.0)),
+        );
+
+        assert!(
+            speed < gate,
+            "walking pace must fall below the swing gate {gate}, read {speed}"
+        );
+    }
+
+    /// The same rule read the other way: a creature charging onto a held blade
+    /// impales itself. The weapon is still, the victim is not, and the closing
+    /// speed is real - which weapon-velocity-alone could never see.
+    #[test]
+    fn a_victim_charging_a_still_weapon_is_a_real_impact() {
+        let mut physics = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        moving_body(
+            &mut physics,
+            weapon,
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+        );
+        moving_body(
+            &mut physics,
+            victim,
+            vec3(1.0, 0.0, 0.0),
+            vec3(-4.0, 0.0, 0.0),
+        );
+
+        let speed = closing_speed(
+            weapon,
+            victim,
+            &physics,
+            head_on_contact(vec3(0.5, 0.0, 0.0)),
+        );
+
+        assert!(
+            speed > 2.5,
+            "a charging victim must register as an impact, read {speed}"
+        );
+    }
+
+    /// Sliding a weapon *along* a surface is fast but closes on nothing, so it
+    /// must not bill - the reason the speed is projected onto the contact
+    /// normal instead of taken as a magnitude.
+    #[test]
+    fn dragging_a_weapon_along_a_surface_does_not_bill() {
+        let mut physics = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        // Moving hard along +Z, while the contact normal points along +X.
+        moving_body(
+            &mut physics,
+            weapon,
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 9.0),
+        );
+        moving_body(
+            &mut physics,
+            victim,
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+        );
+
+        let speed = closing_speed(
+            weapon,
+            victim,
+            &physics,
+            head_on_contact(vec3(0.5, 0.0, 0.0)),
+        );
+
+        assert!(
+            speed < 2.5,
+            "motion across a surface closes on nothing, read {speed}"
+        );
+    }
+
     fn test_world(mode: PresentationMode) -> (World, EntityId, EntityId) {
         test_world_with_victim_receptrons(mode, vec![(WEAPON_BASH, damage_receptron(16, 1.0))])
     }

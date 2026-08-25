@@ -3547,6 +3547,24 @@ impl PhysicsWorld {
         }
     }
 
+    /// Velocity of `entity_id`'s body at a world-space point on it.
+    ///
+    /// Differs from [`Self::get_velocity`] by including the `omega x r` term:
+    /// the head of a weapon swung about the wrist moves fast while its centre
+    /// of mass barely moves, so a guard reading centre-of-mass velocity
+    /// under-reads exactly the gesture it is meant to measure.
+    pub fn velocity_at_point(
+        &self,
+        entity_id: EntityId,
+        point: Vector3<f32>,
+    ) -> Option<Vector3<f32>> {
+        let handle = self.entity_id_to_body.get(&entity_id)?;
+        let rigid_body = self.rigid_body_set.get(*handle)?;
+        Some(nvec_to_cgmath(
+            rigid_body.velocity_at_point(&Point::from(vec_to_nvec(point))),
+        ))
+    }
+
     pub fn set_velocity(&mut self, entity_id: EntityId, velocity: Vector3<f32>) {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get_mut(*handle);

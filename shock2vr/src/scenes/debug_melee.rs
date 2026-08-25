@@ -76,16 +76,19 @@ const PEN_FAR: f32 = 12.5;
 const PEN_HALF_WIDTH: f32 = 2.5;
 const PEN_WALL_HEIGHT: f32 = 4.0;
 
-/// Contact speed a swing must carry to damage, in world units per second.
-/// Resting a weapon against a creature does nothing; a deliberate swing does.
+/// Closing speed a contact must carry to damage, in world units per second.
 ///
-/// Measured in this scene rather than guessed: a held weapon at rest reads
-/// ~0.005, and a brisk controller sweep peaks at ~1.6 - far below the hand's
-/// own ~10, because the spring drive currently attenuates a swing several-fold
-/// (see `physics::spring_sweep`). 0.5 separates the two cleanly today and
-/// still will once the drive tracks properly, since that only raises the
-/// swinging figure.
-const FREE_SWING_SPEED: f32 = 0.5;
+/// Measured on the swept drive rather than guessed
+/// (`physics::held_melee_drive::free_swing_speed_separation`): a brisk swing
+/// peaks at **4.07** and ordinary walking carries the weapon at **1.80**, so
+/// this sits in the gap between them.
+///
+/// The 0.5 this replaces was calibrated against the old spring drive, where a
+/// swing peaked at 1.6 against that same 1.80 walk - the two *overlapped*, so
+/// no threshold could separate them and walking billed a free hit on anything
+/// it brushed. Fixing the drive is what made a real threshold possible; this
+/// is the second half of that fix.
+pub const FREE_SWING_SPEED: f32 = 2.5;
 
 /// Distance to the wall the player can swing into, straight ahead. Also the
 /// pen's back wall.
