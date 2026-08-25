@@ -717,7 +717,11 @@ fn move_live_entity_into_container_at_cell(
     target_cell: (usize, usize),
 ) -> bool {
     let grid = crate::inventory::grid_for(world, container_entity_id);
-    let occupied = crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    let mut occupied =
+        crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    // See `move_live_entity_into_container_at_slot`: a re-grab can still show
+    // the dropped entity occupying its own old cell here.
+    occupied.remove_entity(dropped_entity_id);
     let dims = world
         .borrow::<View<dark::properties::PropInventoryDimensions>>()
         .ok()
@@ -815,7 +819,11 @@ fn container_can_accept_item(
         return false;
     }
     let grid = crate::inventory::grid_for(world, container_entity_id);
-    let occupied = crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    let mut occupied =
+        crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    // See `move_live_entity_into_container_at_slot`: a re-grab can still show
+    // the dropped entity occupying its own old cell here.
+    occupied.remove_entity(dropped_entity_id);
     let dims = world
         .borrow::<View<dark::properties::PropInventoryDimensions>>()
         .ok()
@@ -847,15 +855,19 @@ fn move_live_entity_into_container_at_slot(
     }
 
     // Give the item a cell in the container's grid, so it stays where it
-    // was put instead of being repacked on every draw. Computed before
-    // the borrow below, and *after* the item's own links are irrelevant -
-    // it is not in the container yet, so it cannot occupy a cell here.
+    // was put instead of being repacked on every draw.
     let slot = match requested_slot {
         Some(slot) => slot,
         None => {
             let grid = crate::inventory::grid_for(world, container_entity_id);
-            let occupied =
+            let mut occupied =
                 crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+            // A re-grab (e.g. a flat wield-swap's double-click pull from the
+            // backpack) can still show the dropped entity's own OLD cell as
+            // occupied here - its `Contains` link is not removed until below.
+            // Uncount it so the capacity check reflects the cell it is about
+            // to vacate, not phantom occupancy by itself.
+            occupied.remove_entity(dropped_entity_id);
             let dims = world
                 .borrow::<View<dark::properties::PropInventoryDimensions>>()
                 .ok()
@@ -8982,6 +8994,7 @@ impl MissionCore {
                     });
                     if !stored {
                         deferred.push(backpack_full_feedback(entity_id));
+                        self.restore_refused_store_to_world(entity_id);
                     }
                 }
                 VirtualHandEffect::StoreItemAtCell { entity_id, cell } => {
@@ -8995,32 +9008,59 @@ impl MissionCore {
                     });
                     if !stored {
                         deferred.push(backpack_full_feedback(entity_id));
+                        self.restore_refused_store_to_world(entity_id);
                     }
                 }
                 VirtualHandEffect::DropItem { entity_id } => {
-                    if !restore_live_entity_world_refs(&mut self.world, entity_id) {
-                        continue;
-                    }
-                    if self.is_vr_melee_weapon(entity_id) {
-                        // Recreate from authored physics so the released item
-                        // is an ordinary dynamic, harmless loose prop again.
-                        self.make_un_physical(entity_id);
-                    }
-                    // After the body is gone (so this writes the entity's
-                    // transform rather than pushing the outgoing kinematic
-                    // body around) and before the loose prop is rebuilt from
-                    // it.
-                    self.return_held_entity_to_the_hand(entity_id);
-                    self.make_physical(entity_id);
-
-                    self.script_world.dispatch(Message {
-                        payload: MessagePayload::Drop,
-                        to: entity_id,
-                    });
+                    self.drop_held_item_into_world(entity_id);
                 }
             }
         }
         deferred
+    }
+
+    /// Restore a HELD item's ordinary world presence (refs, physics body, and
+    /// the `Drop` script signal) - the shared tail for an explicit VR release
+    /// (`DropItem`) and a `StoreItem`/`StoreItemAtCell` deposit refused for
+    /// lack of backpack room. A held item (a wield swap's displaced weapon, a
+    /// grabbed item) has already had its world refs stripped and its physics
+    /// removed by the time it reaches a store attempt, so a plain refusal
+    /// would otherwise leave it with no container link, no physics, and no
+    /// hand - gone. A no-op if the entity was destroyed in between.
+    fn drop_held_item_into_world(&mut self, entity_id: EntityId) {
+        if !restore_live_entity_world_refs(&mut self.world, entity_id) {
+            return;
+        }
+        if self.is_vr_melee_weapon(entity_id) {
+            // Recreate from authored physics so the released item is an
+            // ordinary dynamic, harmless loose prop again.
+            self.make_un_physical(entity_id);
+        }
+        // After the body is gone (so this writes the entity's transform
+        // rather than pushing the outgoing kinematic body around) and before
+        // the loose prop is rebuilt from it.
+        self.return_held_entity_to_the_hand(entity_id);
+        self.make_physical(entity_id);
+
+        self.script_world.dispatch(Message {
+            payload: MessagePayload::Drop,
+            to: entity_id,
+        });
+    }
+
+    /// A `StoreItem`/`StoreItemAtCell` deposit was refused (no room): if the
+    /// item still has an ordinary physics body it was never picked up out of
+    /// the world (the flat "loot goes straight to the backpack" path), and
+    /// `drop_entity_into_container`'s failure already left it untouched -
+    /// nothing to do. Otherwise it left the world when it was grabbed/held
+    /// (a wield-swap's displaced weapon, a VR hand's held item whose strip
+    /// release was claimed but then lost the room race), and must be
+    /// restored rather than vanish.
+    fn restore_refused_store_to_world(&mut self, entity_id: EntityId) {
+        if self.id_to_physics.contains_key(&entity_id) {
+            return;
+        }
+        self.drop_held_item_into_world(entity_id);
     }
 
     fn is_vr_melee_weapon(&self, entity_id: EntityId) -> bool {

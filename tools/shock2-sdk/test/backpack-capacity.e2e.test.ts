@@ -317,3 +317,57 @@ test(
     );
   },
 );
+
+test(
+  "a full backpack returns a wield-swap's displaced weapon to the world instead of losing it",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    // A wield swap holsters the previously-wielded weapon via the same
+    // `VirtualHandEffect::StoreItem` a world pickup uses - but that weapon
+    // already left the world (unphysical, refs stripped) the moment it was
+    // first wielded. A refusal here has nowhere to "leave it be": without a
+    // world-drop fallback the displaced weapon is destroyed nowhere - not in
+    // the backpack, not in the world, not held.
+    await using game = await GameServer.launch({
+      mission: "earth.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 9501) + 5,
+    });
+    await game.step({ frames: 30 });
+
+    await fillBackpackWithWrenches(game);
+
+    await game.input.trigger("DebugCycleWeapon");
+    await game.step({ frames: 5 });
+    const firstWeapon = (await game.info()).player.wielded_entity_id;
+    assert.ok(firstWeapon, "the first cycle should wield a spawned weapon");
+    // A wielded item is itself listed (location "left_hand"), so this is the
+    // baseline to compare against after the swap - not zero.
+    const beforeCount = (await game.player.inventory()).count;
+
+    // The second cycle wields a different weapon, displacing the first -
+    // exactly the swap that must not lose it with a full backpack.
+    await game.input.trigger("DebugCycleWeapon");
+    await game.step({ frames: 5 });
+    const secondWeapon = (await game.info()).player.wielded_entity_id;
+    assert.ok(secondWeapon && secondWeapon !== firstWeapon, "the swap must wield a new weapon");
+
+    assert.equal(
+      (await game.player.inventory()).items.find((i) => i.entity_id === firstWeapon),
+      undefined,
+      "the displaced weapon must not enter the full backpack",
+    );
+    // Wrenches unchanged, one weapon still wielded (now `secondWeapon`) - the
+    // count itself doesn't distinguish "vanished" from "back in the world"
+    // (neither is counted), so it's a sanity check; the body check below is
+    // the one that actually catches the vanish.
+    assert.equal(
+      (await game.player.inventory()).count,
+      beforeCount,
+      "wrench count plus exactly one wielded weapon, unchanged",
+    );
+    assert.ok(
+      (await game.physics.bodies({ entityId: firstWeapon! })).bodies.length > 0,
+      "the displaced weapon must fall back into the world instead of vanishing",
+    );
+  },
+);
