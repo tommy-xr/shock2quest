@@ -96,17 +96,161 @@ fn selected_clip_templates(world: &World, weapon: EntityId) -> Option<Vec<i32>> 
     if projectiles.is_empty() {
         return None;
     }
-    let selected = world
-        .borrow::<View<crate::runtime_props::RuntimePropSelectedAmmo>>()
-        .ok()
-        .and_then(|selected| selected.get(weapon).ok().map(|selected| selected.0))
-        .unwrap_or(0);
-    let projectile_template = projectiles[selected % projectiles.len()].0;
+    clip_templates_for_projectile(world, projectiles[selected_ammo_index(world, weapon)].0)
+}
+
+/// The clip archetypes authored for one projectile archetype.
+fn clip_templates_for_projectile(world: &World, projectile_template: i32) -> Option<Vec<i32>> {
     world
         .borrow::<UniqueView<GlobalProjectileClips>>()
         .ok()
         .and_then(|clips| clips.clips.get(&projectile_template).cloned())
         .filter(|clips| !clips.is_empty())
+}
+
+/// Which of `weapon`'s projectile links is currently selected, already wrapped
+/// into range. A weapon with no `RuntimePropSelectedAmmo` is on its first.
+pub(crate) fn selected_ammo_index(world: &World, weapon: EntityId) -> usize {
+    let count = crate::scripts::script_util::ordered_projectile_links(world, weapon).len();
+    if count == 0 {
+        return 0;
+    }
+    world
+        .borrow::<View<crate::runtime_props::RuntimePropSelectedAmmo>>()
+        .ok()
+        .and_then(|selected| selected.get(weapon).ok().map(|selected| selected.0))
+        .unwrap_or(0)
+        % count
+}
+
+/// Whether `item`'s class descends from any clip archetype the data authors a
+/// `Clip` relation to - "this is ammo", regardless of which gun it fits.
+///
+/// The physical insert gesture needs this separately from
+/// [`clip_projectile_index`]: an item that is not ammo at all must pass through
+/// the magazine zone in silence, while ammo the gun cannot take earns a
+/// refusal.
+pub(crate) fn is_ammo_clip(world: &World, item: EntityId) -> bool {
+    let Some(class_template_id) =
+        crate::scripts::script_util::entity_class_template_id(world, item)
+    else {
+        return false;
+    };
+    let (Ok(projectile_clips), Ok(hierarchy)) = (
+        world.borrow::<UniqueView<GlobalProjectileClips>>(),
+        world.borrow::<UniqueView<crate::mission::GlobalTemplateHierarchy>>(),
+    ) else {
+        return false;
+    };
+    projectile_clips
+        .clips
+        .values()
+        .flatten()
+        .any(|clip_template| hierarchy.is_or_descends_from(class_template_id, *clip_template))
+}
+
+/// Which of `weapon`'s ammo types the clip entity `clip` loads, as an index
+/// into its ordered projectile links. `None` when the weapon takes no such
+/// clip at all.
+///
+/// The CURRENTLY selected type is tested first, so a clip that fits more than
+/// one of a weapon's projectiles (a family archetype two ammo types both
+/// inherit) tops the loaded type off rather than silently swapping it.
+pub(crate) fn clip_projectile_index(
+    world: &World,
+    weapon: EntityId,
+    clip: EntityId,
+) -> Option<usize> {
+    let projectiles = crate::scripts::script_util::ordered_projectile_links(world, weapon);
+    if projectiles.is_empty() {
+        return None;
+    }
+    let class_template_id = crate::scripts::script_util::entity_class_template_id(world, clip)?;
+    let hierarchy = world
+        .borrow::<UniqueView<crate::mission::GlobalTemplateHierarchy>>()
+        .ok()?;
+    let selected = selected_ammo_index(world, weapon);
+    let order = std::iter::once(selected).chain((0..projectiles.len()).filter(|i| *i != selected));
+    order.into_iter().find(|index| {
+        clip_templates_for_projectile(world, projectiles[*index].0).is_some_and(|clip_templates| {
+            clip_templates.iter().any(|clip_template| {
+                hierarchy.is_or_descends_from(class_template_id, *clip_template)
+            })
+        })
+    })
+}
+
+/// Move rounds from ONE clip entity the player is physically holding into
+/// `weapon`'s magazine - the physical VR reload's counterpart to
+/// [`load_from_reserve`], which draws from the backpack instead.
+///
+/// Only as many rounds as the magazine is missing move, so a fuller clip keeps
+/// its remainder and stays in the hand. A clip drained to zero is reported in
+/// `depleted_items` for the caller to destroy, exactly as a reserve stack is.
+pub(crate) fn load_from_held_clip(
+    world: &World,
+    weapon: EntityId,
+    clip: EntityId,
+    capacity: i32,
+) -> ReloadOutcome {
+    let current_ammo = world
+        .borrow::<View<PropGunState>>()
+        .ok()
+        .and_then(|states| states.get(weapon).ok().map(|state| state.ammo));
+    let Some(current_ammo) = current_ammo else {
+        return ReloadOutcome::default();
+    };
+    let rounds_needed = (capacity.max(0) - current_ammo.max(0)).max(0);
+    if rounds_needed == 0 {
+        return ReloadOutcome::default();
+    }
+
+    let mut outcome = ReloadOutcome::default();
+    {
+        let Ok(mut stacks) = world.borrow::<ViewMut<PropStackCount>>() else {
+            return outcome;
+        };
+        let Ok(stack) = (&mut stacks).get(clip) else {
+            return outcome;
+        };
+        let consumed = stack.0.min(rounds_needed).max(0);
+        if consumed == 0 {
+            return outcome;
+        }
+        stack.0 -= consumed;
+        outcome.rounds_loaded = consumed;
+        if stack.0 == 0 {
+            outcome.depleted_items.push(clip);
+        }
+    }
+
+    let mut states = world.borrow::<ViewMut<PropGunState>>().unwrap();
+    if let Ok(state) = (&mut states).get(weapon) {
+        state.ammo = (state.ammo.max(0) + outcome.rounds_loaded).min(capacity.max(0));
+    }
+    outcome
+}
+
+/// Enter/exit radii (world units) of a weapon's magazine zone - the volume a
+/// held clip is inserted by entering. One world unit is ~0.76 m, so this is a
+/// generous ~19 cm sphere around the weapon's origin, entered deliberately but
+/// not requiring the player to thread a needle in mid-air.
+///
+/// v1 centres the zone on the weapon's own transform; a per-model magazine
+/// anchor is a follow-up.
+pub(crate) const CLIP_INSERT_ENTER_RADIUS: f32 = 0.25;
+pub(crate) const CLIP_INSERT_EXIT_RADIUS: f32 = 0.35;
+
+/// Whether the magazine zone is engaged this frame, given whether it was
+/// engaged last frame. The two radii are deliberately different: a single
+/// threshold flickers on hand jitter right at the boundary, and every flicker
+/// is another insert attempt.
+pub(crate) fn clip_insert_zone_engaged(was_engaged: bool, distance: f32) -> bool {
+    if was_engaged {
+        distance <= CLIP_INSERT_EXIT_RADIUS
+    } else {
+        distance <= CLIP_INSERT_ENTER_RADIUS
+    }
 }
 
 /// The backpack's stackable items whose class descends from one of
@@ -473,6 +617,14 @@ mod tests {
                     to_template_id: concrete_template_id,
                 });
             item
+        }
+
+        /// A clip the player is physically holding: an ordinary stackable
+        /// entity with NO `Contains` link, since a grabbed item has left the
+        /// backpack.
+        fn held_clip(&mut self, template_id: i32, rounds: i32) -> EntityId {
+            self.world
+                .add_entity((PropTemplateId { template_id }, PropStackCount(rounds)))
         }
 
         fn set_standard_projectile(&mut self, template_id: i32) {
@@ -899,6 +1051,132 @@ mod tests {
         fixture.set_standard_projectile(CLIPLESS_PROJECTILE);
 
         assert!(!can_cycle_ammo(&fixture.world, fixture.weapon));
+    }
+
+    // --- the physical VR insert gesture (a clip carried to the magazine) ---
+
+    #[test]
+    fn a_held_clip_of_the_selected_type_loads_that_type() {
+        let mut fixture = Fixture::new(0, 0);
+        let clip = fixture.held_clip(EARTH_SMALL_STD_CLIP, 6);
+
+        assert_eq!(
+            clip_projectile_index(&fixture.world, fixture.weapon, clip),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn a_held_clip_of_another_carried_type_names_that_types_projectile() {
+        // Standard is selected and HE is what the hand brought: the gesture has
+        // to name index 1 so the caller ejects and swaps to it.
+        let mut fixture = Fixture::new(0, 0);
+        let clip = fixture.held_clip(HE_CLIP, 4);
+
+        assert_eq!(
+            clip_projectile_index(&fixture.world, fixture.weapon, clip),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn a_clip_this_weapon_does_not_take_has_no_projectile_index() {
+        // Real ammo (a prism), but for a gun the pistol's projectiles never
+        // link - the refusal case, as distinct from carrying a medkit past.
+        let mut fixture = Fixture::new(0, 0);
+        let clip = fixture.held_clip(SMALL_PRISM, 10);
+
+        assert!(is_ammo_clip(&fixture.world, clip));
+        assert_eq!(
+            clip_projectile_index(&fixture.world, fixture.weapon, clip),
+            None
+        );
+    }
+
+    #[test]
+    fn an_item_that_is_not_ammo_at_all_is_not_a_clip() {
+        const A_MEDKIT: i32 = -9999;
+        let mut fixture = Fixture::new(0, 0);
+        let item = fixture.held_clip(A_MEDKIT, 1);
+
+        assert!(!is_ammo_clip(&fixture.world, item));
+    }
+
+    #[test]
+    fn inserting_a_held_clip_fills_the_magazine_and_empties_the_clip() {
+        let mut fixture = Fixture::new(0, 0);
+        let clip = fixture.held_clip(EARTH_SMALL_STD_CLIP, 12);
+
+        let outcome = load_from_held_clip(&fixture.world, fixture.weapon, clip, 12);
+
+        assert_eq!(fixture.ammo(), 12);
+        assert_eq!(fixture.rounds(clip), 0);
+        assert_eq!(outcome.rounds_loaded, 12);
+        assert_eq!(
+            outcome.depleted_items,
+            vec![clip],
+            "a spent clip is the caller's to destroy - it leaves the hand with it"
+        );
+    }
+
+    #[test]
+    fn a_fuller_clip_keeps_its_remainder_in_the_hand() {
+        let mut fixture = Fixture::new(0, 0);
+        let clip = fixture.held_clip(STD_CLIP, 20);
+
+        let outcome = load_from_held_clip(&fixture.world, fixture.weapon, clip, 12);
+
+        assert_eq!(fixture.ammo(), 12);
+        assert_eq!(fixture.rounds(clip), 8, "the remainder stays on the clip");
+        assert_eq!(outcome.rounds_loaded, 12);
+        assert!(
+            outcome.depleted_items.is_empty(),
+            "a clip with rounds left is not destroyed"
+        );
+    }
+
+    #[test]
+    fn a_partly_loaded_magazine_is_topped_off_from_the_held_clip() {
+        let mut fixture = Fixture::new(7, 0);
+        let clip = fixture.held_clip(EARTH_SMALL_STD_CLIP, 6);
+
+        let outcome = load_from_held_clip(&fixture.world, fixture.weapon, clip, 12);
+
+        assert_eq!(fixture.ammo(), 12);
+        assert_eq!(fixture.rounds(clip), 1);
+        assert_eq!(outcome.rounds_loaded, 5);
+    }
+
+    #[test]
+    fn inserting_into_a_full_magazine_moves_nothing() {
+        // The rounds must not be silently burned: a full gun simply refuses the
+        // clip, and the player still carries it.
+        let mut fixture = Fixture::new(12, 0);
+        let clip = fixture.held_clip(EARTH_SMALL_STD_CLIP, 6);
+
+        let outcome = load_from_held_clip(&fixture.world, fixture.weapon, clip, 12);
+
+        assert_eq!(outcome, ReloadOutcome::default());
+        assert_eq!(fixture.ammo(), 12);
+        assert_eq!(fixture.rounds(clip), 6);
+    }
+
+    #[test]
+    fn the_magazine_zone_needs_a_closer_approach_than_it_needs_to_hold() {
+        // Hysteresis: without it, hand jitter right at the boundary re-enters
+        // the zone every few frames, and every entry is another insert.
+        let between = (CLIP_INSERT_ENTER_RADIUS + CLIP_INSERT_EXIT_RADIUS) / 2.0;
+
+        assert!(!clip_insert_zone_engaged(false, between));
+        assert!(clip_insert_zone_engaged(true, between));
+        assert!(clip_insert_zone_engaged(
+            false,
+            CLIP_INSERT_ENTER_RADIUS - 0.01
+        ));
+        assert!(!clip_insert_zone_engaged(
+            true,
+            CLIP_INSERT_EXIT_RADIUS + 0.01
+        ));
     }
 
     #[test]

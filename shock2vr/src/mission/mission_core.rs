@@ -1622,6 +1622,14 @@ pub struct MissionCore {
     /// never made. See [`latch_trigger_safe`].
     vr_trigger_safe_latch: [Option<bool>; 2],
 
+    /// Whether each hand (indexed by [`hand_slot`]) is currently inside the
+    /// other hand's weapon magazine zone. The physical reload fires on the
+    /// rising edge of this - see [`update_clip_insert_gesture`] - so a clip
+    /// resting against the gun inserts once rather than every frame.
+    ///
+    /// [`update_clip_insert_gesture`]: MissionCore::update_clip_insert_gesture
+    vr_clip_insert_engaged: [bool; 2],
+
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
     /// `GuiManager` for the corresponding object-bound world panel.
@@ -2478,6 +2486,7 @@ impl MissionCore {
             vr_use_mode_pointer: None,
             vr_squeeze_swallow: [false; 2],
             vr_trigger_safe_latch: [None; 2],
+            vr_clip_insert_engaged: [false; 2],
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
@@ -3386,6 +3395,14 @@ impl MissionCore {
         });
         rewrite_strip_release(&mut interaction_msgs, &store, &collect);
         self.process_virtual_hand_effects(asset_cache, interaction_msgs);
+
+        // The physical VR reload: a clip carried into the other hand's weapon
+        // loads it. Runs after the hands have been updated so the held pair is
+        // this frame's.
+        if game_options.presentation_mode == crate::PresentationMode::Vr {
+            let cues = self.update_clip_insert_gesture(asset_cache);
+            effects.extend(cues);
+        }
 
         // Tag the wielded weapon with the flat camera/crosshair fire ray so its
         // firing scripts spawn projectiles along the crosshair (camera-origin
@@ -7962,6 +7979,158 @@ impl MissionCore {
             &self.world,
             weapon,
             "reload",
+            vec![],
+            AudioHandle::new(),
+        )
+    }
+
+    /// The physical VR reload (R3a): a clip carried in one hand into the
+    /// magazine zone of the weapon held in the other loads it instantly.
+    ///
+    /// **Proximity while held, not release.** The insert fires the moment the
+    /// clip ENTERS the zone, which is both what the motion reads like
+    /// physically (you push the magazine home, you do not let go of it inside
+    /// the gun) and what keeps this clear of the release gestures that already
+    /// exist: a clip opened over the cyber-interface strip must still deposit
+    /// there (#1138/#1158), and claiming releases near a weapon would swallow
+    /// exactly those.
+    ///
+    /// The motion IS the reload cost, so there is no authored `reload_time`
+    /// hold on this path - only the weapon's authored "reload" cue, which is
+    /// the sole feedback a VR player gets (the flat reload's viewmodel pitch is
+    /// never rendered for a hand-held gun).
+    ///
+    /// Returns the audible cues to apply.
+    fn update_clip_insert_gesture(&mut self, asset_cache: &mut AssetCache) -> Vec<Effect> {
+        let (left_held, right_held) = self.interaction.held_entities();
+        let held = [left_held, right_held];
+        let mut cues = Vec::new();
+        for slot in 0..2 {
+            // Per weapon, not per player: the zone belongs to whichever hand
+            // holds a gun, so dual wielding inserts into the gun the clip
+            // actually reached.
+            let pair = match (held[slot], held[1 - slot]) {
+                (Some(clip), Some(weapon)) if self.magazine_capacity(weapon).is_some() => {
+                    Some((clip, weapon))
+                }
+                _ => None,
+            };
+            let engaged = pair
+                .and_then(|(clip, weapon)| {
+                    let clip_position = self.entity_world_position(clip)?;
+                    let weapon_position = self.entity_world_position(weapon)?;
+                    Some(crate::mission::reload::clip_insert_zone_engaged(
+                        self.vr_clip_insert_engaged[slot],
+                        (clip_position - weapon_position).magnitude(),
+                    ))
+                })
+                .unwrap_or(false);
+            let entered = engaged && !self.vr_clip_insert_engaged[slot];
+            self.vr_clip_insert_engaged[slot] = engaged;
+            if let (true, Some((clip, weapon))) = (entered, pair) {
+                cues.extend(self.insert_held_clip(asset_cache, weapon, clip));
+            }
+        }
+        cues
+    }
+
+    /// How many rounds `weapon`'s magazine holds, or `None` when it is not a
+    /// gun that takes one.
+    fn magazine_capacity(&self, weapon: EntityId) -> Option<i32> {
+        crate::scripts::script_util::active_gun_setting(&self.world, weapon).map(|d| d.clip)
+    }
+
+    /// The world position of `entity`'s live transform.
+    fn entity_world_position(&self, entity: EntityId) -> Option<Vector3<f32>> {
+        use cgmath::Transform as _;
+        let transforms = self.world.borrow::<View<RuntimePropTransform>>().ok()?;
+        let transform = transforms.get(entity).ok()?;
+        Some(crate::util::point3_to_vec3(
+            transform.0.transform_point(Point3::new(0.0, 0.0, 0.0)),
+        ))
+    }
+
+    /// Load a held `clip` into `weapon`, swapping the loaded ammo type if the
+    /// clip is a different one. Returns the gesture's audible cues.
+    ///
+    /// A clip of a type the weapon does not take earns the refusal cue and
+    /// changes nothing; an item that is not ammo at all passes through in
+    /// silence, since the zone is a volume around a gun the player carries
+    /// everything else past.
+    fn insert_held_clip(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        weapon: EntityId,
+        clip: EntityId,
+    ) -> Vec<Effect> {
+        if !crate::mission::reload::is_ammo_clip(&self.world, clip) {
+            return Vec::new();
+        }
+        let Some(capacity) = self.magazine_capacity(weapon) else {
+            return Vec::new();
+        };
+        let Some(index) = crate::mission::reload::clip_projectile_index(&self.world, weapon, clip)
+        else {
+            return vec![self.refuse_clip_insert(weapon)];
+        };
+
+        if index != crate::mission::reload::selected_ammo_index(&self.world, weapon) {
+            // A different ammo type: the loaded rounds go back to the backpack
+            // as what they already are, exactly as an ammo-cycle ejects them.
+            if let Some((clip_template, rounds)) =
+                crate::mission::reload::unload_to_reserve(&self.world, weapon).spawn_clip
+            {
+                self.give_ejected_clip(asset_cache, weapon, clip_template, rounds);
+            }
+            // The swap is earned by an empty magazine, never assumed - see
+            // `cycle_ammo`. Rounds that could not be returned stay loaded, and
+            // switching over them would convert them for free.
+            let still_loaded = self
+                .world
+                .borrow::<View<dark::properties::PropGunState>>()
+                .ok()
+                .and_then(|states| states.get(weapon).ok().map(|state| state.ammo > 0))
+                .unwrap_or(false);
+            if still_loaded {
+                return vec![self.refuse_clip_insert(weapon)];
+            }
+            self.world
+                .add_component(weapon, RuntimePropSelectedAmmo(index));
+        }
+
+        let outcome =
+            crate::mission::reload::load_from_held_clip(&self.world, weapon, clip, capacity);
+        if outcome.rounds_loaded == 0 {
+            // A magazine already at capacity: nothing moved, and a cue for a
+            // reload that did not happen would be a lie.
+            return Vec::new();
+        }
+        // A clip drained to nothing leaves the hand with it - the hand is
+        // released by `on_entity_destroyed`. A clip with rounds left over stays
+        // held, and the zone's exit radius keeps it from re-inserting in place.
+        for item in outcome.depleted_items {
+            self.interaction.on_entity_destroyed(item);
+            self.flat_ui.on_entity_destroyed(item);
+            self.remove_incoming_contains_links(item);
+            self.remove_entity(item);
+        }
+
+        vec![crate::scripts::script_util::play_environmental_sound(
+            &self.world,
+            weapon,
+            "reload",
+            vec![],
+            AudioHandle::new(),
+        )]
+    }
+
+    /// The insert-refused cue: the gun's own dry-fire click, the refusal sound
+    /// the player already associates with "this weapon will not do that".
+    fn refuse_clip_insert(&self, weapon: EntityId) -> Effect {
+        crate::scripts::script_util::play_environmental_sound(
+            &self.world,
+            weapon,
+            "dryfire",
             vec![],
             AudioHandle::new(),
         )
