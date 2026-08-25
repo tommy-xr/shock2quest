@@ -386,13 +386,6 @@ fn backpack_accepts_deposit(world: &World) -> bool {
 /// scales the unusually wide 15-column strip so all of it fits at arm's reach.
 const VR_BACKPACK_WORLD_SCALE: f32 = 0.55;
 
-/// Head-relative authored-space placement for the narrow portrait reader.
-/// After Dark's scale conversion the panel center is 1.5 world units forward
-/// and 1.4 units above the player origin, keeping its 0.75 x 1.18 canvas fully
-/// framed and within ordinary controller reach.
-const VR_MEDIA_FORWARD: f32 = 3.75;
-const VR_MEDIA_UP: f32 = 3.5;
-
 /// The use-mode ("cyber interface") open/close sting: the shipped gamesys's
 /// own `UI_SCH` schema pair for opening/closing the game's main panel
 /// (`cargo dq templates 610`/`611`) - a faithful "interface open/close"
@@ -1563,6 +1556,15 @@ pub struct MissionCore {
     /// dismissed as soon as that gun stops being wielded.
     weapon_settings_gun: Option<EntityId>,
 
+    /// Whether this use-mode session was opened by the VR log-reader shortcut
+    /// (Quest Y / `Effect::ReadLastUnreadLog`) rather than a deliberate
+    /// `ToggleUseMode`. It makes Y a true inverse of itself: the press that
+    /// dismisses the reader closes the whole interface when Y is what opened
+    /// it, and only puts the reader away - back to the inventory strip - when
+    /// the player was already in the interface. Transient like `use_mode`
+    /// itself (not serialized: a load leaves the mode closed).
+    use_mode_from_log_reader: bool,
+
     /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the rim
     /// vignette (both presentations), the VR comfort dim's strength, and the
     /// flat FOV pull - see [`crate::ui::entry_ramp`]. Advanced every update
@@ -2479,6 +2481,7 @@ impl MissionCore {
             flat_melee_anim: None,
             use_mode: false,
             weapon_settings_gun: None,
+            use_mode_from_log_reader: false,
             use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp::new(),
             vr_use_mode_anchor: crate::ui::FrontendPanelAnchor::new(),
             vr_use_mode_head: crate::ui::world_dim::UNTRACKED_HEAD,
@@ -5331,6 +5334,13 @@ impl MissionCore {
         self.use_mode = false;
         self.flat_ui.take_cursor_item();
         self.flat_ui.set_strip(None);
+        // The mode owns the whole canvas, panel slot included: leaving it with
+        // a panel still bound would keep the log reader alive and reported by
+        // `/v1/ui` with nothing presenting it. Inert on flat's Tab path (that
+        // branch dismisses an open panel first and never reaches here with one
+        // bound) and already what `CloseUseMode` does explicitly.
+        self.flat_ui.close();
+        self.use_mode_from_log_reader = false;
         // VR weapon-safe exit: a trigger still held from inside the mode must
         // be released before the hands see it again, or leaving the cyber
         // interface would fire the wielded weapon on a stale press. Inert in
@@ -5353,7 +5363,17 @@ impl MissionCore {
     /// the player's `internal_inventory` entity (whose GuiScript already
     /// emits SetUI every frame). Shared by both presentations - the strip
     /// canvas is the mode; only where it is presented differs.
-    fn enter_use_mode(&mut self) -> Effect {
+    /// Place the VR cyber-interface panel from the pose of *this* entry, not
+    /// wherever the player stood last time - and let the anchor wait out an
+    /// untracked (zero-quaternion) head rather than locking in a garbage
+    /// placement (rules 3 and 7 of the vr-ui-design skill). Shared by every
+    /// way into the mode so no entry can forget it; inert in flat.
+    fn reset_vr_use_mode_placement(&mut self) {
+        self.vr_use_mode_anchor = crate::ui::FrontendPanelAnchor::new();
+        self.vr_use_mode_head = crate::ui::world_dim::UNTRACKED_HEAD;
+    }
+
+    fn enter_use_mode(&mut self, ramp: crate::ui::entry_ramp::RampParams) -> Effect {
         self.use_mode = true;
         let strip_entity = self
             .world
@@ -5366,8 +5386,10 @@ impl MissionCore {
         // a held press must never read as a click on whatever the pointer first
         // crosses (rule 6 of the vr-ui-design skill).
         self.flat_ui.guard_held_press();
-        self.use_mode_ramp
-            .open(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT);
+        // `ramp` is how strong/long this particular entry feels: the
+        // deliberate inventory open and the Y-to-log-reader shortcut are the
+        // same mode reached with different intent.
+        self.use_mode_ramp.open(ramp);
         Effect::PlaySound {
             handle: AudioHandle::new(),
             source: None,
@@ -5632,7 +5654,9 @@ impl MissionCore {
                             } else if self.use_mode {
                                 effects.push_front(self.leave_use_mode());
                             } else {
-                                effects.push_front(self.enter_use_mode());
+                                effects.push_front(
+                                    self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT),
+                                );
                             }
                         }
                         crate::PresentationMode::Vr => {
@@ -5653,14 +5677,10 @@ impl MissionCore {
                                 // open, and a level transition replaces this
                                 // scene (taking the mission-owned mode state
                                 // with it).
-                                effects.push_front(self.enter_use_mode());
-                                // Place the panel from the pose of *this*
-                                // entry, not wherever the player stood last
-                                // time - and let the anchor wait out an
-                                // untracked (zero-quaternion) head rather than
-                                // locking in a garbage placement.
-                                self.vr_use_mode_anchor = crate::ui::FrontendPanelAnchor::new();
-                                self.vr_use_mode_head = crate::ui::world_dim::UNTRACKED_HEAD;
+                                effects.push_front(
+                                    self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT),
+                                );
+                                self.reset_vr_use_mode_placement();
                             }
                         }
                     }
@@ -5797,7 +5817,7 @@ impl MissionCore {
                     self.consume_log_pickup(entity_id);
                 }
 
-                Effect::ReadLastUnreadLog { head_rotation } => {
+                Effect::ReadLastUnreadLog => {
                     let panel_entity = self
                         .world
                         .borrow::<UniqueView<MediaPanelEntity>>()
@@ -5808,18 +5828,32 @@ impl MissionCore {
                         continue;
                     };
 
+                    let is_vr = game_options.presentation_mode == crate::PresentationMode::Vr;
+
                     // Y is also the production dismiss affordance in VR. The
                     // next press re-enters this path, re-resolves and replays
                     // the latest collected log even when it is already read.
-                    if game_options.presentation_mode == crate::PresentationMode::Vr
-                        && self.gui.active_panel() == Some(panel_entity)
-                    {
-                        self.gui.close_panel(
-                            &mut self.world,
-                            &mut self.physics,
-                            &mut self.script_world,
-                            &mut self.id_to_physics,
-                        );
+                    // Y is a true inverse of itself: it puts back exactly what
+                    // it brought up - the whole interface when Y opened it,
+                    // just the reader (leaving the inventory strip) when the
+                    // player was already inside.
+                    if is_vr && self.flat_ui.active_panel() == Some(panel_entity) {
+                        if self.use_mode_from_log_reader {
+                            effects.push_front(self.leave_use_mode());
+                        } else {
+                            self.flat_ui.close();
+                        }
+                        // The log's audio is deliberately left playing - the
+                        // reader is a transcript of a recording, not its
+                        // transport.
+                        continue;
+                    }
+
+                    // Edge policy: no cyber interface over the death sequence,
+                    // the same rule `ToggleUseMode` applies - that moment
+                    // belongs to the game-over flow. Flat is untouched: its
+                    // reader is an MFD, not a mode.
+                    if is_vr && !self.use_mode && !self.player_is_alive() {
                         continue;
                     }
 
@@ -5868,47 +5902,23 @@ impl MissionCore {
                         payload: MessagePayload::PanelOpened,
                     });
 
-                    match game_options.presentation_mode {
-                        crate::PresentationMode::Flat => self.flat_ui.open_unbound(panel_entity),
-                        crate::PresentationMode::Vr => {
-                            let (player_position, player_rotation) = {
-                                let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-                                (player.pos, player.rotation * head_rotation)
-                            };
-                            let offset = player_rotation
-                                * vec3(
-                                    0.0,
-                                    VR_MEDIA_UP / SCALE_FACTOR,
-                                    -VR_MEDIA_FORWARD / SCALE_FACTOR,
-                                );
-                            let panel_position = player_position + offset;
-                            let panel_rotation =
-                                Quaternion::from_angle_y(cgmath::Deg(180.0)) * player_rotation;
-                            self.world.add_component(
-                                panel_entity,
-                                PropPosition {
-                                    position: panel_position,
-                                    rotation: panel_rotation,
-                                    cell: 0,
-                                },
-                            );
-                            self.world.add_component(
-                                panel_entity,
-                                RuntimePropTransform(
-                                    Matrix4::from_translation(panel_position)
-                                        * Matrix4::from(panel_rotation),
-                                ),
-                            );
-                            self.gui.open_panel(
-                                panel_entity,
-                                false,
-                                &mut self.world,
-                                &mut self.physics,
-                                &mut self.script_world,
-                                &mut self.id_to_physics,
-                            );
-                        }
+                    // One canvas, two presenters: the reader is bound into the
+                    // same host slot in both presentations, docked in the MFD
+                    // on screen and carried on the head-anchored cyber-
+                    // interface panel in VR. `open_unbound` because the reader
+                    // is player-owned and has no world object to walk away
+                    // from - it closes only explicitly.
+                    if is_vr && !self.use_mode {
+                        // Y is a shortcut into the interface, not a second
+                        // interface: enter the one mode, with a lighter ramp
+                        // than the deliberate open (see `LOG_READER_ENTRY_EXIT`).
+                        effects.push_front(
+                            self.enter_use_mode(crate::ui::entry_ramp::LOG_READER_ENTRY_EXIT),
+                        );
+                        self.reset_vr_use_mode_placement();
+                        self.use_mode_from_log_reader = true;
                     }
+                    self.flat_ui.open_unbound(panel_entity);
 
                     // Only after a localized reader is bound to the active
                     // presentation do read state and audio advance together.
