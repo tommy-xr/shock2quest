@@ -25,7 +25,7 @@
 //! channels are withheld from the scene (see `Game::update`), so the pawn
 //! stands still rather than sleepwalking off while you fly.
 
-use cgmath::{Matrix4, Quaternion, Rotation, Rotation3, SquareMatrix, Vector3, vec3};
+use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Rotation3, SquareMatrix, Vector3, vec3};
 
 use crate::dev_params;
 use crate::input_context::InputContext;
@@ -75,6 +75,23 @@ impl FreeCamera {
     pub fn attach(&mut self) {
         self.detached = false;
         self.pose = None;
+    }
+
+    /// Detach the camera and put it at an explicit pose, in one step.
+    ///
+    /// Unlike [`toggle`], this leaves nothing to be captured later: the pose
+    /// is known now, so the very next frame renders from it. This is what an
+    /// out-of-process caller (the debug runtime's `POST /v1/camera`) uses to
+    /// place the camera, since there is no stick to fly it with.
+    ///
+    /// The pose is the *camera* pose, not the eye pose: a runtime composes its
+    /// tracked head offset/rotation on top of it (see [`pose_for_eye`], which
+    /// is how a caller who wants a particular eye pose gets there).
+    ///
+    /// [`toggle`]: Self::toggle
+    pub fn place(&mut self, pose: Pose) {
+        self.detached = true;
+        self.pose = Some(pose);
     }
 
     /// The captured pose, or `None` while attached (or on the single frame
@@ -206,6 +223,64 @@ pub fn without_locomotion(input_context: &InputContext) -> InputContext {
     withheld.jump = false;
     withheld.crouch = false;
     withheld
+}
+
+/// The rotation that aims a camera at `target` from `eye`, with no roll.
+///
+/// The camera convention is the engine's: the camera looks down its own `-Z`
+/// (which is why [`FreeCamera::fly`] walks the stick's forward along `-Z`), so
+/// the returned rotation maps `(0, 0, -1)` onto `normalize(target - eye)`.
+///
+/// `None` when there is no direction to speak of - `target` is `eye`, or one of
+/// them is not finite - rather than a silently arbitrary orientation.
+///
+/// Looking straight up or down has no roll-free "up" to level against, so the
+/// basis is leveled against a horizontal reference there instead; the result
+/// still faces the target exactly, which is the property callers depend on.
+///
+/// The basis itself is [`crate::util::get_rotation_from_forward_vector`] - the
+/// repo's one "aim a rotation along a direction" - fed the *negated* direction,
+/// which is the same call the panel anchor and the hit-feedback rim already
+/// make to turn a gaze direction into a camera-convention rotation. All this
+/// adds is the guard: a target on top of the eye has no direction, and a
+/// normalize there would hand back a NaN rotation.
+pub fn look_at_rotation(eye: Vector3<f32>, target: Vector3<f32>) -> Option<Quaternion<f32>> {
+    let delta = target - eye;
+    if !delta.x.is_finite() || !delta.y.is_finite() || !delta.z.is_finite() {
+        return None;
+    }
+    if delta.magnitude2() < 1e-12 {
+        return None;
+    }
+    // The camera's own +Z points *backwards* along the view direction.
+    Some(crate::util::get_rotation_from_forward_vector(
+        -delta.normalize(),
+    ))
+}
+
+/// The camera pose that renders the eye at exactly `eye`, given the tracked
+/// head offset/rotation the runtime composes on top of the camera pose.
+///
+/// A runtime builds its view as `(camera * head)^-1` (see
+/// `engine::util::compute_view_matrix`), so a caller who names a world pose for
+/// the *eye* - "stand here, look at that" - must have the head composition
+/// divided back out or the camera lands an eye-height above the requested point
+/// and rotated by whatever the head last reported. This is that division, and
+/// [`eye_for_pose`] is its inverse (what the eye actually ends up as).
+pub fn pose_for_eye(eye: Pose, head_offset: Vector3<f32>, head_rotation: Quaternion<f32>) -> Pose {
+    let rotation = eye.1 * head_rotation.invert();
+    (eye.0 - rotation.rotate_vector(head_offset), rotation)
+}
+
+/// Where the eye actually ends up for a camera pose, once the runtime composes
+/// its tracked head offset/rotation on top. The inverse of [`pose_for_eye`],
+/// and what `GET /v1/camera` reports so a caller reads back the pose it asked
+/// for rather than the compensated one stored underneath.
+pub fn eye_for_pose(pose: Pose, head_offset: Vector3<f32>, head_rotation: Quaternion<f32>) -> Pose {
+    (
+        pose.0 + pose.1.rotate_vector(head_offset),
+        pose.1 * head_rotation,
+    )
 }
 
 #[cfg(test)]
@@ -435,5 +510,125 @@ mod tests {
                 "corrected view {corrected:?} != player view {expected:?}"
             );
         }
+    }
+
+    /// A camera looks down its own -Z, so the look-at rotation must map -Z onto
+    /// the direction to the target. A subtly wrong look-at (a sign, or the
+    /// forward/back axis swapped) is invisible in a screenshot of an empty
+    /// corridor, so it is asserted numerically.
+    #[test]
+    fn a_look_at_rotation_points_the_camera_at_its_target() {
+        let eye = vec3(1.0, 2.0, 3.0);
+        for target in [
+            vec3(10.0, 2.0, 3.0),
+            vec3(-4.0, 9.0, 3.0),
+            vec3(1.0, 2.0, -8.0),
+            vec3(-2.5, -6.0, 7.25),
+        ] {
+            let rotation = look_at_rotation(eye, target).expect("a distinct target has a rotation");
+            let forward = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+            let expected = (target - eye).normalize();
+            assert!(
+                (forward - expected).magnitude() < 1e-5,
+                "aimed {forward:?}, wanted {expected:?}"
+            );
+        }
+    }
+
+    /// Level against the horizon: aiming anywhere but straight up/down must
+    /// leave the camera's right axis horizontal, or every framed screenshot
+    /// comes out rolled.
+    #[test]
+    fn a_look_at_rotation_has_no_roll() {
+        let eye = vec3(0.0, 5.0, 0.0);
+        let rotation =
+            look_at_rotation(eye, vec3(12.0, 1.0, -7.0)).expect("a distinct target has a rotation");
+        let right = rotation.rotate_vector(vec3(1.0, 0.0, 0.0));
+        assert!(right.y.abs() < 1e-5, "camera is rolled: right = {right:?}");
+        let up = rotation.rotate_vector(vec3(0.0, 1.0, 0.0));
+        assert!(up.y > 0.0, "camera is upside down: up = {up:?}");
+    }
+
+    /// Straight down is the degenerate case for "level against world up". It
+    /// must still aim exactly at the target rather than fall over into a NaN.
+    #[test]
+    fn a_look_at_rotation_survives_looking_straight_down() {
+        let eye = vec3(2.0, 20.0, -3.0);
+        let rotation =
+            look_at_rotation(eye, vec3(2.0, 0.0, -3.0)).expect("a distinct target has a rotation");
+        let forward = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+        assert!(
+            (forward - vec3(0.0, -1.0, 0.0)).magnitude() < 1e-5,
+            "aimed {forward:?}, wanted straight down"
+        );
+    }
+
+    /// No direction, no answer - rather than an arbitrary one.
+    #[test]
+    fn a_look_at_rotation_refuses_a_target_on_top_of_the_eye() {
+        assert!(look_at_rotation(vec3(1.0, 2.0, 3.0), vec3(1.0, 2.0, 3.0)).is_none());
+        assert!(look_at_rotation(vec3(0.0, 0.0, 0.0), vec3(f32::NAN, 0.0, 1.0)).is_none());
+    }
+
+    /// The whole point of the head compensation: a caller names an eye pose,
+    /// and the view the runtime actually builds - `(camera * head)^-1` - must
+    /// put the eye exactly there. Asserted against the engine's own view
+    /// matrix, not against a re-derivation of it.
+    #[test]
+    fn compensating_for_the_head_puts_the_eye_where_it_was_asked_for() {
+        let head_offset = vec3(0.0, 1.04, 0.0);
+        let head_rotation = Quaternion::from_angle_y(Deg(-90.0_f32));
+        let eye: Pose = (
+            vec3(4.0, 3.0, -6.0),
+            Quaternion::from_angle_y(Deg(20.0_f32)),
+        );
+
+        let pose = pose_for_eye(eye, head_offset, head_rotation);
+        let view = engine::util::compute_view_matrix(pose.0, pose.1, head_offset, head_rotation);
+        // The eye's world transform is the inverse of the view matrix.
+        let eye_to_world = view.invert().expect("a view matrix inverts");
+        let origin = eye_to_world * Vector4::new(0.0, 0.0, 0.0, 1.0);
+        assert!(
+            (vec3(origin.x, origin.y, origin.z) - eye.0).magnitude() < 1e-4,
+            "eye landed at {origin:?}, wanted {:?}",
+            eye.0
+        );
+        let forward = eye_to_world * Vector4::new(0.0, 0.0, -1.0, 0.0);
+        let expected = eye.1.rotate_vector(vec3(0.0, 0.0, -1.0));
+        assert!(
+            (vec3(forward.x, forward.y, forward.z) - expected).magnitude() < 1e-4,
+            "eye faced {forward:?}, wanted {expected:?}"
+        );
+    }
+
+    /// `eye_for_pose` is what the read-back reports, so it has to be the exact
+    /// inverse of the compensation - otherwise a caller reads a pose it never
+    /// set.
+    #[test]
+    fn the_eye_and_camera_poses_round_trip() {
+        let head_offset = vec3(0.2, 1.7, -0.1);
+        let head_rotation = Quaternion::from_angle_x(Deg(15.0_f32));
+        let eye: Pose = (
+            vec3(-9.0, 2.5, 11.0),
+            Quaternion::from_angle_z(Deg(5.0_f32)),
+        );
+
+        let pose = pose_for_eye(eye, head_offset, head_rotation);
+        let (position, rotation) = eye_for_pose(pose, head_offset, head_rotation);
+        assert!((position - eye.0).magnitude() < 1e-4, "{position:?}");
+        let delta = rotation.rotate_vector(vec3(0.0, 0.0, -1.0))
+            - eye.1.rotate_vector(vec3(0.0, 0.0, -1.0));
+        assert!(delta.magnitude() < 1e-4);
+    }
+
+    /// Placing is a detach and a pose in one: nothing is left to be captured
+    /// from the player on the next render (which would silently overwrite it).
+    #[test]
+    fn placing_the_camera_detaches_it_at_the_requested_pose() {
+        let mut camera = FreeCamera::new();
+        camera.place(elsewhere());
+        assert!(camera.is_detached());
+        assert_eq!(camera.pose(), Some(elsewhere()));
+        assert_eq!(camera.camera_pose(pawn()), elsewhere());
     }
 }

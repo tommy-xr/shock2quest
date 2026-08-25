@@ -4,6 +4,7 @@ import type {
   CommandResult,
   DebugEntityMessage,
   DevParamSetResult,
+  CameraPlacement,
   CameraState,
   DevParamsListResult,
   EntityDetailResult,
@@ -620,6 +621,39 @@ export class CameraApi {
    */
   async state(): Promise<CameraState> {
     return this.client.get<CameraState>("/v1/camera");
+  }
+
+  /**
+   * Detach the camera and place it in the world - the only way to photograph
+   * something the player's own eye cannot see, the player themselves included.
+   *
+   * `{ position, lookAt }` is the primitive worth reaching for: stand the
+   * camera off to one side and aim it at the thing under test. The returned
+   * state reports where the eye ended up, so a caller can assert on the pose it
+   * asked for rather than trusting the request.
+   *
+   * The simulation is untouched: the pawn does not move, and everything that
+   * reads the player's position keeps reading the body. Placing does turn the
+   * `free_camera` developer option on (nothing else would keep the placement
+   * past the next step), and while the camera is detached the pawn will not
+   * walk - the locomotion sticks fly the camera instead.
+   *
+   * Aim the head AFTER this and the camera swings off its target: the runtime
+   * composes the tracked head onto the camera pose, and this divides out the
+   * head as it is now. Place the camera last, or re-issue the placement.
+   */
+  async set(placement: CameraPlacement): Promise<CameraState> {
+    return this.client.post<CameraState>("/v1/camera", {
+      detached: true,
+      position: placement.position,
+      look_at: placement.lookAt,
+      rotation: placement.rotation,
+    });
+  }
+
+  /** Return the view to the player's own eye. */
+  async attach(): Promise<CameraState> {
+    return this.client.post<CameraState>("/v1/camera", { detached: false });
   }
 }
 

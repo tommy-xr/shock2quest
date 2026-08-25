@@ -33,7 +33,7 @@ use lifecycle::{DEFAULT_IDLE_TIMEOUT_SECS, IDLE_POLL_INTERVAL, IdleWatchdog};
 // Game engine imports
 extern crate glfw;
 use self::glfw::{Context, WindowEvent};
-use cgmath::{Quaternion, Rotation3, vec2, vec3};
+use cgmath::{InnerSpace, Quaternion, Rotation3, vec2, vec3};
 use dark::SCALE_FACTOR;
 use engine::{profile, scene::Scene, util::compute_view_matrix_from_render_context};
 use shock2vr::{
@@ -166,18 +166,6 @@ struct Args {
 /// Instance identifier from --instance-id, echoed by /v1/health
 static INSTANCE_ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
 
-/// Default debug-camera head rotation.
-///
-/// Matches the desktop runtime's default view orientation (`cargo dr`): at
-/// `yaw=0, pitch=0` the desktop camera forward is `(1,0,0)` fed through
-/// `look_at_rh`, so it looks toward `-X`. Mirroring it here keeps debug-runtime
-/// screenshots framed the same as what you see interactively on desktop.
-///
-/// TODO(camera-endpoint): make the debug camera aimable over HTTP - either a new
-/// `/v1/camera` endpoint or by honoring the head rotation in `/v1/control/input`
-/// - so an agent can point the camera at an arbitrary world point (e.g. wherever
-/// a ragdoll lands) instead of relying on this fixed default. Tracked in
-/// projects/debug-runtime.md.
 /// Fixed simulation timestep used while stepping (`/v1/step`), so frame- and
 /// time-based stepping advance a deterministic, wall-clock-independent amount of
 /// simulation time (60 Hz, matching the game's target frame rate).
@@ -192,6 +180,17 @@ const FIXED_STEP_DT: f32 = 1.0 / 60.0;
 /// ms is a no-op for automation but returns the core the rest of the time.
 const IDLE_SLEEP: Duration = Duration::from_millis(4);
 
+/// Default debug-camera head rotation.
+///
+/// Matches the desktop runtime's default view orientation (`cargo dr`): at
+/// `yaw=0, pitch=0` the desktop camera forward is `(1,0,0)` fed through
+/// `look_at_rh`, so it looks toward `-X`. Mirroring it here keeps debug-runtime
+/// screenshots framed the same as what you see interactively on desktop.
+///
+/// This is the *starting* value only - it is written once, before the loop, so
+/// `/v1/control/input` can aim the head from there. The same rotation is also
+/// composed onto the free camera's pose every frame, which is why
+/// `POST /v1/camera` divides it back out (see `apply_camera_request`).
 fn default_camera_head_rotation() -> Quaternion<f32> {
     head_rotation_from_yaw_pitch(0.0, 0.0)
 }
@@ -365,6 +364,7 @@ async fn start_http_server(
         .route("/v1/entities/:id/animation", get(get_animation_state))
         .route("/v1/player/position", get(get_player_position))
         .route("/v1/camera", get(get_camera_state))
+        .route("/v1/camera", axum::routing::post(set_camera_state))
         .route("/v1/player/teleport", axum::routing::post(teleport_player))
         .route(
             "/v1/player/move",
@@ -1367,16 +1367,15 @@ fn process_command(
             }
         }
         RuntimeCommand::GetCameraState(reply) => {
-            let (detached, pose) = game.free_camera_state();
-            let snapshot = CameraStateSnapshot {
-                detached,
-                enabled: shock2vr::free_camera::FreeCamera::is_enabled(),
-                position: pose.map(|(position, _)| [position.x, position.y, position.z]),
-                rotation: pose
-                    .map(|(_, rotation)| [rotation.s, rotation.v.x, rotation.v.y, rotation.v.z]),
-            };
-            if reply.send(snapshot).is_err() {
+            if reply.send(camera_snapshot(game, current_input)).is_err() {
                 tracing::warn!("Failed to send camera state - receiver dropped");
+            }
+        }
+        RuntimeCommand::SetCameraState { request, reply } => {
+            let result = apply_camera_request(game, current_input, &request)
+                .map(|()| camera_snapshot(game, current_input));
+            if reply.send(result).is_err() {
+                tracing::warn!("Failed to send camera placement result - receiver dropped");
             }
         }
         RuntimeCommand::GetPlayerPosition(reply) => {
@@ -1975,18 +1974,185 @@ fn input_snapshot_from_context(input: &InputContext) -> InputSnapshot {
 /// camera the runtime actually rendered from, which is what makes the death
 /// camera observable headlessly, and a second copy of this expression would
 /// drift from the one that matters.
+/// The *tracked* head this runtime reports: the crouch-aware eye height and
+/// whatever `/v1/control/input` last aimed the head at.
+fn tracked_head(game: &Game, input: &InputContext) -> (Vector3<f32>, Quaternion<f32>) {
+    (
+        vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
+        input.head.rotation,
+    )
+}
+
+/// The head the renderer actually composes onto the camera pose this frame.
+///
+/// Not the tracked pair: while the player is dying the death camera *replaces*
+/// both components with the fallen eye (`death_camera::resolve`), and it does
+/// so with a full position, not a small delta. Dividing out the tracked pair
+/// instead would land a placement made during the fall metres away and have
+/// `GET /v1/camera` confidently report a pose that was never rendered - and
+/// "watch where the ragdoll landed" is exactly when an agent reaches for this.
+///
+/// The pawn is passed as the identity it is relative to, the same trick
+/// `capture_frame_snapshot` uses: `resolve` never touches the pawn half.
+fn composed_head(game: &Game, input: &InputContext) -> (Vector3<f32>, Quaternion<f32>) {
+    let (head_offset, head_rotation) = tracked_head(game, input);
+    let resolved = game.resolve_camera(
+        vec3(0.0, 0.0, 0.0),
+        Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        head_offset,
+        head_rotation,
+    );
+    (resolved.head_offset, resolved.head_rotation)
+}
+
+/// The free camera's state as `GET /v1/camera` (and the reply to a placement)
+/// reports it: the stored camera pose, plus the eye pose it renders as.
+fn camera_snapshot(game: &Game, input: &InputContext) -> CameraStateSnapshot {
+    let (head_offset, head_rotation) = composed_head(game, input);
+    let (detached, pose) = game.free_camera_state();
+    let eye =
+        pose.map(|pose| shock2vr::free_camera::eye_for_pose(pose, head_offset, head_rotation));
+    CameraStateSnapshot {
+        detached,
+        enabled: shock2vr::free_camera::FreeCamera::is_enabled(),
+        position: pose.map(|(position, _)| [position.x, position.y, position.z]),
+        rotation: pose.map(|(_, rotation)| [rotation.s, rotation.v.x, rotation.v.y, rotation.v.z]),
+        eye_position: eye.map(|(position, _)| [position.x, position.y, position.z]),
+        eye_rotation: eye
+            .map(|(_, rotation)| [rotation.s, rotation.v.x, rotation.v.y, rotation.v.z]),
+    }
+}
+
+/// Apply a `POST /v1/camera` request: re-attach, or detach and place the camera
+/// at the requested eye pose.
+///
+/// Two things this has to get right, both of which produce an endpoint that
+/// looks like it works and silently does nothing:
+///
+/// * **The head composition.** The view is `(camera * head)^-1`, so a pose
+///   handed straight to the free camera would render an eye-height above the
+///   requested point, rotated by whatever the head last reported. It is divided
+///   out here (`free_camera::pose_for_eye`) against `composed_head` - the head
+///   the renderer really composes, death-camera blend included.
+/// * **The developer gate.** `Game::update` re-attaches the camera every frame
+///   while the `free_camera` dev param is off, so a placement made without it
+///   would survive exactly until the next `/v1/step`. There is no human at a
+///   Developer screen in a headless runtime, so placing the camera over HTTP
+///   turns the gate on itself (and `GET /v1/camera` reports it as `enabled`).
+///   Re-attaching deliberately leaves the gate alone: the caller may have set
+///   it on purpose, and re-attaching is already the full way back to the body.
+///   One consequence worth knowing: the gate stays on for the rest of the
+///   process, so the `ToggleFreeCamera` chord is live from the first placement.
+///
+/// The compensation is a snapshot of a live quantity, so a later
+/// `POST /v1/control/input` that patches `head.rotation` (or a crouch, which
+/// moves the eye height) swings a placed camera off its target - `GET` still
+/// reports the truth, because it recomputes, but the picture is no longer the
+/// one that was asked for. Re-issue the placement after aiming the head.
+fn apply_camera_request(
+    game: &mut Game,
+    input: &InputContext,
+    request: &SetCameraRequest,
+) -> Result<(), String> {
+    fn all_finite(values: &[f32]) -> bool {
+        values.iter().all(|v| v.is_finite())
+    }
+    fn finite(label: &str, values: [f32; 3]) -> Result<Vector3<f32>, String> {
+        if !all_finite(&values) {
+            return Err(format!(
+                "'{label}' must be three finite numbers, got {values:?}"
+            ));
+        }
+        Ok(vec3(values[0], values[1], values[2]))
+    }
+
+    if request.detached == Some(false) {
+        if request.position.is_some() || request.look_at.is_some() || request.rotation.is_some() {
+            return Err(
+                "'detached: false' re-attaches the camera to the player and takes no pose; \
+                 drop 'position'/'look_at'/'rotation', or set 'detached: true'"
+                    .to_string(),
+            );
+        }
+        game.attach_free_camera();
+        return Ok(());
+    }
+
+    if request.look_at.is_some() && request.rotation.is_some() {
+        return Err(
+            "'look_at' and 'rotation' are two ways to say the same thing; pass one".to_string(),
+        );
+    }
+
+    let (head_offset, head_rotation) = composed_head(game, input);
+    // Patch semantics are against the *eye* pose, which is the pose the caller
+    // named last time - not the compensated one stored underneath.
+    let current_eye = game
+        .free_camera_state()
+        .1
+        .map(|pose| shock2vr::free_camera::eye_for_pose(pose, head_offset, head_rotation));
+
+    let position = match request.position {
+        Some(position) => finite("position", position)?,
+        None => {
+            current_eye
+                .ok_or_else(|| {
+                    "'position' is required: the camera is not placed yet, so there is nothing \
+                     to patch"
+                        .to_string()
+                })?
+                .0
+        }
+    };
+
+    let rotation = if let Some(target) = request.look_at {
+        let target = finite("look_at", target)?;
+        shock2vr::free_camera::look_at_rotation(position, target).ok_or_else(|| {
+            format!(
+                "'look_at' {:?} is the camera position itself, so there is no direction to aim",
+                [target.x, target.y, target.z]
+            )
+        })?
+    } else if let Some([w, x, y, z]) = request.rotation {
+        let quaternion = Quaternion::new(w, x, y, z);
+        if !all_finite(&[w, x, y, z]) || quaternion.magnitude() < 1e-6 {
+            return Err(format!(
+                "'rotation' must be a non-degenerate [w, x, y, z] quaternion, got {:?}",
+                [w, x, y, z]
+            ));
+        }
+        quaternion.normalize()
+    } else {
+        current_eye
+            .ok_or_else(|| {
+                "'look_at' or 'rotation' is required: the camera is not placed yet, so there is \
+                 no orientation to keep"
+                    .to_string()
+            })?
+            .1
+    };
+
+    shock2vr::dev_params::set(shock2vr::dev_params::FREE_CAMERA, 1.0);
+    game.place_free_camera(shock2vr::free_camera::pose_for_eye(
+        (position, rotation),
+        head_offset,
+        head_rotation,
+    ));
+    Ok(())
+}
+
 fn resolved_camera(
     game: &Game,
     pawn_offset: Vector3<f32>,
     pawn_rotation: Quaternion<f32>,
     input: &InputContext,
 ) -> shock2vr::death_camera::CameraPose {
-    game.resolve_camera(
-        pawn_offset,
-        pawn_rotation,
-        vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
-        input.head.rotation,
-    )
+    // The head pair comes from `tracked_head` rather than being spelled out
+    // again here: `composed_head` - what `POST /v1/camera` divides back out -
+    // is this same pair put through the same `resolve_camera`, and the
+    // placement is only correct while the two agree.
+    let (head_offset, head_rotation) = tracked_head(game, input);
+    game.resolve_camera(pawn_offset, pawn_rotation, head_offset, head_rotation)
 }
 
 /// Capture current game state as a frame snapshot
@@ -2515,6 +2681,38 @@ async fn get_camera_state(
         Ok(snapshot) => Ok(Json(snapshot)),
         Err(_) => {
             tracing::error!("Failed to receive camera state - sender dropped");
+            Err(game_loop_unavailable())
+        }
+    }
+}
+
+/// HTTP handler placing the free (debug) camera, or re-attaching it.
+///
+/// The write side of `GET /v1/camera`: it makes a third-person shot possible at
+/// all - the player and whatever they are holding, framed from outside - which
+/// the player-anchored eye simply cannot see.
+async fn set_camera_state(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(request): LenientJson<SetCameraRequest>,
+) -> Result<Json<CameraStateSnapshot>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if command_tx
+        .send(RuntimeCommand::SetCameraState {
+            request,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send SetCameraState command - game loop receiver dropped");
+        return Err(game_loop_unavailable());
+    }
+
+    match reply_rx.await {
+        Ok(Ok(snapshot)) => Ok(Json(snapshot)),
+        Ok(Err(message)) => Err((StatusCode::BAD_REQUEST, message)),
+        Err(_) => {
+            tracing::error!("Failed to receive camera placement result - sender dropped");
             Err(game_loop_unavailable())
         }
     }

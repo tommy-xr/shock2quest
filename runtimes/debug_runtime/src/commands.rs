@@ -112,6 +112,14 @@ pub enum RuntimeCommand {
     /// rendering from when it is.
     GetCameraState(oneshot::Sender<CameraStateSnapshot>),
 
+    /// Place the free (debug) camera, or re-attach it to the player. Replies
+    /// with the resulting state, so a caller can read back what it set in the
+    /// same round trip.
+    SetCameraState {
+        request: SetCameraRequest,
+        reply: oneshot::Sender<Result<CameraStateSnapshot, String>>,
+    },
+
     /// Pathfinding test command (set_start, set_goal, reset)
     PathfindingTest(String, oneshot::Sender<CommandResult>),
 
@@ -719,6 +727,39 @@ pub struct CameraStateSnapshot {
     pub enabled: bool,
     pub position: Option<[f32; 3]>,
     /// Rotation as `[w, x, y, z]`.
+    pub rotation: Option<[f32; 4]>,
+    /// Where the *eye* actually ends up, once the runtime composes its tracked
+    /// head offset/rotation onto the camera pose above. This is the pose
+    /// `POST /v1/camera` takes and the one a screenshot is taken from, so a
+    /// caller reads back what it asked for rather than the compensated pose
+    /// stored underneath (see `shock2vr::free_camera::eye_for_pose`).
+    pub eye_position: Option<[f32; 3]>,
+    /// Eye rotation as `[w, x, y, z]`.
+    pub eye_rotation: Option<[f32; 4]>,
+}
+
+/// `POST /v1/camera`: detach and place the free (debug) camera, or re-attach it.
+///
+/// Every pose is the **eye** pose in world space - where the picture is taken
+/// from - not the internal camera pose the head composition sits on top of.
+///
+/// * `{"detached": false}` re-attaches to the player. No pose field is allowed.
+/// * Otherwise the camera detaches (that is the default) and moves:
+///   - `position` - where to put the eye. Required unless the camera already
+///     has a pose to patch.
+///   - `look_at` - a world point to aim at. The ergonomic primitive: "frame
+///     this entity" is `position` + `look_at`.
+///   - `rotation` - an explicit `[w, x, y, z]` orientation instead of
+///     `look_at`. The two are mutually exclusive.
+///   - Omitting both keeps the current orientation.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetCameraRequest {
+    /// `false` re-attaches. Omitted means "detached", since placing a camera
+    /// that is still attached to the player could not mean anything else.
+    pub detached: Option<bool>,
+    pub position: Option<[f32; 3]>,
+    pub look_at: Option<[f32; 3]>,
+    /// `[w, x, y, z]`, matching what `GET /v1/camera` reports.
     pub rotation: Option<[f32; 4]>,
 }
 
