@@ -2923,9 +2923,13 @@ impl MissionCore {
                         is_climbing: self.player_handle.is_climbing(),
                     });
             if let Some(footstep) = footstep {
+                // The deck the foot landed on: `new_character_pos` is the pawn
+                // origin, already at the player's feet.
+                let ground_material = self.physics.ground_surface_material(new_character_pos);
                 effects.push(crate::mission::player_footsteps::player_footstep_effect(
                     footstep,
                     new_character_pos,
+                    ground_material,
                 ));
             }
 
