@@ -1,8 +1,13 @@
+use std::collections::HashMap;
+
 use cgmath::{Matrix4, Vector2, point2, vec2, vec3};
 use collision::{Aabb2, Aabb3};
 use dark::{
-    importers::{FONT_IMPORTER, TEXTURE_IMPORTER},
-    properties::{PropHUDSelect, PropHitPoints, PropObjName, PropStackCount, PropTemplateId},
+    importers::{FONT_IMPORTER, STRINGS_IMPORTER, TEXTURE_IMPORTER},
+    properties::{
+        ObjectNameType, PropGunState, PropHUDSelect, PropHitPoints, PropLog, PropObjName,
+        PropObjectNameType, PropStackCount, PropTemplateId,
+    },
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
 use shipyard::{EntityId, Get, View, World};
@@ -30,11 +35,118 @@ pub(crate) fn is_hud_selectable(world: &World, entity_id: EntityId) -> bool {
         .unwrap_or(false)
 }
 
+const LOG_UNSET: u32 = 33;
+
+fn resolve_localized_property_string(raw: &str, strings: &HashMap<String, String>) -> String {
+    let (key, fallback) = match raw.split_once(':') {
+        Some((key, remainder)) => {
+            let remainder = remainder.trim();
+            let fallback = match remainder.strip_prefix('"') {
+                Some(quoted) => quoted.split_once('"').map_or("", |(value, _)| value),
+                None => remainder,
+            };
+            (key.trim(), fallback)
+        }
+        None => (raw.trim(), ""),
+    };
+
+    strings
+        .get(&key.to_ascii_lowercase())
+        .map(String::as_str)
+        .unwrap_or(fallback)
+        .to_owned()
+}
+
 fn format_stack_aware_item_name(item_name: &str, stack_count: Option<i32>) -> String {
     match stack_count {
         Some(count) => item_name.replace("%d", &count.to_string()),
         None => item_name.to_owned(),
     }
+}
+
+fn format_typed_item_name(
+    item_name: &str,
+    name_type: ObjectNameType,
+    stack_count: Option<i32>,
+    log_title: Option<&str>,
+    weapon_condition: Option<&str>,
+) -> String {
+    match name_type {
+        ObjectNameType::StackCount => format_stack_aware_item_name(item_name, stack_count),
+        ObjectNameType::LogTitle => log_title
+            .map(|title| item_name.replace("%s", title))
+            .unwrap_or_else(|| item_name.to_owned()),
+        ObjectNameType::Weapon => weapon_condition
+            .map(|condition| item_name.replace("%s", condition))
+            .unwrap_or_else(|| item_name.to_owned()),
+        ObjectNameType::Normal | ObjectNameType::Unknown(_) => item_name.to_owned(),
+    }
+}
+
+fn format_hover_label(
+    item_name: &str,
+    hit_points: Option<i32>,
+    debug_identity: Option<(&str, u64)>,
+) -> String {
+    match (hit_points, debug_identity) {
+        (Some(hit_points), Some((template_id, entity_id))) => {
+            format!("{item_name} | {hit_points} (Tem {template_id}| Ent {entity_id})")
+        }
+        (None, Some((template_id, entity_id))) => {
+            format!("{item_name} (Tem {template_id}| Ent {entity_id})")
+        }
+        (Some(hit_points), None) => format!("{item_name} | {hit_points}"),
+        (None, None) => item_name.to_owned(),
+    }
+}
+
+fn format_inline_localized_text(text: &str) -> String {
+    text.replace("\\n", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn localized_log_title(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+) -> Option<String> {
+    let (deck, log) = {
+        let logs = world.borrow::<View<PropLog>>().ok()?;
+        let log = logs.get(entity_id).ok()?;
+        (log.deck, log.log)
+    };
+    if deck == 0 || log == 0 || log == LOG_UNSET {
+        return None;
+    }
+
+    let strings = asset_cache.get_opt(&STRINGS_IMPORTER, &format!("level{deck:02}.str"))?;
+    strings
+        .get(&format!("logname{log}"))
+        .map(|name| format_inline_localized_text(name))
+}
+
+fn weapon_condition_key(condition: f32) -> String {
+    // Looking Glass's GunGetConditionString truncates the 0..100 condition,
+    // divides it into ten buckets, and fetches GunCondVal1..10.
+    let bucket = ((condition as i32) / 10).clamp(0, 9) + 1;
+    format!("guncondval{bucket}")
+}
+
+fn localized_weapon_condition(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+) -> Option<String> {
+    let condition = {
+        let gun_states = world.borrow::<View<PropGunState>>().ok()?;
+        gun_states.get(entity_id).ok()?.condition
+    };
+    asset_cache
+        .get_opt(&STRINGS_IMPORTER, "weapon.str")?
+        .get(&weapon_condition_key(condition))
+        .cloned()
 }
 
 pub fn draw_item_name(
@@ -54,54 +166,69 @@ pub fn draw_item_name(
         return vec![];
     }
 
-    let v_prop_obj_short_name = world.borrow::<View<PropObjName>>().unwrap();
-    let maybe_prop_obj_short_name = v_prop_obj_short_name.get(entity_id);
+    let v_prop_obj_name = world.borrow::<View<PropObjName>>().unwrap();
+    let maybe_prop_obj_name = v_prop_obj_name.get(entity_id);
 
-    if maybe_prop_obj_short_name.is_err() {
+    if maybe_prop_obj_name.is_err() {
         return vec![];
     }
 
-    let prop_obj_short_name = maybe_prop_obj_short_name.unwrap();
+    let prop_obj_name = maybe_prop_obj_name.unwrap();
 
-    if prop_obj_short_name.0.is_empty() {
+    if prop_obj_name.0.is_empty() {
         return vec![];
     }
 
+    let object_name_strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
+    let localized_name = resolve_localized_property_string(&prop_obj_name.0, &object_name_strings);
+    if localized_name.is_empty() {
+        return vec![];
+    }
+
+    let name_type = world
+        .borrow::<View<PropObjectNameType>>()
+        .unwrap()
+        .get(entity_id)
+        .map(|name_type| name_type.0)
+        .unwrap_or_default();
     let stack_count = world
         .borrow::<View<PropStackCount>>()
         .unwrap()
         .get(entity_id)
         .map(|stack| stack.0)
         .ok();
-    let item_name = format_stack_aware_item_name(&prop_obj_short_name.0, stack_count);
+    let log_title = (name_type == ObjectNameType::LogTitle)
+        .then(|| localized_log_title(asset_cache, world, entity_id))
+        .flatten();
+    let weapon_condition = (name_type == ObjectNameType::Weapon)
+        .then(|| localized_weapon_condition(asset_cache, world, entity_id))
+        .flatten();
+    let item_name = format_typed_item_name(
+        &localized_name,
+        name_type,
+        stack_count,
+        log_title.as_deref(),
+        weapon_condition.as_deref(),
+    );
 
     let aabb = maybe_bbox.unwrap();
     let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
     let extents = project_aabb3(&aabb, view, projection, screen_size);
 
     let v_prop_hitpoints = world.borrow::<View<PropHitPoints>>().unwrap();
-    let maybe_hitpoints = v_prop_hitpoints
-        .get(entity_id)
-        .map(|hp| hp.hit_points.to_string())
-        .unwrap_or("?".to_string());
-
-    let text_content = if debug_show_ids {
-        let template_id = world
+    let hit_points = v_prop_hitpoints.get(entity_id).map(|hp| hp.hit_points).ok();
+    let template_id = debug_show_ids.then(|| {
+        world
             .borrow::<View<PropTemplateId>>()
             .unwrap()
             .get(entity_id)
             .map(|prop| prop.template_id.to_string())
-            .unwrap_or_else(|_| "runtime".to_owned());
-        format!(
-            "{} | {} (Tem {}| Ent {})",
-            item_name,
-            &maybe_hitpoints,
-            template_id,
-            entity_id.inner(),
-        )
-    } else {
-        format!("{} | {}", item_name, &maybe_hitpoints,)
-    };
+            .unwrap_or_else(|_| "runtime".to_owned())
+    });
+    let debug_identity = template_id
+        .as_deref()
+        .map(|template_id| (template_id, entity_id.inner()));
+    let text_content = format_hover_label(&item_name, hit_points, debug_identity);
 
     let text_obj_0_0 = SceneObject::screen_space_text(
         &text_content,
@@ -119,7 +246,7 @@ pub fn draw_item_name(
 mod tests {
     use super::*;
     use crate::flat_player_controller::is_frobbable;
-    use dark::properties::{FrobFlag, PropFrobInfo};
+    use dark::properties::{FrobFlag, ObjectNameType, PropFrobInfo};
 
     fn frob_info() -> PropFrobInfo {
         PropFrobInfo {
@@ -170,6 +297,121 @@ mod tests {
 
         assert!(!is_frobbable(&world, id));
         assert!(!is_hud_selectable(&world, id));
+    }
+
+    #[test]
+    fn object_name_resource_reference_uses_localized_value() {
+        let strings = HashMap::from([(
+            "elevator_button".to_string(),
+            "Localized elevator button".to_string(),
+        )]);
+
+        assert_eq!(
+            resolve_localized_property_string(
+                r#"Elevator_Button: "A two-state button.""#,
+                &strings,
+            ),
+            "Localized elevator button",
+        );
+    }
+
+    #[test]
+    fn object_name_resource_reference_uses_embedded_fallback() {
+        assert_eq!(
+            resolve_localized_property_string(r#"HumanCorpses: "A corpse.""#, &HashMap::new(),),
+            "A corpse.",
+        );
+    }
+
+    #[test]
+    fn object_name_resource_key_without_fallback_uses_localized_value() {
+        let strings = HashMap::from([("basketball".to_string(), "A basketball.".to_string())]);
+
+        assert_eq!(
+            resolve_localized_property_string("Basketball", &strings),
+            "A basketball.",
+        );
+    }
+
+    #[test]
+    fn hover_label_omits_unknown_hit_points() {
+        assert_eq!(format_hover_label("A corpse.", None, None), "A corpse.");
+    }
+
+    #[test]
+    fn hover_label_keeps_meaningful_hit_points_and_debug_identity() {
+        assert_eq!(
+            format_hover_label("A turret.", Some(12), Some(("-1778", 42))),
+            "A turret. | 12 (Tem -1778| Ent 42)",
+        );
+    }
+
+    #[test]
+    fn hover_label_falls_back_to_runtime_identity_without_a_template() {
+        assert_eq!(
+            format_hover_label("A corpse.", None, Some(("runtime", 7))),
+            "A corpse. (Tem runtime| Ent 7)",
+        );
+    }
+
+    #[test]
+    fn localized_stack_name_replaces_decimal_placeholder() {
+        let strings =
+            HashMap::from([("nanites".to_string(), "%d translated nanites.".to_string())]);
+        let localized = resolve_localized_property_string(r#"Nanites: "%d nanites.""#, &strings);
+
+        assert_eq!(
+            format_typed_item_name(
+                &localized,
+                ObjectNameType::StackCount,
+                Some(250),
+                None,
+                None,
+            ),
+            "250 translated nanites.",
+        );
+    }
+
+    #[test]
+    fn log_and_weapon_name_types_replace_string_placeholder() {
+        assert_eq!(
+            format_typed_item_name(
+                "An audio log: %s.",
+                ObjectNameType::LogTitle,
+                None,
+                Some("SANGER"),
+                None,
+            ),
+            "An audio log: SANGER.",
+        );
+        assert_eq!(
+            format_typed_item_name(
+                "A pistol. (%s)",
+                ObjectNameType::Weapon,
+                None,
+                None,
+                Some("Perfect: 10"),
+            ),
+            "A pistol. (Perfect: 10)",
+        );
+    }
+
+    #[test]
+    fn authored_log_line_breaks_become_single_line_hover_text() {
+        assert_eq!(
+            format_inline_localized_text("SANGER 10.JUL.14\\nre: Locking Eng. Control\\n"),
+            "SANGER 10.JUL.14 re: Locking Eng. Control",
+        );
+    }
+
+    #[test]
+    fn weapon_condition_uses_original_ten_point_buckets() {
+        assert_eq!(weapon_condition_key(-1.0), "guncondval1");
+        assert_eq!(weapon_condition_key(0.0), "guncondval1");
+        assert_eq!(weapon_condition_key(9.9), "guncondval1");
+        assert_eq!(weapon_condition_key(10.0), "guncondval2");
+        assert_eq!(weapon_condition_key(50.0), "guncondval6");
+        assert_eq!(weapon_condition_key(100.0), "guncondval10");
     }
 
     #[test]

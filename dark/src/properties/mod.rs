@@ -369,6 +369,52 @@ pub struct PropObjIcon(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjName(pub String);
 
+/// How the original Shock UI substitutes placeholders in an object's localized
+/// long/short name (`P$NameType` / `ObjNameType`).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ObjectNameType {
+    #[default]
+    Normal,
+    StackCount,
+    LogTitle,
+    Weapon,
+    /// Preserve unfamiliar retail/mod values rather than silently treating
+    /// them as one of the known formatting strategies.
+    Unknown(i32),
+}
+
+impl ObjectNameType {
+    pub fn from_raw(value: i32) -> Self {
+        match value {
+            0 => Self::Normal,
+            1 => Self::StackCount,
+            2 => Self::LogTitle,
+            3 => Self::Weapon,
+            value => Self::Unknown(value),
+        }
+    }
+
+    pub fn raw(self) -> i32 {
+        match self {
+            Self::Normal => 0,
+            Self::StackCount => 1,
+            Self::LogTitle => 2,
+            Self::Weapon => 3,
+            Self::Unknown(value) => value,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, Component)]
+pub struct PropObjectNameType(pub ObjectNameType);
+
+impl PropObjectNameType {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, len: u32) -> Self {
+        assert_eq!(len, 4, "P$NameType must contain one signed 32-bit value");
+        Self(ObjectNameType::from_raw(read_i32(reader)))
+    }
+}
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjShortName(pub String);
 
@@ -1626,6 +1672,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$NameType",
+            PropObjectNameType::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$ObjState",
             PropObjState::read,
             identity,
@@ -2422,6 +2474,21 @@ pub fn define_link_with_versioned_data<TData: 'static + fmt::Debug + Send + Sync
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn object_name_type_reads_retail_variants_and_preserves_unknown_values() {
+        for (raw, expected) in [
+            (0_i32, ObjectNameType::Normal),
+            (1, ObjectNameType::StackCount),
+            (2, ObjectNameType::LogTitle),
+            (3, ObjectNameType::Weapon),
+            (17, ObjectNameType::Unknown(17)),
+        ] {
+            let parsed = PropObjectNameType::read(&mut Cursor::new(raw.to_le_bytes()), 4);
+            assert_eq!(parsed, PropObjectNameType(expected));
+            assert_eq!(parsed.0.raw(), raw);
+        }
+    }
 
     /// Build a 108-byte sStimSourceDesc payload the way shock2.gam lays it
     /// out: propagator id, intensity, unknown, then propagator params.
