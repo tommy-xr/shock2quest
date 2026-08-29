@@ -628,12 +628,6 @@ mod tests {
     fn a_landed_vr_swing_deals_the_weapons_authored_contact_damage() {
         let (world, weapon, target) = test_world(PresentationMode::Vr);
         let mut script = TriggeredMeleeWeapon::new();
-        script.handle_message(
-            weapon,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TriggerPull,
-        );
 
         let Effect::Multiple(effects) = collide(&mut script, &world, weapon, target) else {
             panic!("expected melee impact effects");
@@ -660,12 +654,6 @@ mod tests {
     fn a_landed_vr_swing_carries_an_impact_for_the_death_reaction() {
         let (world, weapon, target) = test_world(PresentationMode::Vr);
         let mut script = TriggeredMeleeWeapon::new();
-        script.handle_message(
-            weapon,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TriggerPull,
-        );
 
         let Effect::Multiple(effects) = collide(&mut script, &world, weapon, target) else {
             panic!("expected melee impact effects");
@@ -706,12 +694,6 @@ mod tests {
             ),
         );
         let mut script = TriggeredMeleeWeapon::new();
-        script.handle_message(
-            weapon,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TriggerPull,
-        );
 
         assert_damage(collide(&mut script, &world, weapon, target), target);
     }
@@ -723,12 +705,6 @@ mod tests {
         let (world, weapon, target) =
             test_world_with_victim_receptrons(PresentationMode::Vr, Vec::new());
         let mut script = TriggeredMeleeWeapon::new();
-        script.handle_message(
-            weapon,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TriggerPull,
-        );
 
         assert!(matches!(
             collide(&mut script, &world, weapon, target),
@@ -736,13 +712,21 @@ mod tests {
         ));
     }
 
+    /// A contact from a weapon moving comfortably above the shipped free-swing
+    /// gate, along the contact normal - the canonical billable swing.
     fn collide(
         script: &mut TriggeredMeleeWeapon,
         world: &World,
         weapon: EntityId,
         target: EntityId,
     ) -> Effect {
-        collide_at_speed(script, world, weapon, target, &PhysicsWorld::new())
+        collide_at_speed(script, world, weapon, target, &fast_swing(weapon))
+    }
+
+    /// A physics world whose weapon closes faster than the shipped gate.
+    fn fast_swing(weapon: EntityId) -> PhysicsWorld {
+        let gate = crate::dev_params::spec(crate::dev_params::MELEE_FREE_SWING_SPEED).default;
+        physics_with_weapon_speed(weapon, gate + 1.0)
     }
 
     fn collide_at_speed(
@@ -833,7 +817,6 @@ mod tests {
         audible_weapon(&mut world, weapon);
         let physics = swinging(weapon);
         let mut script = TriggeredMeleeWeapon::new();
-        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerPull);
 
         let effect = collide_at_speed(&mut script, &world, weapon, target, &physics);
         assert_eq!(sound_count(&effect), 1, "got {effect:?}");
@@ -845,9 +828,8 @@ mod tests {
     fn a_damaging_contact_makes_both_damage_and_an_impact_sound() {
         let (mut world, weapon, target) = test_world(PresentationMode::Vr);
         audible_weapon(&mut world, weapon);
-        let physics = swinging(weapon);
+        let physics = fast_swing(weapon);
         let mut script = TriggeredMeleeWeapon::new();
-        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerPull);
 
         let effect = collide_at_speed(&mut script, &world, weapon, target, &physics);
         assert_eq!(sound_count(&effect), 1, "got {effect:?}");
@@ -886,19 +868,17 @@ mod tests {
         assert_eq!(sound_count(&later), 1, "got {later:?}");
     }
 
-    /// The trigger rule does not speed-gate damage, so a slow press that still
-    /// bills a hit must not fall through the sound's speed floor: a blow that
-    /// lands was always audible and must stay that way.
+    /// A graze below the swing gate bills nothing but is still audible: the
+    /// sound floor (0.1) sits far below the damage gate on purpose.
     #[test]
-    fn a_slow_contact_that_still_damages_is_audible() {
+    fn a_graze_below_the_swing_threshold_is_audible_but_harmless() {
         let (mut world, weapon, target) = test_world(PresentationMode::Vr);
         audible_weapon(&mut world, weapon);
-        let physics = physics_with_weapon_speed(weapon, 0.005);
+        let physics = physics_with_weapon_speed(weapon, 1.0);
         let mut script = TriggeredMeleeWeapon::new();
-        script.handle_message(weapon, &world, &physics, &MessagePayload::TriggerPull);
 
         let effect = collide_at_speed(&mut script, &world, weapon, target, &physics);
-        assert_eq!(damage_count(&effect), 1, "got {effect:?}");
+        assert_eq!(damage_count(&effect), 0, "got {effect:?}");
         assert_eq!(sound_count(&effect), 1, "got {effect:?}");
     }
 
@@ -947,72 +927,45 @@ mod tests {
         ));
     }
 
+    /// One physical swing crosses a body over several contact frames; the
+    /// per-victim cooldown makes it bill once, and a later swing bills again.
     #[test]
-    fn authored_melee_contact_is_harmless_until_vr_trigger_pull() {
+    fn one_swing_bills_each_victim_only_once() {
         let (world, weapon, target) = test_world(PresentationMode::Vr);
+        let physics = fast_swing(weapon);
         let mut script = TriggeredMeleeWeapon::new();
 
+        assert_damage(
+            collide_at_speed(&mut script, &world, weapon, target, &physics),
+            target,
+        );
         assert!(matches!(
-            collide(&mut script, &world, weapon, target),
+            collide_at_speed(&mut script, &world, weapon, target, &physics),
             Effect::NoEffect
         ));
-        script.handle_message(
+
+        // ...and once the cooldown expires, a second swing is a second hit.
+        script.update(
             weapon,
             &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TriggerPull,
+            &physics,
+            &crate::time::Time {
+                elapsed: std::time::Duration::from_millis(500),
+                total: std::time::Duration::from_millis(500),
+            },
         );
-        assert_damage(collide(&mut script, &world, weapon, target), target);
-    }
-
-    #[test]
-    fn one_vr_trigger_pull_can_damage_each_contact_only_once() {
-        let (world, weapon, target) = test_world(PresentationMode::Vr);
-        let mut script = TriggeredMeleeWeapon::new();
-        script.handle_message(
-            weapon,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TriggerPull,
+        assert_damage(
+            collide_at_speed(&mut script, &world, weapon, target, &physics),
+            target,
         );
-
-        assert_damage(collide(&mut script, &world, weapon, target), target);
-        assert!(matches!(
-            collide(&mut script, &world, weapon, target),
-            Effect::NoEffect
-        ));
     }
 
+    /// Flat melee is `WeaponScript`'s aimed raycast; a physically bumped
+    /// wielded weapon must do nothing outside VR however fast it moves.
     #[test]
-    fn release_and_drop_close_the_vr_melee_damage_window() {
-        for close in [MessagePayload::TriggerRelease, MessagePayload::Drop] {
-            let (world, weapon, target) = test_world(PresentationMode::Vr);
-            let mut script = TriggeredMeleeWeapon::new();
-            script.handle_message(
-                weapon,
-                &world,
-                &PhysicsWorld::new(),
-                &MessagePayload::TriggerPull,
-            );
-            script.handle_message(weapon, &world, &PhysicsWorld::new(), &close);
-
-            assert!(matches!(
-                collide(&mut script, &world, weapon, target),
-                Effect::NoEffect
-            ));
-        }
-    }
-
-    #[test]
-    fn flat_trigger_does_not_arm_physical_melee_damage() {
+    fn physical_melee_contact_is_inert_outside_vr() {
         let (world, weapon, target) = test_world(PresentationMode::Flat);
         let mut script = TriggeredMeleeWeapon::new();
-        script.handle_message(
-            weapon,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TriggerPull,
-        );
 
         assert!(matches!(
             collide(&mut script, &world, weapon, target),
