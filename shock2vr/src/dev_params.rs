@@ -169,10 +169,7 @@ dev_params! {
     /// (`physics::held_melee_drive::free_swing_speed_separation`): a brisk
     /// swing peaks at **4.07** and ordinary walking carries the weapon at
     /// **1.80**. 2.0 was then tuned in-headset from that measurement.
-    ///
-    /// `0` is a legacy escape hatch back to the trigger-held attack window
-    /// (`TriggeredMeleeWeapon`'s trigger rule).
-    MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Free swing", 2.0, 0.0, 20.0, 0.5),
+    MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Free swing", 2.0, 0.5, 20.0, 0.5),
     /// Draw the tracked-hand glove *in addition to* a wielded weapon's own
     /// first-person model, instead of letting the weapon model stand in for the
     /// hand. `0` off, `1` on.
