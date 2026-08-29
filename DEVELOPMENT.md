@@ -228,3 +228,28 @@ reading pixels - see `tools/shock2-sdk/test/free-camera.e2e.test.ts`.
 - `cargo apk run --release`
 
 **Note**: Cargo aliases (dr, dq, dv) work for desktop development but not for Android builds, which require the full cargo apk commands.
+
+##### Wireless deploy & logs (no cable)
+
+Everything in the Quest loop (`cargo apk run`, `adb install`, `adb logcat`) goes
+through adb, so it all works over Wi-Fi once adb is connected wirelessly. One-time
+setup per headset boot, with the cable plugged in:
+
+```sh
+adb tcpip 5555
+adb shell ip route     # note the headset's IP, e.g. 192.168.1.42
+# unplug the cable, then:
+adb connect 192.168.1.42:5555
+```
+
+After that, `adb devices` lists `192.168.1.42:5555` and `cargo apk run --release`
+installs + launches over the air; `adb logcat` streams logs wirelessly.
+
+- If both a USB and a wireless device are listed, target one with
+  `adb -s 192.168.1.42:5555 ...` or `export ANDROID_SERIAL=192.168.1.42:5555`.
+- A reboot (and sometimes sleep / a Wi-Fi drop) resets tcpip mode — reconnect the
+  cable and repeat. For a fully cable-free flow, use the headset's Wireless
+  Debugging (Settings → System → Developer) with `adb pair` once and
+  `adb connect` per session, or let Meta Quest Developer Hub manage the
+  connection (it auto-reconnects and can keep the headset awake).
+- APK push is slower over Wi-Fi than USB; fine for the normal iterate loop.
