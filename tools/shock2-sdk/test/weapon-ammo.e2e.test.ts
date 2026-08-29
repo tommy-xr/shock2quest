@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { EntitySummary } from "../src/index.js";
-import { fireOnce } from "./helpers/weapon.js";
+import { cycleToWeapon, fireOnce } from "./helpers/weapon.js";
 
 // End-to-end regression test for weapon ammo (PropGunState): a weapon limited by
 // its clip decrements one round per shot and dry-fires (no projectile) at empty.
@@ -36,13 +36,9 @@ test(
 
     // debug_weapons starts unarmed; DebugCycleWeapon spawns + wields the pistol.
     await game.step({ frames: 5 });
-    await game.input.trigger("DebugCycleWeapon");
-    await game.step({ frames: 5 });
-
-    const pistolId = (await game.entities.list({ limit: 60 })).entities.find(
-      (e) => e.name === "Pistol",
-    )?.id;
-    assert.ok(pistolId !== undefined, "pistol should be wielded");
+    const pistolId = (
+      await cycleToWeapon(game, (e) => e.name === "Pistol", { settleFrames: 5 })
+    ).id;
 
     const startAmmo = ammoOf(await game.entities.detail(pistolId));
     assert.ok(startAmmo > 0, `pistol should start with rounds (got ${startAmmo})`);

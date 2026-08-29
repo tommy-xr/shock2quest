@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { cycleToWeapon } from "./helpers/weapon.js";
 import type { EntitySummary, Vec3 } from "../src/index.js";
 import {
   add,
@@ -186,13 +187,7 @@ test(
     await game.step({ frames: 30 });
 
     // DebugCycleWeapon drops each weapon in front of the player in VR.
-    let laser: EntitySummary | undefined;
-    for (let cycle = 0; cycle < 12 && !laser; cycle += 1) {
-      await game.input.trigger("DebugCycleWeapon");
-      await game.step({ frames: 10 });
-      laser = (await game.entities.list()).entities.find((e) => e.template_id === LASER_PISTOL);
-    }
-    assert.ok(laser, "DebugCycleWeapon must spawn the Laser Pistol");
+    const laser = await cycleToWeapon(game, (e) => e.template_id === LASER_PISTOL);
 
     await grabWithRightHand(game, laser.position as Vec3);
     const held = await game.info();

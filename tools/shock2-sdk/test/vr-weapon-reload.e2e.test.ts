@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { EntitySummary, PlayedSound, Vec3 } from "../src/index.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
-import { fireOnce } from "./helpers/weapon.js";
+import { fireOnce, cycleToWeapon } from "./helpers/weapon.js";
 
 // End-to-end coverage for gun handling from a VR-HELD weapon. The reload and
 // ammo-cycle machinery is presentation-shared, but until the Quest face-button
@@ -63,10 +63,7 @@ function tagValue(sound: PlayedSound, tag: string): string | undefined {
 async function grabPistol(game: GameServer): Promise<EntitySummary> {
   // In VR `wield` is a no-op, so DebugCycleWeapon drops each weapon in front of
   // the player as a world pickup. The pistol is the first roster entry.
-  await game.input.trigger("DebugCycleWeapon");
-  await game.step({ frames: 10 });
-  const pistol = (await game.entities.list()).entities.find((e) => e.template_id === PISTOL);
-  assert.ok(pistol, "DebugCycleWeapon must spawn the Pistol");
+  const pistol = await cycleToWeapon(game, (e) => e.template_id === PISTOL);
 
   await aimVrHandAt(game, pistol.position as Vec3, 0.3);
   await game.input.set("right_hand.squeeze", 1);
