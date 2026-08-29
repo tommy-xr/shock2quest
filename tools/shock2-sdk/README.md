@@ -169,6 +169,11 @@ const game = await GameServer.connect("http://127.0.0.1:8080");
   its own ephemeral one. (Existing tests still pass a fixed port; that is now
   an exact request, so a leftover runtime on it fails the launch loudly instead
   of silently drifting to the next port.)
+- Both `npm test` and `npm run test:e2e` end with a single verdict line,
+  `shock2-sdk tests: PASS|FAIL ...`, and exit non-zero on any failure (a
+  runner killed by a signal included). Gate on the exit code; when only a
+  captured log survives (tee/background wrappers can mask the code), grep
+  that line instead of parsing TAP.
 - Reliability runs (catch flakiness in timing-sensitive tests): `npm run
   test:e2e:reliability` runs the e2e suite 10x (also serial). Target one test
   with `node scripts/reliability.mjs <count> "<name pattern>"`, e.g.
