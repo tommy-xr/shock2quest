@@ -91,12 +91,12 @@ const IMPACT_SOUND_COOLDOWN_SECONDS: f32 = 0.15;
 /// Measured in `debug_melee` (see its module docs): a held weapon at rest
 /// reads ~0.005 and a brisk controller sweep peaks at ~1.6. This sits well
 /// clear of rest while staying far below the free-swing *damage* threshold
-/// (0.5 in that scene), so a light tap that does no damage still clinks.
+/// (`MELEE_FREE_SWING_SPEED`), so a light tap that does no damage still clinks.
 const IMPACT_SOUND_MIN_SPEED: f32 = 0.1;
 
-/// The physical alternative to the trigger window: a swing damages because it
-/// was *moving*, not because a button was down. `None` when the shipped
-/// trigger rule is in force.
+/// The shipped rule: a swing damages because it was *moving*, not because a
+/// button was down. `None` only when the parameter is zeroed - the legacy
+/// escape hatch back to the trigger-window rule.
 fn free_swing_speed_threshold() -> Option<f32> {
     let threshold = crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED);
     (threshold > 0.0).then_some(threshold)
@@ -459,7 +459,7 @@ mod tests {
     /// against the old one.
     #[test]
     fn carrying_a_weapon_at_walking_pace_is_not_a_swing() {
-        let gate = crate::scenes::debug_melee::FREE_SWING_SPEED;
+        let gate = crate::dev_params::spec(crate::dev_params::MELEE_FREE_SWING_SPEED).default;
         let mut physics = PhysicsWorld::new();
         let weapon = EntityId::from_inner(1).unwrap();
         let victim = EntityId::from_inner(2).unwrap();
