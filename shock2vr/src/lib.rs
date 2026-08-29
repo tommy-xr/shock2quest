@@ -439,11 +439,14 @@ const MIN_LOADING_FRAMES: u32 = 24;
 const PROGRESS_PARSING: f32 = 0.25;
 const PROGRESS_PARSE_DONE: f32 = 0.65;
 /// Shown just before the blocking build, which submits no frames; the bar sits here
-/// until the built mission swaps in.
+/// until the built mission swaps in. It stays visible only because the build blocks
+/// presentation, so the last rendered frame persists (the desktop window keeps it,
+/// the Quest compositor reprojects it).
 const PROGRESS_BUILDING: f32 = 0.9;
 /// Frames the parse-done fill is held (and rendered) before the build is allowed to
-/// start, so the bar's advance is visible instead of swallowed by the frozen build.
-/// ~0.2s at 60fps.
+/// start. A deliberate ~0.2s (at 60fps) added to every transition: without at least
+/// one rendered frame per later checkpoint, `finish_transition` would run the same
+/// frame the parse ends and the frozen build would display the parsing fill forever.
 const PARSE_DONE_HOLD_FRAMES: u32 = 12;
 
 /// Map the deferred transition's checkpoints to the loading-bar fill.
@@ -453,6 +456,14 @@ fn transition_progress(frames_shown: u32, parse_done_frame: Option<u32>) -> f32 
         Some(done) if frames_shown < done + PARSE_DONE_HOLD_FRAMES => PROGRESS_PARSE_DONE,
         Some(_) => PROGRESS_BUILDING,
     }
+}
+
+/// Whether the deferred transition may run its blocking build this frame. Strictly
+/// *after* the hold, not at it: the frame at `done + PARSE_DONE_HOLD_FRAMES` must
+/// still render, because it is the one that shows [`PROGRESS_BUILDING`].
+fn transition_ready(frames_shown: u32, parse_done_frame: Option<u32>) -> bool {
+    parse_done_frame.is_some_and(|done| frames_shown > done + PARSE_DONE_HOLD_FRAMES)
+        && frames_shown >= MIN_LOADING_FRAMES
 }
 
 pub struct Game {
@@ -863,7 +874,12 @@ impl Game {
             Mission::parse(&**asset_paths, &base_path, &parse_name, &global_context)
         });
 
-        self.set_active_scene(Box::new(LoadingScene::new()));
+        // Start the bar at the parsing fill: `begin_transition` runs after this
+        // frame's pending-transition block, so a fresh scene's 0.0 would render
+        // for one frame before the first checkpoint lands.
+        let mut loading_scene = LoadingScene::new();
+        loading_scene.set_progress(PROGRESS_PARSING);
+        self.set_active_scene(Box::new(loading_scene));
         self.pending_transition = Some(PendingTransition {
             level_name,
             spawn_loc,
@@ -1376,12 +1392,7 @@ impl Game {
                 pending.parse_done_frame = Some(pending.frames_shown);
             }
             let progress = transition_progress(pending.frames_shown, pending.parse_done_frame);
-            // Build only after the parse-done fill has been held on screen (see
-            // PARSE_DONE_HOLD_FRAMES) and the minimum display has elapsed.
-            let ready = pending
-                .parse_done_frame
-                .is_some_and(|done| pending.frames_shown > done + PARSE_DONE_HOLD_FRAMES)
-                && pending.frames_shown >= MIN_LOADING_FRAMES;
+            let ready = transition_ready(pending.frames_shown, pending.parse_done_frame);
             if ready {
                 let pending = self.pending_transition.take().unwrap();
                 self.finish_transition(pending);
@@ -2349,6 +2360,25 @@ mod tests {
             transition_progress(10 + PARSE_DONE_HOLD_FRAMES, Some(10)),
             PROGRESS_BUILDING
         );
+    }
+
+    /// The build checkpoint must actually render: the last frame before
+    /// `transition_ready` fires shows PROGRESS_BUILDING. Weakening `ready`'s
+    /// strict `>` to `>=` would silently delete the 0.9 state (#1005).
+    #[test]
+    fn the_build_fill_renders_before_the_transition_finishes() {
+        let done = MIN_LOADING_FRAMES; // parse finished after the minimum display
+        let last_shown = done + PARSE_DONE_HOLD_FRAMES;
+        assert!(!transition_ready(last_shown, Some(done)));
+        assert_eq!(
+            transition_progress(last_shown, Some(done)),
+            PROGRESS_BUILDING
+        );
+        assert!(transition_ready(last_shown + 1, Some(done)));
+        // The minimum display still gates a fast parse.
+        assert!(!transition_ready(MIN_LOADING_FRAMES - 1, Some(1)));
+        // And an unfinished parse is never ready.
+        assert!(!transition_ready(1000, None));
     }
 
     /// On by default on every platform since the Quest measurement (#1022).

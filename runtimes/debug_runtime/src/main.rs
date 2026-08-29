@@ -869,7 +869,9 @@ fn run_game_blocking(
             // loading screen's frame-counted minimum/hold through in about a
             // millisecond (and pinning a core) - so its progress checkpoints
             // could never be observed via /v1/screenshot, unlike on the real
-            // runtimes where update runs once per presented frame.
+            // runtimes where update runs once per presented frame. Trade-off:
+            // commands are polled at the top of the loop, so any /v1 request
+            // arriving mid-transition waits up to one fixed step extra.
             if game.has_pending_transition() {
                 thread::sleep(Duration::from_secs_f32(FIXED_STEP_DT));
             }
