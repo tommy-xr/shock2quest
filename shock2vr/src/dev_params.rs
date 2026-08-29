@@ -159,17 +159,20 @@ dev_params! {
     MELEE_MAX_SPEED = float("melee_max_speed", "Melee speed", 60.0, 1.0, 200.0, 5.0),
     /// The angular counterpart of [`MELEE_MAX_SPEED`], in radians per second.
     MELEE_MAX_TURN = float("melee_max_turn", "Melee turn", 60.0, 1.0, 200.0, 5.0),
-    /// Minimum contact speed, in world units per second, at which a held melee
-    /// weapon damages what it touches *without* the trigger being pulled.
+    /// Minimum closing speed, in world units per second, at which a held melee
+    /// weapon damages what it touches. This is the shipped VR melee rule: a
+    /// swing damages because it was moving, not because a button was down,
+    /// with the value acting as the swing/graze threshold so a weapon resting
+    /// against a creature does nothing.
     ///
-    /// `0` (the default) keeps the shipped rule: contact damage happens only
-    /// inside a trigger-held attack window (`TriggeredMeleeWeapon`). Any
-    /// positive value is the physical rule instead - a swing damages because
-    /// it was moving, not because a button was down - with the value acting as
-    /// the swing/graze threshold so a weapon resting against a creature does
-    /// nothing. `debug_melee` turns it on; missions leave it at 0 until the
-    /// physical model is the shipped one.
-    MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Free swing", 0.0, 0.0, 20.0, 0.5),
+    /// The default sits in a measured gap, not a guessed one
+    /// (`physics::held_melee_drive::free_swing_speed_separation`): a brisk
+    /// swing peaks at **4.07** and ordinary walking carries the weapon at
+    /// **1.80**. 2.0 was then tuned in-headset from that measurement.
+    ///
+    /// `0` is a legacy escape hatch back to the trigger-held attack window
+    /// (`TriggeredMeleeWeapon`'s trigger rule).
+    MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Free swing", 2.0, 0.0, 20.0, 0.5),
     /// Draw the tracked-hand glove *in addition to* a wielded weapon's own
     /// first-person model, instead of letting the weapon model stand in for the
     /// hand. `0` off, `1` on.

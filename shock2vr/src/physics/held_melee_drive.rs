@@ -349,6 +349,62 @@ fn held_melee_is_still_in_a_still_hand() {
     );
 }
 
+/// What the free-swing damage gate actually reads, for the two gestures it has
+/// to tell apart. The 0.5 threshold `debug_melee` shipped with was calibrated
+/// against the *spring* drive, where a swing peaked at 1.6 while walking is
+/// ~1.8 - overlapping, which is why walking billed free hits. The swept drive
+/// tracks the hand, so this prints whether the two have separated.
+#[test]
+#[ignore = "measurement - run explicitly"]
+fn free_swing_speed_separation() {
+    // A swing: the hand arcs and the weapon follows it.
+    let (mut world, mut player) = world_with_floor();
+    let (start, start_rot) = swing_pose(0.0);
+    let (weapon, handle) = spawn_held_wrench(&mut world, start);
+    for _ in 0..30 {
+        world.set_position_rotation2(weapon, start, start_rot);
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+    }
+    let mut swing_peak = 0.0f32;
+    for frame in 0..SWING_FRAMES {
+        let (hand, hand_rot) = swing_pose(frame as f32 / SWING_FRAMES as f32);
+        world.set_position_rotation2(weapon, hand, hand_rot);
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let head = world.get_position(handle).unwrap();
+        let v = world
+            .velocity_at_point(weapon, head)
+            .unwrap_or(vec3(0.0, 0.0, 0.0));
+        swing_peak = swing_peak.max(v.magnitude());
+    }
+
+    // Walking: the hand holds still relative to the player, and the whole
+    // pair translates. This is the gesture that must NOT bill damage.
+    let (mut world, mut player) = world_with_floor();
+    let (rest, rest_rot) = swing_pose(0.0);
+    let (weapon, handle) = spawn_held_wrench(&mut world, rest);
+    for _ in 0..30 {
+        world.set_position_rotation2(weapon, rest, rest_rot);
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+    }
+    // 1.8 units/s is ordinary walking; step the hand by that per frame.
+    let per_frame = 1.8 / 60.0;
+    let mut walk_peak = 0.0f32;
+    for frame in 0..30 {
+        let carried = rest + vec3(per_frame * frame as f32, 0.0, 0.0);
+        world.set_position_rotation2(weapon, carried, rest_rot);
+        world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let head = world.get_position(handle).unwrap();
+        let v = world
+            .velocity_at_point(weapon, head)
+            .unwrap_or(vec3(0.0, 0.0, 0.0));
+        walk_peak = walk_peak.max(v.magnitude());
+    }
+
+    println!("\nswing peak: {swing_peak:.3} u/s");
+    println!("walk  peak: {walk_peak:.3} u/s");
+    println!("separation ratio: {:.1}x", swing_peak / walk_peak.max(1e-6));
+}
+
 /// The per-frame table a human reads when the drive feels wrong. Ignored
 /// because it prints rather than asserts.
 #[test]

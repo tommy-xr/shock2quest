@@ -8,11 +8,10 @@
 //! weapon within arm's reach, a row of damageable creatures at known
 //! distances, and a flat wall to swing into.
 //!
-//! Contact damage here needs no trigger. The scene raises
-//! [`dev_params::MELEE_FREE_SWING_SPEED`], so a swing damages because the
-//! weapon was moving - which is the model physical melee is heading toward and
-//! the one worth exercising. Missions are untouched; the parameter defaults to
-//! 0 (the shipped trigger window) everywhere else.
+//! Contact damage here needs no trigger, same as everywhere: a swing damages
+//! because the weapon was moving, gated by
+//! [`dev_params::MELEE_FREE_SWING_SPEED`] (the shipped default; see its docs
+//! for the measurement behind the number).
 //!
 //! Grip calibration: raise `melee_glove_overlay` (Developer screen, or
 //! `POST /v1/dev-params`) to draw the tracked-hand glove *as well as* the
@@ -76,17 +75,6 @@ const PEN_FAR: f32 = 12.5;
 const PEN_HALF_WIDTH: f32 = 2.5;
 const PEN_WALL_HEIGHT: f32 = 4.0;
 
-/// Contact speed a swing must carry to damage, in world units per second.
-/// Resting a weapon against a creature does nothing; a deliberate swing does.
-///
-/// Measured in this scene rather than guessed: a held weapon at rest reads
-/// ~0.005, and a brisk controller sweep peaks at ~1.6 - far below the hand's
-/// own ~10, because the spring drive currently attenuates a swing several-fold
-/// (see `physics::spring_sweep`). 0.5 separates the two cleanly today and
-/// still will once the drive tracks properly, since that only raises the
-/// swinging figure.
-const FREE_SWING_SPEED: f32 = 0.5;
-
 /// Distance to the wall the player can swing into, straight ahead. Also the
 /// pen's back wall.
 const WALL_DISTANCE: f32 = 13.0;
@@ -112,8 +100,6 @@ pub fn create_debug_melee_scene(
     asset_cache: &mut AssetCache,
     audio_context: &mut AudioContext<EntityId, String>,
 ) -> Box<dyn GameScene> {
-    // Contact damages on its own here - see the module docs.
-    dev_params::set(dev_params::MELEE_FREE_SWING_SPEED, FREE_SWING_SPEED);
     // Both calibration overlays default ON in this scene: it exists to answer
     // "is the hand where my hand is" and "is the damage volume on the weapon I
     // can see", and neither question can be asked with them off. They stay off
@@ -200,10 +186,11 @@ pub fn create_debug_melee_scene(
         audio_context,
     });
 
+    let free_swing = dev_params::get(dev_params::MELEE_FREE_SWING_SPEED);
     println!(
         "[debug_melee] A rack of every player melee weapon is within reach ahead;\n\
          grab one (squeeze) and swing at the creatures that come down the corridor.\n\
-         Contact damages on its own above {FREE_SWING_SPEED} units/s - no trigger needed.\n\
+         Contact damages on its own above {free_swing} units/s (`melee_free_swing`) - no trigger needed.\n\
          The tracked-hand glove and the live contact volume are both drawn here by\n\
          default (`melee_glove_overlay`, `melee_volumes`) so the wield can be compared\n\
          against where the controller and the damage box actually are.\n\
@@ -220,12 +207,10 @@ struct MeleeHooks {
 }
 
 impl Drop for MeleeHooks {
-    /// Put the registry back on the way out. The scene raises a *global*
-    /// tuning parameter, and a level transition in the same process would
-    /// otherwise carry trigger-free melee damage into a real mission -
-    /// contradicting the parameter's own contract that missions leave it at 0.
+    /// Put the registry back on the way out. The scene raises *global* tuning
+    /// parameters, and a level transition in the same process would otherwise
+    /// carry the calibration overlays into a real mission.
     fn drop(&mut self) {
-        dev_params::reset(dev_params::MELEE_FREE_SWING_SPEED);
         dev_params::reset(dev_params::MELEE_GLOVE_OVERLAY);
         dev_params::reset(dev_params::MELEE_VOLUMES);
     }
