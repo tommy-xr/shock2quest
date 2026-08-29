@@ -7,9 +7,14 @@ use dark::{
 use shipyard::{EntityId, Get, Unique, UniqueView, View, ViewMut, World};
 
 /// Projectile archetype -> compatible ammo-clip archetypes, authored by the
-/// Dark engine's `Clip` relation.
+/// Dark engine's `Clip` relation, plus each clip archetype's authored stack
+/// size (its effective `P$StackCount`) so an eject can mint the box that
+/// actually fits the rounds.
 #[derive(Unique, Clone, Default)]
-pub(crate) struct GlobalProjectileClips(pub HashMap<i32, Vec<i32>>);
+pub(crate) struct GlobalProjectileClips {
+    pub clips: HashMap<i32, Vec<i32>>,
+    pub clip_sizes: HashMap<i32, i32>,
+}
 
 impl GlobalProjectileClips {
     pub fn from_entity_info(entity_info: &SystemShock2EntityInfo) -> Self {
@@ -20,15 +25,13 @@ impl GlobalProjectileClips {
         // relation for every archetype so a concrete projectile child can use a
         // relation authored on its family archetype.
         //
-        // MOST-DERIVED FIRST, and that order is load-bearing: an unload mints
-        // `[0]` as the ammo type's canonical clip, so a projectile's OWN
-        // authored clip must outrank anything it merely inherits, and the
-        // data's own preference must be preserved within a template (the
-        // pistol's standard bullet lists the full Standard Clip first, the
-        // assault rifle's lists the Small Standard Clip first - each weapon
-        // family's intended default). `get_ancestors` is root-first, so it is
-        // reversed here. Compatibility checks elsewhere only test membership
-        // and are indifferent to the order.
+        // MOST-DERIVED FIRST, and that order is load-bearing: it is an unload's
+        // tie-break and its fallback when no clip has an authored size (see
+        // [`mint_clip_template`]), so a projectile's OWN authored clip must
+        // outrank anything it merely inherits, and the data's own preference
+        // must be preserved within a template. `get_ancestors` is root-first,
+        // so it is reversed here. Compatibility checks elsewhere only test
+        // membership and are indifferent to the order.
         for template_id in entity_info.entity_to_properties.keys() {
             let mut lineage = vec![*template_id];
             lineage.extend(
@@ -56,7 +59,25 @@ impl GlobalProjectileClips {
             }
         }
 
-        Self(projectile_clips)
+        // Resolve each clip archetype's authored stack size - "Small Standard
+        // Clip" holds 6, "Standard Clip" 12 - which is what an eject sizes its
+        // minted clip against.
+        let mut clip_sizes = HashMap::new();
+        for clip in projectile_clips.values().flatten() {
+            if !clip_sizes.contains_key(clip) {
+                if let Some(stack) = crate::scripts::script_util::hydrate_template_component::<
+                    PropStackCount,
+                >(*clip, entity_info)
+                {
+                    clip_sizes.insert(*clip, stack.0);
+                }
+            }
+        }
+
+        Self {
+            clips: projectile_clips,
+            clip_sizes,
+        }
     }
 }
 
@@ -84,7 +105,7 @@ fn selected_clip_templates(world: &World, weapon: EntityId) -> Option<Vec<i32>> 
     world
         .borrow::<UniqueView<GlobalProjectileClips>>()
         .ok()
-        .and_then(|clips| clips.0.get(&projectile_template).cloned())
+        .and_then(|clips| clips.clips.get(&projectile_template).cloned())
         .filter(|clips| !clips.is_empty())
 }
 
@@ -244,10 +265,13 @@ pub(crate) fn unload_to_reserve(world: &World, weapon: EntityId) -> UnloadOutcom
         .next();
 
     let Some(item) = destination else {
-        // The most-derived authored clip is the ammo type's canonical archetype.
+        let template = world
+            .borrow::<UniqueView<GlobalProjectileClips>>()
+            .map(|clips| mint_clip_template(&compatible_clip_templates, &clips.clip_sizes, loaded))
+            .unwrap_or(compatible_clip_templates[0]);
         return UnloadOutcome {
             rounds_unloaded: 0,
-            spawn_clip: Some((compatible_clip_templates[0], loaded)),
+            spawn_clip: Some((template, loaded)),
         };
     };
 
@@ -265,6 +289,33 @@ pub(crate) fn unload_to_reserve(world: &World, weapon: EntityId) -> UnloadOutcom
         rounds_unloaded: loaded,
         spawn_clip: None,
     }
+}
+
+/// The clip archetype to mint for `rounds` ejected rounds: the smallest
+/// authored box that holds them all, so the label matches the contents - an
+/// assault rifle's 30 rounds must not come back as a "Small Standard Clip"
+/// (issue #1171). When even the largest box cannot hold them, the largest is
+/// minted holding them all anyway: reserve stacks have no capacity ceiling in
+/// this port. The data's authored order breaks ties and stands in for
+/// archetypes with no authored size.
+fn mint_clip_template(clip_templates: &[i32], sizes: &HashMap<i32, i32>, rounds: i32) -> i32 {
+    let mut fitting: Option<(i32, i32)> = None;
+    let mut largest: Option<(i32, i32)> = None;
+    for &clip in clip_templates {
+        let Some(&size) = sizes.get(&clip) else {
+            continue;
+        };
+        if size >= rounds && fitting.is_none_or(|(_, best)| size < best) {
+            fitting = Some((clip, size));
+        }
+        if largest.is_none_or(|(_, best)| size > best) {
+            largest = Some((clip, size));
+        }
+    }
+    fitting
+        .or(largest)
+        .map(|(clip, _)| clip)
+        .unwrap_or(clip_templates[0])
 }
 
 /// Zero `weapon`'s magazine, once its rounds are safely somewhere else.
@@ -354,12 +405,22 @@ mod tests {
                 right_hand_entity_id: None,
                 inventory_entity_id: inventory,
             });
-            world.add_unique(GlobalProjectileClips(HashMap::from([
-                (STD_PROJECTILE, vec![STD_CLIP, SMALL_STD_CLIP]),
-                (ASSAULT_STD_PROJECTILE, vec![SMALL_STD_CLIP, STD_CLIP]),
-                (HE_PROJECTILE, vec![HE_CLIP]),
-                (PRISM_PROJECTILE, vec![SMALL_PRISM, LARGE_PRISM]),
-            ])));
+            world.add_unique(GlobalProjectileClips {
+                clips: HashMap::from([
+                    (STD_PROJECTILE, vec![STD_CLIP, SMALL_STD_CLIP]),
+                    (ASSAULT_STD_PROJECTILE, vec![SMALL_STD_CLIP, STD_CLIP]),
+                    (HE_PROJECTILE, vec![HE_CLIP]),
+                    (PRISM_PROJECTILE, vec![SMALL_PRISM, LARGE_PRISM]),
+                ]),
+                // The shipped archetypes' authored sizes.
+                clip_sizes: HashMap::from([
+                    (STD_CLIP, 12),
+                    (SMALL_STD_CLIP, 6),
+                    (HE_CLIP, 12),
+                    (SMALL_PRISM, 10),
+                    (LARGE_PRISM, 20),
+                ]),
+            });
             world.add_unique(GlobalTemplateHierarchy(HashMap::from([
                 (SMALL_STD_CLIP, vec![STD_CLIP]),
                 (EARTH_SMALL_STD_CLIP, vec![SMALL_STD_CLIP]),
@@ -683,8 +744,9 @@ mod tests {
             UnloadOutcome {
                 // Nothing has moved yet - this is a request, not a completed
                 // unload, so the rounds are still counted in the magazine.
+                // 5 rounds fit the small box, so that is the one requested.
                 rounds_unloaded: 0,
-                spawn_clip: Some((STD_CLIP, 5)),
+                spawn_clip: Some((SMALL_STD_CLIP, 5)),
             }
         );
         assert_eq!(fixture.rounds(mismatched), 6, "HE reserve is untouched");
@@ -700,11 +762,84 @@ mod tests {
 
         let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
 
-        assert_eq!(outcome.spawn_clip, Some((STD_CLIP, 5)));
+        assert_eq!(outcome.spawn_clip, Some((SMALL_STD_CLIP, 5)));
         assert_eq!(fixture.ammo(), 5, "still loaded until the clip is carried");
 
         empty_magazine(&fixture.world, fixture.weapon);
         assert_eq!(fixture.ammo(), 0);
+    }
+
+    #[test]
+    fn ejecting_more_rounds_than_any_box_holds_mints_the_largest_archetype() {
+        // Issue #1171's headline case: the assault rifle's data prefers the
+        // SMALL standard clip, but 30 rounds fit neither the 6- nor the
+        // 12-round box, so the largest must absorb them rather than labeling
+        // 30 rounds a "Small Standard Clip".
+        let mut fixture = Fixture::new(30, 0);
+        fixture.set_standard_projectile(ASSAULT_STD_PROJECTILE);
+
+        let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
+
+        assert_eq!(outcome.spawn_clip, Some((STD_CLIP, 30)));
+    }
+
+    #[test]
+    fn ejecting_exactly_a_full_box_mints_that_box() {
+        // 12 rounds are exactly a full Standard Clip, even for the assault
+        // rifle whose authored order prefers the small one.
+        let mut fixture = Fixture::new(12, 0);
+        fixture.set_standard_projectile(ASSAULT_STD_PROJECTILE);
+
+        let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
+
+        assert_eq!(outcome.spawn_clip, Some((STD_CLIP, 12)));
+    }
+
+    #[test]
+    fn ejecting_fewer_rounds_than_the_smallest_box_mints_the_smallest() {
+        // 6 rounds fit the Small Standard Clip exactly, even for the pistol
+        // whose authored order prefers the full-size one.
+        let fixture = Fixture::new(6, 0);
+
+        let outcome = unload_to_reserve(&fixture.world, fixture.weapon);
+
+        assert_eq!(outcome.spawn_clip, Some((SMALL_STD_CLIP, 6)));
+    }
+
+    #[test]
+    fn minting_without_authored_sizes_falls_back_to_the_authored_order() {
+        assert_eq!(
+            mint_clip_template(&[SMALL_STD_CLIP, STD_CLIP], &HashMap::new(), 7),
+            SMALL_STD_CLIP
+        );
+    }
+
+    #[test]
+    fn from_entity_info_records_each_clip_archetypes_authored_size() {
+        use dark::properties::ToTemplateLink;
+        use std::sync::Arc;
+
+        let mut entity_info = SystemShock2EntityInfo::empty();
+        entity_info
+            .entity_to_properties
+            .insert(STD_PROJECTILE, vec![]);
+        entity_info
+            .entity_to_properties
+            .insert(STD_CLIP, vec![Arc::new(Box::new(PropStackCount(12)))]);
+        entity_info.template_to_links.insert(
+            STD_PROJECTILE,
+            dark::properties::TemplateLinks {
+                to_links: vec![ToTemplateLink {
+                    link: Link::Clip,
+                    to_template_id: STD_CLIP,
+                }],
+            },
+        );
+
+        let clips = GlobalProjectileClips::from_entity_info(&entity_info);
+
+        assert_eq!(clips.clips.get(&STD_PROJECTILE), Some(&vec![STD_CLIP]));
+        assert_eq!(clips.clip_sizes.get(&STD_CLIP), Some(&12));
     }
 
     #[test]
