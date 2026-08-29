@@ -228,10 +228,10 @@ dev_params! {
     /// same pose).
     FREE_CAMERA_CULL_FROM_CAMERA = bool("free_camera_cull", "Cull from cam", false),
     /// Draw the player's world position (X/Y/Z) as a text readout over the
-    /// game. Emitted from the shared HUD canvas, so flat and VR show the same
-    /// readout in the same place - the coordinates a bug report needs are
-    /// otherwise only reachable from a debug-runtime HTTP query, which a
-    /// headset has no way to make.
+    /// game. Laid out once on the shared HUD canvas; flat draws that canvas in
+    /// screen space, VR presents it on a head-anchored panel. The coordinates a
+    /// bug report needs are otherwise only reachable from a debug-runtime HTTP
+    /// query, which a headset has no way to make.
     SHOW_POSITION = bool("show_position", "Show position", false),
     /// How fast the free camera flies, in the player's own speed units - the
     /// default IS [`PLAYER_MOVE_SPEED`], so "walking pace" cannot drift from

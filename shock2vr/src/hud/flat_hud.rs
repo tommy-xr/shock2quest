@@ -37,7 +37,9 @@ const CROSSHAIR: Rect = Rect::new(
 // 128x64) as the backdrop; it is the left crop of the wider BIOFULL.PCX, so
 // the icon/bar/readout offsets below land identically on it.
 const METERS_X: f32 = 2.0;
-const METERS_Y: f32 = 414.0;
+/// Top of the bio/ammo block - the floor everything else on the HUD canvas
+/// must stay above (see `debug_overlay`).
+pub(crate) const METERS_Y: f32 = 414.0;
 const METERS_W: f32 = 128.0;
 const METERS_H: f32 = 64.0;
 const BAR_W: f32 = 80.0;

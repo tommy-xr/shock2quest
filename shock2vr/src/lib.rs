@@ -2041,10 +2041,14 @@ impl Game {
         // left latched when the menu closes. The same `is_open()` gate drops the
         // scene's screen-space UI in `render_per_eye`.
         // The same drop covers the death camera - see `player_visuals_hidden`.
+        // The `show_position` readout rides along: it is the VR half of an
+        // overlay whose flat half is dropped with the per-eye scene below, so
+        // dropping it here is what keeps the two presentations agreeing.
         if self.pause_menu.is_open() || self.player_visuals_hidden() {
             scene.retain(|object| {
-                object.debug_tag().and_then(|tag| tag.source.as_deref())
-                    != Some(util::render_source::PLAYER_HANDS)
+                let source = object.debug_tag().and_then(|tag| tag.source.as_deref());
+                source != Some(util::render_source::PLAYER_HANDS)
+                    && source != Some(util::render_source::DEBUG_OVERLAY)
             });
         }
 

@@ -364,6 +364,11 @@ pub mod render_source {
     /// entry/exit ramp - layered alongside (not merged with) [`HIT_FEEDBACK`],
     /// so a hit still reads while the interface is open.
     pub const USE_MODE_VIGNETTE: &str = "use_mode_vignette";
+    /// The `show_position` readout's VR panel. Labelled so the pause/death
+    /// filters drop it exactly as they drop the flat readout with the rest of
+    /// the per-eye scene - a debug overlay must not float in front of the
+    /// pause menu, or drift by while the death camera falls.
+    pub const DEBUG_OVERLAY: &str = "debug_overlay";
 }
 
 /// A tag that records only which render path produced an object.
