@@ -1617,6 +1617,12 @@ pub struct MissionCore {
     /// threaded through the effect path.
     last_head_rotation: Quaternion<f32>,
 
+    /// The tracked head position this frame, in pawn space - the companion to
+    /// [`Self::last_head_rotation`], recorded here for the same reason: the
+    /// `show_position` overlay hangs its VR panel off the head pose from
+    /// `render`, which sees no input context.
+    last_head_position: Vector3<f32>,
+
     /// The fall to the floor that plays while the player is dying, or `None`
     /// while they are alive. Runtime-only, like [`PlayerLifeState`] itself: a
     /// dead game cannot be saved, so there is no death mid-fall to restore.
@@ -2417,6 +2423,7 @@ impl MissionCore {
             screen_fade_alpha: 0.0,
             screen_fade_texture,
             last_head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            last_head_position: vec3(0.0, crate::input_context::DEFAULT_HEAD_HEIGHT, 0.0),
             death_camera: None,
         };
         for (index, entity_id) in backpack_load_remap.overflow.into_iter().enumerate() {
@@ -2708,6 +2715,7 @@ impl MissionCore {
                 .unwrap_or(false)
         };
         self.last_head_rotation = input_context.head.rotation;
+        self.last_head_position = input_context.head.position;
         let mut life_state_effects = Vec::new();
         if self.player_is_alive() && player_health_depleted {
             life_state_effects.append(&mut self.begin_player_death());
@@ -8118,6 +8126,19 @@ impl MissionCore {
                 self.use_mode,
             ));
 
+            // `show_position` readout (flat). VR presents the same canvas on a
+            // head-anchored panel in `render`.
+            if crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION) {
+                let pos = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
+                ret.extend(
+                    crate::hud::build_debug_overlay_canvas(pos).render_screen_space(
+                        asset_cache,
+                        screen_size,
+                        crate::ui::ScaleMode::PreserveAspect,
+                    ),
+                );
+            }
+
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
             // the HUD. Also records the render-target size the pointer ->
             // canvas mapping needs.
@@ -8594,6 +8615,35 @@ impl MissionCore {
                 object.set_transform(pawn_to_world * object.get_transform());
             }
             scene.extend(use_mode_objects);
+        }
+
+        // `show_position` readout (VR): the canvas the flat HUD presents in
+        // screen space, hung off the head's yaw instead - so the coordinates
+        // land in the same place relative to the HUD in both presentations.
+        // Built in pawn space and rebased like the cyber interface's panel.
+        if options.presentation_mode == crate::PresentationMode::Vr
+            && crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION)
+        {
+            let panel = crate::ui::PanelPlacement::from_head(
+                self.last_head_position,
+                self.last_head_rotation,
+            )
+            .panel();
+            let pawn_to_world =
+                Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
+            let mut objects = crate::hud::build_debug_overlay_canvas(player.pos)
+                .render_world_space(
+                    asset_cache,
+                    panel.transform(),
+                    None,
+                    None,
+                    crate::ui::VR_COMPONENT_Z_STEP,
+                );
+            for object in &mut objects {
+                object.set_render_layer(RenderLayer::SystemOverlay);
+                object.set_transform(pawn_to_world * object.get_transform());
+            }
+            scene.extend(objects);
         }
 
         // Note: Hand spotlights for enhanced lighting are now handled in the runtime
