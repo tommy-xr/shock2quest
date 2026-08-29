@@ -93,6 +93,21 @@ pub enum GlobalEffect {
     Quit,
 }
 
+impl GlobalEffect {
+    /// The new-game boot into `level_file`: map-default spawn, no triggers,
+    /// vitals initialized from the destination. Shared by the main menu's New
+    /// Game and the developer launcher's Missions tab so the two boots cannot
+    /// drift.
+    pub fn new_game_transition(level_file: String) -> Self {
+        GlobalEffect::TransitionLevel {
+            level_file,
+            loc: None,
+            entities_to_trigger: vec![],
+            vitals_transition: PlayerVitalsTransition::InitializeFromDestination,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum AIPropertyUpdate {
     Alertness {

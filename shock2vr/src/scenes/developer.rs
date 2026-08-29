@@ -118,10 +118,14 @@ pub enum SceneTab {
 impl SceneTab {
     const ALL: [SceneTab; 2] = [SceneTab::Missions, SceneTab::DebugScenes];
 
+    /// Both labels together must fit the 202px header the tabs split -
+    /// "Debug Scenes" measured ~139px in the menu font and overprinted its
+    /// neighbour, hence the short form (drawn `_fit` besides, so a wide label
+    /// can never spill into the other tab again).
     fn label(self) -> &'static str {
         match self {
             SceneTab::Missions => "Missions",
-            SceneTab::DebugScenes => "Debug Scenes",
+            SceneTab::DebugScenes => "Debug",
         }
     }
 }
@@ -357,8 +361,6 @@ impl DeveloperScene {
             page: DeveloperPage::Params,
             tab: SceneTab::Missions,
             missions: Vec::new(),
-            // Preselect the first entry so "Launch" is immediately meaningful,
-            // the way the load screen preselects the most recent save.
             scene_scroll: 0,
             selected_scene: None,
         }
@@ -442,8 +444,11 @@ impl DeveloperScene {
                 for tab in SceneTab::ALL {
                     let active =
                         self.tab == tab || hovered == Some(DeveloperAction::SelectTab(tab));
+                    // `_fit` so a label stays inside its own half of the
+                    // header - drawn wider it would overprint the other tab
+                    // while the rect-based hit test kept the boundary.
                     canvas
-                        .text_native(
+                        .text_native_fit(
                             tab_rect(self.panel_rects, tab),
                             tab.label(),
                             MENU_FONT,
@@ -455,14 +460,20 @@ impl DeveloperScene {
 
                 let len = self.tab_list_len();
                 let rows = scene_visible_rows(self.panel_rects, len, self.scene_scroll);
-                for slot in 0..rows.len() {
-                    let Some(name) = self.tab_name(rows.start + slot) else {
-                        break;
-                    };
+                // The visible page's names, resolved once (not per row).
+                let names: Vec<String> = match self.tab {
+                    SceneTab::Missions => self.missions[rows.clone()].to_vec(),
+                    SceneTab::DebugScenes => super::debug_scene_names()
+                        .skip(rows.start)
+                        .take(rows.len())
+                        .map(str::to_owned)
+                        .collect(),
+                };
+                for (slot, name) in names.iter().enumerate() {
                     canvas
                         .text_native_fit(
                             scene_text_rect(self.panel_rects, len, slot),
-                            &name,
+                            name,
                             LIST_FONT,
                             HAlign::Left,
                             VAlign::Middle,
@@ -542,13 +553,9 @@ impl DeveloperScene {
                     // launching from here is the new-game boot with the level
                     // swapped: default spawn, vitals from the destination map.
                     SceneTab::Missions => {
-                        vec![Effect::GlobalEffect(GlobalEffect::TransitionLevel {
-                            level_file: name,
-                            loc: None,
-                            entities_to_trigger: vec![],
-                            vitals_transition:
-                                crate::scripts::PlayerVitalsTransition::InitializeFromDestination,
-                        })]
+                        vec![Effect::GlobalEffect(GlobalEffect::new_game_transition(
+                            name,
+                        ))]
                     }
                     SceneTab::DebugScenes => {
                         vec![Effect::GlobalEffect(GlobalEffect::LaunchDebugScene {
@@ -1018,7 +1025,11 @@ mod tests {
                 "tab {tab:?}"
             );
         }
-        assert!(tab_rect(rects, SceneTab::Missions).x < tab_rect(rects, SceneTab::DebugScenes).x);
+        // The halves are disjoint - a draw kept inside its own rect (`_fit`)
+        // can therefore never overprint the other tab or its click target.
+        let missions = tab_rect(rects, SceneTab::Missions);
+        let debug = tab_rect(rects, SceneTab::DebugScenes);
+        assert!(missions.x + missions.w <= debug.x);
 
         let mut scene = DeveloperScene::new();
         scene.page = DeveloperPage::Scenes;

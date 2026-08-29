@@ -319,13 +319,9 @@ impl GameScene for MainMenuScene {
 
         match action {
             Some(MenuAction::NewGame) => {
-                vec![Effect::GlobalEffect(GlobalEffect::TransitionLevel {
-                    level_file: NEW_GAME_MISSION.to_owned(),
-                    loc: None,
-                    entities_to_trigger: vec![],
-                    vitals_transition:
-                        crate::scripts::PlayerVitalsTransition::InitializeFromDestination,
-                })]
+                vec![Effect::GlobalEffect(GlobalEffect::new_game_transition(
+                    NEW_GAME_MISSION.to_owned(),
+                ))]
             }
             Some(MenuAction::LoadGame) => {
                 vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
