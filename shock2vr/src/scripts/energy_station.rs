@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use dark::{
     EnvSoundQuery,
     properties::{PropClassTag, PropPosition},
@@ -12,36 +14,44 @@ use super::{Effect, Message, MessagePayload, Script};
 
 /// How long (seconds) a charged item must stay out of contact before holding
 /// it to the station charges it again. Also absorbs single-frame raycast
-/// jitter so a wobbling hand doesn't re-trigger the charge.
+/// jitter (and re-fired Collided edges from a held item resting against the
+/// station) so a wobbling hand doesn't re-trigger the charge.
 const CONTACT_RELEASE_SECONDS: f32 = 0.5;
 
 pub struct EnergyStation {
-    // VR hover/contact latch: the item currently pressed to the station, and
-    // how long since its contact was last seen. Hover arrives every frame the
-    // hand ray touches the station, so without the latch the charge + sound
-    // replay per frame. Transient proximity state - deliberately not saved:
-    // after a load the worst case is one extra charge of an already-full item.
-    contact_target: Option<EntityId>,
-    seconds_since_contact: f32,
+    // VR hover/contact latch: each item currently pressed to the station,
+    // keyed per item (both hands can press one item each) with the seconds
+    // since its contact was last seen. Hover arrives every frame the hand ray
+    // touches the station, so without the latch the charge + sound replay per
+    // frame. Transient proximity state - deliberately not saved: after a load
+    // the worst case is one extra charge of an already-full item.
+    contacts: HashMap<EntityId, f32>,
 }
 impl EnergyStation {
     pub fn new() -> EnergyStation {
         EnergyStation {
-            contact_target: None,
-            seconds_since_contact: 0.0,
+            contacts: HashMap::new(),
         }
     }
 
     /// Charge `with` once per continuous interaction: first contact charges,
-    /// repeated contact only renews the latch until the item leaves.
+    /// repeated contact only renews the latch until the item leaves. A fresh
+    /// item arriving while another contact is still fresh charges *quietly* -
+    /// the activate sound already played for this interaction (this covers
+    /// the charged cell that replaces a dead one mid-hold, and a second held
+    /// item pressed alongside the first).
     fn contact_recharge(&mut self, world: &World, entity_id: EntityId, with: &EntityId) -> Effect {
-        let renewed = self.contact_target == Some(*with);
-        self.contact_target = Some(*with);
-        self.seconds_since_contact = 0.0;
+        let other_contact_fresh = self.contacts.keys().any(|item| item != with);
+        let renewed = self.contacts.insert(*with, 0.0).is_some();
         if renewed {
             Effect::NoEffect
+        } else if other_contact_fresh {
+            recharge_message(with)
         } else {
-            do_recharge(world, entity_id, with)
+            Effect::combine(vec![
+                recharge_message(with),
+                activate_sound(world, entity_id),
+            ])
         }
     }
 }
@@ -54,11 +64,12 @@ impl Script for EnergyStation {
         _physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
-        if self.contact_target.is_some() {
-            self.seconds_since_contact += time.elapsed.as_secs_f32();
-            if self.seconds_since_contact > CONTACT_RELEASE_SECONDS {
-                self.contact_target = None;
-            }
+        if !self.contacts.is_empty() {
+            let dt = time.elapsed.as_secs_f32();
+            self.contacts.retain(|_, age| {
+                *age += dt;
+                *age <= CONTACT_RELEASE_SECONDS
+            });
         }
         Effect::NoEffect
     }
@@ -100,15 +111,19 @@ impl Script for EnergyStation {
 fn do_recharge_all(world: &World, entity_id: EntityId) -> Effect {
     let mut effects: Vec<Effect> = super::script_util::player_carried_items(world)
         .into_iter()
-        .map(|item| Effect::Send {
-            msg: Message {
-                to: item,
-                payload: MessagePayload::Recharge,
-            },
-        })
+        .map(|item| recharge_message(&item))
         .collect();
     effects.push(activate_sound(world, entity_id));
     Effect::combine(effects)
+}
+
+fn recharge_message(to: &EntityId) -> Effect {
+    Effect::Send {
+        msg: Message {
+            to: *to,
+            payload: MessagePayload::Recharge,
+        },
+    }
 }
 
 fn activate_sound(world: &World, entity_id: EntityId) -> Effect {
@@ -126,16 +141,6 @@ fn activate_sound(world: &World, entity_id: EntityId) -> Effect {
         query: EnvSoundQuery::from_tag_values(query),
         position: pos.position,
     }
-}
-
-fn do_recharge(world: &World, entity_id: EntityId, with: &EntityId) -> Effect {
-    let recharge_effect = Effect::Send {
-        msg: Message {
-            to: *with,
-            payload: MessagePayload::Recharge,
-        },
-    };
-    Effect::combine(vec![recharge_effect, activate_sound(world, entity_id)])
 }
 
 #[cfg(test)]
@@ -251,6 +256,50 @@ mod tests {
         tick(&mut script, station, &world, 1.0);
         let again = charge_events(script.handle_message(station, &world, &physics, &hover(item)));
         assert_eq!(again, (1, 1), "latch re-arms once contact lapses");
+    }
+
+    #[test]
+    fn alternating_items_each_charge_once_with_one_sound() {
+        // Two hands holding two items at the station: Hover alternates targets
+        // every frame. Each item charges once; the sound plays once for the
+        // whole interaction (the second item joins an already-audible charge).
+        let (mut world, station, item_a) = make_world();
+        let item_b = world.add_entity(());
+        let mut script = EnergyStation::new();
+        let physics = PhysicsWorld::new();
+
+        let mut totals = (0, 0);
+        for _ in 0..60 {
+            for item in [item_a, item_b] {
+                let (r, s) =
+                    charge_events(script.handle_message(station, &world, &physics, &hover(item)));
+                totals.0 += r;
+                totals.1 += s;
+            }
+            tick(&mut script, station, &world, 1.0 / 60.0);
+        }
+
+        assert_eq!(totals, (2, 1), "each item charges once, one sound total");
+    }
+
+    #[test]
+    fn replacement_item_charges_quietly_mid_hold() {
+        // Recharging a dead power cell replaces it with a NEW entity still in
+        // the hand; that fresh id must not replay the activate sound.
+        let (mut world, station, dead_cell) = make_world();
+        let charged_cell = world.add_entity(());
+        let mut script = EnergyStation::new();
+        let physics = PhysicsWorld::new();
+
+        let first =
+            charge_events(script.handle_message(station, &world, &physics, &hover(dead_cell)));
+        assert_eq!(first, (1, 1));
+
+        // Next frame the hand holds the replacement entity.
+        tick(&mut script, station, &world, 1.0 / 60.0);
+        let second =
+            charge_events(script.handle_message(station, &world, &physics, &hover(charged_cell)));
+        assert_eq!(second, (1, 0), "recharge sent, sound not replayed");
     }
 
     #[test]
