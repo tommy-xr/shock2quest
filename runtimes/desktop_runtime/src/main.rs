@@ -95,6 +95,8 @@ struct Args {
     #[arg(short, long)]
     mission: Option<String>,
 
+    /// Start with the physics wireframe on (the `debug_physics` dev param,
+    /// which stays toggleable at runtime).
     #[arg(long = "debug-physics")]
     debug_physics: bool,
 
@@ -332,13 +334,18 @@ pub fn main() {
         .unwrap_or_else(|| "main_menu".to_owned());
     let (mission, spawn_location) = parse_mission(&mission_arg);
 
+    // `--debug-physics` seeds the live dev param, which owns the setting from
+    // here on (toggleable over HTTP and from the Developer menu).
+    if args.debug_physics {
+        shock2vr::dev_params::set(shock2vr::dev_params::DEBUG_PHYSICS, 1.0);
+    }
+
     let options = GameOptions {
         mission,
         presentation_mode,
         spawn_location,
         save_file: args.save_file,
         debug_draw: args.debug_draw,
-        debug_physics: args.debug_physics,
         debug_portals: args.debug_portals,
         debug_show_ids: args.debug_show_ids,
         debug_skeletons: args.debug_skeletons,

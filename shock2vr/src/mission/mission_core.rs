@@ -8545,7 +8545,7 @@ impl MissionCore {
         }
 
         // Render debug physics
-        if options.debug_physics {
+        if crate::dev_params::get_bool(crate::dev_params::DEBUG_PHYSICS) {
             let debug_render = &self.physics.debug_render();
             scene.append(&mut debug_render.clone());
         }
