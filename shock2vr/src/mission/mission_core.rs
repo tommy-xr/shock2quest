@@ -6491,8 +6491,23 @@ impl MissionCore {
                                     )
                                 });
                                 if let Some(arm) = arm {
+                                    // Which arm to draw. The `_h` rigs are all
+                                    // authored as a right arm, so a left-hand
+                                    // wield renders the mirror image - and the
+                                    // contact offset below is mirrored with
+                                    // it, keeping the collider on the rendered
+                                    // head. A model applied while nothing
+                                    // holds it (a restore before the grab) has
+                                    // no hand yet; the right-handed default
+                                    // matches what the rig is authored as, and
+                                    // the grab's own ChangeModel re-derives
+                                    // this.
+                                    let hand = self
+                                        .interaction
+                                        .holding_hand(entity_id)
+                                        .unwrap_or(crate::vr_config::Handedness::Right);
                                     let correction =
-                                        crate::vr_config::melee_wield_pose_correction(arm);
+                                        crate::vr_config::melee_wield_pose_correction(arm, hand);
                                     new_model.apply_local_transform(correction);
                                     self.world.add_component(
                                         entity_id,

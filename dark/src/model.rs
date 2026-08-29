@@ -11,8 +11,16 @@ use cgmath::{Matrix4, SquareMatrix, Vector2};
 use collision::Aabb3;
 use engine::{
     assets::asset_cache::AssetCache,
-    scene::{MAX_SKINNED_JOINTS, SKINNING_PALETTE_SIZE, SceneObject},
+    scene::{FrontFaceWinding, MAX_SKINNED_JOINTS, SKINNING_PALETTE_SIZE, SceneObject},
 };
+
+/// The opposite winding: what a mirrored copy of a mesh presents to the GPU.
+fn flip_winding(winding: FrontFaceWinding) -> FrontFaceWinding {
+    match winding {
+        FrontFaceWinding::Clockwise => FrontFaceWinding::CounterClockwise,
+        FrontFaceWinding::CounterClockwise => FrontFaceWinding::Clockwise,
+    }
+}
 
 #[derive(Clone)]
 pub struct StaticModel {
@@ -479,13 +487,24 @@ impl Model {
     /// loader gives vhot debug cubes theirs). The render path re-sets the
     /// entity (world) transform every frame; the local one rides along with
     /// the model.
+    ///
+    /// A *mirroring* transform (negative determinant - e.g. the left-hand VR
+    /// wield) reverses the triangle winding the GPU sees, so an object that
+    /// culls backfaces would render inside-out. Flip its front-face winding to
+    /// match, here rather than at each call site: the transform is what makes
+    /// the mesh mirrored, so the winding it implies belongs with it. Objects
+    /// that do not cull (the GLB-loaded glove, debug geometry) are unaffected.
     pub fn apply_local_transform(&mut self, local_transform: Matrix4<f32>) {
+        let mirrored = local_transform.determinant() < 0.0;
         let scene_objects = match &mut self.inner {
             InnerModel::Static(static_model) => &mut static_model.scene_objects,
             InnerModel::Animated(animated_model) => &mut animated_model.scene_objects,
         };
         for obj in scene_objects {
             obj.set_local_transform(local_transform * obj.local_transform);
+            if mirrored {
+                obj.set_backface_culling(obj.backface_culling().map(flip_winding));
+            }
         }
     }
 
@@ -510,5 +529,63 @@ impl Model {
                 ..self.clone()
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cgmath::{Point3, vec3};
+    use std::cell::RefCell;
+
+    fn culled_static_model() -> Model {
+        let material = RefCell::new(engine::scene::color_material::create(vec3(1.0, 1.0, 1.0)));
+        let geometry: Rc<Box<dyn engine::scene::Geometry>> =
+            Rc::new(Box::new(engine::scene::geometry::EmptyMesh));
+        let mut object = SceneObject::create(material, geometry);
+        object.set_backface_culling(Some(FrontFaceWinding::Clockwise));
+
+        Model {
+            transform: Matrix4::identity(),
+            inner: InnerModel::Static(StaticModel {
+                scene_objects: vec![object],
+                bounding_box: Aabb3::new(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 1.0)),
+                vhots: Vec::new(),
+            }),
+        }
+    }
+
+    fn winding(model: &Model) -> Option<FrontFaceWinding> {
+        match &model.inner {
+            InnerModel::Static(m) => m.scene_objects[0].backface_culling(),
+            InnerModel::Animated(m) => m.scene_objects[0].backface_culling(),
+        }
+    }
+
+    /// A mirroring local transform (the left-hand VR melee wield) reverses the
+    /// triangle winding the GPU sees, so the front face has to flip with it or
+    /// the mesh renders inside-out - backfaces toward the camera, front faces
+    /// culled.
+    #[test]
+    fn a_mirrored_local_transform_flips_the_front_face_winding() {
+        let mut model = culled_static_model();
+        model.apply_local_transform(Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0));
+
+        assert_eq!(winding(&model), Some(FrontFaceWinding::CounterClockwise));
+    }
+
+    /// Mirroring twice is not mirrored, and an ordinary (rotate/translate/
+    /// uniform-scale) correction must leave the winding exactly as authored.
+    #[test]
+    fn an_ordinary_local_transform_leaves_the_winding_alone() {
+        let mut model = culled_static_model();
+        model.apply_local_transform(
+            Matrix4::from_translation(vec3(1.0, 2.0, 3.0)) * Matrix4::from_scale(0.5),
+        );
+        assert_eq!(winding(&model), Some(FrontFaceWinding::Clockwise));
+
+        model.apply_local_transform(Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0));
+        model.apply_local_transform(Matrix4::from_nonuniform_scale(-1.0, 1.0, 1.0));
+        assert_eq!(winding(&model), Some(FrontFaceWinding::Clockwise));
     }
 }
