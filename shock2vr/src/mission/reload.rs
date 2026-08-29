@@ -62,15 +62,15 @@ impl GlobalProjectileClips {
         // Resolve each clip archetype's authored stack size - "Small Standard
         // Clip" holds 6, "Standard Clip" 12 - which is what an eject sizes its
         // minted clip against.
+        let unique_clips: std::collections::HashSet<i32> =
+            projectile_clips.values().flatten().copied().collect();
         let mut clip_sizes = HashMap::new();
-        for clip in projectile_clips.values().flatten() {
-            if !clip_sizes.contains_key(clip) {
-                if let Some(stack) = crate::scripts::script_util::hydrate_template_component::<
-                    PropStackCount,
-                >(*clip, entity_info)
-                {
-                    clip_sizes.insert(*clip, stack.0);
-                }
+        for clip in unique_clips {
+            if let Some(stack) = crate::scripts::script_util::hydrate_template_component::<
+                PropStackCount,
+            >(clip, entity_info)
+            {
+                clip_sizes.insert(clip, stack.0);
             }
         }
 
@@ -826,20 +826,34 @@ mod tests {
         entity_info
             .entity_to_properties
             .insert(STD_CLIP, vec![Arc::new(Box::new(PropStackCount(12)))]);
+        entity_info
+            .entity_to_properties
+            .insert(SMALL_STD_CLIP, vec![Arc::new(Box::new(PropStackCount(6)))]);
         entity_info.template_to_links.insert(
             STD_PROJECTILE,
             dark::properties::TemplateLinks {
-                to_links: vec![ToTemplateLink {
-                    link: Link::Clip,
-                    to_template_id: STD_CLIP,
-                }],
+                to_links: vec![
+                    ToTemplateLink {
+                        link: Link::Clip,
+                        to_template_id: SMALL_STD_CLIP,
+                    },
+                    ToTemplateLink {
+                        link: Link::Clip,
+                        to_template_id: STD_CLIP,
+                    },
+                ],
             },
         );
 
         let clips = GlobalProjectileClips::from_entity_info(&entity_info);
 
-        assert_eq!(clips.clips.get(&STD_PROJECTILE), Some(&vec![STD_CLIP]));
+        assert_eq!(
+            clips.clips.get(&STD_PROJECTILE),
+            Some(&vec![SMALL_STD_CLIP, STD_CLIP]),
+            "the authored order is preserved - the mint's tie-break and fallback"
+        );
         assert_eq!(clips.clip_sizes.get(&STD_CLIP), Some(&12));
+        assert_eq!(clips.clip_sizes.get(&SMALL_STD_CLIP), Some(&6));
     }
 
     #[test]
