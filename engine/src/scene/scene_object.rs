@@ -108,6 +108,10 @@ pub struct SceneObject {
     /// Front-face winding used to cull backfaces for this object. Most engine
     /// geometry remains double-sided; imported Dark models opt in explicitly.
     backface_culling: Option<FrontFaceWinding>,
+    /// Pull this object's depth slightly toward the camera (polygon offset).
+    /// Used for flat decal-like models (floor/wall signs) that sit coplanar
+    /// with world geometry and would otherwise z-fight it.
+    depth_bias: bool,
     /// Debug-only provenance; `Rc` so cloning an object per frame stays cheap.
     debug_tag: Option<Rc<SceneObjectDebugTag>>,
 }
@@ -286,6 +290,7 @@ impl SceneObject {
             transparency_override: None,
             debug_tag: None,
             backface_culling: None,
+            depth_bias: false,
         }
     }
 
@@ -319,7 +324,7 @@ impl SceneObject {
             &self.skinning_data,
             lights,
         ) {
-            self.draw_geometry();
+            self.draw_geometry(true);
         }
         if self.transparency_override.is_some() {
             self.material.borrow_mut().set_transparency_override(None);
@@ -349,7 +354,7 @@ impl SceneObject {
             &self.skinning_data,
             lights,
         ) {
-            self.draw_geometry();
+            self.draw_geometry(false);
         }
         if self.transparency_override.is_some() {
             self.material.borrow_mut().set_transparency_override(None);
@@ -412,6 +417,7 @@ impl SceneObject {
             transparency_override: None,
             debug_tag: None,
             backface_culling: None,
+            depth_bias: false,
         }
     }
 
@@ -427,6 +433,7 @@ impl SceneObject {
             transparency_override: self.transparency_override,
             debug_tag: self.debug_tag.clone(),
             backface_culling: self.backface_culling,
+            depth_bias: self.depth_bias,
         }
     }
 
@@ -466,7 +473,27 @@ impl SceneObject {
         self.backface_culling
     }
 
-    fn draw_geometry(&self) {
+    /// Pull this object's depth slightly toward the camera so it wins the
+    /// depth test against coplanar world geometry instead of z-fighting it.
+    pub fn set_depth_bias(&mut self, enabled: bool) {
+        self.depth_bias = enabled;
+    }
+
+    pub fn depth_bias(&self) -> bool {
+        self.depth_bias
+    }
+
+    /// `apply_depth_bias` is false on the transparent pass: the bias exists
+    /// for opaque coplanar decals, and translucent flats (membranes, glass)
+    /// were never verified with an offset applied.
+    fn draw_geometry(&self, apply_depth_bias: bool) {
+        let depth_bias = apply_depth_bias && self.depth_bias;
+        if depth_bias {
+            unsafe {
+                gl::Enable(gl::POLYGON_OFFSET_FILL);
+                gl::PolygonOffset(-1.0, -2.0);
+            }
+        }
         if let Some(front_face) = self.backface_culling {
             unsafe {
                 gl::Enable(gl::CULL_FACE);
@@ -486,6 +513,13 @@ impl SceneObject {
             unsafe {
                 gl::Disable(gl::CULL_FACE);
                 gl::FrontFace(gl::CCW);
+            }
+        }
+
+        if depth_bias {
+            unsafe {
+                gl::PolygonOffset(0.0, 0.0);
+                gl::Disable(gl::POLYGON_OFFSET_FILL);
             }
         }
     }

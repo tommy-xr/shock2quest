@@ -581,10 +581,34 @@ fn decal_local_x_offset(bbox: Aabb3<f32>, scale_x: f32) -> Option<f32> {
     Some(-DECAL_SURFACE_OFFSET / scale_x)
 }
 
+/// Whether a paper-thin model that `decal_local_x_offset` does not handle is
+/// still a decal: thin along local Y or Z instead of X (e.g. station.mis's
+/// floor signs, authored flat in the horizontal plane). Which *direction* its
+/// visible face points cannot be read off the bounding box, so these are
+/// depth-biased at draw time (view-relative, direction-free) rather than
+/// displaced. Both in-plane extents must dwarf the thin axis, so small solid
+/// props (shell casings) and thin rods stay out. Like `decal_local_x_offset`,
+/// this classifies the unscaled model-space bounds - `PropScale` is ignored.
+fn decal_needs_depth_bias(bbox: Aabb3<f32>) -> bool {
+    let dx = bbox.max.x - bbox.min.x;
+    let dy = bbox.max.y - bbox.min.y;
+    let dz = bbox.max.z - bbox.min.z;
+    let (thickness, in_plane) = if dy <= dz {
+        (dy, [dx, dz])
+    } else {
+        (dz, [dx, dy])
+    };
+    thickness <= DECAL_SURFACE_OFFSET
+        && in_plane
+            .iter()
+            .all(|&d| d > DECAL_SURFACE_OFFSET && thickness < d / 10.0)
+}
+
 /// Decals (blood splatters, signs, bullet holes) are paper-thin models placed
 /// exactly coplanar with the surface they are stuck to, so they z-fight with
 /// the level geometry - they flicker, or vanish entirely, as the viewpoint
-/// moves. Lift such a model off its surface along its own outward normal.
+/// moves. Lift an X-thin model off its surface along its known outward normal
+/// (local -X); depth-bias a model that is thin along another axis instead.
 ///
 /// The offset is applied as the scene objects' *local* transform: the render
 /// path overwrites the model transform with the entity's
@@ -594,11 +618,11 @@ fn apply_decal_offset(model: &mut Model, scale_x: f32) {
         return;
     };
 
-    let Some(offset) = decal_local_x_offset(bbox, scale_x) else {
-        return;
-    };
-
-    model.apply_local_transform(Matrix4::from_translation(vec3(offset, 0.0, 0.0)));
+    if let Some(offset) = decal_local_x_offset(bbox, scale_x) {
+        model.apply_local_transform(Matrix4::from_translation(vec3(offset, 0.0, 0.0)));
+    } else if decal_needs_depth_bias(bbox) {
+        model.set_depth_bias(true);
+    }
 }
 
 fn create_model(
@@ -1637,6 +1661,26 @@ mod tests {
     fn an_ordinary_prop_is_not_a_decal() {
         let crate_bbox = Aabb3::new(point3(-1.0, -1.0, -1.0), point3(1.0, 1.0, 1.0));
         assert_eq!(decal_local_x_offset(crate_bbox, 1.0), None);
+    }
+
+    /// station.mis's floor signs are paper-thin along local Y (flat in the
+    /// horizontal plane), which `decal_local_x_offset` does not handle - they
+    /// take the depth-bias path instead. Small solid props and real-extent
+    /// boxes must not.
+    #[test]
+    fn a_y_thin_floor_sign_is_depth_biased_and_solid_props_are_not() {
+        let floor_sign = Aabb3::new(point3(-0.5, 0.0, -0.7), point3(0.5, 0.001, 0.7));
+        assert!(decal_needs_depth_bias(floor_sign));
+        // An X-thin wall decal is handled by the local-X lift, not the bias.
+        assert!(!decal_needs_depth_bias(decal_bbox()));
+
+        let shell_casing = Aabb3::new(point3(0.0, 0.0, 0.0), point3(0.01, 0.01, 0.01));
+        assert!(!decal_needs_depth_bias(shell_casing));
+        // A thin rod is long in only ONE in-plane direction - not a decal.
+        let rod = Aabb3::new(point3(0.0, 0.0, 0.0), point3(0.2, 0.01, 0.01));
+        assert!(!decal_needs_depth_bias(rod));
+        let crate_bbox = Aabb3::new(point3(-1.0, -1.0, -1.0), point3(1.0, 1.0, 1.0));
+        assert!(!decal_needs_depth_bias(crate_bbox));
     }
 
     /// A ladder-shaped entity: climbable terrain with a physics type but - like
