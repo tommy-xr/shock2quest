@@ -167,7 +167,7 @@ impl Script for TriggeredMeleeWeapon {
                 if self.may_play_impact_sound(entity_id, *with, physics, *contact)
                     | damage.is_some()
                 {
-                    let sound = impact_sound_effect(entity_id, *with, world);
+                    let sound = impact_sound_effect(entity_id, *with, world, physics, *contact);
                     if !matches!(sound, Effect::NoEffect) {
                         effects.push(sound);
                     }
@@ -300,7 +300,13 @@ fn contact_damage_effect(
 /// tag + hit material - wrench on metal clangs, on a creature thuds), unless
 /// its collision type opts out. Needs no damage value: unmaterialed surfaces
 /// (world geometry, a bench) fall back to the default material tag.
-fn impact_sound_effect(entity_id: EntityId, with: EntityId, world: &World) -> Effect {
+fn impact_sound_effect(
+    entity_id: EntityId,
+    with: EntityId,
+    world: &World,
+    physics: &PhysicsWorld,
+    contact: Option<crate::physics::CollisionContact>,
+) -> Effect {
     let no_sound = world
         .borrow::<View<PropCollisionType>>()
         .ok()
@@ -310,19 +316,28 @@ fn impact_sound_effect(entity_id: EntityId, with: EntityId, world: &World) -> Ef
         return Effect::NoEffect;
     }
     let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
-    play_impact_sound(world, entity_id, with, position.to_vec())
+    play_impact_sound(
+        world,
+        entity_id,
+        with,
+        position.to_vec(),
+        contact
+            .and_then(|contact| contact.surface_material)
+            .and_then(|material| physics.surface_material_name(material)),
+    )
 }
 
 fn melee_impact(
     entity_id: EntityId,
     with: EntityId,
     world: &World,
+    physics: &PhysicsWorld,
     amount: f32,
     contact: Option<crate::physics::CollisionContact>,
 ) -> Effect {
     Effect::Multiple(vec![
         contact_damage_effect(with, amount, contact),
-        impact_sound_effect(entity_id, with, world),
+        impact_sound_effect(entity_id, with, world, physics, contact),
     ])
 }
 
@@ -331,7 +346,7 @@ impl Script for MeleeWeapon {
         &mut self,
         entity_id: EntityId,
         world: &World,
-        _physics: &PhysicsWorld,
+        physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
         // The legacy literal `wrench` script can still back a VR physical
@@ -344,7 +359,7 @@ impl Script for MeleeWeapon {
         match msg {
             // Legacy literal `wrench` script (Maintenance Tool -2949).
             MessagePayload::Collided { with, contact } => {
-                melee_impact(entity_id, *with, world, 1.0, *contact)
+                melee_impact(entity_id, *with, world, physics, 1.0, *contact)
             }
             _ => Effect::NoEffect,
         }
@@ -574,6 +589,7 @@ mod tests {
                 contact: Some(crate::physics::CollisionContact {
                     point: vec3(2.0, 3.0, 4.0),
                     normal: vec3(1.0, 0.0, 0.0),
+                    surface_material: None,
                 }),
             },
         )
@@ -846,6 +862,7 @@ mod tests {
                 contact: Some(crate::physics::CollisionContact {
                     point: vec3(2.0, 3.0, 4.0),
                     normal: vec3(1.0, 0.0, 0.0),
+                    surface_material: None,
                 }),
             },
         );

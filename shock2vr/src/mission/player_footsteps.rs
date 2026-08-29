@@ -180,6 +180,24 @@ impl PlayerFootsteps {
     }
 }
 
+/// The schema query for one player footstep on `material`.
+fn player_footstep_query(footstep: PlayerFootstep, material: &str) -> dark::EnvSoundQuery {
+    let mut tags = vec![
+        ("event", "footstep"),
+        ("creaturetype", "player"),
+        ("material", material),
+    ];
+    if footstep == PlayerFootstep::Landing {
+        tags.push(("landing", "true"));
+    }
+    let query = dark::EnvSoundQuery::from_tag_values(tags);
+    if footstep == PlayerFootstep::Landing {
+        query.most_specific()
+    } else {
+        query
+    }
+}
+
 /// The `Effect` for a player footstep at `position` (the pawn origin, which is
 /// at the player's feet).
 ///
@@ -189,20 +207,27 @@ impl PlayerFootsteps {
 /// node that already resolves (`material=metal` -> `ftmet1..4`), and the
 /// default shallowest-match resolution would hand back the ordinary footstep
 /// and drop the thud.
-pub fn player_footstep_effect(footstep: PlayerFootstep, position: Vector3<f32>) -> Effect {
-    let mut tags = vec![
-        ("event", "footstep"),
-        ("creaturetype", "player"),
-        ("material", script_util::DEFAULT_IMPACT_MATERIAL),
-    ];
-    if footstep == PlayerFootstep::Landing {
-        tags.push(("landing", "true"));
-    }
-    let query = dark::EnvSoundQuery::from_tag_values(tags);
-    let query = if footstep == PlayerFootstep::Landing {
-        query.most_specific()
-    } else {
+///
+/// `ground_material` is the deck underfoot, from the world geometry's own
+/// texture material - carpet reads `ftcar*`, tile `fttil*`, bulkhead
+/// `ftmet*`. `None` (no ground found, or a surface with no material) keeps the
+/// default. The schema does not author every material for every sub-key, so
+/// the query falls back to the default material rather than going silent on,
+/// say, a landing the schema has no thud for.
+pub fn player_footstep_effect(
+    footstep: PlayerFootstep,
+    position: Vector3<f32>,
+    ground_material: Option<&str>,
+) -> Effect {
+    let material = ground_material.unwrap_or(script_util::DEFAULT_IMPACT_MATERIAL);
+    let query = player_footstep_query(footstep, material);
+    let query = if material == script_util::DEFAULT_IMPACT_MATERIAL {
         query
+    } else {
+        query.with_fallback(player_footstep_query(
+            footstep,
+            script_util::DEFAULT_IMPACT_MATERIAL,
+        ))
     };
 
     Effect::PlayEnvironmentalSound {
@@ -434,7 +459,7 @@ mod tests {
 
     #[test]
     fn the_landing_query_asks_for_the_most_specific_match() {
-        let effect = player_footstep_effect(PlayerFootstep::Landing, vec3(0.0, 0.0, 0.0));
+        let effect = player_footstep_effect(PlayerFootstep::Landing, vec3(0.0, 0.0, 0.0), None);
         let Effect::PlayEnvironmentalSound { query, .. } = effect else {
             panic!("expected an environmental sound");
         };
@@ -446,9 +471,53 @@ mod tests {
         );
     }
 
+    /// The deck underfoot picks the sample: carpet is `ftcar*`, not the
+    /// bulkhead `ftmet*` every step used to resolve. The default stays the
+    /// fallback, so a material the schema never authored for this sub-key
+    /// still makes a sound.
+    #[test]
+    fn a_step_names_the_ground_it_landed_on() {
+        let effect =
+            player_footstep_effect(PlayerFootstep::Step, vec3(0.0, 0.0, 0.0), Some("fabric"));
+        let Effect::PlayEnvironmentalSound { query, .. } = effect else {
+            panic!("expected an environmental sound");
+        };
+        assert!(
+            query
+                .tag_values()
+                .contains(&("material".to_owned(), "fabric".to_owned())),
+            "the real deck is queried first: {:?}",
+            query.tag_values()
+        );
+        let fallback = query.fallback().expect("a fallback query");
+        assert!(
+            fallback
+                .tag_values()
+                .contains(&("material".to_owned(), "metal".to_owned())),
+            "the default material backs it up: {:?}",
+            fallback.tag_values()
+        );
+    }
+
+    /// No ground found (mid-air, or a surface with no material) is the old
+    /// behavior exactly, with no fallback to itself.
+    #[test]
+    fn a_step_with_no_ground_material_keeps_the_default() {
+        let effect = player_footstep_effect(PlayerFootstep::Step, vec3(0.0, 0.0, 0.0), None);
+        let Effect::PlayEnvironmentalSound { query, .. } = effect else {
+            panic!("expected an environmental sound");
+        };
+        assert!(
+            query
+                .tag_values()
+                .contains(&("material".to_owned(), "metal".to_owned())),
+        );
+        assert!(query.fallback().is_none());
+    }
+
     #[test]
     fn the_step_query_names_the_player_and_a_material() {
-        let effect = player_footstep_effect(PlayerFootstep::Step, vec3(0.0, 0.0, 0.0));
+        let effect = player_footstep_effect(PlayerFootstep::Step, vec3(0.0, 0.0, 0.0), None);
         let Effect::PlayEnvironmentalSound { query, .. } = effect else {
             panic!("expected an environmental sound");
         };

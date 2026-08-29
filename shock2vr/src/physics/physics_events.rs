@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rapier3d::prelude::{ColliderSet, ContactPair, EventHandler, Real, RigidBodySet};
 use shipyard::EntityId;
@@ -7,13 +7,24 @@ use super::util::{npoint_to_cgvec, nvec_to_cgmath};
 
 pub struct PhysicsEvents {
     queued_events: Mutex<Vec<super::CollisionEvent>>,
+    /// The level's per-triangle materials, so a contact against world geometry
+    /// can name the surface it touched. `None` until a level is added (debug
+    /// scenes never add one). Written once, under `&mut self`, so it needs no
+    /// lock of its own - unlike `queued_events`, which the handler fills from
+    /// inside the solver.
+    level_surface_materials: Option<Arc<super::LevelSurfaceMaterials>>,
 }
 
 impl PhysicsEvents {
     pub fn new() -> PhysicsEvents {
         PhysicsEvents {
             queued_events: Mutex::new(vec![]),
+            level_surface_materials: None,
         }
+    }
+
+    pub fn set_level_surface_materials(&mut self, materials: Arc<super::LevelSurfaceMaterials>) {
+        self.level_surface_materials = Some(materials);
     }
 
     pub fn get_and_clear_events(&self) -> Vec<super::CollisionEvent> {
@@ -51,6 +62,7 @@ impl EventHandler for PhysicsEvents {
                     // manifold normal, which Rapier orients collider1 ->
                     // collider2. Some synthetic/degenerate contacts may have
                     // no solver point, so the payload remains optional.
+                    let level_surface_materials = self.level_surface_materials.as_ref();
                     let contact = contact_pair
                         .manifolds
                         .iter()
@@ -65,6 +77,23 @@ impl EventHandler for PhysicsEvents {
                         .map(|(manifold, contact)| super::CollisionContact {
                             point: npoint_to_cgvec(contact.point),
                             normal: nvec_to_cgmath(manifold.data.normal),
+                            // For a composite shape (the level trimesh is the
+                            // only one either side of a contact can be), the
+                            // manifold's subshape IS the triangle index - so a
+                            // wrench on a carpeted floor knows it hit fabric.
+                            surface_material: level_surface_materials.and_then(|materials| {
+                                materials
+                                    .material_for_triangle_on(
+                                        contact_pair.collider1,
+                                        manifold.subshape1,
+                                    )
+                                    .or_else(|| {
+                                        materials.material_for_triangle_on(
+                                            contact_pair.collider2,
+                                            manifold.subshape2,
+                                        )
+                                    })
+                            }),
                         });
                     self.queued_events.lock().unwrap().push(
                         super::CollisionEvent::CollisionStarted {

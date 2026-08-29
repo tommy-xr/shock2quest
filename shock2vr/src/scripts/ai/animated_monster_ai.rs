@@ -1425,7 +1425,17 @@ impl Script for AnimatedMonsterAI {
                 let footstep = if motion_flags
                     .intersects(MotionFlags::LEFT_FOOT_STEP | MotionFlags::RIGHT_FOOT_STEP)
                 {
-                    script_util::play_footstep_sound(world, entity_id)
+                    // The deck underfoot, so a hybrid crossing carpet sounds
+                    // different from one crossing bulkhead.
+                    let ground_material = physics.ground_surface_material(
+                        crate::util::get_position_from_transform(
+                            world,
+                            entity_id,
+                            vec3(0.0, 0.0, 0.0),
+                        )
+                        .to_vec(),
+                    );
+                    script_util::play_footstep_sound(world, entity_id, ground_material)
                 } else {
                     Effect::NoEffect
                 };

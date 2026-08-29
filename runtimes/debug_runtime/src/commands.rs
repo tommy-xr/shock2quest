@@ -282,6 +282,8 @@ pub struct RayCastResult {
     pub body_id: Option<u32>,
     pub collision_group: Option<String>,
     pub is_sensor: bool,
+    /// Sound-schema material of the world surface hit, when level geometry.
+    pub surface_material: Option<String>,
 }
 
 /// Scene objects submitted on the last rendered frame

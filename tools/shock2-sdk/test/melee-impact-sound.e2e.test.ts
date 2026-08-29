@@ -11,7 +11,9 @@ import {
 
 // A VR melee contact with something that takes no authored damage - a wall, a
 // bench, a crate - used to be completely silent, because the impact sound was
-// emitted only from the damage path. This exercises the production path on a
+// emitted only from the damage path. It also checks the surface the contact
+// names: the material comes from the level trimesh triangle the manifold
+// touched, so a deck sounds like its own material rather than the default. This exercises the production path on a
 // real mission's static world geometry (not a debug scene's synthetic
 // collider) and observes the played-sound log, the only headless way to hear
 // anything.
@@ -97,9 +99,12 @@ test(
       impacts.length > 0,
       `hitting world geometry should play a collision sound: ${describe(afterSwing)}`,
     );
+    // The floor names its own material now that world geometry carries one
+    // (command2's deck is plasticrete -> `hwrepla*`, where every surface used
+    // to resolve the blanket metal schema).
     assert.ok(
-      impacts.some((sound) => tagValue(sound, "material") === "metal"),
-      `an unmaterialed surface should resolve the default metal schema: ${describe(impacts)}`,
+      impacts.some((sound) => tagValue(sound, "material") === "plasticrete"),
+      `the deck should resolve its own material schema: ${describe(impacts)}`,
     );
     // The swing crosses the floor over ~0.4 s; the per-surface cooldown caps
     // that at a couple of thuds rather than one per contact frame.

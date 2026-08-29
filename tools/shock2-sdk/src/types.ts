@@ -298,6 +298,12 @@ export interface RayCastResult {
   body_id?: number | null;
   collision_group: string | null;
   is_sensor: boolean;
+  /**
+   * Sound-schema material of the world surface hit ("metal", "plasticrete",
+   * "glass", "fabric"), when the ray landed on level geometry. Optional when
+   * connected to runtimes predating world surface materials.
+   */
+  surface_material?: string | null;
 }
 
 /** Summary of one rigid body, as reported by GET /v1/physics/bodies. */

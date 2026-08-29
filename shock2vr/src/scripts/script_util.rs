@@ -792,32 +792,19 @@ pub fn play_environmental_sound(
     additional_tags: Vec<(&str, &str)>,
     audio_handle: AudioHandle,
 ) -> Effect {
-    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let maybe_env_sound_query =
         get_environmental_sound_query(world, entity_id, event_type, additional_tags);
 
-    // An entity can be animating without owning a physics transform (the
-    // animation players and `id_to_physics` are separate maps, and ownership
-    // changes hands around death), so a missing transform is a silent no-sound
-    // rather than a panic - there is nowhere to place the sound.
-    let (Some(query), Ok(transform)) = (maybe_env_sound_query, v_transform.get(entity_id)) else {
-        return Effect::NoEffect;
-    };
-
-    {
-        let position = transform.0.transform_point(point3(0.0, 0.0, 0.0));
-        Effect::PlayEnvironmentalSound {
-            audio_handle,
-            query,
-            position: point3_to_vec3(position),
-        }
+    match maybe_env_sound_query {
+        Some(query) => emit_environmental_sound(world, entity_id, query, audio_handle),
+        None => Effect::NoEffect,
     }
 }
 
 /// Material tag used for impact-schema lookups when the hit surface has no
-/// resolvable material. World geometry has no per-texture material lookup in
-/// the port yet, so terrain hits (and entities without material tags) all
-/// sound like the ship's metal bulkheads.
+/// resolvable material: an entity with no material tag, or world geometry whose
+/// texture archetype names none. The ship is mostly metal, so that is the
+/// truest single guess.
 pub const DEFAULT_IMPACT_MATERIAL: &str = "metal";
 
 /// The collision-schema material tag ("fleshtarget", "metal", ...) for
@@ -830,18 +817,80 @@ fn get_impact_material(world: &World, hit_entity_id: EntityId) -> String {
     world
         .borrow::<View<PropMaterial>>()
         .ok()
-        .and_then(|v_material| {
-            let raw = &v_material.get(victim).ok()?.0;
-            // "Material FleshTarget" -> "fleshtarget"
-            let mut tokens = raw.split_whitespace();
-            while let Some(token) = tokens.next() {
-                if token.eq_ignore_ascii_case("material") {
-                    return tokens.next().map(|value| value.to_ascii_lowercase());
-                }
-            }
-            None
-        })
+        .and_then(|v_material| v_material.get(victim).ok()?.tag())
         .unwrap_or_else(|| DEFAULT_IMPACT_MATERIAL.to_owned())
+}
+
+/// A sound query over `tags`, with a less specific one to fall back on when
+/// `relaxed_tag`'s material has no entry in the schema.
+///
+/// The shipped schema does not author every (event, material) combination -
+/// there is no bullet impact on glass, and no creature footstep on fabric -
+/// so naming the real surface can resolve to *nothing* where the old fixed
+/// `metal` resolved to a sample. A truer material must never buy silence, so
+/// every material-tagged query keeps the default as its fallback.
+///
+/// The tag layer's own relaxation (`TagQueryItem`'s optional flag, which drops
+/// an item that matches nothing) cannot serve here: the schema branches on
+/// material *before* it reaches a sample, so dropping the tag resolves to
+/// nothing at all - `+event:collision +ammotype:std` and a materialless
+/// footstep both match no sample. Substituting the default is what actually
+/// keeps a sound, and it is the exact sound that played before.
+fn query_with_material_fallback(
+    world: &World,
+    entity_id: EntityId,
+    event_type: &str,
+    tags: Vec<(&str, &str)>,
+    relaxed_tag: &str,
+) -> Option<EnvSoundQuery> {
+    let query = get_environmental_sound_query(world, entity_id, event_type, tags.clone())?;
+
+    let already_default = tags
+        .iter()
+        .any(|(tag, value)| *tag == relaxed_tag && *value == DEFAULT_IMPACT_MATERIAL);
+    if already_default {
+        return Some(query);
+    }
+
+    let relaxed_tags = tags
+        .into_iter()
+        .map(|(tag, value)| {
+            if tag == relaxed_tag {
+                (tag, DEFAULT_IMPACT_MATERIAL)
+            } else {
+                (tag, value)
+            }
+        })
+        .collect();
+    match get_environmental_sound_query(world, entity_id, event_type, relaxed_tags) {
+        Some(fallback) => Some(query.with_fallback(fallback)),
+        None => Some(query),
+    }
+}
+
+/// Emit an already-built environmental sound query at `entity_id`'s position.
+///
+/// An entity can be animating without owning a physics transform (the
+/// animation players and `id_to_physics` are separate maps, and ownership
+/// changes hands around death), so a missing transform is a silent no-sound
+/// rather than a panic - there is nowhere to place the sound. Footsteps come
+/// from foot-plant frames of the death collapse too, so this is a live path.
+fn emit_environmental_sound(
+    world: &World,
+    entity_id: EntityId,
+    query: EnvSoundQuery,
+    audio_handle: AudioHandle,
+) -> Effect {
+    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
+    let Ok(transform) = v_transform.get(entity_id) else {
+        return Effect::NoEffect;
+    };
+
+    Effect::PlayEnvironmentalSound {
+        audio_handle,
+        query,
+        position: point3_to_vec3(transform.0.transform_point(point3(0.0, 0.0, 0.0))),
+    }
 }
 
 /// Footstep sound for a creature whose animation just reached an authored
@@ -851,25 +900,38 @@ fn get_impact_material(world: &World, hit_entity_id: EntityId) -> String {
 /// tags (`creaturetype=oncegrunt`, `=monkey`, `=droid`, ...); most creature
 /// types resolve on those alone to a four-sample set (`ft_monk1..4`). Hybrids
 /// (`oncegrunt`) branch further on `material` - the creature's *own* material,
-/// i.e. what its feet are made of - and `material2`, the surface underfoot.
-/// The port has no per-texture lookup for world geometry, so `material2` is
-/// the default bulkhead metal, which is what most of the ship is; on a hybrid
-/// that resolves to `ft_ogm*`.
+/// i.e. what its feet are made of - and `material2`, the surface underfoot,
+/// which is `ground_material`: the deck the foot was planted on, probed from
+/// the world geometry's own texture material. A hybrid on MedSci's plasticrete
+/// deck resolves `ft_og*`, on metal plating `ft_ogm*`. `None` (no ground
+/// found, or a surface with no material) keeps the default bulkhead metal.
 ///
 /// Creature types the schema authors no footsteps for (swarms, apparitions,
 /// SHODAN) resolve to nothing and fall through silently.
-pub fn play_footstep_sound(world: &World, entity_id: EntityId) -> Effect {
+pub fn play_footstep_sound(
+    world: &World,
+    entity_id: EntityId,
+    ground_material: Option<&str>,
+) -> Effect {
     let own_material = get_impact_material(world, entity_id);
-    play_environmental_sound(
+    let maybe_query = query_with_material_fallback(
         world,
         entity_id,
         "footstep",
         vec![
             ("material", &own_material),
-            ("material2", DEFAULT_IMPACT_MATERIAL),
+            (
+                "material2",
+                ground_material.unwrap_or(DEFAULT_IMPACT_MATERIAL),
+            ),
         ],
-        AudioHandle::new(),
-    )
+        "material2",
+    );
+
+    match maybe_query {
+        Some(query) => emit_environmental_sound(world, entity_id, query, AudioHandle::new()),
+        None => Effect::NoEffect,
+    }
 }
 
 /// Impact/collision sound for `entity_id` (a projectile or melee weapon)
@@ -879,15 +941,38 @@ pub fn play_footstep_sound(world: &World, entity_id: EntityId) -> Effect {
 /// wall resolves (event=collision, ammotype=std, material=metal) -> `bulmet*`,
 /// on a hybrid (event=collision, ammotype=std, material=fleshtarget) ->
 /// `bulftar*`.
+///
+/// `surface_material` is the material of the *world surface* struck, when the
+/// hit came with one (see [`crate::physics::PhysicsWorld::surface_material_name`]).
+/// It only applies to world geometry: an entity with its own `PropMaterial` is
+/// what was hit, whatever it is standing on.
 pub fn play_impact_sound(
     world: &World,
     entity_id: EntityId,
     hit_entity_id: EntityId,
     position: Vector3<f32>,
+    surface_material: Option<&str>,
 ) -> Effect {
-    let material = get_impact_material(world, hit_entity_id);
-    let maybe_query =
-        get_environmental_sound_query(world, entity_id, "collision", vec![("material", &material)]);
+    let entity_material = get_impact_material(world, hit_entity_id);
+    let maybe_query = match surface_material {
+        // A world surface is newly able to name itself, so it keeps the
+        // default it replaced as a fallback.
+        Some(surface_material) => query_with_material_fallback(
+            world,
+            entity_id,
+            "collision",
+            vec![("material", surface_material)],
+            "material",
+        ),
+        // An entity's own material is what was hit, and resolves exactly as it
+        // always has - no fallback, so a hit that was silent stays silent.
+        None => get_environmental_sound_query(
+            world,
+            entity_id,
+            "collision",
+            vec![("material", &entity_material)],
+        ),
+    };
 
     if let Some(query) = maybe_query {
         Effect::PlayEnvironmentalSound {
@@ -1033,6 +1118,108 @@ mod tests {
             RuntimePropTransform(Matrix4::from_translation(at)),
         ));
         (world, entity_id)
+    }
+
+    /// A bullet on a surface whose material the schema has no entry for must
+    /// keep the default material as a fallback - naming the real surface must
+    /// never trade a sound for silence (`bulmet*` on glass, not nothing).
+    #[test]
+    fn a_surface_material_impact_falls_back_to_the_default_material() {
+        use super::play_impact_sound;
+        use dark::properties::PropClassTag;
+
+        let mut world = World::new();
+        let bullet = world.add_entity((PropClassTag::from_string("AmmoType Std"),));
+        let wall = world.add_entity((RuntimePropTransform(Matrix4::from_translation(vec3(
+            0.0, 0.0, 0.0,
+        ))),));
+
+        let effect = play_impact_sound(&world, bullet, wall, vec3(0.0, 0.0, 0.0), Some("glass"));
+
+        let crate::scripts::Effect::PlayEnvironmentalSound { query, .. } = effect else {
+            panic!("expected an environmental sound, got {effect:?}");
+        };
+        assert!(
+            query
+                .tag_values()
+                .contains(&("material".to_owned(), "glass".to_owned())),
+            "the real surface material is queried first: {:?}",
+            query.tag_values()
+        );
+        let fallback = query.fallback().expect("a fallback query");
+        assert!(
+            fallback
+                .tag_values()
+                .contains(&("material".to_owned(), "metal".to_owned())),
+            "the default material backs it up: {:?}",
+            fallback.tag_values()
+        );
+    }
+
+    /// The default material needs no fallback to itself.
+    #[test]
+    fn a_default_material_impact_has_no_fallback() {
+        use super::play_impact_sound;
+        use dark::properties::PropClassTag;
+
+        let mut world = World::new();
+        let bullet = world.add_entity((PropClassTag::from_string("AmmoType Std"),));
+        let wall = world.add_entity((RuntimePropTransform(Matrix4::from_translation(vec3(
+            0.0, 0.0, 0.0,
+        ))),));
+
+        let effect = play_impact_sound(&world, bullet, wall, vec3(0.0, 0.0, 0.0), Some("metal"));
+
+        let crate::scripts::Effect::PlayEnvironmentalSound { query, .. } = effect else {
+            panic!("expected an environmental sound, got {effect:?}");
+        };
+        assert!(query.fallback().is_none());
+    }
+
+    /// A creature can plant a foot while it owns no physics transform - the
+    /// animation player and `id_to_physics` are separate maps, and ownership
+    /// changes hands around death. There is nowhere to place the sound, so it
+    /// is silent rather than a panic.
+    #[test]
+    fn a_footstep_without_a_transform_is_silent() {
+        use super::play_footstep_sound;
+        use dark::properties::PropClassTag;
+
+        let mut world = World::new();
+        let creature = world.add_entity((PropClassTag::from_string("CreatureType OnceGrunt"),));
+
+        let effect = play_footstep_sound(&world, creature, Some("plasticrete"));
+
+        assert!(matches!(effect, crate::scripts::Effect::NoEffect));
+    }
+
+    /// Footsteps relax the *ground* (`material2`), not the creature's own
+    /// material: the schema has no `fabric` footstep, so a hybrid on carpet
+    /// must still land on its metal step rather than going silent.
+    #[test]
+    fn a_footstep_falls_back_on_the_ground_material() {
+        use super::play_footstep_sound;
+        use dark::properties::PropClassTag;
+
+        let mut world = World::new();
+        let creature = world.add_entity((
+            PropClassTag::from_string("CreatureType OnceGrunt"),
+            RuntimePropTransform(Matrix4::from_translation(vec3(0.0, 0.0, 0.0))),
+        ));
+
+        let effect = play_footstep_sound(&world, creature, Some("fabric"));
+
+        let crate::scripts::Effect::PlayEnvironmentalSound { query, .. } = effect else {
+            panic!("expected an environmental sound, got {effect:?}");
+        };
+        let fallback = query.fallback().expect("a fallback query");
+        assert!(
+            fallback
+                .tag_values()
+                .contains(&("material2".to_owned(), "metal".to_owned())),
+            "only the ground is relaxed: {:?}",
+            fallback.tag_values()
+        );
     }
 
     #[test]

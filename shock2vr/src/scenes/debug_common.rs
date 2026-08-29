@@ -115,13 +115,15 @@ impl DebugSceneBuilder {
 
     pub fn build_core(self, options: DebugSceneBuildOptions<'_>) -> MissionCore {
         let mut scene_objects = Vec::new();
-        let mut physics_geometry = self.physics_geometry;
+        let mut physics_geometry = self
+            .physics_geometry
+            .map(crate::physics::LevelGeometry::untextured);
 
         if let Some(floor) = self.floor {
             let (mut floor_objects, floor_collider) = floor.build(options.asset_cache);
             scene_objects.append(&mut floor_objects);
             if physics_geometry.is_none() {
-                physics_geometry = Some(floor_collider);
+                physics_geometry = Some(crate::physics::LevelGeometry::untextured(floor_collider));
             }
         }
 
