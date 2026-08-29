@@ -316,13 +316,15 @@ test(
     await click(game, TAB_MISSIONS);
     await click(game, sceneRow(MEDSCI1_ROW));
     await click(game, ACTION);
-    // Row 9 is medsci1.mis on the canonical 23-mission install; another
-    // install may sort a different mission into that row, so the hard
-    // assertion is "a real mission booted", not which one.
-    const mission = (await game.info()).mission;
-    assert.ok(
-      mission.toLowerCase().endsWith(".mis"),
-      `Launch on the Missions tab must boot the selected mission, got ${mission}`,
+    // Row 9 is medsci1.mis on the canonical 23-mission install (the same
+    // assumption missions.e2e.test.ts hardcodes). Asserting the exact name
+    // proves the row CLICK picked the mission - the preselected row 0 would
+    // boot command1.mis, so a looser ".mis booted" check could pass without
+    // the selection ever moving.
+    assert.equal(
+      (await game.info()).mission,
+      "medsci1.mis",
+      "Launch on the Missions tab must boot the clicked row's mission (canonical install assumed)",
     );
 
     // ...and it is a real world, not just a scene-name swap.

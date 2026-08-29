@@ -529,6 +529,9 @@ impl DeveloperScene {
             }
             DeveloperAction::OpenScenes => {
                 self.page = DeveloperPage::Scenes;
+                // The launcher always opens on the Missions tab, whatever tab
+                // it was left on.
+                self.tab = SceneTab::Missions;
                 self.missions = mission_files();
                 self.reset_list();
             }
@@ -1047,10 +1050,12 @@ mod tests {
     }
 
     /// Opening the launcher enumerates the install's missions and lands on the
-    /// Missions tab with its first entry preselected.
+    /// Missions tab with its first entry preselected - even when it was left
+    /// on the Debug Scenes tab last time.
     #[test]
     fn opening_the_launcher_enumerates_missions() {
         let mut scene = DeveloperScene::new();
+        scene.tab = SceneTab::DebugScenes;
         scene.handle_action(DeveloperAction::OpenScenes);
         assert_eq!(scene.tab, SceneTab::Missions);
         assert_eq!(scene.missions, mission_files());
