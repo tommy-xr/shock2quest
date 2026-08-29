@@ -3452,9 +3452,9 @@ impl MissionCore {
                         .iter()
                         .with_id()
                 {
-                    // Dormant groups (authored inactive) do not emit. There is
-                    // no runtime activation toggle yet; when one exists this
-                    // should flip the system on rather than skip it. A
+                    // Dormant groups (authored inactive, or switched off via
+                    // Effect::SetParticleActive - which also drops the live
+                    // system, see the effect applier) do not emit. A
                     // transient (fire-and-forget) entity that is dormant would
                     // never finish a burst, so reap it immediately instead of
                     // leaking an invisible entity.
@@ -6994,6 +6994,20 @@ impl MissionCore {
                         .unwrap_or(false);
                     if is_alive {
                         self.world.add_component(entity_id, PropObjState(state));
+                    }
+                }
+                Effect::SetParticleActive { entity_id, active } => {
+                    self.world.run(|mut v_pg: ViewMut<PropParticleGroup>| {
+                        if let Ok(pg) = (&mut v_pg).get(entity_id) {
+                            pg.is_active = active;
+                        }
+                    });
+                    // Drop the live system on deactivate: the render pass
+                    // draws whatever systems exist, so a lingering system
+                    // would keep showing its last frame. Rebuilding on the
+                    // next activation also restarts the burst from scratch.
+                    if !active {
+                        self.id_to_particle_system.remove(&entity_id);
                     }
                 }
                 Effect::SetAnimatedLight {

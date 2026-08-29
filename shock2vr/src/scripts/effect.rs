@@ -619,6 +619,15 @@ pub enum Effect {
         state: ObjectState,
     },
 
+    /// Turn one authored particle group (`P$ParticleG`) on or off - e.g. the
+    /// recharge station pulsing its attached `RechargeFX` while it charges.
+    /// Deactivating also clears the live particle system, so the next
+    /// activation restarts the burst from scratch.
+    SetParticleActive {
+        entity_id: EntityId,
+        active: bool,
+    },
+
     /// Persistently switch one authored animated light and update the matching
     /// world-representation lightmap layers. `intensity` is normalized against
     /// the light's authored maximum; `inactive` is stored in `P$AnimLight` so
