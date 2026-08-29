@@ -35,25 +35,19 @@ pub struct EnergyStation {
     /// Seconds left on the current RechargeFX pulse; <= 0 means the FX is off.
     /// Transient like `contacts` - a pulse lost to a save/load is cosmetic.
     fx_seconds_left: f32,
-    /// The mission data authors the FX group `is_active: true`, so it would
-    /// otherwise glow forever; the first update turns it off. False again
-    /// after a load, which re-normalizes the restored state.
-    fx_normalized: bool,
 }
 impl EnergyStation {
     pub fn new() -> EnergyStation {
         EnergyStation {
             contacts: HashMap::new(),
             fx_seconds_left: 0.0,
-            fx_normalized: false,
         }
     }
 
-    /// Start (or extend) the charge FX pulse on the station's attached
-    /// particle group.
+    /// Start a charge FX pulse on the station's attached particle group (one
+    /// per interaction - a held contact renews the latch, not the pulse).
     fn begin_fx_pulse(&mut self, world: &World, entity_id: EntityId) -> Effect {
         self.fx_seconds_left = FX_PULSE_SECONDS;
-        self.fx_normalized = true;
         set_attached_fx_active(world, entity_id, true)
     }
 
@@ -84,6 +78,13 @@ impl EnergyStation {
 }
 
 impl Script for EnergyStation {
+    // The mission data authors the FX group `is_active: true` (it would glow
+    // forever) - switch it off until a charge pulses it. Runs fresh and after
+    // every load (the pulse timer is transient), re-normalizing restored state.
+    fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        set_attached_fx_active(world, entity_id, false)
+    }
+
     fn update(
         &mut self,
         entity_id: EntityId,
@@ -97,14 +98,6 @@ impl Script for EnergyStation {
                 *age += dt;
                 *age <= CONTACT_RELEASE_SECONDS
             });
-        }
-        // The authored FX group ships active - switch it off until a charge
-        // pulses it (and after a load, re-normalize the restored state).
-        if !self.fx_normalized {
-            self.fx_normalized = true;
-            if self.fx_seconds_left <= 0.0 {
-                return set_attached_fx_active(world, entity_id, false);
-            }
         }
         // Expire the charge pulse.
         if self.fx_seconds_left > 0.0 {
@@ -165,7 +158,9 @@ fn do_recharge_all(world: &World, entity_id: EntityId) -> Effect {
 /// Toggle the particle groups attached to this station. The mission data
 /// authors one `RechargeFX` entity per station, linked BY the FX entity via a
 /// concrete `ParticleAttachement` link (FX -> station), so the FX is found by
-/// scanning incoming links.
+/// scanning incoming links. This assumes a mission-placed station: a
+/// runtime-created host gets its riders attached without `Links`, but every
+/// energy station ships placed in the level.
 fn set_attached_fx_active(world: &World, station_id: EntityId, active: bool) -> Effect {
     let v_links = world.borrow::<View<Links>>().unwrap();
     let effects: Vec<Effect> = v_links
@@ -455,16 +450,16 @@ mod tests {
     }
 
     #[test]
-    fn first_update_turns_authored_fx_off() {
+    fn initialize_turns_authored_fx_off() {
         // The mission data authors the FX group active; the station normalizes
-        // it off before any charge.
+        // it off before any charge, and plain updates don't re-emit it.
         let (mut world, station, _item) = make_world();
         let fx = add_fx(&mut world, station);
         let mut script = EnergyStation::new();
 
-        let first = fx_toggles(tick(&mut script, station, &world, 1.0 / 60.0));
-        assert_eq!(first, vec![(fx, false)]);
-        let second = fx_toggles(tick(&mut script, station, &world, 1.0 / 60.0));
-        assert_eq!(second, vec![], "normalization happens once");
+        let init = fx_toggles(script.initialize(station, &world));
+        assert_eq!(init, vec![(fx, false)]);
+        let update = fx_toggles(tick(&mut script, station, &world, 1.0 / 60.0));
+        assert_eq!(update, vec![], "idle update emits nothing");
     }
 }
