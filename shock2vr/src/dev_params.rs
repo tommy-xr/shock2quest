@@ -233,8 +233,8 @@ dev_params! {
     /// bug report needs are otherwise only reachable from a debug-runtime HTTP
     /// query, which a headset has no way to make.
     SHOW_POSITION = bool("show_position", "Show position", false),
-    /// Draw the physics world as wireframes (colliders, contacts, joint
-    /// anchors) over the game. Live because the question it answers - "does
+    /// Draw the physics world as wireframes (collider shapes and AABBs,
+    /// contacts, joint anchors) over the game. Live because the question it answers - "does
     /// the collider match what I see?" - is asked while walking into the
     /// thing, and a boot-time flag means guessing which scene to arm before
     /// the scene exists. `--debug-physics` still seeds it on at launch.
