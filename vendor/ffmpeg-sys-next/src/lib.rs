@@ -9,6 +9,14 @@
 #![allow(clippy::ptr_offset_with_cast)]
 #![allow(unpredictable_function_pointer_comparisons)]
 #![allow(unnecessary_transmutes)]
+// bindgen emits declarations for the libc string/memory routines pulled in by
+// ffmpeg's headers (memcpy, memset, strlen, ...) typed with `libc::c_ulong`
+// rather than `usize`. Newer rustc flags that as a mismatched redeclaration of
+// a runtime symbol the standard library owns; the types are layout-identical,
+// so allow it. `unknown_lints` keeps older toolchains (which do not know the
+// lint name) from failing on the allow itself under `-D warnings`.
+#![allow(unknown_lints)]
+#![allow(suspicious_runtime_symbol_definitions)]
 
 extern crate libc;
 
