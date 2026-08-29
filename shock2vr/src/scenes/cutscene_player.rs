@@ -157,8 +157,13 @@ impl CutscenePlayerScene {
         let screen_height = 2.0 / dark::SCALE_FACTOR;
         let screen_width = screen_height * aspect_ratio;
 
+        // Decoded frames are top-row-first while the quad maps v=0 to its
+        // bottom edge, and the billboard basis faces the quad's back toward
+        // the player - together the video showed rotated 180 degrees. Spinning
+        // the quad half a turn in its own plane corrects both at once.
         let transform = Matrix4::from_translation(screen_position)
             * Matrix4::from(rotation_matrix)
+            * Matrix4::from_angle_z(cgmath::Deg(180.0))
             * Matrix4::from_nonuniform_scale(screen_width, screen_height, 1.0);
         quad.set_transform(transform);
         quad
