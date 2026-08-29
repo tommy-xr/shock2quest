@@ -2024,7 +2024,7 @@ impl CollisionGroup {
         let solver = InteractionGroups {
             memberships: InternalCollisionGroups::ENTITY.bits.into(),
             // Contact generation still includes ACTOR through `collision`,
-            // so TriggeredMeleeWeapon receives CollisionStarted and owns the
+            // so HeldMeleeWeapon receives CollisionStarted and owns the
             // authored damage. Only Rapier's physical impulse is suppressed:
             // a motor-driven weapon must not launch a living dynamic capsule.
             // World and loose-prop response remains solid.

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use cgmath::{EuclideanSpace, InnerSpace, vec3};
 use dark::properties::{CollisionType, PropCollisionType};
@@ -27,26 +27,24 @@ impl MeleeWeapon {
 
 /// Contact damage for the player's authored melee weapons (`PropLimbModel`).
 ///
-/// Dark opens melee collision only during an attack window. In VR the trigger
-/// edge is that production attack gesture: contacts before it, after release,
-/// and after dropping the weapon are harmless. A target can be damaged only
-/// once per pull even if the physical swing chatters across several contacts.
+/// The rule is physical: a swing damages because the weapon was closing on
+/// what it hit fast enough ([`closing_speed`] against
+/// [`crate::dev_params::MELEE_FREE_SWING_SPEED`]), not because a button was
+/// down. A short per-victim cooldown makes one swing - which crosses a body
+/// over several contact frames - bill at most once.
 ///
 /// Physical contact is *never* the damage trigger outside VR - a flat swing is
 /// `WeaponScript`'s aimed short-range raycast, so bumping a wielded wrench into
 /// scenery must do nothing. The whole script is therefore inert in flat mode
 /// rather than guarding individual messages.
 ///
-/// The impact *sound*, unlike the damage, is not gated on the attack window or
-/// on the weapon being held: a wrench meeting a bulkhead, a bench or the floor
-/// makes a noise either way, and a dropped one clatters when it lands. That is
-/// intentional - the silence was the complaint.
-pub struct TriggeredMeleeWeapon {
-    attack_active: bool,
-    hit_entities: HashSet<EntityId>,
-    /// Remaining seconds before each already-hit victim may be hit again.
-    /// Only used by the free-swing rule: the trigger rule re-arms on the next
-    /// pull instead, so it has nothing to expire.
+/// The impact *sound*, unlike the damage, is not gated on the swing threshold
+/// or on the weapon being held: a wrench meeting a bulkhead, a bench or the
+/// floor makes a noise either way, and a dropped one clatters when it lands.
+/// That is intentional - the silence was the complaint.
+pub struct HeldMeleeWeapon {
+    /// Remaining seconds before each already-hit victim may be hit again -
+    /// the dedupe that turns a multi-frame contact into one billed hit.
     free_swing_cooldowns: HashMap<EntityId, f32>,
     /// Remaining seconds before this weapon may thud against the same contact
     /// partner again. Independent of the damage cooldowns above: a wall makes
@@ -54,11 +52,9 @@ pub struct TriggeredMeleeWeapon {
     sound_cooldowns: HashMap<EntityId, f32>,
 }
 
-impl TriggeredMeleeWeapon {
+impl HeldMeleeWeapon {
     pub fn new() -> Self {
         Self {
-            attack_active: false,
-            hit_entities: HashSet::new(),
             free_swing_cooldowns: HashMap::new(),
             sound_cooldowns: HashMap::new(),
         }
@@ -94,15 +90,12 @@ const IMPACT_SOUND_COOLDOWN_SECONDS: f32 = 0.15;
 /// (`MELEE_FREE_SWING_SPEED`), so a light tap that does no damage still clinks.
 const IMPACT_SOUND_MIN_SPEED: f32 = 0.1;
 
-/// The shipped rule: a swing damages because it was *moving*, not because a
-/// button was down. `None` only when the parameter is zeroed - the legacy
-/// escape hatch back to the trigger-window rule.
-fn free_swing_speed_threshold() -> Option<f32> {
-    let threshold = crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED);
-    (threshold > 0.0).then_some(threshold)
+/// The swing/graze gate: minimum closing speed for a contact to damage.
+fn free_swing_speed_threshold() -> f32 {
+    crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED)
 }
 
-impl Script for TriggeredMeleeWeapon {
+impl Script for HeldMeleeWeapon {
     /// Expire the per-victim cooldowns (free-swing damage, impact sound).
     fn update(
         &mut self,
@@ -133,23 +126,9 @@ impl Script for TriggeredMeleeWeapon {
         }
 
         match msg {
-            MessagePayload::TriggerPull => {
-                self.attack_active = true;
-                self.hit_entities.clear();
-                Effect::NoEffect
-            }
-            MessagePayload::TriggerRelease | MessagePayload::Drop => {
-                self.attack_active = false;
-                self.hit_entities.clear();
-                self.free_swing_cooldowns.clear();
-                // `sound_cooldowns` is deliberately NOT cleared: releasing the
-                // trigger mid-contact is no reason to re-clang, and a dropped
-                // weapon lands under the same rate limit as any other contact.
-                Effect::NoEffect
-            }
             MessagePayload::Collided { with, contact } => {
                 // Damage and sound are separate questions. Damage stays gated
-                // by the attack window and the victim's authored receptrons;
+                // by the swing threshold and the victim's authored receptrons;
                 // *hitting something* is audible regardless - a wrench on a
                 // bulkhead or a bench does nothing but must still clang.
                 let damage = self
@@ -184,14 +163,10 @@ impl Script for TriggeredMeleeWeapon {
     }
 }
 
-impl TriggeredMeleeWeapon {
-    /// Whether this contact opens a hit, under whichever rule is in force.
-    ///
-    /// Both rules bill a victim at most once per swing; they differ in what a
-    /// swing *is*. Under the trigger rule it is the window a pull opens, and
-    /// the next pull re-arms it. Under the free-swing rule it is the weapon
-    /// actually moving at contact, and a short cooldown stands in for the
-    /// release edge that no longer exists - otherwise a weapon left leaning on
+impl HeldMeleeWeapon {
+    /// Whether this contact opens a hit: the weapon was actually moving at
+    /// contact, and this victim has not just been billed. The short cooldown
+    /// is what makes a swing a *swing* - without it a weapon left leaning on
     /// a creature would bill every frame it stayed there.
     fn may_damage(
         &mut self,
@@ -200,13 +175,10 @@ impl TriggeredMeleeWeapon {
         physics: &PhysicsWorld,
         contact: Option<crate::physics::CollisionContact>,
     ) -> bool {
-        let Some(threshold) = free_swing_speed_threshold() else {
-            return self.attack_active && self.hit_entities.insert(with);
-        };
         if self.free_swing_cooldowns.contains_key(&with) {
             return false;
         }
-        if closing_speed(entity_id, with, physics, contact) < threshold {
+        if closing_speed(entity_id, with, physics, contact) < free_swing_speed_threshold() {
             return false;
         }
         self.free_swing_cooldowns
@@ -627,7 +599,7 @@ mod tests {
     #[test]
     fn a_landed_vr_swing_deals_the_weapons_authored_contact_damage() {
         let (world, weapon, target) = test_world(PresentationMode::Vr);
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         let Effect::Multiple(effects) = collide(&mut script, &world, weapon, target) else {
             panic!("expected melee impact effects");
@@ -653,7 +625,7 @@ mod tests {
     #[test]
     fn a_landed_vr_swing_carries_an_impact_for_the_death_reaction() {
         let (world, weapon, target) = test_world(PresentationMode::Vr);
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         let Effect::Multiple(effects) = collide(&mut script, &world, weapon, target) else {
             panic!("expected melee impact effects");
@@ -693,7 +665,7 @@ mod tests {
                 crate::runtime_props::RuntimePropCanonicalTemplateId(WRENCH),
             ),
         );
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         assert_damage(collide(&mut script, &world, weapon, target), target);
     }
@@ -704,7 +676,7 @@ mod tests {
     fn a_target_with_no_matching_receptron_takes_no_vr_melee_damage() {
         let (world, weapon, target) =
             test_world_with_victim_receptrons(PresentationMode::Vr, Vec::new());
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         assert!(matches!(
             collide(&mut script, &world, weapon, target),
@@ -715,7 +687,7 @@ mod tests {
     /// A contact from a weapon moving comfortably above the shipped free-swing
     /// gate, along the contact normal - the canonical billable swing.
     fn collide(
-        script: &mut TriggeredMeleeWeapon,
+        script: &mut HeldMeleeWeapon,
         world: &World,
         weapon: EntityId,
         target: EntityId,
@@ -730,7 +702,7 @@ mod tests {
     }
 
     fn collide_at_speed(
-        script: &mut TriggeredMeleeWeapon,
+        script: &mut HeldMeleeWeapon,
         world: &World,
         weapon: EntityId,
         target: EntityId,
@@ -816,7 +788,7 @@ mod tests {
             test_world_with_victim_receptrons(PresentationMode::Vr, Vec::new());
         audible_weapon(&mut world, weapon);
         let physics = swinging(weapon);
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         let effect = collide_at_speed(&mut script, &world, weapon, target, &physics);
         assert_eq!(sound_count(&effect), 1, "got {effect:?}");
@@ -829,7 +801,7 @@ mod tests {
         let (mut world, weapon, target) = test_world(PresentationMode::Vr);
         audible_weapon(&mut world, weapon);
         let physics = fast_swing(weapon);
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         let effect = collide_at_speed(&mut script, &world, weapon, target, &physics);
         assert_eq!(sound_count(&effect), 1, "got {effect:?}");
@@ -845,7 +817,7 @@ mod tests {
             test_world_with_victim_receptrons(PresentationMode::Vr, Vec::new());
         audible_weapon(&mut world, weapon);
         let physics = swinging(weapon);
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         let first = collide_at_speed(&mut script, &world, weapon, target, &physics);
         assert_eq!(sound_count(&first), 1, "got {first:?}");
@@ -875,7 +847,7 @@ mod tests {
         let (mut world, weapon, target) = test_world(PresentationMode::Vr);
         audible_weapon(&mut world, weapon);
         let physics = physics_with_weapon_speed(weapon, 1.0);
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         let effect = collide_at_speed(&mut script, &world, weapon, target, &physics);
         assert_eq!(damage_count(&effect), 0, "got {effect:?}");
@@ -903,7 +875,7 @@ mod tests {
             crate::physics::DynamicPhysicsOptions::default(),
         );
         physics.set_velocity(weapon, vec3(0.0, 0.0, 5.0));
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         assert!(matches!(
             collide_at_speed(&mut script, &world, weapon, target, &physics),
@@ -919,7 +891,7 @@ mod tests {
             test_world_with_victim_receptrons(PresentationMode::Vr, Vec::new());
         audible_weapon(&mut world, weapon);
         let physics = physics_with_weapon_speed(weapon, 0.005);
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         assert!(matches!(
             collide_at_speed(&mut script, &world, weapon, target, &physics),
@@ -933,7 +905,7 @@ mod tests {
     fn one_swing_bills_each_victim_only_once() {
         let (world, weapon, target) = test_world(PresentationMode::Vr);
         let physics = fast_swing(weapon);
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         assert_damage(
             collide_at_speed(&mut script, &world, weapon, target, &physics),
@@ -965,7 +937,7 @@ mod tests {
     #[test]
     fn physical_melee_contact_is_inert_outside_vr() {
         let (world, weapon, target) = test_world(PresentationMode::Flat);
-        let mut script = TriggeredMeleeWeapon::new();
+        let mut script = HeldMeleeWeapon::new();
 
         assert!(matches!(
             collide(&mut script, &world, weapon, target),

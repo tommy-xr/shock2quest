@@ -170,9 +170,9 @@ dev_params! {
     /// swing peaks at **4.07** and ordinary walking carries the weapon at
     /// **1.80**. 2.0 was then tuned in-headset from that measurement.
     ///
-    /// `0` is a legacy escape hatch back to the trigger-held attack window
-    /// (`TriggeredMeleeWeapon`'s trigger rule).
-    MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Free swing", 2.0, 0.0, 20.0, 0.5),
+    /// The minimum is 0.5, not 0: a zero gate would bill every touch, and the
+    /// trigger-window rule that 0 used to select no longer exists.
+    MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Free swing", 2.0, 0.5, 20.0, 0.5),
     /// Draw the tracked-hand glove *in addition to* a wielded weapon's own
     /// first-person model, instead of letting the weapon model stand in for the
     /// hand. `0` off, `1` on.
