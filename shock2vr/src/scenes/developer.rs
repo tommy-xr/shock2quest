@@ -338,23 +338,12 @@ pub struct DeveloperScene {
     selected_scene: Option<usize>,
 }
 
-/// The `*.mis` files in the data root, sorted by name. Read when the launcher
-/// opens, so a changed install shows up without a restart.
+/// The install's missions, sorted by name - loose `.mis` files on a classic
+/// install, the archived `data/*.mis` entries on a 25AE one
+/// ([`crate::data_files::mission_names`]). Read when the launcher opens, so a
+/// changed install shows up without a restart.
 fn mission_files() -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(crate::paths::data_root())
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            std::path::Path::new(&name)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("mis"))
-                .then_some(name)
-        })
-        .collect();
-    names.sort_by_key(|name| name.to_ascii_lowercase());
-    names
+    crate::data_files::mission_names(&crate::paths::data_root())
 }
 
 impl DeveloperScene {
