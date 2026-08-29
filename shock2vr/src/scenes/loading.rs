@@ -12,7 +12,8 @@
 //!
 //! The rotation is driven by the frame clock (always animates). The bar fill is
 //! driven by `progress`: `new_demo()` sweeps it for visual inspection via the
-//! `debug_loading` scene; real background loading (PR 3) calls `set_progress`.
+//! `debug_loading` scene; a real transition sets it from the deferred-transition
+//! checkpoints (`Game::update` via `set_progress`).
 
 use cgmath::{Quaternion, Vector2, Vector3, vec2, vec3};
 use dark::{importers::UI_LAYOUT_IMPORTER, map::MapRect};
@@ -107,7 +108,7 @@ impl LoadingScene {
         }
     }
 
-    /// Set the load progress (0..=1). Used by the background loader in PR 3.
+    /// Set the load progress (0..=1). Driven by the deferred transition's checkpoints.
     pub fn set_progress(&mut self, progress: f32) {
         self.progress = progress.clamp(0.0, 1.0);
     }
@@ -240,6 +241,12 @@ impl GameScene for LoadingScene {
 
     fn scene_name(&self) -> &str {
         &self.scene_name
+    }
+
+    /// So `Game::update` can reach [`LoadingScene::set_progress`] through the
+    /// active-scene box during a deferred transition.
+    fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
     }
 }
 
