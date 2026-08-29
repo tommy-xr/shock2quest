@@ -4,6 +4,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { GameServer, findRepoRoot } from "../src/index.js";
+import { cycleToWeapon } from "./helpers/weapon.js";
 
 // End-to-end regression tests for held-weapon models: on a 25AE install the
 // remastered first-person gun models (obj/*_h.bin in mods/sshock2ee.kpf) are
@@ -34,13 +35,9 @@ test(
     // DebugCycleWeapon spawns the pistol; VR wield is a no-op so it drops to the
     // floor in front of the player.
     await game.step({ frames: 10 });
-    await game.input.trigger("DebugCycleWeapon");
-    await game.step({ frames: 90 });
-
-    const pistol = (await game.entities.list({ limit: 100 })).entities.find(
-      (e) => e.name === "Pistol",
-    );
-    assert.ok(pistol, "pistol should have spawned");
+    const pistol = await cycleToWeapon(game, (e) => e.name === "Pistol", {
+      settleFrames: 90,
+    });
     assert.equal(modelOf(await game.entities.detail(pistol.id)), "atek_w");
 
     // Grab it: park the right hand on the pistol's forward raycast axis
@@ -94,7 +91,7 @@ test(
     for (let i = 0; i < 20 && !wrench; i++) {
       await game.input.trigger("DebugCycleWeapon");
       await game.step({ frames: 5 });
-      wrench = (await game.entities.list({ limit: 100 })).entities.find(
+      wrench = (await game.entities.list({ limit: 200 })).entities.find(
         (e) => e.name === "Wrench",
       );
     }
@@ -105,7 +102,7 @@ test(
     // Grab it: put the hand at the settled wrench's live position (pawn-local)
     // and squeeze.
     const pawn = (await game.info()).player.position;
-    const settled = (await game.entities.list({ limit: 100 })).entities.find(
+    const settled = (await game.entities.list({ limit: 200 })).entities.find(
       (e) => e.id === wrench!.id,
     )!;
     const [px, py, pz] = settled.position;
@@ -152,7 +149,7 @@ test(
     for (let i = 0; i < 20 && !sword; i++) {
       await game.input.trigger("DebugCycleWeapon");
       await game.step({ frames: 5 });
-      sword = (await game.entities.list({ limit: 100 })).entities.find(
+      sword = (await game.entities.list({ limit: 200 })).entities.find(
         (e) => e.name === "PsiSword",
       );
     }
@@ -160,7 +157,7 @@ test(
     await game.step({ frames: 60 });
 
     const pawn = (await game.info()).player.position;
-    const settled = (await game.entities.list({ limit: 100 })).entities.find(
+    const settled = (await game.entities.list({ limit: 200 })).entities.find(
       (e) => e.id === sword!.id,
     )!;
     const [px, py, pz] = settled.position;
@@ -228,7 +225,7 @@ test(
     for (let i = 0; i < 20 && !wrench; i++) {
       await game.input.trigger("DebugCycleWeapon");
       await game.step({ frames: 5 });
-      wrench = (await game.entities.list({ limit: 100 })).entities.find(
+      wrench = (await game.entities.list({ limit: 200 })).entities.find(
         (e) => e.name === "Wrench",
       );
     }
@@ -237,7 +234,6 @@ test(
 
     // One pose, used for both hands, so the two results are comparable.
     const held: Record<string, number[]> = {};
-    const pawn = (await game.info()).player.position;
     const holdAt: [number, number, number] = [-1.7, 0.95, -0.2];
     const yaw45: [number, number, number, number] = [
       0, 0.3826834, 0, 0.9238795,
@@ -247,7 +243,11 @@ test(
       const other = hand === "right" ? "left" : "right";
       await game.input.set(`${other}_hand.position`, [3, -3, 3]);
 
-      const resting = (await game.entities.list({ limit: 100 })).entities.find(
+      // Hand channels are pawn-relative, and the pawn drifts slightly while a
+      // held weapon's body shoves the capsule around - read it fresh per hand,
+      // or the second hand is staged against a stale origin and misses.
+      const pawn = (await game.info()).player.position;
+      const resting = (await game.entities.list({ limit: 200 })).entities.find(
         (e) => e.id === wrench!.id,
       )!.position;
       await game.input.set(`${hand}_hand.position`, [
@@ -270,7 +270,7 @@ test(
       await game.input.set(`${hand}_hand.position`, holdAt);
       await game.step({ frames: 20 });
 
-      held[hand] = (await game.entities.list({ limit: 100 })).entities.find(
+      held[hand] = (await game.entities.list({ limit: 200 })).entities.find(
         (e) => e.id === wrench!.id,
       )!.position;
 
@@ -386,13 +386,7 @@ test(
     // In flat, DebugCycleWeapon spawns AND wields (sends Hold), which swaps the
     // model to the atek_h viewmodel for the first-person weapon path.
     await game.step({ frames: 5 });
-    await game.input.trigger("DebugCycleWeapon");
-    await game.step({ frames: 10 });
-
-    const pistol = (await game.entities.list({ limit: 100 })).entities.find(
-      (e) => e.name === "Pistol",
-    );
-    assert.ok(pistol, "pistol should be wielded");
+    const pistol = await cycleToWeapon(game, (e) => e.name === "Pistol");
     assert.equal(modelOf(await game.entities.detail(pistol.id)), "atek_h");
   },
 );

@@ -156,9 +156,7 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     ("debug_minimal", |global, options, assets, audio| {
         Box::new(DebugMinimalScene::create(global, options, assets, audio))
     }),
-    ("debug_weapons", |global, options, assets, audio| {
-        Box::new(create_debug_weapons_scene(global, options, assets, audio))
-    }),
+    ("debug_weapons", create_debug_weapons_scene),
     ("debug_melee", create_debug_melee_scene),
     ("debug_psi", create_debug_psi_scene),
     ("debug_teleport", |global, options, assets, audio| {

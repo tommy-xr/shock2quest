@@ -20,7 +20,7 @@
 //! between them is the calibration error, and it is only visible with both on
 //! screen at once.
 
-use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3, vec3};
+use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, Vector3, vec3};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
@@ -32,12 +32,9 @@ use shipyard::EntityId;
 use crate::{
     GameOptions, dev_params,
     game_scene::GameScene,
-    mission::{
-        GlobalContext, SpawnLocation, entity_creator::CreateEntityOptions,
-        mission_core::MissionCore,
-    },
+    mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     scenes::debug_common::{
-        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
+        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene, spawn_at,
     },
     scripts::Effect,
 };
@@ -252,19 +249,5 @@ impl DebugSceneHooks for MeleeHooks {
             asset_cache,
             audio_context,
         );
-    }
-}
-
-fn spawn_at(template_id: i32, position: Point3<f32>) -> Effect {
-    Effect::CreateEntity {
-        template_id,
-        position,
-        orientation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-        // Identity, not `from_translation(position)`: the root transform is
-        // applied *on top of* `position`, so passing the position twice lands
-        // the entity at double the offset (`debug_ragdoll` does this and its
-        // hybrid spawns twice as far out as its own focus point claims).
-        root_transform: Matrix4::identity(),
-        options: CreateEntityOptions::default(),
     }
 }

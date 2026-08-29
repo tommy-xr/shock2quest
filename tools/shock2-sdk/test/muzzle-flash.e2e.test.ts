@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { cycleToWeapon } from "./helpers/weapon.js";
 import type { EntitySummary, Vec3 } from "../src/index.js";
 
 // End-to-end regression test for "muzzle flash follows the weapon" (the generic
@@ -35,13 +36,9 @@ test(
 
     // debug_weapons starts unarmed; DebugCycleWeapon spawns and wields the pistol.
     await game.step({ frames: 5 });
-    await game.input.trigger("DebugCycleWeapon");
-    await game.step({ frames: 5 });
-
-    // The wielded-entity field (new /v1/info player data) should report the pistol.
-    const before = (await game.entities.list({ limit: 60 })).entities;
-    const pistolId = before.find((e) => e.name === "Pistol")?.id;
-    assert.ok(pistolId !== undefined, "the pistol should exist after DebugCycleWeapon");
+    const pistolId = (
+      await cycleToWeapon(game, (e) => e.name === "Pistol", { settleFrames: 5 })
+    ).id;
     const info = await game.info();
     assert.equal(
       info.player.wielded_entity_id,
@@ -54,8 +51,8 @@ test(
     await game.input.set("right_hand.trigger", 1.0);
     await game.step({ frames: 1 });
 
-    const listA = (await game.entities.list({ limit: 60 })).entities;
-    const pistolA = posOf(listA, "Pistol");
+    const listA = (await game.entities.list({ limit: 200 })).entities;
+    const pistolA = listA.find((e) => e.id === pistolId)?.position;
     const flashA = posOf(listA, "Assault Flash");
     assert.ok(pistolA, "pistol present after firing");
     assert.ok(flashA, "muzzle flash should spawn on fire");
@@ -66,8 +63,8 @@ test(
     await game.input.set("head.look", [30, 0]);
     await game.step({ frames: 1 });
 
-    const listB = (await game.entities.list({ limit: 60 })).entities;
-    const pistolB = posOf(listB, "Pistol");
+    const listB = (await game.entities.list({ limit: 200 })).entities;
+    const pistolB = listB.find((e) => e.id === pistolId)?.position;
     const flashB = posOf(listB, "Assault Flash");
     assert.ok(pistolB, "pistol present after turning");
     assert.ok(flashB, "muzzle flash should still be alive after the turn");

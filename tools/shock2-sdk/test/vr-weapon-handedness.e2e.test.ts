@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { cycleToWeapon } from "./helpers/weapon.js";
 import type { SceneObjectSummary, Vec3 } from "../src/types.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
 
@@ -79,12 +80,9 @@ test(
     // DebugCycleWeapon spawns the pistol; the VR path has no auto-wield, so it
     // drops to the floor for the hands to pick up.
     await game.step({ frames: 10 });
-    await game.input.trigger("DebugCycleWeapon");
-    await game.step({ frames: 90 });
-    const pistol = (await game.entities.list({ limit: 200 })).entities.find(
-      (entity) => entity.name === "Pistol",
-    );
-    assert.ok(pistol, "pistol should have spawned");
+    const pistol = await cycleToWeapon(game, (e) => e.name === "Pistol", {
+      settleFrames: 90,
+    });
 
     // Reserve rounds for the reload. `spawn-item` enters the backpack in both
     // presentations, so this needs no VR inventory interaction.

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{Deg, Matrix4, Quaternion, Rotation3, Vector2, Vector3, vec3};
+use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector2, Vector3, vec3};
 use dark::{
     SCALE_FACTOR,
     importers::TEXTURE_IMPORTER,
@@ -23,6 +23,7 @@ use crate::{
     input_context::InputContext,
     mission::{
         AbstractMission, AlwaysVisible, GlobalContext, SpawnLocation,
+        entity_creator::CreateEntityOptions,
         entity_populator::empty_entity_populator::EmptyEntityPopulator, mission_core::MissionCore,
     },
     quest_info::QuestInfo,
@@ -657,5 +658,20 @@ impl DebugSceneFloor {
         .build();
 
         (vec![floor_object], collider)
+    }
+}
+
+/// `Effect::CreateEntity` at a world position with identity orientation - the
+/// spawn shape every populate hook wants.
+pub fn spawn_at(template_id: i32, position: Point3<f32>) -> Effect {
+    Effect::CreateEntity {
+        template_id,
+        position,
+        orientation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        // Identity, not `from_translation(position)`: the root transform is
+        // applied *on top of* `position`, so passing the position twice lands
+        // the entity at double the offset.
+        root_transform: Matrix4::identity(),
+        options: CreateEntityOptions::default(),
     }
 }
