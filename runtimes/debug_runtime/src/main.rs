@@ -864,6 +864,15 @@ fn run_game_blocking(
             }
             accumulated_time
         } else {
+            // Pace the paused deferred-transition pump to the fixed frame rate.
+            // Without this the loop spins zero-dt updates flat out, racing the
+            // loading screen's frame-counted minimum/hold through in about a
+            // millisecond (and pinning a core) - so its progress checkpoints
+            // could never be observed via /v1/screenshot, unlike on the real
+            // runtimes where update runs once per presented frame.
+            if game.has_pending_transition() {
+                thread::sleep(Duration::from_secs_f32(FIXED_STEP_DT));
+            }
             // When paused, use zero delta time to prevent any updates
             let zero_time = Time {
                 elapsed: Duration::from_secs_f32(0.0),

@@ -443,7 +443,8 @@ const PROGRESS_PARSE_DONE: f32 = 0.65;
 const PROGRESS_BUILDING: f32 = 0.9;
 /// Frames the parse-done fill is held (and rendered) before the build is allowed to
 /// start, so the bar's advance is visible instead of swallowed by the frozen build.
-const PARSE_DONE_HOLD_FRAMES: u32 = 6;
+/// ~0.2s at 60fps.
+const PARSE_DONE_HOLD_FRAMES: u32 = 12;
 
 /// Map the deferred transition's checkpoints to the loading-bar fill.
 fn transition_progress(frames_shown: u32, parse_done_frame: Option<u32>) -> f32 {
