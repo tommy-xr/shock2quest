@@ -110,7 +110,8 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_IDLE_TIMEOUT_SECS)]
     idle_timeout_secs: u64,
 
-    /// Enable debug physics rendering
+    /// Start with the physics wireframe on (the `debug_physics` dev param,
+    /// which stays toggleable at runtime).
     #[arg(long)]
     debug_physics: bool,
 
@@ -263,6 +264,13 @@ fn main() -> anyhow::Result<()> {
         "{}",
         lifecycle::port_marker_line(bound_addr, std::process::id(), args.instance_id.as_deref())
     );
+
+    // `--debug-physics` seeds the live dev param, which owns the setting from
+    // here on (toggleable over HTTP and from the Developer menu). Seed before
+    // the HTTP server spawns so a client's write can never be clobbered by it.
+    if args.debug_physics {
+        shock2vr::dev_params::set(shock2vr::dev_params::DEBUG_PHYSICS, 1.0);
+    }
 
     let idle_timeout =
         (args.idle_timeout_secs > 0).then(|| Duration::from_secs(args.idle_timeout_secs));
@@ -570,7 +578,6 @@ fn run_game_blocking(
         spawn_location,
         save_file: args.save_file,
         debug_draw: args.debug_draw,
-        debug_physics: args.debug_physics,
         debug_portals: args.debug_portals,
         debug_show_ids: args.debug_show_ids,
         debug_skeletons: args.debug_skeletons,

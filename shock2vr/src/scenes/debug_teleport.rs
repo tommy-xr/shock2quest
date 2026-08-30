@@ -25,7 +25,6 @@ impl DebugTeleportScene {
             spawn_location: game_options.spawn_location.clone(),
             save_file: game_options.save_file.clone(),
             render_particles: game_options.render_particles,
-            debug_physics: game_options.debug_physics,
             debug_draw: game_options.debug_draw,
             debug_portals: game_options.debug_portals,
             debug_show_ids: game_options.debug_show_ids,
