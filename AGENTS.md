@@ -312,6 +312,12 @@ For debugging visual/rendering changes without a full interactive session:
    # runtime orphaned by a dead session stops holding ~700 MB and a port. Any
    # request resets the timer; a request in flight never counts as idle.
 
+   # Level transitions are deferred behind the loading screen on the shipping
+   # runtimes, but that deferral waits on a wall-clock level parse while
+   # stepping is deliberately wall-clock independent - so this runtime lands a
+   # transition as soon as it starts and a warp/bulkhead button is observable
+   # immediately. Pass `--defer-transitions` to see the loading screen instead.
+
    # Control via HTTP
    curl http://127.0.0.1:8080/v1/step -X POST -d '{"frames": 10}'
    curl http://127.0.0.1:8080/v1/screenshot -X POST -d '{"filename": "test.png"}'
