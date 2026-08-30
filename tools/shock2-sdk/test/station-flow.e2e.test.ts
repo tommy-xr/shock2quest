@@ -110,10 +110,10 @@ async function teleportTo(game: GameServer, [x, y, z]: Vec3): Promise<void> {
  * for the mapping), so the destination is only on screen once those finish;
  * this test is about what survives the chain, not about the movies.
  */
-async function tripAndArrive(game: GameServer, at: Vec3, frames: number): Promise<void> {
+async function tripAndArrive(game: GameServer, at: Vec3, frames: number): Promise<string[]> {
   await teleportTo(game, at);
   await game.step({ frames });
-  await stepPastCutscenes(game);
+  return stepPastCutscenes(game);
 }
 
 /** The set of `training_year_N` bits currently COMPLETE, sorted ascending. */
@@ -264,7 +264,12 @@ test(
     // Step 3: the third tour advances to year 4, grants the Marine Y3 T0 reward
     // (Mission7: +1 Maintenance), and deploys to MedSci1 - stats survive the
     // level transition.
-    await tripAndArrive(game, TOUR_TRIP, 20);
+    // The deploy is the one moment that plays two movies, shuttle then boarding.
+    assert.deepEqual(
+      await tripAndArrive(game, TOUR_TRIP, 20),
+      ["shuttle3.avi", "cs2.avi"],
+      "the deploy should play the last shuttle, then the boarding of the Von Braun",
+    );
     info = await game.info();
     assert.equal(
       info.mission.toLowerCase(),

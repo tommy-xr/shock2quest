@@ -28,8 +28,10 @@ export async function stepPastCutscenes(
   const seen: string[] = [];
   for (let stepped = 0; stepped <= timeoutSeconds * 60; stepped += chunkFrames) {
     const { mission } = await game.info();
-    if (!isCutsceneScene(mission)) return seen;
-    if (seen[seen.length - 1] !== mission) seen.push(mission);
+    // "loading" is the transition the last cutscene handed off to, so keep
+    // stepping: a caller wants the destination, not the loading screen.
+    if (!isCutsceneScene(mission) && mission !== "loading") return seen;
+    if (isCutsceneScene(mission) && seen[seen.length - 1] !== mission) seen.push(mission);
     await game.step({ frames: chunkFrames });
   }
   throw new Error(

@@ -819,6 +819,9 @@ impl Game {
         // and vitals, and filing a bogus "loading" entry in the mission ledger.
         // Nothing in-game can reach this (the loading scene runs no scripts),
         // but an external caller can, so refuse rather than corrupt.
+        // Taken before the refusal below, so a rejected transition cannot leave
+        // a cutscene's carried state behind for an unrelated later one.
+        let preserved = self.preserved_scene_state.take();
         if self.pending_transition.is_some() {
             warn!(
                 "Ignoring transition to '{}': a level transition is already in flight",
@@ -836,7 +839,7 @@ impl Game {
             quest_info,
             held_data,
             mut player_vitals,
-        } = match self.preserved_scene_state.take() {
+        } = match preserved {
             Some(preserved) => preserved,
             None => self.save_active_scene(),
         };
