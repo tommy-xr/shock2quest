@@ -204,12 +204,15 @@ fn row_rects(rects: PanelRects, index: usize) -> RowRects {
     // Leave the scroll gutter clear whenever it is in use, so a row's `>`
     // never sits under the rocker (they resolve through one hit test, so an
     // overlap is a genuine ambiguity, not just a visual one).
-    let gutter = if max_scroll(rects) > 0 {
+    // The gutter subsumes the right inset: the rocker's own art carries a dark
+    // margin either side of its arrow, so charging the row for both as well
+    // costs label width and ellipsizes names that otherwise fit.
+    let right_margin = if max_scroll(rects) > 0 {
         SCROLL_GUTTER_W
     } else {
-        0.0
+        TEXT_INSET
     };
-    let right = list.x + list.w - TEXT_INSET - gutter;
+    let right = list.x + list.w - right_margin;
     let increment_x = right - ARROW_W;
     let value_x = increment_x - VALUE_W;
     let decrement_x = value_x - ARROW_W;
@@ -586,11 +589,13 @@ mod tests {
         );
         assert!(max_scroll(tall) > 0);
         assert!(scroll_rects(tall).is_some());
-        // Scrolling means the gutter is reserved: a row's increment stops
-        // short of the pane's inset by the gutter width.
+        // Scrolling means the gutter is reserved: a row's increment stops at
+        // the rocker's left edge. The gutter replaces the right inset rather
+        // than adding to it, so reserving it costs the label no width it did
+        // not already lose.
         assert_eq!(
             row_rects(tall, 0).increment.x + ARROW_W,
-            tall.list.x + tall.list.w - TEXT_INSET - SCROLL_GUTTER_W
+            tall.list.x + tall.list.w - SCROLL_GUTTER_W
         );
         assert_eq!(visible_rows(tall, 0), 0..cap);
     }
