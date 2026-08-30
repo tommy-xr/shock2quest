@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { test } from "node:test";
 import { join } from "node:path";
 
-import { GameServer, findRepoRoot } from "../src/index.js";
+import { GameServer } from "../src/index.js";
+import { dataRoot } from "./helpers/crf.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
@@ -11,38 +12,42 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 // runtime's own resolver takes the bare classic name through the Anniversary
 // layers, so both installs play the same scene.
 const SHORT_CUTSCENE = "landing.avi";
+const CUTSCENE_STEM = "landing";
 const CUTSCENE_LAYERS = ["", "enhanced", "original", "kex"];
 
-function dataRoot(): string {
-  return (
-    process.env.DARK_ASSET_PATH ??
-    join(findRepoRoot(process.cwd()) ?? process.cwd(), "Data")
-  );
-}
-
-/** Whether any install layer actually ships the clip this test plays. */
-function cutsceneIsInstalled(): boolean {
-  return CUTSCENE_LAYERS.some((layer) =>
-    ["avi", "ogv"].some((extension) =>
-      existsSync(
-        join(
-          dataRoot(),
-          "cutscenes",
-          layer,
-          `${SHORT_CUTSCENE.replace(/\.avi$/, "")}.${extension}`,
-        ),
+/**
+ * Whether any install layer ships the clip this test plays, matching the
+ * runtime resolver's case-insensitive name comparison (its Anniversary layers
+ * are `.ogv` while a classic install has `.avi`).
+ */
+function installedCutscene(): string | null {
+  for (const layer of CUTSCENE_LAYERS) {
+    let entries: string[];
+    try {
+      entries = readdirSync(join(dataRoot(), "cutscenes", layer));
+    } catch {
+      continue;
+    }
+    const match = entries.find((entry) =>
+      ["avi", "ogv"].some(
+        (extension) =>
+          entry.toLowerCase() === `${CUTSCENE_STEM}.${extension}`.toLowerCase(),
       ),
-    ),
-  );
+    );
+    if (match) return join(layer, match);
+  }
+  return null;
 }
 
 test(
   "a cutscene signals completion and hands off to its follow-on scene",
   { skip: !e2eEnabled, timeout: 300_000 },
-  async () => {
-    if (!cutsceneIsInstalled()) {
-      // Nothing to assert on an install without the clip; skipping beats a
-      // failure that says nothing about the change.
+  async (t) => {
+    const installed = installedCutscene();
+    if (!installed) {
+      // Nothing to assert on an install without the clip. Skip visibly - a
+      // silent pass would hide the whole test.
+      t.skip(`no ${CUTSCENE_STEM} cutscene installed under ${dataRoot()}`);
       return;
     }
 
@@ -51,10 +56,9 @@ test(
     // Mid-playback the cutscene must still own the screen, or "it ended" would
     // be indistinguishable from "it never started".
     await game.step({ frames: 60 });
-    const playing = (await game.info()).mission;
     assert.match(
-      playing,
-      /landing\.(avi|ogv)$/i,
+      (await game.info()).mission,
+      new RegExp(`${CUTSCENE_STEM}\\.(avi|ogv)$`, "i"),
       "the cutscene should be the active scene while it plays",
     );
 

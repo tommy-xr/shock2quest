@@ -81,6 +81,12 @@ pub enum GlobalEffect {
     /// dispatch `then` once it finishes (defaulting to the main menu). The name
     /// is resolved by `scenes::resolve_cutscene_path`; a video that cannot be
     /// opened is skipped straight to `then` rather than stranding the player.
+    ///
+    /// Handling this does *not* write the outgoing mission back to the
+    /// in-memory level ledger, because the cutscene's own empty world would be
+    /// what got saved. A caller that interrupts live gameplay is responsible for
+    /// preserving it first (as `CompleteCampaign` does), and any `then` that
+    /// resumes gameplay depends on that having happened.
     PlayCutscene {
         video: String,
         then: Option<Box<GlobalEffect>>,

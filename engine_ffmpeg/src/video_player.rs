@@ -131,7 +131,13 @@ impl VideoPlayer {
     }
 
     pub fn advance_by_time(&mut self, time: Duration) {
-        self.current_time = (self.current_time + time).min(self.duration);
+        self.current_time += time;
+        // A stream that reported no duration must not be clamped to zero, or it
+        // would never decode a second frame and so never reach EOF - the only
+        // completion signal such a stream has.
+        if !self.duration.is_zero() {
+            self.current_time = self.current_time.min(self.duration);
+        }
         let target_frame_index =
             (self.current_time.as_secs_f64() * self.frames_per_second).floor() as usize;
 
@@ -256,5 +262,33 @@ mod tests {
                 "{fixture_name} should be finished after its duration elapses"
             );
         }
+    }
+
+    /// A container that reports no duration has only EOF to signal completion,
+    /// so playback must still advance frame by frame and finish.
+    #[test]
+    fn a_duration_less_stream_still_advances_to_completion() {
+        crate::init().unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("streaming-test.avi");
+
+        let mut player = VideoPlayer::from_filename(fixture.to_str().unwrap()).unwrap();
+        player.duration = Duration::ZERO;
+        let first_frame = player.get_current_frame();
+
+        player.advance_by_time(Duration::from_millis(500));
+        assert!(
+            player.current_frame_index > 0,
+            "a duration-less stream should still decode past its first frame"
+        );
+        assert_ne!(player.get_current_frame().bytes, first_frame.bytes);
+        assert!(!player.is_finished());
+
+        player.advance_by_time(Duration::from_secs(60));
+        assert!(
+            player.is_finished(),
+            "a duration-less stream should finish once its frames run out"
+        );
     }
 }
