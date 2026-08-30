@@ -417,6 +417,22 @@ fn presentation_world_panel_size(
     }
 }
 
+/// Move a VR overlay built in the tracked pawn space (the cyber interface, the
+/// `show_position` readout) into world coordinates, and put it in the system-
+/// overlay group. The pawn transform is the same one the runtime builds its
+/// camera from, so the overlay stays where the head put it.
+fn rebase_pawn_overlay(
+    objects: &mut [SceneObject],
+    pawn_position: Vector3<f32>,
+    pawn_rotation: Quaternion<f32>,
+) {
+    let pawn_to_world = Matrix4::from_translation(pawn_position) * Matrix4::from(pawn_rotation);
+    for object in objects {
+        object.set_render_layer(RenderLayer::SystemOverlay);
+        object.set_transform(pawn_to_world * object.get_transform());
+    }
+}
+
 #[cfg(test)]
 mod vr_backpack_panel_tests {
     use super::*;
@@ -1617,6 +1633,13 @@ pub struct MissionCore {
     /// threaded through the effect path.
     last_head_rotation: Quaternion<f32>,
 
+    /// Where the `show_position` readout's VR panel hangs: placed on the first
+    /// visible frame, world-locked, lazily recentered - the same treatment
+    /// every other head-referenced panel gets, so the readout does not swim
+    /// with the head. Reset while the param is off, so turning it back on
+    /// re-places it where the player is now looking.
+    show_position_anchor: crate::ui::FrontendPanelAnchor,
+
     /// The fall to the floor that plays while the player is dying, or `None`
     /// while they are alive. Runtime-only, like [`PlayerLifeState`] itself: a
     /// dead game cannot be saved, so there is no death mid-fall to restore.
@@ -2417,6 +2440,7 @@ impl MissionCore {
             screen_fade_alpha: 0.0,
             screen_fade_texture,
             last_head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            show_position_anchor: crate::ui::FrontendPanelAnchor::new(),
             death_camera: None,
         };
         for (index, entity_id) in backpack_load_remap.overflow.into_iter().enumerate() {
@@ -3122,6 +3146,20 @@ impl MissionCore {
         {
             self.vr_use_mode_head = (input_context.head.position, input_context.head.rotation);
         }
+        // The `show_position` readout's panel. Advanced here (not in `render`)
+        // because the anchor needs the tracked head and a dt; while the readout
+        // is not being drawn the anchor is reset, so the next time it comes up
+        // it places in front of the player rather than wherever they last were.
+        if self.show_position_readout_visible(game_options) {
+            self.show_position_anchor.update(
+                input_context.head.position,
+                input_context.head.rotation,
+                time.elapsed,
+            );
+        } else {
+            self.show_position_anchor = crate::ui::FrontendPanelAnchor::new();
+        }
+
         if game_options.presentation_mode == crate::PresentationMode::Vr && self.use_mode {
             let panel = self.vr_use_mode_anchor.update(
                 input_context.head.position,
@@ -8118,6 +8156,19 @@ impl MissionCore {
                 self.use_mode,
             ));
 
+            // `show_position` readout (flat). VR presents the same canvas on a
+            // head-anchored panel in `render`.
+            if crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION) {
+                let pos = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap().pos;
+                ret.extend(
+                    crate::hud::build_debug_overlay_canvas(pos).render_screen_space(
+                        asset_cache,
+                        screen_size,
+                        crate::ui::ScaleMode::PreserveAspect,
+                    ),
+                );
+            }
+
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
             // the HUD. Also records the render-target size the pointer ->
             // canvas mapping needs.
@@ -8164,6 +8215,20 @@ impl MissionCore {
     /// screen this is a mode of play, so the player's own hands are still being
     /// rendered by the interaction controller, and a second static glove would
     /// stack on top of them (the defect issue #1018 fixed for the pause menu).
+    /// Whether the VR `show_position` readout is anchored and drawn this frame.
+    ///
+    /// The cyber interface is excluded here because its panel owns the view
+    /// while it is up (and keeps owning it through the exit ramp). The pause
+    /// menu and the death camera are *not* checked here - `MissionCore` cannot
+    /// see them; they are covered centrally by `Game::render`'s
+    /// `DEBUG_OVERLAY` drop, the same drop that removes the player's hands.
+    fn show_position_readout_visible(&self, options: &GameOptions) -> bool {
+        options.presentation_mode == crate::PresentationMode::Vr
+            && crate::dev_params::get_bool(crate::dev_params::SHOW_POSITION)
+            && !self.use_mode
+            && self.use_mode_ramp.is_settled_closed()
+    }
+
     fn render_vr_use_mode(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
         use crate::ui::world_dim;
         let panel = self.vr_use_mode_anchor.panel();
@@ -8586,14 +8651,33 @@ impl MissionCore {
         if options.presentation_mode == crate::PresentationMode::Vr
             && (self.use_mode || !self.use_mode_ramp.is_settled_closed())
         {
-            let pawn_to_world =
-                Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
             let mut use_mode_objects = self.render_vr_use_mode(asset_cache);
-            for object in &mut use_mode_objects {
-                object.set_render_layer(RenderLayer::SystemOverlay);
-                object.set_transform(pawn_to_world * object.get_transform());
-            }
+            rebase_pawn_overlay(&mut use_mode_objects, player.pos, player.rotation);
             scene.extend(use_mode_objects);
+        }
+
+        // `show_position` readout (VR): the same canvas flat draws in screen
+        // space, on its own anchored panel - nearer than the system panels so
+        // it cannot be coplanar with them. Labelled `DEBUG_OVERLAY` so
+        // `Game::render`'s pause/death filter drops it exactly as the flat
+        // readout is dropped with the per-eye scene.
+        if let Some(placement) = self
+            .show_position_readout_visible(options)
+            .then(|| self.show_position_anchor.placement())
+            .flatten()
+        {
+            let panel = crate::hud::readout_panel(placement);
+            let mut objects = crate::hud::build_debug_overlay_canvas(player.pos)
+                .render_world_space(
+                    asset_cache,
+                    panel.transform(),
+                    None,
+                    None,
+                    crate::ui::VR_COMPONENT_Z_STEP,
+                );
+            crate::util::tag_render_source(&mut objects, crate::util::render_source::DEBUG_OVERLAY);
+            rebase_pawn_overlay(&mut objects, player.pos, player.rotation);
+            scene.extend(objects);
         }
 
         // Note: Hand spotlights for enhanced lighting are now handled in the runtime
