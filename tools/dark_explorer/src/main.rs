@@ -68,7 +68,7 @@ enum Commands {
         #[arg(long)]
         hitboxes: bool,
 
-        /// Open the Archetypes tab with this creature selected (name or template id)
+        /// Open the Archetypes tab with this archetype selected (name or template id)
         #[arg(long)]
         archetype: Option<String>,
 

@@ -1,6 +1,6 @@
-//! Gamesys creature archetypes: templates that resolve (inheritance-aware) to
-//! a model + creature type, arranged in their MetaProp hierarchy, plus the
-//! motion-database clip list for each archetype's actor type.
+//! Gamesys archetypes: every template that resolves (inheritance-aware) to a
+//! model, arranged in its MetaProp hierarchy. Creature templates additionally
+//! carry an actor type and the motion-database clip list it can play.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -34,17 +34,25 @@ pub struct Archetype {
     pub name: String,
     /// Model base name from `PropModelName` (lowercased, no extension).
     pub model_name: String,
-    pub creature_type: u32,
+    /// `PropCreature`, or None for a non-creature template (weapon, prop, ...).
+    pub creature_type: Option<u32>,
     /// The motion database's creature category, from the creature definition.
     pub actor_type: Option<ActorType>,
 }
 
 impl Archetype {
+    pub fn is_creature(&self) -> bool {
+        self.creature_type.is_some()
+    }
+
     pub fn creature_type_name(&self) -> String {
+        let Some(creature_type) = self.creature_type else {
+            return "-".to_string();
+        };
         CREATURE_TYPE_NAMES
-            .get(self.creature_type as usize)
-            .map(|n| format!("{n} ({})", self.creature_type))
-            .unwrap_or_else(|| format!("unknown ({})", self.creature_type))
+            .get(creature_type as usize)
+            .map(|n| format!("{n} ({creature_type})"))
+            .unwrap_or_else(|| format!("unknown ({creature_type})"))
     }
 
     pub fn actor_type_name(&self) -> String {
@@ -129,6 +137,9 @@ impl ArchetypeDb {
     /// Clip names playable by this archetype's actor type.
     pub fn clips_for(&self, archetype: &Archetype) -> Result<Vec<String>, String> {
         let motion_db = self.motion_db.as_ref().map_err(|e| e.clone())?;
+        if !archetype.is_creature() {
+            return Err(format!("'{}' is not a creature", archetype.name));
+        }
         let actor = archetype.actor_type.clone().ok_or_else(|| {
             format!(
                 "no creature definition for {}",
@@ -197,7 +208,7 @@ impl ArchetypeDb {
             return if self.archetypes.contains_key(&id) {
                 Ok(id)
             } else {
-                Err(format!("no creature archetype with template id {id}"))
+                Err(format!("no archetype with template id {id}"))
             };
         }
         let needle = wanted.to_ascii_lowercase();
@@ -217,13 +228,18 @@ impl ArchetypeDb {
         }
         match matches.as_slice() {
             [id] => Ok(*id),
-            [] => Err(format!("no creature archetype matching '{wanted}'")),
+            [] => Err(format!("no archetype matching '{wanted}'")),
+            // Substring hits can run to dozens now that every modeled template
+            // is here; list a sample rather than a wall of names.
             many => Err(format!(
-                "'{wanted}' is ambiguous: {}",
+                "'{wanted}' is ambiguous ({} matches): {}{}",
+                many.len(),
                 many.iter()
+                    .take(10)
                     .map(|id| self.name_of(*id))
                     .collect::<Vec<_>>()
-                    .join(", ")
+                    .join(", "),
+                if many.len() > 10 { ", ..." } else { "" }
             )),
         }
     }
@@ -261,10 +277,12 @@ fn load_impl() -> Result<ArchetypeDb, String> {
             if let Ok(name) = v_name.get(entity) {
                 names.insert(template_id, name.0.clone());
             }
-            let (Ok(model), Ok(creature)) = (v_model.get(entity), v_creature.get(entity)) else {
+            let Ok(model) = v_model.get(entity) else {
                 continue;
             };
-            let actor_type = shock2vr::creature::get_creature_definition(creature.0)
+            let creature_type = v_creature.get(entity).ok().map(|c| c.0);
+            let actor_type = creature_type
+                .and_then(shock2vr::creature::get_creature_definition)
                 .map(|def| def.actor_type.clone());
             archetypes.insert(
                 template_id,
@@ -275,7 +293,7 @@ fn load_impl() -> Result<ArchetypeDb, String> {
                         .cloned()
                         .unwrap_or_else(|| format!("Template {template_id}")),
                     model_name: model.0.to_ascii_lowercase(),
-                    creature_type: creature.0,
+                    creature_type,
                     actor_type,
                 },
             );
