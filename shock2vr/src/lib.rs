@@ -1900,10 +1900,7 @@ impl Game {
                 let after_ending = scenes::finale_follow_on(scenes::resolve_credits_cutscene());
 
                 self.campaign_completed = true;
-                self.handle_global_effect(GlobalEffect::PlayCutscene {
-                    video: resolve_ending_cutscene(),
-                    then: Box::new(after_ending),
-                });
+                self.handle_global_effect(after_ending.after_cutscene(&resolve_ending_cutscene()));
             }
             GlobalEffect::Quit => {
                 self.should_quit = true;

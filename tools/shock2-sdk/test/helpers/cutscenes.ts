@@ -5,7 +5,11 @@ import type { GameServer } from "../../src/index.js";
 // reports the requested video name (not the file the install resolves it to),
 // which is how a cutscene is told apart from a level here.
 
-/** Whether `mission` names a cutscene rather than a level or debug scene. */
+/**
+ * Whether `mission` names a cutscene rather than a level or debug scene. Mirrors
+ * the runtime's `scenes::is_cutscene_file`, which is what decides the same thing
+ * there; keep the extensions in step with it.
+ */
 export function isCutsceneScene(mission: string): boolean {
   return /\.(avi|ogv)$/i.test(mission);
 }

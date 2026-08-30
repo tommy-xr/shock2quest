@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
 import { isCutsceneScene, stepPastCutscenes } from "./helpers/cutscenes.js";
-import { menuEntry } from "./helpers/frontend-menu.js";
+import { clickMenuEntry } from "./helpers/frontend-menu.js";
 
 // The authored campaign moments play their movie before the level they lead to.
 // Negative-first: before the wiring each of these transitions swapped straight
@@ -17,7 +17,7 @@ import { menuEntry } from "./helpers/frontend-menu.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 /** New Game is the first of the six main-menu entries. */
-const NEW_GAME_ENTRY = menuEntry(0);
+const NEW_GAME_ENTRY = 0;
 
 // The earth.mis Marine career-door tripwire volume: teleporting onto it fires
 // the same ENTER trigger as walking in, running the real TrapNewTripwire ->
@@ -32,14 +32,7 @@ test(
     await using game = await GameServer.launch({ mission: "main_menu" });
     await game.step({ frames: 10 });
 
-    // Clicks are rising-edge, so the press has to start on a frame where the
-    // previous one was unpressed.
-    await game.input.set("pointer.position", NEW_GAME_ENTRY);
-    await game.step({ frames: 5 });
-    await game.input.set("pointer.pressed", 1);
-    await game.step({ frames: 2 });
-    await game.input.set("pointer.pressed", 0);
-    await game.step({ frames: 5 });
+    await clickMenuEntry(game, NEW_GAME_ENTRY);
 
     // The intro runs for minutes, so this stops at "the movie is what is on
     // screen, and earth.mis is not loaded yet" rather than playing it out.

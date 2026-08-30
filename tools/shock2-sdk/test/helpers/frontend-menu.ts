@@ -1,4 +1,5 @@
 import { PLAYER_EYE_HEIGHT_WORLD } from "../../src/index.js";
+import type { GameServer } from "../../src/index.js";
 
 /** The frontend screens are authored on the original 640x480 UI canvas. */
 export const CANVAS_W = 640;
@@ -14,6 +15,19 @@ export const norm = (x: number, y: number): [number, number] => [x / CANVAS_W, y
  */
 export const menuEntry = (index: number): [number, number] =>
   norm(400 + 179 / 2, 20 + index * 76 + 60 / 2);
+
+/**
+ * Click one main-menu entry with the flat pointer. Clicks are rising-edge, so
+ * the press has to start on a frame where the previous one was unpressed.
+ */
+export async function clickMenuEntry(game: GameServer, index: number): Promise<void> {
+  await game.input.set("pointer.position", menuEntry(index));
+  await game.step({ frames: 5 });
+  await game.input.set("pointer.pressed", 1);
+  await game.step({ frames: 2 });
+  await game.input.set("pointer.pressed", 0);
+  await game.step({ frames: 5 });
+}
 
 // The VR menu is the same canvas on a world-space panel, driven by a controller
 // ray instead of a cursor. The runtime's VR head yaw is +90 degrees (the camera
