@@ -20,6 +20,7 @@ use crate::{
 };
 
 pub mod cutscene_player;
+pub mod cutscene_skip;
 pub mod debug_camera;
 pub mod debug_common;
 pub mod debug_gloves;
