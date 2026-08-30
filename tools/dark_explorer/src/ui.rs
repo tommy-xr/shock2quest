@@ -13,12 +13,12 @@ use engine::texture_format::{self, PixelFormat};
 
 use crate::explorer;
 
-const IMAGE_EXTENSIONS: &[&str] = &["pcx", "tga", "png", "gif", "jpg", "jpeg", "dds"];
 const TEXT_EXTENSIONS: &[&str] = &["str", "mtl", "txt", "ini", "cfg", "json"];
 /// Cap on rows the flattened search view renders per frame.
 const SEARCH_RESULT_CAP: usize = 500;
 
 pub fn run(screenshot: Option<PathBuf>, select: Option<String>, search: Option<String>) {
+    explorer::print_coverage_caveat();
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1150.0, 760.0])
         .with_title("dark_explorer");
@@ -29,7 +29,17 @@ pub fn run(screenshot: Option<PathBuf>, select: Option<String>, search: Option<S
     let result = eframe::run_native(
         "dark_explorer",
         options,
-        Box::new(move |_cc| Ok(Box::new(ExplorerApp::new(screenshot, select, search)))),
+        Box::new(move |cc| {
+            // No open/close or scroll animation: a `--select` scroll measured
+            // against a still-animating CollapsingHeader lands on stale layout,
+            // and an animated scroll-to hasn't arrived when `--screenshot`
+            // captures a few frames in.
+            cc.egui_ctx.all_styles_mut(|style| {
+                style.animation_time = 0.0;
+                style.scroll_animation = egui::style::ScrollAnimation::none();
+            });
+            Ok(Box::new(ExplorerApp::new(screenshot, select, search)))
+        }),
     );
     if let Err(err) = result {
         eprintln!("ui failed: {err}");
@@ -93,8 +103,6 @@ impl LoadedFamily {
 enum PreviewKind {
     Image {
         color_image: egui::ColorImage,
-        width: u32,
-        height: u32,
         texture: Option<egui::TextureHandle>,
     },
     Audio {
@@ -126,11 +134,16 @@ pub struct ExplorerApp {
     selected: Option<(String, String)>,
     preview: Option<Preview>,
     audio: Option<AudioContext<(), String>>,
+    /// The previous Play's handle, stopped before the next one starts.
+    audio_handle: Option<AudioHandle>,
     audio_error: Option<String>,
     screenshot: Option<PathBuf>,
     frames_rendered: u32,
-    /// One-shot: scroll the tree to the selected row on the next frame.
-    scroll_to_selected: bool,
+    /// Frames left in which the tree scrolls to the selected row (a couple of
+    /// frames, so the scroll re-applies once layout has settled).
+    scroll_frames: u8,
+    /// Flattened search rows, cached per needle: (needle, capped rows, total).
+    search_results: Option<(String, Vec<(String, String)>, usize)>,
 }
 
 impl ExplorerApp {
@@ -146,21 +159,29 @@ impl ExplorerApp {
             selected: None,
             preview: None,
             audio: None,
+            audio_handle: None,
             audio_error: None,
             screenshot,
             frames_rendered: 0,
-            scroll_to_selected: false,
+            scroll_frames: 0,
+            search_results: None,
         };
         if let Some(select) = select {
+            // Fail loudly on a bad selection: a `--screenshot` run that quietly
+            // captured an empty preview would still exit 0 otherwise.
             match select.split_once('/') {
                 Some((family, key)) if app.family_names.contains(&family) => {
-                    app.select(family.to_string(), key.to_string());
+                    let key = key.to_ascii_lowercase(); // lookup keys are lowercased
+                    if !app.family(family).all_entries.iter().any(|e| e.key == key) {
+                        eprintln!("--select: no asset '{key}' in family '{family}'");
+                        std::process::exit(2);
+                    }
+                    app.select(family.to_string(), key);
                 }
-                // `data` keys have no '/', so a bare family/key split fails there.
-                _ if select.starts_with("data/") || app.family_names.contains(&select.as_str()) => {
-                    eprintln!("--select wants <family>/<key>, got '{select}'");
+                _ => {
+                    eprintln!("--select wants <known family>/<key>, got '{select}'");
+                    std::process::exit(2);
                 }
-                _ => eprintln!("--select: unknown family in '{select}'"),
             }
         }
         app
@@ -176,7 +197,7 @@ impl ExplorerApp {
         let loaded = self.family(&family);
         self.preview = Some(build_preview(&family, &key, loaded));
         self.selected = Some((family, key));
-        self.scroll_to_selected = true;
+        self.scroll_frames = 3;
     }
 }
 
@@ -228,41 +249,54 @@ fn decode_preview(key: &str, bytes: Vec<u8>) -> PreviewKind {
     let ext = extension(key).to_ascii_lowercase();
     // Dark parsers panic on malformed input, so every decode runs under
     // catch_unwind and falls back to the hex view instead of crashing.
-    if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
-        let decoded = panic::catch_unwind(AssertUnwindSafe(|| {
-            texture_format::extension_to_format(ext.clone()).map(|format| format.load(&bytes))
-        }));
-        return match decoded {
-            Ok(Some(raw)) => {
+    if texture_format::DECODABLE_EXTENSIONS.contains(&ext.as_str()) {
+        // ColorImage construction is inside the guard too: it asserts
+        // bytes.len() == w*h*channels, which a bad decode can violate.
+        let decoded = quiet_catch(|| {
+            texture_format::extension_to_format(ext.clone()).map(|format| {
+                let raw = format.load(&bytes);
                 let size = [raw.width as usize, raw.height as usize];
-                let color_image = match raw.format {
+                match raw.format {
                     PixelFormat::RGB => egui::ColorImage::from_rgb(size, &raw.bytes),
                     PixelFormat::RGBA => egui::ColorImage::from_rgba_unmultiplied(size, &raw.bytes),
-                };
-                PreviewKind::Image {
-                    color_image,
-                    width: raw.width,
-                    height: raw.height,
-                    texture: None,
                 }
-            }
+            })
+        });
+        return match decoded {
+            Ok(Some(color_image)) => PreviewKind::Image {
+                color_image,
+                texture: None,
+            },
             Ok(None) => raw_fallback(&bytes, format!("no decoder for .{ext}")),
-            Err(_) => raw_fallback(&bytes, format!(".{ext} decode panicked")),
+            Err(msg) => raw_fallback(&bytes, format!(".{ext} decode failed: {msg}")),
         };
     }
     if ext == "wav" {
-        let duration = panic::catch_unwind(AssertUnwindSafe(|| {
-            AudioClip::from_bytes(bytes.clone()).total_duration()
-        }));
+        let duration = quiet_catch(|| AudioClip::from_bytes(bytes.clone()).total_duration());
         return match duration {
             Ok(duration) => PreviewKind::Audio { bytes, duration },
-            Err(_) => raw_fallback(&bytes, "wav decode panicked".to_string()),
+            Err(msg) => raw_fallback(&bytes, format!("wav decode failed: {msg}")),
         };
     }
     if TEXT_EXTENSIONS.contains(&ext.as_str()) {
         return PreviewKind::Text(String::from_utf8_lossy(&bytes).into_owned());
     }
     raw_fallback(&bytes, format!("cannot render .{ext} files"))
+}
+
+/// Run a Dark parser under `catch_unwind` with the panic hook silenced (the
+/// format readers panic on malformed input), mapping a panic to its message.
+fn quiet_catch<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    let prev = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let res = panic::catch_unwind(AssertUnwindSafe(f));
+    panic::set_hook(prev);
+    res.map_err(|e| {
+        e.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_else(|| "panic".to_owned())
+    })
 }
 
 fn raw_fallback(bytes: &[u8], reason: String) -> PreviewKind {
@@ -334,7 +368,7 @@ impl eframe::App for ExplorerApp {
             self.show_preview(ui);
         });
 
-        self.scroll_to_selected = false;
+        self.scroll_frames = self.scroll_frames.saturating_sub(1);
         if let Some((family, key)) = clicked {
             self.select(family, key);
         }
@@ -346,7 +380,7 @@ impl eframe::App for ExplorerApp {
 impl ExplorerApp {
     fn show_tree(&mut self, ui: &mut egui::Ui, clicked: &mut Option<(String, String)>) {
         let selected = self.selected.clone();
-        let scroll_to_selected = self.scroll_to_selected;
+        let scroll_to_selected = self.scroll_frames > 0;
         for family in self.family_names.clone() {
             let open_family = selected.as_ref().map(|(f, _)| f == family);
             let header =
@@ -374,39 +408,46 @@ impl ExplorerApp {
     fn show_search_results(&mut self, ui: &mut egui::Ui, clicked: &mut Option<(String, String)>) {
         let needle = self.search.to_ascii_lowercase();
         let selected = self.selected.clone();
-        let mut shown = 0;
-        let mut total = 0;
-        for family in self.family_names.clone() {
-            let loaded = self.family(family);
-            // Borrow-friendly copy of the matches; the row set is capped small.
-            let matches: Vec<String> = loaded
-                .entries
-                .iter()
-                .filter(|e| e.key.contains(&needle))
-                .map(|e| e.key.clone())
-                .collect();
-            for key in matches {
-                total += 1;
-                if shown >= SEARCH_RESULT_CAP {
-                    continue;
-                }
-                shown += 1;
-                let label = format!("{family}/{key}");
-                let is_selected = selected
-                    .as_ref()
-                    .is_some_and(|(f, k)| f == family && *k == key);
-                if ui.selectable_label(is_selected, label).clicked() {
-                    *clicked = Some((family.to_string(), key));
+        // Recompute the flattened rows only when the needle changes; a search
+        // over every family is too costly to redo per frame.
+        if self.search_results.as_ref().map(|(n, _, _)| n.as_str()) != Some(needle.as_str()) {
+            let mut rows: Vec<(String, String)> = Vec::new();
+            let mut total = 0;
+            for family in self.family_names.clone() {
+                let loaded = self.family(family);
+                for entry in &loaded.entries {
+                    if !entry.key.contains(&needle) {
+                        continue;
+                    }
+                    total += 1;
+                    if rows.len() < SEARCH_RESULT_CAP {
+                        rows.push((family.to_string(), entry.key.clone()));
+                    }
                 }
             }
+            self.search_results = Some((needle.clone(), rows, total));
         }
-        if total > shown {
+        let Some((_, rows, total)) = &self.search_results else {
+            return;
+        };
+        for (family, key) in rows {
+            let is_selected = selected
+                .as_ref()
+                .is_some_and(|(f, k)| f == family && k == key);
+            if ui
+                .selectable_label(is_selected, format!("{family}/{key}"))
+                .clicked()
+            {
+                *clicked = Some((family.clone(), key.clone()));
+            }
+        }
+        if *total > rows.len() {
             ui.label(format!(
                 "... {} more matches (narrow the search)",
-                total - shown
+                total - rows.len()
             ));
         }
-        if total == 0 {
+        if *total == 0 {
             ui.label("no matches");
         }
     }
@@ -452,10 +493,9 @@ impl ExplorerApp {
         match &mut preview.kind {
             PreviewKind::Image {
                 color_image,
-                width,
-                height,
                 texture,
             } => {
+                let [width, height] = color_image.size;
                 ui.label(format!("{width} x {height}"));
                 let texture = texture.get_or_insert_with(|| {
                     ui.ctx().load_texture(
@@ -465,9 +505,9 @@ impl ExplorerApp {
                     )
                 });
                 // Scale small game textures up to a readable size.
-                let max_dim = (*width).max(*height) as f32;
+                let max_dim = width.max(height) as f32;
                 let scale = (256.0 / max_dim).clamp(1.0, 8.0);
-                let display = egui::Vec2::new(*width as f32 * scale, *height as f32 * scale);
+                let display = egui::Vec2::new(width as f32 * scale, height as f32 * scale);
                 egui::ScrollArea::both().show(ui, |ui| {
                     ui.image((texture.id(), display));
                 });
@@ -477,7 +517,12 @@ impl ExplorerApp {
                     ui.label(format!("Duration: {:.2}s", duration.as_secs_f32()));
                 }
                 if ui.button("▶ Play").clicked() {
-                    play_wav(&mut self.audio, &mut self.audio_error, bytes.clone());
+                    play_wav(
+                        &mut self.audio,
+                        &mut self.audio_handle,
+                        &mut self.audio_error,
+                        bytes.clone(),
+                    );
                 }
                 if let Some(error) = &self.audio_error {
                     ui.colored_label(egui::Color32::RED, error);
@@ -605,25 +650,28 @@ fn show_dir(
 
 fn play_wav(
     audio: &mut Option<AudioContext<(), String>>,
+    audio_handle: &mut Option<AudioHandle>,
     audio_error: &mut Option<String>,
     bytes: Vec<u8>,
 ) {
     *audio_error = None;
     // The output device is opened on first play so `--screenshot` runs never
     // touch audio; AudioContext::new panics without an output device.
-    let played = panic::catch_unwind(AssertUnwindSafe(|| {
+    let played = quiet_catch(|| {
         let context = match audio {
             Some(context) => context,
             None => audio.insert(AudioContext::new()),
         };
-        engine::audio::play_audio(
-            context,
-            AudioHandle::new(),
-            None,
-            Rc::new(AudioClip::from_bytes(bytes)),
-        );
-    }));
-    if played.is_err() {
-        *audio_error = Some("playback failed (no audio device or bad wav)".to_string());
+        // Stop the previous play: it also reaps its sink entry, which nothing
+        // else does here (the UI never runs AudioContext::update).
+        if let Some(previous) = audio_handle.take() {
+            engine::audio::stop_audio(context, previous);
+        }
+        let handle = AudioHandle::new();
+        *audio_handle = Some(handle.clone());
+        engine::audio::play_audio(context, handle, None, Rc::new(AudioClip::from_bytes(bytes)));
+    });
+    if let Err(msg) = played {
+        *audio_error = Some(format!("playback failed: {msg}"));
     }
 }
