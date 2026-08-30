@@ -794,6 +794,18 @@ impl Game {
         entities_to_trigger: Vec<String>,
         vitals_transition: PlayerVitalsTransition,
     ) {
+        // A transition started while one is already in flight would capture the
+        // *loading* scene as the outgoing save - wiping quest bits, held items
+        // and vitals, and filing a bogus "loading" entry in the mission ledger.
+        // Nothing in-game can reach this (the loading scene runs no scripts),
+        // but an external caller can, so refuse rather than corrupt.
+        if self.pending_transition.is_some() {
+            warn!(
+                "Ignoring transition to '{}': a level transition is already in flight",
+                level_name
+            );
+            return;
+        }
         tracing::info!(
             "[loading-screen] begin_transition -> {} (background parse)",
             level_name

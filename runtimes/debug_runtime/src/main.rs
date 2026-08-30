@@ -171,6 +171,12 @@ static INSTANCE_ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::n
 /// simulation time (60 Hz, matching the game's target frame rate).
 const FIXED_STEP_DT: f32 = 1.0 / 60.0;
 
+/// Upper bound on the frames `/v1/control/transition-level` pumps while driving a
+/// deferred level transition to completion (60 s at the fixed step). A warp that
+/// somehow never lands then returns a truthful failure instead of wedging the
+/// runtime's single game-loop thread.
+const TRANSITION_PUMP_FRAME_CAP: u32 = 60 * 60;
+
 /// How long to sleep at the end of an idle loop iteration (paused, no step in
 /// progress). Without this the loop spins as fast as possible - no swap
 /// interval is set anywhere and the window is hidden, so `swap_buffers` never
@@ -1128,10 +1134,23 @@ fn process_command(
         } => {
             tracing::info!("Transitioning level to {} (loc {:?})", level_file, loc);
             game.transition_level(level_file.clone(), loc);
+            // The transition is deferred behind the loading screen, but a warp
+            // is an automation lever: drive it to completion here so the reply
+            // (and every later request) sees the destination level, rather than
+            // making every caller pump frames and poll. Paced like the paused
+            // transition pump in the game loop; capped so a wedged parse cannot
+            // hang the runtime forever.
+            let mut pumped = 0u32;
+            while game.has_pending_transition() && pumped < TRANSITION_PUMP_FRAME_CAP {
+                let zero_time = Time {
+                    elapsed: Duration::from_secs_f32(0.0),
+                    total: time.total,
+                };
+                game.update(&zero_time, current_input, action_state);
+                pumped += 1;
+                thread::sleep(Duration::from_secs_f32(FIXED_STEP_DT));
+            }
             // Report the ACTUAL post-switch scene rather than assuming success.
-            // The switch is deferred (scene_name() is still "loading"/the old
-            // level), so success stays false until the caller steps far enough
-            // for it to complete.
             let mission = game.scene_name().to_string();
             let success = mission == level_file;
             let message = if success {

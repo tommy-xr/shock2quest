@@ -856,8 +856,8 @@ export class Game {
    * Warp to another level (as if an in-game transition trigger fired), letting
    * a tester jump directly to any mission in isolation. `level` may omit the
    * ".mis" suffix; `loc` is an optional spawn-marker id (map default if omitted).
-   * The switch is deferred behind the loading screen, so step frames until
-   * info() reports the new mission.
+   * Without the loading_screen feature the switch is synchronous and info()
+   * reflects the new mission immediately.
    */
   async transitionLevel(
     level: string,
