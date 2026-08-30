@@ -6,9 +6,26 @@ use crate::{career::Career, physics::PhysicsWorld, quest_info::QuestInfo};
 
 use super::{Effect, MessagePayload, Script};
 
+/// The boarding of the Von Braun, played once as chargen hands off to the
+/// campaign. Movie names are not present in the mission or gamesys data - the
+/// original picked them in its engine/game-script code.
+const DEPLOY_CUTSCENE: &str = "cs2.avi";
+
 pub struct ChooseMissionScript {}
 
 impl ChooseMissionScript {
+    /// The shuttle clip that plays as the player leaves on the tour advancing
+    /// them to `new_year` (2, 3 and 4 are the three tours of duty). `None` for
+    /// any other year, which no authored marker produces.
+    fn tour_cutscene(new_year: u32) -> Option<&'static str> {
+        match new_year {
+            2 => Some("shuttle1.avi"),
+            3 => Some("shuttle2.avi"),
+            4 => Some("shuttle3.avi"),
+            _ => None,
+        }
+    }
+
     pub fn new() -> ChooseMissionScript {
         ChooseMissionScript {}
     }
@@ -113,15 +130,20 @@ impl Script for ChooseMissionScript {
                             .unwrap_or_default()
                     };
 
+                    let mut transition = super::GlobalEffect::TransitionLevel {
+                        level_file: "station.mis".to_string(),
+                        loc: None,
+                        entities_to_trigger,
+                        vitals_transition: super::PlayerVitalsTransition::Preserve,
+                    };
+                    if let Some(video) = Self::tour_cutscene(new_year) {
+                        transition = transition.after_cutscene(video);
+                    }
+
                     Effect::Multiple(vec![
                         set_year_effect,
                         grant_effect,
-                        Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
-                            level_file: "station.mis".to_string(),
-                            loc: None,
-                            entities_to_trigger,
-                            vitals_transition: super::PlayerVitalsTransition::Preserve,
-                        }),
+                        Effect::GlobalEffect(transition),
                     ])
                 } else {
                     // For year 4: go to PropDestLevel (final destination)
@@ -134,19 +156,46 @@ impl Script for ChooseMissionScript {
                     let v_dest_loc = world.borrow::<View<PropDestLoc>>().unwrap();
                     let dest_loc = v_dest_loc.get(entity_id).ok().map(|dest_loc| dest_loc.0);
 
+                    // The last tour's shuttle plays, then the boarding of the
+                    // Von Braun. Each wrap goes in front of what it wraps, so
+                    // the outermost is what the player sees first.
+                    let mut transition = super::GlobalEffect::TransitionLevel {
+                        level_file,
+                        loc: dest_loc,
+                        entities_to_trigger: vec![],
+                        vitals_transition: super::PlayerVitalsTransition::Preserve,
+                    }
+                    .after_cutscene(DEPLOY_CUTSCENE);
+                    if let Some(video) = Self::tour_cutscene(new_year) {
+                        transition = transition.after_cutscene(video);
+                    }
+
                     Effect::Multiple(vec![
                         set_year_effect,
                         grant_effect,
-                        Effect::GlobalEffect(super::GlobalEffect::TransitionLevel {
-                            level_file,
-                            loc: dest_loc,
-                            entities_to_trigger: vec![],
-                            vitals_transition: super::PlayerVitalsTransition::Preserve,
-                        }),
+                        Effect::GlobalEffect(transition),
                     ])
                 }
             }
             _ => Effect::NoEffect,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One shuttle per tour of duty, in order, and nothing for a year no
+    /// authored marker can reach - a repeat trigger past the deploy must not
+    /// replay the last tour's video.
+    #[test]
+    fn each_tour_of_duty_has_its_own_shuttle_clip() {
+        assert_eq!(ChooseMissionScript::tour_cutscene(2), Some("shuttle1.avi"));
+        assert_eq!(ChooseMissionScript::tour_cutscene(3), Some("shuttle2.avi"));
+        assert_eq!(ChooseMissionScript::tour_cutscene(4), Some("shuttle3.avi"));
+
+        assert_eq!(ChooseMissionScript::tour_cutscene(1), None);
+        assert_eq!(ChooseMissionScript::tour_cutscene(5), None);
     }
 }

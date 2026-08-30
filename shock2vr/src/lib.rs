@@ -465,6 +465,19 @@ fn transition_ready(frames_shown: u32, parse_done_frame: Option<u32>) -> bool {
         && frames_shown >= MIN_LOADING_FRAMES
 }
 
+/// What a scene hands to the level that follows it: the quest bits, the items
+/// in hand and (unless the destination initializes them) the player's vitals.
+///
+/// A transition normally captures this from the scene that queued it, but a
+/// cutscene played in between replaces that scene first - so the cutscene's own
+/// empty world would be what got carried, wiping the player's career, training
+/// year, inventory and health.
+struct PreservedSceneState {
+    quest_info: QuestInfo,
+    held_data: HeldItemSaveData,
+    player_vitals: Option<PlayerVitals>,
+}
+
 pub struct Game {
     options: GameOptions,
     pub asset_cache: AssetCache,
@@ -474,6 +487,9 @@ pub struct Game {
     active_game_scene: Box<dyn GameScene>,
     /// Set while a deferred transition is in flight (loading screen showing).
     pending_transition: Option<PendingTransition>,
+    /// Set while a cutscene stands in for the scene that queued the transition
+    /// following it. See [`PreservedSceneState`].
+    preserved_scene_state: Option<PreservedSceneState>,
     // physics: PhysicsWorld,
     // script_world: ScriptWorld,
     audio_context: AudioContext<EntityId, String>,
@@ -756,7 +772,7 @@ impl Game {
     /// Capture the outgoing scene's save data (so its state survives the transition)
     /// and return the context the new mission needs. Must run while the outgoing scene
     /// is still active.
-    fn save_active_scene(&mut self) -> (QuestInfo, HeldItemSaveData, Option<PlayerVitals>) {
+    fn save_active_scene(&mut self) -> PreservedSceneState {
         let current_quest_info = self
             .active_game_scene
             .world()
@@ -781,7 +797,11 @@ impl Game {
 
         let player_vitals = save_load::capture_player_vitals(self.active_game_scene.world());
 
-        (current_quest_info, held_data, player_vitals)
+        PreservedSceneState {
+            quest_info: current_quest_info,
+            held_data,
+            player_vitals,
+        }
     }
 
     /// Start a background transition: save the outgoing scene, spawn the GL-free level
@@ -810,7 +830,16 @@ impl Game {
             "[loading-screen] begin_transition -> {} (background parse)",
             level_name
         );
-        let (quest_info, held_data, mut player_vitals) = self.save_active_scene();
+        // A cutscene playing ahead of this transition already captured the scene
+        // that queued it; its own empty world is not what should carry forward.
+        let PreservedSceneState {
+            quest_info,
+            held_data,
+            mut player_vitals,
+        } = match self.preserved_scene_state.take() {
+            Some(preserved) => preserved,
+            None => self.save_active_scene(),
+        };
         if vitals_transition == PlayerVitalsTransition::InitializeFromDestination {
             player_vitals = None;
         }
@@ -1261,6 +1290,7 @@ impl Game {
             audio_context,
             active_game_scene,
             pending_transition: None,
+            preserved_scene_state: None,
             global_context: Arc::new(global_context),
             last_music_cue: None,
             last_env_sound: None,
@@ -1833,26 +1863,40 @@ impl Game {
                 self.hit_feedback.trigger(damage);
             }
             GlobalEffect::PlayCutscene { video, then } => {
-                // A scene swap like the frontend ones: no ledger write-back, and
-                // any pending transition is abandoned.
+                // Any pending transition is abandoned, as for the frontend swaps.
                 self.pending_transition = None;
                 let follow_on = *then;
+                // Capture the scene the cutscene is about to replace, so a
+                // follow-on transition carries the player's state and not the
+                // cutscene's empty world. A cutscene chaining into another keeps
+                // what the first captured - the empty world it would capture now
+                // is exactly what must not win.
+                let preserved = match self.preserved_scene_state.take() {
+                    Some(carried) => carried,
+                    None => self.save_active_scene(),
+                };
                 match CutscenePlayerScene::new(video, follow_on.clone(), &mut self.audio_context) {
-                    Ok(cutscene) => self.set_active_scene(Box::new(cutscene)),
+                    Ok(cutscene) => {
+                        self.set_active_scene(Box::new(cutscene));
+                        // After the swap: `set_active_scene` clears this.
+                        self.preserved_scene_state = Some(preserved);
+                    }
                     Err(error) => {
                         // An install missing a movie must not strand the player
                         // on the scene the cutscene was replacing.
                         warn!("{error} - skipping it");
+                        // The follow-on still needs what was captured: the scene
+                        // is unchanged here, but in a chain this is the state of
+                        // the gameplay scene an earlier cutscene replaced.
+                        self.preserved_scene_state = Some(preserved);
                         self.handle_global_effect(follow_on);
                     }
                 }
             }
             GlobalEffect::CompleteCampaign => {
-                // Preserve the destroyed head and the rest of the finale state
-                // in the in-memory mission ledger before the cutscene replaces
-                // the active world.
-                self.save_active_scene();
-
+                // The destroyed head and the rest of the finale state reach the
+                // in-memory mission ledger through `PlayCutscene`, which saves
+                // the scene it replaces.
                 let after_ending = scenes::finale_follow_on(scenes::resolve_credits_cutscene());
 
                 self.campaign_completed = true;
@@ -1872,6 +1916,11 @@ impl Game {
     /// scene swap goes through here so that hook cannot be forgotten.
     fn set_active_scene(&mut self, scene: Box<dyn GameScene>) {
         self.active_game_scene.on_exit(&mut self.audio_context);
+        // Only a cutscene standing in for a scene carries state on its behalf,
+        // and `PlayCutscene` re-arms this straight after the swap. Clearing it
+        // for every other swap means a chain that ends anywhere but a
+        // transition cannot leak the old scene's state into a later one.
+        self.preserved_scene_state = None;
         self.active_game_scene = scene;
         // Whatever hurt the player belongs to the scene being left: a quickload
         // taken mid-fight must not open on a red rim, and the main menu must

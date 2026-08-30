@@ -50,6 +50,10 @@ use std::collections::HashMap;
 
 /// Mission loaded when the player chooses "New Game".
 const NEW_GAME_MISSION: &str = "earth.mis";
+/// The intro movie the original played on New Game, before the first level.
+/// Only this button gets it - the developer launcher boots the same level with
+/// no cutscene, and a load resumes straight into the save.
+const NEW_GAME_CUTSCENE: &str = "cs1.avi";
 
 /// The menu is authored on the original 640x480 `MAIN.PCX` canvas.
 const CANVAS_W: f32 = 640.0;
@@ -319,9 +323,10 @@ impl GameScene for MainMenuScene {
 
         match action {
             Some(MenuAction::NewGame) => {
-                vec![Effect::GlobalEffect(GlobalEffect::new_game_transition(
-                    NEW_GAME_MISSION.to_owned(),
-                ))]
+                vec![Effect::GlobalEffect(
+                    GlobalEffect::new_game_transition(NEW_GAME_MISSION.to_owned())
+                        .after_cutscene(NEW_GAME_CUTSCENE),
+                )]
             }
             Some(MenuAction::LoadGame) => {
                 vec![Effect::GlobalEffect(GlobalEffect::ShowLoadGame)]
