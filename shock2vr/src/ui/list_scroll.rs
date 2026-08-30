@@ -22,12 +22,41 @@ use super::{Rect, UiCanvas};
 pub const GUTTER_W: f32 = 32.0;
 const BUTTON_H: f32 = 16.0;
 
-/// The original scroll-arrow art. Each half has three states, and the art
-/// itself carries the shading, so the rocker draws fully opaque throughout:
-/// `_NORM` idle, `_HLIT` under the pointer, `_DOWN` (the darkened plate) for a
-/// half that cannot move.
-const UP_ART: [&str; 3] = ["BUP_NORM.PCX", "BUP_HLIT.PCX", "BUP_DOWN.PCX"];
-const DOWN_ART: [&str; 3] = ["BDN_NORM.PCX", "BDN_HLIT.PCX", "BDN_DOWN.PCX"];
+/// The original scroll-arrow art for one half. The art carries the shading, so
+/// the rocker draws fully opaque and picks a state instead of an opacity.
+struct ArrowArt {
+    /// Idle.
+    norm: &'static str,
+    /// Under the pointer.
+    hlit: &'static str,
+    /// A half that cannot move. This is the original's *pressed* plate; the
+    /// rocker has no press-and-hold visual of its own, and its darkened arrow
+    /// reads as unavailable, so it doubles as the inert state.
+    down: &'static str,
+}
+
+const UP_ART: ArrowArt = ArrowArt {
+    norm: "BUP_NORM.PCX",
+    hlit: "BUP_HLIT.PCX",
+    down: "BUP_DOWN.PCX",
+};
+const DOWN_ART: ArrowArt = ArrowArt {
+    norm: "BDN_NORM.PCX",
+    hlit: "BDN_HLIT.PCX",
+    down: "BDN_DOWN.PCX",
+};
+
+/// The art a half shows. Named rather than positional so a state can't
+/// silently swap with its neighbour.
+fn art_for(art: &ArrowArt, enabled: bool, hovered: bool) -> &'static str {
+    if !enabled {
+        art.down
+    } else if hovered {
+        art.hlit
+    } else {
+        art.norm
+    }
+}
 
 /// Which half of the rocker a point is over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,17 +149,15 @@ pub fn draw(
     hovered: Option<ScrollHalf>,
 ) {
     for (half, rect, art, enabled) in [
-        (ScrollHalf::Up, rocker.up, UP_ART, scroll > 0),
-        (ScrollHalf::Down, rocker.down, DOWN_ART, scroll < max_scroll),
+        (ScrollHalf::Up, rocker.up, &UP_ART, scroll > 0),
+        (
+            ScrollHalf::Down,
+            rocker.down,
+            &DOWN_ART,
+            scroll < max_scroll,
+        ),
     ] {
-        let texture = if !enabled {
-            art[2]
-        } else if hovered == Some(half) {
-            art[1]
-        } else {
-            art[0]
-        };
-        canvas.image(rect, texture);
+        canvas.image(rect, art_for(art, enabled, hovered == Some(half)));
     }
 }
 
@@ -197,6 +224,19 @@ mod tests {
 
     fn rocker_none() -> Option<Rocker> {
         rocker(LIST, FIELD_TOP_Y, false)
+    }
+
+    #[test]
+    fn each_half_shows_the_art_for_its_state() {
+        assert_eq!(art_for(&UP_ART, true, false), "BUP_NORM.PCX");
+        assert_eq!(art_for(&UP_ART, true, true), "BUP_HLIT.PCX");
+        assert_eq!(art_for(&DOWN_ART, true, false), "BDN_NORM.PCX");
+        assert_eq!(art_for(&DOWN_ART, true, true), "BDN_HLIT.PCX");
+        // A half that cannot move shows the darkened plate whether or not the
+        // pointer is over it - it is not hit-testable either.
+        assert_eq!(art_for(&UP_ART, false, false), "BUP_DOWN.PCX");
+        assert_eq!(art_for(&UP_ART, false, true), "BUP_DOWN.PCX");
+        assert_eq!(art_for(&DOWN_ART, false, true), "BDN_DOWN.PCX");
     }
 
     #[test]

@@ -164,7 +164,7 @@ const ARROW_W: f32 = 20.0;
 /// Width of the value readout between the arrows.
 const VALUE_W: f32 = 48.0;
 /// The scroll gutter down the list pane's right edge. The rocker itself - its
-/// geometry, its labels and its "an end that cannot move is inert" rule - is
+/// geometry, its arrow art and its "an end that cannot move is inert" rule - is
 /// [`list_scroll`]'s, shared with the debug-scene launcher.
 const SCROLL_GUTTER_W: f32 = list_scroll::GUTTER_W;
 
