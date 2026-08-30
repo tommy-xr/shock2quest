@@ -283,6 +283,12 @@ fn anniversary_family_mounts(
     mounts
 }
 
+/// The resource families a lookup consults, in priority order - for tools that
+/// enumerate the mounts family by family (`resource_family_paths`).
+pub fn resource_families() -> &'static [&'static str] {
+    RESOURCE_FAMILIES
+}
+
 /// The mounts for a *single* resource family, for a CLI tool that needs one
 /// family's files without a renderer - `dq maps` reads the map rectangles out
 /// of `intrface`, which a classic install keeps in `res/intrface.crf` and a

@@ -13,6 +13,21 @@ pub trait ReadableAndSeekable: io::Read + io::Seek + Send + Sync + 'static {}
 
 impl<T> ReadableAndSeekable for T where T: io::Read + io::Seek + Send + Sync + 'static {}
 
+/// One lookup key a mount can serve, plus where the bytes really live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetEntry {
+    /// The key `exists`/`get_reader` resolve (lowercased).
+    pub key: String,
+    /// The archive or folder serving it.
+    pub source: String,
+    /// The real entry name inside the source (original case, full path).
+    pub entry_name: String,
+    /// True for a secondary key (collapsed basename, namespace-qualified name)
+    /// pointing at the same bytes as a primary mount-relative key. Filter these
+    /// out to list each file once; keep them to see every resolvable name.
+    pub is_alias: bool,
+}
+
 pub trait AbstractAssetPath: Sync + Send {
     fn exists(&self, base_path: String, asset_name: String) -> bool;
 
@@ -38,6 +53,15 @@ pub trait AbstractAssetPath: Sync + Send {
             .iter()
             .find(|candidate| self.exists(base_path.clone(), (*candidate).to_string()))
             .cloned()
+    }
+
+    /// Every lookup key this mount can serve. Combined mounts concatenate in
+    /// mount-priority order (a key's first occurrence is the mount a lookup
+    /// serves it from); within one mount, keys are unique and unordered.
+    /// Mounts that cannot cheaply enumerate (loose folders, the app bundle)
+    /// report nothing - enumeration is a tooling affordance, not a lookup path.
+    fn entries(&self) -> Vec<AssetEntry> {
+        Vec::new()
     }
 }
 
@@ -85,6 +109,13 @@ impl AbstractAssetPath for MultipleAssetPaths {
             }
         }
         None
+    }
+
+    fn entries(&self) -> Vec<AssetEntry> {
+        self.asset_paths
+            .iter()
+            .flat_map(|asset_path| asset_path.entries())
+            .collect()
     }
 }
 

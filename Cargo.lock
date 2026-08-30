@@ -887,6 +887,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dark_explorer"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "engine",
+ "shock2vr",
+]
+
+[[package]]
 name = "dark_query"
 version = "0.1.0"
 dependencies = [

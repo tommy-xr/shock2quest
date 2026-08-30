@@ -159,3 +159,17 @@ impl Drop for TempDir {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// Write a zip archive at `path` holding `entries`, for tests that mount one.
+pub fn write_archive(path: &Path, entries: &[(&str, &[u8])]) {
+    use std::io::Write;
+    let file = std::fs::File::create(path).unwrap();
+    let mut writer = zip::ZipWriter::new(file);
+    for (name, contents) in entries {
+        writer
+            .start_file(*name, zip::write::FileOptions::default())
+            .unwrap();
+        writer.write_all(contents).unwrap();
+    }
+    writer.finish().unwrap();
+}

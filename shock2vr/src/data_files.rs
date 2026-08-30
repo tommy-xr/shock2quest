@@ -147,15 +147,10 @@ mod tests {
 
     /// Write a stand-in for the 25AE archive holding `entries`.
     fn write_archive(root: &Path, entries: &[(&str, &[u8])]) {
-        let file = std::fs::File::create(root.join(crate::install::ANNIVERSARY_SENTINEL)).unwrap();
-        let mut writer = zip::ZipWriter::new(file);
-        for (name, contents) in entries {
-            writer
-                .start_file(*name, zip::write::FileOptions::default())
-                .unwrap();
-            writer.write_all(contents).unwrap();
-        }
-        writer.finish().unwrap();
+        crate::test_support::write_archive(
+            &root.join(crate::install::ANNIVERSARY_SENTINEL),
+            entries,
+        );
     }
 
     fn read(root: &Path, name: &str) -> Option<Vec<u8>> {
