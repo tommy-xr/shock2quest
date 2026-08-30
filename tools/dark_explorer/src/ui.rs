@@ -1406,7 +1406,7 @@ impl ExplorerApp {
                         .values()
                         .filter(|a| a.name.to_ascii_lowercase().contains(&needle))
                         .collect();
-                    matches.sort_by_key(|a| a.name.to_ascii_lowercase());
+                    matches.sort_by_key(|a| (a.name.to_ascii_lowercase(), a.template_id));
                     for archetype in &matches {
                         let is_selected = selected == Some(archetype.template_id);
                         if ui.selectable_label(is_selected, &archetype.name).clicked() {

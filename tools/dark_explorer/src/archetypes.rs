@@ -326,10 +326,11 @@ fn load_impl() -> Result<ArchetypeDb, String> {
             .unwrap_or_else(|| format!("Template {id}"))
             .to_ascii_lowercase()
     };
+    // Tie-break same-named templates on id so tree order is reproducible.
     for siblings in children.values_mut() {
-        siblings.sort_by_key(name_of);
+        siblings.sort_by_key(|id| (name_of(id), *id));
     }
-    roots.sort_by_key(name_of);
+    roots.sort_by_key(|id| (name_of(id), *id));
 
     let motion_db = quiet_catch(|| {
         let mut reader = shock2vr::data_files::open_data_file("motiondb.bin")
