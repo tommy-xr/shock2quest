@@ -1017,6 +1017,14 @@ fn create_physics_representation_with_options(
         dimensions.y.abs().max(min_size_vec.y),
         dimensions.z.abs().max(min_size_vec.z),
     );
+    // Model bounds are not centred on the object's origin - a skinned corpse
+    // lies away from its root joint - so the selection box has to be carried
+    // to the bounds' centre, or it covers empty space beside the mesh.
+    let model_bounds_center = maybe_model
+        .as_ref()
+        .and_then(|model| model.bounding_box())
+        .map(|bbox| bbox.min.to_vec() + (bbox.max - bbox.min) / 2.0)
+        .unwrap_or_else(Vector3::zero);
 
     let dynamics_options = if let Ok(phys_attr) = v_phys_attr.get(entity_id) {
         DynamicPhysicsOptions {
@@ -1214,7 +1222,7 @@ fn create_physics_representation_with_options(
             physics.add_interaction_cuboid(
                 rigid_body_handle,
                 entity_id,
-                Vector3::zero(),
+                model_bounds_center,
                 abs_dimensions,
                 frob_group,
             );
@@ -1249,7 +1257,7 @@ fn create_physics_representation_with_options(
                 entity_id,
                 pos.position,
                 qrotation,
-                Vector3::zero(),
+                model_bounds_center,
                 abs_dimensions,
                 // TODO: Kinematic experiment
                 //is_sensor,
@@ -1973,6 +1981,38 @@ mod tests {
             );
         }
         entity_id
+    }
+
+    /// The selection collider has to cover the *mesh*, wherever the mesh sits
+    /// relative to the object's origin. A skinned corpse's bounds lie a body
+    /// length away from its root joint, so an origin-centred box misses it.
+    ///
+    /// Negative-first: before the fix the collider was always centred on the
+    /// object's position.
+    #[test]
+    fn a_frob_collider_is_centred_on_the_model_bounds() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = add_wall_fixture(&mut world, None);
+        // Bounds offset 3 units along +x, as a lying corpse's are from its
+        // root joint.
+        let model = Model::from_glb(
+            vec![],
+            Aabb3::new(Point3::new(2.0, -0.5, -0.5), Point3::new(4.0, 0.5, 0.5)),
+            None,
+        );
+
+        create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+            .expect("a frobbable fixture should always get a frob collider");
+
+        let aabb = physics
+            .get_aabb2(entity_id)
+            .expect("the frob collider has bounds");
+        let center = aabb.min + (aabb.max - aabb.min) / 2.0;
+        assert!(
+            (center.x - 3.0).abs() < 0.01,
+            "collider should sit at the model bounds centre, got {center:?}"
+        );
     }
 
     /// A frobbable fixture's collider comes from its model bounding box, not
