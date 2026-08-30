@@ -77,6 +77,15 @@ pub enum GlobalEffect {
         name: String,
     },
 
+    /// Play `video` full-screen, replacing whatever scene is active, and
+    /// dispatch `then` once it finishes (defaulting to the main menu). The name
+    /// is resolved by `scenes::resolve_cutscene_path`; a video that cannot be
+    /// opened is skipped straight to `then` rather than stranding the player.
+    PlayCutscene {
+        video: String,
+        then: Option<Box<GlobalEffect>>,
+    },
+
     /// Play the retail ending and enter the campaign's terminal state.
     CompleteCampaign,
 

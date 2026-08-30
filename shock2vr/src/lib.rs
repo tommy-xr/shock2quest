@@ -1827,29 +1827,52 @@ impl Game {
             GlobalEffect::PlayerHit { damage } => {
                 self.hit_feedback.trigger(damage);
             }
+            GlobalEffect::PlayCutscene { video, then } => {
+                // A scene swap like the frontend ones: no ledger write-back, and
+                // any pending transition is abandoned.
+                self.pending_transition = None;
+                let follow_on = then.map_or(GlobalEffect::ShowMainMenu, |effect| *effect);
+                let path_string = scenes::resolve_cutscene_path(&video)
+                    .to_string_lossy()
+                    .into_owned();
+                match CutscenePlayerScene::new(
+                    video.clone(),
+                    path_string.clone(),
+                    follow_on.clone(),
+                    &mut self.audio_context,
+                ) {
+                    Ok(cutscene) => self.set_active_scene(Box::new(cutscene)),
+                    Err(error) => {
+                        // An install missing a movie must not strand the player
+                        // on the scene the cutscene was replacing.
+                        warn!(
+                            "Failed to initialize cutscene '{}' from '{}': {} - skipping it",
+                            video, path_string, error
+                        );
+                        self.handle_global_effect(follow_on);
+                    }
+                }
+            }
             GlobalEffect::CompleteCampaign => {
                 // Preserve the destroyed head and the rest of the finale state
                 // in the in-memory mission ledger before the cutscene replaces
                 // the active world.
                 self.save_active_scene();
 
-                let (cutscene_name, cutscene_path) = resolve_ending_cutscene();
-                let path_string = cutscene_path.to_string_lossy().into_owned();
-                let cutscene = CutscenePlayerScene::new(
-                    cutscene_name.clone(),
-                    path_string.clone(),
-                    &mut self.audio_context,
-                )
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "Failed to initialize ending cutscene '{}' from '{}': {}",
-                        cutscene_name, path_string, error
-                    )
-                });
+                let ending_name = resolve_ending_cutscene();
+                let after_ending = match scenes::resolve_credits_cutscene() {
+                    Some(credits_name) => GlobalEffect::PlayCutscene {
+                        video: credits_name,
+                        then: Some(Box::new(GlobalEffect::ShowMainMenu)),
+                    },
+                    None => GlobalEffect::ShowMainMenu,
+                };
 
-                self.pending_transition = None;
-                self.set_active_scene(Box::new(cutscene));
                 self.campaign_completed = true;
+                self.handle_global_effect(GlobalEffect::PlayCutscene {
+                    video: ending_name,
+                    then: Some(Box::new(after_ending)),
+                });
             }
             GlobalEffect::Quit => {
                 self.should_quit = true;

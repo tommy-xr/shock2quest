@@ -16,6 +16,7 @@ use crate::{
     },
     paths,
     save_load::{EntitySaveData, HeldItemSaveData, SaveData},
+    scripts::GlobalEffect,
 };
 
 pub mod cutscene_player;
@@ -110,7 +111,12 @@ pub struct SceneInitResult {
     pub mission_save_data: HashMap<String, EntitySaveData>,
 }
 
+// Movie names are not present in the mission or gamesys data - the original
+// picked them in its engine/game-script code - so the finale's videos are named
+// here.
 const ENDING_CUTSCENE_CANDIDATES: &[&str] = &["enhanced/cs3.ogv", "cs3.avi", "cs3.ogv"];
+const CREDITS_CUTSCENE_CANDIDATES: &[&str] =
+    &["enhanced/credits.ogv", "credits.avi", "credits.ogv"];
 const ANNIVERSARY_CUTSCENE_LAYERS: &[&str] = &["enhanced", "original", "kex"];
 
 /// How a debug scene is built. Every entry in [`DEBUG_SCENES`] has this shape,
@@ -217,6 +223,7 @@ pub fn create_initial_scene(
         let cutscene = CutscenePlayerScene::new(
             mission_name.clone(),
             cutscene_path_string.clone(),
+            GlobalEffect::ShowMainMenu,
             audio_context,
         )
         .unwrap_or_else(|err| {
@@ -464,16 +471,23 @@ fn find_file_ignoring_ascii_case(path: &Path) -> Option<PathBuf> {
 
 /// Resolve the retail ending for both 25th Anniversary (`enhanced/cs3.ogv`)
 /// and classic (`cs3.avi`) installs.
-pub(crate) fn resolve_ending_cutscene() -> (String, PathBuf) {
-    ENDING_CUTSCENE_CANDIDATES
+pub(crate) fn resolve_ending_cutscene() -> String {
+    first_present_cutscene(ENDING_CUTSCENE_CANDIDATES)
+        .map(|(name, _)| name)
+        .unwrap_or_else(|| ENDING_CUTSCENE_CANDIDATES[0].to_string())
+}
+
+/// The credits roll that follows the ending, or `None` on an install that ships
+/// without one (the finale then returns straight to the menu).
+pub(crate) fn resolve_credits_cutscene() -> Option<String> {
+    first_present_cutscene(CREDITS_CUTSCENE_CANDIDATES).map(|(name, _)| name)
+}
+
+fn first_present_cutscene(candidates: &[&str]) -> Option<(String, PathBuf)> {
+    candidates
         .iter()
         .map(|name| ((*name).to_string(), resolve_cutscene_path(name)))
         .find(|(_, path)| path.is_file())
-        .unwrap_or_else(|| {
-            let name = ENDING_CUTSCENE_CANDIDATES[0].to_string();
-            let path = resolve_cutscene_path(&name);
-            (name, path)
-        })
 }
 
 #[cfg(test)]

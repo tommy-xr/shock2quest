@@ -23,6 +23,7 @@ pub struct VideoPlayer {
     decoder: ffmpeg::decoder::Video,
     scaler: ffmpeg::software::scaling::Context,
     sent_eof: bool,
+    frames_exhausted: bool,
 }
 
 impl VideoPlayer {
@@ -86,6 +87,7 @@ impl VideoPlayer {
             decoder,
             scaler,
             sent_eof: false,
+            frames_exhausted: false,
         };
         if !player.decode_next_frame()? {
             return Err(ffmpeg::Error::InvalidData);
@@ -136,9 +138,13 @@ impl VideoPlayer {
         while self.current_frame_index < target_frame_index {
             match self.decode_next_frame() {
                 Ok(true) => self.current_frame_index += 1,
-                Ok(false) => break,
+                Ok(false) => {
+                    self.frames_exhausted = true;
+                    break;
+                }
                 Err(error) => {
                     eprintln!("cutscene video decode failed: {error}");
+                    self.frames_exhausted = true;
                     break;
                 }
             }
@@ -147,6 +153,19 @@ impl VideoPlayer {
 
     pub fn get_current_frame(&self) -> RawTextureData {
         self.current_frame.clone()
+    }
+
+    /// Playback length of the video stream. Zero when neither the stream nor
+    /// the container reported one.
+    pub fn duration(&self) -> Duration {
+        self.duration
+    }
+
+    /// True once playback has reached the end: either the timeline caught up
+    /// with the reported duration, or the decoder drained (which is the only
+    /// signal available for a stream that reports no duration).
+    pub fn is_finished(&self) -> bool {
+        self.frames_exhausted || (!self.duration.is_zero() && self.current_time >= self.duration)
     }
 }
 
@@ -203,6 +222,38 @@ mod tests {
             assert!(
                 retained_frame_bytes(&player) <= one_rgb_frame,
                 "reaching EOF in {fixture_name} retained prior decoded frames"
+            );
+        }
+    }
+
+    #[test]
+    fn playback_is_finished_only_once_the_video_ends() {
+        crate::init().unwrap();
+        let testdata = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+
+        for fixture_name in ["streaming-test.avi", "streaming-test.ogv"] {
+            let fixture = testdata.join(fixture_name);
+            let mut player = VideoPlayer::from_filename(fixture.to_str().unwrap()).unwrap();
+
+            assert!(
+                !player.duration().is_zero(),
+                "{fixture_name} should report a duration"
+            );
+            assert!(
+                !player.is_finished(),
+                "{fixture_name} should not be finished before it plays"
+            );
+
+            player.advance_by_time(player.duration() / 2);
+            assert!(
+                !player.is_finished(),
+                "{fixture_name} should not be finished halfway through"
+            );
+
+            player.advance_by_time(player.duration());
+            assert!(
+                player.is_finished(),
+                "{fixture_name} should be finished after its duration elapses"
             );
         }
     }
