@@ -55,6 +55,10 @@ enum Commands {
         #[arg(long)]
         search: Option<String>,
 
+        /// Open the Files tab in grid (thumbnail) view
+        #[arg(long)]
+        grid: bool,
+
         /// Start the 3D model preview with the skeleton overlay on
         #[arg(long)]
         skeletons: bool,
@@ -204,6 +208,7 @@ fn main() {
             screenshot,
             select,
             search,
+            grid,
             skeletons,
             hitboxes,
             archetype,
@@ -213,6 +218,7 @@ fn main() {
             screenshot,
             select,
             search,
+            grid,
             skeletons,
             hitboxes,
             archetype,
