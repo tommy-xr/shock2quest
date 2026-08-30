@@ -65,7 +65,22 @@ interaction, deterministic fixed-timestep), assembles the GIF, hosts the
 binaries in a gist, and embeds them in the PR body. Run the capture in a
 subagent when the active agent supports delegation; otherwise run it inline.
 
-### 5. Token-Efficient Tool Output
+### 5. Save Compatibility Is Not a Concern Before v1
+
+**Do not spend effort keeping pre-existing save files working.** Until v1 ships,
+a change is free to add a property, rename a field, or alter the serialized
+shape without a migration, and "this breaks saves made before this commit" is
+not a valid review finding. Re-saving is the expected fix.
+
+This specifically covers the `restore_missing_component!` backfill list in
+`shock2vr/src/mission/entity_populator/save_file_entity_populator.rs`: a newly
+parsed property does **not** need an entry there just because old saves predate
+it. Add one only when a save in active use would otherwise break.
+
+Saves must still round-trip correctly *within* a build — a save written by the
+current code must load in the current code.
+
+### 6. Token-Efficient Tool Output
 
 A 30-day audit of agent sessions (the `audit-our-commands` skill) showed most
 tool-result tokens go to *reading habits*, not to game tooling — `sed`-paging

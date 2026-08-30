@@ -37,6 +37,9 @@ pub(crate) fn is_hud_selectable(world: &World, entity_id: EntityId) -> bool {
 
 const LOG_UNSET: u32 = 33;
 
+/// Side of each corner-bracket glyph, in screen pixels.
+const BRACKET_SIZE: f32 = 8.0;
+
 fn resolve_localized_property_string(raw: &str, strings: &HashMap<String, String>) -> String {
     let (key, fallback) = match raw.split_once(':') {
         Some((key, remainder)) => {
@@ -231,14 +234,16 @@ pub fn draw_item_name(
     let text_content = format_hover_label(&item_name, hit_points, debug_identity);
 
     // Below the brackets, as the original draws it: the strip directly above
-    // the rect belongs to the health bar (`draw_health_bar`).
+    // the rect belongs to the health bar (`draw_health_bar`). Cleared by a
+    // full bracket glyph, since the text anchors on its top edge and the
+    // bottom brackets hang below the rect.
     let text_obj_0_0 = SceneObject::screen_space_text(
         &text_content,
         font.clone(),
         10.0,
         0.5,
         extents.min.x,
-        extents.max.y + 4.0,
+        extents.max.y + BRACKET_SIZE,
     );
 
     vec![text_obj_0_0]
@@ -479,7 +484,7 @@ mod tests {
 /// The original biases the health ratio by a couple of points at both ends, so
 /// a creature on its last hit point still shows a sliver of bar rather than
 /// nothing, and a full pool always reads as exactly full.
-const HP_BUFFER: i32 = 2;
+const HP_BUFFER: f32 = 2.0;
 /// Three bar bitmaps, `HPBAR0` (red) through `HPBAR2` (green).
 const HP_BAR_COUNT: i32 = 3;
 /// Authored size of the bar bitmaps, in canvas pixels.
@@ -491,7 +496,7 @@ fn health_bar_ratio(hit_points: i32, max_hit_points: u32) -> f32 {
     if hit_points <= 0 || max_hit_points == 0 {
         return 0.0;
     }
-    ((hit_points + HP_BUFFER) as f32 / (max_hit_points as i32 + HP_BUFFER) as f32).clamp(0.0, 1.0)
+    ((hit_points as f32 + HP_BUFFER) / (max_hit_points as f32 + HP_BUFFER)).clamp(0.0, 1.0)
 }
 
 /// Colour is quantized where width is not: the bar is one of three bitmaps
@@ -562,8 +567,13 @@ pub fn draw_health_bar(
     };
     let extents = project_aabb3(&aabb, view, projection, screen_size);
 
+    // Nearest sampling, unlike the rest of the HUD: the remastered bar art is
+    // several times the 80x14 it draws at and carries a pure colour-key border,
+    // so linear minification blends key into art and leaves a teal fringe along
+    // the bar's top and bottom edges that the shader's key test cannot catch.
     let options = TextureOptions {
         wrap: false,
+        filter: engine::texture::TextureFilter::Nearest,
         ..Default::default()
     };
     let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, health_bar_texture(ratio), &options);
@@ -606,7 +616,7 @@ pub fn draw_item_outline(
     let bottom_right_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK2.PCX", &options);
     let bottom_left_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK3.PCX", &options);
 
-    let size = vec2(8.0, 8.0);
+    let size = vec2(BRACKET_SIZE, BRACKET_SIZE);
     let extents = project_aabb3(&aabb, view, projection, screen_size);
     let top_left_brack_obj =
         SceneObject::screen_space_quad(top_left_brack, vec2(extents.min.x, extents.min.y), size);

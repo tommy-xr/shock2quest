@@ -3513,6 +3513,7 @@ impl MissionCore {
                                         // palette index 0 (the magenta color
                                         // key only covers some of them).
                                         transparent_index_0: true,
+                                        ..Default::default()
                                     },
                                 ) {
                                     system = system
@@ -5314,9 +5315,13 @@ impl MissionCore {
                                 });
                             }
                         }
-                        // Show the overlay on anything the player just hurt.
-                        // Gated on the same opt-in the bar itself reads, so
-                        // the map only ever holds creatures.
+                        // Show the overlay on anything that just took damage -
+                        // this is the one applier every source of damage flows
+                        // through, so an AI burned by a fire or shot by a
+                        // turret flashes too, not only the player's own hits.
+                        // Narrowed to the bar's own opt-in, which the original
+                        // does not do: it keeps the map to creatures, and an
+                        // object with no bar to show has nothing to reveal.
                         if entity_id != player_entity
                             && hp < previous
                             && crate::hud::shows_hit_points(&self.world, entity_id)
@@ -7945,15 +7950,24 @@ impl MissionCore {
         // is most needed for exactly the fixtures the gate excludes - so the
         // debug overlay deliberately bypasses it.
         let mut highlighted = self.interaction.highlighted_entities();
-        if !options.debug_show_ids {
-            highlighted.retain(|e| is_hud_selectable(&self.world, *e));
-        }
         // Recently-damaged creatures show the same overlay without being
         // looked at, so a shot that lands off to the side still reads.
+        //
+        // Visibility is the load-bearing gate here, not decoration: the
+        // reticle pick is a raycast and so is always unoccluded and in front
+        // of the camera, but a damaged entity is any entity - one behind the
+        // player projects to a mirrored on-screen position, and one through a
+        // wall would advertise its health through the geometry.
         for flashed in self.damage_flash_entities() {
-            if !highlighted.contains(&flashed) {
+            if self.visibility_engine.is_visible(flashed) && !highlighted.contains(&flashed) {
                 highlighted.push(flashed);
             }
+        }
+        // One gate for the whole overlay, applied to hover and damage alike,
+        // so an entity cannot acquire brackets by being shot that it could
+        // never get by being looked at.
+        if !options.debug_show_ids {
+            highlighted.retain(|e| is_hud_selectable(&self.world, *e));
         }
         for hit_entity in highlighted {
             ret.extend(draw_item_outline(

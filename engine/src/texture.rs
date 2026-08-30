@@ -123,6 +123,17 @@ pub fn bind(texture: &Texture) {
     bind0(texture);
 }
 
+/// How a texture is sampled when it does not map 1:1 to pixels.
+#[derive(Hash, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TextureFilter {
+    /// Blend neighbouring texels. Right for world and scaled-up art.
+    Linear,
+    /// Snap to the nearest texel. Right for colour-keyed HUD bitmaps drawn
+    /// minified: blending across the key boundary turns it into a visible
+    /// fringe that no colour-key test can then recognize.
+    Nearest,
+}
+
 #[derive(Hash)]
 pub struct TextureOptions {
     pub wrap: bool,
@@ -130,6 +141,7 @@ pub struct TextureOptions {
     /// (PCX). Dark bitmap sprites (particles) are keyed this way; wall/UI
     /// textures are not, so this is opt-in.
     pub transparent_index_0: bool,
+    pub filter: TextureFilter,
 }
 
 impl Default for TextureOptions {
@@ -137,6 +149,7 @@ impl Default for TextureOptions {
         TextureOptions {
             wrap: true,
             transparent_index_0: false,
+            filter: TextureFilter::Linear,
         }
     }
 }
@@ -163,8 +176,12 @@ pub fn init_from_memory2(raw_texture_data: RawTextureData, options: &TextureOpti
         // gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
 
         // set texture filtering parameters
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+        let filter = match options.filter {
+            TextureFilter::Linear => gl::LINEAR,
+            TextureFilter::Nearest => gl::NEAREST,
+        };
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, filter as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, filter as i32);
     }
 
     let pixel_format = match raw_texture_data.format {

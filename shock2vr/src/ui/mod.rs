@@ -879,20 +879,13 @@ impl UiCanvas<()> {
     }
 }
 
-/// Replicate `SceneObject::screen_space_quad`'s transform so a manually-built
-/// screen-space object (e.g. the clipped bar material) maps to the same pixels.
-fn screen_space_quad_transform(position: Vector2<f32>, size: Vector2<f32>) -> Matrix4<f32> {
-    Matrix4::from_translation(vec3(position.x, position.y, 0.0))
-        * Matrix4::from_nonuniform_scale(size.x, size.y, 1.0)
-        * Matrix4::from_translation(vec3(0.5, 0.5, 0.0))
-}
-
 /// How a `kind`'s art is sampled. Shared so layout and the presenters key the
 /// asset cache the same way.
 fn texture_options(kind: ImageKind) -> TextureOptions {
     TextureOptions {
         wrap: false,
         transparent_index_0: kind.transparent_index_0(),
+        ..Default::default()
     }
 }
 
@@ -1007,16 +1000,12 @@ fn present_screen(
         PlacedContent::Bar { texture, fill } => {
             let texture =
                 asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options(ImageKind::Ui));
-            let material = engine::scene::clipped_screen_material::create_screen_space(
+            SceneObject::screen_space_clipped_quad(
                 texture.clone() as Rc<dyn TextureTrait>,
-                *fill,
-            );
-            let mut object = SceneObject::new(material, Box::new(engine::scene::quad::create()));
-            object.set_local_transform(screen_space_quad_transform(
                 vec2(rect.x, rect.y),
                 vec2(rect.w, rect.h),
-            ));
-            object
+                *fill,
+            )
         }
         PlacedContent::Text { text, font, .. } => {
             let font_obj = resolve_font(asset_cache, font);
