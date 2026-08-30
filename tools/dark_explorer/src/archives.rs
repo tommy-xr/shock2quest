@@ -1,6 +1,10 @@
 //! Raw archive access for the Archives tab: the full contents of every
 //! KPF/CRF on disk, read straight from the zip rather than through the game's
 //! mount stack (so entries the game never mounts are visible too).
+//!
+//! Not `ZipAssetPath`: that mounts one prefix-scoped family and panics on an
+//! archive it cannot read, where this browses whole archives and reports a
+//! failure as a label.
 
 use std::path::{Path, PathBuf};
 
@@ -40,12 +44,20 @@ pub fn list_entries(path: &Path) -> Result<Vec<String>, String> {
     let mut archive =
         zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|err| err.to_string())?;
     let mut entries = Vec::with_capacity(archive.len());
+    // One malformed entry must not cost the whole listing. `enclosed_name`
+    // normalizes the path (and drops anything escaping the archive), matching
+    // how the mount index keys entry names.
     for index in 0..archive.len() {
-        let file = archive.by_index(index).map_err(|err| err.to_string())?;
+        let Ok(file) = archive.by_index(index) else {
+            continue;
+        };
         if file.is_dir() {
             continue;
         }
-        entries.push(file.name().to_string());
+        let Some(name) = file.enclosed_name() else {
+            continue;
+        };
+        entries.push(name.to_string_lossy().into_owned());
     }
     entries.sort();
     Ok(entries)

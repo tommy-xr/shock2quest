@@ -207,11 +207,13 @@ enum PreviewOrigin {
         shadowed: Vec<AssetEntry>,
     },
     /// Archives tab: read straight out of one archive, with the mount key the
-    /// game serves it as (none when the game does not mount it at all).
+    /// game serves it as (none when the game does not mount it at all) and,
+    /// for a shadowed copy, the archive a lookup would read instead.
     Archive {
         archive: String,
         entry_name: String,
         mounted_as: Option<(String, String)>,
+        shadowed_by: Option<String>,
     },
 }
 
@@ -314,6 +316,9 @@ struct ArchiveRow {
 #[derive(Default)]
 struct MountIndex {
     served: std::collections::HashMap<(String, String), (String, String)>,
+    /// Which archive a lookup of (family, key) actually reads, so a shadowed
+    /// copy can say so: (family, key) -> archive path (original case).
+    winners: std::collections::HashMap<(String, String), String>,
     /// Archive paths (lowercased) in mount-priority order.
     order: Vec<String>,
 }
@@ -422,12 +427,12 @@ impl ExplorerApp {
                 std::process::exit(2);
             };
             match app.resolve_archive_entry(archive, entry) {
-                Some(name) => {
+                Ok(name) => {
                     app.tab = Tab::Archives;
                     app.select_archive_entry(archive.to_string(), name);
                 }
-                None => {
-                    eprintln!("--select-entry: no entry '{entry}' in archive '{archive}'");
+                Err(err) => {
+                    eprintln!("--select-entry: {err}");
                     std::process::exit(2);
                 }
             }
@@ -436,23 +441,26 @@ impl ExplorerApp {
     }
 
     /// The real (case-preserving) entry name in `archive`, matched
-    /// case-insensitively; None when the archive or the entry is unknown.
-    fn resolve_archive_entry(&mut self, archive: &str, entry: &str) -> Option<String> {
+    /// case-insensitively. Err says which of the three ways it failed:
+    /// unknown archive, unreadable archive, or no such entry.
+    fn resolve_archive_entry(&mut self, archive: &str, entry: &str) -> Result<String, String> {
         self.ensure_archives();
-        let index = self
-            .archives
-            .as_ref()?
+        let archives = self.archives.as_ref().expect("just built");
+        let index = archives
             .iter()
-            .position(|a| a.display == archive)?;
+            .position(|a| a.display == archive)
+            .ok_or_else(|| format!("no archive '{archive}' under the data root"))?;
         self.ensure_listing(index);
         let needle = entry.to_ascii_lowercase();
-        match &self.archives.as_ref()?[index].listing {
+        match &self.archives.as_ref().expect("just built")[index].listing {
             Some(Ok(listing)) => listing
                 .entries
                 .iter()
                 .find(|row| row.name.to_ascii_lowercase() == needle)
-                .map(|row| row.name.clone()),
-            _ => None,
+                .map(|row| row.name.clone())
+                .ok_or_else(|| format!("no entry '{entry}' in archive '{archive}'")),
+            Some(Err(err)) => Err(format!("cannot read archive '{archive}': {err}")),
+            None => unreachable!("the listing was just ensured"),
         }
     }
 
@@ -475,7 +483,8 @@ impl ExplorerApp {
 
     /// Index what the game's mount stack actually serves, so the Archives tab
     /// can tell a mounted entry from one the game never looks at. Enumerating
-    /// every family indexes every mounted archive, so this is built once.
+    /// every family indexes every mounted archive - the first Archives-tab
+    /// open pays for loading all of them - so this is built once.
     fn ensure_mount_index(&mut self) {
         if self.mount_index.is_some() {
             return;
@@ -494,12 +503,20 @@ impl ExplorerApp {
                     .served
                     .entry((source, entry.entry_name.to_ascii_lowercase()))
                     .or_insert_with(|| (family.to_string(), entry.key.clone()));
+                // Mount order: the first archive serving a key is the one a
+                // lookup reads it from.
+                index
+                    .winners
+                    .entry((family.to_string(), entry.key.clone()))
+                    .or_insert_with(|| entry.source.clone());
             }
         }
         self.mount_index = Some(index);
     }
 
-    /// The archives on disk, mounted ones first in mount-priority order.
+    /// The archives on disk, mounted ones first in mount-priority order -
+    /// which is the order the mount index first saw them in, so it needs no
+    /// separate list of the game's archives.
     fn ensure_archives(&mut self) {
         if self.archives.is_some() {
             return;
@@ -573,17 +590,25 @@ impl ExplorerApp {
             return;
         };
         let source = path.to_string_lossy().to_ascii_lowercase();
-        let mounted_as = self.mount_index.as_ref().and_then(|index| {
+        let index = self.mount_index.as_ref();
+        let mounted_as = index.and_then(|index| {
             index
                 .served
-                .get(&(source, entry_name.to_ascii_lowercase()))
+                .get(&(source.clone(), entry_name.to_ascii_lowercase()))
                 .cloned()
+        });
+        // A shadowed copy: the mount stack would read this key from another
+        // archive, which is what a model preview renders.
+        let shadowed_by = mounted_as.as_ref().and_then(|key| {
+            let winner = index?.winners.get(key)?;
+            (winner.to_ascii_lowercase() != source).then(|| explorer::short_source(winner))
         });
         self.preview = Some(build_archive_preview(
             &path,
             &archive,
             &entry_name,
             mounted_as,
+            shadowed_by,
         ));
         self.selected_entry = Some((archive, entry_name));
         self.scroll_frames = 3;
@@ -639,11 +664,13 @@ fn build_archive_preview(
     archive: &str,
     entry_name: &str,
     mounted_as: Option<(String, String)>,
+    shadowed_by: Option<String>,
 ) -> Preview {
     let origin = PreviewOrigin::Archive {
         archive: archive.to_string(),
         entry_name: entry_name.to_string(),
         mounted_as: mounted_as.clone(),
+        shadowed_by,
     };
     let bytes = match archives::read_entry(archive_path, entry_name) {
         Ok(bytes) => bytes,
@@ -855,11 +882,17 @@ impl eframe::App for ExplorerApp {
             .default_size(380.0)
             .show(ui, |ui| {
                 ui.add_space(4.0);
+                let previous_tab = self.tab;
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.tab, Tab::Files, "Files");
                     ui.selectable_value(&mut self.tab, Tab::Archetypes, "Archetypes");
                     ui.selectable_value(&mut self.tab, Tab::Archives, "Archives");
                 });
+                // The preview belongs to the tab that selected it; a Files
+                // asset must not keep showing under the Archives tab.
+                if self.tab != previous_tab {
+                    self.preview = None;
+                }
                 ui.separator();
                 match self.tab {
                     Tab::Files => {
@@ -944,7 +977,8 @@ impl ExplorerApp {
                     family,
                     "",
                     &loaded.tree,
-                    &loaded.entries,
+                    // A family tree lists only what the game mounts.
+                    &|index| (loaded.entries[index].key.clone(), true),
                     selected_key.as_deref(),
                     scroll_to_selected,
                     clicked,
@@ -965,26 +999,7 @@ impl ExplorerApp {
         let Some((_, rows, total)) = &self.search_results else {
             return;
         };
-        for (family, key) in rows {
-            let is_selected = selected
-                .as_ref()
-                .is_some_and(|(f, k)| f == family && k == key);
-            if ui
-                .selectable_label(is_selected, format!("{family}/{key}"))
-                .clicked()
-            {
-                *clicked = Some((family.clone(), key.clone()));
-            }
-        }
-        if *total > rows.len() {
-            ui.label(format!(
-                "... {} more matches (narrow the search)",
-                total - rows.len()
-            ));
-        }
-        if *total == 0 {
-            ui.label("no matches");
-        }
+        show_flat_results(ui, rows, *total, '/', selected.as_ref(), clicked);
     }
 
     /// Scan every family for keys containing `needle` that pass `keep`,
@@ -1224,12 +1239,15 @@ impl ExplorerApp {
                                 .map(|(_, e)| e.clone());
                             let archive = &self.archives.as_ref().expect("built")[index];
                             match &archive.listing {
-                                Some(Ok(listing)) => show_archive_dir(
+                                Some(Ok(listing)) => show_dir(
                                     ui,
                                     &display,
                                     "",
                                     &listing.tree,
-                                    &listing.entries,
+                                    &|index| {
+                                        let row = &listing.entries[index];
+                                        (row.name.clone(), row.mounted_as.is_some())
+                                    },
                                     selected_entry.as_deref(),
                                     scroll_to_selected,
                                     clicked,
@@ -1279,26 +1297,7 @@ impl ExplorerApp {
         let Some((_, rows, total)) = &self.archive_results else {
             return;
         };
-        for (archive, entry) in rows {
-            let is_selected = selected
-                .as_ref()
-                .is_some_and(|(a, e)| a == archive && e == entry);
-            if ui
-                .selectable_label(is_selected, format!("{archive}:{entry}"))
-                .clicked()
-            {
-                *clicked = Some((archive.clone(), entry.clone()));
-            }
-        }
-        if *total > rows.len() {
-            ui.label(format!(
-                "... {} more matches (narrow the search)",
-                total - rows.len()
-            ));
-        }
-        if *total == 0 {
-            ui.label("no matches");
-        }
+        show_flat_results(ui, rows, *total, ':', selected.as_ref(), clicked);
     }
 
     /// Left panel, Archetypes tab: search box + creature template tree (or a
@@ -1495,6 +1494,7 @@ impl ExplorerApp {
                     archive,
                     entry_name,
                     mounted_as,
+                    shadowed_by,
                 } => {
                     ui.label("Archive");
                     ui.label(archive);
@@ -1511,6 +1511,14 @@ impl ExplorerApp {
                         None => ui.label("not mounted by the game"),
                     };
                     ui.end_row();
+                    // The model preview resolves through the mount stack, so a
+                    // shadowed copy shows the winner's model, not this file's.
+                    if let (Some(winner), PreviewKind::Model { .. }) = (shadowed_by, &preview.kind)
+                    {
+                        ui.label("Model preview");
+                        ui.label(format!("shows the winning copy from {winner}"));
+                        ui.end_row();
+                    }
                 }
             });
         ui.separator();
@@ -1714,74 +1722,50 @@ fn show_archetype_node(
     }
 }
 
-/// One directory level of an archive's raw entry tree. Entries (and whole
-/// directories) the game's mounts do not serve render in the weak text color.
-#[allow(clippy::too_many_arguments)]
-fn show_archive_dir(
+/// The flat rows a search view shows: "<scope><separator><name>", selectable,
+/// with the "more matches" / "no matches" footer.
+fn show_flat_results(
     ui: &mut egui::Ui,
-    archive: &str,
-    path: &str,
-    node: &DirNode,
-    entries: &[ArchiveRow],
-    selected_entry: Option<&str>,
-    scroll_to_selected: bool,
+    rows: &[(String, String)],
+    total: usize,
+    separator: char,
+    selected: Option<&(String, String)>,
     clicked: &mut Option<(String, String)>,
 ) {
-    for (name, child) in &node.dirs {
-        let child_path = if path.is_empty() {
-            name.clone()
-        } else {
-            format!("{path}/{name}")
-        };
-        let is_ancestor =
-            selected_entry.is_some_and(|entry| entry.starts_with(&format!("{child_path}/")));
-        let title = if child.any_mounted {
-            egui::RichText::new(name)
-        } else {
-            egui::RichText::new(name).weak()
-        };
-        egui::CollapsingHeader::new(title)
-            .id_salt(&child_path)
-            .default_open(is_ancestor)
-            .show(ui, |ui| {
-                show_archive_dir(
-                    ui,
-                    archive,
-                    &child_path,
-                    child,
-                    entries,
-                    selected_entry,
-                    scroll_to_selected,
-                    clicked,
-                );
-            });
+    for row in rows {
+        let is_selected = selected == Some(row);
+        let (scope, name) = row;
+        if ui
+            .selectable_label(is_selected, format!("{scope}{separator}{name}"))
+            .clicked()
+        {
+            *clicked = Some(row.clone());
+        }
     }
-    for (name, index) in &node.files {
-        let row = &entries[*index];
-        let is_selected = selected_entry == Some(row.name.as_str());
-        let label = if row.mounted_as.is_some() {
-            egui::RichText::new(name)
-        } else {
-            egui::RichText::new(name).weak()
-        };
-        let response = ui.selectable_label(is_selected, label);
-        if is_selected && scroll_to_selected {
-            response.scroll_to_me(Some(egui::Align::Center));
-        }
-        if response.clicked() {
-            *clicked = Some((archive.to_string(), row.name.clone()));
-        }
+    if total > rows.len() {
+        ui.label(format!(
+            "... {} more matches (narrow the search)",
+            total - rows.len()
+        ));
+    }
+    if total == 0 {
+        ui.label("no matches");
     }
 }
 
+/// One directory level of a file tree: subdirectory headers then selectable
+/// files. `row` maps a file index to its full path and whether the game mounts
+/// it - an unmounted file (and a directory holding only unmounted files) draws
+/// in the weak text color, which is how the Archives tab shows what the game
+/// ignores. A click reports (`root`, full path).
 #[allow(clippy::too_many_arguments)]
 fn show_dir(
     ui: &mut egui::Ui,
-    family: &str,
+    root: &str,
     path: &str,
     node: &DirNode,
-    entries: &[AssetEntry],
-    selected_key: Option<&str>,
+    row: &dyn Fn(usize) -> (String, bool),
+    selected: Option<&str>,
     scroll_to_selected: bool,
     clicked: &mut Option<(String, String)>,
 ) {
@@ -1791,35 +1775,39 @@ fn show_dir(
         } else {
             format!("{path}/{name}")
         };
-        let is_ancestor =
-            selected_key.is_some_and(|key| key.starts_with(&format!("{child_path}/")));
-        egui::CollapsingHeader::new(name)
+        let is_ancestor = selected.is_some_and(|key| key.starts_with(&format!("{child_path}/")));
+        egui::CollapsingHeader::new(dimmable(name, child.any_mounted))
             .id_salt(&child_path)
             .default_open(is_ancestor)
             .show(ui, |ui| {
                 show_dir(
                     ui,
-                    family,
+                    root,
                     &child_path,
                     child,
-                    entries,
-                    selected_key,
+                    row,
+                    selected,
                     scroll_to_selected,
                     clicked,
                 );
             });
     }
     for (name, index) in &node.files {
-        let key = &entries[*index].key;
-        let is_selected = selected_key == Some(key.as_str());
-        let response = ui.selectable_label(is_selected, name);
+        let (full_path, mounted) = row(*index);
+        let is_selected = selected == Some(full_path.as_str());
+        let response = ui.selectable_label(is_selected, dimmable(name, mounted));
         if is_selected && scroll_to_selected {
             response.scroll_to_me(Some(egui::Align::Center));
         }
         if response.clicked() {
-            *clicked = Some((family.to_string(), key.clone()));
+            *clicked = Some((root.to_string(), full_path));
         }
     }
+}
+
+fn dimmable(text: &str, mounted: bool) -> egui::RichText {
+    let text = egui::RichText::new(text);
+    if mounted { text } else { text.weak() }
 }
 
 fn play_wav(
