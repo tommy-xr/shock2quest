@@ -387,6 +387,19 @@ impl Model {
         }
     }
 
+    /// Bias every scene object's depth slightly toward the camera. Set at
+    /// model preparation for flat decal-like meshes placed coplanar with
+    /// world geometry, so they win the depth test instead of z-fighting it.
+    pub fn set_depth_bias(&mut self, enabled: bool) {
+        let objs = match &mut self.inner {
+            InnerModel::Static(m) => &mut m.scene_objects,
+            InnerModel::Animated(m) => &mut m.scene_objects,
+        };
+        for obj in objs {
+            obj.set_depth_bias(enabled);
+        }
+    }
+
     pub fn get_transform(&self) -> Matrix4<f32> {
         self.transform
     }

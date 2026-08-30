@@ -309,6 +309,9 @@ pub struct SceneObjectSummary {
     /// Transparency in effect for this draw (0.0 = opaque, 1.0 = invisible).
     pub transparency: Option<f32>,
     pub depth_write: bool,
+    /// Depth pulled slightly toward the camera on the opaque pass (polygon
+    /// offset) - set for flat decal-like models coplanar with world geometry.
+    pub depth_bias: bool,
     /// Explicit renderer composition layer.
     pub render_layer: String,
     /// Backwards-compatible indication that this object begins a depth-cleared
