@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use dark::{
     EnvSoundQuery,
-    properties::{PropClassTag, PropPosition},
+    properties::{Link, Links, PropClassTag, PropPosition},
 };
 use engine::audio::AudioHandle;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 
 use crate::physics::PhysicsWorld;
 use crate::time::Time;
@@ -18,6 +18,12 @@ use super::{Effect, Message, MessagePayload, Script};
 /// station) so a wobbling hand doesn't re-trigger the charge.
 const CONTACT_RELEASE_SECONDS: f32 = 0.5;
 
+/// How long (seconds) the station's attached `RechargeFX` particle group
+/// plays after a charge. The mission data authors the group as a continuous
+/// emitter with no duration of its own, so the station pulses it: on at each
+/// charge, off when this expires (roughly the activate sound's length).
+const FX_PULSE_SECONDS: f32 = 2.0;
+
 pub struct EnergyStation {
     // VR hover/contact latch: each item currently pressed to the station,
     // keyed per item (both hands can press one item each) with the seconds
@@ -26,12 +32,23 @@ pub struct EnergyStation {
     // frame. Transient proximity state - deliberately not saved: after a load
     // the worst case is one extra charge of an already-full item.
     contacts: HashMap<EntityId, f32>,
+    /// Seconds left on the current RechargeFX pulse; <= 0 means the FX is off.
+    /// Transient like `contacts` - a pulse lost to a save/load is cosmetic.
+    fx_seconds_left: f32,
 }
 impl EnergyStation {
     pub fn new() -> EnergyStation {
         EnergyStation {
             contacts: HashMap::new(),
+            fx_seconds_left: 0.0,
         }
+    }
+
+    /// Start a charge FX pulse on the station's attached particle group (one
+    /// per interaction - a held contact renews the latch, not the pulse).
+    fn begin_fx_pulse(&mut self, world: &World, entity_id: EntityId) -> Effect {
+        self.fx_seconds_left = FX_PULSE_SECONDS;
+        set_attached_fx_active(world, entity_id, true)
     }
 
     /// Charge `with` once per continuous interaction: first contact charges,
@@ -46,30 +63,48 @@ impl EnergyStation {
         if renewed {
             Effect::NoEffect
         } else if other_contact_fresh {
-            recharge_message(with)
+            Effect::combine(vec![
+                recharge_message(with),
+                self.begin_fx_pulse(world, entity_id),
+            ])
         } else {
             Effect::combine(vec![
                 recharge_message(with),
                 activate_sound(world, entity_id),
+                self.begin_fx_pulse(world, entity_id),
             ])
         }
     }
 }
 
 impl Script for EnergyStation {
+    // The mission data authors the FX group `is_active: true` (it would glow
+    // forever) - switch it off until a charge pulses it. Runs fresh and after
+    // every load (the pulse timer is transient), re-normalizing restored state.
+    fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        set_attached_fx_active(world, entity_id, false)
+    }
+
     fn update(
         &mut self,
-        _entity_id: EntityId,
-        _world: &World,
+        entity_id: EntityId,
+        world: &World,
         _physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
+        let dt = time.elapsed.as_secs_f32();
         if !self.contacts.is_empty() {
-            let dt = time.elapsed.as_secs_f32();
             self.contacts.retain(|_, age| {
                 *age += dt;
                 *age <= CONTACT_RELEASE_SECONDS
             });
+        }
+        // Expire the charge pulse.
+        if self.fx_seconds_left > 0.0 {
+            self.fx_seconds_left -= dt;
+            if self.fx_seconds_left <= 0.0 {
+                return set_attached_fx_active(world, entity_id, false);
+            }
         }
         Effect::NoEffect
     }
@@ -102,7 +137,10 @@ impl Script for EnergyStation {
             // power cells replace themselves with charged cells, while energy
             // weapons replenish their internal charge. The VR-only
             // hold-one-item-to-the-station step is Hover/Collided above.
-            MessagePayload::Frob => do_recharge_all(world, entity_id),
+            MessagePayload::Frob => Effect::combine(vec![
+                do_recharge_all(world, entity_id),
+                self.begin_fx_pulse(world, entity_id),
+            ]),
             _ => Effect::NoEffect,
         }
     }
@@ -114,6 +152,31 @@ fn do_recharge_all(world: &World, entity_id: EntityId) -> Effect {
         .map(|item| recharge_message(&item))
         .collect();
     effects.push(activate_sound(world, entity_id));
+    Effect::combine(effects)
+}
+
+/// Toggle the particle groups attached to this station. The mission data
+/// authors one `RechargeFX` entity per station, linked BY the FX entity via a
+/// concrete `ParticleAttachement` link (FX -> station), so the FX is found by
+/// scanning incoming links. This assumes a mission-placed station: a
+/// runtime-created host gets its riders attached without `Links`, but every
+/// energy station ships placed in the level.
+fn set_attached_fx_active(world: &World, station_id: EntityId, active: bool) -> Effect {
+    let v_links = world.borrow::<View<Links>>().unwrap();
+    let effects: Vec<Effect> = v_links
+        .iter()
+        .with_id()
+        .filter(|(_, links)| {
+            links.to_links.iter().any(|l| {
+                matches!(l.link, Link::ParticleAttachement(_))
+                    && l.to_entity_id.map(|e| e.0) == Some(station_id)
+            })
+        })
+        .map(|(id, _)| Effect::SetParticleActive {
+            entity_id: id,
+            active,
+        })
+        .collect();
     Effect::combine(effects)
 }
 
@@ -148,7 +211,9 @@ mod tests {
     use std::time::Duration;
 
     use cgmath::{Quaternion, vec3};
-    use dark::properties::PropPosition;
+    use dark::properties::{
+        Link, Links, ParticleAttachOptions, PropPosition, ToLink, WrappedEntityId,
+    };
     use shipyard::{EntityId, World};
 
     use crate::{physics::PhysicsWorld, time::Time, vr_config::Handedness};
@@ -200,12 +265,40 @@ mod tests {
         (recharges, sounds)
     }
 
-    fn tick(script: &mut EnergyStation, station: EntityId, world: &World, seconds: f32) {
+    fn tick(script: &mut EnergyStation, station: EntityId, world: &World, seconds: f32) -> Effect {
         let time = Time {
             elapsed: Duration::from_secs_f32(seconds),
             total: Duration::ZERO,
         };
-        script.update(station, world, &PhysicsWorld::new(), &time);
+        script.update(station, world, &PhysicsWorld::new(), &time)
+    }
+
+    /// Add a mission-style RechargeFX entity: a concrete ParticleAttachement
+    /// link from the FX entity to its station.
+    fn add_fx(world: &mut World, station: EntityId) -> EntityId {
+        world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: 0,
+                to_entity_id: Some(WrappedEntityId(station)),
+                link: Link::ParticleAttachement(ParticleAttachOptions {
+                    attach_type: 0,
+                    vhot: 0,
+                    joint: 0,
+                    submodel: 0,
+                }),
+            }],
+        })
+    }
+
+    /// Collect (entity, active) from every SetParticleActive in the tree.
+    fn fx_toggles(effect: Effect) -> Vec<(EntityId, bool)> {
+        Effect::flatten(vec![effect])
+            .into_iter()
+            .filter_map(|e| match e {
+                Effect::SetParticleActive { entity_id, active } => Some((entity_id, active)),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -318,5 +411,55 @@ mod tests {
             ));
             assert_eq!(sounds, 1);
         }
+    }
+
+    #[test]
+    fn charge_pulses_attached_fx_once_per_interaction() {
+        let (mut world, station, item) = make_world();
+        let fx = add_fx(&mut world, station);
+        let mut script = EnergyStation::new();
+        let physics = PhysicsWorld::new();
+
+        // First contact turns the FX on...
+        let first = fx_toggles(script.handle_message(station, &world, &physics, &hover(item)));
+        assert_eq!(first, vec![(fx, true)]);
+
+        // ...latched repeat contacts don't re-emit it...
+        tick(&mut script, station, &world, 1.0 / 60.0);
+        let repeat = fx_toggles(script.handle_message(station, &world, &physics, &hover(item)));
+        assert_eq!(repeat, vec![], "latched contact must not re-pulse the FX");
+
+        // ...and the pulse expires back to off.
+        let mut offs = Vec::new();
+        for _ in 0..180 {
+            offs.extend(fx_toggles(tick(&mut script, station, &world, 1.0 / 60.0)));
+        }
+        assert_eq!(offs, vec![(fx, false)], "pulse turns off exactly once");
+    }
+
+    #[test]
+    fn frob_pulses_attached_fx() {
+        let (mut world, station, _item) = make_world();
+        let fx = add_fx(&mut world, station);
+        let mut script = EnergyStation::new();
+        let physics = PhysicsWorld::new();
+
+        let toggles =
+            fx_toggles(script.handle_message(station, &world, &physics, &MessagePayload::Frob));
+        assert_eq!(toggles, vec![(fx, true)]);
+    }
+
+    #[test]
+    fn initialize_turns_authored_fx_off() {
+        // The mission data authors the FX group active; the station normalizes
+        // it off before any charge, and plain updates don't re-emit it.
+        let (mut world, station, _item) = make_world();
+        let fx = add_fx(&mut world, station);
+        let mut script = EnergyStation::new();
+
+        let init = fx_toggles(script.initialize(station, &world));
+        assert_eq!(init, vec![(fx, false)]);
+        let update = fx_toggles(tick(&mut script, station, &world, 1.0 / 60.0));
+        assert_eq!(update, vec![], "idle update emits nothing");
     }
 }
