@@ -13,28 +13,37 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 // layers, so both installs play the same scene.
 const SHORT_CUTSCENE = "landing.avi";
 const CUTSCENE_STEM = "landing";
-const CUTSCENE_LAYERS = ["", "enhanced", "original", "kex"];
+const ANNIVERSARY_LAYERS = ["enhanced", "original", "kex"];
 
 /**
- * Whether any install layer ships the clip this test plays, matching the
- * runtime resolver's case-insensitive name comparison (its Anniversary layers
- * are `.ogv` while a classic install has `.avi`).
+ * Whether the runtime would resolve this test's clip to a real file. Mirrors
+ * `resolve_cutscene_path` exactly, including that it is case-insensitive and
+ * that its Anniversary layer fallback only ever tries `<stem>.ogv` - accepting
+ * a layered `.avi` here would report "installed" for a name the runtime then
+ * fails to open.
  */
 function installedCutscene(): string | null {
-  for (const layer of CUTSCENE_LAYERS) {
+  const found = (layer: string, names: string[]): string | null => {
     let entries: string[];
     try {
       entries = readdirSync(join(dataRoot(), "cutscenes", layer));
     } catch {
-      continue;
+      return null;
     }
+    const wanted = names.map((name) => name.toLowerCase());
     const match = entries.find((entry) =>
-      ["avi", "ogv"].some(
-        (extension) =>
-          entry.toLowerCase() === `${CUTSCENE_STEM}.${extension}`.toLowerCase(),
-      ),
+      wanted.includes(entry.toLowerCase()),
     );
-    if (match) return join(layer, match);
+    return match ? join(layer, match) : null;
+  };
+
+  // The bare `cutscenes/` root takes the requested name, or its `.ogv` twin.
+  const rooted = found("", [`${CUTSCENE_STEM}.avi`, `${CUTSCENE_STEM}.ogv`]);
+  if (rooted) return rooted;
+
+  for (const layer of ANNIVERSARY_LAYERS) {
+    const layered = found(layer, [`${CUTSCENE_STEM}.ogv`]);
+    if (layered) return layered;
   }
   return null;
 }

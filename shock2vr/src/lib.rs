@@ -1799,6 +1799,10 @@ impl Game {
             }
             GlobalEffect::ShowMainMenu => {
                 self.pending_transition = None;
+                // The flag means "the finale is on screen", so reaching the menu
+                // ends it - the ending cutscene now finishes rather than holding
+                // its last frame forever.
+                self.campaign_completed = false;
                 self.set_active_scene(Box::new(MainMenuScene::new()));
             }
             GlobalEffect::ShowDeveloper => {
@@ -1831,7 +1835,7 @@ impl Game {
                 // A scene swap like the frontend ones: no ledger write-back, and
                 // any pending transition is abandoned.
                 self.pending_transition = None;
-                let follow_on = then.map_or(GlobalEffect::ShowMainMenu, |effect| *effect);
+                let follow_on = *then;
                 match CutscenePlayerScene::new(video, follow_on.clone(), &mut self.audio_context) {
                     Ok(cutscene) => self.set_active_scene(Box::new(cutscene)),
                     Err(error) => {
@@ -1848,19 +1852,12 @@ impl Game {
                 // the active world.
                 self.save_active_scene();
 
-                let ending_name = resolve_ending_cutscene();
-                let after_ending = match scenes::resolve_credits_cutscene() {
-                    Some(credits_name) => GlobalEffect::PlayCutscene {
-                        video: credits_name,
-                        then: Some(Box::new(GlobalEffect::ShowMainMenu)),
-                    },
-                    None => GlobalEffect::ShowMainMenu,
-                };
+                let after_ending = scenes::finale_follow_on(scenes::resolve_credits_cutscene());
 
                 self.campaign_completed = true;
                 self.handle_global_effect(GlobalEffect::PlayCutscene {
-                    video: ending_name,
-                    then: Some(Box::new(after_ending)),
+                    video: resolve_ending_cutscene(),
+                    then: Box::new(after_ending),
                 });
             }
             GlobalEffect::Quit => {

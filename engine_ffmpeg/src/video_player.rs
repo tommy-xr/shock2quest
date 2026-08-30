@@ -148,9 +148,12 @@ impl VideoPlayer {
                     self.frames_exhausted = true;
                     break;
                 }
+                // Deliberately not latched: a bad packet mid-video would
+                // otherwise mark the whole stream finished and truncate the
+                // cutscene. Breaking lets the next advance retry, and a stream
+                // that reported a duration still completes on its timeline.
                 Err(error) => {
                     eprintln!("cutscene video decode failed: {error}");
-                    self.frames_exhausted = true;
                     break;
                 }
             }

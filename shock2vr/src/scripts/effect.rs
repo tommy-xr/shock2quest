@@ -78,9 +78,9 @@ pub enum GlobalEffect {
     },
 
     /// Play `video` full-screen, replacing whatever scene is active, and
-    /// dispatch `then` once it finishes (defaulting to the main menu). The name
-    /// is resolved by `scenes::resolve_cutscene_path`; a video that cannot be
-    /// opened is skipped straight to `then` rather than stranding the player.
+    /// dispatch `then` once it finishes. The name is resolved by
+    /// `scenes::resolve_cutscene_path`; a video that cannot be opened is skipped
+    /// straight to `then` rather than stranding the player.
     ///
     /// Handling this does *not* write the outgoing mission back to the
     /// in-memory level ledger, because the cutscene's own empty world would be
@@ -89,7 +89,7 @@ pub enum GlobalEffect {
     /// resumes gameplay depends on that having happened.
     PlayCutscene {
         video: String,
-        then: Option<Box<GlobalEffect>>,
+        then: Box<GlobalEffect>,
     },
 
     /// Play the retail ending and enter the campaign's terminal state.

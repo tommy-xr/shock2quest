@@ -464,26 +464,52 @@ fn find_file_ignoring_ascii_case(path: &Path) -> Option<PathBuf> {
 /// and classic (`cs3.avi`) installs.
 pub(crate) fn resolve_ending_cutscene() -> String {
     first_present_cutscene(ENDING_CUTSCENE_CANDIDATES)
-        .map(|(name, _)| name)
         .unwrap_or_else(|| ENDING_CUTSCENE_CANDIDATES[0].to_string())
 }
 
 /// The credits roll that follows the ending, or `None` on an install that ships
 /// without one (the finale then returns straight to the menu).
 pub(crate) fn resolve_credits_cutscene() -> Option<String> {
-    first_present_cutscene(CREDITS_CUTSCENE_CANDIDATES).map(|(name, _)| name)
+    first_present_cutscene(CREDITS_CUTSCENE_CANDIDATES)
 }
 
-fn first_present_cutscene(candidates: &[&str]) -> Option<(String, PathBuf)> {
+/// What the ending cutscene hands off to: the credits roll when the install
+/// ships one, then the main menu either way.
+pub(crate) fn finale_follow_on(credits: Option<String>) -> GlobalEffect {
+    match credits {
+        Some(video) => GlobalEffect::PlayCutscene {
+            video,
+            then: Box::new(GlobalEffect::ShowMainMenu),
+        },
+        None => GlobalEffect::ShowMainMenu,
+    }
+}
+
+fn first_present_cutscene(candidates: &[&str]) -> Option<String> {
     candidates
         .iter()
-        .map(|name| ((*name).to_string(), resolve_cutscene_path(name)))
-        .find(|(_, path)| path.is_file())
+        .find(|name| resolve_cutscene_path(name).is_file())
+        .map(|name| (*name).to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The finale always ends up at the menu, through the credits when the
+    /// install has them and directly when it does not.
+    #[test]
+    fn the_finale_chains_through_the_credits_only_when_they_are_installed() {
+        match finale_follow_on(Some("enhanced/credits.ogv".to_string())) {
+            GlobalEffect::PlayCutscene { video, then } => {
+                assert_eq!(video, "enhanced/credits.ogv");
+                assert!(matches!(*then, GlobalEffect::ShowMainMenu));
+            }
+            other => panic!("expected the credits to play, got {other:?}"),
+        }
+
+        assert!(matches!(finale_follow_on(None), GlobalEffect::ShowMainMenu));
+    }
 
     /// The launcher offers exactly what the dispatcher can build, and every
     /// name is a distinct `debug_` name the CLI accepts too.

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, rc::Rc, time::Duration};
+use std::{collections::HashMap, rc::Rc};
+
+#[cfg(not(feature = "ffmpeg"))]
+use std::time::Duration;
 
 use cgmath::{InnerSpace, Matrix3, Matrix4, Quaternion, Vector3, vec3};
 use engine::{
@@ -36,6 +39,8 @@ pub struct CutscenePlayerScene {
     screen_distance: f32,
     screen_vertical_offset: f32,
     video_name: String,
+    /// Only the stub has no decoder to ask how far playback has got.
+    #[cfg(not(feature = "ffmpeg"))]
     total_time: Duration,
     /// Dispatched once, when playback ends. Without it a finished cutscene
     /// would hold its last frame forever.
@@ -90,7 +95,6 @@ impl CutscenePlayerScene {
                 screen_distance: 6.0 / dark::SCALE_FACTOR,
                 screen_vertical_offset: 1.5 / dark::SCALE_FACTOR,
                 video_name,
-                total_time: Duration::ZERO,
                 on_complete,
                 completion_emitted: false,
                 audio_handle,
@@ -272,7 +276,6 @@ impl GameScene for CutscenePlayerScene {
         self.head_rotation = input_context.head.rotation;
         self.player_position = vec3(0.0, 0.0, 0.0);
         self.player_rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
-        self.total_time += time.elapsed;
         self.update_player_info();
 
         #[cfg(feature = "ffmpeg")]
@@ -280,8 +283,14 @@ impl GameScene for CutscenePlayerScene {
             self.video_player.advance_by_time(time.elapsed);
         }
 
-        // Latched: the scene keeps updating until `Game` swaps it out, and a
-        // repeated completion effect would re-enter the follow-on every frame.
+        #[cfg(not(feature = "ffmpeg"))]
+        {
+            self.total_time += time.elapsed;
+        }
+
+        // Latched because not every `on_complete` replaces this scene - a
+        // follow-on like `Quit` leaves it running, and re-emitting would then
+        // repeat the effect every frame.
         if !self.completion_emitted && self.playback_is_finished() {
             self.completion_emitted = true;
             return vec![Effect::GlobalEffect(self.on_complete.clone())];
