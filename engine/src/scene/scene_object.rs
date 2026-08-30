@@ -149,6 +149,26 @@ impl SceneObject {
         ret.set_local_transform(xform);
         ret
     }
+    /// A screen-space quad whose texture is *clipped* at `clip` (0..1) of its
+    /// width rather than scaled to it: the bitmap draws at `size` and
+    /// everything past `clip` is discarded. This is what a fill bar wants -
+    /// the artwork's right-hand border disappears as the bar drains instead of
+    /// sliding inwards.
+    pub fn screen_space_clipped_quad(
+        texture: Rc<dyn TextureTrait>,
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        clip: f32,
+    ) -> SceneObject {
+        let material = crate::scene::clipped_screen_material::create_screen_space(texture, clip);
+        let xform = Matrix4::from_translation(vec3(position.x, position.y, 0.0))
+            * Matrix4::from_nonuniform_scale(size.x, size.y, 1.0)
+            * Matrix4::from_translation(vec3(0.5, 0.5, 0.0));
+        let mut ret = Self::new(material, Box::new(quad::create()));
+        ret.set_local_transform(xform);
+        ret
+    }
+
     /// Glyph quads for `str` at `font_size`, laid out from `origin` as the
     /// **top-left of the line**, x growing right and y growing down.
     ///

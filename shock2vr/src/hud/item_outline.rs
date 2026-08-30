@@ -5,8 +5,8 @@ use collision::{Aabb2, Aabb3};
 use dark::{
     importers::{FONT_IMPORTER, STRINGS_IMPORTER, TEXTURE_IMPORTER},
     properties::{
-        ObjectNameType, PropGunState, PropHUDSelect, PropHitPoints, PropLog, PropObjName,
-        PropObjectNameType, PropStackCount, PropTemplateId,
+        ObjectNameType, PropGunState, PropHUDSelect, PropHitPoints, PropLog, PropMaxHitPoints,
+        PropObjName, PropObjectNameType, PropShowHP, PropStackCount, PropTemplateId,
     },
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
@@ -230,13 +230,15 @@ pub fn draw_item_name(
         .map(|template_id| (template_id, entity_id.inner()));
     let text_content = format_hover_label(&item_name, hit_points, debug_identity);
 
+    // Below the brackets, as the original draws it: the strip directly above
+    // the rect belongs to the health bar (`draw_health_bar`).
     let text_obj_0_0 = SceneObject::screen_space_text(
         &text_content,
         font.clone(),
         10.0,
         0.5,
         extents.min.x,
-        extents.min.y - 10.0,
+        extents.max.y + 4.0,
     );
 
     vec![text_obj_0_0]
@@ -430,6 +432,41 @@ mod tests {
         );
     }
 
+    /// The bias means a full pool reads as exactly full and a creature on its
+    /// last point still shows a sliver, rather than a bar that vanishes one
+    /// hit before death.
+    #[test]
+    fn health_ratio_is_biased_at_both_ends() {
+        assert_eq!(health_bar_ratio(10, 10), 1.0);
+        assert_eq!(health_bar_ratio(1, 10), 0.25);
+        assert_eq!(health_bar_ratio(0, 10), 0.0);
+        assert_eq!(health_bar_ratio(-5, 10), 0.0);
+        assert_eq!(health_bar_ratio(10, 0), 0.0);
+    }
+
+    /// Colour steps in thirds and swaps outright - full health must not land
+    /// on a fourth, nonexistent bitmap.
+    #[test]
+    fn health_bar_bitmap_steps_in_thirds() {
+        assert_eq!(health_bar_texture(1.0), "HPBAR2.PCX");
+        assert_eq!(health_bar_texture(2.0 / 3.0), "HPBAR2.PCX");
+        assert_eq!(health_bar_texture(0.65), "HPBAR1.PCX");
+        assert_eq!(health_bar_texture(1.0 / 3.0), "HPBAR1.PCX");
+        assert_eq!(health_bar_texture(0.32), "HPBAR0.PCX");
+        assert_eq!(health_bar_texture(0.0), "HPBAR0.PCX");
+    }
+
+    /// `P$ShowHP` is the bar's own opt-in: brackets are not enough.
+    #[test]
+    fn health_bar_needs_its_own_opt_in() {
+        let mut world = World::new();
+        let id = world.add_entity(PropHUDSelect(true));
+        assert!(!shows_hit_points(&world, id));
+
+        world.add_component(id, PropShowHP(true));
+        assert!(shows_hit_points(&world, id));
+    }
+
     #[test]
     fn decimal_placeholder_is_preserved_without_a_stack_count() {
         assert_eq!(
@@ -437,6 +474,110 @@ mod tests {
             r#"Nanites: "%d nanites.""#,
         );
     }
+}
+
+/// The original biases the health ratio by a couple of points at both ends, so
+/// a creature on its last hit point still shows a sliver of bar rather than
+/// nothing, and a full pool always reads as exactly full.
+const HP_BUFFER: i32 = 2;
+/// Three bar bitmaps, `HPBAR0` (red) through `HPBAR2` (green).
+const HP_BAR_COUNT: i32 = 3;
+/// Authored size of the bar bitmaps, in canvas pixels.
+const HP_BAR_WIDTH: f32 = 80.0;
+const HP_BAR_HEIGHT: f32 = 14.0;
+
+/// `0.0` when dead or when the pool is meaningless, `1.0` at full health.
+fn health_bar_ratio(hit_points: i32, max_hit_points: u32) -> f32 {
+    if hit_points <= 0 || max_hit_points == 0 {
+        return 0.0;
+    }
+    ((hit_points + HP_BUFFER) as f32 / (max_hit_points as i32 + HP_BUFFER) as f32).clamp(0.0, 1.0)
+}
+
+/// Colour is quantized where width is not: the bar is one of three bitmaps
+/// chosen by which *third* of the ratio it falls in, and it swaps outright
+/// rather than blending, so red means "nearly dead" at a glance.
+fn health_bar_texture(ratio: f32) -> &'static str {
+    match ((ratio * HP_BAR_COUNT as f32) as i32).clamp(0, HP_BAR_COUNT - 1) {
+        0 => "HPBAR0.PCX",
+        1 => "HPBAR1.PCX",
+        _ => "HPBAR2.PCX",
+    }
+}
+
+/// Whether `entity_id` opts in to the health bar.
+///
+/// This is `P$ShowHP` ("Show HP?"), which is a *separate* opt-in from
+/// [`is_hud_selectable`]'s `P$HUDSelect`: the shipped data sets it on the
+/// creature families and leaves it off everything else, so a damageable crate
+/// draws brackets without advertising its hit points.
+pub(crate) fn shows_hit_points(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<PropShowHP>>()
+        .map(|v| v.get(entity_id).map(|p| p.0).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+fn hit_point_pool(world: &World, entity_id: EntityId) -> Option<(i32, u32)> {
+    let hit_points = world
+        .borrow::<View<PropHitPoints>>()
+        .ok()?
+        .get(entity_id)
+        .ok()?
+        .hit_points;
+    let max_hit_points = world
+        .borrow::<View<PropMaxHitPoints>>()
+        .ok()?
+        .get(entity_id)
+        .ok()?
+        .hit_points;
+    Some((hit_points, max_hit_points))
+}
+
+/// The enemy health bar, drawn flush on top of the selection brackets.
+pub fn draw_health_bar(
+    asset_cache: &mut AssetCache,
+    physics: &PhysicsWorld,
+    entity_id: EntityId,
+    world: &World,
+    view: Matrix4<f32>,
+    projection: Matrix4<f32>,
+    screen_size: Vector2<f32>,
+) -> Vec<SceneObject> {
+    if !shows_hit_points(world, entity_id) {
+        return vec![];
+    }
+
+    let Some((hit_points, max_hit_points)) = hit_point_pool(world, entity_id) else {
+        return vec![];
+    };
+
+    let ratio = health_bar_ratio(hit_points, max_hit_points);
+    if ratio <= 0.0 {
+        return vec![];
+    }
+
+    let Some(aabb) = physics.get_aabb2(entity_id) else {
+        return vec![];
+    };
+    let extents = project_aabb3(&aabb, view, projection, screen_size);
+
+    let options = TextureOptions {
+        wrap: false,
+        ..Default::default()
+    };
+    let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, health_bar_texture(ratio), &options);
+
+    // Clipped, not scaled: the bar is drawn at its authored width and cut off
+    // at `ratio`, so a half-health bar is the left half of the artwork - the
+    // right-hand border vanishes rather than sliding in. Left-aligned to the
+    // rect and exactly one bar-height above it, sitting on the brackets.
+    vec![SceneObject::screen_space_clipped_quad(
+        texture,
+        vec2(extents.min.x, extents.min.y - HP_BAR_HEIGHT),
+        vec2(HP_BAR_WIDTH, HP_BAR_HEIGHT),
+        ratio,
+    )]
 }
 
 pub fn draw_item_outline(

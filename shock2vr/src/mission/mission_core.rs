@@ -79,7 +79,7 @@ use crate::{
     game_scene::AmbientAudioState,
     game_scene::PlayerSavePoseError,
     gui::GuiManager,
-    hud::{draw_item_name, draw_item_outline, is_hud_selectable},
+    hud::{DamageFlash, draw_health_bar, draw_item_name, draw_item_outline, is_hud_selectable},
     input_context::{self, InputContext},
     interaction::{FlatInteraction, InteractionContext, PlayerInteraction, VrInteraction},
     inventory::PlayerInventoryEntity,
@@ -1887,6 +1887,7 @@ impl MissionCore {
         world.add_unique(crate::psi::ActivePsiPowers::default());
         world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
         world.add_unique(crate::scripts::radiation::ActiveRadiation::default());
+        world.add_unique(DamageFlash::default());
 
         // ** Entity creation
 
@@ -5313,6 +5314,19 @@ impl MissionCore {
                                 });
                             }
                         }
+                        // Show the overlay on anything the player just hurt.
+                        // Gated on the same opt-in the bar itself reads, so
+                        // the map only ever holds creatures.
+                        if entity_id != player_entity
+                            && hp < previous
+                            && crate::hud::shows_hit_points(&self.world, entity_id)
+                        {
+                            let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                            self.world
+                                .borrow::<UniqueViewMut<DamageFlash>>()
+                                .unwrap()
+                                .arm(entity_id, now);
+                        }
                         if entity_id == player_entity && previous > 0 && hp == 0 {
                             for death_effect in self.begin_player_death() {
                                 effects.push_back(death_effect);
@@ -7902,6 +7916,15 @@ impl MissionCore {
         }
     }
 
+    /// Entities whose HUD overlay is still forced on by recent damage.
+    fn damage_flash_entities(&self) -> Vec<EntityId> {
+        let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+        self.world
+            .borrow::<UniqueViewMut<DamageFlash>>()
+            .map(|mut flash| flash.active(now))
+            .unwrap_or_default()
+    }
+
     pub fn render_per_eye(
         &mut self,
         asset_cache: &mut AssetCache,
@@ -7925,6 +7948,13 @@ impl MissionCore {
         if !options.debug_show_ids {
             highlighted.retain(|e| is_hud_selectable(&self.world, *e));
         }
+        // Recently-damaged creatures show the same overlay without being
+        // looked at, so a shot that lands off to the side still reads.
+        for flashed in self.damage_flash_entities() {
+            if !highlighted.contains(&flashed) {
+                highlighted.push(flashed);
+            }
+        }
         for hit_entity in highlighted {
             ret.extend(draw_item_outline(
                 asset_cache,
@@ -7944,6 +7974,16 @@ impl MissionCore {
                 projection,
                 screen_size,
                 options.debug_show_ids,
+            ));
+
+            ret.extend(draw_health_bar(
+                asset_cache,
+                &self.physics,
+                hit_entity,
+                &self.world,
+                view,
+                projection,
+                screen_size,
             ));
         }
 

@@ -1,3 +1,6 @@
+mod damage_flash;
+pub use damage_flash::*;
+
 mod item_outline;
 pub use item_outline::*;
 
