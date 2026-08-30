@@ -15,7 +15,7 @@ use std::ffi::CString;
 use cgmath::{Quaternion, Rad, Rotation3, vec2, vec3};
 use dark::importers::MODELS_IMPORTER;
 use dark::model::Model;
-use dark_viewer::scenes::{BinAiViewerScene, BinObjViewerScene, ToolScene};
+use dark_viewer::scenes::{BinAiViewerScene, BinObjViewerScene, SkeletonViewerScene, ToolScene};
 use eframe::{egui, glow};
 use engine::Engine;
 use engine::assets::asset_cache::AssetCache;
@@ -36,6 +36,26 @@ pub fn init_raw_gl(cc: &eframe::CreationContext<'_>) {
     }
 }
 
+/// What the preview renders for the current selection.
+#[derive(Clone, PartialEq)]
+pub enum PreviewScene {
+    /// The `.bin` model alone.
+    Model,
+    /// The `.bin` model animated by a motion clip (`<name>_.mc`).
+    Clip(String),
+    /// Bone lines only: the `.bin`'s skeleton posed by a motion clip.
+    Skeleton(String),
+}
+
+impl PreviewScene {
+    fn clip(&self) -> Option<&str> {
+        match self {
+            PreviewScene::Model => None,
+            PreviewScene::Clip(clip) | PreviewScene::Skeleton(clip) => Some(clip),
+        }
+    }
+}
+
 /// Offscreen render target whose color texture egui displays. Created once;
 /// a resize re-specifies the texture/renderbuffer storage in place, so the
 /// registered egui texture id stays valid for the preview's lifetime.
@@ -50,9 +70,9 @@ struct OffscreenTarget {
 pub struct ModelPreview {
     engine: Box<dyn Engine>,
     asset_cache: AssetCache,
-    /// What the current scene (or error) was built for: (key, clip, skeletons,
+    /// What the current scene (or error) was built for: (key, scene, skeletons,
     /// hitboxes). Guards against rebuilding — or re-panicking — every frame.
-    built_for: Option<(String, Option<String>, bool, bool)>,
+    built_for: Option<(String, PreviewScene, bool, bool)>,
     scene: Option<Box<dyn ToolScene>>,
     /// The scene plays an animation clip, so it re-renders every frame.
     animated: bool,
@@ -104,16 +124,16 @@ impl ModelPreview {
     }
 
     /// Show the preview for `key` (a `.bin` model): toggles, then the rendered
-    /// viewport filling the remaining space. With `clip` (a motion name, no
-    /// extension), the model animates with that clip on loop.
+    /// viewport filling the remaining space. `scene` picks static, animated, or
+    /// skeleton-only rendering; a clip plays on loop.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
         frame: &mut eframe::Frame,
         key: &str,
-        clip: Option<&str>,
+        scene: &PreviewScene,
     ) {
-        self.ensure_scene(key, clip);
+        self.ensure_scene(key, scene);
         if let Some(error) = &self.error {
             ui.label(format!("Cannot render this model: {error}"));
             return;
@@ -125,10 +145,13 @@ impl ModelPreview {
         }
 
         // A toggle change rebuilds on the next frame's ensure_scene (the click
-        // itself triggers that repaint).
+        // itself triggers that repaint). The overlays mean nothing in
+        // skeleton-only mode, which draws bones and nothing else.
         ui.horizontal(|ui| {
-            ui.checkbox(&mut self.debug_skeletons, "Skeleton");
-            ui.checkbox(&mut self.debug_hit_boxes, "Hitboxes");
+            if !matches!(scene, PreviewScene::Skeleton(_)) {
+                ui.checkbox(&mut self.debug_skeletons, "Skeleton");
+                ui.checkbox(&mut self.debug_hit_boxes, "Hitboxes");
+            }
             ui.label("(drag to orbit, scroll to zoom)");
         });
 
@@ -174,10 +197,10 @@ impl ModelPreview {
 
     /// (Re)build the scene when the key, clip, or a debug toggle changed,
     /// framing the camera from the model's bounds where they are known.
-    fn ensure_scene(&mut self, key: &str, clip: Option<&str>) {
+    fn ensure_scene(&mut self, key: &str, scene: &PreviewScene) {
         let wanted = (
             key.to_string(),
-            clip.map(|c| c.to_string()),
+            scene.clone(),
             self.debug_skeletons,
             self.debug_hit_boxes,
         );
@@ -201,8 +224,11 @@ impl ModelPreview {
                 return;
             }
         };
-        let scene: Result<Box<dyn ToolScene>, String> = match clip {
-            None => BinObjViewerScene::from_model(
+        // Skeleton scenes frame on their posed joints; an AI mesh has no
+        // bounding box for `frame_camera` to use.
+        let mut pose_bounds = None;
+        let built: Result<Box<dyn ToolScene>, String> = match scene {
+            PreviewScene::Model => BinObjViewerScene::from_model(
                 key.to_string(),
                 &self.asset_cache,
                 self.debug_skeletons,
@@ -212,7 +238,7 @@ impl ModelPreview {
             .map_err(|err| err.to_string()),
             // Clip parsing panics on malformed input too, so it also runs
             // under the guard.
-            Some(clip) => quiet_catch(|| {
+            PreviewScene::Clip(clip) => quiet_catch(|| {
                 BinAiViewerScene::from_clips(
                     key.to_string(),
                     vec![dark_viewer::normalize_clip_name(clip)?],
@@ -224,14 +250,29 @@ impl ModelPreview {
                 .map_err(|err| err.to_string())
             })
             .and_then(|r| r),
+            PreviewScene::Skeleton(clip) => quiet_catch(|| {
+                SkeletonViewerScene::new(
+                    key,
+                    &dark_viewer::normalize_clip_name(clip)?,
+                    &mut self.asset_cache,
+                )
+                .map(|scene| {
+                    pose_bounds = Some(scene.pose_bounds());
+                    Box::new(scene) as Box<dyn ToolScene>
+                })
+            })
+            .and_then(|r| r),
         };
-        match scene {
-            Ok(scene) => {
-                self.scene = Some(scene);
-                self.animated = clip.is_some();
+        match built {
+            Ok(built) => {
+                self.scene = Some(built);
+                self.animated = scene.clip().is_some();
                 self.needs_render = true;
                 if reframe {
-                    self.frame_camera(&model);
+                    match pose_bounds {
+                        Some((center, radius)) => self.frame_bounds(center, radius, 1.0),
+                        None => self.frame_camera(&model),
+                    }
                 }
             }
             Err(err) => self.error = Some(err),
@@ -274,13 +315,10 @@ impl ModelPreview {
                         (min.z + max.z) / 2.0,
                         1.0,
                     );
-                self.target = vec3(center.x, center.y, center.z);
                 let extent = vec3(max.x - min.x, max.y - min.y, max.z - min.z);
                 let radius =
                     (extent.x * extent.x + extent.y * extent.y + extent.z * extent.z).sqrt() / 2.0;
-                // r / sin(fovy/2) exactly fills the 45-degree frustum; 2.9r
-                // leaves some margin around it.
-                self.distance = (radius * 2.9).clamp(3.0, 150.0);
+                self.frame_bounds(vec3(center.x, center.y, center.z), radius, 3.0);
             }
             None => {
                 // Animated (AI) meshes expose no bounds; they T-pose around
@@ -289,6 +327,15 @@ impl ModelPreview {
                 self.distance = 11.0;
             }
         }
+    }
+
+    /// Orbit around a sphere of `radius` at `center`, at the default angle.
+    /// r / sin(fovy/2) exactly fills the 45-degree frustum; 2.9r leaves margin.
+    fn frame_bounds(&mut self, center: cgmath::Vector3<f32>, radius: f32, min_distance: f32) {
+        self.yaw = 65.0;
+        self.pitch = 75.0;
+        self.target = center;
+        self.distance = (radius * 2.9).clamp(min_distance, 150.0);
     }
 
     /// Returns whether the camera moved.

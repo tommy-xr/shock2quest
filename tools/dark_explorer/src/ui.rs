@@ -11,10 +11,10 @@ use engine::assets::asset_paths::{AbstractAssetPath, AssetEntry};
 use engine::audio::{AudioClip, AudioContext, AudioHandle};
 use engine::texture_format::{self, PixelFormat};
 
-use crate::archetypes::{Archetype, ArchetypeDb};
+use crate::archetypes::{Archetype, ArchetypeDb, ClipInfo};
 use crate::archives;
 use crate::explorer;
-use crate::model_preview::{self, ModelPreview};
+use crate::model_preview::{self, ModelPreview, PreviewScene};
 
 const TEXT_EXTENSIONS: &[&str] = &[
     "str", "mtl", "txt", "ini", "cfg", "json", "nut", "inc", "dml",
@@ -161,6 +161,15 @@ enum PreviewKind {
     /// is not the raw archive entry name an Archives-tab selection shows).
     Model {
         key: String,
+    },
+    /// A `.mc` motion clip, played as bone lines on a matching actor's skeleton.
+    Motion {
+        clip: ClipInfo,
+    },
+    /// A `.mi` motion-info header, parsed standalone.
+    MotionInfo {
+        info: dark::motion::MotionInfo,
+        hex: String,
     },
     /// Undecodable content: the reason plus a hex dump of the leading bytes.
     Raw {
@@ -475,10 +484,24 @@ impl ExplorerApp {
     }
 
     fn select(&mut self, family: String, key: String) {
-        let loaded = self.family(&family);
-        self.preview = Some(build_preview(&family, &key, loaded));
+        self.family(&family);
+        self.ensure_motion_db(&key);
+        let loaded = self.families.get(&family).expect("just loaded");
+        self.preview = Some(build_preview(&family, &key, loaded, self.motion_db()));
         self.selected = Some((family, key));
         self.scroll_frames = 3;
+    }
+
+    /// A `.mc` preview needs the motion database (and the gamesys behind it, to
+    /// pick a skeleton), so pay for the same lazy load the Archetypes tab does.
+    fn ensure_motion_db(&mut self, key: &str) {
+        if key.to_ascii_lowercase().ends_with(".mc") {
+            self.archetype_db();
+        }
+    }
+
+    fn motion_db(&self) -> Option<&ArchetypeDb> {
+        self.archetype_db.as_ref().and_then(|db| db.as_ref().ok())
     }
 
     /// Index what the game's mount stack actually serves, so the Archives tab
@@ -581,6 +604,7 @@ impl ExplorerApp {
 
     fn select_archive_entry(&mut self, archive: String, entry_name: String) {
         self.ensure_archives();
+        self.ensure_motion_db(&entry_name);
         let Some(path) = self
             .archives
             .as_ref()
@@ -609,13 +633,19 @@ impl ExplorerApp {
             &entry_name,
             mounted_as,
             shadowed_by,
+            self.motion_db(),
         ));
         self.selected_entry = Some((archive, entry_name));
         self.scroll_frames = 3;
     }
 }
 
-fn build_preview(family: &str, key: &str, loaded: &LoadedFamily) -> Preview {
+fn build_preview(
+    family: &str,
+    key: &str,
+    loaded: &LoadedFamily,
+    motion_db: Option<&ArchetypeDb>,
+) -> Preview {
     // Same-key entries in mount order: first is the copy a lookup gets,
     // the rest are shadowed (the CLI `which` view of this one key).
     let mut same_key = loaded.all_entries.iter().filter(|e| e.key == key);
@@ -647,7 +677,7 @@ fn build_preview(family: &str, key: &str, loaded: &LoadedFamily) -> Preview {
         }
     };
     let size = bytes.len();
-    let kind = decode_preview(family, key, bytes);
+    let kind = decode_preview(family, key, bytes, motion_db);
     Preview {
         key: key.to_string(),
         size,
@@ -665,6 +695,7 @@ fn build_archive_preview(
     entry_name: &str,
     mounted_as: Option<(String, String)>,
     shadowed_by: Option<String>,
+    motion_db: Option<&ArchetypeDb>,
 ) -> Preview {
     let origin = PreviewOrigin::Archive {
         archive: archive.to_string(),
@@ -688,8 +719,8 @@ fn build_archive_preview(
     };
     let size = bytes.len();
     let kind = match &mounted_as {
-        Some((family, key)) => decode_preview(family, key, bytes),
-        None => decode_preview("", entry_name, bytes),
+        Some((family, key)) => decode_preview(family, key, bytes, motion_db),
+        None => decode_preview("", entry_name, bytes, motion_db),
     };
     Preview {
         key: entry_name.to_string(),
@@ -703,7 +734,12 @@ fn extension(key: &str) -> &str {
     key.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("")
 }
 
-fn decode_preview(family: &str, key: &str, bytes: Vec<u8>) -> PreviewKind {
+fn decode_preview(
+    family: &str,
+    key: &str,
+    bytes: Vec<u8>,
+    motion_db: Option<&ArchetypeDb>,
+) -> PreviewKind {
     let ext = extension(key).to_ascii_lowercase();
     // Dark parsers panic on malformed input, so every decode runs under
     // catch_unwind and falls back to the hex view instead of crashing.
@@ -732,6 +768,26 @@ fn decode_preview(family: &str, key: &str, bytes: Vec<u8>) -> PreviewKind {
     if ext == "bin" && matches!(family, "obj" | "mesh") {
         return PreviewKind::Model {
             key: key.to_string(),
+        };
+    }
+    if ext == "mc" {
+        return match motion_db.ok_or_else(|| "the motion database is not loaded".to_string()) {
+            Ok(db) => match quiet_catch(|| db.clip_info(key)).and_then(|r| r) {
+                Ok(clip) => PreviewKind::Motion { clip },
+                Err(reason) => raw_fallback(&bytes, reason),
+            },
+            Err(reason) => raw_fallback(&bytes, reason),
+        };
+    }
+    if ext == "mi" {
+        let parsed =
+            quiet_catch(|| dark::motion::MotionInfo::read(&mut std::io::Cursor::new(&bytes)));
+        return match parsed {
+            Ok(info) => PreviewKind::MotionInfo {
+                info,
+                hex: hex_dump(&bytes, 1024),
+            },
+            Err(msg) => raw_fallback(&bytes, format!(".mi parse failed: {msg}")),
         };
     }
     raw_fallback(&bytes, format!("cannot render .{ext} files"))
@@ -1439,12 +1495,11 @@ impl ExplorerApp {
             self.initial_overlays,
             self.screenshot.is_some(),
         );
-        host.show(
-            ui,
-            frame,
-            &archetype.model_key(),
-            self.selected_clip.as_deref(),
-        );
+        let scene = match &self.selected_clip {
+            Some(clip) => PreviewScene::Clip(clip.clone()),
+            None => PreviewScene::Model,
+        };
+        host.show(ui, frame, &archetype.model_key(), &scene);
     }
 
     fn show_preview(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -1579,7 +1634,67 @@ impl ExplorerApp {
                     self.initial_overlays,
                     self.screenshot.is_some(),
                 );
-                host.show(ui, frame, &key, None);
+                host.show(ui, frame, &key, &PreviewScene::Model);
+            }
+            PreviewKind::Motion { clip } => {
+                egui::Grid::new("motion_info")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        ui.label("Clip");
+                        ui.label(&clip.name);
+                        ui.end_row();
+                        ui.label("Actor type");
+                        ui.label(clip.actor_label());
+                        ui.end_row();
+                        ui.label("Skeleton");
+                        ui.label(&clip.model_key);
+                        ui.end_row();
+                        ui.label("Frames");
+                        ui.label(format!("{} @ {} fps", clip.frame_count, clip.frame_rate));
+                        ui.end_row();
+                        ui.label("Duration");
+                        ui.label(format!("{:.2}s", clip.duration));
+                        ui.end_row();
+                        ui.label("Flags");
+                        ui.label(format!("{:#06x}", clip.flags));
+                        ui.end_row();
+                    });
+                ui.separator();
+                let (model_key, clip_name) = (clip.model_key.clone(), clip.name.clone());
+                let host = preview_host(
+                    &mut self.model_preview,
+                    self.initial_overlays,
+                    self.screenshot.is_some(),
+                );
+                host.show(ui, frame, &model_key, &PreviewScene::Skeleton(clip_name));
+            }
+            PreviewKind::MotionInfo { info, hex } => {
+                egui::Grid::new("motion_info_file")
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for (label, value) in [
+                            ("Name", info.name.clone()),
+                            ("Motion type", info.motion_type.to_string()),
+                            ("Joint signature", format!("{:#010x}", info.sig)),
+                            ("Frame count", info.frame_count.to_string()),
+                            ("Frame rate", info.frame_rate.to_string()),
+                            ("Motion number", info.mot_num.to_string()),
+                        ] {
+                            ui.label(label);
+                            ui.label(value);
+                            ui.end_row();
+                        }
+                    });
+                ui.separator();
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut hex.as_str())
+                                .font(egui::TextStyle::Monospace)
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
             }
             PreviewKind::Raw { reason, hex } => {
                 ui.label(format!("Cannot render this file: {reason}"));

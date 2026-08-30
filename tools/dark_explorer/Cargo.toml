@@ -17,6 +17,8 @@ shipyard = "0.6.2"
 # Same version shock2vr uses, for reading raw archive entries directly.
 zip = "0.6.6"
 cgmath = "0.18.0"
+# Same version shock2vr uses, to map a motion-DB actor index back to ActorType.
+num-traits = "0.2.15"
 clap = { version = "4.5.4", features = ["derive"] }
 eframe = { version = "=0.36.1", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
 # Same version the engine uses, so the workspace builds one copy.
