@@ -7,12 +7,14 @@
 //! pause overlay hosts the very same builder as its Developer page, so the
 //! screen is identical whichever way it is reached.
 //!
-//! The screen has a second page: a list of the debug scenes, reached from the
-//! upper framed button (the load screen's "Load" frame) and returning to the
-//! parameters with its own "Done". It exists because a headset picks its scene
-//! from a file read at startup, so without an in-game entry point every change
-//! of debug scene - or every death inside one - costs an APK relaunch. The
-//! names come from the same registry `--mission debug_x` dispatches from
+//! The screen has a second page: a launcher, reached from the upper framed
+//! button (the load screen's "Load" frame) and returning to the parameters
+//! with its own "Done". It exists because a headset picks its scene from a
+//! file read at startup, so without an in-game entry point every change of
+//! scene - or every death inside one - costs an APK relaunch. Two tabs share
+//! the one list: "Missions" enumerates the `*.mis` files in the data root and
+//! launches through the same `TransitionLevel` the main menu's New Game uses;
+//! "Debug Scenes" lists the registry `--mission debug_x` dispatches from
 //! ([`crate::scenes::debug_scene_names`]), so the launcher cannot drift from
 //! what the game can actually start.
 //!
@@ -88,7 +90,6 @@ const DISABLED_OPACITY: f32 = 0.3;
 const IDLE_OPACITY: f32 = 0.65;
 const ACTIVE_OPACITY: f32 = 1.0;
 
-const SCENES_HEADER_LABEL: &str = "Select a debug scene.";
 /// The upper framed button: the launcher's door on the parameters page, and
 /// the launch itself on the launcher page.
 const OPEN_SCENES_LABEL: &str = "Scenes";
@@ -100,8 +101,33 @@ const DONE_LABEL: &str = "Done";
 pub enum DeveloperPage {
     /// The tunable parameter rows ([`dev_params_panel`]).
     Params,
-    /// The debug-scene launcher.
+    /// The mission / debug-scene launcher.
     Scenes,
+}
+
+/// Which list the launcher shows. The tabs live in the header rect, so they
+/// cost no pane space and the list machinery below them is shared.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SceneTab {
+    /// The `*.mis` files in the data root.
+    Missions,
+    /// The debug-scene registry.
+    DebugScenes,
+}
+
+impl SceneTab {
+    const ALL: [SceneTab; 2] = [SceneTab::Missions, SceneTab::DebugScenes];
+
+    /// Both labels together must fit the 202px header the tabs split -
+    /// "Debug Scenes" measured ~139px in the menu font and overprinted its
+    /// neighbour, hence the short form (drawn `_fit` besides, so a wide label
+    /// can never spill into the other tab again).
+    fn label(self) -> &'static str {
+        match self {
+            SceneTab::Missions => "Missions",
+            SceneTab::DebugScenes => "Debug",
+        }
+    }
 }
 
 /// What a click on the screen asks for, whichever page it landed on.
@@ -109,11 +135,13 @@ pub enum DeveloperPage {
 pub enum DeveloperAction {
     /// Something on the parameter page: a step, its scroll, or "Done".
     Param(DevParamsEvent),
-    /// Open the debug-scene launcher.
+    /// Open the launcher.
     OpenScenes,
-    /// Highlight the debug scene at this index in the registry.
+    /// Show this tab's list in the launcher.
+    SelectTab(SceneTab),
+    /// Highlight the entry at this index in the showing tab's list.
     SelectScene(usize),
-    /// Launch the highlighted debug scene.
+    /// Launch the highlighted entry.
     LaunchScene,
     /// Scroll the launcher's list.
     ScrollScenes(ScrollHalf),
@@ -130,9 +158,12 @@ struct ScreenState {
     rects: PanelRects,
     /// Registry index drawn in the parameter pane's top row.
     scroll: usize,
-    /// Registry index drawn in the launcher's top row.
+    /// How many entries the launcher's showing tab lists - the only thing the
+    /// shared list geometry needs to know about the data source.
+    list_len: usize,
+    /// List index drawn in the launcher's top row.
     scene_scroll: usize,
-    /// Whether a scene row is highlighted - "Launch" is inert without one,
+    /// Whether a row is highlighted - "Launch" is inert without one,
     /// exactly as the load screen's "Load" is.
     has_selection: bool,
 }
@@ -146,27 +177,47 @@ fn scene_rows_per_page(rects: PanelRects) -> usize {
     list_scroll::rows_per_page(rects.list_rect(), FIELD_TOP_Y, SCENE_ROW_H)
 }
 
-fn scene_max_scroll(rects: PanelRects) -> usize {
-    list_scroll::max_scroll(scene_count(), scene_rows_per_page(rects))
+fn scene_max_scroll(rects: PanelRects, len: usize) -> usize {
+    list_scroll::max_scroll(len, scene_rows_per_page(rects))
 }
 
-/// The registry indices on screen at `scene_scroll`, clamped to the page.
-fn scene_visible_rows(rects: PanelRects, scene_scroll: usize) -> std::ops::Range<usize> {
-    list_scroll::visible_rows(scene_count(), scene_rows_per_page(rects), scene_scroll)
+/// The list indices on screen at `scene_scroll`, clamped to the page.
+fn scene_visible_rows(
+    rects: PanelRects,
+    len: usize,
+    scene_scroll: usize,
+) -> std::ops::Range<usize> {
+    list_scroll::visible_rows(len, scene_rows_per_page(rects), scene_scroll)
 }
 
 /// The launcher's scroll rocker, in the gutter down the pane's right edge -
 /// the very same one the parameter page scrolls with.
-fn scene_rocker(rects: PanelRects) -> Option<list_scroll::Rocker> {
-    list_scroll::rocker(rects.list_rect(), FIELD_TOP_Y, scene_max_scroll(rects) > 0)
+fn scene_rocker(rects: PanelRects, len: usize) -> Option<list_scroll::Rocker> {
+    list_scroll::rocker(
+        rects.list_rect(),
+        FIELD_TOP_Y,
+        scene_max_scroll(rects, len) > 0,
+    )
+}
+
+/// The canvas rect of the tab header for `tab`: the header rect split in two,
+/// so the tabs ride the backdrop's authored header line in both presentations.
+fn tab_rect(rects: PanelRects, tab: SceneTab) -> Rect {
+    let header = rects.header_rect();
+    let half = header.w / 2.0;
+    let x = match tab {
+        SceneTab::Missions => header.x,
+        SceneTab::DebugScenes => header.x + half,
+    };
+    Rect::new(x, header.y, half, header.h)
 }
 
 /// The canvas rect of the launcher's `slot`-th visible row. The rows stop
 /// short of the scroll gutter whenever it is in use, so a row and the rocker
 /// can never claim the same point.
-fn scene_row_rect(rects: PanelRects, slot: usize) -> Rect {
+fn scene_row_rect(rects: PanelRects, len: usize, slot: usize) -> Rect {
     let list = rects.list_rect();
-    let gutter = if scene_max_scroll(rects) > 0 {
+    let gutter = if scene_max_scroll(rects, len) > 0 {
         list_scroll::GUTTER_W
     } else {
         0.0
@@ -179,9 +230,9 @@ fn scene_row_rect(rects: PanelRects, slot: usize) -> Rect {
     )
 }
 
-/// The rect a scene name is drawn in: the row, inset on both edges.
-fn scene_text_rect(rects: PanelRects, slot: usize) -> Rect {
-    let row = scene_row_rect(rects, slot);
+/// The rect a row's name is drawn in: the row, inset on both edges.
+fn scene_text_rect(rects: PanelRects, len: usize, slot: usize) -> Rect {
+    let row = scene_row_rect(rects, len, slot);
     Rect::new(
         row.x + SCENE_TEXT_INSET,
         row.y,
@@ -202,6 +253,12 @@ fn hit(state: ScreenState, point: Vector2<f32>) -> Option<DeveloperAction> {
             dev_params_panel::hit(state.rects, state.scroll, point).map(DeveloperAction::Param)
         }
         DeveloperPage::Scenes => {
+            if let Some(tab) = SceneTab::ALL
+                .into_iter()
+                .find(|tab| tab_rect(state.rects, *tab).contains(point))
+            {
+                return Some(DeveloperAction::SelectTab(tab));
+            }
             // "Launch" is inert with nothing selected rather than launching
             // whatever happens to be first.
             if state.has_selection && state.rects.action_rect().contains(point) {
@@ -210,19 +267,22 @@ fn hit(state: ScreenState, point: Vector2<f32>) -> Option<DeveloperAction> {
             if state.rects.done_rect().contains(point) {
                 return Some(DeveloperAction::CloseScenes);
             }
-            let rows = scene_visible_rows(state.rects, state.scene_scroll);
-            if let Some(rocker) = scene_rocker(state.rects) {
-                if let Some(half) =
-                    list_scroll::hit(&rocker, rows.start, scene_max_scroll(state.rects), point)
-                {
+            let rows = scene_visible_rows(state.rects, state.list_len, state.scene_scroll);
+            if let Some(rocker) = scene_rocker(state.rects, state.list_len) {
+                if let Some(half) = list_scroll::hit(
+                    &rocker,
+                    rows.start,
+                    scene_max_scroll(state.rects, state.list_len),
+                    point,
+                ) {
                     return Some(DeveloperAction::ScrollScenes(half));
                 }
             }
-            // Rows carry the index of the scene scrolled into that slot, never
-            // the slot itself: a positional index would launch whatever scene
+            // Rows carry the index of the entry scrolled into that slot, never
+            // the slot itself: a positional index would launch whatever entry
             // *used* to be in the row the moment the list scrolls.
             (0..rows.len())
-                .find(|slot| scene_row_rect(state.rects, *slot).contains(point))
+                .find(|slot| scene_row_rect(state.rects, state.list_len, *slot).contains(point))
                 .map(|slot| DeveloperAction::SelectScene(rows.start + slot))
         }
     }
@@ -271,10 +331,23 @@ pub struct DeveloperScene {
     scroll: usize,
     /// Which page is showing.
     page: DeveloperPage,
-    /// Index of the debug scene drawn in the launcher's top row.
+    /// Which of the launcher's tabs is showing.
+    tab: SceneTab,
+    /// The `*.mis` files the Missions tab lists, enumerated from the data
+    /// root when the launcher opens.
+    missions: Vec<String>,
+    /// Index of the entry drawn in the launcher's top row.
     scene_scroll: usize,
-    /// The highlighted debug scene, as an index into the registry.
+    /// The highlighted entry, as an index into the showing tab's list.
     selected_scene: Option<usize>,
+}
+
+/// The install's missions, sorted by name - loose `.mis` files on a classic
+/// install, the archived `data/*.mis` entries on a 25AE one
+/// ([`crate::data_files::mission_names`]). Read when the launcher opens, so a
+/// changed install shows up without a restart.
+fn mission_files() -> Vec<String> {
+    crate::data_files::mission_names(&crate::paths::data_root())
 }
 
 impl DeveloperScene {
@@ -286,11 +359,35 @@ impl DeveloperScene {
             panel_rects: PanelRects::default(),
             scroll: 0,
             page: DeveloperPage::Params,
-            // Preselect the first scene so "Launch" is immediately meaningful,
-            // the way the load screen preselects the most recent save.
+            tab: SceneTab::Missions,
+            missions: Vec::new(),
             scene_scroll: 0,
-            selected_scene: (scene_count() > 0).then_some(0),
+            selected_scene: None,
         }
+    }
+
+    /// How many entries the showing tab lists.
+    fn tab_list_len(&self) -> usize {
+        match self.tab {
+            SceneTab::Missions => self.missions.len(),
+            SceneTab::DebugScenes => scene_count(),
+        }
+    }
+
+    /// The name of the showing tab's `index`-th entry.
+    fn tab_name(&self, index: usize) -> Option<String> {
+        match self.tab {
+            SceneTab::Missions => self.missions.get(index).cloned(),
+            SceneTab::DebugScenes => super::debug_scene_names().nth(index).map(str::to_owned),
+        }
+    }
+
+    /// Reset the launcher's list to its top with the first entry highlighted -
+    /// on opening it and on switching tabs, so a stale index can never point
+    /// into the other tab's list.
+    fn reset_list(&mut self) {
+        self.scene_scroll = 0;
+        self.selected_scene = (self.tab_list_len() > 0).then_some(0);
     }
 
     /// Everything a click on this frame depends on, in one value shared by the
@@ -300,6 +397,7 @@ impl DeveloperScene {
             page: self.page,
             rects: self.panel_rects,
             scroll: self.scroll,
+            list_len: self.tab_list_len(),
             scene_scroll: self.scene_scroll,
             has_selection: self.selected_scene.is_some(),
         }
@@ -341,23 +439,40 @@ impl DeveloperScene {
                 );
             }
             DeveloperPage::Scenes => {
-                canvas.text_native(
-                    self.panel_rects.header_rect(),
-                    SCENES_HEADER_LABEL,
-                    MENU_FONT,
-                    HAlign::Center,
-                    VAlign::Middle,
-                );
-
-                let rows = scene_visible_rows(self.panel_rects, self.scene_scroll);
-                for (slot, name) in super::debug_scene_names()
-                    .skip(rows.start)
-                    .take(rows.len())
-                    .enumerate()
-                {
+                // The tabs ride the header line: the showing one at full
+                // opacity, the other at the buttons' idle level.
+                for tab in SceneTab::ALL {
+                    let active =
+                        self.tab == tab || hovered == Some(DeveloperAction::SelectTab(tab));
+                    // `_fit` so a label stays inside its own half of the
+                    // header - drawn wider it would overprint the other tab
+                    // while the rect-based hit test kept the boundary.
                     canvas
                         .text_native_fit(
-                            scene_text_rect(self.panel_rects, slot),
+                            tab_rect(self.panel_rects, tab),
+                            tab.label(),
+                            MENU_FONT,
+                            HAlign::Center,
+                            VAlign::Middle,
+                        )
+                        .opacity(if active { ACTIVE_OPACITY } else { IDLE_OPACITY });
+                }
+
+                let len = self.tab_list_len();
+                let rows = scene_visible_rows(self.panel_rects, len, self.scene_scroll);
+                // The visible page's names, resolved once (not per row).
+                let names: Vec<String> = match self.tab {
+                    SceneTab::Missions => self.missions[rows.clone()].to_vec(),
+                    SceneTab::DebugScenes => super::debug_scene_names()
+                        .skip(rows.start)
+                        .take(rows.len())
+                        .map(str::to_owned)
+                        .collect(),
+                };
+                for (slot, name) in names.iter().enumerate() {
+                    canvas
+                        .text_native_fit(
+                            scene_text_rect(self.panel_rects, len, slot),
                             name,
                             LIST_FONT,
                             HAlign::Left,
@@ -370,12 +485,12 @@ impl DeveloperScene {
                         });
                 }
 
-                if let Some(rocker) = scene_rocker(self.panel_rects) {
+                if let Some(rocker) = scene_rocker(self.panel_rects, len) {
                     list_scroll::draw(
                         &mut canvas,
                         &rocker,
                         rows.start,
-                        scene_max_scroll(self.panel_rects),
+                        scene_max_scroll(self.panel_rects, len),
                         match hovered {
                             Some(DeveloperAction::ScrollScenes(half)) => Some(half),
                             _ => None,
@@ -412,23 +527,45 @@ impl DeveloperScene {
                     return vec![Effect::GlobalEffect(GlobalEffect::ShowMainMenu)];
                 }
             }
-            DeveloperAction::OpenScenes => self.page = DeveloperPage::Scenes,
+            DeveloperAction::OpenScenes => {
+                self.page = DeveloperPage::Scenes;
+                // The launcher always opens on the Missions tab, whatever tab
+                // it was left on.
+                self.tab = SceneTab::Missions;
+                self.missions = mission_files();
+                self.reset_list();
+            }
             DeveloperAction::CloseScenes => self.page = DeveloperPage::Params,
-            DeveloperAction::SelectScene(index) => self.selected_scene = Some(index),
-            DeveloperAction::ScrollScenes(half) => list_scroll::apply(
-                half,
-                &mut self.scene_scroll,
-                scene_max_scroll(self.panel_rects),
-            ),
-            DeveloperAction::LaunchScene => {
-                if let Some(name) = self
-                    .selected_scene
-                    .and_then(|index| super::debug_scene_names().nth(index))
-                {
-                    return vec![Effect::GlobalEffect(GlobalEffect::LaunchDebugScene {
-                        name: name.to_owned(),
-                    })];
+            DeveloperAction::SelectTab(tab) => {
+                if self.tab != tab {
+                    self.tab = tab;
+                    self.reset_list();
                 }
+            }
+            DeveloperAction::SelectScene(index) => self.selected_scene = Some(index),
+            DeveloperAction::ScrollScenes(half) => {
+                let max = scene_max_scroll(self.panel_rects, self.tab_list_len());
+                list_scroll::apply(half, &mut self.scene_scroll, max)
+            }
+            DeveloperAction::LaunchScene => {
+                let Some(name) = self.selected_scene.and_then(|index| self.tab_name(index)) else {
+                    return Vec::new();
+                };
+                return match self.tab {
+                    // The very same effect the main menu's New Game emits, so
+                    // launching from here is the new-game boot with the level
+                    // swapped: default spawn, vitals from the destination map.
+                    SceneTab::Missions => {
+                        vec![Effect::GlobalEffect(GlobalEffect::new_game_transition(
+                            name,
+                        ))]
+                    }
+                    SceneTab::DebugScenes => {
+                        vec![Effect::GlobalEffect(GlobalEffect::LaunchDebugScene {
+                            name,
+                        })]
+                    }
+                };
             }
         }
         Vec::new()
@@ -569,20 +706,31 @@ mod tests {
             page: DeveloperPage::Params,
             rects: PanelRects::default(),
             scroll,
+            list_len: scene_count(),
             scene_scroll: 0,
             has_selection: true,
         }
     }
 
-    /// The debug-scene launcher at `scene_scroll`.
-    fn scenes_state(scene_scroll: usize, has_selection: bool) -> ScreenState {
+    /// The launcher at `scene_scroll`, showing a list of `len` entries.
+    fn scenes_state(scene_scroll: usize, has_selection: bool, len: usize) -> ScreenState {
         ScreenState {
             page: DeveloperPage::Scenes,
             rects: PanelRects::default(),
             scroll: 0,
+            list_len: len,
             scene_scroll,
             has_selection,
         }
+    }
+
+    /// A launcher scene showing the debug-scene tab, as a click would reach
+    /// it: opened (which enumerates missions), then tabbed over.
+    fn debug_tab_scene() -> DeveloperScene {
+        let mut scene = DeveloperScene::new();
+        scene.handle_action(DeveloperAction::OpenScenes);
+        scene.handle_action(DeveloperAction::SelectTab(SceneTab::DebugScenes));
+        scene
     }
 
     fn pointer_at(canvas_point: Vector2<f32>, pressed: bool) -> Option<Pointer2D> {
@@ -776,20 +924,21 @@ mod tests {
         let names: Vec<&str> = super::super::debug_scene_names().collect();
         assert!(!names.is_empty(), "there are debug scenes to launch");
         let rects = PanelRects::default();
+        let len = names.len();
         for (index, name) in names.iter().enumerate() {
             // Scrolling to a scene's own index always shows it (clamped when
             // it is inside the last page).
-            let rows = scene_visible_rows(rects, index);
+            let rows = scene_visible_rows(rects, len, index);
             assert!(rows.contains(&index), "scene {name} is off screen");
-            let row = scene_row_rect(rects, index - rows.start);
+            let row = scene_row_rect(rects, len, index - rows.start);
             assert_eq!(
-                hit(scenes_state(index, true), row.center()),
+                hit(scenes_state(index, true, len), row.center()),
                 Some(DeveloperAction::SelectScene(index)),
                 "row for {name}"
             );
 
             // ...and selecting it launches *that* scene.
-            let mut scene = DeveloperScene::new();
+            let mut scene = debug_tab_scene();
             scene.handle_action(DeveloperAction::SelectScene(index));
             assert_eq!(
                 launched_scene(scene.handle_action(DeveloperAction::LaunchScene)),
@@ -799,18 +948,146 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_mission_is_reachable_and_launches_its_own_file() {
+        // The list is data the fs hands the scene, so the mapping is tested on
+        // a fake install; the enumeration itself is thin (`mission_files`).
+        let missions: Vec<String> = (1..=23).map(|n| format!("level{n:02}.mis")).collect();
+        let rects = PanelRects::default();
+        let len = missions.len();
+        for (index, name) in missions.iter().enumerate() {
+            let rows = scene_visible_rows(rects, len, index);
+            assert!(rows.contains(&index), "mission {name} is off screen");
+            let row = scene_row_rect(rects, len, index - rows.start);
+            assert_eq!(
+                hit(scenes_state(index, true, len), row.center()),
+                Some(DeveloperAction::SelectScene(index)),
+                "row for {name}"
+            );
+
+            let mut scene = DeveloperScene::new();
+            scene.page = DeveloperPage::Scenes;
+            scene.missions = missions.clone();
+            scene.handle_action(DeveloperAction::SelectScene(index));
+            match global_effect(scene.handle_action(DeveloperAction::LaunchScene)) {
+                Some(GlobalEffect::TransitionLevel {
+                    level_file,
+                    loc,
+                    entities_to_trigger,
+                    ..
+                }) => {
+                    assert_eq!(&level_file, name);
+                    assert_eq!(loc, None, "map-default spawn");
+                    assert!(entities_to_trigger.is_empty());
+                }
+                other => panic!("launch of {name} produced {other:?}"),
+            }
+        }
+    }
+
+    /// The negative test the tabs demand: the very same Launch click must emit
+    /// a mission transition on one tab and a debug-scene launch on the other -
+    /// never the wrong one.
+    #[test]
+    fn launch_follows_the_showing_tab() {
+        let mut scene = DeveloperScene::new();
+        scene.page = DeveloperPage::Scenes;
+        scene.missions = vec!["earth.mis".to_owned()];
+        scene.reset_list();
+        assert_eq!(scene.tab, SceneTab::Missions);
+        let effect = global_effect(scene.handle_action(DeveloperAction::LaunchScene));
+        assert!(
+            matches!(
+                effect,
+                Some(GlobalEffect::TransitionLevel { ref level_file, .. }) if level_file == "earth.mis"
+            ),
+            "Missions tab must emit TransitionLevel, got {effect:?}"
+        );
+
+        scene.handle_action(DeveloperAction::SelectTab(SceneTab::DebugScenes));
+        assert!(matches!(
+            global_effect(scene.handle_action(DeveloperAction::LaunchScene)),
+            Some(GlobalEffect::LaunchDebugScene { .. })
+        ));
+    }
+
+    /// Switching tabs resets the scroll and the selection - a stale index
+    /// would point into the other tab's list. Re-clicking the showing tab
+    /// keeps the selection.
+    #[test]
+    fn the_tabs_share_the_header_and_reset_the_list() {
+        let rects = PanelRects::default();
+        let header = rects.header_rect();
+        // Both tabs sit on the authored header line, side by side.
+        for tab in SceneTab::ALL {
+            let r = tab_rect(rects, tab);
+            assert_eq!(r.y, header.y);
+            assert_eq!(
+                hit(scenes_state(0, true, scene_count()), r.center()),
+                Some(DeveloperAction::SelectTab(tab)),
+                "tab {tab:?}"
+            );
+        }
+        // The halves are disjoint - a draw kept inside its own rect (`_fit`)
+        // can therefore never overprint the other tab or its click target.
+        let missions = tab_rect(rects, SceneTab::Missions);
+        let debug = tab_rect(rects, SceneTab::DebugScenes);
+        assert!(missions.x + missions.w <= debug.x);
+
+        let mut scene = DeveloperScene::new();
+        scene.page = DeveloperPage::Scenes;
+        scene.missions = vec!["earth.mis".to_owned(), "station.mis".to_owned()];
+        scene.reset_list();
+        scene.handle_action(DeveloperAction::SelectScene(1));
+        // Re-clicking the showing tab is a no-op.
+        scene.handle_action(DeveloperAction::SelectTab(SceneTab::Missions));
+        assert_eq!(scene.selected_scene, Some(1));
+        // Switching resets to the other list's first entry.
+        scene.handle_action(DeveloperAction::SelectTab(SceneTab::DebugScenes));
+        assert_eq!(scene.tab, SceneTab::DebugScenes);
+        assert_eq!(scene.scene_scroll, 0);
+        assert_eq!(scene.selected_scene, Some(0));
+    }
+
+    /// Opening the launcher enumerates the install's missions and lands on the
+    /// Missions tab with its first entry preselected - even when it was left
+    /// on the Debug Scenes tab last time.
+    #[test]
+    fn opening_the_launcher_enumerates_missions() {
+        let mut scene = DeveloperScene::new();
+        scene.tab = SceneTab::DebugScenes;
+        scene.handle_action(DeveloperAction::OpenScenes);
+        assert_eq!(scene.tab, SceneTab::Missions);
+        assert_eq!(scene.missions, mission_files());
+        assert_eq!(
+            scene.selected_scene,
+            (!scene.missions.is_empty()).then_some(0)
+        );
+        // The enumeration is sorted and lists only `*.mis` files.
+        let mut sorted = scene.missions.clone();
+        sorted.sort_by_key(|name| name.to_ascii_lowercase());
+        assert_eq!(scene.missions, sorted);
+        assert!(
+            scene
+                .missions
+                .iter()
+                .all(|name| name.to_ascii_lowercase().ends_with(".mis"))
+        );
+    }
+
     /// The bug a scrolling list invites: the rows move but the hit test still
     /// indexes positionally, so clicking a row launches whatever scene *used*
     /// to be there.
     #[test]
     fn the_launcher_hit_test_follows_its_scroll() {
         let rects = PanelRects::default();
-        let max = scene_max_scroll(rects);
+        let len = scene_count();
+        let max = scene_max_scroll(rects, len);
         assert!(max > 0, "the shipped scene list must scroll to test this");
         for scroll in 1..=max {
-            let slot0 = scene_row_rect(rects, 0);
+            let slot0 = scene_row_rect(rects, len, 0);
             assert_eq!(
-                hit(scenes_state(scroll, true), slot0.center()),
+                hit(scenes_state(scroll, true, len), slot0.center()),
                 Some(DeveloperAction::SelectScene(scroll)),
                 "top row at scroll {scroll}"
             );
@@ -820,23 +1097,26 @@ mod tests {
     #[test]
     fn the_launchers_rocker_scrolls_and_stops_at_both_ends() {
         let rects = PanelRects::default();
-        let rocker = scene_rocker(rects).expect("the shipped scene list scrolls");
-        let max = scene_max_scroll(rects);
+        let len = scene_count();
+        let rocker = scene_rocker(rects, len).expect("the shipped scene list scrolls");
+        let max = scene_max_scroll(rects, len);
 
         // At the top the "Up" half is inert; at the bottom, "Dn" is.
-        assert_eq!(hit(scenes_state(0, true), rocker.up.center()), None);
+        assert_eq!(hit(scenes_state(0, true, len), rocker.up.center()), None);
         assert_eq!(
-            hit(scenes_state(0, true), rocker.down.center()),
+            hit(scenes_state(0, true, len), rocker.down.center()),
             Some(DeveloperAction::ScrollScenes(ScrollHalf::Down))
         );
-        assert_eq!(hit(scenes_state(max, true), rocker.down.center()), None);
         assert_eq!(
-            hit(scenes_state(max, true), rocker.up.center()),
+            hit(scenes_state(max, true, len), rocker.down.center()),
+            None
+        );
+        assert_eq!(
+            hit(scenes_state(max, true, len), rocker.up.center()),
             Some(DeveloperAction::ScrollScenes(ScrollHalf::Up))
         );
 
-        let mut scene = DeveloperScene::new();
-        scene.page = DeveloperPage::Scenes;
+        let mut scene = debug_tab_scene();
         for _ in 0..max + 3 {
             scene.handle_action(DeveloperAction::ScrollScenes(ScrollHalf::Down));
         }
@@ -845,18 +1125,22 @@ mod tests {
         assert_eq!(scene.scene_scroll, max - 1);
 
         // A row's text must never run under the rocker it shares the pane with.
-        assert!(scene_text_rect(rects, 0).x + scene_text_rect(rects, 0).w <= rocker.up.x);
+        let text = scene_text_rect(rects, len, 0);
+        assert!(text.x + text.w <= rocker.up.x);
     }
 
     #[test]
     fn launch_requires_a_selection() {
         assert_eq!(
-            hit(scenes_state(0, true), action_point()),
+            hit(scenes_state(0, true, scene_count()), action_point()),
             Some(DeveloperAction::LaunchScene)
         );
         // With nothing selected the button is inert rather than launching
         // whatever happens to be first.
-        assert_eq!(hit(scenes_state(0, false), action_point()), None);
+        assert_eq!(
+            hit(scenes_state(0, false, scene_count()), action_point()),
+            None
+        );
         let mut scene = DeveloperScene::new();
         scene.selected_scene = None;
         assert!(scene.handle_action(DeveloperAction::LaunchScene).is_empty());
@@ -866,7 +1150,7 @@ mod tests {
     fn done_leaves_the_launcher_for_the_parameters_not_the_main_menu() {
         let done = PanelRects::default().done_rect().center();
         assert_eq!(
-            hit(scenes_state(0, true), done),
+            hit(scenes_state(0, true, scene_count()), done),
             Some(DeveloperAction::CloseScenes)
         );
         let mut scene = DeveloperScene::new();
@@ -894,11 +1178,11 @@ mod tests {
             Some(DeveloperAction::Param(_))
         ));
         assert!(!matches!(
-            hit(scenes_state(0, true), arrow),
+            hit(scenes_state(0, true, scene_count()), arrow),
             Some(DeveloperAction::Param(_))
         ));
         // And the launcher's rows are not on the parameters page.
-        let row = scene_row_rect(PanelRects::default(), 0);
+        let row = scene_row_rect(PanelRects::default(), scene_count(), 0);
         assert!(!matches!(
             hit(params_state(0), row.center()),
             Some(DeveloperAction::SelectScene(_))
@@ -933,16 +1217,42 @@ mod tests {
             Some(DeveloperAction::OpenScenes)
         );
         assert_eq!(
-            resolve_click_at(scenes_state(0, true), Some(point), pressed, false).0,
+            resolve_click_at(
+                scenes_state(0, true, scene_count()),
+                Some(point),
+                pressed,
+                false
+            )
+            .0,
             Some(DeveloperAction::LaunchScene)
         );
 
         // A row on the launcher, through the same ray.
-        let row = scene_row_rect(PanelRects::default(), 2).center();
+        let row = scene_row_rect(PanelRects::default(), scene_count(), 2).center();
         let (point, pressed) = aim(row);
         assert_eq!(
-            resolve_click_at(scenes_state(0, true), Some(point), pressed, false).0,
+            resolve_click_at(
+                scenes_state(0, true, scene_count()),
+                Some(point),
+                pressed,
+                false
+            )
+            .0,
             Some(DeveloperAction::SelectScene(2))
+        );
+
+        // ...and a tab, through the same ray - the parity the tabs must keep.
+        let tab = tab_rect(PanelRects::default(), SceneTab::Missions).center();
+        let (point, pressed) = aim(tab);
+        assert_eq!(
+            resolve_click_at(
+                scenes_state(0, true, scene_count()),
+                Some(point),
+                pressed,
+                false
+            )
+            .0,
+            Some(DeveloperAction::SelectTab(SceneTab::Missions))
         );
     }
 
@@ -951,12 +1261,13 @@ mod tests {
     #[test]
     fn the_launchers_rows_stay_inside_the_pane() {
         let rects = PanelRects::default();
+        let len = scene_count();
         let list = rects.list_rect();
-        let rows = scene_visible_rows(rects, 0);
+        let rows = scene_visible_rows(rects, len, 0);
         assert!(rows.len() >= 10, "the pane should show a useful page");
-        let last = scene_row_rect(rects, rows.len() - 1);
+        let last = scene_row_rect(rects, len, rows.len() - 1);
         assert!(last.y + last.h <= FIELD_TOP_Y);
         assert!(last.y + last.h <= list.y + list.h);
-        assert_eq!(scene_row_rect(rects, 0).x, list.x);
+        assert_eq!(scene_row_rect(rects, len, 0).x, list.x);
     }
 }

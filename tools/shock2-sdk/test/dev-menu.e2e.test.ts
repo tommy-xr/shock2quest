@@ -43,12 +43,22 @@ const DONE: [number, number] = [527 + 95 / 2, 405 + 62 / 2];
 // launch itself on the launcher page.
 const ACTION: [number, number] = [527 + 96 / 2, 161 + 62 / 2];
 /**
+ * The launcher's tabs ride the header line (GAMELODR.BIN rect 0: 261,31
+ * 202x20), split in half: Missions on the left, Debug Scenes on the right.
+ * The launcher opens on Missions.
+ */
+const TAB_MISSIONS: [number, number] = [261 + 202 / 4, 41];
+const TAB_DEBUG_SCENES: [number, number] = [261 + (3 * 202) / 4, 41];
+/**
  * A row of the launcher's list: 19px rows from the pane top (y=54), x well
- * inside the pane and clear of the scroll gutter. Row 2 is `debug_minimal` -
- * the cheapest scene to actually start.
+ * inside the pane and clear of the scroll gutter. On the Debug Scenes tab
+ * row 2 is `debug_minimal` - the cheapest scene to actually start. On the
+ * Missions tab (the sorted *.mis files of the canonical install) row 9 is
+ * `medsci1.mis`.
  */
 const sceneRow = (index: number): [number, number] => [330, 54 + index * 19 + 9];
 const DEBUG_MINIMAL_ROW = 2;
+const MEDSCI1_ROW = 9;
 
 /** SIMR.BIN pause entries: five 179x76 buttons at x=400, top 20, 92px pitch. */
 const pauseEntry = (index: number): [number, number] =>
@@ -277,8 +287,9 @@ test(
     );
     await click(game, ROW0_DECREMENT);
 
-    // Select a scene and launch it.
+    // Select a scene on the Debug Scenes tab and launch it.
     await click(game, ACTION);
+    await click(game, TAB_DEBUG_SCENES);
     await click(game, sceneRow(DEBUG_MINIMAL_ROW));
     await click(game, ACTION);
     assert.equal(
@@ -286,6 +297,39 @@ test(
       "debug_minimal",
       "Launch must start the selected scene",
     );
+  },
+);
+
+test(
+  "the flat Developer screen launches a full mission from the Missions tab",
+  { skip: !e2eEnabled && "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "main_menu" });
+    await game.step({ frames: 10 });
+    await click(game, [489, 202]);
+    assert.equal((await game.info()).mission, "developer");
+
+    // The launcher opens on the Missions tab; tab over to Debug Scenes and
+    // back, so the round trip is exercised end to end, then pick a row.
+    await click(game, ACTION);
+    await click(game, TAB_DEBUG_SCENES);
+    await click(game, TAB_MISSIONS);
+    await click(game, sceneRow(MEDSCI1_ROW));
+    await click(game, ACTION);
+    // Row 9 is medsci1.mis on the canonical 23-mission install (the same
+    // assumption missions.e2e.test.ts hardcodes). Asserting the exact name
+    // proves the row CLICK picked the mission - the preselected row 0 would
+    // boot command1.mis, so a looser ".mis booted" check could pass without
+    // the selection ever moving.
+    assert.equal(
+      (await game.info()).mission,
+      "medsci1.mis",
+      "Launch on the Missions tab must boot the clicked row's mission (canonical install assumed)",
+    );
+
+    // ...and it is a real world, not just a scene-name swap.
+    const { entities } = await game.entities.list({ limit: 200 });
+    assert.ok(entities.length > 100, `expected a populated mission, got ${entities.length}`);
   },
 );
 
@@ -307,6 +351,7 @@ test(
     await game.step({ frames: 5 });
     await game.screenshot("dev-scenes-vr.png");
 
+    await vrClick(game, TAB_DEBUG_SCENES);
     await vrClick(game, sceneRow(DEBUG_MINIMAL_ROW));
     await vrClick(game, ACTION);
     assert.equal((await game.info()).mission, "debug_minimal");
