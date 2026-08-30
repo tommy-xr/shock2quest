@@ -59,6 +59,10 @@ pub struct ModelPreview {
     error: Option<String>,
     pub debug_skeletons: bool,
     pub debug_hit_boxes: bool,
+    /// Suspend the per-frame wall-clock tick of an animated scene, so
+    /// `advance()` is the only time source - `--screenshot` runs set this to
+    /// capture a deterministic pose.
+    pub paused: bool,
     // Orbit camera around `target` (dark_viewer's parameterization: pitch 90
     // is horizontal, distance along the orbit radius).
     yaw: f32,
@@ -89,6 +93,7 @@ impl ModelPreview {
             error: None,
             debug_skeletons: false,
             debug_hit_boxes: false,
+            paused: false,
             yaw: 65.0,
             pitch: 75.0,
             distance: 10.0,
@@ -113,7 +118,7 @@ impl ModelPreview {
             ui.label(format!("Cannot render this model: {error}"));
             return;
         }
-        if self.animated {
+        if self.animated && !self.paused {
             // Tick the playing clip with real dt and keep frames coming.
             self.needs_render = true;
             ui.ctx().request_repaint();
@@ -144,9 +149,11 @@ impl ModelPreview {
         }
 
         if self.needs_render && self.scene.is_some() && self.fbo.is_some() {
-            let dt = ui.input(|i| i.stable_dt).min(0.1);
-            if let Some(scene) = &mut self.scene {
-                scene.update(dt);
+            if !self.paused {
+                let dt = ui.input(|i| i.stable_dt).min(0.1);
+                if let Some(scene) = &mut self.scene {
+                    scene.update(dt);
+                }
             }
             self.render_scene(px);
             self.needs_render = false;
@@ -204,11 +211,11 @@ impl ModelPreview {
             .map(|scene| Box::new(scene) as Box<dyn ToolScene>)
             .map_err(|err| err.to_string()),
             // Clip parsing panics on malformed input too, so it also runs
-            // under the guard. `<name>_.mc` is the clip importer's naming.
+            // under the guard.
             Some(clip) => quiet_catch(|| {
                 BinAiViewerScene::from_clips(
                     key.to_string(),
-                    vec![format!("{clip}_.mc")],
+                    vec![dark_viewer::normalize_clip_name(clip)?],
                     &mut self.asset_cache,
                     self.debug_skeletons,
                     self.debug_hit_boxes,
@@ -236,11 +243,17 @@ impl ModelPreview {
     /// mid-clip.
     pub fn advance(&mut self, seconds: f32) {
         let Some(scene) = &mut self.scene else { return };
-        let steps = (seconds * 60.0).round().max(0.0) as u32;
+        // Cap at 10 minutes of sim time so a typo'd --advance can't hang.
+        let steps = (seconds * 60.0).round().clamp(0.0, 60.0 * 600.0) as u32;
         for _ in 0..steps {
             scene.update(1.0 / 60.0);
         }
         self.needs_render = true;
+    }
+
+    /// Why the current selection could not be shown, if it could not.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     /// Reset the orbit to frame the model: static models by their bounding

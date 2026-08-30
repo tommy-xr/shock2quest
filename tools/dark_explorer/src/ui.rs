@@ -700,13 +700,11 @@ impl ExplorerApp {
                 }
             });
 
-        let (skeletons, hitboxes) = self.initial_overlays;
-        let host = self.model_preview.get_or_insert_with(|| {
-            let mut host = ModelPreview::new();
-            host.debug_skeletons = skeletons;
-            host.debug_hit_boxes = hitboxes;
-            host
-        });
+        let host = preview_host(
+            &mut self.model_preview,
+            self.initial_overlays,
+            self.screenshot.is_some(),
+        );
         host.show(
             ui,
             frame,
@@ -804,13 +802,11 @@ impl ExplorerApp {
             }
             PreviewKind::Model => {
                 let key = preview.key.clone();
-                let (skeletons, hitboxes) = self.initial_overlays;
-                let host = self.model_preview.get_or_insert_with(|| {
-                    let mut host = ModelPreview::new();
-                    host.debug_skeletons = skeletons;
-                    host.debug_hit_boxes = hitboxes;
-                    host
-                });
+                let host = preview_host(
+                    &mut self.model_preview,
+                    self.initial_overlays,
+                    self.screenshot.is_some(),
+                );
                 host.show(ui, frame, &key, None);
             }
             PreviewKind::Raw { reason, hex } => {
@@ -846,6 +842,12 @@ impl ExplorerApp {
             }
         }
         if self.frames_rendered == 3 {
+            // A selection that failed to load would capture only its error
+            // label; fail loudly instead so automation can trust exit 0.
+            if let Some(error) = self.model_preview.as_ref().and_then(|p| p.error()) {
+                eprintln!("cannot render the selection: {error}");
+                std::process::exit(2);
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
         let image = ctx.input(|i| {
@@ -879,6 +881,23 @@ impl ExplorerApp {
             std::process::exit(1);
         }
     }
+}
+
+/// The lazily-built 3D preview host. CLI overlays apply on first build, and a
+/// `--screenshot` run pauses wall-clock animation so `--advance` is the only
+/// time source (a deterministic pose per invocation).
+fn preview_host(
+    model_preview: &mut Option<ModelPreview>,
+    (skeletons, hitboxes): (bool, bool),
+    paused: bool,
+) -> &mut ModelPreview {
+    model_preview.get_or_insert_with(|| {
+        let mut host = ModelPreview::new();
+        host.debug_skeletons = skeletons;
+        host.debug_hit_boxes = hitboxes;
+        host.paused = paused;
+        host
+    })
 }
 
 /// One node of the archetype tree: a collapsible header where the template has
@@ -915,7 +934,11 @@ fn show_archetype_node(
                 });
         }
         _ => {
-            if ui.selectable_label(is_selected, &name).clicked() && is_archetype {
+            // A childless grouping node (a multi-parent template's other
+            // ancestor) is not selectable - only archetypes are.
+            if !is_archetype {
+                ui.label(&name);
+            } else if ui.selectable_label(is_selected, &name).clicked() {
                 *clicked = Some(id);
             }
         }

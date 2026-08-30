@@ -8,6 +8,7 @@ use dark::motion::MotionDB;
 use dark::properties::{PropCreature, PropModelName, PropSymName, PropTemplateId};
 use dark::ss2_entity_info;
 use shipyard::{Get, IntoIter, IntoWithId, View, World};
+use shock2vr::creature::ActorType;
 
 use crate::ui::quiet_catch;
 
@@ -25,9 +26,6 @@ const CREATURE_TYPE_NAMES: &[&str] = &[
     "Shodan",
 ];
 
-/// `ActorType` values, indexing the motion database's tag databases.
-const ACTOR_TYPE_NAMES: &[&str] = &["Human", "PlayerLimb", "Droid", "Overlord", "Arachnid"];
-
 #[derive(Clone)]
 pub struct Archetype {
     pub template_id: i32,
@@ -35,8 +33,8 @@ pub struct Archetype {
     /// Model base name from `PropModelName` (lowercased, no extension).
     pub model_name: String,
     pub creature_type: u32,
-    /// Motion-database creature index, from the creature definition.
-    pub actor_type: Option<u32>,
+    /// The motion database's creature category, from the creature definition.
+    pub actor_type: Option<ActorType>,
 }
 
 impl Archetype {
@@ -48,11 +46,8 @@ impl Archetype {
     }
 
     pub fn actor_type_name(&self) -> String {
-        match self.actor_type {
-            Some(actor) => ACTOR_TYPE_NAMES
-                .get(actor as usize)
-                .map(|n| format!("{n} ({actor})"))
-                .unwrap_or_else(|| format!("unknown ({actor})")),
+        match &self.actor_type {
+            Some(actor) => format!("{actor:?} ({})", actor.clone() as u32),
             None => "unknown".to_string(),
         }
     }
@@ -104,13 +99,13 @@ impl ArchetypeDb {
     /// Clip names playable by this archetype's actor type.
     pub fn clips_for(&self, archetype: &Archetype) -> Result<Vec<String>, String> {
         let motion_db = self.motion_db.as_ref().map_err(|e| e.clone())?;
-        let actor = archetype.actor_type.ok_or_else(|| {
+        let actor = archetype.actor_type.clone().ok_or_else(|| {
             format!(
                 "no creature definition for {}",
                 archetype.creature_type_name()
             )
         })?;
-        Ok(motion_db.get_all_motions_for_creature(actor))
+        Ok(motion_db.get_all_motions_for_creature(actor as u32))
     }
 
     /// Resolve a CLI `--archetype` value: a template id (either sign) or a
@@ -189,7 +184,7 @@ fn load_impl() -> Result<ArchetypeDb, String> {
                 continue;
             };
             let actor_type = shock2vr::creature::get_creature_definition(creature.0)
-                .map(|def| def.actor_type.clone() as u32);
+                .map(|def| def.actor_type.clone());
             archetypes.insert(
                 template_id,
                 Archetype {
