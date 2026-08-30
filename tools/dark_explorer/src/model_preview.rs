@@ -301,8 +301,6 @@ impl ModelPreview {
     /// box, animated (AI) meshes with a standing-creature default. The default
     /// angle is a three-quarter view so flat models are not seen edge-on.
     fn frame_camera(&mut self, model: &Model) {
-        self.yaw = 65.0;
-        self.pitch = 75.0;
         match model.bounding_box() {
             Some(bb) => {
                 // The scene objects render with the model transform applied, so
@@ -323,6 +321,8 @@ impl ModelPreview {
             None => {
                 // Animated (AI) meshes expose no bounds; they T-pose around
                 // the origin at the hips (legs below y=0), so aim there.
+                self.yaw = 65.0;
+                self.pitch = 75.0;
                 self.target = vec3(0.0, 0.0, 0.0);
                 self.distance = 11.0;
             }

@@ -1162,7 +1162,6 @@ dependencies = [
  "engine",
  "gl",
  "image 0.24.7",
- "num-traits",
  "shipyard",
  "shock2vr",
  "zip",

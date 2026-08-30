@@ -2,7 +2,9 @@
 //! a model + creature type, arranged in their MetaProp hierarchy, plus the
 //! motion-database clip list for each archetype's actor type.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+use dark_viewer::clip_base_name;
 
 use dark::motion::MotionDB;
 use dark::properties::{PropCreature, PropModelName, PropSymName, PropTemplateId};
@@ -85,18 +87,6 @@ impl ClipInfo {
     }
 }
 
-/// The motion-DB name behind a `.mc` asset key: the importer's `<name>_.mc`
-/// convention, tolerating a plain `<name>.mc`.
-fn clip_base_name(asset_key: &str) -> String {
-    let file = asset_key
-        .rsplit('/')
-        .next()
-        .unwrap_or(asset_key)
-        .to_ascii_lowercase();
-    let stem = file.strip_suffix(".mc").unwrap_or(&file);
-    stem.strip_suffix('_').unwrap_or(stem).to_string()
-}
-
 pub struct ArchetypeDb {
     pub archetypes: HashMap<i32, Archetype>,
     /// Display names for every tree node (grouping ancestors included).
@@ -157,15 +147,20 @@ impl ArchetypeDb {
             return Err(format!("'{name}' is not in motiondb.bin"));
         }
         // A clip does not name its actor, so ask each actor's tag database
-        // whether it can reach this clip; Human is the fallback.
-        let actor_type = (0..motion_db.get_creature_type_count() as u32)
+        // whether it can reach this clip; Human is the fallback. Actors come
+        // from the archetype table (deduped, ordered - Human wins ties).
+        let actor_type = self
+            .archetypes
+            .values()
+            .filter_map(|a| a.actor_type.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .find(|actor| {
                 motion_db
-                    .get_all_motions_for_creature(*actor)
+                    .get_all_motions_for_creature(actor.clone() as u32)
                     .iter()
                     .any(|m| m.eq_ignore_ascii_case(&name))
-            })
-            .and_then(num_traits::FromPrimitive::from_u32);
+            });
         let resolved = actor_type.clone().unwrap_or(ActorType::Human);
         let model_key = self
             .model_for_actor(&resolved)

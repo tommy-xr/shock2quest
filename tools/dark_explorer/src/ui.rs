@@ -900,6 +900,20 @@ fn raw_fallback(bytes: &[u8], reason: String) -> PreviewKind {
 }
 
 /// Classic offset/hex/ascii dump of the first `limit` bytes.
+/// Scrollable read-only monospace view of a `hex_dump`.
+fn show_hex(ui: &mut egui::Ui, hex: &str) {
+    egui::ScrollArea::both()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let mut text = hex;
+            ui.add(
+                egui::TextEdit::multiline(&mut text)
+                    .font(egui::TextStyle::Monospace)
+                    .desired_width(f32::INFINITY),
+            );
+        });
+}
+
 fn hex_dump(bytes: &[u8], limit: usize) -> String {
     let mut out = String::new();
     for (row, chunk) in bytes[..bytes.len().min(limit)].chunks(16).enumerate() {
@@ -1686,28 +1700,12 @@ impl ExplorerApp {
                         }
                     });
                 ui.separator();
-                egui::ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut hex.as_str())
-                                .font(egui::TextStyle::Monospace)
-                                .desired_width(f32::INFINITY),
-                        );
-                    });
+                show_hex(ui, hex);
             }
             PreviewKind::Raw { reason, hex } => {
                 ui.label(format!("Cannot render this file: {reason}"));
                 if !hex.is_empty() {
-                    egui::ScrollArea::both()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut hex.as_str())
-                                    .font(egui::TextStyle::Monospace)
-                                    .desired_width(f32::INFINITY),
-                            );
-                        });
+                    show_hex(ui, hex);
                 }
             }
         }
