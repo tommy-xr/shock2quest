@@ -29,7 +29,7 @@ impl BinObjViewerScene {
         debug_hit_boxes: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // We don't load the model here, we'll load it during render using the asset cache
-        let mut animation_player = AnimationPlayer::empty();
+        let animation_player = AnimationPlayer::empty();
         // animation_player = AnimationPlayer::set_additional_joint_transform(
         //     &animation_player,
         //     2,

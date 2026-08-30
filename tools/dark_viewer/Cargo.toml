@@ -3,6 +3,10 @@ name = "dark_viewer"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "dark_viewer"
+path = "src/lib.rs"
+
 [[bin]]
 name = "dark_viewer"
 path = "src/main.rs"

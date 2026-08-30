@@ -52,11 +52,11 @@ impl VideoPlayerScene {
 }
 
 impl ToolScene for VideoPlayerScene {
-    fn init(&mut self, audio_context: &mut AudioContext<(), String>) {
+    fn init(&mut self, _audio_context: &mut AudioContext<(), String>) {
         #[cfg(feature = "ffmpeg")]
         {
             engine_ffmpeg::init().unwrap();
-            self.init_audio(audio_context);
+            self.init_audio(_audio_context);
         }
     }
 
