@@ -730,7 +730,7 @@ mod tests {
 
     #[test]
     fn world_supports_transition_save_data() {
-        // On "New Game", `switch_mission` calls `to_save_data` on the outgoing
+        // On "New Game", the level transition calls `to_save_data` on the outgoing
         // scene's world, so the menu world must support it (PlayerInfo,
         // GlobalTemplateIdMap, ...). This would panic if a unique were missing.
         let scene = MainMenuScene::new();

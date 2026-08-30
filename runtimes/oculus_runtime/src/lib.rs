@@ -531,11 +531,6 @@ fn main() {
     let bundle_storage = engine.get_storage();
     let mut experimental_features = HashSet::new();
     // experimental_features.insert("gui".to_owned());
-    // Level transitions are deferred so the loading screen shows while the level
-    // parses, instead of freezing the headset on the last menu frame for the whole
-    // load (#1002). On by default here because a frozen compositor frame is far
-    // worse in a headset than on a monitor; it stays opt-in on the desktop.
-    experimental_features.insert("loading_screen".to_owned());
     let mission = quest_config::configured_mission();
     let game_init_started = Instant::now();
     let options: GameOptions = GameOptions {

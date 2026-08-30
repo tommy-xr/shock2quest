@@ -752,7 +752,7 @@ fn run_game_blocking(
 
         // Throttle: paused, no step in progress, no command arrived this
         // iteration, nothing queued to render for, and no deferred level
-        // transition (--experimental loading_screen) needs frames pumped.
+        // transition needs frames pumped.
         // Without this the loop spins as fast as possible - no swap interval
         // is set anywhere and the window is hidden, so `swap_buffers` never
         // blocks - pinning a CPU core running an unchanged frame's
@@ -1129,10 +1129,9 @@ fn process_command(
             tracing::info!("Transitioning level to {} (loc {:?})", level_file, loc);
             game.transition_level(level_file.clone(), loc);
             // Report the ACTUAL post-switch scene rather than assuming success.
-            // Without the loading_screen feature the switch is synchronous and
-            // scene_name() is already the target; with it the switch is deferred
-            // (scene_name() is still "loading"/the old level), so success stays
-            // false until the caller steps far enough for it to complete.
+            // The switch is deferred (scene_name() is still "loading"/the old
+            // level), so success stays false until the caller steps far enough
+            // for it to complete.
             let mission = game.scene_name().to_string();
             let success = mission == level_file;
             let message = if success {
