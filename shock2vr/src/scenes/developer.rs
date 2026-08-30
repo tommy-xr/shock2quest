@@ -1101,7 +1101,7 @@ mod tests {
         let rocker = scene_rocker(rects, len).expect("the shipped scene list scrolls");
         let max = scene_max_scroll(rects, len);
 
-        // At the top the "Up" half is inert; at the bottom, "Dn" is.
+        // At the top the up half is inert; at the bottom, the down half is.
         assert_eq!(hit(scenes_state(0, true, len), rocker.up.center()), None);
         assert_eq!(
             hit(scenes_state(0, true, len), rocker.down.center()),

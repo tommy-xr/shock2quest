@@ -246,7 +246,7 @@ fn visible_rows(rects: PanelRects, scroll: usize) -> Range<usize> {
     list_scroll::visible_rows(dev_params::PARAMS.len(), rows_per_page(rects), scroll)
 }
 
-/// The scroll rocker's two halves - "Up" and "Down" - in a gutter down the
+/// The scroll rocker's two halves - up and down arrows - in a gutter down the
 /// list pane's right edge, beside the rows they scroll. `None` when the whole
 /// registry fits on one page.
 ///
@@ -534,7 +534,7 @@ mod tests {
         let (up, down) = scroll_rects(rects).expect("the shipped registry scrolls");
         let mut scroll = 0;
 
-        // At the top the "Up" half is inert - and stays inert if activated.
+        // At the top the up half is inert - and stays inert if activated.
         assert_eq!(hit(rects, scroll, up.center()), None);
         assert_eq!(
             hit(rects, scroll, down.center()),

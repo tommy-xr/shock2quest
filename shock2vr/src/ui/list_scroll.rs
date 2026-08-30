@@ -4,7 +4,7 @@
 //! of them bounded by the backdrop art, and - when the contents outrun the page
 //! - a two-button rocker in a gutter down the pane's right edge. This module
 //! owns that geometry, its enablement rule ("a half that cannot move is inert,
-//! not just dimmed") and its labels, so the Developer parameter list and the
+//! not just dimmed") and its arrow art, so the Developer parameter list and the
 //! debug-scene launcher scroll the same way rather than each growing their own.
 //!
 //! Everything here is in canvas pixels and presentation-free: hosts hand the
@@ -15,26 +15,19 @@ use std::ops::Range;
 
 use cgmath::Vector2;
 
-use super::{HAlign, Rect, UiCanvas, VAlign};
+use super::{Rect, UiCanvas};
 
-/// The gutter the rocker lives in, and the height of each of its halves.
-pub const GUTTER_W: f32 = 26.0;
-const BUTTON_H: f32 = 20.0;
+/// The gutter the rocker lives in, and the height of each of its halves -
+/// the authored 32x16 size of the arrow art, so it draws unstretched.
+pub const GUTTER_W: f32 = 32.0;
+const BUTTON_H: f32 = 16.0;
 
-/// The small data font, and "Dn" rather than "Down": `text_native` does not
-/// shrink to its rect, so the display font's labels overhung the gutter and
-/// drew across the rows beside them.
-const LABEL_FONT: &str = "mainfont.fon";
-const UP_LABEL: &str = "Up";
-const DOWN_LABEL: &str = "Dn";
-
-/// Opacity for a half that cannot move any further - which is also not
-/// hit-testable.
-const DISABLED_OPACITY: f32 = 0.3;
-/// Opacity for a movable half the pointer is not over.
-const IDLE_OPACITY: f32 = 0.65;
-/// Opacity for the half under the pointer.
-const HOVER_OPACITY: f32 = 1.0;
+/// The original scroll-arrow art. Each half has three states, and the art
+/// itself carries the shading, so the rocker draws fully opaque throughout:
+/// `_NORM` idle, `_HLIT` under the pointer, `_DOWN` (the darkened plate) for a
+/// half that cannot move.
+const UP_ART: [&str; 3] = ["BUP_NORM.PCX", "BUP_HLIT.PCX", "BUP_DOWN.PCX"];
+const DOWN_ART: [&str; 3] = ["BDN_NORM.PCX", "BDN_HLIT.PCX", "BDN_DOWN.PCX"];
 
 /// Which half of the rocker a point is over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,24 +119,18 @@ pub fn draw(
     max_scroll: usize,
     hovered: Option<ScrollHalf>,
 ) {
-    for (half, rect, text, enabled) in [
-        (ScrollHalf::Up, rocker.up, UP_LABEL, scroll > 0),
-        (
-            ScrollHalf::Down,
-            rocker.down,
-            DOWN_LABEL,
-            scroll < max_scroll,
-        ),
+    for (half, rect, art, enabled) in [
+        (ScrollHalf::Up, rocker.up, UP_ART, scroll > 0),
+        (ScrollHalf::Down, rocker.down, DOWN_ART, scroll < max_scroll),
     ] {
-        canvas
-            .text_native(rect, text, LABEL_FONT, HAlign::Center, VAlign::Middle)
-            .opacity(if !enabled {
-                DISABLED_OPACITY
-            } else if hovered == Some(half) {
-                HOVER_OPACITY
-            } else {
-                IDLE_OPACITY
-            });
+        let texture = if !enabled {
+            art[2]
+        } else if hovered == Some(half) {
+            art[1]
+        } else {
+            art[0]
+        };
+        canvas.image(rect, texture);
     }
 }
 
