@@ -529,8 +529,7 @@ fn main() {
     let now = Instant::now();
     let engine = engine::android();
     let bundle_storage = engine.get_storage();
-    let mut experimental_features = HashSet::new();
-    // experimental_features.insert("gui".to_owned());
+    let experimental_features = HashSet::new();
     let mission = quest_config::configured_mission();
     let game_init_started = Instant::now();
     let options: GameOptions = GameOptions {
