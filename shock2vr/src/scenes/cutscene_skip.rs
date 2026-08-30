@@ -68,7 +68,7 @@ const RING_INNER: f32 = 0.66;
 const RING_OUTER: f32 = 0.86;
 /// Alpha of the part of the ring the hold has not reached yet - present enough
 /// to read as a track for the fill to run around.
-const TRACK_ALPHA: u8 = 60;
+const TRACK_ALPHA: u8 = 90;
 
 /// The radial progress ring for a hold `progress` in 0.0..=1.0: a white arc
 /// filling clockwise from twelve o'clock over a faint full-circle track,
