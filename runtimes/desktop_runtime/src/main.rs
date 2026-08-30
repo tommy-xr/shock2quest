@@ -68,6 +68,9 @@ struct HandContext {
     left_trigger_pressed: bool,
     left_squeeze_pressed: bool,
     left_a_pressed: bool,
+
+    /// Which hand owns each physically-held mouse button (trigger, squeeze, A).
+    button_owner: [Option<MouseLookTarget>; 3],
 }
 
 impl HandContext {
@@ -83,6 +86,8 @@ impl HandContext {
             left_squeeze_pressed: false,
             left_trigger_pressed: false,
             left_a_pressed: false,
+
+            button_owner: [None; 3],
         }
     }
 }
@@ -241,6 +246,30 @@ fn mouse_look_target(
         MouseLookTarget::RightHand
     } else {
         MouseLookTarget::Cursor
+    }
+}
+
+/// Which hand a held mouse button belongs to.
+///
+/// Ownership is claimed on the press edge by the hand the mouse was aiming
+/// then, and dropped only when the button physically comes up - so releasing
+/// Q/E while still holding the mouse keeps the grab alive and you can walk
+/// around with the item. Ownership is never transferred mid-press: a stuck
+/// button on an unaimed hand would swallow the next rising edge.
+fn update_button_owner(
+    owner: Option<MouseLookTarget>,
+    pressed: bool,
+    look_target: MouseLookTarget,
+) -> Option<MouseLookTarget> {
+    if !pressed {
+        return None;
+    }
+    match owner {
+        Some(existing) => Some(existing),
+        None => match look_target {
+            MouseLookTarget::RightHand | MouseLookTarget::LeftHand => Some(look_target),
+            MouseLookTarget::Head | MouseLookTarget::Cursor => None,
+        },
     }
 }
 
@@ -632,18 +661,10 @@ fn process_events(
         MouseLookTarget::RightHand => {
             hand_context.right_hand_context.yaw += rot_yaw * head_rot_speed * delta_time;
             hand_context.right_hand_context.pitch += rot_pitch * head_rot_speed * delta_time;
-
-            hand_context.right_trigger_pressed = mouse_pressed(MouseButton::Button1);
-            hand_context.right_squeeze_pressed = mouse_pressed(MouseButton::Button2);
-            hand_context.right_a_pressed = mouse_pressed(MouseButton::Button3);
         }
         MouseLookTarget::LeftHand => {
             hand_context.left_hand_context.yaw += rot_yaw * head_rot_speed * delta_time;
             hand_context.left_hand_context.pitch += rot_pitch * head_rot_speed * delta_time;
-
-            hand_context.left_trigger_pressed = mouse_pressed(MouseButton::Button1);
-            hand_context.left_squeeze_pressed = mouse_pressed(MouseButton::Button2);
-            hand_context.left_a_pressed = mouse_pressed(MouseButton::Button3);
         }
         target @ (MouseLookTarget::Head | MouseLookTarget::Cursor) => {
             if target == MouseLookTarget::Head {
@@ -660,19 +681,29 @@ fn process_events(
     }
 
     // A hand's buttons are the mouse buttons *while the mouse is driving that
-    // hand*. Clearing an undriven hand's buttons keeps a press from latching
-    // when the aim key is released first - a stuck trigger swallows the menu's
-    // rising edge, so the next click does nothing.
-    if look_target != MouseLookTarget::RightHand {
-        hand_context.right_trigger_pressed = false;
-        hand_context.right_squeeze_pressed = false;
-        hand_context.right_a_pressed = false;
+    // hand*, but ownership latches for as long as the button is physically
+    // down: letting go of E/Q must not drop a held item.
+    let buttons = [
+        MouseButton::Button1,
+        MouseButton::Button2,
+        MouseButton::Button3,
+    ];
+    for (i, button) in buttons.into_iter().enumerate() {
+        hand_context.button_owner[i] = update_button_owner(
+            hand_context.button_owner[i],
+            mouse_pressed(button),
+            look_target,
+        );
     }
-    if look_target != MouseLookTarget::LeftHand {
-        hand_context.left_trigger_pressed = false;
-        hand_context.left_squeeze_pressed = false;
-        hand_context.left_a_pressed = false;
-    }
+    let owner = hand_context.button_owner;
+    let owned_by = |i: usize, hand: MouseLookTarget| owner[i] == Some(hand);
+    let (right, left) = (MouseLookTarget::RightHand, MouseLookTarget::LeftHand);
+    hand_context.right_trigger_pressed = owned_by(0, right);
+    hand_context.right_squeeze_pressed = owned_by(1, right);
+    hand_context.right_a_pressed = owned_by(2, right);
+    hand_context.left_trigger_pressed = owned_by(0, left);
+    hand_context.left_squeeze_pressed = owned_by(1, left);
+    hand_context.left_a_pressed = owned_by(2, left);
 
     if camera_context.pitch < -89.0 {
         camera_context.pitch = -89.0
@@ -900,5 +931,26 @@ mod tests {
             mouse_look_target(false, true, true, Vr),
             MouseLookTarget::LeftHand
         );
+    }
+
+    /// Releasing the aim key must not drop a grab: the hand that owned the
+    /// button on the press edge keeps it until the button physically releases.
+    #[test]
+    fn a_held_mouse_button_stays_with_the_hand_that_claimed_it() {
+        use MouseLookTarget::{Head, LeftHand, RightHand};
+
+        // Squeeze while aiming the right hand, then let go of E.
+        let owner = update_button_owner(None, true, RightHand);
+        assert_eq!(owner, Some(RightHand));
+        let owner = update_button_owner(owner, true, Head);
+        assert_eq!(owner, Some(RightHand));
+        // ...and re-aiming the other hand mid-press does not steal it.
+        let owner = update_button_owner(owner, true, LeftHand);
+        assert_eq!(owner, Some(RightHand));
+        // Releasing the button ends the grab.
+        assert_eq!(update_button_owner(owner, false, Head), None);
+
+        // A press with no hand aimed belongs to no hand.
+        assert_eq!(update_button_owner(None, true, Head), None);
     }
 }
