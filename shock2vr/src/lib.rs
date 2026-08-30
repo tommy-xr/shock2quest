@@ -14,7 +14,7 @@ pub mod teleport;
 pub mod time;
 
 pub mod career;
-mod creature;
+pub mod creature;
 pub mod data_files;
 pub mod death_camera;
 pub mod dev_params;
