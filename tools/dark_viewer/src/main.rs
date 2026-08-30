@@ -33,6 +33,7 @@ use engine::scene::SceneObject;
 use engine::scene::TextVertex;
 use shock2vr::GameOptions;
 use shock2vr::paths;
+use shock2vr::scenes::{is_cutscene_file, resolve_cutscene_path};
 use tracing::trace;
 
 extern crate gl;
@@ -58,7 +59,7 @@ const SCR_HEIGHT: u32 = 600;
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Shock Engine tooling viewer", long_about = None)]
 struct Cli {
-    /// Asset to preview (video .avi, object .bin, font .fon, GLB .glb)
+    /// Asset to preview (video .avi/.ogv, object .bin, font .fon, GLB .glb)
     filename: String,
 
     /// One or more animation clips, comma separated.
@@ -181,34 +182,6 @@ fn camera_update_mouse(camera: &mut CameraContext, x_pos: f32, y_pos: f32) -> Mo
     }
 }
 
-fn find_video_file(filename: &str) -> Option<String> {
-    let requested = Path::new(filename);
-    let data_root = paths::data_root();
-
-    let mut candidates = vec![requested.to_path_buf()];
-    if requested.is_relative() {
-        candidates.push(data_root.join(requested));
-        if let Some(file_name) = requested.file_name() {
-            candidates.push(data_root.join("cutscenes").join(file_name));
-            candidates.push(Path::new("cutscenes").join(file_name));
-        }
-    }
-
-    for candidate in candidates {
-        if candidate.exists() {
-            println!("Found video at: {}", candidate.display());
-            return Some(candidate.to_string_lossy().into_owned());
-        }
-    }
-
-    println!(
-        "Could not find video file {} in any of the expected locations (searched under {} and current directory)",
-        filename,
-        data_root.display()
-    );
-    None
-}
-
 fn create_scene(
     filename: &str,
     animations: &[String],
@@ -219,11 +192,18 @@ fn create_scene(
     debug_hit_boxes: bool,
 ) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
     let lower = filename.to_ascii_lowercase();
-    if lower.ends_with(".avi") {
-        if let Some(video_path) = find_video_file(filename) {
-            let scene = VideoPlayerScene::from_file(video_path)?;
+    if is_cutscene_file(&lower) {
+        let video_path = resolve_cutscene_path(filename);
+        if video_path.is_file() {
+            println!("Found video at: {}", video_path.display());
+            let scene = VideoPlayerScene::from_file(video_path.to_string_lossy().into_owned())?;
             Ok(Box::new(scene))
         } else {
+            println!(
+                "Could not find video file {} in any of the expected locations (searched under {} and current directory)",
+                filename,
+                paths::data_root().display()
+            );
             Err(format!("Could not find video file: {}", filename).into())
         }
     } else if lower.ends_with(".bin") {
@@ -259,7 +239,7 @@ fn create_scene(
         Err("Animation preview is only supported for .bin AI meshes.".into())
     } else {
         Err(format!(
-            "Unsupported file type: {}. Supported file types: .avi (video), .bin (3D model), .fon (font), .glb (GLB/GLTF 3D model)",
+            "Unsupported file type: {}. Supported file types: .avi/.ogv (video), .bin (3D model), .fon (font), .glb (GLB/GLTF 3D model)",
             filename
         )
         .into())

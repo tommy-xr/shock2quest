@@ -111,6 +111,7 @@ pub struct SceneInitResult {
 }
 
 const ENDING_CUTSCENE_CANDIDATES: &[&str] = &["enhanced/cs3.ogv", "cs3.avi", "cs3.ogv"];
+const ANNIVERSARY_CUTSCENE_LAYERS: &[&str] = &["enhanced", "original", "kex"];
 
 /// How a debug scene is built. Every entry in [`DEBUG_SCENES`] has this shape,
 /// so a scene that needs none of the arguments simply ignores them.
@@ -209,7 +210,7 @@ pub fn create_initial_scene(
     global_context: &GlobalContext,
     options: &GameOptions,
 ) -> SceneInitResult {
-    if is_cutscene_mission(&options.mission) {
+    if is_cutscene_file(&options.mission) {
         let mission_name = options.mission.clone();
         let cutscene_path = resolve_cutscene_path(&mission_name);
         let cutscene_path_string = cutscene_path.to_string_lossy().into_owned();
@@ -367,12 +368,17 @@ pub fn load_mission_from_save_data(
     (active_mission, save_data.level_data)
 }
 
-fn is_cutscene_mission(name: &str) -> bool {
+pub fn is_cutscene_file(name: &str) -> bool {
     let normalized = name.trim().to_ascii_lowercase();
     normalized.ends_with(".avi") || normalized.ends_with(".ogv")
 }
 
-fn resolve_cutscene_path(name: &str) -> PathBuf {
+/// Resolve a classic or 25th Anniversary cutscene name to a loose video file.
+///
+/// Exact paths retain priority. When a classic `.avi` is absent, Anniversary
+/// `.ogv` files are searched in the game's preferred layer order: enhanced
+/// videos first, then original, then KEX-specific videos.
+pub fn resolve_cutscene_path(name: &str) -> PathBuf {
     resolve_cutscene_path_from(&paths::data_root(), name)
 }
 
@@ -381,18 +387,79 @@ fn resolve_cutscene_path_from(data_root: &Path, name: &str) -> PathBuf {
     let raw_path = Path::new(trimmed);
 
     if raw_path.is_absolute() {
-        return raw_path.to_path_buf();
+        return find_requested_cutscene(raw_path).unwrap_or_else(|| raw_path.to_path_buf());
     }
 
-    let begins_with_cutscenes = raw_path
-        .components()
-        .next()
-        .is_some_and(|component| component.as_os_str().eq_ignore_ascii_case("cutscenes"));
-    if begins_with_cutscenes {
-        data_root.join(raw_path)
-    } else {
-        data_root.join("cutscenes").join(raw_path)
+    // dark_viewer historically accepts a path relative to its working
+    // directory. Keep that behavior in the shared resolver so the tool and
+    // game select the same file for any given request.
+    if let Some(path) = find_requested_cutscene(raw_path) {
+        return path;
     }
+
+    let mut components = raw_path.components();
+    let relative_cutscene_path = if components
+        .next()
+        .is_some_and(|component| component.as_os_str().eq_ignore_ascii_case("cutscenes"))
+    {
+        components.as_path()
+    } else {
+        raw_path
+    };
+    let rooted_path = data_root.join("cutscenes").join(relative_cutscene_path);
+
+    if let Some(path) = find_requested_cutscene(&rooted_path) {
+        return path;
+    }
+
+    // An explicit layer remains explicit. Layer fallback is only for the
+    // classic bare names authored by the game, such as `Intro.avi`.
+    if relative_cutscene_path.components().count() == 1
+        && is_cutscene_file(relative_cutscene_path.to_string_lossy().as_ref())
+    {
+        let file_stem = relative_cutscene_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let anniversary_name = format!("{file_stem}.ogv");
+
+        for layer in ANNIVERSARY_CUTSCENE_LAYERS {
+            let candidate = data_root
+                .join("cutscenes")
+                .join(layer)
+                .join(&anniversary_name);
+            if let Some(path) = find_file_ignoring_ascii_case(&candidate) {
+                return path;
+            }
+        }
+    }
+
+    rooted_path
+}
+
+fn find_requested_cutscene(path: &Path) -> Option<PathBuf> {
+    find_file_ignoring_ascii_case(path).or_else(|| {
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("avi"))
+            .then(|| path.with_extension("ogv"))
+            .and_then(|candidate| find_file_ignoring_ascii_case(&candidate))
+    })
+}
+
+fn find_file_ignoring_ascii_case(path: &Path) -> Option<PathBuf> {
+    if path.is_file() {
+        return Some(path.to_path_buf());
+    }
+
+    let requested_name = path.file_name()?;
+    path.parent()?
+        .read_dir()
+        .ok()?
+        .filter_map(Result::ok)
+        .find(|entry| entry.file_name().eq_ignore_ascii_case(requested_name))
+        .map(|entry| entry.path())
 }
 
 /// Resolve the retail ending for both 25th Anniversary (`enhanced/cs3.ogv`)
@@ -446,11 +513,41 @@ mod tests {
         );
     }
 
+    /// A scratch data root that removes itself after each resolver test.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("shock2vr-cutscenes-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn write(&self, relative_path: &str) -> PathBuf {
+            let path = self.0.join(relative_path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"cutscene fixture").unwrap();
+            path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn recognizes_classic_and_enhanced_cutscene_extensions() {
-        assert!(is_cutscene_mission("cs3.avi"));
-        assert!(is_cutscene_mission("enhanced/cs3.ogv"));
-        assert!(!is_cutscene_mission("shodan.mis"));
+        assert!(is_cutscene_file("cs3.avi"));
+        assert!(is_cutscene_file("enhanced/cs3.ogv"));
+        assert!(!is_cutscene_file("shodan.mis"));
     }
 
     #[test]
@@ -465,5 +562,25 @@ mod tests {
             resolve_cutscene_path_from(root, "cutscenes/enhanced/cs3.ogv"),
             root.join("cutscenes/enhanced/cs3.ogv")
         );
+    }
+
+    #[test]
+    fn classic_name_resolves_to_anniversary_ogv_counterpart() {
+        let root = TempDir::new("anniversary-counterpart");
+        let expected = root.write("cutscenes/original/intro.ogv");
+
+        assert_eq!(
+            resolve_cutscene_path_from(root.path(), "Intro.avi"),
+            expected
+        );
+    }
+
+    #[test]
+    fn enhanced_anniversary_layer_precedes_original() {
+        let root = TempDir::new("anniversary-precedence");
+        let expected = root.write("cutscenes/enhanced/cs1.ogv");
+        root.write("cutscenes/original/cs1.ogv");
+
+        assert_eq!(resolve_cutscene_path_from(root.path(), "cs1.avi"), expected);
     }
 }
