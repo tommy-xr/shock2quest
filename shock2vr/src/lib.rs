@@ -1832,23 +1832,12 @@ impl Game {
                 // any pending transition is abandoned.
                 self.pending_transition = None;
                 let follow_on = then.map_or(GlobalEffect::ShowMainMenu, |effect| *effect);
-                let path_string = scenes::resolve_cutscene_path(&video)
-                    .to_string_lossy()
-                    .into_owned();
-                match CutscenePlayerScene::new(
-                    video.clone(),
-                    path_string.clone(),
-                    follow_on.clone(),
-                    &mut self.audio_context,
-                ) {
+                match CutscenePlayerScene::new(video, follow_on.clone(), &mut self.audio_context) {
                     Ok(cutscene) => self.set_active_scene(Box::new(cutscene)),
                     Err(error) => {
                         // An install missing a movie must not strand the player
                         // on the scene the cutscene was replacing.
-                        warn!(
-                            "Failed to initialize cutscene '{}' from '{}': {} - skipping it",
-                            video, path_string, error
-                        );
+                        warn!("{error} - skipping it");
                         self.handle_global_effect(follow_on);
                     }
                 }

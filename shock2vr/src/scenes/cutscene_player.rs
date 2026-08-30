@@ -54,9 +54,11 @@ pub struct CutscenePlayerScene {
 const STUB_PLAYBACK_DURATION: Duration = Duration::from_secs(2);
 
 impl CutscenePlayerScene {
+    /// `video_name` is a cutscene name, resolved to a file here so every caller
+    /// selects the same one (see [`super::resolve_cutscene_path`]). The error
+    /// names both, so a caller only has to report it.
     pub fn new(
         video_name: String,
-        video_path: String,
         on_complete: GlobalEffect,
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
@@ -66,8 +68,16 @@ impl CutscenePlayerScene {
         {
             use engine::audio::{AudioHandle, play_audio};
 
-            let video_player = VideoPlayer::from_filename(&video_path)?;
-            let audio_clip = Rc::new(AudioPlayer::from_filename(&video_path)?);
+            let video_path = super::resolve_cutscene_path(&video_name)
+                .to_string_lossy()
+                .into_owned();
+            let describe = |error: &dyn std::fmt::Display| {
+                format!("cutscene '{video_name}' could not be opened from '{video_path}': {error}")
+            };
+            let video_player =
+                VideoPlayer::from_filename(&video_path).map_err(|error| describe(&error))?;
+            let audio_clip =
+                Rc::new(AudioPlayer::from_filename(&video_path).map_err(|error| describe(&error))?);
             let audio_handle = AudioHandle::new();
             play_audio(audio_context, audio_handle.clone(), None, audio_clip);
 
@@ -91,7 +101,6 @@ impl CutscenePlayerScene {
         #[cfg(not(feature = "ffmpeg"))]
         {
             let _ = audio_context;
-            let _ = video_path;
             Ok(Self {
                 world,
                 head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),

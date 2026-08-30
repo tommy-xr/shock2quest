@@ -218,20 +218,11 @@ pub fn create_initial_scene(
 ) -> SceneInitResult {
     if is_cutscene_file(&options.mission) {
         let mission_name = options.mission.clone();
-        let cutscene_path = resolve_cutscene_path(&mission_name);
-        let cutscene_path_string = cutscene_path.to_string_lossy().into_owned();
-        let cutscene = CutscenePlayerScene::new(
-            mission_name.clone(),
-            cutscene_path_string.clone(),
-            GlobalEffect::ShowMainMenu,
-            audio_context,
-        )
-        .unwrap_or_else(|err| {
-            panic!(
-                "Failed to initialize cutscene '{}' from '{}': {}",
-                mission_name, cutscene_path_string, err
-            )
-        });
+        let cutscene =
+            CutscenePlayerScene::new(mission_name, GlobalEffect::ShowMainMenu, audio_context)
+                // An explicitly requested cutscene that cannot be opened is a
+                // bad invocation, so fail loudly rather than boot elsewhere.
+                .unwrap_or_else(|err| panic!("{err}"));
         return SceneInitResult {
             scene: Box::new(cutscene),
             mission_save_data: HashMap::new(),
