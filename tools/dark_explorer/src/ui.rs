@@ -147,6 +147,24 @@ enum PreviewKind {
     },
 }
 
+/// One scoped grid row, with its thumb-cache id ("family/key") precomputed so
+/// the per-frame decode and draw loops don't allocate.
+struct GridRow {
+    family: String,
+    key: String,
+    id: String,
+}
+
+impl GridRow {
+    fn new(family: &str, key: &str) -> GridRow {
+        GridRow {
+            family: family.to_string(),
+            key: key.to_string(),
+            id: format!("{family}/{key}"),
+        }
+    }
+}
+
 /// One grid tile's decoded state; entries absent from the cache are pending.
 enum Thumb {
     Loaded {
@@ -199,13 +217,13 @@ pub struct ExplorerApp {
     scroll_frames: u8,
     /// Flattened search rows, cached per needle: (needle, capped rows, total).
     search_results: Option<(String, Vec<(String, String)>, usize)>,
-    /// Files tab shows thumbnails instead of the tree / search list.
+    /// Files tab shows a central thumbnail grid instead of the preview pane.
     grid_view: bool,
-    /// Decoded thumbnails by (family, key); never evicted, but each texture is
+    /// Decoded thumbnails by "family/key"; never evicted, but each texture is
     /// downscaled to the tile size so the cache stays small.
-    thumbs: std::collections::HashMap<(String, String), Thumb>,
+    thumbs: std::collections::HashMap<String, Thumb>,
     /// Grid rows cached per scope: (scope id, capped rows, total).
-    grid_results: Option<(String, Vec<(String, String)>, usize)>,
+    grid_results: Option<(String, Vec<GridRow>, usize)>,
     /// Scoped tiles still waiting for a decode after this frame's budget.
     thumbs_pending: usize,
     /// Lazily built on first opening the Archetypes tab: parsing the gamesys
@@ -430,35 +448,64 @@ fn is_image_key(key: &str) -> bool {
     texture_format::DECODABLE_EXTENSIONS.contains(&ext.as_str())
 }
 
-/// Nearest-neighbor downscale so a large source doesn't become a large GPU
-/// texture; images already within `max_dim` pass through untouched.
-fn downscale_to(image: egui::ColorImage, max_dim: usize) -> egui::ColorImage {
+/// Box-filter downscale (the engine's DDS mip halver) so a large source
+/// doesn't become a large GPU texture; images within `max_dim` pass through.
+fn downscale_to(image: egui::ColorImage, max_dim: u32) -> egui::ColorImage {
     let [w, h] = image.size;
-    if w.max(h) <= max_dim || w == 0 || h == 0 {
+    if w.max(h) as u32 <= max_dim {
         return image;
     }
-    let nw = (w * max_dim / w.max(h)).max(1);
-    let nh = (h * max_dim / w.max(h)).max(1);
-    let mut pixels = Vec::with_capacity(nw * nh);
-    for y in 0..nh {
-        for x in 0..nw {
-            pixels.push(image.pixels[(y * h / nh) * w + (x * w / nw)]);
-        }
-    }
-    egui::ColorImage::new([nw, nh], pixels)
+    let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
+    let (rgba, nw, nh) = engine::dds::downscale_to_fit(rgba, w as u32, h as u32, max_dim);
+    egui::ColorImage::from_rgba_unmultiplied([nw as usize, nh as usize], &rgba)
 }
 
-/// "verylongfilename.pcx" -> "verylongfi…e.pcx", within `max` chars.
-fn middle_ellipsize(s: &str, max: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max {
-        return s.to_string();
+/// One fixed-size grid tile: the thumbnail centered in a selectable frame,
+/// "!" for a failed decode, "…" while the decode is pending.
+fn grid_tile(ui: &mut egui::Ui, thumb: Option<&Thumb>, selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(TILE), egui::Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return response;
     }
-    let head = max * 2 / 3;
-    let tail = max - head - 1;
-    let start: String = chars[..head].iter().collect();
-    let end: String = chars[chars.len() - tail..].iter().collect();
-    format!("{start}…{end}")
+    let visuals = ui.style().interact_selectable(&response, selected);
+    ui.painter().rect(
+        rect,
+        3.0,
+        visuals.weak_bg_fill,
+        visuals.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    match thumb {
+        Some(Thumb::Loaded { texture, .. }) => {
+            // Center the image, preserving its aspect within the tile.
+            let tex = texture.size();
+            let scale = (TILE - 4.0) / tex[0].max(tex[1]).max(1) as f32;
+            let display = egui::Vec2::new(tex[0] as f32, tex[1] as f32) * scale;
+            let image_rect = egui::Rect::from_center_size(rect.center(), display);
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            ui.painter()
+                .image(texture.id(), image_rect, uv, egui::Color32::WHITE);
+        }
+        Some(Thumb::Failed(_)) => {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "!",
+                egui::FontId::proportional(24.0),
+                ui.visuals().warn_fg_color,
+            );
+        }
+        None => {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "…",
+                egui::FontId::proportional(16.0),
+                ui.visuals().weak_text_color(),
+            );
+        }
+    }
+    response
 }
 
 /// Run a Dark parser under `catch_unwind` with the panic hook silenced (the
@@ -542,9 +589,9 @@ impl eframe::App for ExplorerApp {
                         egui::ScrollArea::both()
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                if self.grid_view {
-                                    self.show_grid(ui, &mut clicked);
-                                } else if self.search.is_empty() {
+                                // In grid view the search scopes the central
+                                // grid, so the left panel keeps the tree.
+                                if self.search.is_empty() || self.grid_view {
                                     self.show_tree(ui, &mut clicked);
                                 } else {
                                     self.show_search_results(ui, &mut clicked);
@@ -558,6 +605,18 @@ impl eframe::App for ExplorerApp {
         egui::CentralPanel::default_margins().show(ui, |ui| {
             if self.tab == Tab::Archetypes {
                 self.show_archetype_preview(ui, frame);
+            } else if self.grid_view {
+                // Grid fills the central panel; the selected tile's standard
+                // preview docks on the right.
+                if self.preview.is_some() {
+                    egui::Panel::right(egui::Id::new("grid_preview"))
+                        .resizable(true)
+                        .default_size(380.0)
+                        .show(ui, |ui| self.show_preview(ui, frame));
+                }
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.show_grid(ui, &mut clicked));
             } else {
                 self.show_preview(ui, frame);
             }
@@ -606,20 +665,7 @@ impl ExplorerApp {
         // Recompute the flattened rows only when the needle changes; a search
         // over every family is too costly to redo per frame.
         if self.search_results.as_ref().map(|(n, _, _)| n.as_str()) != Some(needle.as_str()) {
-            let mut rows: Vec<(String, String)> = Vec::new();
-            let mut total = 0;
-            for family in self.family_names.clone() {
-                let loaded = self.family(family);
-                for entry in &loaded.entries {
-                    if !entry.key.contains(&needle) {
-                        continue;
-                    }
-                    total += 1;
-                    if rows.len() < SEARCH_RESULT_CAP {
-                        rows.push((family.to_string(), entry.key.clone()));
-                    }
-                }
-            }
+            let (rows, total) = self.flatten_matches(&needle, |_| true, SEARCH_RESULT_CAP);
             self.search_results = Some((needle.clone(), rows, total));
         }
         let Some((_, rows, total)) = &self.search_results else {
@@ -647,12 +693,38 @@ impl ExplorerApp {
         }
     }
 
-    /// Grid rows for the current scope: the image assets matching the search
-    /// across all families, else the selected asset's directory siblings.
-    /// Cached per scope id; returns None when nothing scopes the grid.
-    fn grid_rows(&mut self) -> Option<(Vec<(String, String)>, usize)> {
+    /// Scan every family for keys containing `needle` that pass `keep`,
+    /// capped at `cap`: (rows as (family, key), total match count).
+    fn flatten_matches(
+        &mut self,
+        needle: &str,
+        keep: fn(&str) -> bool,
+        cap: usize,
+    ) -> (Vec<(String, String)>, usize) {
+        let mut rows: Vec<(String, String)> = Vec::new();
+        let mut total = 0;
+        for family in self.family_names.clone() {
+            for entry in &self.family(family).entries {
+                if !entry.key.contains(needle) || !keep(&entry.key) {
+                    continue;
+                }
+                total += 1;
+                if rows.len() < cap {
+                    rows.push((family.to_string(), entry.key.clone()));
+                }
+            }
+        }
+        (rows, total)
+    }
+
+    /// Refresh `grid_results` for the current scope: the image assets matching
+    /// the search across all families, else the selected asset's directory
+    /// siblings. Cached per scope id; false when nothing scopes the grid.
+    fn ensure_grid_rows(&mut self) -> bool {
         let (scope, family_dir) = if self.search.is_empty() {
-            let (family, key) = self.selected.clone()?;
+            let Some((family, key)) = self.selected.clone() else {
+                return false;
+            };
             let dir = key
                 .rsplit_once('/')
                 .map(|(dir, _)| dir.to_string())
@@ -661,47 +733,42 @@ impl ExplorerApp {
         } else {
             (format!("search:{}", self.search.to_ascii_lowercase()), None)
         };
-        if self.grid_results.as_ref().map(|(s, _, _)| s.as_str()) != Some(scope.as_str()) {
-            let mut rows: Vec<(String, String)> = Vec::new();
-            let mut total = 0;
-            let mut push = |family: &str, key: &str| {
-                total += 1;
-                if rows.len() < GRID_TILE_CAP {
-                    rows.push((family.to_string(), key.to_string()));
-                }
-            };
-            match &family_dir {
-                Some((family, dir)) => {
-                    // Immediate image files of the selected asset's directory.
-                    let prefix = if dir.is_empty() {
-                        String::new()
-                    } else {
-                        format!("{dir}/")
-                    };
-                    for entry in &self.family(family).entries {
-                        match entry.key.strip_prefix(&prefix) {
-                            Some(rest) if !rest.contains('/') && is_image_key(&entry.key) => {
-                                push(family, &entry.key);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                None => {
-                    let needle = self.search.to_ascii_lowercase();
-                    for family in self.family_names.clone() {
-                        for entry in &self.family(family).entries {
-                            if entry.key.contains(&needle) && is_image_key(&entry.key) {
-                                push(family, &entry.key);
+        if self.grid_results.as_ref().map(|(s, _, _)| s.as_str()) == Some(scope.as_str()) {
+            return true;
+        }
+        let (mut rows, mut total) = (Vec::new(), 0);
+        match &family_dir {
+            Some((family, dir)) => {
+                // Immediate image files of the selected asset's directory.
+                let prefix = if dir.is_empty() {
+                    String::new()
+                } else {
+                    format!("{dir}/")
+                };
+                for entry in &self.family(family).entries {
+                    match entry.key.strip_prefix(&prefix) {
+                        Some(rest) if !rest.contains('/') && is_image_key(&entry.key) => {
+                            total += 1;
+                            if rows.len() < GRID_TILE_CAP {
+                                rows.push(GridRow::new(family, &entry.key));
                             }
                         }
+                        _ => {}
                     }
                 }
             }
-            self.grid_results = Some((scope.clone(), rows, total));
+            None => {
+                let needle = self.search.to_ascii_lowercase();
+                let (matches, matched) = self.flatten_matches(&needle, is_image_key, GRID_TILE_CAP);
+                rows = matches
+                    .iter()
+                    .map(|(family, key)| GridRow::new(family, key))
+                    .collect();
+                total = matched;
+            }
         }
-        let (_, rows, total) = self.grid_results.as_ref().unwrap();
-        Some((rows.clone(), *total))
+        self.grid_results = Some((scope, rows, total));
+        true
     }
 
     /// Decode one thumbnail: read the asset, decode under the panic guard,
@@ -715,9 +782,12 @@ impl ExplorerApp {
         match decode_image(&ext, &bytes) {
             Ok(Some(image)) => {
                 let size = image.size;
+                if size[0] == 0 || size[1] == 0 {
+                    return Thumb::Failed(format!("decoded to {} x {}", size[0], size[1]));
+                }
                 let texture = ctx.load_texture(
                     format!("thumb:{family}/{key}"),
-                    downscale_to(image, TILE as usize),
+                    downscale_to(image, TILE as u32),
                     egui::TextureOptions::NEAREST,
                 );
                 Thumb::Loaded { texture, size }
@@ -727,110 +797,87 @@ impl ExplorerApp {
         }
     }
 
-    /// Files tab, grid view: wrapping thumbnail tiles of the scoped image
-    /// assets. Decodes are budgeted per frame; a tile is a spinner until its
-    /// decode lands, then a click-to-select image (or "!" on failure).
+    /// Central panel, grid view: wrapping thumbnail tiles of the scoped image
+    /// assets. Decodes are budgeted per frame; a tile is a placeholder until
+    /// its decode lands, then a click-to-select image (or "!" on failure).
     fn show_grid(&mut self, ui: &mut egui::Ui, clicked: &mut Option<(String, String)>) {
-        let Some((rows, total)) = self.grid_rows() else {
+        if !self.ensure_grid_rows() {
             self.thumbs_pending = 0;
-            ui.label("Search, or select an asset in List view,\nto scope the grid");
+            ui.label("Search, or select an asset in the tree, to scope the grid");
             return;
-        };
+        }
+        // Take the cached rows so the loops below can borrow self freely;
+        // restored before returning.
+        let (scope, rows, total) = self.grid_results.take().unwrap();
         if rows.is_empty() {
             self.thumbs_pending = 0;
             ui.label("no image assets in this scope");
-            return;
-        }
-
-        // Budgeted decode of whatever the scope still misses.
-        let ctx = ui.ctx().clone();
-        let mut budget = THUMBS_PER_FRAME;
-        let mut pending = 0;
-        for (family, key) in &rows {
-            if self.thumbs.contains_key(&(family.clone(), key.clone())) {
-                continue;
+        } else {
+            // Budgeted decode of whatever the scope still misses.
+            let ctx = ui.ctx().clone();
+            let mut budget = THUMBS_PER_FRAME;
+            let mut pending = 0;
+            for row in &rows {
+                if self.thumbs.contains_key(&row.id) {
+                    continue;
+                }
+                if budget == 0 {
+                    pending += 1;
+                    continue;
+                }
+                budget -= 1;
+                let thumb = self.load_thumb(&ctx, &row.family, &row.key);
+                self.thumbs.insert(row.id.clone(), thumb);
             }
-            if budget == 0 {
-                pending += 1;
-                continue;
+            self.thumbs_pending = pending;
+            if pending > 0 {
+                ctx.request_repaint();
             }
-            budget -= 1;
-            let thumb = self.load_thumb(&ctx, family, key);
-            self.thumbs.insert((family.clone(), key.clone()), thumb);
-        }
-        self.thumbs_pending = pending;
-        if pending > 0 {
-            ctx.request_repaint();
-        }
 
-        let selected = self.selected.clone();
-        let tile_size = egui::Vec2::splat(TILE);
-        ui.horizontal_wrapped(|ui| {
-            for (family, key) in &rows {
-                let is_selected = selected
-                    .as_ref()
-                    .is_some_and(|(f, k)| f == family && k == key);
-                let name = key.rsplit('/').next().unwrap_or(key);
-                ui.allocate_ui(egui::vec2(TILE + 8.0, TILE + 26.0), |ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(TILE + 8.0);
-                        let response = match self.thumbs.get(&(family.clone(), key.clone())) {
-                            Some(Thumb::Loaded { texture, size }) => {
-                                // Fill the tile, preserving the image's aspect.
-                                let tex_size = texture.size();
-                                let scale = TILE / tex_size[0].max(tex_size[1]) as f32;
-                                let display = egui::Vec2::new(
-                                    tex_size[0] as f32 * scale,
-                                    tex_size[1] as f32 * scale,
-                                );
-                                Some(
-                                    ui.add(
-                                        egui::Button::image(egui::Image::new((
-                                            texture.id(),
-                                            display,
-                                        )))
-                                        .selected(is_selected)
-                                        .min_size(tile_size),
-                                    )
-                                    .on_hover_text(format!(
-                                        "{family}/{key} ({} x {})",
-                                        size[0], size[1]
-                                    )),
-                                )
+            let selected = self.selected.clone();
+            ui.horizontal_wrapped(|ui| {
+                for row in &rows {
+                    let is_selected = selected
+                        .as_ref()
+                        .is_some_and(|(f, k)| *f == row.family && *k == row.key);
+                    let thumb = self.thumbs.get(&row.id);
+                    ui.allocate_ui(egui::vec2(TILE, TILE + 22.0), |ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(TILE);
+                            let response = grid_tile(ui, thumb, is_selected).on_hover_ui(|ui| {
+                                match thumb {
+                                    Some(Thumb::Loaded { size, .. }) => {
+                                        ui.label(format!("{} ({} x {})", row.id, size[0], size[1]))
+                                    }
+                                    Some(Thumb::Failed(msg)) => {
+                                        ui.label(format!("{}: {msg}", row.id))
+                                    }
+                                    None => ui.label(&row.id),
+                                };
+                            });
+                            if response.clicked() {
+                                *clicked = Some((row.family.clone(), row.key.clone()));
                             }
-                            Some(Thumb::Failed(msg)) => Some(
-                                ui.add(
-                                    egui::Button::new(egui::RichText::new("!").size(24.0))
-                                        .selected(is_selected)
-                                        .min_size(tile_size),
-                                )
-                                .on_hover_text(format!("{family}/{key}: {msg}")),
-                            ),
-                            None => {
-                                ui.add_sized(tile_size, egui::Spinner::new());
-                                None
-                            }
-                        };
-                        if response.is_some_and(|r| r.clicked()) {
-                            *clicked = Some((family.clone(), key.clone()));
-                        }
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(middle_ellipsize(name, 18)).small(),
-                            )
-                            .selectable(false),
-                        )
-                        .on_hover_text(format!("{family}/{key}"));
+                            let name = row.key.rsplit('/').next().unwrap_or(&row.key);
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(name).small())
+                                    .truncate()
+                                    .selectable(false),
+                            );
+                        });
                     });
-                });
+                }
+            });
+            if total > rows.len() {
+                let hint = if scope.starts_with("search:") {
+                    " (narrow the search)"
+                } else {
+                    ""
+                };
+                ui.label(format!("... {} more images{hint}", total - rows.len()));
             }
-        });
-        if total > rows.len() {
-            ui.label(format!(
-                "... {} more images (narrow the search)",
-                total - rows.len()
-            ));
         }
+        self.grid_results = Some((scope, rows, total));
     }
 
     /// Left panel, Archetypes tab: search box + creature template tree (or a
