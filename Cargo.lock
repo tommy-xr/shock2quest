@@ -1154,9 +1154,13 @@ dependencies = [
 name = "dark_explorer"
 version = "0.1.0"
 dependencies = [
+ "cgmath",
  "clap",
+ "dark",
+ "dark_viewer",
  "eframe",
  "engine",
+ "gl",
  "image 0.24.7",
  "shock2vr",
 ]
