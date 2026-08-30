@@ -8,6 +8,10 @@ use rodio::buffer::SamplesBuffer;
 use rodio::source::{Buffered, ChannelVolume, Source};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, SpatialSink};
 
+/// Re-exported so a caller can ask a [`StreamingAudioSource`] about its format
+/// without taking its own rodio dependency.
+pub use rodio::source::Source as AudioSource;
+
 use crate::audio_log;
 use tracing::trace;
 
@@ -521,6 +525,87 @@ fn wav_duration(bytes: &[u8]) -> Option<std::time::Duration> {
     }
 }
 
+/// A rodio source fed chunk by chunk over a channel, for audio too long to
+/// decode into an [`AudioClip`] up front - a feature-length cutscene is minutes
+/// of PCM that would otherwise all be resident before its first frame shows.
+///
+/// `next` blocks while the producer catches up, which is what rodio's own file
+/// decoders do in the mixer callback anyway, and ends when the sender drops -
+/// so end-of-stream and a playback cut short by [`stop_audio`] finish the same
+/// way.
+pub struct StreamingAudioSource {
+    chunks: std::sync::mpsc::Receiver<Vec<i16>>,
+    current: std::vec::IntoIter<i16>,
+    channels: u16,
+    sample_rate: u32,
+}
+
+impl StreamingAudioSource {
+    pub fn new(
+        channels: u16,
+        sample_rate: u32,
+        chunks: std::sync::mpsc::Receiver<Vec<i16>>,
+    ) -> StreamingAudioSource {
+        StreamingAudioSource {
+            chunks,
+            current: Vec::new().into_iter(),
+            channels,
+            sample_rate,
+        }
+    }
+}
+
+impl Iterator for StreamingAudioSource {
+    type Item = i16;
+
+    fn next(&mut self) -> Option<i16> {
+        loop {
+            if let Some(sample) = self.current.next() {
+                return Some(sample);
+            }
+            self.current = self.chunks.recv().ok()?.into_iter();
+        }
+    }
+}
+
+impl Source for StreamingAudioSource {
+    /// The stream never changes format, so the whole thing is one span of
+    /// unknown length.
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        None
+    }
+}
+
+/// Plays a [`StreamingAudioSource`] at the listener origin, on the same
+/// listener-relative gain as [`play_audio`] so a streamed soundtrack sounds
+/// like the fully-decoded clip it replaces. [`stop_audio`] ends it.
+pub fn play_streaming_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
+    context: &mut AudioContext<TAmbientKey, TCue>,
+    handle: AudioHandle,
+    source: StreamingAudioSource,
+) -> Vec<u64> {
+    let id = handle.id;
+    let preempted = prepare_audio_play(context, &handle, None);
+    let sink = rodio::Sink::try_new(&context.handle).unwrap();
+    let settings = AudioPlaybackSettings::default();
+    sink.set_volume(settings.gain);
+    sink.append(ChannelVolume::new(source, settings.channel_gains.to_vec()));
+    context.handle_to_sink.insert(id, SinkAdapter::fixed(sink));
+    preempted
+}
+
 pub fn stop_audio<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
     context: &mut AudioContext<TAmbientKey, TCue>,
     handle: AudioHandle,
@@ -686,8 +771,37 @@ fn prepare_audio_play<TAmbientKey: Hash + Eq + Copy, TCue: Clone>(
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioClip, AudioPlaybackSettings, TrackedEmitter, wav_duration};
+    use super::{
+        AudioClip, AudioPlaybackSettings, AudioSource, StreamingAudioSource, TrackedEmitter,
+        wav_duration,
+    };
     use cgmath::vec3;
+
+    /// Chunk boundaries must be inaudible: the source is one continuous
+    /// soundtrack, whatever sizes the decoder happened to hand over.
+    #[test]
+    fn a_streaming_source_joins_its_chunks_seamlessly() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        sender.send(vec![1, 2, 3]).unwrap();
+        // An empty batch is skipped rather than mistaken for the end.
+        sender.send(Vec::new()).unwrap();
+        sender.send(vec![4]).unwrap();
+        drop(sender);
+
+        let source = StreamingAudioSource::new(1, 44100, receiver);
+        assert_eq!(AudioSource::channels(&source), 1);
+        assert_eq!(AudioSource::sample_rate(&source), 44100);
+        assert_eq!(source.collect::<Vec<i16>>(), vec![1, 2, 3, 4]);
+    }
+
+    /// Playback ends when the producer goes away - that is how a decode that
+    /// reached end-of-stream, or one cut short, finishes the sink.
+    #[test]
+    fn a_streaming_source_ends_when_its_producer_drops() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<Vec<i16>>(1);
+        drop(sender);
+        assert_eq!(StreamingAudioSource::new(1, 44100, receiver).next(), None);
+    }
 
     fn riff(avg_bytes_per_sec: u32, data_len: usize) -> Vec<u8> {
         let mut fmt = Vec::new();
