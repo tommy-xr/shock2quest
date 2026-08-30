@@ -900,7 +900,8 @@ impl Game {
         self.should_quit
     }
 
-    /// Whether the retail campaign finale has entered its terminal cutscene.
+    /// Whether the retail campaign finale is playing its terminal cutscene.
+    /// Clears again when the chain reaches the main menu.
     pub fn campaign_completed(&self) -> bool {
         self.campaign_completed
     }

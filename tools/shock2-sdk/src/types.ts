@@ -591,7 +591,8 @@ export interface FrameSnapshot {
   frame_index: number;
   time: { total: number; delta: number };
   mission: string;
-  /** True once the retail finale has entered its terminal ending cutscene. */
+  /** True while the retail finale is playing its terminal ending cutscene;
+   * false again once the chain reaches the main menu. */
   campaign_completed: boolean;
   /** True once a scene asked the runtime to quit (the main menu's Quit). The
    * debug runtime stays up regardless, so this is how the quit path is
