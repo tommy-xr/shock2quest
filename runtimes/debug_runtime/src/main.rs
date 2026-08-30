@@ -156,6 +156,16 @@ struct Args {
     #[arg(long)]
     visible: bool,
 
+    /// Keep level transitions deferred behind the loading screen, the way the
+    /// shipping runtimes present them. By default this runtime drives a
+    /// transition to completion as soon as it starts, because the deferral is
+    /// wall-clock bound (the level parses on a worker thread) while stepping is
+    /// deliberately wall-clock independent - so a stepped caller could otherwise
+    /// never observe the destination level deterministically. Pass this to test
+    /// the loading screen itself.
+    #[arg(long)]
+    defer_transitions: bool,
+
     /// Opaque instance identifier echoed by /v1/health, so the client that
     /// launched this process can verify it is talking to its own instance
     /// and not another agent's runtime that happens to hold the same port.
@@ -751,6 +761,7 @@ fn run_game_blocking(
                         &mut current_input,
                         &last_scene,
                         last_scene_frame,
+                        args.defer_transitions,
                     );
                 }
             }
@@ -807,6 +818,16 @@ fn run_game_blocking(
                 "game.update",
                 game.update(&game_time, &current_input, &mut action_state)
             );
+            // An in-game transition (a frobbed bulkhead button, a trigger
+            // volume) starts here; land it now for the same reason a warp does.
+            if !args.defer_transitions {
+                complete_pending_transition(
+                    &mut game,
+                    &game_time,
+                    &current_input,
+                    &mut action_state,
+                );
+            }
 
             if step_requested {
                 // Increment frame counter and accumulated time
@@ -891,6 +912,14 @@ fn run_game_blocking(
                 "game.update",
                 game.update(&zero_time, &current_input, &mut action_state)
             );
+            if !args.defer_transitions {
+                complete_pending_transition(
+                    &mut game,
+                    &zero_time,
+                    &current_input,
+                    &mut action_state,
+                );
+            }
             accumulated_time // Use accumulated time, not real time
         };
 
@@ -1001,6 +1030,32 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
         .collect()
 }
 
+/// Drive a deferred level transition to completion, so a headless caller
+/// observes the destination level rather than the loading screen.
+///
+/// The deferral is bound to wall-clock time (the level parses on a worker
+/// thread) while `/v1/step` is deliberately wall-clock *independent*, so no
+/// number of stepped frames would reliably land the switch. Paced at the fixed
+/// step like the game loop's paused pump, and capped so a wedged parse cannot
+/// hang the runtime's single game-loop thread forever.
+fn complete_pending_transition(
+    game: &mut Game,
+    time: &Time,
+    current_input: &InputContext,
+    action_state: &mut InputActionState,
+) {
+    let mut pumped = 0u32;
+    while game.has_pending_transition() && pumped < TRANSITION_PUMP_FRAME_CAP {
+        let zero_time = Time {
+            elapsed: Duration::from_secs_f32(0.0),
+            total: time.total,
+        };
+        game.update(&zero_time, current_input, action_state);
+        pumped += 1;
+        thread::sleep(Duration::from_secs_f32(FIXED_STEP_DT));
+    }
+}
+
 fn process_command(
     command: RuntimeCommand,
     game: &mut Game,
@@ -1010,6 +1065,7 @@ fn process_command(
     current_input: &mut InputContext,
     last_scene: &[commands::SceneObjectSummary],
     last_scene_frame: u64,
+    defer_transitions: bool,
 ) {
     match command {
         RuntimeCommand::GetInfo(reply) => {
@@ -1134,21 +1190,10 @@ fn process_command(
         } => {
             tracing::info!("Transitioning level to {} (loc {:?})", level_file, loc);
             game.transition_level(level_file.clone(), loc);
-            // The transition is deferred behind the loading screen, but a warp
-            // is an automation lever: drive it to completion here so the reply
-            // (and every later request) sees the destination level, rather than
-            // making every caller pump frames and poll. Paced like the paused
-            // transition pump in the game loop; capped so a wedged parse cannot
-            // hang the runtime forever.
-            let mut pumped = 0u32;
-            while game.has_pending_transition() && pumped < TRANSITION_PUMP_FRAME_CAP {
-                let zero_time = Time {
-                    elapsed: Duration::from_secs_f32(0.0),
-                    total: time.total,
-                };
-                game.update(&zero_time, current_input, action_state);
-                pumped += 1;
-                thread::sleep(Duration::from_secs_f32(FIXED_STEP_DT));
+            // Land the warp before replying, so `success` and every later
+            // request see the destination level (see `complete_pending_transition`).
+            if !defer_transitions {
+                complete_pending_transition(game, time, current_input, action_state);
             }
             // Report the ACTUAL post-switch scene rather than assuming success.
             let mission = game.scene_name().to_string();
