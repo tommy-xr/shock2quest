@@ -1630,6 +1630,11 @@ impl Game {
         self.set_active_scene(Box::new(mission));
         self.mission_to_save_data = level_map;
         self.campaign_completed = false;
+        // A load replaces the world wholesale, so any transition still in
+        // flight (a quickload while the loading screen is up) must be dropped -
+        // otherwise it lands a few frames later and overwrites the loaded save
+        // with the pre-load destination.
+        self.pending_transition = None;
         Ok(())
     }
 
