@@ -11,7 +11,10 @@ use engine::texture_format::{PixelFormat, RawTextureData};
 pub const SKIP_HOLD_DURATION: Duration = Duration::from_millis(1500);
 
 /// Analog triggers rest a little above zero, so a resting hand must not read as
-/// a hold - nor light up the affordance.
+/// a hold - nor light up the affordance. Deliberately below the shared
+/// press threshold ([`crate::ui::VR_TRIGGER_THRESHOLD`]): this is "the trigger
+/// is being touched", which is when the affordance should appear, not "the
+/// trigger is pressed".
 const TRIGGER_TOUCH: f32 = 0.2;
 
 /// How fast the affordance fades in and back out, in alpha per second.
@@ -25,6 +28,11 @@ pub struct SkipHold {
     /// Opacity of the affordance, so releasing fades it out rather than
     /// blinking it away.
     alpha: f32,
+    /// The trigger has been seen released since the cutscene began. A cutscene
+    /// is often started by a trigger - a frobbed panel, a menu click - and that
+    /// press is frequently still down as the movie opens; counting it would
+    /// dismiss the movie the player just started.
+    armed: bool,
 }
 
 impl SkipHold {
@@ -32,6 +40,8 @@ impl SkipHold {
     /// now complete - i.e. the cutscene should skip.
     pub fn update(&mut self, trigger_value: f32, elapsed: Duration) -> bool {
         let touched = trigger_value >= TRIGGER_TOUCH;
+        self.armed |= !touched;
+        let touched = touched && self.armed;
         if touched {
             self.held = (self.held + elapsed).min(SKIP_HOLD_DURATION);
         } else {
@@ -60,9 +70,25 @@ impl SkipHold {
     }
 }
 
-/// Edge length of the generated ring texture. Small: the ring is a thin arc on
-/// a quad a few degrees wide, and it is rebuilt every frame it is visible.
-const RING_TEXTURE_SIZE: usize = 96;
+/// Edge length of the generated ring texture. Small: the ring draws a few dozen
+/// pixels across, so anything larger is only oversampling.
+const RING_TEXTURE_SIZE: usize = 64;
+
+/// Steps the fill is drawn in. The art changes only when the arc crosses one, so
+/// a caller keyed on [`ring_step`] rebuilds and re-uploads the texture this many
+/// times over a hold rather than once per frame.
+pub const RING_STEPS: u32 = 48;
+
+/// Which step `progress` falls in - the cache key for [`ring_texture`].
+pub fn ring_step(progress: f32) -> u32 {
+    (progress.clamp(0.0, 1.0) * RING_STEPS as f32).round() as u32
+}
+
+/// The ring art for a step from [`ring_step`].
+pub fn ring_texture_for_step(step: u32) -> RawTextureData {
+    ring_texture(step as f32 / RING_STEPS as f32)
+}
+
 /// Inner and outer radius of the ring, in units of half the texture edge.
 const RING_INNER: f32 = 0.66;
 const RING_OUTER: f32 = 0.86;
@@ -120,9 +146,28 @@ mod tests {
 
     const FRAME: Duration = Duration::from_millis(100);
 
+    /// Release the trigger for a frame, which is what arms a fresh hold.
+    fn armed() -> SkipHold {
+        let mut hold = SkipHold::default();
+        hold.update(0.0, FRAME);
+        hold
+    }
+
+    /// The trigger that started the cutscene is often still down as it opens.
+    #[test]
+    fn a_trigger_already_held_at_the_start_does_not_skip() {
+        let mut hold = SkipHold::default();
+        assert!(!hold.update(1.0, SKIP_HOLD_DURATION * 3));
+        assert_eq!(hold.progress(), 0.0);
+
+        // Once released, a fresh hold counts as normal.
+        hold.update(0.0, FRAME);
+        assert!(hold.update(1.0, SKIP_HOLD_DURATION));
+    }
+
     #[test]
     fn a_held_trigger_completes_only_after_the_hold_duration() {
-        let mut hold = SkipHold::default();
+        let mut hold = armed();
         let mut elapsed = Duration::ZERO;
 
         while elapsed + FRAME < SKIP_HOLD_DURATION {
@@ -137,7 +182,7 @@ mod tests {
 
     #[test]
     fn releasing_the_trigger_resets_the_hold() {
-        let mut hold = SkipHold::default();
+        let mut hold = armed();
         hold.update(1.0, SKIP_HOLD_DURATION - FRAME);
         assert!(hold.progress() > 0.9);
 
@@ -151,7 +196,7 @@ mod tests {
     /// A resting analog trigger reads slightly above zero on real hardware.
     #[test]
     fn a_barely_touched_trigger_does_not_accumulate() {
-        let mut hold = SkipHold::default();
+        let mut hold = armed();
         hold.update(0.05, SKIP_HOLD_DURATION);
         assert_eq!(hold.progress(), 0.0);
         assert_eq!(hold.alpha(), 0.0);
@@ -159,7 +204,7 @@ mod tests {
 
     #[test]
     fn the_affordance_fades_in_while_held_and_out_after_release() {
-        let mut hold = SkipHold::default();
+        let mut hold = armed();
         hold.update(1.0, FRAME);
         let faded_in = hold.alpha();
         assert!(faded_in > 0.0);

@@ -51,6 +51,9 @@ pub struct CutscenePlayerScene {
     completion_emitted: bool,
     /// Holding either trigger finishes the cutscene early.
     skip_hold: SkipHold,
+    /// The generated progress-ring art, keyed on the fill step it was built
+    /// for, so a held trigger does not re-upload it every frame.
+    ring_art: Option<(u32, Rc<dyn TextureTrait>)>,
     #[cfg(feature = "ffmpeg")]
     audio_handle: engine::audio::AudioHandle,
     #[cfg(feature = "ffmpeg")]
@@ -60,8 +63,10 @@ pub struct CutscenePlayerScene {
 /// Where the video screen hangs, and the viewer-facing basis it is built on.
 struct ScreenBasis {
     center: Vector3<f32>,
-    /// Perpendicular to the view on the screen plane, and `up` with it.
-    right: Vector3<f32>,
+    /// In-plane horizontal axis. It points to the viewer's *left*: the
+    /// billboard basis below is mirrored, and this is the axis that mirroring
+    /// is built from - it is not a "right" to offset something sideways by.
+    screen_x: Vector3<f32>,
     up: Vector3<f32>,
     /// From the screen back toward the viewer.
     look_dir: Vector3<f32>,
@@ -75,15 +80,21 @@ impl ScreenBasis {
     /// is turned half a turn in its own plane, which corrects both at once.
     /// The generated ring art shares the row order, so it shares this basis.
     fn billboard_rotation(&self) -> Matrix3<f32> {
-        Matrix3::from_cols(self.right, self.up, -self.look_dir)
+        Matrix3::from_cols(self.screen_x, self.up, -self.look_dir)
             * Matrix3::from_angle_z(cgmath::Deg(180.0))
     }
 
-    /// Orientation for a [`WorldPanel`] on the screen: an honest basis with +x
-    /// the viewer's right, +y up and +z at the viewer, which is what the canvas
-    /// path expects (it applies its own canvas-y flip).
+    /// Orientation for a [`WorldPanel`] on the screen: the honest basis the
+    /// canvas path expects (+x the viewer's right, +y up, +z back at the
+    /// viewer), which is what facing the viewer means.
     fn panel_rotation(&self) -> Quaternion<f32> {
-        Matrix3::from_cols(-self.right, self.up, self.look_dir).into()
+        crate::util::get_rotation_from_forward_vector(self.look_dir)
+    }
+
+    /// Off the screen plane toward the viewer, so an overlay never z-fights the
+    /// video it sits on.
+    fn toward_viewer(&self, fraction_of_height: f32) -> Vector3<f32> {
+        self.look_dir * (self.height * fraction_of_height)
     }
 }
 
@@ -95,6 +106,8 @@ const RING_CENTER_HEIGHT: f32 = -0.28;
 const HINT_WIDTH: f32 = 0.6;
 const HINT_HEIGHT: f32 = 0.075;
 const HINT_CENTER_HEIGHT: f32 = -0.42;
+/// How far the affordance floats off the screen plane, in the same units.
+const OVERLAY_DEPTH: f32 = 0.01;
 /// Canvas the caption is authored on - only its aspect matters, since the panel
 /// scales it to `HINT_WIDTH` x `HINT_HEIGHT`.
 const HINT_CANVAS: Vector2<f32> = Vector2 { x: 320.0, y: 40.0 };
@@ -146,6 +159,7 @@ impl CutscenePlayerScene {
                 on_complete,
                 completion_emitted: false,
                 skip_hold: SkipHold::default(),
+                ring_art: None,
                 audio_handle,
                 video_player,
             });
@@ -167,6 +181,7 @@ impl CutscenePlayerScene {
                 on_complete,
                 completion_emitted: false,
                 skip_hold: SkipHold::default(),
+                ring_art: None,
             })
         }
     }
@@ -236,19 +251,18 @@ impl CutscenePlayerScene {
 
         ScreenBasis {
             center: screen_position,
-            right,
+            screen_x: right,
             up: true_up,
             look_dir,
             height: 2.0 / dark::SCALE_FACTOR,
         }
     }
 
-    fn build_screen_object(&self) -> SceneObject {
+    fn build_screen_object(&self, basis: &ScreenBasis) -> SceneObject {
         let (texture, aspect_ratio) = self.build_video_texture();
         let material = basic_material::create(texture, 1.0, 0.0);
         let mut quad = SceneObject::new(material, Box::new(engine::scene::quad::create()));
 
-        let basis = self.screen_basis();
         let screen_height = basis.height;
         let screen_width = screen_height * aspect_ratio;
 
@@ -260,20 +274,26 @@ impl CutscenePlayerScene {
     }
 
     /// The radial hold-to-skip progress ring, drawn on the video screen while
-    /// the trigger is touched. `None` once it has faded out.
-    fn build_skip_ring(&self) -> Option<SceneObject> {
-        let alpha = self.skip_hold.alpha();
-        if alpha <= 0.01 {
-            return None;
-        }
+    /// the trigger is touched.
+    fn build_skip_ring(&mut self, basis: &ScreenBasis, alpha: f32) -> SceneObject {
+        // The art changes only when the fill crosses a step, so a held trigger
+        // rasterizes and uploads a few dozen textures rather than one a frame.
+        let step = cutscene_skip::ring_step(self.skip_hold.progress());
+        let texture = match &self.ring_art {
+            Some((cached_step, texture)) if *cached_step == step => texture.clone(),
+            _ => {
+                let texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
+                    cutscene_skip::ring_texture_for_step(step),
+                    &TextureOptions {
+                        wrap: false,
+                        ..Default::default()
+                    },
+                ));
+                self.ring_art = Some((step, texture.clone()));
+                texture
+            }
+        };
 
-        let texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
-            cutscene_skip::ring_texture(self.skip_hold.progress()),
-            &TextureOptions {
-                wrap: false,
-                ..Default::default()
-            },
-        ));
         // Held just under fully opaque: the material only joins the blended
         // pass when it is transparent at all, and the ring is nothing but
         // per-pixel alpha.
@@ -281,39 +301,36 @@ impl CutscenePlayerScene {
         let material = basic_material::create(texture, 1.0, transparency);
         let mut quad = SceneObject::new(material, Box::new(engine::scene::quad::create()));
 
-        let basis = self.screen_basis();
         let size = basis.height * RING_SIZE;
-        let center = basis.center + basis.up * (RING_CENTER_HEIGHT * basis.height)
-            // Off the screen plane toward the viewer, so it never z-fights the
-            // video it sits on.
-            + basis.look_dir * (size * 0.05);
+        let center = basis.center
+            + basis.up * (RING_CENTER_HEIGHT * basis.height)
+            + basis.toward_viewer(OVERLAY_DEPTH);
 
         quad.set_transform(
             Matrix4::from_translation(center)
                 * Matrix4::from(basis.billboard_rotation())
                 * Matrix4::from_nonuniform_scale(size, size, 1.0),
         );
-        Some(quad)
+        quad
     }
 
     /// The "hold to skip" caption under the ring, on its own world panel so the
     /// text goes through the shared UI path rather than a bespoke one.
-    fn build_skip_hint(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
-        let alpha = self.skip_hold.alpha();
-        if alpha <= 0.01 {
-            return Vec::new();
-        }
-
-        let basis = self.screen_basis();
+    fn build_skip_hint(
+        &self,
+        asset_cache: &mut AssetCache,
+        basis: &ScreenBasis,
+        alpha: f32,
+    ) -> Vec<SceneObject> {
         let panel = WorldPanel {
             center: basis.center
                 + basis.up * (HINT_CENTER_HEIGHT * basis.height)
-                + basis.look_dir * (basis.height * 0.01),
+                + basis.toward_viewer(OVERLAY_DEPTH),
             rotation: basis.panel_rotation(),
             size: vec2(basis.height * HINT_WIDTH, basis.height * HINT_HEIGHT),
         };
 
-        let mut canvas = UiCanvas::new(vec2(HINT_CANVAS.x, HINT_CANVAS.y));
+        let mut canvas = UiCanvas::new(HINT_CANVAS);
         canvas.text_native(
             Rect::new(0.0, 0.0, HINT_CANVAS.x, HINT_CANVAS.y),
             "HOLD TO SKIP",
@@ -445,9 +462,13 @@ impl GameScene for CutscenePlayerScene {
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         // One world-space list for both presentations: the affordance is
         // anchored to the video screen, so flatscreen and VR place it alike.
-        let mut objects = vec![self.build_screen_object()];
-        objects.extend(self.build_skip_ring());
-        objects.extend(self.build_skip_hint(asset_cache));
+        let basis = self.screen_basis();
+        let mut objects = vec![self.build_screen_object(&basis)];
+        let alpha = self.skip_hold.alpha();
+        if alpha > 0.01 {
+            objects.push(self.build_skip_ring(&basis, alpha));
+            objects.extend(self.build_skip_hint(asset_cache, &basis, alpha));
+        }
         (objects, self.player_position, self.player_rotation)
     }
 
