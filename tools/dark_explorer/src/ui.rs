@@ -12,10 +12,13 @@ use engine::audio::{AudioClip, AudioContext, AudioHandle};
 use engine::texture_format::{self, PixelFormat};
 
 use crate::archetypes::{Archetype, ArchetypeDb};
+use crate::archives;
 use crate::explorer;
 use crate::model_preview::{self, ModelPreview};
 
-const TEXT_EXTENSIONS: &[&str] = &["str", "mtl", "txt", "ini", "cfg", "json"];
+const TEXT_EXTENSIONS: &[&str] = &[
+    "str", "mtl", "txt", "ini", "cfg", "json", "nut", "inc", "dml",
+];
 /// Cap on rows the flattened search view renders per frame.
 const SEARCH_RESULT_CAP: usize = 500;
 /// Grid view: tile edge in points, tiles shown at most, decodes per frame
@@ -40,6 +43,10 @@ pub struct UiOptions {
     pub archetype: Option<String>,
     pub clip: Option<String>,
     pub advance: Option<f32>,
+    /// Open the Archives tab, optionally with one raw entry selected as
+    /// "<archive>:<entry>" (e.g. "mods/sshock2ee.kpf:sq_scripts/foo.nut").
+    pub archives: bool,
+    pub select_entry: Option<String>,
 }
 
 pub fn run(options: UiOptions) {
@@ -80,8 +87,12 @@ pub fn run(options: UiOptions) {
 #[derive(Default)]
 struct DirNode {
     dirs: BTreeMap<String, DirNode>,
-    /// (file name, index into `LoadedFamily::entries`)
+    /// (file name, index into the owning listing's entries)
     files: Vec<(String, usize)>,
+    /// Whether the game's mounts serve anything below this directory (always
+    /// true in a family tree, which lists only mounted assets; the Archives
+    /// tab dims the directories where it is false).
+    any_mounted: bool,
 }
 
 struct LoadedFamily {
@@ -109,21 +120,29 @@ impl LoadedFamily {
         entries.sort_by(|a, b| a.key.cmp(&b.key));
         let mut tree = DirNode::default();
         for (index, entry) in entries.iter().enumerate() {
-            let mut node = &mut tree;
-            let mut segments = entry.key.split('/').peekable();
-            while let Some(segment) = segments.next() {
-                if segments.peek().is_some() {
-                    node = node.dirs.entry(segment.to_string()).or_default();
-                } else {
-                    node.files.push((segment.to_string(), index));
-                }
-            }
+            insert_path(&mut tree, &entry.key, index, true);
         }
         LoadedFamily {
             mounts,
             all_entries,
             entries,
             tree,
+        }
+    }
+}
+
+/// File one `path` into the directory tree at `index`, marking every
+/// directory it passes through as containing a mounted file when `mounted`.
+fn insert_path(tree: &mut DirNode, path: &str, index: usize, mounted: bool) {
+    let mut node = tree;
+    node.any_mounted |= mounted;
+    let mut segments = path.split('/').peekable();
+    while let Some(segment) = segments.next() {
+        if segments.peek().is_some() {
+            node = node.dirs.entry(segment.to_string()).or_default();
+            node.any_mounted |= mounted;
+        } else {
+            node.files.push((segment.to_string(), index));
         }
     }
 }
@@ -138,8 +157,11 @@ enum PreviewKind {
         duration: Option<std::time::Duration>,
     },
     Text(String),
-    /// A `.bin` 3D model, rendered by `ModelPreview` from `Preview::key`.
-    Model,
+    /// A `.bin` 3D model, rendered by `ModelPreview` from the mount key (which
+    /// is not the raw archive entry name an Archives-tab selection shows).
+    Model {
+        key: String,
+    },
     /// Undecodable content: the reason plus a hex dump of the leading bytes.
     Raw {
         reason: String,
@@ -175,13 +197,29 @@ enum Thumb {
     Failed(String),
 }
 
+/// Where a previewed file came from, and what the info pane says about it.
+enum PreviewOrigin {
+    /// Files tab: read through a family's mount stack.
+    Mount {
+        family: String,
+        winner: AssetEntry,
+        /// Same key served by lower-priority mounts (shadowed copies).
+        shadowed: Vec<AssetEntry>,
+    },
+    /// Archives tab: read straight out of one archive, with the mount key the
+    /// game serves it as (none when the game does not mount it at all).
+    Archive {
+        archive: String,
+        entry_name: String,
+        mounted_as: Option<(String, String)>,
+    },
+}
+
 struct Preview {
-    family: String,
+    /// The name shown as the heading: a mount key, or a raw archive entry.
     key: String,
     size: usize,
-    winner: AssetEntry,
-    /// Same key served by lower-priority mounts (shadowed copies).
-    shadowed: Vec<AssetEntry>,
+    origin: PreviewOrigin,
     kind: PreviewKind,
 }
 
@@ -189,6 +227,7 @@ struct Preview {
 enum Tab {
     Files,
     Archetypes,
+    Archives,
 }
 
 pub struct ExplorerApp {
@@ -236,6 +275,47 @@ pub struct ExplorerApp {
     archetype_clips: Option<(i32, Result<Vec<String>, String>)>,
     /// Simulation seconds to step the scene once it exists (from `--advance`).
     advance_pending: Option<f32>,
+    /// Archives tab: every archive on disk, mounted ones first. Built with the
+    /// mount index on first use; each archive's listing is read on expand.
+    archives: Option<Vec<LoadedArchive>>,
+    /// What the game's mounts serve, as (archive path, entry name) lowercased
+    /// -> (family, mount key). Everything else renders dimmed.
+    mount_index: Option<MountIndex>,
+    archive_search: String,
+    /// (archive display path, entry name)
+    selected_entry: Option<(String, String)>,
+    /// Flattened archive search rows, cached per needle: (needle, rows, total).
+    archive_results: Option<(String, Vec<(String, String)>, usize)>,
+}
+
+/// One archive on disk in the Archives tab.
+struct LoadedArchive {
+    path: PathBuf,
+    /// Path relative to the data root, the tab's identity for the archive.
+    display: String,
+    /// Whether the game mounts this archive at all (an unmounted archive is
+    /// listed after the mounted ones, with every entry dimmed).
+    mounted: bool,
+    /// Read from the zip's central directory on first expand.
+    listing: Option<Result<ArchiveListing, String>>,
+}
+
+struct ArchiveListing {
+    entries: Vec<ArchiveRow>,
+    tree: DirNode,
+}
+
+struct ArchiveRow {
+    name: String,
+    /// (family, mount key) when the game's mount stack serves this entry.
+    mounted_as: Option<(String, String)>,
+}
+
+#[derive(Default)]
+struct MountIndex {
+    served: std::collections::HashMap<(String, String), (String, String)>,
+    /// Archive paths (lowercased) in mount-priority order.
+    order: Vec<String>,
 }
 
 impl ExplorerApp {
@@ -267,6 +347,11 @@ impl ExplorerApp {
             selected_clip: None,
             archetype_clips: None,
             advance_pending: options.advance,
+            archives: None,
+            mount_index: None,
+            archive_search: String::new(),
+            selected_entry: None,
+            archive_results: None,
         };
         if let Some(archetype) = options.archetype {
             // Fail loudly, like --select: a `--screenshot` run that quietly
@@ -327,7 +412,48 @@ impl ExplorerApp {
                 }
             }
         }
+        if options.archives {
+            app.tab = Tab::Archives;
+        }
+        if let Some(select) = options.select_entry {
+            // Fail loudly, like --select.
+            let Some((archive, entry)) = select.split_once(':') else {
+                eprintln!("--select-entry wants <archive>:<entry>, got '{select}'");
+                std::process::exit(2);
+            };
+            match app.resolve_archive_entry(archive, entry) {
+                Some(name) => {
+                    app.tab = Tab::Archives;
+                    app.select_archive_entry(archive.to_string(), name);
+                }
+                None => {
+                    eprintln!("--select-entry: no entry '{entry}' in archive '{archive}'");
+                    std::process::exit(2);
+                }
+            }
+        }
         app
+    }
+
+    /// The real (case-preserving) entry name in `archive`, matched
+    /// case-insensitively; None when the archive or the entry is unknown.
+    fn resolve_archive_entry(&mut self, archive: &str, entry: &str) -> Option<String> {
+        self.ensure_archives();
+        let index = self
+            .archives
+            .as_ref()?
+            .iter()
+            .position(|a| a.display == archive)?;
+        self.ensure_listing(index);
+        let needle = entry.to_ascii_lowercase();
+        match &self.archives.as_ref()?[index].listing {
+            Some(Ok(listing)) => listing
+                .entries
+                .iter()
+                .find(|row| row.name.to_ascii_lowercase() == needle)
+                .map(|row| row.name.clone()),
+            _ => None,
+        }
     }
 
     fn archetype_db(&mut self) -> &Result<ArchetypeDb, String> {
@@ -346,6 +472,122 @@ impl ExplorerApp {
         self.selected = Some((family, key));
         self.scroll_frames = 3;
     }
+
+    /// Index what the game's mount stack actually serves, so the Archives tab
+    /// can tell a mounted entry from one the game never looks at. Enumerating
+    /// every family indexes every mounted archive, so this is built once.
+    fn ensure_mount_index(&mut self) {
+        if self.mount_index.is_some() {
+            return;
+        }
+        let mut index = MountIndex::default();
+        for family in self.family_names.clone() {
+            for entry in &self.family(family).all_entries {
+                if entry.is_alias {
+                    continue;
+                }
+                let source = entry.source.to_ascii_lowercase();
+                if !index.order.contains(&source) {
+                    index.order.push(source.clone());
+                }
+                index
+                    .served
+                    .entry((source, entry.entry_name.to_ascii_lowercase()))
+                    .or_insert_with(|| (family.to_string(), entry.key.clone()));
+            }
+        }
+        self.mount_index = Some(index);
+    }
+
+    /// The archives on disk, mounted ones first in mount-priority order.
+    fn ensure_archives(&mut self) {
+        if self.archives.is_some() {
+            return;
+        }
+        self.ensure_mount_index();
+        let index = self.mount_index.as_ref().expect("just built");
+        let mut found: Vec<(usize, LoadedArchive)> =
+            archives::discover(&shock2vr::paths::data_root())
+                .into_iter()
+                .map(|path| {
+                    let lower = path.to_string_lossy().to_ascii_lowercase();
+                    let rank = index.order.iter().position(|source| *source == lower);
+                    let archive = LoadedArchive {
+                        display: explorer::short_source(&path.to_string_lossy()),
+                        path,
+                        mounted: rank.is_some(),
+                        listing: None,
+                    };
+                    (rank.unwrap_or(usize::MAX), archive)
+                })
+                .collect();
+        found
+            .sort_by(|(a_rank, a), (b_rank, b)| a_rank.cmp(b_rank).then(a.display.cmp(&b.display)));
+        self.archives = Some(found.into_iter().map(|(_, archive)| archive).collect());
+    }
+
+    /// Read one archive's central directory (on first expand), tagging each
+    /// entry with the mount key the game serves it as, if any.
+    fn ensure_listing(&mut self, archive_index: usize) {
+        let Some(index) = self.mount_index.as_ref() else {
+            return;
+        };
+        let Some(archive) = self
+            .archives
+            .as_mut()
+            .and_then(|archives| archives.get_mut(archive_index))
+        else {
+            return;
+        };
+        if archive.listing.is_some() {
+            return;
+        }
+        let source = archive.path.to_string_lossy().to_ascii_lowercase();
+        archive.listing = Some(archives::list_entries(&archive.path).map(|entries| {
+            let entries: Vec<ArchiveRow> = entries
+                .into_iter()
+                .map(|name| ArchiveRow {
+                    mounted_as: index
+                        .served
+                        .get(&(source.clone(), name.to_ascii_lowercase()))
+                        .cloned(),
+                    name,
+                })
+                .collect();
+            let mut tree = DirNode::default();
+            for (row_index, row) in entries.iter().enumerate() {
+                insert_path(&mut tree, &row.name, row_index, row.mounted_as.is_some());
+            }
+            ArchiveListing { entries, tree }
+        }));
+    }
+
+    fn select_archive_entry(&mut self, archive: String, entry_name: String) {
+        self.ensure_archives();
+        let Some(path) = self
+            .archives
+            .as_ref()
+            .and_then(|archives| archives.iter().find(|a| a.display == archive))
+            .map(|a| a.path.clone())
+        else {
+            return;
+        };
+        let source = path.to_string_lossy().to_ascii_lowercase();
+        let mounted_as = self.mount_index.as_ref().and_then(|index| {
+            index
+                .served
+                .get(&(source, entry_name.to_ascii_lowercase()))
+                .cloned()
+        });
+        self.preview = Some(build_archive_preview(
+            &path,
+            &archive,
+            &entry_name,
+            mounted_as,
+        ));
+        self.selected_entry = Some((archive, entry_name));
+        self.scroll_frames = 3;
+    }
 }
 
 fn build_preview(family: &str, key: &str, loaded: &LoadedFamily) -> Preview {
@@ -360,15 +602,18 @@ fn build_preview(family: &str, key: &str, loaded: &LoadedFamily) -> Preview {
     });
     let shadowed: Vec<AssetEntry> = same_key.cloned().collect();
 
+    let origin = PreviewOrigin::Mount {
+        family: family.to_string(),
+        winner,
+        shadowed,
+    };
     let bytes = match explorer::read_asset_bytes(&*loaded.mounts, key) {
         Some(bytes) => bytes,
         None => {
             return Preview {
-                family: family.to_string(),
                 key: key.to_string(),
                 size: 0,
-                winner,
-                shadowed,
+                origin,
                 kind: PreviewKind::Raw {
                     reason: "failed to read asset bytes".to_string(),
                     hex: String::new(),
@@ -379,11 +624,50 @@ fn build_preview(family: &str, key: &str, loaded: &LoadedFamily) -> Preview {
     let size = bytes.len();
     let kind = decode_preview(family, key, bytes);
     Preview {
-        family: family.to_string(),
         key: key.to_string(),
         size,
-        winner,
-        shadowed,
+        origin,
+        kind,
+    }
+}
+
+/// Preview one raw archive entry, read straight from the zip. A mounted entry
+/// decodes as its family does (so a model still gets the 3D preview); an
+/// unmounted one gets the format-only dispatch.
+fn build_archive_preview(
+    archive_path: &std::path::Path,
+    archive: &str,
+    entry_name: &str,
+    mounted_as: Option<(String, String)>,
+) -> Preview {
+    let origin = PreviewOrigin::Archive {
+        archive: archive.to_string(),
+        entry_name: entry_name.to_string(),
+        mounted_as: mounted_as.clone(),
+    };
+    let bytes = match archives::read_entry(archive_path, entry_name) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return Preview {
+                key: entry_name.to_string(),
+                size: 0,
+                origin,
+                kind: PreviewKind::Raw {
+                    reason: format!("failed to read archive entry: {err}"),
+                    hex: String::new(),
+                },
+            };
+        }
+    };
+    let size = bytes.len();
+    let kind = match &mounted_as {
+        Some((family, key)) => decode_preview(family, key, bytes),
+        None => decode_preview("", entry_name, bytes),
+    };
+    Preview {
+        key: entry_name.to_string(),
+        size,
+        origin,
         kind,
     }
 }
@@ -419,7 +703,9 @@ fn decode_preview(family: &str, key: &str, bytes: Vec<u8>) -> PreviewKind {
     // Only the model families: `data` also serves `.bin` files (motiondb)
     // whose parse failure aborts rather than unwinds.
     if ext == "bin" && matches!(family, "obj" | "mesh") {
-        return PreviewKind::Model;
+        return PreviewKind::Model {
+            key: key.to_string(),
+        };
     }
     raw_fallback(&bytes, format!("cannot render .{ext} files"))
 }
@@ -562,6 +848,7 @@ impl eframe::App for ExplorerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let mut clicked: Option<(String, String)> = None;
+        let mut clicked_entry: Option<(String, String)> = None;
 
         egui::Panel::left(egui::Id::new("asset_tree"))
             .resizable(true)
@@ -571,6 +858,7 @@ impl eframe::App for ExplorerApp {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.tab, Tab::Files, "Files");
                     ui.selectable_value(&mut self.tab, Tab::Archetypes, "Archetypes");
+                    ui.selectable_value(&mut self.tab, Tab::Archives, "Archives");
                 });
                 ui.separator();
                 match self.tab {
@@ -599,12 +887,15 @@ impl eframe::App for ExplorerApp {
                             });
                     }
                     Tab::Archetypes => self.show_archetype_panel(ui),
+                    Tab::Archives => self.show_archive_panel(ui, &mut clicked_entry),
                 }
             });
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
             if self.tab == Tab::Archetypes {
                 self.show_archetype_preview(ui, frame);
+            } else if self.tab == Tab::Archives {
+                self.show_preview(ui, frame);
             } else if self.grid_view {
                 // Grid fills the central panel; the selected tile's standard
                 // preview docks on the right.
@@ -625,6 +916,9 @@ impl eframe::App for ExplorerApp {
         self.scroll_frames = self.scroll_frames.saturating_sub(1);
         if let Some((family, key)) = clicked {
             self.select(family, key);
+        }
+        if let Some((archive, entry)) = clicked_entry {
+            self.select_archive_entry(archive, entry);
         }
 
         self.drive_screenshot(&ctx);
@@ -880,6 +1174,133 @@ impl ExplorerApp {
         self.grid_results = Some((scope, rows, total));
     }
 
+    /// Left panel, Archives tab: one collapsible root per archive on disk,
+    /// listing every zip entry - dimmed where the game's mounts never serve it.
+    fn show_archive_panel(&mut self, ui: &mut egui::Ui, clicked: &mut Option<(String, String)>) {
+        ui.horizontal(|ui| {
+            ui.label("Search:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.archive_search)
+                    .hint_text("substring of an entry path")
+                    .desired_width(f32::INFINITY),
+            );
+        });
+        ui.label(
+            egui::RichText::new("dimmed = not mounted by the game")
+                .small()
+                .weak(),
+        );
+        ui.separator();
+        self.ensure_archives();
+        let selected = self.selected_entry.clone();
+        let scroll_to_selected = self.scroll_frames > 0;
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if !self.archive_search.is_empty() {
+                    self.show_archive_search_results(ui, clicked);
+                    return;
+                }
+                let count = self.archives.as_ref().map_or(0, |a| a.len());
+                for index in 0..count {
+                    let (display, mounted) = {
+                        let archive = &self.archives.as_ref().expect("built")[index];
+                        (archive.display.clone(), archive.mounted)
+                    };
+                    let open = selected.as_ref().is_some_and(|(a, _)| *a == display);
+                    let title = if mounted {
+                        egui::RichText::new(&display)
+                    } else {
+                        egui::RichText::new(&display).weak()
+                    };
+                    egui::CollapsingHeader::new(title)
+                        .id_salt(&display)
+                        .default_open(open)
+                        .show(ui, |ui| {
+                            self.ensure_listing(index);
+                            let selected_entry = selected
+                                .as_ref()
+                                .filter(|(a, _)| *a == display)
+                                .map(|(_, e)| e.clone());
+                            let archive = &self.archives.as_ref().expect("built")[index];
+                            match &archive.listing {
+                                Some(Ok(listing)) => show_archive_dir(
+                                    ui,
+                                    &display,
+                                    "",
+                                    &listing.tree,
+                                    &listing.entries,
+                                    selected_entry.as_deref(),
+                                    scroll_to_selected,
+                                    clicked,
+                                ),
+                                Some(Err(err)) => {
+                                    ui.label(format!("cannot read archive: {err}"));
+                                }
+                                None => {}
+                            }
+                        });
+                }
+            });
+    }
+
+    /// Flat list of the entries matching the Archives-tab search, across every
+    /// archive (which forces each archive's listing).
+    fn show_archive_search_results(
+        &mut self,
+        ui: &mut egui::Ui,
+        clicked: &mut Option<(String, String)>,
+    ) {
+        let needle = self.archive_search.to_ascii_lowercase();
+        if self.archive_results.as_ref().map(|(n, _, _)| n.as_str()) != Some(needle.as_str()) {
+            let count = self.archives.as_ref().map_or(0, |a| a.len());
+            for index in 0..count {
+                self.ensure_listing(index);
+            }
+            let mut rows: Vec<(String, String)> = Vec::new();
+            let mut total = 0;
+            for archive in self.archives.iter().flatten() {
+                let Some(Ok(listing)) = &archive.listing else {
+                    continue;
+                };
+                for row in &listing.entries {
+                    if !row.name.to_ascii_lowercase().contains(&needle) {
+                        continue;
+                    }
+                    total += 1;
+                    if rows.len() < SEARCH_RESULT_CAP {
+                        rows.push((archive.display.clone(), row.name.clone()));
+                    }
+                }
+            }
+            self.archive_results = Some((needle, rows, total));
+        }
+        let selected = self.selected_entry.clone();
+        let Some((_, rows, total)) = &self.archive_results else {
+            return;
+        };
+        for (archive, entry) in rows {
+            let is_selected = selected
+                .as_ref()
+                .is_some_and(|(a, e)| a == archive && e == entry);
+            if ui
+                .selectable_label(is_selected, format!("{archive}:{entry}"))
+                .clicked()
+            {
+                *clicked = Some((archive.clone(), entry.clone()));
+            }
+        }
+        if *total > rows.len() {
+            ui.label(format!(
+                "... {} more matches (narrow the search)",
+                total - rows.len()
+            ));
+        }
+        if *total == 0 {
+            ui.label("no matches");
+        }
+    }
+
     /// Left panel, Archetypes tab: search box + creature template tree (or a
     /// flat filtered list while searching).
     fn show_archetype_panel(&mut self, ui: &mut egui::Ui) {
@@ -1036,33 +1457,62 @@ impl ExplorerApp {
         };
 
         ui.heading(&preview.key);
-        egui::Grid::new("asset_info").num_columns(2).show(ui, |ui| {
-            ui.label("Family");
-            ui.label(&preview.family);
-            ui.end_row();
-            ui.label("Source");
-            ui.label(explorer::short_source(&preview.winner.source));
-            ui.end_row();
-            ui.label("Entry name");
-            ui.label(&preview.winner.entry_name);
-            ui.end_row();
-            ui.label("Size");
-            ui.label(format!("{} bytes", preview.size));
-            ui.end_row();
-            if !preview.shadowed.is_empty() {
-                ui.label("Shadowed copies");
-                ui.vertical(|ui| {
-                    for entry in &preview.shadowed {
-                        ui.label(format!(
-                            "{} ({})",
-                            explorer::short_source(&entry.source),
-                            entry.entry_name
-                        ));
+        egui::Grid::new("asset_info")
+            .num_columns(2)
+            .show(ui, |ui| match &preview.origin {
+                PreviewOrigin::Mount {
+                    family,
+                    winner,
+                    shadowed,
+                } => {
+                    ui.label("Family");
+                    ui.label(family);
+                    ui.end_row();
+                    ui.label("Source");
+                    ui.label(explorer::short_source(&winner.source));
+                    ui.end_row();
+                    ui.label("Entry name");
+                    ui.label(&winner.entry_name);
+                    ui.end_row();
+                    ui.label("Size");
+                    ui.label(format!("{} bytes", preview.size));
+                    ui.end_row();
+                    if !shadowed.is_empty() {
+                        ui.label("Shadowed copies");
+                        ui.vertical(|ui| {
+                            for entry in shadowed {
+                                ui.label(format!(
+                                    "{} ({})",
+                                    explorer::short_source(&entry.source),
+                                    entry.entry_name
+                                ));
+                            }
+                        });
+                        ui.end_row();
                     }
-                });
-                ui.end_row();
-            }
-        });
+                }
+                PreviewOrigin::Archive {
+                    archive,
+                    entry_name,
+                    mounted_as,
+                } => {
+                    ui.label("Archive");
+                    ui.label(archive);
+                    ui.end_row();
+                    ui.label("Entry name");
+                    ui.label(entry_name);
+                    ui.end_row();
+                    ui.label("Size");
+                    ui.label(format!("{} bytes", preview.size));
+                    ui.end_row();
+                    ui.label("Status");
+                    match mounted_as {
+                        Some((family, key)) => ui.label(format!("mounted as {family}/{key}")),
+                        None => ui.label("not mounted by the game"),
+                    };
+                    ui.end_row();
+                }
+            });
         ui.separator();
 
         match &mut preview.kind {
@@ -1114,8 +1564,8 @@ impl ExplorerApp {
                         );
                     });
             }
-            PreviewKind::Model => {
-                let key = preview.key.clone();
+            PreviewKind::Model { key } => {
+                let key = key.clone();
                 let host = preview_host(
                     &mut self.model_preview,
                     self.initial_overlays,
@@ -1260,6 +1710,66 @@ fn show_archetype_node(
             } else if ui.selectable_label(is_selected, &name).clicked() {
                 *clicked = Some(id);
             }
+        }
+    }
+}
+
+/// One directory level of an archive's raw entry tree. Entries (and whole
+/// directories) the game's mounts do not serve render in the weak text color.
+#[allow(clippy::too_many_arguments)]
+fn show_archive_dir(
+    ui: &mut egui::Ui,
+    archive: &str,
+    path: &str,
+    node: &DirNode,
+    entries: &[ArchiveRow],
+    selected_entry: Option<&str>,
+    scroll_to_selected: bool,
+    clicked: &mut Option<(String, String)>,
+) {
+    for (name, child) in &node.dirs {
+        let child_path = if path.is_empty() {
+            name.clone()
+        } else {
+            format!("{path}/{name}")
+        };
+        let is_ancestor =
+            selected_entry.is_some_and(|entry| entry.starts_with(&format!("{child_path}/")));
+        let title = if child.any_mounted {
+            egui::RichText::new(name)
+        } else {
+            egui::RichText::new(name).weak()
+        };
+        egui::CollapsingHeader::new(title)
+            .id_salt(&child_path)
+            .default_open(is_ancestor)
+            .show(ui, |ui| {
+                show_archive_dir(
+                    ui,
+                    archive,
+                    &child_path,
+                    child,
+                    entries,
+                    selected_entry,
+                    scroll_to_selected,
+                    clicked,
+                );
+            });
+    }
+    for (name, index) in &node.files {
+        let row = &entries[*index];
+        let is_selected = selected_entry == Some(row.name.as_str());
+        let label = if row.mounted_as.is_some() {
+            egui::RichText::new(name)
+        } else {
+            egui::RichText::new(name).weak()
+        };
+        let response = ui.selectable_label(is_selected, label);
+        if is_selected && scroll_to_selected {
+            response.scroll_to_me(Some(egui::Align::Center));
+        }
+        if response.clicked() {
+            *clicked = Some((archive.to_string(), row.name.clone()));
         }
     }
 }
