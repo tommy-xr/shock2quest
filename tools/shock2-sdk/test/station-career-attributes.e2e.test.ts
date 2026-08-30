@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
+import { stepPastCutscenes } from "./helpers/cutscenes.js";
 
 // End-to-end test for career (Marine/Navy/OSA) branching. Requires game assets
 // in Data/ and compiles the runtime on first run, so it is opt-in:
@@ -79,6 +80,9 @@ async function playCareer(
 
   await game.entities.sendMessage(marker.id, { type: "TurnOn" });
   await game.step({ frames: 3 });
+  // Enlisting plays its authored movie first (campaign-cutscenes.e2e.test.ts);
+  // this test is about the loadout waiting on the other side of it.
+  await stepPastCutscenes(game);
   // The marker's own transition ships the player to the recruit station.
   assert.equal(
     (await game.info()).mission,
