@@ -9,13 +9,12 @@
 //! Recorded from the one place every script message is dispatched
 //! (`ScriptWorld::update`), so it sees melee, projectiles, hitbox-forwarded
 //! damage and script-injected damage alike - anything that reaches a script as
-//! `MessagePayload::Damage` with an impact point.
-
-use std::sync::Mutex;
+//! `MessagePayload::Damage` with an impact point. The readouts live on the
+//! `ScriptWorld` that records them, so they die with their scene.
 
 use cgmath::{Deg, InnerSpace, Matrix4, SquareMatrix, Vector3, vec3};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
-use shipyard::{EntityId, World};
+use shipyard::{EntityId, Get, View, World};
 
 use dark::importers::FONT_IMPORTER;
 
@@ -27,26 +26,21 @@ const LIFETIME_SECS: f64 = 1.6;
 const RISE: f32 = 0.6;
 /// World-space height of a line of text.
 const TEXT_HEIGHT: f32 = 0.22;
-/// Nominal glyph width as a fraction of the line height, for sizing the quad
-/// the normalized text is stretched onto.
-const CHAR_ASPECT: f32 = 0.55;
 /// Older readouts are dropped rather than accumulating in a firefight.
 const MAX_POPUPS: usize = 32;
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct DamagePopup {
+pub(crate) struct DamagePopup {
     pub text: String,
     pub point: Vector3<f32>,
     pub spawned_at: f64,
 }
 
-static POPUPS: Mutex<Vec<DamagePopup>> = Mutex::new(Vec::new());
-
 /// The readout for one blow: how much, and where it landed. The hitbox name
 /// comes from the struck joint, which only a hitbox-forwarded hit carries - a
 /// blow that landed on the entity's own collider says nothing about limbs
 /// rather than guessing "Body".
-pub fn popup_text(amount: f32, hit_box: Option<HitBoxType>) -> String {
+pub(crate) fn popup_text(amount: f32, hit_box: Option<HitBoxType>) -> String {
     let amount = format!("-{} HP", format_amount(amount));
     match hit_box {
         Some(hit_box) => format!("{amount}  {}", hit_box_label(hit_box)),
@@ -76,56 +70,74 @@ fn hit_box_label(hit_box: HitBoxType) -> &'static str {
 }
 
 /// Remaining life of a readout as a 0..1 ramp, `None` once it has expired.
-pub fn fade(spawned_at: f64, now: f64) -> Option<f32> {
+pub(crate) fn fade(spawned_at: f64, now: f64) -> Option<f32> {
     let age = now - spawned_at;
     (age >= 0.0 && age < LIFETIME_SECS).then(|| 1.0 - (age / LIFETIME_SECS) as f32)
 }
 
-/// Record a dispatched message, keeping the ones that are damage with a known
-/// impact point. A no-op while the overlay is off, so nothing accumulates.
-pub fn record(world: &World, sim_time: f64, target: EntityId, payload: &MessagePayload) {
+/// The readout a dispatched message earns, if any: damage that knows where it
+/// landed, while the overlay is on.
+///
+/// A hit forwarded by a hitbox is dispatched twice - once to the hitbox entity
+/// and once to the creature it belongs to, both carrying the same impact point
+/// - so the proxy delivery is skipped. Recording both would stack an unlabeled
+/// readout under the labeled one on every real limb hit, which is exactly the
+/// ambiguity this overlay exists to remove.
+pub(crate) fn popup_for(
+    world: &World,
+    sim_time: f64,
+    target: EntityId,
+    payload: &MessagePayload,
+) -> Option<DamagePopup> {
     if !crate::dev_params::get_bool(crate::dev_params::DAMAGE_NUMBERS) {
-        return;
+        return None;
     }
     let MessagePayload::Damage {
         amount,
         impact: Some(impact),
     } = payload
     else {
-        return;
+        return None;
     };
+    if is_hit_box(world, target) {
+        return None;
+    }
 
     let hit_box = impact.bone.and_then(|bone| {
         crate::creature::get_entity_creature(world, target)
             .and_then(|creature| creature.get_hitbox_type(bone))
     });
 
-    let mut popups = POPUPS.lock().unwrap();
-    if popups.len() >= MAX_POPUPS {
-        popups.remove(0);
-    }
-    popups.push(DamagePopup {
+    Some(DamagePopup {
         text: popup_text(*amount, hit_box),
         point: impact.point,
         spawned_at: sim_time,
-    });
+    })
 }
 
-/// Live readouts, oldest first. Expired ones are dropped as a side effect, so
-/// the buffer drains on its own even if nothing is rendering.
-pub fn live(now: f64) -> Vec<(DamagePopup, f32)> {
-    let mut popups = POPUPS.lock().unwrap();
+/// Whether an entity is one of a creature's hitbox proxies.
+fn is_hit_box(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<crate::creature::RuntimePropHitBox>>()
+        .is_ok_and(|hit_boxes| hit_boxes.get(entity_id).is_ok())
+}
+
+/// Cap the buffer, oldest dropped first, so a firefight cannot grow it without
+/// bound before the next render ages it out.
+pub(crate) fn trim(popups: &mut Vec<DamagePopup>) {
+    if popups.len() > MAX_POPUPS {
+        popups.drain(..popups.len() - MAX_POPUPS);
+    }
+}
+
+/// Drop expired readouts, and report those still alive with their remaining
+/// life as a 0..1 ramp.
+pub(crate) fn live(popups: &mut Vec<DamagePopup>, now: f64) -> Vec<(DamagePopup, f32)> {
     popups.retain(|popup| fade(popup.spawned_at, now).is_some());
     popups
         .iter()
         .filter_map(|popup| fade(popup.spawned_at, now).map(|fade| (popup.clone(), fade)))
         .collect()
-}
-
-/// Drop every readout. Called on a level transition, where the world the points
-/// referred to is gone.
-pub fn clear() {
-    POPUPS.lock().unwrap().clear();
 }
 
 /// The readouts as world-space text, turned to face the camera and drifting up
@@ -134,12 +146,25 @@ pub fn clear() {
 /// Billboarded about the vertical only, toward `camera_pos`: a readout stays
 /// upright, which is what makes it readable, and it needs only the camera's
 /// position - so the same call serves the flat camera and either VR eye.
-pub fn render(
+///
+/// `camera_pos` is the player's own eye. A *detached* free camera therefore
+/// sees the readouts edge-on: the free camera's pose is resolved by `Game`
+/// after this scene is built, and is deliberately not plumbed in here - a
+/// spectator camera showing the body's instruments from the body's point of
+/// view is the same rule the HUD already follows.
+pub(crate) fn render(
     asset_cache: &mut AssetCache,
+    popups: &mut Vec<DamagePopup>,
     camera_pos: Vector3<f32>,
     now: f64,
 ) -> Vec<SceneObject> {
-    let live = live(now);
+    if !crate::dev_params::get_bool(crate::dev_params::DAMAGE_NUMBERS) {
+        // Turning the overlay off takes the readouts with it, rather than
+        // leaving the last second and a half of them hanging in the world.
+        popups.clear();
+        return Vec::new();
+    }
+    let live = live(popups, now);
     if live.is_empty() {
         return Vec::new();
     }
@@ -155,9 +180,9 @@ pub fn render(
                     * facing_rotation(position, camera_pos)
                     * Matrix4::from_nonuniform_scale(
                         // `world_space_text` normalizes its glyphs into a unit
-                        // square, so the caller owns the aspect: width is the
-                        // line height times the character count.
-                        TEXT_HEIGHT * popup.text.chars().count() as f32 * CHAR_ASPECT,
+                        // square, so the caller owns the aspect: the font's own
+                        // measurement of this string at unit line height.
+                        TEXT_HEIGHT * engine::measure_text_width(&**font, &popup.text, 1.0),
                         TEXT_HEIGHT,
                         1.0,
                     )

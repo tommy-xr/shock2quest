@@ -1616,6 +1616,9 @@ pub struct MissionCore {
     /// no input context - so it is recorded here each update rather than
     /// threaded through the effect path.
     last_head_rotation: Quaternion<f32>,
+    /// The eye's offset within the pawn, as last reported by the input
+    /// context: eye height in flat, plus the roomscale offset in VR.
+    last_head_position: Vector3<f32>,
 
     /// The fall to the floor that plays while the player is dying, or `None`
     /// while they are alive. Runtime-only, like [`PlayerLifeState`] itself: a
@@ -2418,6 +2421,7 @@ impl MissionCore {
             screen_fade_alpha: 0.0,
             screen_fade_texture,
             last_head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            last_head_position: vec3(0.0, 0.0, 0.0),
             death_camera: None,
         };
         for (index, entity_id) in backpack_load_remap.overflow.into_iter().enumerate() {
@@ -2709,6 +2713,10 @@ impl MissionCore {
                 .unwrap_or(false)
         };
         self.last_head_rotation = input_context.head.rotation;
+        // Where the eye is within the pawn, so the damage readouts face the
+        // viewer rather than the pawn origin (they differ by the roomscale
+        // offset in VR, and by eye height in both).
+        self.last_head_position = input_context.head.position;
         let mut life_state_effects = Vec::new();
         if self.player_is_alive() && player_health_depleted {
             life_state_effects.append(&mut self.begin_player_death());
@@ -8672,9 +8680,11 @@ impl MissionCore {
             .borrow::<UniqueView<Time>>()
             .map(|time| time.total.as_secs_f64())
             .unwrap_or(0.0);
+        let eye = player.pos + player.rotation * self.last_head_position;
         scene.extend(crate::damage_overlay::render(
             asset_cache,
-            player.pos,
+            self.script_world.damage_popups(),
+            eye,
             sim_time,
         ));
 

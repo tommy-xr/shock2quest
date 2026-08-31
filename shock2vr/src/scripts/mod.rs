@@ -836,14 +836,25 @@ pub struct ScriptWorld {
     entity_has_initialized: HashMap<EntityId, bool>,
     entity_to_scripts: HashMap<EntityId, Vec<ScriptInstance>>,
     message_queue: Vec<Message>,
+    /// Floating damage readouts earned by the messages dispatched here, drawn
+    /// by the mission's render pass. Owned by the script world so they die
+    /// with their scene - a readout is a world point in one level.
+    damage_popups: Vec<crate::damage_overlay::DamagePopup>,
 }
 
 impl ScriptWorld {
+    /// The floating damage readouts recorded so far, for the render pass to
+    /// draw and age out.
+    pub(crate) fn damage_popups(&mut self) -> &mut Vec<crate::damage_overlay::DamagePopup> {
+        &mut self.damage_popups
+    }
+
     pub fn new() -> ScriptWorld {
         ScriptWorld {
             entity_has_initialized: HashMap::new(),
             entity_to_scripts: HashMap::new(),
             message_queue: Vec::new(),
+            damage_popups: Vec::new(),
         }
     }
 
@@ -1332,6 +1343,9 @@ impl ScriptWorld {
 
         // Process any incoming messages
         let mut slayed_entities: HashSet<EntityId> = HashSet::new();
+        // Collected here and appended after the loop: the queue is borrowed
+        // for the duration of it.
+        let mut new_damage_popups = Vec::new();
         let span = span!(Level::INFO, "messages");
         let _ = span.enter();
         for msg in &self.message_queue {
@@ -1353,12 +1367,14 @@ impl ScriptWorld {
             // Same choke point feeds the floating damage readouts, so they see
             // every damage path (melee contact, projectiles, hitbox-forwarded
             // hits, script injection) rather than one of them.
-            crate::damage_overlay::record(
+            if let Some(popup) = crate::damage_overlay::popup_for(
                 world,
                 time.total.as_secs_f64(),
                 to_entity_id,
                 &msg.payload,
-            );
+            ) {
+                new_damage_popups.push(popup);
+            }
 
             let mut is_turn_on = false;
             match msg.payload {
@@ -1396,6 +1412,8 @@ impl ScriptWorld {
         }
 
         self.message_queue.clear();
+        self.damage_popups.extend(new_damage_popups);
+        crate::damage_overlay::trim(&mut self.damage_popups);
 
         for (entity_id, scripts) in self.entity_to_scripts.iter_mut() {
             for instance in scripts.iter_mut() {
