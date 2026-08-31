@@ -1016,27 +1016,31 @@ fn create_physics_representation_with_options(
 
     let min_size = 0.5 / SCALE_FACTOR;
     let min_size_vec = vec3(min_size, min_size, min_size);
-    // Model bounds in world units: the mesh is drawn at `PropScale`, so both the
-    // size and the centre of a box that stands in for it take that scale. The
-    // render bakes the scale's absolute value (see `create_model`), so a
-    // mirrored model keeps its box on the same side as its mesh.
+    // The render bakes the *absolute* value of `PropScale` (see `create_model`),
+    // so anything derived from the model's bounds follows the same.
     let model_scale = vec3(
         model_scale.x.abs(),
         model_scale.y.abs(),
         model_scale.z.abs(),
     );
     let model_bounds = maybe_model.as_ref().and_then(|model| model.bounding_box());
+    // Deliberately unscaled, as it always has been. Scaling the model-bounds
+    // *size* here resizes the selection volume of every scaled object in the
+    // game, and measurably moves what the crosshair picks (it took earth's
+    // Interrogation Room door pick with it), so it wants its own pass.
     let dimensions = model_bounds
         .map(|bbox| bbox.dim())
         .unwrap_or(default_size_vec);
     let abs_dimensions = vec3(
-        (dimensions.x * model_scale.x).abs().max(min_size_vec.x),
-        (dimensions.y * model_scale.y).abs().max(min_size_vec.y),
-        (dimensions.z * model_scale.z).abs().max(min_size_vec.z),
+        dimensions.x.abs().max(min_size_vec.x),
+        dimensions.y.abs().max(min_size_vec.y),
+        dimensions.z.abs().max(min_size_vec.z),
     );
     // Model bounds are not centred on the object's origin - a skinned corpse
     // lies away from its root joint - so the selection box has to be carried to
-    // the bounds' centre, or it covers empty space beside the mesh.
+    // the bounds' centre, or it covers empty space beside the mesh. The centre
+    // *is* scaled: it says where the mesh is, and a scaled mesh is somewhere
+    // else.
     let model_bounds_center = model_bounds
         .map(|bbox| {
             let center = bbox.center().to_vec();
@@ -2013,10 +2017,11 @@ mod tests {
         entity_id
     }
 
-    /// The mesh is drawn at `PropScale`, so its stand-in box takes that scale -
-    /// in both size and placement, and by the scale's absolute value, which is
-    /// what the render bakes (a mirrored model must not have its box flipped to
-    /// the other side of the object).
+    /// A scaled mesh sits somewhere else, so the box follows `PropScale` to the
+    /// scaled bounds centre - by the scale's absolute value, which is what the
+    /// render bakes (a mirrored model must not have its box flipped to the
+    /// other side of the object). The box's *size* is deliberately left
+    /// unscaled: see the comment at the call site.
     #[test]
     fn a_frob_collider_takes_the_models_scale() {
         for scale in [vec3(2.0, 2.0, 2.0), vec3(-2.0, 2.0, 2.0)] {
@@ -2042,8 +2047,8 @@ mod tests {
                 "scale {scale:?}: the box should sit at the scaled bounds centre, got {center:?}"
             );
             assert!(
-                ((aabb.max.x - aabb.min.x) - 4.0).abs() < 0.01,
-                "scale {scale:?}: the box should be the scaled bounds size, got {aabb:?}"
+                ((aabb.max.x - aabb.min.x) - 2.0).abs() < 0.01,
+                "scale {scale:?}: the box keeps the unscaled bounds size, got {aabb:?}"
             );
         }
     }
