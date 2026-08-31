@@ -59,6 +59,12 @@ impl CreatureDefinition {
             .map(|v| *v as u32)
     }
 
+    /// Whether this creature is damaged through per-joint hitboxes at all.
+    /// Only the player's own limbs map none.
+    pub fn has_hit_boxes(&self) -> bool {
+        !self.hit_boxes.is_empty()
+    }
+
     pub fn get_hitbox_type(&self, joint_id: u32) -> Option<HitBoxType> {
         self.hit_boxes.get(&joint_id).cloned()
     }

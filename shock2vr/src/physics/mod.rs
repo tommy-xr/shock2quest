@@ -1982,14 +1982,29 @@ impl CollisionGroup {
         }
     }
 
+    /// A creature's per-joint damage proxy. Raycasts find it (that is how a
+    /// shot picks a limb), and a held melee weapon *contacts* it - so a swing
+    /// lands on the arm it visually struck rather than on the capsule around
+    /// the creature.
+    ///
+    /// It solves against nothing: these are damage volumes, and a limb that
+    /// shoved the weapon out of the swing (or the creature off its feet) would
+    /// be a physics body, which the actor capsule already is.
     pub fn hitbox() -> CollisionGroup {
-        Self::solid(InteractionGroups {
+        let collision = InteractionGroups {
             memberships: (InternalCollisionGroups::HITBOX.bits
                 | InternalCollisionGroups::RAYCAST.bits)
                 .into(),
-            filter: InternalCollisionGroups::RAYCAST.bits.into(),
+            filter: (InternalCollisionGroups::RAYCAST.bits | InternalCollisionGroups::ENTITY.bits)
+                .into(),
             test_mode: Default::default(),
-        })
+        };
+        let solver = InteractionGroups {
+            memberships: InternalCollisionGroups::HITBOX.bits.into(),
+            filter: InternalCollisionGroups::empty().bits.into(),
+            test_mode: Default::default(),
+        };
+        CollisionGroup { collision, solver }
     }
 
     pub fn ui() -> CollisionGroup {
@@ -2017,7 +2032,11 @@ impl CollisionGroup {
             memberships: InternalCollisionGroups::ENTITY.bits.into(),
             filter: (InternalCollisionGroups::WORLD.bits
                 | InternalCollisionGroups::ENTITIES.bits
-                | InternalCollisionGroups::SELECTABLE.bits)
+                | InternalCollisionGroups::SELECTABLE.bits
+                // A creature's own hitboxes, so a swing lands on the limb it
+                // struck. The capsule contact is still generated and is what
+                // a creature with no hitboxes is hit on.
+                | InternalCollisionGroups::HITBOX.bits)
                 .into(),
             test_mode: Default::default(),
         };

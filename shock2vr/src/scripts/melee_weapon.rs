@@ -127,26 +127,39 @@ impl Script for HeldMeleeWeapon {
 
         match msg {
             MessagePayload::Collided { with, contact } => {
+                // A creature is struck through its hitboxes: the contact
+                // arrives from the limb proxy, and the *creature* is what owns
+                // the receptrons, the material and the velocity. The capsule
+                // around a creature that has hitboxes is ignored, or a single
+                // swing would be billed twice - once on the limb it hit and
+                // once on the cylinder it was inside.
+                let owner = crate::util::resolve_proxy_entity(world, *with);
+                if owner == *with && has_hit_boxes(world, *with) {
+                    return Effect::NoEffect;
+                }
+
                 // Damage and sound are separate questions. Damage stays gated
                 // by the swing threshold and the victim's authored receptrons;
                 // *hitting something* is audible regardless - a wrench on a
                 // bulkhead or a bench does nothing but must still clang.
                 let damage = self
-                    .may_damage(entity_id, *with, physics, *contact)
-                    .then(|| authored_contact_damage(world, entity_id, *with))
+                    .may_damage(entity_id, owner, physics, *contact)
+                    .then(|| authored_contact_damage(world, entity_id, owner))
                     .flatten();
 
                 let mut effects = Vec::new();
                 if let Some(amount) = damage {
+                    // Addressed to the hitbox, not the creature: forwarding it
+                    // is what stamps the struck joint onto the blow.
                     effects.push(contact_damage_effect(*with, amount, *contact));
                 }
                 // A blow that lands is always audible, as it always was. The
                 // operator is a bitwise `|`, not `||`, so the guard still runs
                 // (and arms the cooldown) even when damage forces the sound.
-                if self.may_play_impact_sound(entity_id, *with, physics, *contact)
+                if self.may_play_impact_sound(entity_id, owner, physics, *contact)
                     | damage.is_some()
                 {
-                    let sound = impact_sound_effect(entity_id, *with, world);
+                    let sound = impact_sound_effect(entity_id, owner, world);
                     if !matches!(sound, Effect::NoEffect) {
                         effects.push(sound);
                     }
@@ -228,6 +241,15 @@ impl HeldMeleeWeapon {
             .insert(with, IMPACT_SOUND_COOLDOWN_SECONDS);
         true
     }
+}
+
+/// Whether a creature carries per-joint hitboxes, i.e. whether a blow on it
+/// arrives through a limb proxy. Read from the creature definition rather than
+/// the live proxy table: the answer is the same, and a script has the world
+/// but not the mission's hitbox manager.
+fn has_hit_boxes(world: &World, entity_id: EntityId) -> bool {
+    crate::creature::get_entity_creature(world, entity_id)
+        .is_some_and(|creature| creature.has_hit_boxes())
 }
 
 fn is_vr(world: &World) -> bool {
