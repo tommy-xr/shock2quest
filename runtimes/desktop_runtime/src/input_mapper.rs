@@ -189,6 +189,13 @@ impl DesktopInputMapper {
                 modifier: Modifier::Alt,
                 action: InputAction::ToggleFreeCamera,
             },
+            // Open/close the developer cheat pad. Alt-modified and gated on
+            // the `cheats` dev param, exactly like the free camera above.
+            Binding {
+                key: Key::K,
+                modifier: Modifier::Alt,
+                action: InputAction::ToggleCheatPad,
+            },
         ];
 
         Self {

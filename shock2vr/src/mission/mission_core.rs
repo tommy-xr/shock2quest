@@ -122,6 +122,13 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 /// trimesh (see `spawn_ragdoll`).
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
 
+/// Where `Effect::RainItems` puts its spawns: a ring of this radius, this far
+/// above the player's feet. Wide enough that neighbours do not start
+/// interpenetrating (which the solver resolves by flinging them apart), low
+/// enough to stay under an ordinary ceiling.
+const RAIN_RADIUS: f32 = 0.8;
+const RAIN_HEIGHT: f32 = 2.5;
+
 /// Resolve optional media-reader portrait/icon art before it becomes a shared
 /// UI image. STR tables author extension-less PCX-era names, while replacement
 /// layers may provide the same art under a modern encoding (SCP's Earth
@@ -7567,6 +7574,34 @@ impl MissionCore {
                         self.process_virtual_hand_effects(asset_cache, msgs);
                     }
                 }
+                Effect::RainItems { template_ids } => {
+                    let (pos, rot) = {
+                        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                        (vec3_to_point3(player.pos), player.rotation)
+                    };
+                    // A ring above head height, one item per slot: spread out
+                    // so the spawns do not interpenetrate on the first step
+                    // (which would fling them apart), and high enough that
+                    // they visibly fall. Deterministic, not random - a capture
+                    // or an e2e assertion must be able to repeat the layout.
+                    let count = template_ids.len().max(1) as f32;
+                    for (index, template_id) in template_ids.iter().enumerate() {
+                        let angle = std::f32::consts::TAU * index as f32 / count;
+                        let offset = vec3(
+                            RAIN_RADIUS * angle.cos(),
+                            RAIN_HEIGHT,
+                            RAIN_RADIUS * angle.sin(),
+                        );
+                        self.create_entity_with_position(
+                            asset_cache,
+                            *template_id,
+                            pos + offset,
+                            rot,
+                            Matrix4::identity(),
+                            CreateEntityOptions::default(),
+                        );
+                    }
+                }
                 Effect::DebugCycleWeapon { head_rotation } => {
                     // The SS2 player-weapon roster (templates with PropPlayerGun),
                     // cycled for flat-mode aim/viewmodel testing.
@@ -12398,5 +12433,13 @@ impl crate::game_scene::GameScene for MissionCore {
 
     fn wants_pointer(&self) -> bool {
         self.wants_pointer()
+    }
+
+    fn hand_is_empty(&self, hand: crate::vr_config::Handedness) -> bool {
+        let (left, right) = self.interaction.held_entities();
+        match hand {
+            crate::vr_config::Handedness::Left => left.is_none(),
+            crate::vr_config::Handedness::Right => right.is_none(),
+        }
     }
 }

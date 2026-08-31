@@ -821,16 +821,35 @@ fn main() {
             }
             crouch_button_was_pressed = crouch_state.current_state;
         }
-        action_state.sync_discrete_button(
-            shock2vr::input::InputAction::ToggleUseMode,
-            use_mode_state.is_active,
-            use_mode_state.changed_since_last_sync,
+        // Left X and Y carry two meanings, on the same terms right A and B do
+        // below: alone they toggle the cyber interface and play the last audio
+        // log, together they toggle the developer cheat pad. The sharing is
+        // dead unless the `cheats` developer option is on, and while it is on
+        // the button whose partner is ALREADY held is suppressed so completing
+        // the chord cannot also open the interface.
+        let cheats_gate = shock2vr::dev_params::get_bool(shock2vr::dev_params::CHEATS);
+        let suppress_use_mode = cheats_gate && audio_log_state.current_state;
+        let suppress_audio_log = cheats_gate && use_mode_state.current_state;
+        if !suppress_use_mode {
+            action_state.sync_discrete_button(
+                shock2vr::input::InputAction::ToggleUseMode,
+                use_mode_state.is_active,
+                use_mode_state.changed_since_last_sync,
+                use_mode_state.current_state,
+            );
+        }
+        if !suppress_audio_log {
+            action_state.sync_discrete_button(
+                shock2vr::input::InputAction::ReadLastUnreadLog,
+                audio_log_state.is_active,
+                audio_log_state.changed_since_last_sync,
+                audio_log_state.current_state,
+            );
+        }
+        action_state.sync_chord(
+            shock2vr::input::InputAction::ToggleCheatPad,
+            use_mode_state.is_active && audio_log_state.is_active,
             use_mode_state.current_state,
-        );
-        action_state.sync_discrete_button(
-            shock2vr::input::InputAction::ReadLastUnreadLog,
-            audio_log_state.is_active,
-            audio_log_state.changed_since_last_sync,
             audio_log_state.current_state,
         );
         action_state.sync_discrete_button(

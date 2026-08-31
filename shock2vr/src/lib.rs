@@ -14,6 +14,7 @@ pub mod teleport;
 pub mod time;
 
 pub mod career;
+pub mod cheat_pad;
 pub mod creature;
 pub mod data_files;
 pub mod death_camera;
@@ -602,6 +603,11 @@ pub struct Game {
     /// so the paused scene keeps rendering while its update is skipped.
     pause_menu: pause_menu::PauseMenu,
 
+    /// The developer cheat pad, a second `Game`-owned overlay for the same
+    /// reasons the pause menu is one. Gated on the `cheats` developer
+    /// parameter; see [`cheat_pad`].
+    cheat_pad: cheat_pad::CheatPad,
+
     /// Wall-clock time spent with the simulation suspended, subtracted from the
     /// clock the scene sees. See [`Game::scene_time`].
     time_suspended: std::time::Duration,
@@ -1031,7 +1037,9 @@ impl Game {
     pub fn wants_pointer(&self) -> bool {
         // The pause menu is pointer-driven in flat presentation, and it is
         // drawn over scenes that otherwise capture the mouse for look.
-        self.pause_menu.is_open() || self.active_game_scene.wants_pointer()
+        self.pause_menu.is_open()
+            || self.cheat_pad.is_open()
+            || self.active_game_scene.wants_pointer()
     }
 
     /// Whether the in-game pause menu is up (and therefore the simulation is
@@ -1318,6 +1326,7 @@ impl Game {
             should_quit: false,
             campaign_completed: false,
             pause_menu: pause_menu::PauseMenu::new(),
+            cheat_pad: cheat_pad::CheatPad::new(),
             time_suspended: std::time::Duration::ZERO,
             hit_feedback: hit_feedback::HitFeedback::new(),
             head_pose: (
@@ -1394,7 +1403,12 @@ impl Game {
         // scene is not updated at all, so a scene-routed effect could never
         // close the menu again.
         self.update_pause_menu(time, input_context, actions);
-        if self.pause_menu.suspends_scene() {
+        // The cheat pad is a second Game-owned overlay, driven only while the
+        // pause menu is not (two stacked panels would both own the pointer).
+        if !self.pause_menu.suspends_scene() {
+            self.update_cheat_pad(time, input_context, actions);
+        }
+        if self.pause_menu.suspends_scene() || self.cheat_pad.suspends_scene() {
             // Paused: the scene is not updated (nothing simulates, and
             // `VirtualHand` is never advanced, so hands are inert but keep
             // whatever they were holding). It is still *rendered* every frame
@@ -1601,6 +1615,98 @@ impl Game {
             }
             None => {}
         }
+    }
+
+    /// Whether a `Game`-owned panel is covering the view. The scene's own
+    /// hands, viewmodel and HUD are dropped while one is, so they cannot draw
+    /// a second pair of hands inside the panel's or bleed through it.
+    fn overlay_is_open(&self) -> bool {
+        self.pause_menu.is_open() || self.cheat_pad.is_open()
+    }
+
+    /// Whether the cheat pad may open right now: the developer gate is on, the
+    /// scene is one that can be frozen, and - in VR only - the hand carrying
+    /// the opening chord is empty. Flat has no motion controllers, so
+    /// "an empty hand" has no meaning there and its key binding is
+    /// unambiguous on its own.
+    fn cheats_are_allowed(&self) -> bool {
+        if !dev_params::get_bool(dev_params::CHEATS) || !self.pause_is_allowed() {
+            return false;
+        }
+        self.options.presentation_mode != PresentationMode::Vr
+            || self
+                .active_game_scene
+                .hand_is_empty(vr_config::Handedness::Left)
+    }
+
+    /// Apply the cheat-pad toggle and, while open, drive the overlay.
+    fn update_cheat_pad(
+        &mut self,
+        time: &Time,
+        input_context: &input_context::InputContext,
+        actions: &input::InputActionState,
+    ) {
+        self.cheat_pad.poll_release(input_context);
+
+        if actions.just_triggered(InputAction::ToggleCheatPad) && self.cheats_are_allowed() {
+            if self.cheat_pad.is_open() {
+                self.close_cheat_pad(false);
+            } else {
+                self.cheat_pad.open();
+            }
+        }
+
+        if !self.cheat_pad.is_open() {
+            return;
+        }
+        // A pad that lost its gate mid-session (the option was switched off, a
+        // transition started, the player died) closes rather than stranding
+        // them on a panel over a screen that has taken over.
+        if !dev_params::get_bool(dev_params::CHEATS) || !self.pause_is_allowed() {
+            self.close_cheat_pad(false);
+            return;
+        }
+
+        let clicked = self.cheat_pad.update(
+            time.elapsed,
+            input_context,
+            &mut self.asset_cache,
+            &self.options,
+        );
+        self.cheat_pad
+            .pump_sfx(&mut self.asset_cache, &mut self.audio_context);
+        let Some(button) = clicked else {
+            return;
+        };
+        // The pad stays up across a rain (pressing both buttons is the common
+        // case); only "Done" closes it. `handle_effects` stays callable while
+        // the scene's `update` is skipped, which is how the spawn reaches a
+        // suspended world at all - the items hang until the world resumes and
+        // then fall.
+        match button.effect() {
+            Some(effect) => {
+                let global_effects = self.active_game_scene.handle_effects(
+                    vec![effect],
+                    &self.global_context,
+                    &self.options,
+                    &mut self.asset_cache,
+                    &mut self.audio_context,
+                );
+                for effect in global_effects {
+                    self.handle_global_effect(effect);
+                }
+            }
+            None => self.close_cheat_pad(true),
+        }
+    }
+
+    fn close_cheat_pad(&mut self, after_click: bool) {
+        if after_click {
+            self.cheat_pad.close_after_click();
+        } else {
+            self.cheat_pad.close();
+        }
+        self.cheat_pad.stop_sfx(&mut self.audio_context);
     }
 
     fn close_pause_menu(&mut self, after_click: bool) {
@@ -1984,7 +2090,7 @@ impl Game {
         // The lights belong to the hands: with the hands suppressed they would
         // be two pools cast by nothing - and, being world lighting, they light
         // the scene *before* the pause dim and show straight through it.
-        if self.pause_menu.is_open() {
+        if self.overlay_is_open() {
             return Vec::new();
         }
         self.active_game_scene.get_hand_spotlights(&self.options)
@@ -2093,7 +2199,7 @@ impl Game {
         // left latched when the menu closes. The same `is_open()` gate drops the
         // scene's screen-space UI in `render_per_eye`.
         // The same drop covers the death camera - see `player_visuals_hidden`.
-        if self.pause_menu.is_open() || self.player_visuals_hidden() {
+        if self.overlay_is_open() || self.player_visuals_hidden() {
             scene.retain(|object| {
                 object.debug_tag().and_then(|tag| tag.source.as_deref())
                     != Some(util::render_source::PLAYER_HANDS)
@@ -2167,13 +2273,18 @@ impl Game {
             scene.push(layer);
         }
 
-        let mut pause_objects =
+        let mut overlay_objects =
             self.pause_menu
                 .render(&mut self.asset_cache, &self.options, pawn_to_world);
-        for object in &mut pause_objects {
+        overlay_objects.extend(self.cheat_pad.render(
+            &mut self.asset_cache,
+            &self.options,
+            pawn_to_world,
+        ));
+        for object in &mut overlay_objects {
             object.set_render_layer(RenderLayer::SystemOverlay);
         }
-        scene.extend(pause_objects);
+        scene.extend(overlay_objects);
 
         // let font = File::open(resource_path("res/fonts/mainfont.FON")).unwrap();
         // let mut font_reader = BufReader::new(font);
@@ -2227,7 +2338,7 @@ impl Game {
         // with a gun welded to their face while the camera rolled onto the
         // floor - the two presentations diverging on exactly the beat this
         // feature exists for (AGENTS.md section 3).
-        let mut objs = if self.pause_menu.is_open() || self.player_visuals_hidden() {
+        let mut objs = if self.overlay_is_open() || self.player_visuals_hidden() {
             Vec::new()
         } else {
             self.active_game_scene.render_per_eye(
@@ -2244,13 +2355,18 @@ impl Game {
             }
         }
 
-        let mut pause_objects =
+        let mut overlay_objects =
             self.pause_menu
                 .render_per_eye(&mut self.asset_cache, screen_size, &self.options);
-        for object in &mut pause_objects {
+        overlay_objects.extend(self.cheat_pad.render_per_eye(
+            &mut self.asset_cache,
+            screen_size,
+            &self.options,
+        ));
+        for object in &mut overlay_objects {
             object.set_render_layer(RenderLayer::SystemOverlay);
         }
-        objs.extend(pause_objects);
+        objs.extend(overlay_objects);
 
         let world_position = vec3(0.0, 1.0, 0.0);
         let screen_width = screen_size.x;

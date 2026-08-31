@@ -213,6 +213,12 @@ dev_params! {
     /// making the arm exactly life-size (0.79) would leave the Wrench at 52,
     /// and making the Wrench right (~0.5) would leave a child's arm.
     MELEE_WIELD_SCALE = float("melee_scale", "Melee scale", 0.7, 0.25, 1.5, 0.05),
+    /// Enables the developer cheat pad. Like [`FREE_CAMERA`] this is a *gate*,
+    /// not the pad's own open/closed state: while it is false the open action
+    /// is not even read, so neither a stray controller chord nor an HTTP
+    /// injection can conjure free weapons into an ordinary run. Turning it off
+    /// while the pad is up also closes it, so the switch is always a way out.
+    CHEATS = bool("cheats", "Cheats", false),
     /// Enables the detached debug ("free") camera. This is the *gate*, not
     /// the camera's own on/off: while it is false the toggle input is not
     /// even read, so a stray `Alt+V` (or controller chord) during normal play

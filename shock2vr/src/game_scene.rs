@@ -16,6 +16,7 @@ use crate::{
     quest_info::QuestInfo,
     scripts::{Effect, GlobalEffect, ScriptWorld},
     time::Time,
+    vr_config::Handedness,
 };
 
 /// Why the player's current state cannot be represented by a durable save.
@@ -149,6 +150,16 @@ pub trait GameScene {
     /// stacked menus; they keep the default.
     fn is_pausable(&self) -> bool {
         false
+    }
+
+    /// Whether the given VR hand is holding nothing.
+    ///
+    /// Gates the cheat pad's controller chord, which shares its two face
+    /// buttons with the actions worth reaching for *while holding something*.
+    /// Scenes with no virtual hands keep the default, so the gate is inert
+    /// rather than blocking there.
+    fn hand_is_empty(&self, _hand: Handedness) -> bool {
+        true
     }
 
     /// Whether the player's collider is currently crouched (the *actual*

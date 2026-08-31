@@ -128,6 +128,7 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | `Alt+G` | `DebugForceChase` | every monster hunts the player, pinned |
 | `Alt+C` | `DebugCalmAll` | clears the pin |
 | `Alt+V` | `ToggleFreeCamera` | requires the **Free camera** developer option; Quest: right `A`+`B` together |
+| `Alt+K` | `ToggleCheatPad` | requires the **Cheats** developer option; Quest: left `X`+`Y` together, on an empty left hand |
 
 Every action is also triggerable without a keyboard - over HTTP on the debug
 runtime (`POST /v1/input/action`) or through the SDK (`game.input.trigger(...)`).
@@ -150,6 +151,14 @@ shows exactly what the *player's* viewpoint decided to draw. Turn on **Cull
 from cam** when you would rather just look at things. The developer option is
 the gate: while it is off the `Alt+V` / `A`+`B` toggle does nothing, and turning
 it off while detached re-attaches the camera.
+
+**Cheats** arms the developer cheat pad: a two-button panel (`Alt+K`, or left
+`X`+`Y` on the Quest with nothing in that hand) that rains a spread of weapons
+and ammo, or of cyber modules and nanites, down around the player so a test
+situation can be set up without playing the game up to it. Like the free
+camera, the developer option is the gate - with it off the toggle does nothing
+from any input path, HTTP injection included, and turning it off while the pad
+is up closes it.
 
 Flying uses the ordinary locomotion controls, so they are the ones your hands
 already know - and while the camera has them, the player stands still rather

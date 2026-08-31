@@ -97,6 +97,12 @@ pub enum InputAction {
     /// stray press during normal play cannot detach the view.
     ToggleFreeCamera,
 
+    /// Toggle the developer cheat pad. Consumed by `Game` itself for the same
+    /// reason `TogglePauseMenu` is: the pad is a `Game`-owned overlay that
+    /// suspends the scene, so an effect routed through the scene could never
+    /// close it again. Inert unless the `cheats` developer option is on.
+    ToggleCheatPad,
+
     /// Open/play the newest unread audio log (the original's
     /// `play_unread_log`), or replay the newest collected log once all are read.
     /// Collecting a disc only files it in the PDA, so this is how it is read.
@@ -141,6 +147,7 @@ impl InputAction {
             InputAction::ToggleMap,
             InputAction::TogglePauseMenu,
             InputAction::ToggleFreeCamera,
+            InputAction::ToggleCheatPad,
         ]
     }
 
@@ -179,6 +186,7 @@ impl InputAction {
             InputAction::ToggleMap => "ToggleMap",
             InputAction::TogglePauseMenu => "TogglePauseMenu",
             InputAction::ToggleFreeCamera => "ToggleFreeCamera",
+            InputAction::ToggleCheatPad => "ToggleCheatPad",
         }
     }
 
@@ -225,6 +233,16 @@ impl InputAction {
             InputAction::ToggleFreeCamera => Some((
                 "/user/hand/right/input/a/click",
                 "/user/hand/right/input/b/click",
+            )),
+            // The cheat pad takes the LEFT controller's face pair, because the
+            // right one is already the free camera's. Same sharing argument:
+            // the chord is dead unless the `cheats` developer option is on,
+            // and `Game` additionally refuses it while the left hand is
+            // holding something - the state in which X (the cyber interface)
+            // and Y (play last log) are worth reaching for on their own.
+            InputAction::ToggleCheatPad => Some((
+                "/user/hand/left/input/x/click",
+                "/user/hand/left/input/y/click",
             )),
             _ => None,
         }
@@ -323,6 +341,34 @@ mod tests {
         );
         assert_eq!(first, "/user/hand/right/input/a/click");
         assert_eq!(second, "/user/hand/right/input/b/click");
+    }
+
+    /// The cheat pad shares the LEFT face pair, because the right one is
+    /// already the free camera's. Pinning both chords here means a future
+    /// rebinding of either has to come back and re-read `oculus_runtime`'s
+    /// suppression rule rather than silently making one chord fire the other.
+    #[test]
+    fn the_cheat_pad_chord_shares_the_two_left_face_buttons() {
+        assert_eq!(InputAction::ToggleCheatPad.quest_touch_click_path(), None);
+        let (first, second) = InputAction::ToggleCheatPad
+            .quest_touch_chord_paths()
+            .expect("cheat pad chord binding");
+        assert_eq!(
+            first,
+            InputAction::ToggleUseMode.quest_touch_click_path().unwrap()
+        );
+        assert_eq!(
+            second,
+            InputAction::ReadLastUnreadLog
+                .quest_touch_click_path()
+                .unwrap()
+        );
+        // ...and it is a different pair from the free camera's, so completing
+        // one chord can never also complete the other.
+        assert_ne!(
+            InputAction::ToggleCheatPad.quest_touch_chord_paths(),
+            InputAction::ToggleFreeCamera.quest_touch_chord_paths()
+        );
     }
 
     /// Every action is reachable by exactly one kind of binding, or none.
