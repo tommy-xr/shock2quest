@@ -483,6 +483,43 @@ pub(crate) fn finale_follow_on(credits: Option<String>) -> GlobalEffect {
     }
 }
 
+/// Every cutscene the install ships, as bare names ready for
+/// [`resolve_cutscene_path`] (e.g. `cs1.avi`), sorted and deduplicated.
+///
+/// A 25th Anniversary install layers the same clip under `enhanced/`,
+/// `original/` and `kex/`, so the layers are folded into one entry per stem and
+/// the bare name lets the resolver pick its preferred layer at playback -
+/// exactly what an authored moment gets.
+pub(crate) fn cutscene_names() -> Vec<String> {
+    cutscene_names_from(&paths::data_root())
+}
+
+fn cutscene_names_from(data_root: &Path) -> Vec<String> {
+    let root = data_root.join("cutscenes");
+    let mut stems: Vec<String> = std::iter::once(root.clone())
+        .chain(
+            ANNIVERSARY_CUTSCENE_LAYERS
+                .iter()
+                .map(|layer| root.join(layer)),
+        )
+        .filter_map(|dir| dir.read_dir().ok())
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| is_cutscene_file(&entry.file_name().to_string_lossy()))
+        .filter_map(|entry| {
+            Path::new(&entry.file_name())
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().to_ascii_lowercase())
+        })
+        .collect();
+    stems.sort();
+    stems.dedup();
+    stems
+        .into_iter()
+        .map(|stem| format!("{stem}.avi"))
+        .collect()
+}
+
 fn first_present_cutscene(candidates: &[&str]) -> Option<String> {
     candidates
         .iter()
@@ -493,6 +530,32 @@ fn first_present_cutscene(candidates: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The launcher's list folds an Anniversary install's layers into one
+    /// entry per clip and hands back names the resolver understands - a name
+    /// per layer would offer the same movie three times.
+    #[test]
+    fn the_cutscene_list_folds_the_anniversary_layers_into_one_entry_each() {
+        let root = crate::test_support::TempDir::new("cutscenes");
+        let cutscenes = root.path().join("cutscenes");
+        for (layer, name) in [
+            ("enhanced", "cs1.ogv"),
+            ("original", "cs1.ogv"),
+            ("kex", "Kex.ogv"),
+            ("", "intro.avi"),
+            // Not a video: the list must not offer it.
+            ("", "notes.txt"),
+        ] {
+            let dir = cutscenes.join(layer);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(name), b"").unwrap();
+        }
+
+        assert_eq!(
+            cutscene_names_from(root.path()),
+            vec!["cs1.avi", "intro.avi", "kex.avi"]
+        );
+    }
 
     /// The finale always ends up at the menu, through the credits when the
     /// install has them and directly when it does not.
