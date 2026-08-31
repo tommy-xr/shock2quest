@@ -79,6 +79,12 @@ pub struct AnimatedModel {
     /// rather than joint-local space. Holds `bind_inverse[j] * bind_correction`,
     /// so the posed palette becomes `pose[j] * bind[j]`.
     bind: Option<Rc<[Matrix4<f32>; MAX_SKINNED_JOINTS]>>,
+    /// Global joint transforms of the pose baked into `scene_objects`, set when
+    /// a model is statically posed (`animate`/`pose`). The skeleton itself stays
+    /// at rest - only the skinning palette is baked - so this is the only record
+    /// of the pose the model is actually drawn in, and [`bounding_box`] needs it
+    /// to bound a lying corpse rather than the standing rest pose.
+    posed_joints: Option<Rc<[Matrix4<f32>; 40]>>,
 }
 
 /// Build the render palette, undoing the bind pose first when the geometry needs
@@ -105,17 +111,26 @@ fn build_palette(
 }
 
 impl AnimatedModel {
-    /// Model-space bounds in the skeleton's rest pose - the pose an
-    /// un-animated model draws in (an authored corpse, a posed prop). Each
-    /// joint's vertex AABB is authored in that joint's own frame, so it is
-    /// carried into model space by that joint's rest transform before the
-    /// union. `None` when the mesh has no per-joint boxes at all (a jointed
-    /// object mesh, a GLB).
+    /// Model-space bounds of the pose this model is drawn in - the baked pose
+    /// for a statically posed model (an authored corpse), the rest pose
+    /// otherwise. Each joint's vertex AABB is authored in that joint's own
+    /// frame, so it is carried into model space by that joint's transform
+    /// before the union. `None` when the mesh has no per-joint boxes at all (a
+    /// jointed object mesh, a GLB).
+    ///
+    /// The joint boxes are the coarse per-joint vertex AABBs (they cluster at
+    /// the joint origins), not a fit of the skinned vertices - enough for the
+    /// selection volume this feeds, and the same source the damage hitboxes
+    /// use.
     fn bounding_box(&self) -> Option<Aabb3<f32>> {
-        let rest = self.skeleton.get_transforms();
+        let joints = self
+            .posed_joints
+            .as_ref()
+            .map(|posed| **posed)
+            .unwrap_or_else(|| self.skeleton.get_transforms());
         let mut bounds: Option<Aabb3<f32>> = None;
         for (joint_id, aabb) in self.hit_boxes.iter() {
-            let Some(transform) = rest.get(*joint_id as usize) else {
+            let Some(transform) = joints.get(*joint_id as usize) else {
                 continue;
             };
             for corner in aabb.to_corners() {
@@ -184,6 +199,7 @@ impl AnimatedModel {
             vhots: self.vhots.clone(),
             sub_objects: self.sub_objects.clone(),
             bind: self.bind.clone(),
+            posed_joints: Some(Rc::new(animated_skeleton.get_transforms())),
         }
     }
 
@@ -207,6 +223,7 @@ impl AnimatedModel {
             vhots: model.vhots.clone(),
             sub_objects: model.sub_objects.clone(),
             bind: model.bind.clone(),
+            posed_joints: model.posed_joints.clone(),
         }
     }
 
@@ -262,6 +279,7 @@ impl Model {
                     vhots: static_mesh.vhots.clone(),
                     sub_objects,
                     bind: None,
+                    posed_joints: None,
                 }),
             }
         } else {
@@ -331,6 +349,7 @@ impl Model {
                 vhots: vec![],
                 sub_objects: vec![],
                 bind,
+                posed_joints: None,
             }),
         }
     }
@@ -357,6 +376,7 @@ impl Model {
                     vhots: vec![],
                     sub_objects: vec![],
                     bind: None,
+                    posed_joints: None,
                 }),
             }
         } else {
@@ -639,6 +659,14 @@ mod tests {
     /// per-joint boxes placed by the rest pose, not the joint-local boxes
     /// themselves.
     fn animated_model(hit_boxes: HashMap<u32, Aabb3<f32>>, bones: Vec<Bone>) -> Model {
+        posed_model(hit_boxes, bones, None)
+    }
+
+    fn posed_model(
+        hit_boxes: HashMap<u32, Aabb3<f32>>,
+        bones: Vec<Bone>,
+        posed_joints: Option<[Matrix4<f32>; 40]>,
+    ) -> Model {
         Model {
             transform: Matrix4::identity(),
             inner: InnerModel::Animated(AnimatedModel {
@@ -647,7 +675,9 @@ mod tests {
                 hit_boxes: Rc::new(hit_boxes),
                 hit_box_shapes: Rc::new(HashMap::new()),
                 vhots: Vec::new(),
+                sub_objects: Vec::new(),
                 bind: None,
+                posed_joints: posed_joints.map(Rc::new),
             }),
         }
     }
@@ -660,7 +690,7 @@ mod tests {
     /// every consumer (the frob/selection collider a corpse is picked by) fell
     /// back to a default-sized box at the object's origin.
     #[test]
-    fn an_animated_model_has_the_bounds_of_its_posed_joint_boxes() {
+    fn an_animated_model_has_the_bounds_of_its_rest_posed_joint_boxes() {
         let bones = vec![
             Bone {
                 joint_id: 0,
@@ -683,6 +713,28 @@ mod tests {
         // taking the joint-local boxes as-is would give a 1-unit cube.
         assert_eq!(bounds.min, Point3::new(-0.5, -0.5, -0.5));
         assert_eq!(bounds.max, Point3::new(4.5, 0.5, 0.5));
+    }
+
+    /// A statically posed model (an authored corpse) is drawn in its baked
+    /// pose, not the skeleton's rest pose: its bounds must follow the pose, or
+    /// a body lying on the floor is bounded by the standing rest skeleton.
+    #[test]
+    fn a_posed_model_is_bounded_by_the_pose_it_is_drawn_in() {
+        let bones = vec![Bone {
+            joint_id: 0,
+            parent_id: None,
+            local_transform: Matrix4::identity(),
+        }];
+        // The pose lays the single joint down 5 units along +x.
+        let mut posed = [Matrix4::identity(); 40];
+        posed[0] = Matrix4::from_translation(vec3(5.0, 0.0, 0.0));
+
+        let bounds = posed_model(HashMap::from([(0, unit_box())]), bones, Some(posed))
+            .bounding_box()
+            .expect("a posed model with joint boxes has bounds");
+
+        assert_eq!(bounds.min, Point3::new(4.5, -0.5, -0.5));
+        assert_eq!(bounds.max, Point3::new(5.5, 0.5, 0.5));
     }
 
     /// A jointed object mesh (`from_obj_bin`'s animated branch) carries no

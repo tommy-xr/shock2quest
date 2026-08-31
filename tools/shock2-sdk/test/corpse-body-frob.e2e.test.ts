@@ -51,6 +51,25 @@ test(
       `the corpse's selection collider should cover its body; only ${onBody} of 65 samples hit it`,
     );
 
+    // ...and be the shape of the pose it is DRAWN in. Bounding the skeleton's
+    // standing rest pose instead gives a body-height slab standing on end over
+    // a body lying flat, which passes the footprint probe above but fences off
+    // the air above the corpse.
+    const top = await probe(0, 0);
+    assert.equal(top.entity_id, corpse.id, "expected the probe over the origin to hit the corpse");
+    const height = top.hit_point![1] - cy;
+    assert.ok(
+      height < 0.8,
+      `a corpse lies flat: its collider should top out just above its origin, got ${height}`,
+    );
+
+    // The collider must be solid to nothing: it is a selection volume, and a
+    // body-sized solid box would fence off the floor around every corpse.
+    const [body] = (await game.physics.bodies({ entityId: corpse.id })).bodies;
+    assert.ok(body, "the corpse should have a physics body");
+    assert.equal(body.blocks_player, false, "a corpse must not block the player");
+    assert.equal(body.blocks_actor, false, "a corpse must not block actors");
+
     // Production interaction: aim at a point a half body-length off the root
     // joint - the part of the corpse the old point-sized collider missed.
     await teleportVerified(game, STANDING_SPOT);

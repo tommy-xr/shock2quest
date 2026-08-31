@@ -13,7 +13,7 @@ use cgmath::{
     EuclideanSpace, Matrix4, Point3, Quaternion, SquareMatrix, Transform, Vector3, Zero,
     num_traits::abs, vec3,
 };
-use collision::Aabb3;
+use collision::{Aabb, Aabb3};
 use dark::{
     BitmapAnimation, SCALE_FACTOR,
     importers::{ANIMATION_CLIP_IMPORTER, BITMAP_ANIMATION_IMPORTER, MODELS_IMPORTER},
@@ -978,6 +978,14 @@ fn create_physics_representation_with_options(
         .unwrap()
         .contains(entity_id);
 
+    // Read alone: the borrow tuple below is already at shipyard's arity limit.
+    let model_scale = world
+        .borrow::<View<PropScale>>()
+        .unwrap()
+        .get(entity_id)
+        .map(|scale| scale.0)
+        .unwrap_or_else(|_| vec3(1.0, 1.0, 1.0));
+
     let (
         v_pos,
         v_phys_attr,
@@ -1008,9 +1016,9 @@ fn create_physics_representation_with_options(
 
     let min_size = 0.5 / SCALE_FACTOR;
     let min_size_vec = vec3(min_size, min_size, min_size);
-    let dimensions = maybe_model
-        .as_ref()
-        .and_then(|model| model.bounding_box().map(|bbox| bbox.max - bbox.min))
+    let model_bounds = maybe_model.as_ref().and_then(|model| model.bounding_box());
+    let dimensions = model_bounds
+        .map(|bbox| bbox.dim())
         .unwrap_or(default_size_vec);
     let abs_dimensions = vec3(
         dimensions.x.abs().max(min_size_vec.x),
@@ -1019,11 +1027,18 @@ fn create_physics_representation_with_options(
     );
     // Model bounds are not centred on the object's origin - a skinned corpse
     // lies away from its root joint - so the selection box has to be carried
-    // to the bounds' centre, or it covers empty space beside the mesh.
-    let model_bounds_center = maybe_model
-        .as_ref()
-        .and_then(|model| model.bounding_box())
-        .map(|bbox| bbox.min.to_vec() + (bbox.max - bbox.min) / 2.0)
+    // to the bounds' centre, or it covers empty space beside the mesh. The
+    // centre follows the model's own scale (which `abs_dimensions` above has
+    // never applied) so a scaled mesh keeps its box.
+    let model_bounds_center = model_bounds
+        .map(|bbox| {
+            let center = bbox.center().to_vec();
+            vec3(
+                center.x * model_scale.x,
+                center.y * model_scale.y,
+                center.z * model_scale.z,
+            )
+        })
         .unwrap_or_else(Vector3::zero);
 
     let dynamics_options = if let Ok(phys_attr) = v_phys_attr.get(entity_id) {
@@ -1250,7 +1265,12 @@ fn create_physics_representation_with_options(
             // walk-in fixtures - the hydro2 Resurrection Station alcove is a
             // 2.2 x 4.0 x 2.5 box the player must stand inside - and wedges
             // the capsule against its faces with no way out (#801).
-            if v_phys_type.get(entity_id).is_err() {
+            //
+            // An authored corpse is the same story from the other side: it is
+            // a posed creature, so it *does* inherit a `PhysType`, but its box
+            // is now the whole body and a solid one would fence off the floor
+            // around it. Retail lets the player walk over a body.
+            if v_phys_type.get(entity_id).is_err() || v_creature_pose.get(entity_id).is_ok() {
                 frob_group = frob_group.non_solid_to_characters();
             }
             rigid_body_handle = physics.add_kinematic(
@@ -1981,6 +2001,51 @@ mod tests {
             );
         }
         entity_id
+    }
+
+    /// An authored corpse is a posed creature: it inherits a `PhysType`, so the
+    /// #801 guard below does not fire, but its selection box is now the whole
+    /// body - solid, it would fence off the floor around every body in the
+    /// level. Retail lets the player walk over a corpse.
+    ///
+    /// Negative-first: with the body-sized box and no pose guard this blocks.
+    #[test]
+    fn a_posed_corpse_frob_box_does_not_block_characters() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = add_wall_fixture(&mut world, Some(PhysicsModelType::ORIENTED_BOUNDING_BOX));
+        world.add_component(
+            entity_id,
+            PropCreaturePose {
+                pose_type: PoseType::MOTION_NAME,
+                motion_or_tag_name: "humdie3c".to_owned(),
+                scale: 1.0,
+                ballistic: true,
+            },
+        );
+        let model = ladder_model();
+
+        let handle =
+            create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+                .expect("a posed corpse should still get its frob collider");
+
+        assert!(
+            !physics.collider_blocks_player(handle),
+            "a corpse's frob box must not block the player"
+        );
+        assert!(
+            !physics.collider_blocks_actor(handle),
+            "a corpse's frob box must not block actors"
+        );
+        let bodies = physics.debug_list_bodies();
+        assert!(
+            bodies[0]
+                .collision_groups
+                .iter()
+                .any(|g| g == "entity" || g == "selectable"),
+            "the corpse must stay selectable, got {:?}",
+            bodies[0].collision_groups
+        );
     }
 
     /// The selection collider has to cover the *mesh*, wherever the mesh sits
