@@ -236,21 +236,26 @@ pub fn draw_item_name(
         .map(|template_id| (template_id, entity_id.inner()));
     let text_content = format_hover_label(&item_name, hit_points, debug_identity);
 
-    // Above the rect, lifted clear of the health bar - the original reserves
-    // the strip immediately above the rect for the bar (`draw_health_bar`).
+    // Above the rect, and lifted by a further bar-height only when this entity
+    // actually draws one - an ordinary item with no health bar keeps the label
+    // tight to its brackets rather than floating a gap above nothing.
     //
     // This position is ours, not the original's: there the rollover name is
     // not anchored to the rect at all, but drawn in a fixed frame at the top
     // centre of the screen, and the slot below the rect belongs to a separate
     // "HUD Use" hint string ("Search container") that this port does not yet
     // read. Keeping the name by the object is the interim.
+    let label_lift = match health_bar_fill(world, entity_id) {
+        Some(_) => HP_BAR_HEIGHT + LABEL_HEIGHT,
+        None => LABEL_HEIGHT,
+    };
     let text_obj_0_0 = SceneObject::screen_space_text(
         &text_content,
         font.clone(),
         10.0,
         0.5,
         extents.min.x,
-        extents.min.y - HP_BAR_HEIGHT - LABEL_HEIGHT,
+        extents.min.y - label_lift,
     );
 
     vec![text_obj_0_0]
@@ -479,6 +484,37 @@ mod tests {
         assert!(shows_hit_points(&world, id));
     }
 
+    /// The label's lift is driven by whether a bar is actually drawn, not by
+    /// the entity merely being a creature: an item with no bar keeps its label
+    /// tight to the brackets, and a corpse at zero hit points draws no bar and
+    /// so gets no gap either.
+    #[test]
+    fn only_an_entity_with_a_bar_reserves_the_strip_above_the_rect() {
+        let mut world = World::new();
+
+        let item = world.add_entity(PropHUDSelect(true));
+        assert_eq!(health_bar_fill(&world, item), None, "no ShowHP, no bar");
+
+        let creature = world.add_entity((
+            PropShowHP(true),
+            PropHitPoints { hit_points: 6 },
+            PropMaxHitPoints { hit_points: 12 },
+        ));
+        // Biased, like every other ratio here: (6+2)/(12+2).
+        assert_eq!(health_bar_fill(&world, creature), Some(8.0 / 14.0));
+
+        let corpse = world.add_entity((
+            PropShowHP(true),
+            PropHitPoints { hit_points: 0 },
+            PropMaxHitPoints { hit_points: 12 },
+        ));
+        assert_eq!(health_bar_fill(&world, corpse), None, "dead: no bar");
+
+        // Opted in but with no pool to read - nothing to draw.
+        let poolless = world.add_entity(PropShowHP(true));
+        assert_eq!(health_bar_fill(&world, poolless), None);
+    }
+
     #[test]
     fn decimal_placeholder_is_preserved_without_a_stack_count() {
         assert_eq!(
@@ -546,6 +582,20 @@ fn hit_point_pool(world: &World, entity_id: EntityId) -> Option<(i32, u32)> {
     Some((hit_points, max_hit_points))
 }
 
+/// The bar's fill ratio when `entity_id` will draw one at all, else `None`.
+///
+/// The single answer to "is there a bar here?", so the label's offset in
+/// [`draw_item_name`] and the bar itself cannot disagree about whether the
+/// strip above the rect is occupied.
+fn health_bar_fill(world: &World, entity_id: EntityId) -> Option<f32> {
+    if !shows_hit_points(world, entity_id) {
+        return None;
+    }
+    let (hit_points, max_hit_points) = hit_point_pool(world, entity_id)?;
+    let ratio = health_bar_ratio(hit_points, max_hit_points);
+    (ratio > 0.0).then_some(ratio)
+}
+
 /// The enemy health bar, drawn flush on top of the selection brackets.
 pub fn draw_health_bar(
     asset_cache: &mut AssetCache,
@@ -556,18 +606,9 @@ pub fn draw_health_bar(
     projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
 ) -> Vec<SceneObject> {
-    if !shows_hit_points(world, entity_id) {
-        return vec![];
-    }
-
-    let Some((hit_points, max_hit_points)) = hit_point_pool(world, entity_id) else {
+    let Some(ratio) = health_bar_fill(world, entity_id) else {
         return vec![];
     };
-
-    let ratio = health_bar_ratio(hit_points, max_hit_points);
-    if ratio <= 0.0 {
-        return vec![];
-    }
 
     let Some(aabb) = physics.get_aabb2(entity_id) else {
         return vec![];
