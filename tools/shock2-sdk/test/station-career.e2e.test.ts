@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { stepPastCutscenes } from "./helpers/cutscenes.js";
 
 // End-to-end test for the station training-year progression. Requires game
 // assets in Data/ and compiles the runtime on first run, so it is opt-in:
@@ -38,6 +39,9 @@ test(
         type: "TurnOn",
       } as unknown as Parameters<typeof game.entities.sendMessage>[1]);
       await game.step({ frames: 20 });
+      // Each tour leaves on its authored shuttle movie
+      // (campaign-cutscenes.e2e.test.ts); the year only advances on the far side.
+      await stepPastCutscenes(game);
       mission = (await game.info()).mission;
     }
 

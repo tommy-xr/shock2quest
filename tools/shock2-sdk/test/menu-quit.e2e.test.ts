@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import { AIM_AT_PANEL, menuEntry, panelPoint } from "./helpers/frontend-menu.js";
+import { AIM_AT_PANEL, clickMenuEntry, menuEntry, panelPoint } from "./helpers/frontend-menu.js";
 
 // End-to-end test for the main menu's Quit entry: clicking it must reach
 // `Game::should_quit`, which is what every runtime shuts down on (the desktop
@@ -17,7 +17,8 @@ import { AIM_AT_PANEL, menuEntry, panelPoint } from "./helpers/frontend-menu.js"
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 /** Quit is the last of the six main-menu entries. */
-const QUIT_ENTRY = menuEntry(5);
+const QUIT_INDEX = 5;
+const QUIT_ENTRY = menuEntry(QUIT_INDEX);
 
 test(
   "clicking Quit in the flat menu requests a quit without killing the runtime",
@@ -32,14 +33,7 @@ test(
       "nothing has asked to quit yet",
     );
 
-    // Clicks are rising-edge, so the press has to start on a frame where the
-    // previous one was unpressed.
-    await game.input.set("pointer.position", QUIT_ENTRY);
-    await game.step({ frames: 5 });
-    await game.input.set("pointer.pressed", 1);
-    await game.step({ frames: 2 });
-    await game.input.set("pointer.pressed", 0);
-    await game.step({ frames: 5 });
+    await clickMenuEntry(game, QUIT_INDEX);
 
     assert.equal(
       (await game.info()).quit_requested,

@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
+import { stepPastCutscenes } from "./helpers/cutscenes.js";
 
 // End-to-end test for the HONEST character-creation chain the player walks at
 // game start: earth.mis (pick a career) -> station.mis three training tours ->
@@ -103,6 +104,18 @@ async function teleportTo(game: GameServer, [x, y, z]: Vec3): Promise<void> {
   await game.player.teleport({ x, y, z });
 }
 
+/**
+ * Trip a chargen tripwire and arrive at its destination. Each of these
+ * transitions plays its authored movie first (see campaign-cutscenes.e2e.test.ts
+ * for the mapping), so the destination is only on screen once those finish;
+ * this test is about what survives the chain, not about the movies.
+ */
+async function tripAndArrive(game: GameServer, at: Vec3, frames: number): Promise<string[]> {
+  await teleportTo(game, at);
+  await game.step({ frames });
+  return stepPastCutscenes(game);
+}
+
 /** The set of `training_year_N` bits currently COMPLETE, sorted ascending. */
 async function completeTrainingYears(game: GameServer): Promise<string[]> {
   const { quests } = await game.quests.list();
@@ -125,8 +138,7 @@ test(
     // Step 1: enlist as a Marine by walking through the Marine career door.
     // Teleport ONTO its tripwire volume (equivalent to walking in: fires the same
     // ENTER trigger) and let the real TrapNewTripwire -> ChooseService chain run.
-    await teleportTo(game, CAREER_DOORS.marine.trip);
-    await game.step({ frames: 15 });
+    await tripAndArrive(game, CAREER_DOORS.marine.trip, 15);
 
     let info = await game.info();
     assert.equal(
@@ -189,8 +201,7 @@ test(
     // back to station.mis, and grant the tour-0 reward for that Marine year
     // (#453). hp/psi are unchanged by these grants (they touch STR/skills), so
     // the loadout stays 45/20 - the observable change is now in player.stats.
-    await teleportTo(game, TOUR_TRIP);
-    await game.step({ frames: 20 });
+    await tripAndArrive(game, TOUR_TRIP, 20);
     info = await game.info();
     assert.equal(info.mission.toLowerCase(), "station.mis", "tour 1 (year < 4) should loop back to station.mis");
     assert.deepEqual(
@@ -212,8 +223,7 @@ test(
       "#497 START_02 Marine choice",
     );
 
-    await teleportTo(game, TOUR_TRIP);
-    await game.step({ frames: 20 });
+    await tripAndArrive(game, TOUR_TRIP, 20);
     info = await game.info();
     assert.equal(info.mission.toLowerCase(), "station.mis", "tour 2 (year < 4) should loop back to station.mis");
     assert.deepEqual(
@@ -254,8 +264,12 @@ test(
     // Step 3: the third tour advances to year 4, grants the Marine Y3 T0 reward
     // (Mission7: +1 Maintenance), and deploys to MedSci1 - stats survive the
     // level transition.
-    await teleportTo(game, TOUR_TRIP);
-    await game.step({ frames: 20 });
+    // The deploy is the one moment that plays two movies, shuttle then boarding.
+    assert.deepEqual(
+      await tripAndArrive(game, TOUR_TRIP, 20),
+      ["shuttle3.avi", "cs2.avi"],
+      "the deploy should play the last shuttle, then the boarding of the Von Braun",
+    );
     info = await game.info();
     assert.equal(
       info.mission.toLowerCase(),
@@ -303,8 +317,7 @@ async function enlist(
   await using game = await GameServer.launch({ mission: "earth.mis" });
   await game.step({ frames: 5 });
 
-  await teleportTo(game, door.trip);
-  await game.step({ frames: 15 });
+  await tripAndArrive(game, door.trip, 15);
 
   const info = await game.info();
   assert.equal(

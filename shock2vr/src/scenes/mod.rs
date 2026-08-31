@@ -477,10 +477,7 @@ pub(crate) fn resolve_credits_cutscene() -> Option<String> {
 /// ships one, then the main menu either way.
 pub(crate) fn finale_follow_on(credits: Option<String>) -> GlobalEffect {
     match credits {
-        Some(video) => GlobalEffect::PlayCutscene {
-            video,
-            then: Box::new(GlobalEffect::ShowMainMenu),
-        },
+        Some(video) => GlobalEffect::ShowMainMenu.after_cutscene(&video),
         None => GlobalEffect::ShowMainMenu,
     }
 }

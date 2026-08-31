@@ -25,6 +25,11 @@ use super::{Effect, GlobalEffect, MessagePayload, Script};
 /// `crate::career` + `MissionCore::load`) - and then transitions to the marker's
 /// own destination (the station recruit deck). The three branches are mutually
 /// exclusive: selecting one clears the others.
+/// The ride to the recruit station, played once as the player leaves Earth for
+/// the tour selection. Movie names are not present in the mission or gamesys
+/// data - the original picked them in its engine/game-script code.
+const ENLISTMENT_CUTSCENE: &str = "starport.avi";
+
 pub struct ChooseServiceScript {}
 impl ChooseServiceScript {
     pub fn new() -> ChooseServiceScript {
@@ -59,12 +64,15 @@ impl Script for ChooseServiceScript {
                 if let Ok(dest_level) = v_dest_level.get(entity_id) {
                     let v_dest_loc = world.borrow::<View<PropDestLoc>>().unwrap();
                     let dest_loc = v_dest_loc.get(entity_id).ok().map(|l| l.0);
-                    effects.push(Effect::GlobalEffect(GlobalEffect::TransitionLevel {
+                    let transition = GlobalEffect::TransitionLevel {
                         level_file: format!("{}.mis", dest_level.0),
                         loc: dest_loc,
                         entities_to_trigger: vec![career.station_start_trigger(1)],
                         vitals_transition: super::PlayerVitalsTransition::InitializeFromDestination,
-                    }));
+                    };
+                    effects.push(Effect::GlobalEffect(
+                        transition.after_cutscene(ENLISTMENT_CUTSCENE),
+                    ));
                 }
 
                 Effect::Multiple(effects)

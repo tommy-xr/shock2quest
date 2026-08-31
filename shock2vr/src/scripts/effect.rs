@@ -82,11 +82,11 @@ pub enum GlobalEffect {
     /// `scenes::resolve_cutscene_path`; a video that cannot be opened is skipped
     /// straight to `then` rather than stranding the player.
     ///
-    /// Handling this does *not* write the outgoing mission back to the
-    /// in-memory level ledger, because the cutscene's own empty world would be
-    /// what got saved. A caller that interrupts live gameplay is responsible for
-    /// preserving it first (as `CompleteCampaign` does), and any `then` that
-    /// resumes gameplay depends on that having happened.
+    /// Handling this saves the scene being replaced - to the in-memory level
+    /// ledger, and as the quest bits / held items / vitals a `then` transition
+    /// carries forward. Without that the cutscene's own empty world would be
+    /// what a chargen transition handed the next level, wiping the player's
+    /// career, training year, inventory and health.
     PlayCutscene {
         video: String,
         then: Box<GlobalEffect>,
@@ -109,6 +109,18 @@ pub enum GlobalEffect {
 }
 
 impl GlobalEffect {
+    /// Play `video` first and dispatch `self` when it ends.
+    ///
+    /// Movie names are not present in the mission or gamesys data - the original
+    /// picked them in its engine/game-script code - so each authored moment
+    /// names its own video at the site that emits the transition.
+    pub fn after_cutscene(self, video: &str) -> Self {
+        GlobalEffect::PlayCutscene {
+            video: video.to_owned(),
+            then: Box::new(self),
+        }
+    }
+
     /// The new-game boot into `level_file`: map-default spawn, no triggers,
     /// vitals initialized from the destination. Shared by the main menu's New
     /// Game and the developer launcher's Missions tab so the two boots cannot
