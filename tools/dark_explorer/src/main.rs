@@ -1,6 +1,11 @@
 use clap::{Parser, Subcommand};
 use engine::assets::asset_paths::AssetEntry;
 
+mod explorer;
+mod ui;
+
+use explorer::{family_entries, family_names, print_coverage_caveat, short_source};
+
 #[derive(Parser)]
 #[command(name = "dark_explorer")]
 #[command(about = "Explore the mounted game archives (KPF/CRF) without unzipping them")]
@@ -34,63 +39,26 @@ enum Commands {
         #[arg(long, default_value_t = 50)]
         limit: usize,
     },
+    /// Open a windowed asset browser (tree + search + preview)
+    Ui {
+        /// Write a PNG of the first rendered frame to this path and exit
+        #[arg(long)]
+        screenshot: Option<std::path::PathBuf>,
+
+        /// Open with an asset selected, as "<family>/<key>" (e.g. "obj/txt16/arm.pcx")
+        #[arg(long)]
+        select: Option<String>,
+
+        /// Open with the search box pre-filled with this filter
+        #[arg(long)]
+        search: Option<String>,
+    },
     /// Show every mount serving an asset name, resolution winner first
     Which {
         /// A lookup key: mount-relative path, bare filename where the family
         /// collapses basenames, or a namespace-qualified name like "iface/log.pcx"
         name: String,
     },
-}
-
-/// The families the tool enumerates, in the game's lookup priority order:
-/// every family the game consults, plus the raw data files (gamesys, missions,
-/// motiondb) as a pseudo-family, plus `fonts` on a classic install (mounted
-/// from `res/fonts.crf` outside the family list there).
-fn family_names() -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = shock2vr::resource_families().to_vec();
-    if !shock2vr::is_25th_anniversary_install() {
-        names.push("fonts");
-    }
-    names.push("data");
-    names
-}
-
-fn family_entries(family: &str) -> Vec<AssetEntry> {
-    if family == "data" {
-        let mounts = engine::assets::asset_paths::AssetPath::combine(
-            shock2vr::data_files::data_file_mounts(shock2vr::paths::data_root()),
-        );
-        // The data mount spans all of `data/`, which contains the res/
-        // families already listed as their own families; keep only the
-        // root-level files (gamesys, missions, motiondb).
-        return mounts
-            .entries()
-            .into_iter()
-            .filter(|entry| !entry.key.contains('/'))
-            .collect();
-    }
-    shock2vr::resource_family_paths(family).entries()
-}
-
-/// Mounts the game consults that this tool cannot enumerate, so results can be
-/// incomplete: a classic install's loose `res/mesh` / `res/obj` folder mounts
-/// (which outrank the archives) and its loose data-root files.
-fn print_coverage_caveat() {
-    if !shock2vr::is_25th_anniversary_install() {
-        eprintln!(
-            "note: classic install - loose res/mesh and res/obj folders (which outrank the \
-             archives) and loose data-root files are not enumerated; results may be incomplete"
-        );
-    }
-}
-
-/// Archive path relative to the data root, for compact display.
-fn short_source(source: &str) -> String {
-    let root = shock2vr::paths::data_root().to_string_lossy().into_owned();
-    source
-        .strip_prefix(&format!("{root}/"))
-        .unwrap_or(source)
-        .to_string()
 }
 
 fn ls(family: Option<String>, filter: Option<String>, limit: usize) {
@@ -209,6 +177,11 @@ fn main() {
             limit,
         } => ls(family, filter, limit),
         Commands::Find { pattern, limit } => find(pattern, limit),
+        Commands::Ui {
+            screenshot,
+            select,
+            search,
+        } => ui::run(screenshot, select, search),
         Commands::Which { name } => which(name),
     }
 }
