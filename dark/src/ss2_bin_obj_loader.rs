@@ -969,8 +969,7 @@ pub struct SubObjectHeader {
     idx: u32,
     #[allow(dead_code)]
     parent_idx: i32,
-    #[allow(dead_code)]
-    name: String,
+    pub name: String,
     transform: Matrix4<f32>,
     #[allow(dead_code)]
     min_range: f32,

@@ -22,11 +22,21 @@ fn flip_winding(winding: FrontFaceWinding) -> FrontFaceWinding {
     }
 }
 
+/// One LGMD sub-object: a named part of a static `.bin` (the pieces an in-game
+/// tweq rotates or translates - a gun slide, a door leaf) and its pivot in
+/// model space. Empty for LGMM/AI and GLB models, which articulate via joints.
+#[derive(Clone, Debug)]
+pub struct SubObject {
+    pub name: String,
+    pub transform: Matrix4<f32>,
+}
+
 #[derive(Clone)]
 pub struct StaticModel {
     scene_objects: Vec<SceneObject>,
     bounding_box: Aabb3<f32>,
     vhots: Vec<Vhot>,
+    sub_objects: Vec<SubObject>,
 }
 
 impl StaticModel {
@@ -52,6 +62,7 @@ impl StaticModel {
             scene_objects: new_scene_objects,
             bounding_box: model.bounding_box,
             vhots: model.vhots.clone(),
+            sub_objects: model.sub_objects.clone(),
         }
     }
 }
@@ -63,6 +74,7 @@ pub struct AnimatedModel {
     hit_boxes: Rc<HashMap<u32, Aabb3<f32>>>,
     hit_box_shapes: Rc<HashMap<u32, HitBoxShape>>,
     vhots: Vec<Vhot>,
+    sub_objects: Vec<SubObject>,
     /// Set only for a `PMNM` mesh, whose vertices are in bind-pose model space
     /// rather than joint-local space. Holds `bind_inverse[j] * bind_correction`,
     /// so the posed palette becomes `pose[j] * bind[j]`.
@@ -146,6 +158,7 @@ impl AnimatedModel {
             hit_boxes: self.hit_boxes.clone(),
             hit_box_shapes: self.hit_box_shapes.clone(),
             vhots: self.vhots.clone(),
+            sub_objects: self.sub_objects.clone(),
             bind: self.bind.clone(),
         }
     }
@@ -168,6 +181,7 @@ impl AnimatedModel {
             hit_boxes: model.hit_boxes.clone(),
             hit_box_shapes: model.hit_box_shapes.clone(),
             vhots: model.vhots.clone(),
+            sub_objects: model.sub_objects.clone(),
             bind: model.bind.clone(),
         }
     }
@@ -198,6 +212,18 @@ impl Model {
             ss2_bin_obj_loader::to_scene_objects(&static_mesh, asset_cache);
         let bounding_box = static_mesh.bounding_box;
 
+        // Sub-object pivots, in model space: the skeleton the obj loader just
+        // built from the sub-object tree is exactly that hierarchy resolved.
+        let sub_objects = static_mesh
+            .sub_objects
+            .iter()
+            .enumerate()
+            .map(|(index, sub_object)| SubObject {
+                name: sub_object.name.clone(),
+                transform: skeleton.global_transform(&(index as u32)),
+            })
+            .collect::<Vec<SubObject>>();
+
         if skeleton.bone_count() > 1 {
             let hit_boxes = HashMap::new();
             Model {
@@ -208,6 +234,7 @@ impl Model {
                     hit_boxes: Rc::new(hit_boxes),
                     hit_box_shapes: Rc::new(HashMap::new()),
                     vhots: static_mesh.vhots.clone(),
+                    sub_objects,
                     bind: None,
                 }),
             }
@@ -218,6 +245,7 @@ impl Model {
                     scene_objects,
                     bounding_box,
                     vhots: static_mesh.vhots.clone(),
+                    sub_objects,
                 }),
             }
         }
@@ -275,6 +303,7 @@ impl Model {
                 hit_boxes: Rc::new(hit_boxes),
                 hit_box_shapes: Rc::new(hit_box_shapes),
                 vhots: vec![],
+                sub_objects: vec![],
                 bind,
             }),
         }
@@ -300,6 +329,7 @@ impl Model {
                     hit_boxes: Rc::new(hit_boxes),
                     hit_box_shapes: Rc::new(HashMap::new()),
                     vhots: vec![],
+                    sub_objects: vec![],
                     bind: None,
                 }),
             }
@@ -312,6 +342,7 @@ impl Model {
                     scene_objects,
                     bounding_box,
                     vhots: vec![],
+                    sub_objects: vec![],
                 }),
             }
         }
@@ -347,6 +378,15 @@ impl Model {
         match &self.inner {
             InnerModel::Animated(animated_model) => animated_model.vhots.clone(),
             InnerModel::Static(static_model) => static_model.vhots.clone(),
+        }
+    }
+
+    /// The LGMD sub-object pivots (see [`SubObject`]). Empty unless this model
+    /// came from an object `.bin`.
+    pub fn sub_objects(&self) -> &[SubObject] {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => &animated_model.sub_objects,
+            InnerModel::Static(static_model) => &static_model.sub_objects,
         }
     }
 
@@ -564,6 +604,7 @@ mod tests {
                 scene_objects: vec![object],
                 bounding_box: Aabb3::new(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 1.0)),
                 vhots: Vec::new(),
+                sub_objects: Vec::new(),
             }),
         }
     }
