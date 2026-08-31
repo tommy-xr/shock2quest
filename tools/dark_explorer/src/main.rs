@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use engine::assets::asset_paths::AssetEntry;
 
+mod archetypes;
 mod explorer;
 mod model_preview;
 mod ui;
@@ -61,6 +62,19 @@ enum Commands {
         /// Start the 3D model preview with the hitbox overlay on
         #[arg(long)]
         hitboxes: bool,
+
+        /// Open the Archetypes tab with this creature selected (name or template id)
+        #[arg(long)]
+        archetype: Option<String>,
+
+        /// Play this animation clip on the selected archetype (needs --archetype)
+        #[arg(long)]
+        clip: Option<String>,
+
+        /// Advance the preview scene by this many simulation seconds before a
+        /// --screenshot capture (for posing an animated clip)
+        #[arg(long)]
+        advance: Option<f32>,
     },
     /// Show every mount serving an asset name, resolution winner first
     Which {
@@ -192,12 +206,18 @@ fn main() {
             search,
             skeletons,
             hitboxes,
+            archetype,
+            clip,
+            advance,
         } => ui::run(ui::UiOptions {
             screenshot,
             select,
             search,
             skeletons,
             hitboxes,
+            archetype,
+            clip,
+            advance,
         }),
         Commands::Which { name } => which(name),
     }

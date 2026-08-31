@@ -249,6 +249,24 @@ impl MotionDB {
     pub fn get_creature_type_count(&self) -> usize {
         self.tag_databases.len()
     }
+
+    /// Every animation name reachable from one creature type's tag database,
+    /// sorted and de-duplicated.
+    pub fn get_all_motions_for_creature(&self, creature_type: u32) -> Vec<String> {
+        let Some(tag_database) = self.tag_databases.get(creature_type as usize) else {
+            return vec![];
+        };
+        let mut names: Vec<String> = tag_database
+            .collect_all_data_ids()
+            .into_iter()
+            .filter_map(|id| self.tag_value_to_animations.get(&id))
+            .flatten()
+            .cloned()
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
 }
 
 fn load_name_map<T: io::Read + io::Seek>(

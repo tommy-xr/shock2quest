@@ -15,7 +15,7 @@ use std::ffi::CString;
 use cgmath::{Quaternion, Rad, Rotation3, vec2, vec3};
 use dark::importers::MODELS_IMPORTER;
 use dark::model::Model;
-use dark_viewer::scenes::{BinObjViewerScene, ToolScene};
+use dark_viewer::scenes::{BinAiViewerScene, BinObjViewerScene, ToolScene};
 use eframe::{egui, glow};
 use engine::Engine;
 use engine::assets::asset_cache::AssetCache;
@@ -50,13 +50,19 @@ struct OffscreenTarget {
 pub struct ModelPreview {
     engine: Box<dyn Engine>,
     asset_cache: AssetCache,
-    /// What the current scene (or error) was built for: (key, skeletons,
+    /// What the current scene (or error) was built for: (key, clip, skeletons,
     /// hitboxes). Guards against rebuilding — or re-panicking — every frame.
-    built_for: Option<(String, bool, bool)>,
+    built_for: Option<(String, Option<String>, bool, bool)>,
     scene: Option<Box<dyn ToolScene>>,
+    /// The scene plays an animation clip, so it re-renders every frame.
+    animated: bool,
     error: Option<String>,
     pub debug_skeletons: bool,
     pub debug_hit_boxes: bool,
+    /// Suspend the per-frame wall-clock tick of an animated scene, so
+    /// `advance()` is the only time source - `--screenshot` runs set this to
+    /// capture a deterministic pose.
+    pub paused: bool,
     // Orbit camera around `target` (dark_viewer's parameterization: pitch 90
     // is horizontal, distance along the orbit radius).
     yaw: f32,
@@ -64,8 +70,8 @@ pub struct ModelPreview {
     distance: f32,
     target: cgmath::Vector3<f32>,
     fbo: Option<OffscreenTarget>,
-    /// The scene is static (animation is out of scope), so the FBO is only
-    /// re-rendered when something changed — scene, camera, or viewport size.
+    /// A static scene's FBO is only re-rendered when something changed —
+    /// scene, camera, or viewport size; an animated one renders every frame.
     needs_render: bool,
 }
 
@@ -83,9 +89,11 @@ impl ModelPreview {
             asset_cache,
             built_for: None,
             scene: None,
+            animated: false,
             error: None,
             debug_skeletons: false,
             debug_hit_boxes: false,
+            paused: false,
             yaw: 65.0,
             pitch: 75.0,
             distance: 10.0,
@@ -96,12 +104,24 @@ impl ModelPreview {
     }
 
     /// Show the preview for `key` (a `.bin` model): toggles, then the rendered
-    /// viewport filling the remaining space.
-    pub fn show(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame, key: &str) {
-        self.ensure_scene(key);
+    /// viewport filling the remaining space. With `clip` (a motion name, no
+    /// extension), the model animates with that clip on loop.
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        frame: &mut eframe::Frame,
+        key: &str,
+        clip: Option<&str>,
+    ) {
+        self.ensure_scene(key, clip);
         if let Some(error) = &self.error {
             ui.label(format!("Cannot render this model: {error}"));
             return;
+        }
+        if self.animated && !self.paused {
+            // Tick the playing clip with real dt and keep frames coming.
+            self.needs_render = true;
+            ui.ctx().request_repaint();
         }
 
         // A toggle change rebuilds on the next frame's ensure_scene (the click
@@ -129,9 +149,11 @@ impl ModelPreview {
         }
 
         if self.needs_render && self.scene.is_some() && self.fbo.is_some() {
-            let dt = ui.input(|i| i.stable_dt).min(0.1);
-            if let Some(scene) = &mut self.scene {
-                scene.update(dt);
+            if !self.paused {
+                let dt = ui.input(|i| i.stable_dt).min(0.1);
+                if let Some(scene) = &mut self.scene {
+                    scene.update(dt);
+                }
             }
             self.render_scene(px);
             self.needs_render = false;
@@ -150,16 +172,22 @@ impl ModelPreview {
         }
     }
 
-    /// (Re)build the scene when the key or a debug toggle changed, framing the
-    /// camera from the model's bounds where they are known.
-    fn ensure_scene(&mut self, key: &str) {
-        let wanted = (key.to_string(), self.debug_skeletons, self.debug_hit_boxes);
+    /// (Re)build the scene when the key, clip, or a debug toggle changed,
+    /// framing the camera from the model's bounds where they are known.
+    fn ensure_scene(&mut self, key: &str, clip: Option<&str>) {
+        let wanted = (
+            key.to_string(),
+            clip.map(|c| c.to_string()),
+            self.debug_skeletons,
+            self.debug_hit_boxes,
+        );
         if self.built_for.as_ref() == Some(&wanted) {
             return;
         }
         let reframe = self.built_for.as_ref().map(|(k, ..)| k.as_str()) != Some(key);
         self.built_for = Some(wanted);
         self.scene = None;
+        self.animated = false;
         self.error = None;
         // Load the model eagerly under catch_unwind — the scene itself defers
         // loading to render, and Dark parsers panic on malformed input; a
@@ -173,21 +201,59 @@ impl ModelPreview {
                 return;
             }
         };
-        match BinObjViewerScene::from_model(
-            key.to_string(),
-            &self.asset_cache,
-            self.debug_skeletons,
-            self.debug_hit_boxes,
-        ) {
+        let scene: Result<Box<dyn ToolScene>, String> = match clip {
+            None => BinObjViewerScene::from_model(
+                key.to_string(),
+                &self.asset_cache,
+                self.debug_skeletons,
+                self.debug_hit_boxes,
+            )
+            .map(|scene| Box::new(scene) as Box<dyn ToolScene>)
+            .map_err(|err| err.to_string()),
+            // Clip parsing panics on malformed input too, so it also runs
+            // under the guard.
+            Some(clip) => quiet_catch(|| {
+                BinAiViewerScene::from_clips(
+                    key.to_string(),
+                    vec![dark_viewer::normalize_clip_name(clip)?],
+                    &mut self.asset_cache,
+                    self.debug_skeletons,
+                    self.debug_hit_boxes,
+                )
+                .map(|scene| Box::new(scene) as Box<dyn ToolScene>)
+                .map_err(|err| err.to_string())
+            })
+            .and_then(|r| r),
+        };
+        match scene {
             Ok(scene) => {
-                self.scene = Some(Box::new(scene));
+                self.scene = Some(scene);
+                self.animated = clip.is_some();
                 self.needs_render = true;
                 if reframe {
                     self.frame_camera(&model);
                 }
             }
-            Err(err) => self.error = Some(err.to_string()),
+            Err(err) => self.error = Some(err),
         }
+    }
+
+    /// Step the playing scene forward by `seconds` of simulation time (in
+    /// fixed 60 Hz increments), so `--screenshot` runs can capture a pose
+    /// mid-clip.
+    pub fn advance(&mut self, seconds: f32) {
+        let Some(scene) = &mut self.scene else { return };
+        // Cap at 10 minutes of sim time so a typo'd --advance can't hang.
+        let steps = (seconds * 60.0).round().clamp(0.0, 60.0 * 600.0) as u32;
+        for _ in 0..steps {
+            scene.update(1.0 / 60.0);
+        }
+        self.needs_render = true;
+    }
+
+    /// Why the current selection could not be shown, if it could not.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
     }
 
     /// Reset the orbit to frame the model: static models by their bounding

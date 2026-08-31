@@ -11,6 +11,7 @@ use engine::assets::asset_paths::{AbstractAssetPath, AssetEntry};
 use engine::audio::{AudioClip, AudioContext, AudioHandle};
 use engine::texture_format::{self, PixelFormat};
 
+use crate::archetypes::{Archetype, ArchetypeDb};
 use crate::explorer;
 use crate::model_preview::{self, ModelPreview};
 
@@ -26,6 +27,12 @@ pub struct UiOptions {
     /// `--screenshot` run can capture the debug overlays).
     pub skeletons: bool,
     pub hitboxes: bool,
+    /// Open the Archetypes tab with this creature selected (name or
+    /// template id), optionally playing `clip`, advanced by `advance` seconds
+    /// of simulation time before a `--screenshot` capture.
+    pub archetype: Option<String>,
+    pub clip: Option<String>,
+    pub advance: Option<f32>,
 }
 
 pub fn run(options: UiOptions) {
@@ -143,7 +150,14 @@ struct Preview {
     kind: PreviewKind,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Tab {
+    Files,
+    Archetypes,
+}
+
 pub struct ExplorerApp {
+    tab: Tab,
     family_names: Vec<&'static str>,
     families: BTreeMap<String, LoadedFamily>,
     search: String,
@@ -165,11 +179,22 @@ pub struct ExplorerApp {
     scroll_frames: u8,
     /// Flattened search rows, cached per needle: (needle, capped rows, total).
     search_results: Option<(String, Vec<(String, String)>, usize)>,
+    /// Lazily built on first opening the Archetypes tab: parsing the gamesys
+    /// and motion database takes a moment. Err = why it failed, shown inline.
+    archetype_db: Option<Result<ArchetypeDb, String>>,
+    archetype_search: String,
+    selected_archetype: Option<i32>,
+    selected_clip: Option<String>,
+    /// Clip list cached for the selected archetype's template id.
+    archetype_clips: Option<(i32, Result<Vec<String>, String>)>,
+    /// Simulation seconds to step the scene once it exists (from `--advance`).
+    advance_pending: Option<f32>,
 }
 
 impl ExplorerApp {
     fn new(options: UiOptions) -> ExplorerApp {
         let mut app = ExplorerApp {
+            tab: Tab::Files,
             family_names: explorer::family_names(),
             families: BTreeMap::new(),
             search: options.search.unwrap_or_default(),
@@ -184,7 +209,54 @@ impl ExplorerApp {
             frames_rendered: 0,
             scroll_frames: 0,
             search_results: None,
+            archetype_db: None,
+            archetype_search: String::new(),
+            selected_archetype: None,
+            selected_clip: None,
+            archetype_clips: None,
+            advance_pending: options.advance,
         };
+        if let Some(archetype) = options.archetype {
+            // Fail loudly, like --select: a `--screenshot` run that quietly
+            // captured an empty preview would still exit 0 otherwise.
+            let id = {
+                let db = match app.archetype_db().as_ref() {
+                    Ok(db) => db,
+                    Err(err) => {
+                        eprintln!("--archetype: {err}");
+                        std::process::exit(2);
+                    }
+                };
+                let id = match db.resolve(&archetype) {
+                    Ok(id) => id,
+                    Err(err) => {
+                        eprintln!("--archetype: {err}");
+                        std::process::exit(2);
+                    }
+                };
+                if let Some(clip) = &options.clip {
+                    match db.archetypes.get(&id).map(|a| db.clips_for(a)) {
+                        Some(Ok(clips)) if clips.iter().any(|c| c == clip) => {}
+                        Some(Ok(_)) => {
+                            eprintln!("--clip: no clip '{clip}' for that archetype");
+                            std::process::exit(2);
+                        }
+                        Some(Err(err)) => {
+                            eprintln!("--clip: cannot list clips: {err}");
+                            std::process::exit(2);
+                        }
+                        None => unreachable!("resolve returned an unknown archetype"),
+                    }
+                }
+                id
+            };
+            app.tab = Tab::Archetypes;
+            app.selected_archetype = Some(id);
+            app.selected_clip = options.clip;
+        } else if options.clip.is_some() {
+            eprintln!("--clip needs --archetype");
+            std::process::exit(2);
+        }
         if let Some(select) = options.select {
             // Fail loudly on a bad selection: a `--screenshot` run that quietly
             // captured an empty preview would still exit 0 otherwise.
@@ -204,6 +276,10 @@ impl ExplorerApp {
             }
         }
         app
+    }
+
+    fn archetype_db(&mut self) -> &Result<ArchetypeDb, String> {
+        self.archetype_db.get_or_insert_with(ArchetypeDb::load)
     }
 
     fn family(&mut self, name: &str) -> &LoadedFamily {
@@ -369,27 +445,41 @@ impl eframe::App for ExplorerApp {
             .show(ui, |ui| {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    ui.label("Search:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.search)
-                            .hint_text("substring of a key")
-                            .desired_width(f32::INFINITY),
-                    );
+                    ui.selectable_value(&mut self.tab, Tab::Files, "Files");
+                    ui.selectable_value(&mut self.tab, Tab::Archetypes, "Archetypes");
                 });
                 ui.separator();
-                egui::ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        if self.search.is_empty() {
-                            self.show_tree(ui, &mut clicked);
-                        } else {
-                            self.show_search_results(ui, &mut clicked);
-                        }
-                    });
+                match self.tab {
+                    Tab::Files => {
+                        ui.horizontal(|ui| {
+                            ui.label("Search:");
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.search)
+                                    .hint_text("substring of a key")
+                                    .desired_width(f32::INFINITY),
+                            );
+                        });
+                        ui.separator();
+                        egui::ScrollArea::both()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                if self.search.is_empty() {
+                                    self.show_tree(ui, &mut clicked);
+                                } else {
+                                    self.show_search_results(ui, &mut clicked);
+                                }
+                            });
+                    }
+                    Tab::Archetypes => self.show_archetype_panel(ui),
+                }
             });
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
-            self.show_preview(ui, frame);
+            if self.tab == Tab::Archetypes {
+                self.show_archetype_preview(ui, frame);
+            } else {
+                self.show_preview(ui, frame);
+            }
         });
 
         self.scroll_frames = self.scroll_frames.saturating_sub(1);
@@ -474,6 +564,153 @@ impl ExplorerApp {
         if *total == 0 {
             ui.label("no matches");
         }
+    }
+
+    /// Left panel, Archetypes tab: search box + creature template tree (or a
+    /// flat filtered list while searching).
+    fn show_archetype_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Search:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.archetype_search)
+                    .hint_text("archetype name")
+                    .desired_width(f32::INFINITY),
+            );
+        });
+        ui.separator();
+        let db = match self.archetype_db.get_or_insert_with(ArchetypeDb::load) {
+            Ok(db) => db,
+            Err(err) => {
+                ui.label(format!("Cannot load gamesys: {err}"));
+                return;
+            }
+        };
+        let selected = self.selected_archetype;
+        let mut clicked: Option<i32> = None;
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if self.archetype_search.is_empty() {
+                    let open_path = selected.map(|id| db.ancestors_of(id)).unwrap_or_default();
+                    for root in &db.roots {
+                        show_archetype_node(ui, db, *root, selected, &open_path, &mut clicked);
+                    }
+                } else {
+                    let needle = self.archetype_search.to_ascii_lowercase();
+                    let mut matches: Vec<&Archetype> = db
+                        .archetypes
+                        .values()
+                        .filter(|a| a.name.to_ascii_lowercase().contains(&needle))
+                        .collect();
+                    matches.sort_by_key(|a| a.name.to_ascii_lowercase());
+                    for archetype in &matches {
+                        let is_selected = selected == Some(archetype.template_id);
+                        if ui.selectable_label(is_selected, &archetype.name).clicked() {
+                            clicked = Some(archetype.template_id);
+                        }
+                    }
+                    if matches.is_empty() {
+                        ui.label("no matches");
+                    }
+                }
+            });
+        if let Some(id) = clicked {
+            self.selected_archetype = Some(id);
+            self.selected_clip = None;
+            self.archetype_clips = None;
+        }
+    }
+
+    /// Right pane, Archetypes tab: archetype info, clip list, 3D preview.
+    fn show_archetype_preview(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let Some(id) = self.selected_archetype else {
+            ui.centered_and_justified(|ui| {
+                ui.label("Select an archetype to preview it");
+            });
+            return;
+        };
+        // The db is loaded whenever a selection exists; guard regardless.
+        let archetype = match &self.archetype_db {
+            Some(Ok(db)) => match db.archetypes.get(&id) {
+                Some(archetype) => archetype.clone(),
+                None => {
+                    ui.label(format!("no archetype with template id {id}"));
+                    return;
+                }
+            },
+            _ => {
+                ui.label("archetype data not loaded");
+                return;
+            }
+        };
+        if self.archetype_clips.as_ref().map(|(i, _)| *i) != Some(id) {
+            let clips = match &self.archetype_db {
+                Some(Ok(db)) => db.clips_for(&archetype),
+                _ => Err("archetype data not loaded".to_string()),
+            };
+            self.archetype_clips = Some((id, clips));
+        }
+
+        ui.heading(&archetype.name);
+        egui::Grid::new("archetype_info")
+            .num_columns(2)
+            .show(ui, |ui| {
+                ui.label("Template id");
+                ui.label(archetype.template_id.to_string());
+                ui.end_row();
+                ui.label("Model");
+                ui.label(archetype.model_key());
+                ui.end_row();
+                ui.label("Creature type");
+                ui.label(archetype.creature_type_name());
+                ui.end_row();
+                ui.label("Actor type");
+                ui.label(archetype.actor_type_name());
+                ui.end_row();
+            });
+        ui.separator();
+
+        egui::Panel::right(egui::Id::new("clip_list"))
+            .resizable(true)
+            .default_size(220.0)
+            .show(ui, |ui| {
+                ui.label("Clips (click to play)");
+                ui.separator();
+                match &self.archetype_clips {
+                    Some((_, Ok(clips))) => {
+                        if clips.is_empty() {
+                            ui.label("(no clips for this actor type)");
+                        }
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                for clip in clips {
+                                    let is_playing = self.selected_clip.as_deref() == Some(clip);
+                                    if ui.selectable_label(is_playing, clip).clicked() {
+                                        // Click toggles: re-clicking stops it.
+                                        self.selected_clip = (!is_playing).then(|| clip.clone());
+                                    }
+                                }
+                            });
+                    }
+                    Some((_, Err(err))) => {
+                        ui.label(format!("Cannot list clips: {err}"));
+                    }
+                    None => {}
+                }
+            });
+
+        let host = preview_host(
+            &mut self.model_preview,
+            self.initial_overlays,
+            self.screenshot.is_some(),
+        );
+        host.show(
+            ui,
+            frame,
+            &archetype.model_key(),
+            self.selected_clip.as_deref(),
+        );
     }
 
     fn show_preview(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -565,14 +802,12 @@ impl ExplorerApp {
             }
             PreviewKind::Model => {
                 let key = preview.key.clone();
-                let (skeletons, hitboxes) = self.initial_overlays;
-                let host = self.model_preview.get_or_insert_with(|| {
-                    let mut host = ModelPreview::new();
-                    host.debug_skeletons = skeletons;
-                    host.debug_hit_boxes = hitboxes;
-                    host
-                });
-                host.show(ui, frame, &key);
+                let host = preview_host(
+                    &mut self.model_preview,
+                    self.initial_overlays,
+                    self.screenshot.is_some(),
+                );
+                host.show(ui, frame, &key, None);
             }
             PreviewKind::Raw { reason, hex } => {
                 ui.label(format!("Cannot render this file: {reason}"));
@@ -599,7 +834,20 @@ impl ExplorerApp {
         };
         self.frames_rendered += 1;
         ctx.request_repaint();
+        // The scene exists after the first frame's show; step it before the
+        // capture so `--advance` screenshots a mid-clip pose.
+        if self.frames_rendered == 2 && self.advance_pending.is_some() {
+            if let Some(preview) = self.model_preview.as_mut() {
+                preview.advance(self.advance_pending.take().unwrap());
+            }
+        }
         if self.frames_rendered == 3 {
+            // A selection that failed to load would capture only its error
+            // label; fail loudly instead so automation can trust exit 0.
+            if let Some(error) = self.model_preview.as_ref().and_then(|p| p.error()) {
+                eprintln!("cannot render the selection: {error}");
+                std::process::exit(2);
+            }
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
         let image = ctx.input(|i| {
@@ -631,6 +879,68 @@ impl ExplorerApp {
         if self.frames_rendered > 300 {
             eprintln!("screenshot never arrived after 300 frames");
             std::process::exit(1);
+        }
+    }
+}
+
+/// The lazily-built 3D preview host. CLI overlays apply on first build, and a
+/// `--screenshot` run pauses wall-clock animation so `--advance` is the only
+/// time source (a deterministic pose per invocation).
+fn preview_host(
+    model_preview: &mut Option<ModelPreview>,
+    (skeletons, hitboxes): (bool, bool),
+    paused: bool,
+) -> &mut ModelPreview {
+    model_preview.get_or_insert_with(|| {
+        let mut host = ModelPreview::new();
+        host.debug_skeletons = skeletons;
+        host.debug_hit_boxes = hitboxes;
+        host.paused = paused;
+        host
+    })
+}
+
+/// One node of the archetype tree: a collapsible header where the template has
+/// children (with a selectable "(this)" row when it is itself a creature),
+/// else a selectable leaf.
+fn show_archetype_node(
+    ui: &mut egui::Ui,
+    db: &ArchetypeDb,
+    id: i32,
+    selected: Option<i32>,
+    open_path: &std::collections::HashSet<i32>,
+    clicked: &mut Option<i32>,
+) {
+    let name = db.name_of(id);
+    let is_archetype = db.archetypes.contains_key(&id);
+    let is_selected = selected == Some(id);
+    match db.children.get(&id) {
+        Some(children) if !children.is_empty() => {
+            egui::CollapsingHeader::new(&name)
+                .id_salt(id)
+                .default_open(open_path.contains(&id))
+                .show(ui, |ui| {
+                    if is_archetype {
+                        if ui
+                            .selectable_label(is_selected, format!("{name} (this)"))
+                            .clicked()
+                        {
+                            *clicked = Some(id);
+                        }
+                    }
+                    for child in children {
+                        show_archetype_node(ui, db, *child, selected, open_path, clicked);
+                    }
+                });
+        }
+        _ => {
+            // A childless grouping node (a multi-parent template's other
+            // ancestor) is not selectable - only archetypes are.
+            if !is_archetype {
+                ui.label(&name);
+            } else if ui.selectable_label(is_selected, &name).clicked() {
+                *clicked = Some(id);
+            }
         }
     }
 }
