@@ -18,11 +18,18 @@ use crate::model_preview::{self, ModelPreview};
 const TEXT_EXTENSIONS: &[&str] = &["str", "mtl", "txt", "ini", "cfg", "json"];
 /// Cap on rows the flattened search view renders per frame.
 const SEARCH_RESULT_CAP: usize = 500;
+/// Grid view: tile edge in points, tiles shown at most, decodes per frame
+/// (budgeted so a folder of large DDS files never hangs a frame).
+const TILE: f32 = 96.0;
+const GRID_TILE_CAP: usize = 400;
+const THUMBS_PER_FRAME: usize = 6;
 
 pub struct UiOptions {
     pub screenshot: Option<PathBuf>,
     pub select: Option<String>,
     pub search: Option<String>,
+    /// Open the Files tab in grid (thumbnail) view.
+    pub grid: bool,
     /// Start the model preview with the skeleton / hitbox overlay on (so a
     /// `--screenshot` run can capture the debug overlays).
     pub skeletons: bool,
@@ -140,6 +147,34 @@ enum PreviewKind {
     },
 }
 
+/// One scoped grid row, with its thumb-cache id ("family/key") precomputed so
+/// the per-frame decode and draw loops don't allocate.
+struct GridRow {
+    family: String,
+    key: String,
+    id: String,
+}
+
+impl GridRow {
+    fn new(family: &str, key: &str) -> GridRow {
+        GridRow {
+            family: family.to_string(),
+            key: key.to_string(),
+            id: format!("{family}/{key}"),
+        }
+    }
+}
+
+/// One grid tile's decoded state; entries absent from the cache are pending.
+enum Thumb {
+    Loaded {
+        texture: egui::TextureHandle,
+        /// Original image size (the texture is downscaled to the tile).
+        size: [usize; 2],
+    },
+    Failed(String),
+}
+
 struct Preview {
     family: String,
     key: String,
@@ -174,11 +209,23 @@ pub struct ExplorerApp {
     /// Initial overlay toggles for the model preview (from the CLI).
     initial_overlays: (bool, bool),
     frames_rendered: u32,
+    /// Whether the screenshot viewport command was already sent (grid mode
+    /// delays it until the visible thumbnails have decoded).
+    screenshot_sent: bool,
     /// Frames left in which the tree scrolls to the selected row (a couple of
     /// frames, so the scroll re-applies once layout has settled).
     scroll_frames: u8,
     /// Flattened search rows, cached per needle: (needle, capped rows, total).
     search_results: Option<(String, Vec<(String, String)>, usize)>,
+    /// Files tab shows a central thumbnail grid instead of the preview pane.
+    grid_view: bool,
+    /// Decoded thumbnails by "family/key"; never evicted, but each texture is
+    /// downscaled to the tile size so the cache stays small.
+    thumbs: std::collections::HashMap<String, Thumb>,
+    /// Grid rows cached per scope: (scope id, capped rows, total).
+    grid_results: Option<(String, Vec<GridRow>, usize)>,
+    /// Scoped tiles still waiting for a decode after this frame's budget.
+    thumbs_pending: usize,
     /// Lazily built on first opening the Archetypes tab: parsing the gamesys
     /// and motion database takes a moment. Err = why it failed, shown inline.
     archetype_db: Option<Result<ArchetypeDb, String>>,
@@ -207,8 +254,13 @@ impl ExplorerApp {
             model_preview: None,
             initial_overlays: (options.skeletons, options.hitboxes),
             frames_rendered: 0,
+            screenshot_sent: false,
             scroll_frames: 0,
             search_results: None,
+            grid_view: options.grid,
+            thumbs: std::collections::HashMap::new(),
+            grid_results: None,
+            thumbs_pending: 0,
             archetype_db: None,
             archetype_search: String::new(),
             selected_archetype: None,
@@ -345,19 +397,7 @@ fn decode_preview(family: &str, key: &str, bytes: Vec<u8>) -> PreviewKind {
     // Dark parsers panic on malformed input, so every decode runs under
     // catch_unwind and falls back to the hex view instead of crashing.
     if texture_format::DECODABLE_EXTENSIONS.contains(&ext.as_str()) {
-        // ColorImage construction is inside the guard too: it asserts
-        // bytes.len() == w*h*channels, which a bad decode can violate.
-        let decoded = quiet_catch(|| {
-            texture_format::extension_to_format(ext.clone()).map(|format| {
-                let raw = format.load(&bytes);
-                let size = [raw.width as usize, raw.height as usize];
-                match raw.format {
-                    PixelFormat::RGB => egui::ColorImage::from_rgb(size, &raw.bytes),
-                    PixelFormat::RGBA => egui::ColorImage::from_rgba_unmultiplied(size, &raw.bytes),
-                }
-            })
-        });
-        return match decoded {
+        return match decode_image(&ext, &bytes) {
             Ok(Some(color_image)) => PreviewKind::Image {
                 color_image,
                 texture: None,
@@ -382,6 +422,90 @@ fn decode_preview(family: &str, key: &str, bytes: Vec<u8>) -> PreviewKind {
         return PreviewKind::Model;
     }
     raw_fallback(&bytes, format!("cannot render .{ext} files"))
+}
+
+/// Decode image bytes to a `ColorImage` under the panic guard (Ok(None) = no
+/// decoder for the extension). ColorImage construction is inside the guard
+/// too: it asserts bytes.len() == w*h*channels, which a bad decode can
+/// violate.
+fn decode_image(ext: &str, bytes: &[u8]) -> Result<Option<egui::ColorImage>, String> {
+    quiet_catch(|| {
+        texture_format::extension_to_format(ext.to_string()).map(|format| {
+            let raw = format.load(bytes);
+            let size = [raw.width as usize, raw.height as usize];
+            match raw.format {
+                PixelFormat::RGB => egui::ColorImage::from_rgb(size, &raw.bytes),
+                PixelFormat::RGBA => egui::ColorImage::from_rgba_unmultiplied(size, &raw.bytes),
+            }
+        })
+    })
+}
+
+/// Whether the key's extension is one the engine's texture decoders handle
+/// (the tiles the grid view shows).
+fn is_image_key(key: &str) -> bool {
+    let ext = extension(key).to_ascii_lowercase();
+    texture_format::DECODABLE_EXTENSIONS.contains(&ext.as_str())
+}
+
+/// Box-filter downscale (the engine's DDS mip halver) so a large source
+/// doesn't become a large GPU texture; images within `max_dim` pass through.
+fn downscale_to(image: egui::ColorImage, max_dim: u32) -> egui::ColorImage {
+    let [w, h] = image.size;
+    if w.max(h) as u32 <= max_dim {
+        return image;
+    }
+    let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_array()).collect();
+    let (rgba, nw, nh) = engine::dds::downscale_to_fit(rgba, w as u32, h as u32, max_dim);
+    egui::ColorImage::from_rgba_unmultiplied([nw as usize, nh as usize], &rgba)
+}
+
+/// One fixed-size grid tile: the thumbnail centered in a selectable frame,
+/// "!" for a failed decode, "…" while the decode is pending.
+fn grid_tile(ui: &mut egui::Ui, thumb: Option<&Thumb>, selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(TILE), egui::Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let visuals = ui.style().interact_selectable(&response, selected);
+    ui.painter().rect(
+        rect,
+        3.0,
+        visuals.weak_bg_fill,
+        visuals.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    match thumb {
+        Some(Thumb::Loaded { texture, .. }) => {
+            // Center the image, preserving its aspect within the tile.
+            let tex = texture.size();
+            let scale = (TILE - 4.0) / tex[0].max(tex[1]).max(1) as f32;
+            let display = egui::Vec2::new(tex[0] as f32, tex[1] as f32) * scale;
+            let image_rect = egui::Rect::from_center_size(rect.center(), display);
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            ui.painter()
+                .image(texture.id(), image_rect, uv, egui::Color32::WHITE);
+        }
+        Some(Thumb::Failed(_)) => {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "!",
+                egui::FontId::proportional(24.0),
+                ui.visuals().warn_fg_color,
+            );
+        }
+        None => {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "…",
+                egui::FontId::proportional(16.0),
+                ui.visuals().weak_text_color(),
+            );
+        }
+    }
+    response
 }
 
 /// Run a Dark parser under `catch_unwind` with the panic hook silenced (the
@@ -452,6 +576,8 @@ impl eframe::App for ExplorerApp {
                 match self.tab {
                     Tab::Files => {
                         ui.horizontal(|ui| {
+                            ui.selectable_value(&mut self.grid_view, false, "List");
+                            ui.selectable_value(&mut self.grid_view, true, "Grid");
                             ui.label("Search:");
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.search)
@@ -463,7 +589,9 @@ impl eframe::App for ExplorerApp {
                         egui::ScrollArea::both()
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                if self.search.is_empty() {
+                                // In grid view the search scopes the central
+                                // grid, so the left panel keeps the tree.
+                                if self.search.is_empty() || self.grid_view {
                                     self.show_tree(ui, &mut clicked);
                                 } else {
                                     self.show_search_results(ui, &mut clicked);
@@ -477,6 +605,18 @@ impl eframe::App for ExplorerApp {
         egui::CentralPanel::default_margins().show(ui, |ui| {
             if self.tab == Tab::Archetypes {
                 self.show_archetype_preview(ui, frame);
+            } else if self.grid_view {
+                // Grid fills the central panel; the selected tile's standard
+                // preview docks on the right.
+                if self.preview.is_some() {
+                    egui::Panel::right(egui::Id::new("grid_preview"))
+                        .resizable(true)
+                        .default_size(380.0)
+                        .show(ui, |ui| self.show_preview(ui, frame));
+                }
+                egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.show_grid(ui, &mut clicked));
             } else {
                 self.show_preview(ui, frame);
             }
@@ -525,20 +665,7 @@ impl ExplorerApp {
         // Recompute the flattened rows only when the needle changes; a search
         // over every family is too costly to redo per frame.
         if self.search_results.as_ref().map(|(n, _, _)| n.as_str()) != Some(needle.as_str()) {
-            let mut rows: Vec<(String, String)> = Vec::new();
-            let mut total = 0;
-            for family in self.family_names.clone() {
-                let loaded = self.family(family);
-                for entry in &loaded.entries {
-                    if !entry.key.contains(&needle) {
-                        continue;
-                    }
-                    total += 1;
-                    if rows.len() < SEARCH_RESULT_CAP {
-                        rows.push((family.to_string(), entry.key.clone()));
-                    }
-                }
-            }
+            let (rows, total) = self.flatten_matches(&needle, |_| true, SEARCH_RESULT_CAP);
             self.search_results = Some((needle.clone(), rows, total));
         }
         let Some((_, rows, total)) = &self.search_results else {
@@ -564,6 +691,193 @@ impl ExplorerApp {
         if *total == 0 {
             ui.label("no matches");
         }
+    }
+
+    /// Scan every family for keys containing `needle` that pass `keep`,
+    /// capped at `cap`: (rows as (family, key), total match count).
+    fn flatten_matches(
+        &mut self,
+        needle: &str,
+        keep: fn(&str) -> bool,
+        cap: usize,
+    ) -> (Vec<(String, String)>, usize) {
+        let mut rows: Vec<(String, String)> = Vec::new();
+        let mut total = 0;
+        for family in self.family_names.clone() {
+            for entry in &self.family(family).entries {
+                if !entry.key.contains(needle) || !keep(&entry.key) {
+                    continue;
+                }
+                total += 1;
+                if rows.len() < cap {
+                    rows.push((family.to_string(), entry.key.clone()));
+                }
+            }
+        }
+        (rows, total)
+    }
+
+    /// Refresh `grid_results` for the current scope: the image assets matching
+    /// the search across all families, else the selected asset's directory
+    /// siblings. Cached per scope id; false when nothing scopes the grid.
+    fn ensure_grid_rows(&mut self) -> bool {
+        let (scope, family_dir) = if self.search.is_empty() {
+            let Some((family, key)) = self.selected.clone() else {
+                return false;
+            };
+            let dir = key
+                .rsplit_once('/')
+                .map(|(dir, _)| dir.to_string())
+                .unwrap_or_default();
+            (format!("dir:{family}:{dir}"), Some((family, dir)))
+        } else {
+            (format!("search:{}", self.search.to_ascii_lowercase()), None)
+        };
+        if self.grid_results.as_ref().map(|(s, _, _)| s.as_str()) == Some(scope.as_str()) {
+            return true;
+        }
+        let (mut rows, mut total) = (Vec::new(), 0);
+        match &family_dir {
+            Some((family, dir)) => {
+                // Immediate image files of the selected asset's directory.
+                let prefix = if dir.is_empty() {
+                    String::new()
+                } else {
+                    format!("{dir}/")
+                };
+                for entry in &self.family(family).entries {
+                    match entry.key.strip_prefix(&prefix) {
+                        Some(rest) if !rest.contains('/') && is_image_key(&entry.key) => {
+                            total += 1;
+                            if rows.len() < GRID_TILE_CAP {
+                                rows.push(GridRow::new(family, &entry.key));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            None => {
+                let needle = self.search.to_ascii_lowercase();
+                let (matches, matched) = self.flatten_matches(&needle, is_image_key, GRID_TILE_CAP);
+                rows = matches
+                    .iter()
+                    .map(|(family, key)| GridRow::new(family, key))
+                    .collect();
+                total = matched;
+            }
+        }
+        self.grid_results = Some((scope, rows, total));
+        true
+    }
+
+    /// Decode one thumbnail: read the asset, decode under the panic guard,
+    /// downscale to the tile size, upload as an egui texture.
+    fn load_thumb(&mut self, ctx: &egui::Context, family: &str, key: &str) -> Thumb {
+        let loaded = self.family(family);
+        let Some(bytes) = explorer::read_asset_bytes(&*loaded.mounts, key) else {
+            return Thumb::Failed("failed to read asset bytes".to_string());
+        };
+        let ext = extension(key).to_ascii_lowercase();
+        match decode_image(&ext, &bytes) {
+            Ok(Some(image)) => {
+                let size = image.size;
+                if size[0] == 0 || size[1] == 0 {
+                    return Thumb::Failed(format!("decoded to {} x {}", size[0], size[1]));
+                }
+                let texture = ctx.load_texture(
+                    format!("thumb:{family}/{key}"),
+                    downscale_to(image, TILE as u32),
+                    egui::TextureOptions::NEAREST,
+                );
+                Thumb::Loaded { texture, size }
+            }
+            Ok(None) => Thumb::Failed(format!("no decoder for .{ext}")),
+            Err(msg) => Thumb::Failed(format!(".{ext} decode failed: {msg}")),
+        }
+    }
+
+    /// Central panel, grid view: wrapping thumbnail tiles of the scoped image
+    /// assets. Decodes are budgeted per frame; a tile is a placeholder until
+    /// its decode lands, then a click-to-select image (or "!" on failure).
+    fn show_grid(&mut self, ui: &mut egui::Ui, clicked: &mut Option<(String, String)>) {
+        if !self.ensure_grid_rows() {
+            self.thumbs_pending = 0;
+            ui.label("Search, or select an asset in the tree, to scope the grid");
+            return;
+        }
+        // Take the cached rows so the loops below can borrow self freely;
+        // restored before returning.
+        let (scope, rows, total) = self.grid_results.take().unwrap();
+        if rows.is_empty() {
+            self.thumbs_pending = 0;
+            ui.label("no image assets in this scope");
+        } else {
+            // Budgeted decode of whatever the scope still misses.
+            let ctx = ui.ctx().clone();
+            let mut budget = THUMBS_PER_FRAME;
+            let mut pending = 0;
+            for row in &rows {
+                if self.thumbs.contains_key(&row.id) {
+                    continue;
+                }
+                if budget == 0 {
+                    pending += 1;
+                    continue;
+                }
+                budget -= 1;
+                let thumb = self.load_thumb(&ctx, &row.family, &row.key);
+                self.thumbs.insert(row.id.clone(), thumb);
+            }
+            self.thumbs_pending = pending;
+            if pending > 0 {
+                ctx.request_repaint();
+            }
+
+            let selected = self.selected.clone();
+            ui.horizontal_wrapped(|ui| {
+                for row in &rows {
+                    let is_selected = selected
+                        .as_ref()
+                        .is_some_and(|(f, k)| *f == row.family && *k == row.key);
+                    let thumb = self.thumbs.get(&row.id);
+                    ui.allocate_ui(egui::vec2(TILE, TILE + 22.0), |ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(TILE);
+                            let response = grid_tile(ui, thumb, is_selected).on_hover_ui(|ui| {
+                                match thumb {
+                                    Some(Thumb::Loaded { size, .. }) => {
+                                        ui.label(format!("{} ({} x {})", row.id, size[0], size[1]))
+                                    }
+                                    Some(Thumb::Failed(msg)) => {
+                                        ui.label(format!("{}: {msg}", row.id))
+                                    }
+                                    None => ui.label(&row.id),
+                                };
+                            });
+                            if response.clicked() {
+                                *clicked = Some((row.family.clone(), row.key.clone()));
+                            }
+                            let name = row.key.rsplit('/').next().unwrap_or(&row.key);
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(name).small())
+                                    .truncate()
+                                    .selectable(false),
+                            );
+                        });
+                    });
+                }
+            });
+            if total > rows.len() {
+                let hint = if scope.starts_with("search:") {
+                    " (narrow the search)"
+                } else {
+                    ""
+                };
+                ui.label(format!("... {} more images{hint}", total - rows.len()));
+            }
+        }
+        self.grid_results = Some((scope, rows, total));
     }
 
     /// Left panel, Archetypes tab: search box + creature template tree (or a
@@ -841,7 +1155,11 @@ impl ExplorerApp {
                 preview.advance(self.advance_pending.take().unwrap());
             }
         }
-        if self.frames_rendered == 3 {
+        // Grid view holds the capture until the scoped thumbnails have all
+        // decoded (frame-capped so a decode stall still produces a capture).
+        let thumbs_ready =
+            !self.grid_view || self.thumbs_pending == 0 || self.frames_rendered >= 250;
+        if self.frames_rendered >= 3 && thumbs_ready && !self.screenshot_sent {
             // A selection that failed to load would capture only its error
             // label; fail loudly instead so automation can trust exit 0.
             if let Some(error) = self.model_preview.as_ref().and_then(|p| p.error()) {
@@ -849,6 +1167,7 @@ impl ExplorerApp {
                 std::process::exit(2);
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            self.screenshot_sent = true;
         }
         let image = ctx.input(|i| {
             i.events.iter().find_map(|event| match event {

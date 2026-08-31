@@ -239,11 +239,12 @@ const MAX_EDGE: Option<u32> = Some(256);
 #[cfg(not(target_os = "android"))]
 const MAX_EDGE: Option<u32> = None;
 
-/// Halve `(w, h)` repeatedly until both fit `max_edge`, box-filtering each step.
+/// Halve an RGBA8 image `(w, h)` repeatedly until both fit `max_edge`,
+/// box-filtering each step.
 ///
 /// Successive halving rather than a single resample: it is a few lines, needs no
 /// filter kernel, and each step averages exactly 4 source texels.
-fn downscale_to_fit(
+pub fn downscale_to_fit(
     mut data: Vec<u8>,
     mut w: u32,
     mut h: u32,
