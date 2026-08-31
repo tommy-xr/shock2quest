@@ -15,6 +15,7 @@ pub mod time;
 
 pub mod career;
 pub mod creature;
+pub mod damage_overlay;
 pub mod data_files;
 pub mod death_camera;
 pub mod dev_params;

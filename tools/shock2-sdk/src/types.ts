@@ -92,6 +92,12 @@ export type DebugEntityMessage =
       direction?: [number, number, number];
       /** Optional world-space hit point (defaults to the victim's position). */
       point?: [number, number, number];
+      /**
+       * Optional skeleton joint id of the hitbox struck, as a real
+       * hitbox-forwarded hit carries - exercises the per-limb paths (damage
+       * readouts, ragdoll reaction) without landing a live shot on a limb.
+       */
+      bone?: number;
     }
   | { type: "Frob" }
   | { type: "Signal"; name: string }

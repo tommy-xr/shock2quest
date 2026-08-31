@@ -1350,6 +1350,15 @@ impl ScriptWorld {
                 to_entity_id,
                 &msg.payload,
             );
+            // Same choke point feeds the floating damage readouts, so they see
+            // every damage path (melee contact, projectiles, hitbox-forwarded
+            // hits, script injection) rather than one of them.
+            crate::damage_overlay::record(
+                world,
+                time.total.as_secs_f64(),
+                to_entity_id,
+                &msg.payload,
+            );
 
             let mut is_turn_on = false;
             match msg.payload {
