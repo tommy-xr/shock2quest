@@ -83,6 +83,17 @@ impl FontMetrics {
         Some(self.columns[i + 1] - self.columns[i])
     }
 
+    /// Human-readable name of the bitmap encoding, for tools reporting which
+    /// variant a file uses.
+    pub fn format_label(&self) -> &'static str {
+        match self.format {
+            0 => "0 (packed, 1 bit per pixel)",
+            1 => "1 (antialiased, 16 coverage levels)",
+            0xcccc => "0xcccc (antialiased, 8-bit alpha)",
+            _ => "unknown (treated as 8-bit alpha)",
+        }
+    }
+
     pub fn read<T: io::Read + io::Seek>(reader: &mut T) -> FontMetrics {
         let header = FontHeader::read(reader);
         assert!(header.palette == 0);
@@ -108,6 +119,102 @@ impl FontMetrics {
             bitmap_offset: header.bitmap_offset,
             columns,
         }
+    }
+}
+
+/// A `.FON` decoded to CPU-side glyph coverage: the metrics plus the raw
+/// bitmap strip, with no texture atlas and no GL. [`Font::read`] builds its
+/// atlas from this, and headless tools (dark_explorer's font preview) rasterize
+/// sample strings from it.
+pub struct FontBitmap {
+    pub metrics: FontMetrics,
+    bitmap: Vec<u8>,
+}
+
+/// Horizontal gap between glyphs, in the font's native pixels.
+const GLYPH_SPACING: usize = SPACING as usize;
+
+impl FontBitmap {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T) -> FontBitmap {
+        // The bitmap strip runs to end-of-file, so measure the file first.
+        let mut all = Vec::new();
+        reader.read_to_end(&mut all).unwrap();
+        let end_bytes = reader.stream_position().unwrap();
+        reader.seek(io::SeekFrom::Start(0)).unwrap();
+
+        let metrics = FontMetrics::read(reader);
+        reader
+            .seek(io::SeekFrom::Start(metrics.bitmap_offset as u64))
+            .unwrap();
+        let bitmap_size = end_bytes.saturating_sub(metrics.bitmap_offset as u64);
+        let bitmap = read_bytes(reader, bitmap_size as usize);
+
+        FontBitmap { metrics, bitmap }
+    }
+
+    /// Alpha of one pixel of the bitmap strip, in strip coordinates. Reads past
+    /// the strip (a truncated file) yield transparent rather than panicking.
+    fn pixel_alpha(&self, x: u32, y: u32) -> u8 {
+        let row_width = self.metrics.row_width as u32;
+        if self.metrics.format == 0 {
+            // Packed: each byte holds 8 horizontally adjacent pixels, MSB first.
+            let byte = *self
+                .bitmap
+                .get((y * row_width + x / 8) as usize)
+                .unwrap_or(&0);
+            if byte >> (7 - (x % 8)) & 1 == 1 {
+                255
+            } else {
+                0
+            }
+        } else {
+            let byte = *self.bitmap.get((y * row_width + x) as usize).unwrap_or(&0);
+            unpacked_byte_alpha(self.metrics.format, byte)
+        }
+    }
+
+    /// Coverage mask for one glyph: `(width, alpha)` with `alpha` row-major
+    /// `width * height`. `None` for a code the font does not define.
+    pub fn glyph_alpha(&self, code: i16) -> Option<(usize, Vec<u8>)> {
+        let width = self.metrics.glyph_width(code)? as u32;
+        let column = self.metrics.columns[(code - self.metrics.first_char) as usize] as u32;
+        let height = self.metrics.height as u32;
+        let mut alpha = Vec::with_capacity((width * height) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                alpha.push(self.pixel_alpha(column + x, y));
+            }
+        }
+        Some((width as usize, alpha))
+    }
+
+    /// Rasterize `text` at native size into `(width, height, alpha)`, laying
+    /// glyphs out left to right exactly as the in-game text mesh does (one
+    /// pixel of spacing). Characters the font does not define are skipped.
+    pub fn render_string(&self, text: &str) -> (usize, usize, Vec<u8>) {
+        let height = self.metrics.height as usize;
+        let glyphs: Vec<(usize, Vec<u8>)> = text
+            .chars()
+            .filter_map(|c| i16::try_from(c as u32).ok())
+            .filter_map(|code| self.glyph_alpha(code))
+            .collect();
+        if glyphs.is_empty() || height == 0 {
+            return (0, 0, Vec::new());
+        }
+        let width: usize =
+            glyphs.iter().map(|(w, _)| w).sum::<usize>() + GLYPH_SPACING * (glyphs.len() - 1);
+
+        let mut out = vec![0u8; width * height];
+        let mut pen = 0usize;
+        for (glyph_width, alpha) in &glyphs {
+            for y in 0..height {
+                let dst = y * width + pen;
+                out[dst..dst + glyph_width]
+                    .copy_from_slice(&alpha[y * glyph_width..(y + 1) * glyph_width]);
+            }
+            pen += glyph_width + GLYPH_SPACING;
+        }
+        (width, height, out)
     }
 }
 
@@ -219,70 +326,25 @@ impl Font {
         mesh::create(vertices)
     }
     pub fn read<T: io::Read + io::Seek>(reader: &mut T) -> Font {
-        // Get total length of file
-        // Needed so we can get the size of the bitmap
-        let mut _vec = Vec::new();
-        let _end = reader.read_to_end(&mut _vec).unwrap();
-        let end_bytes = reader.stream_position().unwrap();
-
-        // Then rewind and start reading...
-        reader.seek(io::SeekFrom::Start(0)).unwrap();
-
-        let metrics = FontMetrics::read(reader);
+        let font_bitmap = FontBitmap::read(reader);
+        let metrics = &font_bitmap.metrics;
 
         info!("Loading font with metrics: {:?}", metrics);
 
         let num_chars = metrics.num_chars();
-
-        // Read bitmap data
-        reader
-            .seek(io::SeekFrom::Start(metrics.bitmap_offset as u64))
-            .unwrap();
-
-        let bitmap_size = end_bytes - metrics.bitmap_offset as u64;
-        let bitmap = read_bytes(reader, bitmap_size as usize);
 
         let mut char_to_info = HashMap::new();
         let mut texture_packer = TexturePacker::<image::Rgba<u8>>::new_rgba(512, 512);
         for n in 0..num_chars {
             let code = metrics.first_char + n as i16;
             let ascii = char::from_u32(code as u32).unwrap();
-            let idx = n;
 
-            let column = metrics.columns[idx];
-            let width = metrics.columns[idx + 1] - metrics.columns[idx];
+            let (width, alpha) = font_bitmap.glyph_alpha(code).unwrap();
 
-            // Generate the image corresponding to the character:
+            // White glyphs; the bitmap only carries coverage.
             let img: ImageBuffer<image::Rgba<u8>, std::vec::Vec<u8>> =
                 image::ImageBuffer::from_fn(width as u32, metrics.height as u32, |x, y| {
-                    let adj_x = x + (column as u32);
-                    if metrics.format == 0 {
-                        // This is a little gnarly... what is happening here is that each pixel
-                        // is compacted horizontally. Each 'byte' value actually corresponds to 8
-                        // pixels - each bit tracking whether the pixel is on or off.
-
-                        // First, get the byte-index of the pixel
-                        let idx_packed = adj_x / 8;
-                        let byte_index = (y * metrics.row_width as u32 + idx_packed) as usize;
-
-                        // This gives us the full byte value
-                        let packed_val = bitmap[byte_index];
-
-                        // Now, we need to figure out whether the 'bit' corresponding to the pixel
-                        // is on or off. We grab the remainder to find the relevant bit:
-                        let x_remainder = 7 - (adj_x % 8);
-                        // and then check if it is on:
-                        let is_on = packed_val >> x_remainder & 1 == 1;
-
-                        let alpha = if is_on { 255u8 } else { 0u8 };
-
-                        image::Rgba([255, 255, 255, alpha])
-                    } else {
-                        // Unpacked formats: one byte per pixel.
-                        let idx = (y * metrics.row_width as u32 + adj_x) as usize;
-                        let alpha = unpacked_byte_alpha(metrics.format, bitmap[idx]);
-                        image::Rgba([255, 255, 255, alpha])
-                    }
+                    image::Rgba([255, 255, 255, alpha[(y as usize) * width + x as usize]])
                 });
 
             let texture_pack_result = texture_packer.pack(&img);
@@ -352,7 +414,7 @@ impl engine::Font for Font {
 
 #[cfg(test)]
 mod tests {
-    use super::FontMetrics;
+    use super::{FontBitmap, FontMetrics};
     use std::io::Cursor;
 
     /// Build a minimal, valid Dark `.FON` byte buffer for `first..=last` with
@@ -399,6 +461,54 @@ mod tests {
         // Out-of-range codes have no glyph.
         assert_eq!(m.glyph_width(47), None);
         assert_eq!(m.glyph_width(50), None);
+    }
+
+    /// `synth_font` leaves the bitmap strip zeroed; overwrite it with `pixels`.
+    fn with_bitmap(mut bytes: Vec<u8>, pixels: &[u8]) -> Vec<u8> {
+        let start = bytes.len() - pixels.len();
+        bytes[start..].copy_from_slice(pixels);
+        bytes
+    }
+
+    #[test]
+    fn packed_glyph_unpacks_one_bit_per_pixel() {
+        // One 3x2 glyph 'A'; row_width = 3 bytes (synth uses the last column).
+        // Row 0 = 1 0 1, row 1 = 0 1 0.
+        let bytes = with_bitmap(
+            synth_font(65, 65, 2, &[0, 3], 0),
+            &[0b1010_0000, 0, 0, 0b0100_0000, 0, 0],
+        );
+        let font = FontBitmap::read(&mut Cursor::new(bytes));
+
+        assert_eq!(
+            font.glyph_alpha(65),
+            Some((3, vec![255, 0, 255, 0, 255, 0]))
+        );
+        assert_eq!(font.glyph_alpha(66), None);
+    }
+
+    #[test]
+    fn format1_glyphs_scale_coverage_and_lay_out_with_spacing() {
+        // Two 2x1 glyphs, format 1 (coverage 0..=15), row_width = 4 bytes.
+        let bytes = with_bitmap(synth_font(65, 66, 1, &[0, 2, 4], 1), &[15, 0, 8, 15]);
+        let font = FontBitmap::read(&mut Cursor::new(bytes));
+
+        assert_eq!(font.glyph_alpha(65), Some((2, vec![255, 0])));
+        assert_eq!(font.glyph_alpha(66), Some((2, vec![136, 255])));
+        // Glyphs run left to right with one transparent pixel between them.
+        assert_eq!(font.render_string("AB"), (5, 1, vec![255, 0, 0, 136, 255]));
+        // Undefined characters are dropped rather than rendered as blanks.
+        assert_eq!(font.render_string("AZB").0, 5);
+        assert_eq!(font.render_string("ZZ"), (0, 0, vec![]));
+    }
+
+    #[test]
+    fn truncated_bitmap_reads_as_transparent_instead_of_panicking() {
+        let mut bytes = with_bitmap(synth_font(65, 65, 2, &[0, 3], 1), &[9; 6]);
+        bytes.truncate(bytes.len() - 4);
+        let font = FontBitmap::read(&mut Cursor::new(bytes));
+
+        assert_eq!(font.glyph_alpha(65), Some((3, vec![153, 153, 0, 0, 0, 0])));
     }
 
     /// Locate a game asset by data-root-relative path (fonts live under both
