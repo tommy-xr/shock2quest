@@ -33,6 +33,11 @@ pub struct Cell {
     pub planes: Vec<Plane>,
     pub vertices: Vec<Vector3<f32>>,
     pub lights: Vec<LightInfo>,
+    /// Indices into the mission's object-light table naming the lights that
+    /// reach this cell - the candidate set for lighting any object standing
+    /// here. Authored at level-build time, so it is not derivable from the
+    /// lights' radii.
+    pub light_indices: Vec<u16>,
 }
 
 impl Cell {
@@ -99,7 +104,7 @@ impl Cell {
             planes.push(plane);
         }
 
-        let lights = read_lights(
+        let (lights, light_indices) = read_lights(
             packer,
             cell_idx,
             reader,
@@ -122,6 +127,7 @@ impl Cell {
             planes,
             vertices,
             lights,
+            light_indices,
         };
         cell
     }
@@ -331,7 +337,7 @@ fn read_lights<T: io::Read>(
     num_lights: u8,
     num_lightmaps: u8,
     light_size: u8,
-) -> Vec<LightInfo> {
+) -> (Vec<LightInfo>, Vec<u16>) {
     // Cell-local order for the animated-light bits on each face. A set bit in
     // `LightInfo::animation_flags` means the following layer belongs to the
     // light number at the same index in this table.
@@ -378,12 +384,19 @@ fn read_lights<T: io::Read>(
         }
     }
 
-    let light_count = reader.read_u32::<byteorder::LittleEndian>().unwrap();
-    for _ in 0..light_count {
-        let _ = reader.read_u16::<byteorder::LittleEndian>().unwrap();
+    // The cell's object-light list: a count, then that count of entries whose
+    // first element repeats the count.
+    let light_index_count = reader.read_u32::<byteorder::LittleEndian>().unwrap();
+    let mut light_indices = Vec::new();
+    for i in 0..light_index_count {
+        let index = reader.read_u16::<byteorder::LittleEndian>().unwrap();
+        // The first entry repeats the count; only the rest are light indices.
+        if i > 0 {
+            light_indices.push(index);
+        }
     }
 
-    light_infos
+    (light_infos, light_indices)
 }
 
 fn set_bit_indices(flags: u32) -> impl Iterator<Item = usize> {

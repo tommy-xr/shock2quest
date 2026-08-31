@@ -1,6 +1,7 @@
 mod bsp_tree;
 mod cell;
 mod cell_portal;
+pub mod light_table;
 mod map_params;
 pub mod path_database;
 mod plane;
@@ -14,6 +15,7 @@ pub mod texture_list;
 pub use bsp_tree::*;
 pub use cell::*;
 pub use cell_portal::*;
+pub use light_table::{LightTable, WorldLight};
 pub use map_params::MapParams;
 pub use path_database::{CellDoor, PathDatabase};
 pub use plane::*;
@@ -87,6 +89,9 @@ pub struct SystemShock2Level {
     pub map_params: MapParams,
     pub bsp_tree: BspTree,
     pub path_database: Option<PathDatabase>,
+    /// Lights that shade *objects*, as opposed to the baked lightmaps that
+    /// shade world geometry.
+    pub light_table: LightTable,
 }
 
 // Capstone for the loading-screen "foundation track" (projects/loading-screen.md, PR
@@ -211,10 +216,14 @@ pub fn read<T: io::Read + io::Seek>(
 
     let num_static_lights = read_u32(reader);
     let num_dynamic_lights = read_u32(reader);
+    let light_table = LightTable::read(reader, num_static_lights, num_dynamic_lights);
+    let cell_light_refs: usize = cells.iter().map(|c| c.light_indices.len()).sum();
     tracing::debug!(
-        "Mission lights - static: {} dynamic: {}",
+        "Mission lights - static: {} dynamic: {} first: {:?} cell refs: {}",
         num_static_lights,
-        num_dynamic_lights
+        num_dynamic_lights,
+        light_table.static_lights().first(),
+        cell_light_refs,
     );
 
     let (obj_map, obj_texture_families) = read_obj_map(&table_of_contents, reader);
@@ -280,6 +289,7 @@ pub fn read<T: io::Read + io::Seek>(
         song_params,
         map_params,
         path_database,
+        light_table,
     }
 }
 
