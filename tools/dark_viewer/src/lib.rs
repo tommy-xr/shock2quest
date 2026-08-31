@@ -21,3 +21,29 @@ pub fn normalize_clip_name(raw: &str) -> Result<String, String> {
     }
     Ok(format!("{}_.mc", trimmed))
 }
+
+/// Inverse of [`normalize_clip_name`]: the motion-DB name behind a `.mc` asset
+/// key, tolerating a plain `<name>.mc` and a leading directory.
+pub fn clip_base_name(asset_key: &str) -> String {
+    let file = asset_key
+        .rsplit('/')
+        .next()
+        .unwrap_or(asset_key)
+        .to_ascii_lowercase();
+    let stem = file.strip_suffix(".mc").unwrap_or(&file);
+    stem.strip_suffix('_').unwrap_or(stem).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clip_name_round_trip() {
+        assert_eq!(normalize_clip_name("bh111001").unwrap(), "bh111001_.mc");
+        assert_eq!(clip_base_name("bh111001_.mc"), "bh111001");
+        assert_eq!(clip_base_name("name.mc"), "name");
+        assert_eq!(clip_base_name("sub/dir/NAME_.MC"), "name");
+        assert_eq!(clip_base_name("name"), "name");
+    }
+}

@@ -9,6 +9,17 @@ use engine::scene::{
 /// Color of the fitted hit-box wireframe overlay (bright green).
 const HIT_BOX_OVERLAY_COLOR: Vector3<f32> = Vector3::new(0.2, 1.0, 0.3);
 
+/// The model's joint palette in world space: each joint transform with the
+/// model transform applied, as the debug skeleton and hit-box overlays want it.
+pub fn world_joint_transforms(model: &Model, player: &AnimationPlayer) -> Vec<Matrix4<f32>> {
+    let model_transform = model.get_transform();
+    model
+        .get_joint_transforms(player)
+        .iter()
+        .map(|joint| model_transform * *joint)
+        .collect()
+}
+
 /// Compose a scene for a model, optionally overlaying debug skeletons and/or the
 /// fitted per-joint hit-box shapes (`dark::hit_box`). The hit-box overlay renders
 /// exactly what `fit_hit_box_shapes` produced, transformed by the live joint
@@ -28,12 +39,7 @@ pub fn build_model_scene_with_debug_skeletons(
                 obj.set_skinned_transparency(Some(0.35));
             });
 
-            let joint_transforms = model.get_joint_transforms(player);
-            let model_transform = model.get_transform();
-            let world_joints: Vec<Matrix4<f32>> = joint_transforms
-                .iter()
-                .map(|joint| model_transform * *joint)
-                .collect();
+            let world_joints = world_joint_transforms(model, player);
 
             if debug_skeletons {
                 let mut debug_skeleton = model.draw_debug_skeleton(&world_joints);

@@ -2,7 +2,9 @@
 //! a model + creature type, arranged in their MetaProp hierarchy, plus the
 //! motion-database clip list for each archetype's actor type.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+use dark_viewer::clip_base_name;
 
 use dark::motion::MotionDB;
 use dark::properties::{PropCreature, PropModelName, PropSymName, PropTemplateId};
@@ -57,6 +59,34 @@ impl Archetype {
     }
 }
 
+/// A `.mc` motion clip resolved against the motion database.
+pub struct ClipInfo {
+    /// Clip name as the motion DB knows it (the asset key without `_.mc`).
+    pub name: String,
+    /// The actor whose tag database references this clip, if any.
+    pub actor_type: Option<ActorType>,
+    /// The skeleton actually used: `actor_type`, or Human when nothing claims it.
+    pub resolved_actor: ActorType,
+    /// Mesh supplying that skeleton's joint topology.
+    pub model_key: String,
+    pub duration: f32,
+    pub flags: u32,
+    pub frame_count: f32,
+    pub frame_rate: i32,
+}
+
+impl ClipInfo {
+    pub fn actor_label(&self) -> String {
+        match &self.actor_type {
+            Some(actor) => format!("{actor:?} ({})", actor.clone() as u32),
+            None => format!(
+                "{:?} (assumed - no actor claims this clip)",
+                self.resolved_actor
+            ),
+        }
+    }
+}
+
 pub struct ArchetypeDb {
     pub archetypes: HashMap<i32, Archetype>,
     /// Display names for every tree node (grouping ancestors included).
@@ -106,6 +136,57 @@ impl ArchetypeDb {
             )
         })?;
         Ok(motion_db.get_all_motions_for_creature(actor as u32))
+    }
+
+    /// Resolve a `.mc` asset key against the motion database: which actor plays
+    /// it, whose skeleton can render it, and the clip's motion-DB metadata.
+    pub fn clip_info(&self, asset_key: &str) -> Result<ClipInfo, String> {
+        let motion_db = self.motion_db.as_ref().map_err(|e| e.clone())?;
+        let name = clip_base_name(asset_key);
+        if !motion_db.has_motion(&name) {
+            return Err(format!("'{name}' is not in motiondb.bin"));
+        }
+        // A clip does not name its actor, so ask each actor's tag database
+        // whether it can reach this clip; Human is the fallback. Actors come
+        // from the archetype table (deduped, ordered - Human wins ties).
+        let actor_type = self
+            .archetypes
+            .values()
+            .filter_map(|a| a.actor_type.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .find(|actor| {
+                motion_db
+                    .get_all_motions_for_creature(actor.clone() as u32)
+                    .iter()
+                    .any(|m| m.eq_ignore_ascii_case(&name))
+            });
+        let resolved = actor_type.clone().unwrap_or(ActorType::Human);
+        let model_key = self
+            .model_for_actor(&resolved)
+            .ok_or_else(|| format!("no creature archetype uses the {resolved:?} skeleton"))?;
+        let stuff = motion_db.get_motion_stuff(name.clone());
+        let mps = motion_db.get_mps_motions(name.clone());
+        Ok(ClipInfo {
+            name,
+            actor_type,
+            resolved_actor: resolved,
+            model_key,
+            duration: stuff.duration,
+            flags: stuff.flags,
+            frame_count: mps.frame_count,
+            frame_rate: mps.frame_rate,
+        })
+    }
+
+    /// A mesh whose skeleton matches `actor`: the name-first creature archetype
+    /// using it (any of them has the right joint topology).
+    fn model_for_actor(&self, actor: &ActorType) -> Option<String> {
+        self.archetypes
+            .values()
+            .filter(|a| a.actor_type.as_ref() == Some(actor))
+            .min_by_key(|a| a.model_name.clone())
+            .map(|a| a.model_key())
     }
 
     /// Resolve a CLI `--archetype` value: a template id (either sign) or a
