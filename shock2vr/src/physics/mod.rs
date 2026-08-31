@@ -1932,6 +1932,11 @@ bitflags! {
         // physical entities: interaction-only/model-bounds stand-ins can then
         // let characters pass while remaining solid to projectiles and props.
         const ACTOR = 1 << 8;
+        // A melee weapon in the player's hand. Its own membership, because a
+        // creature's hitboxes answer to it and to nothing else: they are
+        // damage volumes, and generating contacts against every prop that
+        // brushes a limb is both meaningless and expensive.
+        const HELD_MELEE = 1 << 9;
         /// Every physical ECS object, including living creature actors. Use
         /// this for entity queries/filters; use `ENTITY` or `ACTOR` for an
         /// individual collider's membership.
@@ -1995,7 +2000,8 @@ impl CollisionGroup {
             memberships: (InternalCollisionGroups::HITBOX.bits
                 | InternalCollisionGroups::RAYCAST.bits)
                 .into(),
-            filter: (InternalCollisionGroups::RAYCAST.bits | InternalCollisionGroups::ENTITY.bits)
+            filter: (InternalCollisionGroups::RAYCAST.bits
+                | InternalCollisionGroups::HELD_MELEE.bits)
                 .into(),
             test_mode: Default::default(),
         };
@@ -2029,7 +2035,9 @@ impl CollisionGroup {
     /// weapon's trigger-gated script; this group only filters physical contact.
     pub fn held_melee() -> CollisionGroup {
         let collision = InteractionGroups {
-            memberships: InternalCollisionGroups::ENTITY.bits.into(),
+            memberships: (InternalCollisionGroups::ENTITY.bits
+                | InternalCollisionGroups::HELD_MELEE.bits)
+                .into(),
             filter: (InternalCollisionGroups::WORLD.bits
                 | InternalCollisionGroups::ENTITIES.bits
                 | InternalCollisionGroups::SELECTABLE.bits
