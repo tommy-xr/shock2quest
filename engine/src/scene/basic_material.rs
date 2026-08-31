@@ -62,6 +62,19 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform float spotlightOuterAngle[6];
         uniform float spotlightRange[6];
 
+        // Light every surface gets before any lamp reaches it.
+        uniform vec3 ambientLight;
+        // 0 = the renderer's smooth curve, 1 = inverse distance (how the
+        // original lit objects - it falls off far more slowly).
+        uniform int lightFalloffMode;
+        // 0 = plain lambert, 1 = half-lambert (light wraps past the terminator).
+        uniform float lambertWrap;
+
+        // Lights are sources of this radius, not points: without a floor the
+        // inverse-distance falloff runs away inside the model a lamp belongs
+        // to. Must equal engine::scene::light::LIGHT_SOURCE_RADIUS.
+        const float SOURCE_RADIUS = 0.8;
+
         // Calculate spotlight contribution
         vec3 calculateSpotlight(int i, vec3 worldPos, vec3 normal, vec3 texColor) {
             // Skip if light has zero intensity
@@ -97,10 +110,17 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             }
 
             // Distance attenuation
-            float distanceAttenuation = 1.0 / (1.0 + 0.1 * distance + 0.01 * distance * distance);
+            float distanceAttenuation;
+            if (lightFalloffMode == 1) {
+                distanceAttenuation = 1.0 / max(distance, SOURCE_RADIUS);
+            } else {
+                distanceAttenuation = 1.0 / (1.0 + 0.1 * distance + 0.01 * distance * distance);
+            }
 
-            // Diffuse lighting
-            float lambertian = max(dot(normal, lightDir), 0.0);
+            // Diffuse lighting, optionally wrapped past the terminator so a
+            // surface facing away is lifted rather than black.
+            float ndl = dot(normal, lightDir);
+            float lambertian = max((ndl + lambertWrap) / (1.0 + lambertWrap), 0.0);
 
             // Combine all factors
             return texColor * spotlightColorIntensity[i].rgb * spotlightColorIntensity[i].w
@@ -118,7 +138,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             if (texColor.a < 0.1) discard;
 
             // Base material color (ambient)
-            vec3 finalColor = texColor.rgb * 0.5 * ambientIntensity;
+            vec3 finalColor = texColor.rgb * ambientLight * ambientIntensity;
 
             // Add emissive contribution
             finalColor += texColor.rgb * emissivity;
@@ -152,6 +172,9 @@ struct UnifiedUniforms {
     spotlight_inner_angle_loc: [i32; 6],
     spotlight_outer_angle_loc: [i32; 6],
     spotlight_range_loc: [i32; 6],
+    ambient_light_loc: i32,
+    light_falloff_mode_loc: i32,
+    lambert_wrap_loc: i32,
 }
 
 static UNIFIED_SHADER_PROGRAM: OnceCell<(ShaderProgram, UnifiedUniforms)> = OnceCell::new();
@@ -208,6 +231,23 @@ where
                     1.0
                 } else {
                     render_context.ambient_light_intensity
+                },
+            );
+
+            // How this array's lights behave: what an unlit surface shows, and
+            // how the lights fall off.
+            gl::Uniform3f(
+                uniforms.ambient_light_loc,
+                lights.ambient.x,
+                lights.ambient.y,
+                lights.ambient.z,
+            );
+            gl::Uniform1f(uniforms.lambert_wrap_loc, lights.lambert_wrap);
+            gl::Uniform1i(
+                uniforms.light_falloff_mode_loc,
+                match lights.falloff {
+                    crate::scene::light::LightFalloff::Smooth => 0,
+                    crate::scene::light::LightFalloff::InverseDistance => 1,
                 },
             );
 
@@ -449,6 +489,18 @@ where
                         gl::GetUniformLocation(shader.gl_id, c_str!("spotlightRange[4]").as_ptr()),
                         gl::GetUniformLocation(shader.gl_id, c_str!("spotlightRange[5]").as_ptr()),
                     ],
+                    ambient_light_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("ambientLight").as_ptr(),
+                    ),
+                    light_falloff_mode_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lightFalloffMode").as_ptr(),
+                    ),
+                    lambert_wrap_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("lambertWrap").as_ptr(),
+                    ),
                 };
                 (shader, uniforms)
             }
@@ -536,4 +588,25 @@ where
         additive_unlit: false,
         fixed_ambient: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shader floors its inverse-distance falloff at a source radius, and
+    /// the light selection ranks with the same floor. They are declared in two
+    /// languages, so pin them to each other: if they drift, the lights chosen
+    /// are not the lights drawn.
+    #[test]
+    fn shader_source_radius_matches_the_engine_constant() {
+        let declared = format!(
+            "const float SOURCE_RADIUS = {:.1};",
+            crate::scene::light::LIGHT_SOURCE_RADIUS
+        );
+        assert!(
+            UNIFIED_FRAGMENT_SHADER_SOURCE.contains(&declared),
+            "shader must declare `{declared}`"
+        );
+    }
 }

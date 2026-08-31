@@ -14,6 +14,7 @@ use cgmath::{InnerSpace, Vector3, Vector4, vec3};
 use dark::mission::{LightTable, WorldLight};
 use engine::scene::light::{LightArray, PointLight, SpotLight};
 
+use crate::dev_params;
 use crate::mission::spatial_query::SpatialQueryEngine;
 
 /// How many lights the renderer can apply to one object.
@@ -23,13 +24,20 @@ const MAX_OBJECT_LIGHTS: usize = 6;
 /// the remainder cannot meaningfully change the shading.
 const ENERGY_CUTOFF: f32 = 0.95;
 
-/// Distances below this are treated as this, so a light sitting exactly on an
-/// object doesn't divide by zero.
-const MIN_DISTANCE: f32 = 0.01;
+/// Rank lights with the same source radius the shader shades them with. A
+/// light inside its own lamp model would otherwise score in the hundreds and
+/// take the entire energy budget, ejecting every light that actually matters.
+const MIN_DISTANCE: f32 = engine::scene::light::LIGHT_SOURCE_RADIUS;
+
+/// Brightness is authored against the mission's own units, but our world is
+/// `SCALE_FACTOR` smaller - so every distance is smaller by that factor and the
+/// inverse-distance falloff would come out that much brighter. Scale the
+/// brightness back down by the same factor to land where the original did.
+const BRIGHTNESS_SCALE: f32 = 1.0 / dark::SCALE_FACTOR;
 
 /// Perceptual weighting used to rank lights against each other - green carries
 /// most of the apparent brightness.
-fn perceived_brightness(brightness: Vector3<f32>) -> f32 {
+pub fn perceived_brightness(brightness: Vector3<f32>) -> f32 {
     0.25 * brightness.x + 0.5 * brightness.y + 0.25 * brightness.z
 }
 
@@ -60,13 +68,32 @@ fn cone_coverage(light: &WorldLight, position: Vector3<f32>) -> f32 {
     (alignment - light.outer) / (light.inner - light.outer)
 }
 
+/// How much light an object at `position` receives from `lights`, ignoring
+/// which way its surfaces face. This is the scalar the original engine used to
+/// answer "how lit is this object" - including, notably, for whether AI can see
+/// the player - so it is the right summary number for tooling to report.
+pub fn received_light(lights: &LightArray, position: Vector3<f32>) -> f32 {
+    lights
+        .iter_active()
+        .map(|(_, light)| {
+            let color = light.color_intensity();
+            let brightness = vec3(color.x, color.y, color.z) * color.w;
+            let distance = (light.position() - position).magnitude().max(MIN_DISTANCE);
+            perceived_brightness(brightness) / distance
+        })
+        .sum()
+}
+
 /// The lights that shade an object at `position`, strongest first.
 pub fn lights_for_position(
     spatial: &dyn SpatialQueryEngine,
     table: &LightTable,
     position: Vector3<f32>,
 ) -> LightArray {
-    let mut lights = LightArray::new();
+    let ambient_boost = dev_params::get(dev_params::OBJECT_LIGHT_AMBIENT_BOOST);
+    let ambient = spatial.get_ambient_light() + vec3(ambient_boost, ambient_boost, ambient_boost);
+    let mut lights = LightArray::new()
+        .with_object_lighting(ambient, dev_params::get(dev_params::OBJECT_LIGHT_WRAP));
 
     let Some(cell) = spatial.get_cell_from_position(position) else {
         // Outside the world rep (or in a scene with none) - no cell, no lights.
@@ -121,10 +148,11 @@ pub fn lights_for_position(
 /// stored as cosines and the renderer wants radians; a light with no radius
 /// reaches everywhere, which the renderer spells as an enormous range.
 fn to_scene_light(light: &WorldLight) -> engine::scene::light::SceneLight {
+    let scale = BRIGHTNESS_SCALE * dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS);
     let color_intensity = Vector4::new(
-        light.brightness.x,
-        light.brightness.y,
-        light.brightness.z,
+        light.brightness.x * scale,
+        light.brightness.y * scale,
+        light.brightness.z * scale,
         1.0,
     );
     let range = if light.radius > 0.0 {

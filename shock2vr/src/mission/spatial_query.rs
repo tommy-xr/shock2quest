@@ -18,6 +18,10 @@ pub trait SpatialQueryEngine {
 
     /// The mission's object-light table, which the cells' light lists index.
     fn get_light_table(&self) -> &LightTable;
+
+    /// The mission's ambient light - the floor an object shows where no light
+    /// reaches it.
+    fn get_ambient_light(&self) -> Vector3<f32>;
 }
 
 /// Lightweight spatial data structure extracted from SystemShock2Level
@@ -26,6 +30,7 @@ pub struct LevelSpatialData {
     pub cells: Vec<Cell>,
     pub bsp_tree: BspTree,
     pub light_table: LightTable,
+    pub ambient_light: Vector3<f32>,
 }
 
 impl SpatialQueryEngine for LevelSpatialData {
@@ -49,6 +54,10 @@ impl SpatialQueryEngine for LevelSpatialData {
     fn get_light_table(&self) -> &LightTable {
         &self.light_table
     }
+
+    fn get_ambient_light(&self) -> Vector3<f32> {
+        self.ambient_light
+    }
 }
 
 impl LevelSpatialData {
@@ -58,6 +67,7 @@ impl LevelSpatialData {
             cells: level.cells.clone(),
             bsp_tree: level.bsp_tree.clone(),
             light_table: level.light_table.clone(),
+            ambient_light: level.render_params.ambient_color,
         }
     }
 }
@@ -83,5 +93,9 @@ impl SpatialQueryEngine for SystemShock2Level {
 
     fn get_light_table(&self) -> &LightTable {
         &self.light_table
+    }
+
+    fn get_ambient_light(&self) -> Vector3<f32> {
+        self.render_params.ambient_color
     }
 }
