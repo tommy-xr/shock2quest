@@ -26,11 +26,13 @@ icon = "@mipmap/icon"
 # Launcher name. Without it cargo-apk falls back to the crate name ("shock2quest").
 label = "Shock2Quest"
 
-# Meta's launcher reads these to classify the app as a Quest VR title rather
-# than an unrecognized 2D sideload. `eureka` is Quest 3.
+# Meta's launcher reads this to classify the app as a Quest VR title rather than
+# an unrecognized 2D sideload. Use released names, not internal codenames -
+# Meta's own docs ask for these, and `eureka` (Quest 3's codename) is reported
+# to confuse headset identification.
 [[package.metadata.android.application.meta_data]]
 name = "com.oculus.supportedDevices"
-value = "quest2|questpro|eureka"
+value = "quest2|questpro|quest3|quest3s"
 
 [[package.metadata.android.application.meta_data]]
 name = "com.samsung.android.vr.application.mode"
