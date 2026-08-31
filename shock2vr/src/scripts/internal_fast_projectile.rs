@@ -173,14 +173,20 @@ impl Script for InternalFastProjectileScript {
     }
 }
 
+/// Whether a collider is one of this creature's own hitboxes. Read from the
+/// proxy's `parent_entity_id` - the fact that says whose limb this is - rather
+/// than from the generic proxy link `resolve_proxy_entity` follows.
 fn hitbox_belongs_to_entity(world: &World, hitbox_entity: EntityId, parent: EntityId) -> bool {
     world
         .borrow::<View<RuntimePropHitBox>>()
-        .is_ok_and(|hitboxes| {
-            hitboxes
+        .ok()
+        .and_then(|hit_boxes| {
+            hit_boxes
                 .get(hitbox_entity)
-                .is_ok_and(|hitbox| hitbox.parent_entity_id == parent)
+                .ok()
+                .map(|hb| hb.parent_entity_id)
         })
+        == Some(parent)
 }
 
 /// Whether the shot started inside this entity's own bounds - a weapon pressed
@@ -202,6 +208,12 @@ fn fired_from_inside(
 /// unusual; this only bounds the work.
 const MAX_PASS_THROUGH: usize = 4;
 
+/// How far a shot reaches, in world units. The shipped value: `ray_cast`
+/// normalizes its direction and caps the cast at 100, so the caller's nominal
+/// 1000 never applied. Kept explicit here so the range stays what it has
+/// always been rather than becoming ten times longer by accident.
+const MAX_RANGE: f32 = 100.0;
+
 fn projectile_ray_cast(
     start_point: Point3<f32>,
     forward: cgmath::Vector3<f32>,
@@ -215,6 +227,7 @@ fn projectile_ray_cast(
     } else {
         InternalCollisionGroups::empty()
     };
+    let distance = distance.min(MAX_RANGE);
     let coarse_groups = InternalCollisionGroups::ENTITIES
         // Sometimes, the hitbox can stick out past the bounding box...
         // so we should still check for it here
@@ -223,10 +236,11 @@ fn projectile_ray_cast(
         | InternalCollisionGroups::SELECTABLE
         | InternalCollisionGroups::WORLD;
 
-    // Creatures whose capsule the shot has already passed through: they had no
-    // limb on this line, so they are not what it hit.
+    // Creatures whose *capsule* the shot has already passed through: it found
+    // no limb of theirs on this line. Their proxies stay in play - if a later
+    // pass finds one, that is a genuine limb hit and wins.
     let mut passed_through: Vec<EntityId> = Vec::new();
-    for _ in 0..MAX_PASS_THROUGH {
+    for pass in 0..=MAX_PASS_THROUGH {
         let is_not_passed_through = |entity_id: EntityId| !passed_through.contains(&entity_id);
         let maybe_hit_spot = physics.ray_cast2_with_entity_filter(
             start_point,
@@ -248,6 +262,10 @@ fn projectile_ray_cast(
         // carries `PropCreature` but is never animated and has none. Reading
         // the definition would refine against hitboxes that do not exist and
         // then pass the shot straight through the body.
+        // Out of passes: take the nearest thing that is left, capsule or not.
+        if pass == MAX_PASS_THROUGH {
+            return maybe_hit_spot;
+        }
         if !crate::creature::has_live_hit_boxes(world, hit_entity_id) {
             return maybe_hit_spot;
         }
@@ -274,6 +292,15 @@ fn projectile_ray_cast(
             // the damage.
             return refined_hit;
         }
+        if !crate::creature::hit_boxes_cover_body(world, hit_entity_id) {
+            // The creature's hitboxes do not stand in for its body: the
+            // arachnids and the Overlord map a single `Body` joint, so their
+            // legs and limbs have no proxy at all. Passing through would make
+            // whole bands of them unshootable, so the capsule keeps the shot
+            // (with no joint to report). Widening those definitions is the fix
+            // that would let them join the rule above.
+            return maybe_hit_spot;
+        }
         if fired_from_inside(physics, start_point, hit_entity_id) {
             // Point blank, with the capsule around the muzzle: the proxies may
             // all be behind the origin, and a shot pressed into a creature
@@ -285,16 +312,7 @@ fn projectile_ray_cast(
         // creature, so the shot carries on to whatever is behind it.
         passed_through.push(hit_entity_id);
     }
-    // Too many creatures deep: take the nearest thing that is left.
-    physics.ray_cast2_with_entity_filter(
-        start_point,
-        forward,
-        distance,
-        coarse_groups,
-        None,
-        true,
-        &|entity_id: EntityId| !passed_through.contains(&entity_id),
-    )
+    None
 }
 
 #[cfg(test)]
@@ -304,6 +322,7 @@ mod tests {
     use crate::physics::PhysicsWorld;
     use cgmath::{Quaternion, point3, vec3};
     use dark::SCALE_FACTOR;
+    use dark::properties::PropCreature;
     use shipyard::{EntityId, World};
 
     #[test]
@@ -381,8 +400,10 @@ mod tests {
         let mut physics = PhysicsWorld::new();
         let mut world = World::new();
 
-        // The creature's capsule spans the line of fire...
-        let creature = world.add_entity(crate::creature::RuntimePropHasHitBoxes);
+        // The creature's capsule spans the line of fire...  Creature type 0 is
+        // HUMAN, whose definition maps fifteen joints, so its hitboxes stand
+        // in for its body.
+        let creature = world.add_entity((crate::creature::RuntimePropHasHitBoxes, PropCreature(0)));
         physics.add_kinematic(
             creature,
             vec3(0.0, 0.0, 5.0),
@@ -449,7 +470,7 @@ mod tests {
         let mut physics = PhysicsWorld::new();
         let mut world = World::new();
 
-        let creature = world.add_entity(crate::creature::RuntimePropHasHitBoxes);
+        let creature = world.add_entity((crate::creature::RuntimePropHasHitBoxes, PropCreature(0)));
         physics.add_kinematic(
             creature,
             vec3(0.0, 0.0, 0.0),
@@ -502,6 +523,73 @@ mod tests {
             hit.and_then(|result| result.maybe_entity_id),
             Some(creature),
             "a muzzle inside the creature keeps its coarse hit",
+        );
+    }
+
+    /// The arachnids and the Overlord map a single `Body` joint, so their legs
+    /// and limbs have no proxy at all. A shot that misses that one blob has
+    /// not missed the animal - passing through would leave whole bands of it
+    /// unshootable - so those creatures keep their capsule.
+    ///
+    /// Negative-first: without the coverage gate this shot reaches the wall.
+    #[test]
+    fn a_sparse_hitbox_creature_is_still_hit_on_its_capsule() {
+        let mut physics = PhysicsWorld::new();
+        let mut world = World::new();
+
+        // Creature type 6 is ARACHNID: one mapped joint.
+        let creature = world.add_entity((crate::creature::RuntimePropHasHitBoxes, PropCreature(6)));
+        physics.add_kinematic(
+            creature,
+            vec3(0.0, 0.0, 5.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(3.0, 3.0, 1.0),
+            crate::physics::CollisionGroup::actor(),
+            false,
+        );
+        let hit_box = world.add_entity(RuntimePropHitBox {
+            parent_entity_id: creature,
+            hit_box_type: HitBoxType::Body,
+            joint_id: 0,
+        });
+        // Off to the side, as an arachnid's body blob is from its legs.
+        physics.add_kinematic(
+            hit_box,
+            vec3(1.2, 0.0, 5.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.4, 0.4, 0.4),
+            crate::physics::CollisionGroup::hitbox(),
+            false,
+        );
+        let wall = world.add_entity(());
+        physics.add_kinematic(
+            wall,
+            vec3(0.0, 0.0, 9.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(6.0, 6.0, 1.0),
+            crate::physics::CollisionGroup::selectable(),
+            false,
+        );
+        let mut player =
+            physics.create_player(vec3(0.0, 0.0, -50.0), EntityId::from_inner(9).unwrap());
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+        let hit = projectile_ray_cast(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            &physics,
+            20.0,
+            &world,
+            false,
+        );
+
+        assert_eq!(
+            hit.and_then(|result| result.maybe_entity_id),
+            Some(creature),
+            "a creature whose hitboxes do not cover it keeps taking capsule hits",
         );
     }
 

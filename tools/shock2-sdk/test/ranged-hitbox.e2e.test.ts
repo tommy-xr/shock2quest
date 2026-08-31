@@ -63,6 +63,12 @@ test(
       }
     }
 
+    // The centred shot must land: this rule may only reroute shots that
+    // missed every limb, never make a creature harder to hit.
+    assert.ok(
+      seen.some(([entity]) => entity === target.entity_id),
+      `the centred shot should have damaged the creature; got ${JSON.stringify(seen)}`,
+    );
     assert.ok(seen.length > 0, "the shots should have damaged a creature");
     // Negative-first: the capsule fallback billed creatures with bone null.
     assert.ok(

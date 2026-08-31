@@ -37,6 +37,19 @@ pub(crate) fn is_hit_box(world: &World, entity_id: EntityId) -> bool {
         .is_ok_and(|hit_boxes| hit_boxes.get(entity_id).is_ok())
 }
 
+/// Whether a creature's hitboxes stand in for its *body*, i.e. whether missing
+/// all of them means the shot missed the creature.
+///
+/// A definition that maps one `Body` joint (`SPIDER_HIT_BOXES`,
+/// `OVERLORD_HIT_BOXES`) leaves the legs and limbs with no proxy at all, so
+/// treating a miss on that one blob as a miss on the animal would make whole
+/// bands of it unshootable. Those creatures keep their capsule; widening their
+/// definitions is what would let them join the rule.
+pub(crate) fn hit_boxes_cover_body(world: &World, entity_id: EntityId) -> bool {
+    crate::creature::get_entity_creature(world, entity_id)
+        .is_some_and(|creature| creature.hit_boxes.len() > 1)
+}
+
 /// Whether an entity is a creature with live hitbox proxies - i.e. whether a
 /// blow on it arrives through a limb.
 pub(crate) fn has_live_hit_boxes(world: &World, entity_id: EntityId) -> bool {
