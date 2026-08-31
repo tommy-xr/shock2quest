@@ -610,6 +610,9 @@ pub struct UiStateResult {
     /// while the interface is up in VR. Aim a controller at a canvas rect by
     /// mapping it through this.
     pub panel_pose: Option<shock2vr::game_scene::DebugUiPanelPose>,
+    /// The station security alarm; `Some` exactly while one is up, which is
+    /// when the HUD shows its badge and countdown.
+    pub security_alarm: Option<shock2vr::game_scene::DebugSecurityAlarm>,
 }
 
 /// A single carried item.
