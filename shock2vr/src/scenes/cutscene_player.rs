@@ -132,7 +132,7 @@ impl CutscenePlayerScene {
 
         #[cfg(feature = "ffmpeg")]
         {
-            use engine::audio::{AudioHandle, play_audio};
+            use engine::audio::{AudioHandle, play_streaming_audio};
 
             let video_path = super::resolve_cutscene_path(&video_name)
                 .to_string_lossy()
@@ -142,10 +142,13 @@ impl CutscenePlayerScene {
             };
             let video_player =
                 VideoPlayer::from_filename(&video_path).map_err(|error| describe(&error))?;
-            let audio_clip =
-                Rc::new(AudioPlayer::from_filename(&video_path).map_err(|error| describe(&error))?);
+            // Streamed rather than decoded into a clip: a feature-length
+            // cutscene is minutes of PCM, and waiting for all of it here would
+            // stall the first frame and hold tens of MiB for the whole scene.
+            let audio_stream =
+                AudioPlayer::open_stream(&video_path).map_err(|error| describe(&error))?;
             let audio_handle = AudioHandle::new();
-            play_audio(audio_context, audio_handle.clone(), None, audio_clip);
+            play_streaming_audio(audio_context, audio_handle.clone(), audio_stream);
 
             return Ok(Self {
                 world,
