@@ -37,6 +37,7 @@ pub struct UiOptions {
     /// `--screenshot` run can capture the debug overlays).
     pub skeletons: bool,
     pub hitboxes: bool,
+    pub articulation: bool,
     /// Open the Archetypes tab with this archetype selected (name or
     /// template id), optionally playing `clip`, advanced by `advance` seconds
     /// of simulation time before a `--screenshot` capture.
@@ -257,7 +258,7 @@ pub struct ExplorerApp {
     /// every family's archives and creates the engine render host.
     model_preview: Option<ModelPreview>,
     /// Initial overlay toggles for the model preview (from the CLI).
-    initial_overlays: (bool, bool),
+    initial_overlays: (bool, bool, bool),
     frames_rendered: u32,
     /// Whether the screenshot viewport command was already sent (grid mode
     /// delays it until the visible thumbnails have decoded).
@@ -346,7 +347,7 @@ impl ExplorerApp {
             audio_error: None,
             screenshot: options.screenshot,
             model_preview: None,
-            initial_overlays: (options.skeletons, options.hitboxes),
+            initial_overlays: (options.skeletons, options.hitboxes, options.articulation),
             frames_rendered: 0,
             screenshot_sent: false,
             scroll_frames: 0,
@@ -1786,13 +1787,14 @@ impl ExplorerApp {
 /// time source (a deterministic pose per invocation).
 fn preview_host(
     model_preview: &mut Option<ModelPreview>,
-    (skeletons, hitboxes): (bool, bool),
+    (skeletons, hitboxes, articulation): (bool, bool, bool),
     paused: bool,
 ) -> &mut ModelPreview {
     model_preview.get_or_insert_with(|| {
         let mut host = ModelPreview::new();
         host.debug_skeletons = skeletons;
         host.debug_hit_boxes = hitboxes;
+        host.debug_articulation = articulation;
         host.paused = paused;
         host
     })

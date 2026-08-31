@@ -19,6 +19,7 @@ pub struct BinObjViewerScene {
     animation_player: AnimationPlayer,
     debug_skeletons: bool,
     debug_hit_boxes: bool,
+    debug_articulation: bool,
 }
 
 impl BinObjViewerScene {
@@ -27,6 +28,7 @@ impl BinObjViewerScene {
         _asset_cache: &AssetCache,
         debug_skeletons: bool,
         debug_hit_boxes: bool,
+        debug_articulation: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // We don't load the model here, we'll load it during render using the asset cache
         let animation_player = AnimationPlayer::empty();
@@ -42,6 +44,7 @@ impl BinObjViewerScene {
             animation_player,
             debug_skeletons,
             debug_hit_boxes,
+            debug_articulation,
         })
     }
 }
@@ -66,20 +69,19 @@ impl ToolScene for BinObjViewerScene {
 
     fn render(&self, asset_cache: &mut AssetCache) -> Scene {
         let turret = asset_cache.get(&MODELS_IMPORTER, &self.model_name);
-        let mut turret_scene_objects = turret.to_animated_scene_objects(&self.animation_player);
+        let turret_scene_objects = turret.to_animated_scene_objects(&self.animation_player);
 
-        // Add ground plane
-        turret_scene_objects.push(create_ground_plane(asset_cache));
-
-        // Add axes gizmo
-        turret_scene_objects.extend(create_axes_gizmo(asset_cache));
+        let mut decorations = vec![create_ground_plane(asset_cache)];
+        decorations.extend(create_axes_gizmo(asset_cache));
 
         build_model_scene_with_debug_skeletons(
             turret.as_ref(),
             Some(&self.animation_player),
             turret_scene_objects,
+            decorations,
             self.debug_skeletons,
             self.debug_hit_boxes,
+            self.debug_articulation,
         )
     }
 }

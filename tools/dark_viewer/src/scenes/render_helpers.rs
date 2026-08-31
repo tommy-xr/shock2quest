@@ -1,4 +1,4 @@
-use cgmath::{Matrix4, Vector3};
+use cgmath::{EuclideanSpace, Matrix4, Vector3};
 use dark::{importers::TEXTURE_IMPORTER, model::Model, motion::AnimationPlayer};
 use engine::assets::asset_cache::AssetCache;
 use engine::scene::{
@@ -8,6 +8,46 @@ use engine::scene::{
 
 /// Color of the fitted hit-box wireframe overlay (bright green).
 const HIT_BOX_OVERLAY_COLOR: Vector3<f32> = Vector3::new(0.2, 1.0, 0.3);
+
+/// Articulation overlay: LGMD sub-object pivots (magenta) and vhots (yellow).
+const SUB_OBJECT_COLOR: Vector3<f32> = Vector3::new(1.0, 0.2, 0.85);
+const VHOT_COLOR: Vector3<f32> = Vector3::new(1.0, 0.85, 0.1);
+const SUB_OBJECT_MARKER_SIZE: f32 = 0.05;
+const VHOT_MARKER_SIZE: f32 = 0.035;
+
+/// How much of the mesh shows through under an overlay (0 = opaque).
+const OVERLAY_GHOST_TRANSPARENCY: f32 = 0.35;
+
+/// Markers for a static `.bin`'s articulation points: one cube per sub-object
+/// pivot (the parts tweqs rotate/translate) and one per vhot (attachment
+/// points - muzzle, light, particle origins). Empty for LGMM/GLB models.
+pub fn articulation_overlay(model: &Model) -> Vec<SceneObject> {
+    let model_transform = model.get_transform();
+    let marker = |color: Vector3<f32>, at: Matrix4<f32>, size: f32| {
+        let mut obj = SceneObject::new(color_material::create(color), Box::new(cube::create()));
+        obj.set_transform(model_transform * at * Matrix4::from_scale(size));
+        obj
+    };
+
+    let mut objects = model
+        .sub_objects()
+        .iter()
+        .map(|sub_object| {
+            // Pivot only: the sub-object's rotation would skew the cube.
+            let at = Matrix4::from_translation(sub_object.transform.w.truncate());
+            marker(SUB_OBJECT_COLOR, at, SUB_OBJECT_MARKER_SIZE)
+        })
+        .collect::<Vec<SceneObject>>();
+
+    // These coincide with the small blue cubes the LGMD loader itself bakes in
+    // at every vhot (`ss2_bin_obj_loader::to_scene_objects`) - see issue #1208.
+    objects.extend(model.vhots().iter().map(|vhot| {
+        let at = Matrix4::from_translation(vhot.point.to_vec());
+        marker(VHOT_COLOR, at, VHOT_MARKER_SIZE)
+    }));
+
+    objects
+}
 
 /// The model's joint palette in world space: each joint transform with the
 /// model transform applied, as the debug skeleton and hit-box overlays want it.
@@ -20,44 +60,60 @@ pub fn world_joint_transforms(model: &Model, player: &AnimationPlayer) -> Vec<Ma
         .collect()
 }
 
-/// Compose a scene for a model, optionally overlaying debug skeletons and/or the
-/// fitted per-joint hit-box shapes (`dark::hit_box`). The hit-box overlay renders
-/// exactly what `fit_hit_box_shapes` produced, transformed by the live joint
-/// transforms - so it tracks the animated mesh and reveals fit/mapping issues
-/// independent of the physics ragdoll.
+/// Compose a scene for a model, optionally overlaying debug skeletons, the
+/// fitted per-joint hit-box shapes (`dark::hit_box`), and/or the LGMD
+/// articulation markers. The hit-box overlay renders exactly what
+/// `fit_hit_box_shapes` produced, transformed by the live joint transforms - so
+/// it tracks the animated mesh and reveals fit/mapping issues independent of the
+/// physics ragdoll.
+///
+/// `decorations` (ground plane, axes gizmo) are kept apart from the model's own
+/// objects so that ghosting under an overlay touches only the mesh.
 pub fn build_model_scene_with_debug_skeletons(
     model: &Model,
     animation_player: Option<&AnimationPlayer>,
-    mut objects: Vec<SceneObject>,
+    mut model_objects: Vec<SceneObject>,
+    mut decorations: Vec<SceneObject>,
     debug_skeletons: bool,
     debug_hit_boxes: bool,
+    debug_articulation: bool,
 ) -> Scene {
+    let mut overlay = Vec::new();
+
     if (debug_skeletons || debug_hit_boxes) && model.is_animated() {
         if let Some(player) = animation_player {
-            objects.iter_mut().for_each(|obj| {
-                obj.set_depth_write(false);
-                obj.set_skinned_transparency(Some(0.35));
-            });
-
             let world_joints = world_joint_transforms(model, player);
 
             if debug_skeletons {
-                let mut debug_skeleton = model.draw_debug_skeleton(&world_joints);
-                objects.append(&mut debug_skeleton);
+                overlay.append(&mut model.draw_debug_skeleton(&world_joints));
             }
 
             if debug_hit_boxes {
-                let mut debug_hit_boxes = dark::hit_box::draw_debug_hit_box_shapes(
+                overlay.append(&mut dark::hit_box::draw_debug_hit_box_shapes(
                     &model.hit_box_shapes(),
                     &world_joints,
                     HIT_BOX_OVERLAY_COLOR,
-                );
-                objects.append(&mut debug_hit_boxes);
+                ));
             }
         }
     }
 
-    Scene::from_objects(objects)
+    if debug_articulation {
+        overlay.append(&mut articulation_overlay(model));
+    }
+
+    // Ghost the model (and only the model - not the grid) so overlay geometry
+    // buried inside the mesh still reads.
+    if !overlay.is_empty() {
+        model_objects.iter_mut().for_each(|obj| {
+            obj.set_depth_write(false);
+            obj.set_transparency(Some(OVERLAY_GHOST_TRANSPARENCY));
+        });
+    }
+
+    model_objects.append(&mut decorations);
+    model_objects.append(&mut overlay);
+    Scene::from_objects(model_objects)
 }
 
 /// Create a ground plane SceneObject with grid texture and proper scaling

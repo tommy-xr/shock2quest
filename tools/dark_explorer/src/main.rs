@@ -68,6 +68,11 @@ enum Commands {
         #[arg(long)]
         hitboxes: bool,
 
+        /// Start the 3D model preview with the LGMD articulation overlay on
+        /// (sub-object pivots + vhots)
+        #[arg(long)]
+        articulation: bool,
+
         /// Open the Archetypes tab with this archetype selected (name or template id)
         #[arg(long)]
         archetype: Option<String>,
@@ -221,6 +226,7 @@ fn main() {
             grid,
             skeletons,
             hitboxes,
+            articulation,
             archetype,
             clip,
             advance,
@@ -233,6 +239,7 @@ fn main() {
             grid,
             skeletons,
             hitboxes,
+            articulation,
             archetype,
             clip,
             advance,

@@ -71,14 +71,19 @@ pub struct ModelPreview {
     engine: Box<dyn Engine>,
     asset_cache: AssetCache,
     /// What the current scene (or error) was built for: (key, scene, skeletons,
-    /// hitboxes). Guards against rebuilding — or re-panicking — every frame.
-    built_for: Option<(String, PreviewScene, bool, bool)>,
+    /// hitboxes, articulation). Guards against rebuilding — or re-panicking —
+    /// every frame.
+    built_for: Option<(String, PreviewScene, bool, bool, bool)>,
     scene: Option<Box<dyn ToolScene>>,
     /// The scene plays an animation clip, so it re-renders every frame.
     animated: bool,
     error: Option<String>,
     pub debug_skeletons: bool,
     pub debug_hit_boxes: bool,
+    pub debug_articulation: bool,
+    /// (sub-object, vhot) counts of the loaded LGMD model, when it has any -
+    /// what the articulation overlay would draw.
+    articulation: Option<(usize, usize)>,
     /// Suspend the per-frame wall-clock tick of an animated scene, so
     /// `advance()` is the only time source - `--screenshot` runs set this to
     /// capture a deterministic pose.
@@ -113,6 +118,8 @@ impl ModelPreview {
             error: None,
             debug_skeletons: false,
             debug_hit_boxes: false,
+            debug_articulation: false,
+            articulation: None,
             paused: false,
             yaw: 65.0,
             pitch: 75.0,
@@ -151,6 +158,11 @@ impl ModelPreview {
             if !matches!(scene, PreviewScene::Skeleton(_)) {
                 ui.checkbox(&mut self.debug_skeletons, "Skeleton");
                 ui.checkbox(&mut self.debug_hit_boxes, "Hitboxes");
+            }
+            // Only an object (LGMD) .bin has sub-objects/vhots to show.
+            if let Some((sub_objects, vhots)) = self.articulation {
+                ui.checkbox(&mut self.debug_articulation, "Articulation");
+                ui.label(format!("({sub_objects} sub-objects, {vhots} vhots)"));
             }
             ui.label("(drag to orbit, scroll to zoom)");
         });
@@ -203,6 +215,7 @@ impl ModelPreview {
             scene.clone(),
             self.debug_skeletons,
             self.debug_hit_boxes,
+            self.debug_articulation,
         );
         if self.built_for.as_ref() == Some(&wanted) {
             return;
@@ -212,6 +225,7 @@ impl ModelPreview {
         self.scene = None;
         self.animated = false;
         self.error = None;
+        self.articulation = None;
         // Load the model eagerly under catch_unwind — the scene itself defers
         // loading to render, and Dark parsers panic on malformed input; a
         // failure becomes an error label instead of a crash. The key resolves
@@ -233,6 +247,7 @@ impl ModelPreview {
                 &self.asset_cache,
                 self.debug_skeletons,
                 self.debug_hit_boxes,
+                self.debug_articulation,
             )
             .map(|scene| Box::new(scene) as Box<dyn ToolScene>)
             .map_err(|err| err.to_string()),
@@ -263,6 +278,22 @@ impl ModelPreview {
             })
             .and_then(|r| r),
         };
+        // Offer the articulation toggle only where there is something to draw.
+        if matches!(scene, PreviewScene::Model) {
+            let counts = (model.sub_objects().len(), model.vhots().len());
+            if counts != (0, 0) {
+                self.articulation = Some(counts);
+            }
+        }
+        // No toggle means no way to turn it back off, so don't carry a hidden
+        // "on" over from the previous model. Keep `built_for` in step or the
+        // next frame rebuilds the scene for nothing.
+        if self.articulation.is_none() {
+            self.debug_articulation = false;
+            if let Some(built_for) = &mut self.built_for {
+                built_for.4 = false;
+            }
+        }
         match built {
             Ok(built) => {
                 self.scene = Some(built);

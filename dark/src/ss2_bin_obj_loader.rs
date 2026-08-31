@@ -969,8 +969,7 @@ pub struct SubObjectHeader {
     idx: u32,
     #[allow(dead_code)]
     parent_idx: i32,
-    #[allow(dead_code)]
-    name: String,
+    pub name: String,
     transform: Matrix4<f32>,
     #[allow(dead_code)]
     min_range: f32,
@@ -1238,6 +1237,41 @@ mod tests {
             polygons,
             sub_objects: Vec::new(),
         }
+    }
+
+    fn sub_object(name: &str, local: Vector3<f32>, child: i16, next: i16) -> SubObjectHeader {
+        SubObjectHeader {
+            idx: 0,
+            parent_idx: -1,
+            name: name.to_owned(),
+            transform: Matrix4::from_translation(local),
+            min_range: 0.0,
+            max_range: 0.0,
+            child_sub_obj_idx: child,
+            next_sub_obj_idx: next,
+            point_start: 0,
+            point_stop: 0,
+        }
+    }
+
+    /// A sub-object's authored transform is relative to its parent, so a pivot
+    /// is only right once the chain is composed - this is what
+    /// `Model::sub_objects` (which needs GL, hence the test at this level)
+    /// hands the articulation overlay.
+    #[test]
+    fn sub_object_transforms_compose_the_parent_chain() {
+        let mut mesh = mesh_with(vec![], vec![]);
+        mesh.sub_objects = vec![
+            sub_object("parent", vec3(1.0, 0.0, 0.0), 1, -1),
+            sub_object("child", vec3(0.0, 1.0, 0.0), -1, -1),
+        ];
+
+        let transforms = sub_object_transforms(&mesh);
+
+        assert_eq!(transforms[0].0, "parent");
+        assert_eq!(transforms[0].1.w.truncate(), vec3(1.0, 0.0, 0.0));
+        assert_eq!(transforms[1].0, "child");
+        assert_eq!(transforms[1].1.w.truncate(), vec3(1.0, 1.0, 0.0));
     }
 
     #[test]
