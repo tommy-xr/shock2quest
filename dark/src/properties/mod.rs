@@ -500,6 +500,13 @@ pub struct PropLocalPlayer {}
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropHUDSelect(pub bool);
 
+/// "ShowHP" ("Show HP?"): opt-in for the hit-point bar drawn above the
+/// selection brackets. Separate from [`PropHUDSelect`], which only gates the
+/// brackets themselves - the shipped data sets this on the creature families
+/// so loot and set dressing stay bar-less.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropShowHP(pub bool);
+
 /// "AI_Patrol": when true, the AI patrols a route of patrol-point objects
 /// chained by `Link::AIPatrol`, walking point to point while idle.
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
@@ -1515,6 +1522,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$HUDSelect",
             |reader, _len| read_bool(reader),
             PropHUDSelect,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ShowHP",
+            |reader, _len| read_bool(reader),
+            PropShowHP,
             accumulator::latest,
         ),
         define_prop(

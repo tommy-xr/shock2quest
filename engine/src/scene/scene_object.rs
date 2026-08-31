@@ -117,38 +117,55 @@ pub struct SceneObject {
 }
 
 impl SceneObject {
+    /// Places a unit quad at `position` with `size`, in screen pixels with the
+    /// origin at the top-left. Shared by every screen-space quad constructor so
+    /// they cannot drift apart on where a rect lands.
+    fn screen_space_quad_object(
+        material: Box<dyn Material>,
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+    ) -> SceneObject {
+        let xform = Matrix4::from_translation(vec3(position.x, position.y, 0.0))
+            * Matrix4::from_nonuniform_scale(size.x, size.y, 1.0)
+            * Matrix4::from_translation(vec3(0.5, 0.5, 0.0));
+        let mut ret = Self::new(material, Box::new(quad::create()));
+        ret.set_local_transform(xform);
+        ret
+    }
+
     pub fn screen_space_quad2(
         texture: Rc<dyn TextureTrait>,
         position: Vector2<f32>,
         size: Vector2<f32>,
         opacity: f32,
     ) -> SceneObject {
-        let mesh = quad::create();
         let material =
             materials::ScreenSpaceMaterial::create(texture, vec4(1.0, 1.0, 1.0, opacity));
-
-        let xform = Matrix4::from_translation(vec3(position.x, position.y, 0.0))
-            * Matrix4::from_nonuniform_scale(size.x, size.y, 1.0)
-            * Matrix4::from_translation(vec3(0.5, 0.5, 0.0));
-        let mut ret = Self::new(material, Box::new(mesh));
-        ret.set_local_transform(xform);
-        ret
+        Self::screen_space_quad_object(material, position, size)
     }
     pub fn screen_space_quad(
         texture: Rc<dyn TextureTrait>,
         position: Vector2<f32>,
         size: Vector2<f32>,
     ) -> SceneObject {
-        let mesh = quad::create();
         let material = materials::ScreenSpaceMaterial::create(texture, vec4(1.0, 1.0, 1.0, 1.0));
-
-        let xform = Matrix4::from_translation(vec3(position.x, position.y, 0.0))
-            * Matrix4::from_nonuniform_scale(size.x, size.y, 1.0)
-            * Matrix4::from_translation(vec3(0.5, 0.5, 0.0));
-        let mut ret = Self::new(material, Box::new(mesh));
-        ret.set_local_transform(xform);
-        ret
+        Self::screen_space_quad_object(material, position, size)
     }
+    /// A screen-space quad whose texture is *clipped* at `clip` (0..1) of its
+    /// width rather than scaled to it: the bitmap draws at `size` and
+    /// everything past `clip` is discarded. This is what a fill bar wants -
+    /// the artwork's right-hand border disappears as the bar drains instead of
+    /// sliding inwards.
+    pub fn screen_space_clipped_quad(
+        texture: Rc<dyn TextureTrait>,
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        clip: f32,
+    ) -> SceneObject {
+        let material = crate::scene::clipped_screen_material::create_screen_space(texture, clip);
+        Self::screen_space_quad_object(material, position, size)
+    }
+
     /// Glyph quads for `str` at `font_size`, laid out from `origin` as the
     /// **top-left of the line**, x growing right and y growing down.
     ///

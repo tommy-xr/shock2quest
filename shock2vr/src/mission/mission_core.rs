@@ -79,7 +79,7 @@ use crate::{
     game_scene::AmbientAudioState,
     game_scene::PlayerSavePoseError,
     gui::GuiManager,
-    hud::{draw_item_name, draw_item_outline, is_hud_selectable},
+    hud::{DamageFlash, draw_health_bar, draw_item_name, draw_item_outline, is_hud_selectable},
     input_context::{self, InputContext},
     interaction::{FlatInteraction, InteractionContext, PlayerInteraction, VrInteraction},
     inventory::PlayerInventoryEntity,
@@ -1887,6 +1887,7 @@ impl MissionCore {
         world.add_unique(crate::psi::ActivePsiPowers::default());
         world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
         world.add_unique(crate::scripts::radiation::ActiveRadiation::default());
+        world.add_unique(DamageFlash::default());
 
         // ** Entity creation
 
@@ -3512,6 +3513,7 @@ impl MissionCore {
                                         // palette index 0 (the magenta color
                                         // key only covers some of them).
                                         transparent_index_0: true,
+                                        ..Default::default()
                                     },
                                 ) {
                                     system = system
@@ -5312,6 +5314,23 @@ impl MissionCore {
                                     spatial: false,
                                 });
                             }
+                        }
+                        // Show the overlay on anything that just took damage -
+                        // this is the one applier every source of damage flows
+                        // through, so an AI burned by a fire or shot by a
+                        // turret flashes too, not only the player's own hits.
+                        // Narrowed to the bar's own opt-in, which the original
+                        // does not do: it keeps the map to creatures, and an
+                        // object with no bar to show has nothing to reveal.
+                        if entity_id != player_entity
+                            && hp < previous
+                            && crate::hud::shows_hit_points(&self.world, entity_id)
+                        {
+                            let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                            self.world
+                                .borrow::<UniqueViewMut<DamageFlash>>()
+                                .unwrap()
+                                .arm(entity_id, now);
                         }
                         if entity_id == player_entity && previous > 0 && hp == 0 {
                             for death_effect in self.begin_player_death() {
@@ -7902,6 +7921,15 @@ impl MissionCore {
         }
     }
 
+    /// Entities whose HUD overlay is still forced on by recent damage.
+    fn damage_flash_entities(&self) -> Vec<EntityId> {
+        let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+        self.world
+            .borrow::<UniqueViewMut<DamageFlash>>()
+            .map(|mut flash| flash.active(now))
+            .unwrap_or_default()
+    }
+
     pub fn render_per_eye(
         &mut self,
         asset_cache: &mut AssetCache,
@@ -7922,6 +7950,22 @@ impl MissionCore {
         // is most needed for exactly the fixtures the gate excludes - so the
         // debug overlay deliberately bypasses it.
         let mut highlighted = self.interaction.highlighted_entities();
+        // Recently-damaged creatures show the same overlay without being
+        // looked at, so a shot that lands off to the side still reads.
+        //
+        // Visibility is the load-bearing gate here, not decoration: the
+        // reticle pick is a raycast and so is always unoccluded and in front
+        // of the camera, but a damaged entity is any entity - one behind the
+        // player projects to a mirrored on-screen position, and one through a
+        // wall would advertise its health through the geometry.
+        for flashed in self.damage_flash_entities() {
+            if self.visibility_engine.is_visible(flashed) && !highlighted.contains(&flashed) {
+                highlighted.push(flashed);
+            }
+        }
+        // One gate for the whole overlay, applied to hover and damage alike,
+        // so an entity cannot acquire brackets by being shot that it could
+        // never get by being looked at.
         if !options.debug_show_ids {
             highlighted.retain(|e| is_hud_selectable(&self.world, *e));
         }
@@ -7944,6 +7988,16 @@ impl MissionCore {
                 projection,
                 screen_size,
                 options.debug_show_ids,
+            ));
+
+            ret.extend(draw_health_bar(
+                asset_cache,
+                &self.physics,
+                hit_entity,
+                &self.world,
+                view,
+                projection,
+                screen_size,
             ));
         }
 

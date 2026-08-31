@@ -5,8 +5,8 @@ use collision::{Aabb2, Aabb3};
 use dark::{
     importers::{FONT_IMPORTER, STRINGS_IMPORTER, TEXTURE_IMPORTER},
     properties::{
-        ObjectNameType, PropGunState, PropHUDSelect, PropHitPoints, PropLog, PropObjName,
-        PropObjectNameType, PropStackCount, PropTemplateId,
+        ObjectNameType, PropGunState, PropHUDSelect, PropHitPoints, PropLog, PropMaxHitPoints,
+        PropObjName, PropObjectNameType, PropShowHP, PropStackCount, PropTemplateId,
     },
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
@@ -36,6 +36,12 @@ pub(crate) fn is_hud_selectable(world: &World, entity_id: EntityId) -> bool {
 }
 
 const LOG_UNSET: u32 = 33;
+
+/// Side of each corner-bracket glyph, in screen pixels.
+const BRACKET_SIZE: f32 = 8.0;
+
+/// Line height of the rollover label, in screen pixels.
+const LABEL_HEIGHT: f32 = 10.0;
 
 fn resolve_localized_property_string(raw: &str, strings: &HashMap<String, String>) -> String {
     let (key, fallback) = match raw.split_once(':') {
@@ -230,13 +236,26 @@ pub fn draw_item_name(
         .map(|template_id| (template_id, entity_id.inner()));
     let text_content = format_hover_label(&item_name, hit_points, debug_identity);
 
+    // Above the rect, and lifted by a further bar-height only when this entity
+    // actually draws one - an ordinary item with no health bar keeps the label
+    // tight to its brackets rather than floating a gap above nothing.
+    //
+    // This position is ours, not the original's: there the rollover name is
+    // not anchored to the rect at all, but drawn in a fixed frame at the top
+    // centre of the screen, and the slot below the rect belongs to a separate
+    // "HUD Use" hint string ("Search container") that this port does not yet
+    // read. Keeping the name by the object is the interim.
+    let label_lift = match health_bar_fill(world, entity_id) {
+        Some(_) => HP_BAR_HEIGHT + LABEL_HEIGHT,
+        None => LABEL_HEIGHT,
+    };
     let text_obj_0_0 = SceneObject::screen_space_text(
         &text_content,
         font.clone(),
         10.0,
         0.5,
         extents.min.x,
-        extents.min.y - 10.0,
+        extents.min.y - label_lift,
     );
 
     vec![text_obj_0_0]
@@ -430,6 +449,72 @@ mod tests {
         );
     }
 
+    /// The bias means a full pool reads as exactly full and a creature on its
+    /// last point still shows a sliver, rather than a bar that vanishes one
+    /// hit before death.
+    #[test]
+    fn health_ratio_is_biased_at_both_ends() {
+        assert_eq!(health_bar_ratio(10, 10), 1.0);
+        assert_eq!(health_bar_ratio(1, 10), 0.25);
+        assert_eq!(health_bar_ratio(0, 10), 0.0);
+        assert_eq!(health_bar_ratio(-5, 10), 0.0);
+        assert_eq!(health_bar_ratio(10, 0), 0.0);
+    }
+
+    /// Colour steps in thirds and swaps outright - full health must not land
+    /// on a fourth, nonexistent bitmap.
+    #[test]
+    fn health_bar_bitmap_steps_in_thirds() {
+        assert_eq!(health_bar_texture(1.0), "HPBAR2.PCX");
+        assert_eq!(health_bar_texture(2.0 / 3.0), "HPBAR2.PCX");
+        assert_eq!(health_bar_texture(0.65), "HPBAR1.PCX");
+        assert_eq!(health_bar_texture(1.0 / 3.0), "HPBAR1.PCX");
+        assert_eq!(health_bar_texture(0.32), "HPBAR0.PCX");
+        assert_eq!(health_bar_texture(0.0), "HPBAR0.PCX");
+    }
+
+    /// `P$ShowHP` is the bar's own opt-in: brackets are not enough.
+    #[test]
+    fn health_bar_needs_its_own_opt_in() {
+        let mut world = World::new();
+        let id = world.add_entity(PropHUDSelect(true));
+        assert!(!shows_hit_points(&world, id));
+
+        world.add_component(id, PropShowHP(true));
+        assert!(shows_hit_points(&world, id));
+    }
+
+    /// The label's lift is driven by whether a bar is actually drawn, not by
+    /// the entity merely being a creature: an item with no bar keeps its label
+    /// tight to the brackets, and a corpse at zero hit points draws no bar and
+    /// so gets no gap either.
+    #[test]
+    fn only_an_entity_with_a_bar_reserves_the_strip_above_the_rect() {
+        let mut world = World::new();
+
+        let item = world.add_entity(PropHUDSelect(true));
+        assert_eq!(health_bar_fill(&world, item), None, "no ShowHP, no bar");
+
+        let creature = world.add_entity((
+            PropShowHP(true),
+            PropHitPoints { hit_points: 6 },
+            PropMaxHitPoints { hit_points: 12 },
+        ));
+        // Biased, like every other ratio here: (6+2)/(12+2).
+        assert_eq!(health_bar_fill(&world, creature), Some(8.0 / 14.0));
+
+        let corpse = world.add_entity((
+            PropShowHP(true),
+            PropHitPoints { hit_points: 0 },
+            PropMaxHitPoints { hit_points: 12 },
+        ));
+        assert_eq!(health_bar_fill(&world, corpse), None, "dead: no bar");
+
+        // Opted in but with no pool to read - nothing to draw.
+        let poolless = world.add_entity(PropShowHP(true));
+        assert_eq!(health_bar_fill(&world, poolless), None);
+    }
+
     #[test]
     fn decimal_placeholder_is_preserved_without_a_stack_count() {
         assert_eq!(
@@ -437,6 +522,120 @@ mod tests {
             r#"Nanites: "%d nanites.""#,
         );
     }
+}
+
+/// The original biases the health ratio by a couple of points at both ends, so
+/// a creature on its last hit point still shows a sliver of bar rather than
+/// nothing, and a full pool always reads as exactly full.
+const HP_BUFFER: f32 = 2.0;
+/// Three bar bitmaps, `HPBAR0` (red) through `HPBAR2` (green).
+const HP_BAR_COUNT: i32 = 3;
+/// Authored size of the bar bitmaps, in canvas pixels.
+const HP_BAR_WIDTH: f32 = 80.0;
+const HP_BAR_HEIGHT: f32 = 14.0;
+
+/// `0.0` when dead or when the pool is meaningless, `1.0` at full health.
+fn health_bar_ratio(hit_points: i32, max_hit_points: u32) -> f32 {
+    if hit_points <= 0 || max_hit_points == 0 {
+        return 0.0;
+    }
+    ((hit_points as f32 + HP_BUFFER) / (max_hit_points as f32 + HP_BUFFER)).clamp(0.0, 1.0)
+}
+
+/// Colour is quantized where width is not: the bar is one of three bitmaps
+/// chosen by which *third* of the ratio it falls in, and it swaps outright
+/// rather than blending, so red means "nearly dead" at a glance.
+fn health_bar_texture(ratio: f32) -> &'static str {
+    match ((ratio * HP_BAR_COUNT as f32) as i32).clamp(0, HP_BAR_COUNT - 1) {
+        0 => "HPBAR0.PCX",
+        1 => "HPBAR1.PCX",
+        _ => "HPBAR2.PCX",
+    }
+}
+
+/// Whether `entity_id` opts in to the health bar.
+///
+/// This is `P$ShowHP` ("Show HP?"), which is a *separate* opt-in from
+/// [`is_hud_selectable`]'s `P$HUDSelect`: the shipped data sets it on the
+/// creature families and leaves it off everything else, so a damageable crate
+/// draws brackets without advertising its hit points.
+pub(crate) fn shows_hit_points(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<PropShowHP>>()
+        .map(|v| v.get(entity_id).map(|p| p.0).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+fn hit_point_pool(world: &World, entity_id: EntityId) -> Option<(i32, u32)> {
+    let hit_points = world
+        .borrow::<View<PropHitPoints>>()
+        .ok()?
+        .get(entity_id)
+        .ok()?
+        .hit_points;
+    let max_hit_points = world
+        .borrow::<View<PropMaxHitPoints>>()
+        .ok()?
+        .get(entity_id)
+        .ok()?
+        .hit_points;
+    Some((hit_points, max_hit_points))
+}
+
+/// The bar's fill ratio when `entity_id` will draw one at all, else `None`.
+///
+/// The single answer to "is there a bar here?", so the label's offset in
+/// [`draw_item_name`] and the bar itself cannot disagree about whether the
+/// strip above the rect is occupied.
+fn health_bar_fill(world: &World, entity_id: EntityId) -> Option<f32> {
+    if !shows_hit_points(world, entity_id) {
+        return None;
+    }
+    let (hit_points, max_hit_points) = hit_point_pool(world, entity_id)?;
+    let ratio = health_bar_ratio(hit_points, max_hit_points);
+    (ratio > 0.0).then_some(ratio)
+}
+
+/// The enemy health bar, drawn flush on top of the selection brackets.
+pub fn draw_health_bar(
+    asset_cache: &mut AssetCache,
+    physics: &PhysicsWorld,
+    entity_id: EntityId,
+    world: &World,
+    view: Matrix4<f32>,
+    projection: Matrix4<f32>,
+    screen_size: Vector2<f32>,
+) -> Vec<SceneObject> {
+    let Some(ratio) = health_bar_fill(world, entity_id) else {
+        return vec![];
+    };
+
+    let Some(aabb) = physics.get_aabb2(entity_id) else {
+        return vec![];
+    };
+    let extents = project_aabb3(&aabb, view, projection, screen_size);
+
+    // Nearest sampling, unlike the rest of the HUD: the remastered bar art is
+    // several times the 80x14 it draws at and carries a pure colour-key border,
+    // so linear minification blends key into art and leaves a teal fringe along
+    // the bar's top and bottom edges that the shader's key test cannot catch.
+    let options = TextureOptions {
+        wrap: false,
+        filter: engine::texture::TextureFilter::Nearest,
+        ..Default::default()
+    };
+    let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, health_bar_texture(ratio), &options);
+
+    // Clipped, not scaled: the bar is drawn at its authored width and cut off
+    // at `ratio`, so a half-health bar is the left half of the artwork - the
+    // right-hand border vanishes rather than sliding in. Left-aligned to the
+    // rect and exactly one bar-height above it, sitting on the brackets.
+    vec![SceneObject::screen_space_clipped_quad(
+        texture,
+        vec2(extents.min.x, extents.min.y - HP_BAR_HEIGHT),
+        vec2(HP_BAR_WIDTH, HP_BAR_HEIGHT),
+        ratio,
+    )]
 }
 
 pub fn draw_item_outline(
@@ -465,7 +664,7 @@ pub fn draw_item_outline(
     let bottom_right_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK2.PCX", &options);
     let bottom_left_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK3.PCX", &options);
 
-    let size = vec2(8.0, 8.0);
+    let size = vec2(BRACKET_SIZE, BRACKET_SIZE);
     let extents = project_aabb3(&aabb, view, projection, screen_size);
     let top_left_brack_obj =
         SceneObject::screen_space_quad(top_left_brack, vec2(extents.min.x, extents.min.y), size);
