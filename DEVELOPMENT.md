@@ -229,6 +229,34 @@ reading pixels - see `tools/shock2-sdk/test/free-camera.e2e.test.ts`.
 
 **Note**: Cargo aliases (dr, dq, dv) work for desktop development but not for Android builds, which require the full cargo apk commands.
 
+##### Launcher icon
+
+`runtimes/oculus_runtime/res/mipmap/icon.png` is a neutral placeholder, on
+purpose: the obvious icon is SHODAN, and that art belongs to the game's
+rightsholders, so it is not committed here. Anyone who owns the game can swap in
+the 25th Anniversary portrait locally — it is a 1024x1024 BC7 texture with no
+logo or watermark, which is what makes it read at launcher-tile size. Run it
+from the repo root, with `DARK_ASSET_PATH` pointing at your install:
+
+```sh
+pip install texture2ddecoder pillow
+python3 - <<'EOF'
+import zipfile, os, texture2ddecoder
+from PIL import Image
+kpf = os.path.join(os.environ["DARK_ASSET_PATH"], "mods/sshock2ee.kpf")
+dds = zipfile.ZipFile(kpf).read("obj/txt16/ND-shodan.dds")
+W = H = 1024                                  # DX10 header is 20 bytes past the 128-byte DDS header
+px = texture2ddecoder.decode_bc7(dds[148:148 + W * H], W, H)
+im = Image.frombytes("RGBA", (W, H), px, "raw", "BGRA").convert("RGB")
+m = int(W * 0.05)                             # trim the framing so the face fills the tile
+im.crop((m, m, W - m, H - m)).resize((512, 512), Image.LANCZOS).save(
+    "runtimes/oculus_runtime/res/mipmap/icon.png", optimize=True)
+EOF
+```
+
+That leaves `res/mipmap/icon.png` modified in your working tree — keep it local,
+don't commit it.
+
 ##### Wireless deploy & logs (no cable)
 
 Everything in the Quest loop (`cargo apk run`, `adb install`, `adb logcat`) goes
