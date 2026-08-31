@@ -14,7 +14,7 @@
 
 use cgmath::{Deg, InnerSpace, Matrix4, SquareMatrix, Vector3, vec3};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, World};
 
 use dark::importers::FONT_IMPORTER;
 
@@ -99,7 +99,7 @@ pub(crate) fn popup_for(
     else {
         return None;
     };
-    if is_hit_box(world, target) {
+    if crate::creature::is_hit_box(world, target) {
         return None;
     }
 
@@ -113,13 +113,6 @@ pub(crate) fn popup_for(
         point: impact.point,
         spawned_at: sim_time,
     })
-}
-
-/// Whether an entity is one of a creature's hitbox proxies.
-fn is_hit_box(world: &World, entity_id: EntityId) -> bool {
-    world
-        .borrow::<View<crate::creature::RuntimePropHitBox>>()
-        .is_ok_and(|hit_boxes| hit_boxes.get(entity_id).is_ok())
 }
 
 /// Cap the buffer, oldest dropped first, so a firefight cannot grow it without

@@ -96,15 +96,37 @@ test(
       )}`,
     );
 
-    // ...and the creature is billed once per blow, through its hitbox - not
-    // once for the limb and again for the capsule it sits inside.
-    const onHitBox = damage.filter((message) => message.to.entity_id !== target.entity_id);
+    // ...and one swing is one blow: the cooldown is keyed on the creature, so
+    // sweeping through several limbs bills it once, not once per limb.
     assert.equal(
       onCreature.length,
-      onHitBox.length,
-      `each blow should arrive once, via a hitbox: ${JSON.stringify(
-        damage.map((d) => [d.to.entity_id, d.impact?.bone]),
+      1,
+      `one swing should bill the creature once: ${JSON.stringify(
+        onCreature.map((d) => [d.to.entity_id, d.impact?.bone]),
       )}`,
     );
+  },
+);
+
+test(
+  "an authored corpse has no hitboxes, and is still struck on its collider",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 20 });
+
+    // A corpse carries PropCreature - so its creature *definition* maps
+    // hitboxes - but is never animated, so it has none. Reading the definition
+    // instead of the live proxies made every corpse in the game silent and
+    // unhittable to a swing.
+    const corpse = (await game.entities.list()).entities
+      .filter((entity) => entity.name === "MS Male Corpse")
+      .sort((a, b) => a.distance - b.distance)[0];
+    assert.ok(corpse, "expected a corpse in medsci1");
+    const detail = await game.entities.detail(corpse.id);
+    assert.equal((detail.aim_points ?? []).length, 0, "a posed corpse has no hitbox proxies");
   },
 );

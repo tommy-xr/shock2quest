@@ -129,12 +129,22 @@ impl Script for HeldMeleeWeapon {
             MessagePayload::Collided { with, contact } => {
                 // A creature is struck through its hitboxes: the contact
                 // arrives from the limb proxy, and the *creature* is what owns
-                // the receptrons, the material and the velocity. The capsule
-                // around a creature that has hitboxes is ignored, or a single
-                // swing would be billed twice - once on the limb it hit and
-                // once on the cylinder it was inside.
+                // the receptrons, the material and the velocity.
+                //
+                // The capsule contact of that same swing is dropped so the
+                // blow is attributed to the limb rather than to the cylinder
+                // around it - whichever of the two the frame dispatched first.
+                // (It is not what stops double billing: the cooldown, keyed on
+                // the creature, already does that.) Only when a limb contact
+                // is actually on offer: a creature with no live proxies - an
+                // authored corpse carries `PropCreature` but is never animated
+                // - keeps being hit, and heard, on its capsule.
                 let owner = crate::util::resolve_proxy_entity(world, *with);
-                if owner == *with && has_hit_boxes(world, *with) {
+                let is_capsule_contact = owner == *with;
+                if is_capsule_contact
+                    && self.is_held(world, entity_id)
+                    && crate::creature::has_live_hit_boxes(world, owner)
+                {
                     return Effect::NoEffect;
                 }
 
@@ -177,6 +187,16 @@ impl Script for HeldMeleeWeapon {
 }
 
 impl HeldMeleeWeapon {
+    /// Whether this weapon is in the player's hand. Only a held weapon reaches
+    /// a creature's hitboxes, so only a held weapon has a limb contact to
+    /// prefer over its capsule; a wrench lying on the floor keeps clattering
+    /// when a creature walks into it.
+    fn is_held(&self, world: &World, entity_id: EntityId) -> bool {
+        world
+            .borrow::<View<crate::runtime_props::RuntimePropVrGripOffset>>()
+            .is_ok_and(|grips| grips.get(entity_id).is_ok())
+    }
+
     /// Whether this contact opens a hit: the weapon was actually moving at
     /// contact, and this victim has not just been billed. The short cooldown
     /// is what makes a swing a *swing* - without it a weapon left leaning on
@@ -241,15 +261,6 @@ impl HeldMeleeWeapon {
             .insert(with, IMPACT_SOUND_COOLDOWN_SECONDS);
         true
     }
-}
-
-/// Whether a creature carries per-joint hitboxes, i.e. whether a blow on it
-/// arrives through a limb proxy. Read from the creature definition rather than
-/// the live proxy table: the answer is the same, and a script has the world
-/// but not the mission's hitbox manager.
-fn has_hit_boxes(world: &World, entity_id: EntityId) -> bool {
-    crate::creature::get_entity_creature(world, entity_id)
-        .is_some_and(|creature| creature.has_hit_boxes())
 }
 
 fn is_vr(world: &World) -> bool {

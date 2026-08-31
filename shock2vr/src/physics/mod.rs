@@ -1996,7 +1996,11 @@ impl CollisionGroup {
     /// shoved the weapon out of the swing (or the creature off its feet) would
     /// be a physics body, which the actor capsule already is.
     pub fn hitbox() -> CollisionGroup {
-        let collision = InteractionGroups {
+        // `solid` mirrors these into the solver groups, which resolves to
+        // nothing anyway: no group filters on `HITBOX`, and `held_melee`'s
+        // solver filter deliberately excludes it - so a limb never shoves the
+        // weapon that struck it.
+        Self::solid(InteractionGroups {
             memberships: (InternalCollisionGroups::HITBOX.bits
                 | InternalCollisionGroups::RAYCAST.bits)
                 .into(),
@@ -2004,13 +2008,7 @@ impl CollisionGroup {
                 | InternalCollisionGroups::HELD_MELEE.bits)
                 .into(),
             test_mode: Default::default(),
-        };
-        let solver = InteractionGroups {
-            memberships: InternalCollisionGroups::HITBOX.bits.into(),
-            filter: InternalCollisionGroups::empty().bits.into(),
-            test_mode: Default::default(),
-        };
-        CollisionGroup { collision, solver }
+        })
     }
 
     pub fn ui() -> CollisionGroup {
