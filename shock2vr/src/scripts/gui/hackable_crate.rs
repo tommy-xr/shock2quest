@@ -35,8 +35,8 @@ use crate::scripts::Effect;
 
 use super::container::{ContainerGui, ContainerGuiMsg, ContainerGuiState};
 use super::keypad::{
-    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
-    handle_hack_msg, object_state,
+    HackPhase, HackState, HackTerms, KeyPadMsg, draw_hack_board, hack_diff, handle_hack_msg,
+    object_state,
 };
 
 /// The ICE Pick's authored script name (`P$Scripts` on gamesys template -73).
@@ -196,7 +196,8 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
                     &state.hack,
                     hack_msg,
                     diff,
-                    HackOutcomeEffects {
+                    HackTerms {
+                        skill_bonus: 0,
                         success: crate_hack_success,
                         critical_failure: crate_hack_critical_failure,
                     },
@@ -412,7 +413,7 @@ mod tests {
     }
 
     /// Playing the winning node through the real `handle_msg` path opens the
-    /// crate persistently. This drives the actual `HackOutcomeEffects` wiring,
+    /// crate persistently. This drives the actual `HackTerms` wiring,
     /// so swapping the success and critical-failure handlers fails it.
     #[test]
     fn winning_the_board_persistently_opens_the_crate() {

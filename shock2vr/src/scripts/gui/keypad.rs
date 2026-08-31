@@ -175,15 +175,21 @@ fn roll_succeeds(roll: i32, chance: i32) -> bool {
     roll < chance
 }
 
-fn effective_hack_values(world: &World, diff: PropHackDiff) -> (i32, i32) {
+/// The success chance and mine count this player faces on this object, with
+/// the gamesys-authored skill/stat bonuses applied. `skill_bonus` is the
+/// object's own contribution to the hacker's effective skill.
+fn effective_hack_values(world: &World, diff: PropHackDiff, skill_bonus: i32) -> (i32, i32) {
     let (skill, stat) = world
         .borrow::<UniqueView<QuestInfo>>()
         .ok()
         .map(|quest| {
             let stats = quest.player_stats();
-            (stats.skill_level(Skill::Hack), stats.cyber_affinity)
+            (
+                stats.skill_level(Skill::Hack) + skill_bonus,
+                stats.cyber_affinity,
+            )
         })
-        .unwrap_or((0, 0));
+        .unwrap_or((skill_bonus, 0));
     world
         .borrow::<UniqueView<GlobalHrmParams>>()
         .ok()
@@ -383,7 +389,11 @@ where
     components
 }
 
-pub(crate) struct HackOutcomeEffects {
+/// The terms one object is hacked on: the per-object skill bonus it grants
+/// (retail's Security O/S trait is worth +2 Hack at a security console, and
+/// nowhere else) plus what winning and critically failing do to it.
+pub(crate) struct HackTerms {
+    pub(crate) skill_bonus: i32,
     pub(crate) success: fn(EntityId, &World) -> Effect,
     pub(crate) critical_failure: fn(EntityId, &World) -> Effect,
 }
@@ -394,7 +404,7 @@ pub(crate) fn handle_hack_msg(
     state: &HackState,
     msg: &KeyPadMsg,
     diff: PropHackDiff,
-    outcomes: HackOutcomeEffects,
+    terms: HackTerms,
 ) -> (HackState, Effect) {
     let mut new_state = state.clone();
     match msg {
@@ -412,7 +422,7 @@ pub(crate) fn handle_hack_msg(
                     },
                 );
             };
-            let (_, mine_count) = effective_hack_values(world, diff);
+            let (_, mine_count) = effective_hack_values(world, diff, terms.skill_bonus);
             let mut rng_state = hack_seed(world, entity_id);
             tracing::debug!(entity = entity_id.inner(), rng_state, "HRM rng seed");
             let nodes = board_with_mines(mine_count, &mut rng_state);
@@ -464,7 +474,7 @@ pub(crate) fn handle_hack_msg(
                 rng_state = new_state.rng_state,
                 "HRM rng outcome"
             );
-            let (chance, _) = effective_hack_values(world, diff);
+            let (chance, _) = effective_hack_values(world, diff, terms.skill_bonus);
             if roll_succeeds(roll, chance) {
                 new_state.nodes[index] = HackNode::Lit;
                 if has_connected_three(&new_state.nodes) {
@@ -472,7 +482,7 @@ pub(crate) fn handle_hack_msg(
                     return (
                         new_state,
                         Effect::combine(vec![
-                            (outcomes.success)(entity_id, world),
+                            (terms.success)(entity_id, world),
                             Effect::PlaySound {
                                 handle: AudioHandle::new(),
                                 source: Some(entity_id),
@@ -487,7 +497,7 @@ pub(crate) fn handle_hack_msg(
                 return (
                     new_state,
                     Effect::combine(vec![
-                        (outcomes.critical_failure)(entity_id, world),
+                        (terms.critical_failure)(entity_id, world),
                         Effect::PlaySound {
                             handle: AudioHandle::new(),
                             source: Some(entity_id),
@@ -670,7 +680,8 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
                 &state.hack,
                 msg,
                 hack_diff,
-                HackOutcomeEffects {
+                HackTerms {
+                    skill_bonus: 0,
                     success: keypad_hack_success,
                     critical_failure: keypad_hack_critical_failure,
                 },
@@ -877,7 +888,8 @@ mod tests {
             &state,
             &KeyPadMsg::StartHack,
             diff,
-            HackOutcomeEffects {
+            HackTerms {
+                skill_bonus: 0,
                 success: keypad_hack_success,
                 critical_failure: keypad_hack_critical_failure,
             },

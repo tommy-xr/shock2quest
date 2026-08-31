@@ -8,8 +8,10 @@ mod map;
 mod media;
 mod replicator;
 mod research;
+mod security_computer;
 mod trainer;
 mod traits;
+mod turret_hack;
 
 pub use computer::*;
 pub use container::*;
@@ -21,5 +23,7 @@ pub use map::*;
 pub use media::*;
 pub use replicator::*;
 pub use research::*;
+pub use security_computer::*;
 pub use trainer::*;
 pub use traits::*;
+pub use turret_hack::*;

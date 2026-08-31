@@ -283,6 +283,18 @@ pub struct PropMapText(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropHackText(pub String);
 
+/// How long a successful hack of this object stays in effect, in
+/// milliseconds. The security console authors 120000 - the same two minutes
+/// its level's security ecology takes to recover from an alert.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropHackTime(pub i32);
+
+impl PropHackTime {
+    pub fn seconds(&self) -> f32 {
+        self.0 as f32 / 1000.0
+    }
+}
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropMapObjIcon(pub String);
 
@@ -1510,6 +1522,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$HackText",
             read_variable_length_string,
             PropHackText,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$HackTime",
+            |reader, _len| read_i32(reader),
+            PropHackTime,
             accumulator::latest,
         ),
         define_prop(

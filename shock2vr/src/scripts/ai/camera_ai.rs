@@ -446,14 +446,17 @@ impl Script for CameraAI {
             // The +90 offset aligns with how the debug visualization works
             let effective_heading = Deg(self.state.view_angle + 90.0);
 
-            // Check visibility with FOV constraint
-            is_visible = ai_util::is_player_visible_in_fov(
-                entity_id,
-                world,
-                physics,
-                effective_heading,
-                CAMERA_FOV_HALF_ANGLE,
-            );
+            // Check visibility with FOV constraint. A hacked security console
+            // blinds the level's cameras for its window - the camera keeps
+            // scanning, it just cannot pick the player out.
+            is_visible = !crate::security_alarm::cameras_are_blind(world)
+                && ai_util::is_player_visible_in_fov(
+                    entity_id,
+                    world,
+                    physics,
+                    effective_heading,
+                    CAMERA_FOV_HALF_ANGLE,
+                );
 
             if is_visible {
                 let v_pos = world.borrow::<View<PropPosition>>().unwrap();

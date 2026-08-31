@@ -6,6 +6,12 @@ import type { UiElement, UiPanel } from "../src/types.js";
 import { carriedNaniteTotal } from "./helpers/nanites.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { clickUiElement } from "./helpers/ui.js";
+import {
+  activePanel,
+  button,
+  hasTexture,
+  playHackBoardToWin,
+} from "./helpers/hack.js";
 
 // End-to-end coverage for hydro1's security crates (#811): the `HackableCrate`
 // archetype was an UnimplementedScript, so the crates were inert props and
@@ -29,30 +35,8 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const CLIP_CRATE = 325; // Contains -> Small HE Clip
 const BIG_NANITE_PILE = -1591;
 
-function button(panel: UiPanel, label: string): UiElement {
-  const found = panel.elements.find(
-    (element) => element.kind === "button" && element.label === label,
-  );
-  assert.ok(
-    found,
-    `panel should expose button ${label} (got ${JSON.stringify(
-      panel.elements.map((e) => e.label ?? e.texture),
-    )})`,
-  );
-  return found;
-}
 
-function hasTexture(panel: UiPanel, texture: string): boolean {
-  return panel.elements.some(
-    (element) => element.texture?.toLowerCase() === texture,
-  );
-}
 
-async function activePanel(game: GameServer): Promise<UiPanel> {
-  const panel = (await game.ui.state()).active_panel;
-  assert.ok(panel, "the crate interaction should keep an MFD panel open");
-  return panel;
-}
 
 /** Stand next to a crate and frob it through the normal squeeze path. */
 async function frobCrate(game: GameServer, crateId: number): Promise<void> {
@@ -66,69 +50,6 @@ async function frobCrate(game: GameServer, crateId: number): Promise<void> {
 async function containsLinks(game: GameServer, entityId: number) {
   const detail = await game.entities.detail(entityId);
   return detail.outgoing_links.filter((l) => l.link_type.startsWith("Contains"));
-}
-
-/**
- * Genuinely play the shared HRM board until the crate opens: START (charging
- * the authored cost), then light nodes toward a connected three, re-dealing a
- * board that burned itself out. No direct success message and no assumption
- * that any one roll must land. Winning flips the panel straight to the crate's
- * loot face, which is what this returns.
- */
-async function playHackBoardToWin(game: GameServer): Promise<UiPanel> {
-  const routes = [
-    ["node-2-0", "node-3-0", "node-4-0"],
-    ["node-2-1", "node-2-2", "node-2-3"],
-    ["node-0-1", "node-0-2", "node-0-3"],
-    ["node-4-0", "node-4-1", "node-4-2"],
-    ["node-0-3", "node-1-3", "node-2-3"],
-  ];
-  for (let attempt = 0; attempt < 15; attempt += 1) {
-    let panel = await activePanel(game);
-    if (hasTexture(panel, "contain.pcx")) return panel;
-    // A ruined crate is terminal - fail loudly rather than spin.
-    assert.ok(
-      !hasTexture(panel, "loseh.pcx"),
-      "a critical failure ruined the crate; max Hack skill should leave no mines",
-    );
-
-    // Deal a board only when one is not already in play - the caller's paid
-    // START must not be thrown away by an immediate RESET. A burned-out board
-    // is re-dealt with RESET, which charges the authored cost again, exactly
-    // as retail does.
-    const inPlay = panel.elements.some(
-      (element) => element.label === "reset-hack",
-    );
-    const burnedOut = hasTexture(panel, "failh.pcx");
-    if (!inPlay || burnedOut) {
-      const deal = panel.elements.find(
-        (element) =>
-          element.label === "start-hack" || element.label === "reset-hack",
-      );
-      assert.ok(deal, "an unwon board should offer START/RESET");
-      await clickUiElement(game, deal);
-      assert.ok(
-        !hasTexture(await activePanel(game), "payh.pcx"),
-        "the test wallet should always cover the authored hack cost",
-      );
-    }
-
-    for (const label of routes[attempt % routes.length]) {
-      panel = await activePanel(game);
-      if (hasTexture(panel, "contain.pcx")) return panel;
-      if (hasTexture(panel, "failh.pcx") || hasTexture(panel, "loseh.pcx")) break;
-      await clickUiElement(game, button(panel, label));
-    }
-  }
-  const final = await activePanel(game);
-  assert.fail(
-    `the HRM board should open the crate within the attempt budget; rng=${game
-      .logs()
-      .filter((line) => line.includes("HRM rng"))
-      .slice(-6)
-      .join(" | ")}`,
-  );
-  return final;
 }
 
 test(
@@ -202,7 +123,7 @@ test(
     );
     // --- KEY: connecting three nodes opens the crate, and the panel turns
     // into the ordinary loot MFD showing the authored contents. ---
-    const loot = await playHackBoardToWin(game);
+    const loot = await playHackBoardToWin(game, (panel) => hasTexture(panel, "contain.pcx"));
     assert.ok(
       hasTexture(loot, "contain.pcx"),
       "a won hack should turn the crate into the normal loot MFD",

@@ -790,6 +790,11 @@ export interface UiState {
    * when the HUD shows its badge and countdown.
    */
   security_alarm: UiSecurityAlarm | null;
+  /**
+   * Seconds left on a hacked security console's window, during which the
+   * level's cameras cannot see the player. Zero when they can.
+   */
+  security_cameras_blind_seconds: number;
 }
 
 /** The station security alarm as the HUD presents it. */

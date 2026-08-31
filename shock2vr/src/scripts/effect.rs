@@ -3,8 +3,8 @@ use dark::{
     EnvSoundQuery,
     motion::{MotionQueryItem, MotionQuerySelectionStrategy},
     properties::{
-        AIAlertLevel, AIMode, KeyCard, ObjectState, PropGunState, PropReplicatorHackedContents,
-        QuestBitValue, TeleportSource,
+        AIAlertLevel, AIMode, AITeam, KeyCard, ObjectState, PropGunState,
+        PropReplicatorHackedContents, QuestBitValue, TeleportSource,
     },
 };
 use engine::audio::AudioHandle;
@@ -599,6 +599,11 @@ pub enum Effect {
     ClearSecurityAlarm {
         from: EntityId,
     },
+    /// Hide the player from every security camera on the level for `seconds`
+    /// - what a hacked security console buys. Raising an alarm cancels it.
+    BlindSecurityCameras {
+        seconds: f32,
+    },
     SetPosition {
         entity_id: EntityId,
         position: Vector3<f32>,
@@ -669,6 +674,14 @@ pub enum Effect {
     SetObjectState {
         entity_id: EntityId,
         state: ObjectState,
+    },
+
+    /// Persistently set Dark's `P$AI_Team` on one live AI. A hacked turret
+    /// joins the player's team, which is what its targeting reads. ObjState is
+    /// deliberately untouched: a hacked turret stays a working turret.
+    SetAITeam {
+        entity_id: EntityId,
+        team: AITeam,
     },
 
     /// Turn one authored particle group (`P$ParticleG`) on or off - e.g. the

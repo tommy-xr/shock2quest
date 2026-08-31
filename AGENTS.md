@@ -464,7 +464,7 @@ For debugging visual/rendering changes without a full interactive session:
    | Scene                    | Purpose                                      |
    | ------------------------ | -------------------------------------------- |
    | `debug_camera`           | Test security camera AI behavior             |
-   | `debug_turret`           | Test turret AI and targeting                 |
+   | `debug_turret`           | Turret AI, team targeting, and turret hacking (a live hostile stands in its arc) |
    | `debug_ragdoll`          | Test ragdoll physics                         |
    | `debug_hitbox`           | View fitted hitbox shapes vs ragdoll colliders across poses |
    | `debug_gloves`           | Test VR hand/glove rendering                 |

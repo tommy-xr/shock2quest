@@ -17,8 +17,8 @@ use crate::{
 };
 
 use super::keypad::{
-    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
-    handle_hack_msg, object_state,
+    HackPhase, HackState, HackTerms, KeyPadMsg, draw_hack_board, hack_diff, handle_hack_msg,
+    object_state,
 };
 
 const FALLBACK_HACK_TEXT: &str = "Complete the circuit to hack this computer.";
@@ -208,6 +208,45 @@ fn wrap_hack_text(text: &str) -> Vec<String> {
     lines
 }
 
+/// The HRM board a computer-style console shows: the shared board plus the
+/// object's own authored instructions above it. Every console that hacks this
+/// way draws it, so none of them can drift from the others.
+pub(crate) fn hack_board_with_instructions<TMsg, F>(
+    entity_id: EntityId,
+    world: &World,
+    hack: &HackState,
+    wrap: F,
+) -> Vec<GuiComponent<TMsg>>
+where
+    TMsg: Clone,
+    F: Fn(KeyPadMsg) -> TMsg + Copy,
+{
+    let Some(diff) = hack_diff(world, entity_id) else {
+        return Vec::new();
+    };
+    let mut components = draw_hack_board(hack, diff, wrap);
+    for (line, text) in wrap_hack_text(&authored_hack_text(world, entity_id))
+        .into_iter()
+        .take(3)
+        .enumerate()
+    {
+        components.push(
+            crate::gui::text(&text)
+                .with_position(vec2(15.0, 10.0 + line as f32 * 11.0))
+                .with_size(vec2(158.0, 11.0)),
+        );
+    }
+    components
+}
+
+/// The console board's canvas, shared by every computer-style hack panel.
+pub(crate) fn hack_board_config() -> GuiConfig {
+    GuiConfig {
+        world_offset: Vector3::new(0.0, 0.0, -1.0),
+        screen_size_in_pixels: Vector2::new(188.0, 296.0),
+    }
+}
+
 impl Gui<ComputerState, ComputerMsg> for ComputerGui {
     fn get_components(
         &self,
@@ -216,29 +255,11 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
         world: &World,
         state: &ComputerState,
     ) -> Vec<GuiComponent<ComputerMsg>> {
-        let Some(diff) = hack_diff(world, entity_id) else {
-            return Vec::new();
-        };
-        let mut components = draw_hack_board(&state.hack, diff, ComputerMsg::Hack);
-        for (line, text) in wrap_hack_text(&authored_hack_text(world, entity_id))
-            .into_iter()
-            .take(3)
-            .enumerate()
-        {
-            components.push(
-                crate::gui::text(&text)
-                    .with_position(vec2(15.0, 10.0 + line as f32 * 11.0))
-                    .with_size(vec2(158.0, 11.0)),
-            );
-        }
-        components
+        hack_board_with_instructions(entity_id, world, &state.hack, ComputerMsg::Hack)
     }
 
     fn get_config(&self) -> GuiConfig {
-        GuiConfig {
-            world_offset: Vector3::new(0.0, 0.0, -1.0),
-            screen_size_in_pixels: Vector2::new(188.0, 296.0),
-        }
+        hack_board_config()
     }
 
     fn handle_msg(
@@ -258,7 +279,8 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
             &state.hack,
             msg,
             diff,
-            HackOutcomeEffects {
+            HackTerms {
+                skill_bonus: 0,
                 success: computer_hack_success,
                 critical_failure: computer_hack_critical_failure,
             },

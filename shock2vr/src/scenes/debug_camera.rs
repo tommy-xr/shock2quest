@@ -1,6 +1,8 @@
 use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, point3, vec3};
 use dark::SCALE_FACTOR;
-use dark::properties::{Link, Links, PropEcology, ToLink, WrappedEntityId};
+use dark::properties::{
+    Link, Links, PropEcology, PropHackDiff, PropHackTime, ToLink, WrappedEntityId,
+};
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use shipyard::EntityId;
 use tracing::info;
@@ -128,6 +130,20 @@ impl DebugCameraScene {
                 CreateEntityOptions::default(),
             )
             .entity_id;
+        // Debug scenes instantiate a template's scripts and model, not its
+        // authored property set, so the console's hack terms are given here -
+        // the gamesys numbers for `Security Comp`, including the 120 s window
+        // (`P$HackTime`, in milliseconds) a win blinds the cameras for.
+        core.world.add_component(
+            console_entity,
+            PropHackDiff {
+                success_chance: 20,
+                critical_chance: 10,
+                cost: 3.0,
+            },
+        );
+        core.world
+            .add_component(console_entity, PropHackTime(120_000));
         info!("Spawned debug security computer entity {console_entity:?}");
 
         // Equip the player with the psi amp on the first update (same
