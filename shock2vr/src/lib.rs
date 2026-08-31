@@ -1950,8 +1950,16 @@ impl Game {
     /// stand-in chaining into another keeps what the first captured - the empty
     /// world it would capture now is exactly what must not win.
     fn show_over_mission(&mut self, scene: Option<Box<dyn GameScene>>, follow_on: GlobalEffect) {
-        // Any pending transition is abandoned, as for the frontend swaps.
-        self.pending_transition = None;
+        // The same refusal `begin_transition` makes, for the same reason: with a
+        // transition in flight the active scene is the loading screen, and
+        // saving *that* as the outgoing state wipes quest bits, held items and
+        // vitals. Nothing in-game can reach this (the loading scene runs no
+        // scripts), but an external caller can, so refuse rather than corrupt -
+        // the transition already under way is what the player is waiting for.
+        if self.pending_transition.is_some() {
+            warn!("Ignoring a scene standing in for the mission: a level transition is in flight");
+            return;
+        }
         let preserved = match self.preserved_scene_state.take() {
             Some(carried) => carried,
             None => self.save_active_scene(),

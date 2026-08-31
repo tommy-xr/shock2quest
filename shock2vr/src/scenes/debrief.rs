@@ -153,7 +153,10 @@ impl DebriefScene {
             if line.is_empty() {
                 continue;
             }
-            canvas.text_native(
+            // `_fit` rather than plain `text_native`: the wrap already keeps
+            // rows inside the column, so this only catches a single word wider
+            // than the panel, which would otherwise run across the backdrop art.
+            canvas.text_native_fit(
                 Rect::new(TEXT_RECT.x, y, TEXT_RECT.w, BODY_LINE_H),
                 line,
                 BODY_FONT,
