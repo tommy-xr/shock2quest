@@ -1016,20 +1016,27 @@ fn create_physics_representation_with_options(
 
     let min_size = 0.5 / SCALE_FACTOR;
     let min_size_vec = vec3(min_size, min_size, min_size);
+    // Model bounds in world units: the mesh is drawn at `PropScale`, so both the
+    // size and the centre of a box that stands in for it take that scale. The
+    // render bakes the scale's absolute value (see `create_model`), so a
+    // mirrored model keeps its box on the same side as its mesh.
+    let model_scale = vec3(
+        model_scale.x.abs(),
+        model_scale.y.abs(),
+        model_scale.z.abs(),
+    );
     let model_bounds = maybe_model.as_ref().and_then(|model| model.bounding_box());
     let dimensions = model_bounds
         .map(|bbox| bbox.dim())
         .unwrap_or(default_size_vec);
     let abs_dimensions = vec3(
-        dimensions.x.abs().max(min_size_vec.x),
-        dimensions.y.abs().max(min_size_vec.y),
-        dimensions.z.abs().max(min_size_vec.z),
+        (dimensions.x * model_scale.x).abs().max(min_size_vec.x),
+        (dimensions.y * model_scale.y).abs().max(min_size_vec.y),
+        (dimensions.z * model_scale.z).abs().max(min_size_vec.z),
     );
     // Model bounds are not centred on the object's origin - a skinned corpse
-    // lies away from its root joint - so the selection box has to be carried
-    // to the bounds' centre, or it covers empty space beside the mesh. The
-    // centre follows the model's own scale (which `abs_dimensions` above has
-    // never applied) so a scaled mesh keeps its box.
+    // lies away from its root joint - so the selection box has to be carried to
+    // the bounds' centre, or it covers empty space beside the mesh.
     let model_bounds_center = model_bounds
         .map(|bbox| {
             let center = bbox.center().to_vec();
@@ -1058,7 +1065,10 @@ fn create_physics_representation_with_options(
     // every load. Preserve the live creature's dynamic capsule geometry and
     // material, place it at the exact saved transform, then start it asleep.
     // The corpse group keeps it on the world and selectable for looting without
-    // leaving a player-blocking creature capsule behind.
+    // leaving a player-blocking creature capsule behind. This capsule is also
+    // why a death pose needs no model bounds: it is posed at draw time from an
+    // `AnimationPlayer`, which bakes no bounds, so it would otherwise fall
+    // through to the rest-pose box below.
     if v_death_pose.get(entity_id).is_ok() {
         if let (Ok(pos), Ok(creature_type)) = (v_pos.get(entity_id), v_creature.get(entity_id)) {
             let creature_def = get_creature_definition(creature_type.0).unwrap();
@@ -2003,6 +2013,41 @@ mod tests {
         entity_id
     }
 
+    /// The mesh is drawn at `PropScale`, so its stand-in box takes that scale -
+    /// in both size and placement, and by the scale's absolute value, which is
+    /// what the render bakes (a mirrored model must not have its box flipped to
+    /// the other side of the object).
+    #[test]
+    fn a_frob_collider_takes_the_models_scale() {
+        for scale in [vec3(2.0, 2.0, 2.0), vec3(-2.0, 2.0, 2.0)] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity_id = add_wall_fixture(&mut world, None);
+            world.add_component(entity_id, PropScale(scale));
+            let model = Model::from_glb(
+                vec![],
+                Aabb3::new(Point3::new(2.0, -0.5, -0.5), Point3::new(4.0, 0.5, 0.5)),
+                None,
+            );
+
+            create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+                .expect("a frobbable fixture should always get a frob collider");
+
+            let aabb = physics
+                .get_aabb2(entity_id)
+                .expect("the frob collider has bounds");
+            let center = aabb.min + (aabb.max - aabb.min) / 2.0;
+            assert!(
+                (center.x - 6.0).abs() < 0.01,
+                "scale {scale:?}: the box should sit at the scaled bounds centre, got {center:?}"
+            );
+            assert!(
+                ((aabb.max.x - aabb.min.x) - 4.0).abs() < 0.01,
+                "scale {scale:?}: the box should be the scaled bounds size, got {aabb:?}"
+            );
+        }
+    }
+
     /// An authored corpse is a posed creature: it inherits a `PhysType`, so the
     /// #801 guard below does not fire, but its selection box is now the whole
     /// body - solid, it would fence off the floor around every body in the
@@ -2037,14 +2082,17 @@ mod tests {
             !physics.collider_blocks_actor(handle),
             "a corpse's frob box must not block actors"
         );
-        let bodies = physics.debug_list_bodies();
+        let body = physics
+            .debug_list_bodies()
+            .into_iter()
+            .find(|body| body.entity_id == Some(entity_id.inner() as i32))
+            .expect("the corpse's body should be listed");
         assert!(
-            bodies[0]
-                .collision_groups
+            body.collision_groups
                 .iter()
                 .any(|g| g == "entity" || g == "selectable"),
             "the corpse must stay selectable, got {:?}",
-            bodies[0].collision_groups
+            body.collision_groups
         );
     }
 
