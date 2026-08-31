@@ -262,6 +262,10 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.wants_pointer()
     }
 
+    fn hand_is_empty(&self, hand: crate::vr_config::Handedness) -> bool {
+        self.mission_core.hand_is_empty(hand)
+    }
+
     fn player_is_crouched(&self) -> bool {
         self.mission_core.player_is_crouched()
     }

@@ -123,9 +123,11 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
 
 /// Where `Effect::RainItems` puts its spawns: a ring of this radius, this far
-/// above the player's feet. Wide enough that neighbours do not start
-/// interpenetrating (which the solver resolves by flinging them apart), low
-/// enough to stay under an ordinary ceiling.
+/// above the player's origin - both in **world** units, not the pre-scale SS2
+/// units the neighbouring spawn handlers divide by `SCALE_FACTOR`. Wide enough
+/// that neighbours do not start interpenetrating (which the solver resolves by
+/// flinging them apart), low enough to stay under an ordinary ceiling. A spawn
+/// that still lands inside geometry is simply ejected by the solver.
 const RAIN_RADIUS: f32 = 0.8;
 const RAIN_HEIGHT: f32 = 2.5;
 
@@ -7584,7 +7586,7 @@ impl MissionCore {
                     // (which would fling them apart), and high enough that
                     // they visibly fall. Deterministic, not random - a capture
                     // or an e2e assertion must be able to repeat the layout.
-                    let count = template_ids.len().max(1) as f32;
+                    let count = template_ids.len() as f32;
                     for (index, template_id) in template_ids.iter().enumerate() {
                         let angle = std::f32::consts::TAU * index as f32 / count;
                         let offset = vec3(
@@ -8757,6 +8759,19 @@ impl MissionCore {
 
     /// Actual crouch state of the player collider (stand-up can be refused
     /// for lack of headroom, so this can lag the crouch input).
+    /// Whether the given VR hand is holding nothing. See
+    /// [`crate::game_scene::GameScene::hand_is_empty`]; inherent so the
+    /// `Mission` / `DebugScene` wrappers can delegate to it (without this they
+    /// silently keep the trait default, which would leave the cheat pad's
+    /// empty-hand gate inert everywhere `Game` actually runs).
+    pub fn hand_is_empty(&self, hand: crate::vr_config::Handedness) -> bool {
+        let (left, right) = self.interaction.held_entities();
+        match hand {
+            crate::vr_config::Handedness::Left => left.is_none(),
+            crate::vr_config::Handedness::Right => right.is_none(),
+        }
+    }
+
     pub fn player_is_crouched(&self) -> bool {
         self.player_handle.is_crouched()
     }
@@ -12436,10 +12451,6 @@ impl crate::game_scene::GameScene for MissionCore {
     }
 
     fn hand_is_empty(&self, hand: crate::vr_config::Handedness) -> bool {
-        let (left, right) = self.interaction.held_entities();
-        match hand {
-            crate::vr_config::Handedness::Left => left.is_none(),
-            crate::vr_config::Handedness::Right => right.is_none(),
-        }
+        self.hand_is_empty(hand)
     }
 }

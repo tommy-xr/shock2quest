@@ -3,10 +3,13 @@
 //! A two-button panel that rains useful items around the player, for setting
 //! up a test situation without playing the game up to it. Like
 //! [`crate::pause_menu`] it is an overlay owned by [`crate::Game`] rather than
-//! a [`GameScene`](crate::game_scene::GameScene), so every gameplay scene -
-//! missions and the `debug_*` scenes alike - gets it for free, the world keeps
-//! rendering behind it (a frozen submit is a VR comfort problem), and only the
-//! scene's `update` is skipped while it is up.
+//! a [`GameScene`](crate::game_scene::GameScene), so it draws over any pausable
+//! scene without that scene implementing anything, the world keeps rendering
+//! behind it (a frozen submit is a VR comfort problem), and only the scene's
+//! `update` is skipped while it is up. The *rain* still needs a scene that
+//! handles [`Effect::RainItems`] - missions and the `debug_*` scenes built on
+//! `MissionCore` do; a scene using the trait's default effect handler (e.g.
+//! `debug_hud`) shows the pad but drops the spawn.
 //!
 //! It is gated on the `cheats` developer parameter: with that off the open
 //! action is never even read, so neither a stray controller chord nor an HTTP

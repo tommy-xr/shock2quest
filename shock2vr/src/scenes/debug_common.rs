@@ -267,6 +267,10 @@ impl GameScene for DebugScene {
         self.core.queue_entity_trigger(entity_name)
     }
 
+    fn hand_is_empty(&self, hand: crate::vr_config::Handedness) -> bool {
+        self.core.hand_is_empty(hand)
+    }
+
     fn player_is_crouched(&self) -> bool {
         self.core.player_is_crouched()
     }
@@ -497,6 +501,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn queue_entity_trigger(&mut self, entity_name: String) {
         self.core.queue_entity_trigger(entity_name)
+    }
+
+    fn hand_is_empty(&self, hand: crate::vr_config::Handedness) -> bool {
+        self.core.hand_is_empty(hand)
     }
 
     fn player_is_crouched(&self) -> bool {

@@ -1042,10 +1042,11 @@ impl Game {
             || self.active_game_scene.wants_pointer()
     }
 
-    /// Whether the in-game pause menu is up (and therefore the simulation is
-    /// frozen). Automation reads this to tell "paused" from "stuck".
+    /// Whether a `Game`-owned overlay is up (and therefore the simulation is
+    /// frozen). Automation reads this to tell "paused" from "stuck", so it must
+    /// name every overlay that suspends the scene, not just the pause menu.
     pub fn is_paused(&self) -> bool {
-        self.pause_menu.is_open()
+        self.overlay_is_open()
     }
 
     /// Name of the currently active scene (e.g. "medsci1.mis"), tracking
@@ -1648,11 +1649,13 @@ impl Game {
     ) {
         self.cheat_pad.poll_release(input_context);
 
-        if actions.just_triggered(InputAction::ToggleCheatPad) && self.cheats_are_allowed() {
+        if actions.just_triggered(InputAction::ToggleCheatPad) {
+            // Only *opening* is gated: a pad that is already up must always be
+            // closable by the same chord, whatever the gate says about it now.
             if self.cheat_pad.is_open() {
                 self.close_cheat_pad(false);
-            } else {
-                self.cheat_pad.open();
+            } else if self.cheats_are_allowed() {
+                self.open_cheat_pad();
             }
         }
 
@@ -1700,6 +1703,24 @@ impl Game {
         }
     }
 
+    /// Open the pad, taking the screen over from the flat metagame (Tab/MFD)
+    /// mode exactly as [`Self::open_pause_menu`] does - and for the same reason
+    /// on the Quest, where the first half of the `X`+`Y` chord fires `X`'s own
+    /// action and opens the cyber interface a frame before the pad appears.
+    fn open_cheat_pad(&mut self) {
+        let global_effects = self.active_game_scene.handle_effects(
+            vec![Effect::CloseUseMode],
+            &self.global_context,
+            &self.options,
+            &mut self.asset_cache,
+            &mut self.audio_context,
+        );
+        for effect in global_effects {
+            self.handle_global_effect(effect);
+        }
+        self.cheat_pad.open();
+    }
+
     fn close_cheat_pad(&mut self, after_click: bool) {
         if after_click {
             self.cheat_pad.close_after_click();
@@ -1719,6 +1740,12 @@ impl Game {
     }
 
     fn open_pause_menu(&mut self) {
+        // At most one overlay is up at a time. Without this the pause menu
+        // would open *behind* an already-open cheat pad - the pad's opaque
+        // backdrop drawn last, but the pause menu the only one consuming
+        // clicks - so the player would blind-press "Quit to Main Menu"
+        // through the panel they can actually see.
+        self.close_cheat_pad(false);
         // Taking over the screen suspends the flat metagame (Tab/MFD) mode, so
         // the player is not left with a cursor-driven overlay under the pause
         // panel. Effects reach a scene through `handle_effects`, which stays
