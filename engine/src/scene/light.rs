@@ -35,88 +35,177 @@ pub trait Light: std::fmt::Debug {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LightType {
     Spotlight,
-    // Future extensions:
-    // PointLight,
-    // DirectionalLight,
+    /// Casts in every direction. In the shader these share the spotlight slots
+    /// and are told apart by a negative inner cone angle - see
+    /// [`SceneLight::inner_cone_angle`].
+    PointLight,
 }
 
-/// Container for managing up to 6 spotlights for single-pass lighting
+/// An omni light: a position, a colour and a reach, with no cone.
+#[derive(Debug, Clone)]
+pub struct PointLight {
+    /// World space position
+    pub position: Vector3<f32>,
+
+    /// RGB color and intensity in the alpha channel
+    pub color_intensity: Vector4<f32>,
+
+    /// Maximum range of the light (for optimization)
+    pub range: f32,
+}
+
+impl Light for PointLight {
+    fn position(&self) -> Vector3<f32> {
+        self.position
+    }
+
+    fn color_intensity(&self) -> Vector4<f32> {
+        self.color_intensity
+    }
+
+    fn light_type(&self) -> LightType {
+        LightType::PointLight
+    }
+
+    fn affects_position(&self, world_pos: Vector3<f32>) -> bool {
+        (world_pos - self.position).magnitude() <= self.range
+    }
+}
+
+/// A light occupying one of the renderer's light slots. Both kinds upload
+/// through the same uniforms; a point light is a spotlight slot whose cone
+/// covers everything.
+#[derive(Debug, Clone)]
+pub enum SceneLight {
+    Spot(SpotLight),
+    Point(PointLight),
+}
+
+/// Marks a slot as having no cone. Angles are otherwise non-negative, so the
+/// shader can branch on the sign rather than carry another uniform array
+/// through every material.
+pub const NO_CONE: f32 = -1.0;
+
+impl SceneLight {
+    pub fn position(&self) -> Vector3<f32> {
+        match self {
+            SceneLight::Spot(light) => light.position,
+            SceneLight::Point(light) => light.position,
+        }
+    }
+
+    pub fn color_intensity(&self) -> Vector4<f32> {
+        match self {
+            SceneLight::Spot(light) => light.color_intensity,
+            SceneLight::Point(light) => light.color_intensity,
+        }
+    }
+
+    pub fn direction(&self) -> Vector3<f32> {
+        match self {
+            SceneLight::Spot(light) => light.direction,
+            SceneLight::Point(_) => Vector3::new(0.0, 0.0, 0.0),
+        }
+    }
+
+    /// Negative for a point light - that is how the shader tells the two apart.
+    pub fn inner_cone_angle(&self) -> f32 {
+        match self {
+            SceneLight::Spot(light) => light.inner_cone_angle,
+            SceneLight::Point(_) => NO_CONE,
+        }
+    }
+
+    pub fn outer_cone_angle(&self) -> f32 {
+        match self {
+            SceneLight::Spot(light) => light.outer_cone_angle,
+            SceneLight::Point(_) => NO_CONE,
+        }
+    }
+
+    pub fn range(&self) -> f32 {
+        match self {
+            SceneLight::Spot(light) => light.range,
+            SceneLight::Point(light) => light.range,
+        }
+    }
+
+    pub fn affects_position(&self, world_pos: Vector3<f32>) -> bool {
+        match self {
+            SceneLight::Spot(light) => light.affects_position(world_pos),
+            SceneLight::Point(light) => light.affects_position(world_pos),
+        }
+    }
+}
+
+impl From<SpotLight> for SceneLight {
+    fn from(light: SpotLight) -> Self {
+        SceneLight::Spot(light)
+    }
+}
+
+impl From<PointLight> for SceneLight {
+    fn from(light: PointLight) -> Self {
+        SceneLight::Point(light)
+    }
+}
+
+/// Container for managing up to 6 lights for single-pass lighting
 #[derive(Debug, Clone)]
 pub struct LightArray {
-    /// Array of up to 6 spotlights (None = disabled slot)
-    pub spotlights: [Option<SpotLight>; 6],
+    /// Array of up to 6 lights (None = disabled slot)
+    pub lights: [Option<SceneLight>; 6],
 }
 
 impl LightArray {
     /// Create a new empty light array
     pub fn new() -> Self {
         Self {
-            spotlights: [None, None, None, None, None, None],
+            lights: [None, None, None, None, None, None],
         }
     }
 
-    /// Add a spotlight to the first available slot
+    /// Add a light to the first available slot
     /// Returns the slot index if successful, None if array is full
-    pub fn add_spotlight(&mut self, spotlight: SpotLight) -> Option<usize> {
-        for (i, slot) in self.spotlights.iter_mut().enumerate() {
+    pub fn add_light(&mut self, light: impl Into<SceneLight>) -> Option<usize> {
+        let light = light.into();
+        for (i, slot) in self.lights.iter_mut().enumerate() {
             if slot.is_none() {
-                *slot = Some(spotlight);
+                *slot = Some(light);
                 return Some(i);
             }
         }
         None
     }
 
-    /// Remove a spotlight from the specified slot
-    pub fn remove_spotlight(&mut self, index: usize) -> Option<SpotLight> {
-        if index < 6 {
-            self.spotlights[index].take()
-        } else {
-            None
-        }
+    /// Get a reference to the light in the specified slot
+    pub fn get_light(&self, index: usize) -> Option<&SceneLight> {
+        self.lights.get(index).and_then(|slot| slot.as_ref())
     }
 
-    /// Get a reference to a spotlight at the specified slot
-    pub fn get_spotlight(&self, index: usize) -> Option<&SpotLight> {
-        if index < 6 {
-            self.spotlights[index].as_ref()
-        } else {
-            None
-        }
-    }
-
-    /// Get a mutable reference to a spotlight at the specified slot
-    pub fn get_spotlight_mut(&mut self, index: usize) -> Option<&mut SpotLight> {
-        if index < 6 {
-            self.spotlights[index].as_mut()
-        } else {
-            None
-        }
-    }
-
-    /// Clear all spotlights
+    /// Clear all lights
     pub fn clear(&mut self) {
-        self.spotlights = [None, None, None, None, None, None];
+        self.lights = [None, None, None, None, None, None];
     }
 
-    /// Get the number of active spotlights
+    /// Get the number of active lights
     pub fn active_count(&self) -> usize {
-        self.spotlights.iter().filter(|s| s.is_some()).count()
+        self.lights.iter().filter(|s| s.is_some()).count()
     }
 
     /// Check if the array is empty
     pub fn is_empty(&self) -> bool {
-        self.spotlights.iter().all(|s| s.is_none())
+        self.lights.iter().all(|s| s.is_none())
     }
 
     /// Check if the array is full
     pub fn is_full(&self) -> bool {
-        self.spotlights.iter().all(|s| s.is_some())
+        self.lights.iter().all(|s| s.is_some())
     }
 
-    /// Iterator over active spotlights with their indices
-    pub fn iter_active(&self) -> impl Iterator<Item = (usize, &SpotLight)> {
-        self.spotlights
+    /// Iterator over active lights with their indices
+    pub fn iter_active(&self) -> impl Iterator<Item = (usize, &SceneLight)> {
+        self.lights
             .iter()
             .enumerate()
             .filter_map(|(i, light)| light.as_ref().map(|l| (i, l)))
@@ -341,20 +430,85 @@ mod tests {
         );
 
         // Add light
-        let index = light_array.add_spotlight(light.clone()).unwrap();
+        let index = light_array.add_light(light.clone()).unwrap();
         assert_eq!(index, 0);
         assert_eq!(light_array.active_count(), 1);
         assert!(!light_array.is_empty());
 
         // Get light
-        let retrieved = light_array.get_spotlight(0).unwrap();
+        let retrieved = light_array.get_light(0).unwrap();
         assert_eq!(retrieved.position(), light.position());
 
-        // Remove light
-        let removed = light_array.remove_spotlight(0).unwrap();
-        assert_eq!(removed.position(), light.position());
+        // Clearing empties every slot - the array is rebuilt each frame
+        light_array.clear();
         assert!(light_array.is_empty());
         assert_eq!(light_array.active_count(), 0);
+    }
+
+    /// The shader tells a point light from a spotlight by the sign of the inner
+    /// cone angle, so a point light must report a negative one and a spotlight
+    /// must not.
+    #[test]
+    fn point_lights_are_marked_by_a_negative_inner_cone() {
+        let point: SceneLight = PointLight {
+            position: Vector3::new(1.0, 2.0, 3.0),
+            color_intensity: Vector4::new(1.0, 1.0, 1.0, 1.0),
+            range: 10.0,
+        }
+        .into();
+        assert!(point.inner_cone_angle() < 0.0);
+        assert!(point.outer_cone_angle() < 0.0);
+        assert_eq!(point.range(), 10.0);
+
+        let spot: SceneLight = SpotLight::new(
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(1.0, 1.0, 1.0),
+            1.0,
+        )
+        .into();
+        assert!(
+            spot.inner_cone_angle() >= 0.0,
+            "a real cone must not look like a point light"
+        );
+    }
+
+    #[test]
+    fn a_point_light_reaches_in_every_direction_within_range() {
+        let light = PointLight {
+            position: Vector3::new(0.0, 0.0, 0.0),
+            color_intensity: Vector4::new(1.0, 1.0, 1.0, 1.0),
+            range: 5.0,
+        };
+
+        for direction in [
+            Vector3::new(5.0, 0.0, 0.0),
+            Vector3::new(-5.0, 0.0, 0.0),
+            Vector3::new(0.0, 0.0, -4.9),
+        ] {
+            assert!(light.affects_position(direction), "{direction:?}");
+        }
+        assert!(!light.affects_position(Vector3::new(0.0, 5.1, 0.0)));
+    }
+
+    #[test]
+    fn a_light_array_holds_both_kinds() {
+        let mut light_array = LightArray::new();
+        light_array.add_light(SpotLight::new(
+            Vector3::new(0.0, 1.0, 0.0),
+            Vector3::new(0.0, -1.0, 0.0),
+            Vector3::new(1.0, 1.0, 1.0),
+            1.0,
+        ));
+        light_array.add_light(PointLight {
+            position: Vector3::new(3.0, 0.0, 0.0),
+            color_intensity: Vector4::new(1.0, 0.0, 0.0, 2.0),
+            range: 8.0,
+        });
+
+        assert_eq!(light_array.active_count(), 2);
+        assert!(light_array.get_light(0).unwrap().inner_cone_angle() >= 0.0);
+        assert!(light_array.get_light(1).unwrap().inner_cone_angle() < 0.0);
     }
 
     #[test]
@@ -369,7 +523,7 @@ mod tests {
 
         // Fill array to capacity
         for i in 0..6 {
-            let index = light_array.add_spotlight(light.clone()).unwrap();
+            let index = light_array.add_light(light.clone()).unwrap();
             assert_eq!(index, i);
         }
 
@@ -377,7 +531,7 @@ mod tests {
         assert_eq!(light_array.active_count(), 6);
 
         // Try to add one more (should fail)
-        assert!(light_array.add_spotlight(light).is_none());
+        assert!(light_array.add_light(light).is_none());
     }
 
     #[test]
@@ -396,8 +550,8 @@ mod tests {
             1.0,
         );
 
-        light_array.add_spotlight(light1);
-        light_array.add_spotlight(light2);
+        light_array.add_light(light1);
+        light_array.add_light(light2);
 
         let active_lights: Vec<_> = light_array.iter_active().collect();
         assert_eq!(active_lights.len(), 2);

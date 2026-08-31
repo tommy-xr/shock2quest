@@ -967,7 +967,7 @@ fn run_game_blocking(
         // Add hand spotlights
         let hand_spotlights = game.get_hand_spotlights();
         for spotlight in hand_spotlights {
-            scene_for_render.lights_mut().add_spotlight(spotlight);
+            scene_for_render.lights_mut().add_light(spotlight);
         }
 
         // Actually render the scene
