@@ -40,6 +40,9 @@ const LOG_UNSET: u32 = 33;
 /// Side of each corner-bracket glyph, in screen pixels.
 const BRACKET_SIZE: f32 = 8.0;
 
+/// Line height of the rollover label, in screen pixels.
+const LABEL_HEIGHT: f32 = 10.0;
+
 fn resolve_localized_property_string(raw: &str, strings: &HashMap<String, String>) -> String {
     let (key, fallback) = match raw.split_once(':') {
         Some((key, remainder)) => {
@@ -233,17 +236,21 @@ pub fn draw_item_name(
         .map(|template_id| (template_id, entity_id.inner()));
     let text_content = format_hover_label(&item_name, hit_points, debug_identity);
 
-    // Below the brackets, as the original draws it: the strip directly above
-    // the rect belongs to the health bar (`draw_health_bar`). Cleared by a
-    // full bracket glyph, since the text anchors on its top edge and the
-    // bottom brackets hang below the rect.
+    // Above the rect, lifted clear of the health bar - the original reserves
+    // the strip immediately above the rect for the bar (`draw_health_bar`).
+    //
+    // This position is ours, not the original's: there the rollover name is
+    // not anchored to the rect at all, but drawn in a fixed frame at the top
+    // centre of the screen, and the slot below the rect belongs to a separate
+    // "HUD Use" hint string ("Search container") that this port does not yet
+    // read. Keeping the name by the object is the interim.
     let text_obj_0_0 = SceneObject::screen_space_text(
         &text_content,
         font.clone(),
         10.0,
         0.5,
         extents.min.x,
-        extents.max.y + BRACKET_SIZE,
+        extents.min.y - HP_BAR_HEIGHT - LABEL_HEIGHT,
     );
 
     vec![text_obj_0_0]
