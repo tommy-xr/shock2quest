@@ -39,6 +39,9 @@ const CANVAS_H: f32 = 480.0;
 /// pages read as one screen family.
 const BACKDROP_TEXTURE: &str = "GAMELOD.PCX";
 const MENU_FONT: &str = "metafont.fon";
+/// The smaller face the Developer page's rows use. The display font
+/// ellipsizes "Rain modules + nanites" inside the 202px pane.
+const ROW_FONT: &str = "mainfont.fon";
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
 
 /// Opacity for a button the pointer is not over, and for the one it is.
@@ -155,13 +158,14 @@ fn build_canvas(rects: PanelRects, pointer_canvas: Option<Vector2<f32>>) -> UiCa
     );
 
     for (index, (button, label)) in CheatButton::ROWS.iter().enumerate() {
-        // Fitted, not plain: "Rain modules + nanites" is wider than the pane
-        // at METAFONT's native cell, and `text_native` does not shrink.
+        // Fitted, not plain: `text_native` does not shrink to its rect, so a
+        // label that outgrows the pane would run over the frame instead of
+        // ellipsizing inside it.
         canvas
             .text_native_fit(
                 button_rect(rects, index),
                 label,
-                MENU_FONT,
+                ROW_FONT,
                 HAlign::Center,
                 VAlign::Middle,
             )
