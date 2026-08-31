@@ -16,7 +16,7 @@ use engine::{
     texture_atlas::{TexturePackResult, TexturePacker},
 };
 use image::ImageBuffer;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::ss2_common::{read_bytes, read_i16, read_u8, read_u16, read_u32};
 
@@ -131,23 +131,27 @@ pub struct FontBitmap {
     bitmap: Vec<u8>,
 }
 
-/// Horizontal gap between glyphs, in the font's native pixels.
-const GLYPH_SPACING: usize = SPACING as usize;
-
 impl FontBitmap {
     pub fn read<T: io::Read + io::Seek>(reader: &mut T) -> FontBitmap {
-        // The bitmap strip runs to end-of-file, so measure the file first.
+        // The bitmap strip runs to end-of-file, so read the whole file once.
         let mut all = Vec::new();
-        reader.read_to_end(&mut all).unwrap();
-        let end_bytes = reader.stream_position().unwrap();
         reader.seek(io::SeekFrom::Start(0)).unwrap();
+        reader.read_to_end(&mut all).unwrap();
 
-        let metrics = FontMetrics::read(reader);
-        reader
-            .seek(io::SeekFrom::Start(metrics.bitmap_offset as u64))
-            .unwrap();
-        let bitmap_size = end_bytes.saturating_sub(metrics.bitmap_offset as u64);
-        let bitmap = read_bytes(reader, bitmap_size as usize);
+        let metrics = FontMetrics::read(&mut io::Cursor::new(&all));
+        let bitmap = all
+            .get(metrics.bitmap_offset as usize..)
+            .unwrap_or(&[])
+            .to_vec();
+        let expected = metrics.row_width as usize * metrics.height as usize;
+        if bitmap.len() < expected {
+            // Reads past the strip decode as transparent, so say so rather than
+            // letting a bad asset render as silently blank glyphs.
+            warn!(
+                "font bitmap truncated: {} of {expected} bytes",
+                bitmap.len()
+            );
+        }
 
         FontBitmap { metrics, bitmap }
     }
@@ -189,8 +193,10 @@ impl FontBitmap {
     }
 
     /// Rasterize `text` at native size into `(width, height, alpha)`, laying
-    /// glyphs out left to right exactly as the in-game text mesh does (one
-    /// pixel of spacing). Characters the font does not define are skipped.
+    /// glyphs out left to right on their advances with nothing added between
+    /// them (side bearings are baked into the glyph cells), as the UI's
+    /// `measure_text_width` does. Characters the font does not define are
+    /// skipped.
     pub fn render_string(&self, text: &str) -> (usize, usize, Vec<u8>) {
         let height = self.metrics.height as usize;
         let glyphs: Vec<(usize, Vec<u8>)> = text
@@ -201,8 +207,10 @@ impl FontBitmap {
         if glyphs.is_empty() || height == 0 {
             return (0, 0, Vec::new());
         }
-        let width: usize =
-            glyphs.iter().map(|(w, _)| w).sum::<usize>() + GLYPH_SPACING * (glyphs.len() - 1);
+        let width: usize = glyphs.iter().map(|(w, _)| w).sum();
+        if width == 0 {
+            return (0, 0, Vec::new());
+        }
 
         let mut out = vec![0u8; width * height];
         let mut pen = 0usize;
@@ -212,7 +220,7 @@ impl FontBitmap {
                 out[dst..dst + glyph_width]
                     .copy_from_slice(&alpha[y * glyph_width..(y + 1) * glyph_width]);
             }
-            pen += glyph_width + GLYPH_SPACING;
+            pen += glyph_width;
         }
         (width, height, out)
     }
@@ -488,17 +496,17 @@ mod tests {
     }
 
     #[test]
-    fn format1_glyphs_scale_coverage_and_lay_out_with_spacing() {
+    fn format1_glyphs_scale_coverage_and_lay_out_on_advances() {
         // Two 2x1 glyphs, format 1 (coverage 0..=15), row_width = 4 bytes.
         let bytes = with_bitmap(synth_font(65, 66, 1, &[0, 2, 4], 1), &[15, 0, 8, 15]);
         let font = FontBitmap::read(&mut Cursor::new(bytes));
 
         assert_eq!(font.glyph_alpha(65), Some((2, vec![255, 0])));
         assert_eq!(font.glyph_alpha(66), Some((2, vec![136, 255])));
-        // Glyphs run left to right with one transparent pixel between them.
-        assert_eq!(font.render_string("AB"), (5, 1, vec![255, 0, 0, 136, 255]));
+        // Glyphs run left to right on their advances, nothing added between.
+        assert_eq!(font.render_string("AB"), (4, 1, vec![255, 0, 136, 255]));
         // Undefined characters are dropped rather than rendered as blanks.
-        assert_eq!(font.render_string("AZB").0, 5);
+        assert_eq!(font.render_string("AZB").0, 4);
         assert_eq!(font.render_string("ZZ"), (0, 0, vec![]));
     }
 
