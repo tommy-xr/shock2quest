@@ -689,6 +689,10 @@ pub struct EntityDetailResult {
     pub incoming_links: Vec<LinkInfo>,
     pub contained_by: Option<i32>,
     pub aim_points: Vec<AimPointInfo>,
+    /// World-space `[min, max]` of what the HUD highlight frames for this
+    /// entity: the union of its hitboxes where it has them, otherwise its own
+    /// collider.
+    pub selection_bounds: Option<[[f32; 3]; 2]>,
 }
 
 #[derive(Debug, Serialize)]

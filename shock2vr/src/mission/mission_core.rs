@@ -14,6 +14,8 @@ use cgmath::{
     Vector2, Vector3, num_traits::ToPrimitive, vec2, vec3,
 };
 
+use collision::Aabb3;
+
 use crate::SpawnLocation;
 use crate::game_scene::DebuggableScene;
 use crate::mission::CullingInfo;
@@ -7930,12 +7932,25 @@ impl MissionCore {
     }
 
     /// Entities whose HUD overlay is still forced on by recent damage.
+    /// Entities whose HUD overlay is still forced on by recent damage.
     fn damage_flash_entities(&self) -> Vec<EntityId> {
         let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
         self.world
             .borrow::<UniqueViewMut<DamageFlash>>()
             .map(|mut flash| flash.active(now))
             .unwrap_or_default()
+    }
+
+    /// The world-space bounds that stand in for an entity: the union of its
+    /// hitboxes where it has them - the volume a creature's limbs occupy in
+    /// the pose it is in - otherwise its own collider.
+    ///
+    /// The HUD highlight frames this, and `/v1/entities/:id` reports it, from
+    /// this one function: what an agent reads is what the player sees framed.
+    pub(crate) fn selection_bounds(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
+        self.hit_boxes
+            .selection_bounds(&self.physics, entity_id)
+            .or_else(|| self.physics.get_aabb2(entity_id))
     }
 
     pub fn render_per_eye(
@@ -7978,15 +7993,9 @@ impl MissionCore {
             highlighted.retain(|e| is_hud_selectable(&self.world, *e));
         }
         for hit_entity in highlighted {
-            // What the highlight frames: the creature's own hitboxes where it
-            // has them (the volume its limbs occupy in the pose it is in),
-            // otherwise its collider. Resolved once, so the brackets and the
-            // label can never frame different things.
-            let Some(bounds) = self
-                .hit_boxes
-                .selection_bounds(&self.physics, hit_entity)
-                .or_else(|| self.physics.get_aabb2(hit_entity))
-            else {
+            // What the highlight frames. Resolved once, so the brackets and
+            // the label can never frame different things.
+            let Some(bounds) = self.selection_bounds(hit_entity) else {
                 continue;
             };
 
@@ -9868,6 +9877,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     }
 
     fn entity_detail(&self, id: EntityId) -> Option<crate::game_scene::DebugEntityDetail> {
+        let selection_bounds = self.selection_bounds(id);
         use crate::game_scene::{DebugAimPoint, DebugEntityDetail, DebugPropertyInfo};
         use shipyard::*;
 
@@ -10136,6 +10146,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     incoming_links,
                     contained_by,
                     aim_points: aim_points.clone(),
+                    selection_bounds: selection_bounds.map(|bounds| {
+                        [
+                            [bounds.min.x, bounds.min.y, bounds.min.z],
+                            [bounds.max.x, bounds.max.y, bounds.max.z],
+                        ]
+                    }),
                 })
             },
         )
