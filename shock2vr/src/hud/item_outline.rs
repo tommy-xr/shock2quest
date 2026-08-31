@@ -650,7 +650,7 @@ fn health_bar_fill(world: &World, entity_id: EntityId) -> Option<f32> {
 /// The enemy health bar, drawn flush on top of the selection brackets.
 pub fn draw_health_bar(
     asset_cache: &mut AssetCache,
-    physics: &PhysicsWorld,
+    bounds: Aabb3<f32>,
     entity_id: EntityId,
     world: &World,
     view: Matrix4<f32>,
@@ -661,10 +661,13 @@ pub fn draw_health_bar(
         return vec![];
     };
 
-    let Some(aabb) = physics.get_aabb2(entity_id) else {
-        return vec![];
-    };
-    let extents = project_aabb3(&aabb, view, projection, screen_size);
+    // The same resolved bounds the brackets and the label frame, so the bar
+    // cannot sit over a different volume than the outline it caps.
+    let extents = clamp_extents_to_screen(
+        project_aabb3(&bounds, view, projection, screen_size),
+        screen_size,
+        LABEL_MARGIN,
+    );
 
     // Nearest sampling, unlike the rest of the HUD: the remastered bar art is
     // several times the 80x14 it draws at and carries a pure colour-key border,

@@ -7947,9 +7947,13 @@ impl MissionCore {
     ///
     /// The HUD highlight frames this, and `/v1/entities/:id` reports it, from
     /// this one function: what an agent reads is what the player sees framed.
+    ///
+    /// The proxies are stepped by physics before they are re-posed, so the
+    /// bounds trail the drawn pose by a frame - invisible at 60 Hz, and not
+    /// worth a second pose evaluation to remove.
     pub(crate) fn selection_bounds(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
         self.hit_boxes
-            .selection_bounds(&self.physics, entity_id)
+            .hit_box_bounds(&self.physics, entity_id)
             .or_else(|| self.physics.get_aabb2(entity_id))
     }
 
@@ -8020,7 +8024,7 @@ impl MissionCore {
 
             ret.extend(draw_health_bar(
                 asset_cache,
-                &self.physics,
+                bounds,
                 hit_entity,
                 &self.world,
                 view,
@@ -9877,7 +9881,6 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     }
 
     fn entity_detail(&self, id: EntityId) -> Option<crate::game_scene::DebugEntityDetail> {
-        let selection_bounds = self.selection_bounds(id);
         use crate::game_scene::{DebugAimPoint, DebugEntityDetail, DebugPropertyInfo};
         use shipyard::*;
 
@@ -10130,6 +10133,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .find(|link| link.contains_ordinal.is_some())
                     .map(|link| link.target_id);
 
+                let selection_bounds = self.selection_bounds(id);
                 Some(DebugEntityDetail {
                     entity_id: id.inner() as i32,
                     name,

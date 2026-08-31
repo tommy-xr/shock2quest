@@ -132,11 +132,24 @@ impl HitBoxManager {
     ///
     /// This is what the HUD outline wants: the entity's own collider is a
     /// standing capsule sized from the creature definition, so it frames a
-    /// nominal cylinder rather than the creature - too wide for a monkey,
-    /// far too tall for anything crouched, crawling or dead. `None` for
-    /// anything with no proxies (every non-creature, and a posed corpse),
-    /// which keeps its collider bounds.
-    pub fn selection_bounds(
+    /// nominal cylinder rather than the creature - and frames the same
+    /// cylinder whatever the creature is doing.
+    ///
+    /// A definition that maps a single `Body` joint (the arachnids and the
+    /// Overlord) gets a body-only frame, legs excluded - measured on hydro3's
+    /// Baby Arachnids at 0.33-0.58 across, against a 0.40 collider. Neither is
+    /// the animal: the shipped creature colliders are their own known problem
+    /// (#904). The hitbox is at least measured from the mesh, so it is what is
+    /// used, and widening those definitions is the fix worth making.
+    ///
+    /// The boxes are world AABBs of the *rotated* proxy shapes, so a diagonal
+    /// limb contributes a little more than its thickness. The extremes come
+    /// from the head, hands and feet, so the inflation is small against the
+    /// error it replaces. (It is deliberately read from physics rather than
+    /// recomputed from the joint transforms with `dark`'s `joint_box_bounds`:
+    /// this is the volume the creature is actually *shot* by, the same proxies
+    /// `aim_points` reports.)
+    pub fn hit_box_bounds(
         &self,
         physics: &PhysicsWorld,
         entity_id: EntityId,
@@ -354,7 +367,7 @@ mod tests {
     /// Two hitboxes a body-length apart: the highlight must frame both, not
     /// one of them and not the standing capsule the entity's own collider is.
     #[test]
-    fn selection_bounds_span_every_hit_box() {
+    fn hit_box_bounds_span_every_hit_box() {
         let mut world = World::new();
         let mut physics = PhysicsWorld::new();
         let creature = world.add_entity(());
@@ -377,7 +390,7 @@ mod tests {
         manager.hit_boxes.insert(creature, hit_boxes);
 
         let bounds = manager
-            .selection_bounds(&physics, creature)
+            .hit_box_bounds(&physics, creature)
             .expect("a creature with hitboxes has selection bounds");
 
         assert!(
@@ -393,14 +406,14 @@ mod tests {
     /// Anything without hitboxes - every prop, and a posed corpse - has no
     /// hitbox bounds, so the caller keeps using its collider.
     #[test]
-    fn selection_bounds_are_absent_without_hit_boxes() {
+    fn hit_box_bounds_are_absent_without_hit_boxes() {
         let mut world = World::new();
         let physics = PhysicsWorld::new();
         let entity_id = world.add_entity(());
 
         assert!(
             HitBoxManager::new()
-                .selection_bounds(&physics, entity_id)
+                .hit_box_bounds(&physics, entity_id)
                 .is_none()
         );
     }
@@ -409,7 +422,7 @@ mod tests {
     /// than a zero-sized box at the world origin that would stretch the
     /// highlight across the level.
     #[test]
-    fn selection_bounds_ignore_a_proxy_with_no_body() {
+    fn hit_box_bounds_ignore_a_proxy_with_no_body() {
         let mut world = World::new();
         let mut physics = PhysicsWorld::new();
         let creature = world.add_entity(());
@@ -429,11 +442,43 @@ mod tests {
             .hit_boxes
             .insert(creature, HashMap::from([(0, real), (1, phantom)]));
 
-        let bounds = manager.selection_bounds(&physics, creature).unwrap();
+        let bounds = manager.hit_box_bounds(&physics, creature).unwrap();
 
         assert!(
             bounds.min.x > 2.0,
             "the phantom must not drag the box to the origin: {bounds:?}"
+        );
+    }
+
+    /// A creature that maps a single `Body` hitbox (the arachnids, the
+    /// Overlord) still gets that hitbox's bounds - it is measured from the
+    /// mesh, unlike the capsule beside it.
+    #[test]
+    fn a_single_hit_box_still_gives_bounds() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let creature = world.add_entity(());
+        let hit_box = world.add_entity(());
+        physics.add_kinematic(
+            hit_box,
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Vector3::zero(),
+            vec3(0.2, 0.2, 0.2),
+            CollisionGroup::hitbox(),
+            false,
+        );
+        let mut manager = HitBoxManager::new();
+        manager
+            .hit_boxes
+            .insert(creature, HashMap::from([(0, hit_box)]));
+
+        let bounds = manager
+            .hit_box_bounds(&physics, creature)
+            .expect("one hitbox is still bounds");
+        assert!(
+            (bounds.max.x - bounds.min.x - 0.2).abs() < 0.01,
+            "the lone hitbox's own extent, got {bounds:?}"
         );
     }
 }

@@ -37,7 +37,8 @@ test(
     // animated creature (arms out, weapon raised), so this fails on the
     // collider bounds it used to report.
     const [min, max] = bounds;
-    for (const point of detail.aim_points ?? []) {
+    const points = detail.aim_points ?? [];
+    for (const point of points) {
       for (let axis = 0; axis < 3; axis++) {
         assert.ok(
           point.position[axis] >= min[axis] - 0.01 &&
@@ -45,6 +46,19 @@ test(
           `hitbox ${point.joint_id} (${point.classification}) sits outside the highlight on axis ${axis}: ${JSON.stringify(point.position)} vs ${JSON.stringify(bounds)}`,
         );
       }
+    }
+
+    // ...and it frames THIS creature, not the room: the box may exceed the
+    // hitbox centres only by about a limb's thickness. (Containment alone
+    // cannot fail - the bounds are the union of these very proxies - so this
+    // is the half of the check that can.)
+    for (let axis = 0; axis < 3; axis++) {
+      const lo = Math.min(...points.map((point) => point.position[axis]));
+      const hi = Math.max(...points.map((point) => point.position[axis]));
+      assert.ok(
+        min[axis] > lo - 0.8 && max[axis] < hi + 0.8,
+        `the highlight should hug the hitboxes on axis ${axis}: hitboxes span ${lo.toFixed(2)}..${hi.toFixed(2)}, box spans ${min[axis].toFixed(2)}..${max[axis].toFixed(2)}`,
+      );
     }
   },
 );
@@ -69,5 +83,39 @@ test(
     // The PR-1 body-shaped box: a body length across, and flat.
     assert.ok(max[0] - min[0] > 2, `expected a body-length box, got ${JSON.stringify(bounds)}`);
     assert.ok(max[1] - min[1] < 1.2, `expected a flat box, got ${JSON.stringify(bounds)}`);
+  },
+);
+
+test(
+  "an arachnid is framed by its single Body hitbox, at collider scale",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "hydro3.mis" });
+    await game.step({ frames: 60 });
+
+    const arachnid = (await game.entities.list()).entities.find((entity) =>
+      entity.name.includes("Arachnid"),
+    );
+    assert.ok(arachnid, "expected a Baby Arachnid in hydro3");
+    const detail = await game.entities.detail(arachnid.id);
+    assert.equal(
+      (detail.aim_points ?? []).length,
+      1,
+      "the arachnid definition maps exactly one Body hitbox",
+    );
+
+    // A single Body hitbox frames the body without the legs. Coarser than a
+    // humanoid's frame, but still the scale of the creature (its collider
+    // measures 0.40 across) rather than collapsing to a point - which is the
+    // regression a future change here would introduce.
+    const bounds = detail.selection_bounds;
+    assert.ok(bounds, "the arachnid should still report bounds");
+    const width = Math.max(bounds[1][0] - bounds[0][0], bounds[1][2] - bounds[0][2]);
+    const height = bounds[1][1] - bounds[0][1];
+    assert.ok(
+      width > 0.25 && width < 1.0,
+      `expected a body-scale frame, got ${width.toFixed(2)} across`,
+    );
+    assert.ok(height > 0.25, `expected a body-scale frame, got ${height.toFixed(2)} tall`);
   },
 );
