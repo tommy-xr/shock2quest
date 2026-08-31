@@ -8208,7 +8208,7 @@ impl MissionCore {
                 // Use mode expands the compact readouts to BIOFULL/AMMOFULL.
                 self.use_mode,
                 // Security alert badge + its recovery countdown.
-                self.security_alarm.status().hud_seconds(),
+                crate::security_alarm::status(&self.world).hud_seconds(),
             ));
 
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
@@ -10468,12 +10468,15 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     ],
                 }
             }),
-            security_alarm: self.security_alarm.status().hud_seconds().map(|seconds| {
-                crate::game_scene::DebugSecurityAlarm {
-                    count: self.security_alarm.status().count,
-                    seconds_remaining: seconds,
-                }
-            }),
+            security_alarm: {
+                let alarm = crate::security_alarm::status(&self.world);
+                alarm
+                    .hud_seconds()
+                    .map(|seconds| crate::game_scene::DebugSecurityAlarm {
+                        count: alarm.count,
+                        seconds_remaining: seconds,
+                    })
+            },
         }
     }
 

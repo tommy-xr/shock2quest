@@ -93,21 +93,27 @@ impl DebugCameraScene {
         // Levels author this pair of switch links in both directions: the
         // camera alarms the ecology, and the ecology's reset clears the
         // camera again.
-        let switch_link = |to_entity_id, to_template_id| Links {
-            to_links: vec![ToLink {
+        // Appended, not assigned: `add_component` replaces, and the templates
+        // may already carry links of their own.
+        let mut add_switch_link = |from: EntityId, to: EntityId, to_template_id: i32| {
+            let mut links = core
+                .world
+                .borrow::<shipyard::View<Links>>()
+                .ok()
+                .and_then(|existing| {
+                    use shipyard::Get;
+                    existing.get(from).ok().cloned()
+                })
+                .unwrap_or(Links { to_links: vec![] });
+            links.to_links.push(ToLink {
                 to_template_id,
-                to_entity_id: Some(WrappedEntityId(to_entity_id)),
+                to_entity_id: Some(WrappedEntityId(to)),
                 link: Link::SwitchLink,
-            }],
+            });
+            core.world.add_component(from, links);
         };
-        core.world.add_component(
-            camera_entity,
-            switch_link(ecology_entity, ECOLOGY_TEMPLATE_ID),
-        );
-        core.world.add_component(
-            ecology_entity,
-            switch_link(camera_entity, CAMERA_TEMPLATE_ID),
-        );
+        add_switch_link(camera_entity, ecology_entity, ECOLOGY_TEMPLATE_ID);
+        add_switch_link(ecology_entity, camera_entity, CAMERA_TEMPLATE_ID);
         info!("Spawned debug security ecology entity {ecology_entity:?}");
 
         // A security computer, so standing the alarm down early is testable

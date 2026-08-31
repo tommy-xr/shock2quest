@@ -209,8 +209,8 @@ pub(crate) fn build_flat_hud_canvas(
 
 /// Build and render the flat HUD as screen-space scene objects. `use_mode`
 /// (Tab metagame mode) expands the compact readouts to BIOFULL/AMMOFULL.
-/// `alert_seconds` is the security alert's remaining recovery (`None` while
-/// security is calm) - see `security_alert::SecurityAlert::status`.
+/// `alert_seconds` is the security alarm's remaining countdown (`None` while
+/// security is calm) - see `security_alarm::status`.
 pub(crate) fn create_flat_hud(
     asset_cache: &mut AssetCache,
     world: &World,
