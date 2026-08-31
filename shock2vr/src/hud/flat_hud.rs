@@ -89,6 +89,12 @@ const AMMO_PANEL_ORIGIN: Vector2<f32> = vec2(AMMO_FULL_X, AMMO_Y);
 pub(crate) const AMMO_CYCLE_BUTTON: Rect =
     ammo_panel::at(AMMO_PANEL_ORIGIN, ammo_panel::CYCLE_BUTTON);
 
+// Security alert badge (ALARM.PCX, 64x64: "SECURITY ALERT ACTIVE" over a
+// camera). Blinks while a security ecology is alerted. Unlike the meters and
+// the ammo gauge there is no *R.BIN for the in-game overlays, so the anchor is
+// ours: the free top-left corner, clear of the crosshair and the bottom strip.
+const ALERT_BADGE: Rect = Rect::new(8.0, 8.0, 64.0, 64.0);
+
 // Psi overload meter - drawn center-screen below the crosshair while the psi
 // amp's trigger is held on an overloadable power (and briefly after release,
 // flashing the result). Uses the original meter art (res/iface, 64x16):
@@ -115,6 +121,7 @@ pub(crate) fn build_flat_hud_canvas(
     psi_fraction: f32,
     psi_charge: Option<RuntimePropPsiCharge>,
     ammo_readout: &AmmoReadout,
+    alert_badge: bool,
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(VIRTUAL_W, VIRTUAL_H));
 
@@ -138,6 +145,11 @@ pub(crate) fn build_flat_hud_canvas(
 
     if crosshair {
         canvas.image(CROSSHAIR, "CROSSHAI.PCX");
+    }
+    // The caller blinks this by toggling the flag, so the badge is simply
+    // drawn or not - no per-frame animation state lives in the canvas.
+    if alert_badge {
+        canvas.image(ALERT_BADGE, "ALARM.PCX");
     }
     canvas
         // Bio-monitor backdrop first; the bars + numbers render on top of it.
@@ -196,12 +208,15 @@ pub(crate) fn build_flat_hud_canvas(
 
 /// Build and render the flat HUD as screen-space scene objects. `use_mode`
 /// (Tab metagame mode) expands the compact readouts to BIOFULL/AMMOFULL.
+/// `alert_badge` is the security-alert badge's lit half of its blink cycle
+/// (`security_alert::SecurityAlert::badge_visible`).
 pub(crate) fn create_flat_hud(
     asset_cache: &mut AssetCache,
     world: &World,
     screen_size: cgmath::Vector2<f32>,
     crosshair: bool,
     use_mode: bool,
+    alert_badge: bool,
 ) -> Vec<SceneObject> {
     let canvas = build_flat_hud_canvas(
         crosshair,
@@ -211,6 +226,7 @@ pub(crate) fn create_flat_hud(
         get_wielded_psi_charge(world),
         // The same predicate the pointer hit-test uses, so drawn == clickable.
         &AmmoReadout::from_world(world, ammo_cycle_button_visible(world, use_mode)),
+        alert_badge,
     );
     // Keep the crosshair square and bars undistorted on non-4:3 windows.
     canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
@@ -270,6 +286,7 @@ mod tests {
             0.75,
             None,
             &readout(None, None, None, false),
+            false,
         );
         assert_eq!(canvas.element_count(), 6);
     }
@@ -284,6 +301,7 @@ mod tests {
             0.75,
             None,
             &readout(Some(12), None, None, false),
+            false,
         );
         assert_eq!(canvas.element_count(), 8);
     }
@@ -298,6 +316,7 @@ mod tests {
             0.75,
             None,
             &readout(Some(12), Some("STD_I.PCX"), Some("std"), false),
+            false,
         );
         assert_eq!(canvas.element_count(), 10);
     }
@@ -317,6 +336,7 @@ mod tests {
                 ammo: Some(0),
                 ..Default::default()
             },
+            false,
         );
         assert_eq!(canvas.element_count(), 10);
     }
@@ -333,6 +353,7 @@ mod tests {
             0.75,
             None,
             &readout(Some(12), None, None, false),
+            false,
         );
         assert_eq!(shooter.element_count(), 8);
         // Use mode (crosshair off) with an empty multi-ammo weapon: the same
@@ -345,6 +366,7 @@ mod tests {
             0.75,
             None,
             &readout(Some(0), None, None, true),
+            false,
         );
         assert_eq!(use_mode.element_count(), 8);
         // The cycle button only appears when the weapon can actually cycle.
@@ -355,6 +377,7 @@ mod tests {
             0.75,
             None,
             &readout(Some(0), None, None, false),
+            false,
         );
         assert_eq!(single_ammo.element_count(), 7);
     }
@@ -400,6 +423,20 @@ mod tests {
     }
 
     #[test]
+    fn the_security_alert_badge_is_drawn_only_when_lit() {
+        let empty = readout(None, None, None, false);
+        let dark = build_flat_hud_canvas(true, false, 1.0, 0.75, None, &empty, false);
+        let lit = build_flat_hud_canvas(true, false, 1.0, 0.75, None, &empty, true);
+        assert_eq!(lit.element_count(), dark.element_count() + 1);
+    }
+
+    #[test]
+    fn the_security_alert_badge_clears_the_crosshair_and_the_bottom_strip() {
+        assert!(ALERT_BADGE.y + ALERT_BADGE.h < CROSSHAIR.y);
+        assert!(ALERT_BADGE.y + ALERT_BADGE.h < METERS_Y);
+    }
+
+    #[test]
     fn health_sits_above_psi() {
         // Matches the original SS2 HUD: health sits above psi (18 < 41).
         assert!(HEALTH_BAR.y < PSI_BAR.y);
@@ -415,8 +452,8 @@ mod tests {
         // The original turns the crosshair overlay off while the cursor is
         // up (ShockOverlayMouseMode) - one fewer element than shooter mode.
         let empty = readout(None, None, None, false);
-        let shooter = build_flat_hud_canvas(true, false, 1.0, 0.75, None, &empty);
-        let use_mode = build_flat_hud_canvas(false, false, 1.0, 0.75, None, &empty);
+        let shooter = build_flat_hud_canvas(true, false, 1.0, 0.75, None, &empty, false);
+        let use_mode = build_flat_hud_canvas(false, false, 1.0, 0.75, None, &empty, false);
         assert_eq!(use_mode.element_count(), shooter.element_count() - 1);
     }
 
@@ -430,6 +467,7 @@ mod tests {
             -1.0,
             None,
             &readout(None, None, None, false),
+            false,
         );
     }
 }

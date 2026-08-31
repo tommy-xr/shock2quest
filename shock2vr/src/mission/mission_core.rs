@@ -1515,6 +1515,9 @@ pub struct MissionCore {
     pub pathfinding_service: Option<Arc<PathfindingService>>,
     pub path_visualization: PathVisualizationSystem,
     pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
+    /// Blinking HUD badge + looping warning while a security ecology is
+    /// alerted. Derived from the world's `P$EcoState`, so it is not saved.
+    pub security_alert: crate::security_alert::SecurityAlert,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
     pub debug_pose_index: u32,
@@ -2401,6 +2404,7 @@ impl MissionCore {
             pathfinding_service,
             path_visualization: PathVisualizationSystem::new(),
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
+            security_alert: crate::security_alert::SecurityAlert::default(),
             debug_pose_index: 0,
             debug_weapon_index: 0,
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
@@ -2843,6 +2847,10 @@ impl MissionCore {
         ) {
             effects.push(radiation);
         }
+        // Security alert feedback: the HUD badge blink phase and the looping
+        // "Potential threat detected." warning, both driven by whether any
+        // security ecology sits in its alert column.
+        effects.extend(self.security_alert.update(&self.world, time));
         effects.extend(command_effects);
 
         let player = {
@@ -8184,6 +8192,8 @@ impl MissionCore {
                 !self.use_mode,
                 // Use mode expands the compact readouts to BIOFULL/AMMOFULL.
                 self.use_mode,
+                // Blinking security alert badge (lit half of the cycle).
+                self.security_alert.badge_visible(),
             ));
 
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over

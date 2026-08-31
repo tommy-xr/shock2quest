@@ -37,6 +37,7 @@ pub mod quest_info;
 pub mod research;
 mod runtime_props;
 mod scripts;
+mod security_alert;
 mod systems;
 #[cfg(test)]
 mod test_support;
