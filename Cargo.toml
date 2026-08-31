@@ -23,6 +23,7 @@ members = [
     "dark",
     "tools/asset_probe",
     "tools/dark_viewer",
+    "tools/dark_explorer",
     "tools/dark_query",
     "tools/debug_command",
     "tools/hitbox_analyzer",

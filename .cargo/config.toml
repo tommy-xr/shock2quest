@@ -1,6 +1,7 @@
 [alias]
 dv = "run -p dark_viewer --"
 dq = "run -p dark_query --"
+dx = "run -p dark_explorer --"
 dr = "run -p desktop_runtime --"
 dbgr = "run -p debug_runtime --"
 dbgc = "run -p debug_command --"

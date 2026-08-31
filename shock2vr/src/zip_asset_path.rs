@@ -6,21 +6,25 @@ use std::{
     sync::Mutex,
 };
 
-use engine::assets::asset_paths::{AbstractAssetPath, ReadableAndSeekable};
+use engine::assets::asset_paths::{AbstractAssetPath, AssetEntry, ReadableAndSeekable};
 use zip::ZipArchive;
 
 pub struct ZipAssetPath {
+    zip_path: String,
     archive: Mutex<ZipArchive<BufReader<File>>>,
     asset_to_path: HashMap<String, String>,
+    /// The (lowercased) mount prefix, kept so `entries()` can tell a primary
+    /// key (the prefix-stripped path) from a registered alias.
+    prefix: String,
 }
 
 impl ZipAssetPath {
     pub fn new(zip_path: String) -> Box<ZipAssetPath> {
-        Self::build(zip_path, true, None)
+        Self::with_prefix_opts(zip_path, "", true, None)
     }
 
     pub fn new2(zip_path: String, collapse_paths: bool) -> Box<ZipAssetPath> {
-        Self::build(zip_path, collapse_paths, None)
+        Self::with_prefix_opts(zip_path, "", collapse_paths, None)
     }
 
     /// Mount like [`ZipAssetPath::new`], but *additionally* register every entry
@@ -30,7 +34,7 @@ impl ZipAssetPath {
     /// basename (e.g. `"iface/log.pcx"` selects iface.crf's 188x296 MFD frame
     /// rather than obj.crf's 64x64 model texture, both named `LOG.PCX`).
     pub fn with_namespace(zip_path: String, namespace: &str) -> Box<ZipAssetPath> {
-        Self::build(zip_path, true, Some(namespace))
+        Self::with_prefix_opts(zip_path, "", true, Some(namespace))
     }
 
     /// Mount only the entries under `prefix`, keyed by the path *relative to*
@@ -99,56 +103,10 @@ impl ZipAssetPath {
             }
         }
         Box::new(ZipAssetPath {
+            zip_path,
             archive: Mutex::new(archive),
             asset_to_path,
-        })
-    }
-
-    fn build(zip_path: String, collapse_paths: bool, namespace: Option<&str>) -> Box<ZipAssetPath> {
-        let file = File::open(zip_path).unwrap();
-        let reader = BufReader::new(file);
-
-        let mut archive = zip::ZipArchive::new(reader).unwrap();
-        let mut asset_to_path = HashMap::new();
-        for i in 0..archive.len() {
-            let file = archive.by_index(i).unwrap();
-            let outpath = match file.enclosed_name() {
-                Some(path) => path,
-                None => {
-                    // println!("Entry {} has a suspicious path", file.name());
-                    continue;
-                }
-            };
-
-            if !(*file.name()).ends_with('/') {
-                let just_file_name = outpath
-                    .file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_ascii_lowercase();
-
-                asset_to_path.insert(
-                    outpath.to_str().unwrap().to_ascii_lowercase(),
-                    outpath.to_str().unwrap().to_string(),
-                );
-                if collapse_paths {
-                    asset_to_path.insert(
-                        just_file_name.clone(),
-                        outpath.to_str().unwrap().to_string(),
-                    );
-                }
-                if let Some(namespace) = namespace {
-                    asset_to_path.insert(
-                        format!("{}/{}", namespace, just_file_name),
-                        outpath.to_str().unwrap().to_string(),
-                    );
-                }
-            }
-        }
-        Box::new(ZipAssetPath {
-            archive: Mutex::new(archive),
-            asset_to_path,
+            prefix,
         })
     }
 }
@@ -171,12 +129,145 @@ impl AbstractAssetPath for ZipAssetPath {
         file.read_to_end(&mut file_contents).unwrap();
         Some(RefCell::new(Box::new(Cursor::new(file_contents))))
     }
+
+    fn entries(&self) -> Vec<AssetEntry> {
+        // Every registered lookup key, aliases included, so a caller can tell
+        // exactly which names this mount resolves. A key is primary when it is
+        // the prefix-stripped entry path; anything else (collapsed basename,
+        // namespace-qualified) is an alias to the same bytes.
+        self.asset_to_path
+            .iter()
+            .map(|(key, entry_name)| {
+                let primary = entry_name
+                    .to_ascii_lowercase()
+                    .strip_prefix(&self.prefix)
+                    .map(str::to_owned)
+                    .unwrap_or_default();
+                AssetEntry {
+                    key: key.clone(),
+                    source: self.zip_path.clone(),
+                    entry_name: entry_name.clone(),
+                    is_alias: *key != primary,
+                }
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::write_archive;
     use engine::assets::asset_paths::AssetPath;
+
+    /// `entries()` reports every registered lookup key - each file once as a
+    /// primary mount-relative key, plus its basename/namespace aliases marked
+    /// `is_alias` - all pointing at the real archive entry serving the bytes.
+    #[test]
+    fn entries_reports_primary_keys_and_marks_aliases() {
+        let root = crate::test_support::TempDir::new("zip-entries");
+        let archive = root.path().join("mod.kpf");
+        write_archive(
+            &archive,
+            &[
+                ("OBJ/txt16/Foo.PCX", b"pcx bytes"),
+                ("OBJ/foo.bin", b"bin bytes"),
+                ("other/skipped.txt", b"outside the prefix"),
+            ],
+        );
+        let archive = archive.to_string_lossy().into_owned();
+
+        let mount = ZipAssetPath::with_prefix_opts(archive.clone(), "obj/", true, Some("obj"));
+        let mut entries = mount.entries();
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        assert_eq!(
+            entries,
+            vec![
+                // "foo.bin" is both the primary key and its own basename, so
+                // there is exactly one (primary) entry for it.
+                AssetEntry {
+                    key: "foo.bin".to_owned(),
+                    source: archive.clone(),
+                    entry_name: "OBJ/foo.bin".to_owned(),
+                    is_alias: false,
+                },
+                AssetEntry {
+                    key: "foo.pcx".to_owned(),
+                    source: archive.clone(),
+                    entry_name: "OBJ/txt16/Foo.PCX".to_owned(),
+                    is_alias: true,
+                },
+                AssetEntry {
+                    key: "obj/foo.bin".to_owned(),
+                    source: archive.clone(),
+                    entry_name: "OBJ/foo.bin".to_owned(),
+                    is_alias: true,
+                },
+                AssetEntry {
+                    key: "obj/foo.pcx".to_owned(),
+                    source: archive.clone(),
+                    entry_name: "OBJ/txt16/Foo.PCX".to_owned(),
+                    is_alias: true,
+                },
+                AssetEntry {
+                    key: "txt16/foo.pcx".to_owned(),
+                    source: archive.clone(),
+                    entry_name: "OBJ/txt16/Foo.PCX".to_owned(),
+                    is_alias: false,
+                },
+            ]
+        );
+    }
+
+    /// A mount that registers no basename aliases (`collapse_paths: false`,
+    /// the `strings` family) must report none - a bare-name query genuinely
+    /// does not resolve there.
+    #[test]
+    fn entries_reports_no_aliases_when_paths_are_not_collapsed() {
+        let root = crate::test_support::TempDir::new("zip-entries-nocollapse");
+        let archive = root.path().join("strings.kpf");
+        write_archive(
+            &archive,
+            &[("strings/german/objshort.str", b"german table")],
+        );
+        let archive = archive.to_string_lossy().into_owned();
+
+        let mount = ZipAssetPath::with_prefix_opts(archive, "strings/", false, None);
+        let entries = mount.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].key, "german/objshort.str");
+        assert!(!entries[0].is_alias);
+        assert!(!mount.exists(String::new(), "objshort.str".to_owned()));
+    }
+
+    /// Combined mounts enumerate in resolution-priority order, so the first
+    /// entry for a key is the mount a lookup would actually serve it from.
+    #[test]
+    fn combined_mounts_enumerate_in_priority_order() {
+        let root = crate::test_support::TempDir::new("zip-entries-priority");
+        let modded = root.path().join("mod.kpf");
+        let base = root.path().join("base.kpf");
+        write_archive(&modded, &[("obj/foo.pcx", b"modded")]);
+        write_archive(&base, &[("data/res/obj/foo.pcx", b"original")]);
+
+        let mounts = AssetPath::combine(vec![
+            ZipAssetPath::with_prefix(modded.to_string_lossy().into_owned(), "obj/"),
+            ZipAssetPath::with_prefix(base.to_string_lossy().into_owned(), "data/res/obj/"),
+        ]);
+        let entries = mounts.entries();
+        let sources: Vec<String> = entries
+            .iter()
+            .filter(|e| e.key == "foo.pcx")
+            .map(|e| e.source.clone())
+            .collect();
+        assert_eq!(
+            sources,
+            vec![
+                modded.to_string_lossy().into_owned(),
+                base.to_string_lossy().into_owned()
+            ]
+        );
+    }
 
     /// `res/iface.crf` bundles its own `fonts/` subfolder sharing most
     /// basenames with `res/fonts.crf` (the canonical font family) - almost all
