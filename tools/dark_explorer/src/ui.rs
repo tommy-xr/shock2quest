@@ -1,5 +1,5 @@
 //! Windowed asset browser: family/directory tree + search on the left,
-//! per-asset preview (image/audio/text/hex) on the right.
+//! per-asset preview (image/audio/text/3D model/hex) on the right.
 
 use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
@@ -12,24 +12,38 @@ use engine::audio::{AudioClip, AudioContext, AudioHandle};
 use engine::texture_format::{self, PixelFormat};
 
 use crate::explorer;
+use crate::model_preview::{self, ModelPreview};
 
 const TEXT_EXTENSIONS: &[&str] = &["str", "mtl", "txt", "ini", "cfg", "json"];
 /// Cap on rows the flattened search view renders per frame.
 const SEARCH_RESULT_CAP: usize = 500;
 
-pub fn run(screenshot: Option<PathBuf>, select: Option<String>, search: Option<String>) {
+pub struct UiOptions {
+    pub screenshot: Option<PathBuf>,
+    pub select: Option<String>,
+    pub search: Option<String>,
+    /// Start the model preview with the skeleton / hitbox overlay on (so a
+    /// `--screenshot` run can capture the debug overlays).
+    pub skeletons: bool,
+    pub hitboxes: bool,
+}
+
+pub fn run(options: UiOptions) {
     explorer::print_coverage_caveat();
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1150.0, 760.0])
         .with_title("dark_explorer");
-    let options = eframe::NativeOptions {
+    let native_options = eframe::NativeOptions {
         viewport,
         ..Default::default()
     };
     let result = eframe::run_native(
         "dark_explorer",
-        options,
+        native_options,
         Box::new(move |cc| {
+            // Point the engine's raw `gl` bindings at eframe's GL context so
+            // the model preview can render with the game renderer.
+            model_preview::init_raw_gl(cc);
             // No open/close or scroll animation: a `--select` scroll measured
             // against a still-animating CollapsingHeader lands on stale layout,
             // and an animated scroll-to hasn't arrived when `--screenshot`
@@ -38,7 +52,7 @@ pub fn run(screenshot: Option<PathBuf>, select: Option<String>, search: Option<S
                 style.animation_time = 0.0;
                 style.scroll_animation = egui::style::ScrollAnimation::none();
             });
-            Ok(Box::new(ExplorerApp::new(screenshot, select, search)))
+            Ok(Box::new(ExplorerApp::new(options)))
         }),
     );
     if let Err(err) = result {
@@ -110,6 +124,8 @@ enum PreviewKind {
         duration: Option<std::time::Duration>,
     },
     Text(String),
+    /// A `.bin` 3D model, rendered by `ModelPreview` from `Preview::key`.
+    Model,
     /// Undecodable content: the reason plus a hex dump of the leading bytes.
     Raw {
         reason: String,
@@ -138,6 +154,11 @@ pub struct ExplorerApp {
     audio_handle: Option<AudioHandle>,
     audio_error: Option<String>,
     screenshot: Option<PathBuf>,
+    /// Lazily built on the first model selection: constructing it indexes
+    /// every family's archives and creates the engine render host.
+    model_preview: Option<ModelPreview>,
+    /// Initial overlay toggles for the model preview (from the CLI).
+    initial_overlays: (bool, bool),
     frames_rendered: u32,
     /// Frames left in which the tree scrolls to the selected row (a couple of
     /// frames, so the scroll re-applies once layout has settled).
@@ -147,26 +168,24 @@ pub struct ExplorerApp {
 }
 
 impl ExplorerApp {
-    fn new(
-        screenshot: Option<PathBuf>,
-        select: Option<String>,
-        search: Option<String>,
-    ) -> ExplorerApp {
+    fn new(options: UiOptions) -> ExplorerApp {
         let mut app = ExplorerApp {
             family_names: explorer::family_names(),
             families: BTreeMap::new(),
-            search: search.unwrap_or_default(),
+            search: options.search.unwrap_or_default(),
             selected: None,
             preview: None,
             audio: None,
             audio_handle: None,
             audio_error: None,
-            screenshot,
+            screenshot: options.screenshot,
+            model_preview: None,
+            initial_overlays: (options.skeletons, options.hitboxes),
             frames_rendered: 0,
             scroll_frames: 0,
             search_results: None,
         };
-        if let Some(select) = select {
+        if let Some(select) = options.select {
             // Fail loudly on a bad selection: a `--screenshot` run that quietly
             // captured an empty preview would still exit 0 otherwise.
             match select.split_once('/') {
@@ -230,7 +249,7 @@ fn build_preview(family: &str, key: &str, loaded: &LoadedFamily) -> Preview {
         }
     };
     let size = bytes.len();
-    let kind = decode_preview(key, bytes);
+    let kind = decode_preview(family, key, bytes);
     Preview {
         family: family.to_string(),
         key: key.to_string(),
@@ -245,7 +264,7 @@ fn extension(key: &str) -> &str {
     key.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("")
 }
 
-fn decode_preview(key: &str, bytes: Vec<u8>) -> PreviewKind {
+fn decode_preview(family: &str, key: &str, bytes: Vec<u8>) -> PreviewKind {
     let ext = extension(key).to_ascii_lowercase();
     // Dark parsers panic on malformed input, so every decode runs under
     // catch_unwind and falls back to the hex view instead of crashing.
@@ -281,12 +300,17 @@ fn decode_preview(key: &str, bytes: Vec<u8>) -> PreviewKind {
     if TEXT_EXTENSIONS.contains(&ext.as_str()) {
         return PreviewKind::Text(String::from_utf8_lossy(&bytes).into_owned());
     }
+    // Only the model families: `data` also serves `.bin` files (motiondb)
+    // whose parse failure aborts rather than unwinds.
+    if ext == "bin" && matches!(family, "obj" | "mesh") {
+        return PreviewKind::Model;
+    }
     raw_fallback(&bytes, format!("cannot render .{ext} files"))
 }
 
 /// Run a Dark parser under `catch_unwind` with the panic hook silenced (the
 /// format readers panic on malformed input), mapping a panic to its message.
-fn quiet_catch<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+pub(crate) fn quiet_catch<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     let prev = panic::take_hook();
     panic::set_hook(Box::new(|_| {}));
     let res = panic::catch_unwind(AssertUnwindSafe(f));
@@ -335,7 +359,7 @@ fn hex_dump(bytes: &[u8], limit: usize) -> String {
 }
 
 impl eframe::App for ExplorerApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let mut clicked: Option<(String, String)> = None;
 
@@ -365,7 +389,7 @@ impl eframe::App for ExplorerApp {
             });
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
-            self.show_preview(ui);
+            self.show_preview(ui, frame);
         });
 
         self.scroll_frames = self.scroll_frames.saturating_sub(1);
@@ -452,7 +476,7 @@ impl ExplorerApp {
         }
     }
 
-    fn show_preview(&mut self, ui: &mut egui::Ui) {
+    fn show_preview(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let Some(preview) = &mut self.preview else {
             ui.centered_and_justified(|ui| {
                 ui.label("Select an asset to preview it");
@@ -538,6 +562,17 @@ impl ExplorerApp {
                                 .desired_width(f32::INFINITY),
                         );
                     });
+            }
+            PreviewKind::Model => {
+                let key = preview.key.clone();
+                let (skeletons, hitboxes) = self.initial_overlays;
+                let host = self.model_preview.get_or_insert_with(|| {
+                    let mut host = ModelPreview::new();
+                    host.debug_skeletons = skeletons;
+                    host.debug_hit_boxes = hitboxes;
+                    host
+                });
+                host.show(ui, frame, &key);
             }
             PreviewKind::Raw { reason, hex } => {
                 ui.label(format!("Cannot render this file: {reason}"));

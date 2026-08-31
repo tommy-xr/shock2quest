@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use engine::assets::asset_paths::AssetEntry;
 
 mod explorer;
+mod model_preview;
 mod ui;
 
 use explorer::{family_entries, family_names, print_coverage_caveat, short_source};
@@ -52,6 +53,14 @@ enum Commands {
         /// Open with the search box pre-filled with this filter
         #[arg(long)]
         search: Option<String>,
+
+        /// Start the 3D model preview with the skeleton overlay on
+        #[arg(long)]
+        skeletons: bool,
+
+        /// Start the 3D model preview with the hitbox overlay on
+        #[arg(long)]
+        hitboxes: bool,
     },
     /// Show every mount serving an asset name, resolution winner first
     Which {
@@ -181,7 +190,15 @@ fn main() {
             screenshot,
             select,
             search,
-        } => ui::run(screenshot, select, search),
+            skeletons,
+            hitboxes,
+        } => ui::run(ui::UiOptions {
+            screenshot,
+            select,
+            search,
+            skeletons,
+            hitboxes,
+        }),
         Commands::Which { name } => which(name),
     }
 }

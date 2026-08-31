@@ -52,6 +52,7 @@ impl VideoPlayerScene {
 }
 
 impl ToolScene for VideoPlayerScene {
+    #[cfg_attr(not(feature = "ffmpeg"), allow(unused_variables))]
     fn init(&mut self, audio_context: &mut AudioContext<(), String>) {
         #[cfg(feature = "ffmpeg")]
         {

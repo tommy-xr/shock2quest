@@ -7,7 +7,7 @@ extern crate glfw;
 use clap::Parser;
 use glfw::GlfwReceiver;
 
-mod scenes;
+use dark_viewer::scenes;
 use scenes::{
     BinAiViewerScene, BinObjViewerScene, FontViewerScene, GlbViewerScene, ToolScene,
     VideoPlayerScene,

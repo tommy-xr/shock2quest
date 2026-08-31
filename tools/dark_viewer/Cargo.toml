@@ -3,6 +3,10 @@ name = "dark_viewer"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "dark_viewer"
+path = "src/lib.rs"
+
 [[bin]]
 name = "dark_viewer"
 path = "src/main.rs"
@@ -15,7 +19,10 @@ glfw = "0.56.0"
 engine = { path = "../../engine" }
 engine_ffmpeg = { path = "../../engine_ffmpeg", optional = true }
 dark = { path = "../../dark" }
-shock2vr = { path = "../../shock2vr" }
+# default-features off so a dependent with `default-features = false` (the
+# dark_explorer preview) does not get shock2vr/ffmpeg back through feature
+# unification; the crate's own `ffmpeg` feature forwards it.
+shock2vr = { path = "../../shock2vr", default-features = false }
 cgmath = "0.18.0"
 byteorder = "1.4.3"
 pcx = "0.2.3"
