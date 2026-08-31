@@ -15,6 +15,7 @@ mod melee_charge_visual;
 pub mod message_trace;
 pub mod psi_amp_selection;
 mod psi_carousel;
+pub mod object_lighting;
 pub mod save_load;
 pub mod scenes;
 pub mod time;
