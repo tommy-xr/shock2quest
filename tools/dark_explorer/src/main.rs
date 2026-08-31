@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use engine::assets::asset_paths::AssetEntry;
 
 mod archetypes;
+mod archives;
 mod explorer;
 mod model_preview;
 mod ui;
@@ -79,6 +80,15 @@ enum Commands {
         /// --screenshot capture (for posing an animated clip)
         #[arg(long)]
         advance: Option<f32>,
+
+        /// Open the Archives tab (raw archive contents, unmounted entries dimmed)
+        #[arg(long)]
+        archives: bool,
+
+        /// Open the Archives tab with one raw entry selected, as
+        /// "<archive>:<entry>" (e.g. "mods/sshock2ee.kpf:sq_scripts/foo.nut")
+        #[arg(long)]
+        select_entry: Option<String>,
     },
     /// Show every mount serving an asset name, resolution winner first
     Which {
@@ -214,6 +224,8 @@ fn main() {
             archetype,
             clip,
             advance,
+            archives,
+            select_entry,
         } => ui::run(ui::UiOptions {
             screenshot,
             select,
@@ -224,6 +236,8 @@ fn main() {
             archetype,
             clip,
             advance,
+            archives,
+            select_entry,
         }),
         Commands::Which { name } => which(name),
     }
