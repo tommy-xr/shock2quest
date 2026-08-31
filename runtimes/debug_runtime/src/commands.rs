@@ -319,6 +319,21 @@ pub struct SceneObjectSummary {
     pub clear_depth: bool,
     /// Front-face winding used for culling, or absent when double-sided.
     pub backface_culling: Option<String>,
+    /// Lights resolved for this object alone, when object lighting is on.
+    /// Absent for anything lit by the scene's own lights (world geometry, HUD).
+    pub lighting: Option<ObjectLightingSummary>,
+}
+
+/// What the object-lighting pass decided for one object.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ObjectLightingSummary {
+    /// How many lights were kept for it, out of the renderer's slots.
+    pub light_count: usize,
+    /// Total light arriving at its position, ignoring surface orientation -
+    /// the number to compare between objects to see who is lit and who is not.
+    pub received: f32,
+    /// The unlit floor this object is shaded over.
+    pub ambient: [f32; 3],
 }
 
 /// List of physics rigid bodies

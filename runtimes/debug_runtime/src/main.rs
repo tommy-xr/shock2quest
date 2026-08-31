@@ -1026,6 +1026,14 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
                 render_layer: render_layer.as_str().to_owned(),
                 clear_depth: render_layer.clears_depth() && first_in_layer,
                 backface_culling: obj.backface_culling().map(|w| format!("{w:?}")),
+                lighting: obj.lights().map(|lights| {
+                    let position = cgmath::vec3(translation.x, translation.y, translation.z);
+                    commands::ObjectLightingSummary {
+                        light_count: lights.active_count(),
+                        received: shock2vr::object_lighting::received_light(lights, position),
+                        ambient: [lights.ambient.x, lights.ambient.y, lights.ambient.z],
+                    }
+                }),
             }
         })
         .collect()
@@ -1794,6 +1802,14 @@ fn process_command(
                     render_layer: o.render_layer.clone(),
                     clear_depth: o.clear_depth,
                     backface_culling: o.backface_culling.clone(),
+                    lighting: o
+                        .lighting
+                        .as_ref()
+                        .map(|l| commands::ObjectLightingSummary {
+                            light_count: l.light_count,
+                            received: l.received,
+                            ambient: l.ambient,
+                        }),
                 })
                 .collect();
             let result = commands::SceneListResult {

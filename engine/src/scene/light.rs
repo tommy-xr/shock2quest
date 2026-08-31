@@ -150,11 +150,42 @@ impl From<PointLight> for SceneLight {
     }
 }
 
+/// How a light's contribution falls off with distance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightFalloff {
+    /// The renderer's own smooth curve, used by the player's hand lights.
+    Smooth,
+    /// Inverse distance, which is what the original engine used to light
+    /// objects. Falls off far more slowly than an inverse square.
+    InverseDistance,
+}
+
+/// The unlit floor: what a surface shows before any light reaches it.
+pub const DEFAULT_AMBIENT: f32 = 0.5;
+
+/// Treat every light as a source of this radius rather than a point, in world
+/// units. Inverse-distance has no upper bound, so a light sitting inside the
+/// model it belongs to - a lamp lighting its own housing - would otherwise
+/// contribute thousands and, worse, crowd every other light out of the
+/// selection. Shading and ranking MUST use the same floor or the lights chosen
+/// are not the lights drawn; the shader spells it `SOURCE_RADIUS`.
+pub const LIGHT_SOURCE_RADIUS: f32 = 0.8;
+
 /// Container for managing up to 6 lights for single-pass lighting
 #[derive(Debug, Clone)]
 pub struct LightArray {
     /// Array of up to 6 lights (None = disabled slot)
     pub lights: [Option<SceneLight>; 6],
+    /// Light every surface receives regardless of the lights above.
+    pub ambient: Vector3<f32>,
+    /// How the lights in this array attenuate.
+    pub falloff: LightFalloff,
+    /// Wraps diffuse light around the terminator: 0 is plain lambert (a
+    /// surface facing away gets nothing, which is what the original did for
+    /// objects), 1 is half-lambert (what it baked into lightmaps, where a wall
+    /// facing away still catches half). Between the two trades directional
+    /// contrast for lifted shadows.
+    pub lambert_wrap: f32,
 }
 
 impl LightArray {
@@ -162,6 +193,9 @@ impl LightArray {
     pub fn new() -> Self {
         Self {
             lights: [None, None, None, None, None, None],
+            ambient: Vector3::new(DEFAULT_AMBIENT, DEFAULT_AMBIENT, DEFAULT_AMBIENT),
+            falloff: LightFalloff::Smooth,
+            lambert_wrap: 0.0,
         }
     }
 
@@ -181,6 +215,15 @@ impl LightArray {
     /// Get a reference to the light in the specified slot
     pub fn get_light(&self, index: usize) -> Option<&SceneLight> {
         self.lights.get(index).and_then(|slot| slot.as_ref())
+    }
+
+    /// Light everything in this array by the original engine's rule: inverse
+    /// distance, over the mission's own ambient floor.
+    pub fn with_object_lighting(mut self, ambient: Vector3<f32>, lambert_wrap: f32) -> Self {
+        self.ambient = ambient;
+        self.falloff = LightFalloff::InverseDistance;
+        self.lambert_wrap = lambert_wrap;
+        self
     }
 
     /// Clear all lights

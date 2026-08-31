@@ -218,6 +218,25 @@ dev_params! {
     /// even read, so a stray `Alt+V` (or controller chord) during normal play
     /// cannot detach the view. Turning it back off while detached also
     /// re-attaches the camera, so the switch is always a way out.
+    /// Multiplies every object light's brightness. The default 1.0 is the
+    /// faithful value - brightness as authored, divided back down for our
+    /// smaller world units - and exists to be turned up when the authored
+    /// answer reads too dark on a modern display. Objects are legitimately
+    /// dimmer than the walls behind them (lightmapped surfaces never fall
+    /// fully dark, objects do), so this is a taste knob, not a correction.
+    OBJECT_LIGHT_BRIGHTNESS = float("object_light_brightness", "Obj light", 1.0, 0.0, 8.0, 0.1),
+    /// Added to the mission's own ambient for objects only. The mission floor
+    /// is often very low (medsci1 authors 0.078), which is faithful but leaves
+    /// an object with no light on it nearly black; raise this to lift the
+    /// shadows without touching what the lamps do.
+    OBJECT_LIGHT_AMBIENT_BOOST = float("object_light_ambient", "Obj ambient", 0.0, 0.0, 0.5, 0.01),
+    /// How far light wraps past the terminator on objects. 0 is what the
+    /// original did for objects - a face pointing away from a lamp gets
+    /// nothing but ambient. 1 is the half-lambert it baked into *lightmaps*,
+    /// which is why walls never go fully dark and props do. Raising this lifts
+    /// a prop's shadowed side at the cost of the directional read that makes a
+    /// lamp feel like a lamp.
+    OBJECT_LIGHT_WRAP = float("object_light_wrap", "Obj wrap", 0.0, 0.0, 1.0, 0.05),
     FREE_CAMERA = bool("free_camera", "Free camera", false),
     /// Which pose the visibility engine culls from while the free camera is
     /// detached. Off (the default) culls from the *player*, so flying out
