@@ -1,5 +1,5 @@
 import type { GameServer } from "../../src/index.js";
-import { norm } from "./frontend-menu.js";
+import { clickCanvasPoint } from "./frontend-menu.js";
 
 // A training tour ends on the debrief screen (DEBRIEF.PCX), which waits for the
 // player before the departure runs. Any test that drives a tour therefore has
@@ -19,12 +19,6 @@ export async function debriefIsUp(game: GameServer): Promise<boolean> {
  */
 export async function dismissDebrief(game: GameServer): Promise<boolean> {
   if (!(await debriefIsUp(game))) return false;
-  await game.input.set("pointer.position", norm(...DEBRIEF_CONTINUE));
-  await game.input.set("pointer.pressed", 0);
-  await game.step({ frames: 3 });
-  await game.input.set("pointer.pressed", 1);
-  await game.step({ frames: 3 });
-  await game.input.set("pointer.pressed", 0);
-  await game.step({ frames: 3 });
+  await clickCanvasPoint(game, DEBRIEF_CONTINUE);
   return true;
 }

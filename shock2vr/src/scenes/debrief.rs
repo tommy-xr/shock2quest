@@ -21,6 +21,7 @@ use engine::{
     scene::{SceneObject, light::SpotLight},
 };
 use shipyard::{EntityId, UniqueViewMut, World};
+use tracing::warn;
 
 use crate::{
     GameOptions,
@@ -29,7 +30,9 @@ use crate::{
     mission::GlobalContext,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    ui::{FrontendMenu, HAlign, Rect, ScaleMode, UiCanvas, VAlign},
+    ui::{
+        FrontendMenu, FrontendMenuItem, HAlign, Rect, ScaleMode, UiCanvas, VAlign, hit_menu_item,
+    },
 };
 
 /// The screen is authored on the original 640x480 `DEBRIEF.PCX` canvas.
@@ -40,16 +43,13 @@ const BACKDROP_TEXTURE: &str = "DEBRIEF.PCX";
 const LAYOUT_FILE: &str = "DEBRIEFR.BIN";
 /// The screen's own string table: a single `Continue` entry.
 const LABELS_FILE: &str = "DEBRIEF.STR";
-const CONTINUE_KEY: &str = "continue";
-const CONTINUE_FALLBACK: &str = "Continue";
 /// Same display font the other frontend screens label their buttons with.
 const MENU_FONT: &str = "metafont.fon";
-/// The small in-game font, for the page body.
+/// The small in-game font, for the page body - drawn at its authored size
+/// (`text_native`, the fidelity-correct default), so the page reads as the same
+/// kind of text the rest of the interface draws.
 const BODY_FONT: &str = "mainfont.fon";
-/// Glyph-cell height in canvas pixels for the body, and the row pitch.
-/// `mainfont` is ~10 px native; this keeps the page legible at panel distance
-/// while a full 27-line-table page still fits the backdrop's text panel.
-const BODY_FONT_SIZE: f32 = 16.0;
+/// Row pitch, matching the load screen's list rows.
 const BODY_LINE_H: f32 = 19.0;
 /// The 4:3 art is letterboxed (not stretched) on non-4:3 windows.
 const SCALE_MODE: ScaleMode = ScaleMode::PreserveAspect;
@@ -65,7 +65,13 @@ enum DebriefAction {
     Continue,
 }
 
-/// The only index into `DEBRIEFR.BIN`.
+/// The screen's one widget, parallel to `DEBRIEFR.BIN`'s one rect.
+const MENU_ITEMS: &[FrontendMenuItem<DebriefAction>] = &[FrontendMenuItem {
+    string_key: "continue",
+    fallback_label: "Continue",
+    action: Some(DebriefAction::Continue),
+    label_override: None,
+}];
 const CONTINUE_RECT_INDEX: usize = 0;
 /// Decoded `DEBRIEFR.BIN` value, used when the layout file is absent.
 const FALLBACK_RECTS: [Rect; 1] = [Rect::new(425.0, 401.0, 210.0, 74.0)];
@@ -73,9 +79,7 @@ const FALLBACK_RECTS: [Rect; 1] = [Rect::new(425.0, 401.0, 210.0, 74.0)];
 /// The button at a canvas point, if any. Shared by the click and the rollover
 /// sound so the two always agree on where the button is.
 fn hit(point: Vector2<f32>, rects: &[Rect]) -> Option<DebriefAction> {
-    rects[CONTINUE_RECT_INDEX]
-        .contains(point)
-        .then_some(DebriefAction::Continue)
+    hit_menu_item(point, MENU_ITEMS, rects, |_| true)
 }
 
 pub struct DebriefScene {
@@ -122,34 +126,42 @@ impl DebriefScene {
 
         let lines: Vec<String> = {
             let font = asset_cache.get(&FONT_IMPORTER, BODY_FONT);
-            wrap_page(&**font, &self.text, BODY_FONT_SIZE, TEXT_RECT.w)
+            wrap_page(&**font, &self.text, font.base_height(), TEXT_RECT.w)
         };
         for (index, line) in lines.iter().enumerate() {
             let y = TEXT_RECT.y + index as f32 * BODY_LINE_H;
+            // The shipped pages wrap to at most 10 rows in a 15-row panel, so
+            // this is a guard, not a design: a page that would spill over the
+            // backdrop art stops at the panel and says so, rather than quietly
+            // drawing its last line (the grant) off the screen.
+            if y + BODY_LINE_H > TEXT_RECT.y + TEXT_RECT.h {
+                warn!(
+                    "Debrief page is {} rows too tall for the panel - truncated",
+                    lines.len() - index
+                );
+                break;
+            }
             // A blank line is a paragraph gap: it spaces the block, it draws
-            // nothing. Rows past the panel are dropped rather than spilling
-            // over the backdrop art.
-            if line.is_empty() || y + BODY_LINE_H > TEXT_RECT.y + TEXT_RECT.h {
+            // nothing.
+            if line.is_empty() {
                 continue;
             }
-            canvas.text(
+            canvas.text_native(
                 Rect::new(TEXT_RECT.x, y, TEXT_RECT.w, BODY_LINE_H),
                 line,
                 BODY_FONT,
-                BODY_FONT_SIZE,
                 HAlign::Left,
                 VAlign::Middle,
             );
         }
 
         let rects = self.menu.rects(asset_cache, LAYOUT_FILE, &FALLBACK_RECTS);
-        let strings = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, LABELS_FILE);
-        let label =
-            crate::ui::resolve_menu_label(strings.as_deref(), CONTINUE_KEY, CONTINUE_FALLBACK);
+        let labels = self.menu.labels(asset_cache, LABELS_FILE, MENU_ITEMS);
+        let label = &labels[CONTINUE_RECT_INDEX];
         let rect = rects[CONTINUE_RECT_INDEX];
         let hovered = pointer_canvas.is_some_and(|p| rect.contains(p));
         canvas
-            .text_native(rect, &label, MENU_FONT, HAlign::Center, VAlign::Middle)
+            .text_native(rect, label, MENU_FONT, HAlign::Center, VAlign::Middle)
             .opacity(if hovered { 1.0 } else { 0.6 });
 
         canvas

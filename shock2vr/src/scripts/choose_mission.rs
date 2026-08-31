@@ -68,18 +68,27 @@ impl ChooseMissionScript {
         }
     }
 
-    /// The debrief page key for the tour this trigger completes, if any: the
-    /// `Mission1..Mission27` key `player_stats::REWARDS` records beside the
-    /// grants for (career, completed year, tour index). The markers carry no
-    /// text of their own - only `P$CharGenRo` - so the page is selected the way
-    /// the original does, from the same table that decides the stats.
-    fn debrief_key(world: &World, entity_id: EntityId, current_year: u32) -> Option<&'static str> {
-        match Self::grant_reward_effect(world, entity_id, current_year) {
-            Effect::GrantTourReward { career, year, tour } => {
-                crate::player_stats::tour_reward(career, year, tour).map(|reward| reward.text_key)
-            }
-            _ => None,
+    /// The debrief page key for the grant this trigger is about to make, if
+    /// any: the `Mission1..Mission27` key `player_stats::REWARDS` records
+    /// beside the grants themselves. The markers carry no text of their own -
+    /// only `P$CharGenRo` - so the page is selected the way the original does,
+    /// from the same table that decides the stats.
+    ///
+    /// `None` for a year already granted, so the page can never claim a stat
+    /// change `apply_tour_reward` is about to refuse (two markers firing in one
+    /// frame both read the pre-effect quest bits).
+    fn debrief_key(world: &World, grant: &Effect) -> Option<&'static str> {
+        let Effect::GrantTourReward { career, year, tour } = grant else {
+            return None;
+        };
+        let already_granted = world
+            .borrow::<UniqueView<QuestInfo>>()
+            .map(|quest_info| quest_info.player_stats().granted_years.contains(year))
+            .unwrap_or(false);
+        if already_granted {
+            return None;
         }
+        crate::player_stats::tour_reward(*career, *year, *tour).map(|reward| reward.text_key)
     }
 
     /// `transition` behind the tour's debrief page, when it has one. The page
@@ -179,7 +188,7 @@ impl Script for ChooseMissionScript {
                             },
                             new_year,
                         ),
-                        Self::debrief_key(world, entity_id, current_year),
+                        Self::debrief_key(world, &grant_effect),
                     );
 
                     Effect::Multiple(vec![
@@ -208,7 +217,7 @@ impl Script for ChooseMissionScript {
                             },
                             new_year,
                         ),
-                        Self::debrief_key(world, entity_id, current_year),
+                        Self::debrief_key(world, &grant_effect),
                     );
 
                     Effect::Multiple(vec![

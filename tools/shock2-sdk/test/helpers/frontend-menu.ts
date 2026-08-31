@@ -48,3 +48,35 @@ export const panelPoint = ([u, v]: [number, number]): [number, number, number] =
   PLAYER_EYE_HEIGHT_WORLD + (0.5 - v) * PANEL_SIZE.y,
   (0.5 - u) * PANEL_SIZE.x,
 ];
+
+/** Click a canvas point with the flat pointer, as a real rising edge. */
+export async function clickCanvasPoint(
+  game: GameServer,
+  [x, y]: [number, number],
+): Promise<void> {
+  await game.input.set("pointer.position", norm(x, y));
+  await game.input.set("pointer.pressed", 0);
+  await game.step({ frames: 3 });
+  await game.input.set("pointer.pressed", 1);
+  await game.step({ frames: 3 });
+  await game.input.set("pointer.pressed", 0);
+  await game.step({ frames: 3 });
+}
+
+/** Pull the trigger over a canvas point on the VR panel, as a rising edge. */
+export async function vrClickCanvasPoint(
+  game: GameServer,
+  [x, y]: [number, number],
+): Promise<void> {
+  const [, py, pz] = panelPoint(norm(x, y));
+  await game.input.set("right_hand.rotation", AIM_AT_PANEL);
+  // Aimed straight down -X: the ray meets the panel at the same canvas point
+  // whatever distance the panel is currently tuned to.
+  await game.input.set("right_hand.position", [0, py, pz]);
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({ frames: 3 });
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 3 });
+  await game.input.set("right_hand.trigger", 0);
+  await game.step({ frames: 3 });
+}

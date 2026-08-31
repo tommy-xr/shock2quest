@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import { isCutsceneScene } from "./helpers/cutscenes.js";
 import { DEBRIEF_CONTINUE, dismissDebrief } from "./helpers/debrief.js";
-import { AIM_AT_PANEL, norm, panelPoint } from "./helpers/frontend-menu.js";
+import { vrClickCanvasPoint } from "./helpers/frontend-menu.js";
 
 // The character-creation debrief: the page the original shows as a training
 // tour ends ("Your stint aboard the UNN Gallo is finished... You've gained +2
@@ -50,19 +50,6 @@ async function completeTourZero(game: GameServer): Promise<void> {
     type: "TurnOn",
   } as unknown as Parameters<typeof game.entities.sendMessage>[1]);
   await game.step({ frames: 30 });
-}
-
-/** Pull the trigger over a canvas point on the VR panel, as a rising edge. */
-async function vrClick(game: GameServer, [x, y]: [number, number]): Promise<void> {
-  const [, py, pz] = panelPoint(norm(x, y));
-  await game.input.set("right_hand.rotation", AIM_AT_PANEL);
-  await game.input.set("right_hand.position", [0, py, pz]);
-  await game.input.set("right_hand.trigger", 0);
-  await game.step({ frames: 3 });
-  await game.input.set("right_hand.trigger", 1);
-  await game.step({ frames: 3 });
-  await game.input.set("right_hand.trigger", 0);
-  await game.step({ frames: 3 });
 }
 
 test(
@@ -134,7 +121,7 @@ test(
     );
 
     // The same canvas rect drives the click in VR, through the controller ray.
-    await vrClick(game, DEBRIEF_CONTINUE);
+    await vrClickCanvasPoint(game, DEBRIEF_CONTINUE);
     const after = (await game.info()).mission;
     assert.ok(
       isCutsceneScene(after) || after.toLowerCase().includes("station"),
