@@ -37,7 +37,7 @@ pub struct UiOptions {
     /// `--screenshot` run can capture the debug overlays).
     pub skeletons: bool,
     pub hitboxes: bool,
-    /// Open the Archetypes tab with this creature selected (name or
+    /// Open the Archetypes tab with this archetype selected (name or
     /// template id), optionally playing `clip`, advanced by `advance` seconds
     /// of simulation time before a `--screenshot` capture.
     pub archetype: Option<String>,
@@ -1370,7 +1370,7 @@ impl ExplorerApp {
         show_flat_results(ui, rows, *total, ':', selected.as_ref(), clicked);
     }
 
-    /// Left panel, Archetypes tab: search box + creature template tree (or a
+    /// Left panel, Archetypes tab: search box + modeled-template tree (or a
     /// flat filtered list while searching).
     fn show_archetype_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
@@ -1406,7 +1406,7 @@ impl ExplorerApp {
                         .values()
                         .filter(|a| a.name.to_ascii_lowercase().contains(&needle))
                         .collect();
-                    matches.sort_by_key(|a| a.name.to_ascii_lowercase());
+                    matches.sort_by_key(|a| (a.name.to_ascii_lowercase(), a.template_id));
                     for archetype in &matches {
                         let is_selected = selected == Some(archetype.template_id);
                         if ui.selectable_label(is_selected, &archetype.name).clicked() {
@@ -1447,7 +1447,7 @@ impl ExplorerApp {
                 return;
             }
         };
-        if self.archetype_clips.as_ref().map(|(i, _)| *i) != Some(id) {
+        if archetype.is_creature() && self.archetype_clips.as_ref().map(|(i, _)| *i) != Some(id) {
             let clips = match &self.archetype_db {
                 Some(Ok(db)) => db.clips_for(&archetype),
                 _ => Err("archetype data not loaded".to_string()),
@@ -1465,44 +1465,52 @@ impl ExplorerApp {
                 ui.label("Model");
                 ui.label(archetype.model_key());
                 ui.end_row();
-                ui.label("Creature type");
-                ui.label(archetype.creature_type_name());
-                ui.end_row();
-                ui.label("Actor type");
-                ui.label(archetype.actor_type_name());
-                ui.end_row();
+                // Creature rows are meaningless for a weapon or prop.
+                if archetype.is_creature() {
+                    ui.label("Creature type");
+                    ui.label(archetype.creature_type_name());
+                    ui.end_row();
+                    ui.label("Actor type");
+                    ui.label(archetype.actor_type_name());
+                    ui.end_row();
+                }
             });
         ui.separator();
 
-        egui::Panel::right(egui::Id::new("clip_list"))
-            .resizable(true)
-            .default_size(220.0)
-            .show(ui, |ui| {
-                ui.label("Clips (click to play)");
-                ui.separator();
-                match &self.archetype_clips {
-                    Some((_, Ok(clips))) => {
-                        if clips.is_empty() {
-                            ui.label("(no clips for this actor type)");
-                        }
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                for clip in clips {
-                                    let is_playing = self.selected_clip.as_deref() == Some(clip);
-                                    if ui.selectable_label(is_playing, clip).clicked() {
-                                        // Click toggles: re-clicking stops it.
-                                        self.selected_clip = (!is_playing).then(|| clip.clone());
+        // Only creatures animate; non-creatures get the full pane for the model.
+        if archetype.is_creature() {
+            egui::Panel::right(egui::Id::new("clip_list"))
+                .resizable(true)
+                .default_size(220.0)
+                .show(ui, |ui| {
+                    ui.label("Clips (click to play)");
+                    ui.separator();
+                    match &self.archetype_clips {
+                        Some((_, Ok(clips))) => {
+                            if clips.is_empty() {
+                                ui.label("(no clips for this actor type)");
+                            }
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    for clip in clips {
+                                        let is_playing =
+                                            self.selected_clip.as_deref() == Some(clip);
+                                        if ui.selectable_label(is_playing, clip).clicked() {
+                                            // Click toggles: re-clicking stops it.
+                                            self.selected_clip =
+                                                (!is_playing).then(|| clip.clone());
+                                        }
                                     }
-                                }
-                            });
+                                });
+                        }
+                        Some((_, Err(err))) => {
+                            ui.label(format!("Cannot list clips: {err}"));
+                        }
+                        None => {}
                     }
-                    Some((_, Err(err))) => {
-                        ui.label(format!("Cannot list clips: {err}"));
-                    }
-                    None => {}
-                }
-            });
+                });
+        }
 
         let host = preview_host(
             &mut self.model_preview,
@@ -1510,8 +1518,8 @@ impl ExplorerApp {
             self.screenshot.is_some(),
         );
         let scene = match &self.selected_clip {
-            Some(clip) => PreviewScene::Clip(clip.clone()),
-            None => PreviewScene::Model,
+            Some(clip) if archetype.is_creature() => PreviewScene::Clip(clip.clone()),
+            _ => PreviewScene::Model,
         };
         host.show(ui, frame, &archetype.model_key(), &scene);
     }
@@ -1791,7 +1799,7 @@ fn preview_host(
 }
 
 /// One node of the archetype tree: a collapsible header where the template has
-/// children (with a selectable "(this)" row when it is itself a creature),
+/// children (with a selectable "(this)" row when it is itself an archetype),
 /// else a selectable leaf.
 fn show_archetype_node(
     ui: &mut egui::Ui,
