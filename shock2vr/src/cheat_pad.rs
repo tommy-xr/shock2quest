@@ -34,7 +34,7 @@ use crate::{
     ui::{
         FrontendCanvasPresenter, FrontendMenu, HAlign, Rect, ScaleMode, UiCanvas, VAlign,
         dev_params_panel::{self, FIELD_TOP_Y, PanelRects},
-        list_scroll::{self, ScrollHalf},
+        list_scroll::{self, ListGeometry, ListHit, ScrollHalf},
     },
 };
 
@@ -60,15 +60,15 @@ const IDLE_OPACITY: f32 = 0.65;
 const HOVER_OPACITY: f32 = 1.0;
 
 /// One entry in the list: the row's label and the templates it rains.
-pub struct Cheat {
-    pub label: &'static str,
+struct Cheat {
+    label: &'static str,
     templates: &'static [i32],
 }
 
 /// Every cheat, in screen order. Template ids come from `cargo dq` against the
-/// gamesys; a new cheat is one line here and nothing else - the list pages and
+/// gamesys; a new cheat is one entry here and nothing else - the list pages and
 /// grows a scroll rocker on its own once the entries outrun the pane.
-pub static CHEATS: &[Cheat] = &[
+static CHEATS: &[Cheat] = &[
     Cheat {
         label: "Rain weapons",
         // The four workhorse weapons, plus a clip for each gun that takes one.
@@ -97,18 +97,17 @@ pub static CHEATS: &[Cheat] = &[
 
 impl Cheat {
     /// The effect this row asks the scene for.
-    pub fn effect(&self) -> Effect {
+    fn effect(&self) -> Effect {
         Effect::RainItems {
             template_ids: self.templates.to_vec(),
         }
     }
 }
 
-/// What a click on the pad resolves to. `Cheat` carries the index of the entry
-/// scrolled into that row, never the row's own slot: a positional index would
-/// rain whatever entry *used* to sit there the moment the list scrolls.
+/// What a click on the pad resolves to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CheatEvent {
+    /// The index of the cheat scrolled into the clicked row.
     Cheat(usize),
     Scroll(ScrollHalf),
     /// Close the pad and let the simulation run again.
@@ -123,70 +122,38 @@ pub enum CheatOutcome {
     Close,
 }
 
-// The list geometry, all of it `list_scroll`'s. Parameterised by `len` rather
-// than reading `CHEATS` directly so the paging and scroll behaviour is testable
-// against a list longer than the two entries shipped today.
-
-fn rows_per_page(rects: PanelRects) -> usize {
-    list_scroll::rows_per_page(rects.list_rect(), FIELD_TOP_Y, ROW_H)
-}
-
-fn max_scroll(rects: PanelRects, len: usize) -> usize {
-    list_scroll::max_scroll(len, rows_per_page(rects))
-}
-
-fn visible_rows(rects: PanelRects, len: usize, scroll: usize) -> std::ops::Range<usize> {
-    list_scroll::visible_rows(len, rows_per_page(rects), scroll)
-}
-
-fn rocker(rects: PanelRects, len: usize) -> Option<list_scroll::Rocker> {
-    list_scroll::rocker(rects.list_rect(), FIELD_TOP_Y, max_scroll(rects, len) > 0)
-}
-
-/// The canvas rect of the `slot`-th visible row. Rows stop short of the scroll
-/// gutter whenever it is in use, so a row and the rocker can never claim the
-/// same point.
-fn row_rect(rects: PanelRects, len: usize, slot: usize) -> Rect {
-    let list = rects.list_rect();
-    let gutter = if max_scroll(rects, len) > 0 {
-        list_scroll::GUTTER_W
-    } else {
-        0.0
-    };
-    Rect::new(
-        list.x,
-        list.y + slot as f32 * ROW_H,
-        (list.w - gutter).max(0.0),
-        ROW_H,
-    )
-}
-
-/// The rect a row's label is drawn in: the row, inset on both edges.
-fn text_rect(rects: PanelRects, len: usize, slot: usize) -> Rect {
-    let row = row_rect(rects, len, slot);
-    Rect::new(
-        row.x + TEXT_INSET,
-        row.y,
-        (row.w - 2.0 * TEXT_INSET).max(0.0),
-        row.h,
-    )
+/// The list's geometry, shared with every other frontend list. The pane and
+/// the line the rows stop at are the Developer page's own; the pitch and inset
+/// are the debug-scene launcher's, so a cheat row and a scene row are the same
+/// row.
+fn geometry(rects: PanelRects) -> ListGeometry {
+    ListGeometry {
+        pane: rects.list_rect(),
+        bottom_limit: FIELD_TOP_Y,
+        row_h: ROW_H,
+        text_inset: TEXT_INSET,
+    }
 }
 
 /// What is at a canvas point, if any. Both the click and the hover highlight go
 /// through this, so the two can never disagree.
-fn hit(rects: PanelRects, len: usize, scroll: usize, point: Vector2<f32>) -> Option<CheatEvent> {
+///
+/// Takes the entries rather than a count so the rows and the labels drawn in
+/// them are the same object: a length parameter would let a caller hit-test a
+/// row that has no cheat behind it.
+fn hit(
+    rects: PanelRects,
+    cheats: &[Cheat],
+    scroll: usize,
+    point: Vector2<f32>,
+) -> Option<CheatEvent> {
     if rects.done_rect().contains(point) {
         return Some(CheatEvent::Done);
     }
-    let rows = visible_rows(rects, len, scroll);
-    if let Some(rocker) = rocker(rects, len) {
-        if let Some(half) = list_scroll::hit(&rocker, rows.start, max_scroll(rects, len), point) {
-            return Some(CheatEvent::Scroll(half));
-        }
+    match geometry(rects).hit(cheats.len(), scroll, point)? {
+        ListHit::Row(index) => Some(CheatEvent::Cheat(index)),
+        ListHit::Scroll(half) => Some(CheatEvent::Scroll(half)),
     }
-    (0..rows.len())
-        .find(|slot| row_rect(rects, len, *slot).contains(point))
-        .map(|slot| CheatEvent::Cheat(rows.start + slot))
 }
 
 /// Describe the pad onto a canvas: backdrop, header, the scrolled rows, the
@@ -194,14 +161,16 @@ fn hit(rects: PanelRects, len: usize, scroll: usize, point: Vector2<f32>) -> Opt
 /// presentations.
 fn build_canvas(
     rects: PanelRects,
-    len: usize,
+    cheats: &[Cheat],
     scroll: usize,
     pointer_canvas: Option<Vector2<f32>>,
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(CANVAS_W, CANVAS_H));
     canvas.image(Rect::new(0.0, 0.0, CANVAS_W, CANVAS_H), BACKDROP_TEXTURE);
 
-    let hovered = pointer_canvas.and_then(|point| hit(rects, len, scroll, point));
+    let list = geometry(rects);
+    let len = cheats.len();
+    let hovered = pointer_canvas.and_then(|point| hit(rects, cheats, scroll, point));
     let opacity = |event: CheatEvent| {
         if hovered == Some(event) {
             HOVER_OPACITY
@@ -218,15 +187,15 @@ fn build_canvas(
         VAlign::Middle,
     );
 
-    let rows = visible_rows(rects, len, scroll);
+    let rows = list.visible_rows(len, scroll);
     for (slot, index) in rows.clone().enumerate() {
         // Fitted, not plain: `text_native` does not shrink to its rect, so a
         // label that outgrows the pane would run over the frame - and over the
         // scroll gutter - instead of ellipsizing inside it.
         canvas
             .text_native_fit(
-                text_rect(rects, len, slot),
-                CHEATS[index].label,
+                list.text_rect(len, slot),
+                cheats[index].label,
                 ROW_FONT,
                 HAlign::Left,
                 VAlign::Middle,
@@ -234,12 +203,12 @@ fn build_canvas(
             .opacity(opacity(CheatEvent::Cheat(index)));
     }
 
-    if let Some(rocker) = rocker(rects, len) {
+    if let Some(rocker) = list.rocker(len) {
         list_scroll::draw(
             &mut canvas,
             &rocker,
             rows.start,
-            max_scroll(rects, len),
+            list.max_scroll(len),
             match hovered {
                 Some(CheatEvent::Scroll(half)) => Some(half),
                 _ => None,
@@ -379,13 +348,13 @@ impl CheatPad {
         self.rects = dev_params_panel::rects(asset_cache);
         self.head = (input_context.head.position, input_context.head.rotation);
 
-        let (rects, len, scroll) = (self.rects, CHEATS.len(), self.scroll);
+        let (rects, scroll) = (self.rects, self.scroll);
         let event = self.menu.update(
             elapsed,
             input_context,
             options.presentation_mode,
-            |point| hit(rects, len, scroll, point),
-            |point| hit(rects, len, scroll, point),
+            |point| hit(rects, CHEATS, scroll, point),
+            |point| hit(rects, CHEATS, scroll, point),
         );
         self.activate(event)
     }
@@ -395,7 +364,11 @@ impl CheatPad {
         match event? {
             CheatEvent::Cheat(index) => Some(CheatOutcome::Rain(CHEATS[index].effect())),
             CheatEvent::Scroll(half) => {
-                list_scroll::apply(half, &mut self.scroll, max_scroll(self.rects, CHEATS.len()));
+                list_scroll::apply(
+                    half,
+                    &mut self.scroll,
+                    geometry(self.rects).max_scroll(CHEATS.len()),
+                );
                 None
             }
             CheatEvent::Done => Some(CheatOutcome::Close),
@@ -418,12 +391,8 @@ impl CheatPad {
         FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE).present_world_space(
             || {
                 let panel = self.menu.panel();
-                let canvas = build_canvas(
-                    self.rects,
-                    CHEATS.len(),
-                    self.scroll,
-                    self.menu.pointer_canvas(),
-                );
+                let canvas =
+                    build_canvas(self.rects, CHEATS, self.scroll, self.menu.pointer_canvas());
                 let (dim_position, dim_forward) = dim_pose(self.head.0, self.head.1, &panel);
                 let mut objects = vec![world_dim_layer(
                     dim_position,
@@ -458,7 +427,7 @@ impl CheatPad {
         FrontendCanvasPresenter::new(options.presentation_mode, SCALE_MODE).present_screen_space(
             || {
                 let pointer_canvas = self.menu.screen_pointer_canvas(screen_size);
-                let canvas = build_canvas(self.rects, CHEATS.len(), self.scroll, pointer_canvas);
+                let canvas = build_canvas(self.rects, CHEATS, self.scroll, pointer_canvas);
                 self.menu.render_screen_space(
                     asset_cache,
                     canvas,
@@ -474,82 +443,73 @@ impl CheatPad {
 mod tests {
     use super::*;
 
-    /// A list long enough to outrun the pane, for the scrolling assertions.
-    /// The shipped `CHEATS` fits on one page today - which is the point of
-    /// parameterising the geometry on `len` rather than reading it.
-    fn long_list(rects: PanelRects) -> usize {
-        rows_per_page(rects) + 5
+    /// A synthesized list long enough to outrun the pane. The shipped `CHEATS`
+    /// fits on one page today, which is exactly why the geometry takes the
+    /// entries rather than reading the global.
+    fn long_list(rects: PanelRects) -> Vec<Cheat> {
+        let len = geometry(rects).rows_per_page() + 5;
+        (0..len)
+            .map(|_| Cheat {
+                label: "test cheat",
+                templates: &[-17],
+            })
+            .collect()
     }
 
     #[test]
     fn every_shipped_cheat_is_reachable_and_hit_tests_to_itself() {
         let rects = PanelRects::default();
-        let len = CHEATS.len();
+        let list = geometry(rects);
         assert!(
-            len <= rows_per_page(rects),
+            CHEATS.len() <= list.rows_per_page(),
             "the shipped list fits one page"
         );
-        for index in 0..len {
+        for index in 0..CHEATS.len() {
             assert_eq!(
-                hit(rects, len, 0, row_rect(rects, len, index).center()),
+                hit(
+                    rects,
+                    CHEATS,
+                    0,
+                    list.row_rect(CHEATS.len(), index).center()
+                ),
                 Some(CheatEvent::Cheat(index)),
             );
         }
         assert_eq!(
-            hit(rects, len, 0, rects.done_rect().center()),
+            hit(rects, CHEATS, 0, rects.done_rect().center()),
             Some(CheatEvent::Done)
         );
     }
 
-    #[test]
-    fn the_rows_stay_inside_the_list_pane() {
-        let rects = PanelRects::default();
-        let len = CHEATS.len();
-        let list = rects.list_rect();
-        for slot in 0..len {
-            let row = row_rect(rects, len, slot);
-            assert!(
-                row.x >= list.x && row.x + row.w <= list.x + list.w,
-                "{row:?}"
-            );
-            assert!(
-                row.y >= list.y && row.y + row.h <= list.y + list.h,
-                "{row:?}"
-            );
-        }
-    }
-
-    /// The list is meant to grow. Once it outruns the pane a rocker appears,
-    /// the rows make room for its gutter, and a row reports the entry
-    /// *scrolled into* it rather than its own slot.
+    /// The list is meant to grow. Once it outruns the pane a rocker appears and
+    /// a row reports the entry *scrolled into* it rather than its own slot.
+    /// (The geometry itself is `list_scroll`'s and tested there; this pins that
+    /// the pad is wired to it, and that "Done" still wins over a row.)
     #[test]
     fn a_list_that_outruns_the_pane_scrolls_and_rows_follow_the_offset() {
         let rects = PanelRects::default();
-        let len = long_list(rects);
-        let max = max_scroll(rects, len);
+        let cheats = long_list(rects);
+        let list = geometry(rects);
+        let max = list.max_scroll(cheats.len());
         assert_eq!(max, 5);
 
-        let no_gutter = row_rect(rects, CHEATS.len(), 0);
-        let with_gutter = row_rect(rects, len, 0);
-        assert_eq!(
-            with_gutter.w,
-            no_gutter.w - list_scroll::GUTTER_W,
-            "rows must clear the rocker's gutter once it appears"
-        );
-
-        // Unscrolled the top row is entry 0; scrolled by 3 it is entry 3.
-        assert_eq!(
-            hit(rects, len, 0, row_rect(rects, len, 0).center()),
-            Some(CheatEvent::Cheat(0))
-        );
-        assert_eq!(
-            hit(rects, len, 3, row_rect(rects, len, 0).center()),
-            Some(CheatEvent::Cheat(3))
-        );
+        let row0 = list.row_rect(cheats.len(), 0).center();
+        assert_eq!(hit(rects, &cheats, 0, row0), Some(CheatEvent::Cheat(0)));
+        assert_eq!(hit(rects, &cheats, 3, row0), Some(CheatEvent::Cheat(3)));
         // An over-scroll cannot walk the list off its end.
+        assert_eq!(hit(rects, &cheats, 99, row0), Some(CheatEvent::Cheat(max)));
+
+        let rocker = list.rocker(cheats.len()).expect("this list scrolls");
         assert_eq!(
-            hit(rects, len, 99, row_rect(rects, len, 0).center()),
-            Some(CheatEvent::Cheat(max))
+            hit(rects, &cheats, 0, rocker.down.center()),
+            Some(CheatEvent::Scroll(ScrollHalf::Down))
+        );
+        assert_eq!(hit(rects, &cheats, 0, rocker.up.center()), None);
+        // "Done" is resolved before the list, so a pane that ever grew over it
+        // could not swallow the way out.
+        assert_eq!(
+            hit(rects, &cheats, 0, rects.done_rect().center()),
+            Some(CheatEvent::Done)
         );
     }
 
@@ -557,45 +517,21 @@ mod tests {
     #[test]
     fn a_list_that_fits_has_no_rocker() {
         let rects = PanelRects::default();
-        assert!(rocker(rects, CHEATS.len()).is_none());
-        assert!(rocker(rects, long_list(rects)).is_some());
+        assert!(geometry(rects).rocker(CHEATS.len()).is_none());
+        assert!(geometry(rects).rocker(long_list(rects).len()).is_some());
     }
 
-    /// The rocker's ends are inert, and clicking it scrolls rather than
-    /// reaching `Game` - the pad absorbs it.
+    /// Clicking the rocker scrolls the pad rather than reaching `Game`.
     #[test]
-    fn the_rocker_scrolls_and_stops_at_both_ends() {
-        let rects = PanelRects::default();
-        let len = long_list(rects);
-        let max = max_scroll(rects, len);
-        let rocker = rocker(rects, len).expect("this list scrolls");
-
-        // At the top, "up" is inert and "down" scrolls.
-        assert_eq!(hit(rects, len, 0, rocker.up.center()), None);
-        assert_eq!(
-            hit(rects, len, 0, rocker.down.center()),
-            Some(CheatEvent::Scroll(ScrollHalf::Down))
-        );
-
+    fn a_scroll_click_is_absorbed_by_the_pad() {
         let mut pad = CheatPad::new();
-        pad.rects = rects;
-        // `activate` scrolls against the SHIPPED list, which fits, so its max
-        // is zero - assert the absorption, then the walk on the long list.
-        assert!(matches!(
-            pad.activate(Some(CheatEvent::Scroll(ScrollHalf::Down))),
-            None
-        ));
-
-        let mut scroll = 0;
-        for _ in 0..max + 3 {
-            list_scroll::apply(ScrollHalf::Down, &mut scroll, max);
-        }
-        assert_eq!(scroll, max);
-        assert_eq!(hit(rects, len, max, rocker.down.center()), None);
-        assert_eq!(
-            hit(rects, len, max, rocker.up.center()),
-            Some(CheatEvent::Scroll(ScrollHalf::Up))
+        pad.rects = PanelRects::default();
+        assert!(
+            pad.activate(Some(CheatEvent::Scroll(ScrollHalf::Down)))
+                .is_none()
         );
+        // The shipped list fits, so its max is zero and the offset stays put.
+        assert_eq!(pad.scroll, 0);
     }
 
     /// The pad's whole point: each cheat asks for a spread of items, and the
@@ -667,12 +603,11 @@ mod tests {
     #[test]
     fn the_press_that_opens_the_pad_cannot_click_a_row() {
         let rects = PanelRects::default();
-        let len = CHEATS.len();
         let mut pad = CheatPad::new();
         pad.open();
         pad.rects = rects;
-        let point = Some(row_rect(rects, len, 0).center());
-        let at = |p| hit(rects, len, 0, p);
+        let point = Some(geometry(rects).row_rect(CHEATS.len(), 0).center());
+        let at = |p| hit(rects, CHEATS, 0, p);
 
         assert_eq!(
             pad.menu.resolve_pointer(point, true, at, at),

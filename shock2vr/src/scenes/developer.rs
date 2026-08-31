@@ -173,31 +173,23 @@ fn scene_count() -> usize {
     super::debug_scene_names().count()
 }
 
-fn scene_rows_per_page(rects: PanelRects) -> usize {
-    list_scroll::rows_per_page(rects.list_rect(), FIELD_TOP_Y, SCENE_ROW_H)
+/// The launcher list's geometry - paging, the gutter rocker and the
+/// slot-to-entry mapping - shared with every other frontend list.
+fn scene_list(rects: PanelRects) -> list_scroll::ListGeometry {
+    list_scroll::ListGeometry {
+        pane: rects.list_rect(),
+        bottom_limit: FIELD_TOP_Y,
+        row_h: SCENE_ROW_H,
+        text_inset: SCENE_TEXT_INSET,
+    }
 }
 
-fn scene_max_scroll(rects: PanelRects, len: usize) -> usize {
-    list_scroll::max_scroll(len, scene_rows_per_page(rects))
-}
-
-/// The list indices on screen at `scene_scroll`, clamped to the page.
 fn scene_visible_rows(
     rects: PanelRects,
     len: usize,
     scene_scroll: usize,
 ) -> std::ops::Range<usize> {
-    list_scroll::visible_rows(len, scene_rows_per_page(rects), scene_scroll)
-}
-
-/// The launcher's scroll rocker, in the gutter down the pane's right edge -
-/// the very same one the parameter page scrolls with.
-fn scene_rocker(rects: PanelRects, len: usize) -> Option<list_scroll::Rocker> {
-    list_scroll::rocker(
-        rects.list_rect(),
-        FIELD_TOP_Y,
-        scene_max_scroll(rects, len) > 0,
-    )
+    scene_list(rects).visible_rows(len, scene_scroll)
 }
 
 /// The canvas rect of the tab header for `tab`: the header rect split in two,
@@ -212,33 +204,16 @@ fn tab_rect(rects: PanelRects, tab: SceneTab) -> Rect {
     Rect::new(x, header.y, half, header.h)
 }
 
-/// The canvas rect of the launcher's `slot`-th visible row. The rows stop
-/// short of the scroll gutter whenever it is in use, so a row and the rocker
-/// can never claim the same point.
+/// The canvas rect of the launcher's `slot`-th visible row. Production code
+/// reaches rows through `scene_list(..).hit(..)`; the tests still name them.
+#[cfg(test)]
 fn scene_row_rect(rects: PanelRects, len: usize, slot: usize) -> Rect {
-    let list = rects.list_rect();
-    let gutter = if scene_max_scroll(rects, len) > 0 {
-        list_scroll::GUTTER_W
-    } else {
-        0.0
-    };
-    Rect::new(
-        list.x,
-        list.y + slot as f32 * SCENE_ROW_H,
-        (list.w - gutter).max(0.0),
-        SCENE_ROW_H,
-    )
+    scene_list(rects).row_rect(len, slot)
 }
 
 /// The rect a row's name is drawn in: the row, inset on both edges.
 fn scene_text_rect(rects: PanelRects, len: usize, slot: usize) -> Rect {
-    let row = scene_row_rect(rects, len, slot);
-    Rect::new(
-        row.x + SCENE_TEXT_INSET,
-        row.y,
-        (row.w - 2.0 * SCENE_TEXT_INSET).max(0.0),
-        row.h,
-    )
+    scene_list(rects).text_rect(len, slot)
 }
 
 /// What is at a canvas point, on whichever page is showing. Shared by the
@@ -267,23 +242,14 @@ fn hit(state: ScreenState, point: Vector2<f32>) -> Option<DeveloperAction> {
             if state.rects.done_rect().contains(point) {
                 return Some(DeveloperAction::CloseScenes);
             }
-            let rows = scene_visible_rows(state.rects, state.list_len, state.scene_scroll);
-            if let Some(rocker) = scene_rocker(state.rects, state.list_len) {
-                if let Some(half) = list_scroll::hit(
-                    &rocker,
-                    rows.start,
-                    scene_max_scroll(state.rects, state.list_len),
-                    point,
-                ) {
-                    return Some(DeveloperAction::ScrollScenes(half));
-                }
-            }
             // Rows carry the index of the entry scrolled into that slot, never
             // the slot itself: a positional index would launch whatever entry
-            // *used* to be in the row the moment the list scrolls.
-            (0..rows.len())
-                .find(|slot| scene_row_rect(state.rects, state.list_len, *slot).contains(point))
-                .map(|slot| DeveloperAction::SelectScene(rows.start + slot))
+            // *used* to be in the row the moment the list scrolls. That rule,
+            // and the inert-rocker-end one, live in `list_scroll`.
+            match scene_list(state.rects).hit(state.list_len, state.scene_scroll, point)? {
+                list_scroll::ListHit::Row(index) => Some(DeveloperAction::SelectScene(index)),
+                list_scroll::ListHit::Scroll(half) => Some(DeveloperAction::ScrollScenes(half)),
+            }
         }
     }
 }
@@ -485,12 +451,12 @@ impl DeveloperScene {
                         });
                 }
 
-                if let Some(rocker) = scene_rocker(self.panel_rects, len) {
+                if let Some(rocker) = scene_list(self.panel_rects).rocker(len) {
                     list_scroll::draw(
                         &mut canvas,
                         &rocker,
                         rows.start,
-                        scene_max_scroll(self.panel_rects, len),
+                        scene_list(self.panel_rects).max_scroll(len),
                         match hovered {
                             Some(DeveloperAction::ScrollScenes(half)) => Some(half),
                             _ => None,
@@ -544,7 +510,7 @@ impl DeveloperScene {
             }
             DeveloperAction::SelectScene(index) => self.selected_scene = Some(index),
             DeveloperAction::ScrollScenes(half) => {
-                let max = scene_max_scroll(self.panel_rects, self.tab_list_len());
+                let max = scene_list(self.panel_rects).max_scroll(self.tab_list_len());
                 list_scroll::apply(half, &mut self.scene_scroll, max)
             }
             DeveloperAction::LaunchScene => {
@@ -1082,7 +1048,7 @@ mod tests {
     fn the_launcher_hit_test_follows_its_scroll() {
         let rects = PanelRects::default();
         let len = scene_count();
-        let max = scene_max_scroll(rects, len);
+        let max = scene_list(rects).max_scroll(len);
         assert!(max > 0, "the shipped scene list must scroll to test this");
         for scroll in 1..=max {
             let slot0 = scene_row_rect(rects, len, 0);
@@ -1098,8 +1064,10 @@ mod tests {
     fn the_launchers_rocker_scrolls_and_stops_at_both_ends() {
         let rects = PanelRects::default();
         let len = scene_count();
-        let rocker = scene_rocker(rects, len).expect("the shipped scene list scrolls");
-        let max = scene_max_scroll(rects, len);
+        let rocker = scene_list(rects)
+            .rocker(len)
+            .expect("the shipped scene list scrolls");
+        let max = scene_list(rects).max_scroll(len);
 
         // At the top the up half is inert; at the bottom, the down half is.
         assert_eq!(hit(scenes_state(0, true, len), rocker.up.center()), None);
