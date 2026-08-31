@@ -22,6 +22,10 @@ use super::{Rect, UiCanvas};
 pub const GUTTER_W: f32 = 32.0;
 const BUTTON_H: f32 = 16.0;
 
+/// Breathing room between the down arrow and the line the page stops at, so
+/// the arrow reads as sitting in the pane rather than resting on its edge.
+const BOTTOM_GAP: f32 = 6.0;
+
 /// The original scroll-arrow art for one half. The art carries the shading, so
 /// the rocker draws fully opaque and picks a state instead of an opacity.
 struct ArrowArt {
@@ -107,7 +111,7 @@ pub fn rocker(list: Rect, bottom_limit: f32, needed: bool) -> Option<Rocker> {
         let bottom = (list.y + list.h).min(bottom_limit);
         Rocker {
             up: Rect::new(x, list.y, GUTTER_W, BUTTON_H),
-            down: Rect::new(x, bottom - BUTTON_H, GUTTER_W, BUTTON_H),
+            down: Rect::new(x, bottom - BUTTON_H - BOTTOM_GAP, GUTTER_W, BUTTON_H),
         }
     })
 }
@@ -203,7 +207,7 @@ mod tests {
         assert_eq!(rocker.up.x, LIST.x + LIST.w - GUTTER_W);
         assert_eq!(rocker.up.y, LIST.y);
         assert_eq!(rocker.down.x, rocker.up.x);
-        assert_eq!(rocker.down.y + BUTTON_H, FIELD_TOP_Y);
+        assert_eq!(rocker.down.y + BUTTON_H + BOTTOM_GAP, FIELD_TOP_Y);
 
         let max = 4;
         assert_eq!(hit(&rocker, 0, max, rocker.up.center()), None);
