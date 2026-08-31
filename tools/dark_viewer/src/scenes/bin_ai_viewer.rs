@@ -100,18 +100,16 @@ impl ToolScene for BinAiViewerScene {
     }
 
     fn render(&self, asset_cache: &mut AssetCache) -> Scene {
-        let mut objects = self.model.to_animated_scene_objects(&self.animation_player);
+        let objects = self.model.to_animated_scene_objects(&self.animation_player);
 
-        // Add ground plane
-        objects.push(create_ground_plane(asset_cache));
-
-        // Add axes gizmo
-        objects.extend(create_axes_gizmo(asset_cache));
+        let mut decorations = vec![create_ground_plane(asset_cache)];
+        decorations.extend(create_axes_gizmo(asset_cache));
 
         build_model_scene_with_debug_skeletons(
             self.model.as_ref(),
             Some(&self.animation_player),
             objects,
+            decorations,
             self.debug_skeletons,
             self.debug_hit_boxes,
             // LGMM meshes carry no sub-objects or vhots.

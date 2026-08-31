@@ -39,6 +39,8 @@ pub fn articulation_overlay(model: &Model) -> Vec<SceneObject> {
         })
         .collect::<Vec<SceneObject>>();
 
+    // These coincide with the small blue cubes the LGMD loader itself bakes in
+    // at every vhot (`ss2_bin_obj_loader::to_scene_objects`) - see issue #1208.
     objects.extend(model.vhots().iter().map(|vhot| {
         let at = Matrix4::from_translation(vhot.point.to_vec());
         marker(VHOT_COLOR, at, VHOT_MARKER_SIZE)
@@ -64,10 +66,14 @@ pub fn world_joint_transforms(model: &Model, player: &AnimationPlayer) -> Vec<Ma
 /// `fit_hit_box_shapes` produced, transformed by the live joint transforms - so
 /// it tracks the animated mesh and reveals fit/mapping issues independent of the
 /// physics ragdoll.
+///
+/// `decorations` (ground plane, axes gizmo) are kept apart from the model's own
+/// objects so that ghosting under an overlay touches only the mesh.
 pub fn build_model_scene_with_debug_skeletons(
     model: &Model,
     animation_player: Option<&AnimationPlayer>,
-    mut objects: Vec<SceneObject>,
+    mut model_objects: Vec<SceneObject>,
+    mut decorations: Vec<SceneObject>,
     debug_skeletons: bool,
     debug_hit_boxes: bool,
     debug_articulation: bool,
@@ -92,29 +98,22 @@ pub fn build_model_scene_with_debug_skeletons(
         }
     }
 
-    // Ghost the mesh so overlay geometry buried inside it still reads.
+    if debug_articulation {
+        overlay.append(&mut articulation_overlay(model));
+    }
+
+    // Ghost the model (and only the model - not the grid) so overlay geometry
+    // buried inside the mesh still reads.
     if !overlay.is_empty() {
-        objects.iter_mut().for_each(|obj| {
+        model_objects.iter_mut().for_each(|obj| {
             obj.set_depth_write(false);
-            obj.set_skinned_transparency(Some(OVERLAY_GHOST_TRANSPARENCY));
+            obj.set_transparency(Some(OVERLAY_GHOST_TRANSPARENCY));
         });
     }
 
-    if debug_articulation {
-        let mut markers = articulation_overlay(model);
-        if !markers.is_empty() {
-            // An LGMD mesh is not skinned, so ghosting it takes the per-object
-            // transparency override instead of the material one above.
-            objects.iter_mut().for_each(|obj| {
-                obj.set_depth_write(false);
-                obj.set_transparency(Some(OVERLAY_GHOST_TRANSPARENCY));
-            });
-            overlay.append(&mut markers);
-        }
-    }
-
-    objects.append(&mut overlay);
-    Scene::from_objects(objects)
+    model_objects.append(&mut decorations);
+    model_objects.append(&mut overlay);
+    Scene::from_objects(model_objects)
 }
 
 /// Create a ground plane SceneObject with grid texture and proper scaling

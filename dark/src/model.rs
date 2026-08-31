@@ -214,6 +214,8 @@ impl Model {
 
         // Sub-object pivots, in model space: the skeleton the obj loader just
         // built from the sub-object tree is exactly that hierarchy resolved.
+        // Same pairs as `ss2_bin_obj_loader::sub_object_transforms` - keep them
+        // in step.
         let sub_objects = static_mesh
             .sub_objects
             .iter()

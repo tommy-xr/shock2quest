@@ -285,6 +285,15 @@ impl ModelPreview {
                 self.articulation = Some(counts);
             }
         }
+        // No toggle means no way to turn it back off, so don't carry a hidden
+        // "on" over from the previous model. Keep `built_for` in step or the
+        // next frame rebuilds the scene for nothing.
+        if self.articulation.is_none() {
+            self.debug_articulation = false;
+            if let Some(built_for) = &mut self.built_for {
+                built_for.4 = false;
+            }
+        }
         match built {
             Ok(built) => {
                 self.scene = Some(built);
