@@ -8,10 +8,10 @@
 /// (`Cell::light_indices`) naming the lights that reach that cell, so lighting
 /// an object is "find its cell, evaluate that cell's lights".
 ///
-/// The table is a fixed-size array regardless of how many lights the mission
-/// actually uses; `num_static` names the used prefix and the dynamic lights the
-/// engine appends at runtime live directly above it.
-use byteorder::ReadBytesExt;
+/// The world rep declares how many lights it holds; the array on disk is longer
+/// than that and its full length varies by mission (WRRGB and WREXT missions
+/// differ), so read only the declared count - everything past it is unrelated
+/// data that would decode as plausible-looking junk.
 use cgmath::{Vector3, vec3};
 
 use std::io;
@@ -19,23 +19,17 @@ use std::io;
 use crate::SCALE_FACTOR;
 use crate::ss2_common::{read_single, read_vec3};
 
-/// The table is always written at full size, used entries or not.
-pub const LIGHT_TABLE_LEN: usize = 768;
-
-/// A scratch array of the same record type follows the table and carries no
-/// meaning - it is whatever the writer happened to have in its working buffer.
-const SCRATCH_LEN: usize = 32;
-
 /// Bytes per record: position, direction, rgb brightness, two cone cosines and
 /// a radius.
-const RECORD_SIZE: usize = 48;
+pub const RECORD_SIZE: usize = 48;
 
 /// Sentinel in `inner`: this light is an omni, not a spotlight.
 const NOT_A_SPOTLIGHT: f32 = -1.0;
 
 /// One light as it lights objects. Brightness arrives pre-divided by the
-/// engine's light scale, so it is already in the 0..1-ish range the shader
-/// wants rather than the authored brightness.
+/// engine's light scale, so it is much smaller than the authored brightness -
+/// but it is NOT normalized: values run past 1.0 (up to ~12.5 on medsci1), so
+/// whatever consumes this has to scale or tone-map rather than assume 0..1.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WorldLight {
     pub position: Vector3<f32>,
@@ -53,51 +47,42 @@ pub struct WorldLight {
 
 impl WorldLight {
     pub fn is_spotlight(&self) -> bool {
-        self.inner != NOT_A_SPOTLIGHT
-    }
-
-    /// Whether this light can reach `position` at all. Only the radius cutoff -
-    /// cone and falloff are the renderer's business.
-    pub fn reaches(&self, position: Vector3<f32>) -> bool {
-        if self.radius == 0.0 {
-            return true;
-        }
-        let delta = position - self.position;
-        cgmath::dot(delta, delta) <= self.radius * self.radius
+        self.inner > NOT_A_SPOTLIGHT
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct LightTable {
+    /// The static lights, then the dynamic ones the engine keeps above them.
     lights: Vec<WorldLight>,
-    num_static: u32,
-    num_dynamic: u32,
+    num_static: usize,
 }
 
 impl LightTable {
-    pub fn read<T: io::Read>(reader: &mut T, num_static: u32, num_dynamic: u32) -> LightTable {
-        let mut lights = Vec::with_capacity(LIGHT_TABLE_LEN);
-        for _ in 0..LIGHT_TABLE_LEN {
-            lights.push(read_light(reader));
+    /// Reads the declared lights. `max_records` bounds the read to what is left
+    /// in the world-rep chunk, so a mission whose counts overstate its table is
+    /// short rather than a read past the end of the file.
+    pub fn read<T: io::Read>(
+        reader: &mut T,
+        num_static: u32,
+        num_dynamic: u32,
+        max_records: usize,
+    ) -> LightTable {
+        let declared = num_static as usize + num_dynamic as usize;
+        let to_read = declared.min(max_records);
+        if to_read < declared {
+            tracing::warn!(
+                "Light table declares {} lights but only {} fit in the world rep",
+                declared,
+                to_read
+            );
         }
 
-        for _ in 0..(SCRATCH_LEN * RECORD_SIZE) {
-            let _ = reader.read_u8();
-        }
+        let lights = (0..to_read).map(|_| read_light(reader)).collect();
 
         LightTable {
             lights,
-            num_static,
-            num_dynamic,
-        }
-    }
-
-    /// An empty table, for scenes with no world rep of their own.
-    pub fn empty() -> LightTable {
-        LightTable {
-            lights: Vec::new(),
-            num_static: 0,
-            num_dynamic: 0,
+            num_static: (num_static as usize).min(to_read),
         }
     }
 
@@ -107,18 +92,10 @@ impl LightTable {
         self.lights.get(index as usize)
     }
 
-    /// The used prefix of the table - the lights the mission actually authored.
+    /// The lights authored into the level, which is what the cells' index lists
+    /// address.
     pub fn static_lights(&self) -> &[WorldLight] {
-        let end = (self.num_static as usize).min(self.lights.len());
-        &self.lights[..end]
-    }
-
-    pub fn num_static(&self) -> u32 {
-        self.num_static
-    }
-
-    pub fn num_dynamic(&self) -> u32 {
-        self.num_dynamic
+        &self.lights[..self.num_static]
     }
 }
 
@@ -176,15 +153,16 @@ mod tests {
         bytes
     }
 
-    fn table_bytes() -> Vec<u8> {
+    /// A table of `count` records, followed by unrelated data that must never
+    /// be decoded as a light.
+    fn table_bytes(count: usize) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend(record(10.0, NOT_A_SPOTLIGHT, 0.0));
         bytes.extend(record(20.0, 0.9, 32.0));
-        for _ in 2..LIGHT_TABLE_LEN {
+        for _ in 2..count {
             bytes.extend(record(0.0, NOT_A_SPOTLIGHT, 0.0));
         }
-        // The scratch array the table is followed by.
-        for _ in 0..SCRATCH_LEN {
+        for _ in 0..4 {
             bytes.extend(record(999.0, NOT_A_SPOTLIGHT, 0.0));
         }
         bytes
@@ -192,8 +170,7 @@ mod tests {
 
     #[test]
     fn reads_a_light_record_field_by_field() {
-        let bytes = table_bytes();
-        let table = LightTable::read(&mut io::Cursor::new(bytes), 2, 0);
+        let table = LightTable::read(&mut io::Cursor::new(table_bytes(8)), 8, 0, usize::MAX);
 
         // Positions and directions come back in engine axes: the file's
         // (x, y, z) is read as (-x, z, y), and positions are scaled.
@@ -210,8 +187,7 @@ mod tests {
     /// exactly 48 bytes.
     #[test]
     fn later_records_land_at_the_right_stride() {
-        let bytes = table_bytes();
-        let table = LightTable::read(&mut io::Cursor::new(bytes), 2, 0);
+        let table = LightTable::read(&mut io::Cursor::new(table_bytes(8)), 8, 0, usize::MAX);
 
         let light = table.get(1).expect("light 1 must parse");
         assert_eq!(light.position, vec3(-20.0, 22.0, 21.0) / SCALE_FACTOR);
@@ -220,43 +196,38 @@ mod tests {
         assert_eq!(light.radius, 32.0 / SCALE_FACTOR);
     }
 
-    /// The table is fixed-length and the scratch array that follows it is not
-    /// part of it, so the last slot must be a real record and the marker value
-    /// from the scratch array must never appear.
+    /// The array on disk runs past the declared count, and what follows is not
+    /// lights - so reading more than was declared yields junk.
     #[test]
-    fn table_is_fixed_length_and_excludes_the_scratch_array() {
-        let bytes = table_bytes();
-        let consumed = bytes.len();
-        let mut cursor = io::Cursor::new(bytes);
-        let table = LightTable::read(&mut cursor, 2, 0);
+    fn reads_only_the_declared_lights() {
+        let table = LightTable::read(&mut io::Cursor::new(table_bytes(8)), 8, 0, usize::MAX);
 
-        assert!(table.get(LIGHT_TABLE_LEN as u16 - 1).is_some());
-        assert!(table.get(LIGHT_TABLE_LEN as u16).is_none());
-        assert!(
-            table
-                .static_lights()
-                .iter()
-                .all(|l| l.position.x != -999.0 / SCALE_FACTOR)
-        );
-        assert_eq!(
-            cursor.position() as usize,
-            consumed,
-            "the scratch array must be consumed too, or every chunk after the \
-             world rep reads from the wrong offset"
-        );
+        assert_eq!(table.static_lights().len(), 8);
+        assert!(table.get(8).is_none(), "must not decode past the count");
+    }
+
+    /// Dynamic lights sit above the static ones and are not part of the prefix
+    /// the cells' index lists address.
+    #[test]
+    fn dynamic_lights_follow_the_static_ones() {
+        let table = LightTable::read(&mut io::Cursor::new(table_bytes(8)), 6, 2, usize::MAX);
+
+        assert_eq!(table.static_lights().len(), 6);
+        assert!(table.get(7).is_some());
+        assert!(table.get(8).is_none());
+    }
+
+    /// A mission whose counts overstate its table must come back short rather
+    /// than reading off the end of the chunk.
+    #[test]
+    fn a_short_chunk_bounds_the_read() {
+        let table = LightTable::read(&mut io::Cursor::new(table_bytes(4)), 900, 0, 4);
+
+        assert_eq!(table.static_lights().len(), 4);
     }
 
     #[test]
-    fn static_lights_are_the_used_prefix() {
-        let bytes = table_bytes();
-        let table = LightTable::read(&mut io::Cursor::new(bytes), 2, 4);
-
-        assert_eq!(table.static_lights().len(), 2);
-        assert_eq!(table.num_dynamic(), 4);
-    }
-
-    #[test]
-    fn radius_zero_reaches_everywhere() {
+    fn the_spotlight_sentinel_is_the_only_omni_case() {
         let omni = WorldLight {
             position: vec3(0.0, 0.0, 0.0),
             direction: vec3(0.0, 0.0, -1.0),
@@ -265,13 +236,15 @@ mod tests {
             outer: 0.0,
             radius: 0.0,
         };
-        assert!(omni.reaches(vec3(1000.0, 0.0, 0.0)));
-
-        let bounded = WorldLight {
-            radius: 10.0,
-            ..omni
-        };
-        assert!(bounded.reaches(vec3(9.0, 0.0, 0.0)));
-        assert!(!bounded.reaches(vec3(11.0, 0.0, 0.0)));
+        assert!(!omni.is_spotlight());
+        assert!(
+            !WorldLight {
+                inner: NOT_A_SPOTLIGHT - 0.0001,
+                ..omni
+            }
+            .is_spotlight(),
+            "a value below the sentinel is not a cone"
+        );
+        assert!(WorldLight { inner: 0.5, ..omni }.is_spotlight());
     }
 }

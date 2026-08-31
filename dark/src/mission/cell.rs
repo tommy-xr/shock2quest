@@ -384,16 +384,21 @@ fn read_lights<T: io::Read>(
         }
     }
 
-    // The cell's object-light list: a count, then that count of entries whose
-    // first element repeats the count.
+    // The cell's object-light list. The u32 counts the u16s that follow, and
+    // the first of those is itself the number of real indices behind it.
     let light_index_count = reader.read_u32::<byteorder::LittleEndian>().unwrap();
     let mut light_indices = Vec::new();
     for i in 0..light_index_count {
         let index = reader.read_u16::<byteorder::LittleEndian>().unwrap();
-        // The first entry repeats the count; only the rest are light indices.
-        if i > 0 {
-            light_indices.push(index);
+        if i == 0 {
+            debug_assert_eq!(
+                u32::from(index) + 1,
+                light_index_count,
+                "cell {poly_idx}: leading light-list entry should count the rest"
+            );
+            continue;
         }
+        light_indices.push(index);
     }
 
     (light_infos, light_indices)

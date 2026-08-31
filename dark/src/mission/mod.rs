@@ -216,14 +216,21 @@ pub fn read<T: io::Read + io::Seek>(
 
     let num_static_lights = read_u32(reader);
     let num_dynamic_lights = read_u32(reader);
-    let light_table = LightTable::read(reader, num_static_lights, num_dynamic_lights);
-    let cell_light_refs: usize = cells.iter().map(|c| c.light_indices.len()).sum();
-    tracing::debug!(
-        "Mission lights - static: {} dynamic: {} first: {:?} cell refs: {}",
+    // The light array on disk is longer than the declared count and its length
+    // varies by mission, so bound the read by what is left in the chunk.
+    let wr_chunk_end = wr_chunk.offset + wr_chunk.length;
+    let max_light_records = wr_chunk_end.saturating_sub(reader.stream_position().unwrap()) as usize
+        / light_table::RECORD_SIZE;
+    let light_table = LightTable::read(
+        reader,
         num_static_lights,
         num_dynamic_lights,
-        light_table.static_lights().first(),
-        cell_light_refs,
+        max_light_records,
+    );
+    tracing::debug!(
+        "Mission lights - static: {} dynamic: {}",
+        num_static_lights,
+        num_dynamic_lights
     );
 
     let (obj_map, obj_texture_families) = read_obj_map(&table_of_contents, reader);
