@@ -1,6 +1,8 @@
 # Loading Screen — Design Note
 
 > Status: 🚧 In progress; foundation + UI rendering landed. Updated 2026-06-20.
+> The deferred transition is no longer gated — the `loading_screen` experimental
+> flag is gone and every runtime uses this path.
 > Goal: show the original animated loading screen while a level loads **in the
 > background**, instead of freezing the window on a black frame.
 >

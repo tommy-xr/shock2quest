@@ -495,7 +495,6 @@ impl Default for GameOptions {
 
 /// A level transition that has been started (outgoing scene already saved, loading
 /// screen showing) and whose blocking load is deferred to the next `update` frame.
-/// Only used when the experimental `loading_screen` feature is enabled.
 struct PendingTransition {
     level_name: String,
     spawn_loc: SpawnLocation,
@@ -723,8 +722,8 @@ impl std::fmt::Display for SaveGameError {
 impl std::error::Error for SaveGameError {}
 
 impl Game {
-    /// True while a deferred level transition (`--experimental loading_screen`)
-    /// is in flight. `update` is what advances it (`pending_transition.frames_shown`
+    /// True while a deferred level transition is in flight.
+    /// `update` is what advances it (`pending_transition.frames_shown`
     /// and the background parse-completion check), so a caller that only calls
     /// `update` on activity - e.g. the debug runtime's idle-throttled loop
     /// (#784) - needs this to know a transition still needs frames pumped even
@@ -841,13 +840,6 @@ impl Game {
         })
     }
 
-    /// Whether the experimental loading screen (deferred transitions) is enabled.
-    fn loading_screen_enabled(&self) -> bool {
-        self.options
-            .experimental_features
-            .contains("loading_screen")
-    }
-
     /// Capture the outgoing scene's save data (so its state survives the transition)
     /// and return the context the new mission needs. Must run while the outgoing scene
     /// is still active.
@@ -879,58 +871,6 @@ impl Game {
         (current_quest_info, held_data, player_vitals)
     }
 
-    /// Load a mission (using previously-captured save context) and make it the active
-    /// scene. This is the blocking part of a transition.
-    fn load_mission_into_scene(
-        &mut self,
-        level_name: String,
-        spawn_loc: SpawnLocation,
-        quest_info: QuestInfo,
-        held_data: HeldItemSaveData,
-        player_vitals: Option<PlayerVitals>,
-    ) {
-        let populator: Box<dyn EntityPopulator> = {
-            if let Some(save_data) = self
-                .mission_to_save_data
-                .get(&level_name.to_ascii_lowercase())
-            {
-                let save_data_cloned = save_data.clone();
-                let populator = SaveFileEntityPopulator::create(save_data_cloned);
-                Box::new(populator)
-            } else {
-                Box::new(MissionEntityPopulator::create())
-            }
-        };
-
-        let active_mission = Mission::load(
-            level_name,
-            &mut self.asset_cache,
-            &mut self.audio_context,
-            &self.global_context,
-            spawn_loc,
-            quest_info,
-            populator,
-            held_data,
-            &self.options,
-        );
-        save_load::restore_player_vitals(&active_mission.mission_core.world, player_vitals);
-        self.set_active_scene(Box::new(active_mission));
-        self.campaign_completed = false;
-    }
-
-    fn switch_mission(
-        &mut self,
-        level_name: String,
-        spawn_loc: SpawnLocation,
-        vitals_transition: PlayerVitalsTransition,
-    ) {
-        let (quest_info, held_data, mut player_vitals) = self.save_active_scene();
-        if vitals_transition == PlayerVitalsTransition::InitializeFromDestination {
-            player_vitals = None;
-        }
-        self.load_mission_into_scene(level_name, spawn_loc, quest_info, held_data, player_vitals);
-    }
-
     /// Start a background transition: save the outgoing scene, spawn the GL-free level
     /// parse on a worker thread, and swap to the loading screen. The loading screen
     /// animates while the parse runs; `update` completes it once the parse finishes.
@@ -941,6 +881,18 @@ impl Game {
         entities_to_trigger: Vec<String>,
         vitals_transition: PlayerVitalsTransition,
     ) {
+        // A transition started while one is already in flight would capture the
+        // *loading* scene as the outgoing save - wiping quest bits, held items
+        // and vitals, and filing a bogus "loading" entry in the mission ledger.
+        // Nothing in-game can reach this (the loading scene runs no scripts),
+        // but an external caller can, so refuse rather than corrupt.
+        if self.pending_transition.is_some() {
+            warn!(
+                "Ignoring transition to '{}': a level transition is already in flight",
+                level_name
+            );
+            return;
+        }
         tracing::info!(
             "[loading-screen] begin_transition -> {} (background parse)",
             level_name
@@ -1024,23 +976,6 @@ impl Game {
         }
     }
 
-    fn switch_mission_with_trigger(
-        &mut self,
-        level_name: String,
-        spawn_loc: SpawnLocation,
-        entities_to_trigger: Vec<String>,
-        vitals_transition: PlayerVitalsTransition,
-    ) {
-        // First, switch to the new mission
-        self.switch_mission(level_name, spawn_loc, vitals_transition);
-
-        // Then, queue the entities to be triggered after scripts are initialized
-        for entity_name in entities_to_trigger {
-            println!("Queueing entity trigger for: {}", entity_name);
-            self.active_game_scene.queue_entity_trigger(entity_name);
-        }
-    }
-
     /// Get access to the world for debugging purposes
     pub fn world(&self) -> &shipyard::World {
         self.active_game_scene.world()
@@ -1085,10 +1020,9 @@ impl Game {
     /// marker id, or the map default when `None`). `level_file` should be the
     /// mission filename (e.g. "eng1.mis"). This lets an automated tester warp to
     /// any level in isolation instead of having to physically reach each
-    /// transition trigger. With the `loading_screen` feature enabled the switch
-    /// is deferred (the outgoing scene renders the loading screen first), so
-    /// `scene_name()` only reflects the new level after subsequent updates;
-    /// otherwise it is synchronous and observable immediately.
+    /// transition trigger. The switch is deferred (the loading screen renders
+    /// first), so `scene_name()` only reflects the new level after subsequent
+    /// updates.
     pub fn transition_level(&mut self, level_file: String, loc: Option<i32>) {
         self.handle_global_effect(GlobalEffect::TransitionLevel {
             level_file,
@@ -1712,6 +1646,11 @@ impl Game {
         self.set_active_scene(Box::new(mission));
         self.mission_to_save_data = level_map;
         self.campaign_completed = false;
+        // A load replaces the world wholesale, so any transition still in
+        // flight (a quickload while the loading screen is up) must be dropped -
+        // otherwise it lands a few frames later and overwrites the loaded save
+        // with the pre-load destination.
+        self.pending_transition = None;
         Ok(())
     }
 
@@ -1836,21 +1775,12 @@ impl Game {
                     Some(marker) => SpawnLocation::Marker(marker),
                 };
 
-                if self.loading_screen_enabled() {
-                    self.begin_transition(
-                        level_file,
-                        spawn_loc,
-                        entities_to_trigger,
-                        vitals_transition,
-                    );
-                } else {
-                    self.switch_mission_with_trigger(
-                        level_file,
-                        spawn_loc,
-                        entities_to_trigger,
-                        vitals_transition,
-                    );
-                }
+                self.begin_transition(
+                    level_file,
+                    spawn_loc,
+                    entities_to_trigger,
+                    vitals_transition,
+                );
             }
             GlobalEffect::TestReload => {
                 let (position, rotation) = match self.player_standing_transform() {
@@ -1862,16 +1792,12 @@ impl Game {
                 };
                 let level_name = self.active_game_scene.scene_name().to_string();
                 let spawn_loc = SpawnLocation::PositionRotation(position, rotation);
-                if self.loading_screen_enabled() {
-                    self.begin_transition(
-                        level_name,
-                        spawn_loc,
-                        vec![],
-                        PlayerVitalsTransition::Preserve,
-                    );
-                } else {
-                    self.switch_mission(level_name, spawn_loc, PlayerVitalsTransition::Preserve);
-                }
+                self.begin_transition(
+                    level_name,
+                    spawn_loc,
+                    vec![],
+                    PlayerVitalsTransition::Preserve,
+                );
             }
             GlobalEffect::GameOver => {
                 // The run is over, so the dead mission is deliberately NOT

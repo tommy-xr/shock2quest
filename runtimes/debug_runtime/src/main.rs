@@ -156,6 +156,16 @@ struct Args {
     #[arg(long)]
     visible: bool,
 
+    /// Keep level transitions deferred behind the loading screen, the way the
+    /// shipping runtimes present them. By default this runtime drives a
+    /// transition to completion as soon as it starts, because the deferral is
+    /// wall-clock bound (the level parses on a worker thread) while stepping is
+    /// deliberately wall-clock independent - so a stepped caller could otherwise
+    /// never observe the destination level deterministically. Pass this to test
+    /// the loading screen itself.
+    #[arg(long)]
+    defer_transitions: bool,
+
     /// Opaque instance identifier echoed by /v1/health, so the client that
     /// launched this process can verify it is talking to its own instance
     /// and not another agent's runtime that happens to hold the same port.
@@ -170,6 +180,12 @@ static INSTANCE_ID: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::n
 /// time-based stepping advance a deterministic, wall-clock-independent amount of
 /// simulation time (60 Hz, matching the game's target frame rate).
 const FIXED_STEP_DT: f32 = 1.0 / 60.0;
+
+/// Upper bound on the frames `/v1/control/transition-level` pumps while driving a
+/// deferred level transition to completion (60 s at the fixed step). A warp that
+/// somehow never lands then returns a truthful failure instead of wedging the
+/// runtime's single game-loop thread.
+const TRANSITION_PUMP_FRAME_CAP: u32 = 60 * 60;
 
 /// How long to sleep at the end of an idle loop iteration (paused, no step in
 /// progress). Without this the loop spins as fast as possible - no swap
@@ -745,6 +761,7 @@ fn run_game_blocking(
                         &mut current_input,
                         &last_scene,
                         last_scene_frame,
+                        args.defer_transitions,
                     );
                 }
             }
@@ -752,7 +769,7 @@ fn run_game_blocking(
 
         // Throttle: paused, no step in progress, no command arrived this
         // iteration, nothing queued to render for, and no deferred level
-        // transition (--experimental loading_screen) needs frames pumped.
+        // transition needs frames pumped.
         // Without this the loop spins as fast as possible - no swap interval
         // is set anywhere and the window is hidden, so `swap_buffers` never
         // blocks - pinning a CPU core running an unchanged frame's
@@ -801,6 +818,16 @@ fn run_game_blocking(
                 "game.update",
                 game.update(&game_time, &current_input, &mut action_state)
             );
+            // An in-game transition (a frobbed bulkhead button, a trigger
+            // volume) starts here; land it now for the same reason a warp does.
+            if !args.defer_transitions {
+                complete_pending_transition(
+                    &mut game,
+                    &game_time,
+                    &current_input,
+                    &mut action_state,
+                );
+            }
 
             if step_requested {
                 // Increment frame counter and accumulated time
@@ -885,6 +912,14 @@ fn run_game_blocking(
                 "game.update",
                 game.update(&zero_time, &current_input, &mut action_state)
             );
+            if !args.defer_transitions {
+                complete_pending_transition(
+                    &mut game,
+                    &zero_time,
+                    &current_input,
+                    &mut action_state,
+                );
+            }
             accumulated_time // Use accumulated time, not real time
         };
 
@@ -996,6 +1031,32 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
         .collect()
 }
 
+/// Drive a deferred level transition to completion, so a headless caller
+/// observes the destination level rather than the loading screen.
+///
+/// The deferral is bound to wall-clock time (the level parses on a worker
+/// thread) while `/v1/step` is deliberately wall-clock *independent*, so no
+/// number of stepped frames would reliably land the switch. Paced at the fixed
+/// step like the game loop's paused pump, and capped so a wedged parse cannot
+/// hang the runtime's single game-loop thread forever.
+fn complete_pending_transition(
+    game: &mut Game,
+    time: &Time,
+    current_input: &InputContext,
+    action_state: &mut InputActionState,
+) {
+    let mut pumped = 0u32;
+    while game.has_pending_transition() && pumped < TRANSITION_PUMP_FRAME_CAP {
+        let zero_time = Time {
+            elapsed: Duration::from_secs_f32(0.0),
+            total: time.total,
+        };
+        game.update(&zero_time, current_input, action_state);
+        pumped += 1;
+        thread::sleep(Duration::from_secs_f32(FIXED_STEP_DT));
+    }
+}
+
 fn process_command(
     command: RuntimeCommand,
     game: &mut Game,
@@ -1005,6 +1066,7 @@ fn process_command(
     current_input: &mut InputContext,
     last_scene: &[commands::SceneObjectSummary],
     last_scene_frame: u64,
+    defer_transitions: bool,
 ) {
     match command {
         RuntimeCommand::GetInfo(reply) => {
@@ -1129,11 +1191,12 @@ fn process_command(
         } => {
             tracing::info!("Transitioning level to {} (loc {:?})", level_file, loc);
             game.transition_level(level_file.clone(), loc);
+            // Land the warp before replying, so `success` and every later
+            // request see the destination level (see `complete_pending_transition`).
+            if !defer_transitions {
+                complete_pending_transition(game, time, current_input, action_state);
+            }
             // Report the ACTUAL post-switch scene rather than assuming success.
-            // Without the loading_screen feature the switch is synchronous and
-            // scene_name() is already the target; with it the switch is deferred
-            // (scene_name() is still "loading"/the old level), so success stays
-            // false until the caller steps far enough for it to complete.
             let mission = game.scene_name().to_string();
             let success = mission == level_file;
             let message = if success {

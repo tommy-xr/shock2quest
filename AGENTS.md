@@ -327,6 +327,12 @@ For debugging visual/rendering changes without a full interactive session:
    # runtime orphaned by a dead session stops holding ~700 MB and a port. Any
    # request resets the timer; a request in flight never counts as idle.
 
+   # Level transitions are deferred behind the loading screen on the shipping
+   # runtimes, but that deferral waits on a wall-clock level parse while
+   # stepping is deliberately wall-clock independent - so this runtime lands a
+   # transition as soon as it starts and a warp/bulkhead button is observable
+   # immediately. Pass `--defer-transitions` to see the loading screen instead.
+
    # Control via HTTP
    curl http://127.0.0.1:8080/v1/step -X POST -d '{"frames": 10}'
    curl http://127.0.0.1:8080/v1/screenshot -X POST -d '{"filename": "test.png"}'
@@ -613,17 +619,6 @@ The project supports experimental flags for gating in-progress features during d
   rig — joints anchored at the limb articulation points, so limbs structurally can't
   separate — with raised sleep thresholds so the settled corpse goes fully still
   (and wakes again on contact/impulse). See `projects/ragdoll-settling-followup.md`.
-
-- **`loading_screen`**: show the animated loading screen during level transitions
-  (`GlobalEffect::TransitionLevel` / `TestReload`) instead of switching instantly. The
-  transition is deferred: the outgoing scene is saved, the level parse runs on a worker
-  thread while the `LoadingScene` animates for at least a brief minimum, then the
-  main-thread GPU build runs (still blocking - no frames are submitted while it does).
-  The screen is presented on a world panel in VR and in screen space when flat. The
-  `DebugReloadLevel` input action reloads the current level in place to exercise this.
-  See `projects/loading-screen.md`. Without it, transitions are synchronous and
-  unchanged. **Enabled by default on Quest** (`oculus_runtime`), where freezing the
-  compositor on the last frame is far worse than on a monitor; opt-in on the desktop.
 
 - **`nav_bridges`**: reconnect the AI navigation mesh for full-map pathfinding. The
   shipped mission data partitions the walk graph into per-area islands with no links

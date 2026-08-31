@@ -66,8 +66,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      experimental: ["loading_screen"],
-      debugFlags: ["--vr"],
+      debugFlags: ["--vr", "--defer-transitions"],
     });
 
     await enterLoadingScreen(game);
@@ -107,8 +106,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      experimental: ["loading_screen"],
-      debugFlags: [],
+      debugFlags: ["--defer-transitions"],
     });
 
     await enterLoadingScreen(game);
