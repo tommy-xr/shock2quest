@@ -23,6 +23,7 @@ pub struct VideoPlayer {
     decoder: ffmpeg::decoder::Video,
     scaler: ffmpeg::software::scaling::Context,
     sent_eof: bool,
+    frames_exhausted: bool,
 }
 
 impl VideoPlayer {
@@ -86,6 +87,7 @@ impl VideoPlayer {
             decoder,
             scaler,
             sent_eof: false,
+            frames_exhausted: false,
         };
         if !player.decode_next_frame()? {
             return Err(ffmpeg::Error::InvalidData);
@@ -129,14 +131,27 @@ impl VideoPlayer {
     }
 
     pub fn advance_by_time(&mut self, time: Duration) {
-        self.current_time = (self.current_time + time).min(self.duration);
+        self.current_time += time;
+        // A stream that reported no duration must not be clamped to zero, or it
+        // would never decode a second frame and so never reach EOF - the only
+        // completion signal such a stream has.
+        if !self.duration.is_zero() {
+            self.current_time = self.current_time.min(self.duration);
+        }
         let target_frame_index =
             (self.current_time.as_secs_f64() * self.frames_per_second).floor() as usize;
 
         while self.current_frame_index < target_frame_index {
             match self.decode_next_frame() {
                 Ok(true) => self.current_frame_index += 1,
-                Ok(false) => break,
+                Ok(false) => {
+                    self.frames_exhausted = true;
+                    break;
+                }
+                // Deliberately not latched: a bad packet mid-video would
+                // otherwise mark the whole stream finished and truncate the
+                // cutscene. Breaking lets the next advance retry, and a stream
+                // that reported a duration still completes on its timeline.
                 Err(error) => {
                     eprintln!("cutscene video decode failed: {error}");
                     break;
@@ -147,6 +162,19 @@ impl VideoPlayer {
 
     pub fn get_current_frame(&self) -> RawTextureData {
         self.current_frame.clone()
+    }
+
+    /// Playback length of the video stream. Zero when neither the stream nor
+    /// the container reported one.
+    pub fn duration(&self) -> Duration {
+        self.duration
+    }
+
+    /// True once playback has reached the end: either the timeline caught up
+    /// with the reported duration, or the decoder drained (which is the only
+    /// signal available for a stream that reports no duration).
+    pub fn is_finished(&self) -> bool {
+        self.frames_exhausted || (!self.duration.is_zero() && self.current_time >= self.duration)
     }
 }
 
@@ -205,5 +233,65 @@ mod tests {
                 "reaching EOF in {fixture_name} retained prior decoded frames"
             );
         }
+    }
+
+    #[test]
+    fn playback_is_finished_only_once_the_video_ends() {
+        crate::init().unwrap();
+        let testdata = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata");
+
+        for fixture_name in ["streaming-test.avi", "streaming-test.ogv"] {
+            let fixture = testdata.join(fixture_name);
+            let mut player = VideoPlayer::from_filename(fixture.to_str().unwrap()).unwrap();
+
+            assert!(
+                !player.duration().is_zero(),
+                "{fixture_name} should report a duration"
+            );
+            assert!(
+                !player.is_finished(),
+                "{fixture_name} should not be finished before it plays"
+            );
+
+            player.advance_by_time(player.duration() / 2);
+            assert!(
+                !player.is_finished(),
+                "{fixture_name} should not be finished halfway through"
+            );
+
+            player.advance_by_time(player.duration());
+            assert!(
+                player.is_finished(),
+                "{fixture_name} should be finished after its duration elapses"
+            );
+        }
+    }
+
+    /// A container that reports no duration has only EOF to signal completion,
+    /// so playback must still advance frame by frame and finish.
+    #[test]
+    fn a_duration_less_stream_still_advances_to_completion() {
+        crate::init().unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("streaming-test.avi");
+
+        let mut player = VideoPlayer::from_filename(fixture.to_str().unwrap()).unwrap();
+        player.duration = Duration::ZERO;
+        let first_frame = player.get_current_frame();
+
+        player.advance_by_time(Duration::from_millis(500));
+        assert!(
+            player.current_frame_index > 0,
+            "a duration-less stream should still decode past its first frame"
+        );
+        assert_ne!(player.get_current_frame().bytes, first_frame.bytes);
+        assert!(!player.is_finished());
+
+        player.advance_by_time(Duration::from_secs(60));
+        assert!(
+            player.is_finished(),
+            "a duration-less stream should finish once its frames run out"
+        );
     }
 }

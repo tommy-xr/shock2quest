@@ -987,7 +987,8 @@ impl Game {
         self.should_quit
     }
 
-    /// Whether the retail campaign finale has entered its terminal cutscene.
+    /// Whether the retail campaign finale is playing its terminal cutscene.
+    /// Clears again when the chain reaches the main menu.
     pub fn campaign_completed(&self) -> bool {
         self.campaign_completed
     }
@@ -1815,6 +1816,10 @@ impl Game {
             }
             GlobalEffect::ShowMainMenu => {
                 self.pending_transition = None;
+                // The flag means "the finale is on screen", so reaching the menu
+                // ends it - the ending cutscene now finishes rather than holding
+                // its last frame forever.
+                self.campaign_completed = false;
                 self.set_active_scene(Box::new(MainMenuScene::new()));
             }
             GlobalEffect::ShowDeveloper => {
@@ -1843,29 +1848,34 @@ impl Game {
             GlobalEffect::PlayerHit { damage } => {
                 self.hit_feedback.trigger(damage);
             }
+            GlobalEffect::PlayCutscene { video, then } => {
+                // A scene swap like the frontend ones: no ledger write-back, and
+                // any pending transition is abandoned.
+                self.pending_transition = None;
+                let follow_on = *then;
+                match CutscenePlayerScene::new(video, follow_on.clone(), &mut self.audio_context) {
+                    Ok(cutscene) => self.set_active_scene(Box::new(cutscene)),
+                    Err(error) => {
+                        // An install missing a movie must not strand the player
+                        // on the scene the cutscene was replacing.
+                        warn!("{error} - skipping it");
+                        self.handle_global_effect(follow_on);
+                    }
+                }
+            }
             GlobalEffect::CompleteCampaign => {
                 // Preserve the destroyed head and the rest of the finale state
                 // in the in-memory mission ledger before the cutscene replaces
                 // the active world.
                 self.save_active_scene();
 
-                let (cutscene_name, cutscene_path) = resolve_ending_cutscene();
-                let path_string = cutscene_path.to_string_lossy().into_owned();
-                let cutscene = CutscenePlayerScene::new(
-                    cutscene_name.clone(),
-                    path_string.clone(),
-                    &mut self.audio_context,
-                )
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "Failed to initialize ending cutscene '{}' from '{}': {}",
-                        cutscene_name, path_string, error
-                    )
-                });
+                let after_ending = scenes::finale_follow_on(scenes::resolve_credits_cutscene());
 
-                self.pending_transition = None;
-                self.set_active_scene(Box::new(cutscene));
                 self.campaign_completed = true;
+                self.handle_global_effect(GlobalEffect::PlayCutscene {
+                    video: resolve_ending_cutscene(),
+                    then: Box::new(after_ending),
+                });
             }
             GlobalEffect::Quit => {
                 self.should_quit = true;

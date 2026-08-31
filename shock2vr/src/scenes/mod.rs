@@ -16,6 +16,7 @@ use crate::{
     },
     paths,
     save_load::{EntitySaveData, HeldItemSaveData, SaveData},
+    scripts::GlobalEffect,
 };
 
 pub mod cutscene_player;
@@ -110,7 +111,12 @@ pub struct SceneInitResult {
     pub mission_save_data: HashMap<String, EntitySaveData>,
 }
 
+// Movie names are not present in the mission or gamesys data - the original
+// picked them in its engine/game-script code - so the finale's videos are named
+// here.
 const ENDING_CUTSCENE_CANDIDATES: &[&str] = &["enhanced/cs3.ogv", "cs3.avi", "cs3.ogv"];
+const CREDITS_CUTSCENE_CANDIDATES: &[&str] =
+    &["enhanced/credits.ogv", "credits.avi", "credits.ogv"];
 const ANNIVERSARY_CUTSCENE_LAYERS: &[&str] = &["enhanced", "original", "kex"];
 
 /// How a debug scene is built. Every entry in [`DEBUG_SCENES`] has this shape,
@@ -212,19 +218,11 @@ pub fn create_initial_scene(
 ) -> SceneInitResult {
     if is_cutscene_file(&options.mission) {
         let mission_name = options.mission.clone();
-        let cutscene_path = resolve_cutscene_path(&mission_name);
-        let cutscene_path_string = cutscene_path.to_string_lossy().into_owned();
-        let cutscene = CutscenePlayerScene::new(
-            mission_name.clone(),
-            cutscene_path_string.clone(),
-            audio_context,
-        )
-        .unwrap_or_else(|err| {
-            panic!(
-                "Failed to initialize cutscene '{}' from '{}': {}",
-                mission_name, cutscene_path_string, err
-            )
-        });
+        let cutscene =
+            CutscenePlayerScene::new(mission_name, GlobalEffect::ShowMainMenu, audio_context)
+                // An explicitly requested cutscene that cannot be opened is a
+                // bad invocation, so fail loudly rather than boot elsewhere.
+                .unwrap_or_else(|err| panic!("{err}"));
         return SceneInitResult {
             scene: Box::new(cutscene),
             mission_save_data: HashMap::new(),
@@ -464,21 +462,54 @@ fn find_file_ignoring_ascii_case(path: &Path) -> Option<PathBuf> {
 
 /// Resolve the retail ending for both 25th Anniversary (`enhanced/cs3.ogv`)
 /// and classic (`cs3.avi`) installs.
-pub(crate) fn resolve_ending_cutscene() -> (String, PathBuf) {
-    ENDING_CUTSCENE_CANDIDATES
+pub(crate) fn resolve_ending_cutscene() -> String {
+    first_present_cutscene(ENDING_CUTSCENE_CANDIDATES)
+        .unwrap_or_else(|| ENDING_CUTSCENE_CANDIDATES[0].to_string())
+}
+
+/// The credits roll that follows the ending, or `None` on an install that ships
+/// without one (the finale then returns straight to the menu).
+pub(crate) fn resolve_credits_cutscene() -> Option<String> {
+    first_present_cutscene(CREDITS_CUTSCENE_CANDIDATES)
+}
+
+/// What the ending cutscene hands off to: the credits roll when the install
+/// ships one, then the main menu either way.
+pub(crate) fn finale_follow_on(credits: Option<String>) -> GlobalEffect {
+    match credits {
+        Some(video) => GlobalEffect::PlayCutscene {
+            video,
+            then: Box::new(GlobalEffect::ShowMainMenu),
+        },
+        None => GlobalEffect::ShowMainMenu,
+    }
+}
+
+fn first_present_cutscene(candidates: &[&str]) -> Option<String> {
+    candidates
         .iter()
-        .map(|name| ((*name).to_string(), resolve_cutscene_path(name)))
-        .find(|(_, path)| path.is_file())
-        .unwrap_or_else(|| {
-            let name = ENDING_CUTSCENE_CANDIDATES[0].to_string();
-            let path = resolve_cutscene_path(&name);
-            (name, path)
-        })
+        .find(|name| resolve_cutscene_path(name).is_file())
+        .map(|name| (*name).to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The finale always ends up at the menu, through the credits when the
+    /// install has them and directly when it does not.
+    #[test]
+    fn the_finale_chains_through_the_credits_only_when_they_are_installed() {
+        match finale_follow_on(Some("enhanced/credits.ogv".to_string())) {
+            GlobalEffect::PlayCutscene { video, then } => {
+                assert_eq!(video, "enhanced/credits.ogv");
+                assert!(matches!(*then, GlobalEffect::ShowMainMenu));
+            }
+            other => panic!("expected the credits to play, got {other:?}"),
+        }
+
+        assert!(matches!(finale_follow_on(None), GlobalEffect::ShowMainMenu));
+    }
 
     /// The launcher offers exactly what the dispatcher can build, and every
     /// name is a distinct `debug_` name the CLI accepts too.

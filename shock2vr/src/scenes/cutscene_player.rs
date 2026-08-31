@@ -1,4 +1,7 @@
-use std::{collections::HashMap, rc::Rc, time::Duration};
+use std::{collections::HashMap, rc::Rc};
+
+#[cfg(not(feature = "ffmpeg"))]
+use std::time::Duration;
 
 use cgmath::{InnerSpace, Matrix3, Matrix4, Quaternion, Vector3, vec3};
 use engine::{
@@ -14,9 +17,9 @@ use crate::{
     game_scene::GameScene,
     input_context::InputContext,
     inventory::PlayerInventoryEntity,
-    mission::{GlobalEntityMetadata, GlobalTemplateIdMap, PlayerInfo},
+    mission::{GlobalContext, GlobalEntityMetadata, GlobalTemplateIdMap, PlayerInfo},
     quest_info::QuestInfo,
-    scripts::Effect,
+    scripts::{Effect, GlobalEffect},
     time::Time,
 };
 
@@ -36,15 +39,32 @@ pub struct CutscenePlayerScene {
     screen_distance: f32,
     screen_vertical_offset: f32,
     video_name: String,
+    /// Only the stub has no decoder to ask how far playback has got.
+    #[cfg(not(feature = "ffmpeg"))]
     total_time: Duration,
+    /// Dispatched once, when playback ends. Without it a finished cutscene
+    /// would hold its last frame forever.
+    on_complete: GlobalEffect,
+    completion_emitted: bool,
+    #[cfg(feature = "ffmpeg")]
+    audio_handle: engine::audio::AudioHandle,
     #[cfg(feature = "ffmpeg")]
     video_player: VideoPlayer,
 }
 
+/// How long the non-ffmpeg stub shows its placeholder before completing. There
+/// is no decoder to ask, so a build without video still has to move on rather
+/// than sit on a blank panel forever.
+#[cfg(not(feature = "ffmpeg"))]
+const STUB_PLAYBACK_DURATION: Duration = Duration::from_secs(2);
+
 impl CutscenePlayerScene {
+    /// `video_name` is a cutscene name, resolved to a file here so every caller
+    /// selects the same one (see [`super::resolve_cutscene_path`]). The error
+    /// names both, so a caller only has to report it.
     pub fn new(
         video_name: String,
-        video_path: String,
+        on_complete: GlobalEffect,
         audio_context: &mut AudioContext<EntityId, String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let world = Self::initialize_world();
@@ -53,9 +73,18 @@ impl CutscenePlayerScene {
         {
             use engine::audio::{AudioHandle, play_audio};
 
-            let video_player = VideoPlayer::from_filename(&video_path)?;
-            let audio_clip = Rc::new(AudioPlayer::from_filename(&video_path)?);
-            play_audio(audio_context, AudioHandle::new(), None, audio_clip);
+            let video_path = super::resolve_cutscene_path(&video_name)
+                .to_string_lossy()
+                .into_owned();
+            let describe = |error: &dyn std::fmt::Display| {
+                format!("cutscene '{video_name}' could not be opened from '{video_path}': {error}")
+            };
+            let video_player =
+                VideoPlayer::from_filename(&video_path).map_err(|error| describe(&error))?;
+            let audio_clip =
+                Rc::new(AudioPlayer::from_filename(&video_path).map_err(|error| describe(&error))?);
+            let audio_handle = AudioHandle::new();
+            play_audio(audio_context, audio_handle.clone(), None, audio_clip);
 
             return Ok(Self {
                 world,
@@ -66,7 +95,9 @@ impl CutscenePlayerScene {
                 screen_distance: 6.0 / dark::SCALE_FACTOR,
                 screen_vertical_offset: 1.5 / dark::SCALE_FACTOR,
                 video_name,
-                total_time: Duration::ZERO,
+                on_complete,
+                completion_emitted: false,
+                audio_handle,
                 video_player,
             });
         }
@@ -74,7 +105,6 @@ impl CutscenePlayerScene {
         #[cfg(not(feature = "ffmpeg"))]
         {
             let _ = audio_context;
-            let _ = video_path;
             Ok(Self {
                 world,
                 head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
@@ -85,6 +115,8 @@ impl CutscenePlayerScene {
                 screen_vertical_offset: 1.5 / dark::SCALE_FACTOR,
                 video_name,
                 total_time: Duration::ZERO,
+                on_complete,
+                completion_emitted: false,
             })
         }
     }
@@ -212,6 +244,18 @@ impl CutscenePlayerScene {
             )
         }
     }
+
+    fn playback_is_finished(&self) -> bool {
+        #[cfg(feature = "ffmpeg")]
+        {
+            self.video_player.is_finished()
+        }
+
+        #[cfg(not(feature = "ffmpeg"))]
+        {
+            self.total_time >= STUB_PLAYBACK_DURATION
+        }
+    }
 }
 
 impl GameScene for CutscenePlayerScene {
@@ -232,12 +276,24 @@ impl GameScene for CutscenePlayerScene {
         self.head_rotation = input_context.head.rotation;
         self.player_position = vec3(0.0, 0.0, 0.0);
         self.player_rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
-        self.total_time += time.elapsed;
         self.update_player_info();
 
         #[cfg(feature = "ffmpeg")]
         {
             self.video_player.advance_by_time(time.elapsed);
+        }
+
+        #[cfg(not(feature = "ffmpeg"))]
+        {
+            self.total_time += time.elapsed;
+        }
+
+        // Latched because not every `on_complete` replaces this scene - a
+        // follow-on like `Quit` leaves it running, and re-emitting would then
+        // repeat the effect every frame.
+        if !self.completion_emitted && self.playback_is_finished() {
+            self.completion_emitted = true;
+            return vec![Effect::GlobalEffect(self.on_complete.clone())];
         }
 
         Vec::new()
@@ -250,6 +306,33 @@ impl GameScene for CutscenePlayerScene {
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         let screen = self.build_screen_object();
         (vec![screen], self.player_position, self.player_rotation)
+    }
+
+    fn handle_effects(
+        &mut self,
+        effects: Vec<Effect>,
+        _global_context: &GlobalContext,
+        _game_options: &GameOptions,
+        _asset_cache: &mut AssetCache,
+        _audio_context: &mut AudioContext<EntityId, String>,
+    ) -> Vec<GlobalEffect> {
+        effects
+            .into_iter()
+            .filter_map(|effect| match effect {
+                Effect::GlobalEffect(global) => Some(global),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
+        // The soundtrack is one clip for the whole video; without this it keeps
+        // playing over whatever scene follows until it drains.
+        #[cfg(feature = "ffmpeg")]
+        engine::audio::stop_audio(audio_context, self.audio_handle.clone());
+
+        #[cfg(not(feature = "ffmpeg"))]
+        let _ = audio_context;
     }
 
     fn get_hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {

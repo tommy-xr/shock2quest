@@ -772,7 +772,8 @@ pub struct FrameSnapshot {
     pub frame_index: u64,
     pub time: TimeInfo,
     pub mission: String,
-    /// True once the retail finale has entered its terminal ending cutscene.
+    /// True while the retail finale is playing its terminal ending cutscene;
+    /// false again once the chain reaches the main menu.
     pub campaign_completed: bool,
     /// True once a scene has asked the runtime to quit (the main menu's Quit).
     /// The debug runtime deliberately stays up - an automation session must not
