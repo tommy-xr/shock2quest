@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
 import { stepPastCutscenes } from "./helpers/cutscenes.js";
+import { dismissDebrief } from "./helpers/debrief.js";
 
 // End-to-end test for the HONEST character-creation chain the player walks at
 // game start: earth.mis (pick a career) -> station.mis three training tours ->
@@ -113,6 +114,9 @@ async function teleportTo(game: GameServer, [x, y, z]: Vec3): Promise<void> {
 async function tripAndArrive(game: GameServer, at: Vec3, frames: number): Promise<string[]> {
   await teleportTo(game, at);
   await game.step({ frames });
+  // A tour ends on its debrief page, which waits for the player before the
+  // departure runs; a career door has none to dismiss.
+  await dismissDebrief(game);
   return stepPastCutscenes(game);
 }
 
