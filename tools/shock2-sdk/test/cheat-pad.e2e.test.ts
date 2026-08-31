@@ -12,10 +12,12 @@ import { norm } from "./helpers/frontend-menu.js";
 // Verified by removing both gate checks: the test then fails.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-// The pad rides the Developer page's authored widget rects (GAMELODR.BIN:
-// list pane 261,54 202x290 and Done 527,405 95x62), with 40px rows inset 8px
-// on a 56px pitch - see `cheat_pad::button_rect`.
-const row = (index: number): [number, number] => [261 + 202 / 2, 54 + 8 + index * 56 + 40 / 2];
+// The pad is a `list_scroll` list on the Developer page's authored widget
+// rects (GAMELODR.BIN: list pane 261,54 202x290 and Done 527,405 95x62), at
+// the same 19px row pitch the debug-scene launcher uses - see
+// `cheat_pad::row_rect`. The two shipped cheats fit one page, so there is no
+// scroll gutter and rows span the full pane width.
+const row = (index: number): [number, number] => [261 + 202 / 2, 54 + index * 19 + 19 / 2];
 const RAIN_WEAPONS = row(0);
 const RAIN_MODULES = row(1);
 const DONE: [number, number] = [527 + 95 / 2, 405 + 62 / 2];

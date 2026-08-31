@@ -1678,16 +1678,13 @@ impl Game {
         );
         self.cheat_pad
             .pump_sfx(&mut self.asset_cache, &mut self.audio_context);
-        let Some(button) = clicked else {
-            return;
-        };
-        // The pad stays up across a rain (pressing both buttons is the common
-        // case); only "Done" closes it. `handle_effects` stays callable while
-        // the scene's `update` is skipped, which is how the spawn reaches a
-        // suspended world at all - the items hang until the world resumes and
-        // then fall.
-        match button.effect() {
-            Some(effect) => {
+        // The pad stays up across a rain (using more than one cheat is the
+        // common case); only "Done" closes it, and scrolling never gets here
+        // at all. `handle_effects` stays callable while the scene's `update`
+        // is skipped, which is how the spawn reaches a suspended world at all
+        // - the items hang until the world resumes and then fall.
+        match clicked {
+            Some(cheat_pad::CheatOutcome::Rain(effect)) => {
                 let global_effects = self.active_game_scene.handle_effects(
                     vec![effect],
                     &self.global_context,
@@ -1699,7 +1696,8 @@ impl Game {
                     self.handle_global_effect(effect);
                 }
             }
-            None => self.close_cheat_pad(true),
+            Some(cheat_pad::CheatOutcome::Close) => self.close_cheat_pad(true),
+            None => {}
         }
     }
 
