@@ -57,6 +57,17 @@ pub fn create_arm_hud_panels(
     );
     scene_objects.append(&mut left_hud_layers);
 
+    // The station security alarm, standing above the left forearm panel while
+    // one is up - the same `alarm_panel` layout the flat HUD draws.
+    if let Some(seconds) = crate::security_alarm::status(world).hud_seconds() {
+        scene_objects.append(&mut create_alarm_forearm_panel(
+            asset_cache,
+            seconds,
+            left_hand_position,
+            left_hand_rotation,
+        ));
+    }
+
     // Create right arm HUD (AMMOFULL) with the live ammo readout on it
     let mut right_hud_layers =
         create_ammo_forearm_panel(asset_cache, world, right_hand_position, right_hand_rotation);
@@ -411,6 +422,43 @@ fn forearm_panel_transform(
     Matrix4::from_translation(position)
         * Matrix4::from(rotation)
         * Matrix4::from_nonuniform_scale(HUD_PANEL_WIDTH, HUD_PANEL_HEIGHT, 1.0)
+}
+
+/// The security alarm readout, on its own quad standing above the left
+/// forearm panel - the VR counterpart of the flat HUD's alarm badge.
+///
+/// Only the *origin* differs between the presentations: the badge, its
+/// translucency and the countdown under it all come from the shared
+/// [`crate::hud::alarm_panel`] layout (AGENTS.md section 3). The panel keeps
+/// the layout's aspect, scaled off the forearm panel's width so it reads at
+/// the same distance as the meters beside it.
+fn create_alarm_forearm_panel(
+    asset_cache: &mut AssetCache,
+    seconds: f32,
+    hand_position: Vector3<f32>,
+    hand_rotation: Quaternion<f32>,
+) -> Vec<SceneObject> {
+    use crate::hud::alarm_panel;
+
+    let (position, rotation) = forearm_pose(hand_position, hand_rotation, Handedness::Left);
+    // BIOFULL's 260 canvas pixels span HUD_PANEL_WIDTH, so one canvas pixel is
+    // this many world units - the alarm panel is sized in the same currency.
+    let world_per_pixel = HUD_PANEL_WIDTH / BIOFULL_WIDTH;
+    let width = alarm_panel::PANEL.x * world_per_pixel;
+    let height = alarm_panel::PANEL.y * world_per_pixel;
+    // Stand it just above the forearm panel rather than over the meters.
+    let offset = vec3(0.0, HUD_PANEL_HEIGHT / 2.0 + height / 2.0, OVERLAY_Z_OFFSET);
+    let transform = Matrix4::from_translation(position + rotation.rotate_vector(offset))
+        * Matrix4::from(rotation)
+        * Matrix4::from_nonuniform_scale(width, height, 1.0);
+
+    alarm_panel::build_panel_canvas(seconds).render_world_space(
+        asset_cache,
+        transform,
+        None,
+        None,
+        OVERLAY_Z_OFFSET,
+    )
 }
 
 /// The right forearm's AMMOFULL panel, with the live ammo readout composited

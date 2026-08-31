@@ -1515,9 +1515,10 @@ pub struct MissionCore {
     pub pathfinding_service: Option<Arc<PathfindingService>>,
     pub path_visualization: PathVisualizationSystem,
     pub pathfinding_test: crate::mission::pathfinding_test::PathfindingTest,
-    /// Blinking HUD badge + looping warning while a security ecology is
-    /// alerted. Derived from the world's `P$EcoState`, so it is not saved.
-    pub security_alert: crate::security_alert::SecurityAlert,
+    /// The refcounted station security alarm behind the HUD badge and its
+    /// countdown. The durable state is the ecologies' alert tier, so this is
+    /// not saved.
+    pub security_alarm: crate::security_alarm::SecurityAlarm,
     /// Sequential index for `Effect::DebugCycleHitboxPose` so each trigger picks
     /// the next animation deterministically (debug hitbox inspection).
     pub debug_pose_index: u32,
@@ -2404,7 +2405,7 @@ impl MissionCore {
             pathfinding_service,
             path_visualization: PathVisualizationSystem::new(),
             pathfinding_test: crate::mission::pathfinding_test::PathfindingTest::new(),
-            security_alert: crate::security_alert::SecurityAlert::default(),
+            security_alarm: crate::security_alarm::SecurityAlarm::default(),
             debug_pose_index: 0,
             debug_weapon_index: 0,
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
@@ -2847,10 +2848,12 @@ impl MissionCore {
         ) {
             effects.push(radiation);
         }
-        // Security alert feedback: the HUD badge blink phase and the looping
-        // "Potential threat detected." warning, both driven by whether any
-        // security ecology sits in its alert column.
-        effects.extend(self.security_alert.update(&self.world, time));
+        // Run the station security alarm's deadline down; when it expires the
+        // alarm stands security down on its own.
+        effects.extend(self.security_alarm.update(&self.world, time));
+        // Both HUD paths (the flat overlay and the VR forearm) read the alarm
+        // from the world, so neither presentation owns it.
+        self.security_alarm.publish(&self.world);
         effects.extend(command_effects);
 
         let player = {
@@ -6948,6 +6951,18 @@ impl MissionCore {
                     crate::audio_log::record_stop(handle.id());
                     engine::audio::stop_audio(audio_context, handle);
                 }
+                Effect::RaiseSecurityAlarm { seconds } => {
+                    for effect in self.security_alarm.add(&self.world, seconds) {
+                        effects.push_back(effect);
+                    }
+                    self.security_alarm.publish(&self.world);
+                }
+                Effect::ClearSecurityAlarm { from } => {
+                    for effect in self.security_alarm.disable(&self.world, Some(from)) {
+                        effects.push_back(effect);
+                    }
+                    self.security_alarm.publish(&self.world);
+                }
                 Effect::DestroyEntity { entity_id } => {
                     info!("!!!Destroying entity: {:?}", entity_id);
                     self.destroy_entity(entity_id);
@@ -8192,8 +8207,8 @@ impl MissionCore {
                 !self.use_mode,
                 // Use mode expands the compact readouts to BIOFULL/AMMOFULL.
                 self.use_mode,
-                // Blinking security alert badge (lit half of the cycle).
-                self.security_alert.badge_visible(),
+                // Security alert badge + its recovery countdown.
+                self.security_alarm.status().hud_seconds(),
             ));
 
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
@@ -10451,6 +10466,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         crate::mission::flat_ui_host::CANVAS_SIZE.x,
                         crate::mission::flat_ui_host::CANVAS_SIZE.y,
                     ],
+                }
+            }),
+            security_alarm: self.security_alarm.status().hud_seconds().map(|seconds| {
+                crate::game_scene::DebugSecurityAlarm {
+                    count: self.security_alarm.status().count,
+                    seconds_remaining: seconds,
                 }
             }),
         }

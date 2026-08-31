@@ -69,11 +69,20 @@ impl Script for CameraAlert {
         match self.phase {
             AlarmPhase::Armed if high_alert => {
                 self.phase = AlarmPhase::Latched;
-                send_to_all_switch_links(
-                    world,
-                    entity_id,
-                    MessagePayload::Alarm { from: entity_id },
-                )
+                // The camera both pulses its authored switch links (the
+                // ecology and any mission-authored alarm devices on them) and
+                // raises the station alarm the HUD reports, for as long as its
+                // ecology's authored alert recovery.
+                Effect::combine(vec![
+                    send_to_all_switch_links(
+                        world,
+                        entity_id,
+                        MessagePayload::Alarm { from: entity_id },
+                    ),
+                    Effect::RaiseSecurityAlarm {
+                        seconds: crate::security_alarm::authored_alarm_seconds(world, entity_id),
+                    },
+                ])
             }
             AlarmPhase::Resetting if !high_alert => {
                 self.phase = AlarmPhase::Armed;
@@ -136,7 +145,15 @@ mod tests {
 
     fn camera_world() -> (World, EntityId, EntityId) {
         let mut world = World::new();
-        let ecology = world.add_entity(());
+        let ecology = world.add_entity(dark::properties::PropEcology {
+            period_seconds: 15.0,
+            min_count: [0; 3],
+            max_count: [0; 3],
+            // medsci1's authored alert recovery - how long the camera's alarm
+            // holds the station.
+            recovery_seconds: [0.0, 0.0, 120.0],
+            random_chance: [0; 3],
+        });
         let camera = world.add_entity((
             PropAIAlertness {
                 level: AIAlertLevel::High,
@@ -165,6 +182,16 @@ mod tests {
         }
     }
 
+    /// The station-alarm duration the effect asks for, if any.
+    fn station_alarm_seconds(effect: &Effect) -> Option<f32> {
+        Effect::flatten(vec![effect.clone()])
+            .into_iter()
+            .find_map(|effect| match effect {
+                Effect::RaiseSecurityAlarm { seconds } => Some(seconds),
+                _ => None,
+            })
+    }
+
     fn raises_alarm(effect: Effect, camera: EntityId, ecology: EntityId) -> bool {
         Effect::flatten(vec![effect]).into_iter().any(|effect| {
             matches!(
@@ -182,6 +209,8 @@ mod tests {
         let mut script = CameraAlert::new();
 
         let first = script.update(camera, &world, &PhysicsWorld::new(), &time());
+        // ...and raises the station alarm for the ecology's authored recovery.
+        assert_eq!(station_alarm_seconds(&first), Some(120.0));
         assert!(raises_alarm(first, camera, ecology));
         assert!(matches!(
             script.update(camera, &world, &PhysicsWorld::new(), &time()),

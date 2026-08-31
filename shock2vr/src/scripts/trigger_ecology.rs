@@ -12,7 +12,9 @@ use super::{
 
 const PHYSICAL_TEMPLATE_ID: i32 = -11;
 const ECOLOGY_STATE_NORMAL: i32 = 0;
-const ECOLOGY_STATE_ALERT: i32 = 2;
+/// The alert column of `P$EcoState` - also what the security-alert HUD/audio
+/// feedback watches for (`crate::security_alert`).
+pub(crate) const ECOLOGY_STATE_ALERT: i32 = 2;
 const SCRIPT_STATE_KEY: &str = "shock2vr.trigger_ecology";
 
 #[derive(Serialize, Deserialize)]

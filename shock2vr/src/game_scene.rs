@@ -566,6 +566,19 @@ pub struct DebugUiState {
     /// while the interface is up in VR. Lets a client aim a controller at a
     /// canvas rect without re-deriving the panel's placement.
     pub panel_pose: Option<DebugUiPanelPose>,
+    /// The station security alarm - `Some` exactly while one is up, which is
+    /// when the HUD shows its badge and countdown.
+    pub security_alarm: Option<DebugSecurityAlarm>,
+}
+
+/// The station security alarm as the HUD presents it (`GET /v1/ui`).
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugSecurityAlarm {
+    /// Outstanding alarms; overlapping alarms are refcounted, and the badge
+    /// shows until the last one is gone.
+    pub count: u32,
+    /// Seconds left on the alarm's deadline, floored at zero.
+    pub seconds_remaining: f32,
 }
 
 /// One frame of pointing at the shared UI canvas.
@@ -890,6 +903,7 @@ pub trait DebuggableScene {
             ammo_cycle: None,
             pointer: None,
             panel_pose: None,
+            security_alarm: None,
         }
     }
 
