@@ -114,6 +114,8 @@ impl ToolScene for BinAiViewerScene {
             objects,
             self.debug_skeletons,
             self.debug_hit_boxes,
+            // LGMM meshes carry no sub-objects or vhots.
+            false,
         )
     }
 }

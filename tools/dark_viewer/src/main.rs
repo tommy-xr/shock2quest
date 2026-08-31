@@ -83,6 +83,10 @@ struct Cli {
     /// Overlay the fitted per-joint hit-box shapes (capsules/boxes) for AI meshes (.bin).
     #[arg(long)]
     debug_hitboxes: bool,
+
+    /// Overlay LGMD sub-object pivots and vhots for object meshes (.bin).
+    #[arg(long)]
+    debug_articulation: bool,
 }
 
 use dark_viewer::normalize_clip_name;
@@ -175,6 +179,7 @@ fn create_scene(
     asset_cache: &mut engine::assets::asset_cache::AssetCache,
     debug_skeletons: bool,
     debug_hit_boxes: bool,
+    debug_articulation: bool,
 ) -> Result<Box<dyn ToolScene>, Box<dyn std::error::Error>> {
     let lower = filename.to_ascii_lowercase();
     if is_cutscene_file(&lower) {
@@ -198,6 +203,7 @@ fn create_scene(
                 asset_cache,
                 debug_skeletons,
                 debug_hit_boxes,
+                debug_articulation,
             )?;
             Ok(Box::new(scene))
         } else {
@@ -331,6 +337,7 @@ pub fn main() {
             &mut game.asset_cache,
             debug_skeletons,
             debug_hit_boxes,
+            cli.debug_articulation,
         ) {
             Ok(_) => println!("Scene creation succeeded."),
             Err(err) => println!("Error creating scene: {err}"),
@@ -346,6 +353,7 @@ pub fn main() {
         &mut game.asset_cache,
         debug_skeletons,
         debug_hit_boxes,
+        cli.debug_articulation,
     ) {
         Ok(scene) => scene,
         Err(err) => {
