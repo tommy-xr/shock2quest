@@ -91,6 +91,9 @@ pub struct DebriefScene {
     /// tour trigger asked for.
     then: GlobalEffect,
     menu: FrontendMenu<DebriefAction>,
+    /// Latches the "page too tall for the panel" warning, which is otherwise
+    /// decided again on every rendered frame.
+    truncation_warned: bool,
 }
 
 impl DebriefScene {
@@ -101,6 +104,7 @@ impl DebriefScene {
             text,
             then,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
+            truncation_warned: false,
         }
     }
 
@@ -117,7 +121,7 @@ impl DebriefScene {
     /// they cannot drift apart in layout, wrap, or which button looks
     /// actionable.
     fn build_canvas(
-        &self,
+        &mut self,
         asset_cache: &mut AssetCache,
         pointer_canvas: Option<Vector2<f32>>,
     ) -> UiCanvas {
@@ -135,10 +139,13 @@ impl DebriefScene {
             // backdrop art stops at the panel and says so, rather than quietly
             // drawing its last line (the grant) off the screen.
             if y + BODY_LINE_H > TEXT_RECT.y + TEXT_RECT.h {
-                warn!(
-                    "Debrief page is {} rows too tall for the panel - truncated",
-                    lines.len() - index
-                );
+                if !self.truncation_warned {
+                    self.truncation_warned = true;
+                    warn!(
+                        "Debrief page is {} rows too tall for the panel - truncated",
+                        lines.len() - index
+                    );
+                }
                 break;
             }
             // A blank line is a paragraph gap: it spaces the block, it draws
@@ -205,7 +212,8 @@ impl GameScene for DebriefScene {
         options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
-        let canvas = self.build_canvas(asset_cache, self.menu.pointer_canvas());
+        let pointer_canvas = self.menu.pointer_canvas();
+        let canvas = self.build_canvas(asset_cache, pointer_canvas);
         let objects = self
             .menu
             .render_world_space(asset_cache, canvas, options.presentation_mode);
