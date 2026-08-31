@@ -122,14 +122,18 @@ pub const THE_PLAYER_TEMPLATE_ID: i32 = -384;
 /// trimesh (see `spawn_ragdoll`).
 const RAGDOLL_SPAWN_LIFT: f32 = 0.05;
 
-/// Where `Effect::RainItems` puts its spawns: a ring of this radius, this far
-/// above the player's origin - both in **world** units, not the pre-scale SS2
-/// units the neighbouring spawn handlers divide by `SCALE_FACTOR`. Wide enough
-/// that neighbours do not start interpenetrating (which the solver resolves by
-/// flinging them apart), low enough to stay under an ordinary ceiling. A spawn
-/// that still lands inside geometry is simply ejected by the solver.
-const RAIN_RADIUS: f32 = 0.8;
-const RAIN_HEIGHT: f32 = 2.5;
+/// Where `Effect::RainItems` puts its spawns, relative to the player's body
+/// ORIGIN (which is the capsule centre, three feet off the floor - not the
+/// feet). Written in SS2 feet over `SCALE_FACTOR`, like the spawn handlers
+/// beside it, because the profile these clear is authored in feet: the
+/// standing capsule's crown is 3 ft above the origin and its radius is 1.2 ft.
+///
+/// So the ring drops items from just over head height, at arm's length: high
+/// enough to fall visibly and to miss the player, low enough to stay under a
+/// corridor ceiling. Height was 6.25 ft here at first and the rain landed on
+/// top of the ceiling geometry instead of reaching the player.
+const RAIN_RADIUS: f32 = 2.0 / SCALE_FACTOR;
+const RAIN_HEIGHT: f32 = 3.5 / SCALE_FACTOR;
 
 /// Resolve optional media-reader portrait/icon art before it becomes a shared
 /// UI image. STR tables author extension-less PCX-era names, while replacement
