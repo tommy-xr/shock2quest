@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use cgmath::{EuclideanSpace, Matrix4, Vector3, vec3};
-use collision::{Aabb, Aabb3};
+use collision::{Aabb, Aabb3, Union};
 use dark::{hit_box::HitBoxShape, model::Model, motion::JointId, properties::PropPosition};
 use rapier3d::{
     na::Point3 as NaPoint3,
@@ -127,6 +127,27 @@ pub struct HitBoxManager {
 }
 
 impl HitBoxManager {
+    /// World-space bounds of a creature's hitbox proxies - the volume its
+    /// limbs actually occupy in the pose it is drawn in.
+    ///
+    /// This is what the HUD outline wants: the entity's own collider is a
+    /// standing capsule sized from the creature definition, so it frames a
+    /// nominal cylinder rather than the creature - too wide for a monkey,
+    /// far too tall for anything crouched, crawling or dead. `None` for
+    /// anything with no proxies (every non-creature, and a posed corpse),
+    /// which keeps its collider bounds.
+    pub fn selection_bounds(
+        &self,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+    ) -> Option<Aabb3<f32>> {
+        let hit_boxes = self.hit_boxes.get(&entity_id)?;
+        hit_boxes
+            .values()
+            .filter_map(|hit_box| physics.get_aabb2(*hit_box))
+            .reduce(|acc, bounds| acc.union(&bounds))
+    }
+
     pub fn new() -> HitBoxManager {
         HitBoxManager {
             hit_boxes: HashMap::new(),
@@ -321,5 +342,98 @@ impl HitBoxManager {
                 script_world.remove_entity(hitbox);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physics::{CollisionGroup, PhysicsWorld};
+    use cgmath::{Quaternion, Zero};
+
+    /// Two hitboxes a body-length apart: the highlight must frame both, not
+    /// one of them and not the standing capsule the entity's own collider is.
+    #[test]
+    fn selection_bounds_span_every_hit_box() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let creature = world.add_entity(());
+        let mut manager = HitBoxManager::new();
+        let mut hit_boxes = HashMap::new();
+
+        for (joint, x) in [(0u32, -1.0), (1, 1.0)] {
+            let hit_box = world.add_entity(());
+            physics.add_kinematic(
+                hit_box,
+                vec3(x, 0.0, 0.0),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                Vector3::zero(),
+                vec3(0.5, 0.5, 0.5),
+                CollisionGroup::hitbox(),
+                false,
+            );
+            hit_boxes.insert(joint, hit_box);
+        }
+        manager.hit_boxes.insert(creature, hit_boxes);
+
+        let bounds = manager
+            .selection_bounds(&physics, creature)
+            .expect("a creature with hitboxes has selection bounds");
+
+        assert!(
+            bounds.min.x <= -1.25 && bounds.max.x >= 1.25,
+            "got {bounds:?}"
+        );
+        assert!(
+            bounds.min.y >= -0.3 && bounds.max.y <= 0.3,
+            "got {bounds:?}"
+        );
+    }
+
+    /// Anything without hitboxes - every prop, and a posed corpse - has no
+    /// hitbox bounds, so the caller keeps using its collider.
+    #[test]
+    fn selection_bounds_are_absent_without_hit_boxes() {
+        let mut world = World::new();
+        let physics = PhysicsWorld::new();
+        let entity_id = world.add_entity(());
+
+        assert!(
+            HitBoxManager::new()
+                .selection_bounds(&physics, entity_id)
+                .is_none()
+        );
+    }
+
+    /// A proxy whose body has gone (mid-teardown) contributes nothing, rather
+    /// than a zero-sized box at the world origin that would stretch the
+    /// highlight across the level.
+    #[test]
+    fn selection_bounds_ignore_a_proxy_with_no_body() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let creature = world.add_entity(());
+        let real = world.add_entity(());
+        let phantom = world.add_entity(());
+        physics.add_kinematic(
+            real,
+            vec3(3.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Vector3::zero(),
+            vec3(0.5, 0.5, 0.5),
+            CollisionGroup::hitbox(),
+            false,
+        );
+        let mut manager = HitBoxManager::new();
+        manager
+            .hit_boxes
+            .insert(creature, HashMap::from([(0, real), (1, phantom)]));
+
+        let bounds = manager.selection_bounds(&physics, creature).unwrap();
+
+        assert!(
+            bounds.min.x > 2.0,
+            "the phantom must not drag the box to the origin: {bounds:?}"
+        );
     }
 }

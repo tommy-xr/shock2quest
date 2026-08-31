@@ -7978,10 +7978,21 @@ impl MissionCore {
             highlighted.retain(|e| is_hud_selectable(&self.world, *e));
         }
         for hit_entity in highlighted {
+            // What the highlight frames: the creature's own hitboxes where it
+            // has them (the volume its limbs occupy in the pose it is in),
+            // otherwise its collider. Resolved once, so the brackets and the
+            // label can never frame different things.
+            let Some(bounds) = self
+                .hit_boxes
+                .selection_bounds(&self.physics, hit_entity)
+                .or_else(|| self.physics.get_aabb2(hit_entity))
+            else {
+                continue;
+            };
+
             ret.extend(draw_item_outline(
                 asset_cache,
-                &self.physics,
-                hit_entity,
+                bounds,
                 view,
                 projection,
                 screen_size,
@@ -7989,7 +8000,7 @@ impl MissionCore {
 
             ret.extend(draw_item_name(
                 asset_cache,
-                &self.physics,
+                bounds,
                 hit_entity,
                 &self.world,
                 view,
