@@ -785,6 +785,11 @@ export interface UiState {
    * mapping it through this pose - see `test/helpers/vr-hand.ts`.
    */
   panel_pose: UiPanelPose | null;
+  /**
+   * The character-creation debrief page on screen right now, verbatim; null
+   * when the debrief screen is not up.
+   */
+  debrief_text: string | null;
 }
 
 /** One frame of pointing at the shared UI canvas. */

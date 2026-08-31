@@ -57,7 +57,7 @@ mod wielded_weapon;
 pub mod zip_asset_path;
 
 use scenes::{
-    CutscenePlayerScene, DeveloperScene, GameOverScene, LoadGameScene, MainMenuScene,
+    CutscenePlayerScene, DebriefScene, DeveloperScene, GameOverScene, LoadGameScene, MainMenuScene,
     SceneInitResult, create_initial_scene, load_mission_from_save_data, resolve_ending_cutscene,
 };
 
@@ -173,6 +173,10 @@ use crate::{
     scripts::Effect,
 };
 use zip_asset_path::ZipAssetPath;
+
+/// The character-creation debrief string table (a page per training tour,
+/// keyed `Mission1..Mission27`). Ships with classic and anniversary installs.
+const CHARGEN_STRINGS: &str = "chargen.str";
 
 const AUDIO_EAR_OFFSET: f32 = 1.0;
 
@@ -1543,6 +1547,21 @@ impl Game {
             && self.player_is_alive()
     }
 
+    /// The debrief page for `text_key`, from `res/strings/CHARGEN.STR`.
+    /// `None` when the table or the page is missing or blank.
+    fn debrief_page(&mut self, text_key: &str) -> Option<String> {
+        let strings = self
+            .asset_cache
+            .get_opt(&STRINGS_IMPORTER, CHARGEN_STRINGS)?;
+        crate::player_stats::debrief_text(&strings, text_key)
+    }
+
+    /// The debrief page on screen right now, for debug introspection: the
+    /// active scene is the debrief screen exactly while one is showing.
+    pub fn active_debrief_text(&self) -> Option<&str> {
+        self.active_game_scene.debrief_text()
+    }
+
     fn player_is_alive(&self) -> bool {
         // Scenes without the life-state unique (the debug scenes) have no death
         // to be in, so they count as alive.
@@ -1920,6 +1939,34 @@ impl Game {
 
                 self.campaign_completed = true;
                 self.handle_global_effect(after_ending.after_cutscene(&resolve_ending_cutscene()));
+            }
+            GlobalEffect::ShowDebrief { text_key, then } => {
+                // Any pending transition is abandoned, as for the frontend swaps.
+                self.pending_transition = None;
+                let follow_on = *then;
+                // Capture the scene the page is about to replace, so the
+                // follow-on transition carries the player's career, training
+                // year, inventory and vitals - not the screen's empty world.
+                // Same contract as `PlayCutscene`, which may be the thing that
+                // captured it if a cutscene chains into this.
+                let preserved = match self.preserved_scene_state.take() {
+                    Some(carried) => carried,
+                    None => self.save_active_scene(),
+                };
+                match self.debrief_page(&text_key) {
+                    Some(text) => {
+                        self.set_active_scene(Box::new(DebriefScene::new(text, follow_on)));
+                        // After the swap: `set_active_scene` clears this.
+                        self.preserved_scene_state = Some(preserved);
+                    }
+                    None => {
+                        // A missing or blank page must not strand the player on
+                        // the scene the debrief was replacing.
+                        warn!("No debrief page for '{}' - skipping it", text_key);
+                        self.preserved_scene_state = Some(preserved);
+                        self.handle_global_effect(follow_on);
+                    }
+                }
             }
             GlobalEffect::Quit => {
                 self.should_quit = true;

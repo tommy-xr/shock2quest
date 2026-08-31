@@ -68,6 +68,33 @@ impl ChooseMissionScript {
         }
     }
 
+    /// The debrief page key for the tour this trigger completes, if any: the
+    /// `Mission1..Mission27` key `player_stats::REWARDS` records beside the
+    /// grants for (career, completed year, tour index). The markers carry no
+    /// text of their own - only `P$CharGenRo` - so the page is selected the way
+    /// the original does, from the same table that decides the stats.
+    fn debrief_key(world: &World, entity_id: EntityId, current_year: u32) -> Option<&'static str> {
+        match Self::grant_reward_effect(world, entity_id, current_year) {
+            Effect::GrantTourReward { career, year, tour } => {
+                crate::player_stats::tour_reward(career, year, tour).map(|reward| reward.text_key)
+            }
+            _ => None,
+        }
+    }
+
+    /// `transition` behind the tour's debrief page, when it has one. The page
+    /// comes first: it reports the tour that just ended, and its Continue is
+    /// what starts the departure.
+    fn behind_debrief(
+        transition: super::GlobalEffect,
+        debrief_key: Option<&str>,
+    ) -> super::GlobalEffect {
+        match debrief_key {
+            Some(key) => transition.after_debrief(key),
+            None => transition,
+        }
+    }
+
     /// The reward effect for completing this tour: the current career (from the
     /// persisted career bit) + the training year being completed (`current_year`,
     /// 1..=3) + the tour index `P$CharGenRo` carried by the tour marker
@@ -142,14 +169,17 @@ impl Script for ChooseMissionScript {
                             .unwrap_or_default()
                     };
 
-                    let transition = Self::behind_departure_cutscenes(
-                        super::GlobalEffect::TransitionLevel {
-                            level_file: "station.mis".to_string(),
-                            loc: None,
-                            entities_to_trigger,
-                            vitals_transition: super::PlayerVitalsTransition::Preserve,
-                        },
-                        new_year,
+                    let transition = Self::behind_debrief(
+                        Self::behind_departure_cutscenes(
+                            super::GlobalEffect::TransitionLevel {
+                                level_file: "station.mis".to_string(),
+                                loc: None,
+                                entities_to_trigger,
+                                vitals_transition: super::PlayerVitalsTransition::Preserve,
+                            },
+                            new_year,
+                        ),
+                        Self::debrief_key(world, entity_id, current_year),
                     );
 
                     Effect::Multiple(vec![
@@ -168,14 +198,17 @@ impl Script for ChooseMissionScript {
                     let v_dest_loc = world.borrow::<View<PropDestLoc>>().unwrap();
                     let dest_loc = v_dest_loc.get(entity_id).ok().map(|dest_loc| dest_loc.0);
 
-                    let transition = Self::behind_departure_cutscenes(
-                        super::GlobalEffect::TransitionLevel {
-                            level_file,
-                            loc: dest_loc,
-                            entities_to_trigger: vec![],
-                            vitals_transition: super::PlayerVitalsTransition::Preserve,
-                        },
-                        new_year,
+                    let transition = Self::behind_debrief(
+                        Self::behind_departure_cutscenes(
+                            super::GlobalEffect::TransitionLevel {
+                                level_file,
+                                loc: dest_loc,
+                                entities_to_trigger: vec![],
+                                vitals_transition: super::PlayerVitalsTransition::Preserve,
+                            },
+                            new_year,
+                        ),
+                        Self::debrief_key(world, entity_id, current_year),
                     );
 
                     Effect::Multiple(vec![
@@ -215,6 +248,31 @@ mod tests {
 
         assert!(ChooseMissionScript::departure_cutscenes(1).is_empty());
         assert!(ChooseMissionScript::departure_cutscenes(5).is_empty());
+    }
+
+    /// The debrief page reports the tour that just ended, so it comes first -
+    /// in front of the departure clips, which are in front of the transition.
+    /// A tour with no page leaves the chain exactly as it was.
+    #[test]
+    fn the_tour_page_comes_before_the_departure_clips() {
+        let transition = GlobalEffect::new_game_transition("station.mis".to_string());
+        let departure = ChooseMissionScript::behind_departure_cutscenes(transition.clone(), 2);
+
+        let wrapped = ChooseMissionScript::behind_debrief(departure, Some("Mission1"));
+        let GlobalEffect::ShowDebrief { text_key, then } = wrapped else {
+            panic!("the tour should show its debrief page first");
+        };
+        assert_eq!(text_key, "Mission1");
+        let GlobalEffect::PlayCutscene { video, then } = *then else {
+            panic!("continuing should depart on the tour's clip");
+        };
+        assert_eq!(video, "shuttle1.avi");
+        assert!(matches!(*then, GlobalEffect::TransitionLevel { .. }));
+
+        assert!(matches!(
+            ChooseMissionScript::behind_debrief(transition, None),
+            GlobalEffect::TransitionLevel { .. }
+        ));
     }
 
     /// The clips wrap the transition in the order they are shown, and a year
