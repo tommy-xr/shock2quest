@@ -43,6 +43,10 @@ const BRACKET_SIZE: f32 = 8.0;
 /// Line height of the rollover label, in screen pixels.
 const LABEL_HEIGHT: f32 = 10.0;
 
+/// Screen inset for the hover label: the bracket it sits beside plus the line
+/// of text drawn above it.
+const LABEL_MARGIN: f32 = BRACKET_SIZE + LABEL_HEIGHT;
+
 fn resolve_localized_property_string(raw: &str, strings: &HashMap<String, String>) -> String {
     let (key, fallback) = match raw.split_once(':') {
         Some((key, remainder)) => {
@@ -219,7 +223,12 @@ pub fn draw_item_name(
 
     let aabb = maybe_bbox.unwrap();
     let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
-    let extents = project_aabb3(&aabb, view, projection, screen_size);
+    // Clamped like the brackets, plus the line of text the label sits on.
+    let extents = clamp_extents_to_screen(
+        project_aabb3(&aabb, view, projection, screen_size),
+        screen_size,
+        LABEL_MARGIN,
+    );
 
     let v_prop_hitpoints = world.borrow::<View<PropHitPoints>>().unwrap();
     let hit_points = v_prop_hitpoints.get(entity_id).map(|hp| hp.hit_points).ok();
@@ -264,6 +273,57 @@ pub fn draw_item_name(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SCREEN: Vector2<f32> = Vector2::new(800.0, 600.0);
+
+    fn extents(min: (f32, f32), max: (f32, f32)) -> Aabb2<f32> {
+        Aabb2 {
+            min: point2(min.0, min.1),
+            max: point2(max.0, max.1),
+        }
+    }
+
+    /// Negative-first: a corpse frobbed from arm's length projects past every
+    /// edge, and unclamped its brackets and name are drawn off-screen - the
+    /// object looks un-highlighted while the player is looting it.
+    #[test]
+    fn an_oversized_extent_is_pulled_back_onto_the_screen() {
+        let clamped =
+            clamp_extents_to_screen(extents((-400.0, -300.0), (1200.0, 900.0)), SCREEN, 8.0);
+
+        assert_eq!(clamped.min, point2(8.0, 8.0));
+        assert_eq!(clamped.max, point2(792.0, 592.0));
+    }
+
+    /// An extent already on screen is untouched: the clamp must not nudge the
+    /// brackets off the object they frame.
+    #[test]
+    fn an_onscreen_extent_is_left_alone() {
+        let original = extents((100.0, 120.0), (300.0, 260.0));
+
+        assert_eq!(
+            clamp_extents_to_screen(original, SCREEN, 8.0).min,
+            original.min
+        );
+        assert_eq!(
+            clamp_extents_to_screen(original, SCREEN, 8.0).max,
+            original.max
+        );
+    }
+
+    /// Something entirely off screen (behind the camera, or past its edge) is
+    /// left alone too - clamping it would pin a marker to the edge for an
+    /// object the player cannot see.
+    #[test]
+    fn a_fully_offscreen_extent_is_not_pinned_to_the_edge() {
+        let offscreen = extents((-500.0, -400.0), (-100.0, -50.0));
+
+        assert_eq!(
+            clamp_extents_to_screen(offscreen, SCREEN, 8.0).min,
+            offscreen.min
+        );
+    }
+
     use crate::flat_player_controller::is_frobbable;
     use dark::properties::{FrobFlag, ObjectNameType, PropFrobInfo};
 
@@ -665,7 +725,14 @@ pub fn draw_item_outline(
     let bottom_left_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK3.PCX", &options);
 
     let size = vec2(BRACKET_SIZE, BRACKET_SIZE);
-    let extents = project_aabb3(&aabb, view, projection, screen_size);
+    // A body-sized volume seen from arm's length projects past every edge of
+    // the screen; without the clamp all four brackets land off-view and the
+    // object reads as un-highlighted while it is being frobbed.
+    let extents = clamp_extents_to_screen(
+        project_aabb3(&aabb, view, projection, screen_size),
+        screen_size,
+        size.x,
+    );
     let top_left_brack_obj =
         SceneObject::screen_space_quad(top_left_brack, vec2(extents.min.x, extents.min.y), size);
     let top_right_brack_obj =
@@ -683,6 +750,36 @@ pub fn draw_item_outline(
         bottom_right_brack_obj,
         top_right_brack_obj,
     ]
+}
+
+/// Keep a projected extent on screen, so an object bigger than the view still
+/// shows where it is instead of throwing its brackets and label off-view. Every
+/// edge is inset by `margin` (the bracket size), and a fully off-screen extent
+/// is left alone - clamping that would pin a marker to the edge for something
+/// behind the camera.
+pub fn clamp_extents_to_screen(
+    extents: Aabb2<f32>,
+    screen_size: Vector2<f32>,
+    margin: f32,
+) -> Aabb2<f32> {
+    let (max_x, max_y) = (screen_size.x - margin, screen_size.y - margin);
+    if extents.max.x < margin
+        || extents.max.y < margin
+        || extents.min.x > max_x
+        || extents.min.y > max_y
+    {
+        return extents;
+    }
+    Aabb2 {
+        min: point2(
+            extents.min.x.clamp(margin, max_x),
+            extents.min.y.clamp(margin, max_y),
+        ),
+        max: point2(
+            extents.max.x.clamp(margin, max_x),
+            extents.max.y.clamp(margin, max_y),
+        ),
+    }
 }
 
 pub fn project_aabb3(
