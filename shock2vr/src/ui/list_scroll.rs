@@ -4,7 +4,7 @@
 //! of them bounded by the backdrop art, and - when the contents outrun the page
 //! - a two-button rocker in a gutter down the pane's right edge. This module
 //! owns that geometry, its enablement rule ("a half that cannot move is inert,
-//! not just dimmed") and its labels, so the Developer parameter list and the
+//! not just dimmed") and its arrow art, so the Developer parameter list and the
 //! debug-scene launcher scroll the same way rather than each growing their own.
 //!
 //! Everything here is in canvas pixels and presentation-free: hosts hand the
@@ -15,26 +15,52 @@ use std::ops::Range;
 
 use cgmath::Vector2;
 
-use super::{HAlign, Rect, UiCanvas, VAlign};
+use super::{Rect, UiCanvas};
 
-/// The gutter the rocker lives in, and the height of each of its halves.
-pub const GUTTER_W: f32 = 26.0;
-const BUTTON_H: f32 = 20.0;
+/// The gutter the rocker lives in, and the height of each of its halves -
+/// the authored 32x16 size of the arrow art, so it draws unstretched.
+pub const GUTTER_W: f32 = 32.0;
+const BUTTON_H: f32 = 16.0;
 
-/// The small data font, and "Dn" rather than "Down": `text_native` does not
-/// shrink to its rect, so the display font's labels overhung the gutter and
-/// drew across the rows beside them.
-const LABEL_FONT: &str = "mainfont.fon";
-const UP_LABEL: &str = "Up";
-const DOWN_LABEL: &str = "Dn";
+/// Breathing room between the down arrow and the line the page stops at, so
+/// the arrow reads as sitting in the pane rather than resting on its edge.
+const BOTTOM_GAP: f32 = 6.0;
 
-/// Opacity for a half that cannot move any further - which is also not
-/// hit-testable.
-const DISABLED_OPACITY: f32 = 0.3;
-/// Opacity for a movable half the pointer is not over.
-const IDLE_OPACITY: f32 = 0.65;
-/// Opacity for the half under the pointer.
-const HOVER_OPACITY: f32 = 1.0;
+/// The original scroll-arrow art for one half. The art carries the shading, so
+/// the rocker draws fully opaque and picks a state instead of an opacity.
+struct ArrowArt {
+    /// Idle.
+    norm: &'static str,
+    /// Under the pointer.
+    hlit: &'static str,
+    /// A half that cannot move. This is the original's *pressed* plate; the
+    /// rocker has no press-and-hold visual of its own, and its darkened arrow
+    /// reads as unavailable, so it doubles as the inert state.
+    down: &'static str,
+}
+
+const UP_ART: ArrowArt = ArrowArt {
+    norm: "BUP_NORM.PCX",
+    hlit: "BUP_HLIT.PCX",
+    down: "BUP_DOWN.PCX",
+};
+const DOWN_ART: ArrowArt = ArrowArt {
+    norm: "BDN_NORM.PCX",
+    hlit: "BDN_HLIT.PCX",
+    down: "BDN_DOWN.PCX",
+};
+
+/// The art a half shows. Named rather than positional so a state can't
+/// silently swap with its neighbour.
+fn art_for(art: &ArrowArt, enabled: bool, hovered: bool) -> &'static str {
+    if !enabled {
+        art.down
+    } else if hovered {
+        art.hlit
+    } else {
+        art.norm
+    }
+}
 
 /// Which half of the rocker a point is over.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,7 +111,7 @@ pub fn rocker(list: Rect, bottom_limit: f32, needed: bool) -> Option<Rocker> {
         let bottom = (list.y + list.h).min(bottom_limit);
         Rocker {
             up: Rect::new(x, list.y, GUTTER_W, BUTTON_H),
-            down: Rect::new(x, bottom - BUTTON_H, GUTTER_W, BUTTON_H),
+            down: Rect::new(x, bottom - BUTTON_H - BOTTOM_GAP, GUTTER_W, BUTTON_H),
         }
     })
 }
@@ -126,24 +152,16 @@ pub fn draw(
     max_scroll: usize,
     hovered: Option<ScrollHalf>,
 ) {
-    for (half, rect, text, enabled) in [
-        (ScrollHalf::Up, rocker.up, UP_LABEL, scroll > 0),
+    for (half, rect, art, enabled) in [
+        (ScrollHalf::Up, rocker.up, &UP_ART, scroll > 0),
         (
             ScrollHalf::Down,
             rocker.down,
-            DOWN_LABEL,
+            &DOWN_ART,
             scroll < max_scroll,
         ),
     ] {
-        canvas
-            .text_native(rect, text, LABEL_FONT, HAlign::Center, VAlign::Middle)
-            .opacity(if !enabled {
-                DISABLED_OPACITY
-            } else if hovered == Some(half) {
-                HOVER_OPACITY
-            } else {
-                IDLE_OPACITY
-            });
+        canvas.image(rect, art_for(art, enabled, hovered == Some(half)));
     }
 }
 
@@ -189,7 +207,7 @@ mod tests {
         assert_eq!(rocker.up.x, LIST.x + LIST.w - GUTTER_W);
         assert_eq!(rocker.up.y, LIST.y);
         assert_eq!(rocker.down.x, rocker.up.x);
-        assert_eq!(rocker.down.y + BUTTON_H, FIELD_TOP_Y);
+        assert_eq!(rocker.down.y + BUTTON_H + BOTTOM_GAP, FIELD_TOP_Y);
 
         let max = 4;
         assert_eq!(hit(&rocker, 0, max, rocker.up.center()), None);
@@ -210,6 +228,19 @@ mod tests {
 
     fn rocker_none() -> Option<Rocker> {
         rocker(LIST, FIELD_TOP_Y, false)
+    }
+
+    #[test]
+    fn each_half_shows_the_art_for_its_state() {
+        assert_eq!(art_for(&UP_ART, true, false), "BUP_NORM.PCX");
+        assert_eq!(art_for(&UP_ART, true, true), "BUP_HLIT.PCX");
+        assert_eq!(art_for(&DOWN_ART, true, false), "BDN_NORM.PCX");
+        assert_eq!(art_for(&DOWN_ART, true, true), "BDN_HLIT.PCX");
+        // A half that cannot move shows the darkened plate whether or not the
+        // pointer is over it - it is not hit-testable either.
+        assert_eq!(art_for(&UP_ART, false, false), "BUP_DOWN.PCX");
+        assert_eq!(art_for(&UP_ART, false, true), "BUP_DOWN.PCX");
+        assert_eq!(art_for(&DOWN_ART, false, true), "BDN_DOWN.PCX");
     }
 
     #[test]
