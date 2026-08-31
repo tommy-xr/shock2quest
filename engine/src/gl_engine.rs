@@ -126,15 +126,25 @@ impl Engine for OpenGLEngine {
 
                 // SINGLE-PASS LIGHTING: Opaque pass with all lighting calculated
                 // in shaders.
-                scene
-                    .objects_in_layer(layer)
-                    .for_each(|s| s.draw_opaque(self, render_context, &view, scene.lights()));
+                scene.objects_in_layer(layer).for_each(|s| {
+                    s.draw_opaque(
+                        self,
+                        render_context,
+                        &view,
+                        s.lights().unwrap_or(scene.lights()),
+                    )
+                });
 
                 // Transparent pass with all lighting calculated in shaders
                 gl::DepthMask(gl::FALSE);
-                scene
-                    .objects_in_layer(layer)
-                    .for_each(|s| s.draw_transparent(self, render_context, &view, scene.lights()));
+                scene.objects_in_layer(layer).for_each(|s| {
+                    s.draw_transparent(
+                        self,
+                        render_context,
+                        &view,
+                        s.lights().unwrap_or(scene.lights()),
+                    )
+                });
                 gl::DepthMask(gl::TRUE);
             }
 

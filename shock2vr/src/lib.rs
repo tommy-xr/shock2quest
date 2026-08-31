@@ -8,6 +8,7 @@ pub mod input_context;
 pub mod install;
 pub mod inventory;
 pub mod message_trace;
+pub mod object_lighting;
 pub mod save_load;
 pub mod scenes;
 pub mod teleport;

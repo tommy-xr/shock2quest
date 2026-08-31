@@ -8394,6 +8394,24 @@ impl MissionCore {
                 HashSet::new()
             };
 
+        // Per-object lighting, when enabled: a closure so the render loop pays
+        // nothing (no cell lookup, no light ranking) when the flag is off.
+        let object_lights: Option<Box<dyn Fn(Vector3<f32>) -> engine::scene::light::LightArray>> =
+            if options.experimental_features.contains("object_lighting") {
+                self.spatial_data.as_deref().map(|spatial| {
+                    Box::new(move |position: Vector3<f32>| {
+                        crate::object_lighting::lights_for_position(
+                            spatial,
+                            spatial.get_light_table(),
+                            position,
+                        )
+                    })
+                        as Box<dyn Fn(Vector3<f32>) -> engine::scene::light::LightArray>
+                })
+            } else {
+                None
+            };
+
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
@@ -8443,10 +8461,18 @@ impl MissionCore {
             });
 
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
+                // One light set per entity, resolved at its origin and shared by
+                // its sub-objects - the lights that reach the room it stands in.
+                let entity_lights = object_lights.as_ref().map(|resolve| {
+                    let position = xform.w.truncate();
+                    Rc::new(resolve(position))
+                });
+
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(xform);
                     xformed_obj.set_debug_tag(Some(debug_tag.clone()));
+                    xformed_obj.set_lights(entity_lights.clone());
                     if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);
                         xformed_obj.set_skinned_transparency(Some(0.35));

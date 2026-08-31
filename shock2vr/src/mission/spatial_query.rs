@@ -1,5 +1,5 @@
 use cgmath::Vector3;
-use dark::mission::{BspTree, Cell, SystemShock2Level};
+use dark::mission::{BspTree, Cell, LightTable, SystemShock2Level};
 
 /// Spatial query interface for level data
 /// Provides position-based lookups without requiring the full SystemShock2Level
@@ -15,6 +15,9 @@ pub trait SpatialQueryEngine {
 
     /// Get a cell by its index
     fn get_cell_by_index(&self, index: usize) -> Option<&Cell>;
+
+    /// The mission's object-light table, which the cells' light lists index.
+    fn get_light_table(&self) -> &LightTable;
 }
 
 /// Lightweight spatial data structure extracted from SystemShock2Level
@@ -22,6 +25,7 @@ pub trait SpatialQueryEngine {
 pub struct LevelSpatialData {
     pub cells: Vec<Cell>,
     pub bsp_tree: BspTree,
+    pub light_table: LightTable,
 }
 
 impl SpatialQueryEngine for LevelSpatialData {
@@ -41,6 +45,10 @@ impl SpatialQueryEngine for LevelSpatialData {
     fn get_cell_by_index(&self, index: usize) -> Option<&Cell> {
         self.cells.get(index)
     }
+
+    fn get_light_table(&self) -> &LightTable {
+        &self.light_table
+    }
 }
 
 impl LevelSpatialData {
@@ -49,6 +57,7 @@ impl LevelSpatialData {
         Self {
             cells: level.cells.clone(),
             bsp_tree: level.bsp_tree.clone(),
+            light_table: level.light_table.clone(),
         }
     }
 }
@@ -70,5 +79,9 @@ impl SpatialQueryEngine for SystemShock2Level {
 
     fn get_cell_by_index(&self, index: usize) -> Option<&Cell> {
         self.cells.get(index)
+    }
+
+    fn get_light_table(&self) -> &LightTable {
+        &self.light_table
     }
 }
