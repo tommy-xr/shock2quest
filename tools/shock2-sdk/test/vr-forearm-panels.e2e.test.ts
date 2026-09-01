@@ -2,39 +2,36 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { add, sub, dot } from "./helpers/vr-hand.js";
+import { litFraction } from "./helpers/screenshot-pixels.js";
 
 // The VR forearm HUD has to be photographable from the offscreen `--vr`
 // runtime: PRs that added forearm panels could not capture them because the
-// panels, while drawn, sat *above* the eye and outside the frame - a black
-// screenshot that looked like "VR renders nothing offscreen".
+// panels, while drawn, sat *above* the eye and so outside the frame - a black
+// screenshot that read as "VR renders nothing offscreen".
 //
 // Both presentations park their hands somewhere by default (the debug runtime
 // for a mission, the `debug_hud` scene for itself), so assert the same thing
-// about both: what `/v1/scene` reports as `player_hands` lands inside the
-// picture the runtime renders.
+// about both: the hands are within reach BELOW the eye, where a flat-on-the-arm
+// panel can be seen at all. The exact frustum containment is asserted in
+// `debug_runtime`'s own unit test, which knows the projection; here the check
+// is the invariant that broke, plus - for `debug_hud`, whose only content is
+// the panels - that the capture is not black.
 //
-// Negative-first: with the previous default poses (hands 0.36 world units
-// ABOVE the eye) every one of these objects is behind/above the frustum and
-// the frame check fails.
+// Negative-first: with the previous default poses (hands 0.36 world units ABOVE
+// the eye) both the eye-relative check and the lit-frame check fail.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-// The runtime's projection: `shock2vr::DEFAULT_FOV_DEG` vertical over its 4:3
-// framebuffer.
-const HALF_FOV_V_DEG = 45 / 2;
-const HALF_FOV_H_DEG =
-  (Math.atan(Math.tan((HALF_FOV_V_DEG * Math.PI) / 180) * (4 / 3)) * 180) /
-  Math.PI;
+/** Arm's length in world units - 1 unit is 2.5 SS2 feet. */
+const MAX_HAND_REACH = 1.2;
 
-/** Assert every hand-path object this frame is inside the rendered frustum. */
-async function assertHandObjectsAreInFrame(game: GameServer, label: string) {
-  const info = await game.info();
-  const player = info.player;
+async function assertHandsAreWhereThePanelsCanBeSeen(
+  game: GameServer,
+  label: string,
+) {
+  const { player } = await game.info();
   assert.ok(player, `${label}: expected a player`);
-  const eye: [number, number, number] = [
-    player.position[0] + player.camera_offset[0],
-    player.position[1] + player.camera_offset[1],
-    player.position[2] + player.camera_offset[2],
-  ];
+  const eye = add(player.position, player.camera_offset);
 
   const hands = await game.scene.fromSource("player_hands");
   assert.ok(
@@ -43,30 +40,21 @@ async function assertHandObjectsAreInFrame(game: GameServer, label: string) {
   );
 
   for (const object of hands) {
-    // Pawn forward is -X at the default (unrotated) camera; the lateral axis
-    // is Z. Both scenes under test face that way.
-    const forward = eye[0] - object.position[0];
-    const down = eye[1] - object.position[1];
-    const across = object.position[2] - eye[2];
+    const fromEye = sub(object.position, eye);
     assert.ok(
-      forward > 0,
-      `${label}: hand object is behind the eye (${JSON.stringify(object.position)})`,
+      fromEye[1] < 0,
+      `${label}: hand object sits above the eye, where its panel faces away (${JSON.stringify(object.position)} vs eye ${JSON.stringify(eye)})`,
     );
-    const downDeg = (Math.atan(down / forward) * 180) / Math.PI;
-    const acrossDeg = (Math.atan(Math.abs(across) / forward) * 180) / Math.PI;
+    const distance = Math.sqrt(dot(fromEye, fromEye));
     assert.ok(
-      Math.abs(downDeg) < HALF_FOV_V_DEG,
-      `${label}: hand object is outside the vertical FOV (${downDeg.toFixed(1)} deg)`,
-    );
-    assert.ok(
-      acrossDeg < HALF_FOV_H_DEG,
-      `${label}: hand object is outside the horizontal FOV (${acrossDeg.toFixed(1)} deg)`,
+      distance < MAX_HAND_REACH,
+      `${label}: hand object is ${distance.toFixed(2)} units from the eye, beyond arm's reach`,
     );
   }
 }
 
 test(
-  "the debug_hud scene puts its forearm panels in shot",
+  "the debug_hud scene photographs its forearm panels",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -74,13 +62,21 @@ test(
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 10 });
-    await assertHandObjectsAreInFrame(game, "debug_hud --vr");
-    await game.screenshot("vr-forearm-panels-debug-hud.png");
+    await assertHandsAreWhereThePanelsCanBeSeen(game, "debug_hud --vr");
+
+    // This scene draws nothing but the panels, so the frame being black is
+    // exactly the bug and the lit area is exactly the panels.
+    const shot = await game.screenshot("vr-forearm-panels-debug-hud.png");
+    const lit = litFraction(shot.full_path);
+    assert.ok(
+      lit > 0.02,
+      `debug_hud --vr captured an essentially black frame (${(lit * 100).toFixed(2)}% lit)`,
+    );
   },
 );
 
 test(
-  "a mission's default --vr hand pose puts the forearm panels in shot",
+  "a mission's default --vr hand pose keeps the forearm panels in view",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -88,7 +84,7 @@ test(
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
-    await assertHandObjectsAreInFrame(game, "medsci1 --vr");
+    await assertHandsAreWhereThePanelsCanBeSeen(game, "medsci1 --vr");
     await game.screenshot("vr-forearm-panels-medsci1.png");
   },
 );

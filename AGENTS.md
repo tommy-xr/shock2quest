@@ -307,10 +307,13 @@ For debugging visual/rendering changes without a full interactive session:
    # mode the flat weapon-wield / fire path is inactive.)
    #
    # In `--vr` the simulated hands rest just below the eye and out in front, so
-   # both forearm HUD panels are in shot on the very first screenshot. To read
-   # a panel square on, pitch the head down (`/v1/control/input`
-   # {"head.look": [0, 40]}); to place a hand yourself, patch
-   # `{left,right}_hand.position` / `.rotation` (pawn-local, forward is -X).
+   # both forearm HUD panels are in shot on the very first screenshot, seen at
+   # a grazing angle (they lie flat on the arm). To centre them, pitch the head
+   # down ~12 deg (`/v1/control/input` {"head.look": [0, 12]}); to read one, put
+   # the hands nearer and lower and pitch further down, e.g.
+   # {"left_hand.position": [-0.45, 0.85, 0.15],
+   #  "right_hand.position": [-0.45, 0.85, -0.15], "head.look": [0, 35]}
+   # (hand poses are pawn-local; forward is -X).
    #
    # The window is HIDDEN by default (offscreen render) so the runtime never
    # steals focus or pops to the foreground - `/v1/screenshot` still works.
