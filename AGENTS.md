@@ -306,6 +306,12 @@ For debugging visual/rendering changes without a full interactive session:
    # VR forearm/two-hand path. (Flat is what most weapon/aim testing needs; in VR
    # mode the flat weapon-wield / fire path is inactive.)
    #
+   # In `--vr` the simulated hands rest just below the eye and out in front, so
+   # both forearm HUD panels are in shot on the very first screenshot. To read
+   # a panel square on, pitch the head down (`/v1/control/input`
+   # {"head.look": [0, 40]}); to place a hand yourself, patch
+   # `{left,right}_hand.position` / `.rotation` (pawn-local, forward is -X).
+   #
    # The window is HIDDEN by default (offscreen render) so the runtime never
    # steals focus or pops to the foreground - `/v1/screenshot` still works.
    # Pass `--visible` to watch the game in a real window.

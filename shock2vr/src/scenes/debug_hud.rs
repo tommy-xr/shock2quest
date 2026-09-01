@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{Deg, Euler, Quaternion, Vector3, vec3};
+use cgmath::{Deg, Euler, InnerSpace, Quaternion, Vector3, Vector4, vec3};
 use dark::properties::{PropHitPoints, PropMaxHitPoints};
 use engine::{
     assets::asset_cache::AssetCache,
@@ -24,7 +24,17 @@ use crate::{
 const DEBUG_HEAD_HEIGHT: f32 = 0.0;
 const DEBUG_HAND_FORWARD_DISTANCE: f32 = 0.6;
 const DEBUG_HAND_LATERAL_SPREAD: f32 = 0.15;
-const DEBUG_HAND_VERTICAL_OFFSET: f32 = 1.45;
+/// Hands sit just below the eye the runtimes compose onto this scene's camera
+/// ([`crate::input_context::DEFAULT_HEAD_HEIGHT`]), so the panels they carry
+/// land in the middle of the picture. Anchored to that eye rather than to a
+/// standalone height: a fixed number here drifted *above* the eye, which is
+/// what made this scene photograph as an empty black frame.
+const DEBUG_HAND_DROP_BELOW_EYE: f32 = 0.1;
+
+/// This scene has no level geometry and so no lights of its own; without one
+/// the panels render as near-black rectangles. A pair of hand spotlights - the
+/// same mechanism a mission uses - lights them the way a level does.
+const DEBUG_HAND_LIGHT: Vector4<f32> = Vector4::new(1.0, 1.0, 0.95, 2.5);
 
 /// Health animation constants
 const HEALTH_ANIMATION_SPEED: f32 = 0.25; // Cycles per second
@@ -113,7 +123,11 @@ impl DebugHudScene {
         // Position hands in front of camera, spread laterally
         let center_position = head_base
             + forward * DEBUG_HAND_FORWARD_DISTANCE
-            + vec3(0.0, DEBUG_HAND_VERTICAL_OFFSET, 0.0);
+            + vec3(
+                0.0,
+                crate::input_context::DEFAULT_HEAD_HEIGHT - DEBUG_HAND_DROP_BELOW_EYE,
+                0.0,
+            );
 
         let center_offset = -0.25;
         self.left_hand_position =
@@ -213,7 +227,20 @@ impl GameScene for DebugHudScene {
     }
 
     fn get_hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
-        Vec::new()
+        // Aimed from the head at the hands, so both panels are lit head-on
+        // rather than raked from the wrist (which leaves the far end black).
+        let head = self.head_base() + vec3(0.0, crate::input_context::DEFAULT_HEAD_HEIGHT, 0.0);
+        [self.left_hand_position, self.right_hand_position]
+            .into_iter()
+            .map(|hand| SpotLight {
+                position: head,
+                direction: (hand - head).normalize(),
+                color_intensity: DEBUG_HAND_LIGHT,
+                inner_cone_angle: 20.0_f32.to_radians(),
+                outer_cone_angle: 45.0_f32.to_radians(),
+                range: 10.0,
+            })
+            .collect()
     }
 
     fn world(&self) -> &World {
