@@ -227,20 +227,19 @@ impl GameScene for DebugHudScene {
     }
 
     fn get_hand_spotlights(&self, _options: &GameOptions) -> Vec<SpotLight> {
-        // Aimed from the head at the hands, so both panels are lit head-on
-        // rather than raked from the wrist (which leaves the far end black).
+        // One light, from the head at the midpoint between the hands: both
+        // panels are lit head-on rather than raked from a wrist, which leaves
+        // the far end of the panel black.
         let head = self.head_base() + vec3(0.0, crate::input_context::DEFAULT_HEAD_HEIGHT, 0.0);
-        [self.left_hand_position, self.right_hand_position]
-            .into_iter()
-            .map(|hand| SpotLight {
-                position: head,
-                direction: (hand - head).normalize(),
-                color_intensity: DEBUG_HAND_LIGHT,
-                inner_cone_angle: 20.0_f32.to_radians(),
-                outer_cone_angle: 45.0_f32.to_radians(),
-                range: 10.0,
-            })
-            .collect()
+        let hands_midpoint = (self.left_hand_position + self.right_hand_position) / 2.0;
+        vec![SpotLight {
+            position: head,
+            direction: (hands_midpoint - head).normalize(),
+            color_intensity: DEBUG_HAND_LIGHT,
+            inner_cone_angle: 25.0_f32.to_radians(),
+            outer_cone_angle: 50.0_f32.to_radians(),
+            range: 10.0,
+        }]
     }
 
     fn world(&self) -> &World {
