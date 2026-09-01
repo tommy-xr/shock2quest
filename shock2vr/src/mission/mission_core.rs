@@ -13654,23 +13654,14 @@ impl MissionCore {
             .iter()
             .map(|c| (c.entity_id, c.strength))
             .collect();
-        // Per-object lighting, when enabled: a closure so the render loop pays
-        // nothing (no cell lookup, no light ranking) when the flag is off.
-        let object_lights: Option<Box<dyn Fn(Vector3<f32>) -> engine::scene::light::LightArray>> =
-            if options.experimental_features.contains("object_lighting") {
-                self.spatial_data.as_deref().map(|spatial| {
-                    Box::new(move |position: Vector3<f32>| {
-                        crate::object_lighting::lights_for_position(
-                            spatial,
-                            spatial.get_light_table(),
-                            position,
-                        )
-                    })
-                        as Box<dyn Fn(Vector3<f32>) -> engine::scene::light::LightArray>
-                })
-            } else {
-                None
-            };
+        // Per-object lighting, when enabled. `None` when the flag is off or the
+        // scene has no world rep, so the render loop pays no cell lookup and no
+        // light ranking at all.
+        let object_lights: Option<&dyn SpatialQueryEngine> = options
+            .experimental_features
+            .contains("object_lighting")
+            .then(|| self.spatial_data.as_deref())
+            .flatten();
 
         // Render models
         for (entity_id, objs) in &self.id_to_model {
@@ -13737,9 +13728,11 @@ impl MissionCore {
                 };
                 // One light set per entity, resolved at its origin and shared by
                 // its sub-objects - the lights that reach the room it stands in.
-                let entity_lights = object_lights.as_ref().map(|resolve| {
-                    let position = xform.w.truncate();
-                    Rc::new(resolve(position))
+                let entity_lights = object_lights.map(|spatial| {
+                    Rc::new(crate::object_lighting::lights_for_position(
+                        spatial,
+                        xform.w.truncate(),
+                    ))
                 });
 
                 for obj in scene_objs {

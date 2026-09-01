@@ -318,7 +318,7 @@ pub struct SceneListResult {
 }
 
 /// One scene object as submitted to the renderer
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SceneObjectSummary {
     pub entity_id: Option<u64>,
     pub name: Option<String>,
@@ -348,7 +348,7 @@ pub struct SceneObjectSummary {
 }
 
 /// What the object-lighting pass decided for one object.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ObjectLightingSummary {
     /// How many lights were kept for it, out of the renderer's slots.
     pub light_count: usize,

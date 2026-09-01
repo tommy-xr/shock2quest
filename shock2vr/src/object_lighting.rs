@@ -11,8 +11,8 @@
 //! the strongest are kept.
 
 use cgmath::{InnerSpace, Vector3, Vector4, vec3};
-use dark::mission::{LightTable, WorldLight};
-use engine::scene::light::{LightArray, PointLight, SpotLight};
+use dark::mission::WorldLight;
+use engine::scene::light::{LightArray, PointLight, SceneLight, SpotLight};
 
 use crate::dev_params;
 use crate::mission::spatial_query::SpatialQueryEngine;
@@ -28,6 +28,12 @@ const ENERGY_CUTOFF: f32 = 0.95;
 /// light inside its own lamp model would otherwise score in the hundreds and
 /// take the entire energy budget, ejecting every light that actually matters.
 const MIN_DISTANCE: f32 = engine::scene::light::LIGHT_SOURCE_RADIUS;
+
+/// Range handed to the renderer for a light with no authored cutoff. The
+/// uniform is `mediump` on GLES, whose guaranteed range stops around 2^14, so
+/// `f32::MAX` would be outside what the shader can be relied on to compare -
+/// this is simply larger than any level.
+const UNBOUNDED_RANGE: f32 = 1.0e4;
 
 /// Brightness is authored against the mission's own units, but our world is
 /// `SCALE_FACTOR` smaller - so every distance is smaller by that factor and the
@@ -69,9 +75,12 @@ fn cone_coverage(light: &WorldLight, position: Vector3<f32>) -> f32 {
 }
 
 /// How much light an object at `position` receives from `lights`, ignoring
-/// which way its surfaces face. This is the scalar the original engine used to
-/// answer "how lit is this object" - including, notably, for whether AI can see
-/// the player - so it is the right summary number for tooling to report.
+/// which way its surfaces face and ignoring any spotlight cone. Reported by the
+/// debug runtime so tooling can compare objects without screenshots.
+///
+/// This is in renderer scale, i.e. after the unit conversion and the brightness
+/// dev param, so it moves when that knob does - compare objects within one run,
+/// not across settings.
 pub fn received_light(lights: &LightArray, position: Vector3<f32>) -> f32 {
     lights
         .iter_active()
@@ -85,11 +94,9 @@ pub fn received_light(lights: &LightArray, position: Vector3<f32>) -> f32 {
 }
 
 /// The lights that shade an object at `position`, strongest first.
-pub fn lights_for_position(
-    spatial: &dyn SpatialQueryEngine,
-    table: &LightTable,
-    position: Vector3<f32>,
-) -> LightArray {
+pub fn lights_for_position(spatial: &dyn SpatialQueryEngine, position: Vector3<f32>) -> LightArray {
+    let table = spatial.get_light_table();
+    let brightness = BRIGHTNESS_SCALE * dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS);
     let ambient_boost = dev_params::get(dev_params::OBJECT_LIGHT_AMBIENT_BOOST);
     let ambient = spatial.get_ambient_light() + vec3(ambient_boost, ambient_boost, ambient_boost);
     let mut lights = LightArray::new()
@@ -100,7 +107,7 @@ pub fn lights_for_position(
         return lights;
     };
 
-    let mut candidates: Vec<(f32, &WorldLight)> = Vec::new();
+    let mut candidates: Vec<(f32, SceneLight)> = Vec::new();
     let mut total_contribution = 0.0;
 
     for index in &cell.light_indices {
@@ -108,9 +115,10 @@ pub fn lights_for_position(
             continue;
         };
 
-        let to_light = light.position - position;
-        let distance2 = to_light.magnitude2();
-        if light.radius > 0.0 && distance2 > light.radius * light.radius {
+        // Convert first, then ask the renderer's own reach test - so the lights
+        // we rank are judged by exactly the rule that will shade them.
+        let scene_light = to_scene_light(light, brightness);
+        if !scene_light.affects_position(position) {
             continue;
         }
 
@@ -119,14 +127,14 @@ pub fn lights_for_position(
             continue;
         }
 
-        let distance = distance2.sqrt().max(MIN_DISTANCE);
+        let distance = (light.position - position).magnitude().max(MIN_DISTANCE);
         let contribution = perceived_brightness(light.brightness) * coverage / distance;
         if contribution <= 0.0 {
             continue;
         }
 
         total_contribution += contribution;
-        candidates.push((contribution, light));
+        candidates.push((contribution, scene_light));
     }
 
     candidates.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -134,7 +142,7 @@ pub fn lights_for_position(
     let enough = total_contribution * ENERGY_CUTOFF;
     let mut kept = 0.0;
     for (contribution, light) in candidates.into_iter().take(MAX_OBJECT_LIGHTS) {
-        lights.add_light(to_scene_light(light));
+        lights.add_light(light);
         kept += contribution;
         if kept >= enough {
             break;
@@ -147,8 +155,7 @@ pub fn lights_for_position(
 /// Convert a parsed light into the renderer's representation. Cone angles are
 /// stored as cosines and the renderer wants radians; a light with no radius
 /// reaches everywhere, which the renderer spells as an enormous range.
-fn to_scene_light(light: &WorldLight) -> engine::scene::light::SceneLight {
-    let scale = BRIGHTNESS_SCALE * dev_params::get(dev_params::OBJECT_LIGHT_BRIGHTNESS);
+fn to_scene_light(light: &WorldLight, scale: f32) -> SceneLight {
     let color_intensity = Vector4::new(
         light.brightness.x * scale,
         light.brightness.y * scale,
@@ -158,7 +165,7 @@ fn to_scene_light(light: &WorldLight) -> engine::scene::light::SceneLight {
     let range = if light.radius > 0.0 {
         light.radius
     } else {
-        f32::MAX
+        UNBOUNDED_RANGE
     };
 
     if light.is_spotlight() {
@@ -269,11 +276,15 @@ mod tests {
 
     #[test]
     fn an_omni_becomes_a_point_light_and_a_cone_becomes_a_spotlight() {
-        let point = to_scene_light(&omni(vec3(1.0, 2.0, 3.0), 0.5, 0.0));
+        let point = to_scene_light(&omni(vec3(1.0, 2.0, 3.0), 0.5, 0.0), 1.0);
         assert!(point.inner_cone_angle() < 0.0, "a point light has no cone");
-        assert_eq!(point.range(), f32::MAX, "radius 0 reaches everywhere");
+        assert_eq!(
+            point.range(),
+            UNBOUNDED_RANGE,
+            "radius 0 reaches everywhere"
+        );
 
-        let cone = to_scene_light(&spot(vec3(0.0, 0.0, 0.0), vec3(0.0, -1.0, 0.0)));
+        let cone = to_scene_light(&spot(vec3(0.0, 0.0, 0.0), vec3(0.0, -1.0, 0.0)), 1.0);
         assert!(cone.inner_cone_angle() >= 0.0);
         // inner cosine 0.5 is 60 degrees.
         assert!((cone.inner_cone_angle().to_degrees() - 60.0).abs() < 0.01);
@@ -283,10 +294,10 @@ mod tests {
     fn a_zero_direction_cone_does_not_produce_a_nan_direction() {
         let mut light = spot(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0));
         light.inner = 0.5;
-        let converted = to_scene_light(&light);
+        let converted = to_scene_light(&light, 1.0);
         let direction = match converted {
-            engine::scene::light::SceneLight::Spot(spot) => spot.direction,
-            engine::scene::light::SceneLight::Point(_) => panic!("expected a spotlight"),
+            SceneLight::Spot(spot) => spot.direction,
+            SceneLight::Point(_) => panic!("expected a spotlight"),
         };
         assert!(direction.magnitude2().is_finite() && direction.magnitude2() > 0.0);
     }
