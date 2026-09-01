@@ -8394,6 +8394,15 @@ impl MissionCore {
                 HashSet::new()
             };
 
+        // Per-object lighting, when enabled. `None` when the flag is off or the
+        // scene has no world rep, so the render loop pays no cell lookup and no
+        // light ranking at all.
+        let object_lights: Option<&dyn SpatialQueryEngine> = options
+            .experimental_features
+            .contains("object_lighting")
+            .then(|| self.spatial_data.as_deref())
+            .flatten();
+
         // Render models
         for (entity_id, objs) in &self.id_to_model {
             total_model_count += 1;
@@ -8443,10 +8452,20 @@ impl MissionCore {
             });
 
             if let Ok(xform) = v_transform.get(*entity_id).map(|p| p.0) {
+                // One light set per entity, resolved at its origin and shared by
+                // its sub-objects - the lights that reach the room it stands in.
+                let entity_lights = object_lights.map(|spatial| {
+                    Rc::new(crate::object_lighting::lights_for_position(
+                        spatial,
+                        xform.w.truncate(),
+                    ))
+                });
+
                 for obj in scene_objs {
                     let mut xformed_obj = obj.clone();
                     xformed_obj.set_transform(xform);
                     xformed_obj.set_debug_tag(Some(debug_tag.clone()));
+                    xformed_obj.set_lights(entity_lights.clone());
                     if options.debug_skeletons && is_animated_model {
                         xformed_obj.set_depth_write(false);
                         xformed_obj.set_skinned_transparency(Some(0.35));

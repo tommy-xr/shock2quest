@@ -114,6 +114,11 @@ pub struct SceneObject {
     depth_bias: bool,
     /// Debug-only provenance; `Rc` so cloning an object per frame stays cheap.
     debug_tag: Option<Rc<SceneObjectDebugTag>>,
+    /// Lights for this object alone, overriding the scene's. World geometry is
+    /// lit by baked lightmaps and wants the scene set; an object standing in a
+    /// room wants the lights that actually reach that room. `Rc` so the objects
+    /// of one entity share a resolved set and cloning stays cheap.
+    lights: Option<Rc<crate::scene::light::LightArray>>,
 }
 
 impl SceneObject {
@@ -308,7 +313,18 @@ impl SceneObject {
             debug_tag: None,
             backface_culling: None,
             depth_bias: false,
+            lights: None,
         }
+    }
+
+    /// Light this object with its own set instead of the scene's.
+    pub fn set_lights(&mut self, lights: Option<Rc<crate::scene::light::LightArray>>) {
+        self.lights = lights;
+    }
+
+    /// This object's own lights, if it has them.
+    pub fn lights(&self) -> Option<&crate::scene::light::LightArray> {
+        self.lights.as_deref()
     }
 
     pub fn draw_opaque(
@@ -435,11 +451,13 @@ impl SceneObject {
             debug_tag: None,
             backface_culling: None,
             depth_bias: false,
+            lights: None,
         }
     }
 
     pub fn duplicate(&self) -> SceneObject {
         SceneObject {
+            lights: self.lights.clone(),
             material: self.material.clone(),
             geometry: self.geometry.clone(),
             transform: self.transform,
