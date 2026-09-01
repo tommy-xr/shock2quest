@@ -65,14 +65,31 @@ pub struct RuntimePropHitBox {
     pub joint_id: JointId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HitBoxType {
     Head,
     Body,
     Limb,
     Extremity,
-    #[allow(dead_code)]
-    NoDamage,
+}
+
+impl HitBoxType {
+    /// What a blow on this part is worth, as a factor on the authored damage.
+    ///
+    /// A deliberate divergence: the original scales damage by the *stim* and
+    /// the victim's receptrons, never by where the blow landed. Aiming is what
+    /// the per-joint hitboxes make possible, so this is what makes aiming
+    /// matter - a head is worth more than a shin.
+    pub fn damage_multiplier(self) -> f32 {
+        match self {
+            HitBoxType::Head => 1.25,
+            HitBoxType::Body => 1.0,
+            // The near half of a limb: thigh, shoulder.
+            HitBoxType::Limb => 0.75,
+            // The far half: forearm, shin, hand, foot.
+            HitBoxType::Extremity => 0.5,
+        }
+    }
 }
 
 /// Floor for the AABB fallback's half-extents: a degenerate joint AABB (a joint

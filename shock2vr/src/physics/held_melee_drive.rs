@@ -444,3 +444,63 @@ fn melee_drive_trace() {
         }
     }
 }
+
+/// A swing stopped by a limb reports the blow, and reports it pointing the way
+/// the weapon was going. The contact's normal drives the killing blow's ragdoll
+/// impulse (`rag_doll::apply_killing_blow`), so an inverted one throws the
+/// corpse back at the player.
+///
+/// Negative-first: `cast_shape` reports the normal *on the limb*, i.e. limb ->
+/// weapon, which is the opposite of what a `CollisionContact` means.
+#[test]
+fn a_swing_stopped_by_a_limb_reports_it_pointing_at_the_limb() {
+    let (mut world, mut player) = world_with_floor();
+    let (weapon, _) = spawn_held_wrench(&mut world, vec3(0.0, 1.2, 0.0));
+
+    // A limb straight ahead of the weapon, in the hitbox group.
+    let limb = EntityId::from_inner(7).unwrap();
+    world.add_kinematic(
+        limb,
+        vec3(0.0, 1.2, 1.5),
+        identity_quat(),
+        Vector3::new(0.0, 0.0, 0.0),
+        vec3(0.6, 0.6, 0.6),
+        CollisionGroup::hitbox(),
+        false,
+    );
+
+    // Drive the hand through it, and collect what the sweep reported.
+    let mut reported = None;
+    for frame in 0..30 {
+        let z = 0.1 * frame as f32;
+        world.set_position_rotation2(weapon, vec3(0.0, 1.2, z), identity_quat());
+        let (_, events) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+        for event in events {
+            if let super::CollisionEvent::CollisionStarted {
+                entity1_id,
+                entity2_id,
+                contact: Some(contact),
+            } = event
+            {
+                if entity1_id == weapon && entity2_id == limb {
+                    reported = Some(contact);
+                }
+            }
+        }
+        if reported.is_some() {
+            break;
+        }
+    }
+
+    let contact = reported.expect("the swing should have reported the limb it stopped on");
+    assert!(
+        contact.normal.z > 0.5,
+        "the normal should point from the weapon toward the limb (+z), got {:?}",
+        contact.normal
+    );
+    assert!(
+        contact.closing_speed.unwrap_or(0.0) > 0.0,
+        "a swept blow carries the speed the sweep measured, got {:?}",
+        contact.closing_speed
+    );
+}

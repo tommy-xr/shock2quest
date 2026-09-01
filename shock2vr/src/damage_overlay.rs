@@ -65,7 +65,6 @@ fn hit_box_label(hit_box: HitBoxType) -> &'static str {
         HitBoxType::Body => "body",
         HitBoxType::Limb => "limb",
         HitBoxType::Extremity => "extremity",
-        HitBoxType::NoDamage => "no-damage",
     }
 }
 
