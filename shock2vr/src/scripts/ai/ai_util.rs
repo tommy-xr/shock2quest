@@ -335,13 +335,6 @@ pub(crate) fn is_entity_door(world: &shipyard::World, entity_id: shipyard::Entit
     v_door_prop.contains(entity_id)
 }
 
-pub(crate) fn does_entity_have_hitboxes(world: &World, entity_id: EntityId) -> bool {
-    let v_creature_prop = world.borrow::<View<PropCreature>>().unwrap();
-
-    // If the entity has a creature prop, we use hitboxes for damage
-    v_creature_prop.contains(entity_id)
-}
-
 /// Fire Ranged Weapon
 ///
 /// Handles firing a projectile through the AIRangedWeapon link, which is a proxy between the main entity link
