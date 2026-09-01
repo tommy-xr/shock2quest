@@ -1650,6 +1650,7 @@ fn process_command(
                                 position: point.position,
                             })
                             .collect(),
+                        selection_bounds: detail.selection_bounds,
                     })
             } else {
                 None

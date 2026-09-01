@@ -287,6 +287,10 @@ pub struct DebugEntityDetail {
     /// this entity lives inside a container.
     pub contained_by: Option<i32>,
     pub aim_points: Vec<DebugAimPoint>,
+    /// World-space bounds the HUD highlight frames: the union of the
+    /// creature's hitboxes where it has them, otherwise the entity's own
+    /// collider. `[min, max]`, or null for an entity with neither.
+    pub selection_bounds: Option<[[f32; 3]; 2]>,
 }
 
 #[derive(Debug, Serialize, Clone)]

@@ -12,8 +12,6 @@ use dark::{
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
 use shipyard::{EntityId, Get, View, World};
 
-use crate::physics::PhysicsWorld;
-
 /// Whether the highlight overlay (corner brackets + rollover name) may be
 /// drawn for `entity_id`.
 ///
@@ -161,21 +159,14 @@ fn localized_weapon_condition(
 
 pub fn draw_item_name(
     asset_cache: &mut AssetCache,
-    physics: &PhysicsWorld,
+    bounds: Aabb3<f32>,
     entity_id: EntityId,
     world: &World,
-    //aabb: collision::Aabb3<f32>,
     view: Matrix4<f32>,
     projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
     debug_show_ids: bool,
 ) -> Vec<SceneObject> {
-    let maybe_bbox = physics.get_aabb2(entity_id);
-
-    if maybe_bbox.is_none() {
-        return vec![];
-    }
-
     let v_prop_obj_name = world.borrow::<View<PropObjName>>().unwrap();
     let maybe_prop_obj_name = v_prop_obj_name.get(entity_id);
 
@@ -221,7 +212,7 @@ pub fn draw_item_name(
         weapon_condition.as_deref(),
     );
 
-    let aabb = maybe_bbox.unwrap();
+    let aabb = bounds;
     let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");
     // Clamped like the brackets, plus the line of text the label sits on.
     let extents = clamp_extents_to_screen(
@@ -659,7 +650,7 @@ fn health_bar_fill(world: &World, entity_id: EntityId) -> Option<f32> {
 /// The enemy health bar, drawn flush on top of the selection brackets.
 pub fn draw_health_bar(
     asset_cache: &mut AssetCache,
-    physics: &PhysicsWorld,
+    bounds: Aabb3<f32>,
     entity_id: EntityId,
     world: &World,
     view: Matrix4<f32>,
@@ -670,10 +661,13 @@ pub fn draw_health_bar(
         return vec![];
     };
 
-    let Some(aabb) = physics.get_aabb2(entity_id) else {
-        return vec![];
-    };
-    let extents = project_aabb3(&aabb, view, projection, screen_size);
+    // The same resolved bounds the brackets and the label frame, so the bar
+    // cannot sit over a different volume than the outline it caps.
+    let extents = clamp_extents_to_screen(
+        project_aabb3(&bounds, view, projection, screen_size),
+        screen_size,
+        LABEL_MARGIN,
+    );
 
     // Nearest sampling, unlike the rest of the HUD: the remastered bar art is
     // several times the 80x14 it draws at and carries a pure colour-key border,
@@ -700,25 +694,17 @@ pub fn draw_health_bar(
 
 pub fn draw_item_outline(
     asset_cache: &mut AssetCache,
-    physics: &PhysicsWorld,
-    entity_id: EntityId,
-    //aabb: collision::Aabb3<f32>,
+    bounds: Aabb3<f32>,
     view: Matrix4<f32>,
     projection: Matrix4<f32>,
     screen_size: Vector2<f32>,
 ) -> Vec<SceneObject> {
-    let maybe_bbox = physics.get_aabb2(entity_id);
-
-    if maybe_bbox.is_none() {
-        return vec![];
-    }
-
     let options = TextureOptions {
         wrap: false,
         ..Default::default()
     };
 
-    let aabb = maybe_bbox.unwrap();
+    let aabb = bounds;
     let top_left_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK0.PCX", &options);
     let top_right_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK1.PCX", &options);
     let bottom_right_brack = asset_cache.get_ext(&TEXTURE_IMPORTER, "BRACK2.PCX", &options);

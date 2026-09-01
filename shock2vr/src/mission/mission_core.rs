@@ -14,6 +14,8 @@ use cgmath::{
     Vector2, Vector3, num_traits::ToPrimitive, vec2, vec3,
 };
 
+use collision::Aabb3;
+
 use crate::SpawnLocation;
 use crate::game_scene::DebuggableScene;
 use crate::mission::CullingInfo;
@@ -7930,12 +7932,29 @@ impl MissionCore {
     }
 
     /// Entities whose HUD overlay is still forced on by recent damage.
+    /// Entities whose HUD overlay is still forced on by recent damage.
     fn damage_flash_entities(&self) -> Vec<EntityId> {
         let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
         self.world
             .borrow::<UniqueViewMut<DamageFlash>>()
             .map(|mut flash| flash.active(now))
             .unwrap_or_default()
+    }
+
+    /// The world-space bounds that stand in for an entity: the union of its
+    /// hitboxes where it has them - the volume a creature's limbs occupy in
+    /// the pose it is in - otherwise its own collider.
+    ///
+    /// The HUD highlight frames this, and `/v1/entities/:id` reports it, from
+    /// this one function: what an agent reads is what the player sees framed.
+    ///
+    /// The proxies are stepped by physics before they are re-posed, so the
+    /// bounds trail the drawn pose by a frame - invisible at 60 Hz, and not
+    /// worth a second pose evaluation to remove.
+    pub(crate) fn selection_bounds(&self, entity_id: EntityId) -> Option<Aabb3<f32>> {
+        self.hit_boxes
+            .hit_box_bounds(&self.physics, entity_id)
+            .or_else(|| self.physics.get_aabb2(entity_id))
     }
 
     pub fn render_per_eye(
@@ -7978,10 +7997,15 @@ impl MissionCore {
             highlighted.retain(|e| is_hud_selectable(&self.world, *e));
         }
         for hit_entity in highlighted {
+            // What the highlight frames. Resolved once, so the brackets and
+            // the label can never frame different things.
+            let Some(bounds) = self.selection_bounds(hit_entity) else {
+                continue;
+            };
+
             ret.extend(draw_item_outline(
                 asset_cache,
-                &self.physics,
-                hit_entity,
+                bounds,
                 view,
                 projection,
                 screen_size,
@@ -7989,7 +8013,7 @@ impl MissionCore {
 
             ret.extend(draw_item_name(
                 asset_cache,
-                &self.physics,
+                bounds,
                 hit_entity,
                 &self.world,
                 view,
@@ -8000,7 +8024,7 @@ impl MissionCore {
 
             ret.extend(draw_health_bar(
                 asset_cache,
-                &self.physics,
+                bounds,
                 hit_entity,
                 &self.world,
                 view,
@@ -10109,6 +10133,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .find(|link| link.contains_ordinal.is_some())
                     .map(|link| link.target_id);
 
+                let selection_bounds = self.selection_bounds(id);
                 Some(DebugEntityDetail {
                     entity_id: id.inner() as i32,
                     name,
@@ -10125,6 +10150,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     incoming_links,
                     contained_by,
                     aim_points: aim_points.clone(),
+                    selection_bounds: selection_bounds.map(|bounds| {
+                        [
+                            [bounds.min.x, bounds.min.y, bounds.min.z],
+                            [bounds.max.x, bounds.max.y, bounds.max.z],
+                        ]
+                    }),
                 })
             },
         )

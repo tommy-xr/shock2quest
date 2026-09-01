@@ -153,6 +153,11 @@ export interface EntityDetailResult {
    * runtimes predating the aim-point capability.
    */
   aim_points?: AimPoint[];
+  /**
+   * World-space `[min, max]` of what the HUD highlight frames: the union of
+   * the entity's hitboxes where it has them, otherwise its own collider.
+   */
+  selection_bounds?: [[number, number, number], [number, number, number]] | null;
 }
 
 export interface AimPoint {
