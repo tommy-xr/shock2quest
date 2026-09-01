@@ -1048,6 +1048,12 @@ pub enum DebugEntityMessage {
         direction: Option<[f32; 3]>,
         #[serde(default)]
         point: Option<[f32; 3]>,
+        /// Skeleton joint id of the hitbox that was struck, as a real
+        /// hitbox-forwarded hit carries. Lets a test exercise the per-limb
+        /// paths (damage readouts, ragdoll reaction) without having to land a
+        /// live shot on a chosen limb.
+        #[serde(default)]
+        bone: Option<u32>,
     },
     /// Frob (use) the entity.
     Frob,
