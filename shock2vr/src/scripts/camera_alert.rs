@@ -65,7 +65,12 @@ impl Script for CameraAlert {
         _physics: &PhysicsWorld,
         _time: &Time,
     ) -> Effect {
-        let high_alert = Self::is_high_alert(world, entity_id);
+        // A hacked security console is exactly a camera that cannot report the
+        // player, so a camera holds its alarm for the console's window. Without
+        // this an identification made *before* the hack landed would still fire
+        // a frame later and cancel the window the player just paid for.
+        let high_alert = Self::is_high_alert(world, entity_id)
+            && !crate::security_alarm::cameras_are_blind(world);
         match self.phase {
             AlarmPhase::Armed if high_alert => {
                 self.phase = AlarmPhase::Latched;

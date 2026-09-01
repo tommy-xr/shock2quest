@@ -189,7 +189,7 @@ fn effective_hack_values(world: &World, diff: PropHackDiff, skill_bonus: i32) ->
                 stats.cyber_affinity,
             )
         })
-        .unwrap_or((skill_bonus, 0));
+        .unwrap_or((0, 0));
     world
         .borrow::<UniqueView<GlobalHrmParams>>()
         .ok()
@@ -387,6 +387,16 @@ where
         );
     }
     components
+}
+
+/// The generic consequence of a critical failure: the object breaks. Every
+/// hackable device except the numeric keypad (which has nothing to break)
+/// shares it, so "broken" cannot come to mean different things per device.
+pub(crate) fn break_on_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
+    Effect::SetObjectState {
+        entity_id,
+        state: ObjectState::Broken,
+    }
 }
 
 /// The terms one object is hacked on: the per-object skill bonus it grants

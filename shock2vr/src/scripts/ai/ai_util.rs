@@ -1128,27 +1128,37 @@ pub fn nearest_visible_hostile(
         .and_then(|positions| positions.get(from_entity).ok().map(|pose| pose.position))?;
 
     // Gather the candidates before testing sight: the visibility check borrows
-    // the same storages.
+    // the same storages. The player's own sight rule (psi invisibility) is
+    // applied here, so every candidate is then tested the same way.
     let mut candidates: Vec<(EntityId, Vector3<f32>)> = Vec::new();
     if own_team != PLAYER_TEAM
+        && !is_player_psi_invisible(world)
         && let Ok(player) = world.borrow::<UniqueView<PlayerInfo>>()
     {
         candidates.push((player.entity_id, player.pos));
     }
-    if let (Ok(ais), Ok(positions), Ok(hit_points)) = (
-        world.borrow::<View<PropAI>>(),
+    // Living creatures on another team. Creatures only: cameras and turrets
+    // are AIs too, and a hacked turret gunning down the level's cameras is not
+    // what "shoot your foes" means.
+    if let (Ok(creatures), Ok(teams), Ok(positions), Ok(hit_points)) = (
+        world.borrow::<View<PropCreature>>(),
+        world.borrow::<View<PropAITeam>>(),
         world.borrow::<View<PropPosition>>(),
         world.borrow::<View<PropHitPoints>>(),
     ) {
-        for (entity_id, _) in ais.iter().with_id() {
+        for (entity_id, _) in creatures.iter().with_id() {
             if entity_id == from_entity {
                 continue;
             }
+            let team = teams
+                .get(entity_id)
+                .map(|team| team.0)
+                .unwrap_or(AITeam::Bad1);
             let is_living = hit_points
                 .get(entity_id)
                 .map(|hp| hp.hit_points > 0)
                 .unwrap_or(true);
-            if !is_living || ai_team(world, entity_id) == own_team {
+            if !is_living || team == own_team {
                 continue;
             }
             if let Ok(pose) = positions.get(entity_id) {
@@ -1157,38 +1167,24 @@ pub fn nearest_visible_hostile(
         }
     }
 
-    let player_entity = world
-        .borrow::<UniqueView<PlayerInfo>>()
-        .ok()
-        .map(|player| player.entity_id);
-    candidates
-        .into_iter()
-        .filter(|(target, target_pos)| {
-            if Some(*target) == player_entity {
-                // The player has their own sight rules (psi invisibility).
-                return is_player_visible_in_fov(
-                    from_entity,
-                    world,
-                    physics,
-                    heading,
-                    fov_half_angle,
-                );
-            }
-            is_entity_visible_in_fov(
-                from_entity,
-                *target,
-                *target_pos,
-                world,
-                physics,
-                heading,
-                fov_half_angle,
-            )
-        })
-        .min_by(|(_, a), (_, b)| {
-            (a - own_position)
-                .magnitude2()
-                .total_cmp(&(b - own_position).magnitude2())
-        })
+    // Nearest first, so the sight test - a raycast each - stops at the first
+    // candidate that passes rather than testing every one of them.
+    candidates.sort_by(|(_, a), (_, b)| {
+        (a - own_position)
+            .magnitude2()
+            .total_cmp(&(b - own_position).magnitude2())
+    });
+    candidates.into_iter().find(|(target, target_pos)| {
+        is_entity_visible_in_fov(
+            from_entity,
+            *target,
+            *target_pos,
+            world,
+            physics,
+            heading,
+            fov_half_angle,
+        )
+    })
 }
 
 /// The same cone-plus-line-of-sight check for any target, not just the player.

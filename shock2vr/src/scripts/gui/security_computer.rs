@@ -15,53 +15,36 @@
 //! refuses to open. Success deliberately leaves `P$ObjState` alone: the window
 //! is temporary, so the console has to be hackable again once it lapses.
 
-use dark::properties::{ObjectState, PropHackTime};
+use dark::properties::PropHackTime;
 use shipyard::{EntityId, Get, View, World};
 
-use crate::{
-    gui::{Gui, GuiComponent, GuiConfig, GuiCursor},
-    quest_info::QuestInfo,
-    scripts::Effect,
-};
+use crate::{quest_info::QuestInfo, scripts::Effect};
 
-use super::computer::{hack_board_config, hack_board_with_instructions};
-use super::keypad::{
-    HackPhase, HackState, HackTerms, KeyPadMsg, hack_diff, handle_hack_msg, object_state,
-};
+use super::hack_board::{HackBoardGui, HackBoardObject};
 use super::traits::TRAIT_SECURITY_EXPERT;
 
 /// What the Security Expert O/S trait is worth at a security console, and
 /// nowhere else.
 const SECURITY_EXPERT_HACK_BONUS: i32 = 2;
 
-pub struct SecurityComputerGui;
+/// The security console, on the shared hack board.
+pub struct SecurityConsole;
 
-#[derive(Clone, Debug, Default)]
-pub struct SecurityComputerState {
-    hack: HackState,
-}
+pub type SecurityComputerGui = HackBoardGui<SecurityConsole>;
 
-#[derive(Clone)]
-pub enum SecurityComputerMsg {
-    Hack(KeyPadMsg),
-}
+impl HackBoardObject for SecurityConsole {
+    fn on_success(entity_id: EntityId, world: &World) -> Effect {
+        security_hack_success(entity_id, world)
+    }
 
-fn can_hack(world: &World, entity_id: EntityId) -> bool {
-    !matches!(
-        object_state(world, entity_id),
-        ObjectState::Broken | ObjectState::Destroyed
-    ) && hack_diff(world, entity_id).is_some()
-}
-
-/// The console's own skill bonus: Security Expert reads as two extra levels of
-/// Hack here.
-fn skill_bonus(world: &World) -> i32 {
-    world
-        .borrow::<shipyard::UniqueView<QuestInfo>>()
-        .map(|quests| quests.player_stats().has_os_trait(TRAIT_SECURITY_EXPERT))
-        .unwrap_or(false)
-        .then_some(SECURITY_EXPERT_HACK_BONUS)
-        .unwrap_or(0)
+    fn skill_bonus(world: &World) -> i32 {
+        world
+            .borrow::<shipyard::UniqueView<QuestInfo>>()
+            .map(|quests| quests.player_stats().has_os_trait(TRAIT_SECURITY_EXPERT))
+            .unwrap_or(false)
+            .then_some(SECURITY_EXPERT_HACK_BONUS)
+            .unwrap_or(0)
+    }
 }
 
 /// How long a win blinds the cameras: the console's authored `P$HackTime`.
@@ -83,71 +66,13 @@ fn security_hack_success(entity_id: EntityId, world: &World) -> Effect {
     ])
 }
 
-fn security_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
-    Effect::SetObjectState {
-        entity_id,
-        state: ObjectState::Broken,
-    }
-}
-
-impl Gui<SecurityComputerState, SecurityComputerMsg> for SecurityComputerGui {
-    fn get_components(
-        &self,
-        _cursor: &Option<GuiCursor>,
-        entity_id: EntityId,
-        world: &World,
-        state: &SecurityComputerState,
-    ) -> Vec<GuiComponent<SecurityComputerMsg>> {
-        hack_board_with_instructions(entity_id, world, &state.hack, SecurityComputerMsg::Hack)
-    }
-
-    fn get_config(&self) -> GuiConfig {
-        hack_board_config()
-    }
-
-    fn handle_msg(
-        &self,
-        entity_id: EntityId,
-        world: &World,
-        state: &SecurityComputerState,
-        msg: &SecurityComputerMsg,
-    ) -> (SecurityComputerState, Effect) {
-        let Some(diff) = hack_diff(world, entity_id) else {
-            return (state.clone(), Effect::NoEffect);
-        };
-        let SecurityComputerMsg::Hack(msg) = msg;
-        let (hack, effect) = handle_hack_msg(
-            entity_id,
-            world,
-            &state.hack,
-            msg,
-            diff,
-            HackTerms {
-                skill_bonus: skill_bonus(world),
-                success: security_hack_success,
-                critical_failure: security_hack_critical_failure,
-            },
-        );
-        (SecurityComputerState { hack }, effect)
-    }
-
-    fn opens_on_frob(&self, entity_id: EntityId, world: &World) -> bool {
-        can_hack(world, entity_id)
-    }
-
-    fn prepare_state_on_frob(&self, state: &mut SecurityComputerState) {
-        if state.hack.phase != HackPhase::Playing {
-            *state = SecurityComputerState::default();
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use dark::properties::{PropHackDiff, PropObjState};
+    use dark::properties::{ObjectState, PropHackDiff, PropObjState};
     use shipyard::World;
 
     use super::*;
+    use crate::gui::Gui;
 
     fn flatten(effect: &Effect) -> Vec<&Effect> {
         match effect {
@@ -191,16 +116,16 @@ mod tests {
             cost: 3.0,
         });
         assert!(matches!(
-            security_hack_critical_failure(console, &world),
+            super::super::keypad::break_on_critical_failure(console, &world),
             Effect::SetObjectState {
                 entity_id,
                 state: ObjectState::Broken,
             } if entity_id == console
         ));
 
-        assert!(SecurityComputerGui.opens_on_frob(console, &world));
+        assert!(SecurityComputerGui::new().opens_on_frob(console, &world));
         world.add_component(console, PropObjState(ObjectState::Broken));
-        assert!(!SecurityComputerGui.opens_on_frob(console, &world));
+        assert!(!SecurityComputerGui::new().opens_on_frob(console, &world));
     }
 
     #[test]
@@ -218,6 +143,6 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::SetObjectState { .. }))
         );
-        assert!(SecurityComputerGui.opens_on_frob(console, &world));
+        assert!(SecurityComputerGui::new().opens_on_frob(console, &world));
     }
 }

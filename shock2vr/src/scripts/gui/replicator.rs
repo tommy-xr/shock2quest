@@ -18,8 +18,8 @@ use crate::scripts::{Effect, script_util::*};
 
 use super::{
     keypad::{
-        HackPhase, HackState, HackTerms, KeyPadMsg, draw_hack_board, hack_diff, handle_hack_msg,
-        object_state,
+        HackPhase, HackState, HackTerms, KeyPadMsg, break_on_critical_failure, draw_hack_board,
+        hack_diff, handle_hack_msg, object_state,
     },
     traits::TRAIT_REPLICATOR_EXPERT,
 };
@@ -98,13 +98,6 @@ fn replicator_hack_success(entity_id: EntityId, _world: &World) -> Effect {
     Effect::SetObjectState {
         entity_id,
         state: ObjectState::Hacked,
-    }
-}
-
-fn replicator_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
-    Effect::SetObjectState {
-        entity_id,
-        state: ObjectState::Broken,
     }
 }
 
@@ -423,7 +416,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                     HackTerms {
                         skill_bonus: 0,
                         success: replicator_hack_success,
-                        critical_failure: replicator_hack_critical_failure,
+                        critical_failure: break_on_critical_failure,
                     },
                 );
                 (

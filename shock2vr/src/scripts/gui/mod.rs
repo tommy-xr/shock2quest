@@ -2,6 +2,7 @@ mod computer;
 mod container;
 mod elevator;
 mod gamepig;
+mod hack_board;
 mod hackable_crate;
 mod keypad;
 mod map;

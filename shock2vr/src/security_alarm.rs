@@ -171,6 +171,11 @@ pub struct SecurityAlarm {
     /// What is left of a hacked console's camera-blindness window. The alarm
     /// owns it because the two are mutually exclusive: raising an alarm ends
     /// the blindness, exactly as standing security down ends the alarm.
+    ///
+    /// Like the alarm around it, this is runtime-only: a save taken mid-window
+    /// reloads with the cameras seeing again (the alarm reloads the same way,
+    /// derived from the ecologies it drives). Both would need a durable home
+    /// to survive, and a console is cheap to hack again.
     cameras_blind_seconds: f32,
 }
 

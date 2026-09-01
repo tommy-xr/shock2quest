@@ -35,8 +35,8 @@ use crate::scripts::Effect;
 
 use super::container::{ContainerGui, ContainerGuiMsg, ContainerGuiState};
 use super::keypad::{
-    HackPhase, HackState, HackTerms, KeyPadMsg, draw_hack_board, hack_diff, handle_hack_msg,
-    object_state,
+    HackPhase, HackState, HackTerms, KeyPadMsg, break_on_critical_failure, draw_hack_board,
+    hack_diff, handle_hack_msg, object_state,
 };
 
 /// The ICE Pick's authored script name (`P$Scripts` on gamesys template -73).
@@ -107,13 +107,6 @@ fn crate_hack_success(entity_id: EntityId, _world: &World) -> Effect {
 
 /// "Critical failure destroys it" (the archetype's own `P$HackText`): the
 /// crate is ruined for the rest of the game and its loot is unrecoverable.
-fn crate_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
-    Effect::SetObjectState {
-        entity_id,
-        state: ObjectState::Broken,
-    }
-}
-
 /// Whether `entity_id` is an ICE Pick - an object the data marks with the
 /// `FreeHack` script.
 fn is_free_hack_tool(world: &World, entity_id: EntityId) -> bool {
@@ -199,7 +192,7 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
                     HackTerms {
                         skill_bonus: 0,
                         success: crate_hack_success,
-                        critical_failure: crate_hack_critical_failure,
+                        critical_failure: break_on_critical_failure,
                     },
                 );
                 (

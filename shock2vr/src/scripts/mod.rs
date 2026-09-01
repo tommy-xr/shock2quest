@@ -1040,7 +1040,7 @@ impl ScriptWorld {
             // partially implemented:
             "keypadunhackable" => gui_script(Box::new(KeyPadGui)),
             "keypad" => gui_script(Box::new(KeyPadGui)),
-            "securitycomputer" => gui_script(Box::new(SecurityComputerGui)),
+            "securitycomputer" => gui_script(Box::new(SecurityComputerGui::new())),
             "resurrectmachine" => Box::new(BaseButton {}),
             "twostatebutton" => Box::new(BaseButton::new()),
 
@@ -1088,12 +1088,12 @@ impl ScriptWorld {
             "ectoplasm" => Box::new(UnimplementedScript::new(&script_name)),
             "medpatchscript" => Box::new(HealingItemScript::new(HealingItemKind::MedPatch)),
             "psikitscript" => Box::new(PsiKitScript::new()),
-            "computer" => gui_script(Box::new(ComputerGui)),
+            "computer" => gui_script(Box::new(ComputerGui::new())),
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => gui_script(Box::new(HackableCrateGui::new())),
             // The turret's own script slot is its hack panel; its AI comes
             // from `PropAI` through `BaseMonster`.
-            "turret" => gui_script(Box::new(TurretHackGui)),
+            "turret" => gui_script(Box::new(TurretHackGui::new())),
             "triggerdestroy" => Box::new(TriggerDestroy::new()),
 
             // skill point machines

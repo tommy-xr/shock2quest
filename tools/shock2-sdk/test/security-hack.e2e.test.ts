@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { EntityDetailResult, EntitySummary } from "../src/index.js";
+import { only, property } from "./helpers/entities.js";
 import {
   activePanel,
+  closePanel,
   hasTexture,
   playHackBoardToCriticalFailure,
   playHackBoardToWin,
@@ -27,19 +28,7 @@ const BLIND_SECONDS = 120;
 /// The board a won hack shows.
 const WON_TEXTURE = "winh.pcx";
 
-function property(detail: EntityDetailResult, name: string): string | undefined {
-  return detail.properties.find((candidate) => candidate.name === name)?.value;
-}
 
-async function only(
-  game: GameServer,
-  templateId: number,
-  label: string,
-): Promise<EntitySummary> {
-  const matches = await game.entities.byTemplate(templateId);
-  assert.equal(matches.length, 1, `${label}: expected one, got ${JSON.stringify(matches)}`);
-  return matches[0]!;
-}
 
 async function alarm(game: GameServer) {
   return (await game.ui.state()).security_alarm ?? null;
@@ -61,15 +50,6 @@ async function frobNearby(game: GameServer, entityId: number): Promise<void> {
   await game.step({ frames: 5 });
 }
 
-/** Dismiss whatever panel is open, by clicking the bare view beside it. */
-async function closePanel(game: GameServer): Promise<void> {
-  await game.input.set("pointer.position", [0.9, 0.9]);
-  await game.step({ frames: 2 });
-  await game.input.set("pointer.pressed", 1);
-  await game.step({ frames: 2 });
-  await game.input.set("pointer.pressed", 0);
-  await game.step({ frames: 5 });
-}
 
 /** Max Hack and a full wallet: skill leaves the board with no mines to lose on. */
 async function provisionExpertHacker(game: GameServer): Promise<void> {
@@ -201,8 +181,11 @@ test(
     const turret = await only(game, TURRET, "laser turret");
     const hostile = await only(game, HOSTILE, "hostile creature");
 
-    const hostileHp = async () =>
-      Number(property(await game.entities.detail(hostile.id), "HitPoints") ?? "0");
+    // A slain creature leaves the world, which reads as zero hit points.
+    const hostileHp = async () => {
+      const detail = await game.entities.detail(hostile.id);
+      return detail ? Number(property(detail, "HitPoints") ?? "0") : 0;
+    };
 
     // Before the hack the turret is on its authored hostile team and shoots
     // the player, not the creature beside them.
@@ -211,17 +194,16 @@ test(
       "Good",
       "an authored turret is hostile to the player",
     );
+    // (Only the player is *targeted*; a bystander standing in the bolt's path
+    // can still be clipped, so this asserts targeting, not who takes damage.)
+    // A tough player: standing in a turret's arc while a hostile closes in is
+    // lethal, and a dead player ends the mission scene mid-test.
+    await game.player.setStats({ endurance: 6 });
     const playerHpBefore = (await game.info()).player.hit_points ?? 0;
-    const hostileHpBefore = await hostileHp();
-    await game.step({ frames: 8 * 60 });
+    await game.step({ frames: 5 * 60 });
     assert.ok(
       ((await game.info()).player.hit_points ?? 0) < playerHpBefore,
       "a hostile turret should be shooting the player",
-    );
-    assert.equal(
-      await hostileHp(),
-      hostileHpBefore,
-      "a hostile turret should not shoot its own side",
     );
 
     // Hack it.
@@ -254,6 +236,61 @@ test(
     assert.ok(
       panel === null || panel.entity_id !== turret.id,
       "a hacked turret must not offer its board again",
+    );
+  },
+);
+
+test(
+  "a critically failed turret goes out of service",
+  { skip: !e2eEnabled, timeout: 900_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_turret" });
+    await game.step({ frames: 30 });
+
+    const turret = await only(game, TURRET, "laser turret");
+    const spawn = await game.player.position();
+    const alertness = async () => {
+      const detail = await game.entities.detail(turret.id);
+      assert.ok(detail, "the turret should still be in the world");
+      return property(detail, "AIAlertness");
+    };
+
+    // A working turret escalates on the player standing in its arc. Its
+    // escalation is timed, and the hostile wandering through the line of sight
+    // can stall it, so poll rather than assume a fixed number of seconds.
+    for (
+      let attempt = 0;
+      attempt < 20 && (await alertness()) !== "High";
+      attempt += 1
+    ) {
+      await game.step({ frames: 60 });
+    }
+    assert.equal(await alertness(), "High", "a working turret should track the player");
+
+    // Deliberately unskilled: the mines stay on the board.
+    await game.player.setStats({ cyber_affinity: 1, skills: { hack: 0 } });
+    await game.player.spawnItem(BIG_NANITE_PILE);
+    await game.player.spawnItem(BIG_NANITE_PILE);
+    await frobNearby(game, turret.id);
+    await playHackBoardToCriticalFailure(game);
+    await game.step({ frames: 10 });
+
+    assert.equal(
+      property(await game.entities.detail(turret.id), "ObjectState"),
+      "Broken",
+      "losing on a mine should break the turret",
+    );
+
+    // ...and a broken turret acquires nothing, however long it is watched.
+    // Back to the spawn first: standing at the turret puts it in the melee the
+    // hostile is bringing, and a turret beaten apart proves nothing here.
+    await closePanel(game);
+    await game.player.teleport(spawn);
+    await game.step({ frames: 10 * 60 });
+    assert.notEqual(
+      await alertness(),
+      "High",
+      "a broken turret must not track anything",
     );
   },
 );

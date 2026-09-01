@@ -45,6 +45,16 @@ export async function activePanel(game: GameServer): Promise<UiPanel> {
   return panel;
 }
 
+/** Dismiss whatever panel is open, by clicking the bare view beside it. */
+export async function closePanel(game: GameServer): Promise<void> {
+  await game.input.set("pointer.position", [0.9, 0.9]);
+  await game.step({ frames: 2 });
+  await game.input.set("pointer.pressed", 1);
+  await game.step({ frames: 2 });
+  await game.input.set("pointer.pressed", 0);
+  await game.step({ frames: 5 });
+}
+
 /**
  * Genuinely play the shared HRM board until `isWon` reports the object gave
  * way: START (charging the authored cost), then light nodes toward a connected

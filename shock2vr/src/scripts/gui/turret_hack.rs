@@ -9,110 +9,36 @@
 //! A critical failure breaks the turret generically, and a broken turret
 //! refuses to open its board.
 
-use dark::properties::ObjectState;
 use shipyard::{EntityId, World};
 
-use crate::{
-    gui::{Gui, GuiComponent, GuiConfig, GuiCursor},
-    scripts::{Effect, ai::ai_util},
-};
+use crate::scripts::{Effect, ai::ai_util};
 
-use super::computer::{hack_board_config, hack_board_with_instructions};
-use super::keypad::{
-    HackPhase, HackState, HackTerms, KeyPadMsg, hack_diff, handle_hack_msg, object_state,
-};
+use super::hack_board::{HackBoardGui, HackBoardObject};
 
-pub struct TurretHackGui;
+/// A turret, on the shared hack board.
+pub struct HackableTurret;
 
-#[derive(Clone, Debug, Default)]
-pub struct TurretHackState {
-    hack: HackState,
-}
+pub type TurretHackGui = HackBoardGui<HackableTurret>;
 
-#[derive(Clone)]
-pub enum TurretHackMsg {
-    Hack(KeyPadMsg),
-}
-
-/// A turret is worth hacking while it is still hostile: on the player's team
-/// there is nothing left to buy, and broken is broken.
-fn can_hack(world: &World, entity_id: EntityId) -> bool {
-    !matches!(
-        object_state(world, entity_id),
-        ObjectState::Broken | ObjectState::Destroyed
-    ) && ai_util::ai_team(world, entity_id) != ai_util::PLAYER_TEAM
-        && hack_diff(world, entity_id).is_some()
-}
-
-fn turret_hack_success(entity_id: EntityId, _world: &World) -> Effect {
-    Effect::SetAITeam {
-        entity_id,
-        team: ai_util::PLAYER_TEAM,
-    }
-}
-
-fn turret_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
-    Effect::SetObjectState {
-        entity_id,
-        state: ObjectState::Broken,
-    }
-}
-
-impl Gui<TurretHackState, TurretHackMsg> for TurretHackGui {
-    fn get_components(
-        &self,
-        _cursor: &Option<GuiCursor>,
-        entity_id: EntityId,
-        world: &World,
-        state: &TurretHackState,
-    ) -> Vec<GuiComponent<TurretHackMsg>> {
-        hack_board_with_instructions(entity_id, world, &state.hack, TurretHackMsg::Hack)
-    }
-
-    fn get_config(&self) -> GuiConfig {
-        hack_board_config()
-    }
-
-    fn handle_msg(
-        &self,
-        entity_id: EntityId,
-        world: &World,
-        state: &TurretHackState,
-        msg: &TurretHackMsg,
-    ) -> (TurretHackState, Effect) {
-        let Some(diff) = hack_diff(world, entity_id) else {
-            return (state.clone(), Effect::NoEffect);
-        };
-        let TurretHackMsg::Hack(msg) = msg;
-        let (hack, effect) = handle_hack_msg(
+impl HackBoardObject for HackableTurret {
+    fn on_success(entity_id: EntityId, _world: &World) -> Effect {
+        Effect::SetAITeam {
             entity_id,
-            world,
-            &state.hack,
-            msg,
-            diff,
-            HackTerms {
-                skill_bonus: 0,
-                success: turret_hack_success,
-                critical_failure: turret_hack_critical_failure,
-            },
-        );
-        (TurretHackState { hack }, effect)
-    }
-
-    fn opens_on_frob(&self, entity_id: EntityId, world: &World) -> bool {
-        can_hack(world, entity_id)
-    }
-
-    fn prepare_state_on_frob(&self, state: &mut TurretHackState) {
-        if state.hack.phase != HackPhase::Playing {
-            *state = TurretHackState::default();
+            team: ai_util::PLAYER_TEAM,
         }
+    }
+
+    /// Only while it is still hostile: on the player's team there is nothing
+    /// left to buy.
+    fn is_offered(world: &World, entity_id: EntityId) -> bool {
+        ai_util::ai_team(world, entity_id) != ai_util::PLAYER_TEAM
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use dark::properties::{AITeam, PropAITeam, PropHackDiff, PropObjState};
+    use crate::gui::Gui;
+    use dark::properties::{AITeam, ObjectState, PropAITeam, PropHackDiff, PropObjState};
     use shipyard::World;
 
     use super::*;
@@ -130,7 +56,7 @@ mod tests {
         let mut world = World::new();
         let turret = turret(&mut world);
         assert!(matches!(
-            turret_hack_success(turret, &world),
+            HackableTurret::on_success(turret, &world),
             Effect::SetAITeam {
                 entity_id,
                 team: AITeam::Good,
@@ -142,9 +68,9 @@ mod tests {
     fn a_hacked_turret_cannot_be_hacked_again() {
         let mut world = World::new();
         let turret = turret(&mut world);
-        assert!(TurretHackGui.opens_on_frob(turret, &world));
+        assert!(TurretHackGui::new().opens_on_frob(turret, &world));
         world.add_component(turret, PropAITeam(ai_util::PLAYER_TEAM));
-        assert!(!TurretHackGui.opens_on_frob(turret, &world));
+        assert!(!TurretHackGui::new().opens_on_frob(turret, &world));
     }
 
     #[test]
@@ -152,13 +78,13 @@ mod tests {
         let mut world = World::new();
         let turret = turret(&mut world);
         assert!(matches!(
-            turret_hack_critical_failure(turret, &world),
+            super::super::keypad::break_on_critical_failure(turret, &world),
             Effect::SetObjectState {
                 entity_id,
                 state: ObjectState::Broken,
             } if entity_id == turret
         ));
         world.add_component(turret, PropObjState(ObjectState::Broken));
-        assert!(!TurretHackGui.opens_on_frob(turret, &world));
+        assert!(!TurretHackGui::new().opens_on_frob(turret, &world));
     }
 }

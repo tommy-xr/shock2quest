@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { EntityDetailResult, EntitySummary } from "../src/index.js";
+import { only, property } from "./helpers/entities.js";
 import { activePanel, hasTexture, playHackBoardToWin } from "./helpers/hack.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
@@ -17,19 +17,7 @@ const CONSOLE = -1250;
 const ALARM_SECONDS = 120;
 const BIG_NANITE_PILE = -1591;
 
-function property(detail: EntityDetailResult, name: string): string | undefined {
-  return detail.properties.find((candidate) => candidate.name === name)?.value;
-}
 
-async function only(
-  game: GameServer,
-  templateId: number,
-  label: string,
-): Promise<EntitySummary> {
-  const matches = await game.entities.byTemplate(templateId);
-  assert.equal(matches.length, 1, `${label}: expected one, got ${JSON.stringify(matches)}`);
-  return matches[0]!;
-}
 
 async function alarm(game: GameServer) {
   return (await game.ui.state()).security_alarm ?? null;
