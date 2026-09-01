@@ -13,7 +13,7 @@ use cgmath::{
     EuclideanSpace, Matrix4, Point3, Quaternion, SquareMatrix, Transform, Vector3, Zero,
     num_traits::abs, vec3,
 };
-use collision::Aabb3;
+use collision::{Aabb, Aabb3};
 use dark::{
     BitmapAnimation, SCALE_FACTOR,
     importers::{ANIMATION_CLIP_IMPORTER, BITMAP_ANIMATION_IMPORTER, MODELS_IMPORTER},
@@ -978,6 +978,14 @@ fn create_physics_representation_with_options(
         .unwrap()
         .contains(entity_id);
 
+    // Read alone: the borrow tuple below is already at shipyard's arity limit.
+    let model_scale = world
+        .borrow::<View<PropScale>>()
+        .unwrap()
+        .get(entity_id)
+        .map(|scale| scale.0)
+        .unwrap_or_else(|_| vec3(1.0, 1.0, 1.0));
+
     let (
         v_pos,
         v_phys_attr,
@@ -1008,15 +1016,41 @@ fn create_physics_representation_with_options(
 
     let min_size = 0.5 / SCALE_FACTOR;
     let min_size_vec = vec3(min_size, min_size, min_size);
-    let dimensions = maybe_model
-        .as_ref()
-        .and_then(|model| model.bounding_box().map(|bbox| bbox.max - bbox.min))
+    // The render bakes the *absolute* value of `PropScale` (see `create_model`),
+    // so anything derived from the model's bounds follows the same.
+    let model_scale = vec3(
+        model_scale.x.abs(),
+        model_scale.y.abs(),
+        model_scale.z.abs(),
+    );
+    let model_bounds = maybe_model.as_ref().and_then(|model| model.bounding_box());
+    // Deliberately unscaled, as it always has been. Scaling the model-bounds
+    // *size* here resizes the selection volume of every scaled object in the
+    // game, and measurably moves what the crosshair picks (it took earth's
+    // Interrogation Room door pick with it), so it wants its own pass.
+    let dimensions = model_bounds
+        .map(|bbox| bbox.dim())
         .unwrap_or(default_size_vec);
     let abs_dimensions = vec3(
         dimensions.x.abs().max(min_size_vec.x),
         dimensions.y.abs().max(min_size_vec.y),
         dimensions.z.abs().max(min_size_vec.z),
     );
+    // Model bounds are not centred on the object's origin - a skinned corpse
+    // lies away from its root joint - so the selection box has to be carried to
+    // the bounds' centre, or it covers empty space beside the mesh. The centre
+    // *is* scaled: it says where the mesh is, and a scaled mesh is somewhere
+    // else.
+    let model_bounds_center = model_bounds
+        .map(|bbox| {
+            let center = bbox.center().to_vec();
+            vec3(
+                center.x * model_scale.x,
+                center.y * model_scale.y,
+                center.z * model_scale.z,
+            )
+        })
+        .unwrap_or_else(Vector3::zero);
 
     let dynamics_options = if let Ok(phys_attr) = v_phys_attr.get(entity_id) {
         DynamicPhysicsOptions {
@@ -1035,7 +1069,10 @@ fn create_physics_representation_with_options(
     // every load. Preserve the live creature's dynamic capsule geometry and
     // material, place it at the exact saved transform, then start it asleep.
     // The corpse group keeps it on the world and selectable for looting without
-    // leaving a player-blocking creature capsule behind.
+    // leaving a player-blocking creature capsule behind. This capsule is also
+    // why a death pose needs no model bounds: it is posed at draw time from an
+    // `AnimationPlayer`, which bakes no bounds, so it would otherwise fall
+    // through to the rest-pose box below.
     if v_death_pose.get(entity_id).is_ok() {
         if let (Ok(pos), Ok(creature_type)) = (v_pos.get(entity_id), v_creature.get(entity_id)) {
             let creature_def = get_creature_definition(creature_type.0).unwrap();
@@ -1214,7 +1251,7 @@ fn create_physics_representation_with_options(
             physics.add_interaction_cuboid(
                 rigid_body_handle,
                 entity_id,
-                Vector3::zero(),
+                model_bounds_center,
                 abs_dimensions,
                 frob_group,
             );
@@ -1242,14 +1279,19 @@ fn create_physics_representation_with_options(
             // walk-in fixtures - the hydro2 Resurrection Station alcove is a
             // 2.2 x 4.0 x 2.5 box the player must stand inside - and wedges
             // the capsule against its faces with no way out (#801).
-            if v_phys_type.get(entity_id).is_err() {
+            //
+            // An authored corpse is the same story from the other side: it is
+            // a posed creature, so it *does* inherit a `PhysType`, but its box
+            // is now the whole body and a solid one would fence off the floor
+            // around it. Retail lets the player walk over a body.
+            if v_phys_type.get(entity_id).is_err() || v_creature_pose.get(entity_id).is_ok() {
                 frob_group = frob_group.non_solid_to_characters();
             }
             rigid_body_handle = physics.add_kinematic(
                 entity_id,
                 pos.position,
                 qrotation,
-                Vector3::zero(),
+                model_bounds_center,
                 abs_dimensions,
                 // TODO: Kinematic experiment
                 //is_sensor,
@@ -1973,6 +2015,122 @@ mod tests {
             );
         }
         entity_id
+    }
+
+    /// A scaled mesh sits somewhere else, so the box follows `PropScale` to the
+    /// scaled bounds centre - by the scale's absolute value, which is what the
+    /// render bakes (a mirrored model must not have its box flipped to the
+    /// other side of the object). The box's *size* is deliberately left
+    /// unscaled: see the comment at the call site.
+    #[test]
+    fn a_frob_collider_takes_the_models_scale() {
+        for scale in [vec3(2.0, 2.0, 2.0), vec3(-2.0, 2.0, 2.0)] {
+            let mut world = World::new();
+            let mut physics = PhysicsWorld::new();
+            let entity_id = add_wall_fixture(&mut world, None);
+            world.add_component(entity_id, PropScale(scale));
+            let model = Model::from_glb(
+                vec![],
+                Aabb3::new(Point3::new(2.0, -0.5, -0.5), Point3::new(4.0, 0.5, 0.5)),
+                None,
+            );
+
+            create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+                .expect("a frobbable fixture should always get a frob collider");
+
+            let aabb = physics
+                .get_aabb2(entity_id)
+                .expect("the frob collider has bounds");
+            let center = aabb.min + (aabb.max - aabb.min) / 2.0;
+            assert!(
+                (center.x - 6.0).abs() < 0.01,
+                "scale {scale:?}: the box should sit at the scaled bounds centre, got {center:?}"
+            );
+            assert!(
+                ((aabb.max.x - aabb.min.x) - 2.0).abs() < 0.01,
+                "scale {scale:?}: the box keeps the unscaled bounds size, got {aabb:?}"
+            );
+        }
+    }
+
+    /// An authored corpse is a posed creature: it inherits a `PhysType`, so the
+    /// #801 guard below does not fire, but its selection box is now the whole
+    /// body - solid, it would fence off the floor around every body in the
+    /// level. Retail lets the player walk over a corpse.
+    ///
+    /// Negative-first: with the body-sized box and no pose guard this blocks.
+    #[test]
+    fn a_posed_corpse_frob_box_does_not_block_characters() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = add_wall_fixture(&mut world, Some(PhysicsModelType::ORIENTED_BOUNDING_BOX));
+        world.add_component(
+            entity_id,
+            PropCreaturePose {
+                pose_type: PoseType::MOTION_NAME,
+                motion_or_tag_name: "humdie3c".to_owned(),
+                scale: 1.0,
+                ballistic: true,
+            },
+        );
+        let model = ladder_model();
+
+        let handle =
+            create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+                .expect("a posed corpse should still get its frob collider");
+
+        assert!(
+            !physics.collider_blocks_player(handle),
+            "a corpse's frob box must not block the player"
+        );
+        assert!(
+            !physics.collider_blocks_actor(handle),
+            "a corpse's frob box must not block actors"
+        );
+        let body = physics
+            .debug_list_bodies()
+            .into_iter()
+            .find(|body| body.entity_id == Some(entity_id.inner() as i32))
+            .expect("the corpse's body should be listed");
+        assert!(
+            body.collision_groups
+                .iter()
+                .any(|g| g == "entity" || g == "selectable"),
+            "the corpse must stay selectable, got {:?}",
+            body.collision_groups
+        );
+    }
+
+    /// The selection collider has to cover the *mesh*, wherever the mesh sits
+    /// relative to the object's origin. A skinned corpse's bounds lie a body
+    /// length away from its root joint, so an origin-centred box misses it.
+    ///
+    /// Negative-first: before the fix the collider was always centred on the
+    /// object's position.
+    #[test]
+    fn a_frob_collider_is_centred_on_the_model_bounds() {
+        let mut world = World::new();
+        let mut physics = PhysicsWorld::new();
+        let entity_id = add_wall_fixture(&mut world, None);
+        // Bounds offset 3 units along +x, as a lying corpse's are from its
+        // root joint.
+        let model = Model::from_glb(
+            vec![],
+            Aabb3::new(Point3::new(2.0, -0.5, -0.5), Point3::new(4.0, 0.5, 0.5)),
+            None,
+        );
+
+        create_physics_representation(&mut world, &mut physics, &Some(&model), entity_id)
+            .expect("a frobbable fixture should always get a frob collider");
+
+        let aabb = physics
+            .get_aabb2(entity_id)
+            .expect("the frob collider has bounds");
+        let center = aabb.min + (aabb.max - aabb.min) / 2.0;
+        assert!(
+            (center.x - 3.0).abs() < 0.01,
+            "collider should sit at the model bounds centre, got {center:?}"
+        );
     }
 
     /// A frobbable fixture's collider comes from its model bounding box, not
