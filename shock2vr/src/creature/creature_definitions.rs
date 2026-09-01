@@ -83,22 +83,29 @@ pub const MONKEY_WIDTH: f32 = 3.0 / SCALE_FACTOR;
 pub const RUMBLER_HEIGHT: f32 = 6.25 / SCALE_FACTOR;
 pub const RUMBLER_WIDTH: f32 = 5.0 / SCALE_FACTOR;
 
+/// Which part of a humanoid each skeleton joint is, and so what a blow there
+/// is worth (see [`HitBoxType::damage_multiplier`]).
+///
+/// `Limb` is the near half of a limb - the segment hanging off the torso - and
+/// `Extremity` the far half, which a blow reaches more easily and which carries
+/// less of the creature. The two used to be split by "leg or arm" instead, so
+/// an elbow counted for as much as a shoulder and a foot for less than a knee.
 pub const HUMANOID_HIT_BOXES: Lazy<Arc<HashMap<u32, HitBoxType>>> = Lazy::new(|| {
     Arc::new(HashMap::from_iter(vec![
         (2, HitBoxType::Extremity),  // LToe
         (3, HitBoxType::Extremity),  //Rtoe
-        (4, HitBoxType::Limb),       // LKnee
-        (5, HitBoxType::Limb),       // RKnee
+        (4, HitBoxType::Extremity),  // LKnee - lower leg
+        (5, HitBoxType::Extremity),  // RKnee - lower leg
         (6, HitBoxType::Limb),       // LThigh
         (7, HitBoxType::Limb),       // RThigh
         (8, HitBoxType::Body),       // Neck
         (9, HitBoxType::Head),       // Head
         (10, HitBoxType::Limb),      // LShoulder
         (11, HitBoxType::Limb),      // RShoulder
-        (12, HitBoxType::Limb),      // LElbow
-        (13, HitBoxType::Limb),      // RElbow
-        (14, HitBoxType::Extremity), // LWeap
-        (15, HitBoxType::Extremity), // RWeap
+        (12, HitBoxType::Extremity), // LElbow - forearm
+        (13, HitBoxType::Extremity), // RElbow - forearm
+        (14, HitBoxType::NoDamage),  // LWeap - the weapon in its hand
+        (15, HitBoxType::NoDamage),  // RWeap
         (18, HitBoxType::Body),      // Abdomen
     ]))
 });
@@ -292,4 +299,43 @@ pub fn get_entity_creature(world: &World, entity_id: EntityId) -> Option<Arc<Cre
     let v_creature = world.borrow::<View<PropCreature>>().ok()?;
     let creature_type = v_creature.get(entity_id).ok()?;
     get_creature_definition(creature_type.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The humanoid map is what turns "which joint" into "what it is worth",
+    /// so its buckets are load-bearing: near limb segments are worth more than
+    /// far ones, and the weapon in a creature's hand is worth nothing.
+    #[test]
+    fn humanoid_joints_are_bucketed_by_what_a_blow_there_is_worth() {
+        let map = HUMANOID_HIT_BOXES.clone();
+        let worth = |joint: u32| map.get(&joint).copied().map(HitBoxType::damage_multiplier);
+
+        assert_eq!(worth(9), Some(1.25), "head");
+        assert_eq!(worth(8), Some(1.0), "neck");
+        assert_eq!(worth(18), Some(1.0), "abdomen");
+        for (joint, part) in [
+            (6, "left thigh"),
+            (7, "right thigh"),
+            (10, "left shoulder"),
+            (11, "right shoulder"),
+        ] {
+            assert_eq!(worth(joint), Some(0.75), "{part}");
+        }
+        for (joint, part) in [
+            (4, "left knee"),
+            (5, "right knee"),
+            (12, "left elbow"),
+            (13, "right elbow"),
+            (2, "left toe"),
+            (3, "right toe"),
+        ] {
+            assert_eq!(worth(joint), Some(0.5), "{part}");
+        }
+        for (joint, part) in [(14, "left weapon"), (15, "right weapon")] {
+            assert_eq!(worth(joint), Some(0.0), "{part}");
+        }
+    }
 }
