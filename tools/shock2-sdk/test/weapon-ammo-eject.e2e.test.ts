@@ -22,11 +22,11 @@ import type { EntitySummary } from "../src/index.js";
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-/** The pistol's standard clip - the archetype an ejected std magazine becomes. */
+/** The full-size standard clip (authored size 12). */
 const STD_CLIP = -31;
-/** The Assault Rifle's *first* authored standard clip, which is the SMALL one -
- * the reverse of the pistol's preference, and the case that catches an eject
- * minting a family-wide default instead of the weapon's own authored choice. */
+/** The small standard clip (authored size 6) - the Assault Rifle's *first*
+ * authored choice, which must NOT win when the ejected rounds don't fit its
+ * authored size (issue #1171). */
 const SMALL_STD_CLIP = -1358;
 
 function propOf(
@@ -161,15 +161,15 @@ test(
 );
 
 test(
-  "the ejected clip is the weapon's own authored archetype, not a family default",
+  "the ejected clip is the archetype whose authored size fits the rounds",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
-    // The pistol's standard bullet authors [Standard Clip, Small Standard Clip];
-    // the ASSAULT RIFLE's authors those two the other way round. Each weapon's
-    // own first choice must win, so an eject that reached for a shared family
-    // default - or that let an inherited relation outrank the projectile's own -
-    // would mint the wrong archetype here while still looking right for the
-    // pistol.
+    // The Assault Rifle's standard bullet authors [Small Standard Clip,
+    // Standard Clip] - small first. Its magazine holds far more than the small
+    // box's authored 6, so minting the data's first choice would label the
+    // ejected rounds a "Small Standard Clip" (issue #1171). The eject must
+    // instead mint the smallest archetype that holds the count - and the
+    // largest when, topped past every box size, nothing does.
     await using game = await GameServer.launch({
       mission: "debug_weapons",
     });
@@ -184,8 +184,19 @@ test(
     const rifle = (await game.info()).player.wielded_entity_id;
     assert.ok(rifle !== null, "the assault rifle should be wielded");
     assert.equal((await game.info()).player.wielded_ammo_type, "std");
+
+    // Top the rifle up past the largest box's authored size (12): a small
+    // spare clip reloads on top of the starting magazine.
+    await game.player.spawnItem(SMALL_STD_CLIP);
+    await game.input.trigger("Reload");
+    await game.step({ frames: 2 });
     const loaded = ammoOf(await game.entities.detail(rifle));
-    assert.ok(loaded > 0, "the debug assault rifle starts loaded");
+    assert.ok(loaded > 12, `the rifle holds more than any box (${loaded})`);
+    assert.equal(
+      (await carriedClips(game, SMALL_STD_CLIP)).length,
+      0,
+      "the spare was consumed - the eject has nothing to merge into",
+    );
 
     await game.input.trigger("CycleAmmo");
     await game.step({ frames: 2 });
@@ -194,11 +205,11 @@ test(
     const small = await carriedClips(game, SMALL_STD_CLIP);
     const full = await carriedClips(game, STD_CLIP);
     assert.equal(
-      full.length,
+      small.length,
       0,
-      "the pistol's full-size Standard Clip is NOT the assault rifle's choice",
+      "the rifle's first authored choice, the small box, cannot hold the rounds",
     );
-    assert.equal(small.length, 1, "the assault rifle ejects into its own Small Standard Clip");
-    assert.equal(stackOf(await game.entities.detail(small[0].id)), loaded);
+    assert.equal(full.length, 1, "the largest box absorbs the whole magazine");
+    assert.equal(stackOf(await game.entities.detail(full[0].id)), loaded);
   },
 );
