@@ -1319,6 +1319,9 @@ fn process_command(
             }
         }
         RuntimeCommand::GetUiState { reply } => {
+            // Game-level, so it is reported whether or not the active scene
+            // exposes debug UI state.
+            let debrief_text = game.active_debrief_text().map(str::to_owned);
             let result = game
                 .debug_scene()
                 .map(|scene| {
@@ -1331,6 +1334,7 @@ fn process_command(
                         ammo_cycle: ui.ammo_cycle,
                         pointer: ui.pointer,
                         panel_pose: ui.panel_pose,
+                        debrief_text: debrief_text.clone(),
                     }
                 })
                 .unwrap_or(commands::UiStateResult {
@@ -1341,6 +1345,7 @@ fn process_command(
                     ammo_cycle: None,
                     pointer: None,
                     panel_pose: None,
+                    debrief_text,
                 });
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send ui state - receiver dropped");

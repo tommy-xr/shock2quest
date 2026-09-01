@@ -610,6 +610,9 @@ pub struct UiStateResult {
     /// while the interface is up in VR. Aim a controller at a canvas rect by
     /// mapping it through this.
     pub panel_pose: Option<shock2vr::game_scene::DebugUiPanelPose>,
+    /// The character-creation debrief page currently on screen, verbatim;
+    /// `None` when the debrief screen is not up.
+    pub debrief_text: Option<String>,
 }
 
 /// A single carried item.

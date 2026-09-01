@@ -103,6 +103,20 @@ pub enum GlobalEffect {
         damage: f32,
     },
 
+    /// Show the character-creation debrief page - the `res/strings/CHARGEN.STR`
+    /// entry `text_key` on the original `DEBRIEF.PCX` screen - and dispatch
+    /// `then` when the player continues.
+    ///
+    /// A screen rather than an overlay, so the page owns the moment the way the
+    /// original does. Like [`PlayCutscene`](GlobalEffect::PlayCutscene) it
+    /// replaces the mission scene, so handling it saves that scene: a `then`
+    /// transition has to carry the player's career, training year, inventory
+    /// and vitals, not the empty world of the screen that stood in for it.
+    ShowDebrief {
+        text_key: String,
+        then: Box<GlobalEffect>,
+    },
+
     // Quit the game (e.g. from the main menu). The runtime is responsible for
     // observing this via `Game::should_quit` and closing its window.
     Quit,
@@ -117,6 +131,15 @@ impl GlobalEffect {
     pub fn after_cutscene(self, video: &str) -> Self {
         GlobalEffect::PlayCutscene {
             video: video.to_owned(),
+            then: Box::new(self),
+        }
+    }
+
+    /// Show the debrief page for `text_key` first and dispatch `self` when the
+    /// player continues.
+    pub fn after_debrief(self, text_key: &str) -> Self {
+        GlobalEffect::ShowDebrief {
+            text_key: text_key.to_owned(),
             then: Box::new(self),
         }
     }

@@ -509,9 +509,53 @@ pub fn tour_reward(career: Career, year: u32, tour: u32) -> Option<&'static Tour
     Some(&REWARDS[career_index(career)][(year - 1) as usize][tour as usize])
 }
 
+/// The debrief page for a completed tour, looked up in a parsed
+/// `res/strings/CHARGEN.STR` table.
+///
+/// Pure so the key casing and the escape handling are testable without an
+/// asset cache: the importer lowercases keys, and the shipped values carry
+/// literal backslash-n escapes ("Get back to Wake Island Station \npronto")
+/// which are unescaped into real line breaks - the same treatment the audio
+/// log reader gives `level<deck>.str`.
+pub fn debrief_text(
+    strings: &std::collections::HashMap<String, String>,
+    text_key: &str,
+) -> Option<String> {
+    strings
+        .get(&text_key.to_ascii_lowercase())
+        .map(|text| text.replace("\\n", "\n"))
+        .filter(|text| !text.trim().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    fn table(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn debrief_text_resolves_the_lowercased_key_and_unescapes_line_breaks() {
+        // Keys as the importer stores them (lowercased); the value is the
+        // shipped Mission7 text, abridged, with its literal escape.
+        let strings = table(&[("mission7", "Get back to Wake Island Station \\npronto.")]);
+        assert_eq!(
+            debrief_text(&strings, "Mission7").as_deref(),
+            Some("Get back to Wake Island Station \npronto.")
+        );
+    }
+
+    #[test]
+    fn debrief_text_is_none_for_a_missing_or_blank_page() {
+        let strings = table(&[("mission1", "   ")]);
+        assert_eq!(debrief_text(&strings, "Mission1"), None);
+        assert_eq!(debrief_text(&strings, "Mission2"), None);
+    }
 
     #[test]
     fn table_is_fully_populated_with_unique_text_keys() {

@@ -58,7 +58,7 @@ mod wielded_weapon;
 pub mod zip_asset_path;
 
 use scenes::{
-    CutscenePlayerScene, DeveloperScene, GameOverScene, LoadGameScene, MainMenuScene,
+    CutscenePlayerScene, DebriefScene, DeveloperScene, GameOverScene, LoadGameScene, MainMenuScene,
     SceneInitResult, create_initial_scene, load_mission_from_save_data, resolve_ending_cutscene,
 };
 
@@ -174,6 +174,10 @@ use crate::{
     scripts::Effect,
 };
 use zip_asset_path::ZipAssetPath;
+
+/// The character-creation debrief string table (a page per training tour,
+/// keyed `Mission1..Mission27`). Ships with classic and anniversary installs.
+const CHARGEN_STRINGS: &str = "chargen.str";
 
 const AUDIO_EAR_OFFSET: f32 = 1.0;
 
@@ -1544,6 +1548,21 @@ impl Game {
             && self.player_is_alive()
     }
 
+    /// The debrief page for `text_key`, from `res/strings/CHARGEN.STR`.
+    /// `None` when the table or the page is missing or blank.
+    fn debrief_page(&mut self, text_key: &str) -> Option<String> {
+        let strings = self
+            .asset_cache
+            .get_opt(&STRINGS_IMPORTER, CHARGEN_STRINGS)?;
+        crate::player_stats::debrief_text(&strings, text_key)
+    }
+
+    /// The debrief page on screen right now, for debug introspection: the
+    /// active scene is the debrief screen exactly while one is showing.
+    pub fn active_debrief_text(&self) -> Option<&str> {
+        self.active_game_scene.debrief_text()
+    }
+
     fn player_is_alive(&self) -> bool {
         // Scenes without the life-state unique (the debug scenes) have no death
         // to be in, so they count as alive.
@@ -1883,35 +1902,17 @@ impl Game {
                 self.hit_feedback.trigger(damage);
             }
             GlobalEffect::PlayCutscene { video, then } => {
-                // Any pending transition is abandoned, as for the frontend swaps.
-                self.pending_transition = None;
                 let follow_on = *then;
-                // Capture the scene the cutscene is about to replace, so a
-                // follow-on transition carries the player's state and not the
-                // cutscene's empty world. A cutscene chaining into another keeps
-                // what the first captured - the empty world it would capture now
-                // is exactly what must not win.
-                let preserved = match self.preserved_scene_state.take() {
-                    Some(carried) => carried,
-                    None => self.save_active_scene(),
-                };
-                match CutscenePlayerScene::new(video, follow_on.clone(), &mut self.audio_context) {
-                    Ok(cutscene) => {
-                        self.set_active_scene(Box::new(cutscene));
-                        // After the swap: `set_active_scene` clears this.
-                        self.preserved_scene_state = Some(preserved);
-                    }
-                    Err(error) => {
-                        // An install missing a movie must not strand the player
-                        // on the scene the cutscene was replacing.
-                        warn!("{error} - skipping it");
-                        // The follow-on still needs what was captured: the scene
-                        // is unchanged here, but in a chain this is the state of
-                        // the gameplay scene an earlier cutscene replaced.
-                        self.preserved_scene_state = Some(preserved);
-                        self.handle_global_effect(follow_on);
-                    }
-                }
+                let cutscene =
+                    CutscenePlayerScene::new(video, follow_on.clone(), &mut self.audio_context)
+                        .map(|cutscene| Box::new(cutscene) as Box<dyn GameScene>)
+                        .map_err(|error| {
+                            // An install missing a movie must not strand the
+                            // player on the scene the cutscene was replacing.
+                            warn!("{error} - skipping it");
+                        })
+                        .ok();
+                self.show_over_mission(cutscene, follow_on);
             }
             GlobalEffect::CompleteCampaign => {
                 // The destroyed head and the rest of the finale state reach the
@@ -1922,8 +1923,60 @@ impl Game {
                 self.campaign_completed = true;
                 self.handle_global_effect(after_ending.after_cutscene(&resolve_ending_cutscene()));
             }
+            GlobalEffect::ShowDebrief { text_key, then } => {
+                let follow_on = *then;
+                let page = self.debrief_page(&text_key).map(|text| {
+                    Box::new(DebriefScene::new(text, follow_on.clone())) as Box<dyn GameScene>
+                });
+                if page.is_none() {
+                    // A missing or blank page must not strand the player on the
+                    // scene the debrief was replacing.
+                    warn!("No debrief page for '{}' - skipping it", text_key);
+                }
+                self.show_over_mission(page, follow_on);
+            }
             GlobalEffect::Quit => {
                 self.should_quit = true;
+            }
+        }
+    }
+
+    /// Put `scene` on screen in place of the mission until it hands on to
+    /// `follow_on` (a cutscene, the character-creation debrief). `None` means
+    /// the stand-in could not be built, and `follow_on` runs straight away
+    /// rather than stranding the player on the scene it was replacing.
+    ///
+    /// The scene being replaced is saved first, so a `follow_on` transition
+    /// carries the player's state and not the stand-in's empty world. A
+    /// stand-in chaining into another keeps what the first captured - the empty
+    /// world it would capture now is exactly what must not win.
+    fn show_over_mission(&mut self, scene: Option<Box<dyn GameScene>>, follow_on: GlobalEffect) {
+        // The same refusal `begin_transition` makes, for the same reason: with a
+        // transition in flight the active scene is the loading screen, and
+        // saving *that* as the outgoing state wipes quest bits, held items and
+        // vitals. Nothing in-game can reach this (the loading scene runs no
+        // scripts), but an external caller can, so refuse rather than corrupt -
+        // the transition already under way is what the player is waiting for.
+        if self.pending_transition.is_some() {
+            warn!("Ignoring a scene standing in for the mission: a level transition is in flight");
+            return;
+        }
+        let preserved = match self.preserved_scene_state.take() {
+            Some(carried) => carried,
+            None => self.save_active_scene(),
+        };
+        match scene {
+            Some(scene) => {
+                self.set_active_scene(scene);
+                // After the swap: `set_active_scene` clears this.
+                self.preserved_scene_state = Some(preserved);
+            }
+            None => {
+                // Re-armed *before* dispatching: the follow-on transition reads
+                // it, and in a chain it is the state of the gameplay scene an
+                // earlier stand-in replaced.
+                self.preserved_scene_state = Some(preserved);
+                self.handle_global_effect(follow_on);
             }
         }
     }
@@ -1933,9 +1986,9 @@ impl Game {
     /// scene swap goes through here so that hook cannot be forgotten.
     fn set_active_scene(&mut self, scene: Box<dyn GameScene>) {
         self.active_game_scene.on_exit(&mut self.audio_context);
-        // Only a cutscene standing in for a scene carries state on its behalf,
-        // and `PlayCutscene` re-arms this straight after the swap. Clearing it
-        // for every other swap means a chain that ends anywhere but a
+        // Only a scene standing in for the mission carries state on its behalf,
+        // and `show_over_mission` re-arms this straight after the swap. Clearing
+        // it for every other swap means a chain that ends anywhere but a
         // transition cannot leak the old scene's state into a later one.
         self.preserved_scene_state = None;
         self.active_game_scene = scene;

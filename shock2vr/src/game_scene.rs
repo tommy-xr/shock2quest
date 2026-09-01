@@ -140,6 +140,13 @@ pub trait GameScene {
         false
     }
 
+    /// The character-creation debrief page this scene is showing, if it is the
+    /// debrief screen. Debug introspection only (`/v1/ui`), so a test can
+    /// assert which page came up.
+    fn debrief_text(&self) -> Option<&str> {
+        None
+    }
+
     /// Whether the in-game pause menu may open over this scene.
     ///
     /// True for scenes that run a simulation the player would want frozen -
