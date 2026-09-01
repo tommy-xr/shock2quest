@@ -9904,7 +9904,6 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                                 crate::creature::HitBoxType::Body => "torso",
                                 crate::creature::HitBoxType::Limb => "limb",
                                 crate::creature::HitBoxType::Extremity => "extremity",
-                                crate::creature::HitBoxType::NoDamage => "no_damage",
                             }
                             .to_string(),
                             position: body.position,

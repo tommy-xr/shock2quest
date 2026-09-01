@@ -2343,6 +2343,9 @@ pub struct PlayerHandle {
 #[derive(Clone, Copy)]
 struct HeldMeleeDrive {
     target: RigidBodyHandle,
+    /// The weapon's own entity, so a swept blow can be reported without
+    /// digging it back out of the body's user data every frame.
+    weapon_entity: Option<EntityId>,
     /// The loose/restored world body is seated at the first tracked pose once;
     /// later hand poses move only `target` so world contact stays physical.
     seated: bool,
@@ -2821,6 +2824,12 @@ impl PhysicsWorld {
                 handle,
                 HeldMeleeDrive {
                     target,
+                    weapon_entity: EntityId::from_inner(
+                        self.rigid_body_set
+                            .get(handle)
+                            .map(|body| body.user_data as u64)
+                            .unwrap_or(0),
+                    ),
                     seated: false,
                     stopped_on: None,
                 },
@@ -3990,9 +3999,11 @@ impl PhysicsWorld {
     /// far milder than the one taking the hand's rotation prevents (a weapon
     /// whose angle is not the angle of the hand holding it).
     ///
-    /// Only WORLD geometry blocks. Actors deliberately do not: a swing has to
-    /// travel *into* a creature to damage it, and loose props are better
-    /// swept through than treated as walls.
+    /// World geometry blocks, and so do a creature's hitboxes - the limbs a
+    /// swing can see. Its actor capsule deliberately does not: that is a
+    /// movement volume wider than the creature, and stopping on it would halt
+    /// the weapon in the air beside its target. Loose props are likewise
+    /// better swept through than treated as walls.
     fn drive_held_melee(&mut self) {
         let max_step = crate::dev_params::get(crate::dev_params::MELEE_MAX_SPEED)
             * self.integration_parameters.dt;
@@ -4052,24 +4063,29 @@ impl PhysicsWorld {
             // One blow per arrival: the sweep re-reports the same limb every
             // frame the weapon leans on it, and a swing is a swing, not a
             // per-frame billing.
-            let weapon_entity = self
-                .rigid_body_set
-                .get(weapon)
-                .and_then(|body| EntityId::from_inner(body.user_data as u64));
-            let previous = self
+            let (weapon_entity, previous) = self
                 .held_melee_drives
                 .get(&weapon)
-                .and_then(|drive| drive.stopped_on);
+                .map(|drive| (drive.weapon_entity, drive.stopped_on))
+                .unwrap_or((None, None));
             let arrived = sweep_stop
                 .as_ref()
                 .filter(|stop| previous != Some(stop.limb))
                 .zip(weapon_entity);
             if let Some((stop, weapon_entity)) = arrived {
-                let speed = if self.integration_parameters.dt > 0.0 {
+                // How fast the weapon was closing on the limb, not how fast the
+                // hand was travelling: a weapon dragged along a creature, or
+                // simply carried into one at walking pace, covers ground
+                // without closing on anything. This is the swept equivalent of
+                // `melee_weapon::closing_speed`'s projection, which cannot be
+                // computed later because the stop leaves the weapon still.
+                let travel = if self.integration_parameters.dt > 0.0 {
                     step / self.integration_parameters.dt
                 } else {
                     0.0
                 };
+                let heading = delta / distance;
+                let speed = travel * heading.dot(&vec_to_nvec(stop.normal)).abs();
                 self.pending_melee_sweep_events
                     .push(CollisionEvent::CollisionStarted {
                         entity1_id: weapon_entity,
@@ -4168,8 +4184,14 @@ impl PhysicsWorld {
                     .and_then(|collider| EntityId::from_inner(collider.user_data as u64))
                     .map(|limb| SweepStop {
                         limb,
+                        // World-space, on the limb: the pipeline is shape 1 of
+                        // the cast, so witness1/normal1 belong to what was hit.
                         point: npoint_to_cgvec(hit.witness1),
-                        normal: nvec_to_cgmath(hit.normal1.into_inner()),
+                        // ...which means `normal1` points limb -> weapon, and a
+                        // `CollisionContact` normal points entity1 -> entity2,
+                        // i.e. weapon -> limb. Un-negated it drives the killing
+                        // blow's ragdoll impulse back toward the player.
+                        normal: -nvec_to_cgmath(hit.normal1.into_inner()),
                     });
             }
         }

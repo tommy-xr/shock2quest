@@ -71,7 +71,6 @@ pub enum HitBoxType {
     Body,
     Limb,
     Extremity,
-    NoDamage,
 }
 
 impl HitBoxType {
@@ -80,18 +79,15 @@ impl HitBoxType {
     /// A deliberate divergence: the original scales damage by the *stim* and
     /// the victim's receptrons, never by where the blow landed. Aiming is what
     /// the per-joint hitboxes make possible, so this is what makes aiming
-    /// matter - a head is worth more than a shin, and a creature's own weapon
-    /// is worth nothing at all.
+    /// matter - a head is worth more than a shin.
     pub fn damage_multiplier(self) -> f32 {
         match self {
             HitBoxType::Head => 1.25,
             HitBoxType::Body => 1.0,
             // The near half of a limb: thigh, shoulder.
             HitBoxType::Limb => 0.75,
-            // The far half: forearm, shin, foot.
+            // The far half: forearm, shin, hand, foot.
             HitBoxType::Extremity => 0.5,
-            // The pipe it is holding. Hitting that is hitting the pipe.
-            HitBoxType::NoDamage => 0.0,
         }
     }
 }

@@ -104,8 +104,13 @@ pub const HUMANOID_HIT_BOXES: Lazy<Arc<HashMap<u32, HitBoxType>>> = Lazy::new(||
         (11, HitBoxType::Limb),      // RShoulder
         (12, HitBoxType::Extremity), // LElbow - forearm
         (13, HitBoxType::Extremity), // RElbow - forearm
-        (14, HitBoxType::NoDamage),  // LWeap - the weapon in its hand
-        (15, HitBoxType::NoDamage),  // RWeap
+        // The `LWeap`/`RWeap` joints are where a weapon is *attached*; the
+        // vertices skinned to them are the creature's own hands, and the pipe
+        // it carries is a separate object with no hitbox at all. So these are
+        // hands - far limb - and a blow on the weapon itself is not something
+        // this engine can currently tell apart.
+        (14, HitBoxType::Extremity), // LWeap - the hand
+        (15, HitBoxType::Extremity), // RWeap
         (18, HitBoxType::Body),      // Abdomen
     ]))
 });
@@ -334,8 +339,8 @@ mod tests {
         ] {
             assert_eq!(worth(joint), Some(0.5), "{part}");
         }
-        for (joint, part) in [(14, "left weapon"), (15, "right weapon")] {
-            assert_eq!(worth(joint), Some(0.0), "{part}");
+        for (joint, part) in [(14, "left hand"), (15, "right hand")] {
+            assert_eq!(worth(joint), Some(0.5), "{part}");
         }
     }
 }

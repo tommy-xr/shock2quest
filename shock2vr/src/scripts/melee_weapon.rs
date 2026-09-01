@@ -237,6 +237,11 @@ impl HeldMeleeWeapon {
     /// separate functions because they answer different questions at different
     /// thresholds - audible is a much lower bar than damaging, and a contact
     /// that is too gentle to bill should still clink.
+    /// Whether this contact thuds. Same speed question as [`Self::may_damage`],
+    /// a lower bar - and the same reason for reading the sweep's own
+    /// measurement: a swing stopped on a limb has no live velocity left to
+    /// read, so without it exactly the blows that now land are the ones that
+    /// would fall silent.
     fn may_play_impact_sound(
         &mut self,
         entity_id: EntityId,

@@ -40,13 +40,8 @@ impl Script for HitBoxScript {
     ) -> Effect {
         match msg {
             MessagePayload::Damage { amount, impact } => {
-                // What this part is worth. A blow on the creature's own weapon
-                // is worth nothing, and is absorbed here rather than reaching
-                // the creature as a zero that still reads as being hit.
+                // What this part is worth.
                 let multiplier = self.hit_box_type.damage_multiplier();
-                if multiplier <= 0.0 {
-                    return Effect::NoEffect;
-                }
                 Effect::Send {
                     msg: Message {
                         to: self.parent_entity_id,
@@ -121,11 +116,17 @@ mod tests {
         assert_eq!(blow(&mut script(HitBoxType::Extremity), 10.0), Some(5.0));
     }
 
-    /// A creature's own weapon is not the creature: a blow that lands on the
-    /// pipe it is holding is absorbed there, rather than reaching it as a zero
-    /// that still reads as a hit.
+    /// Every blow reaches the creature, whatever it is worth: its AI wakes on
+    /// being hit, so a part must never swallow the message.
     #[test]
-    fn a_blow_on_the_weapon_it_holds_reaches_nothing() {
-        assert_eq!(blow(&mut script(HitBoxType::NoDamage), 10.0), None);
+    fn every_blow_reaches_the_creature() {
+        for part in [
+            HitBoxType::Head,
+            HitBoxType::Body,
+            HitBoxType::Limb,
+            HitBoxType::Extremity,
+        ] {
+            assert!(blow(&mut script(part), 10.0).is_some(), "{part:?}");
+        }
     }
 }
