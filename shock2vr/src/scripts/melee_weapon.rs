@@ -127,26 +127,49 @@ impl Script for HeldMeleeWeapon {
 
         match msg {
             MessagePayload::Collided { with, contact } => {
+                // A creature is struck through its hitboxes: the contact
+                // arrives from the limb proxy, and the *creature* is what owns
+                // the receptrons, the material and the velocity.
+                //
+                // The capsule contact of that same swing is dropped so the
+                // blow is attributed to the limb rather than to the cylinder
+                // around it - whichever of the two the frame dispatched first.
+                // (It is not what stops double billing: the cooldown, keyed on
+                // the creature, already does that.) Only when a limb contact
+                // is actually on offer: a creature with no live proxies - an
+                // authored corpse carries `PropCreature` but is never animated
+                // - keeps being hit, and heard, on its capsule.
+                let owner = crate::util::resolve_proxy_entity(world, *with);
+                let is_capsule_contact = owner == *with;
+                if is_capsule_contact
+                    && self.is_held(world, entity_id)
+                    && crate::creature::has_live_hit_boxes(world, owner)
+                {
+                    return Effect::NoEffect;
+                }
+
                 // Damage and sound are separate questions. Damage stays gated
                 // by the swing threshold and the victim's authored receptrons;
                 // *hitting something* is audible regardless - a wrench on a
                 // bulkhead or a bench does nothing but must still clang.
                 let damage = self
-                    .may_damage(entity_id, *with, physics, *contact)
-                    .then(|| authored_contact_damage(world, entity_id, *with))
+                    .may_damage(entity_id, owner, physics, *contact)
+                    .then(|| authored_contact_damage(world, entity_id, owner))
                     .flatten();
 
                 let mut effects = Vec::new();
                 if let Some(amount) = damage {
+                    // Addressed to the hitbox, not the creature: forwarding it
+                    // is what stamps the struck joint onto the blow.
                     effects.push(contact_damage_effect(*with, amount, *contact));
                 }
                 // A blow that lands is always audible, as it always was. The
                 // operator is a bitwise `|`, not `||`, so the guard still runs
                 // (and arms the cooldown) even when damage forces the sound.
-                if self.may_play_impact_sound(entity_id, *with, physics, *contact)
+                if self.may_play_impact_sound(entity_id, owner, physics, *contact)
                     | damage.is_some()
                 {
-                    let sound = impact_sound_effect(entity_id, *with, world);
+                    let sound = impact_sound_effect(entity_id, owner, world);
                     if !matches!(sound, Effect::NoEffect) {
                         effects.push(sound);
                     }
@@ -164,6 +187,16 @@ impl Script for HeldMeleeWeapon {
 }
 
 impl HeldMeleeWeapon {
+    /// Whether this weapon is in the player's hand. Only a held weapon reaches
+    /// a creature's hitboxes, so only a held weapon has a limb contact to
+    /// prefer over its capsule; a wrench lying on the floor keeps clattering
+    /// when a creature walks into it.
+    fn is_held(&self, world: &World, entity_id: EntityId) -> bool {
+        world
+            .borrow::<View<crate::runtime_props::RuntimePropVrGripOffset>>()
+            .is_ok_and(|grips| grips.get(entity_id).is_ok())
+    }
+
     /// Whether this contact opens a hit: the weapon was actually moving at
     /// contact, and this victim has not just been billed. The short cooldown
     /// is what makes a swing a *swing* - without it a weapon left leaning on

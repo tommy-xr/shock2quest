@@ -7,7 +7,9 @@ use rapier3d::{
     na::Point3 as NaPoint3,
     prelude::{RigidBodyHandle, SharedShape},
 };
-use shipyard::{Component, EntitiesViewMut, EntityId, IntoIter, IntoWithId, View, ViewMut, World};
+use shipyard::{
+    Component, EntitiesViewMut, EntityId, Get, IntoIter, IntoWithId, View, ViewMut, World,
+};
 
 use crate::{
     physics::PhysicsWorld,
@@ -20,6 +22,28 @@ use crate::{
 };
 
 use super::{get_entity_creature, hit_box_script::HitBoxScript};
+
+/// Marks a creature that has live hitbox proxies, so anything asking "is this
+/// struck through limbs?" reads the world rather than the creature definition.
+/// The two disagree in shipped data: an authored corpse carries `PropCreature`
+/// (so its definition maps hitboxes) but is never animated, so it has none.
+#[derive(Component)]
+pub struct RuntimePropHasHitBoxes;
+
+/// Whether an entity is one of a creature's hitbox proxies.
+pub(crate) fn is_hit_box(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<RuntimePropHitBox>>()
+        .is_ok_and(|hit_boxes| hit_boxes.get(entity_id).is_ok())
+}
+
+/// Whether an entity is a creature with live hitbox proxies - i.e. whether a
+/// blow on it arrives through a limb.
+pub(crate) fn has_live_hit_boxes(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<RuntimePropHasHitBoxes>>()
+        .is_ok_and(|marked| marked.get(entity_id).is_ok())
+}
 
 #[derive(Component)]
 pub struct RuntimePropHitBox {
@@ -175,7 +199,7 @@ impl HitBoxManager {
         id_to_model: &HashMap<EntityId, Model>,
         id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
     ) {
-        let joint_updates = {
+        let (joint_updates, marked_parents) = {
             let v_position = world.borrow::<View<PropPosition>>().unwrap();
             let v_runtime_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
             let v_runtime_joints = world.borrow::<View<RuntimePropJointTransforms>>().unwrap();
@@ -187,6 +211,9 @@ impl HitBoxManager {
             let mut v_entities = world.borrow::<EntitiesViewMut>().unwrap();
 
             let mut joint_updates = HashMap::new();
+            // Applied after this borrow scope: the parents that just gained
+            // proxies (see `RuntimePropHasHitBoxes`).
+            let mut marked_parents = Vec::new();
 
             for (parent_entity_id, (_position, xform, joint_xforms)) in
                 (&v_position, &v_runtime_transform, &v_runtime_joints)
@@ -212,6 +239,7 @@ impl HitBoxManager {
                 let joint_aabbs = maybe_model.unwrap().get_hit_boxes();
                 let creature_type = maybe_creature_type.unwrap();
 
+                let mut built_hit_boxes = false;
                 let hit_box_map = self.hit_boxes.entry(parent_entity_id).or_insert_with(|| {
                     let mut out_hit_boxes = HashMap::new();
 
@@ -267,8 +295,12 @@ impl HitBoxManager {
                         out_hit_boxes.insert(*joint_id, hit_box_entity_id);
                     }
 
+                    built_hit_boxes = !out_hit_boxes.is_empty();
                     out_hit_boxes
                 });
+                if built_hit_boxes {
+                    marked_parents.push(parent_entity_id);
+                }
 
                 let mut joint_index = 0;
                 for joint_xform in joint_xforms.0 {
@@ -323,8 +355,11 @@ impl HitBoxManager {
                 }
             }
 
-            joint_updates
+            (joint_updates, marked_parents)
         };
+        for parent in marked_parents {
+            world.add_component(parent, RuntimePropHasHitBoxes);
+        }
 
         for (ent, matrix) in joint_updates {
             world.add_component(ent, RuntimePropTransform(matrix));
@@ -347,6 +382,7 @@ impl HitBoxManager {
         physics: &mut PhysicsWorld,
         id_to_physics: &mut HashMap<EntityId, RigidBodyHandle>,
     ) {
+        world.remove::<RuntimePropHasHitBoxes>(entity_id);
         if let Some(hitboxes) = self.hit_boxes.remove(&entity_id) {
             for (_, hitbox) in hitboxes {
                 physics.remove(hitbox);

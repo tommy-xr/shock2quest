@@ -1932,6 +1932,11 @@ bitflags! {
         // physical entities: interaction-only/model-bounds stand-ins can then
         // let characters pass while remaining solid to projectiles and props.
         const ACTOR = 1 << 8;
+        // A melee weapon in the player's hand. Its own membership, because a
+        // creature's hitboxes answer to it and to nothing else: they are
+        // damage volumes, and generating contacts against every prop that
+        // brushes a limb is both meaningless and expensive.
+        const HELD_MELEE = 1 << 9;
         /// Every physical ECS object, including living creature actors. Use
         /// this for entity queries/filters; use `ENTITY` or `ACTOR` for an
         /// individual collider's membership.
@@ -1982,12 +1987,26 @@ impl CollisionGroup {
         }
     }
 
+    /// A creature's per-joint damage proxy. Raycasts find it (that is how a
+    /// shot picks a limb), and a held melee weapon *contacts* it - so a swing
+    /// lands on the arm it visually struck rather than on the capsule around
+    /// the creature.
+    ///
+    /// It solves against nothing: these are damage volumes, and a limb that
+    /// shoved the weapon out of the swing (or the creature off its feet) would
+    /// be a physics body, which the actor capsule already is.
     pub fn hitbox() -> CollisionGroup {
+        // `solid` mirrors these into the solver groups, which resolves to
+        // nothing anyway: no group filters on `HITBOX`, and `held_melee`'s
+        // solver filter deliberately excludes it - so a limb never shoves the
+        // weapon that struck it.
         Self::solid(InteractionGroups {
             memberships: (InternalCollisionGroups::HITBOX.bits
                 | InternalCollisionGroups::RAYCAST.bits)
                 .into(),
-            filter: InternalCollisionGroups::RAYCAST.bits.into(),
+            filter: (InternalCollisionGroups::RAYCAST.bits
+                | InternalCollisionGroups::HELD_MELEE.bits)
+                .into(),
             test_mode: Default::default(),
         })
     }
@@ -2014,10 +2033,16 @@ impl CollisionGroup {
     /// weapon's trigger-gated script; this group only filters physical contact.
     pub fn held_melee() -> CollisionGroup {
         let collision = InteractionGroups {
-            memberships: InternalCollisionGroups::ENTITY.bits.into(),
+            memberships: (InternalCollisionGroups::ENTITY.bits
+                | InternalCollisionGroups::HELD_MELEE.bits)
+                .into(),
             filter: (InternalCollisionGroups::WORLD.bits
                 | InternalCollisionGroups::ENTITIES.bits
-                | InternalCollisionGroups::SELECTABLE.bits)
+                | InternalCollisionGroups::SELECTABLE.bits
+                // A creature's own hitboxes, so a swing lands on the limb it
+                // struck. The capsule contact is still generated and is what
+                // a creature with no hitboxes is hit on.
+                | InternalCollisionGroups::HITBOX.bits)
                 .into(),
             test_mode: Default::default(),
         };
