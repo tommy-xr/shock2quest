@@ -77,7 +77,7 @@ const UNIFIED_VERTEX_SHADER_SOURCE: &str = r#"
         }
 "#;
 
-const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
+pub(crate) const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         out vec4 fragColor;
 
         in vec2 texCoord;
@@ -609,3 +609,8 @@ impl SkinnedMaterial {
         })
     }
 }
+
+/// The fragment shader source, for the test that pins its SOURCE_RADIUS to the
+/// engine constant. Both lit materials declare it; both must agree.
+#[cfg(test)]
+pub(crate) const FRAGMENT_SHADER_SOURCE_FOR_TEST: &str = UNIFIED_FRAGMENT_SHADER_SOURCE;

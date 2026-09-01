@@ -631,6 +631,19 @@ The project supports experimental flags for gating in-progress features during d
   prop, e.g. shield membranes) are sealed in A* in every mode. Verify AI routing
   with `GET /v1/ai/paths` on the debug runtime.
 
+- **`object_lighting`**: light objects (props, creatures, held items) from the
+  mission's own lights. Without it every object is shaded a flat ambient plus
+  the player's hand lights, so a prop under a lamp and one in a black corridor
+  look identical. With it, each object takes the lights its cell says reach it,
+  ranked and capped at the renderer's slots, and is shaded the way the original
+  did - inverse-*distance* falloff over the mission's authored ambient. Objects
+  are legitimately dimmer than the lightmapped walls behind them; three dev
+  params (`object_light_brightness`, `object_light_ambient`,
+  `object_light_wrap`) tune that live over HTTP. **No-op in `debug_*` scenes**,
+  which have no world rep and therefore no cells to take lights from. Inspect
+  the result with `GET /v1/scene`, whose `lighting` block reports each object's
+  resolved light count and the light it receives.
+
 - **`high_detail_meshes`** / **`no_high_detail_meshes`**: force the 25AE
   high-detail (`PMNM`) creature meshes on or off, overriding the default (on
   everywhere since the Quest 3 measurement in #1022; ~0.3 ms extra combined eye

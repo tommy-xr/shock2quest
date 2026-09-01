@@ -1790,27 +1790,7 @@ fn process_command(
             let objects = matched
                 .into_iter()
                 .take(limit.unwrap_or(usize::MAX))
-                .map(|o| commands::SceneObjectSummary {
-                    entity_id: o.entity_id,
-                    name: o.name.clone(),
-                    model: o.model.clone(),
-                    source: o.source.clone(),
-                    position: o.position,
-                    transparency: o.transparency,
-                    depth_write: o.depth_write,
-                    depth_bias: o.depth_bias,
-                    render_layer: o.render_layer.clone(),
-                    clear_depth: o.clear_depth,
-                    backface_culling: o.backface_culling.clone(),
-                    lighting: o
-                        .lighting
-                        .as_ref()
-                        .map(|l| commands::ObjectLightingSummary {
-                            light_count: l.light_count,
-                            received: l.received,
-                            ambient: l.ambient,
-                        }),
-                })
+                .cloned()
                 .collect();
             let result = commands::SceneListResult {
                 objects,

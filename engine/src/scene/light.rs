@@ -226,6 +226,33 @@ impl LightArray {
         self
     }
 
+    /// This array's lights plus as many of `scene`'s as still fit, with the
+    /// scene's taking priority.
+    ///
+    /// The player's hand lights live in the scene array and are added by the
+    /// runtime after the game has resolved per-object lights, so an object that
+    /// carries its own lights would otherwise be invisible to the torch pointed
+    /// at it. The scene's go in first because a light the player is holding is
+    /// the one they expect to see working.
+    ///
+    /// Falloff and ambient come from `self`: they are per-array uniforms, so a
+    /// merged array has to pick one rule, and the object's is the one that
+    /// matches the lights doing most of the work.
+    pub fn merged_with(&self, scene: &LightArray) -> LightArray {
+        let mut merged = LightArray {
+            lights: [None, None, None, None, None, None],
+            ambient: self.ambient,
+            falloff: self.falloff,
+            lambert_wrap: self.lambert_wrap,
+        };
+        for (_, light) in scene.iter_active().chain(self.iter_active()) {
+            if merged.add_light(light.clone()).is_none() {
+                break;
+            }
+        }
+        merged
+    }
+
     /// Clear all lights
     pub fn clear(&mut self) {
         self.lights = [None, None, None, None, None, None];

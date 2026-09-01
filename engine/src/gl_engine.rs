@@ -127,22 +127,27 @@ impl Engine for OpenGLEngine {
                 // SINGLE-PASS LIGHTING: Opaque pass with all lighting calculated
                 // in shaders.
                 scene.objects_in_layer(layer).for_each(|s| {
+                    // An object's own lights don't replace the scene's - the
+                    // player's hand lights live there, and a torch pointed at a
+                    // prop has to light it.
+                    let merged = s.lights().map(|o| o.merged_with(scene.lights()));
                     s.draw_opaque(
                         self,
                         render_context,
                         &view,
-                        s.lights().unwrap_or(scene.lights()),
+                        merged.as_ref().unwrap_or(scene.lights()),
                     )
                 });
 
                 // Transparent pass with all lighting calculated in shaders
                 gl::DepthMask(gl::FALSE);
                 scene.objects_in_layer(layer).for_each(|s| {
+                    let merged = s.lights().map(|o| o.merged_with(scene.lights()));
                     s.draw_transparent(
                         self,
                         render_context,
                         &view,
-                        s.lights().unwrap_or(scene.lights()),
+                        merged.as_ref().unwrap_or(scene.lights()),
                     )
                 });
                 gl::DepthMask(gl::TRUE);

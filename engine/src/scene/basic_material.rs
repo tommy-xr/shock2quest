@@ -537,12 +537,20 @@ mod tests {
     #[test]
     fn shader_source_radius_matches_the_engine_constant() {
         let declared = format!(
-            "const float SOURCE_RADIUS = {:.1};",
+            "const float SOURCE_RADIUS = {};",
             crate::scene::light::LIGHT_SOURCE_RADIUS
         );
-        assert!(
-            UNIFIED_FRAGMENT_SHADER_SOURCE.contains(&declared),
-            "shader must declare `{declared}`"
-        );
+        for (name, source) in [
+            ("basic", UNIFIED_FRAGMENT_SHADER_SOURCE),
+            (
+                "skinned",
+                crate::scene::skinned_material::FRAGMENT_SHADER_SOURCE_FOR_TEST,
+            ),
+        ] {
+            assert!(
+                source.contains(&declared),
+                "{name} shader must declare `{declared}`"
+            );
+        }
     }
 }
