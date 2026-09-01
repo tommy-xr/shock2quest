@@ -345,9 +345,16 @@ pub(crate) fn does_entity_have_hitboxes(world: &World, entity_id: EntityId) -> b
 /// Fire Ranged Weapon
 ///
 /// Handles firing a projectile through the AIRangedWeapon link, which is a proxy between the main entity link
-/// Used primarily by turrets
+/// Used primarily by turrets. `target_position` is what the projectile is
+/// aimed at - a turret hacked onto the player's team aims at whatever it is
+/// shooting at now, not at the player.
 ///
-pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaternion<f32>) -> Effect {
+pub fn fire_ranged_weapon(
+    world: &World,
+    entity_id: EntityId,
+    rotation: Quaternion<f32>,
+    target_position: Vector3<f32>,
+) -> Effect {
     // First, let's find the link
     let maybe_ranged_weapon = get_first_link_with_template_and_data(world, entity_id, |link| {
         if matches!(link, Link::AIRangedWeapon) {
@@ -410,8 +417,8 @@ pub fn fire_ranged_weapon(world: &World, entity_id: EntityId, rotation: Quaterni
 
         if let Some((_projectile_id, _options)) = maybe_projectile {
             let (projectile_template_id, _projectile_opts) = maybe_projectile.unwrap();
-            let projectile_transform =
-                projectile_transform_aimed_at_player(world, position, muzzle_transform);
+            let projectile_transform = projectile_transform_aimed_at(position, target_position)
+                .unwrap_or(muzzle_transform);
 
             fire_effects.push(Effect::CreateEntity {
                 // Testing
@@ -930,34 +937,6 @@ fn has_clear_sight_between(
         .is_none()
 }
 
-/// Check if the player is visible from an entity (raycast only, no FOV check)
-///
-/// This is a basic visibility check that only verifies line-of-sight.
-/// For FOV-aware visibility, use `is_player_visible_in_fov`.
-pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &PhysicsWorld) -> bool {
-    if is_player_psi_invisible(world) {
-        return false;
-    }
-
-    let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-    let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
-
-    if let Ok(ent_pos) = v_current_pos.get(from_entity) {
-        let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
-        let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
-        return has_clear_sight_between(
-            from_entity,
-            u_player.entity_id,
-            start_point,
-            end_point,
-            world,
-            physics,
-        );
-    };
-
-    false
-}
-
 /// Whether `from_entity` has a clear line of FIRE to `target` (its known
 /// aim point - see `chase_target`) - the occlusion gate for standing
 /// ranged attacks. This intentionally remains stricter than sight: projectiles
@@ -1057,11 +1036,16 @@ fn has_line_of_fire_from(
     }
 }
 
+/// The team the player counts as. The shipped Good Guy and Charmed
+/// metaproperties put an AI on `Good` to make it friendly to the player, so
+/// that is the team a hacked device joins to stop shooting at them.
+pub const PLAYER_TEAM: AITeam = AITeam::Good;
+
 /// Dark defaults ordinary AIs to Bad 1; Good/Neutral/other Bad teams are
 /// explicit `P$AI_Team` overrides (including the shipped Good Guy and Charmed
 /// metaproperties). Equal teams are allies; a living creature on another team
 /// is a valid hostile obstruction and does not suppress the shot.
-fn ai_team(world: &World, entity_id: EntityId) -> AITeam {
+pub fn ai_team(world: &World, entity_id: EntityId) -> AITeam {
     world
         .borrow::<View<PropAITeam>>()
         .ok()
@@ -1109,55 +1093,145 @@ pub fn is_player_visible_in_fov(
         return false;
     }
 
-    let u_player = world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+    let Ok(player) = world.borrow::<UniqueView<PlayerInfo>>() else {
+        return false;
+    };
+    let (target, target_pos) = (player.entity_id, player.pos);
+    drop(player);
+    is_entity_visible_in_fov(
+        from_entity,
+        target,
+        target_pos,
+        world,
+        physics,
+        heading,
+        fov_half_angle,
+    )
+}
+
+/// The nearest thing `from_entity` can see that is on another AI team - what a
+/// device with no target of its own shoots at. The player counts as a member
+/// of [`PLAYER_TEAM`], so a turret left on its authored hostile team picks the
+/// player exactly as before, and one hacked onto the player's team picks the
+/// hostiles instead.
+pub fn nearest_visible_hostile(
+    from_entity: EntityId,
+    world: &World,
+    physics: &PhysicsWorld,
+    heading: Deg<f32>,
+    fov_half_angle: f32,
+) -> Option<(EntityId, Vector3<f32>)> {
+    let own_team = ai_team(world, from_entity);
+    let own_position = world
+        .borrow::<View<PropPosition>>()
+        .ok()
+        .and_then(|positions| positions.get(from_entity).ok().map(|pose| pose.position))?;
+
+    // Gather the candidates before testing sight: the visibility check borrows
+    // the same storages. The player's own sight rule (psi invisibility) is
+    // applied here, so every candidate is then tested the same way.
+    let mut candidates: Vec<(EntityId, Vector3<f32>)> = Vec::new();
+    if own_team != PLAYER_TEAM
+        && !is_player_psi_invisible(world)
+        && let Ok(player) = world.borrow::<UniqueView<PlayerInfo>>()
+    {
+        candidates.push((player.entity_id, player.pos));
+    }
+    // Living creatures on another team. Creatures only: cameras and turrets
+    // are AIs too, and a hacked turret gunning down the level's cameras is not
+    // what "shoot your foes" means.
+    if let (Ok(creatures), Ok(teams), Ok(positions), Ok(hit_points)) = (
+        world.borrow::<View<PropCreature>>(),
+        world.borrow::<View<PropAITeam>>(),
+        world.borrow::<View<PropPosition>>(),
+        world.borrow::<View<PropHitPoints>>(),
+    ) {
+        for (entity_id, _) in creatures.iter().with_id() {
+            if entity_id == from_entity {
+                continue;
+            }
+            let team = teams
+                .get(entity_id)
+                .map(|team| team.0)
+                .unwrap_or(AITeam::Bad1);
+            let is_living = hit_points
+                .get(entity_id)
+                .map(|hp| hp.hit_points > 0)
+                .unwrap_or(true);
+            if !is_living || team == own_team {
+                continue;
+            }
+            if let Ok(pose) = positions.get(entity_id) {
+                candidates.push((entity_id, pose.position));
+            }
+        }
+    }
+
+    // Nearest first, so the sight test - a raycast each - stops at the first
+    // candidate that passes rather than testing every one of them.
+    candidates.sort_by(|(_, a), (_, b)| {
+        (a - own_position)
+            .magnitude2()
+            .total_cmp(&(b - own_position).magnitude2())
+    });
+    candidates.into_iter().find(|(target, target_pos)| {
+        is_entity_visible_in_fov(
+            from_entity,
+            *target,
+            *target_pos,
+            world,
+            physics,
+            heading,
+            fov_half_angle,
+        )
+    })
+}
+
+/// The same cone-plus-line-of-sight check for any target, not just the player.
+/// A turret that has been hacked onto the player's team looks for its targets
+/// through this, so what it can see is decided exactly as it is for the
+/// player.
+pub fn is_entity_visible_in_fov(
+    from_entity: EntityId,
+    target: EntityId,
+    target_pos: Vector3<f32>,
+    world: &World,
+    physics: &PhysicsWorld,
+    heading: Deg<f32>,
+    fov_half_angle: f32,
+) -> bool {
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
 
-    if let Ok(ent_pos) = v_current_pos.get(from_entity) {
-        let entity_pos = ent_pos.position;
-        let player_pos = u_player.pos;
+    let Ok(ent_pos) = v_current_pos.get(from_entity) else {
+        return false;
+    };
+    let entity_pos = ent_pos.position;
 
-        // Calculate direction to player
-        let to_player = player_pos - entity_pos;
-        let to_player_2d = Vector3::new(to_player.x, 0.0, to_player.z);
+    let to_target = target_pos - entity_pos;
+    let to_target_2d = Vector3::new(to_target.x, 0.0, to_target.z);
 
-        if to_player_2d.magnitude2() < 1e-6 {
-            // Player is directly above/below - consider visible
-            return is_player_visible(from_entity, world, physics);
-        }
+    let start_point = point3(0.0, 0.0, 0.0) + entity_pos;
+    let end_point = point3(0.0, 0.0, 0.0) + target_pos;
 
-        let to_player_2d = to_player_2d.normalize();
+    if to_target_2d.magnitude2() >= 1e-6 {
+        let to_target_2d = to_target_2d.normalize();
 
-        // Calculate entity's forward direction combining base rotation and heading offset
-        // This matches the debug visualization in ai_debug_util::draw_debug_fov
+        // Forward combines the base rotation and the heading offset - this
+        // matches the debug visualization in ai_debug_util::draw_debug_fov.
         let orientation = ent_pos.rotation * Quaternion::from_angle_y(-heading);
         let forward_3d = orientation.rotate_vector(vec3(0.0, 0.0, 1.0));
         let forward = Vector3::new(forward_3d.x, 0.0, forward_3d.z).normalize();
 
-        // Calculate angle between forward and direction to player
-        let dot = forward.dot(to_player_2d);
-        // Clamp dot product to valid range for acos
-        let dot_clamped = dot.clamp(-1.0, 1.0);
-        let angle_to_player = dot_clamped.acos().to_degrees();
-
-        // Check if player is within FOV
-        if angle_to_player > fov_half_angle {
+        let dot = forward.dot(to_target_2d).clamp(-1.0, 1.0);
+        if dot.acos().to_degrees() > fov_half_angle {
             return false;
         }
+    }
+    // A target directly above or below has no meaningful bearing: fall through
+    // to the line-of-sight check alone.
 
-        // Player is in FOV, now check line-of-sight
-        let start_point = point3(0.0, 0.0, 0.0) + entity_pos;
-        let end_point = point3(0.0, 0.0, 0.0) + player_pos;
-        return has_clear_sight_between(
-            from_entity,
-            u_player.entity_id,
-            start_point,
-            end_point,
-            world,
-            physics,
-        );
-    };
-
-    false
+    drop(v_current_pos);
+    has_clear_sight_between(from_entity, target, start_point, end_point, world, physics)
 }
 
 #[cfg(test)]
@@ -1433,7 +1507,14 @@ mod sight_occlusion_tests {
     }
 
     fn player_is_visible(scene: &SightScene) -> bool {
-        is_player_visible(scene.observer, &scene.world, &scene.physics)
+        // A full circle of a cone: line of sight alone, with no bearing test.
+        is_player_visible_in_fov(
+            scene.observer,
+            &scene.world,
+            &scene.physics,
+            Deg(0.0),
+            180.0,
+        )
     }
 
     fn player_is_in_line_of_fire(scene: &SightScene) -> bool {

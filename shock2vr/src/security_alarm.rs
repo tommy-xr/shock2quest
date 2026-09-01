@@ -123,6 +123,16 @@ pub struct SecurityAlarmStatus {
     pub count: u32,
     /// Seconds left on the alarm's deadline, floored at zero.
     pub seconds_remaining: f32,
+    /// Seconds left on a hacked security console's window, during which the
+    /// level's cameras cannot see the player. Zero when they can.
+    pub cameras_blind_seconds: f32,
+}
+
+/// Whether a hacked security console currently hides the player from the
+/// level's cameras. Only the camera vision channel is affected - a blinded
+/// camera is still alive, and every other AI sees the player normally.
+pub fn cameras_are_blind(world: &World) -> bool {
+    status(world).cameras_blind_seconds > 0.0
 }
 
 /// The alarm as last published into the world - the single value every
@@ -158,6 +168,15 @@ pub struct SecurityAlarm {
     /// "no ecology is alerted" only means the alert is over once it has been
     /// seen to start.
     alert_landed: bool,
+    /// What is left of a hacked console's camera-blindness window. The alarm
+    /// owns it because the two are mutually exclusive: raising an alarm ends
+    /// the blindness, exactly as standing security down ends the alarm.
+    ///
+    /// Like the alarm around it, this is runtime-only: a save taken mid-window
+    /// reloads with the cameras seeing again (the alarm reloads the same way,
+    /// derived from the ecologies it drives). Both would need a durable home
+    /// to survive, and a console is cheap to hack again.
+    cameras_blind_seconds: f32,
 }
 
 impl SecurityAlarm {
@@ -176,6 +195,7 @@ impl SecurityAlarm {
             // Already up: the alarm stacks, but the window does not move and
             // the alerted ecologies are already alerted.
             self.count += 1;
+            self.cameras_blind_seconds = 0.0;
             return Vec::new();
         }
         // An alarm nothing holds is no alarm - the badge must not show a
@@ -189,6 +209,9 @@ impl SecurityAlarm {
         self.seconds_remaining = seconds;
         self.count = 1;
         self.alert_landed = false;
+        // An alarm and a hacked console are mutually exclusive: security being
+        // up is exactly what the hack was suppressing.
+        self.cameras_blind_seconds = 0.0;
         takers
             .into_iter()
             .map(|ecology| Effect::Send {
@@ -215,10 +238,24 @@ impl SecurityAlarm {
         stand_down(world, from)
     }
 
+    /// Hide the player from the level's cameras for `seconds` - a hacked
+    /// security console. The longer window wins, so a second hack cannot cut
+    /// the first one short.
+    pub fn blind_cameras(&mut self, seconds: f32) {
+        if seconds <= 0.0 {
+            return;
+        }
+        self.cameras_blind_seconds = self.cameras_blind_seconds.max(seconds);
+    }
+
     /// Run the deadline down. The alarm ends when the window runs out - or as
     /// soon as the ecologies have stood themselves down, since they, not this
     /// countdown, are where the alert actually lives.
     pub fn update(&mut self, world: &World, time: &Time) -> Vec<Effect> {
+        if self.cameras_blind_seconds > 0.0 {
+            self.cameras_blind_seconds =
+                (self.cameras_blind_seconds - time.elapsed.as_secs_f32()).max(0.0);
+        }
         if self.count == 0 {
             return Vec::new();
         }
@@ -235,6 +272,7 @@ impl SecurityAlarm {
         SecurityAlarmStatus {
             count: self.count,
             seconds_remaining: self.seconds_remaining.max(0.0),
+            cameras_blind_seconds: self.cameras_blind_seconds.max(0.0),
         }
     }
 
@@ -324,7 +362,8 @@ mod tests {
             alarm.status(),
             SecurityAlarmStatus {
                 count: 1,
-                seconds_remaining: 120.0
+                seconds_remaining: 120.0,
+                ..SecurityAlarmStatus::default()
             }
         );
     }
@@ -396,7 +435,8 @@ mod tests {
             alarm.status(),
             SecurityAlarmStatus {
                 count: 0,
-                seconds_remaining: 0.0
+                seconds_remaining: 0.0,
+                ..SecurityAlarmStatus::default()
             }
         );
         // ...and it stays down.
@@ -432,6 +472,52 @@ mod tests {
             assert!(alarm.update(&world, &time(1.0 / 60.0)).is_empty());
             assert!(alarm.status().active());
         }
+    }
+
+    #[test]
+    fn a_hacked_console_blinds_the_cameras_until_its_window_runs_out() {
+        let (world, _, _) = ecology_world(ECOLOGY_STATE_NORMAL);
+        let mut alarm = SecurityAlarm::default();
+        assert_eq!(alarm.status().cameras_blind_seconds, 0.0);
+
+        alarm.blind_cameras(120.0);
+        assert_eq!(alarm.status().cameras_blind_seconds, 120.0);
+        // A shorter second hack cannot cut the running window short.
+        alarm.blind_cameras(30.0);
+        assert_eq!(alarm.status().cameras_blind_seconds, 120.0);
+
+        alarm.update(&world, &time(119.0));
+        assert_eq!(alarm.status().cameras_blind_seconds, 1.0);
+        alarm.update(&world, &time(2.0));
+        assert_eq!(alarm.status().cameras_blind_seconds, 0.0);
+    }
+
+    #[test]
+    fn raising_an_alarm_ends_the_blindness() {
+        // Security being up is exactly what the hack was suppressing, so the
+        // two can never be true at once.
+        let (world, _, _) = ecology_world(ECOLOGY_STATE_NORMAL);
+        let mut alarm = SecurityAlarm::default();
+        alarm.blind_cameras(120.0);
+
+        alarm.add(&world, 120.0);
+        assert_eq!(alarm.status().cameras_blind_seconds, 0.0);
+
+        // ...including an alarm that only stacks onto one already up.
+        alarm.blind_cameras(120.0);
+        alarm.add(&world, 120.0);
+        assert_eq!(alarm.status().cameras_blind_seconds, 0.0);
+    }
+
+    #[test]
+    fn standing_security_down_leaves_the_hacked_window_running() {
+        // A console hack does both at once - the stand-down must not undo the
+        // blindness the same win just bought.
+        let (world, _, source) = ecology_world(ECOLOGY_STATE_ALERT);
+        let mut alarm = SecurityAlarm::default();
+        alarm.blind_cameras(120.0);
+        alarm.disable(&world, Some(source));
+        assert_eq!(alarm.status().cameras_blind_seconds, 120.0);
     }
 
     #[test]

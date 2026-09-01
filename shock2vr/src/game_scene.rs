@@ -569,6 +569,9 @@ pub struct DebugUiState {
     /// The station security alarm - `Some` exactly while one is up, which is
     /// when the HUD shows its badge and countdown.
     pub security_alarm: Option<DebugSecurityAlarm>,
+    /// Seconds left on a hacked security console's window, during which the
+    /// level's cameras cannot see the player. Zero when they can.
+    pub security_cameras_blind_seconds: f32,
 }
 
 /// The station security alarm as the HUD presents it (`GET /v1/ui`).
@@ -904,6 +907,7 @@ pub trait DebuggableScene {
             pointer: None,
             panel_pose: None,
             security_alarm: None,
+            security_cameras_blind_seconds: 0.0,
         }
     }
 

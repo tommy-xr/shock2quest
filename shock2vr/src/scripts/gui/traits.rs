@@ -12,7 +12,8 @@
 //! `QuestInfo`, so it survives save/load and deck re-entry), and
 //! `Effect::AcquireOsTrait` applies the pick atomically. Live effects are
 //! implemented for the subset with existing consumers (Tank, Naturally Able,
-//! Pack-Rat, Pharmo-Friendly, Replicator Expert - see [`live_effect_note`]); everything else stays visible
+//! Pack-Rat, Pharmo-Friendly, Replicator Expert, Security Expert - see
+//! [`live_effect_note`]); everything else stays visible
 //! but cannot consume a one-shot machine or trait slot until its effect exists.
 
 use cgmath::{Vector2, Vector3, vec2};
@@ -53,6 +54,7 @@ pub const TRAIT_PACK_RAT: u8 = 3;
 pub const TRAIT_PHARMO_FRIENDLY: u8 = 2;
 pub const TRAIT_TANK: u8 = 8;
 pub const TRAIT_REPLICATOR_EXPERT: u8 = 13;
+pub const TRAIT_SECURITY_EXPERT: u8 = 10;
 
 /// Tank: "+5 maximum hit points" (TRAITS.STR Trait8). The original raises the
 /// ceiling AND current HP by the bonus on purchase (buying at 25/30 yields
@@ -403,6 +405,7 @@ pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
         TRAIT_PACK_RAT => Some("+3 backpack slots"),
         TRAIT_PHARMO_FRIENDLY => Some("20% healing-item bonus"),
         TRAIT_REPLICATOR_EXPERT => Some("20% replicator discount"),
+        TRAIT_SECURITY_EXPERT => Some("+2 Hack at security consoles"),
         _ => None,
     }
 }

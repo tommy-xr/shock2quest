@@ -12,14 +12,12 @@ use engine::assets::asset_cache::AssetCache;
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, Unique, UniqueView, View, World};
 
 use crate::{
-    gui::{Gui, GuiComponent, GuiConfig, GuiCursor},
+    gui::{GuiComponent, GuiConfig},
     scripts::{Effect, Message, MessagePayload, script_util::*},
 };
 
-use super::keypad::{
-    HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
-    handle_hack_msg, object_state,
-};
+use super::hack_board::{HackBoardGui, HackBoardObject};
+use super::keypad::{HackState, KeyPadMsg, draw_hack_board, hack_diff, object_state};
 
 const FALLBACK_HACK_TEXT: &str = "Complete the circuit to hack this computer.";
 const HACK_TEXT_LINE_LENGTH: usize = 25;
@@ -119,23 +117,20 @@ pub(crate) fn restore_authored_computer_data(
     }
 }
 
-pub struct ComputerGui;
+/// A Computer console, on the shared hack board.
+pub struct Computer;
 
-#[derive(Clone, Debug, Default)]
-pub struct ComputerState {
-    hack: HackState,
-}
+pub type ComputerGui = HackBoardGui<Computer>;
 
-#[derive(Clone)]
-pub enum ComputerMsg {
-    Hack(KeyPadMsg),
-}
+impl HackBoardObject for Computer {
+    fn on_success(entity_id: EntityId, world: &World) -> Effect {
+        computer_hack_success(entity_id, world)
+    }
 
-fn can_hack(world: &World, entity_id: EntityId) -> bool {
-    !matches!(
-        object_state(world, entity_id),
-        ObjectState::Broken | ObjectState::Destroyed | ObjectState::Hacked
-    ) && hack_diff(world, entity_id).is_some()
+    /// A computer that has already given way offers no second board.
+    fn is_offered(world: &World, entity_id: EntityId) -> bool {
+        object_state(world, entity_id) != ObjectState::Hacked
+    }
 }
 
 fn computer_hack_success(entity_id: EntityId, world: &World) -> Effect {
@@ -166,13 +161,6 @@ fn computer_hack_success(entity_id: EntityId, world: &World) -> Effect {
         },
     });
     Effect::combine(effects)
-}
-
-fn computer_hack_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
-    Effect::SetObjectState {
-        entity_id,
-        state: ObjectState::Broken,
-    }
 }
 
 fn authored_hack_text(world: &World, entity_id: EntityId) -> String {
@@ -208,72 +196,42 @@ fn wrap_hack_text(text: &str) -> Vec<String> {
     lines
 }
 
-impl Gui<ComputerState, ComputerMsg> for ComputerGui {
-    fn get_components(
-        &self,
-        _cursor: &Option<GuiCursor>,
-        entity_id: EntityId,
-        world: &World,
-        state: &ComputerState,
-    ) -> Vec<GuiComponent<ComputerMsg>> {
-        let Some(diff) = hack_diff(world, entity_id) else {
-            return Vec::new();
-        };
-        let mut components = draw_hack_board(&state.hack, diff, ComputerMsg::Hack);
-        for (line, text) in wrap_hack_text(&authored_hack_text(world, entity_id))
-            .into_iter()
-            .take(3)
-            .enumerate()
-        {
-            components.push(
-                crate::gui::text(&text)
-                    .with_position(vec2(15.0, 10.0 + line as f32 * 11.0))
-                    .with_size(vec2(158.0, 11.0)),
-            );
-        }
-        components
-    }
-
-    fn get_config(&self) -> GuiConfig {
-        GuiConfig {
-            world_offset: Vector3::new(0.0, 0.0, -1.0),
-            screen_size_in_pixels: Vector2::new(188.0, 296.0),
-        }
-    }
-
-    fn handle_msg(
-        &self,
-        entity_id: EntityId,
-        world: &World,
-        state: &ComputerState,
-        msg: &ComputerMsg,
-    ) -> (ComputerState, Effect) {
-        let Some(diff) = hack_diff(world, entity_id) else {
-            return (state.clone(), Effect::NoEffect);
-        };
-        let ComputerMsg::Hack(msg) = msg;
-        let (hack, effect) = handle_hack_msg(
-            entity_id,
-            world,
-            &state.hack,
-            msg,
-            diff,
-            HackOutcomeEffects {
-                success: computer_hack_success,
-                critical_failure: computer_hack_critical_failure,
-            },
+/// The HRM board a computer-style console shows: the shared board plus the
+/// object's own authored instructions above it. Every console that hacks this
+/// way draws it, so none of them can drift from the others.
+pub(crate) fn hack_board_with_instructions<TMsg, F>(
+    entity_id: EntityId,
+    world: &World,
+    hack: &HackState,
+    wrap: F,
+) -> Vec<GuiComponent<TMsg>>
+where
+    TMsg: Clone,
+    F: Fn(KeyPadMsg) -> TMsg + Copy,
+{
+    let Some(diff) = hack_diff(world, entity_id) else {
+        return Vec::new();
+    };
+    let mut components = draw_hack_board(hack, diff, wrap);
+    for (line, text) in wrap_hack_text(&authored_hack_text(world, entity_id))
+        .into_iter()
+        .take(3)
+        .enumerate()
+    {
+        components.push(
+            crate::gui::text(&text)
+                .with_position(vec2(15.0, 10.0 + line as f32 * 11.0))
+                .with_size(vec2(158.0, 11.0)),
         );
-        (ComputerState { hack }, effect)
     }
+    components
+}
 
-    fn opens_on_frob(&self, entity_id: EntityId, world: &World) -> bool {
-        can_hack(world, entity_id)
-    }
-
-    fn prepare_state_on_frob(&self, state: &mut ComputerState) {
-        if state.hack.phase != HackPhase::Playing {
-            *state = ComputerState::default();
-        }
+/// The console board's canvas, shared by every computer-style hack panel.
+pub(crate) fn hack_board_config() -> GuiConfig {
+    GuiConfig {
+        world_offset: Vector3::new(0.0, 0.0, -1.0),
+        screen_size_in_pixels: Vector2::new(188.0, 296.0),
     }
 }
 
@@ -283,7 +241,6 @@ mod tests {
     use shipyard::World;
 
     use super::*;
-    use dark::properties::PropObjState;
 
     fn flatten(effect: &Effect) -> Vec<&Effect> {
         match effect {
@@ -353,7 +310,7 @@ mod tests {
         let mut world = World::new();
         let computer = world.add_entity(());
         assert!(matches!(
-            computer_hack_critical_failure(computer, &world),
+            super::super::keypad::break_on_critical_failure(computer, &world),
             Effect::SetObjectState {
                 entity_id,
                 state: ObjectState::Broken,
@@ -362,46 +319,10 @@ mod tests {
     }
 
     #[test]
-    fn broken_and_hacked_computers_do_not_reopen() {
-        let gui = ComputerGui;
-        for state in [ObjectState::Broken, ObjectState::Hacked] {
-            let mut world = World::new();
-            let computer = world.add_entity((
-                PropHackDiff {
-                    success_chance: 20,
-                    critical_chance: 10,
-                    cost: 3.0,
-                },
-                PropObjState(state),
-            ));
-            assert!(!gui.opens_on_frob(computer, &world));
-        }
-    }
-
-    #[test]
     fn localized_hack_text_is_wrapped_without_losing_words() {
         let text = "Hack all three Interlocks to disable shields.";
         let lines = wrap_hack_text(text);
         assert_eq!(lines.join(" "), text);
         assert!(lines.iter().all(|line| line.len() <= HACK_TEXT_LINE_LENGTH));
-    }
-
-    #[test]
-    fn reopening_preserves_only_an_in_progress_hack() {
-        let gui = ComputerGui;
-        let mut state = ComputerState {
-            hack: HackState {
-                phase: HackPhase::Playing,
-                rng_state: 42,
-                ..HackState::default()
-            },
-        };
-        gui.prepare_state_on_frob(&mut state);
-        assert_eq!(state.hack.phase, HackPhase::Playing);
-        assert_eq!(state.hack.rng_state, 42);
-
-        state.hack.phase = HackPhase::Won;
-        gui.prepare_state_on_frob(&mut state);
-        assert_eq!(state.hack.phase, HackPhase::Unpaid);
     }
 }

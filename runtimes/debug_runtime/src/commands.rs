@@ -613,6 +613,9 @@ pub struct UiStateResult {
     /// The station security alarm; `Some` exactly while one is up, which is
     /// when the HUD shows its badge and countdown.
     pub security_alarm: Option<shock2vr::game_scene::DebugSecurityAlarm>,
+    /// Seconds left on a hacked security console's window, during which the
+    /// level's cameras cannot see the player. Zero when they can.
+    pub security_cameras_blind_seconds: f32,
 }
 
 /// A single carried item.

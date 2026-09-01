@@ -1,15 +1,15 @@
-use cgmath::{Deg, Matrix4, Quaternion, Rotation3, vec3};
-use dark::properties::{AIAlertLevel, PropAIAlertCap, PropAIAwareDelay};
+use cgmath::{Deg, Matrix4, Quaternion, Rotation3, Vector3, vec3};
+use dark::properties::{AIAlertLevel, ObjectState, PropAIAlertCap, PropAIAwareDelay, PropPosition};
 use shipyard::{EntityId, Get, View, World};
 
-use crate::{physics::PhysicsWorld, time::Time};
+use crate::{physics::PhysicsWorld, time::Time, util::vec3_to_point3};
 
 use super::{
     Effect, MessagePayload, Script,
     ai_debug_util::{self, AlertnessDebugConfig, FovDebugConfig},
     ai_util,
     alertness::{self, AlertnessState, AlertnessTimings},
-    steering::{ChasePlayerSteeringStrategy, SteeringStrategy},
+    steering::Steering,
 };
 
 pub enum TurretState {
@@ -25,11 +25,11 @@ impl TurretState {
         entity_id: EntityId,
         time: &Time,
         world: &World,
-        is_player_visible: bool,
+        has_target: bool,
     ) -> (TurretState, Effect) {
         match current_state {
             TurretState::Closed => {
-                if is_player_visible {
+                if has_target {
                     (
                         TurretState::Opening { progress: 0.0 },
                         ai_util::play_positional_sound(
@@ -68,7 +68,7 @@ impl TurretState {
                 }
             }
             TurretState::Open => {
-                if !is_player_visible {
+                if !has_target {
                     (
                         TurretState::Closing { progress: 0.0 },
                         ai_util::play_positional_sound(
@@ -103,7 +103,6 @@ pub struct TurretAI {
     next_fire: f32,
     initial_yaw: Deg<f32>,
     current_heading: Deg<f32>,
-    steering: ChasePlayerSteeringStrategy,
     current_state: TurretState,
     /// Alertness state tracking
     alertness: AlertnessState,
@@ -116,7 +115,6 @@ impl TurretAI {
         TurretAI {
             next_fire: 0.0,
             initial_yaw: Deg(0.0),
-            steering: ChasePlayerSteeringStrategy,
             current_heading: Deg(0.0),
             current_state: TurretState::Closed,
             alertness: AlertnessState::default(),
@@ -163,40 +161,50 @@ impl TurretAI {
         time: &Time,
         world: &World,
         entity_id: EntityId,
-        physics: &PhysicsWorld,
+        target_position: Vector3<f32>,
     ) -> Effect {
-        let _quat = Quaternion::from_angle_x(Deg(time.total.as_secs_f32().sin() * 90.0));
         let fire_projectile = if self.next_fire < time.total.as_secs_f32() {
             self.next_fire = time.total.as_secs_f32() + 1.0;
             let rotation = Quaternion::from_angle_y(self.current_heading - self.initial_yaw);
-            ai_util::fire_ranged_weapon(world, entity_id, rotation)
+            ai_util::fire_ranged_weapon(world, entity_id, rotation, target_position)
         } else {
             Effect::NoEffect
         };
 
-        let maybe_desired_yaw =
-            self.steering
-                .steer(self.current_heading, world, physics, entity_id, time);
+        // Track the target the turret is actually shooting at, rather than the
+        // player: a hacked turret has to swing onto its own hostiles.
+        let own_position = world
+            .borrow::<View<PropPosition>>()
+            .ok()
+            .and_then(|positions| positions.get(entity_id).ok().map(|pose| pose.position));
 
         let rotation_effect = {
-            if let Some((steering_output, _effect)) = maybe_desired_yaw {
+            if let Some(own_position) = own_position {
+                let steering_output = Steering::turn_to_point(
+                    vec3_to_point3(own_position),
+                    vec3_to_point3(target_position),
+                );
                 self.current_heading = steering_output.desired_heading;
-                let rotate = Quaternion::from_angle_x(Deg(self.initial_yaw.0
-                    - self.current_heading.0
-                    - 90.0));
-                let rotate_animation = Effect::SetJointTransform {
-                    entity_id,
-                    joint_id: 1,
-                    transform: rotate.into(),
-                };
-
-                Effect::combine(vec![rotate_animation, _effect])
+                self.aim_joint_effect(entity_id)
             } else {
                 Effect::NoEffect
             }
         };
 
         Effect::combine(vec![fire_projectile, rotation_effect])
+    }
+
+    /// The barrel joint for the turret's current heading. Emitted wherever the
+    /// heading changes - aiming at a target, or returning to rest - so the
+    /// model never keeps pointing at a bearing the turret has left.
+    fn aim_joint_effect(&self, entity_id: EntityId) -> Effect {
+        let rotate =
+            Quaternion::from_angle_x(Deg(self.initial_yaw.0 - self.current_heading.0 - 90.0));
+        Effect::SetJointTransform {
+            entity_id,
+            joint_id: 1,
+            transform: rotate.into(),
+        }
     }
 }
 
@@ -235,13 +243,27 @@ impl Script for TurretAI {
         // Turret FOV is 30 degrees half-angle (matches FovDebugConfig::turret())
         // Turret uses joint transforms for rotation, negate heading to match visual direction
         const TURRET_FOV_HALF_ANGLE: f32 = 30.0;
-        let is_visible = ai_util::is_player_visible_in_fov(
-            entity_id,
-            world,
-            physics,
-            self.initial_yaw - self.current_heading,
-            TURRET_FOV_HALF_ANGLE,
+        // Whatever hostile the turret can see - the player while it is on its
+        // authored team, and the level's hostiles once a hack has moved it onto
+        // the player's.
+        // A turret ruined by a critically failed hack is out of service: it
+        // acquires nothing, so it closes and holds its fire.
+        let is_broken = matches!(
+            crate::scripts::gui::object_state(world, entity_id),
+            ObjectState::Broken | ObjectState::Destroyed
         );
+        let target = if is_broken {
+            None
+        } else {
+            ai_util::nearest_visible_hostile(
+                entity_id,
+                world,
+                physics,
+                self.initial_yaw - self.current_heading,
+                TURRET_FOV_HALF_ANGLE,
+            )
+        };
+        let is_visible = target.is_some();
 
         // Update alertness state
         let alertness_effect = if let Some(config) = &self.config {
@@ -266,6 +288,22 @@ impl Script for TurretAI {
             TurretState::update(&self.current_state, entity_id, time, world, is_visible);
         self.current_state = new_state;
 
+        // The acquisition cone is the turret's own aim, so one that has lost
+        // its target would keep searching the patch of room it was last
+        // pointed at - and a just-hacked turret, still aimed at the player it
+        // may no longer shoot, would never find anything. A turret that has
+        // finished closing returns to the bearing it is mounted at, which is
+        // the arc it covers. Waiting for Closed keeps the barrel still while a
+        // target only briefly leaves the cone.
+        let return_to_rest = if matches!(self.current_state, TurretState::Closed)
+            && self.current_heading != self.initial_yaw
+        {
+            self.current_heading = self.initial_yaw;
+            self.aim_joint_effect(entity_id)
+        } else {
+            Effect::NoEffect
+        };
+
         let open_amount = match self.current_state {
             TurretState::Closed => 0.0,
             TurretState::Opening { progress } => progress,
@@ -279,10 +317,11 @@ impl Script for TurretAI {
             transform: Matrix4::from_translation(vec3(-0.75 * open_amount, 0.0, 0.0)),
         };
 
-        let attack_eff = if matches!(self.current_state, TurretState::Open) {
-            self.try_to_shoot(time, world, entity_id, physics)
-        } else {
-            Effect::NoEffect
+        let attack_eff = match (&self.current_state, target) {
+            (TurretState::Open, Some((_, target_position))) => {
+                self.try_to_shoot(time, world, entity_id, target_position)
+            }
+            _ => Effect::NoEffect,
         };
 
         // Debug visualization - alertness bar
@@ -308,6 +347,7 @@ impl Script for TurretAI {
             alertness_effect,
             cap_animation,
             state_eff,
+            return_to_rest,
             attack_eff,
             alertness_debug_eff,
             fov_debug_eff,

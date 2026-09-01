@@ -38,9 +38,9 @@ use dark::{
     },
     properties::{
         AmbientSoundFlags, Link, LinkDefinition, LinkDefinitionWithData, Links, PhysicsModelType,
-        PropAIAlertness, PropAIMode, PropAmbientHacked, PropAnimLight, PropClassTag, PropCreature,
-        PropFrameAnimState, PropHasRefs, PropHitPoints, PropLimbModel, PropLocalPlayer,
-        PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
+        PropAIAlertness, PropAIMode, PropAITeam, PropAmbientHacked, PropAnimLight, PropClassTag,
+        PropCreature, PropFrameAnimState, PropHasRefs, PropHitPoints, PropLimbModel,
+        PropLocalPlayer, PropModelName, PropMotionActorTags, PropObjState, PropParticleGroup,
         PropParticleLaunchInfo, PropPhysDimensions, PropPhysInitialVelocity, PropPhysState,
         PropPhysType, PropPlayerGun, PropPosition, PropRenderType, PropScripts, PropSymName,
         PropTeleported, PropTripFlags, PropTweqDeleteConfig, PropTweqDeleteState,
@@ -6963,6 +6963,10 @@ impl MissionCore {
                     }
                     self.security_alarm.publish(&self.world);
                 }
+                Effect::BlindSecurityCameras { seconds } => {
+                    self.security_alarm.blind_cameras(seconds);
+                    self.security_alarm.publish(&self.world);
+                }
                 Effect::DestroyEntity { entity_id } => {
                     info!("!!!Destroying entity: {:?}", entity_id);
                     self.destroy_entity(entity_id);
@@ -7036,6 +7040,16 @@ impl MissionCore {
                         .unwrap_or(false);
                     if is_alive {
                         self.world.add_component(entity_id, PropObjState(state));
+                    }
+                }
+                Effect::SetAITeam { entity_id, team } => {
+                    let is_alive = self
+                        .world
+                        .borrow::<shipyard::EntitiesView>()
+                        .map(|entities| entities.is_alive(entity_id))
+                        .unwrap_or(false);
+                    if is_alive {
+                        self.world.add_component(entity_id, PropAITeam(team));
                     }
                 }
                 Effect::SetParticleActive { entity_id, active } => {
@@ -10080,6 +10094,31 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         value: behavior.0.clone(),
                     });
                 }
+                // The durable object state a hack writes (Hacked on a win,
+                // Broken on a critical failure).
+                if let Some(state) = self
+                    .world
+                    .borrow::<View<PropObjState>>()
+                    .ok()
+                    .and_then(|states| states.get(id).ok().map(|state| state.0))
+                {
+                    properties.push(DebugPropertyInfo {
+                        name: "ObjectState".to_string(),
+                        value: format!("{state:?}"),
+                    });
+                }
+                // Which side this AI is on - what a hacked turret changes.
+                if let Some(team) = self
+                    .world
+                    .borrow::<View<PropAITeam>>()
+                    .ok()
+                    .and_then(|teams| teams.get(id).ok().map(|team| team.0))
+                {
+                    properties.push(DebugPropertyInfo {
+                        name: "AITeam".to_string(),
+                        value: format!("{team:?}"),
+                    });
+                }
                 // Hearing acuity when authored (0 = deaf, ignores noises)
                 if let Some(rating) = hearing_rating {
                     properties.push(DebugPropertyInfo {
@@ -10477,6 +10516,8 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         seconds_remaining: seconds,
                     })
             },
+            security_cameras_blind_seconds: crate::security_alarm::status(&self.world)
+                .cameras_blind_seconds,
         }
     }
 

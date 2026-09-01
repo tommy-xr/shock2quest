@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { EntityDetailResult, EntitySummary } from "../src/index.js";
+import { only, property } from "./helpers/entities.js";
+import { activePanel, hasTexture, playHackBoardToWin } from "./helpers/hack.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
@@ -14,20 +15,9 @@ const ECOLOGY = -975;
 const CONSOLE = -1250;
 /// The ecology's authored alert recovery, which is the alarm's duration.
 const ALARM_SECONDS = 120;
+const BIG_NANITE_PILE = -1591;
 
-function property(detail: EntityDetailResult, name: string): string | undefined {
-  return detail.properties.find((candidate) => candidate.name === name)?.value;
-}
 
-async function only(
-  game: GameServer,
-  templateId: number,
-  label: string,
-): Promise<EntitySummary> {
-  const matches = await game.entities.byTemplate(templateId);
-  assert.equal(matches.length, 1, `${label}: expected one, got ${JSON.stringify(matches)}`);
-  return matches[0]!;
-}
 
 async function alarm(game: GameServer) {
   return (await game.ui.state()).security_alarm ?? null;
@@ -93,10 +83,23 @@ test(
       `countdown should be running, ${raised.seconds_remaining} -> ${ticked.seconds_remaining}`,
     );
 
-    // Using the security computer stands the whole station down well before
+    // Hacking the security computer stands the whole station down well before
     // the deadline: the alarm clears and the ecology is reset out of its alert
-    // tier, which in turn clears the camera that raised it.
+    // tier, which in turn clears the camera that raised it. (Frobbing the
+    // console only opens its board - the win is what stands security down.)
+    const spawn = await game.player.position();
+    await game.player.setStats({ cyber_affinity: 6, skills: { hack: 6 } });
+    await game.player.spawnItem(BIG_NANITE_PILE);
+    const [x, y, z] = (await game.entities.detail(console_.id)).position;
+    await game.player.teleport({ x: x - 1.2, y: y + 0.5, z: z - 1.2 });
+    await game.step({ frames: 5 });
     await game.entities.sendMessage(console_.id, { type: "Frob" });
+    await game.step({ frames: 5 });
+    assert.ok(
+      hasTexture(await activePanel(game), "hack.pcx"),
+      "the console should offer its hack board",
+    );
+    await playHackBoardToWin(game, (panel) => hasTexture(panel, "winh.pcx"));
     await game.step({ frames: 10 });
     assert.equal(await alarm(game), null, "the console should stand security down");
     assert.equal(
@@ -110,7 +113,16 @@ test(
       "the ecology's reset should clear the camera that alarmed",
     );
 
-    // The camera re-arms: seeing the player again raises a fresh alarm.
+    // The camera re-arms: seeing the player again raises a fresh alarm - once
+    // the hack's camera-blindness window has run out.
+    await game.player.teleport(spawn);
+    for (
+      let attempt = 0;
+      attempt < 30 && ((await game.ui.state()).security_cameras_blind_seconds ?? 0) > 0;
+      attempt += 1
+    ) {
+      await game.step({ frames: 5 * 60 });
+    }
     for (
       let attempt = 0;
       attempt < 20 && (await alarm(game)) === null;

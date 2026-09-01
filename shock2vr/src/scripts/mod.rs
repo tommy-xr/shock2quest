@@ -53,7 +53,6 @@ mod reroute_elevator_button;
 mod researchable;
 mod room_trigger;
 pub mod script_util;
-mod security_computer;
 mod setup_initial_debrief;
 mod std_door;
 mod tool_consumable;
@@ -120,7 +119,8 @@ use self::comestible::Comestible;
 pub use self::gui::ElevatorContext;
 use self::gui::{
     ComputerGui, ContainerGui, ElevatorGui, GamePigGui, HackableCrateGui, KeyPadGui, MapGui,
-    MediaGui, ReplicatorGui, ResearchGui, TrainerGui, TrainerMode, TraitGui,
+    MediaGui, ReplicatorGui, ResearchGui, SecurityComputerGui, TrainerGui, TrainerMode, TraitGui,
+    TurretHackGui,
 };
 use self::healing_item::{HealingItemKind, HealingItemScript};
 use self::internal_frob_move::InternalFrobMove;
@@ -167,7 +167,6 @@ use self::{
     once_room::OnceRoom,
     once_router::OnceRouter,
     room_trigger::RoomTrigger,
-    security_computer::SecurityComputer,
     std_door::StdDoor,
     tool_consumable::ToolConsumable,
     transluce::TransluceInOutHolo,
@@ -1041,7 +1040,7 @@ impl ScriptWorld {
             // partially implemented:
             "keypadunhackable" => gui_script(Box::new(KeyPadGui)),
             "keypad" => gui_script(Box::new(KeyPadGui)),
-            "securitycomputer" => Box::new(SecurityComputer::new()),
+            "securitycomputer" => gui_script(Box::new(SecurityComputerGui::new())),
             "resurrectmachine" => Box::new(BaseButton {}),
             "twostatebutton" => Box::new(BaseButton::new()),
 
@@ -1089,10 +1088,12 @@ impl ScriptWorld {
             "ectoplasm" => Box::new(UnimplementedScript::new(&script_name)),
             "medpatchscript" => Box::new(HealingItemScript::new(HealingItemKind::MedPatch)),
             "psikitscript" => Box::new(PsiKitScript::new()),
-            "computer" => gui_script(Box::new(ComputerGui)),
+            "computer" => gui_script(Box::new(ComputerGui::new())),
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => gui_script(Box::new(HackableCrateGui::new())),
-            "turret" => Box::new(UnimplementedScript::new(&script_name)),
+            // The turret's own script slot is its hack panel; its AI comes
+            // from `PropAI` through `BaseMonster`.
+            "turret" => gui_script(Box::new(TurretHackGui::new())),
             "triggerdestroy" => Box::new(TriggerDestroy::new()),
 
             // skill point machines
