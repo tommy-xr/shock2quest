@@ -167,6 +167,13 @@ enum PreviewKind {
     Motion {
         clip: ClipInfo,
     },
+    /// A `.fon` bitmap font: its header metadata plus a sample string
+    /// rasterized from the font's own glyphs.
+    Font {
+        summary: Vec<(&'static str, String)>,
+        sample: egui::ColorImage,
+        texture: Option<egui::TextureHandle>,
+    },
     /// A `.mi` motion-info header, parsed standalone.
     MotionInfo {
         info: dark::motion::MotionInfo,
@@ -780,6 +787,13 @@ fn decode_preview(
             Err(reason) => raw_fallback(&bytes, reason),
         };
     }
+    if ext == "fon" {
+        return match quiet_catch(|| decode_font(&bytes)) {
+            Ok(Ok(kind)) => kind,
+            Ok(Err(reason)) => raw_fallback(&bytes, reason),
+            Err(msg) => raw_fallback(&bytes, format!(".fon parse failed: {msg}")),
+        };
+    }
     if ext == "mi" {
         let parsed =
             quiet_catch(|| dark::motion::MotionInfo::read(&mut std::io::Cursor::new(&bytes)));
@@ -792,6 +806,47 @@ fn decode_preview(
         };
     }
     raw_fallback(&bytes, format!("cannot render .{ext} files"))
+}
+
+/// Sample text drawn with a previewed `.fon`, chosen to cover both cases and
+/// the digits.
+const FONT_SAMPLE: &str = "The quick brown fox jumps over the lazy dog 0123456789";
+/// Integer scales the sample is drawn at (the fonts are bitmaps, so only whole
+/// multiples of their native height are meaningful).
+const FONT_SAMPLE_SCALES: &[usize] = &[1, 2, 3];
+
+/// Rasterize the sample string with the font's own glyphs, plus the header
+/// metadata rows. Glyph coverage becomes the alpha of white pixels, so the
+/// sample reads against the panel background.
+fn decode_font(bytes: &[u8]) -> Result<PreviewKind, String> {
+    let font = dark::font::FontBitmap::read(&mut std::io::Cursor::new(bytes));
+    let metrics = &font.metrics;
+    let summary = vec![
+        ("Format", metrics.format_label().to_string()),
+        (
+            "Glyphs",
+            format!(
+                "{} (codes {}..={})",
+                metrics.num_chars(),
+                metrics.first_char,
+                metrics.last_char
+            ),
+        ),
+        ("Height", format!("{} px", metrics.height)),
+        ("Row width", format!("{} bytes", metrics.row_width)),
+    ];
+
+    let (width, height, alpha) = font.render_string(FONT_SAMPLE);
+    if width == 0 || height == 0 {
+        return Err("font defines none of the sample characters".to_string());
+    }
+    let rgba: Vec<u8> = alpha.iter().flat_map(|&a| [255, 255, 255, a]).collect();
+    let sample = egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba);
+    Ok(PreviewKind::Font {
+        summary,
+        sample,
+        texture: None,
+    })
 }
 
 /// Decode image bytes to a `ColorImage` under the panic guard (Ok(None) = no
@@ -1690,6 +1745,37 @@ impl ExplorerApp {
                     self.screenshot.is_some(),
                 );
                 host.show(ui, frame, &model_key, &PreviewScene::Skeleton(clip_name));
+            }
+            PreviewKind::Font {
+                summary,
+                sample,
+                texture,
+            } => {
+                egui::Grid::new("font_info").num_columns(2).show(ui, |ui| {
+                    for (label, value) in summary.iter() {
+                        ui.label(*label);
+                        ui.label(value);
+                        ui.end_row();
+                    }
+                });
+                ui.separator();
+                let [width, height] = sample.size;
+                let texture = texture.get_or_insert_with(|| {
+                    ui.ctx().load_texture(
+                        format!("font_sample:{}", preview.key),
+                        sample.clone(),
+                        egui::TextureOptions::NEAREST,
+                    )
+                });
+                egui::ScrollArea::both().show(ui, |ui| {
+                    for scale in FONT_SAMPLE_SCALES {
+                        ui.label(format!("{scale}x ({} px)", height * scale));
+                        let display =
+                            egui::Vec2::new((width * scale) as f32, (height * scale) as f32);
+                        ui.image((texture.id(), display));
+                        ui.add_space(4.0);
+                    }
+                });
             }
             PreviewKind::MotionInfo { info, hex } => {
                 egui::Grid::new("motion_info_file")
