@@ -286,6 +286,9 @@ fn is_vr(world: &World) -> bool {
 /// - **Not a raw magnitude.** Sliding a weapon *along* a surface is fast but
 ///   closes on nothing.
 ///
+/// The exception is a contact that already knows: see `closing_speed` on
+/// [`crate::physics::CollisionContact`].
+///
 /// `abs` because the normal's orientation depends on which collider Rapier
 /// listed first. With no contact geometry there is no surface to project onto,
 /// so the relative speed is taken whole.
@@ -295,6 +298,12 @@ fn closing_speed(
     physics: &PhysicsWorld,
     contact: Option<crate::physics::CollisionContact>,
 ) -> f32 {
+    // A blow the swing sweep found carries the speed it measured. It has to:
+    // the sweep stops the weapon on the limb, so by the time this runs the
+    // weapon is standing still and every live-velocity reading is zero.
+    if let Some(speed) = contact.and_then(|contact| contact.closing_speed) {
+        return speed;
+    }
     let Some(contact) = contact else {
         let weapon_velocity = physics
             .get_velocity(weapon)
@@ -449,7 +458,40 @@ mod tests {
         Some(crate::physics::CollisionContact {
             point,
             normal: vec3(1.0, 0.0, 0.0),
+            closing_speed: None,
         })
+    }
+
+    /// A blow found by the swing sweep carries the speed the sweep measured.
+    /// It has to: the sweep stops the weapon on the limb, so by the time the
+    /// blow is read every live velocity is zero and the swing gate would
+    /// reject its own hit.
+    ///
+    /// Negative-first: without the carried speed this reads 0.
+    #[test]
+    fn a_swept_blow_uses_the_speed_the_sweep_measured() {
+        let mut physics = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        let swept = Some(crate::physics::CollisionContact {
+            point: vec3(0.0, 0.0, 0.0),
+            normal: vec3(1.0, 0.0, 0.0),
+            closing_speed: Some(7.5),
+        });
+
+        assert_eq!(closing_speed(weapon, victim, &physics, swept), 7.5);
+        // Neither body exists in this world, so an ordinary contact - which
+        // reads the live bodies - has nothing to report.
+        let _ = &mut physics;
+        assert_eq!(
+            closing_speed(
+                weapon,
+                victim,
+                &physics,
+                head_on_contact(vec3(0.0, 0.0, 0.0))
+            ),
+            0.0
+        );
     }
 
     /// The bug this rule exists to fix: a held weapon rides the player, so
@@ -750,6 +792,7 @@ mod tests {
                 contact: Some(crate::physics::CollisionContact {
                     point: vec3(2.0, 3.0, 4.0),
                     normal: vec3(1.0, 0.0, 0.0),
+                    closing_speed: None,
                 }),
             },
         )
@@ -991,6 +1034,7 @@ mod tests {
                 contact: Some(crate::physics::CollisionContact {
                     point: vec3(2.0, 3.0, 4.0),
                     normal: vec3(1.0, 0.0, 0.0),
+                    closing_speed: None,
                 }),
             },
         );

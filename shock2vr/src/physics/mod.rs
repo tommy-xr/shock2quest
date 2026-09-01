@@ -2234,6 +2234,13 @@ pub struct CollisionContact {
     pub point: Vector3<f32>,
     /// Unit normal pointing from `entity1_id` toward `entity2_id`.
     pub normal: Vector3<f32>,
+    /// How fast the bodies were closing when the contact was found, when the
+    /// finder knows. Set for a swing stopped by a creature's hitbox: the sweep
+    /// measured the speed *before* it clamped the weapon, and by the time the
+    /// contact is read the weapon is standing still against the limb. `None`
+    /// for an ordinary narrow-phase contact, where the reader computes it from
+    /// the live bodies.
+    pub closing_speed: Option<f32>,
 }
 
 /// Predicate selecting *only* sensor colliders - the volumes the player's
@@ -2339,6 +2346,18 @@ struct HeldMeleeDrive {
     /// The loose/restored world body is seated at the first tracked pose once;
     /// later hand poses move only `target` so world contact stays physical.
     seated: bool,
+    /// The creature hitbox this swing is currently resting against, so the
+    /// blow is reported when the weapon arrives rather than every frame it
+    /// leans there.
+    stopped_on: Option<EntityId>,
+}
+
+/// What stopped a swing: the limb, and where the cast met it.
+#[derive(Clone, Copy, Debug)]
+struct SweepStop {
+    limb: EntityId,
+    point: Vector3<f32>,
+    normal: Vector3<f32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2462,6 +2481,10 @@ pub struct PhysicsWorld {
     // edges are only delivered by a stepped frame, so moving while the sim is
     // paused accumulates them until it resumes.
     pending_player_sensor_events: Vec<CollisionEvent>,
+    /// Blows reported by the held-melee sweep: a swing stopped by a limb is a
+    /// hit on that limb, and the stop is what prevents the narrow phase from
+    /// ever seeing it.
+    pending_melee_sweep_events: Vec<CollisionEvent>,
 
     // Entities already reported by report_nonfinite_rigid_body_state, so a
     // body fed bad state every frame (e.g. NaN animation joints driving a
@@ -2799,6 +2822,7 @@ impl PhysicsWorld {
                 HeldMeleeDrive {
                     target,
                     seated: false,
+                    stopped_on: None,
                 },
             );
         }
@@ -3995,6 +4019,7 @@ impl PhysicsWorld {
             let current = *body.position();
             let delta = desired.translation.vector - current.translation.vector;
             let distance = delta.norm();
+            let mut sweep_stop: Option<SweepStop> = None;
 
             // Cap how far one step may carry the weapon, and sweep the capped
             // distance - never skip the sweep for a long jump. Skipping it is
@@ -4008,7 +4033,10 @@ impl PhysicsWorld {
                 0.0
             } else {
                 let direction = delta / distance;
-                step * self.held_melee_sweep_fraction(weapon, &current, direction, step)
+                let (fraction, stop) =
+                    self.held_melee_sweep_fraction(weapon, &current, direction, step);
+                sweep_stop = stop;
+                step * fraction
             };
 
             let mut next = desired;
@@ -4019,6 +4047,42 @@ impl PhysicsWorld {
             };
             if let Some(body) = self.rigid_body_set.get_mut(weapon) {
                 body.set_next_kinematic_position(next);
+            }
+
+            // One blow per arrival: the sweep re-reports the same limb every
+            // frame the weapon leans on it, and a swing is a swing, not a
+            // per-frame billing.
+            let weapon_entity = self
+                .rigid_body_set
+                .get(weapon)
+                .and_then(|body| EntityId::from_inner(body.user_data as u64));
+            let previous = self
+                .held_melee_drives
+                .get(&weapon)
+                .and_then(|drive| drive.stopped_on);
+            let arrived = sweep_stop
+                .as_ref()
+                .filter(|stop| previous != Some(stop.limb))
+                .zip(weapon_entity);
+            if let Some((stop, weapon_entity)) = arrived {
+                let speed = if self.integration_parameters.dt > 0.0 {
+                    step / self.integration_parameters.dt
+                } else {
+                    0.0
+                };
+                self.pending_melee_sweep_events
+                    .push(CollisionEvent::CollisionStarted {
+                        entity1_id: weapon_entity,
+                        entity2_id: stop.limb,
+                        contact: Some(CollisionContact {
+                            point: stop.point,
+                            normal: stop.normal,
+                            closing_speed: Some(speed),
+                        }),
+                    });
+            }
+            if let Some(drive) = self.held_melee_drives.get_mut(&weapon) {
+                drive.stopped_on = sweep_stop.map(|stop| stop.limb);
             }
         }
     }
@@ -4031,14 +4095,23 @@ impl PhysicsWorld {
         current: &Isometry<Real>,
         direction: Vector<Real>,
         distance: Real,
-    ) -> Real {
+    ) -> (Real, Option<SweepStop>) {
         let Some(body) = self.rigid_body_set.get(weapon) else {
-            return 1.0;
+            return (1.0, None);
         };
         let filter = QueryFilter::new()
             .groups(InteractionGroups::new(
-                InternalCollisionGroups::ENTITY.bits.into(),
-                InternalCollisionGroups::WORLD.bits.into(),
+                // The weapon carries its melee membership here, not just
+                // `ENTITY`: a creature's hitboxes answer to `HELD_MELEE`
+                // alone, so without it the pair test fails and the swing
+                // sweeps straight through the limb.
+                (InternalCollisionGroups::ENTITY.bits | InternalCollisionGroups::HELD_MELEE.bits)
+                    .into(),
+                // Stopped by the world, and by the limbs of a creature - not
+                // by its actor capsule, which is a movement volume wider than
+                // the creature: stopping on that would halt the weapon in the
+                // air beside it.
+                (InternalCollisionGroups::WORLD.bits | InternalCollisionGroups::HITBOX.bits).into(),
                 Default::default(),
             ))
             .exclude_rigid_body(weapon)
@@ -4052,6 +4125,7 @@ impl PhysicsWorld {
         );
 
         let mut nearest = distance;
+        let mut stopped_by: Option<SweepStop> = None;
         for collider_handle in body.colliders() {
             let Some(collider) = self.collider_set.get(*collider_handle) else {
                 continue;
@@ -4060,7 +4134,7 @@ impl PhysicsWorld {
             // is offset from the body origin, so sweeping the body's origin
             // would probe empty space beside the weapon.
             let shape_pose = current * collider.position_wrt_parent().copied().unwrap_or_default();
-            if let Some((_, hit)) = queries.cast_shape(
+            if let Some((hit_collider, hit)) = queries.cast_shape(
                 &shape_pose,
                 &direction,
                 collider.shape(),
@@ -4075,14 +4149,36 @@ impl PhysicsWorld {
                     compute_impact_geometry_on_penetration: true,
                 },
             ) {
-                nearest = nearest.min(hit.time_of_impact);
+                if hit.time_of_impact >= nearest {
+                    continue;
+                }
+                nearest = hit.time_of_impact;
+                // A swing stopped by a creature's hitbox *is* a blow landing
+                // on that limb: the cast knows which one, where, and how fast
+                // the weapon was travelling. Reported so the damage can come
+                // from here rather than from a contact the stop prevents.
+                stopped_by = self
+                    .collider_set
+                    .get(hit_collider)
+                    .filter(|collider| {
+                        collider.collision_groups().memberships.bits()
+                            & InternalCollisionGroups::HITBOX.bits
+                            != 0
+                    })
+                    .and_then(|collider| EntityId::from_inner(collider.user_data as u64))
+                    .map(|limb| SweepStop {
+                        limb,
+                        point: npoint_to_cgvec(hit.witness1),
+                        normal: nvec_to_cgmath(hit.normal1.into_inner()),
+                    });
             }
         }
-        if distance <= 0.0 {
+        let fraction = if distance <= 0.0 {
             1.0
         } else {
             (nearest / distance).clamp(0.0, 1.0)
-        }
+        };
+        (fraction, stopped_by)
     }
 
     pub fn remove(&mut self, entity_id: EntityId) {
@@ -4349,6 +4445,7 @@ impl PhysicsWorld {
 
             player_sensor_intersections: HashSet::new(),
             pending_player_sensor_events: Vec::new(),
+            pending_melee_sweep_events: Vec::new(),
 
             reported_nonfinite_entities: HashSet::new(),
 
@@ -5034,6 +5131,7 @@ impl PhysicsWorld {
         // `player_sensor_intersections` at the hop's final occupancy, so the
         // diff below sees no change for anything they already reported.
         let mut collision_events = std::mem::take(&mut self.pending_player_sensor_events);
+        collision_events.append(&mut std::mem::take(&mut self.pending_melee_sweep_events));
         let current_sensor_intersections = profile!(scope: "physics", level: TRACE, "physics.intersections_with_shape", {
             // Only consider sensor colliders for player/sensor intersections.
             let sensor_filter = QueryFilter::new().predicate(&is_sensor_collider);
@@ -6558,6 +6656,7 @@ mod tests {
             } if *entity1_id == actor && *entity2_id == weapon => Some(CollisionContact {
                 point: contact.point,
                 normal: -contact.normal,
+                closing_speed: None,
             }),
             _ => None,
         });

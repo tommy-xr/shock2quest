@@ -3027,6 +3027,7 @@ impl MissionCore {
                             contact: contact.map(|contact| physics::CollisionContact {
                                 point: contact.point,
                                 normal: -contact.normal,
+                                closing_speed: contact.closing_speed,
                             }),
                         },
                     });
