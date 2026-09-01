@@ -69,12 +69,16 @@ test(
 );
 
 test(
-  "a blow on the weapon a creature is holding reaches nothing",
+  "a blow on the hand is worth a far-limb blow, and still reaches the creature",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({ mission: "debug_melee" });
     await game.step({ frames: 30 });
 
+    // Joints 14/15 are `LWeap`/`RWeap`: where a weapon is *attached*. The
+    // vertices skinned to them are the creature's own hand - the pipe it
+    // carries is a separate object with no hitbox at all - so a blow there is
+    // a blow on a hand, worth what the far half of a limb is worth.
     let creature;
     for (const entity of (await game.entities.list()).entities) {
       const detail = await game.entities.detail(entity.id);
@@ -84,23 +88,26 @@ test(
       }
     }
     assert.ok(creature, "expected a creature with weapon-hand hitboxes");
-    const weapon = (creature.aim_points ?? []).find(
+    const hand = (creature.aim_points ?? []).find(
       (point) => point.joint_id === 14 || point.joint_id === 15,
     )!;
 
     const before = await hitPoints(game, creature.entity_id);
-    await game.entities.sendMessage(weapon.proxy_entity_id, {
+    assert.ok(before !== null, "the creature should report hit points");
+    await game.entities.sendMessage(hand.proxy_entity_id, {
       type: "Damage",
       amount: AUTHORED,
-      point: weapon.position,
+      point: hand.position,
       direction: [0, 0, 1],
     });
     await game.step({ frames: 3 });
+    const after = await hitPoints(game, creature.entity_id);
+    assert.ok(after !== null, "the creature should still report hit points");
 
-    assert.equal(
-      await hitPoints(game, creature.entity_id),
-      before,
-      "hitting the pipe in its hand should cost the creature nothing",
+    const dealt = before - after;
+    assert.ok(
+      Math.abs(dealt - AUTHORED * 0.5) <= 0.5,
+      `a blow on the hand should cost about ${AUTHORED * 0.5}, got ${dealt}`,
     );
   },
 );
