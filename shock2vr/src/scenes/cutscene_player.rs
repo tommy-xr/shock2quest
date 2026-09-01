@@ -3,7 +3,7 @@ use std::{collections::HashMap, rc::Rc};
 #[cfg(not(feature = "ffmpeg"))]
 use std::time::Duration;
 
-use cgmath::{InnerSpace, Matrix3, Matrix4, Quaternion, Vector2, Vector3, vec2, vec3};
+use cgmath::{Matrix3, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec2, vec3};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
@@ -13,7 +13,7 @@ use engine::{
 use shipyard::{EntityId, UniqueViewMut, World};
 
 use crate::{
-    GameOptions,
+    GameOptions, PresentationMode,
     game_scene::GameScene,
     input_context::InputContext,
     inventory::PlayerInventoryEntity,
@@ -21,7 +21,10 @@ use crate::{
     quest_info::QuestInfo,
     scripts::{Effect, GlobalEffect},
     time::Time,
-    ui::{HAlign, Rect, UiCanvas, VAlign, VR_COMPONENT_Z_STEP, WorldPanel},
+    ui::{
+        FRONTEND_PANEL_SIZE, FrontendPanelAnchor, HAlign, Rect, UiCanvas, VAlign,
+        VR_COMPONENT_Z_STEP, WorldPanel, frontend_panel_distance,
+    },
 };
 
 use super::cutscene_skip::{self, SkipHold};
@@ -35,12 +38,16 @@ use engine::texture_format::{PixelFormat, RawTextureData};
 /// Displays a flat panel in front of the player and plays back a video file.
 pub struct CutscenePlayerScene {
     world: World,
-    head_rotation: Quaternion<f32>,
     player_position: Vector3<f32>,
     player_rotation: Quaternion<f32>,
-    head_height: f32,
-    screen_distance: f32,
-    screen_vertical_offset: f32,
+    /// Where the screen hangs in VR: the same head-anchored placement the
+    /// frontend panels use - placed once from the head's yaw, world-locked
+    /// afterward, lazily recentered when the player turns away and stays away.
+    panel_anchor: FrontendPanelAnchor,
+    /// The live head pose, which is what flatscreen hangs the screen off (see
+    /// [`Self::screen_panel`]).
+    head_position: Vector3<f32>,
+    head_rotation: Quaternion<f32>,
     video_name: String,
     /// Only the stub has no decoder to ask how far playback has got.
     #[cfg(not(feature = "ffmpeg"))]
@@ -60,42 +67,61 @@ pub struct CutscenePlayerScene {
     video_player: VideoPlayer,
 }
 
-/// Where the video screen hangs, and the viewer-facing basis it is built on.
+/// Where the video screen hangs: the panel it is drawn on, and the height the
+/// video occupies inside it once letterboxed.
 struct ScreenBasis {
-    center: Vector3<f32>,
-    /// In-plane horizontal axis. It points to the viewer's *left*: the
-    /// billboard basis below is mirrored, and this is the axis that mirroring
-    /// is built from - it is not a "right" to offset something sideways by.
-    screen_x: Vector3<f32>,
-    up: Vector3<f32>,
-    /// From the screen back toward the viewer.
-    look_dir: Vector3<f32>,
+    panel: WorldPanel,
     height: f32,
 }
 
 impl ScreenBasis {
     /// Orientation for a raw quad drawn on the screen. Decoded frames are
-    /// top-row-first while a quad maps v=0 to its bottom edge, and the
-    /// billboard basis faces the quad's back toward the player - so the quad
-    /// is turned half a turn in its own plane, which corrects both at once.
-    /// The generated ring art shares the row order, so it shares this basis.
+    /// top-row-first while a quad maps v=0 to its bottom edge, and the panel
+    /// basis faces the quad's back toward the player - so the quad is turned
+    /// half a turn about its own x axis, which corrects both at once. The
+    /// generated ring art shares the row order, so it shares this basis.
     fn billboard_rotation(&self) -> Matrix3<f32> {
-        Matrix3::from_cols(self.screen_x, self.up, -self.look_dir)
-            * Matrix3::from_angle_z(cgmath::Deg(180.0))
+        Matrix3::from(self.panel.rotation) * Matrix3::from_angle_x(cgmath::Deg(180.0))
     }
 
-    /// Orientation for a [`WorldPanel`] on the screen: the honest basis the
-    /// canvas path expects (+x the viewer's right, +y up, +z back at the
-    /// viewer), which is what facing the viewer means.
-    fn panel_rotation(&self) -> Quaternion<f32> {
-        crate::util::get_rotation_from_forward_vector(self.look_dir)
+    /// In-plane up: the panel's own, since a placement is gravity-aligned.
+    fn up(&self) -> Vector3<f32> {
+        self.panel.rotation.rotate_vector(vec3(0.0, 1.0, 0.0))
     }
 
     /// Off the screen plane toward the viewer, so an overlay never z-fights the
     /// video it sits on.
     fn toward_viewer(&self, fraction_of_height: f32) -> Vector3<f32> {
-        self.look_dir * (self.height * fraction_of_height)
+        self.panel.normal() * (self.height * fraction_of_height)
     }
+}
+
+/// The screen the video is drawn on, fitted inside `panel`.
+fn screen_basis(panel: WorldPanel, aspect_ratio: f32) -> ScreenBasis {
+    let height = fitted_screen_height(panel.size, aspect_ratio);
+    ScreenBasis { panel, height }
+}
+
+/// A panel hung squarely in front of a head pose, pitch included.
+///
+/// Flatscreen's counterpart to the VR anchor: there is no tracked head there,
+/// only the mouse-look camera, so a world-locked screen would slide out of
+/// frame on the first look and (below the anchor's recenter threshold) never
+/// come back. Keeping it on the view is what "full-screen" means on a monitor.
+fn head_locked_panel(head_position: Vector3<f32>, head_rotation: Quaternion<f32>) -> WorldPanel {
+    let forward = head_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+    WorldPanel {
+        center: head_position + forward * frontend_panel_distance(),
+        rotation: crate::util::get_rotation_from_forward_vector(-forward),
+        size: FRONTEND_PANEL_SIZE,
+    }
+}
+
+/// The video's height once fitted inside the panel's rect, letterboxed rather
+/// than cropped or stretched: wide videos are limited by the panel's width,
+/// tall ones by its height.
+fn fitted_screen_height(panel_size: Vector2<f32>, aspect_ratio: f32) -> f32 {
+    (panel_size.x / aspect_ratio.max(1e-3)).min(panel_size.y)
 }
 
 /// The skip ring's diameter and its center height, both as a fraction of the
@@ -152,12 +178,11 @@ impl CutscenePlayerScene {
 
             return Ok(Self {
                 world,
-                head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
                 player_position: vec3(0.0, 0.0, 0.0),
                 player_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                head_height: 4.0 / dark::SCALE_FACTOR,
-                screen_distance: 6.0 / dark::SCALE_FACTOR,
-                screen_vertical_offset: 1.5 / dark::SCALE_FACTOR,
+                panel_anchor: FrontendPanelAnchor::new(),
+                head_position: vec3(0.0, crate::input_context::DEFAULT_HEAD_HEIGHT, 0.0),
+                head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
                 video_name,
                 on_complete,
                 completion_emitted: false,
@@ -173,12 +198,11 @@ impl CutscenePlayerScene {
             let _ = audio_context;
             Ok(Self {
                 world,
-                head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
                 player_position: vec3(0.0, 0.0, 0.0),
                 player_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-                head_height: 4.0 / dark::SCALE_FACTOR,
-                screen_distance: 6.0 / dark::SCALE_FACTOR,
-                screen_vertical_offset: 1.5 / dark::SCALE_FACTOR,
+                panel_anchor: FrontendPanelAnchor::new(),
+                head_position: vec3(0.0, crate::input_context::DEFAULT_HEAD_HEIGHT, 0.0),
+                head_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
                 video_name,
                 total_time: Duration::ZERO,
                 on_complete,
@@ -216,10 +240,6 @@ impl CutscenePlayerScene {
         world
     }
 
-    fn head_base(&self) -> Vector3<f32> {
-        self.player_position + vec3(0.0, self.head_height, 0.0)
-    }
-
     fn update_player_info(&mut self) {
         if let Ok(mut player_info) = self.world.borrow::<UniqueViewMut<PlayerInfo>>() {
             player_info.pos = self.player_position;
@@ -227,49 +247,33 @@ impl CutscenePlayerScene {
         }
     }
 
-    /// Where the video screen hangs and how it is oriented. The skip affordance
-    /// is anchored to the same basis, so it rides the screen in flatscreen and
-    /// in VR alike rather than being placed twice.
-    fn screen_basis(&self) -> ScreenBasis {
-        let forward = self.head_rotation * vec3(0.0, 0.0, -1.0);
-        let base = self.head_base();
-        let mut screen_position = base + forward * self.screen_distance;
-        screen_position.y += self.screen_vertical_offset;
-
-        let mut look_dir = base - screen_position;
-        if look_dir.magnitude2() < 1e-6 {
-            look_dir = vec3(0.0, 0.0, 1.0);
-        } else {
-            look_dir = look_dir.normalize();
-        }
-
-        let mut up = vec3(0.0, 1.0, 0.0);
-        let mut right = look_dir.cross(up);
-        if right.magnitude2() < 1e-6 {
-            up = vec3(0.0, 0.0, 1.0);
-            right = look_dir.cross(up);
-        }
-        right = right.normalize();
-        let true_up = right.cross(look_dir).normalize();
-
-        ScreenBasis {
-            center: screen_position,
-            screen_x: right,
-            up: true_up,
-            look_dir,
-            height: 2.0 / dark::SCALE_FACTOR,
+    /// The panel the video screen is drawn on, per presentation.
+    ///
+    /// In VR that is the frontend panels' own placement - gravity-aligned,
+    /// world-locked, lazily recentered - so a cutscene hangs where a menu
+    /// would instead of riding the gaze (which tilts with every glance and
+    /// cannot be looked at). Flatscreen keeps the screen on the view; see
+    /// [`head_locked_panel`].
+    fn screen_panel(&self, presentation: PresentationMode) -> WorldPanel {
+        match presentation {
+            PresentationMode::Vr => self.panel_anchor.panel(),
+            PresentationMode::Flat => head_locked_panel(self.head_position, self.head_rotation),
         }
     }
 
-    fn build_screen_object(&self, basis: &ScreenBasis) -> SceneObject {
-        let (texture, aspect_ratio) = self.build_video_texture();
+    fn build_screen_object(
+        &self,
+        basis: &ScreenBasis,
+        texture: Rc<dyn TextureTrait>,
+        aspect_ratio: f32,
+    ) -> SceneObject {
         let material = basic_material::create(texture, 1.0, 0.0);
         let mut quad = SceneObject::new(material, Box::new(engine::scene::quad::create()));
 
         let screen_height = basis.height;
         let screen_width = screen_height * aspect_ratio;
 
-        let transform = Matrix4::from_translation(basis.center)
+        let transform = Matrix4::from_translation(basis.panel.center)
             * Matrix4::from(basis.billboard_rotation())
             * Matrix4::from_nonuniform_scale(screen_width, screen_height, 1.0);
         quad.set_transform(transform);
@@ -305,8 +309,8 @@ impl CutscenePlayerScene {
         let mut quad = SceneObject::new(material, Box::new(engine::scene::quad::create()));
 
         let size = basis.height * RING_SIZE;
-        let center = basis.center
-            + basis.up * (RING_CENTER_HEIGHT * basis.height)
+        let center = basis.panel.center
+            + basis.up() * (RING_CENTER_HEIGHT * basis.height)
             + basis.toward_viewer(OVERLAY_DEPTH);
 
         quad.set_transform(
@@ -326,10 +330,10 @@ impl CutscenePlayerScene {
         alpha: f32,
     ) -> Vec<SceneObject> {
         let panel = WorldPanel {
-            center: basis.center
-                + basis.up * (HINT_CENTER_HEIGHT * basis.height)
+            center: basis.panel.center
+                + basis.up() * (HINT_CENTER_HEIGHT * basis.height)
                 + basis.toward_viewer(OVERLAY_DEPTH),
-            rotation: basis.panel_rotation(),
+            rotation: basis.panel.rotation,
             size: vec2(basis.height * HINT_WIDTH, basis.height * HINT_HEIGHT),
         };
 
@@ -422,7 +426,13 @@ impl GameScene for CutscenePlayerScene {
             *world_time = time.clone();
         }
 
+        self.head_position = input_context.head.position;
         self.head_rotation = input_context.head.rotation;
+        self.panel_anchor.update(
+            input_context.head.position,
+            input_context.head.rotation,
+            time.elapsed,
+        );
         self.player_position = vec3(0.0, 0.0, 0.0);
         self.player_rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
         self.update_player_info();
@@ -461,12 +471,13 @@ impl GameScene for CutscenePlayerScene {
     fn render(
         &mut self,
         asset_cache: &mut AssetCache,
-        _options: &GameOptions,
+        options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         // One world-space list for both presentations: the affordance is
         // anchored to the video screen, so flatscreen and VR place it alike.
-        let basis = self.screen_basis();
-        let mut objects = vec![self.build_screen_object(&basis)];
+        let (texture, aspect_ratio) = self.build_video_texture();
+        let basis = screen_basis(self.screen_panel(options.presentation_mode), aspect_ratio);
+        let mut objects = vec![self.build_screen_object(&basis, texture, aspect_ratio)];
         let alpha = self.skip_hold.alpha();
         if alpha > 0.01 {
             objects.push(self.build_skip_ring(&basis, alpha));
@@ -512,5 +523,99 @@ impl GameScene for CutscenePlayerScene {
 
     fn scene_name(&self) -> &str {
         &self.video_name
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input_context::DEFAULT_HEAD_HEIGHT;
+    use cgmath::{Deg, InnerSpace, Rotation3};
+    use std::time::Duration;
+
+    fn eye() -> Vector3<f32> {
+        vec3(0.0, DEFAULT_HEAD_HEIGHT, 0.0)
+    }
+
+    /// A head pitched at the floor: VR hangs the screen upright at eye level
+    /// (the frontend placement), while flatscreen keeps it squarely on the
+    /// view - a world-locked screen there would slide out of frame on the
+    /// first mouse-look and never come back.
+    #[test]
+    fn vr_hangs_the_screen_upright_while_flat_keeps_it_on_the_view() {
+        let pitched = Quaternion::from_angle_y(Deg(90.0)) * Quaternion::from_angle_x(Deg(-70.0));
+
+        let mut anchor = FrontendPanelAnchor::new();
+        let vr = anchor.update(eye(), pitched, Duration::from_millis(16));
+        assert!(
+            (vr.center.y - eye().y).abs() < 1e-4,
+            "VR screen should hang at eye level, got {:?}",
+            vr.center
+        );
+        let vr_up = vr.rotation.rotate_vector(vec3(0.0, 1.0, 0.0));
+        assert!(
+            vr_up.dot(vec3(0.0, 1.0, 0.0)) > 0.999,
+            "VR screen is upright"
+        );
+
+        let flat = head_locked_panel(eye(), pitched);
+        let gaze = pitched.rotate_vector(vec3(0.0, 0.0, -1.0));
+        let to_screen = (flat.center - eye()).normalize();
+        assert!(
+            to_screen.dot(gaze) > 0.999,
+            "flat screen should sit on the gaze, got {to_screen:?} vs {gaze:?}"
+        );
+        assert!(
+            flat.normal().dot(-gaze) > 0.999,
+            "flat screen faces the eye"
+        );
+    }
+
+    /// A turned head leaves the VR screen where it was placed (it is
+    /// world-locked, like a menu) - the property the whole anchor exists for.
+    #[test]
+    fn turning_the_head_does_not_drag_the_vr_screen_along() {
+        let mut anchor = FrontendPanelAnchor::new();
+        let placed = anchor.update(
+            eye(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            Duration::from_millis(16),
+        );
+        let after_glance = anchor.update(
+            eye(),
+            Quaternion::from_angle_y(Deg(30.0)),
+            Duration::from_millis(16),
+        );
+        assert!((after_glance.center - placed.center).magnitude() < 1e-4);
+    }
+
+    /// The quad's basis flips the decoded frame's row order (top-row-first art
+    /// on a quad whose v=0 is its bottom edge) without mirroring it sideways.
+    #[test]
+    fn the_billboard_basis_flips_rows_and_nothing_else() {
+        let basis = screen_basis(
+            head_locked_panel(eye(), Quaternion::new(1.0, 0.0, 0.0, 0.0)),
+            16.0 / 9.0,
+        );
+        let quad = basis.billboard_rotation();
+        let right = basis.panel.rotation.rotate_vector(vec3(1.0, 0.0, 0.0));
+        assert!(quad.x.dot(right) > 0.999, "not mirrored sideways");
+        assert!(quad.y.dot(basis.up()) < -0.999, "rows are flipped");
+    }
+
+    /// The video is letterboxed into the frontend panel's rect: a wide clip is
+    /// bounded by the panel's width, a tall one by its height. Getting this
+    /// backwards would hang a screen wider or taller than the menus.
+    #[test]
+    fn the_video_is_fitted_inside_the_panel_rect() {
+        let panel = FRONTEND_PANEL_SIZE;
+
+        let wide = fitted_screen_height(panel, 16.0 / 9.0);
+        assert!((wide - panel.x / (16.0 / 9.0)).abs() < 1e-4);
+        assert!(wide <= panel.y);
+
+        let tall = fitted_screen_height(panel, 0.5);
+        assert!((tall - panel.y).abs() < 1e-4);
+        assert!(tall * 0.5 <= panel.x);
     }
 }

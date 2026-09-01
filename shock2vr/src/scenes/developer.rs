@@ -113,19 +113,26 @@ pub enum SceneTab {
     Missions,
     /// The debug-scene registry.
     DebugScenes,
+    /// The cutscene videos the install ships.
+    Cutscenes,
 }
 
 impl SceneTab {
-    const ALL: [SceneTab; 2] = [SceneTab::Missions, SceneTab::DebugScenes];
+    const ALL: [SceneTab; 3] = [
+        SceneTab::Missions,
+        SceneTab::DebugScenes,
+        SceneTab::Cutscenes,
+    ];
 
-    /// Both labels together must fit the 202px header the tabs split -
-    /// "Debug Scenes" measured ~139px in the menu font and overprinted its
-    /// neighbour, hence the short form (drawn `_fit` besides, so a wide label
-    /// can never spill into the other tab again).
+    /// Each label must fit its third of the ~202px header the tabs split -
+    /// about five glyphs of the menu font, so the labels are short forms.
+    /// They are drawn `_fit` besides, which ellipsizes rather than spilling
+    /// into the neighbouring tab: a longer word reads as "Missi..." here.
     fn label(self) -> &'static str {
         match self {
-            SceneTab::Missions => "Missions",
+            SceneTab::Missions => "Maps",
             SceneTab::DebugScenes => "Debug",
+            SceneTab::Cutscenes => "Video",
         }
     }
 }
@@ -200,16 +207,20 @@ fn scene_rocker(rects: PanelRects, len: usize) -> Option<list_scroll::Rocker> {
     )
 }
 
-/// The canvas rect of the tab header for `tab`: the header rect split in two,
-/// so the tabs ride the backdrop's authored header line in both presentations.
+/// The canvas rect of the tab header for `tab`: the header rect split evenly
+/// between the tabs, so they ride the backdrop's authored header line in both
+/// presentations.
 fn tab_rect(rects: PanelRects, tab: SceneTab) -> Rect {
     let header = rects.header_rect();
-    let half = header.w / 2.0;
-    let x = match tab {
-        SceneTab::Missions => header.x,
-        SceneTab::DebugScenes => header.x + half,
+    let width = header.w / SceneTab::ALL.len() as f32;
+    // Explicit, so a new variant is a compile error here rather than a tab
+    // that silently shares the first one's rect (and its click target).
+    let index = match tab {
+        SceneTab::Missions => 0,
+        SceneTab::DebugScenes => 1,
+        SceneTab::Cutscenes => 2,
     };
-    Rect::new(x, header.y, half, header.h)
+    Rect::new(header.x + index as f32 * width, header.y, width, header.h)
 }
 
 /// The canvas rect of the launcher's `slot`-th visible row. The rows stop
@@ -336,6 +347,8 @@ pub struct DeveloperScene {
     /// The `*.mis` files the Missions tab lists, enumerated from the data
     /// root when the launcher opens.
     missions: Vec<String>,
+    /// The cutscene videos the Video tab lists, enumerated alongside them.
+    cutscenes: Vec<String>,
     /// Index of the entry drawn in the launcher's top row.
     scene_scroll: usize,
     /// The highlighted entry, as an index into the showing tab's list.
@@ -361,6 +374,7 @@ impl DeveloperScene {
             page: DeveloperPage::Params,
             tab: SceneTab::Missions,
             missions: Vec::new(),
+            cutscenes: Vec::new(),
             scene_scroll: 0,
             selected_scene: None,
         }
@@ -371,6 +385,7 @@ impl DeveloperScene {
         match self.tab {
             SceneTab::Missions => self.missions.len(),
             SceneTab::DebugScenes => scene_count(),
+            SceneTab::Cutscenes => self.cutscenes.len(),
         }
     }
 
@@ -379,6 +394,7 @@ impl DeveloperScene {
         match self.tab {
             SceneTab::Missions => self.missions.get(index).cloned(),
             SceneTab::DebugScenes => super::debug_scene_names().nth(index).map(str::to_owned),
+            SceneTab::Cutscenes => self.cutscenes.get(index).cloned(),
         }
     }
 
@@ -468,6 +484,7 @@ impl DeveloperScene {
                         .take(rows.len())
                         .map(str::to_owned)
                         .collect(),
+                    SceneTab::Cutscenes => self.cutscenes[rows.clone()].to_vec(),
                 };
                 for (slot, name) in names.iter().enumerate() {
                     canvas
@@ -533,6 +550,7 @@ impl DeveloperScene {
                 // it was left on.
                 self.tab = SceneTab::Missions;
                 self.missions = mission_files();
+                self.cutscenes = super::cutscene_names();
                 self.reset_list();
             }
             DeveloperAction::CloseScenes => self.page = DeveloperPage::Params,
@@ -565,6 +583,12 @@ impl DeveloperScene {
                             name,
                         })]
                     }
+                    // Back to this screen when the video ends (on its parameters
+                    // page, where `ShowDeveloper` always lands) rather than to
+                    // whatever the cutscene replaced.
+                    SceneTab::Cutscenes => vec![Effect::GlobalEffect(
+                        GlobalEffect::ShowDeveloper.after_cutscene(&name),
+                    )],
                 };
             }
         }
@@ -986,13 +1010,14 @@ mod tests {
     }
 
     /// The negative test the tabs demand: the very same Launch click must emit
-    /// a mission transition on one tab and a debug-scene launch on the other -
-    /// never the wrong one.
+    /// a mission transition on one tab, a debug-scene launch on the next and a
+    /// cutscene on the third - never the wrong one.
     #[test]
     fn launch_follows_the_showing_tab() {
         let mut scene = DeveloperScene::new();
         scene.page = DeveloperPage::Scenes;
         scene.missions = vec!["earth.mis".to_owned()];
+        scene.cutscenes = vec!["cs1.avi".to_owned()];
         scene.reset_list();
         assert_eq!(scene.tab, SceneTab::Missions);
         let effect = global_effect(scene.handle_action(DeveloperAction::LaunchScene));
@@ -1009,6 +1034,16 @@ mod tests {
             global_effect(scene.handle_action(DeveloperAction::LaunchScene)),
             Some(GlobalEffect::LaunchDebugScene { .. })
         ));
+
+        // A movie plays and comes back to this screen when it ends.
+        scene.handle_action(DeveloperAction::SelectTab(SceneTab::Cutscenes));
+        match global_effect(scene.handle_action(DeveloperAction::LaunchScene)) {
+            Some(GlobalEffect::PlayCutscene { video, then }) => {
+                assert_eq!(video, "cs1.avi");
+                assert!(matches!(*then, GlobalEffect::ShowDeveloper));
+            }
+            other => panic!("Video tab must emit PlayCutscene, got {other:?}"),
+        }
     }
 
     /// Switching tabs resets the scroll and the selection - a stale index
@@ -1018,7 +1053,7 @@ mod tests {
     fn the_tabs_share_the_header_and_reset_the_list() {
         let rects = PanelRects::default();
         let header = rects.header_rect();
-        // Both tabs sit on the authored header line, side by side.
+        // Every tab sits on the authored header line, side by side.
         for tab in SceneTab::ALL {
             let r = tab_rect(rects, tab);
             assert_eq!(r.y, header.y);
@@ -1028,11 +1063,13 @@ mod tests {
                 "tab {tab:?}"
             );
         }
-        // The halves are disjoint - a draw kept inside its own rect (`_fit`)
-        // can therefore never overprint the other tab or its click target.
-        let missions = tab_rect(rects, SceneTab::Missions);
-        let debug = tab_rect(rects, SceneTab::DebugScenes);
-        assert!(missions.x + missions.w <= debug.x);
+        // The slots are disjoint - a draw kept inside its own rect (`_fit`)
+        // can therefore never overprint another tab or its click target.
+        for pair in SceneTab::ALL.windows(2) {
+            let left = tab_rect(rects, pair[0]);
+            let right = tab_rect(rects, pair[1]);
+            assert!(left.x + left.w <= right.x, "{pair:?} overlap");
+        }
 
         let mut scene = DeveloperScene::new();
         scene.page = DeveloperPage::Scenes;
