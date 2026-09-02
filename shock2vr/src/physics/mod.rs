@@ -232,6 +232,10 @@ const PLAYER_STEP_HEIGHT: f32 = 2.0;
 const PLAYER_JUMP_SPEED: f32 = 28.0;
 const PLAYER_JUMP_GRAVITY: f32 = 40.0;
 const PLAYER_MAX_FALL_SPEED: f32 = 30.0;
+/// The jump's launch speed in world units/second. Doubles as the ceiling on
+/// any other way of throwing the player into the air (see
+/// [`crate::vr_climb::CLIMB_RELEASE_MAX_SPEED`]).
+pub const PLAYER_JUMP_LAUNCH_SPEED: f32 = PLAYER_JUMP_SPEED / SCALE_FACTOR;
 /// Maximum forward search for a jump-through landing. This is deliberately a
 /// short body-scale transition, not a general wall bypass.
 const PLAYER_JUMP_MANTLE_FORWARD: f32 = 8.0;
@@ -2416,6 +2420,10 @@ pub struct PlayerHandle {
     jump_velocity: Option<Real>,
     // Held-button edge state: one press launches at most one jump.
     jump_was_pressed: bool,
+    // Horizontal velocity (world units/second) carried through the current
+    // ballistic arc: what a VR climb release throws the player sideways with.
+    // Ordinary jumps steer with the stick instead and leave this zero.
+    air_velocity: Vector<Real>,
     // The player's OWN translation from the last movement frame - this
     // frame's total travel minus the moving-support carry - so a rider
     // standing still on an elevator reports zero. Purely derived per-frame
@@ -3123,6 +3131,7 @@ impl PhysicsWorld {
         player_handle.slope_displacement = Vector::zeros();
         player_handle.is_grounded = false;
         player_handle.jump_velocity = None;
+        player_handle.air_velocity = Vector::zeros();
         let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
         let shape = if player_handle.is_crouched {
             crouched_player_shared_shape()
@@ -4397,6 +4406,7 @@ impl PhysicsWorld {
             is_grounded: false,
             jump_velocity: None,
             jump_was_pressed: false,
+            air_velocity: Vector::zeros(),
             self_translation: Vector3::new(0.0, 0.0, 0.0),
             is_climbing: false,
         }
@@ -4809,6 +4819,22 @@ impl PhysicsWorld {
         )
     }
 
+    /// Throw the player into the air at `velocity` (world units/second).
+    ///
+    /// The same ballistic state an ordinary jump launches, seeded from
+    /// somewhere else: a VR climb release hands over the momentum of the pull
+    /// it let go of (see [`crate::vr_climb::release_velocity`]). Everything
+    /// after - the arc, the ceiling rejection, the landing - is the existing
+    /// jump path. Must be called before this frame's movement request.
+    pub fn launch_player(&mut self, velocity: Vector3<f32>, player_handle: &mut PlayerHandle) {
+        player_handle.jump_velocity = Some(velocity.y);
+        player_handle.air_velocity = vector![velocity.x, 0.0, velocity.z];
+        player_handle.is_grounded = false;
+        // Launched off whatever was carrying them, as a jump is.
+        player_handle.support = None;
+        player_handle.slope_displacement = Vector::zeros();
+    }
+
     /// Step the simulation and resolve one frame of player movement.
     ///
     /// How far the player actually got is
@@ -5065,12 +5091,20 @@ impl PhysicsWorld {
             // Hanging: the hand owns the body, so any ballistic arc ends here
             // and no gravity pass runs below.
             player_handle.jump_velocity = None;
+            player_handle.air_velocity = Vector::zeros();
         }
+        // Carried launch momentum rides along with whatever the player steers
+        // this frame; it lives only as long as the arc that started it.
+        let desired_movement = if player_handle.jump_velocity.is_some() {
+            desired_movement + player_handle.air_velocity * self.integration_parameters.dt
+        } else {
+            desired_movement
+        };
         let jump_edge = jump_pressed && !player_handle.jump_was_pressed;
         player_handle.jump_was_pressed = jump_pressed;
         let launch_jump = jump_edge && player_handle.is_grounded && player_handle.top_out.is_none();
         if launch_jump {
-            player_handle.jump_velocity = Some(PLAYER_JUMP_SPEED / SCALE_FACTOR);
+            player_handle.jump_velocity = Some(PLAYER_JUMP_LAUNCH_SPEED);
             player_handle.is_grounded = false;
             // A jumping player has left their moving support. Its carry is
             // already represented by the first frame's body pose; do not keep
@@ -5420,12 +5454,14 @@ impl PhysicsWorld {
 
         if is_top_out {
             player_handle.jump_velocity = None;
+            player_handle.air_velocity = Vector::zeros();
             player_handle.is_grounded = false;
         } else if let Some(mut velocity) = player_handle.jump_velocity {
             let requested_vertical = velocity * self.integration_parameters.dt;
             let applied_vertical = self_translation.y;
             if mvt.grounded && requested_vertical <= 0.0 {
                 player_handle.jump_velocity = None;
+                player_handle.air_velocity = Vector::zeros();
                 player_handle.is_grounded = true;
             } else {
                 // A ceiling (or other overhead collision) consumes the upward

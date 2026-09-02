@@ -2913,9 +2913,10 @@ impl MissionCore {
                             - crate::physics::player_center_above_floor(
                                 self.player_handle.is_crouched(),
                             ),
+                        dt: time.elapsed.as_secs_f32(),
                     })
             })
-            .flatten();
+            .unwrap_or_default();
 
         // Skip physics while time is frozen (the debug runtime's paused state
         // calls update with zero dt): the Rapier pipeline advances by a fixed
@@ -2938,11 +2939,16 @@ impl MissionCore {
             // hand grips: the swap shifts the capsule centre further than the
             // grip's stretch tolerance, so a VR player who ducks (or whose
             // tracked head dips) on a ladder would be dropped by it.
-            if hand_climb.is_none() {
+            if hand_climb.translation.is_none() {
                 self.physics
                     .set_player_crouch(input_context.crouch, &mut self.player_handle);
             }
-            let request = match hand_climb {
+            // Letting go of the last hold throws the body with the momentum of
+            // the pull, so a hard haul-and-release sails on past the hold.
+            if let Some(launch) = hand_climb.launch {
+                self.physics.launch_player(launch, &mut self.player_handle);
+            }
+            let request = match hand_climb.translation {
                 Some(translation) => crate::physics::PlayerMoveRequest::HandClimb { translation },
                 None => crate::physics::PlayerMoveRequest::Walk {
                     movement: forward + cgmath::vec3(0.0, up_value, 0.0),
