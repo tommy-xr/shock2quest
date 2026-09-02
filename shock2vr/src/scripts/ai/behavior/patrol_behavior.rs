@@ -68,6 +68,9 @@ pub struct PatrolBehavior {
     /// The runtime AICurrentPatrol link must be published once for a fresh
     /// behavior and whenever the target changes.
     target_dirty: bool,
+    /// Builds the steering for a goal - a hook so tests can drive the
+    /// behavior with a stubbed route outcome.
+    make_steering: fn(Vector3<f32>) -> Box<dyn SteeringStrategy>,
     /// Whether the route has actually advanced at least one edge. Dark clears
     /// the authored AI_Patrol flag at a real end of chain, but the start rule
     /// targets the *destination* of the nearest link, which in shipped data
@@ -83,12 +86,26 @@ impl PatrolBehavior {
             target_point,
             goal,
             steering_strategy: Self::steering_to(goal),
+            make_steering: Self::steering_to,
             finished: false,
             stall_anchor: None,
             stall_seconds: 0.0,
             skipped_points: 0,
             target_dirty: true,
             walked_an_edge: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_steering(
+        target_point: EntityId,
+        goal: Vector3<f32>,
+        make_steering: fn(Vector3<f32>) -> Box<dyn SteeringStrategy>,
+    ) -> PatrolBehavior {
+        PatrolBehavior {
+            steering_strategy: make_steering(goal),
+            make_steering,
+            ..PatrolBehavior::new(target_point, goal)
         }
     }
 
@@ -116,7 +133,7 @@ impl PatrolBehavior {
             Some((next, goal)) => {
                 self.target_point = next;
                 self.goal = goal;
-                self.steering_strategy = Self::steering_to(goal);
+                self.steering_strategy = (self.make_steering)(goal);
                 self.stall_anchor = None;
                 self.stall_seconds = 0.0;
                 self.walked_an_edge = true;
@@ -194,6 +211,17 @@ impl Behavior for PatrolBehavior {
             if self.arrived(position) {
                 self.skipped_points = 0;
                 patrol_effects.push(self.advance(world, entity_id, true));
+            } else if self.steering_strategy.goal_unreachable() {
+                // No route to this point (shipped routes include points on a
+                // disconnected part of the navigation graph, e.g. a marker on
+                // the floor below). Move on at once rather than steering at it
+                // on a heading nothing checked, grinding into the geometry in
+                // between until the stall watchdog retires the whole route.
+                tracing::debug!(
+                    "patrol {entity_id:?}: no route to point {:?}, skipping to the next one",
+                    self.target_point
+                );
+                patrol_effects.push(self.advance(world, entity_id, false));
             } else if self.stalled(position, time) {
                 // Going nowhere: give up on this point and try the next one.
                 // Enough of those in a row and the whole route is out of
@@ -383,6 +411,57 @@ mod tests {
             "a moving patroller must stay on its route"
         );
         assert_eq!(patrol.target_point, first, "and keep the same point");
+    }
+
+    /// Steering that reports no route to whatever goal it was given.
+    struct UnreachableSteering;
+    impl SteeringStrategy for UnreachableSteering {
+        fn goal_unreachable(&self) -> bool {
+            true
+        }
+    }
+
+    /// A patrol point with no route to it (shipped routes include points on
+    /// a disconnected part of the navigation graph) is skipped at once - and
+    /// the route keeps going, rather than the AI grinding into the geometry
+    /// between it and the point until the watchdog retires the patrol.
+    #[test]
+    fn a_patroller_skips_a_point_it_has_no_route_to() {
+        let (world, creature, first, goal) = world_with_unreachable_route();
+        let physics = PhysicsWorld::new();
+        let mut patrol =
+            PatrolBehavior::with_steering(first, goal, |_| Box::new(UnreachableSteering));
+
+        let mut emitted = Vec::new();
+        for _ in 0..100 {
+            if let Some((_, effect)) = patrol.steer(Deg(0.0), &world, &physics, creature, &tick()) {
+                emitted.extend(Effect::flatten(vec![effect]));
+            }
+        }
+
+        assert!(
+            !patrol.finished,
+            "skipping unreachable points must keep the route running"
+        );
+        assert!(
+            !emitted
+                .iter()
+                .any(|effect| matches!(effect, Effect::SetAICurrentPatrol { target: None, .. })),
+            "the patrol must not retire itself over unreachable points"
+        );
+        // The three-point loop keeps advancing: every tick targets a
+        // different point than the one before it.
+        let targets: Vec<EntityId> = emitted
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::SetAICurrentPatrol { target, .. } => *target,
+                _ => None,
+            })
+            .collect();
+        assert!(
+            targets.len() > 3 && targets.windows(2).all(|pair| pair[0] != pair[1]),
+            "expected the route to keep advancing, got {targets:?}"
+        );
     }
 
     #[test]

@@ -94,6 +94,13 @@ const SEPARATION_RADIUS: f32 = 6.0 / SCALE_FACTOR;
 /// (issue #487).
 const SEPARATION_MAX_OFFSET: f32 = 3.0 / SCALE_FACTOR;
 
+/// A route counts as reaching its goal when its last waypoint lands within
+/// this distance (6 Dark feet) in XZ. A* answers an unreachable goal with a
+/// partial route to the closest reachable point, which for a goal on another
+/// walk component can stop a whole room short - following it to the end just
+/// presses the body into whatever geometry sits in between.
+const GOAL_REACHED_DISTANCE: f32 = 6.0 / SCALE_FACTOR;
+
 /// Steers along a route computed by the PathfindingService, the counterpart
 /// of the original engine's cAIPath following (Advance / UpdateTargetEdge in
 /// aipath.cpp). Returns None when no pathfinding data or no route exists so
@@ -119,6 +126,8 @@ pub struct PathFollowSteeringStrategy {
     /// spot means retreat + re-path freed nothing and the body is pinned
     /// (see UNSTICK_NUDGE_DISTANCE)
     last_stall_position: Option<Vector3<f32>>,
+    /// Last query said the goal has no route (see `goal_unreachable`)
+    goal_unreachable: bool,
 }
 
 impl PathFollowSteeringStrategy {
@@ -147,6 +156,7 @@ impl PathFollowSteeringStrategy {
             recovery: None,
             displacement_anchor: None,
             last_stall_position: None,
+            goal_unreachable: false,
         }
     }
 
@@ -166,6 +176,10 @@ impl PathFollowSteeringStrategy {
 }
 
 impl SteeringStrategy for PathFollowSteeringStrategy {
+    fn goal_unreachable(&self) -> bool {
+        self.goal_unreachable
+    }
+
     fn steer(
         &mut self,
         _current_heading: Deg<f32>,
@@ -241,6 +255,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 };
                 match response.outcome {
                     AiPathOutcome::Failed => {
+                        self.goal_unreachable = true;
                         self.clear_path();
                         // No route (even partially) - back off before asking
                         // again; the fallback chain is the worker's most
@@ -249,6 +264,8 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                             REPATH_FAILURE_BACKOFF_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
                     }
                     _ if goal_current => {
+                        self.goal_unreachable =
+                            !route_reaches_goal(&response.waypoints, response.goal);
                         self.path = response.waypoints;
                         self.path_goal = Some(response.goal);
                         // waypoint 0 is the position the query started from
@@ -512,6 +529,15 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
     }
 }
 
+/// Whether a route actually arrives at the goal it was computed for. An
+/// empty route arrives nowhere.
+fn route_reaches_goal(waypoints: &[Vector3<f32>], goal: Vector3<f32>) -> bool {
+    waypoints
+        .last()
+        .map(|last| xz_distance(*last, goal) <= GOAL_REACHED_DISTANCE)
+        .unwrap_or(false)
+}
+
 /// Skip every waypoint already within reach, returning the new index
 fn advance_waypoint(position: Vector3<f32>, path: &[Vector3<f32>], mut index: usize) -> usize {
     while index < path.len() && waypoint_reached(position, path[index]) {
@@ -599,6 +625,28 @@ mod tests {
         // ran in place through an endless stall/re-path loop).
         let path = vec![vec3(0.0, -1.7, 0.0), vec3(10.0, -1.7, 0.0)];
         assert_eq!(advance_waypoint(vec3(0.0, 0.0, 0.0), &path, 0), 1);
+    }
+
+    #[test]
+    fn a_route_ending_at_its_goal_reaches_it() {
+        let goal = vec3(10.0, 0.0, 10.0);
+        assert!(route_reaches_goal(
+            &[vec3(0.0, 0.0, 0.0), vec3(10.5, 0.0, 10.0)],
+            goal
+        ));
+    }
+
+    /// A partial route stopping a room short of an unreachable goal is not
+    /// arrival - the patrol layer skips such a point instead of walking the
+    /// route's end and then pressing on toward the goal.
+    #[test]
+    fn a_partial_route_stopping_short_does_not_reach_its_goal() {
+        let goal = vec3(10.0, 0.0, 10.0);
+        assert!(!route_reaches_goal(
+            &[vec3(0.0, 0.0, 0.0), vec3(4.0, 0.0, 10.0)],
+            goal
+        ));
+        assert!(!route_reaches_goal(&[], goal));
     }
 
     #[test]

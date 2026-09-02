@@ -50,6 +50,15 @@ impl Steering {
 }
 
 pub trait SteeringStrategy {
+    /// Whether the destination this strategy was given has no route to it -
+    /// A* reported no route at all, or only a partial one that stops well
+    /// short. The owning behavior decides what to do about it (a patrol
+    /// skips the point); steering itself must never answer an unreachable
+    /// goal by aiming straight at it.
+    fn goal_unreachable(&self) -> bool {
+        false
+    }
+
     fn steer(
         &mut self,
         _current_heading: Deg<f32>,
