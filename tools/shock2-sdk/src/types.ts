@@ -78,6 +78,26 @@ export interface AiPathEntry {
   outcome: string;
   /** Route waypoints (empty for Failed). */
   waypoints: [number, number, number][];
+  /** Index of the waypoint the steering is CURRENTLY following. */
+  live_next_waypoint?: number | null;
+  /** Length of the live path being followed. */
+  live_path_len?: number | null;
+  /** World position currently steered toward. */
+  live_target?: [number, number, number] | null;
+  /** Seconds without progress toward the current waypoint. */
+  live_stall_seconds?: number | null;
+}
+
+/** One-off walk-graph query between two positions (GET /v1/pathfinding/route). */
+export interface PathRouteResult {
+  /** Cell containing the start (null when off-mesh). */
+  from_cell: number | null;
+  /** Cell containing the goal (null when off-mesh). */
+  to_cell: number | null;
+  /** Whether a walk route exists between them. */
+  reachable: boolean;
+  /** Waypoint count of that route (0 when unreachable). */
+  waypoints: number;
 }
 
 export interface PathfindingStats {

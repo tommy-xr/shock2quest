@@ -42,6 +42,7 @@ import type {
   TransitionsResult,
   WaitForOptions,
   AiPathEntry,
+  PathRouteResult,
   AimOptions,
   AimPoint,
   AimResult,
@@ -832,6 +833,22 @@ export class PathfindingApi {
    */
   async aiPaths(): Promise<AiPathEntry[]> {
     return this.client.get<AiPathEntry[]>("/v1/ai/paths");
+  }
+
+  /**
+   * Does a walk route exist between two world positions? Answers "the AI is
+   * failing to route" vs "nothing walkable connects these at all". Null when
+   * the scene has no pathfinding data.
+   */
+  async route(from: Vec3, to: Vec3): Promise<PathRouteResult | null> {
+    const q = (v: Vec3) => v.join(",");
+    try {
+      return await this.client.get<PathRouteResult>(
+        `/v1/pathfinding/route?from=${q(from)}&to=${q(to)}`,
+      );
+    } catch {
+      return null;
+    }
   }
 }
 

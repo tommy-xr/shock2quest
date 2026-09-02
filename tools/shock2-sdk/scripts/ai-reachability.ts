@@ -1,0 +1,343 @@
+/**
+ * AI reachability harness: does every AI in a mission actually get where it
+ * is going?
+ *
+ * Two passes per mission, each on a freshly launched runtime:
+ *   idle  - no player input, the AIs run their authored patrols
+ *   chase - the player stands at a fixed spot, DebugForceChase pins every AI
+ *           onto them, and we watch who arrives
+ *
+ * Every AI is sampled every N frames (position, behavior, alertness, its
+ * live path + stall) and classified at the end of the pass (see
+ * src/ai-reachability.ts). Writes <out>/<mission>.json with every sample, a
+ * <out>/summary.md table, and per-pass trail maps drawn over the mission's
+ * nav cells.
+ *
+ *   npm run ai-reachability -- --mission medsci2.mis --out /tmp/aire
+ *   npm run ai-reachability -- --all --experimental nav_bridges
+ */
+
+import { spawnSync } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import { readdirSync } from "node:fs";
+import path from "node:path";
+
+import { findRepoRoot, GameServer } from "../src/index.js";
+import type { Game } from "../src/index.js";
+import {
+  classifyTrack,
+  distance3,
+  tally,
+  VERDICTS,
+  type AiSample,
+  type AiTrack,
+  type Classification,
+} from "../src/ai-reachability.js";
+import type { EntityDetailResult, Vec3 } from "../src/types.js";
+
+/**
+ * Where the player stands for the chase pass, per mission. An empty list
+ * means "wherever the mission spawns the player"; add positions here to
+ * probe more of a deck.
+ */
+const CHASE_POSITIONS: Record<string, Vec3[]> = {
+  // The medsci1 spawn is the sealed cryo recovery room (AI-unreachable by
+  // design), so chase from the open deck instead.
+  "medsci1.mis": [[-14.0, 0.5, -30.0]],
+};
+
+interface Args {
+  missions: string[];
+  out: string;
+  idleFrames: number;
+  chaseFrames: number;
+  sampleEvery: number;
+  experimental: string[];
+}
+
+function parseArgs(argv: string[]): Args {
+  const args: Args = {
+    missions: [],
+    out: path.join("/tmp", "ai-reachability"),
+    idleFrames: 3600,
+    chaseFrames: 1800,
+    sampleEvery: 30,
+    experimental: [],
+  };
+  let all = false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const value = () => {
+      const v = argv[++i];
+      if (v === undefined) throw new Error(`${a} needs a value`);
+      return v;
+    };
+    switch (a) {
+      case "--mission":
+        args.missions.push(value());
+        break;
+      case "--all":
+        all = true;
+        break;
+      case "--out":
+        args.out = value();
+        break;
+      case "--idle-frames":
+        args.idleFrames = Number(value());
+        break;
+      case "--chase-frames":
+        args.chaseFrames = Number(value());
+        break;
+      case "--sample-every":
+        args.sampleEvery = Number(value());
+        break;
+      case "--experimental":
+        args.experimental.push(...value().split(","));
+        break;
+      default:
+        throw new Error(`unknown argument ${a}`);
+    }
+  }
+  if (all) args.missions = missionsInData();
+  if (args.missions.length === 0) throw new Error("pass --mission <name> or --all");
+  return args;
+}
+
+function repoRoot(): string {
+  const root = findRepoRoot(process.cwd());
+  if (!root) throw new Error("could not find the cargo workspace root");
+  return root;
+}
+
+function dataRoot(): string {
+  return process.env.DARK_ASSET_PATH ?? path.join(repoRoot(), "Data");
+}
+
+function missionsInData(): string[] {
+  return readdirSync(dataRoot())
+    .filter((f) => f.endsWith(".mis"))
+    .sort();
+}
+
+/**
+ * Every AI in the scene, found by the AI runtime properties rather than by
+ * name - runtime entity ids are not stable across runs, and creature names
+ * vary per mission.
+ */
+async function discoverAis(game: Game): Promise<EntityDetailResult[]> {
+  const { entities } = await game.entities.list({ limit: 5000 });
+  const ais: EntityDetailResult[] = [];
+  for (const entity of entities) {
+    const detail = await game.entities.detail(entity.id);
+    const props = new Set(detail.properties.map((p) => p.name));
+    if (props.has("AIAlertness") || props.has("AIBehavior")) ais.push(detail);
+  }
+  return ais;
+}
+
+function prop(detail: EntityDetailResult, name: string): string | undefined {
+  return detail.properties.find((p) => p.name === name)?.value;
+}
+
+/** Yaw (radians) from the entity's [w,x,y,z] rotation quaternion. */
+function yawOf(rotation: [number, number, number, number]): number {
+  const [w, x, y, z] = rotation;
+  return Math.atan2(2 * (w * y + x * z), 1 - 2 * (y * y + z * z));
+}
+
+interface PassResult {
+  pass: string;
+  player: Vec3;
+  frames: number;
+  tracks: (AiTrack & { classification: Classification })[];
+}
+
+async function runPass(
+  game: Game,
+  passName: "idle" | "chase",
+  label: string,
+  frames: number,
+  sampleEvery: number,
+): Promise<PassResult> {
+  const playerPos = await game.player.position();
+  const player: Vec3 = [playerPos.x, playerPos.y, playerPos.z];
+
+  const ais = await discoverAis(game);
+  const tracks = new Map<number, AiTrack>();
+  for (const ai of ais) {
+    const route = await game.pathfinding.route(ai.position, player);
+    tracks.set(ai.entity_id, {
+      entity_id: ai.entity_id,
+      name: ai.name,
+      template_id: ai.template_id,
+      reachable: route ? route.reachable : null,
+      samples: [],
+    });
+  }
+
+  const steps = Math.floor(frames / sampleEvery);
+  for (let step = 1; step <= steps; step++) {
+    await game.step({ frames: sampleEvery });
+    const t = (step * sampleEvery) / 60;
+    const paths = new Map((await game.pathfinding.aiPaths()).map((p) => [p.entity_id, p]));
+    for (const [id, track] of tracks) {
+      let detail: EntityDetailResult;
+      try {
+        detail = await game.entities.detail(id);
+      } catch {
+        continue; // dead or despawned - the samples so far still classify
+      }
+      const route = paths.get(track.entity_id);
+      const sample: AiSample = {
+        t,
+        position: detail.position,
+        yaw: yawOf(detail.rotation),
+        behavior: prop(detail, "AIBehavior"),
+        alertness: prop(detail, "AIAlertness"),
+        outcome: route?.outcome,
+        live_next_waypoint: route?.live_next_waypoint ?? null,
+        live_path_len: route?.live_path_len ?? null,
+        live_target: route?.live_target ?? null,
+        live_stall_seconds: route?.live_stall_seconds ?? null,
+        distance: distance3(detail.position, player),
+      };
+      track.samples.push(sample);
+    }
+  }
+
+  return {
+    pass: label,
+    player,
+    frames,
+    tracks: [...tracks.values()].map((track) => ({
+      ...track,
+      classification: classifyTrack(track, { pass: passName }),
+    })),
+  };
+}
+
+/** `cargo bn path dump` - the mission's nav cells, for the trail map. */
+async function dumpCells(mission: string, outFile: string): Promise<boolean> {
+  const result = spawnSync(
+    "cargo",
+    ["run", "--release", "-q", "-p", "bench", "--", "path", "dump", mission],
+    { cwd: repoRoot(), encoding: "utf8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (result.status !== 0 || !result.stdout) {
+    console.warn(`  nav-cell dump failed for ${mission}: ${result.stderr?.slice(-400) ?? ""}`);
+    return false;
+  }
+  await writeFile(outFile, result.stdout);
+  return true;
+}
+
+function renderMap(cellsFile: string, passFile: string, pngFile: string): void {
+  const script = path.join(repoRoot(), "tools/shock2-sdk/scripts/render-trail-map.py");
+  const result = spawnSync("python3", [script, cellsFile, passFile, pngFile], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    console.warn(`  trail map failed: ${result.stderr?.slice(-400) ?? ""}`);
+  }
+}
+
+function passTable(mission: string, pass: PassResult): string {
+  const counts = tally(pass.tracks.map((t) => t.classification));
+  const cells = VERDICTS.map((v) => `${counts[v]}`).join(" | ");
+  return `| ${mission} | ${pass.pass} | ${pass.tracks.length} | ${cells} |`;
+}
+
+function wedgeLines(pass: PassResult): string[] {
+  return pass.tracks
+    .filter((t) => t.classification.verdict === "wedged")
+    .map(
+      (t) =>
+        `  - ${t.name} (template ${t.template_id}) wedged ${t.classification.wedge_seconds?.toFixed(1)}s at (${t.classification
+          .wedge_at!.map((c) => c.toFixed(2))
+          .join(", ")}) [${pass.pass}]`,
+    );
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  await mkdir(args.out, { recursive: true });
+
+  const header = `| mission | pass | AIs | ${VERDICTS.join(" | ")} |`;
+  const divider = `|${"---|".repeat(VERDICTS.length + 3)}`;
+  const rows: string[] = [];
+  const wedges: string[] = [];
+
+  for (const mission of args.missions) {
+    console.log(`\n=== ${mission} ===`);
+    const passes: PassResult[] = [];
+
+    // Idle pass: nobody touches the controls; the AIs run their patrols.
+    {
+      await using game = await GameServer.launch({
+        mission,
+        experimental: args.experimental,
+      });
+      await game.step({ frames: 10 });
+      const pass = await runPass(game, "idle", "idle", args.idleFrames, args.sampleEvery);
+      passes.push(pass);
+      console.log(passTable(mission, pass));
+    }
+
+    // Chase passes: one per authored player position (or the spawn).
+    const positions = CHASE_POSITIONS[mission] ?? [];
+    const chaseSpots: (Vec3 | null)[] = positions.length > 0 ? positions : [null];
+    for (const [index, spot] of chaseSpots.entries()) {
+      await using game = await GameServer.launch({
+        mission,
+        experimental: args.experimental,
+      });
+      await game.step({ frames: 10 });
+      if (spot) {
+        await game.player.teleport({ x: spot[0], y: spot[1], z: spot[2] });
+        await game.step({ frames: 10 });
+      }
+      await game.input.trigger("DebugForceChase");
+      await game.step({ frames: 30 });
+      const label = chaseSpots.length > 1 ? `chase#${index}` : "chase";
+      const pass = await runPass(game, "chase", label, args.chaseFrames, args.sampleEvery);
+      passes.push(pass);
+      console.log(passTable(mission, pass));
+    }
+
+    const report = { mission, experimental: args.experimental, passes };
+    const jsonFile = path.join(args.out, `${mission}.json`);
+    await writeFile(jsonFile, JSON.stringify(report, null, 1));
+
+    const cellsFile = path.join(args.out, `${mission}-cells.json`);
+    const haveCells = await dumpCells(mission, cellsFile);
+    for (const pass of passes) {
+      rows.push(passTable(mission, pass));
+      wedges.push(...wedgeLines(pass));
+      if (haveCells) {
+        const passFile = path.join(args.out, `${mission}-${pass.pass}-pass.json`);
+        await writeFile(passFile, JSON.stringify(pass));
+        renderMap(cellsFile, passFile, path.join(args.out, `${mission}-${pass.pass}.png`));
+      }
+    }
+  }
+
+  const summary = [
+    "# AI reachability",
+    "",
+    header,
+    divider,
+    ...rows,
+    "",
+    "## Wedges",
+    "",
+    ...(wedges.length > 0 ? wedges : ["  (none)"]),
+    "",
+  ].join("\n");
+  await writeFile(path.join(args.out, "summary.md"), summary);
+  console.log(`\n${summary}`);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

@@ -23,6 +23,8 @@
     "test:e2e:reliability": "tsc && node scripts/reliability.mjs",
     "preanim-smoothness": "node scripts/check-deps.mjs",
     "anim-smoothness": "tsc && node dist/scripts/anim-smoothness.js",
+    "preai-reachability": "node scripts/check-deps.mjs",
+    "ai-reachability": "tsc && node dist/scripts/ai-reachability.js",
     "clean:saves": "tsc && node scripts/clean-test-saves.mjs",
     "posttest:e2e": "node scripts/clean-test-saves.mjs"
   },
