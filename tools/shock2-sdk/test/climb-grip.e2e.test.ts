@@ -22,6 +22,8 @@ const PROBES: Probe[] = [
   // x ≈ -6.83, its top cap at y = 6.4.
   { name: "ledge ladder face", point: [-6.8, 3.0, 0], expected: "ladder" },
   {
+    // The scene's ladders inherit the Ladders template's mask 27 - the four
+    // vertical sides, no caps.
     name: "ledge ladder top cap (mask 27 excludes it)",
     point: [-6.9, 6.45, 0],
     expected: null,
@@ -79,5 +81,43 @@ test(
       feetY: 6.0,
     });
     assert.equal(standingOnIt.grip, null);
+  },
+);
+
+test(
+  "medsci1: a shipped ladder's broad face is a Ladder grip",
+  { skip: !e2eEnabled, timeout: 300_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "medsci1.mis" });
+    await game.step({ frames: 30 });
+
+    // Discover by name - runtime entity ids are not stable across launches.
+    const { entities } = await game.entities.list({ filter: "Rick Ladder 16" });
+    assert.ok(entities.length > 0, "medsci1 should place Rick Ladder 16s");
+
+    // These instances override the template's 27 with 54 (the broad faces
+    // plus both caps). Either mask must grip the broad face, so probe a ring
+    // around each ladder's own origin and require a Ladder somewhere on it.
+    const RING = 0.12;
+    const kinds = new Set<string>();
+    for (const ladder of entities) {
+      for (const [dx, dz] of [
+        [RING, 0],
+        [-RING, 0],
+        [0, RING],
+        [0, -RING],
+      ]) {
+        const { grip } = await game.physics.grip([
+          ladder.position[0] + dx,
+          ladder.position[1],
+          ladder.position[2] + dz,
+        ]);
+        if (grip?.kind) kinds.add(grip.kind);
+      }
+    }
+    assert.ok(
+      kinds.has("ladder"),
+      `expected a Ladder grip on a shipped ladder, saw ${[...kinds]}`,
+    );
   },
 );

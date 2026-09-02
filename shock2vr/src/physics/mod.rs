@@ -2213,24 +2213,41 @@ pub struct ClimbGrip {
 /// (-x, z, y) (`read_vec3`, dark/src/ss2_common.rs:54), so in the engine's
 /// Y-up frame those bits are: 1=-X, 2=+Z, 4=+Y (top), 8=+X, 16=-Z, 32=-Y.
 ///
-/// `local_normal` is the outward face normal in the collider's local frame;
-/// its dominant axis picks the face. Every shipped ladder authors 27
-/// (= 1|2|8|16), the four vertical sides.
-fn climbable_face_bit(local_normal: Vector<Real>) -> u32 {
-    let (ax, ay, az) = (
-        local_normal.x.abs(),
-        local_normal.y.abs(),
-        local_normal.z.abs(),
-    );
-    if ax >= ay && ax >= az {
-        if local_normal.x >= 0.0 { 8 } else { 1 }
-    } else if ay >= az {
-        if local_normal.y >= 0.0 { 4 } else { 32 }
-    } else if local_normal.z >= 0.0 {
-        2
-    } else {
-        16
-    }
+/// `local_normal` is the outward face normal in the collider's local frame.
+/// The shipped ladders author 27 (= 1|2|8|16, the four vertical sides) on the
+/// `Ladders` template, and some instances override it - medsci1's `Rick
+/// Ladder 16`s author 54 (= 2|4|16|32), the two broad faces plus both caps.
+/// Both include the faces a ladder is actually climbed on.
+///
+/// Returns every face the normal plausibly touches, OR-ed together, not just
+/// the dominant one: a contact on an edge has a diagonal normal, and
+/// collapsing it to whichever axis wins by a hair leaves a dead wedge at the
+/// top of a ladder - exactly where a hand reaches when topping out.
+fn climbable_face_bits(local_normal: Vector<Real>) -> u32 {
+    /// How far off the dominant axis a component still counts as touching its
+    /// face. 0.3 admits an edge contact from either side while a square-on
+    /// face normal still names one face.
+    const EDGE_FRACTION: f32 = 0.3;
+
+    let axes = [
+        (local_normal.x, 8, 1),
+        (local_normal.y, 4, 32),
+        (local_normal.z, 2, 16),
+    ];
+    let threshold = axes
+        .iter()
+        .fold(0.0f32, |acc, (component, _, _)| acc.max(component.abs()))
+        * EDGE_FRACTION;
+    axes.iter()
+        .filter(|(component, _, _)| component.abs() > threshold)
+        .map(|(component, positive, negative)| {
+            if *component >= 0.0 {
+                *positive
+            } else {
+                *negative
+            }
+        })
+        .fold(0, |acc, bit| acc | bit)
 }
 
 #[derive(Clone, Debug)]
@@ -4866,6 +4883,15 @@ impl PhysicsWorld {
     /// solid, player-blocking surface whose face is walkable and sits more
     /// than a step above `feet_y` - the mantle-emulation hold. A wall face,
     /// and the floor the player is standing on, offer neither.
+    ///
+    /// The nearest *qualifying* contact wins: a nearer ungrippable face does
+    /// not occlude a grippable one behind it. A hand reaching past a ladder's
+    /// bare top edge onto the block beside it should still find the block,
+    /// and both surfaces have to be inside one fist-sized ball to compete.
+    ///
+    /// Only this query consults the per-face bits. Flat push-into-ladder
+    /// climbing (`move_player`) grips any sufficiently vertical face of a
+    /// climbable - identical behavior for the 27 every shipped ladder authors.
     pub fn climbable_grip_at(
         &self,
         point: Vector3<f32>,
@@ -4875,8 +4901,8 @@ impl PhysicsWorld {
         let ball = Ball::new(radius.max(1.0e-3));
         let ball_pos = Isometry::translation(point.x, point.y, point.z);
         // Probe AS the player, so only geometry that blocks the player can be
-        // held. Climbables are matched explicitly: a ladder is solid to the
-        // player anyway, but the bit keeps the intent visible.
+        // held. Ladders match through `ENTITY`; `CLIMBABLE` is listed so one
+        // authored with only the marker membership is still found.
         let filter = QueryFilter::new()
             .groups(InteractionGroups::new(
                 InternalCollisionGroups::PLAYER.bits.into(),
@@ -4917,13 +4943,16 @@ impl PhysicsWorld {
                 .intersects(InternalCollisionGroups::CLIMBABLE.bits.into());
             let entity_id = EntityId::from_inner(collider.user_data as u64);
             let kind = if is_climbable {
-                // No recorded mask means the whole collider is grippable -
-                // the behavior climbables had before per-face bits existed.
+                // A climbable with no recorded mask is grippable all over;
+                // refusing it would make it silently unclimbable by hand.
                 let sides = entity_id
                     .and_then(|id| self.climbable_sides.get(&id).copied())
                     .unwrap_or(u32::MAX);
                 let local = collider.rotation().inverse_transform_vector(&outward);
-                if sides & climbable_face_bit(local) == 0 {
+                if sides & climbable_face_bits(local) == 0 {
+                    // A climbable object's authored mask is the whole answer
+                    // for it - a refused face does not fall through to the
+                    // ledge rule and come back as a hold anyway.
                     continue;
                 }
                 ClimbGripKind::Ladder
@@ -8591,27 +8620,10 @@ mod tests {
         );
     }
 
-    /// A player standing at the base of a climbable wall who pushes into it
-    /// climbs it; against an identical NON-climbable wall the same input leaves
-    /// Grip-query fixture: a parentless trimesh floor with its top at y=0 and
-    /// the player parked far away, stepped once so the broad-phase BVH exists.
+    /// Grip-query fixture: the shared floor world (top at y=0, player parked
+    /// far away), stepped once so the broad-phase BVH the query reads exists.
     fn grip_world() -> (PhysicsWorld, PlayerHandle) {
-        let mut world = PhysicsWorld::new();
-        let floor_verts = vec![
-            point![-100.0, 0.0, -100.0],
-            point![100.0, 0.0, -100.0],
-            point![100.0, 0.0, 100.0],
-            point![-100.0, 0.0, 100.0],
-        ];
-        let floor_tris = vec![[0u32, 1, 2], [0, 2, 3]];
-        world.add_collider(
-            EntityId::from_inner(1000).unwrap(),
-            ColliderBuilder::trimesh(floor_verts, floor_tris)
-                .expect("floor trimesh")
-                .build(),
-        );
-        let mut player =
-            world.create_player(vec3(50.0, 1.0, 50.0), EntityId::from_inner(1001).unwrap());
+        let (mut world, mut player) = world_with_floor();
         step(&mut world, &mut player, 1);
         (world, player)
     }
@@ -8650,7 +8662,8 @@ mod tests {
     /// Dark's per-face bits live in its Z-up frame; the importer flips X and
     /// swaps Y/Z. Verified through the query on a YAWED collider, so a wrong
     /// local/world frame or a wrong axis swap shows up as a grip on the wrong
-    /// face. 27 is what every shipped ladder authors.
+    /// face. 27 is the shipped `Ladders` template's mask; 54 is what medsci1's
+    /// ladder instances override it with.
     #[test]
     fn ladder_face_bits_grip_only_the_authored_faces() {
         // The broad face (world +X after the yaw) is one of the four vertical
@@ -8674,6 +8687,18 @@ mod tests {
             "mask 27 excludes the top cap"
         );
 
+        // The top EDGE, where a hand lands when topping out: its contact
+        // normal is diagonal, so a single-dominant-axis pick would call it
+        // the (unauthored) top cap and refuse the whole wedge above 45
+        // degrees. Both plausible faces are tested, so the +X side carries it.
+        assert_eq!(
+            world
+                .climbable_grip_at(vec3(-4.899, 6.451, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .map(|grip| grip.kind),
+            Some(ClimbGripKind::Ladder),
+            "the top edge is still the authored side face"
+        );
+
         // Top-only (4) is the exact inverse.
         let (mut world, mut player) = grip_world();
         add_yawed_ladder(&mut world, &mut player, Some(4));
@@ -8689,6 +8714,26 @@ mod tests {
                 .climbable_grip_at(vec3(-4.85, 3.0, 0.0), CLIMB_GRIP_RADIUS, 0.0)
                 .is_none(),
             "mask 4 excludes the sides"
+        );
+
+        // 54 (medsci1's instance override) keeps the broad faces and ADDS
+        // the caps - the mapping has to distinguish it from 27, not just
+        // accept both.
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, Some(54));
+        assert_eq!(
+            world
+                .climbable_grip_at(vec3(-4.85, 3.0, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .map(|grip| grip.kind),
+            Some(ClimbGripKind::Ladder),
+            "54 keeps the broad face"
+        );
+        assert_eq!(
+            world
+                .climbable_grip_at(vec3(-5.0, 6.45, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .map(|grip| grip.kind),
+            Some(ClimbGripKind::Ladder),
+            "54 adds the top cap that 27 refuses"
         );
 
         // Asymmetric single side: Dark +X (bit 1) is engine -X, which the
@@ -8770,6 +8815,8 @@ mod tests {
         );
     }
 
+    /// A player standing at the base of a climbable wall who pushes into it
+    /// climbs it; against an identical NON-climbable wall the same input leaves
     /// the player on the floor. (Negative-first: without the CLIMBABLE
     /// detection + redirect in `move_player`, both cases stay at floor height
     /// and the ascent assertion fails.)

@@ -3602,7 +3602,6 @@ async fn get_ragdoll_metrics(
     }
 }
 
-/// HTTP handler for impulse-joint diagnostics (ragdoll constraint health).
 #[derive(Deserialize)]
 struct ClimbGripQueryParams {
     x: f32,
@@ -3644,6 +3643,7 @@ async fn climb_grip(
     }
 }
 
+/// HTTP handler for impulse-joint diagnostics (ragdoll constraint health).
 async fn list_physics_joints(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
 ) -> Json<commands::PhysicsJointsResult> {
