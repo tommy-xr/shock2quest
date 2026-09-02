@@ -86,6 +86,20 @@ test("an AI with no walk route to the player is expected-unreachable, not a fail
   assert.equal(result.verdict, "expected_unreachable");
 });
 
+test("player connectivity does not judge the idle pass - the AI is on its own patrol", () => {
+  const result = classifyTrack(
+    track(
+      [
+        { position: [0, 0, 0], outcome: "Full", behavior: "Patrol" },
+        { position: [8, 0, 0], outcome: "Full", behavior: "Patrol" },
+      ],
+      { reachable: false },
+    ),
+    { pass: "idle" },
+  );
+  assert.equal(result.verdict, "progressing");
+});
+
 test("an AI that never leaves Lowest under a forced chase is alert-capped", () => {
   const result = classifyTrack(
     track([

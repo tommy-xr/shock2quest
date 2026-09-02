@@ -128,7 +128,8 @@ async function discoverAis(game: Game): Promise<EntityDetailResult[]> {
   const { entities } = await game.entities.list({ limit: 5000 });
   const ais: EntityDetailResult[] = [];
   for (const entity of entities) {
-    const detail = await game.entities.detail(entity.id);
+    const detail = await game.entities.detail(entity.id).catch(() => null);
+    if (!detail) continue;
     const props = new Set(detail.properties.map((p) => p.name));
     if (props.has("AIAlertness") || props.has("AIBehavior")) ais.push(detail);
   }
@@ -181,12 +182,10 @@ async function runPass(
     const t = (step * sampleEvery) / 60;
     const paths = new Map((await game.pathfinding.aiPaths()).map((p) => [p.entity_id, p]));
     for (const [id, track] of tracks) {
-      let detail: EntityDetailResult;
-      try {
-        detail = await game.entities.detail(id);
-      } catch {
-        continue; // dead or despawned - the samples so far still classify
-      }
+      // A dead or despawned AI stops reporting; the samples so far still
+      // classify, so drop the sample rather than the whole pass.
+      const detail = await game.entities.detail(id).catch(() => null);
+      if (!detail) continue;
       const route = paths.get(track.entity_id);
       const sample: AiSample = {
         t,

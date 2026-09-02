@@ -64,7 +64,10 @@ export interface Classification {
 
 export interface ClassifyOptions {
   pass: "idle" | "chase";
-  /** Distance at which a chasing AI counts as having reached the player. */
+  /**
+   * Distance at which a chasing AI counts as having reached the player.
+   * Defaults to the engine's own melee reach (MELEE_ATTACK_RANGE).
+   */
   arriveRadius?: number;
   /** Minimum stationary span that counts as a wedge, seconds. */
   wedgeWindowSeconds?: number;
@@ -136,7 +139,7 @@ function findWedge(
  * or alert-capped AI is not counted as a pathfinding failure.
  */
 export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classification {
-  const arriveRadius = options.arriveRadius ?? 3.0;
+  const arriveRadius = options.arriveRadius ?? 3.2;
   const windowSeconds = options.wedgeWindowSeconds ?? 6.0;
   const wedgeDisplacement = options.wedgeDisplacement ?? 1.0;
   const samples = track.samples;
@@ -195,7 +198,10 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
     }
   }
 
-  if (track.reachable === false) {
+  // Only the chase pass holds an AI to the player's position: in the idle
+  // pass it is walking its own patrol, so its connectivity to the player says
+  // nothing about whether it is doing its job.
+  if (options.pass === "chase" && track.reachable === false) {
     return {
       verdict: "expected_unreachable",
       reason: "no walk route from its start cell to the player",
