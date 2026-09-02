@@ -52,13 +52,22 @@ pub const VAULT_EYE_MARGIN: f32 = 0.1;
 ///
 /// `anchor_on_top_surface` is the hand's contact normal being walkable: a hand
 /// hooked on a lip's vertical face is not yet on top of anything.
+///
+/// The vault has to be EARNED, hence `eye_y_at_grab`: the eye must have risen
+/// past the lip while the hand held it. Without that, every crate, console and
+/// railing a standing player can already see over would throw them on top of
+/// it the instant they squeezed - leaning on a chest-high box is not a mantle.
 pub fn vault_ready(
     eye_y: f32,
+    eye_y_at_grab: f32,
     lip_y: f32,
     anchor_kind: ClimbGripKind,
     anchor_on_top_surface: bool,
 ) -> bool {
-    anchor_kind == ClimbGripKind::Ledge && anchor_on_top_surface && eye_y > lip_y + VAULT_EYE_MARGIN
+    anchor_kind == ClimbGripKind::Ledge
+        && anchor_on_top_surface
+        && eye_y_at_grab <= lip_y
+        && eye_y > lip_y + VAULT_EYE_MARGIN
 }
 
 /// The body velocity a release throws the player with, from the anchor hand's
@@ -105,6 +114,9 @@ pub struct ClimbFrame {
 pub struct GripAnchor {
     pub grip: ClimbGrip,
     pub hand_world_at_grab: Vector3<f32>,
+    /// Where the body was when this hold was taken, so a vault can tell a pull
+    /// from a grab (see [`vault_ready`]).
+    pub pawn_at_grab: Vector3<f32>,
 }
 
 /// One hand's per-frame climb input.
@@ -221,6 +233,7 @@ impl HandClimb {
                         self.grips[index] = Some(GripAnchor {
                             grip,
                             hand_world_at_grab: hand_world[index],
+                            pawn_at_grab: pawn_pos,
                         });
                         // Last hand to grab drives the body.
                         self.anchor = Some(HANDS[index]);
@@ -754,28 +767,28 @@ mod tests {
 
     #[test]
     fn the_eye_must_clear_the_lip_of_a_ledge_the_hand_is_lying_on() {
-        // On the top surface, eye over the lip: vault.
-        assert!(vault_ready(6.2, 6.0, ClimbGripKind::Ledge, true));
+        // Grabbed from below the lip, pulled until the eye cleared it: vault.
+        assert!(vault_ready(6.2, 5.0, 6.0, ClimbGripKind::Ledge, true));
         // Still below it, or only just level with it: keep pulling.
-        assert!(!vault_ready(5.9, 6.0, ClimbGripKind::Ledge, true));
+        assert!(!vault_ready(5.9, 5.0, 6.0, ClimbGripKind::Ledge, true));
         assert!(!vault_ready(
             6.0 + VAULT_EYE_MARGIN,
+            5.0,
             6.0,
             ClimbGripKind::Ledge,
             true
         ));
+        // Never pulled at all: a standing player who grabs a chest-high crate
+        // was already looking over it, and leaning on it is not a mantle.
+        assert!(!vault_ready(6.2, 6.2, 6.0, ClimbGripKind::Ledge, true));
         // Hooked on the lip's vertical face, not lying on the top.
-        assert!(!vault_ready(6.2, 6.0, ClimbGripKind::Ledge, false));
+        assert!(!vault_ready(6.2, 5.0, 6.0, ClimbGripKind::Ledge, false));
         // A ladder rail is never a vault, however high the eye gets.
-        assert!(!vault_ready(9.0, 6.0, ClimbGripKind::Ladder, true));
+        assert!(!vault_ready(9.0, 5.0, 6.0, ClimbGripKind::Ladder, true));
     }
 
     #[test]
-    fn a_stance_swap_that_leaves_the_pawn_where_it_is_neither_moves_nor_breaks_the_grip() {
-        // The hands hang off the pawn origin, so the ONLY thing a capsule swap
-        // could do to a grip is move that origin - see
-        // `PhysicsWorld::set_player_crouch_hanging`, which holds it still. A
-        // full crouch's worth of shape change is therefore this: nothing.
+    fn only_a_ledge_hold_balls_the_body_up_and_it_remembers_where_it_was_taken() {
         let mut climb = HandClimb::default();
         let pawn = vec3(0.0, 1.24, 0.0);
         let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
@@ -785,26 +798,44 @@ mod tests {
             normal: vec3(0.0, 1.0, 0.0),
             ..ladder_grip(point)
         };
+
+        // A ladder rung is not something to ball up on.
         climb.update(
             pawn,
             identity,
             DT,
             [no_hand(), hand(reach, 1.0)],
+            |p| Some(ladder_grip(p)),
+            |_| true,
+        );
+        assert!(!climb.holds_a_ledge());
+
+        // The other hand takes a ledge: now it is, and the anchor records the
+        // body pose that grab was made from - what tells a pull from a grab.
+        climb.update(
+            pawn,
+            identity,
+            DT,
+            [hand(reach, 1.0), hand(reach, 1.0)],
             |p| Some(ledge(p)),
             |_| true,
         );
         assert!(climb.holds_a_ledge());
+        assert_eq!(climb.anchor(), Some(Handedness::Left));
+        assert_eq!(climb.anchor_grip().unwrap().pawn_at_grab, pawn);
 
-        let swapped = climb.update(
-            pawn,
+        // Hauling the body up does not rewrite it: the pull is measured from
+        // where the hold was taken, however far the body has since travelled.
+        let lifted = pawn + vec3(0.0, 0.4, 0.0);
+        climb.update(
+            lifted,
             identity,
             DT,
-            [no_hand(), hand(reach, 1.0)],
+            [hand(reach, 1.0), hand(reach, 1.0)],
             |_| None,
             |_| true,
         );
-        assert_translation(swapped, Vector3::zero());
-        assert_eq!(climb.grips().count(), 1);
+        assert_eq!(climb.anchor_grip().unwrap().pawn_at_grab, pawn);
     }
 
     #[test]

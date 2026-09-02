@@ -2911,9 +2911,15 @@ impl MissionCore {
                         input: input_context,
                         pawn_pos,
                         pawn_rotation: new_rotation,
+                        // Measured from the STANDING capsule while balling up
+                        // on a hold: that swap raises the collider's feet
+                        // without the body moving, and a ledge must not stop
+                        // being a ledge just because the player tucked their
+                        // knees under it.
                         feet_y: pawn_pos.y
                             - crate::physics::player_center_above_floor(
-                                self.player_handle.is_crouched(),
+                                self.player_handle.is_crouched()
+                                    && !self.player_handle.is_hanging_crouched(),
                             ),
                         step_dt: self.physics.player_step_dt(),
                     })
@@ -2943,10 +2949,17 @@ impl MissionCore {
             // input, so the knees clear the lip being pulled over - and it
             // swaps the capsule around the body CENTER, since a hanging body's
             // feet rest on nothing and the gripping hand rides that center.
-            let hangs_from_a_ledge = self
-                .interaction
-                .hand_climb()
-                .is_some_and(|climb| climb.holds_a_ledge());
+            //
+            // Only while they are actually hanging, though. A player still
+            // standing on the deck holding a waist-high ledge has their weight
+            // on their feet, and a center-anchored swap there would lift them
+            // off the floor going down and drive the standing capsule through
+            // it coming back up.
+            let hangs_from_a_ledge = !self.player_handle.is_grounded()
+                && self
+                    .interaction
+                    .hand_climb()
+                    .is_some_and(|climb| climb.holds_a_ledge());
             let still_hanging =
                 self.player_handle.is_hanging_crouched() && !self.player_handle.is_grounded();
             if hangs_from_a_ledge || still_hanging {
@@ -2956,8 +2969,10 @@ impl MissionCore {
                 // feet-planted path below is the correct one - and the only one
                 // that can stand them up at all, since a center-anchored
                 // expansion would put their feet through that floor.
-                self.physics
-                    .set_player_crouch_hanging(hangs_from_a_ledge, &mut self.player_handle);
+                self.physics.set_player_crouch_hanging(
+                    hangs_from_a_ledge || input_context.crouch,
+                    &mut self.player_handle,
+                );
             } else if hand_climb.translation.is_none() {
                 self.physics
                     .set_player_crouch(input_context.crouch, &mut self.player_handle);
@@ -8864,10 +8879,15 @@ impl MissionCore {
     /// their capsule balls up, and it is the center the tracked head rides.
     fn hand_vault_direction(&self) -> Option<Vector3<f32>> {
         let anchor = self.interaction.hand_climb()?.anchor_grip()?;
-        let center = self.physics.get_player_translation(&self.player_handle);
-        let eye_y = center.y + crate::PLAYER_EYE_HEIGHT / dark::SCALE_FACTOR;
+        // The pose the coming step will land on, as the grip itself is resolved
+        // against - judging the eye against the superseded one lags the pull.
+        let center = self
+            .physics
+            .get_player_next_translation(&self.player_handle);
+        let eye_above_center = crate::PLAYER_EYE_HEIGHT / dark::SCALE_FACTOR;
         if !crate::vr_climb::vault_ready(
-            eye_y,
+            center.y + eye_above_center,
+            anchor.pawn_at_grab.y + eye_above_center,
             anchor.grip.point.y,
             anchor.grip.kind,
             crate::physics::is_walkable_normal(anchor.grip.normal.y),

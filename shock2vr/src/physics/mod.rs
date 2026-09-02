@@ -96,6 +96,27 @@ pub fn player_crouch_center_shift() -> f32 {
     (PLAYER_STANDING_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR
 }
 
+/// What holds a crouching player up, and therefore what stays put as the
+/// capsule changes size (see [`PhysicsWorld::set_player_crouch`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CrouchAnchor {
+    /// Standing on something: the feet stay planted and the center moves.
+    Feet,
+    /// Hanging from their hands: nothing is under the feet, and the tracked
+    /// hands and eye ride the body center, so the center stays put and the
+    /// capsule shrinks toward the hands instead.
+    Center,
+}
+
+impl CrouchAnchor {
+    fn center_shift(self) -> f32 {
+        match self {
+            CrouchAnchor::Feet => player_crouch_center_shift(),
+            CrouchAnchor::Center => 0.0,
+        }
+    }
+}
+
 /// Clearance (SS2 ft) kept between a capped eye and the capsule crown, so the
 /// camera stays strictly inside the collider rather than sitting exactly on
 /// its surface where a coplanar ceiling could still catch it.
@@ -1566,6 +1587,16 @@ fn sync_top_out_collider(
         collider_set[collider_handle].set_shape(restored);
     }
     rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
+}
+
+/// Whether a collider is NOT an authored climbable surface. Membership is
+/// checked rather than filtered by group because a ladder is also an `ENTITY`,
+/// so masking the CLIMBABLE bit out of a group filter would not exclude it.
+fn collider_is_not_climbable(collider: &Collider) -> bool {
+    !collider
+        .collision_groups()
+        .memberships
+        .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
 }
 
 fn advance_climb_top_out(
@@ -4484,7 +4515,7 @@ impl PhysicsWorld {
         want_crouch: bool,
         player_handle: &mut PlayerHandle,
     ) -> bool {
-        self.set_player_crouch_anchored(want_crouch, player_crouch_center_shift(), player_handle)
+        self.set_player_crouch_anchored(want_crouch, CrouchAnchor::Feet, player_handle)
     }
 
     /// Set the crouch state of a player whose weight hangs from their hands
@@ -4503,13 +4534,13 @@ impl PhysicsWorld {
         want_crouch: bool,
         player_handle: &mut PlayerHandle,
     ) -> bool {
-        self.set_player_crouch_anchored(want_crouch, 0.0, player_handle)
+        self.set_player_crouch_anchored(want_crouch, CrouchAnchor::Center, player_handle)
     }
 
     fn set_player_crouch_anchored(
         &mut self,
         want_crouch: bool,
-        center_shift: f32,
+        anchor: CrouchAnchor,
         player_handle: &mut PlayerHandle,
     ) -> bool {
         // Dark disables ordinary player motion while its mantle sequence is
@@ -4519,11 +4550,20 @@ impl PhysicsWorld {
             return player_handle.is_crouched;
         }
         if want_crouch == player_handle.is_crouched {
+            // Already in the wanted stance, so nothing moves - but the request
+            // still says how the body is being held up NOW, and the undo has to
+            // match that, not how the crouch happened to be made. A player who
+            // crouch-walked a duct and then took a ledge hold is hanging from
+            // it, however they got low.
+            if want_crouch {
+                player_handle.is_hanging_crouched = anchor == CrouchAnchor::Center;
+            }
             return player_handle.is_crouched;
         }
 
         let character_handle = player_handle.character_handle;
         let collider_handle = self.rigid_body_set[character_handle].colliders()[0];
+        let center_shift = anchor.center_shift();
 
         if want_crouch {
             self.collider_set[collider_handle].set_shape(crouched_player_shared_shape());
@@ -4532,7 +4572,7 @@ impl PhysicsWorld {
             translation.y -= center_shift;
             body.set_translation(translation, true);
             player_handle.is_crouched = true;
-            player_handle.is_hanging_crouched = center_shift == 0.0;
+            player_handle.is_hanging_crouched = anchor == CrouchAnchor::Center;
         } else {
             // Headroom check: intersect a test capsule at the feet-planted
             // standing pose against the same groups the movement casts use.
@@ -4952,15 +4992,27 @@ impl PhysicsWorld {
         // The same three pipelines the flat ladder top-out plans against: the
         // probes ignore the climbable the player is hanging off, and the
         // scripted route may cross parentless terrain (see `ClimbPass`).
-        let not_climbable = |_handle: ColliderHandle, collider: &Collider| {
-            !collider
-                .collision_groups()
-                .memberships
-                .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
+        let not_climbable =
+            |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
+        let parented_non_climbable = |_handle: ColliderHandle, collider: &Collider| {
+            collider.parent().is_some() && collider_is_not_climbable(collider)
         };
-        let parented_non_climbable = |handle: ColliderHandle, collider: &Collider| {
-            collider.parent().is_some() && not_climbable(handle, collider)
+        // The route is planned for, and ends by expanding, the STANDING
+        // capsule, so a balled-up body has to fit one where it hangs. Test that
+        // first - it is one query, against the planner's hundreds - and refuse
+        // the vault if it does not; the player keeps pulling instead.
+        let stand_anchor = if player_handle.is_hanging_crouched {
+            CrouchAnchor::Center
+        } else {
+            CrouchAnchor::Feet
         };
+        let standing_center = nvec_to_cgmath(character_pos.translation.vector)
+            + vec3(0.0, stand_anchor.center_shift(), 0.0);
+        if player_handle.is_crouched
+            && !self.standing_player_pose_is_clear(standing_center, player_handle)
+        {
+            return false;
+        }
         // Plan before committing to anything: a refused route must leave the
         // player exactly as they were, still holding on.
         let planned = {
@@ -4980,11 +5032,11 @@ impl PhysicsWorld {
         let Some(planned) = planned else {
             return false;
         };
-        // The route is planned for, and ends by expanding, the STANDING
-        // capsule, so a body balled up on the hold un-balls here. Refuse the
-        // vault if it does not fit where the player hangs - they can keep
-        // pulling instead.
-        if player_handle.is_crouched && self.set_player_crouch_hanging(false, player_handle) {
+        // Un-ball on the anchor the crouch was made with, so the body ends up
+        // where the pre-check said the standing capsule fits.
+        if player_handle.is_crouched
+            && self.set_player_crouch_anchored(false, stand_anchor, player_handle)
+        {
             return false;
         }
         player_handle.top_out = planned.top_out;
@@ -5204,7 +5256,7 @@ impl PhysicsWorld {
                 ClimbGripKind::Ladder
             } else {
                 let world_point = contact.point2;
-                if outward.y < PLAYER_MIN_WALKABLE_NORMAL || world_point.y <= min_ledge_height {
+                if !is_walkable_normal(outward.y) || world_point.y <= min_ledge_height {
                     continue;
                 }
                 ClimbGripKind::Ledge
@@ -5403,14 +5455,10 @@ impl PhysicsWorld {
         // by predicate rather than by group filter because a ladder is also an
         // `ENTITY`, so masking the CLIMBABLE bit out of the group filter would
         // not exclude it.
-        let not_climbable = |_handle: ColliderHandle, collider: &Collider| {
-            !collider
-                .collision_groups()
-                .memberships
-                .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
-        };
-        let parented_non_climbable = |handle: ColliderHandle, collider: &Collider| {
-            collider.parent().is_some() && not_climbable(handle, collider)
+        let not_climbable =
+            |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
+        let parented_non_climbable = |_handle: ColliderHandle, collider: &Collider| {
+            collider.parent().is_some() && collider_is_not_climbable(collider)
         };
         let climb_pass_filter = movement_filter.predicate(&not_climbable);
         // Dark's scripted jump-through may cross immutable world terrain.
