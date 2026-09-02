@@ -24,8 +24,8 @@ use crate::{
 const HAND_OFFSET: Vector3<f32> = vec3(0.0, 0.0, 0.0);
 
 /// Where a tracked controller is in the world. Inputs are in pawn space, so
-/// this is the one place that composition lives - `vr_climb` resolves grips
-/// against exactly the pose the hand is drawn and raycast from.
+/// `vr_climb` resolves grips against exactly the pose the hand is drawn and
+/// raycast from.
 pub fn hand_world_position(
     pawn_pos: Vector3<f32>,
     pawn_rotation: Quaternion<f32>,

@@ -155,21 +155,40 @@ test(
     await game.step({ frames: 1 });
     assert.equal((await game.info()).player.climb.grips.length, 1);
 
-    // Straight into the wall the ladder hangs on: the body is blocked, so the
-    // hand runs away from its hold and the grip breaks.
-    await game.input.set(
-      "right_hand.position",
-      await vrHandLocal(game, [
-        LADDER_HOLD[0] - 1.5,
-        LADDER_HOLD[1],
-        LADDER_HOLD[2],
-      ]),
-    );
-    await game.step({ frames: 2 });
+    // Pull the hand back toward the body, a step at a time: pinned to the
+    // hold, that hauls the BODY into the wall the ladder hangs on. Each step
+    // is far short of the break distance, so nothing breaks on the reach
+    // alone - the grip only comes off once the wall stops the body and the
+    // separation accumulates.
+    const STEP = 0.12;
+    const atGrab = await vrHandLocal(game, LADDER_HOLD);
+    const into = await vrHandLocalDelta(game, [STEP, 0, 0]);
+    let broke = 0;
+    for (let frame = 1; frame <= 24; frame += 1) {
+      await game.input.set("right_hand.position", [
+        atGrab[0] + into[0] * frame,
+        atGrab[1] + into[1] * frame,
+        atGrab[2] + into[2] * frame,
+      ]);
+      await game.step({ frames: 1 });
+      if ((await game.info()).player.climb.grips.length === 0) {
+        broke = frame;
+        break;
+      }
+    }
 
-    const climb = (await game.info()).player.climb;
-    assert.equal(climb.grips.length, 0);
-    assert.equal(climb.anchor_hand, null);
+    // The player has ~0.8 wu of floor before the block stops them, so the
+    // first several steps are free travel the body follows exactly - proof the
+    // break comes from the blocked body and not from the reach itself.
+    assert.ok(
+      broke > 5,
+      `an unobstructed reach must not break the grip, broke at step ${broke}`,
+    );
+    assert.ok(
+      broke <= 20,
+      `a blocked body must break the grip, still held after ${STEP * 24} wu`,
+    );
+    assert.equal((await game.info()).player.climb.anchor_hand, null);
   },
 );
 

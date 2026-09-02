@@ -3338,6 +3338,20 @@ impl PhysicsWorld {
         nvec_to_cgmath(*character_body.translation())
     }
 
+    /// The pose the next step will move the character body to - the queued
+    /// kinematic target, which is where this frame's movement will be cast
+    /// FROM. The pawn-space hand composition has to use this: composing
+    /// against the already-superseded `get_player_translation` applies each
+    /// correction on top of a body that has already absorbed the last one,
+    /// which rings instead of settling.
+    pub fn get_player_next_translation(&self, player_handle: &PlayerHandle) -> Vector3<f32> {
+        let character_body = self
+            .rigid_body_set
+            .get(player_handle.character_handle)
+            .unwrap();
+        nvec_to_cgmath(character_body.next_position().translation.vector)
+    }
+
     fn top_out_save_pose_is_clear(
         &self,
         player_handle: &PlayerHandle,
@@ -4798,8 +4812,8 @@ impl PhysicsWorld {
     /// Step the simulation and resolve one frame of player movement.
     ///
     /// How far the player actually got is
-    /// [`PlayerHandle::self_translation`] - what a hand climb needs to know
-    /// whether the body kept up with the hand.
+    /// [`PlayerHandle::self_translation`]; a hand climb's leftover separation
+    /// (the hand's drift from its hold) is what breaks its grip.
     pub fn update_player_movement(
         &mut self,
         request: PlayerMoveRequest,
@@ -5216,27 +5230,7 @@ impl PhysicsWorld {
 
         let player_movement = profile!(scope: "physics", level: TRACE, "physics.move_player", {
             let queries = self.player_movement_queries(dispatcher, movement_filter);
-            if let Some(translation) = hand_climb {
-                // The gripping hand IS the movement: no walk, no gravity, and
-                // the same climbable-excluding cast the ladder pass uses, so a
-                // body pulled up a ladder passes through the slab it holds.
-                let mvt = player_handle.controller.move_shape(
-                    self.integration_parameters.dt,
-                    &queries.with_filter(climb_pass_filter),
-                    character_shape.as_ref(),
-                    &character_pos,
-                    translation,
-                    |_c| (),
-                );
-                PlayerMovement {
-                    self_translation: mvt.translation,
-                    movement: mvt,
-                    is_climbing: true,
-                    top_out: None,
-                    slope_displacement: Vector::zeros(),
-                    actor_collisions: Vec::new(),
-                }
-            } else if let Some(top_out) = player_handle.top_out {
+            if let Some(top_out) = player_handle.top_out {
                 let (movement, top_out) = advance_climb_top_out(
                     &player_handle.controller,
                     &queries,
@@ -5250,6 +5244,31 @@ impl PhysicsWorld {
                     movement,
                     is_climbing: true,
                     top_out,
+                    slope_displacement: Vector::zeros(),
+                    actor_collisions: Vec::new(),
+                }
+            } else if let Some(translation) = hand_climb {
+                // The gripping hand IS the movement: no walk, no gravity, and
+                // the same climbable-excluding cast the ladder pass uses, so a
+                // body pulled up a ladder passes through the slab it holds.
+                //
+                // A scripted mantle outranks it (above): that state runs on a
+                // temporary compressed collider, and abandoning it mid-lip
+                // would restore the full capsule inside the geometry it is
+                // crossing.
+                let mvt = player_handle.controller.move_shape(
+                    self.integration_parameters.dt,
+                    &queries.with_filter(climb_pass_filter),
+                    character_shape.as_ref(),
+                    &character_pos,
+                    translation,
+                    |_c| (),
+                );
+                PlayerMovement {
+                    self_translation: mvt.translation,
+                    movement: mvt,
+                    is_climbing: true,
+                    top_out: None,
                     slope_displacement: Vector::zeros(),
                     actor_collisions: Vec::new(),
                 }

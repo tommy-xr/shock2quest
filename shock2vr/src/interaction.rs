@@ -194,10 +194,11 @@ impl PlayerInteraction for VrInteraction {
                 ctx.physics
                     .climbable_grip_at(point, crate::physics::CLIMB_GRIP_RADIUS, ctx.feet_y)
             },
+            // "Cannot check" is not "gone" - a failed borrow keeps the hold.
             |entity_id| {
                 ctx.world
                     .borrow::<EntitiesView>()
-                    .is_ok_and(|entities| entities.is_alive(entity_id))
+                    .map_or(true, |entities| entities.is_alive(entity_id))
             },
         )
     }

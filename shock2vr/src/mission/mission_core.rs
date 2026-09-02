@@ -2892,16 +2892,24 @@ impl MissionCore {
         // that replaces locomotion entirely for the frame (right-stick
         // movement is ignored; left-stick turn above still applies). Flat has
         // no hands and keeps its push-into-ladder climb.
+        //
+        // Composed against the pose the coming step will land on, not the one
+        // `PlayerInfo` carries: the movement is cast from the queued kinematic
+        // target, and composing against the superseded pose would apply each
+        // correction on top of a body that has already absorbed the last one.
         let hand_climb = (!time.elapsed.is_zero())
             .then(|| {
+                let pawn_pos = self
+                    .physics
+                    .get_player_next_translation(&self.player_handle);
                 self.interaction
                     .update_hand_climb(&crate::interaction::ClimbContext {
                         physics: &self.physics,
                         world: &self.world,
                         input: input_context,
-                        pawn_pos: player.pos,
+                        pawn_pos,
                         pawn_rotation: new_rotation,
-                        feet_y: player.pos.y
+                        feet_y: pawn_pos.y
                             - crate::physics::player_center_above_floor(
                                 self.player_handle.is_crouched(),
                             ),
@@ -2926,9 +2934,14 @@ impl MissionCore {
         } else {
             // Apply the crouch request before moving: swaps the capsule size
             // feet-planted; standing up is refused without headroom (the
-            // actual state is read back via `player_is_crouched`).
-            self.physics
-                .set_player_crouch(input_context.crouch, &mut self.player_handle);
+            // actual state is read back via `player_is_crouched`). Not while a
+            // hand grips: the swap shifts the capsule centre further than the
+            // grip's stretch tolerance, so a VR player who ducks (or whose
+            // tracked head dips) on a ladder would be dropped by it.
+            if hand_climb.is_none() {
+                self.physics
+                    .set_player_crouch(input_context.crouch, &mut self.player_handle);
+            }
             let request = match hand_climb {
                 Some(translation) => crate::physics::PlayerMoveRequest::HandClimb { translation },
                 None => crate::physics::PlayerMoveRequest::Walk {

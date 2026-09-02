@@ -8,9 +8,6 @@ use cgmath::{InnerSpace, Quaternion, Vector3};
 
 use crate::{physics::ClimbGrip, virtual_hand::hand_world_position, vr_config::Handedness};
 
-/// Squeeze value a hand must cross to grab, matching `VirtualHand`'s grab edge.
-const GRIP_SQUEEZE_THRESHOLD: f32 = 0.5;
-
 /// How far a gripping hand may drift from the point it grabbed before the grip
 /// breaks. The drift IS the body's failure to follow: the body is cast every
 /// frame at exactly the offset the hand opened up, so a persistent gap means
@@ -88,7 +85,7 @@ impl HandClimb {
             .map(|hand| hand_world_position(pawn_pos, pawn_rotation, hand.local_position));
 
         for (index, hand) in hands.iter().enumerate() {
-            let squeezing = hand.squeeze > GRIP_SQUEEZE_THRESHOLD;
+            let squeezing = hand.squeeze > crate::ui::VR_TRIGGER_THRESHOLD;
             let was_squeezing = std::mem::replace(&mut self.was_squeezing[index], squeezing);
             match self.grips[index] {
                 Some(anchor) => {
@@ -96,7 +93,10 @@ impl HandClimb {
                         .magnitude()
                         > CLIMB_STRETCH_BREAK;
                     let gone = anchor.grip.entity_id.is_some_and(|id| !is_alive(id));
-                    if !squeezing || over_stretched || gone {
+                    // The hands update after this, so the same squeeze that
+                    // took a hold can also close on an item; a full hand lets
+                    // go of the ladder rather than holding both.
+                    if !squeezing || !hand.is_empty || over_stretched || gone {
                         self.grips[index] = None;
                     }
                 }
@@ -132,7 +132,12 @@ impl HandClimb {
 
         let index = slot(self.anchor?);
         let anchor = self.grips[index]?;
-        Some(anchor.hand_world_at_grab - hand_world[index])
+        Some(anchored_body_translation(
+            anchor.hand_world_at_grab,
+            pawn_pos,
+            pawn_rotation,
+            hands[index].local_position,
+        ))
     }
 
     /// The hand currently moving the body, if any.
