@@ -3186,6 +3186,9 @@ impl PhysicsWorld {
             nvec_to_cgmath(*self.rigid_body_set[player_handle.character_handle].translation());
         self.translate_held_melee_for_player_relocation(position - previous);
         player_handle.top_out = None;
+        // Relocated, so they are no longer hanging off anything: the stance
+        // they are in is now an ordinary crouch, undone feet-planted.
+        player_handle.is_hanging_crouched = false;
         player_handle.slope_displacement = Vector::zeros();
         player_handle.is_grounded = false;
         player_handle.jump_velocity = None;

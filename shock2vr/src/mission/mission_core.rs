@@ -2947,9 +2947,15 @@ impl MissionCore {
                 .interaction
                 .hand_climb()
                 .is_some_and(|climb| climb.holds_a_ledge());
-            if hangs_from_a_ledge || self.player_handle.is_hanging_crouched() {
-                // Undone the same way it was made, so the body ends up back
-                // where it started rather than 0.64 wu above it.
+            let still_hanging =
+                self.player_handle.is_hanging_crouched() && !self.player_handle.is_grounded();
+            if hangs_from_a_ledge || still_hanging {
+                // Undone the same way it was made, so a body that is still in
+                // the air ends up back where it hung rather than 0.64 wu above
+                // it. Once their feet are on something the ordinary
+                // feet-planted path below is the correct one - and the only one
+                // that can stand them up at all, since a center-anchored
+                // expansion would put their feet through that floor.
                 self.physics
                     .set_player_crouch_hanging(hangs_from_a_ledge, &mut self.player_handle);
             } else if hand_climb.translation.is_none() {
