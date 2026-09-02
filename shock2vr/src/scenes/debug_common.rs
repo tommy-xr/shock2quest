@@ -272,6 +272,10 @@ impl GameScene for DebugScene {
         self.core.player_is_crouched()
     }
 
+    fn player_is_gripping(&self) -> bool {
+        self.core.player_is_gripping()
+    }
+
     fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
         self.core.fov_pull_deg(game_options)
     }
@@ -502,6 +506,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn player_is_crouched(&self) -> bool {
         self.core.player_is_crouched()
+    }
+
+    fn player_is_gripping(&self) -> bool {
+        self.core.player_is_gripping()
     }
 
     fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {

@@ -954,8 +954,10 @@ fn main() {
         let tracked_head_position = head_location.location_flags.contains(
             xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::POSITION_TRACKED,
         );
-        let physically_crouched =
-            vr_crouch.update(tracked_head_position.then_some(head_location.pose.position.y));
+        let physically_crouched = vr_crouch.update(
+            tracked_head_position.then_some(head_location.pose.position.y),
+            game.player_is_gripping(),
+        );
         let center_above_floor = game.player_center_above_floor();
         let right_hand_position = stage_to_pawn(
             vec3(

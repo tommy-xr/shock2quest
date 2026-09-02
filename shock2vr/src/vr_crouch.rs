@@ -25,7 +25,15 @@ impl VrCrouchDetector {
     ///
     /// `None` means tracking is currently unavailable; the last request is
     /// retained until a valid sample returns.
-    pub fn update(&mut self, tracked_eye_height: Option<f32>) -> bool {
+    ///
+    /// `frozen` holds the current request and the calibration untouched - a
+    /// player hanging off a climb hold reaches, ducks and leans in ways that
+    /// are not a crouch, and the collider must not swap under a grip anyway
+    /// (the capsule centre moves further than the grip's stretch tolerance).
+    pub fn update(&mut self, tracked_eye_height: Option<f32>, frozen: bool) -> bool {
+        if frozen {
+            return self.crouching;
+        }
         let Some(eye_height) = tracked_eye_height.filter(|height| {
             height.is_finite() && (0.0..=MAX_PLAUSIBLE_EYE_HEIGHT_METERS).contains(height)
         }) else {
@@ -73,49 +81,63 @@ mod tests {
     fn crouches_and_stands_with_hysteresis() {
         let mut detector = VrCrouchDetector::default();
 
-        assert!(!detector.update(Some(1.70)));
-        assert!(!detector.update(Some(1.20)));
-        assert!(detector.update(Some(1.18)));
+        assert!(!detector.update(Some(1.70), false));
+        assert!(!detector.update(Some(1.20), false));
+        assert!(detector.update(Some(1.18), false));
 
         // Remain crouched throughout the dead band between 70% and 85%.
-        assert!(detector.update(Some(1.30)));
-        assert!(detector.update(Some(1.44)));
-        assert!(!detector.update(Some(1.45)));
+        assert!(detector.update(Some(1.30), false));
+        assert!(detector.update(Some(1.44), false));
+        assert!(!detector.update(Some(1.45), false));
 
         // Remain standing throughout that same dead band.
-        assert!(!detector.update(Some(1.30)));
+        assert!(!detector.update(Some(1.30), false));
     }
 
     #[test]
     fn calibration_adapts_when_the_first_sample_was_crouched() {
         let mut detector = VrCrouchDetector::default();
 
-        assert!(!detector.update(Some(1.05)));
-        assert!(!detector.update(Some(1.70)));
-        assert!(detector.update(Some(1.10)));
+        assert!(!detector.update(Some(1.05), false));
+        assert!(!detector.update(Some(1.70), false));
+        assert!(detector.update(Some(1.10), false));
     }
 
     #[test]
     fn unavailable_or_invalid_tracking_preserves_the_current_request() {
         let mut detector = VrCrouchDetector::default();
-        detector.update(Some(1.70));
-        assert!(detector.update(Some(1.00)));
+        detector.update(Some(1.70), false);
+        assert!(detector.update(Some(1.00), false));
 
-        assert!(detector.update(None));
-        assert!(detector.update(Some(f32::NAN)));
-        assert!(detector.update(Some(f32::INFINITY)));
-        assert!(detector.update(Some(-0.1)));
-        assert!(detector.update(Some(3.1)));
+        assert!(detector.update(None, false));
+        assert!(detector.update(Some(f32::NAN), false));
+        assert!(detector.update(Some(f32::INFINITY), false));
+        assert!(detector.update(Some(-0.1), false));
+        assert!(detector.update(Some(3.1), false));
+    }
+
+    #[test]
+    fn a_frozen_detector_neither_crouches_nor_recalibrates() {
+        let mut detector = VrCrouchDetector::default();
+        detector.update(Some(1.70), false);
+
+        // Hanging off a hold: however low the head goes, the stance holds.
+        assert!(!detector.update(Some(1.00), true));
+        assert!(!detector.update(Some(0.60), true));
+
+        // And the hanging pose never became the new standing height, so the
+        // same low head still crouches once the hold is let go.
+        assert!(detector.update(Some(1.00), false));
     }
 
     #[test]
     fn reset_discards_state_and_calibration() {
         let mut detector = VrCrouchDetector::default();
-        detector.update(Some(1.70));
-        assert!(detector.update(Some(1.00)));
+        detector.update(Some(1.70), false);
+        assert!(detector.update(Some(1.00), false));
 
         detector.reset();
 
-        assert!(!detector.update(Some(1.00)));
+        assert!(!detector.update(Some(1.00), false));
     }
 }

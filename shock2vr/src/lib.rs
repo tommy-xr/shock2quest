@@ -2036,6 +2036,13 @@ impl Game {
         physics::player_center_above_floor(self.active_game_scene.player_is_crouched())
     }
 
+    /// Whether a VR hand is holding a climb hold. VR runtimes freeze their
+    /// physical-crouch detector while it is true - see
+    /// [`vr_crouch::VrCrouchDetector::update`].
+    pub fn player_is_gripping(&self) -> bool {
+        self.active_game_scene.player_is_gripping()
+    }
+
     /// Highest the eye may sit (world units) above the player collider's
     /// center for the current stance. VR runtimes clamp the tracked eye to
     /// this so the camera cannot leave the collider crown; see
@@ -2553,6 +2560,14 @@ impl App {
         match self {
             App::Ready(game) => game.player_center_above_floor(),
             App::MissingAssets(_) => physics::player_center_above_floor(false),
+        }
+    }
+
+    /// See [`Game::player_is_gripping`].
+    pub fn player_is_gripping(&self) -> bool {
+        match self {
+            App::Ready(game) => game.player_is_gripping(),
+            App::MissingAssets(_) => false,
         }
     }
 

@@ -2937,8 +2937,10 @@ impl MissionCore {
             // feet-planted; standing up is refused without headroom (the
             // actual state is read back via `player_is_crouched`). Not while a
             // hand grips: the swap shifts the capsule centre further than the
-            // grip's stretch tolerance, so a VR player who ducks (or whose
-            // tracked head dips) on a ladder would be dropped by it.
+            // grip's stretch tolerance, so a VR player who ducks on a ladder
+            // would be dropped by it. The VR runtime also freezes its physical
+            // crouch detector while gripping (`vr_crouch`); this covers the
+            // crouch *button*, which no detector sees.
             if hand_climb.translation.is_none() {
                 self.physics
                     .set_player_crouch(input_context.crouch, &mut self.player_handle);
@@ -8820,6 +8822,13 @@ impl MissionCore {
     /// for lack of headroom, so this can lag the crouch input).
     pub fn player_is_crouched(&self) -> bool {
         self.player_handle.is_crouched()
+    }
+
+    /// Whether either VR hand currently holds a climb hold.
+    pub fn player_is_gripping(&self) -> bool {
+        self.interaction
+            .hand_climb()
+            .is_some_and(|climb| climb.grips().next().is_some())
     }
 
     pub fn player_save_position(&self) -> Result<Vector3<f32>, PlayerSavePoseError> {
