@@ -1185,11 +1185,13 @@ fn bucket_of(x: f32, z: f32) -> (i32, i32) {
 
 impl NavBoundary {
     fn build(db: &PathDatabase) -> Self {
-        let linked: std::collections::HashSet<(u32, u32)> = db
-            .links
-            .iter()
-            .map(|link| (link.from_cell, link.to_cell))
-            .collect();
+        // Adjacency is undirected here: a seam is open floor whichever way
+        // the shipped link happens to point.
+        let mut linked: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+        for link in &db.links {
+            linked.insert((link.from_cell, link.to_cell));
+            linked.insert((link.to_cell, link.from_cell));
+        }
 
         let mut edges: Vec<(u32, Vector3<f32>, Vector3<f32>)> = Vec::new();
         for cell in &db.cells {
@@ -1465,6 +1467,89 @@ pub(crate) mod tests {
                 cost: 5,
             },
         ];
+        PathDatabase {
+            cells,
+            vertices,
+            links,
+            cell_doors: Vec::new(),
+            cell_zones: Vec::new(),
+            zone_pairs: Vec::new(),
+        }
+    }
+
+    /// A wide room (0) connected to a goal room (3) two ways: a 0.2-wide
+    /// pinch corridor (1) that is the cheap route, and a roomy corridor (2)
+    /// that is twice the cost. Cell 2 also serves as the roomy alternative
+    /// to parking in the pinch.
+    fn pinch_and_detour_db() -> PathDatabase {
+        let vertices = vec![
+            // room 0
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 0.0, 0.0),
+            vec3(4.0, 0.0, 5.0),
+            vec3(0.0, 0.0, 5.0),
+            // pinch corridor 1
+            vec3(4.0, 0.0, 0.9),
+            vec3(6.0, 0.0, 0.9),
+            vec3(6.0, 0.0, 1.1),
+            vec3(4.0, 0.0, 1.1),
+            // roomy corridor 2
+            vec3(4.0, 0.0, 3.0),
+            vec3(6.0, 0.0, 3.0),
+            vec3(6.0, 0.0, 5.0),
+            vec3(4.0, 0.0, 5.0),
+            // goal room 3
+            vec3(6.0, 0.0, 0.0),
+            vec3(10.0, 0.0, 0.0),
+            vec3(10.0, 0.0, 5.0),
+            vec3(6.0, 0.0, 5.0),
+        ];
+        let cells = vec![
+            PathCell {
+                id: 0,
+                center: vec3(2.0, 0.0, 2.5),
+                vertex_indices: vec![0, 1, 2, 3],
+                flags: PathCellFlags::empty(),
+            },
+            PathCell {
+                id: 1,
+                center: vec3(5.0, 0.0, 1.0),
+                vertex_indices: vec![4, 5, 6, 7],
+                flags: PathCellFlags::empty(),
+            },
+            PathCell {
+                id: 2,
+                center: vec3(5.0, 0.0, 4.0),
+                vertex_indices: vec![8, 9, 10, 11],
+                flags: PathCellFlags::empty(),
+            },
+            PathCell {
+                id: 3,
+                center: vec3(8.0, 0.0, 2.5),
+                vertex_indices: vec![12, 13, 14, 15],
+                flags: PathCellFlags::empty(),
+            },
+        ];
+        // (from, to, edge, cost) - both directions, pinch cheaper than detour
+        let seams = [
+            (0u32, 1u32, (4u32, 7u32), 2u8),
+            (1, 3, (5, 6), 2),
+            (0, 2, (8, 11), 5),
+            (2, 3, (9, 10), 5),
+        ];
+        let mut links = Vec::new();
+        for (a, b, (va, vb), cost) in seams {
+            for (from, to) in [(a, b), (b, a)] {
+                links.push(PathCellLink {
+                    from_cell: from,
+                    to_cell: to,
+                    edge_vertex_a: va,
+                    edge_vertex_b: vb,
+                    ok_bits: MovementBits::WALK,
+                    cost,
+                });
+            }
+        }
         PathDatabase {
             cells,
             vertices,
@@ -1984,5 +2069,66 @@ pub(crate) mod tests {
         let service = service(db);
         assert_eq!(service.cell_from_position(vec3(1.0, 0.5, 1.0)), Some(0));
         assert_eq!(service.cell_from_position(vec3(1.0, 9.5, 1.0)), Some(3));
+    }
+
+    #[test]
+    fn a_route_detours_around_a_gap_narrower_than_the_body() {
+        let service = service(pinch_and_detour_db());
+        let path = service
+            .find_path(vec3(2.0, 0.0, 2.5), vec3(8.0, 0.0, 2.5), MovementBits::WALK)
+            .expect("both corridors reach the goal");
+        // The pinch corridor is the cheaper route but only 0.2 wide; the
+        // walker takes the roomy one (z >= 3) instead.
+        assert!(
+            path.iter().any(|w| w.z >= 3.0),
+            "expected the roomy corridor, got {path:?}"
+        );
+        assert!(
+            !path.iter().any(|w| w.x > 4.0 && w.z < 2.0),
+            "route threaded the pinch: {path:?}"
+        );
+    }
+
+    #[test]
+    fn a_small_creature_still_uses_the_narrow_gap() {
+        let mut db = pinch_and_detour_db();
+        for link in &mut db.links {
+            link.ok_bits |= MovementBits::SMALL_CREATURE;
+        }
+        let service = service(db);
+        let path = service
+            .find_path(
+                vec3(2.0, 0.0, 2.5),
+                vec3(8.0, 0.0, 2.5),
+                MovementBits::SMALL_CREATURE,
+            )
+            .expect("route exists");
+        assert!(
+            path.iter().any(|w| w.x > 4.0 && w.z < 2.0),
+            "a small creature should take the cheap pinch: {path:?}"
+        );
+    }
+
+    #[test]
+    fn a_partial_route_stops_where_the_body_fits() {
+        let mut db = pinch_and_detour_db();
+        // Cut the goal room off: the pinch (cell 1) is then the reachable
+        // cell closest to a goal beyond it, but nothing can stand in it.
+        db.links
+            .retain(|link| link.from_cell != 3 && link.to_cell != 3);
+        let service = service(db);
+        let path = service
+            .find_path_toward(
+                vec3(2.0, 0.0, 2.5),
+                vec3(12.0, 0.0, 1.0),
+                MovementBits::WALK,
+            )
+            .expect("a partial route exists");
+        let end = *path.last().expect("waypoints");
+        assert_eq!(
+            end,
+            vec3(5.0, 0.0, 4.0),
+            "partial route should end in the roomy corridor, got {end:?}"
+        );
     }
 }
