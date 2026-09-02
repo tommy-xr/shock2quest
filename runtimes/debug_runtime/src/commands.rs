@@ -199,6 +199,14 @@ pub enum RuntimeCommand {
         reply: oneshot::Sender<PhysicsJointsResult>,
     },
 
+    /// Ask what a hand at a world point could grab (ladder face / ledge).
+    ClimbGrip {
+        point: [f32; 3],
+        radius: Option<f32>,
+        feet_y: Option<f32>,
+        reply: oneshot::Sender<ClimbGripResult>,
+    },
+
     /// Apply a world-space impulse to a dynamic physics body (waking it) -
     /// e.g. poke a settled ragdoll to verify it wakes and reacts.
     ApplyBodyImpulse {
@@ -367,6 +375,26 @@ pub struct RagdollMetricsEntry {
     pub min_y: f32,
     pub max_nonadjacent_overlap: f32,
     pub max_drift: f32,
+}
+
+/// What a hand at the queried point can hold onto - `grip` is null when
+/// nothing there is grabbable.
+#[derive(Debug, Serialize)]
+pub struct ClimbGripResult {
+    pub grip: Option<ClimbGripEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClimbGripEntry {
+    /// `"ladder"` (an authored climbable face) or `"ledge"` (a walkable top
+    /// above the player's feet).
+    pub kind: String,
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    /// World-space point on the gripped surface.
+    pub point: [f32; 3],
+    /// World-space surface normal, pointing out toward the hand.
+    pub normal: [f32; 3],
 }
 
 /// Joint diagnostics (ragdoll constraint health), impulse + multibody.

@@ -1328,14 +1328,17 @@ fn create_physics_representation_with_options(
         // extra marker membership so player movement can detect contact.
         // Simplifications: `climbable` is plausibly a per-face bitmask in
         // the original engine (27 = the four vertical sides on ladders) -
-        // any non-zero value marks the whole collider climbable here. And
+        // any non-zero value marks the whole collider solid-climbable here;
+        // the per-face bits are handed to physics for the hand grip query
+        // (`PhysicsWorld::climbable_grip_at`). And
         // only this (non-frobbable) creation branch checks it: all known
         // ladders are plain terrain objects; a frobbable climbable would
         // need the same treatment in the branch above.
-        let is_climbable = v_phys_attr
+        let climbable_sides = v_phys_attr
             .get(entity_id)
-            .map(|pa| pa.climbable != 0)
-            .unwrap_or(false);
+            .map(|pa| pa.climbable)
+            .unwrap_or(0);
+        let is_climbable = climbable_sides != 0;
 
         // `P$PhysDims` is an instantiated, non-inherited property in Dark. A
         // concrete object can therefore inherit a physics type without storing
@@ -1537,6 +1540,11 @@ fn create_physics_representation_with_options(
                     is_sensor,
                 )
             };
+            if is_climbable {
+                // Contact detection only needs the CLIMBABLE membership above;
+                // the hand grip query needs the authored per-face bits.
+                physics.set_climbable_sides(entity_id, climbable_sides);
+            }
             Some(rigid_body_handle)
         } else {
             None

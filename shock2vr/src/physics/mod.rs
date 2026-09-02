@@ -2178,6 +2178,61 @@ impl CollisionGroup {
     }
 }
 
+/// Radius (world units) of the ball a hand probes with in
+/// [`PhysicsWorld::climbable_grip_at`]. Roughly a fist: big enough to find the
+/// surface a tracked hand is resting on, small enough that it only finds the
+/// one face the hand is actually against.
+pub const CLIMB_GRIP_RADIUS: f32 = 0.15;
+
+/// What a hand found to hold onto.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClimbGripKind {
+    /// An authored climbable surface (`PropPhysAttr.climbable`), on a face
+    /// whose per-face bit is set - a ladder rail or rung.
+    Ladder,
+    /// A walkable top surface above the player's feet: the mantle-emulation
+    /// hold. Any solid, non-climbable geometry can offer one.
+    Ledge,
+}
+
+/// A hold found by [`PhysicsWorld::climbable_grip_at`].
+#[derive(Clone, Copy, Debug)]
+pub struct ClimbGrip {
+    pub kind: ClimbGripKind,
+    /// Owning entity, when the surface belongs to one (level terrain has none).
+    pub entity_id: Option<EntityId>,
+    /// World-space point on the surface.
+    pub point: Vector3<f32>,
+    /// World-space surface normal, pointing out of the surface toward the hand.
+    pub normal: Vector3<f32>,
+}
+
+/// Dark's `PropPhysAttr.climbable` is a per-face bitmask over the six OBB
+/// faces in Dark's Z-up local frame: 1=+X, 2=+Y, 4=+Z (top), 8=-X, 16=-Y,
+/// 32=-Z (bottom). The importer maps a Dark vector (x, y, z) to engine
+/// (-x, z, y) (`read_vec3`, dark/src/ss2_common.rs:54), so in the engine's
+/// Y-up frame those bits are: 1=-X, 2=+Z, 4=+Y (top), 8=+X, 16=-Z, 32=-Y.
+///
+/// `local_normal` is the outward face normal in the collider's local frame;
+/// its dominant axis picks the face. Every shipped ladder authors 27
+/// (= 1|2|8|16), the four vertical sides.
+fn climbable_face_bit(local_normal: Vector<Real>) -> u32 {
+    let (ax, ay, az) = (
+        local_normal.x.abs(),
+        local_normal.y.abs(),
+        local_normal.z.abs(),
+    );
+    if ax >= ay && ax >= az {
+        if local_normal.x >= 0.0 { 8 } else { 1 }
+    } else if ay >= az {
+        if local_normal.y >= 0.0 { 4 } else { 32 }
+    } else if local_normal.z >= 0.0 {
+        2
+    } else {
+        16
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RayCastResult {
     pub hit_point: Point3<f32>,
@@ -2440,6 +2495,11 @@ pub struct PhysicsWorld {
     rigid_bodies_with_forces: Vec<RigidBodyHandle>,
 
     entity_id_to_body: HashMap<EntityId, RigidBodyHandle>,
+
+    // Per-face grip bits (Dark `PropPhysAttr.climbable`) for climbable
+    // entities, keyed by owner. Contact detection only needs the CLIMBABLE
+    // group membership; the hand grip query needs to know WHICH face.
+    climbable_sides: HashMap<EntityId, u32>,
 
     // Short-lived recovery state created only while a living, gravity-driven
     // creature is touching the side of horizontally-moving kinematic terrain.
@@ -4239,6 +4299,7 @@ impl PhysicsWorld {
             );
         }
         self.entity_id_to_body.remove(&entity_id);
+        self.climbable_sides.remove(&entity_id);
         self.live_creature_sweep_recovery.remove(&entity_id);
         self.pending_player_push_velocity.remove(&entity_id);
     }
@@ -4458,6 +4519,7 @@ impl PhysicsWorld {
             // physics_hooks: Box::new(physics_hooks),
             // event_handler: Box::new(event_handler),
             entity_id_to_body: HashMap::new(),
+            climbable_sides: HashMap::new(),
             live_creature_sweep_recovery: HashMap::new(),
             pending_player_push_velocity: HashMap::new(),
             kinematic_attachments: HashMap::new(),
@@ -4787,6 +4849,104 @@ impl PhysicsWorld {
         );
         queries.bodies = &self.no_bodies;
         queries
+    }
+
+    /// Record an entity's authored per-face climbable bits (see
+    /// [`climbable_face_bit`]). Called at creation for every climbable entity.
+    pub fn set_climbable_sides(&mut self, entity_id: EntityId, sides: u32) {
+        self.climbable_sides.insert(entity_id, sides);
+    }
+
+    /// What, if anything, a hand at `point` can hold onto.
+    ///
+    /// Probes a ball of `radius` and returns the nearest qualifying contact.
+    /// Two classes (see [`ClimbGripKind`]): a **Ladder** face is an authored
+    /// climbable whose touched face has its bit set, so a ladder authored 27
+    /// rejects grabs on its top and bottom caps; a **Ledge** is any other
+    /// solid, player-blocking surface whose face is walkable and sits more
+    /// than a step above `feet_y` - the mantle-emulation hold. A wall face,
+    /// and the floor the player is standing on, offer neither.
+    pub fn climbable_grip_at(
+        &self,
+        point: Vector3<f32>,
+        radius: f32,
+        feet_y: f32,
+    ) -> Option<ClimbGrip> {
+        let ball = Ball::new(radius.max(1.0e-3));
+        let ball_pos = Isometry::translation(point.x, point.y, point.z);
+        // Probe AS the player, so only geometry that blocks the player can be
+        // held. Climbables are matched explicitly: a ladder is solid to the
+        // player anyway, but the bit keeps the intent visible.
+        let filter = QueryFilter::new()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::PLAYER.bits.into(),
+                (InternalCollisionGroups::WORLD.bits
+                    | InternalCollisionGroups::ENTITY.bits
+                    | InternalCollisionGroups::SELECTABLE.bits
+                    | InternalCollisionGroups::CLIMBABLE.bits)
+                    .into(),
+                Default::default(),
+            ))
+            .exclude_sensors();
+        let dispatcher = self.narrow_phase.query_dispatcher();
+        let queries = self.broad_phase.as_query_pipeline(
+            dispatcher,
+            &self.rigid_body_set,
+            &self.collider_set,
+            filter,
+        );
+
+        let min_ledge_height = feet_y + PLAYER_STEP_HEIGHT / SCALE_FACTOR;
+        let mut nearest: Option<(f32, ClimbGrip)> = None;
+        for (_handle, collider) in queries.intersect_shape(ball_pos, &ball) {
+            let Ok(Some(contact)) = rapier3d::parry::query::contact(
+                &ball_pos,
+                &ball,
+                collider.position(),
+                collider.shape(),
+                0.0,
+            ) else {
+                continue;
+            };
+            // normal1 points from the hand toward the surface; the outward
+            // surface normal is its opposite.
+            let outward = -contact.normal1.into_inner();
+            let is_climbable = collider
+                .collision_groups()
+                .memberships
+                .intersects(InternalCollisionGroups::CLIMBABLE.bits.into());
+            let entity_id = EntityId::from_inner(collider.user_data as u64);
+            let kind = if is_climbable {
+                // No recorded mask means the whole collider is grippable -
+                // the behavior climbables had before per-face bits existed.
+                let sides = entity_id
+                    .and_then(|id| self.climbable_sides.get(&id).copied())
+                    .unwrap_or(u32::MAX);
+                let local = collider.rotation().inverse_transform_vector(&outward);
+                if sides & climbable_face_bit(local) == 0 {
+                    continue;
+                }
+                ClimbGripKind::Ladder
+            } else {
+                let world_point = contact.point2;
+                if outward.y < PLAYER_MIN_WALKABLE_NORMAL || world_point.y <= min_ledge_height {
+                    continue;
+                }
+                ClimbGripKind::Ledge
+            };
+            if nearest.is_none_or(|(dist, _)| contact.dist < dist) {
+                nearest = Some((
+                    contact.dist,
+                    ClimbGrip {
+                        kind,
+                        entity_id,
+                        point: vec3(contact.point2.x, contact.point2.y, contact.point2.z),
+                        normal: vec3(outward.x, outward.y, outward.z),
+                    },
+                ));
+            }
+        }
+        nearest.map(|(_, grip)| grip)
     }
 
     fn move_player(
@@ -8433,6 +8593,183 @@ mod tests {
 
     /// A player standing at the base of a climbable wall who pushes into it
     /// climbs it; against an identical NON-climbable wall the same input leaves
+    /// Grip-query fixture: a parentless trimesh floor with its top at y=0 and
+    /// the player parked far away, stepped once so the broad-phase BVH exists.
+    fn grip_world() -> (PhysicsWorld, PlayerHandle) {
+        let mut world = PhysicsWorld::new();
+        let floor_verts = vec![
+            point![-100.0, 0.0, -100.0],
+            point![100.0, 0.0, -100.0],
+            point![100.0, 0.0, 100.0],
+            point![-100.0, 0.0, 100.0],
+        ];
+        let floor_tris = vec![[0u32, 1, 2], [0, 2, 3]];
+        world.add_collider(
+            EntityId::from_inner(1000).unwrap(),
+            ColliderBuilder::trimesh(floor_verts, floor_tris)
+                .expect("floor trimesh")
+                .build(),
+        );
+        let mut player =
+            world.create_player(vec3(50.0, 1.0, 50.0), EntityId::from_inner(1001).unwrap());
+        step(&mut world, &mut player, 1);
+        (world, player)
+    }
+
+    /// A `ladder.bin`-shaped box (0.9 x 6.4 x 0.1, faces on +-Z at identity)
+    /// stood on the floor at x=-5 and yawed 90 degrees, exactly as the
+    /// `debug_ladder` scene spawns them. After the yaw its broad face points
+    /// along world +X and its narrow edges along world +-Z.
+    fn add_yawed_ladder(
+        world: &mut PhysicsWorld,
+        player: &mut PlayerHandle,
+        climbable: Option<u32>,
+    ) -> EntityId {
+        let entity = EntityId::from_inner(2001).unwrap();
+        let yaw_90 = <Quaternion<f32> as cgmath::Rotation3>::from_angle_y(cgmath::Deg(90.0));
+        world.add_kinematic(
+            entity,
+            vec3(-5.0, 3.2, 0.0),
+            yaw_90,
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(0.9, 6.4, 0.1),
+            if climbable.is_some() {
+                CollisionGroup::climbable_entity()
+            } else {
+                CollisionGroup::entity()
+            },
+            false,
+        );
+        if let Some(sides) = climbable {
+            world.set_climbable_sides(entity, sides);
+        }
+        step(world, player, 1);
+        entity
+    }
+
+    /// Dark's per-face bits live in its Z-up frame; the importer flips X and
+    /// swaps Y/Z. Verified through the query on a YAWED collider, so a wrong
+    /// local/world frame or a wrong axis swap shows up as a grip on the wrong
+    /// face. 27 is what every shipped ladder authors.
+    #[test]
+    fn ladder_face_bits_grip_only_the_authored_faces() {
+        // The broad face (world +X after the yaw) is one of the four vertical
+        // sides in mask 27.
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, Some(27));
+        let side = world
+            .climbable_grip_at(vec3(-4.85, 3.0, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+            .expect("the broad face of a 27 ladder is grippable");
+        assert_eq!(side.kind, ClimbGripKind::Ladder);
+        assert!(
+            side.normal.x > 0.9,
+            "expected a +X face, got {:?}",
+            side.normal
+        );
+        // ... and its top cap is not.
+        assert!(
+            world
+                .climbable_grip_at(vec3(-5.0, 6.45, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none(),
+            "mask 27 excludes the top cap"
+        );
+
+        // Top-only (4) is the exact inverse.
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, Some(4));
+        assert_eq!(
+            world
+                .climbable_grip_at(vec3(-5.0, 6.45, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .map(|grip| grip.kind),
+            Some(ClimbGripKind::Ladder),
+            "mask 4 is the top cap"
+        );
+        assert!(
+            world
+                .climbable_grip_at(vec3(-4.85, 3.0, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none(),
+            "mask 4 excludes the sides"
+        );
+
+        // Asymmetric single side: Dark +X (bit 1) is engine -X, which the
+        // 90-degree yaw turns into world +Z. The opposite edge stays bare.
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, Some(1));
+        assert_eq!(
+            world
+                .climbable_grip_at(vec3(-5.0, 3.0, 0.5), CLIMB_GRIP_RADIUS, 0.0)
+                .map(|grip| grip.kind),
+            Some(ClimbGripKind::Ladder),
+            "bit 1 lands on world +Z once the ladder is yawed"
+        );
+        assert!(
+            world
+                .climbable_grip_at(vec3(-5.0, 3.0, -0.5), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none(),
+            "the opposite edge has no bit"
+        );
+    }
+
+    /// The same box without the climbable marker offers nothing to a hand on
+    /// its vertical face - a wall is not a hold.
+    #[test]
+    fn plain_wall_face_offers_no_grip() {
+        let (mut world, mut player) = grip_world();
+        add_yawed_ladder(&mut world, &mut player, None);
+        assert!(
+            world
+                .climbable_grip_at(vec3(-4.85, 3.0, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none()
+        );
+    }
+
+    /// Mantle emulation: the walkable top of a solid block above the player's
+    /// feet is a Ledge; the floor they are standing on is not (it is not more
+    /// than a step above their feet).
+    #[test]
+    fn walkable_top_above_the_feet_is_a_ledge_but_the_floor_is_not() {
+        let (mut world, mut player) = grip_world();
+        world.add_kinematic(
+            EntityId::from_inner(2002).unwrap(),
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            Vector3::new(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+
+        let lip = world
+            .climbable_grip_at(vec3(0.0, 3.05, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+            .expect("a block top above the feet is grippable");
+        assert_eq!(lip.kind, ClimbGripKind::Ledge);
+        assert!(
+            lip.normal.y > 0.9,
+            "expected an up-facing hold, got {:?}",
+            lip.normal
+        );
+
+        assert!(
+            world
+                .climbable_grip_at(vec3(0.0, 3.05, 0.0), CLIMB_GRIP_RADIUS, 3.0)
+                .is_none(),
+            "the surface the player stands ON is not a hold"
+        );
+        assert!(
+            world
+                .climbable_grip_at(vec3(8.0, 0.05, 8.0), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none(),
+            "the floor at the player's feet is not a hold"
+        );
+        assert!(
+            world
+                .climbable_grip_at(vec3(2.15, 1.5, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+                .is_none(),
+            "the block's vertical side is not a hold"
+        );
+    }
+
     /// the player on the floor. (Negative-first: without the CLIMBABLE
     /// detection + redirect in `move_player`, both cases stay at floor height
     /// and the ascent assertion fails.)

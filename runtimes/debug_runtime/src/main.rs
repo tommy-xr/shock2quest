@@ -405,6 +405,7 @@ async fn start_http_server(
         .route("/v1/physics/bodies", get(list_physics_bodies))
         .route("/v1/physics/bodies/:id", get(get_physics_body_detail))
         .route("/v1/physics/joints", get(list_physics_joints))
+        .route("/v1/physics/grip", get(climb_grip))
         .route(
             "/v1/physics/bodies/:id/impulse",
             axum::routing::post(apply_body_impulse),
@@ -1917,6 +1918,32 @@ fn process_command(
                 .unwrap_or_default();
             if let Err(_) = reply.send(commands::PhysicsJointsResult { joints }) {
                 tracing::warn!("Failed to send physics joints - receiver dropped");
+            }
+        }
+        RuntimeCommand::ClimbGrip {
+            point,
+            radius,
+            feet_y,
+            reply,
+        } => {
+            let grip = game
+                .debug_scene()
+                .and_then(|scene| {
+                    scene.climb_grip(
+                        cgmath::Vector3::new(point[0], point[1], point[2]),
+                        radius,
+                        feet_y,
+                    )
+                })
+                .map(|grip| commands::ClimbGripEntry {
+                    kind: grip.kind.to_string(),
+                    entity_id: grip.entity_id,
+                    entity_name: grip.entity_name,
+                    point: grip.point,
+                    normal: grip.normal,
+                });
+            if reply.send(commands::ClimbGripResult { grip }).is_err() {
+                tracing::warn!("Failed to send climb grip - receiver dropped");
             }
         }
         RuntimeCommand::ApplyBodyImpulse {
@@ -3576,6 +3603,47 @@ async fn get_ragdoll_metrics(
 }
 
 /// HTTP handler for impulse-joint diagnostics (ragdoll constraint health).
+#[derive(Deserialize)]
+struct ClimbGripQueryParams {
+    x: f32,
+    y: f32,
+    z: f32,
+    /// Probe ball radius, world units (default: the hand-sized grip radius).
+    radius: Option<f32>,
+    /// Reference feet height for the ledge test (default: the player's own).
+    feet_y: Option<f32>,
+}
+
+/// HTTP handler for `GET /v1/physics/grip`: what a hand at (x, y, z) could
+/// grab. `grip` is null when nothing there is grabbable.
+async fn climb_grip(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Query(params): Query<ClimbGripQueryParams>,
+) -> Json<commands::ClimbGripResult> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    if command_tx
+        .send(RuntimeCommand::ClimbGrip {
+            point: [params.x, params.y, params.z],
+            radius: params.radius,
+            feet_y: params.feet_y,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send ClimbGrip command - game loop receiver dropped");
+        return Json(commands::ClimbGripResult { grip: None });
+    }
+
+    match reply_rx.await {
+        Ok(result) => Json(result),
+        Err(_) => {
+            tracing::error!("Failed to receive climb grip - sender dropped");
+            Json(commands::ClimbGripResult { grip: None })
+        }
+    }
+}
+
 async fn list_physics_joints(
     State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
 ) -> Json<commands::PhysicsJointsResult> {
