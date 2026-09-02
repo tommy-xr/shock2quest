@@ -11,7 +11,8 @@ use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
     scene::{
-        SceneObject, basic_material, color_material, create_plane_with_uv_scale, light::SpotLight,
+        SceneObject, basic_material, color_material, create_plane_with_uv_scale, cube,
+        light::SpotLight,
     },
 };
 use rapier3d::prelude::{Collider, ColliderBuilder};
@@ -661,13 +662,37 @@ impl DebugSceneFloor {
     }
 }
 
+/// A solid-color unit cube scaled to `scale` and centered on `translation`
+/// - the building block of every debug scene's floor, walls and benches.
+pub fn cube_object(
+    color: Vector3<f32>,
+    translation: Vector3<f32>,
+    scale: Vector3<f32>,
+) -> SceneObject {
+    let mut object = SceneObject::new(color_material::create(color), Box::new(cube::create()));
+    object.set_transform(
+        Matrix4::from_translation(translation)
+            * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z),
+    );
+    object
+}
+
 /// `Effect::CreateEntity` at a world position with identity orientation - the
 /// spawn shape every populate hook wants.
 pub fn spawn_at(template_id: i32, position: Point3<f32>) -> Effect {
+    spawn_at_oriented(template_id, position, Quaternion::new(1.0, 0.0, 0.0, 0.0))
+}
+
+/// [`spawn_at`] with an explicit orientation.
+pub fn spawn_at_oriented(
+    template_id: i32,
+    position: Point3<f32>,
+    orientation: Quaternion<f32>,
+) -> Effect {
     Effect::CreateEntity {
         template_id,
         position,
-        orientation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+        orientation,
         // Identity, not `from_translation(position)`: the root transform is
         // applied *on top of* `position`, so passing the position twice lands
         // the entity at double the offset.

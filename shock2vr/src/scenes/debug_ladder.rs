@@ -6,10 +6,10 @@
 //! load and a re-staged pose whenever the geometry it leans on changes. This
 //! scene is the controlled equivalent: one station per climbing shape, at
 //! known coordinates, built from the same ladder templates the missions place
-//! (so their `PropPhysAttr.climbable` faces and model-bounds colliders are the
+//! (so their `PropPhysAttr.climbable` flag and model-bounds colliders are the
 //! production ones, not stand-ins).
 //!
-//! Stations sit at `x ≈ -8` (ahead of the spawn) on lanes along `z`:
+//! Stations sit at `x ≈ -7` (ahead of the spawn) on lanes along `z`:
 //! - `z = 0`   ledge: a 16' ladder up a walkable block whose top is just
 //!   below the ladder's cap - the rick1 top-out shape.
 //! - `z = 8`   arch: a freestanding block with a 16' ladder on both faces -
@@ -22,22 +22,18 @@
 //! - `z = -16` wall: a plain block, same size as the ledge's, with no ladder.
 //!   The negative case.
 
-use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3, vec3};
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::{SceneObject, color_material, cube},
-};
+use cgmath::{Deg, Point3, Quaternion, Rotation3, Vector3, vec3};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use rapier3d::prelude::{ColliderBuilder, Isometry, SharedShape};
 use shipyard::EntityId;
 
 use crate::{
     GameOptions,
     game_scene::GameScene,
-    mission::entity_creator::CreateEntityOptions,
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     scenes::debug_common::{
-        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
+        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene, cube_object,
+        spawn_at_oriented,
     },
     scripts::Effect,
 };
@@ -82,22 +78,7 @@ fn ladder_yaw() -> Quaternion<f32> {
 }
 
 fn spawn_ladder(template_id: i32, position: Point3<f32>) -> Effect {
-    Effect::CreateEntity {
-        template_id,
-        position,
-        orientation: ladder_yaw(),
-        root_transform: Matrix4::identity(),
-        options: CreateEntityOptions::default(),
-    }
-}
-
-fn cube_object(color: Vector3<f32>, translation: Vector3<f32>, scale: Vector3<f32>) -> SceneObject {
-    let mut object = SceneObject::new(color_material::create(color), Box::new(cube::create()));
-    object.set_transform(
-        Matrix4::from_translation(translation)
-            * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z),
-    );
-    object
+    spawn_at_oriented(template_id, position, ladder_yaw())
 }
 
 pub fn create_debug_ladder_scene(
@@ -173,7 +154,7 @@ pub fn create_debug_ladder_scene(
          z=0 ledge (16' ladder, top-out onto the block), z=8 arch (ladder both\n\
          faces), z=-8 stack (11 stacked rungs), z=16 short 4' ladder, z=-16 plain\n\
          wall (not climbable). Ladders are the shipped templates, so their\n\
-         climbable faces and colliders are the production ones."
+         climbable flag and colliders are the production ones."
     );
 
     Box::new(HookedDebugScene::new(core, LadderHooks::default()))
