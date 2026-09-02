@@ -40,11 +40,10 @@ pub(crate) fn is_hit_box(world: &World, entity_id: EntityId) -> bool {
 /// Whether a creature's hitboxes stand in for its *body*, i.e. whether missing
 /// all of them means the shot missed the creature.
 ///
-/// A definition that maps one `Body` joint (`SPIDER_HIT_BOXES`,
-/// `OVERLORD_HIT_BOXES`) leaves the legs and limbs with no proxy at all, so
-/// treating a miss on that one blob as a miss on the animal would make whole
-/// bands of it unshootable. Those creatures keep their capsule; widening their
-/// definitions is what would let them join the rule.
+/// A definition that maps one `Body` joint (`OVERLORD_HIT_BOXES`) leaves the
+/// limbs with no proxy at all, so treating a miss on that one blob as a miss
+/// on the animal would make whole bands of it unshootable. That creature keeps
+/// its capsule; widening its definition is what would let it join the rule.
 pub(crate) fn hit_boxes_cover_body(world: &World, entity_id: EntityId) -> bool {
     crate::creature::get_entity_creature(world, entity_id)
         .is_some_and(|creature| creature.hit_boxes.len() > 1)
@@ -189,12 +188,11 @@ impl HitBoxManager {
     /// nominal cylinder rather than the creature - and frames the same
     /// cylinder whatever the creature is doing.
     ///
-    /// A definition that maps a single `Body` joint (the arachnids and the
-    /// Overlord) gets a body-only frame, legs excluded - measured on hydro3's
-    /// Baby Arachnids at 0.33-0.58 across, against a 0.40 collider. Neither is
-    /// the animal: the shipped creature colliders are their own known problem
-    /// (#904). The hitbox is at least measured from the mesh, so it is what is
-    /// used, and widening those definitions is the fix worth making.
+    /// A definition that maps a single `Body` joint (the Overlord) gets a
+    /// body-only frame, limbs excluded. That is not the animal either - the
+    /// shipped creature colliders are their own known problem (#904) - but the
+    /// hitbox is at least measured from the mesh, so it is what is used, and
+    /// widening that definition is the fix worth making.
     ///
     /// The boxes are world AABBs of the *rotated* proxy shapes, so a diagonal
     /// limb contributes a little more than its thickness. The extremes come
@@ -516,9 +514,9 @@ mod tests {
         );
     }
 
-    /// A creature that maps a single `Body` hitbox (the arachnids, the
-    /// Overlord) still gets that hitbox's bounds - it is measured from the
-    /// mesh, unlike the capsule beside it.
+    /// A creature that maps a single `Body` hitbox (the Overlord) still gets
+    /// that hitbox's bounds - it is measured from the mesh, unlike the capsule
+    /// beside it.
     #[test]
     fn a_single_hit_box_still_gives_bounds() {
         let mut world = World::new();

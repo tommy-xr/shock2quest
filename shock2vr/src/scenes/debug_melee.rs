@@ -47,9 +47,20 @@ const MELEE_WEAPONS: &[(i32, &str)] = &[
 /// resolves through the authored stim/receptron path rather than a stand-in.
 const TARGET_CREATURE: i32 = -397;
 
-/// Distances (world units) ahead of the player for the target row, inside the
-/// pen. Spaced so a swing can only ever reach one of them.
-const TARGET_DISTANCES: &[f32] = &[8.0, 10.0, 12.0];
+/// The targets: (template, distance ahead of the player, pen centre line z).
+/// The hybrids stand in the pen ahead, spaced so a swing can only ever reach
+/// one of them; the arachnids in the pen beside it. A spider is the other
+/// skeleton the hitbox tables have to fit - low, wide, eight legs - so the
+/// bench keeps one of each size. The plain Arachnid template (-2013) is
+/// abstract - no model - so the adult is the boss-mesh variant the missions
+/// actually place, -1439.
+const TARGETS: &[(i32, f32, f32)] = &[
+    (TARGET_CREATURE, 8.0, 0.0),
+    (TARGET_CREATURE, 10.0, 0.0),
+    (TARGET_CREATURE, 12.0, 0.0),
+    (-1439, 9.0, SPIDER_PEN_Z),
+    (-2014, 11.0, SPIDER_PEN_Z),
+];
 
 /// The creatures stand in a walled corridor that opens toward the player. They
 /// are live AI and will charge, which is the point - but the walls keep them
@@ -67,6 +78,11 @@ const PEN_NEAR: f32 = 5.0;
 const PEN_FAR: f32 = 12.5;
 const PEN_HALF_WIDTH: f32 = 2.5;
 const PEN_WALL_HEIGHT: f32 = 4.0;
+const PEN_WALL_THICKNESS: f32 = 1.0;
+
+/// Centre line (z) of the spider pen: the same corridor again, laid alongside
+/// the hybrids' one on +Z, wall to wall.
+const SPIDER_PEN_Z: f32 = 2.0 * PEN_HALF_WIDTH + PEN_WALL_THICKNESS;
 
 /// Distance to the wall the player can swing into, straight ahead. Also the
 /// pen's back wall.
@@ -104,31 +120,31 @@ pub fn create_debug_melee_scene(
             vec3(-RACK_DISTANCE, RACK_HEIGHT / 2.0, 0.0),
             vec3(0.6, RACK_HEIGHT, 3.0),
         ),
-        // corridor: back wall (also the surface to swing into) and two sides
+        // back wall (also the surface to swing into), spanning both pens
         (
             vec3(0.45, 0.45, 0.5),
-            vec3(-WALL_DISTANCE, PEN_WALL_HEIGHT / 2.0, 0.0),
-            vec3(1.0, PEN_WALL_HEIGHT, 2.0 * PEN_HALF_WIDTH),
-        ),
-        (
-            vec3(0.40, 0.40, 0.45),
+            vec3(-WALL_DISTANCE, PEN_WALL_HEIGHT / 2.0, SPIDER_PEN_Z / 2.0),
             vec3(
-                -(PEN_NEAR + PEN_FAR) / 2.0,
-                PEN_WALL_HEIGHT / 2.0,
-                -PEN_HALF_WIDTH,
+                PEN_WALL_THICKNESS,
+                PEN_WALL_HEIGHT,
+                2.0 * PEN_HALF_WIDTH + SPIDER_PEN_Z,
             ),
-            vec3(PEN_FAR - PEN_NEAR, PEN_WALL_HEIGHT, 1.0),
-        ),
-        (
-            vec3(0.40, 0.40, 0.45),
-            vec3(
-                -(PEN_NEAR + PEN_FAR) / 2.0,
-                PEN_WALL_HEIGHT / 2.0,
-                PEN_HALF_WIDTH,
-            ),
-            vec3(PEN_FAR - PEN_NEAR, PEN_WALL_HEIGHT, 1.0),
         ),
     ];
+    // corridor sides: the hybrids' pen on the centre line, the spiders' beside it
+    for pen_z in [0.0, SPIDER_PEN_Z] {
+        for side in [-PEN_HALF_WIDTH, PEN_HALF_WIDTH] {
+            boxes.push((
+                vec3(0.40, 0.40, 0.45),
+                vec3(
+                    -(PEN_NEAR + PEN_FAR) / 2.0,
+                    PEN_WALL_HEIGHT / 2.0,
+                    pen_z + side,
+                ),
+                vec3(PEN_FAR - PEN_NEAR, PEN_WALL_HEIGHT, PEN_WALL_THICKNESS),
+            ));
+        }
+    }
 
     let (scene_objects, collider) = boxes_to_geometry(boxes);
 
@@ -207,8 +223,8 @@ impl DebugSceneHooks for MeleeHooks {
                 Point3::new(-RACK_DISTANCE, RACK_HEIGHT + 0.05, z),
             ));
         }
-        for distance in TARGET_DISTANCES {
-            effects.push(spawn_at(TARGET_CREATURE, Point3::new(-distance, 1.0, 0.0)));
+        for (template_id, distance, pen_z) in TARGETS {
+            effects.push(spawn_at(*template_id, Point3::new(-distance, 1.0, *pen_z)));
         }
 
         core.handle_effects(

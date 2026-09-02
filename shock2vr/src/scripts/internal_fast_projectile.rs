@@ -296,11 +296,11 @@ fn projectile_ray_cast(
         }
         if !crate::creature::hit_boxes_cover_body(world, hit_entity_id) {
             // The creature's hitboxes do not stand in for its body: the
-            // arachnids and the Overlord map a single `Body` joint, so their
-            // legs and limbs have no proxy at all. Passing through would make
-            // whole bands of them unshootable, so the capsule keeps the shot
-            // (with no joint to report). Widening those definitions is the fix
-            // that would let them join the rule above.
+            // Overlord maps a single `Body` joint, so its limbs have no proxy
+            // at all. Passing through would make whole bands of it
+            // unshootable, so the capsule keeps the shot (with no joint to
+            // report). Widening that definition is the fix that would let
+            // it join the rule above.
             return maybe_hit_spot;
         }
         if fired_from_inside(physics, start_point, hit_entity_id) {
@@ -528,10 +528,10 @@ mod tests {
         );
     }
 
-    /// The arachnids and the Overlord map a single `Body` joint, so their legs
-    /// and limbs have no proxy at all. A shot that misses that one blob has
-    /// not missed the animal - passing through would leave whole bands of it
-    /// unshootable - so those creatures keep their capsule.
+    /// The Overlord maps a single `Body` joint, so its limbs have no proxy at
+    /// all. A shot that misses that one blob has not missed the creature -
+    /// passing through would leave whole bands of it unshootable - so it keeps
+    /// its capsule.
     ///
     /// Negative-first: without the coverage gate this shot reaches the wall.
     #[test]
@@ -539,8 +539,8 @@ mod tests {
         let mut physics = PhysicsWorld::new();
         let mut world = World::new();
 
-        // Creature type 6 is ARACHNID: one mapped joint.
-        let creature = world.add_entity((crate::creature::RuntimePropHasHitBoxes, PropCreature(6)));
+        // Creature type 5 is OVERLORD: one mapped joint.
+        let creature = world.add_entity((crate::creature::RuntimePropHasHitBoxes, PropCreature(5)));
         physics.add_kinematic(
             creature,
             vec3(0.0, 0.0, 5.0),
@@ -555,7 +555,7 @@ mod tests {
             hit_box_type: HitBoxType::Body,
             joint_id: 0,
         });
-        // Off to the side, as an arachnid's body blob is from its legs.
+        // Off to the side, as a body blob is from the limbs.
         physics.add_kinematic(
             hit_box,
             vec3(1.2, 0.0, 5.0),
