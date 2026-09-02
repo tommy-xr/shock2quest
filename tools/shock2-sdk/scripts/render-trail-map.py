@@ -94,8 +94,11 @@ def main():
             draw.ellipse([wx - 12, wy - 12, wx + 12, wy + 12], outline=(255, 40, 40), width=3)
         legend.append(f"{track['name']} t{track['template_id']}: {verdict}")
 
-    text_x = width - LEGEND_WIDTH + 12
-    for row, line in enumerate(legend):
+    # Legend runs in columns so a crowded mission cannot push rows off the page.
+    rows_per_column = max(1, (height - 2 * MARGIN) // 16)
+    for index, line in enumerate(legend):
+        column, row = divmod(index, rows_per_column)
+        text_x = width - LEGEND_WIDTH + 12 + column * 170
         color = (255, 90, 90) if "wedged" in line else (220, 220, 225)
         draw.text((text_x, MARGIN + row * 16), line, fill=color)
 

@@ -4095,7 +4095,12 @@ struct RouteQueryParams {
 }
 
 fn parse_vec3_param(s: &str) -> Option<[f32; 3]> {
-    let parts: Vec<f32> = s.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+    // Every component must parse and be finite: dropping a bad one would
+    // answer a reachability question about a point nobody asked for.
+    let parts: Vec<f32> = s
+        .split(',')
+        .map(|p| p.trim().parse::<f32>().ok().filter(|v| v.is_finite()))
+        .collect::<Option<Vec<f32>>>()?;
     match parts.len() {
         3 => Some([parts[0], parts[1], parts[2]]),
         _ => None,

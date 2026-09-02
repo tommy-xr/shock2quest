@@ -36,7 +36,9 @@ export interface AiTrack {
   template_id: number;
   /**
    * Does the static walk graph connect this AI's start cell to the player's?
-   * Null when the scene has no pathfinding data.
+   * Null when the answer is unknown - no pathfinding data, or either end was
+   * off the nav mesh at pass start (a query from an off-mesh point fails the
+   * same way a disconnected one does, and must not be read as "by design").
    */
   reachable: boolean | null;
   samples: AiSample[];
@@ -94,9 +96,15 @@ function lastOutcome(samples: AiSample[]): string | undefined {
 }
 
 /**
- * The longest span in which the AI stayed put while it had somewhere to be:
- * a stationary window carrying stall time or an active route. Returns the
- * first such window that clears the duration threshold.
+ * The first span in which the AI stayed put while it was actively trying to
+ * move: stationary for long enough, with stall time that CHANGES across the
+ * window.
+ *
+ * The change requirement matters - the steering's live record is only
+ * refreshed while path-following runs, so an AI that stopped following a path
+ * (reached its patrol end, switched to attacking) keeps its last snapshot
+ * forever. A frozen snapshot is not evidence of a wedge; a stall clock that
+ * ticks (or resets on a backout) is.
  */
 function findWedge(
   samples: AiSample[],
@@ -116,16 +124,11 @@ function findWedge(
     // No behavior data at all is not evidence of standing by design - the
     // runtime sometimes omits AIBehavior - so fall back to the path evidence.
     const traveling = behaviors.length === 0 || behaviors.some((b) => LOCOMOTING.has(b));
-    const blocked = window.some(
-      (s) =>
-        (s.live_stall_seconds ?? 0) > 0 ||
-        (s.outcome === "Full" && (s.live_path_len ?? 0) > 0),
-    );
+    const stalls = new Set(window.map((s) => s.live_stall_seconds ?? 0));
+    const blocked = stalls.size > 1 && Math.max(...stalls) > 0;
     if (traveling && blocked) {
       return { at: samples[i].position, seconds };
     }
-    // Windows are maximal, so the next one can only start after this one.
-    i = j;
   }
   return undefined;
 }
@@ -157,10 +160,13 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
   const final = samples[samples.length - 1].distance;
   const base = { closest_distance: closest, final_distance: final };
 
-  if (options.pass === "chase" && closest <= arriveRadius) {
+  // Arrival means the AI CLOSED on the player: one that started inside melee
+  // reach and never moved must still be able to come out as wedged.
+  const start = samples[0].distance;
+  if (options.pass === "chase" && closest <= arriveRadius && start > arriveRadius) {
     return {
       verdict: "arrived",
-      reason: `closed to ${closest.toFixed(1)} (<= ${arriveRadius})`,
+      reason: `closed from ${start.toFixed(1)} to ${closest.toFixed(1)} (<= ${arriveRadius})`,
       ...base,
     };
   }
@@ -192,7 +198,10 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
     if (alertness.length > 0 && alertness.every((a) => a === "Lowest")) {
       return {
         verdict: "expected_unreachable",
-        reason: "alertness stayed Lowest through a forced chase (alert-capped)",
+        // Either the mission caps its alertness (P$AI_AlertC) or the pin never
+        // reaches it at all (it only goes to creatures, so turrets and cameras
+        // land here too) - in both cases it was never coming.
+        reason: "alertness never rose above Lowest under a forced chase",
         ...base,
       };
     }
@@ -214,7 +223,11 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
     return { verdict: "no_route", reason: `last path outcome ${outcome}`, ...base };
   }
 
-  const traveled = distance3(samples[0].position, samples[samples.length - 1].position);
+  // Path length, not start-to-end displacement: a loop patrol returns to where
+  // it started and would otherwise read as "never moved".
+  const traveled = samples
+    .slice(1)
+    .reduce((sum, s, i) => sum + distance3(samples[i].position, s.position), 0);
   const everPathed = samples.some(
     (s) => Boolean(s.outcome) || (s.live_path_len ?? 0) > 0 || (s.live_stall_seconds ?? 0) > 0,
   );

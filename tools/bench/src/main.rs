@@ -91,13 +91,10 @@ enum PathCommand {
     },
     /// Dump every nav cell as JSON (polygon, center, flags, walk component)
     /// - the geometry a map visualization draws over
-    Dump {
-        mission: String,
-        /// Emit JSON (the only supported format; accepted for symmetry with
-        /// `bench --json`)
-        #[arg(long, default_value_t = true)]
-        json: bool,
-    },
+    Dump { mission: String },
+    /// List the missions in the game data, one per line (they can live inside
+    /// an archive, so a directory listing is not enough)
+    Missions,
     /// Show the walk component containing a position and its frontier links
     /// (how the component connects - or fails to connect - to neighbors)
     Component {
@@ -173,7 +170,12 @@ fn run_path_command(command: PathCommand) -> Result<()> {
             let db = load_path_database(&mission)?;
             dump_cells_at(db, parse_vec3(&at)?);
         }
-        PathCommand::Dump { mission, json: _ } => {
+        PathCommand::Missions => {
+            for mission in data_files::mission_names(paths::data_root()) {
+                println!("{mission}");
+            }
+        }
+        PathCommand::Dump { mission } => {
             let db = load_path_database(&mission)?;
             println!("{}", serde_json::to_string(&dump_cells(&mission, &db))?);
         }

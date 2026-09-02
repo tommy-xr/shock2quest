@@ -19,10 +19,9 @@
 
 import { spawnSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
-import { readdirSync } from "node:fs";
 import path from "node:path";
 
-import { findRepoRoot, GameServer } from "../src/index.js";
+import { findRepoRoot, GameServer, HttpError } from "../src/index.js";
 import type { Game } from "../src/index.js";
 import {
   classifyTrack,
@@ -83,13 +82,13 @@ function parseArgs(argv: string[]): Args {
         args.out = value();
         break;
       case "--idle-frames":
-        args.idleFrames = Number(value());
+        args.idleFrames = positiveInt(a, value());
         break;
       case "--chase-frames":
-        args.chaseFrames = Number(value());
+        args.chaseFrames = positiveInt(a, value());
         break;
       case "--sample-every":
-        args.sampleEvery = Number(value());
+        args.sampleEvery = positiveInt(a, value());
         break;
       case "--experimental":
         args.experimental.push(...value().split(","));
@@ -100,7 +99,24 @@ function parseArgs(argv: string[]): Args {
   }
   if (all) args.missions = missionsInData();
   if (args.missions.length === 0) throw new Error("pass --mission <name> or --all");
+  // A pass shorter than one sample would report every AI as "no samples".
+  for (const [name, frames] of [
+    ["--idle-frames", args.idleFrames],
+    ["--chase-frames", args.chaseFrames],
+  ] as const) {
+    if (frames < args.sampleEvery) {
+      throw new Error(`${name} (${frames}) must be at least --sample-every (${args.sampleEvery})`);
+    }
+  }
   return args;
+}
+
+function positiveInt(flag: string, raw: string): number {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${flag} needs a positive whole number, got ${raw}`);
+  }
+  return value;
 }
 
 function repoRoot(): string {
@@ -109,14 +125,24 @@ function repoRoot(): string {
   return root;
 }
 
-function dataRoot(): string {
-  return process.env.DARK_ASSET_PATH ?? path.join(repoRoot(), "Data");
-}
-
+/**
+ * Missions in the game data, from the engine's own discovery - a 25th
+ * Anniversary install keeps every .mis inside an archive, so listing the data
+ * directory finds nothing there.
+ */
 function missionsInData(): string[] {
-  return readdirSync(dataRoot())
-    .filter((f) => f.endsWith(".mis"))
-    .sort();
+  const result = spawnSync("cargo", ["run", "--release", "-q", "-p", "bench", "--", "path", "missions"], {
+    cwd: repoRoot(),
+    encoding: "utf8",
+  });
+  const missions = (result.stdout ?? "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.endsWith(".mis"));
+  if (result.status !== 0 || missions.length === 0) {
+    throw new Error(`could not list missions: ${result.stderr?.slice(-400) ?? "no output"}`);
+  }
+  return missions.sort();
 }
 
 /**
@@ -128,7 +154,10 @@ async function discoverAis(game: Game): Promise<EntityDetailResult[]> {
   const { entities } = await game.entities.list({ limit: 5000 });
   const ais: EntityDetailResult[] = [];
   for (const entity of entities) {
-    const detail = await game.entities.detail(entity.id).catch(() => null);
+    const detail = await game.entities.detail(entity.id).catch((error: unknown) => {
+      if (error instanceof HttpError && error.status === 404) return null;
+      throw error;
+    });
     if (!detail) continue;
     const props = new Set(detail.properties.map((p) => p.name));
     if (props.has("AIAlertness") || props.has("AIBehavior")) ais.push(detail);
@@ -167,11 +196,14 @@ async function runPass(
   const tracks = new Map<number, AiTrack>();
   for (const ai of ais) {
     const route = await game.pathfinding.route(ai.position, player);
+    // An off-mesh endpoint fails the query exactly like a disconnected one,
+    // so only a route between two resolved cells answers "unreachable".
+    const resolved = route !== null && route.from_cell !== null && route.to_cell !== null;
     tracks.set(ai.entity_id, {
       entity_id: ai.entity_id,
       name: ai.name,
       template_id: ai.template_id,
-      reachable: route ? route.reachable : null,
+      reachable: resolved ? route.reachable : null,
       samples: [],
     });
   }
@@ -180,11 +212,18 @@ async function runPass(
   for (let step = 1; step <= steps; step++) {
     await game.step({ frames: sampleEvery });
     const t = (step * sampleEvery) / 60;
+    // Re-read the player: a chase pass sends every creature into melee, and
+    // distances to a stale position would be fiction if the player is moved.
+    const live = await game.player.position();
+    const playerNow: Vec3 = [live.x, live.y, live.z];
     const paths = new Map((await game.pathfinding.aiPaths()).map((p) => [p.entity_id, p]));
     for (const [id, track] of tracks) {
-      // A dead or despawned AI stops reporting; the samples so far still
-      // classify, so drop the sample rather than the whole pass.
-      const detail = await game.entities.detail(id).catch(() => null);
+      // A dead or despawned AI stops reporting (404); the samples so far
+      // still classify. Any other failure is a broken run, not a datum.
+      const detail = await game.entities.detail(id).catch((error: unknown) => {
+        if (error instanceof HttpError && error.status === 404) return null;
+        throw error;
+      });
       if (!detail) continue;
       const route = paths.get(track.entity_id);
       const sample: AiSample = {
@@ -198,7 +237,7 @@ async function runPass(
         live_path_len: route?.live_path_len ?? null,
         live_target: route?.live_target ?? null,
         live_stall_seconds: route?.live_stall_seconds ?? null,
-        distance: distance3(detail.position, player),
+        distance: distance3(detail.position, playerNow),
       };
       track.samples.push(sample);
     }
@@ -297,7 +336,7 @@ async function main(): Promise<void> {
       }
       await game.input.trigger("DebugForceChase");
       await game.step({ frames: 30 });
-      const label = chaseSpots.length > 1 ? `chase#${index}` : "chase";
+      const label = chaseSpots.length > 1 ? `chase-${index}` : "chase";
       const pass = await runPass(game, "chase", label, args.chaseFrames, args.sampleEvery);
       passes.push(pass);
       console.log(passTable(mission, pass));

@@ -1,4 +1,4 @@
-import { HttpClient } from "./client.js";
+import { HttpClient, HttpError } from "./client.js";
 import type {
   AnimationState,
   CommandResult,
@@ -846,8 +846,11 @@ export class PathfindingApi {
       return await this.client.get<PathRouteResult>(
         `/v1/pathfinding/route?from=${q(from)}&to=${q(to)}`,
       );
-    } catch {
-      return null;
+    } catch (error) {
+      // Only "this scene has no pathfinding data" is an answer; a transport
+      // error or a 500 must not masquerade as one.
+      if (error instanceof HttpError && error.status === 404) return null;
+      throw error;
     }
   }
 }

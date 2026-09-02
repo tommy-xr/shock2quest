@@ -46,7 +46,12 @@ test("a patrolling AI stuck against geometry is 'wedged', with its position", ()
   const result = classifyTrack(
     track([
       { position: [48, 0.1, -85], outcome: "Full", live_path_len: 4, live_stall_seconds: 0 },
-      ...stationary(20, { outcome: "Full", live_path_len: 11, live_stall_seconds: 2.5, behavior: "Patrol" }),
+      // The stall clock ticks up and resets on each backout - what a live
+      // wedge looks like, as opposed to a frozen snapshot.
+      ...stationary(20, { outcome: "Full", live_path_len: 11, behavior: "Patrol" }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: (i % 6) * 0.5,
+      })),
     ]),
     { pass: "idle" },
   );
@@ -109,7 +114,7 @@ test("an AI that never leaves Lowest under a forced chase is alert-capped", () =
     { pass: "chase" },
   );
   assert.equal(result.verdict, "expected_unreachable");
-  assert.match(result.reason, /alert-capped/);
+  assert.match(result.reason, /never rose above Lowest/);
 });
 
 test("a scripted-sequence AI is expected-unreachable", () => {
@@ -131,6 +136,57 @@ test("an AI still closing on the player is 'progressing'", () => {
       { position: [20, 0, 0], distance: 30, outcome: "Full", behavior: "Chase", alertness: "High" },
     ]),
     { pass: "chase" },
+  );
+  assert.equal(result.verdict, "progressing");
+});
+
+test("a frozen steering snapshot is not evidence of a wedge", () => {
+  // The live path/stall record is only refreshed while path-following runs,
+  // so an AI that stopped following keeps its last snapshot forever.
+  const result = classifyTrack(
+    track(stationary(30, { outcome: "Full", live_path_len: 5, live_stall_seconds: 0.78, behavior: "Idle" })),
+    { pass: "idle" },
+  );
+  assert.notEqual(result.verdict, "wedged");
+});
+
+test("an AI that starts inside melee reach and never moves is wedged, not 'arrived'", () => {
+  const result = classifyTrack(
+    track(
+      stationary(20, { behavior: "Chase", alertness: "High", live_stall_seconds: 1 }).map((s, i) => ({
+        ...s,
+        distance: 2.5,
+        live_stall_seconds: i % 4, // the stall clock ticks and resets
+      })),
+    ),
+    { pass: "chase" },
+  );
+  assert.equal(result.verdict, "wedged");
+});
+
+test("a wedge that starts after an unblocked stationary spell is still found", () => {
+  const result = classifyTrack(
+    track([
+      // 8s parked with no stall evidence, then 8s parked while stalling.
+      ...stationary(16, { behavior: "Patrol" }),
+      ...stationary(16, { behavior: "Patrol" }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: i % 6,
+      })),
+    ]),
+    { pass: "idle" },
+  );
+  assert.equal(result.verdict, "wedged");
+});
+
+test("a loop patrol that returns to its start is not 'never moved'", () => {
+  const result = classifyTrack(
+    track([
+      { position: [0, 0, 0], behavior: "Patrol" },
+      { position: [0, 0, 20], behavior: "Patrol" },
+      { position: [0, 0, 0], behavior: "Patrol" },
+    ]),
+    { pass: "idle" },
   );
   assert.equal(result.verdict, "progressing");
 });
