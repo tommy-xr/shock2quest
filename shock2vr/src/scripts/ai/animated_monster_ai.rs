@@ -350,11 +350,16 @@ impl AnimatedMonsterAI {
         entity_id: EntityId,
     ) -> Effect {
         let (position, forward) = get_position_and_forward(world, entity_id);
-
-        let down_amount = 2.0 / SCALE_FACTOR;
-        let down_vector = vec3(0.0, -down_amount, 0.0);
+        let position = position + crate::creature::sense_offset(world, entity_id);
 
         let distance = 8.0 / SCALE_FACTOR;
+        // Dip so the probe meets flat floor two thirds of the way out, whatever
+        // the creature's height: a fixed dip that suits a human's chest puts a
+        // spider's probe into the floor within a stride.
+        let down_amount = crate::creature::sense_height(world, entity_id)
+            .map(|height| height * 1.5 / distance)
+            .unwrap_or(2.0 / SCALE_FACTOR);
+        let down_vector = vec3(0.0, -down_amount, 0.0);
 
         let _direction = forward + down_vector;
 

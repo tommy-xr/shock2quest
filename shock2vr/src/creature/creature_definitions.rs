@@ -71,11 +71,19 @@ pub const HUMAN_PHYS_OFFSET: f32 = 1.0 / SCALE_FACTOR;
 pub const DROID_HEIGHT: f32 = 7.0 / SCALE_FACTOR;
 pub const DROID_WIDTH: f32 = 5.0 / SCALE_FACTOR;
 
-pub const BABY_SPIDER_WIDTH: f32 = 3.0 / SCALE_FACTOR;
+// An arachnid's origin sits low - the legs reach only ~0.2 (baby) / ~0.4
+// (adult) below it while the body rises well above - so the capsule is raised
+// (a negative offset) until its bottom meets the leg tips. Sized so the
+// capsule is as tall as the mesh whether it comes from these bounds or from
+// an authored sphere model; a capsule centred on the origin left the spider
+// standing on air. Widths follow the authored collision (~2 ft).
+pub const BABY_SPIDER_WIDTH: f32 = 2.0 / SCALE_FACTOR;
 pub const BABY_SPIDER_HEIGHT: f32 = 3.0 / SCALE_FACTOR;
+pub const BABY_SPIDER_PHYS_OFFSET: f32 = -1.0 / SCALE_FACTOR;
 
-pub const SPIDER_WIDTH: f32 = 4.0 / SCALE_FACTOR;
-pub const SPIDER_HEIGHT: f32 = 4.0 / SCALE_FACTOR;
+pub const SPIDER_WIDTH: f32 = 3.0 / SCALE_FACTOR;
+pub const SPIDER_HEIGHT: f32 = 4.5 / SCALE_FACTOR;
+pub const SPIDER_PHYS_OFFSET: f32 = -1.3 / SCALE_FACTOR;
 
 pub const MONKEY_HEIGHT: f32 = 3.0 / SCALE_FACTOR;
 pub const MONKEY_WIDTH: f32 = 3.0 / SCALE_FACTOR;
@@ -245,7 +253,7 @@ pub const OVERLORD: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
 
 pub const ARACHNID: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
     Arc::new(CreatureDefinition {
-        physics_offset_height: 0.0,
+        physics_offset_height: SPIDER_PHYS_OFFSET,
         bounding_size: vec3(SPIDER_WIDTH, SPIDER_HEIGHT, SPIDER_WIDTH),
         actor_type: ActorType::Arachnid,
         joint_map: vec![
@@ -272,7 +280,7 @@ pub const MONKEY: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
 
 pub const BABY_ARACHNID: Lazy<Arc<CreatureDefinition>> = Lazy::new(|| {
     Arc::new(CreatureDefinition {
-        physics_offset_height: 0.0,
+        physics_offset_height: BABY_SPIDER_PHYS_OFFSET,
         bounding_size: vec3(BABY_SPIDER_WIDTH, BABY_SPIDER_HEIGHT, BABY_SPIDER_WIDTH),
         actor_type: ActorType::Arachnid,
         joint_map: vec![
@@ -321,6 +329,31 @@ pub fn get_entity_creature(world: &World, entity_id: EntityId) -> Option<Arc<Cre
     let v_creature = world.borrow::<View<PropCreature>>().ok()?;
     let creature_type = v_creature.get(entity_id).ok()?;
     get_creature_definition(creature_type.0)
+}
+
+/// Where a creature senses from, relative to its origin. A creature whose
+/// collider is raised above the origin (the arachnids: a negative
+/// `physics_offset_height`) looks, feels for door sensors and whiskers from
+/// the collider's centre, not from ankle height where a ray meets the floor
+/// within a stride. A collider hung below the origin (humanoids) leaves the
+/// origin alone: there it is already the higher point, roughly the chest.
+pub fn sense_offset(world: &World, entity_id: EntityId) -> Vector3<f32> {
+    let lift = get_entity_creature(world, entity_id)
+        .map(|creature| (-creature.physics_offset_height).max(0.0))
+        .unwrap_or(0.0);
+    vec3(0.0, lift, 0.0)
+}
+
+/// How far the sense point sits above the bottom of the creature's collider -
+/// its height above the floor when standing. Both creature shapes total
+/// `bounding_size.y` tall, centred `physics_offset_height` below the origin.
+pub fn sense_height(world: &World, entity_id: EntityId) -> Option<f32> {
+    let creature = get_entity_creature(world, entity_id)?;
+    Some(
+        creature.physics_offset_height
+            + creature.bounding_size.y / 2.0
+            + sense_offset(world, entity_id).y,
+    )
 }
 
 #[cfg(test)]
@@ -381,5 +414,23 @@ mod tests {
             assert_eq!(worth(shoulder + 2), Some(0.5), "leg {leg} wrist");
         }
         assert_eq!(worth(29), None, "claw");
+    }
+
+    /// An arachnid senses from its raised collider's centre; a humanoid from
+    /// its origin, which already sits above the collider's centre.
+    #[test]
+    fn a_raised_collider_lifts_the_sense_point() {
+        let mut world = World::new();
+        let human = world.add_entity(PropCreature(0));
+        let arachnid = world.add_entity(PropCreature(6));
+        let baby = world.add_entity(PropCreature(8));
+
+        assert_eq!(sense_offset(&world, human).y, 0.0);
+        assert!((sense_offset(&world, arachnid).y - 1.3 / SCALE_FACTOR).abs() < 1e-5);
+        assert!((sense_offset(&world, baby).y - 1.0 / SCALE_FACTOR).abs() < 1e-5);
+
+        // Standing heights of the sense point: human origin, spider collider centre.
+        assert!((sense_height(&world, human).unwrap() - 4.25 / SCALE_FACTOR).abs() < 1e-5);
+        assert!((sense_height(&world, baby).unwrap() - 1.5 / SCALE_FACTOR).abs() < 1e-5);
     }
 }
