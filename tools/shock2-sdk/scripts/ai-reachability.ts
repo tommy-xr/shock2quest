@@ -15,6 +15,7 @@
  *
  *   npm run ai-reachability -- --mission medsci2.mis --out /tmp/aire
  *   npm run ai-reachability -- --all --experimental nav_bridges
+ *   npm run ai-reachability -- --all --pass chase --experimental nav_bridges
  */
 
 import { spawnSync } from "node:child_process";
@@ -45,6 +46,8 @@ const CHASE_POSITIONS: Record<string, Vec3[]> = {
   "medsci1.mis": [[-14.0, 0.5, -30.0]],
 };
 
+type PassSelector = "idle" | "chase" | "both";
+
 interface Args {
   missions: string[];
   out: string;
@@ -52,6 +55,7 @@ interface Args {
   chaseFrames: number;
   sampleEvery: number;
   experimental: string[];
+  pass: PassSelector;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -62,6 +66,7 @@ function parseArgs(argv: string[]): Args {
     chaseFrames: 1800,
     sampleEvery: 30,
     experimental: [],
+    pass: "both",
   };
   let all = false;
   for (let i = 0; i < argv.length; i++) {
@@ -93,6 +98,14 @@ function parseArgs(argv: string[]): Args {
       case "--experimental":
         args.experimental.push(...value().split(","));
         break;
+      case "--pass": {
+        const v = value();
+        if (v !== "idle" && v !== "chase" && v !== "both") {
+          throw new Error(`--pass must be idle, chase, or both, got ${v}`);
+        }
+        args.pass = v;
+        break;
+      }
       default:
         throw new Error(`unknown argument ${a}`);
     }
@@ -310,7 +323,7 @@ async function main(): Promise<void> {
     const passes: PassResult[] = [];
 
     // Idle pass: nobody touches the controls; the AIs run their patrols.
-    {
+    if (args.pass === "idle" || args.pass === "both") {
       await using game = await GameServer.launch({
         mission,
         experimental: args.experimental,
@@ -322,24 +335,26 @@ async function main(): Promise<void> {
     }
 
     // Chase passes: one per authored player position (or the spawn).
-    const positions = CHASE_POSITIONS[mission] ?? [];
-    const chaseSpots: (Vec3 | null)[] = positions.length > 0 ? positions : [null];
-    for (const [index, spot] of chaseSpots.entries()) {
-      await using game = await GameServer.launch({
-        mission,
-        experimental: args.experimental,
-      });
-      await game.step({ frames: 10 });
-      if (spot) {
-        await game.player.teleport({ x: spot[0], y: spot[1], z: spot[2] });
+    if (args.pass === "chase" || args.pass === "both") {
+      const positions = CHASE_POSITIONS[mission] ?? [];
+      const chaseSpots: (Vec3 | null)[] = positions.length > 0 ? positions : [null];
+      for (const [index, spot] of chaseSpots.entries()) {
+        await using game = await GameServer.launch({
+          mission,
+          experimental: args.experimental,
+        });
         await game.step({ frames: 10 });
+        if (spot) {
+          await game.player.teleport({ x: spot[0], y: spot[1], z: spot[2] });
+          await game.step({ frames: 10 });
+        }
+        await game.input.trigger("DebugForceChase");
+        await game.step({ frames: 30 });
+        const label = chaseSpots.length > 1 ? `chase-${index}` : "chase";
+        const pass = await runPass(game, "chase", label, args.chaseFrames, args.sampleEvery);
+        passes.push(pass);
+        console.log(passTable(mission, pass));
       }
-      await game.input.trigger("DebugForceChase");
-      await game.step({ frames: 30 });
-      const label = chaseSpots.length > 1 ? `chase-${index}` : "chase";
-      const pass = await runPass(game, "chase", label, args.chaseFrames, args.sampleEvery);
-      passes.push(pass);
-      console.log(passTable(mission, pass));
     }
 
     const report = { mission, experimental: args.experimental, passes };
