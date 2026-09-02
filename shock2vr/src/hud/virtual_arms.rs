@@ -35,7 +35,25 @@ const PSI_BAR_START: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 8.0, 17.0 + BAR_VERTI
 const PSI_BAR_END: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 88.0, 31.0 + BAR_VERTICAL_OFFSET);
 
 /// Z-offset for overlay layers to ensure proper rendering order
-const OVERLAY_Z_OFFSET: f32 = 0.001;
+pub(crate) const OVERLAY_Z_OFFSET: f32 = 0.001;
+
+/// Which forearm panels to draw. The default (both) is the shipped behavior;
+/// the `ambient_meters` experiment retires the right-forearm ammo panel (the
+/// readout moves onto the weapon) and glance-gates the left health panel.
+#[derive(Debug, Clone, Copy)]
+pub struct ArmPanelVisibility {
+    pub health: bool,
+    pub ammo: bool,
+}
+
+impl Default for ArmPanelVisibility {
+    fn default() -> Self {
+        Self {
+            health: true,
+            ammo: true,
+        }
+    }
+}
 
 /// Create HUD panels for both arms with health/psi overlays
 pub fn create_arm_hud_panels(
@@ -45,22 +63,27 @@ pub fn create_arm_hud_panels(
     left_hand_rotation: Quaternion<f32>,
     right_hand_position: Vector3<f32>,
     right_hand_rotation: Quaternion<f32>,
+    visibility: ArmPanelVisibility,
 ) -> Vec<SceneObject> {
     let mut scene_objects = Vec::new();
 
     // Create left arm HUD with health/psi overlays (BIOFULL base)
-    let mut left_hud_layers = create_forearm_hud_with_overlays(
-        asset_cache,
-        world,
-        left_hand_position,
-        left_hand_rotation,
-    );
-    scene_objects.append(&mut left_hud_layers);
+    if visibility.health {
+        let mut left_hud_layers = create_forearm_hud_with_overlays(
+            asset_cache,
+            world,
+            left_hand_position,
+            left_hand_rotation,
+        );
+        scene_objects.append(&mut left_hud_layers);
+    }
 
     // Create right arm HUD (AMMOFULL) with the live ammo readout on it
-    let mut right_hud_layers =
-        create_ammo_forearm_panel(asset_cache, world, right_hand_position, right_hand_rotation);
-    scene_objects.append(&mut right_hud_layers);
+    if visibility.ammo {
+        let mut right_hud_layers =
+            create_ammo_forearm_panel(asset_cache, world, right_hand_position, right_hand_rotation);
+        scene_objects.append(&mut right_hud_layers);
+    }
 
     // Part of the player's hand visuals: labelled here rather than at the call
     // sites so the `debug_hud` scene, which emits these without an interaction
@@ -346,36 +369,44 @@ fn create_forearm_hud_panel(
     hand_rotation: Quaternion<f32>,
     handedness: Handedness,
 ) -> SceneObject {
-    // Load appropriate texture based on handedness
+    // Appropriate texture based on handedness
+    let texture_name = match handedness {
+        Handedness::Left => "BIOFULL.PCX",
+        Handedness::Right => "AMMOFULL.PCX",
+    };
+
+    // Placed by the shared forearm pose
+    panel_backdrop(
+        asset_cache,
+        texture_name,
+        forearm_panel_transform(hand_position, hand_rotation, handedness),
+    )
+}
+
+/// A HUD panel backdrop quad: `texture_name` on a unit quad placed by
+/// `transform` (which carries the panel's world size). Shared between the
+/// forearm panels and the on-weapon ammo meter so they are lit identically.
+pub(crate) fn panel_backdrop(
+    asset_cache: &mut AssetCache,
+    texture_name: &str,
+    transform: Matrix4<f32>,
+) -> SceneObject {
     let texture_options = TextureOptions {
         wrap: false,
         ..Default::default()
     };
-    let texture = match handedness {
-        Handedness::Left => asset_cache.get_ext(&TEXTURE_IMPORTER, "BIOFULL.PCX", &texture_options),
-        Handedness::Right => {
-            asset_cache.get_ext(&TEXTURE_IMPORTER, "AMMOFULL.PCX", &texture_options)
-        }
-    };
+    let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, texture_name, &texture_options);
 
-    // Create BasicMaterial with the loaded texture (casting to the expected trait object)
+    // BasicMaterial with the loaded texture (casting to the expected trait object)
     let material = engine::scene::basic_material::create(
         texture.clone() as std::rc::Rc<dyn engine::texture::TextureTrait>,
         0.0, // No emissivity
         0.0, // No transparency
     );
 
-    // Create quad geometry
     let geometry = Box::new(engine::scene::quad::create());
-
-    // Create scene object, placed by the shared forearm pose
     let mut scene_object = SceneObject::new(material, geometry);
-    scene_object.set_transform(forearm_panel_transform(
-        hand_position,
-        hand_rotation,
-        handedness,
-    ));
-
+    scene_object.set_transform(transform);
     scene_object
 }
 
@@ -383,7 +414,7 @@ fn create_forearm_hud_panel(
 /// toward the body and tilted flat against the arm like a wrist computer.
 /// The single source of forearm placement - the panel quad, its overlays and
 /// the ammo readout canvas all derive from this, so they cannot drift apart.
-fn forearm_pose(
+pub(crate) fn forearm_pose(
     hand_position: Vector3<f32>,
     hand_rotation: Quaternion<f32>,
     handedness: Handedness,
