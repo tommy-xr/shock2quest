@@ -126,7 +126,9 @@ impl WhiskerAvoidance {
                     from,
                     forward,
                     WHISKER_DISTANCE,
-                    InternalCollisionGroups::WORLD | InternalCollisionGroups::ENTITY,
+                    InternalCollisionGroups::ALL_COLLIDABLE
+                        - InternalCollisionGroups::PLAYER
+                        - InternalCollisionGroups::ACTOR,
                     Some(entity_id),
                     true,
                     &not_a_door,

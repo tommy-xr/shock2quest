@@ -38,9 +38,10 @@ const PATROL_STALL_SECONDS: f32 = 5.0;
 /// the stall watchdog. A patrolling AI clears this in a fraction of a second,
 /// so only a body that is genuinely going nowhere trips the timer.
 const PATROL_STALL_PROGRESS: f32 = 2.0 / SCALE_FACTOR;
-/// Points skipped in a row, without reaching one in between, after which the
-/// AI stops patrolling altogether and hands back to idle - rather than
-/// shuffling forever between points it has no route to.
+/// Points STALLED on in a row, without reaching one in between, after which
+/// the AI stops patrolling altogether and hands back to idle - rather than
+/// grinding into geometry forever. (Points with no route at all are cheap to
+/// skip and are bounded separately, by `unreachable_points`.)
 const PATROL_MAX_SKIPPED_POINTS: u32 = 3;
 
 /// Walk an authored patrol route: head to the current patrol point, and on
@@ -65,6 +66,12 @@ pub struct PatrolBehavior {
     stall_seconds: f32,
     /// Points given up on since the last one actually reached.
     skipped_points: u32,
+    /// Points with no route to them, given up on since the last one actually
+    /// reached. Kept apart from `skipped_points`: an unreachable point costs
+    /// nothing to skip (there is no route to grind on), so it must not eat
+    /// the stall budget - but coming back around to one already skipped means
+    /// the whole loop is out of reach, and the route ends there.
+    unreachable_points: Vec<EntityId>,
     /// The runtime AICurrentPatrol link must be published once for a fresh
     /// behavior and whenever the target changes.
     target_dirty: bool,
@@ -91,6 +98,7 @@ impl PatrolBehavior {
             stall_anchor: None,
             stall_seconds: 0.0,
             skipped_points: 0,
+            unreachable_points: Vec::new(),
             target_dirty: true,
             walked_an_edge: false,
         }
@@ -228,6 +236,7 @@ impl Behavior for PatrolBehavior {
             let position = position.to_vec();
             if self.arrived(position) {
                 self.skipped_points = 0;
+                self.unreachable_points.clear();
                 patrol_effects.push(self.advance(world, entity_id, true));
             } else if self.steering_strategy.goal_unreachable() {
                 // No route to this point (shipped routes include points on a
@@ -241,7 +250,18 @@ impl Behavior for PatrolBehavior {
                     "patrol {entity_id:?}: no route to point {:?}, skipping to the next one",
                     self.target_point
                 );
-                patrol_effects.push(self.skip_point(world, entity_id));
+                if self.unreachable_points.contains(&self.target_point) {
+                    // Been here before without reaching anything in between:
+                    // the whole loop is out of reach.
+                    self.finished = true;
+                    patrol_effects.push(Effect::SetAICurrentPatrol {
+                        entity_id,
+                        target: None,
+                    });
+                } else {
+                    self.unreachable_points.push(self.target_point);
+                    patrol_effects.push(self.advance(world, entity_id, false));
+                }
             } else if self.stalled(position, time) {
                 // Going nowhere: give up on this point and try the next one.
                 // Enough of those in a row and the whole route is out of
@@ -455,18 +475,25 @@ mod tests {
 
         // The route moves on at once - one tick per point, no waiting out the
         // stall watchdog - and, since NO point on this loop is reachable, it
-        // ends at the skip cap rather than cycling (and re-querying) forever.
-        let targets: Vec<EntityId> = emitted
+        // ends when it comes back around to one it already gave up on, rather
+        // than cycling (and re-querying) forever.
+        let targets: Vec<Option<EntityId>> = emitted
             .iter()
             .filter_map(|effect| match effect {
-                Effect::SetAICurrentPatrol { target, .. } => *target,
+                Effect::SetAICurrentPatrol { target, .. } => Some(*target),
                 _ => None,
             })
             .collect();
+        let tried: Vec<EntityId> = targets.iter().flatten().copied().collect();
         assert_eq!(
-            targets.len(),
-            PATROL_MAX_SKIPPED_POINTS as usize,
-            "expected one skip per tick up to the cap, got {targets:?}"
+            tried.iter().collect::<std::collections::HashSet<_>>().len(),
+            3,
+            "every point on the loop gets one try, got {tried:?}"
+        );
+        assert_eq!(
+            targets.last(),
+            Some(&None),
+            "and the route then retires, got {targets:?}"
         );
         assert!(patrol.finished, "a route with no reachable point ends");
     }
