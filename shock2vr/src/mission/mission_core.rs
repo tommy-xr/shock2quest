@@ -2913,7 +2913,7 @@ impl MissionCore {
                             - crate::physics::player_center_above_floor(
                                 self.player_handle.is_crouched(),
                             ),
-                        dt: time.elapsed.as_secs_f32(),
+                        step_dt: self.physics.player_step_dt(),
                     })
             })
             .unwrap_or_default();

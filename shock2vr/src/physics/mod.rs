@@ -235,7 +235,7 @@ const PLAYER_MAX_FALL_SPEED: f32 = 30.0;
 /// The jump's launch speed in world units/second. Doubles as the ceiling on
 /// any other way of throwing the player into the air (see
 /// [`crate::vr_climb::CLIMB_RELEASE_MAX_SPEED`]).
-pub const PLAYER_JUMP_LAUNCH_SPEED: f32 = PLAYER_JUMP_SPEED / SCALE_FACTOR;
+pub(crate) const PLAYER_JUMP_LAUNCH_SPEED: f32 = PLAYER_JUMP_SPEED / SCALE_FACTOR;
 /// Maximum forward search for a jump-through landing. This is deliberately a
 /// short body-scale transition, not a general wall bypass.
 const PLAYER_JUMP_MANTLE_FORWARD: f32 = 8.0;
@@ -4827,12 +4827,23 @@ impl PhysicsWorld {
     /// after - the arc, the ceiling rejection, the landing - is the existing
     /// jump path. Must be called before this frame's movement request.
     pub fn launch_player(&mut self, velocity: Vector3<f32>, player_handle: &mut PlayerHandle) {
+        // A scripted mantle owns the body until it finishes and would drop the
+        // arc on its next frame anyway; same rule as `set_player_crouch`.
+        if player_handle.top_out.is_some() {
+            return;
+        }
         player_handle.jump_velocity = Some(velocity.y);
         player_handle.air_velocity = vector![velocity.x, 0.0, velocity.z];
         player_handle.is_grounded = false;
         // Launched off whatever was carrying them, as a jump is.
         player_handle.support = None;
-        player_handle.slope_displacement = Vector::zeros();
+    }
+
+    /// The fixed timestep one movement frame integrates with. A velocity
+    /// handed to [`launch_player`](Self::launch_player) has to be expressed in
+    /// it - see [`crate::vr_climb::release_velocity`].
+    pub fn player_step_dt(&self) -> f32 {
+        self.integration_parameters.dt
     }
 
     /// Step the simulation and resolve one frame of player movement.
@@ -5105,6 +5116,7 @@ impl PhysicsWorld {
         let launch_jump = jump_edge && player_handle.is_grounded && player_handle.top_out.is_none();
         if launch_jump {
             player_handle.jump_velocity = Some(PLAYER_JUMP_LAUNCH_SPEED);
+            player_handle.air_velocity = Vector::zeros();
             player_handle.is_grounded = false;
             // A jumping player has left their moving support. Its carry is
             // already represented by the first frame's body pose; do not keep

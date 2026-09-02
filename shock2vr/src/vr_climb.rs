@@ -6,7 +6,7 @@
 
 use std::collections::VecDeque;
 
-use cgmath::{InnerSpace, Quaternion, Vector3, Zero};
+use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, Zero};
 
 use crate::{physics::ClimbGrip, virtual_hand::hand_world_position, vr_config::Handedness};
 
@@ -21,19 +21,17 @@ pub const CLIMB_STRETCH_BREAK: f32 = 0.6;
 /// player just made.
 const RELEASE_SAMPLE_FRAMES: usize = 4;
 
-/// Ceiling on the speed a release throws the body with (world units/s), at the
-/// ordinary jump's own launch speed: letting go can never fling the player
-/// harder than they could jump.
-pub const CLIMB_RELEASE_MAX_SPEED: f32 = crate::physics::PLAYER_JUMP_LAUNCH_SPEED;
+/// Ceiling on the speed a release throws the body with (world units/s).
+pub(crate) const CLIMB_RELEASE_MAX_SPEED: f32 = 12.0;
 
-/// Separate ceiling on the UPWARD component, at the same jump speed, so a
-/// two-handed haul cannot loft the player above jump apex - the drop back down
-/// is what a fall would eventually be scored on (issue #802).
-pub const CLIMB_RELEASE_MAX_UP_SPEED: f32 = crate::physics::PLAYER_JUMP_LAUNCH_SPEED;
+/// Tighter ceiling on the UPWARD component, at the ordinary jump's own launch
+/// speed: a haul-and-let-go can never rise higher than a jump, so it can never
+/// drop the player further than a jump either (SS2 scores falls - issue #802).
+pub(crate) const CLIMB_RELEASE_MAX_UP_SPEED: f32 = crate::physics::PLAYER_JUMP_LAUNCH_SPEED;
 
 /// Below this a release is just letting go: not worth putting the body into a
 /// ballistic arc (world units/s).
-pub const CLIMB_RELEASE_MIN_SPEED: f32 = 0.5;
+pub(crate) const CLIMB_RELEASE_MIN_SPEED: f32 = 0.5;
 
 /// The body velocity a release throws the player with, from the anchor hand's
 /// recent per-frame travel relative to the pawn (newest last).
@@ -41,15 +39,20 @@ pub const CLIMB_RELEASE_MIN_SPEED: f32 = 0.5;
 /// Negated: a hand hauled DOWN past the body throws the body up, the VR
 /// climbing convention (Climbey, Boneworks, Stride). `None` when there is
 /// nothing to throw with.
-pub fn release_velocity(travel: &[Vector3<f32>], dt: f32) -> Option<Vector3<f32>> {
-    if travel.is_empty() || dt <= 0.0 {
+///
+/// `step_dt` is the timestep the resulting arc will be INTEGRATED with, not
+/// the wall clock: one sample of travel per game update becomes one physics
+/// step of flight, so dividing by anything else makes the throw faster or
+/// slower than the pull that produced it at any frame rate but 60 Hz.
+pub(crate) fn release_velocity(travel: &[Vector3<f32>], step_dt: f32) -> Option<Vector3<f32>> {
+    if travel.is_empty() || step_dt <= 0.0 {
         return None;
     }
     let mean = travel
         .iter()
         .fold(Vector3::zero(), |sum, delta| sum + delta)
         / travel.len() as f32;
-    let mut velocity = -mean / dt;
+    let mut velocity = -mean / step_dt;
     let speed = velocity.magnitude();
     if speed > CLIMB_RELEASE_MAX_SPEED {
         velocity *= CLIMB_RELEASE_MAX_SPEED / speed;
@@ -136,20 +139,37 @@ impl HandClimb {
         &mut self,
         pawn_pos: Vector3<f32>,
         pawn_rotation: Quaternion<f32>,
-        dt: f32,
+        step_dt: f32,
         hands: [ClimbHandInput; 2],
         probe: impl Fn(Vector3<f32>) -> Option<ClimbGrip>,
         is_alive: impl Fn(shipyard::EntityId) -> bool,
     ) -> ClimbFrame {
         let previous_anchor = self.anchor;
         let had_a_hold = self.grips.iter().any(Option::is_some);
-        // Only an opened hand throws the body. A hold torn off by an
-        // over-stretched (blocked) body, or by the entity going away, recorded
-        // travel that was the body failing to follow, not a pull.
-        let mut let_go_cleanly = true;
+        // Per hand: was this the player opening their hand? A hold torn off by
+        // an over-stretched (blocked) body, or by the entity going away,
+        // recorded travel that was the body failing to follow, not a pull -
+        // and one hand's break must not swallow the other hand's throw.
+        let mut let_go_cleanly = [true; 2];
         let hand_world = hands
             .each_ref()
             .map(|hand| hand_world_position(pawn_pos, pawn_rotation, hand.local_position));
+
+        // Sample the anchor's travel BEFORE the releases below, so the flick
+        // on the very frame the hand opens is part of what throws the body.
+        if let Some(hand) = previous_anchor {
+            let local = hands[slot(hand)].local_position;
+            match self.last_anchor_local.replace(local) {
+                Some(previous) => {
+                    if self.recent_anchor_travel.len() == RELEASE_SAMPLE_FRAMES {
+                        self.recent_anchor_travel.pop_front();
+                    }
+                    self.recent_anchor_travel
+                        .push_back(pawn_rotation.rotate_vector(local - previous));
+                }
+                None => self.recent_anchor_travel.clear(),
+            }
+        }
 
         for (index, hand) in hands.iter().enumerate() {
             let squeezing = hand.squeeze > crate::ui::VR_TRIGGER_THRESHOLD;
@@ -165,7 +185,7 @@ impl HandClimb {
                     // go of the ladder rather than holding both.
                     if !squeezing || !hand.is_empty || over_stretched || gone {
                         self.grips[index] = None;
-                        let_go_cleanly &= !squeezing && !over_stretched && !gone;
+                        let_go_cleanly[index] = !squeezing && !over_stretched && !gone;
                     }
                 }
                 None if squeezing && !was_squeezing && hand.is_empty => {
@@ -198,37 +218,20 @@ impl HandClimb {
             }
         }
 
-        let launch = if had_a_hold && self.anchor.is_none() && let_go_cleanly {
-            release_velocity(self.recent_anchor_travel.make_contiguous(), dt)
+        let launch = if had_a_hold
+            && self.anchor.is_none()
+            && previous_anchor.is_some_and(|hand| let_go_cleanly[slot(hand)])
+        {
+            release_velocity(self.recent_anchor_travel.make_contiguous(), step_dt)
         } else {
             None
         };
 
-        // Record this frame's pull for whatever release comes next.
-        match self.anchor {
-            Some(hand) => {
-                let local = hands[slot(hand)].local_position;
-                let previous = (self.anchor == previous_anchor)
-                    .then(|| self.last_anchor_local)
-                    .flatten();
-                match previous {
-                    Some(previous) => {
-                        if self.recent_anchor_travel.len() == RELEASE_SAMPLE_FRAMES {
-                            self.recent_anchor_travel.pop_front();
-                        }
-                        self.recent_anchor_travel.push_back(
-                            hand_world_position(pawn_pos, pawn_rotation, local)
-                                - hand_world_position(pawn_pos, pawn_rotation, previous),
-                        );
-                    }
-                    None => self.recent_anchor_travel.clear(),
-                }
-                self.last_anchor_local = Some(local);
-            }
-            None => {
-                self.recent_anchor_travel.clear();
-                self.last_anchor_local = None;
-            }
+        // A new anchor starts a fresh history: the travel so far is the other
+        // hand's, and a re-based hold is a new pull.
+        if self.anchor != previous_anchor {
+            self.recent_anchor_travel.clear();
+            self.last_anchor_local = self.anchor.map(|hand| hands[slot(hand)].local_position);
         }
 
         let translation = self.anchor.and_then(|hand| {
@@ -565,14 +568,14 @@ mod tests {
         );
         assert!(sideways.x > 0.0, "the throw opposes the pull: {sideways:?}");
 
-        // The up cap applies after the magnitude clamp, so a diagonal yank
-        // keeps its horizontal reach and only loses the excess rise.
-        let diagonal = release_velocity(&[vec3(0.0, -1.0, -1.0)], DT).unwrap();
+        // The up cap is tighter than the magnitude clamp, so a near-vertical
+        // yank loses the excess rise and keeps its horizontal reach.
+        let steep = release_velocity(&[vec3(0.0, -1.0, -0.15)], DT).unwrap();
         assert!(
-            diagonal.y <= CLIMB_RELEASE_MAX_UP_SPEED + 1.0e-4,
-            "{diagonal:?}"
+            (steep.y - CLIMB_RELEASE_MAX_UP_SPEED).abs() < 1.0e-4,
+            "{steep:?}"
         );
-        assert!(diagonal.z > 1.0, "{diagonal:?}");
+        assert!(steep.z > 1.0, "{steep:?}");
     }
 
     #[test]
@@ -629,11 +632,19 @@ mod tests {
 
     #[test]
     fn letting_go_of_the_last_hold_launches_the_body() {
-        // A quick haul: 0.1 wu of hand travel per frame, released open-handed.
-        let released = pull_and_finish(4, vec3(0.0, -0.1, 0.0), open_the_hand);
+        // A quick haul: 0.1 wu of hand travel per frame, let go mid-pull.
+        let released = pull_and_finish(4, vec3(0.0, -0.1, 0.0), |climb, at| {
+            open_the_hand(climb, at + vec3(0.0, -0.1, 0.0))
+        });
         let launch = released.launch.expect("a quick pull should launch");
         assert!((launch.y - 6.0).abs() < 0.1, "{launch:?}");
         assert_eq!(released.translation, None);
+
+        // Stopping the hand before opening it is part of the pull: the same
+        // haul, released from rest, throws proportionally less.
+        let stopped = pull_and_finish(4, vec3(0.0, -0.1, 0.0), open_the_hand);
+        let stopped = stopped.launch.expect("a quick pull should launch");
+        assert!(stopped.y > 0.0 && stopped.y < launch.y, "{stopped:?}");
     }
 
     #[test]

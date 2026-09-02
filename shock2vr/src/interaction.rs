@@ -53,8 +53,9 @@ pub struct ClimbContext<'a> {
     pub pawn_rotation: Quaternion<f32>,
     /// World height of the player's feet, for the ledge grip test.
     pub feet_y: f32,
-    /// This frame's simulation step, for the release velocity.
-    pub dt: f32,
+    /// The fixed timestep the coming movement frame integrates with, for the
+    /// release velocity (NOT the wall clock - see `vr_climb`).
+    pub step_dt: f32,
 }
 
 /// How the player interacts with the world. The effects returned by `update`
@@ -188,7 +189,7 @@ impl PlayerInteraction for VrInteraction {
         self.hand_climb.update(
             ctx.pawn_pos,
             ctx.pawn_rotation,
-            ctx.dt,
+            ctx.step_dt,
             [
                 hand_input(&self.left_hand, &ctx.input.left_hand),
                 hand_input(&self.right_hand, &ctx.input.right_hand),

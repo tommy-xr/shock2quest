@@ -297,18 +297,19 @@ test(
 );
 
 test(
-  "debug_ladder (VR): letting go of a slow pull does not throw the body",
+  "debug_ladder (VR): letting go of a pull below the deadzone throws nothing",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await launchVr();
     await standAtTheLadder(game);
 
-    // The same 1 wu of hand travel, at a leisurely 1 wu per second.
+    // The same 1 wu of hand travel at 0.33 wu/s - under the release
+    // deadzone (CLIMB_RELEASE_MIN_SPEED), so letting go is just letting go.
     const { after } = await vrClimbPull(game, {
       hand: "right",
       grabAt: LADDER_HOLD,
       pull: [0, -1.0, 0],
-      frames: 60,
+      frames: 180,
       release: true,
     });
 
@@ -407,7 +408,7 @@ test(
 
       // The other hand reaches past it and takes over, then this one lets go
       // while still holding on - a handoff, not a release.
-      const other = pulling === "right" ? "left" : "right";
+      const other: "left" | "right" = pulling === "right" ? "left" : "right";
       await game.input.set(`${other}_hand.position`, reach);
       await game.input.set(`${other}_hand.squeeze`, 0);
       heights.push(...(await stepTrackingHeight(game, 1)));
