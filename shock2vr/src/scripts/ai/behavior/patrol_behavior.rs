@@ -111,8 +111,10 @@ impl PatrolBehavior {
 
     fn steering_to(goal: Vector3<f32>) -> Box<dyn SteeringStrategy> {
         steering::chained(vec![
-            // Path steering leads; whisker avoidance only covers the no-route
-            // case (see chase_behavior for the deadlock this prevents)
+            // Path steering leads - it carries its own whiskers as a bias on
+            // its aim point; this one is the no-route fallback, where a
+            // heading override is safe (see chase_behavior for the deadlock
+            // that overriding an ACTIVE route causes)
             Box::new(PathFollowSteeringStrategy::to_point(goal)),
             Box::new(CollisionAvoidanceSteeringStrategy::conservative()),
         ])
@@ -163,6 +165,22 @@ impl PatrolBehavior {
                 Effect::combine(effects)
             }
         }
+    }
+
+    /// Give up on the current point and try the next one. Enough of those in
+    /// a row - without reaching one in between - and the whole route is out
+    /// of reach, so stop patrolling and hand back to idle rather than
+    /// shuffling (and re-querying A*) between points forever.
+    fn skip_point(&mut self, world: &World, entity_id: EntityId) -> Effect {
+        self.skipped_points += 1;
+        if self.skipped_points >= PATROL_MAX_SKIPPED_POINTS {
+            self.finished = true;
+            return Effect::SetAICurrentPatrol {
+                entity_id,
+                target: None,
+            };
+        }
+        self.advance(world, entity_id, false)
     }
 
     /// Whether the AI has failed to cover ground for PATROL_STALL_SECONDS.
@@ -217,26 +235,19 @@ impl Behavior for PatrolBehavior {
                 // the floor below). Move on at once rather than steering at it
                 // on a heading nothing checked, grinding into the geometry in
                 // between until the stall watchdog retires the whole route.
+                // Counted like a stalled skip, so a route with no reachable
+                // point left ends instead of cycling (and re-querying) forever.
                 tracing::debug!(
                     "patrol {entity_id:?}: no route to point {:?}, skipping to the next one",
                     self.target_point
                 );
-                patrol_effects.push(self.advance(world, entity_id, false));
+                patrol_effects.push(self.skip_point(world, entity_id));
             } else if self.stalled(position, time) {
                 // Going nowhere: give up on this point and try the next one.
                 // Enough of those in a row and the whole route is out of
                 // reach, so stop patrolling and hand back to idle via
                 // next_behavior rather than walking in place forever.
-                self.skipped_points += 1;
-                if self.skipped_points >= PATROL_MAX_SKIPPED_POINTS {
-                    self.finished = true;
-                    patrol_effects.push(Effect::SetAICurrentPatrol {
-                        entity_id,
-                        target: None,
-                    });
-                } else {
-                    patrol_effects.push(self.advance(world, entity_id, false));
-                }
+                patrol_effects.push(self.skip_point(world, entity_id));
             }
         }
 
@@ -415,6 +426,9 @@ mod tests {
 
     /// Steering that reports no route to whatever goal it was given.
     struct UnreachableSteering;
+    /// ...and its counterpart, which has a route.
+    struct ReachableSteering;
+    impl SteeringStrategy for ReachableSteering {}
     impl SteeringStrategy for UnreachableSteering {
         fn goal_unreachable(&self) -> bool {
             true
@@ -439,18 +453,9 @@ mod tests {
             }
         }
 
-        assert!(
-            !patrol.finished,
-            "skipping unreachable points must keep the route running"
-        );
-        assert!(
-            !emitted
-                .iter()
-                .any(|effect| matches!(effect, Effect::SetAICurrentPatrol { target: None, .. })),
-            "the patrol must not retire itself over unreachable points"
-        );
-        // The three-point loop keeps advancing: every tick targets a
-        // different point than the one before it.
+        // The route moves on at once - one tick per point, no waiting out the
+        // stall watchdog - and, since NO point on this loop is reachable, it
+        // ends at the skip cap rather than cycling (and re-querying) forever.
         let targets: Vec<EntityId> = emitted
             .iter()
             .filter_map(|effect| match effect {
@@ -458,10 +463,53 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(
-            targets.len() > 3 && targets.windows(2).all(|pair| pair[0] != pair[1]),
-            "expected the route to keep advancing, got {targets:?}"
+        assert_eq!(
+            targets.len(),
+            PATROL_MAX_SKIPPED_POINTS as usize,
+            "expected one skip per tick up to the cap, got {targets:?}"
         );
+        assert!(patrol.finished, "a route with no reachable point ends");
+    }
+
+    thread_local! {
+        /// How many steering strategies the test below has handed out
+        static STEERINGS_BUILT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// One unreachable point does not end a route: the AI skips it and
+    /// carries on toward the next, which it can route to.
+    #[test]
+    fn one_unreachable_point_does_not_end_the_route() {
+        let (world, creature, first, goal) = world_with_unreachable_route();
+        let physics = PhysicsWorld::new();
+        STEERINGS_BUILT.with(|built| built.set(0));
+        // Only the first point reports no route.
+        let mut patrol = PatrolBehavior::with_steering(first, goal, |_| {
+            let nth = STEERINGS_BUILT.with(|built| {
+                let nth = built.get();
+                built.set(nth + 1);
+                nth
+            });
+            if nth == 0 {
+                Box::new(UnreachableSteering)
+            } else {
+                Box::new(ReachableSteering) as Box<dyn SteeringStrategy>
+            }
+        });
+
+        let mut emitted = Vec::new();
+        for _ in 0..20 {
+            if let Some((_, effect)) = patrol.steer(Deg(0.0), &world, &physics, creature, &tick()) {
+                emitted.extend(Effect::flatten(vec![effect]));
+            }
+        }
+
+        assert!(!patrol.finished, "the route carries on past one bad point");
+        let skips = emitted
+            .iter()
+            .filter(|effect| matches!(effect, Effect::SetAICurrentPatrol { .. }))
+            .count();
+        assert_eq!(skips, 2, "the initial target, then one skip");
     }
 
     #[test]

@@ -94,10 +94,11 @@ const SEPARATION_RADIUS: f32 = 6.0 / SCALE_FACTOR;
 /// (issue #487).
 const SEPARATION_MAX_OFFSET: f32 = 3.0 / SCALE_FACTOR;
 
-/// A route counts as reaching its goal when its last waypoint lands within
-/// this distance (6 Dark feet) in XZ. A* answers an unreachable goal with a
-/// partial route to the closest reachable point, which for a goal on another
-/// walk component can stop a whole room short - following it to the end just
+/// A partial route counts as reaching its goal anyway when its last waypoint
+/// lands within this distance (6 Dark feet). A* answers an unreachable goal
+/// with a partial route to the closest reachable CELL CENTER, which lands
+/// near a goal it merely could not resolve to a cell, but a whole room short
+/// of one on another walk component - and following that to its end just
 /// presses the body into whatever geometry sits in between.
 const GOAL_REACHED_DISTANCE: f32 = 6.0 / SCALE_FACTOR;
 
@@ -267,8 +268,10 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                             REPATH_FAILURE_BACKOFF_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
                     }
                     _ if goal_current => {
-                        self.goal_unreachable =
-                            !route_reaches_goal(&response.waypoints, response.goal);
+                        // Only a PARTIAL route says anything about
+                        // reachability: it is A*'s "closest I could get".
+                        self.goal_unreachable = response.outcome == AiPathOutcome::Partial
+                            && !route_reaches_goal(&response.waypoints, response.goal);
                         self.path = response.waypoints;
                         self.path_goal = Some(response.goal);
                         // waypoint 0 is the position the query started from
@@ -322,6 +325,10 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     // same frames forever
                     self.repath_cooldown =
                         REPATH_COOLDOWN_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
+                    // A fresh question: the previous answer's verdict on
+                    // reachability no longer stands (goals move, and blocked
+                    // crossings expire)
+                    self.goal_unreachable = false;
                     // The worker computes a full route, or - when the goal
                     // is unreachable (another island, off-mesh) - a partial
                     // route to the closest reachable point, so the AI
@@ -369,20 +376,18 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // path) stay authoritative - the bias is capped well below the
         // waypoint spacing.
         let separation = ai_util::separation_bias(world, entity_id, position, SEPARATION_RADIUS);
-        let separation = {
-            let magnitude = (separation.x * separation.x + separation.z * separation.z).sqrt();
-            if magnitude > 1e-3 {
-                separation * (magnitude.min(SEPARATION_MAX_OFFSET) / magnitude)
-            } else {
-                Vector3::new(0.0, 0.0, 0.0)
-            }
-        };
         // ...and the same treatment for static geometry the navigation mesh
         // doesn't model (a railing, a crate left on the route): whiskers bend
         // the line around it before the body wedges, without ever taking the
-        // heading away from the route.
+        // heading away from the route. Both together are capped ONCE, so two
+        // biases pointing the same way still cannot bend the line further
+        // than one of them may.
         let whiskers = self.whiskers.update(world, physics, entity_id, time);
-        let aim = aim_with_bias(position, waypoint, separation + whiskers);
+        let aim = aim_with_bias(
+            position,
+            waypoint,
+            capped(separation + whiskers, SEPARATION_MAX_OFFSET),
+        );
 
         // Stall escape: if we stop making progress toward the current
         // waypoint (blocked by a prop, another AI, or bad geometry), drop
@@ -537,6 +542,16 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
     }
 }
 
+/// Shorten a horizontal bias to at most `max`.
+fn capped(bias: Vector3<f32>, max: f32) -> Vector3<f32> {
+    let magnitude = (bias.x * bias.x + bias.z * bias.z).sqrt();
+    if magnitude > max {
+        bias * (max / magnitude)
+    } else {
+        bias
+    }
+}
+
 /// Bend the aim point by a steering bias, keeping the route authoritative:
 /// a bias that would drag the aim point onto (or behind) the body is
 /// dropped, since turning to a point you are standing on is not steering.
@@ -575,7 +590,13 @@ fn aim_with_bias(
 fn route_reaches_goal(waypoints: &[Vector3<f32>], goal: Vector3<f32>) -> bool {
     waypoints
         .last()
-        .map(|last| xz_distance(*last, goal) <= GOAL_REACHED_DISTANCE)
+        .map(|last| {
+            // Height matters as much as ground distance here: the case this
+            // exists for is a goal on the floor below, whose XZ distance is
+            // nearly zero.
+            xz_distance(*last, goal) <= GOAL_REACHED_DISTANCE
+                && (last.y - goal.y).abs() <= GOAL_REACHED_DISTANCE
+        })
         .unwrap_or(false)
 }
 
@@ -722,6 +743,25 @@ mod tests {
             goal
         ));
         assert!(!route_reaches_goal(&[], goal));
+    }
+
+    /// ...and a route that ends directly above (or below) the goal has not
+    /// reached it either - the balcony case.
+    #[test]
+    fn a_route_ending_on_another_floor_does_not_reach_its_goal() {
+        assert!(!route_reaches_goal(
+            &[vec3(10.0, 0.0, 10.0)],
+            vec3(10.0, -4.8, 10.0)
+        ));
+    }
+
+    #[test]
+    fn biases_are_capped_together() {
+        let shortened = capped(vec3(3.0, 0.0, 4.0), 2.5);
+        assert!(
+            ((shortened.x * shortened.x + shortened.z * shortened.z).sqrt() - 2.5).abs() < 1e-5
+        );
+        assert_eq!(capped(vec3(0.3, 0.0, 0.4), 2.5), vec3(0.3, 0.0, 0.4));
     }
 
     #[test]

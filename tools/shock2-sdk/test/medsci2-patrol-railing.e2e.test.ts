@@ -47,24 +47,33 @@ test(
     await game.step({ frames: 60 });
 
     const pipes = await game.entities.list({ filter: "OG-Pipe", limit: 200 });
-    const patroller = pipes.entities.find(
+    const matches = pipes.entities.filter(
       (entity) => entity.template_id === PATROLLER_TEMPLATE,
     );
-    assert.ok(
-      patroller,
-      `medsci2 should contain the balcony patroller (template ${PATROLLER_TEMPLATE})`,
+    // Exactly one, or the run would be watching some other hybrid.
+    assert.equal(
+      matches.length,
+      1,
+      `expected one medsci2 balcony patroller (template ${PATROLLER_TEMPLATE}), got ${matches.length}`,
     );
+    const patroller = matches[0];
 
     let anchor = (await game.entities.detail(patroller.id)).position;
+    let previous = anchor;
+    let travelled = 0;
     let heldSamples = 0;
     let worstHold = 0;
     let behavior: string | undefined;
+    const leftPatrol: string[] = [];
     const wedges: string[] = [];
 
     for (let sample = 0; sample < SAMPLES; sample++) {
       await game.step({ frames: SAMPLE_FRAMES });
       const detail = await game.entities.detail(patroller.id);
       behavior = aiProp(detail, "AIBehavior");
+      if (behavior !== "Patrol") leftPatrol.push(`${sample}s ${behavior ?? "?"}`);
+      travelled += distXZ(detail.position, previous);
+      previous = detail.position;
       if (distXZ(detail.position, anchor) < STUCK_RADIUS) {
         heldSamples += 1;
         worstHold = Math.max(worstHold, heldSamples);
@@ -86,10 +95,16 @@ test(
       0,
       `the patroller should never hold one spot for ${STUCK_SAMPLES}s: ${wedges.join("; ")}`,
     );
-    assert.equal(
-      behavior,
-      "Patrol",
-      `the patroller should still be patrolling after ${SAMPLES}s (worst hold ${worstHold}s)`,
+    assert.deepEqual(
+      leftPatrol,
+      [],
+      `the patroller should stay in Patrol for the whole minute (worst hold ${worstHold}s)`,
+    );
+    // A patrol route on this balcony is tens of units long; an AI shuffling
+    // on the spot (or cycling markers in a corner) covers almost nothing.
+    assert.ok(
+      travelled > 40,
+      `the patroller should walk its route, covered only ${travelled.toFixed(1)} units`,
     );
   },
 );

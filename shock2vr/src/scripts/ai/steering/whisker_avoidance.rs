@@ -1,6 +1,7 @@
 use cgmath::{Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector3, vec3};
 use dark::SCALE_FACTOR;
-use shipyard::{EntityId, World};
+use dark::properties::PropCreature;
+use shipyard::{EntityId, Get, View, World};
 
 use crate::{
     physics::{InternalCollisionGroups, PhysicsWorld},
@@ -14,15 +15,19 @@ use crate::{
 const WHISKER_DISTANCE: f32 = 3.0 / SCALE_FACTOR;
 /// Whiskers to either side of the facing direction
 const WHISKER_SPREAD: Deg<f32> = Deg(30.0);
-/// Probe heights, relative to the body origin (roughly body center). A
-/// railing is a thin slab whose top sits just BELOW an upright creature's
-/// center, so a single center-height ray sails over it - the wedge this
-/// exists to prevent. Two heights also discriminate: a low obstacle (a
-/// stair riser, a kerb) blocks only the knee ray, and a bias is only taken
-/// when BOTH heights are blocked, so climbable steps don't push AIs
-/// sideways off staircases the route chose.
-const WHISKER_KNEE_HEIGHT: f32 = -3.0 / SCALE_FACTOR;
-const WHISKER_CHEST_HEIGHT: f32 = -1.0 / SCALE_FACTOR;
+/// Probe heights, as a fraction of the creature's own height below its body
+/// origin (colliders are centered on that origin). A railing is a thin slab
+/// whose top sits just BELOW an upright creature's center, so a single
+/// center-height ray sails over it - the wedge this exists to prevent. Two
+/// heights also discriminate: a low obstacle (a stair riser, a kerb) blocks
+/// only the knee ray, and a bias is only taken when BOTH heights are
+/// blocked, so climbable steps don't push AIs sideways off staircases the
+/// route chose. Fractions rather than fixed feet, because a monkey is half
+/// a hybrid's height and fixed offsets would put both its probes underground.
+const WHISKER_KNEE_FRACTION: f32 = 0.35;
+const WHISKER_CHEST_FRACTION: f32 = 0.15;
+/// Height to fall back on when the creature has no definition (world units)
+const WHISKER_DEFAULT_HEIGHT: f32 = 6.5 / SCALE_FACTOR;
 /// Seconds between probes. Static geometry doesn't move and every
 /// path-following AI runs this, so the rays are cast a few times a second
 /// and the bias is held in between (the original engine's wall regulator
@@ -47,8 +52,10 @@ pub struct WhiskerReading {
 }
 
 /// Static-geometry whiskers, sampled on an interval and blended into path
-/// following as a bias on the aim point. Unlike `CollisionAvoidanceSteering`
-/// this never takes the heading over - it runs *while* a route is being
+/// following as a bias on the aim point. Unlike
+/// `CollisionAvoidanceSteeringStrategy` - which probes at body center only
+/// and answers with a heading of its own, and stays the no-route fallback -
+/// this never takes the heading over: it runs *while* a route is being
 /// followed, where overriding the route deadlocks AIs against walls the path
 /// was about to turn away from (issue #481).
 pub struct WhiskerAvoidance {
@@ -90,10 +97,17 @@ impl WhiskerAvoidance {
         entity_id: EntityId,
     ) -> Vec<WhiskerReading> {
         let rotation = get_rotation_from_transform(world, entity_id);
-        let knee =
-            get_position_from_transform(world, entity_id, vec3(0.0, WHISKER_KNEE_HEIGHT, 0.0));
-        let chest =
-            get_position_from_transform(world, entity_id, vec3(0.0, WHISKER_CHEST_HEIGHT, 0.0));
+        let height = creature_height(world, entity_id);
+        let knee = get_position_from_transform(
+            world,
+            entity_id,
+            vec3(0.0, -height * WHISKER_KNEE_FRACTION, 0.0),
+        );
+        let chest = get_position_from_transform(
+            world,
+            entity_id,
+            vec3(0.0, -height * WHISKER_CHEST_FRACTION, 0.0),
+        );
 
         // Center first, then the sides - whisker_bias reads them that way
         let mut readings = Vec::new();
@@ -101,22 +115,22 @@ impl WhiskerAvoidance {
             let forward = (rotation * Quaternion::from_angle_y(spread))
                 .rotate_vector(vec3(0.0, 0.0, 1.0))
                 .normalize();
+            // Only static geometry and props: living bodies (and the player)
+            // are what crowd separation is for, and biasing away from them
+            // here would repel a chasing AI from its own target. A door the
+            // AI can open is not an obstacle to bend around either - filtered
+            // inside the query, so whatever stands behind it is still seen.
+            let not_a_door = |id: EntityId| !ai_util::is_entity_door(world, id);
             let cast = |from| {
-                physics
-                    .ray_cast2_as_actor(
-                        from,
-                        forward,
-                        WHISKER_DISTANCE,
-                        InternalCollisionGroups::ALL_COLLIDABLE,
-                        Some(entity_id),
-                        true,
-                    )
-                    // A door the AI can open is not an obstacle to bend around
-                    .filter(|hit| {
-                        !hit.maybe_entity_id
-                            .map(|id| ai_util::is_entity_door(world, id))
-                            .unwrap_or(false)
-                    })
+                physics.ray_cast2_as_actor_with_entity_filter(
+                    from,
+                    forward,
+                    WHISKER_DISTANCE,
+                    InternalCollisionGroups::WORLD | InternalCollisionGroups::ENTITY,
+                    Some(entity_id),
+                    true,
+                    &not_a_door,
+                )
             };
             // Both heights must be blocked - see WHISKER_KNEE_HEIGHT
             let hit = match (cast(knee), cast(chest)) {
@@ -142,6 +156,18 @@ impl WhiskerAvoidance {
         }
         readings
     }
+}
+
+/// The creature's height in world units, for placing the probes on a body
+/// that is not a 6.5-foot hybrid.
+fn creature_height(world: &World, entity_id: EntityId) -> f32 {
+    world
+        .borrow::<View<PropCreature>>()
+        .ok()
+        .and_then(|v_creature| v_creature.get(entity_id).ok().map(|creature| creature.0))
+        .and_then(crate::creature::get_creature_definition)
+        .map(|definition| definition.bounding_size.y / SCALE_FACTOR)
+        .unwrap_or(WHISKER_DEFAULT_HEIGHT)
 }
 
 /// Sum the whiskers into a horizontal push away from the geometry ahead:
