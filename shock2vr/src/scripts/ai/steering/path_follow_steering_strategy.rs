@@ -85,6 +85,16 @@ const UNSTICK_NUDGE_DISTANCE: f32 = 2.0 / SCALE_FACTOR;
 /// off the shared edge without skipping a narrow destination cell (0.5
 /// Dark feet)
 const BLOCKED_PROBE_DISTANCE: f32 = 0.5 / SCALE_FACTOR;
+/// How many leading waypoints of the pre-stall route are remembered to
+/// check whether the re-path actually produced a different route
+const STALL_ROUTE_PREFIX: usize = 3;
+/// Two waypoints this close (Dark feet) count as the same waypoint when
+/// comparing a fresh route against the one that stalled
+const SAME_WAYPOINT_DISTANCE: f32 = 0.5 / SCALE_FACTOR;
+/// How many times one stall incident may escalate (blacklist more of the
+/// reproduced route) before falling through to the physical nudge. Bounded
+/// so a genuinely one-way corridor can't be sealed link by link.
+const MAX_STALL_ESCALATIONS: u32 = 3;
 /// Crowd separation: repel from living creatures within this radius (6 Dark
 /// feet - about two body widths)
 const SEPARATION_RADIUS: f32 = 6.0 / SCALE_FACTOR;
@@ -131,6 +141,15 @@ pub struct PathFollowSteeringStrategy {
     goal_unreachable: bool,
     /// Static-geometry whiskers, biasing the aim point (see `aim_with_bias`)
     whiskers: WhiskerAvoidance,
+    /// The leading waypoints of the route that was in force when the last
+    /// stall fired, kept until the next route is adopted. If the fresh
+    /// route starts the same way, the re-path reproduced the doomed route
+    /// and walking it again just grinds - escalate instead (see
+    /// `MAX_STALL_ESCALATIONS`).
+    stall_route_prefix: Option<Vec<Vector3<f32>>>,
+    /// Escalations spent on the current stall incident; reset once the body
+    /// actually moves
+    stall_escalations: u32,
 }
 
 impl PathFollowSteeringStrategy {
@@ -161,6 +180,8 @@ impl PathFollowSteeringStrategy {
             last_stall_position: None,
             goal_unreachable: false,
             whiskers: WhiskerAvoidance::new(),
+            stall_route_prefix: None,
+            stall_escalations: 0,
         }
     }
 
@@ -257,6 +278,8 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     AiPathOutcome::Failed if goal_current => {
                         self.goal_unreachable = true;
                         self.clear_path();
+                        // Nothing to compare a stalled route against
+                        self.stall_route_prefix = None;
                         // No route (even partially) - back off before asking
                         // again; the fallback chain is the worker's most
                         // expensive outcome
@@ -273,6 +296,29 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         // waypoint 0 is the position the query started from
                         self.next_waypoint = 1;
                         self.reset_stall();
+                        // A stall's re-path has to actually change the
+                        // route. When it comes back starting exactly the
+                        // way the stalled one did, walking it again just
+                        // grinds on the same obstacle - blacklist more of
+                        // it and ask once more (bounded, so a genuinely
+                        // one-way corridor still gets walked and the
+                        // existing nudge remains the last resort).
+                        if let Some(prefix) = self.stall_route_prefix.take() {
+                            if self.stall_escalations < MAX_STALL_ESCALATIONS
+                                && route_starts_the_same(&prefix, &self.path[self.next_waypoint..])
+                            {
+                                self.stall_escalations += 1;
+                                escalate_blocked_route(
+                                    &service,
+                                    position,
+                                    &prefix,
+                                    time.total.as_secs_f32(),
+                                );
+                                self.clear_path();
+                                self.repath_cooldown = REPATH_COOLDOWN_SECONDS
+                                    * rand::thread_rng().gen_range(0.8..1.2);
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -408,6 +454,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 // Real movement: the next stall (if any) is a fresh incident,
                 // not a continuation of a pinned body
                 self.last_stall_position = None;
+                self.stall_escalations = 0;
                 false
             }
             Some((anchor, age)) => {
@@ -440,25 +487,45 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 // the WAYPOINT's height (an edge-inset waypoint then
                 // resolves to the cell beyond the crossing; keeping Y fixed
                 // avoids blacklisting a stacked floor's cell).
+                let now_seconds = time.total.as_secs_f32();
                 let toward = waypoint - position;
                 let toward_len = (toward.x * toward.x + toward.z * toward.z).sqrt();
-                if toward_len > 1e-3 {
+                let crossing_into = if toward_len > 1e-3 {
                     let step = BLOCKED_PROBE_DISTANCE / toward_len;
                     let probe = Vector3::new(
                         waypoint.x + toward.x * step,
                         waypoint.y,
                         waypoint.z + toward.z * step,
                     );
-                    let from = service.cell_from_position(position);
-                    let to = service
+                    service
                         .cell_from_position(probe)
-                        .or_else(|| service.cell_from_position(waypoint));
-                    if let (Some(from), Some(to)) = (from, to) {
-                        if from != to {
-                            service.report_blocked_link(from, to, time.total.as_secs_f32());
-                        }
+                        .or_else(|| service.cell_from_position(waypoint))
+                } else {
+                    None
+                };
+                if let Some(from) = service.cell_from_position(position) {
+                    // The cell we are stuck in is reported EVERY stall, not
+                    // only when the waypoint shares it. Two things need it:
+                    // a stall entirely inside one cell has no crossing to
+                    // blacklist at all (the body never reached an edge), and
+                    // a cell somebody is wedged in is a bad place to route
+                    // the next AI through - otherwise followers inherit the
+                    // doomed route and pile in behind (three hybrids in one
+                    // medsci2 door jamb).
+                    service.report_blocked_cell(from, now_seconds);
+                    if let Some(to) = crossing_into.filter(|to| *to != from) {
+                        service.report_blocked_link(from, to, now_seconds);
                     }
                 }
+                // Remember how the route that failed began, so the re-path
+                // can be checked against it when it lands
+                self.stall_route_prefix = Some(
+                    self.path[self.next_waypoint..]
+                        .iter()
+                        .take(STALL_ROUTE_PREFIX)
+                        .copied()
+                        .collect(),
+                );
                 // ALWAYS back out toward the previous waypoint before
                 // re-pathing, reported or not: the retreat both disengages
                 // the body from whatever it wedged on (an AI boxed among
@@ -606,6 +673,45 @@ fn answers_goal(
 
 /// Whether a route actually arrives at the goal it was computed for. An
 /// empty route arrives nowhere.
+/// Whether a fresh route begins the same way the route that stalled did.
+/// A shorter fresh route is by definition a different one.
+fn route_starts_the_same(previous: &[Vector3<f32>], fresh: &[Vector3<f32>]) -> bool {
+    if previous.is_empty() || fresh.len() < previous.len() {
+        return false;
+    }
+    previous.iter().zip(fresh).all(|(a, b)| {
+        xz_distance(*a, *b) < SAME_WAYPOINT_DISTANCE && (a.y - b.y).abs() < SAME_WAYPOINT_DISTANCE
+    })
+}
+
+/// Blacklist more of a route the AI could not walk: the cell it is standing
+/// in (refreshing that entry's TTL) plus the first cell crossing along the
+/// reproduced route, so the next query cannot answer with the same route
+/// again. One crossing per escalation - sealing the whole prefix at once
+/// would shut a corridor for every AI on a single creature's bad minute.
+fn escalate_blocked_route(
+    service: &crate::pathfinding::PathfindingService,
+    position: Vector3<f32>,
+    prefix: &[Vector3<f32>],
+    now_seconds: f32,
+) {
+    let Some(from) = service.cell_from_position(position) else {
+        return;
+    };
+    service.report_blocked_cell(from, now_seconds);
+    let mut previous = from;
+    for waypoint in prefix {
+        let Some(cell) = service.cell_from_position(*waypoint) else {
+            continue;
+        };
+        if cell != previous {
+            service.report_blocked_link(previous, cell, now_seconds);
+            return;
+        }
+        previous = cell;
+    }
+}
+
 fn route_reaches_goal(waypoints: &[Vector3<f32>], goal: Vector3<f32>) -> bool {
     waypoints
         .last()
@@ -811,5 +917,29 @@ mod tests {
         // reached by standing beneath it
         let path = vec![vec3(0.0, 5.0, 0.0), vec3(10.0, 5.0, 0.0)];
         assert_eq!(advance_waypoint(vec3(0.0, 0.0, 0.0), &path, 0), 0);
+    }
+
+    #[test]
+    fn a_repath_that_repeats_the_stalled_route_is_recognized() {
+        let stalled = vec![vec3(1.0, 0.0, 0.0), vec3(2.0, 0.0, 0.0)];
+        // Same route back, plus more of it: still the same doomed opening
+        let same = vec![
+            vec3(1.0, 0.0, 0.0),
+            vec3(2.0, 0.0, 0.0),
+            vec3(3.0, 0.0, 0.0),
+        ];
+        assert!(route_starts_the_same(&stalled, &same));
+    }
+
+    #[test]
+    fn a_repath_that_turns_away_is_a_different_route() {
+        let stalled = vec![vec3(1.0, 0.0, 0.0), vec3(2.0, 0.0, 0.0)];
+        let different = vec![vec3(1.0, 0.0, 0.0), vec3(2.0, 0.0, 5.0)];
+        assert!(!route_starts_the_same(&stalled, &different));
+        // A route on another floor is different even directly overhead
+        let stacked = vec![vec3(1.0, 5.0, 0.0), vec3(2.0, 5.0, 0.0)];
+        assert!(!route_starts_the_same(&stalled, &stacked));
+        // ...and so is one that stops short
+        assert!(!route_starts_the_same(&stalled, &stalled[..1]));
     }
 }
