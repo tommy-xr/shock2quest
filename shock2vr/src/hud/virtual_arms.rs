@@ -452,8 +452,11 @@ fn create_ammo_forearm_panel(
         Handedness::Right,
     )];
 
-    // No cycle affordance on the forearm: nothing points at this panel yet, and
-    // drawing a button nobody can press would be a lie.
+    // No controls on the forearm: the VR pointer only hits the cyber-interface
+    // panel, never this quad, so drawing a SETTING/RELOAD/cycle button nobody
+    // can press would be a lie. The readout itself is placed identically to
+    // flat's (AGENTS.md section 3) - only the interactive layer differs, and
+    // it differs by whether a pointer can reach it, not by presentation.
     let readout = ammo_panel::AmmoReadout::from_world(world, false);
     objects.append(
         &mut ammo_panel::build_readout_canvas(&readout).render_world_space(

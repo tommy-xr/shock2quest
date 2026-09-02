@@ -27,6 +27,7 @@ use shipyard::{EntitiesView, EntityId, Get, UniqueView, View, World};
 
 use crate::{
     gui::GuiComponentRenderInfo,
+    hud::ammo_panel::{ReadoutButton, ReadoutButtonSpec},
     input_context::Pointer2D,
     mission::PlayerInfo,
     scripts::{Message, MessagePayload},
@@ -77,10 +78,10 @@ const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
 pub enum FlatUiDragAction {
     Throw(EntityId),
     Wield(EntityId),
-    /// Cycle the wielded weapon's ammo type (the AMMOFULL cycle button
-    /// was clicked). Not tied to a cursor item - the caller maps it to
-    /// `Effect::CycleAmmo`, which acts on the wielded weapon.
-    CycleAmmo,
+    /// One of the AMMOFULL readout's controls was clicked (fire-mode setting,
+    /// reload, ammo cycle, psi selector). Not tied to a cursor item - the
+    /// caller maps it to the effect that acts on the wielded weapon.
+    Readout(ReadoutButton),
 }
 
 /// Double-click window (frames at 60Hz) and radius (canvas px) for the
@@ -213,10 +214,10 @@ pub struct FlatUiHost {
     /// The most recent lift, for double-click (wield) detection. Counts down
     /// each frame and clears when the window elapses.
     last_lift: Option<LiftMark>,
-    /// The AMMOFULL ammo-cycle button rect on the 640x480 canvas, set each
-    /// frame by the mission when use mode has a multi-ammo weapon wielded
-    /// (flat UI 5); `None` otherwise. Clicking it emits `CycleAmmo`.
-    ammo_cycle_rect: Option<Rect>,
+    /// The AMMOFULL readout's clickable controls on the 640x480 canvas, set
+    /// each frame by the mission from the same shared layout that drew them
+    /// (empty outside use mode). Clicking one emits `FlatUiDragAction::Readout`.
+    readout_buttons: Vec<ReadoutButtonSpec>,
     /// The active panel was opened unbound (the automap): it has no world
     /// object, so the walk-away distance auto-close is skipped. Cleared on
     /// open/close.
@@ -259,7 +260,7 @@ impl FlatUiHost {
             strip: None,
             cursor_item: None,
             last_lift: None,
-            ammo_cycle_rect: None,
+            readout_buttons: Vec::new(),
             sticky_panel: false,
             cursor_canvas: None,
             hover_close: false,
@@ -351,26 +352,36 @@ impl FlatUiHost {
         self.last_pointer_pressed = true;
     }
 
-    /// Set (or clear) the AMMOFULL ammo-cycle button's canvas rect for this
-    /// frame. The mission passes `Some(rect)` only in use mode with a
-    /// multi-ammo weapon wielded, matching what the flat HUD draws.
-    pub fn set_ammo_cycle_button(&mut self, rect: Option<Rect>) {
-        self.ammo_cycle_rect = rect;
+    /// Set the AMMOFULL readout's clickable controls for this frame. The
+    /// mission passes exactly what the flat HUD drew, so a control is
+    /// clickable if and only if it is on screen.
+    pub fn set_readout_buttons(&mut self, buttons: Vec<ReadoutButtonSpec>) {
+        self.readout_buttons = buttons;
     }
 
-    /// The ammo-cycle button as a `/v1/ui` element (so tests click it by
-    /// meaning), or `None` when it is not shown.
-    pub fn ammo_cycle_debug(&self) -> Option<crate::game_scene::DebugUiElement> {
-        self.ammo_cycle_rect
-            .map(|r| crate::game_scene::DebugUiElement {
+    /// The readout's controls as `/v1/ui` elements (so tests click them by
+    /// meaning), empty when none are shown.
+    pub fn readout_buttons_debug(&self) -> Vec<crate::game_scene::DebugUiElement> {
+        self.readout_buttons
+            .iter()
+            .map(|spec| crate::game_scene::DebugUiElement {
                 kind: "button".to_string(),
-                texture: Some("ammoarw0.pcx".to_string()),
-                text: None,
-                label: Some("cycle_ammo".to_string()),
+                texture: spec.texture.map(str::to_string),
+                text: spec.text.clone(),
+                label: Some(spec.button.label().to_string()),
                 entity_id: None,
-                rect: [r.x, r.y, r.w, r.h],
-                screen_rect: self.to_screen_rect(r),
+                rect: [spec.rect.x, spec.rect.y, spec.rect.w, spec.rect.h],
+                screen_rect: self.to_screen_rect(spec.rect),
             })
+            .collect()
+    }
+
+    /// The ammo-cycle control specifically, kept as its own `/v1/ui` field
+    /// because clients grew up on it before the readout gained the rest.
+    pub fn ammo_cycle_debug(&self) -> Option<crate::game_scene::DebugUiElement> {
+        self.readout_buttons_debug()
+            .into_iter()
+            .find(|element| element.label.as_deref() == Some(ReadoutButton::CycleAmmo.label()))
     }
 
     /// Take the item off the cursor (clearing it), returning its entity id.
@@ -669,10 +680,12 @@ impl FlatUiHost {
         let over_panel = panel_rect
             .map(|r| r.contains(canvas_pos) || close_button_canvas_rect(r).contains(canvas_pos))
             .unwrap_or(false);
-        let over_ammo = self
-            .ammo_cycle_rect
-            .map(|r| r.contains(canvas_pos))
-            .unwrap_or(false);
+        let readout_hit = self
+            .readout_buttons
+            .iter()
+            .find(|spec| spec.rect.contains(canvas_pos))
+            .map(|spec| spec.button);
+        let over_ammo = readout_hit.is_some();
 
         // --- Cursor-is-the-item drag: while an item rides the cursor, LMB
         // places/swaps/throws it and never routes to a GuiScript (protecting
@@ -726,8 +739,8 @@ impl FlatUiHost {
                 return (Vec::new(), Vec::new());
             }
             if over_panel || over_ammo || pointer.bare_view == BareViewPress::Ignore {
-                // Escape hatch: a click on an open MFD or the AMMOFULL cycle
-                // button keeps the held item (a visible button must not throw
+                // Escape hatch: a click on an open MFD or an AMMOFULL readout
+                // control keeps the held item (a visible button must not throw
                 // the item you're carrying) - and so does empty panel space in
                 // VR, where there is no 3D view behind the canvas to throw at.
                 return (Vec::new(), Vec::new());
@@ -738,15 +751,13 @@ impl FlatUiHost {
             return (Vec::new(), vec![FlatUiDragAction::Throw(held.entity)]);
         }
 
-        // --- AMMOFULL ammo-cycle button (use mode, multi-ammo weapon): a
-        // click cycles the wielded ammo type. Checked with an empty cursor
-        // only (mid-drag, a bottom-right click is a throw), before strip/panel
-        // routing since the button is disjoint from both. ---
+        // --- AMMOFULL readout controls (use mode): a click acts on the
+        // wielded weapon. Checked with an empty cursor only (mid-drag, a
+        // bottom-right click is a throw), before strip/panel routing since the
+        // controls are disjoint from both. ---
         if pressed_edge {
-            if let Some(rect) = self.ammo_cycle_rect {
-                if rect.contains(canvas_pos) {
-                    return (Vec::new(), vec![FlatUiDragAction::CycleAmmo]);
-                }
+            if let Some(button) = readout_hit {
+                return (Vec::new(), vec![FlatUiDragAction::Readout(button)]);
             }
         }
 
@@ -2005,24 +2016,61 @@ mod tests {
         assert_eq!(host.strip_item_at(vec2(58.5, 34.0)), None);
     }
 
+    /// The AMMOFULL readout controls as the flat HUD places them on the canvas.
+    fn readout_fixture() -> Vec<ReadoutButtonSpec> {
+        vec![
+            ReadoutButtonSpec {
+                button: ReadoutButton::CycleAmmo,
+                rect: Rect::new(564.0, 429.0, 12.0, 41.0),
+                texture: Some("ammoarw0.pcx"),
+                text: None,
+            },
+            ReadoutButtonSpec {
+                button: ReadoutButton::GunSetting,
+                rect: Rect::new(496.0, 429.0, 66.0, 20.0),
+                texture: None,
+                text: Some("NORM".to_string()),
+            },
+        ]
+    }
+
     #[test]
-    fn clicking_the_ammo_cycle_button_emits_cycle_ammo() {
+    fn clicking_a_readout_button_emits_its_action() {
         let (world, mut host, _wrench, _inv) = drag_world();
-        // The AMMOFULL cycle button lives at canvas (564,429,12,41).
-        host.set_ammo_cycle_button(Some(Rect::new(564.0, 429.0, 12.0, 41.0)));
-        // A click on its center (570, 449) cycles the ammo.
+        host.set_readout_buttons(readout_fixture());
+        // A click on the cycle arrow's center (570, 449) cycles the ammo.
         let actions = press_edge(&mut host, &world, (570.0, 449.0));
-        assert_eq!(actions, vec![FlatUiDragAction::CycleAmmo]);
-        // The /v1/ui element is exposed with a clickable label.
-        let el = host.ammo_cycle_debug().expect("the button is exposed");
+        assert_eq!(
+            actions,
+            vec![FlatUiDragAction::Readout(ReadoutButton::CycleAmmo)]
+        );
+        // ...and one on the SETTING button switches the fire mode.
+        let actions = press_edge(&mut host, &world, (529.0, 439.0));
+        assert_eq!(
+            actions,
+            vec![FlatUiDragAction::Readout(ReadoutButton::GunSetting)]
+        );
+        // The /v1/ui elements are exposed with clickable labels, and the
+        // setting button carries the mode header it is drawn with.
+        let elements = host.readout_buttons_debug();
+        assert_eq!(
+            elements
+                .iter()
+                .map(|e| e.label.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["cycle_ammo", "gun_setting"]
+        );
+        assert_eq!(elements[1].text.as_deref(), Some("NORM"));
+        assert!(elements.iter().all(|e| e.kind == "button"));
+        let el = host.ammo_cycle_debug().expect("the arrow is exposed");
         assert_eq!(el.label.as_deref(), Some("cycle_ammo"));
-        assert_eq!(el.kind, "button");
         // A click elsewhere in the bare view does not cycle.
         let actions = press_edge(&mut host, &world, (300.0, 300.0));
         assert!(actions.is_empty());
         // Cleared when not shown.
-        host.set_ammo_cycle_button(None);
+        host.set_readout_buttons(Vec::new());
         assert!(host.ammo_cycle_debug().is_none());
+        assert!(host.readout_buttons_debug().is_empty());
     }
 
     #[test]
@@ -2031,7 +2079,7 @@ mod tests {
         // the ammo-cycle button mid-drag protects the held item (no throw, no
         // cycle) rather than treating it as a bare-view throw.
         let (world, mut host, _wrench, _inv) = drag_world();
-        host.set_ammo_cycle_button(Some(Rect::new(564.0, 429.0, 12.0, 41.0)));
+        host.set_readout_buttons(readout_fixture());
         press_edge(&mut host, &world, (23.5, 34.0)); // lift the Wrench
         assert!(host.cursor_debug().is_some());
         let actions = press_edge(&mut host, &world, (570.0, 449.0)); // click the ammo button

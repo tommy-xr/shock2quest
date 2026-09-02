@@ -320,10 +320,14 @@ pub enum Effect {
         location: i32,
     },
 
-    /// Select the player's next *trained* psi power (advances
-    /// `PsiPowerSelection` through the `GlobalPsiPowers` registry, wrapping,
-    /// skipping powers not in `PlayerPsiKnownPowers`).
-    CyclePsiPower,
+    /// Step the psi selection one place along an axis, skipping powers not in
+    /// `PlayerPsiKnownPowers` and wrapping. `Any` is the single-key cycle
+    /// (`InputAction::CyclePsiPower`); `Tier`/`Power` are the AMMOFULL
+    /// readout's four arrows. See [`crate::psi::step_selection`].
+    StepPsiSelection {
+        axis: crate::psi::PsiSelectionAxis,
+        forward: bool,
+    },
 
     /// Train the player in a psi power (insert its template id into
     /// `PlayerPsiKnownPowers`), making it selectable and castable - for

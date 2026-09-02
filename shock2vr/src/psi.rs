@@ -138,6 +138,97 @@ pub struct PsiPowerSelection {
     pub index: usize,
 }
 
+/// Which axis of the psi selection a step moves along: the AMMOFULL readout's
+/// tier arrows move between tiers, its power arrows move within one, and the
+/// `CyclePsiPower` key walks every trained power in order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PsiSelectionAxis {
+    Tier,
+    Power,
+    /// Every trained power, tiers included - the single-key cycle.
+    Any,
+}
+
+/// The selection a psi selection step lands on.
+///
+/// `Tier` steps to the next tier that owns a trained power (empty tiers are
+/// skipped) and lands on its first one; `Power` wraps within the current tier;
+/// `Any` walks the whole trained list. All wrap, and all leave the selection
+/// alone when nothing else is trained, so a step can never select a power the
+/// player has not learned.
+pub fn step_selection(
+    powers: &[PsiPowerInfo],
+    known: &HashSet<i32>,
+    index: usize,
+    axis: PsiSelectionAxis,
+    forward: bool,
+) -> usize {
+    let Some(current) = powers.get(index) else {
+        return index;
+    };
+    // `powers` is sorted by (tier, power id), so a tier's trained powers are a
+    // contiguous run and tier order is just the order of the distinct tiers.
+    let trained: Vec<(usize, i32)> = powers
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| known.contains(&p.template_id))
+        .map(|(i, p)| (i, p.power.psi_cost))
+        .collect();
+    if trained.is_empty() {
+        return index;
+    }
+    // The registry holds untrained powers too, and nothing normalizes the
+    // selection when a power is granted - so the selection can be sitting on an
+    // untrained power with no neighbour to step from. Recover onto the first
+    // trained power rather than leaving every step a no-op.
+    if !known.contains(&current.template_id) {
+        return trained[0].0;
+    }
+    let tier = current.power.psi_cost;
+    match axis {
+        PsiSelectionAxis::Any => {
+            let every: Vec<usize> = trained.iter().map(|(i, _)| *i).collect();
+            neighbor(&every, index, forward).unwrap_or(index)
+        }
+        PsiSelectionAxis::Power => {
+            let in_tier: Vec<usize> = trained
+                .iter()
+                .filter(|(_, t)| *t == tier)
+                .map(|(i, _)| *i)
+                .collect();
+            neighbor(&in_tier, index, forward).unwrap_or(index)
+        }
+        PsiSelectionAxis::Tier => {
+            let mut tiers: Vec<i32> = trained.iter().map(|(_, t)| *t).collect();
+            tiers.dedup();
+            let Some(next_tier) = neighbor(&tiers, tier, forward).filter(|next| *next != tier)
+            else {
+                // Only one tier is trained: a tier step has nowhere to go, and
+                // must not quietly behave like a power step.
+                return index;
+            };
+            trained
+                .iter()
+                .find(|(_, t)| *t == next_tier)
+                .map(|(i, _)| *i)
+                .unwrap_or(index)
+        }
+    }
+}
+
+/// The entry after (`forward`) or before `current` in `items`, wrapping.
+/// `None` when `current` is not in `items`.
+fn neighbor<T: Copy + PartialEq>(items: &[T], current: T, forward: bool) -> Option<T> {
+    let at = items.iter().position(|item| *item == current)?;
+    let len = items.len();
+    let next = if forward {
+        (at + 1) % len
+    } else {
+        (at + len - 1) % len
+    };
+    Some(items[next])
+}
+
 /// The psi powers the player has been trained in, by power template id -
 /// the only powers selectable (`Effect::CyclePsiPower`) and castable
 /// (`PsiAmpScript`). Grown at runtime via `Effect::GrantPsiPower`.
@@ -314,6 +405,135 @@ mod tests {
         assert!(learned_bit_set(0, 0b10, 33));
         assert!(learned_bit_set(0, 1 << 7, 39));
         assert!(!learned_bit_set(0, 0, 39));
+    }
+
+    /// A registry in the shape `build_psi_power_registry` produces: sorted by
+    /// (tier, power id). `(template_id, tier)` pairs.
+    fn registry(powers: &[(i32, i32)]) -> Vec<PsiPowerInfo> {
+        powers
+            .iter()
+            .map(|(template_id, tier)| PsiPowerInfo {
+                template_id: *template_id,
+                name: format!("Power {template_id}"),
+                display_name: None,
+                power: PropPsiPower {
+                    power_id: -template_id,
+                    activation_type: 0,
+                    psi_cost: *tier,
+                    data: [0.0; 4],
+                },
+                projectiles: Vec::new(),
+                overloadable: false,
+                duration: None,
+            })
+            .collect()
+    }
+
+    /// Tiers 1, 1, 3 - tier 2 is authored but untrained, so it must be skipped.
+    fn tiered() -> (Vec<PsiPowerInfo>, HashSet<i32>) {
+        let powers = registry(&[(-1, 1), (-2, 1), (-3, 2), (-4, 3), (-5, 3)]);
+        (powers, HashSet::from([-1, -2, -4, -5]))
+    }
+
+    #[test]
+    fn power_arrows_wrap_within_the_current_tier() {
+        let (powers, known) = tiered();
+        let step = |index, forward| {
+            step_selection(&powers, &known, index, PsiSelectionAxis::Power, forward)
+        };
+        assert_eq!(step(0, true), 1);
+        // ...and wraps rather than spilling into the next tier.
+        assert_eq!(step(1, true), 0);
+        assert_eq!(step(0, false), 1);
+        // Tier 3's pair is independent of tier 1's.
+        assert_eq!(step(3, true), 4);
+        assert_eq!(step(4, true), 3);
+    }
+
+    #[test]
+    fn tier_arrows_skip_tiers_with_no_trained_power() {
+        let (powers, known) = tiered();
+        let step = |index, forward| {
+            step_selection(&powers, &known, index, PsiSelectionAxis::Tier, forward)
+        };
+        // Tier 1 -> tier 3: tier 2 is untrained, so it is not a stop.
+        assert_eq!(step(0, true), 3);
+        // ...and back again, wrapping.
+        assert_eq!(step(3, true), 0);
+        assert_eq!(step(0, false), 3);
+        // A tier step lands on that tier's FIRST trained power, not the one at
+        // the same offset.
+        assert_eq!(step(4, true), 0);
+    }
+
+    #[test]
+    fn a_selection_sitting_on_an_untrained_power_recovers() {
+        // The registry holds every power, trained or not, and the default
+        // selection is index 0 - so a player whose training starts at tier 3
+        // begins on an untrained power. Both axes must escape it, not stall.
+        let (powers, _) = tiered();
+        let known = HashSet::from([-4, -5]);
+        for axis in [
+            PsiSelectionAxis::Tier,
+            PsiSelectionAxis::Power,
+            PsiSelectionAxis::Any,
+        ] {
+            assert_eq!(
+                step_selection(&powers, &known, 0, axis, true),
+                3,
+                "{axis:?} should recover onto the first trained power"
+            );
+        }
+    }
+
+    #[test]
+    fn an_arrow_never_selects_an_untrained_power() {
+        let (powers, _) = tiered();
+        // Only the tier-1 pair is trained: both axes stay inside it.
+        let known = HashSet::from([-1, -2]);
+        for axis in [PsiSelectionAxis::Tier, PsiSelectionAxis::Power] {
+            for forward in [true, false] {
+                let next = step_selection(&powers, &known, 0, axis, forward);
+                assert!(
+                    known.contains(&powers[next].template_id),
+                    "{axis:?}/{forward} selected an untrained power"
+                );
+            }
+        }
+        // A lone trained power has nowhere to go, on any axis.
+        let single = HashSet::from([-1]);
+        for axis in [
+            PsiSelectionAxis::Tier,
+            PsiSelectionAxis::Power,
+            PsiSelectionAxis::Any,
+        ] {
+            assert_eq!(
+                step_selection(&powers, &single, 0, axis, true),
+                0,
+                "{axis:?}"
+            );
+        }
+        // Nor does a tier step become a power step when the trained powers all
+        // share one tier.
+        let one_tier = HashSet::from([-1, -2]);
+        assert_eq!(
+            step_selection(&powers, &one_tier, 1, PsiSelectionAxis::Tier, true),
+            1,
+            "one trained tier means the tier arrow is inert"
+        );
+    }
+
+    #[test]
+    fn an_empty_or_out_of_range_selection_is_left_alone() {
+        let (powers, known) = tiered();
+        assert_eq!(
+            step_selection(&powers, &known, 99, PsiSelectionAxis::Tier, true),
+            99
+        );
+        assert_eq!(
+            step_selection(&[], &known, 0, PsiSelectionAxis::Power, true),
+            0
+        );
     }
 }
 

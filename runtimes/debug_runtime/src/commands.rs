@@ -600,9 +600,10 @@ pub struct UiStateResult {
     /// The item held on the cursor mid-drag (cursor-is-the-item); `Some`
     /// between a lift and the place/throw that clears it.
     pub cursor: Option<shock2vr::game_scene::DebugUiCursor>,
-    /// The AMMOFULL ammo-cycle button (use mode + multi-ammo weapon); `Some`
-    /// when shown. Click it to cycle the wielded weapon's ammo type.
-    pub ammo_cycle: Option<shock2vr::game_scene::DebugUiElement>,
+    /// Every AMMOFULL readout control shown this frame (fire-mode SETTING,
+    /// RELOAD, the ammo-cycle arrow, the psi selector arrows), labeled by
+    /// meaning. Empty outside use mode.
+    pub readout: Vec<shock2vr::game_scene::DebugUiElement>,
     /// Where the pointer last landed on the shared canvas (flat: the mouse;
     /// VR: the controller ray on the cyber-interface panel).
     pub pointer: Option<shock2vr::game_scene::DebugUiPointer>,

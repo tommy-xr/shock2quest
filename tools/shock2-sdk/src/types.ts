@@ -786,12 +786,13 @@ export interface UiState {
   /** The item held on the cursor mid-drag, or null when the cursor is empty. */
   cursor: UiCursor | null;
   /**
-   * The AMMOFULL ammo-type cycle button, exposed only in use mode when a gun
-   * with 2+ ammo types is wielded (the expanded weapon panel, flat UI 5).
-   * Click its `screen_rect` center to cycle the wielded weapon's ammo type
-   * (Effect::CycleAmmo). null in shooter mode / unarmed / single-ammo weapons.
+   * Every AMMOFULL readout control shown this frame, labeled by meaning:
+   * `gun_setting` (its `text` is the current fire-mode header), `reload`,
+   * `cycle_ammo`, and the psi selector's `psi_tier_prev`/`psi_tier_next`/
+   * `psi_power_prev`/`psi_power_next`. Empty outside use mode. Click a
+   * control's `screen_rect` center to invoke it.
    */
-  ammo_cycle: UiElement | null;
+  readout: UiElement[];
   /**
    * Where the pointer last landed on the shared canvas: the mouse on flat, the
    * controller ray on the VR cyber-interface panel. null when nothing is

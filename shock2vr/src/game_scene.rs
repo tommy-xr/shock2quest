@@ -562,7 +562,10 @@ pub struct DebugUiState {
     /// The AMMOFULL ammo-cycle button (use mode + empty multi-ammo weapon
     /// wielded); clicking it cycles the wielded weapon's ammo type. `None`
     /// otherwise.
-    pub ammo_cycle: Option<DebugUiElement>,
+    /// Every AMMOFULL readout control shown this frame (fire-mode SETTING,
+    /// RELOAD, the ammo-cycle arrow, the psi selector arrows), labeled by
+    /// meaning. Empty outside use mode.
+    pub readout: Vec<DebugUiElement>,
     /// Where the pointer last landed on the shared canvas (flat: the mouse;
     /// VR: the controller ray on the cyber-interface panel).
     pub pointer: Option<DebugUiPointer>,
@@ -891,7 +894,7 @@ pub trait DebuggableScene {
             active_panel: None,
             strip: None,
             cursor: None,
-            ammo_cycle: None,
+            readout: Vec::new(),
             pointer: None,
             panel_pose: None,
         }

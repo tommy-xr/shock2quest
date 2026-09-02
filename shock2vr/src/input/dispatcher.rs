@@ -106,7 +106,10 @@ impl ActionDispatcher {
             effects.push(Effect::ReloadWeapon);
         }
         if state.just_triggered(InputAction::CyclePsiPower) {
-            effects.push(Effect::CyclePsiPower);
+            effects.push(Effect::StepPsiSelection {
+                axis: crate::psi::PsiSelectionAxis::Any,
+                forward: true,
+            });
         }
         if state.just_triggered(InputAction::DebugReloadLevel) {
             effects.push(Effect::GlobalEffect(GlobalEffect::TestReload));

@@ -2185,6 +2185,7 @@ impl MissionCore {
 
         // Preload the elevator floor labels (MISC.STR) + current mission so the
         // AssetCache-less ElevatorGui can label/gate floors at draw time.
+        world.add_unique(crate::hud::HudStrings::load(asset_cache));
         world.add_unique(crate::scripts::ElevatorContext::load(asset_cache, &mission));
         world.add_unique(crate::scripts::gui::TraitsContext::load(asset_cache));
         world.add_unique(crate::scripts::gui::ComputerContext::load(asset_cache));
@@ -3381,17 +3382,11 @@ impl MissionCore {
         // processed this frame.
         let (ui_messages, ui_drag_actions) = match game_options.presentation_mode {
             crate::PresentationMode::Flat => {
-                // Expose the AMMOFULL ammo-cycle button for hit-testing exactly
-                // when the flat HUD draws it (the shared visibility predicate,
-                // so the clickable rect never diverges from the rendered
-                // button).
-                let ammo_button =
-                    if crate::hud::ammo_cycle_button_visible(&self.world, self.use_mode) {
-                        Some(crate::hud::AMMO_CYCLE_BUTTON)
-                    } else {
-                        None
-                    };
-                self.flat_ui.set_ammo_cycle_button(ammo_button);
+                // Expose the AMMOFULL readout's controls for hit-testing from
+                // the same shared layout that drew them, so a clickable rect
+                // can never diverge from a rendered button.
+                self.flat_ui
+                    .set_readout_buttons(crate::hud::readout_buttons(&self.world, self.use_mode));
                 self.flat_ui.update(&self.world, input_context.pointer)
             }
             // The cyber interface's pointer bridge: the controller ray's canvas
@@ -4636,9 +4631,23 @@ impl MissionCore {
                 self.throw_entity_into_world(entity_id);
                 Vec::new()
             }
-            // The AMMOFULL cycle button: advance the wielded weapon's ammo type
-            // via the same effect as the CycleAmmo key/action.
-            FlatUiDragAction::CycleAmmo => vec![Effect::CycleAmmo],
+            // The AMMOFULL readout's controls emit the same effects as their
+            // keyboard/action counterparts, so the button and the key are one
+            // behavior.
+            FlatUiDragAction::Readout(button) => {
+                use crate::hud::ammo_panel::ReadoutButton;
+                use crate::psi::PsiSelectionAxis;
+                let step = |axis, forward| vec![Effect::StepPsiSelection { axis, forward }];
+                match button {
+                    ReadoutButton::CycleAmmo => vec![Effect::CycleAmmo],
+                    ReadoutButton::GunSetting => vec![Effect::CycleGunSetting],
+                    ReadoutButton::Reload => vec![Effect::ReloadWeapon],
+                    ReadoutButton::PsiTierPrev => step(PsiSelectionAxis::Tier, false),
+                    ReadoutButton::PsiTierNext => step(PsiSelectionAxis::Tier, true),
+                    ReadoutButton::PsiPowerPrev => step(PsiSelectionAxis::Power, false),
+                    ReadoutButton::PsiPowerNext => step(PsiSelectionAxis::Power, true),
+                }
+            }
             // Double-click = equip/use, acting on the still-contained item -
             // identical to the ContainerGui backpack click (shared weapon test,
             // shared effects): a weapon (gun or melee) wields via `GrabEntity`
@@ -5815,7 +5824,7 @@ impl MissionCore {
                     }
                 }
 
-                Effect::CyclePsiPower => {
+                Effect::StepPsiSelection { axis, forward } => {
                     let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
                     let known = self
                         .world
@@ -5825,19 +5834,14 @@ impl MissionCore {
                         .world
                         .borrow::<UniqueViewMut<PsiPowerSelection>>()
                         .unwrap();
-                    if !powers.0.is_empty() {
-                        // Advance to the next *trained* power, wrapping (at
-                        // most one lap - with a single trained power the lap
-                        // lands back on it, so the selection never moves onto
-                        // an untrained power).
-                        for step in 1..=powers.0.len() {
-                            let index = (selection.index + step) % powers.0.len();
-                            if known.0.contains(&powers.0[index].template_id) {
-                                selection.index = index;
-                                break;
-                            }
-                        }
-                        let power = &powers.0[selection.index];
+                    selection.index = crate::psi::step_selection(
+                        &powers.0,
+                        &known.0,
+                        selection.index,
+                        axis,
+                        forward,
+                    );
+                    if let Some(power) = powers.0.get(selection.index) {
                         game_log!(
                             INFO,
                             "Selected psi power: {} (tier {})",
@@ -10598,7 +10602,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             active_panel,
             strip,
             cursor: self.flat_ui.cursor_debug(),
-            ammo_cycle: self.flat_ui.ammo_cycle_debug(),
+            readout: self.flat_ui.readout_buttons_debug(),
             pointer: self.flat_ui.pointer_debug(),
             // The panel a client aims a controller at, reported straight off
             // the anchor that placed it - so a test cannot aim at a placement

@@ -135,7 +135,7 @@ impl Script for PsiAmpScript {
                 // The selection changed mid-hold: the bar wasn't timed for
                 // the now-selected power, so the charge fizzles. (A cycle
                 // and a release landing on the SAME frame still cast the
-                // held power - CyclePsiPower is an effect applied after
+                // held power - the selection step is an effect applied after
                 // message dispatch - which matches the player's intent: they
                 // charged that power the whole hold.)
                 if selected_power(world).map(|p| p.template_id) != Some(power_template_id) {
@@ -289,7 +289,7 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
 }
 
 /// Whether the player has been trained in the power. Selection gating
-/// (`Effect::CyclePsiPower`) means an untrained power should never be
+/// (`Effect::StepPsiSelection`) means an untrained power should never be
 /// selected; this is the belt-and-braces check on the cast paths. Fails
 /// closed: the unique is seeded unconditionally at mission load, so a
 /// missing one is a setup bug - don't let it disable the gate.
