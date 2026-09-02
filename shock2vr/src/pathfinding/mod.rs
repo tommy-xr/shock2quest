@@ -29,6 +29,19 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 /// subdivision edges, not just walls.
 const EDGE_CLEARANCE: f32 = 3.0 / SCALE_FACTOR;
 
+/// Width of the body a walking AI has to fit through (2.4 Dark feet - the
+/// widest humanoid capsule, hybrids/grunts at 0.48 world-unit radius). The
+/// original engine baked clearance offline and deleted portals a creature
+/// could not pass; shipped okBits carry no such marking for the sliver
+/// portals we synthesize walkability for, so we gate them geometrically.
+const AGENT_WIDTH: f32 = 2.4 / SCALE_FACTOR;
+
+/// Extra cost (Dark feet of detour) for crossing a portal narrower than the
+/// walker's body. Large enough to outweigh any local detour around the
+/// pinch, small enough that a sliver still beats no route at all - the
+/// shipped mesh sometimes has no other way into a spot.
+const NARROW_PORTAL_PENALTY: u32 = 250;
+
 /// A zero-bit link counts as a flat walkable seam when the two cell floors
 /// differ by no more than this (3 Dark feet - covers small steps; genuine
 /// cliffs in the data differ by up to 15)
@@ -168,6 +181,16 @@ pub struct PathfindingService {
     /// cross-zone links inherit bits from the zone-pair table, and flat
     /// zero-bit seams (pervasive in shipped data) are granted WALK.
     effective_bits: Vec<MovementBits>,
+    /// Free width at each link's portal (distance from the portal to the
+    /// nearest wall in the mesh), parallel to `effective_bits`. A portal
+    /// with less than the walker's radius is impassable for anything but a
+    /// small creature. Synthesized bridge links carry `f32::INFINITY` -
+    /// their clearance is validated by raycast when they are built.
+    portal_clearances: Vec<f32>,
+    /// Free half-width at each cell's center, parallel to
+    /// `path_database.cells`: a cell whose center is tighter than the
+    /// walker's radius is no place to send a body.
+    cell_clearances: Vec<f32>,
     /// Synthesized island-crossing links (experimental `nav_bridges`),
     /// indexed after `path_database.links`
     bridge_links: Vec<PathCellLink>,
@@ -238,6 +261,9 @@ impl PathfindingService {
             .map(|cd| (cd.cell, cd.door))
             .collect();
         let mut effective_bits = compute_effective_bits(&path_database);
+        let boundary = NavBoundary::build(&path_database);
+        let mut portal_clearances = boundary.portal_clearances(&path_database);
+        let cell_clearances = boundary.cell_clearances(&path_database);
         let bridge_links = if bridge_islands {
             compute_bridge_links(&path_database, &effective_bits, nav_validator)
         } else {
@@ -249,6 +275,7 @@ impl PathfindingService {
                 links.push(idx);
             }
             effective_bits.push(link.ok_bits);
+            portal_clearances.push(f32::INFINITY);
         }
         if !bridge_links.is_empty() {
             tracing::info!(
@@ -261,6 +288,8 @@ impl PathfindingService {
             links_by_cell,
             cell_to_door,
             effective_bits,
+            portal_clearances,
+            cell_clearances,
             bridge_links,
             relaxed: bridge_islands,
             ai_paths: std::sync::Mutex::new(HashMap::new()),
@@ -528,13 +557,33 @@ impl PathfindingService {
         let distance_to_goal = |cell: u32| -> f32 {
             (goal - self.path_database.cells[cell as usize].center).magnitude()
         };
+        // Stop somewhere the body fits. A partial route is aimed at a cell
+        // center, and the cells nearest an unreachable goal are often the
+        // pinch it is unreachable through - the wedge at the bottom of a
+        // converging corner, where an AI parks itself against the geometry
+        // and grinds. Cells too tight to stand in are only considered when
+        // nothing roomier is reachable.
+        let roomy = |cell: u32| -> bool {
+            self.cell_clearances
+                .get(cell as usize)
+                .is_none_or(|&clearance| clearance >= AGENT_WIDTH * 0.5)
+        };
         let mut best = start_cell;
         let mut best_distance = distance_to_goal(start_cell);
         for &cell in reachable.keys() {
             let d = distance_to_goal(cell);
-            if d < best_distance {
+            if d < best_distance && roomy(cell) {
                 best_distance = d;
                 best = cell;
+            }
+        }
+        if best == start_cell {
+            for &cell in reachable.keys() {
+                let d = distance_to_goal(cell);
+                if d < best_distance {
+                    best_distance = d;
+                    best = cell;
+                }
             }
         }
         if best == start_cell {
@@ -627,6 +676,18 @@ impl PathfindingService {
         waypoints.extend(points);
         waypoints.push(goal);
         waypoints
+    }
+
+    /// Free width the mesh leaves at the portal between two cells (nearest
+    /// wall distance at the roomiest point of the shared edge). Inspection
+    /// aid for nav tooling; `None` when the cells share no link.
+    pub fn portal_clearance(&self, from_cell: u32, to_cell: u32) -> Option<f32> {
+        let idx = *self
+            .links_by_cell
+            .get(from_cell as usize)?
+            .iter()
+            .find(|&&idx| self.link_at(idx).to_cell == to_cell)?;
+        self.portal_clearances.get(idx as usize).copied()
     }
 
     /// Find a traversable link from one cell to an adjacent cell
@@ -764,6 +825,15 @@ impl PathfindingService {
             .map(|&idx| {
                 let link = self.link_at(idx);
                 let mut cost = (link.cost as u32).max(1);
+                // A portal the body does not fit through costs a detour's
+                // worth extra, so A* threads a sliver only when nothing else
+                // reaches the goal at all (the mesh's own boundary is the
+                // measure - see `portal_clearances`).
+                if !movement_bits.contains(MovementBits::SMALL_CREATURE)
+                    && self.portal_clearances[idx as usize] < AGENT_WIDTH * 0.5
+                {
+                    cost += NARROW_PORTAL_PENALTY;
+                }
                 if self.relaxed {
                     let dest = &self.path_database.cells[link.to_cell as usize];
                     if dest.flags.contains(PathCellFlags::BLOCKING_OBB) {
@@ -1076,6 +1146,235 @@ fn compute_bridge_links(
         );
     }
     bridges
+}
+
+/// The navigable region's boundary: every stretch of cell edge with no
+/// linked, pathable cell on the other side.
+///
+/// This is what makes a spot too tight for a body. Portal edge lengths do
+/// not: the mesh subdivides open floor into many short portals, while the
+/// 0.6-wide strip beside a door jamb has portals as long as the strip is
+/// wide. Distance to this boundary is the free width, wherever it is
+/// measured.
+struct NavBoundary {
+    /// Wall segments (XZ; `y` from the cell floor they bound)
+    walls: Vec<(Vector3<f32>, Vector3<f32>)>,
+    /// Wall indices per spatial bucket, for nearest-wall queries
+    buckets: HashMap<(i32, i32), Vec<u32>>,
+}
+
+/// Vertical window in which a wall counts against a point (5 Dark feet -
+/// under a deck height, over any step or railing), so a wall on the deck
+/// above doesn't shrink a spot below it
+const WALL_FLOOR_SPAN: f32 = 5.0 / SCALE_FACTOR;
+/// Spatial-hash bucket for boundary lookup (Dark feet)
+const WALL_BUCKET: f32 = 10.0 / SCALE_FACTOR;
+/// Collinearity / overlap tolerance when matching one cell's boundary
+/// against its neighbours' (world units - shipped cells leave slivers of gap
+/// between neighbours, and links name the neighbour's vertices for the same
+/// seam, so the shared stretches are matched geometrically rather than by
+/// vertex id)
+const BOUNDARY_TOLERANCE: f32 = 0.15;
+
+fn bucket_of(x: f32, z: f32) -> (i32, i32) {
+    (
+        (x / WALL_BUCKET).floor() as i32,
+        (z / WALL_BUCKET).floor() as i32,
+    )
+}
+
+impl NavBoundary {
+    fn build(db: &PathDatabase) -> Self {
+        let linked: std::collections::HashSet<(u32, u32)> = db
+            .links
+            .iter()
+            .map(|link| (link.from_cell, link.to_cell))
+            .collect();
+
+        let mut edges: Vec<(u32, Vector3<f32>, Vector3<f32>)> = Vec::new();
+        for cell in &db.cells {
+            let n = cell.vertex_indices.len();
+            if n < 3 {
+                continue;
+            }
+            for i in 0..n {
+                if let (Some(&a), Some(&b)) = (
+                    db.vertices.get(cell.vertex_indices[i] as usize),
+                    db.vertices.get(cell.vertex_indices[(i + 1) % n] as usize),
+                ) {
+                    edges.push((cell.id, a, b));
+                }
+            }
+        }
+        let mut edge_buckets: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
+        for (idx, (_, a, b)) in edges.iter().enumerate() {
+            let (bx0, bz0) = bucket_of(a.x.min(b.x), a.z.min(b.z));
+            let (bx1, bz1) = bucket_of(a.x.max(b.x), a.z.max(b.z));
+            for bx in bx0..=bx1 {
+                for bz in bz0..=bz1 {
+                    edge_buckets.entry((bx, bz)).or_default().push(idx as u32);
+                }
+            }
+        }
+
+        let blocked = PathCellFlags::UNPATHABLE | PathCellFlags::BLOCKING_OBB;
+        let mut walls: Vec<(Vector3<f32>, Vector3<f32>)> = Vec::new();
+        for (edge_idx, &(cell_id, a, b)) in edges.iter().enumerate() {
+            let (dx, dz) = (b.x - a.x, b.z - a.z);
+            let len = (dx * dx + dz * dz).sqrt();
+            if len < BOUNDARY_TOLERANCE {
+                continue;
+            }
+            let (ux, uz) = (dx / len, dz / len);
+            // Stretches of this edge shared with a linked, pathable
+            // neighbour, as intervals [t0, t1] along it
+            let mut open: Vec<(f32, f32)> = Vec::new();
+            let (bx0, bz0) = bucket_of(a.x.min(b.x), a.z.min(b.z));
+            let (bx1, bz1) = bucket_of(a.x.max(b.x), a.z.max(b.z));
+            for bx in (bx0 - 1)..=(bx1 + 1) {
+                for bz in (bz0 - 1)..=(bz1 + 1) {
+                    let Some(candidates) = edge_buckets.get(&(bx, bz)) else {
+                        continue;
+                    };
+                    for &other in candidates {
+                        if other as usize == edge_idx {
+                            continue;
+                        }
+                        let (other_cell, oa, ob) = edges[other as usize];
+                        if other_cell == cell_id || !linked.contains(&(cell_id, other_cell)) {
+                            continue;
+                        }
+                        match db.cells.get(other_cell as usize) {
+                            Some(cell) if !cell.flags.intersects(blocked) => {}
+                            _ => continue,
+                        }
+                        if (oa.y - a.y).abs() > WALL_FLOOR_SPAN
+                            || (ob.y - a.y).abs() > WALL_FLOOR_SPAN
+                        {
+                            continue;
+                        }
+                        let on_line = |p: Vector3<f32>| {
+                            ((p.x - a.x) * uz - (p.z - a.z) * ux).abs() <= BOUNDARY_TOLERANCE
+                        };
+                        if !on_line(oa) || !on_line(ob) {
+                            continue;
+                        }
+                        let ta = (oa.x - a.x) * ux + (oa.z - a.z) * uz;
+                        let tb = (ob.x - a.x) * ux + (ob.z - a.z) * uz;
+                        let (lo, hi) = if ta <= tb { (ta, tb) } else { (tb, ta) };
+                        let (lo, hi) = (lo.max(0.0), hi.min(len));
+                        if hi - lo > BOUNDARY_TOLERANCE {
+                            open.push((lo, hi));
+                        }
+                    }
+                }
+            }
+            open.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+            // What is left of the edge once the shared stretches are removed
+            // is wall
+            let mut cursor = 0.0f32;
+            let point_at = |t: f32| Vector3::new(a.x + ux * t, a.y, a.z + uz * t);
+            for (lo, hi) in open {
+                if lo - cursor > BOUNDARY_TOLERANCE {
+                    walls.push((point_at(cursor), point_at(lo)));
+                }
+                cursor = cursor.max(hi);
+            }
+            if len - cursor > BOUNDARY_TOLERANCE {
+                walls.push((point_at(cursor), point_at(len)));
+            }
+        }
+
+        let mut buckets: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
+        for (idx, (a, b)) in walls.iter().enumerate() {
+            // A wall spans buckets; register it in every one its XZ extent
+            // touches so a nearby query can't miss it
+            let (bx0, bz0) = bucket_of(a.x.min(b.x), a.z.min(b.z));
+            let (bx1, bz1) = bucket_of(a.x.max(b.x), a.z.max(b.z));
+            for bx in bx0..=bx1 {
+                for bz in bz0..=bz1 {
+                    buckets.entry((bx, bz)).or_default().push(idx as u32);
+                }
+            }
+        }
+
+        Self { walls, buckets }
+    }
+
+    /// Distance from a point to the nearest wall (XZ) - half the free width
+    /// there. Unbounded when no wall is near.
+    fn clearance_at(&self, at: Vector3<f32>) -> f32 {
+        let (bx, bz) = bucket_of(at.x, at.z);
+        let mut nearest = f32::INFINITY;
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                let Some(candidates) = self.buckets.get(&(bx + dx, bz + dz)) else {
+                    continue;
+                };
+                for &idx in candidates {
+                    let (wa, wb) = self.walls[idx as usize];
+                    if (wa.y - at.y).abs() > WALL_FLOOR_SPAN
+                        && (wb.y - at.y).abs() > WALL_FLOOR_SPAN
+                    {
+                        continue;
+                    }
+                    let closest = closest_point_on_segment_xz(wa, wb, at);
+                    let (dx, dz) = (closest.x - at.x, closest.z - at.z);
+                    nearest = nearest.min((dx * dx + dz * dz).sqrt());
+                }
+            }
+        }
+        nearest
+    }
+
+    /// Free half-width at each link's portal, parallel to `db.links`: the
+    /// body crosses wherever the portal is roomiest (a portal at a cell
+    /// corner is open on the corner side), so the best point along the
+    /// shared edge wins.
+    fn portal_clearances(&self, db: &PathDatabase) -> Vec<f32> {
+        const SAMPLES: usize = 9;
+        db.links
+            .iter()
+            .map(|link| {
+                let (Some(a), Some(b)) = (
+                    db.vertices.get(link.edge_vertex_a as usize),
+                    db.vertices.get(link.edge_vertex_b as usize),
+                ) else {
+                    return f32::INFINITY;
+                };
+                (0..SAMPLES)
+                    .map(|i| {
+                        let t = i as f32 / (SAMPLES - 1) as f32;
+                        self.clearance_at(a + (b - a) * t)
+                    })
+                    .fold(0.0f32, f32::max)
+            })
+            .collect()
+    }
+
+    /// Free half-width at each cell's center, parallel to `db.cells` - can a
+    /// body stand there at all?
+    fn cell_clearances(&self, db: &PathDatabase) -> Vec<f32> {
+        db.cells
+            .iter()
+            .map(|cell| self.clearance_at(cell.center))
+            .collect()
+    }
+}
+
+/// Closest point to `target` on segment `a`-`b`, in the XZ plane
+fn closest_point_on_segment_xz(
+    a: Vector3<f32>,
+    b: Vector3<f32>,
+    target: Vector3<f32>,
+) -> Vector3<f32> {
+    let (dx, dz) = (b.x - a.x, b.z - a.z);
+    let len_sq = dx * dx + dz * dz;
+    if len_sq < 1e-8 {
+        return a;
+    }
+    let t = (((target.x - a.x) * dx + (target.z - a.z) * dz) / len_sq).clamp(0.0, 1.0);
+    a + (b - a) * t
 }
 
 /// Shrink an edge toward its center by EDGE_CLEARANCE on each end, so taut

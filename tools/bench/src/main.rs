@@ -875,11 +875,32 @@ fn dump_cells_at(db: PathDatabase, at: Vector3<f32>) {
             "  cell {} center=({:.2}, {:.2}, {:.2}) flags={:?} {component}",
             cell.id, cell.center.x, cell.center.y, cell.center.z, cell.flags
         );
+        let verts: Vec<String> = cell
+            .vertex_indices
+            .iter()
+            .filter_map(|&i| db.vertices.get(i as usize))
+            .map(|v| format!("({:.2},{:.2},{:.2})", v.x, v.y, v.z))
+            .collect();
+        println!("    poly: {}", verts.join(" "));
         for link in db.links.iter().filter(|l| l.from_cell == cell.id) {
+            // Portal width is what an agent body has to fit through.
+            let width = match (
+                db.vertices.get(link.edge_vertex_a as usize),
+                db.vertices.get(link.edge_vertex_b as usize),
+            ) {
+                (Some(a), Some(b)) => format!("{:.2}", (b - a).magnitude()),
+                _ => "?".to_string(),
+            };
+            let clearance = service
+                .portal_clearance(cell.id, link.to_cell)
+                .map(|c| format!("{c:.2}"))
+                .unwrap_or_else(|| "-".to_string());
             println!(
-                "    -> cell {:<5} cost {:<3} [{}]",
+                "    -> cell {:<5} cost {:<3} portal {:>5} clearance {:>5} [{}]",
                 link.to_cell,
                 link.cost,
+                width,
+                clearance,
                 describe_bits(link.ok_bits)
             );
         }
