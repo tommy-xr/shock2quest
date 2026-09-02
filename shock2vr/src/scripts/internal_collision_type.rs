@@ -74,7 +74,10 @@ impl Script for InternalCollisionType {
                         // projectile path's hardcoded 6.0 in
                         // internal_fast_projectile.rs.
                         payload: MessagePayload::Damage {
-                            amount: 1.0,
+                            amount: crate::runtime_props::RuntimePropShotModifiers::of(
+                                world, entity_id,
+                            )
+                            .stim,
                             impact: None,
                         },
                     },

@@ -11,13 +11,35 @@ export function ammoOf(detail: {
   return Number(ammo.value);
 }
 
-/** Fire one round: edge-triggered pull (fires on the rising edge), then release,
- * stepping a frame for each so the next pull is a fresh edge. */
-export async function fireOnce(game: GameServer): Promise<void> {
+/** Step until the wielded gun is out of the between-shots wait its fire setting
+ * imposes (`shot_interval_ms`), so the next pull actually fires. A pull inside
+ * the wait is silently ignored, and the waits are long: 1 s on the shotgun,
+ * 3 s on the laser's overcharge. */
+export async function waitForShotReady(game: GameServer): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const remaining = (await game.info()).player.wielded_gun_cooldown_ms;
+    // Absent for a runtime predating the field, null when nothing is wielded.
+    if (typeof remaining !== "number" || remaining <= 0) return;
+    await game.step({ frames: Math.ceil((remaining / 1000) * 60) + 1 });
+  }
+  throw new Error("the wielded gun never came out of its between-shots wait");
+}
+
+/** One edge-triggered pull (weapons fire on the rising edge) and release,
+ * stepping a frame for each so the next pull is a fresh edge. Does NOT wait out
+ * the gun's between-shots interval - use `fireOnce` unless the point is a pull
+ * that lands too early. */
+export async function pullTrigger(game: GameServer): Promise<void> {
   await game.input.set("right_hand.trigger", 1.0);
   await game.step({ frames: 1 });
   await game.input.set("right_hand.trigger", 0.0);
   await game.step({ frames: 1 });
+}
+
+/** Fire one round: wait out the previous shot's interval, then pull. */
+export async function fireOnce(game: GameServer): Promise<void> {
+  await waitForShotReady(game);
+  await pullTrigger(game);
 }
 
 /** Trigger `DebugCycleWeapon` until it spawns an entity matching `match`, and

@@ -3,7 +3,7 @@ use cgmath::{
 };
 use dark::{
     SCALE_FACTOR,
-    properties::{GunFlashOptions, Link, ProjectileOptions},
+    properties::{GunFlashOptions, GunSettingDesc, Link, ProjectileOptions},
 };
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -12,8 +12,8 @@ use crate::{
     mission::{entity_creator::CreateEntityOptions, mission_core::GlobalTemplateClassTags},
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::{
-        RuntimePropFlatAim, RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropTransform,
-        RuntimePropVhots,
+        RuntimePropFlatAim, RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropShotCooldown,
+        RuntimePropShotModifiers, RuntimePropTransform, RuntimePropVhots,
     },
     util::{get_rotation_from_forward_vector, resolve_proxy_entity},
     vr_config,
@@ -60,7 +60,8 @@ fn weapon_world_position(world: &World, entity_id: EntityId) -> Option<cgmath::V
 use super::{
     Effect, Message, MessagePayload, Script,
     script_util::{
-        get_all_links_with_template, ordered_projectile_links, play_environmental_sound,
+        active_gun_setting, get_all_links_with_template, ordered_projectile_links,
+        play_environmental_sound,
     },
 };
 
@@ -71,6 +72,56 @@ fn get_ammotype_from_projectile_template(
 ) -> Option<String> {
     let template_tags = class_tag_map.get(&template_id)?;
     template_tags.get("ammotype").cloned()
+}
+
+/// Rounds one shot consumes in this fire setting: the laser pistol spends 3 per
+/// normal shot and 20 per overcharge. A shot always costs at least one round,
+/// so a setting a gun never authored cannot make it free to fire.
+fn rounds_per_shot(setting: &GunSettingDesc) -> i32 {
+    setting.ammo_usage.max(1)
+}
+
+/// Whether a magazine of `ammo` rounds can pay for a shot costing `rounds`.
+/// `None` is a weapon that tracks no ammo at all (unlimited debug weapons).
+fn can_pay_for_shot(ammo: Option<i32>, rounds: i32) -> bool {
+    ammo.is_none_or(|ammo| ammo >= rounds)
+}
+
+/// The wait this fire setting imposes before the next pull may fire, in
+/// seconds. Zero is a gun that fires as fast as the trigger is pulled.
+fn shot_cooldown_seconds(setting: &GunSettingDesc) -> f32 {
+    setting.shot_interval_ms as f32 / 1000.0
+}
+
+/// One per-shot multiplier of a fire setting, sanitized. The shipped data
+/// leaves the modifiers of a setting the gun never authored at 0, which taken
+/// literally would make its shots damageless and motionless - so only a
+/// positive multiplier counts as one.
+fn shot_multiplier(raw: f32) -> f32 {
+    if raw.is_finite() && raw > 0.0 {
+        raw
+    } else {
+        1.0
+    }
+}
+
+/// The damage and speed multipliers this fire setting puts on the projectile it
+/// launches (the EMP rifle's overcharge hits 3x; the fusion cannon's DEATH lob
+/// travels at 0.4x).
+fn shot_modifiers(setting: &GunSettingDesc) -> RuntimePropShotModifiers {
+    RuntimePropShotModifiers {
+        stim: shot_multiplier(setting.stim_modifier),
+        speed: shot_multiplier(setting.speed_modifier),
+    }
+}
+
+/// Whether `entity_id` is still inside the wait its last shot imposed.
+fn is_cooling_down(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<RuntimePropShotCooldown>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|c| c.remaining > 0.0))
+        .unwrap_or(false)
 }
 
 pub struct WeaponScript;
@@ -136,16 +187,29 @@ impl Script for WeaponScript {
                     }
                 }
 
+                // Everything below is governed by the gun's ACTIVE fire setting -
+                // the mode the player has it switched to - so a laser pistol's
+                // overcharge costs 20 rounds and waits 3 seconds where its
+                // normal shot costs 3 and waits 350 ms. A weapon with no gun
+                // description fires on the neutral default.
+                let setting = active_gun_setting(world, entity_id).unwrap_or_default();
+
+                // The wait the last shot imposed: a pull inside it does nothing
+                // at all, not even the empty-clip click.
+                if is_cooling_down(world, entity_id) {
+                    return Effect::NoEffect;
+                }
+
                 // Ammo gating: weapons that carry a `PropGunState` are limited by
-                // their clip. An empty clip dry-fires (no shot/flash); a live shot
-                // consumes one round (the per-shot `m_ammoUsage` from BaseGunDesc
-                // is a TODO - one round per pull for now). Weapons without a gun
-                // state (e.g. unlimited debug weapons) are unaffected.
+                // their clip. A magazine that cannot pay the setting's per-shot
+                // cost dry-fires (no shot/flash). Weapons without a gun state
+                // (e.g. unlimited debug weapons) are unaffected.
                 let maybe_ammo = world
                     .borrow::<View<dark::properties::PropGunState>>()
                     .ok()
                     .and_then(|v| v.get(entity_id).ok().map(|g| g.ammo));
-                if maybe_ammo == Some(0) {
+                let rounds = rounds_per_shot(&setting);
+                if !can_pay_for_shot(maybe_ammo, rounds) {
                     return dry_fire(world, entity_id);
                 }
 
@@ -189,7 +253,13 @@ impl Script for WeaponScript {
                     maybe_projectile
                         .into_iter()
                         .map(|(template_id, options)| {
-                            create_projectile(world, entity_id, template_id, &options)
+                            create_projectile(
+                                world,
+                                entity_id,
+                                template_id,
+                                &options,
+                                shot_modifiers(&setting),
+                            )
                         })
                         .collect(),
                 );
@@ -211,12 +281,29 @@ impl Script for WeaponScript {
                 //         * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)),
                 // };
 
-                // Consume a round when the weapon tracks ammo.
+                // Consume the setting's per-shot cost when the weapon tracks ammo.
                 let mut effects = vec![sound_effect, muzzle_flash_effect, projectile_effect];
                 if maybe_ammo.is_some() {
                     effects.push(Effect::AdjustAmmo {
                         entity_id,
-                        delta: -1,
+                        delta: -rounds,
+                    });
+                }
+                // Start the setting's between-shots wait. Only a real shot
+                // starts one - a melee weapon that reached here has nothing to
+                // pace.
+                //
+                // This is the interval between trigger PULLS, which is the
+                // whole of a single-shot mode. A burst mode also authors how
+                // many rounds one pull sends and how fast (`burst` /
+                // `burst_interval_ms`, both still unimplemented), so until
+                // those land the pistol's BURST spends its longer interval on
+                // a single round.
+                let cooldown = shot_cooldown_seconds(&setting);
+                if is_gunshot && cooldown > 0.0 {
+                    effects.push(Effect::BeginShotCooldown {
+                        entity_id,
+                        seconds: cooldown,
                     });
                 }
                 // A gunshot is loud: nearby AIs hear it and investigate the
@@ -349,6 +436,7 @@ pub(super) fn create_projectile(
     entity_id: EntityId,
     projectile_template_id: i32,
     _options: &ProjectileOptions,
+    modifiers: RuntimePropShotModifiers,
 ) -> Effect {
     // Flatscreen camera-origin aim: if the weapon carries a flat fire ray, spawn
     // the projectile just ahead of the camera travelling straight along the
@@ -372,6 +460,7 @@ pub(super) fn create_projectile(
                 options: CreateEntityOptions {
                     force_visible: true,
                     projectile_raycast_origin: Some(aim.origin),
+                    shot_modifiers: Some(modifiers),
                     ..CreateEntityOptions::default()
                 },
             };
@@ -421,6 +510,7 @@ pub(super) fn create_projectile(
             * Matrix4::from(barrel_axis_from_forward()),
         options: CreateEntityOptions {
             force_visible: true,
+            shot_modifiers: Some(modifiers),
             ..CreateEntityOptions::default()
         },
     }
@@ -512,6 +602,7 @@ mod tests {
                 order: 0,
                 setting: 0,
             },
+            RuntimePropShotModifiers::default(),
         );
         let Effect::CreateEntity {
             position,
@@ -570,6 +661,64 @@ mod tests {
 
         assert!((origin - vec3(1.0, 2.0, 3.0)).magnitude() < 1e-5);
         assert!((forward - rotation * vec3(-1.0, 0.0, 0.0)).magnitude() < 1e-5);
+    }
+
+    /// The laser pistol: 3 rounds a normal shot, 20 an overcharge.
+    fn laser_setting(ammo_usage: i32, shot_interval_ms: u32) -> GunSettingDesc {
+        GunSettingDesc {
+            ammo_usage,
+            shot_interval_ms,
+            ..GunSettingDesc::default()
+        }
+    }
+
+    #[test]
+    fn a_shot_costs_the_settings_ammo_usage() {
+        assert_eq!(rounds_per_shot(&laser_setting(3, 350)), 3, "laser NORM");
+        assert_eq!(rounds_per_shot(&laser_setting(20, 3000)), 20, "laser OVER");
+        // A setting the gun never authored must not make it free to fire.
+        assert_eq!(rounds_per_shot(&laser_setting(0, 0)), 1);
+    }
+
+    #[test]
+    fn a_magazine_must_cover_the_whole_shot() {
+        assert!(can_pay_for_shot(Some(3), 3), "exactly enough still fires");
+        assert!(!can_pay_for_shot(Some(2), 3), "a partial charge dry-fires");
+        assert!(!can_pay_for_shot(Some(0), 1));
+        assert!(
+            can_pay_for_shot(None, 20),
+            "a weapon with no clip is unlimited"
+        );
+    }
+
+    #[test]
+    fn the_cooldown_is_the_settings_shot_interval() {
+        assert_eq!(shot_cooldown_seconds(&laser_setting(3, 350)), 0.35);
+        assert_eq!(shot_cooldown_seconds(&laser_setting(20, 3000)), 3.0);
+        assert_eq!(shot_cooldown_seconds(&laser_setting(1, 0)), 0.0);
+    }
+
+    #[test]
+    fn only_a_positive_multiplier_modifies_a_shot() {
+        let emp_over = GunSettingDesc {
+            stim_modifier: 3.0,
+            speed_modifier: 0.8,
+            ..GunSettingDesc::default()
+        };
+        let modifiers = shot_modifiers(&emp_over);
+        assert_eq!(modifiers.stim, 3.0);
+        assert_eq!(modifiers.speed, 0.8);
+
+        // The uninitialized record every gun carries for a mode it does not
+        // have: zeroes must not silently disarm the shot.
+        let unauthored = GunSettingDesc {
+            stim_modifier: 0.0,
+            speed_modifier: 0.0,
+            ..GunSettingDesc::default()
+        };
+        let modifiers = shot_modifiers(&unauthored);
+        assert_eq!(modifiers.stim, 1.0);
+        assert_eq!(modifiers.speed, 1.0);
     }
 
     #[test]

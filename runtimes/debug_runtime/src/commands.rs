@@ -829,6 +829,9 @@ pub struct PlayerInfo {
     /// `CycleGunSetting` input action. See `shock2vr::PlayerStateSnapshot`.
     pub wielded_gun_setting: Option<i32>,
     pub wielded_gun_setting_header: Option<String>,
+    /// Milliseconds left of the wielded gun's between-shots wait (0 = ready to
+    /// fire, `null` = nothing wielded). Pulls during the wait are ignored.
+    pub wielded_gun_cooldown_ms: Option<i32>,
     /// The player's current / maximum hit points, or `null` when the player
     /// has no health pool. See `shock2vr::PlayerStateSnapshot`.
     pub hit_points: Option<i32>,

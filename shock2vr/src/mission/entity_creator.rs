@@ -189,6 +189,10 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, RuntimePropLaunchedProjectile);
     }
 
+    if let Some(modifiers) = additional_options.shot_modifiers {
+        world.add_component(entity_id, modifiers);
+    }
+
     create_entity_core(
         entity_id,
         template_id,
@@ -1616,6 +1620,10 @@ pub struct CreateEntityOptions {
     /// Tweq emitter calls `launchProjectile`; this keeps frobbable emitted
     /// archetypes from being reduced to kinematic selection colliders.
     pub launch_projectile: bool,
+    /// The firing gun's per-shot multipliers, stamped on a launched projectile
+    /// as `RuntimePropShotModifiers` so its damage and speed follow the fire
+    /// mode that launched it. `None` for anything that is not a gun shot.
+    pub shot_modifiers: Option<crate::runtime_props::RuntimePropShotModifiers>,
     /// This entity was created as a Flinderize target. Keeping this separate
     /// from the general model-bounds fallback lets only launched debris turn a
     /// dimension-less moving sphere into a simulated body.
@@ -1630,6 +1638,7 @@ impl Default for CreateEntityOptions {
             transient_fx: false,
             projectile_raycast_origin: None,
             launch_projectile: false,
+            shot_modifiers: None,
             flinderize_debris: false,
         }
     }

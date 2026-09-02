@@ -200,6 +200,57 @@ impl RuntimePropReloading {
     }
 }
 
+/// RuntimePropShotCooldown - the wait a gun's active fire setting imposes
+/// between shots (`shot_interval_ms`), counted down on the weapon while it is
+/// running. A trigger pull during the countdown is silently ignored, so the
+/// laser's overcharge really does take three seconds to come round again.
+///
+/// Set by the firing script through `Effect::BeginShotCooldown` and ticked by
+/// the mission loop, the same split as `RuntimePropReloading` above - and, like
+/// it, not serialized: a save taken mid-cooldown loads ready to fire.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropShotCooldown {
+    pub remaining: f32,
+}
+
+/// RuntimePropShotModifiers - the multipliers the firing gun's active fire
+/// setting applies to the projectile it just launched: `stim` scales the damage
+/// it deals (the EMP rifle's overcharge hits 3x), `speed` its launch velocity
+/// (the fusion cannon's DEATH lob travels at 0.4x). Stamped on the projectile
+/// at creation, since the shot outlives the pull that fired it.
+///
+/// Not serialized, like every runtime prop: a shot still in the air when the
+/// game is saved lands, after a load, at its own authored damage and speed.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropShotModifiers {
+    pub stim: f32,
+    pub speed: f32,
+}
+
+impl Default for RuntimePropShotModifiers {
+    fn default() -> Self {
+        RuntimePropShotModifiers {
+            stim: 1.0,
+            speed: 1.0,
+        }
+    }
+}
+
+impl RuntimePropShotModifiers {
+    /// The modifiers `entity_id` was launched with - the neutral ones for
+    /// anything not launched by a gun.
+    pub fn of(world: &shipyard::World, entity_id: shipyard::EntityId) -> Self {
+        world
+            .borrow::<shipyard::View<RuntimePropShotModifiers>>()
+            .ok()
+            .and_then(|v| {
+                use shipyard::Get;
+                v.get(entity_id).ok().copied()
+            })
+            .unwrap_or_default()
+    }
+}
+
 // RuntimePropSelectedAmmo - which of the wielded weapon's Projectile links is
 // selected (index into `ordered_projectile_links`). Many SS2 guns carry several
 // ammo types (e.g. the pistol: standard / HE / AP); firing uses the selected

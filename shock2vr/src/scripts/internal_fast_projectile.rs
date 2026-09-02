@@ -11,7 +11,9 @@ use crate::{
     creature::RuntimePropHitBox,
     mission::entity_creator::CreateEntityOptions,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
-    runtime_props::{RuntimePropProjectileRayOrigin, RuntimePropTransform},
+    runtime_props::{
+        RuntimePropProjectileRayOrigin, RuntimePropShotModifiers, RuntimePropTransform,
+    },
     scripts::{
         Message,
         script_util::{choose_impact_spang, play_impact_sound},
@@ -104,7 +106,7 @@ impl Script for InternalFastProjectileScript {
                         to: hit_entity_id,
                         // TODO: Properly calculate damage
                         payload: MessagePayload::Damage {
-                            amount: 6.0,
+                            amount: 6.0 * RuntimePropShotModifiers::of(world, entity_id).stim,
                             // The shot's travel direction + hit point seed the
                             // victim's death-ragdoll reaction. Bone is filled
                             // in by the hitbox script when a hitbox was struck.

@@ -356,6 +356,10 @@ fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) 
                 order: 0,
                 setting: 0,
             },
+            // A psi bolt is not a gun shot: the amp's fire-setting record is
+            // the editor's uninitialized one (every multiplier 0), so cast at
+            // the projectile's own authored damage and speed.
+            crate::runtime_props::RuntimePropShotModifiers::default(),
         ),
     ];
     effects.extend(amp_cast_flashes(world, amp_entity));
