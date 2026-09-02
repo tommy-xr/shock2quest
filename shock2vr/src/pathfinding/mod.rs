@@ -30,11 +30,18 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 const EDGE_CLEARANCE: f32 = 3.0 / SCALE_FACTOR;
 
 /// Width of the body a walking AI has to fit through (2.4 Dark feet - the
-/// widest humanoid capsule, hybrids/grunts at 0.48 world-unit radius). The
-/// original engine baked clearance offline and deleted portals a creature
-/// could not pass; shipped okBits carry no such marking for the sliver
-/// portals we synthesize walkability for, so we gate them geometrically.
+/// widest humanoid capsule, hybrids and grunts). The original engine baked
+/// clearance offline and deleted portals a creature could not pass; shipped
+/// okBits carry no such marking for the sliver portals we synthesize
+/// walkability for, so we measure clearance against the mesh's own boundary
+/// instead.
 const AGENT_WIDTH: f32 = 2.4 / SCALE_FACTOR;
+
+/// Room an AI needs where it comes to a *stop*: its width plus slack to
+/// manoeuvre. Squeezing through a gap on the way past is one thing; being
+/// sent to stand in one is how an AI ends up pressed into the geometry,
+/// grinding, since steering reaches a spot by pushing toward it.
+const AGENT_STANDING_WIDTH: f32 = 3.5 / SCALE_FACTOR;
 
 /// Extra cost (Dark feet of detour) for crossing a portal narrower than the
 /// walker's body. Large enough to outweigh any local detour around the
@@ -566,7 +573,7 @@ impl PathfindingService {
         let roomy = |cell: u32| -> bool {
             self.cell_clearances
                 .get(cell as usize)
-                .is_none_or(|&clearance| clearance >= AGENT_WIDTH * 0.5)
+                .is_none_or(|&clearance| clearance >= AGENT_STANDING_WIDTH * 0.5)
         };
         let mut best = start_cell;
         let mut best_distance = distance_to_goal(start_cell);
