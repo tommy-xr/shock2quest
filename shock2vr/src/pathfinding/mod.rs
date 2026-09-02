@@ -571,9 +571,11 @@ impl PathfindingService {
         // and grinds. Cells too tight to stand in are only considered when
         // nothing roomier is reachable.
         let roomy = |cell: u32| -> bool {
-            self.cell_clearances
-                .get(cell as usize)
-                .is_none_or(|&clearance| clearance >= AGENT_STANDING_WIDTH * 0.5)
+            movement_bits.contains(MovementBits::SMALL_CREATURE)
+                || self
+                    .cell_clearances
+                    .get(cell as usize)
+                    .is_none_or(|&clearance| clearance >= AGENT_STANDING_WIDTH * 0.5)
         };
         let mut best = start_cell;
         let mut best_distance = distance_to_goal(start_cell);
@@ -1193,6 +1195,24 @@ fn bucket_of(x: f32, z: f32) -> (i32, i32) {
     (bucket(x), bucket(z))
 }
 
+/// Index segments (by position in `segments`) into every XZ bucket their
+/// extent touches, so a nearby query can't miss one.
+fn bucket_segments(
+    segments: impl Iterator<Item = (Vector3<f32>, Vector3<f32>)>,
+) -> HashMap<(i32, i32), Vec<u32>> {
+    let mut buckets: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
+    for (idx, (a, b)) in segments.enumerate() {
+        let (bx0, bz0) = bucket_of(a.x.min(b.x), a.z.min(b.z));
+        let (bx1, bz1) = bucket_of(a.x.max(b.x), a.z.max(b.z));
+        for bx in bx0..=bx1 {
+            for bz in bz0..=bz1 {
+                buckets.entry((bx, bz)).or_default().push(idx as u32);
+            }
+        }
+    }
+    buckets
+}
+
 impl NavBoundary {
     fn build(db: &PathDatabase) -> Self {
         // Adjacency is undirected here: a seam is open floor whichever way
@@ -1208,8 +1228,10 @@ impl NavBoundary {
         // millions of buckets.
         let sane = |a: Vector3<f32>, b: Vector3<f32>| {
             a.x.is_finite()
+                && a.y.is_finite()
                 && a.z.is_finite()
                 && b.x.is_finite()
+                && b.y.is_finite()
                 && b.z.is_finite()
                 && (a.x - b.x).abs() < 1.0e4
                 && (a.z - b.z).abs() < 1.0e4
@@ -1231,16 +1253,7 @@ impl NavBoundary {
                 }
             }
         }
-        let mut edge_buckets: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
-        for (idx, (_, a, b)) in edges.iter().enumerate() {
-            let (bx0, bz0) = bucket_of(a.x.min(b.x), a.z.min(b.z));
-            let (bx1, bz1) = bucket_of(a.x.max(b.x), a.z.max(b.z));
-            for bx in bx0..=bx1 {
-                for bz in bz0..=bz1 {
-                    edge_buckets.entry((bx, bz)).or_default().push(idx as u32);
-                }
-            }
-        }
+        let edge_buckets = bucket_segments(edges.iter().map(|&(_, a, b)| (a, b)));
 
         let blocked = PathCellFlags::UNPATHABLE | PathCellFlags::BLOCKING_OBB;
         let mut walls: Vec<(Vector3<f32>, Vector3<f32>)> = Vec::new();
@@ -1310,18 +1323,9 @@ impl NavBoundary {
             }
         }
 
-        let mut buckets: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
-        for (idx, (a, b)) in walls.iter().enumerate() {
-            // A wall spans buckets; register it in every one its XZ extent
-            // touches so a nearby query can't miss it
-            let (bx0, bz0) = bucket_of(a.x.min(b.x), a.z.min(b.z));
-            let (bx1, bz1) = bucket_of(a.x.max(b.x), a.z.max(b.z));
-            for bx in bx0..=bx1 {
-                for bz in bz0..=bz1 {
-                    buckets.entry((bx, bz)).or_default().push(idx as u32);
-                }
-            }
-        }
+        // A wall spans buckets; register it in every one its XZ extent
+        // touches so a nearby query can't miss it
+        let buckets = bucket_segments(walls.iter().copied());
 
         Self { walls, buckets }
     }
@@ -1390,19 +1394,15 @@ impl NavBoundary {
     }
 }
 
-/// Closest point to `target` on segment `a`-`b`, in the XZ plane
+/// Closest point to `target` on segment `a`-`b`, in the XZ plane (only x/z
+/// are meaningful in the result - callers that need y should not use this).
 fn closest_point_on_segment_xz(
     a: Vector3<f32>,
     b: Vector3<f32>,
     target: Vector3<f32>,
 ) -> Vector3<f32> {
-    let (dx, dz) = (b.x - a.x, b.z - a.z);
-    let len_sq = dx * dx + dz * dz;
-    if len_sq < 1e-8 {
-        return a;
-    }
-    let t = (((target.x - a.x) * dx + (target.z - a.z) * dz) / len_sq).clamp(0.0, 1.0);
-    a + (b - a) * t
+    let flatten = |v: Vector3<f32>| Vector3::new(v.x, 0.0, v.z);
+    closest_point_on_segment(flatten(a), flatten(b), flatten(target))
 }
 
 /// Shrink an edge toward its center by EDGE_CLEARANCE on each end, so taut
