@@ -566,6 +566,9 @@ export interface ClimbHold {
  * into them and holds nothing, so `is_climbing` is not implied by `grips`. */
 export interface ClimbState {
   is_climbing: boolean;
+  /** A scripted top-out is carrying the body over a lip: the second half of a
+   * VR hand vault, and flat's ladder mantle. */
+  vaulting: boolean;
   /** The hand currently moving the body, or null. */
   anchor_hand: "left" | "right" | null;
   grips: ClimbHold[];

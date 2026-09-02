@@ -76,6 +76,10 @@ pub trait PlayerInteraction {
         None
     }
 
+    /// Drop every climb hold without throwing the body - the vault took over
+    /// (see [`crate::vr_climb::HandClimb::release_all`]).
+    fn release_climb_grips(&mut self) {}
+
     /// Entities held in (left, right) - for `PlayerInfo`. Flat reports its
     /// wielded weapon as the "left".
     fn held_entities(&self) -> (Option<EntityId>, Option<EntityId>);
@@ -209,6 +213,10 @@ impl PlayerInteraction for VrInteraction {
 
     fn hand_climb(&self) -> Option<&crate::vr_climb::HandClimb> {
         Some(&self.hand_climb)
+    }
+
+    fn release_climb_grips(&mut self) {
+        self.hand_climb.release_all();
     }
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {

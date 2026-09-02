@@ -8,7 +8,11 @@ use std::collections::VecDeque;
 
 use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, Zero};
 
-use crate::{physics::ClimbGrip, virtual_hand::hand_world_position, vr_config::Handedness};
+use crate::{
+    physics::{ClimbGrip, ClimbGripKind},
+    virtual_hand::hand_world_position,
+    vr_config::Handedness,
+};
 
 /// How far a gripping hand may drift from the point it grabbed before the grip
 /// breaks. The drift IS the body's failure to follow: the body is cast every
@@ -32,6 +36,30 @@ pub(crate) const CLIMB_RELEASE_MAX_UP_SPEED: f32 = crate::physics::PLAYER_JUMP_L
 /// Below this a release is just letting go: not worth putting the body into a
 /// ballistic arc (world units/s).
 pub(crate) const CLIMB_RELEASE_MIN_SPEED: f32 = 0.5;
+
+/// How far the eye must clear a ledge's lip before the body vaults onto it
+/// (world units). Small: the moment the head is over the top is the moment a
+/// climber commits, and waiting longer just makes the pull feel sticky.
+pub const VAULT_EYE_MARGIN: f32 = 0.1;
+
+/// Whether the player has pulled far enough up a ledge to be thrown onto it.
+///
+/// The head-over-the-lip convention (Boneworks, Blade & Sorcery): once the eye
+/// clears the surface the anchor hand is lying ON, the climb is over and the
+/// scripted top-out takes the body the rest of the way. A ladder rail offers no
+/// vault - a hand reaching over a ladder's top onto the deck behind it takes a
+/// `Ledge` grip on that deck, and vaults from there.
+///
+/// `anchor_on_top_surface` is the hand's contact normal being walkable: a hand
+/// hooked on a lip's vertical face is not yet on top of anything.
+pub fn vault_ready(
+    eye_y: f32,
+    lip_y: f32,
+    anchor_kind: ClimbGripKind,
+    anchor_on_top_surface: bool,
+) -> bool {
+    anchor_kind == ClimbGripKind::Ledge && anchor_on_top_surface && eye_y > lip_y + VAULT_EYE_MARGIN
+}
 
 /// The body velocity a release throws the player with, from the anchor hand's
 /// recent per-frame travel relative to the pawn (newest last).
@@ -253,6 +281,28 @@ impl HandClimb {
     /// The hand currently moving the body, if any.
     pub fn anchor(&self) -> Option<Handedness> {
         self.anchor
+    }
+
+    /// The hold the anchor hand is on, if any.
+    pub fn anchor_grip(&self) -> Option<&GripAnchor> {
+        self.grips[slot(self.anchor?)].as_ref()
+    }
+
+    /// Whether any hand is on a ledge - the body balls up while it is.
+    pub fn holds_a_ledge(&self) -> bool {
+        self.grips()
+            .any(|(_, anchor)| anchor.grip.kind == ClimbGripKind::Ledge)
+    }
+
+    /// Drop every hold without throwing the body: the vault took over, and it
+    /// is not the player letting go. The still-closed squeeze cannot re-grab
+    /// (a grab needs a fresh press), so the hands stay out of the way until
+    /// the scripted top-out has finished.
+    pub fn release_all(&mut self) {
+        self.grips = [None, None];
+        self.anchor = None;
+        self.recent_anchor_travel.clear();
+        self.last_anchor_local = None;
     }
 
     /// Every hand that holds a hold, with the hold it holds.
@@ -700,6 +750,95 @@ mod tests {
         let handoff = step(&mut climb, [hand(at, 0.0), hand(right, 1.0)], false);
         assert_eq!(handoff.launch, None);
         assert_eq!(climb.anchor(), Some(Handedness::Right));
+    }
+
+    #[test]
+    fn the_eye_must_clear_the_lip_of_a_ledge_the_hand_is_lying_on() {
+        // On the top surface, eye over the lip: vault.
+        assert!(vault_ready(6.2, 6.0, ClimbGripKind::Ledge, true));
+        // Still below it, or only just level with it: keep pulling.
+        assert!(!vault_ready(5.9, 6.0, ClimbGripKind::Ledge, true));
+        assert!(!vault_ready(
+            6.0 + VAULT_EYE_MARGIN,
+            6.0,
+            ClimbGripKind::Ledge,
+            true
+        ));
+        // Hooked on the lip's vertical face, not lying on the top.
+        assert!(!vault_ready(6.2, 6.0, ClimbGripKind::Ledge, false));
+        // A ladder rail is never a vault, however high the eye gets.
+        assert!(!vault_ready(9.0, 6.0, ClimbGripKind::Ladder, true));
+    }
+
+    #[test]
+    fn a_stance_swap_that_leaves_the_pawn_where_it_is_neither_moves_nor_breaks_the_grip() {
+        // The hands hang off the pawn origin, so the ONLY thing a capsule swap
+        // could do to a grip is move that origin - see
+        // `PhysicsWorld::set_player_crouch_hanging`, which holds it still. A
+        // full crouch's worth of shape change is therefore this: nothing.
+        let mut climb = HandClimb::default();
+        let pawn = vec3(0.0, 1.24, 0.0);
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let reach = vec3(0.0, 1.0, -1.0);
+        let ledge = |point: Vector3<f32>| ClimbGrip {
+            kind: ClimbGripKind::Ledge,
+            normal: vec3(0.0, 1.0, 0.0),
+            ..ladder_grip(point)
+        };
+        climb.update(
+            pawn,
+            identity,
+            DT,
+            [no_hand(), hand(reach, 1.0)],
+            |p| Some(ledge(p)),
+            |_| true,
+        );
+        assert!(climb.holds_a_ledge());
+
+        let swapped = climb.update(
+            pawn,
+            identity,
+            DT,
+            [no_hand(), hand(reach, 1.0)],
+            |_| None,
+            |_| true,
+        );
+        assert_translation(swapped, Vector3::zero());
+        assert_eq!(climb.grips().count(), 1);
+    }
+
+    #[test]
+    fn a_vault_drops_every_hold_without_throwing_the_body() {
+        let mut climb = HandClimb::default();
+        let pawn = Vector3::zero();
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let reach = vec3(0.0, 1.0, -1.0);
+        let step = |climb: &mut HandClimb, at: Vector3<f32>, probe: bool| {
+            climb.update(
+                pawn,
+                identity,
+                DT,
+                [no_hand(), hand(at, 1.0)],
+                |p| probe.then(|| ladder_grip(p)),
+                |_| true,
+            )
+        };
+        step(&mut climb, reach, true);
+        let mut at = reach;
+        for _ in 0..4 {
+            at += vec3(0.0, -0.1, 0.0);
+            step(&mut climb, at, false);
+        }
+
+        climb.release_all();
+        assert_eq!(climb.grips().count(), 0);
+        assert_eq!(climb.anchor(), None);
+
+        // The squeeze is still down, so the hand cannot take a new hold while
+        // the scripted top-out is running, and nothing is thrown.
+        let after = step(&mut climb, at, true);
+        assert_eq!(after.translation, None);
+        assert_eq!(after.launch, None);
     }
 
     #[test]
