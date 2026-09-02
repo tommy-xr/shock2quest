@@ -1183,11 +1183,14 @@ const WALL_BUCKET: f32 = 10.0 / SCALE_FACTOR;
 /// vertex id)
 const BOUNDARY_TOLERANCE: f32 = 0.15;
 
+/// Shipped data carries the odd garbage vertex (coordinates far outside the
+/// level, observed in ops4); clamping the hash keeps bucket arithmetic and
+/// the extent loops finite.
+const MAX_BUCKET: i32 = 1 << 20;
+
 fn bucket_of(x: f32, z: f32) -> (i32, i32) {
-    (
-        (x / WALL_BUCKET).floor() as i32,
-        (z / WALL_BUCKET).floor() as i32,
-    )
+    let bucket = |v: f32| ((v / WALL_BUCKET).floor() as i32).clamp(-MAX_BUCKET, MAX_BUCKET);
+    (bucket(x), bucket(z))
 }
 
 impl NavBoundary {
@@ -1200,6 +1203,17 @@ impl NavBoundary {
             linked.insert((link.to_cell, link.from_cell));
         }
 
+        // A segment is only usable geometry if both ends are finite and it
+        // is short enough to hash: garbage vertices would otherwise fill
+        // millions of buckets.
+        let sane = |a: Vector3<f32>, b: Vector3<f32>| {
+            a.x.is_finite()
+                && a.z.is_finite()
+                && b.x.is_finite()
+                && b.z.is_finite()
+                && (a.x - b.x).abs() < 1.0e4
+                && (a.z - b.z).abs() < 1.0e4
+        };
         let mut edges: Vec<(u32, Vector3<f32>, Vector3<f32>)> = Vec::new();
         for cell in &db.cells {
             let n = cell.vertex_indices.len();
@@ -1211,7 +1225,9 @@ impl NavBoundary {
                     db.vertices.get(cell.vertex_indices[i] as usize),
                     db.vertices.get(cell.vertex_indices[(i + 1) % n] as usize),
                 ) {
-                    edges.push((cell.id, a, b));
+                    if sane(a, b) {
+                        edges.push((cell.id, a, b));
+                    }
                 }
             }
         }
@@ -1240,8 +1256,8 @@ impl NavBoundary {
             let mut open: Vec<(f32, f32)> = Vec::new();
             let (bx0, bz0) = bucket_of(a.x.min(b.x), a.z.min(b.z));
             let (bx1, bz1) = bucket_of(a.x.max(b.x), a.z.max(b.z));
-            for bx in (bx0 - 1)..=(bx1 + 1) {
-                for bz in (bz0 - 1)..=(bz1 + 1) {
+            for bx in bx0.saturating_sub(1)..=bx1.saturating_add(1) {
+                for bz in bz0.saturating_sub(1)..=bz1.saturating_add(1) {
                     let Some(candidates) = edge_buckets.get(&(bx, bz)) else {
                         continue;
                     };
@@ -1317,7 +1333,10 @@ impl NavBoundary {
         let mut nearest = f32::INFINITY;
         for dx in -1..=1 {
             for dz in -1..=1 {
-                let Some(candidates) = self.buckets.get(&(bx + dx, bz + dz)) else {
+                let Some(candidates) = self
+                    .buckets
+                    .get(&(bx.saturating_add(dx), bz.saturating_add(dz)))
+                else {
                     continue;
                 };
                 for &idx in candidates {
