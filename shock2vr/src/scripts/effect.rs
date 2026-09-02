@@ -399,7 +399,7 @@ pub enum Effect {
     },
 
     /// Reload the player's wielded weapon from compatible backpack reserve,
-    /// up to its magazine capacity (`PropBaseGunDesc.clip`). No-op when no
+    /// up to the magazine capacity of its selected fire setting. No-op when no
     /// weapon is wielded, it has no gun state / clip, or no matching reserve is
     /// carried.
     ReloadWeapon,

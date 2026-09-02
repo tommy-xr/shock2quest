@@ -8,8 +8,8 @@ use cgmath::{Transform, Vector3, point3};
 use dark::{
     EnvSoundQuery,
     properties::{
-        Link, Links, ProjectileOptions, PropClassTag, PropGunState, PropMaterial, PropSymName,
-        PropTemplateId, PropTweqModelConfig, ToLink,
+        GunSettingDesc, Link, Links, ProjectileOptions, PropBaseGunDesc, PropClassTag,
+        PropGunState, PropMaterial, PropSymName, PropTemplateId, PropTweqModelConfig, ToLink,
     },
     ss2_entity_info::SystemShock2EntityInfo,
 };
@@ -262,6 +262,33 @@ pub fn has_death_links(world: &World, entity_id: EntityId) -> bool {
     .is_empty()
 }
 
+/// `weapon`'s selected fire setting, 0 when it has no gun state. Ammo-type
+/// selection and the firing description both key off this, so they agree.
+fn current_gun_setting(world: &World, weapon: EntityId) -> i32 {
+    world
+        .borrow::<View<PropGunState>>()
+        .ok()
+        .and_then(|states| states.get(weapon).ok().map(|state| state.setting))
+        .unwrap_or(0)
+}
+
+/// The firing description for `weapon`'s currently selected fire setting, or
+/// `None` when it is not a gun. The setting comes from the weapon's live
+/// `PropGunState` (0 when it has none), and an index the archetype does not
+/// author falls back to setting 0.
+pub fn active_gun_setting(world: &World, weapon: EntityId) -> Option<GunSettingDesc> {
+    let setting = current_gun_setting(world, weapon);
+    world
+        .borrow::<View<PropBaseGunDesc>>()
+        .ok()
+        .and_then(|descs| {
+            descs
+                .get(weapon)
+                .ok()
+                .map(|desc| desc.setting(setting).clone())
+        })
+}
+
 /// A weapon's selectable `Projectile` links (its ammo types), filtered to the
 /// current gun setting and ordered by `ProjectileOptions.order`. This is the
 /// canonical ammo-type list - firing, ammo-type cycling, and the HUD all derive
@@ -269,11 +296,7 @@ pub fn has_death_links(world: &World, entity_id: EntityId) -> bool {
 /// otherwise it must match the weapon's current `PropGunState.setting`
 /// (defaulting to 0 when the weapon has no gun state).
 pub fn ordered_projectile_links(world: &World, weapon: EntityId) -> Vec<(i32, ProjectileOptions)> {
-    let setting = world
-        .borrow::<View<PropGunState>>()
-        .ok()
-        .and_then(|v| v.get(weapon).ok().map(|g| g.setting))
-        .unwrap_or(0);
+    let setting = current_gun_setting(world, weapon);
     let mut links = get_all_links_with_template(world, weapon, |link| match link {
         Link::Projectile(data) => Some(*data),
         _ => None,
@@ -998,18 +1021,63 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 #[cfg(test)]
 mod tests {
     use super::{
-        debit_player_nanites, door_blocks_pathfinding, door_is_closed, is_always_collected,
-        is_nanite_pickup, plan_stack_payment, player_nanite_total, spend_player_nanites,
-        stat_nanite_balance,
+        active_gun_setting, debit_player_nanites, door_blocks_pathfinding, door_is_closed,
+        is_always_collected, is_nanite_pickup, plan_stack_payment, player_nanite_total,
+        spend_player_nanites, stat_nanite_balance,
     };
     use crate::mission::PlayerInfo;
     use crate::quest_info::QuestInfo;
     use crate::runtime_props::RuntimePropTransform;
     use cgmath::{Matrix4, Quaternion, Vector3, vec3};
     use dark::properties::{
-        Link, Links, PropObjIcon, PropStackCount, PropTranslatingDoor, ToLink, WrappedEntityId,
+        GunSettingDesc, Link, Links, PropBaseGunDesc, PropGunState, PropObjIcon, PropStackCount,
+        PropTranslatingDoor, ToLink, WrappedEntityId,
     };
     use shipyard::{EntityId, Get, View, World};
+
+    fn gun_desc() -> PropBaseGunDesc {
+        let setting = |clip| GunSettingDesc {
+            clip,
+            ..GunSettingDesc::default()
+        };
+        PropBaseGunDesc {
+            settings: [setting(10), setting(20), setting(30)],
+        }
+    }
+
+    fn gun_state(setting: i32) -> PropGunState {
+        PropGunState {
+            ammo: 0,
+            condition: 100.0,
+            setting,
+            modification: 0,
+            silence_value: 0.0,
+        }
+    }
+
+    #[test]
+    fn active_gun_setting_follows_the_live_gun_state() {
+        let mut world = World::new();
+        let weapon = world.add_entity((gun_desc(), gun_state(1)));
+
+        assert_eq!(active_gun_setting(&world, weapon).unwrap().clip, 20);
+    }
+
+    #[test]
+    fn active_gun_setting_defaults_to_the_first_setting_without_a_gun_state() {
+        let mut world = World::new();
+        let weapon = world.add_entity(gun_desc());
+
+        assert_eq!(active_gun_setting(&world, weapon).unwrap().clip, 10);
+    }
+
+    #[test]
+    fn active_gun_setting_is_absent_for_a_non_gun() {
+        let mut world = World::new();
+        let not_a_gun = world.add_entity(gun_state(0));
+
+        assert!(active_gun_setting(&world, not_a_gun).is_none());
+    }
 
     fn door_world(
         closed: Vector3<f32>,

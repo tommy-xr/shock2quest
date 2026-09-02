@@ -7704,7 +7704,7 @@ impl MissionCore {
     /// clip is swapped, then raises it back up; the peak angle and pitch speed
     /// come from the weapon's own data (`PropPlayerGun`'s reload pitch/rate, as
     /// 16-bit angle units where 65536 = 360 deg) and the hold from its reload
-    /// time (`PropBaseGunDesc.reload_time_ms`). No-op for non-guns (no
+    /// time (the selected fire setting's reload time). No-op for non-guns (no
     /// `PropBaseGunDesc`), while a reload is already in progress, or when no
     /// compatible reserve rounds are available.
     ///
@@ -7729,15 +7729,11 @@ impl MissionCore {
         }
 
         // Only guns reload; bail (and don't restart an in-progress reload).
-        let (clip, hold) = {
-            let v_desc = self
-                .world
-                .borrow::<View<dark::properties::PropBaseGunDesc>>();
-            match v_desc.as_ref().ok().and_then(|v| v.get(weapon).ok()) {
+        let (clip, hold) =
+            match crate::scripts::script_util::active_gun_setting(&self.world, weapon) {
                 Some(d) => (d.clip, d.reload_time_ms as f32 / 1000.0),
                 None => return Effect::NoEffect,
-            }
-        };
+            };
         if let Ok(v) = self.world.borrow::<View<RuntimePropReloading>>() {
             if v.get(weapon).is_ok_and(|r| !r.is_done()) {
                 return Effect::NoEffect;

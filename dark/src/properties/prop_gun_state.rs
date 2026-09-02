@@ -6,28 +6,28 @@ use crate::ss2_common::{read_i32, read_single};
 
 use serde::{Deserialize, Serialize};
 
-/// `P$GunState` - the mutable per-weapon firing state. Mirrors the Dark engine's
-/// `sGunState` (engfeat/gunbase.h), in field order. For now only `ammo` is used
+/// `P$GunState` - the mutable per-weapon firing state, in on-disk field order.
+/// For now only `ammo` is used
 /// at runtime (current rounds in the clip); the rest are parsed so the chunk
 /// round-trips and is available later (condition, fire setting, modification
 /// level, silencing).
 ///
-/// SS2's on-disk chunk is 16 bytes (it omits the trailing `m_silenceValue`),
-/// while Thief's `sGunState` is 20 bytes. [`PropGunState::read`] therefore reads
+/// The shipped chunk is 16 bytes (it omits the trailing silencing value), while
+/// the 20-byte variant carries it. [`PropGunState::read`] therefore reads
 /// each field only if `len` covers it, then snaps to the end of the chunk - so
 /// both variants parse without over-reading. (A fixed 20-byte read panicked the
 /// chunk-length assertion on every mission.)
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropGunState {
-    /// `m_ammoCount` - current rounds in the clip.
+    /// Current rounds in the clip.
     pub ammo: i32,
-    /// `m_condition` - 0..1 weapon condition (1 = perfect).
+    /// Weapon condition as a percentage (shipped guns author 100.0 = perfect).
     pub condition: f32,
-    /// `m_setting` - current fire setting.
+    /// Current fire setting; indexes `PropBaseGunDesc::settings`.
     pub setting: i32,
-    /// `m_modification` - current modification level.
+    /// Current modification level.
     pub modification: i32,
-    /// `m_silenceValue` - 0..1 amount of silencing (1 = perfect).
+    /// Amount of silencing, 0..1 (1 = perfect).
     pub silence_value: f32,
 }
 
