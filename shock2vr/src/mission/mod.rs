@@ -477,6 +477,14 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.ai_paths()
     }
 
+    fn pathfinding_route(
+        &self,
+        from: [f32; 3],
+        to: [f32; 3],
+    ) -> Option<crate::game_scene::DebugPathRoute> {
+        self.mission_core.pathfinding_route(from, to)
+    }
+
     fn send_entity_message(
         &mut self,
         id: EntityId,

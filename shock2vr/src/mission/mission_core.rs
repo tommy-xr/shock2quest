@@ -12500,6 +12500,24 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             .collect()
     }
 
+    fn pathfinding_route(
+        &self,
+        from: [f32; 3],
+        to: [f32; 3],
+    ) -> Option<crate::game_scene::DebugPathRoute> {
+        use dark::mission::path_database::MovementBits;
+        let service = self.pathfinding_service.as_ref()?;
+        let from = cgmath::Vector3::new(from[0], from[1], from[2]);
+        let to = cgmath::Vector3::new(to[0], to[1], to[2]);
+        let route = service.find_path(from, to, MovementBits::WALK);
+        Some(crate::game_scene::DebugPathRoute {
+            from_cell: service.cell_from_position(from),
+            to_cell: service.cell_from_position(to),
+            reachable: route.is_some(),
+            waypoints: route.map(|w| w.len()).unwrap_or(0),
+        })
+    }
+
     fn send_entity_message(
         &mut self,
         id: EntityId,
