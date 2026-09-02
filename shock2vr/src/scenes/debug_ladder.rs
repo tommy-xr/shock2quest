@@ -19,6 +19,9 @@
 //!   climb must carry across rung boundaries).
 //! - `z = 16`  short: a freestanding 4' ladder, reachable on either face,
 //!   with an exposed top and bottom.
+//! - `z = 24`  mantle: a low block with no ladder, within jump-and-mantle
+//!   reach - the earth.mis training ledge shape. In VR its lip is what a
+//!   hand grabs.
 //! - `z = -16` wall: a plain block, same size as the ledge's, with no ladder.
 //!   The negative case.
 
@@ -68,6 +71,10 @@ const STACK_WALL_HEIGHT: f32 = 9.0;
 
 const SHORT_Z: f32 = 16.0;
 
+const MANTLE_Z: f32 = 24.0;
+/// 7.5 ft: above step height, below the jump-plus-mantle reach.
+const MANTLE_HEIGHT: f32 = 3.0;
+
 const WALL_Z: f32 = -16.0;
 
 /// The ladder models are authored with their rungs facing ±Z. Every station
@@ -112,6 +119,7 @@ pub fn create_debug_ladder_scene(
             STACK_WALL_HEIGHT,
             LEDGE_DEPTH,
         ),
+        block(vec3(0.45, 0.40, 0.30), MANTLE_Z, MANTLE_HEIGHT, LEDGE_DEPTH),
         block(vec3(0.35, 0.35, 0.35), WALL_Z, LEDGE_HEIGHT, LEDGE_DEPTH),
     ];
 
@@ -152,8 +160,8 @@ pub fn create_debug_ladder_scene(
     println!(
         "[debug_ladder] Climbing stations ahead (-X), one per lane along z:\n\
          z=0 ledge (16' ladder, top-out onto the block), z=8 arch (ladder both\n\
-         faces), z=-8 stack (11 stacked rungs), z=16 short 4' ladder, z=-16 plain\n\
-         wall (not climbable). Ladders are the shipped templates, so their\n\
+         faces), z=-8 stack (11 stacked rungs), z=16 short 4' ladder, z=24 low\n\
+         mantle block (no ladder), z=-16 plain wall (not climbable). Ladders are the shipped templates, so their\n\
          climbable flag and colliders are the production ones."
     );
 

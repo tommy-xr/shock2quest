@@ -6,9 +6,9 @@ import { teleportVerified } from "./helpers/teleport.js";
 
 // The debug_ladder scene: one climbing station per lane along z, all at
 // x ≈ -7 ahead of the spawn (see shock2vr/src/scenes/debug_ladder.rs). Flat
-// climbing (push into the ladder) must ascend every ladder station and be
-// blocked by the plain wall, so the scene can stand in for mission geometry
-// in climbing tests.
+// climbing (push into the ladder) must ascend every ladder station, a held
+// jump must mantle the low block, and the plain wall must block, so the scene
+// can stand in for mission geometry in climbing tests.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 // Approach the near (+X) face from here, or the arch's far (-X) face.
@@ -24,6 +24,8 @@ type Station = {
   topY: number;
   freestanding?: boolean;
   climbable?: boolean;
+  /// No ladder: hold jump and push forward to mantle onto the block.
+  mantle?: boolean;
 };
 const STATIONS: Station[] = [
   { name: "ledge", z: 0, topY: 6.0 },
@@ -31,6 +33,7 @@ const STATIONS: Station[] = [
   { name: "arch (far face)", z: 8, x: ARCH_FAR_X, topY: 6.4 },
   { name: "stack", z: -8, topY: 9.0 },
   { name: "short", z: 16, topY: 1.6, freestanding: true },
+  { name: "mantle", z: 24, topY: 3.0, mantle: true },
   { name: "wall", z: -16, topY: 6.0, climbable: false },
 ];
 
@@ -60,6 +63,7 @@ test(
       let peak = floorY;
       let standing = false;
       await game.input.set("right_hand.thumbstick", [0, 1]);
+      if (station.mantle) await game.input.set("jump", 1);
       for (let i = 0; i < 20; i++) {
         await game.step({ frames: 10 });
         const y = (await game.player.position()).y;
@@ -69,6 +73,7 @@ test(
         if (Math.abs(y - (station.topY + floorY)) < 0.1) standing = true;
       }
       await game.input.set("right_hand.thumbstick", [0, 0]);
+      await game.input.set("jump", 0);
       await game.step({ frames: 10 });
 
       if (station.climbable === false) {
@@ -85,7 +90,7 @@ test(
       } else {
         assert.ok(
           standing,
-          `${station.name}: pushing into the ladder should top out onto the block ` +
+          `${station.name}: should end standing on the block ` +
             `(top ${station.topY}, expected y≈${(station.topY + floorY).toFixed(2)}, ` +
             `peak y=${peak.toFixed(2)})`,
         );
