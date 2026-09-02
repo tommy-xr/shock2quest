@@ -231,6 +231,19 @@ pub(crate) fn get_wielded_ammo_type(world: &World) -> Option<String> {
     class_tags.0.get(&template_id)?.get("ammotype").cloned()
 }
 
+/// The wielded gun's fire setting: its index (0 or 1) and the short header for
+/// that setting ("NORM" / "BURST"), or `None` when nothing gun-like is wielded.
+/// The header is absent for a gun whose data names no header for the setting.
+pub(crate) fn get_wielded_gun_setting(world: &World) -> Option<(i32, Option<String>)> {
+    let weapon = crate::wielded_weapon::wielded_weapon(world)?;
+    let setting = world
+        .borrow::<View<dark::properties::PropGunState>>()
+        .ok()
+        .and_then(|states| states.get(weapon).ok().map(|state| state.setting))?;
+    let header = crate::scripts::script_util::gun_setting_header(world, weapon, setting);
+    Some((setting, header))
+}
+
 /// The object-icon bitmap filename (e.g. "STD_I.pcx") of the wielded weapon's
 /// selected ammo type, or `None`. Resolved from the selected projectile
 /// template's `P$ObjIcon` (projectiles are templates, not instantiated entities,

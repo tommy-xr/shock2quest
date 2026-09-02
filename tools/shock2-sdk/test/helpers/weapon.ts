@@ -1,4 +1,15 @@
+import assert from "node:assert/strict";
+
 import type { EntitySummary, GameServer } from "../../src/index.js";
+
+/** The `Ammo` property of a weapon's entity detail - its loaded rounds. */
+export function ammoOf(detail: {
+  properties: { name: string; value: string }[];
+}): number {
+  const ammo = detail.properties.find((p) => p.name === "Ammo");
+  assert.ok(ammo, "weapon should expose an Ammo property");
+  return Number(ammo.value);
+}
 
 /** Fire one round: edge-triggered pull (fires on the rising edge), then release,
  * stepping a frame for each so the next pull is a fresh edge. */

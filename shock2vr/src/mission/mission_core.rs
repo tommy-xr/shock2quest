@@ -1366,6 +1366,12 @@ pub struct GlobalTemplateClassTags(pub HashMap<i32, HashMap<String, String>>);
 #[derive(Unique, Clone)]
 pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
 
+/// The `SHEAD1`/`SHEAD2` string tables - the short header for a gun's first /
+/// second fire setting ("NORM" / "BURST"). Loaded once here because the
+/// readouts that want them (the player state snapshot) have no asset cache.
+#[derive(Unique, Clone, Default)]
+pub struct GlobalGunSettingHeaders(pub [HashMap<String, String>; 2]);
+
 /// The synthetic player-owned entity hosting the automap panel (`MapGui`).
 /// Created at mission init; `Effect::ToggleMap` opens/closes its panel in the
 /// flat host. See `projects/flat-ui-panels.md` §5.
@@ -1822,6 +1828,16 @@ impl MissionCore {
         {
             crate::psi::apply_display_names(&mut psi_powers, &psi_strings);
         }
+        let mut gun_setting_header_table = |file| {
+            asset_cache
+                .get_opt(&dark::importers::STRINGS_IMPORTER, file)
+                .map(|strings| (*strings).clone())
+                .unwrap_or_default()
+        };
+        world.add_unique(GlobalGunSettingHeaders([
+            gun_setting_header_table("shead1.str"),
+            gun_setting_header_table("shead2.str"),
+        ]));
         // Debug scenes unlock every power (debug_psi exercises the whole
         // registry); real missions start with the player template's learned
         // bits plus the default OSA loadout (Cryokinesis).
@@ -5423,6 +5439,26 @@ impl MissionCore {
                     }
                 }
 
+                Effect::CycleGunSetting => {
+                    // Whichever hand holds the gun, like ReloadWeapon above.
+                    if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world) {
+                        // An SS2 gun has exactly two modes, so the switch is a
+                        // toggle - and any other stored value lands on mode 0.
+                        let current =
+                            crate::scripts::script_util::current_gun_setting(&self.world, weapon);
+                        effects.push_back(Effect::SetGunSetting {
+                            entity_id: weapon,
+                            setting: i32::from(current == 0),
+                        });
+                    }
+                }
+
+                Effect::SetGunSetting { entity_id, setting } => {
+                    if let Some(cue) = self.set_gun_setting(entity_id, setting) {
+                        effects.push_back(cue);
+                    }
+                }
+
                 Effect::ToggleUseMode => {
                     match game_options.presentation_mode {
                         crate::PresentationMode::Flat => {
@@ -7840,6 +7876,57 @@ impl MissionCore {
             .unwrap_or(0);
         self.world
             .add_component(weapon, RuntimePropSelectedAmmo((current + 1) % count));
+    }
+
+    /// Switch `weapon` to fire setting `setting`, keeping the selected ammo
+    /// type across the switch by its `ProjectileOptions.order` (the shotgun's
+    /// pellets stay pellets when it goes to its double load). Returns the
+    /// mode-change sting, or `None` when the setting is not a real mode or the
+    /// gun has no second one.
+    ///
+    /// Unlike `cycle_ammo` just above, this does NOT require an empty magazine.
+    /// That rule exists so loaded rounds cannot be converted to a different
+    /// ammo TYPE for free - and a fire setting is not an ammo type: the pair of
+    /// projectiles sharing an `order` across the two modes also share one clip
+    /// archetype (Rifled Slug and Double Slug are both `-43`), so the loaded
+    /// rounds and the reserve they unload to are unchanged by the switch.
+    fn set_gun_setting(&mut self, weapon: EntityId, setting: i32) -> Option<Effect> {
+        use crate::scripts::script_util;
+        // An SS2 gun has two modes; the effect's raw index must name one.
+        if !(0..2).contains(&setting) {
+            return None;
+        }
+        if !script_util::can_cycle_gun_setting(&self.world, weapon) {
+            return None;
+        }
+        let current = script_util::ordered_projectile_links(&self.world, weapon);
+        let next = script_util::ordered_projectile_links_for_setting(&self.world, weapon, setting);
+        let selected = self
+            .world
+            .borrow::<View<RuntimePropSelectedAmmo>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|s| s.0))
+            .unwrap_or(0);
+        let remapped = script_util::remap_selected_ammo(&current, selected, &next);
+
+        let mut gun_state = {
+            let v_gun_state = self.world.borrow::<View<dark::properties::PropGunState>>();
+            v_gun_state
+                .as_ref()
+                .ok()
+                .and_then(|states| states.get(weapon).ok().cloned())?
+        };
+        gun_state.setting = setting;
+        self.world.add_component(weapon, gun_state);
+        self.world
+            .add_component(weapon, RuntimePropSelectedAmmo(remapped));
+
+        Some(Effect::PlaySound {
+            handle: AudioHandle::new(),
+            source: None,
+            name: "bset".to_owned(),
+            spatial: false,
+        })
     }
 
     /// Mint `rounds` rounds of `clip_template` into the backpack - the half of

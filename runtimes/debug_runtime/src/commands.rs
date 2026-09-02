@@ -824,6 +824,11 @@ pub struct PlayerInfo {
     /// The wielded weapon's selected ammo type (e.g. "std" / "he" / "ap"), or
     /// `null` when unarmed / melee. See `shock2vr::PlayerStateSnapshot`.
     pub wielded_ammo_type: Option<String>,
+    /// The wielded gun's fire setting (0 or 1) and its short header ("NORM" /
+    /// "BURST"), or `null` when nothing gun-like is wielded. Cycle with the
+    /// `CycleGunSetting` input action. See `shock2vr::PlayerStateSnapshot`.
+    pub wielded_gun_setting: Option<i32>,
+    pub wielded_gun_setting_header: Option<String>,
     /// The player's current / maximum hit points, or `null` when the player
     /// has no health pool. See `shock2vr::PlayerStateSnapshot`.
     pub hit_points: Option<i32>,

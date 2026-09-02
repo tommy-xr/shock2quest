@@ -120,6 +120,7 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | `P` | `PathfindingTestCycle` | set start → set goal → show path |
 | `B` | `DebugCycleWeapon` | spawns and wields the next weapon (unlike the number row) |
 | `T` / `Y` | `CycleAmmo` / `CyclePsiPower` | |
+| `F` | `CycleGunSetting` | switch the wielded gun's fire mode (e.g. NORM / BURST); flat only |
 | `U` | `ReadLastUnreadLog` | Quest: left `Y` |
 | `M` | `ToggleMap` | flat only |
 | `Tab` / `I` | `ToggleUseMode` | the cyber interface; Quest: left `X` |
