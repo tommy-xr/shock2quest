@@ -15,7 +15,7 @@ use crate::{
     util::vec3_to_point3,
 };
 
-use super::{Steering, SteeringOutput, SteeringStrategy};
+use super::{Steering, SteeringOutput, SteeringStrategy, WhiskerAvoidance};
 
 /// How the strategy picks its destination
 pub enum PathTarget {
@@ -128,6 +128,8 @@ pub struct PathFollowSteeringStrategy {
     last_stall_position: Option<Vector3<f32>>,
     /// Last query said the goal has no route (see `goal_unreachable`)
     goal_unreachable: bool,
+    /// Static-geometry whiskers, biasing the aim point (see `aim_with_bias`)
+    whiskers: WhiskerAvoidance,
 }
 
 impl PathFollowSteeringStrategy {
@@ -157,6 +159,7 @@ impl PathFollowSteeringStrategy {
             displacement_anchor: None,
             last_stall_position: None,
             goal_unreachable: false,
+            whiskers: WhiskerAvoidance::new(),
         }
     }
 
@@ -184,7 +187,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         &mut self,
         _current_heading: Deg<f32>,
         world: &World,
-        _physics: &PhysicsWorld,
+        physics: &PhysicsWorld,
         entity_id: EntityId,
         time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
@@ -366,15 +369,20 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // path) stay authoritative - the bias is capped well below the
         // waypoint spacing.
         let separation = ai_util::separation_bias(world, entity_id, position, SEPARATION_RADIUS);
-        let aim = {
+        let separation = {
             let magnitude = (separation.x * separation.x + separation.z * separation.z).sqrt();
             if magnitude > 1e-3 {
-                let capped = magnitude.min(SEPARATION_MAX_OFFSET);
-                waypoint + separation * (capped / magnitude)
+                separation * (magnitude.min(SEPARATION_MAX_OFFSET) / magnitude)
             } else {
-                waypoint
+                Vector3::new(0.0, 0.0, 0.0)
             }
         };
+        // ...and the same treatment for static geometry the navigation mesh
+        // doesn't model (a railing, a crate left on the route): whiskers bend
+        // the line around it before the body wedges, without ever taking the
+        // heading away from the route.
+        let whiskers = self.whiskers.update(world, physics, entity_id, time);
+        let aim = aim_with_bias(position, waypoint, separation + whiskers);
 
         // Stall escape: if we stop making progress toward the current
         // waypoint (blocked by a prop, another AI, or bad geometry), drop
@@ -529,6 +537,22 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
     }
 }
 
+/// Bend the aim point by a steering bias, keeping the route authoritative:
+/// a bias that would drag the aim point onto (or behind) the body is
+/// dropped, since turning to a point you are standing on is not steering.
+fn aim_with_bias(
+    position: Vector3<f32>,
+    waypoint: Vector3<f32>,
+    bias: Vector3<f32>,
+) -> Vector3<f32> {
+    let aim = waypoint + bias;
+    if xz_distance(position, aim) < WAYPOINT_ADVANCE_DISTANCE {
+        waypoint
+    } else {
+        aim
+    }
+}
+
 /// Whether a route actually arrives at the goal it was computed for. An
 /// empty route arrives nowhere.
 fn route_reaches_goal(waypoints: &[Vector3<f32>], goal: Vector3<f32>) -> bool {
@@ -625,6 +649,28 @@ mod tests {
         // ran in place through an endless stall/re-path loop).
         let path = vec![vec3(0.0, -1.7, 0.0), vec3(10.0, -1.7, 0.0)];
         assert_eq!(advance_waypoint(vec3(0.0, 0.0, 0.0), &path, 0), 1);
+    }
+
+    #[test]
+    fn a_bias_bends_the_aim_point() {
+        let aim = aim_with_bias(
+            vec3(0.0, 0.0, 0.0),
+            vec3(10.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+        );
+        assert_eq!(aim, vec3(10.0, 0.0, 1.0));
+    }
+
+    /// ...but never onto the body itself: a bias pointing back at an AI
+    /// nearly on top of its waypoint would spin it around.
+    #[test]
+    fn a_bias_never_aims_at_the_body() {
+        let position = vec3(0.0, 0.0, 0.0);
+        let waypoint = vec3(0.3, 0.0, 0.0);
+        assert_eq!(
+            aim_with_bias(position, waypoint, vec3(-0.3, 0.0, 0.0)),
+            waypoint
+        );
     }
 
     #[test]

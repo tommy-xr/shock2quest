@@ -4,12 +4,14 @@ mod chase_player_steering_strategy;
 mod collision_avoidance_steering_strategy;
 mod path_follow_steering_strategy;
 mod wander_steering_strategy;
+mod whisker_avoidance;
 
 pub use chained_steering_strategy::*;
 pub use chase_entity_steering_strategy::*;
 pub use chase_player_steering_strategy::*;
 pub use collision_avoidance_steering_strategy::*;
 pub use path_follow_steering_strategy::*;
+pub use whisker_avoidance::*;
 
 use cgmath::{Deg, EuclideanSpace, Point3};
 use shipyard::{EntityId, World};
