@@ -1,7 +1,7 @@
-use dark::properties::{PropBaseGunDesc, PropGunState};
+use dark::properties::PropGunState;
 use shipyard::{EntityId, Get, View, World};
 
-use crate::physics::PhysicsWorld;
+use crate::{physics::PhysicsWorld, scripts::script_util::active_gun_setting};
 
 use super::{Effect, MessagePayload, Script};
 
@@ -32,10 +32,11 @@ impl Script for EnergyWeapon {
             return Effect::NoEffect;
         }
 
-        let v_gun_desc = world.borrow::<View<PropBaseGunDesc>>().unwrap();
         let v_gun_state = world.borrow::<View<PropGunState>>().unwrap();
-        let (Ok(gun_desc), Ok(gun_state)) = (v_gun_desc.get(entity_id), v_gun_state.get(entity_id))
-        else {
+        let (Some(gun_desc), Ok(gun_state)) = (
+            active_gun_setting(world, entity_id),
+            v_gun_state.get(entity_id),
+        ) else {
             return Effect::NoEffect;
         };
         let capacity = gun_desc.clip.max(0);
@@ -53,24 +54,23 @@ impl Script for EnergyWeapon {
 
 #[cfg(test)]
 mod tests {
-    use dark::properties::{PropBaseGunDesc, PropGunState};
+    use dark::properties::{GunSettingDesc, PropBaseGunDesc, PropGunState};
     use shipyard::{Get, View, ViewMut, World};
 
     use crate::{physics::PhysicsWorld, scripts::effect::recharge_ammo_to_capacity};
 
     use super::{Effect, EnergyWeapon, MessagePayload, Script};
 
+    fn setting(clip: i32) -> GunSettingDesc {
+        GunSettingDesc {
+            clip,
+            ..GunSettingDesc::default()
+        }
+    }
+
     fn gun_desc(clip: i32) -> PropBaseGunDesc {
         PropBaseGunDesc {
-            burst: 1,
-            clip,
-            spray: 1,
-            stim_modifier: 1.0,
-            burst_interval_ms: 0,
-            shot_interval_ms: 0,
-            ammo_usage: 1,
-            speed_modifier: 1.0,
-            reload_time_ms: 0,
+            settings: [setting(clip), setting(clip), setting(clip)],
         }
     }
 
@@ -116,6 +116,21 @@ mod tests {
         assert_eq!(state.setting, 1);
         assert_eq!(state.modification, 2);
         assert_eq!(state.silence_value, 0.25);
+    }
+
+    #[test]
+    fn recharge_uses_the_capacity_of_the_selected_fire_setting() {
+        let mut world = World::new();
+        // gun_state selects setting 1, whose capacity differs from setting 0's.
+        let desc = PropBaseGunDesc {
+            settings: [setting(50), setting(100), setting(0)],
+        };
+        let weapon = world.add_entity((desc, gun_state(0)));
+
+        match recharge(&world, weapon) {
+            Effect::RechargeAmmo { capacity, .. } => assert_eq!(capacity, 100),
+            other => panic!("expected recharge ammo adjustment, got {other:?}"),
+        }
     }
 
     #[test]

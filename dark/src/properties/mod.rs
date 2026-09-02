@@ -366,6 +366,23 @@ impl PropInventoryDimensions {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjIcon(pub String);
 
+/// `P$Sett1` / `P$Sett2` - the description text for a gun's first / second fire
+/// setting, and `P$SHead1` / `P$SHead2` - the short header shown beside it
+/// (e.g. "NORM" / "BURST"). Each holds an object string (`key: "fallback"`)
+/// resolved against the matching `SETT1`/`SETT2`/`SHEAD1`/`SHEAD2` string
+/// table; see `dark::importers::resolve_gun_setting_string`.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropGunSettingText1(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropGunSettingText2(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropGunSettingHeader1(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropGunSettingHeader2(pub String);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjName(pub String);
 
@@ -1486,6 +1503,30 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$BaseGunDe",
             PropBaseGunDesc::read,
             identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Sett1",
+            read_variable_length_string,
+            PropGunSettingText1,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Sett2",
+            read_variable_length_string,
+            PropGunSettingText2,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$SHead1",
+            read_variable_length_string,
+            PropGunSettingHeader1,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$SHead2",
+            read_variable_length_string,
+            PropGunSettingHeader2,
             accumulator::latest,
         ),
         define_prop(

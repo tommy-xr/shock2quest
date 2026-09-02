@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-
 use cgmath::{Matrix4, Vector2, point2, vec2, vec3};
 use collision::{Aabb2, Aabb3};
 use dark::{
-    importers::{FONT_IMPORTER, STRINGS_IMPORTER, TEXTURE_IMPORTER},
+    importers::{
+        FONT_IMPORTER, STRINGS_IMPORTER, TEXTURE_IMPORTER, resolve_localized_property_string,
+    },
     properties::{
         ObjectNameType, PropGunState, PropHUDSelect, PropHitPoints, PropLog, PropMaxHitPoints,
         PropObjName, PropObjectNameType, PropShowHP, PropStackCount, PropTemplateId,
@@ -44,26 +44,6 @@ const LABEL_HEIGHT: f32 = 10.0;
 /// Screen inset for the hover label: the bracket it sits beside plus the line
 /// of text drawn above it.
 const LABEL_MARGIN: f32 = BRACKET_SIZE + LABEL_HEIGHT;
-
-fn resolve_localized_property_string(raw: &str, strings: &HashMap<String, String>) -> String {
-    let (key, fallback) = match raw.split_once(':') {
-        Some((key, remainder)) => {
-            let remainder = remainder.trim();
-            let fallback = match remainder.strip_prefix('"') {
-                Some(quoted) => quoted.split_once('"').map_or("", |(value, _)| value),
-                None => remainder,
-            };
-            (key.trim(), fallback)
-        }
-        None => (raw.trim(), ""),
-    };
-
-    strings
-        .get(&key.to_ascii_lowercase())
-        .map(String::as_str)
-        .unwrap_or(fallback)
-        .to_owned()
-}
 
 fn format_stack_aware_item_name(item_name: &str, stack_count: Option<i32>) -> String {
     match stack_count {
@@ -263,6 +243,8 @@ pub fn draw_item_name(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     const SCREEN: Vector2<f32> = Vector2::new(800.0, 600.0);
@@ -367,40 +349,6 @@ mod tests {
 
         assert!(!is_frobbable(&world, id));
         assert!(!is_hud_selectable(&world, id));
-    }
-
-    #[test]
-    fn object_name_resource_reference_uses_localized_value() {
-        let strings = HashMap::from([(
-            "elevator_button".to_string(),
-            "Localized elevator button".to_string(),
-        )]);
-
-        assert_eq!(
-            resolve_localized_property_string(
-                r#"Elevator_Button: "A two-state button.""#,
-                &strings,
-            ),
-            "Localized elevator button",
-        );
-    }
-
-    #[test]
-    fn object_name_resource_reference_uses_embedded_fallback() {
-        assert_eq!(
-            resolve_localized_property_string(r#"HumanCorpses: "A corpse.""#, &HashMap::new(),),
-            "A corpse.",
-        );
-    }
-
-    #[test]
-    fn object_name_resource_key_without_fallback_uses_localized_value() {
-        let strings = HashMap::from([("basketball".to_string(), "A basketball.".to_string())]);
-
-        assert_eq!(
-            resolve_localized_property_string("Basketball", &strings),
-            "A basketball.",
-        );
     }
 
     #[test]
