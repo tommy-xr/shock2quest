@@ -48,7 +48,9 @@ const ACTION: [number, number] = [527 + 96 / 2, 161 + 62 / 2];
  * The launcher opens on Missions.
  */
 const TAB_MISSIONS: [number, number] = [261 + 202 / 4, 41];
-const TAB_DEBUG_SCENES: [number, number] = [261 + (3 * 202) / 4, 41];
+// Three tabs split the header (Missions / Debug Scenes / Video); aim at the
+// middle third's center.
+const TAB_DEBUG_SCENES: [number, number] = [261 + (3 * 202) / 6, 41];
 /**
  * A row of the launcher's list: 19px rows from the pane top (y=54), x well
  * inside the pane and clear of the scroll gutter. On the Debug Scenes tab
