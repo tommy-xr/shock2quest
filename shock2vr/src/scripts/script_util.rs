@@ -9,8 +9,8 @@ use dark::{
     EnvSoundQuery,
     properties::{
         GunSettingDesc, Link, Links, ProjectileOptions, PropBaseGunDesc, PropClassTag,
-        PropGunSettingHeader1, PropGunSettingHeader2, PropGunState, PropMaterial, PropSymName,
-        PropTemplateId, PropTweqModelConfig, ToLink,
+        PropGunSettingHeader1, PropGunSettingHeader2, PropGunSettingText1, PropGunSettingText2,
+        PropGunState, PropMaterial, PropSymName, PropTemplateId, PropTweqModelConfig, ToLink,
     },
     ss2_entity_info::SystemShock2EntityInfo,
 };
@@ -358,15 +358,49 @@ pub fn gun_setting_header(world: &World, weapon: EntityId, setting: i32) -> Opti
             .and_then(|v| v.get(weapon).ok().map(|header| header.0.clone())),
         _ => return None,
     };
+    let tables = world
+        .borrow::<UniqueView<crate::mission::mission_core::GlobalGunSettingHeaders>>()
+        .ok()?;
+    resolve_setting_string(world, weapon, raw, tables.0.get(setting as usize)?)
+}
+
+/// Resolve one of a gun's fire-setting object strings against its string table.
+/// The gun's own property is only half the answer: a gun that authors no
+/// property of its own is still named by the table, keyed on its symbolic name.
+fn resolve_setting_string(
+    world: &World,
+    weapon: EntityId,
+    raw: Option<String>,
+    table: &std::collections::HashMap<String, String>,
+) -> Option<String> {
     let sym_name = world
         .borrow::<View<PropSymName>>()
         .ok()
         .and_then(|v| v.get(weapon).ok().map(|name| name.0.clone()));
-    let tables = world
-        .borrow::<UniqueView<crate::mission::mission_core::GlobalGunSettingHeaders>>()
-        .ok()?;
-    let table = tables.0.get(setting as usize)?;
     dark::importers::resolve_gun_setting_string(raw.as_deref(), sym_name.as_deref(), table)
+}
+
+/// The description text for `weapon`'s fire setting `setting` - "This is the
+/// normal single-shot firing mode." - or `None` when the gun names no such
+/// setting. Resolved from the gun's own `P$Sett1`/`P$Sett2` against the
+/// matching string table, exactly as [`gun_setting_header`] resolves the short
+/// header beside it.
+pub fn gun_setting_description(world: &World, weapon: EntityId, setting: i32) -> Option<String> {
+    let raw = match setting {
+        0 => world
+            .borrow::<View<PropGunSettingText1>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|text| text.0.clone())),
+        1 => world
+            .borrow::<View<PropGunSettingText2>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|text| text.0.clone())),
+        _ => return None,
+    };
+    let tables = world
+        .borrow::<UniqueView<crate::mission::mission_core::GlobalGunSettingTexts>>()
+        .ok()?;
+    resolve_setting_string(world, weapon, raw, tables.0.get(setting as usize)?)
 }
 
 /// The ammo index to select after a fire-mode switch. `order` is the ammo
