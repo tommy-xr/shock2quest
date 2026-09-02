@@ -10,6 +10,7 @@ mod base_elevator;
 mod base_light;
 mod base_monster;
 mod base_room;
+mod burst_fire;
 mod camera_alert;
 mod chemical;
 mod choose_mission;

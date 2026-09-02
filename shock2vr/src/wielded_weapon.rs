@@ -33,6 +33,19 @@ pub fn weapon_in_hand(world: &World, hand: Handedness) -> Option<EntityId> {
     is_weapon(world, held).then_some(held)
 }
 
+/// Whether the player holds `entity` in either hand. Unlike
+/// [`weapon_in_hand`] this asks nothing about what the object is, so it also
+/// covers a gun with no clip of its own. `PlayerInfo` is written before scripts
+/// run each frame, so a pickup is visible to the same frame's scripts.
+pub fn held_in_hand(world: &World, entity: EntityId) -> bool {
+    world
+        .borrow::<UniqueView<PlayerInfo>>()
+        .map(|info| {
+            info.left_hand_entity_id == Some(entity) || info.right_hand_entity_id == Some(entity)
+        })
+        .unwrap_or(false)
+}
+
 /// The weapon the player is wielding, for actions and readouts that are not
 /// tied to one hand (the Reload/CycleAmmo input actions, the ammo readout).
 /// Right hand first - see the module docs for the precedence rule.
