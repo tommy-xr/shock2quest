@@ -19,6 +19,7 @@ import type {
   SceneObjectSummary,
   Position,
   RagdollMetricsResult,
+  ClimbGripResult,
   RayCastRequest,
   RayCastResult,
   ScreenshotResult,
@@ -543,6 +544,26 @@ export class PhysicsApi {
   /** Per-ragdoll settle/quality metrics (empty list when no ragdolls exist). */
   async ragdolls(): Promise<RagdollMetricsResult> {
     return this.client.get<RagdollMetricsResult>("/v1/ragdoll/metrics");
+  }
+
+  /**
+   * What a hand at `point` could grab: an authored ladder face, a walkable
+   * ledge above the player's feet, or nothing. `feetY` defaults to the
+   * player's own feet height.
+   */
+  async grip(
+    point: Vec3,
+    options?: { radius?: number; feetY?: number },
+  ): Promise<ClimbGripResult> {
+    const params = new URLSearchParams({
+      x: String(point[0]),
+      y: String(point[1]),
+      z: String(point[2]),
+    });
+    if (options?.radius !== undefined)
+      params.set("radius", String(options.radius));
+    if (options?.feetY !== undefined) params.set("feet_y", String(options.feetY));
+    return this.client.get<ClimbGripResult>(`/v1/physics/grip?${params}`);
   }
 }
 

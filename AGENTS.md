@@ -343,6 +343,12 @@ For debugging visual/rendering changes without a full interactive session:
    curl "http://127.0.0.1:8080/v1/physics/bodies?entity_id=4"
    curl http://127.0.0.1:8080/v1/physics/bodies/12   # detail by body_id
 
+   # Ask what a hand at a world point could grab: "ladder" (an authored
+   # climbable face whose per-face `PropPhysAttr.climbable` bit is set),
+   # "ledge" (a walkable top more than a step above the feet - the mantle
+   # hold), or null. Optional `radius` and `feet_y` (defaults to the player's).
+   curl "http://127.0.0.1:8080/v1/physics/grip?x=-6.8&y=3&z=0"
+
    # Inspect what the renderer actually drew on the last frame: per-object
    # entity/model, effective transparency, depth-write and backface-culling
    # winding. Answers "why does this prop look transparent/inside-out?" with

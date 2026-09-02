@@ -474,6 +474,24 @@ export interface RagdollMetricsResult {
   ragdolls: RagdollMetrics[];
 }
 
+/** A climbing hold a hand could take (GET /v1/physics/grip). */
+export interface ClimbGrip {
+  /** `"ladder"` = an authored climbable face whose per-face bit is set;
+   * `"ledge"` = a walkable top surface more than a step above the feet. */
+  kind: "ladder" | "ledge";
+  entity_id: number | null;
+  entity_name: string | null;
+  /** World-space point on the gripped surface. */
+  point: Vec3;
+  /** World-space surface normal, pointing out toward the hand. */
+  normal: Vec3;
+}
+
+export interface ClimbGripResult {
+  /** Null when nothing at the queried point is grabbable. */
+  grip: ClimbGrip | null;
+}
+
 export interface PlayerSnapshot {
   entity_id: number | null;
   /** Runtime id of the backpack container; rediscover it after save/load. */
