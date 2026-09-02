@@ -545,6 +545,23 @@ fn aim_with_bias(
     waypoint: Vector3<f32>,
     bias: Vector3<f32>,
 ) -> Vector3<f32> {
+    // Drop whatever part of the bias points back down the route: an
+    // obstacle square across the path answers with its own normal, and
+    // pulling the aim point backwards would only stop the AI in front of it
+    // instead of taking it around (what is left is the sideways part).
+    let toward = waypoint - position;
+    let length = (toward.x * toward.x + toward.z * toward.z).sqrt();
+    let bias = if length > 1e-3 {
+        let toward = Vector3::new(toward.x / length, 0.0, toward.z / length);
+        let along = bias.x * toward.x + bias.z * toward.z;
+        if along < 0.0 {
+            bias - toward * along
+        } else {
+            bias
+        }
+    } else {
+        bias
+    };
     let aim = waypoint + bias;
     if xz_distance(position, aim) < WAYPOINT_ADVANCE_DISTANCE {
         waypoint
@@ -671,6 +688,18 @@ mod tests {
             aim_with_bias(position, waypoint, vec3(-0.3, 0.0, 0.0)),
             waypoint
         );
+    }
+
+    /// A bias pointing back down the route keeps only its sideways part -
+    /// the AI passes the obstacle instead of stopping in front of it.
+    #[test]
+    fn a_backward_bias_becomes_a_sideways_one() {
+        let aim = aim_with_bias(
+            vec3(0.0, 0.0, 0.0),
+            vec3(10.0, 0.0, 0.0),
+            vec3(-2.0, 0.0, 1.0),
+        );
+        assert_eq!(aim, vec3(10.0, 0.0, 1.0));
     }
 
     #[test]

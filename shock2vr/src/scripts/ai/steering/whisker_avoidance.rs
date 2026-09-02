@@ -39,6 +39,13 @@ pub struct WhiskerHit {
     pub distance: f32,
 }
 
+/// One whisker: the (horizontal, unit) direction it was cast along, and what
+/// it found. Readings are ordered CENTER FIRST, then the side whiskers.
+pub struct WhiskerReading {
+    pub direction: Vector3<f32>,
+    pub hit: Option<WhiskerHit>,
+}
+
 /// Static-geometry whiskers, sampled on an interval and blended into path
 /// following as a bias on the aim point. Unlike `CollisionAvoidanceSteering`
 /// this never takes the heading over - it runs *while* a route is being
@@ -76,14 +83,20 @@ impl WhiskerAvoidance {
         self.bias
     }
 
-    fn probe(&self, world: &World, physics: &PhysicsWorld, entity_id: EntityId) -> Vec<WhiskerHit> {
+    fn probe(
+        &self,
+        world: &World,
+        physics: &PhysicsWorld,
+        entity_id: EntityId,
+    ) -> Vec<WhiskerReading> {
         let rotation = get_rotation_from_transform(world, entity_id);
         let knee =
             get_position_from_transform(world, entity_id, vec3(0.0, WHISKER_KNEE_HEIGHT, 0.0));
         let chest =
             get_position_from_transform(world, entity_id, vec3(0.0, WHISKER_CHEST_HEIGHT, 0.0));
 
-        let mut hits = Vec::new();
+        // Center first, then the sides - whisker_bias reads them that way
+        let mut readings = Vec::new();
         for spread in [Deg(0.0), WHISKER_SPREAD, -WHISKER_SPREAD] {
             let forward = (rotation * Quaternion::from_angle_y(spread))
                 .rotate_vector(vec3(0.0, 0.0, 1.0))
@@ -106,40 +119,68 @@ impl WhiskerAvoidance {
                     })
             };
             // Both heights must be blocked - see WHISKER_KNEE_HEIGHT
-            let (Some(low), Some(high)) = (cast(knee), cast(chest)) else {
-                continue;
+            let hit = match (cast(knee), cast(chest)) {
+                (Some(low), Some(high)) => {
+                    let nearest = if (low.hit_point - knee).magnitude()
+                        < (high.hit_point - chest).magnitude()
+                    {
+                        (low, knee)
+                    } else {
+                        (high, chest)
+                    };
+                    Some(WhiskerHit {
+                        normal: nearest.0.hit_normal,
+                        distance: (nearest.0.hit_point - nearest.1).magnitude(),
+                    })
+                }
+                _ => None,
             };
-            let nearest =
-                if (low.hit_point - knee).magnitude() < (high.hit_point - chest).magnitude() {
-                    (low, knee)
-                } else {
-                    (high, chest)
-                };
-            hits.push(WhiskerHit {
-                normal: nearest.0.hit_normal,
-                distance: (nearest.0.hit_point - nearest.1).magnitude(),
+            readings.push(WhiskerReading {
+                direction: vec3(forward.x, 0.0, forward.z).normalize(),
+                hit,
             });
         }
-        hits
+        readings
     }
 }
 
-/// Sum the blocked whiskers into a horizontal push away from the geometry:
-/// each hit contributes its surface normal, weighted by how close it is, and
-/// the total is capped at WHISKER_MAX_OFFSET. Floors and ceilings (normals
-/// without a horizontal component) contribute nothing - the route walks on
-/// them.
-pub fn whisker_bias(hits: &[WhiskerHit], max_distance: f32) -> Vector3<f32> {
+/// Sum the whiskers into a horizontal push away from the geometry ahead:
+/// each blocked whisker contributes its surface normal, weighted by how
+/// close it is, and the total is capped at WHISKER_MAX_OFFSET. Floors and
+/// ceilings (normals without a horizontal component) contribute nothing -
+/// the route walks on them.
+///
+/// A surface square across the path pushes straight BACK, which is no help
+/// to a body that has to get past it, so a blocked center whisker also
+/// contributes a sideways push toward whichever side has more room. That is
+/// what carries an AI along a wall (or a railing) instead of into it.
+pub fn whisker_bias(readings: &[WhiskerReading], max_distance: f32) -> Vector3<f32> {
+    let weight = |hit: &WhiskerHit| ((max_distance - hit.distance) / max_distance).clamp(0.0, 1.0);
     let mut bias = vec3(0.0, 0.0, 0.0);
-    for hit in hits {
+    for reading in readings {
+        let Some(hit) = &reading.hit else { continue };
         let horizontal = vec3(hit.normal.x, 0.0, hit.normal.z);
         let length = horizontal.magnitude();
         if length < 0.5 {
             continue;
         }
-        let weight = ((max_distance - hit.distance) / max_distance).clamp(0.0, 1.0);
-        bias += horizontal / length * weight * WHISKER_MAX_OFFSET;
+        bias += horizontal / length * weight(hit) * WHISKER_MAX_OFFSET;
     }
+
+    // Sideways escape, when the way ahead itself is blocked: aim past the
+    // obstacle on its roomier side (an unblocked whisker has the full
+    // whisker length of room).
+    if let Some(center) = readings.first().and_then(|r| r.hit.as_ref()) {
+        let clearance =
+            |r: &WhiskerReading| r.hit.as_ref().map(|h| h.distance).unwrap_or(max_distance);
+        let roomiest = readings[1..]
+            .iter()
+            .max_by(|a, b| clearance(a).total_cmp(&clearance(b)));
+        if let Some(side) = roomiest {
+            bias += side.direction * weight(center) * WHISKER_MAX_OFFSET;
+        }
+    }
+
     let magnitude = bias.magnitude();
     if magnitude > WHISKER_MAX_OFFSET {
         bias *= WHISKER_MAX_OFFSET / magnitude;
@@ -151,30 +192,63 @@ pub fn whisker_bias(hits: &[WhiskerHit], max_distance: f32) -> Vector3<f32> {
 mod tests {
     use super::*;
 
-    fn hit(normal: Vector3<f32>, distance: f32) -> WhiskerHit {
-        WhiskerHit { normal, distance }
+    fn clear(direction: Vector3<f32>) -> WhiskerReading {
+        WhiskerReading {
+            direction,
+            hit: None,
+        }
     }
+
+    fn blocked(direction: Vector3<f32>, normal: Vector3<f32>, distance: f32) -> WhiskerReading {
+        WhiskerReading {
+            direction,
+            hit: Some(WhiskerHit { normal, distance }),
+        }
+    }
+
+    const AHEAD: Vector3<f32> = Vector3::new(0.0, 0.0, 1.0);
+    const RIGHT: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
+    const LEFT: Vector3<f32> = Vector3::new(-1.0, 0.0, 0.0);
 
     #[test]
     fn clear_whiskers_do_not_bend_the_route() {
-        assert_eq!(whisker_bias(&[], 1.0), vec3(0.0, 0.0, 0.0));
+        let readings = [clear(AHEAD), clear(RIGHT), clear(LEFT)];
+        assert_eq!(whisker_bias(&readings, 1.0), vec3(0.0, 0.0, 0.0));
     }
 
-    /// A wall dead ahead pushes back along its normal, proportionally to how
-    /// close it is.
+    /// A wall to one side pushes away from it, harder the closer it is.
     #[test]
     fn a_near_wall_pushes_away_harder_than_a_far_one() {
-        let near = whisker_bias(&[hit(vec3(-1.0, 0.0, 0.0), 0.25)], 1.0);
-        let far = whisker_bias(&[hit(vec3(-1.0, 0.0, 0.0), 0.75)], 1.0);
+        let near = whisker_bias(&[clear(AHEAD), blocked(RIGHT, LEFT, 0.25)], 1.0);
+        let far = whisker_bias(&[clear(AHEAD), blocked(RIGHT, LEFT, 0.75)], 1.0);
         assert!(near.x < far.x && far.x < 0.0, "near {near:?} far {far:?}");
         assert_eq!(near.z, 0.0);
+    }
+
+    /// A wall square across the path: its normal points straight back, so
+    /// without a sideways term the AI would just be pushed into itself. The
+    /// bias must carry it toward the side with room (here, the right).
+    #[test]
+    fn a_wall_across_the_path_steers_to_the_roomier_side() {
+        let bias = whisker_bias(
+            &[
+                blocked(AHEAD, -AHEAD, 0.2),
+                clear(RIGHT),
+                blocked(LEFT, RIGHT, 0.2),
+            ],
+            1.0,
+        );
+        assert!(bias.x > 0.0, "expected a push to the right, got {bias:?}");
     }
 
     /// Floors and ceilings are not obstacles.
     #[test]
     fn horizontal_surfaces_are_ignored() {
         assert_eq!(
-            whisker_bias(&[hit(vec3(0.0, 1.0, 0.0), 0.1)], 1.0),
+            whisker_bias(
+                &[clear(AHEAD), blocked(RIGHT, vec3(0.0, 1.0, 0.0), 0.1)],
+                1.0
+            ),
             vec3(0.0, 0.0, 0.0)
         );
     }
@@ -185,9 +259,9 @@ mod tests {
     fn the_bias_is_capped() {
         let boxed_in = whisker_bias(
             &[
-                hit(vec3(-1.0, 0.0, 0.0), 0.0),
-                hit(vec3(-0.7, 0.0, -0.7), 0.0),
-                hit(vec3(0.0, 0.0, -1.0), 0.0),
+                blocked(AHEAD, -AHEAD, 0.0),
+                blocked(RIGHT, LEFT, 0.0),
+                blocked(LEFT, RIGHT, 0.0),
             ],
             1.0,
         );
