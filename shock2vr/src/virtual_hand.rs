@@ -23,6 +23,17 @@ use crate::{
 
 const HAND_OFFSET: Vector3<f32> = vec3(0.0, 0.0, 0.0);
 
+/// Where a tracked controller is in the world. Inputs are in pawn space, so
+/// this is the one place that composition lives - `vr_climb` resolves grips
+/// against exactly the pose the hand is drawn and raycast from.
+pub fn hand_world_position(
+    pawn_pos: Vector3<f32>,
+    pawn_rotation: Quaternion<f32>,
+    hand_local: Vector3<f32>,
+) -> Vector3<f32> {
+    pawn_pos + HAND_OFFSET + pawn_rotation.rotate_vector(hand_local)
+}
+
 /// Maximum world-space distance from the hand/eye to a frob target's visible
 /// surface. Retail `shock2.gam` authors `GAMEPARAM.Frob Dist = 50`; the
 /// original `PickSetFocus` treats that as squared SS2 units, while this engine
@@ -224,7 +235,7 @@ impl VirtualHand {
         held_by_other_hand: Option<EntityId>,
     ) -> (VirtualHand, Vec<VirtualHandEffect>) {
         let handedness = prev.handedness;
-        let hand_position = pawn_pos + HAND_OFFSET + pawn_rot.rotate_vector(input_hand.position);
+        let hand_position = hand_world_position(pawn_pos, pawn_rot, input_hand.position);
         let hand_rotation = pawn_rot * input_hand.rotation;
 
         // Also do a raycast to provide the 'Hover' effect

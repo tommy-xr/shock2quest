@@ -885,6 +885,9 @@ pub struct PlayerInfo {
     /// The automap locations explored in the current mission (ascending).
     /// Persisted per mission in `QuestInfo`; survives save/load.
     pub explored_map_locations: Vec<i32>,
+    /// Climb state: whether the player is on a ladder/hand hold at all, and
+    /// (VR) which hands hold what. See `shock2vr::vr_climb`.
+    pub climb: shock2vr::game_scene::DebugClimbState,
 }
 
 /// Input state snapshot

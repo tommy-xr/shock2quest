@@ -2888,6 +2888,27 @@ impl MissionCore {
 
         let up_value = input_context.left_hand.thumbstick.y / dark::SCALE_FACTOR;
 
+        // VR climbs by hand: a gripping hand resolves to a body translation
+        // that replaces locomotion entirely for the frame (right-stick
+        // movement is ignored; left-stick turn above still applies). Flat has
+        // no hands and keeps its push-into-ladder climb.
+        let hand_climb = (!time.elapsed.is_zero())
+            .then(|| {
+                self.interaction
+                    .update_hand_climb(&crate::interaction::ClimbContext {
+                        physics: &self.physics,
+                        world: &self.world,
+                        input: input_context,
+                        pawn_pos: player.pos,
+                        pawn_rotation: new_rotation,
+                        feet_y: player.pos.y
+                            - crate::physics::player_center_above_floor(
+                                self.player_handle.is_crouched(),
+                            ),
+                    })
+            })
+            .flatten();
+
         // Skip physics while time is frozen (the debug runtime's paused state
         // calls update with zero dt): the Rapier pipeline advances by a fixed
         // internal dt per call regardless of elapsed time, so stepping it here
@@ -2908,14 +2929,21 @@ impl MissionCore {
             // actual state is read back via `player_is_crouched`).
             self.physics
                 .set_player_crouch(input_context.crouch, &mut self.player_handle);
+            let request = match hand_climb {
+                Some(translation) => crate::physics::PlayerMoveRequest::HandClimb { translation },
+                None => crate::physics::PlayerMoveRequest::Walk {
+                    movement: forward + cgmath::vec3(0.0, up_value, 0.0),
+                    facing,
+                    jump_pressed: input_context.jump,
+                    // Push-to-climb is the FLAT climb input; VR's hands are
+                    // its own (see `vr_climb`).
+                    push_to_climb: game_options.presentation_mode == crate::PresentationMode::Flat,
+                },
+            };
             profile!(
                 "shock2.update.physics",
-                self.physics.update_with_facing_and_jump(
-                    forward + cgmath::vec3(0.0, up_value, 0.0),
-                    facing,
-                    input_context.jump,
-                    &mut self.player_handle,
-                )
+                self.physics
+                    .update_player_movement(request, &mut self.player_handle)
             )
         };
 
@@ -10192,6 +10220,35 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             entity_name,
             point: [grip.point.x, grip.point.y, grip.point.z],
             normal: [grip.normal.x, grip.normal.y, grip.normal.z],
+        })
+    }
+
+    fn player_climb(&self) -> Option<crate::game_scene::DebugClimbState> {
+        let hand_name = |hand: crate::vr_config::Handedness| match hand {
+            crate::vr_config::Handedness::Left => "left",
+            crate::vr_config::Handedness::Right => "right",
+        };
+        let climb = self.interaction.hand_climb();
+        Some(crate::game_scene::DebugClimbState {
+            is_climbing: self.player_handle.is_climbing(),
+            anchor_hand: climb.and_then(|climb| climb.anchor()).map(hand_name),
+            grips: climb
+                .into_iter()
+                .flat_map(|climb| climb.grips())
+                .map(|(hand, anchor)| crate::game_scene::DebugClimbHold {
+                    hand: hand_name(hand),
+                    kind: match anchor.grip.kind {
+                        crate::physics::ClimbGripKind::Ladder => "ladder",
+                        crate::physics::ClimbGripKind::Ledge => "ledge",
+                    },
+                    entity_id: anchor.grip.entity_id.map(|id| id.inner() as i32),
+                    point: [
+                        anchor.grip.point.x,
+                        anchor.grip.point.y,
+                        anchor.grip.point.z,
+                    ],
+                })
+                .collect(),
         })
     }
 

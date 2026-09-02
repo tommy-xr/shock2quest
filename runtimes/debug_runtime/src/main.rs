@@ -2411,6 +2411,10 @@ fn capture_frame_snapshot(
                     .as_ref()
                     .map(|s| s.explored_map_locations.clone())
                     .unwrap_or_default(),
+                climb: game
+                    .debug_scene()
+                    .and_then(|scene| scene.player_climb())
+                    .unwrap_or_default(),
             }
         },
         entity_count,
