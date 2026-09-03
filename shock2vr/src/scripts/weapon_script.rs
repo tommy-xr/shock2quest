@@ -59,6 +59,7 @@ fn weapon_world_position(world: &World, entity_id: EntityId) -> Option<cgmath::V
 
 use super::{
     Effect, Message, MessagePayload, Script,
+    burst_fire::{BurstState, BurstStep},
     script_util::{
         active_gun_setting, get_all_links_with_template, ordered_projectile_links,
         play_environmental_sound,
@@ -124,14 +125,98 @@ fn is_cooling_down(world: &World, entity_id: EntityId) -> bool {
         .unwrap_or(false)
 }
 
-pub struct WeaponScript;
+/// Whether a reload is running on this weapon - firing is blocked throughout.
+fn is_reloading(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<RuntimePropReloading>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|r| !r.is_done()))
+        == Some(true)
+}
+
+/// The rounds loaded in this weapon, or `None` for one that tracks no ammo at
+/// all (the unlimited debug weapons).
+fn loaded_ammo(world: &World, entity_id: EntityId) -> Option<i32> {
+    world
+        .borrow::<View<dark::properties::PropGunState>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|g| g.ammo))
+}
+
+/// What one shot came to.
+enum ShotOutcome {
+    /// The gun fired: these effects are the shot.
+    Fired(Effect),
+    /// The magazine cannot pay for the shot.
+    Empty,
+    /// Not a gun at all - a flat-aimed melee weapon, whose trigger starts a
+    /// swing instead of firing.
+    FlatMeleeSwing,
+}
+
+pub struct WeaponScript {
+    /// Shots the current trigger pull still owes, paid out one per frame by
+    /// `update` (the pistol's BURST, the assault rifle's AUTO). Script-private
+    /// and deliberately not saved: a save taken mid-burst loads with the
+    /// trigger at rest, the same call `RuntimePropShotCooldown` makes.
+    burst: Option<ActiveBurst>,
+}
+
+/// A burst in flight, with the setting the pull started in - so switching fire
+/// mode part-way through cannot re-price the rounds it still owes.
+struct ActiveBurst {
+    setting: GunSettingDesc,
+    state: BurstState,
+}
+
 impl WeaponScript {
     pub fn new() -> WeaponScript {
-        WeaponScript
+        WeaponScript { burst: None }
     }
 }
 
 impl Script for WeaponScript {
+    /// Pay out the shots the current pull still owes. Nothing else about a
+    /// weapon ticks per frame.
+    fn update(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        _physics: &PhysicsWorld,
+        time: &crate::time::Time,
+    ) -> Effect {
+        let Some(burst) = self.burst.as_mut() else {
+            return Effect::NoEffect;
+        };
+        // A burst belongs to the pull that started it: a reload, or the gun
+        // leaving the player's hands, ends it.
+        if is_reloading(world, entity_id) || !crate::wielded_weapon::held_in_hand(world, entity_id)
+        {
+            self.burst = None;
+            return Effect::NoEffect;
+        }
+
+        let setting = burst.setting.clone();
+        let can_fire = can_pay_for_shot(loaded_ammo(world, entity_id), rounds_per_shot(&setting));
+        match burst.state.advance(time.elapsed.as_secs_f32(), can_fire) {
+            BurstStep::Wait => Effect::NoEffect,
+            BurstStep::Done => {
+                self.burst = None;
+                Effect::NoEffect
+            }
+            BurstStep::Fire => match fire_one_shot(world, entity_id, &setting) {
+                ShotOutcome::Fired(effect) => effect,
+                // Unreachable in practice - `can_fire` covers the magazine and
+                // a melee weapon authors no burst - but a burst that cannot
+                // fire is over either way.
+                ShotOutcome::Empty | ShotOutcome::FlatMeleeSwing => {
+                    self.burst = None;
+                    Effect::NoEffect
+                }
+            },
+        }
+    }
+
     fn handle_message(
         &mut self,
         entity_id: EntityId,
@@ -142,49 +227,8 @@ impl Script for WeaponScript {
         match msg {
             MessagePayload::TriggerPull => {
                 // Firing is blocked while a reload is in progress.
-                if world
-                    .borrow::<View<RuntimePropReloading>>()
-                    .ok()
-                    .and_then(|v| v.get(entity_id).ok().map(|r| !r.is_done()))
-                    == Some(true)
-                {
+                if is_reloading(world, entity_id) {
                     return Effect::NoEffect;
-                }
-
-                //Create muzzle flash
-                let muzzle_flashes =
-                    get_all_links_with_template(world, entity_id, |link| match link {
-                        Link::GunFlash(data) => Some(*data),
-                        _ => None,
-                    });
-
-                // Pick the selected ammo type: guns carry several Projectile
-                // links (standard / HE / AP, ...); RuntimePropSelectedAmmo indexes
-                // into the ordered, setting-filtered list (absent = the first).
-                let projectiles = ordered_projectile_links(world, entity_id);
-                let selected_ammo = world
-                    .borrow::<View<RuntimePropSelectedAmmo>>()
-                    .ok()
-                    .and_then(|v| v.get(entity_id).ok().map(|s| s.0))
-                    .unwrap_or(0);
-                let maybe_projectile = projectiles
-                    .get(selected_ammo % projectiles.len().max(1))
-                    .cloned();
-
-                // A weapon with no Projectile link is melee. In flat mode the
-                // trigger starts the authored player-arm swing; its MF_TRIGGER1
-                // animation event resolves the short aimed raycast later, at
-                // visible impact. (VR has no flat aim and damages through its
-                // trigger-gated physical contact handler.)
-                if maybe_projectile.is_none() {
-                    if world
-                        .borrow::<View<RuntimePropFlatAim>>()
-                        .unwrap()
-                        .get(entity_id)
-                        .is_ok()
-                    {
-                        return Effect::FlatMeleeSwing { entity_id };
-                    }
                 }
 
                 // Everything below is governed by the gun's ACTIVE fire setting -
@@ -195,130 +239,24 @@ impl Script for WeaponScript {
                 let setting = active_gun_setting(world, entity_id).unwrap_or_default();
 
                 // The wait the last shot imposed: a pull inside it does nothing
-                // at all, not even the empty-clip click.
+                // at all, not even the empty-clip click. Ahead of the melee
+                // gate inside `fire_one_shot`, which is safe because only a
+                // gunshot ever starts a cooldown.
                 if is_cooling_down(world, entity_id) {
                     return Effect::NoEffect;
                 }
 
-                // Ammo gating: weapons that carry a `PropGunState` are limited by
-                // their clip. A magazine that cannot pay the setting's per-shot
-                // cost dry-fires (no shot/flash). Weapons without a gun state
-                // (e.g. unlimited debug weapons) are unaffected.
-                let maybe_ammo = world
-                    .borrow::<View<dark::properties::PropGunState>>()
-                    .ok()
-                    .and_then(|v| v.get(entity_id).ok().map(|g| g.ammo));
-                let rounds = rounds_per_shot(&setting);
-                if !can_pay_for_shot(maybe_ammo, rounds) {
-                    return dry_fire(world, entity_id);
-                }
-
-                // Include projectile class tags (ie, ammotype) and weaponmode for sound lookup
-                let mut projectile_class_tags: Vec<(String, String)> =
-                    if let Some((projectile_template_id, _)) = &maybe_projectile {
-                        let class_tags = world
-                            .borrow::<UniqueView<GlobalTemplateClassTags>>()
-                            .unwrap();
-                        get_ammotype_from_projectile_template(
-                            *projectile_template_id,
-                            &class_tags.0,
-                        )
-                        .map(|ammotype| vec![("ammotype".to_string(), ammotype)])
-                        .unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
-
-                // Add weaponmode=0 for shoot mode
-                projectile_class_tags.push(("weaponmode".to_string(), "0".to_string()));
-
-                let additional_sound_tags = projectile_class_tags
-                    .iter()
-                    .map(|(tag, value)| (tag.as_str(), value.as_str()))
-                    .collect::<Vec<_>>();
-
-                let sound_effect = play_environmental_sound(
-                    world,
-                    entity_id,
-                    "shoot",
-                    additional_sound_tags,
-                    AudioHandle::new(),
-                );
-
-                // Only a real gunshot (a fired projectile) raises noise - a
-                // projectile-less weapon that falls through the melee gate
-                // must not emit a phantom gunshot.
-                let is_gunshot = maybe_projectile.is_some();
-                let projectile_effect = Effect::Multiple(
-                    maybe_projectile
-                        .into_iter()
-                        .map(|(template_id, options)| {
-                            create_projectile(
-                                world,
-                                entity_id,
-                                template_id,
-                                &options,
-                                shot_modifiers(&setting),
-                            )
-                        })
-                        .collect(),
-                );
-
-                let muzzle_flash_effect = Effect::Multiple(
-                    muzzle_flashes
-                        .into_iter()
-                        .map(|(template_id, options)| {
-                            create_muzzle_flash(world, entity_id, template_id, &options)
-                        })
-                        .collect(),
-                );
-                // let offset = obj_rotation * vec3(0.0128545, 0.5026805, -3.0933015) / SCALE_FACTOR;
-
-                // let muzzle_flash_effect = Effect::CreateEntity {
-                //     template_id: -2653,
-                //     position: position + offset,
-                //     orientation: *obj_rotation
-                //         * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)),
-                // };
-
-                // Consume the setting's per-shot cost when the weapon tracks ammo.
-                let mut effects = vec![sound_effect, muzzle_flash_effect, projectile_effect];
-                if maybe_ammo.is_some() {
-                    effects.push(Effect::AdjustAmmo {
-                        entity_id,
-                        delta: -rounds,
-                    });
-                }
-                // Start the setting's between-shots wait. Only a real shot
-                // starts one - a melee weapon that reached here has nothing to
-                // pace.
-                //
-                // This is the interval between trigger PULLS, which is the
-                // whole of a single-shot mode. A burst mode also authors how
-                // many rounds one pull sends and how fast (`burst` /
-                // `burst_interval_ms`, both still unimplemented), so until
-                // those land the pistol's BURST spends its longer interval on
-                // a single round.
-                let cooldown = shot_cooldown_seconds(&setting);
-                if is_gunshot && cooldown > 0.0 {
-                    effects.push(Effect::BeginShotCooldown {
-                        entity_id,
-                        seconds: cooldown,
-                    });
-                }
-                // A gunshot is loud: nearby AIs hear it and investigate the
-                // shooter, even without line of sight. The noise comes from
-                // the weapon (in the player's hands), so its position stands
-                // in for the shooter's.
-                if is_gunshot {
-                    if let Some(origin) = weapon_world_position(world, entity_id) {
-                        effects.push(Effect::RaiseNoise {
-                            origin,
-                            radius: GUNSHOT_NOISE_RADIUS,
-                        });
+                match fire_one_shot(world, entity_id, &setting) {
+                    ShotOutcome::FlatMeleeSwing => Effect::FlatMeleeSwing { entity_id },
+                    ShotOutcome::Empty => dry_fire(world, entity_id),
+                    ShotOutcome::Fired(effect) => {
+                        // A burst setting owes more rounds than the one just
+                        // fired; `update` pays them out.
+                        self.burst =
+                            BurstState::begin(&setting).map(|state| ActiveBurst { setting, state });
+                        effect
                     }
                 }
-                Effect::Multiple(effects)
             }
             MessagePayload::AnimationFlagTriggered { motion_flags }
                 if motion_flags.contains(dark::motion::MotionFlags::TRIGGER1)
@@ -334,10 +272,174 @@ impl Script for WeaponScript {
                 };
                 flat_melee_hit(physics, aim, world)
             }
-            MessagePayload::TriggerRelease => Effect::NoEffect,
+            MessagePayload::TriggerRelease => {
+                // An unlimited burst ends with the trigger. A finite one plays
+                // out regardless - letting go of the pistol's BURST one frame
+                // in still sends all three rounds.
+                if let Some(burst) = self.burst.as_mut() {
+                    burst.state.release();
+                }
+                Effect::NoEffect
+            }
             _ => Effect::NoEffect,
         }
     }
+}
+
+/// Fire one shot in `setting`: its sound, muzzle flash, projectile, ammo cost,
+/// between-shots wait and the noise it makes. Shared by the trigger pull and by
+/// the burst that pull leaves behind, so a burst round is in every way the shot
+/// a pull would have fired. The caller has already cleared the reload and
+/// cooldown gates, and decides what an `Empty` magazine means (a pull clicks; a
+/// burst just stops).
+fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -> ShotOutcome {
+    //Create muzzle flash
+    let muzzle_flashes = get_all_links_with_template(world, entity_id, |link| match link {
+        Link::GunFlash(data) => Some(*data),
+        _ => None,
+    });
+
+    // Pick the selected ammo type: guns carry several Projectile
+    // links (standard / HE / AP, ...); RuntimePropSelectedAmmo indexes
+    // into the ordered, setting-filtered list (absent = the first).
+    let projectiles = ordered_projectile_links(world, entity_id);
+    let selected_ammo = world
+        .borrow::<View<RuntimePropSelectedAmmo>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|s| s.0))
+        .unwrap_or(0);
+    let maybe_projectile = projectiles
+        .get(selected_ammo % projectiles.len().max(1))
+        .cloned();
+
+    // A weapon with no Projectile link is melee. In flat mode the
+    // trigger starts the authored player-arm swing; its MF_TRIGGER1
+    // animation event resolves the short aimed raycast later, at
+    // visible impact. (VR has no flat aim and damages through its
+    // trigger-gated physical contact handler.)
+    if maybe_projectile.is_none() {
+        if world
+            .borrow::<View<RuntimePropFlatAim>>()
+            .unwrap()
+            .get(entity_id)
+            .is_ok()
+        {
+            return ShotOutcome::FlatMeleeSwing;
+        }
+    }
+
+    // Ammo gating: weapons that carry a `PropGunState` are limited by
+    // their clip. A magazine that cannot pay the setting's per-shot
+    // cost dry-fires (no shot/flash). Weapons without a gun state
+    // (e.g. unlimited debug weapons) are unaffected.
+    let maybe_ammo = loaded_ammo(world, entity_id);
+    let rounds = rounds_per_shot(setting);
+    if !can_pay_for_shot(maybe_ammo, rounds) {
+        return ShotOutcome::Empty;
+    }
+
+    // Include projectile class tags (ie, ammotype) and weaponmode for sound lookup
+    let mut projectile_class_tags: Vec<(String, String)> =
+        if let Some((projectile_template_id, _)) = &maybe_projectile {
+            let class_tags = world
+                .borrow::<UniqueView<GlobalTemplateClassTags>>()
+                .unwrap();
+            get_ammotype_from_projectile_template(*projectile_template_id, &class_tags.0)
+                .map(|ammotype| vec![("ammotype".to_string(), ammotype)])
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+    // Add weaponmode=0 for shoot mode
+    projectile_class_tags.push(("weaponmode".to_string(), "0".to_string()));
+
+    let additional_sound_tags = projectile_class_tags
+        .iter()
+        .map(|(tag, value)| (tag.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+
+    let sound_effect = play_environmental_sound(
+        world,
+        entity_id,
+        "shoot",
+        additional_sound_tags,
+        AudioHandle::new(),
+    );
+
+    // Only a real gunshot (a fired projectile) raises noise - a
+    // projectile-less weapon that falls through the melee gate
+    // must not emit a phantom gunshot.
+    let is_gunshot = maybe_projectile.is_some();
+    let projectile_effect = Effect::Multiple(
+        maybe_projectile
+            .into_iter()
+            .map(|(template_id, options)| {
+                create_projectile(
+                    world,
+                    entity_id,
+                    template_id,
+                    &options,
+                    shot_modifiers(setting),
+                )
+            })
+            .collect(),
+    );
+
+    let muzzle_flash_effect = Effect::Multiple(
+        muzzle_flashes
+            .into_iter()
+            .map(|(template_id, options)| {
+                create_muzzle_flash(world, entity_id, template_id, &options)
+            })
+            .collect(),
+    );
+    // let offset = obj_rotation * vec3(0.0128545, 0.5026805, -3.0933015) / SCALE_FACTOR;
+
+    // let muzzle_flash_effect = Effect::CreateEntity {
+    //     template_id: -2653,
+    //     position: position + offset,
+    //     orientation: *obj_rotation
+    //         * Quaternion::from_axis_angle(vec3(0.0, 1.0, 0.0), Rad(PI / 2.0)),
+    // };
+
+    // Consume the setting's per-shot cost when the weapon tracks ammo.
+    let mut effects = vec![sound_effect, muzzle_flash_effect, projectile_effect];
+    if maybe_ammo.is_some() {
+        effects.push(Effect::AdjustAmmo {
+            entity_id,
+            delta: -rounds,
+        });
+    }
+    // Start the setting's between-shots wait. Only a real shot
+    // starts one - a melee weapon that reached here has nothing to
+    // pace.
+    //
+    // Every shot restarts it, burst rounds included: a burst pays
+    // its rounds out on the shorter `burst_interval_ms` without
+    // consulting the cooldown, so what is left when the burst ends
+    // is the last round's full wait - the gap the setting asks for
+    // between pulls.
+    let cooldown = shot_cooldown_seconds(setting);
+    if is_gunshot && cooldown > 0.0 {
+        effects.push(Effect::BeginShotCooldown {
+            entity_id,
+            seconds: cooldown,
+        });
+    }
+    // A gunshot is loud: nearby AIs hear it and investigate the
+    // shooter, even without line of sight. The noise comes from
+    // the weapon (in the player's hands), so its position stands
+    // in for the shooter's.
+    if is_gunshot {
+        if let Some(origin) = weapon_world_position(world, entity_id) {
+            effects.push(Effect::RaiseNoise {
+                origin,
+                radius: GUNSHOT_NOISE_RADIUS,
+            });
+        }
+    }
+    ShotOutcome::Fired(Effect::Multiple(effects))
 }
 
 /// Resolve the authored hit event of a flat melee swing: raycast a short
