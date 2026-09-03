@@ -15,18 +15,17 @@
 
 use cgmath::{Deg, Point3, Quaternion, Rotation3, vec3};
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
-use rapier3d::prelude::{ColliderBuilder, Isometry, SharedShape};
 use shipyard::EntityId;
 
 use crate::{
     GameOptions,
-    game_scene::{DebugPlayerStatsRequest, DebugSkillLevelsRequest, DebuggableScene, GameScene},
+    game_scene::GameScene,
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     scenes::debug_common::{
-        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, cube_object, spawn_at,
+        DebugBox, DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, boxes_to_geometry,
+        max_player_stats, spawn_at,
     },
     scripts::Effect,
-    scripts::gui::{PSI_TIER_CAP, SKILL_CAP, STAT_CAP},
 };
 
 /// Distance (world units) from the player to the test wall, straight ahead (-X,
@@ -107,11 +106,7 @@ pub fn create_debug_weapons_scene(
     // and a flat table sheds them onto the floor within seconds.
     let lip_color = vec3(0.36, 0.31, 0.24);
     let lip_top = BENCH_HEIGHT + BENCH_LIP_HEIGHT / 2.0;
-    let boxes: &[(
-        cgmath::Vector3<f32>,
-        cgmath::Vector3<f32>,
-        cgmath::Vector3<f32>,
-    )] = &[
+    let boxes: &[DebugBox] = &[
         // floor
         (
             vec3(0.18, 0.18, 0.22),
@@ -174,22 +169,7 @@ pub fn create_debug_weapons_scene(
         ),
     ];
 
-    let scene_objects = boxes
-        .iter()
-        .map(|(color, translation, scale)| cube_object(*color, *translation, *scale))
-        .collect::<Vec<_>>();
-    let collider = ColliderBuilder::compound(
-        boxes
-            .iter()
-            .map(|(_, translation, scale)| {
-                (
-                    Isometry::translation(translation.x, translation.y, translation.z),
-                    SharedShape::cuboid(scale.x / 2.0, scale.y / 2.0, scale.z / 2.0),
-                )
-            })
-            .collect(),
-    )
-    .build();
+    let (scene_objects, collider) = boxes_to_geometry(boxes);
 
     // Spawn at the floor with identity yaw: the default view forward is -X, so
     // the wall sits dead ahead and the bench is a quarter-turn to the left.
@@ -241,32 +221,7 @@ impl DebugSceneHooks for ArsenalHooks {
         }
         self.populated = true;
 
-        // "Full stats": max the character sheet through the same provisioning
-        // path as `POST /v1/player/stats`, so nothing (skill gates, psi tiers)
-        // stands between the tester and any weapon on the bench.
-        let request = DebugPlayerStatsRequest {
-            strength: Some(STAT_CAP),
-            endurance: Some(STAT_CAP),
-            agility: Some(STAT_CAP),
-            psionic_ability: Some(STAT_CAP),
-            cyber_affinity: Some(STAT_CAP),
-            skills: DebugSkillLevelsRequest {
-                standard_weapons: Some(SKILL_CAP),
-                energy_weapons: Some(SKILL_CAP),
-                heavy_weapons: Some(SKILL_CAP),
-                exotic_weapons: Some(SKILL_CAP),
-                hack: Some(SKILL_CAP),
-                repair: Some(SKILL_CAP),
-                modify: Some(SKILL_CAP),
-                maintenance: Some(SKILL_CAP),
-                research: Some(SKILL_CAP),
-            },
-            psi_tier: Some(PSI_TIER_CAP),
-            cyber_modules: None,
-        };
-        if let Err(err) = core.set_player_stats(&request) {
-            tracing::warn!("[debug_weapons] failed to max player stats: {err}");
-        }
+        max_player_stats(core, "debug_weapons");
 
         // Guns on the outer row, ammo on the inner row. Drop heights are
         // load-bearing: a big gun's collider extends below its origin, and a

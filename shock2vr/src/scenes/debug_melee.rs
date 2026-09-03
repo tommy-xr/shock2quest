@@ -20,9 +20,8 @@
 //! between them is the calibration error, and it is only visible with both on
 //! screen at once.
 
-use cgmath::{Deg, Point3, Quaternion, Rotation3, Vector3, vec3};
+use cgmath::{Deg, Point3, Quaternion, Rotation3, vec3};
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
-use rapier3d::prelude::{ColliderBuilder, Isometry, SharedShape};
 use shipyard::EntityId;
 
 use crate::{
@@ -30,8 +29,8 @@ use crate::{
     game_scene::GameScene,
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     scenes::debug_common::{
-        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene, cube_object,
-        spawn_at,
+        DebugBox, DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
+        boxes_to_geometry, spawn_at,
     },
     scripts::Effect,
 };
@@ -92,10 +91,7 @@ pub fn create_debug_melee_scene(
     dev_params::set(dev_params::MELEE_GLOVE_OVERLAY, 1.0);
     dev_params::set(dev_params::MELEE_VOLUMES, 1.0);
 
-    // The unit cube spans [-0.5, 0.5], so a nonuniform scale is twice the
-    // matching collider half-extent. Every piece is a (visual, collider) pair
-    // built from one box so the two cannot drift.
-    let mut boxes: Vec<(Vector3<f32>, Vector3<f32>, Vector3<f32>)> = vec![
+    let boxes: &[DebugBox] = &[
         // floor
         (
             vec3(0.18, 0.18, 0.22),
@@ -134,22 +130,7 @@ pub fn create_debug_melee_scene(
         ),
     ];
 
-    let scene_objects = boxes
-        .iter()
-        .map(|(color, translation, scale)| cube_object(*color, *translation, *scale))
-        .collect::<Vec<_>>();
-    let collider = ColliderBuilder::compound(
-        boxes
-            .drain(..)
-            .map(|(_, translation, scale)| {
-                (
-                    Isometry::translation(translation.x, translation.y, translation.z),
-                    SharedShape::cuboid(scale.x / 2.0, scale.y / 2.0, scale.z / 2.0),
-                )
-            })
-            .collect(),
-    )
-    .build();
+    let (scene_objects, collider) = boxes_to_geometry(boxes);
 
     // Laid out along -X, the default view forward with an identity spawn yaw
     // in both presentations (same convention as `debug_weapons`). Verified by

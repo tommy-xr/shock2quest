@@ -15,12 +15,12 @@ use engine::{
         light::SpotLight,
     },
 };
-use rapier3d::prelude::{Collider, ColliderBuilder};
+use rapier3d::prelude::{Collider, ColliderBuilder, Isometry, SharedShape};
 use shipyard::EntityId;
 
 use crate::{
     GameOptions,
-    game_scene::GameScene,
+    game_scene::{DebugPlayerStatsRequest, DebugSkillLevelsRequest, DebuggableScene, GameScene},
     input_context::InputContext,
     mission::{
         AbstractMission, AlwaysVisible, GlobalContext, SpawnLocation,
@@ -29,9 +29,68 @@ use crate::{
     },
     quest_info::QuestInfo,
     save_load::HeldItemSaveData,
-    scripts::{Effect, GlobalEffect},
+    scripts::{
+        Effect, GlobalEffect,
+        gui::{PSI_TIER_CAP, SKILL_CAP, STAT_CAP},
+    },
     time::Time,
 };
+
+/// A box of debug geometry: (color, center, size) in world units.
+pub type DebugBox = (Vector3<f32>, Vector3<f32>, Vector3<f32>);
+
+/// Visuals plus one compound collider for a list of boxes. Every piece is a
+/// (visual, collider) pair built from the same box so the two cannot drift:
+/// the unit cube spans [-0.5, 0.5], so a size is twice the collider
+/// half-extent.
+pub fn boxes_to_geometry(boxes: &[DebugBox]) -> (Vec<SceneObject>, Collider) {
+    let scene_objects = boxes
+        .iter()
+        .map(|(color, translation, scale)| cube_object(*color, *translation, *scale))
+        .collect();
+    let collider = ColliderBuilder::compound(
+        boxes
+            .iter()
+            .map(|(_, translation, scale)| {
+                (
+                    Isometry::translation(translation.x, translation.y, translation.z),
+                    SharedShape::cuboid(scale.x / 2.0, scale.y / 2.0, scale.z / 2.0),
+                )
+            })
+            .collect(),
+    )
+    .build();
+    (scene_objects, collider)
+}
+
+/// Max the character sheet (every stat, skill and psi tier at cap) through
+/// the same provisioning path as `POST /v1/player/stats`, so no skill gate
+/// stands between a tester and the scene's content. `scene` tags the warning.
+pub fn max_player_stats(core: &mut MissionCore, scene: &str) {
+    let request = DebugPlayerStatsRequest {
+        strength: Some(STAT_CAP),
+        endurance: Some(STAT_CAP),
+        agility: Some(STAT_CAP),
+        psionic_ability: Some(STAT_CAP),
+        cyber_affinity: Some(STAT_CAP),
+        skills: DebugSkillLevelsRequest {
+            standard_weapons: Some(SKILL_CAP),
+            energy_weapons: Some(SKILL_CAP),
+            heavy_weapons: Some(SKILL_CAP),
+            exotic_weapons: Some(SKILL_CAP),
+            hack: Some(SKILL_CAP),
+            repair: Some(SKILL_CAP),
+            modify: Some(SKILL_CAP),
+            maintenance: Some(SKILL_CAP),
+            research: Some(SKILL_CAP),
+        },
+        psi_tier: Some(PSI_TIER_CAP),
+        cyber_modules: None,
+    };
+    if let Err(err) = core.set_player_stats(&request) {
+        tracing::warn!("[{scene}] failed to max player stats: {err}");
+    }
+}
 
 /// Convenience builder for MissionCore-backed debug scenes that only need a floor and spawn point.
 pub struct DebugSceneBuilder {
