@@ -31,7 +31,7 @@ use crate::{
     input_context::Pointer2D,
     mission::PlayerInfo,
     scripts::{Message, MessagePayload},
-    ui::{Rect, ScaleMode, UiCanvas, pointer_to_canvas},
+    ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, pointer_to_canvas},
     vr_config::Handedness,
 };
 
@@ -63,6 +63,9 @@ const CLOSE_BUTTON_MARGIN: Vector2<f32> = Vector2::new(25.0, 8.0);
 
 /// `CURSOR.PCX` native size.
 const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
+
+/// The HUD's data font, as the rest of this canvas uses.
+const NAME_STRIP_FONT: &str = "mainfont.fon";
 
 /// A host-side action produced by the cursor-is-the-item drag (§1.5/§2.4),
 /// applied by `mission_core` because it touches physics/effects.
@@ -222,6 +225,10 @@ pub struct FlatUiHost {
     /// object, so the walk-away distance auto-close is skipped. Cleared on
     /// open/close.
     sticky_panel: bool,
+    /// The mini-frame's current name line, resolved by the mission each frame
+    /// from [`Self::pointed_item`] / the world object the player is aiming at
+    /// (see [`Self::set_name_strip`]). `None` draws an empty frame.
+    name_strip: Option<String>,
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
     hover_close: bool,
@@ -262,6 +269,7 @@ impl FlatUiHost {
             last_lift: None,
             readout_buttons: Vec::new(),
             sticky_panel: false,
+            name_strip: None,
             cursor_canvas: None,
             hover_close: false,
             last_pointer_pressed: false,
@@ -338,6 +346,32 @@ impl FlatUiHost {
                     Handedness::Right => "right".to_string(),
                 }),
             })
+    }
+
+    /// The item the canvas pointer is currently on: the item riding the cursor
+    /// if the player has lifted one (the cursor *is* that item), otherwise the
+    /// interactive strip or panel element under the pointer.
+    ///
+    /// The mini-frame's first-priority content, resolved here because only the
+    /// host knows its own hit-testing - the mission turns the entity into a
+    /// name and hands it back through [`Self::set_name_strip`].
+    pub fn pointed_item(&self) -> Option<EntityId> {
+        if let Some(cursor) = self.cursor_item.as_ref() {
+            return Some(cursor.entity);
+        }
+        let canvas_pos = self.cursor_canvas?;
+        self.strip_item_at(canvas_pos)
+            .or_else(|| self.panel_item_at(canvas_pos))
+    }
+
+    /// Set the mini-frame's name line (already resolved to a display name).
+    pub fn set_name_strip(&mut self, name: Option<String>) {
+        self.name_strip = name;
+    }
+
+    /// The mini-frame's current name line, for `GET /v1/ui`.
+    pub fn name_strip_debug(&self) -> Option<String> {
+        self.name_strip.clone()
     }
 
     /// Swallow a button that is already held as the host takes over input, so
@@ -437,6 +471,10 @@ impl FlatUiHost {
     /// entity, whose `GuiScript` already emits `SetUI` every frame - the
     /// strip just stashes and re-anchors it.
     pub fn set_strip(&mut self, entity: Option<EntityId>) {
+        // The readout belongs to the bar: leaving use mode must not leave a
+        // stale name behind for `/v1/ui` (the mission's per-frame update runs
+        // before the effect that unbinds the strip).
+        self.name_strip = None;
         self.strip = entity.map(|entity| StripSlot {
             entity,
             size_px: None,
@@ -862,15 +900,13 @@ impl FlatUiHost {
     fn strip_item_at(&self, canvas_pos: Vector2<f32>) -> Option<EntityId> {
         let strip = self.strip.as_ref()?;
         let rect = strip.size_px.map(strip_canvas_rect)?;
-        let held = self.held_entity();
-        strip.components.iter().find_map(|c| match c {
-            GuiComponentRenderInfo::Image {
-                interactive: true,
-                entity: Some(entity),
-                ..
-            } if Some(*entity) != held && c.canvas_rect(rect).contains(canvas_pos) => Some(*entity),
-            _ => None,
-        })
+        item_at(&strip.components, rect, self.held_entity(), canvas_pos)
+    }
+
+    /// The interactive MFD-panel item under `canvas_pos` (a loot panel's item
+    /// buttons), for the mini-frame readout.
+    fn panel_item_at(&self, canvas_pos: Vector2<f32>) -> Option<EntityId> {
+        item_at(&self.components, self.panel_rect()?, None, canvas_pos)
     }
 
     /// Render the inventory strip + active panel + cursor as screen-space
@@ -893,6 +929,14 @@ impl FlatUiHost {
             // Hide the item riding the cursor from the strip grid (it is drawn
             // as the cursor instead).
             draw_components(&mut canvas, &strip.components, rect, self.held_entity());
+            // The mini-frame sits in the inventory bar, so it is up exactly
+            // while the bar is. Placement is decided here, once, in canvas
+            // pixels - both presentations map this rect (AGENTS.md 3).
+            let (frame, text) = name_strip_rects(rect);
+            canvas.image(frame, "frame.pcx");
+            if let Some(name) = self.name_strip.as_deref() {
+                canvas.text_native_fit(text, name, NAME_STRIP_FONT, HAlign::Left, VAlign::Middle);
+            }
         }
         if let Some(rect) = panel_rect {
             draw_components(&mut canvas, &self.components, rect, None);
@@ -1108,6 +1152,22 @@ fn strip_canvas_rect(strip_size_px: Vector2<f32>) -> Rect {
 /// runs unchanged. The click button maps to LMB on flat and the trigger in VR;
 /// the grab gesture is the VR squeeze (flat has none), and the hand it is
 /// reported for is where a `GrabEntity` from the panel lands.
+/// The original's "mini-frame" name line, as an inlay of the inventory bar:
+/// `FRAME.PCX` (256x16) over the blank slot `invback.pcx` leaves between its
+/// INVENTORY and EQUIP labels (a black plate at invback pixels x192..442,
+/// y0..12). Returns `(frame, text line)` in canvas pixels.
+///
+/// Derived from the bar's own rect rather than written out absolutely, so the
+/// frame cannot drift off the slot if the bar's anchor moves.
+fn name_strip_rects(strip: Rect) -> (Rect, Rect) {
+    let frame = Rect::new(strip.x + 190.0, strip.y, 256.0, 16.0);
+    // Inside the plate: clear of the frame's left bevel and the cyan arrow
+    // glyph baked into it, and only as tall as the plate, so the line centres
+    // on that arrow rather than on the bevel below it.
+    let text = Rect::new(frame.x + 11.0, frame.y, frame.w - 16.0, 12.0);
+    (frame, text)
+}
+
 fn gui_hover(
     to: EntityId,
     rect: Rect,
@@ -1172,6 +1232,26 @@ fn draw_components(
         // a VR world-quad translucency, deliberately not applied here.
         canvas.push(component.to_ui_element(rect)).opacity(1.0);
     }
+}
+
+/// The entity of the interactive image component whose canvas rect contains
+/// `canvas_pos`, ignoring `hide` (the item riding the cursor left the grid).
+/// Shared by the drag hit-test and the mini-frame readout so they can never
+/// disagree about what the pointer is on.
+fn item_at(
+    components: &[GuiComponentRenderInfo],
+    rect: Rect,
+    hide: Option<EntityId>,
+    canvas_pos: Vector2<f32>,
+) -> Option<EntityId> {
+    components.iter().find_map(|c| match c {
+        GuiComponentRenderInfo::Image {
+            interactive: true,
+            entity: Some(entity),
+            ..
+        } if Some(*entity) != hide && c.canvas_rect(rect).contains(canvas_pos) => Some(*entity),
+        _ => None,
+    })
 }
 
 fn component_entity(info: &GuiComponentRenderInfo) -> Option<EntityId> {
@@ -1479,6 +1559,158 @@ mod tests {
         // It fits on the canvas and clears the left-MFD slot below (y 124+).
         assert!(rect.x + rect.w <= CANVAS_SIZE.x);
         assert!(rect.y + rect.h < LEFT_MFD_ANCHOR.y);
+    }
+
+    /// The mini-frame lands in the blank slot the inventory-bar art leaves
+    /// between its INVENTORY and EQUIP labels: `invback.pcx` (drawn at the
+    /// canvas anchor (2,0)) is black from its own pixel x 192..442, y 0..12,
+    /// and `FRAME.PCX` is the 256x16 border drawn over it at canvas (192, 0).
+    ///
+    /// Placed once, on the shared canvas, so the flat screen and the VR
+    /// cyber-interface panel cannot put the name line in different places -
+    /// both present exactly this canvas.
+    #[test]
+    fn the_name_frame_fills_the_inventory_bars_blank_slot() {
+        let mut world = World::new();
+        let inventory = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+        host.on_set_ui(
+            &world,
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[],
+        );
+
+        let canvas = host
+            .build_canvas()
+            .expect("the strip should build a canvas");
+        let frame = canvas
+            .elements()
+            .iter()
+            .find(|e| matches!(e, crate::ui::UiElement::Image { texture, .. } if texture == "frame.pcx"))
+            .expect("the inventory bar should draw the mini-frame");
+        assert_eq!(frame.rect(), Rect::new(192.0, 0.0, 256.0, 16.0));
+        // The blank slot in canvas pixels (invback pixel 192..442 at anchor x=2).
+        let slot_left = STRIP_ANCHOR.x + 192.0;
+        let slot_right = STRIP_ANCHOR.x + 442.0;
+        assert!(frame.rect().x <= slot_left && frame.rect().x + frame.rect().w >= slot_right);
+        // ...and it follows the bar rather than sitting at a hardcoded spot:
+        // move the bar and the frame moves with it, by the same offset.
+        let moved = name_strip_rects(Rect::new(12.0, 40.0, 635.0, 120.0)).0;
+        assert_eq!(moved, Rect::new(202.0, 40.0, 256.0, 16.0));
+    }
+
+    /// The name line is the readout, not the frame: it is drawn inside the
+    /// frame's text area and ellipsized there, so a long object name can never
+    /// spill across the INVENTORY / EQUIP labels either side of the slot.
+    #[test]
+    fn the_name_line_is_fitted_inside_the_frame() {
+        let mut world = World::new();
+        let inventory = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+        host.on_set_ui(
+            &world,
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[],
+        );
+
+        // Nothing pointed at: the frame stays, with no text in it.
+        let canvas = host.build_canvas().unwrap();
+        assert!(
+            !canvas
+                .elements()
+                .iter()
+                .any(|e| matches!(e, crate::ui::UiElement::Text { .. })),
+            "an empty readout draws no text"
+        );
+
+        host.set_name_strip(Some("Laser Rapier".to_owned()));
+        let canvas = host.build_canvas().unwrap();
+        let text = canvas
+            .elements()
+            .iter()
+            .find_map(|e| match e {
+                crate::ui::UiElement::Text {
+                    text,
+                    font,
+                    fit_to_rect,
+                    ..
+                } => Some((text.clone(), font.clone(), *fit_to_rect, e.rect())),
+                _ => None,
+            })
+            .expect("the readout should draw its name");
+        assert_eq!(text.0, "Laser Rapier");
+        assert_eq!(text.1, NAME_STRIP_FONT);
+        assert!(text.2, "an unbounded object name must ellipsize");
+        // The line is laid out inside the frame's opaque plate (`FRAME.PCX` is
+        // 16 tall, of which only y0..12 is plate - below that is its bevel),
+        // and clear of the arrow glyph at the plate's left end. Ellipsizing
+        // itself happens in the shared layout pass, which has its own tests.
+        let (frame, plate) = name_strip_rects(strip_canvas_rect(vec2(635.0, 120.0)));
+        let r = text.3;
+        assert_eq!(r, plate);
+        assert!(
+            r.x > frame.x && r.x + r.w <= frame.x + frame.w && r.y + r.h <= frame.y + 12.0,
+            "the name line stays on the frame's plate: {r:?} in {frame:?}"
+        );
+    }
+
+    /// No inventory bar, no mini-frame: the frame belongs to the bar, so an
+    /// MFD panel open on its own draws neither it nor a readout.
+    #[test]
+    fn a_panel_without_the_inventory_bar_draws_no_name_frame() {
+        let mut world = World::new();
+        let panel = world.add_entity(());
+        let mut host = FlatUiHost::new();
+        host.open(panel);
+        host.on_set_ui(
+            &world,
+            panel,
+            vec2(188.0, 296.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[],
+        );
+        host.set_name_strip(Some("Keypad".to_owned()));
+
+        let canvas = host
+            .build_canvas()
+            .expect("the panel should build a canvas");
+        assert!(!canvas.elements().iter().any(
+            |e| matches!(e, crate::ui::UiElement::Image { texture, .. } if texture == "frame.pcx")
+        ),);
+    }
+
+    /// What the readout names: the slot under the pointer, and - once an item
+    /// has been lifted - the item riding the cursor, wherever it is waved.
+    #[test]
+    fn the_readout_follows_the_pointer_then_the_lifted_item() {
+        let (world, mut host, wrench, _inventory) = drag_world();
+        assert_eq!(host.pointed_item(), None, "no pointer, nothing named");
+
+        // Slot 0 holds the wrench (see `drag_world`), at canvas (6..41, 17..51).
+        let over_slot = (21.0, 34.0);
+        host.update(
+            &world,
+            Some(Pointer2D {
+                position: norm(over_slot.0, over_slot.1),
+                pressed: false,
+            }),
+        );
+        assert_eq!(host.pointed_item(), Some(wrench));
+
+        // Lift it, then sweep off the slot: the cursor IS the wrench, so the
+        // readout keeps naming it.
+        press_edge(&mut host, &world, over_slot);
+        host.update(
+            &world,
+            Some(Pointer2D {
+                position: norm(320.0, 400.0),
+                pressed: false,
+            }),
+        );
+        assert_eq!(host.pointed_item(), Some(wrench));
     }
 
     /// Hover routing with both slots live: the strip gets the pointer when

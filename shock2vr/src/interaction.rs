@@ -55,6 +55,11 @@ pub trait PlayerInteraction {
     /// Entities under the reticle/hands, for the hover-highlight overlay.
     fn highlighted_entities(&self) -> Vec<EntityId>;
 
+    /// What one hand alone is aiming at - for readouts that must name a single
+    /// object rather than highlight every pick. Flat aims with the reticle, so
+    /// it reports that pick for either hand.
+    fn highlighted_entity(&self, hand: Handedness) -> Option<EntityId>;
+
     /// The first-person viewmodel entity (drawn on top); `None` for VR.
     fn viewmodel_entity(&self) -> Option<EntityId> {
         None
@@ -192,6 +197,13 @@ impl PlayerInteraction for VrInteraction {
         .collect()
     }
 
+    fn highlighted_entity(&self, hand: Handedness) -> Option<EntityId> {
+        match hand {
+            Handedness::Left => self.left_hand.get_raytraced_entity(),
+            Handedness::Right => self.right_hand.get_raytraced_entity(),
+        }
+    }
+
     fn render(&self, asset_cache: &mut AssetCache, world: &World) -> Vec<SceneObject> {
         let mut glove_slot = self.glove_renderer.borrow_mut();
         let glove_renderer = glove_slot
@@ -326,6 +338,10 @@ impl PlayerInteraction for FlatInteraction {
 
     fn highlighted_entities(&self) -> Vec<EntityId> {
         self.highlighted.into_iter().collect()
+    }
+
+    fn highlighted_entity(&self, _hand: Handedness) -> Option<EntityId> {
+        self.highlighted
     }
 
     fn viewmodel_entity(&self) -> Option<EntityId> {

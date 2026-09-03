@@ -783,6 +783,13 @@ export interface UiState {
    * shooter mode.
    */
   strip: UiPanel | null;
+  /**
+   * The inventory bar's mini-frame name line: the display name of whatever the
+   * player is pointing at - a strip/panel item, the item on the cursor, or
+   * failing all of those the world object under the aim. null when the bar is
+   * down or nothing named is being pointed at.
+   */
+  name_strip: string | null;
   /** The item held on the cursor mid-drag, or null when the cursor is empty. */
   cursor: UiCursor | null;
   /**

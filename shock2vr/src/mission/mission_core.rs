@@ -3482,6 +3482,20 @@ impl MissionCore {
             effects.extend(drag_effects);
         }
 
+        // The inventory bar's mini-frame name line: what the canvas pointer is
+        // on, and failing that the world object the player is aiming at - the
+        // same pick the HUD brackets frame, resolved through the same
+        // `resolve_item_name`, so an object is never called two things at once.
+        // Unlike the brackets this readout is not gated on `P$HUDSelect`: a
+        // door gets no brackets but does get named here.
+        let name_strip = self.flat_ui.strip_entity().and_then(|_| {
+            self.flat_ui
+                .pointed_item()
+                .or_else(|| self.name_strip_world_pick(game_options))
+                .and_then(|entity| crate::hud::resolve_item_name(asset_cache, &self.world, entity))
+        });
+        self.flat_ui.set_name_strip(name_strip);
+
         // Update scripts
         let mut script_effects = profile!(
             scope: "game", level: DEBUG, "script_world.update",
@@ -8202,6 +8216,31 @@ impl MissionCore {
             .or_else(|| self.physics.get_aabb2(entity_id))
     }
 
+    /// The world object the mini-frame names when the canvas pointer is on
+    /// nothing.
+    ///
+    /// Flat aims with one reticle. In VR each hand aims on its own and a hand
+    /// resting on the panel is a UI pointer, not an aim - so the readout takes
+    /// the pick of a hand that is *off* the panel, and names nothing while both
+    /// hands are on it.
+    fn name_strip_world_pick(&self, game_options: &GameOptions) -> Option<EntityId> {
+        use crate::vr_config::Handedness;
+        if game_options.presentation_mode != crate::PresentationMode::Vr {
+            return self.interaction.highlighted_entity(Handedness::Right);
+        }
+        let on_panel = |hand: Handedness| {
+            self.vr_use_mode_pointer.as_ref().is_some_and(|pass| {
+                pass.rays
+                    .iter()
+                    .any(|ray| ray.handedness == hand && ray.canvas_hit.is_some())
+            })
+        };
+        [Handedness::Left, Handedness::Right]
+            .into_iter()
+            .filter(|hand| !on_panel(*hand))
+            .find_map(|hand| self.interaction.highlighted_entity(hand))
+    }
+
     pub fn render_per_eye(
         &mut self,
         asset_cache: &mut AssetCache,
@@ -10719,6 +10758,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             },
             active_panel,
             strip,
+            name_strip: self.flat_ui.name_strip_debug(),
             cursor: self.flat_ui.cursor_debug(),
             readout: self.flat_ui.readout_buttons_debug(),
             pointer: self.flat_ui.pointer_debug(),

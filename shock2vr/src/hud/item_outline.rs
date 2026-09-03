@@ -137,33 +137,32 @@ fn localized_weapon_condition(
         .cloned()
 }
 
-pub fn draw_item_name(
+/// The player-facing display name of `entity_id`: its `P$ObjName` resolved
+/// through `objname.str` and then through whatever substitution its
+/// `P$ObjectNameType` asks for (a stack count, a log's title, a gun's
+/// condition word). `None` when the object has no name to show.
+///
+/// The single name resolution the interface has: the rollover label beside the
+/// HUD brackets and the inventory bar's mini-frame name line both read it, so
+/// one object cannot be called two different things in two places.
+pub fn resolve_item_name(
     asset_cache: &mut AssetCache,
-    bounds: Aabb3<f32>,
-    entity_id: EntityId,
     world: &World,
-    view: Matrix4<f32>,
-    projection: Matrix4<f32>,
-    screen_size: Vector2<f32>,
-    debug_show_ids: bool,
-) -> Vec<SceneObject> {
-    let v_prop_obj_name = world.borrow::<View<PropObjName>>().unwrap();
-    let maybe_prop_obj_name = v_prop_obj_name.get(entity_id);
-
-    if maybe_prop_obj_name.is_err() {
-        return vec![];
-    }
-
-    let prop_obj_name = maybe_prop_obj_name.unwrap();
-
-    if prop_obj_name.0.is_empty() {
-        return vec![];
-    }
+    entity_id: EntityId,
+) -> Option<String> {
+    let obj_name = {
+        let v_prop_obj_name = world.borrow::<View<PropObjName>>().ok()?;
+        let prop_obj_name = v_prop_obj_name.get(entity_id).ok()?;
+        if prop_obj_name.0.is_empty() {
+            return None;
+        }
+        prop_obj_name.0.clone()
+    };
 
     let object_name_strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
-    let localized_name = resolve_localized_property_string(&prop_obj_name.0, &object_name_strings);
+    let localized_name = resolve_localized_property_string(&obj_name, &object_name_strings);
     if localized_name.is_empty() {
-        return vec![];
+        return None;
     }
 
     let name_type = world
@@ -184,13 +183,28 @@ pub fn draw_item_name(
     let weapon_condition = (name_type == ObjectNameType::Weapon)
         .then(|| localized_weapon_condition(asset_cache, world, entity_id))
         .flatten();
-    let item_name = format_typed_item_name(
+    Some(format_typed_item_name(
         &localized_name,
         name_type,
         stack_count,
         log_title.as_deref(),
         weapon_condition.as_deref(),
-    );
+    ))
+}
+
+pub fn draw_item_name(
+    asset_cache: &mut AssetCache,
+    bounds: Aabb3<f32>,
+    entity_id: EntityId,
+    world: &World,
+    view: Matrix4<f32>,
+    projection: Matrix4<f32>,
+    screen_size: Vector2<f32>,
+    debug_show_ids: bool,
+) -> Vec<SceneObject> {
+    let Some(item_name) = resolve_item_name(asset_cache, world, entity_id) else {
+        return vec![];
+    };
 
     let aabb = bounds;
     let font = asset_cache.get(&FONT_IMPORTER, "mainfont.fon");

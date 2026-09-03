@@ -556,6 +556,11 @@ pub struct DebugUiState {
     /// The top-docked inventory strip (Tab metagame mode): the player's
     /// carried items as labeled elements. `Some` exactly in "use" mode.
     pub strip: Option<DebugUiPanel>,
+    /// The inventory bar's mini-frame name line: the display name of whatever
+    /// the player is pointing at (a strip/panel item, the lifted item, or the
+    /// world object under the aim). `None` when nothing is named or the bar is
+    /// not up.
+    pub name_strip: Option<String>,
     /// The item held on the cursor mid-drag (the original's "cursor IS the
     /// item", §2.4). `Some` between a lift and the place/throw that clears it.
     pub cursor: Option<DebugUiCursor>,
@@ -893,6 +898,7 @@ pub trait DebuggableScene {
             mode: "shooter".to_string(),
             active_panel: None,
             strip: None,
+            name_strip: None,
             cursor: None,
             readout: Vec::new(),
             pointer: None,
