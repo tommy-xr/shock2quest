@@ -139,6 +139,9 @@ impl ActionDispatcher {
                 forward: true,
             });
         }
+        if state.just_triggered(InputAction::SelectPsiPower) {
+            effects.push(Effect::OpenPsiPowers);
+        }
         if state.just_triggered(InputAction::DebugReloadLevel) {
             effects.push(Effect::GlobalEffect(GlobalEffect::TestReload));
         }

@@ -59,6 +59,12 @@ pub fn wielded_weapon(world: &World) -> Option<EntityId> {
     weapon_in_hand(world, Handedness::Right).or_else(|| weapon_in_hand(world, Handedness::Left))
 }
 
+/// The wielded psi amp, in either hand - what the psi HUD readout reports and
+/// what the power selection MFD presents.
+pub fn wielded_psi_amp(world: &World) -> Option<EntityId> {
+    wielded_weapon(world).filter(|weapon| is_psi_amp(world, *weapon))
+}
+
 /// The weapon a per-hand gun action (eject, fire-mode toggle) applies to.
 /// `Some(hand)` - a face button - means the weapon in THAT hand, so a
 /// dual-wielding player acts on the gun they pressed; `None` - the

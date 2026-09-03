@@ -55,6 +55,17 @@ pub(crate) const PSI_TIER_NEXT: Rect = Rect::new(136.0, 15.0, 18.0, 18.0);
 /// Power step buttons (`pleft`/`pright` art, 12x41), flanking the power name.
 pub(crate) const PSI_POWER_PREV: Rect = Rect::new(157.0, 15.0, 12.0, 41.0);
 pub(crate) const PSI_POWER_NEXT: Rect = Rect::new(237.0, 15.0, 12.0, 41.0);
+/// The readout itself - badge and discipline name - opens the selection MFD,
+/// where a power is *chosen* from a described grid rather than stepped past.
+/// It is the gauge well minus the power arrows that flank it (x 177..237), so
+/// pressing an arrow still steps rather than opening the panel; it draws
+/// nothing of its own, over art the backdrop already paints.
+pub(crate) const PSI_SELECT: Rect = Rect::new(
+    PSI_TIER_BADGE.x,
+    PSI_TIER_PREV.y,
+    PSI_POWER_NEXT.x - PSI_TIER_BADGE.x,
+    PSI_POWER_NEXT.h,
+);
 
 /// The font every readout label uses (the original's HUD font).
 const FONT: &str = "mainfont.fon";
@@ -73,6 +84,8 @@ pub enum ReadoutButton {
     PsiTierNext,
     PsiPowerPrev,
     PsiPowerNext,
+    /// Open the psi power selection MFD.
+    PsiSelect,
 }
 
 impl ReadoutButton {
@@ -86,6 +99,7 @@ impl ReadoutButton {
             ReadoutButton::PsiTierNext => "psi_tier_next",
             ReadoutButton::PsiPowerPrev => "psi_power_prev",
             ReadoutButton::PsiPowerNext => "psi_power_next",
+            ReadoutButton::PsiSelect => "psi_select",
         }
     }
 }
@@ -208,6 +222,9 @@ pub(crate) fn buttons(readout: &AmmoReadout) -> Vec<ReadoutButtonSpec> {
                 Some("PRIGHT0.PCX"),
                 None,
             ),
+            // Last: the host hit-tests in order and takes the first match, so
+            // the four arrows keep their pixels where they meet the readout.
+            spec(ReadoutButton::PsiSelect, PSI_SELECT, None, None),
         ];
     }
     if readout.ammo.is_none() {
@@ -451,9 +468,11 @@ mod tests {
         }
     }
 
-    /// No control may be drawn on top of the readout it annotates - the bug
+    /// No control may be *drawn* on top of the readout it annotates - the bug
     /// this layout fixes is exactly that (the ammo icon sat inside the SETTING
-    /// button's rect).
+    /// button's rect). `PsiSelect` is the exception that proves it: it draws
+    /// nothing at all and its whole point is to make the badge and discipline
+    /// name themselves clickable, so it is asserted separately below.
     #[test]
     fn no_button_overlaps_the_readout() {
         let overlaps = |a: Rect, b: Rect| {
@@ -469,6 +488,9 @@ mod tests {
             (psi, vec![PSI_TIER_BADGE, PSI_POWER_NAME]),
         ] {
             for spec in buttons(&readout) {
+                if spec.button == ReadoutButton::PsiSelect {
+                    continue;
+                }
                 for rect in &drawn {
                     assert!(
                         !overlaps(spec.rect, *rect),
@@ -538,6 +560,46 @@ mod tests {
         assert_eq!(spec.rect, SETTING_BUTTON);
     }
 
+    /// The badge-and-name area opens the selection MFD, and it draws nothing
+    /// of its own: it covers exactly the readout the backdrop already paints,
+    /// and stops short of the power arrows that flank it, so a click on an
+    /// arrow still steps.
+    #[test]
+    fn the_psi_readout_itself_opens_the_selection_panel() {
+        let amp = AmmoReadout {
+            psi_power: Some(("Projected Cryokinesis".to_string(), 1)),
+            show_buttons: true,
+            ..Default::default()
+        };
+        let spec = buttons(&amp)
+            .into_iter()
+            .find(|spec| spec.button == ReadoutButton::PsiSelect)
+            .expect("the psi readout is clickable");
+        assert!(spec.texture.is_none() && spec.text.is_none(), "{spec:?}");
+        for covered in [PSI_TIER_BADGE, PSI_POWER_NAME] {
+            assert!(
+                spec.rect.x <= covered.x
+                    && spec.rect.y <= covered.y
+                    && spec.rect.x + spec.rect.w >= covered.x + covered.w
+                    && spec.rect.y + spec.rect.h >= covered.y + covered.h,
+                "{covered:?} must be inside {:?}",
+                spec.rect
+            );
+        }
+        for arrow in [PSI_TIER_PREV, PSI_TIER_NEXT, PSI_POWER_PREV, PSI_POWER_NEXT] {
+            let overlaps = spec.rect.x < arrow.x + arrow.w
+                && arrow.x < spec.rect.x + spec.rect.w
+                && spec.rect.y < arrow.y + arrow.h
+                && arrow.y < spec.rect.y + spec.rect.h;
+            assert!(!overlaps, "{arrow:?} must stay outside {:?}", spec.rect);
+        }
+        // ...and it is hit-tested last, so where the rects touch the arrows win.
+        assert_eq!(
+            buttons(&amp).last().map(|s| s.button),
+            Some(ReadoutButton::PsiSelect)
+        );
+    }
+
     #[test]
     fn the_psi_amp_shows_four_selector_arrows_and_no_gun_controls() {
         let amp = AmmoReadout {
@@ -556,7 +618,8 @@ mod tests {
                 ReadoutButton::PsiTierPrev,
                 ReadoutButton::PsiTierNext,
                 ReadoutButton::PsiPowerPrev,
-                ReadoutButton::PsiPowerNext
+                ReadoutButton::PsiPowerNext,
+                ReadoutButton::PsiSelect
             ]
         );
     }

@@ -157,11 +157,14 @@ test(
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
 
+    // The four arrows, plus the readout itself - the badge and discipline name
+    // open the selection MFD (see `psi-powers-mfd.e2e.test.ts`).
     assert.deepEqual(await labels(game), [
       "psi_tier_prev",
       "psi_tier_next",
       "psi_power_prev",
       "psi_power_next",
+      "psi_select",
     ]);
 
     const selected = async () => (await game.info()).player.selected_psi_power;

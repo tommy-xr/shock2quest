@@ -156,13 +156,9 @@ pub(crate) fn get_psi_percentage(world: &World) -> f32 {
 /// `(discipline name, tier)`. `Some` only while the wielded weapon is the
 /// psi amp (class tag `weapontype psiamp`).
 pub(crate) fn get_wielded_psi_power(world: &World) -> Option<(String, i32)> {
-    let weapon = crate::wielded_weapon::wielded_weapon(world)?;
-
-    // Is the wielded weapon the psi amp? Resolved via its template's class
-    // tags, the same mechanism as `get_wielded_ammo_type`.
-    if !crate::wielded_weapon::is_psi_amp(world, weapon) {
-        return None;
-    }
+    // The psi amp is resolved via its template's class tags, the same mechanism
+    // as `get_wielded_ammo_type`.
+    crate::wielded_weapon::wielded_psi_amp(world)?;
 
     let powers = world
         .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
@@ -175,7 +171,8 @@ pub(crate) fn get_wielded_psi_power(world: &World) -> Option<(String, i32)> {
         .display_name
         .clone()
         .unwrap_or_else(|| power.name.clone());
-    Some((name, power.power.psi_cost))
+    // The tier, not the psi-point cost: the badge art is `AmPsi<tier>1.PCX`.
+    Some((name, power.tier()))
 }
 
 /// The wielded psi amp's hold-to-overload meter state, or `None` when no

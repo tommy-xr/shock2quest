@@ -18,6 +18,10 @@ use shipyard::Unique;
 
 use crate::scripts::script_util::hydrate_template_component;
 
+/// Power ids per tier: the tier's capacity marker plus its seven
+/// disciplines. See [`PsiPowerInfo::tier`].
+pub const POWERS_PER_TIER: i32 = 8;
+
 /// `Projected Cryokinesis` - the power every trained OSA agent starts with,
 /// and the default selection.
 const CRYOKINESIS_TEMPLATE_ID: i32 = -1143;
@@ -114,6 +118,17 @@ pub struct PsiPowerInfo {
 }
 
 impl PsiPowerInfo {
+    /// The discipline tier (1..5) this power belongs to.
+    ///
+    /// Power ids are authored in blocks of eight per tier - id `(tier-1)*8` is
+    /// the tier's neural-capacity marker and `(tier-1)*8 + 1..7` are its seven
+    /// disciplines - which is also how the selection screen lays them out. The
+    /// psi-point *cost* is a separate number that happens to equal the tier in
+    /// the shipped data; reading it as the tier is a coincidence, not a rule.
+    pub fn tier(&self) -> i32 {
+        self.power.power_id / POWERS_PER_TIER + 1
+    }
+
     /// The projectile template for a caster with the given PSI stat: the
     /// highest link whose `order` (required PSI level) the stat meets,
     /// falling back to the weakest link for stats below the lowest order.
@@ -137,6 +152,17 @@ pub struct GlobalPsiPowers(pub Vec<PsiPowerInfo>);
 pub struct PsiPowerSelection {
     pub index: usize,
 }
+
+/// The tier the psi power selection MFD is currently *browsing*.
+///
+/// Separate from [`PsiPowerSelection`]: a player can page through tiers on the
+/// panel without changing the power the amp will cast, and only a click on a
+/// trained power commits. It lives here, beside the selection, rather than in
+/// the panel's own GUI state so that the mission can snap it whenever the
+/// selection moves (a stick flick, the `CyclePsiPower` key) - a GUI's state is
+/// only reachable from its own messages.
+#[derive(Unique, Clone, Copy)]
+pub struct PsiPanelTier(pub i32);
 
 /// Which axis of the psi selection a step moves along: the AMMOFULL readout's
 /// tier arrows move between tiers, its power arrows move within one, and the
@@ -172,7 +198,7 @@ pub fn step_selection(
         .iter()
         .enumerate()
         .filter(|(_, p)| known.contains(&p.template_id))
-        .map(|(i, p)| (i, p.power.psi_cost))
+        .map(|(i, p)| (i, p.tier()))
         .collect();
     if trained.is_empty() {
         return index;
@@ -184,7 +210,7 @@ pub fn step_selection(
     if !known.contains(&current.template_id) {
         return trained[0].0;
     }
-    let tier = current.power.psi_cost;
+    let tier = current.tier();
     match axis {
         PsiSelectionAxis::Any => {
             let every: Vec<usize> = trained.iter().map(|(i, _)| *i).collect();
@@ -367,6 +393,23 @@ pub fn build_psi_power_registry(
     )
 }
 
+/// The `psihelp.str` table with its escaped line breaks made real.
+///
+/// The strings files write a paragraph break as the two characters `\` and
+/// `n`, and nothing downstream un-escapes them - so an entry read as-is draws
+/// the escape ("Screen\n\nProtects you...") and its "first line" is the whole
+/// entry. Both readers of this table want the breaks: the selection MFD wraps
+/// the help paragraphs, and [`apply_display_names`] takes line 1 as the
+/// discipline name.
+pub fn normalize_help_strings(
+    strings: &std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<String, String> {
+    strings
+        .iter()
+        .map(|(key, value)| (key.clone(), value.replace("\\n", "\n")))
+        .collect()
+}
+
 /// Fill in player-facing discipline names from the `psihelp.str` string
 /// table: each power's entry is keyed `Psi<power_id>` and its first line is
 /// the discipline name (the rest is the help text).
@@ -389,6 +432,20 @@ pub fn apply_display_names(
 mod tests {
     use super::*;
 
+    /// A help entry's escaped breaks become real ones, so its first line is
+    /// the discipline name rather than the whole paragraph.
+    #[test]
+    fn help_strings_unescape_their_line_breaks() {
+        let raw = std::collections::HashMap::from([(
+            "psi6".to_owned(),
+            "Projected Cryokinesis\\n\\nLaunches a projectile.".to_owned(),
+        )]);
+        let normalized = normalize_help_strings(&raw);
+        let entry = &normalized["psi6"];
+        assert!(!entry.contains('\\'), "{entry:?} still carries an escape");
+        assert_eq!(entry.lines().next(), Some("Projected Cryokinesis"));
+    }
+
     #[test]
     fn learned_bits_split_across_dwords_by_power_id() {
         // Dword 1 covers power ids 0..=31 as bit `power_id`. The reference
@@ -408,25 +465,47 @@ mod tests {
     }
 
     /// A registry in the shape `build_psi_power_registry` produces: sorted by
-    /// (tier, power id). `(template_id, tier)` pairs.
+    /// (tier, power id). `(template_id, tier)` pairs; the power id is authored
+    /// inside the tier's block of eight, the way the shipped data does it, so
+    /// `PsiPowerInfo::tier` reads back the tier the fixture asked for. The psi
+    /// cost is deliberately NOT the tier, so a test that passes cannot be
+    /// reading the cost by accident.
     fn registry(powers: &[(i32, i32)]) -> Vec<PsiPowerInfo> {
+        let mut slot_in_tier = std::collections::HashMap::new();
         powers
             .iter()
-            .map(|(template_id, tier)| PsiPowerInfo {
-                template_id: *template_id,
-                name: format!("Power {template_id}"),
-                display_name: None,
-                power: PropPsiPower {
-                    power_id: -template_id,
-                    activation_type: 0,
-                    psi_cost: *tier,
-                    data: [0.0; 4],
-                },
-                projectiles: Vec::new(),
-                overloadable: false,
-                duration: None,
+            .map(|(template_id, tier)| {
+                let slot = slot_in_tier.entry(*tier).or_insert(0);
+                *slot += 1;
+                PsiPowerInfo {
+                    template_id: *template_id,
+                    name: format!("Power {template_id}"),
+                    display_name: None,
+                    power: PropPsiPower {
+                        power_id: (tier - 1) * POWERS_PER_TIER + *slot,
+                        activation_type: 0,
+                        psi_cost: 99,
+                        data: [0.0; 4],
+                    },
+                    projectiles: Vec::new(),
+                    overloadable: false,
+                    duration: None,
+                }
             })
             .collect()
+    }
+
+    /// The tier comes from the power id's block of eight, never from the psi
+    /// cost - those agree in the shipped data but are different numbers.
+    #[test]
+    fn a_powers_tier_is_read_off_its_power_id() {
+        let powers = registry(&[(-1, 1), (-2, 4)]);
+        assert_eq!(powers[0].tier(), 1);
+        assert_eq!(powers[1].tier(), 4);
+        assert_ne!(
+            powers[1].power.psi_cost, 4,
+            "the fixture's cost is not its tier"
+        );
     }
 
     /// Tiers 1, 1, 3 - tier 2 is authored but untrained, so it must be skipped.

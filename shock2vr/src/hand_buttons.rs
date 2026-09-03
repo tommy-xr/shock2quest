@@ -66,7 +66,7 @@ pub enum HandButtonMode {
 /// |---|---|---|
 /// | nothing, melee, or any other item | `ToggleUseMode` | `ReadLastUnreadLog` |
 /// | a gun | `EjectClip` (that hand's gun) | `CycleGunSetting` (that hand's gun) |
-/// | the psi amp | power selection (not yet bound) | power selection (not yet bound) |
+/// | the psi amp | `SelectPsiPower` (the selection MFD) | `CyclePsiPower` |
 ///
 /// **Mode first.** While the interface is up both buttons keep their interface
 /// meaning on both hands whatever is held, so grabbing a gun off the inventory
@@ -105,8 +105,14 @@ pub fn resolve_hand_button(
             HandButton::Lower => Some(InputAction::EjectClip),
             HandButton::Upper => Some(InputAction::CycleGunSetting),
         },
-        // Reserved for power selection, not yet bound.
-        HeldKind::PsiAmp => None,
+        // The amp hand's own power controls: lower opens the selection MFD
+        // (where a power is *chosen* from a described grid), upper quick-cycles
+        // to the next trained power without a panel. Neither names a hand -
+        // there is one psi selection, not one per amp.
+        HeldKind::PsiAmp => match button {
+            HandButton::Lower => Some(InputAction::SelectPsiPower),
+            HandButton::Upper => Some(InputAction::CyclePsiPower),
+        },
     }
 }
 
@@ -164,6 +170,25 @@ mod tests {
                     "{held:?} in {hand:?}"
                 );
             }
+        }
+    }
+
+    /// Row 3: the psi amp hand's buttons are the amp's - lower opens the
+    /// power selection MFD, upper quick-cycles the selection. Symmetric, since
+    /// there is one psi selection however many hands hold an amp.
+    #[test]
+    fn a_psi_amp_hands_buttons_select_its_power() {
+        for hand in HANDS {
+            assert_eq!(
+                resolve(HeldKind::PsiAmp, hand, HandButton::Lower),
+                Some(InputAction::SelectPsiPower),
+                "{hand:?}"
+            );
+            assert_eq!(
+                resolve(HeldKind::PsiAmp, hand, HandButton::Upper),
+                Some(InputAction::CyclePsiPower),
+                "{hand:?}"
+            );
         }
     }
 

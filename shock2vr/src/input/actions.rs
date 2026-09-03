@@ -63,6 +63,10 @@ pub enum InputAction {
     EjectClip,
     /// Select the next psi power (used when firing the psi amp).
     CyclePsiPower,
+    /// Open the psi power selection MFD. Hand-agnostic here (it means the
+    /// wielded amp); on Quest the psi-amp hand's LOWER face button resolves to
+    /// it - see [`crate::hand_buttons`].
+    SelectPsiPower,
     /// Reload the current level in place (debug). Exercises the level-transition path,
     /// including the experimental loading screen.
     DebugReloadLevel,
@@ -154,6 +158,7 @@ impl InputAction {
             InputAction::Reload,
             InputAction::EjectClip,
             InputAction::CyclePsiPower,
+            InputAction::SelectPsiPower,
             InputAction::DebugReloadLevel,
             InputAction::DebugAlertAll,
             InputAction::DebugCalmAll,
@@ -198,6 +203,7 @@ impl InputAction {
             InputAction::Reload => "Reload",
             InputAction::EjectClip => "EjectClip",
             InputAction::CyclePsiPower => "CyclePsiPower",
+            InputAction::SelectPsiPower => "SelectPsiPower",
             InputAction::DebugReloadLevel => "DebugReloadLevel",
             InputAction::DebugAlertAll => "DebugAlertAll",
             InputAction::DebugCalmAll => "DebugCalmAll",
@@ -232,13 +238,14 @@ impl InputAction {
             // The right controller's menu button is reserved by the Quest
             // system UI; the left one is the app's.
             InputAction::TogglePauseMenu => Some("/user/hand/left/input/menu/click"),
-            // `Reload`, `CycleAmmo`, `EjectClip` and `CycleGunSetting`
-            // deliberately have NO Quest binding of their own: in VR reloading
-            // is the physical clip-insert gesture, an eject is the gun hand's
-            // lower face button and a fire-mode switch its upper one - each
-            // names a hand and so works while dual wielding, where a
-            // hand-agnostic action cannot say which gun it meant. All four
-            // remain reachable everywhere else (flat keys, HTTP, the SDK).
+            // `Reload`, `CycleAmmo`, `EjectClip`, `CycleGunSetting`,
+            // `CyclePsiPower` and `SelectPsiPower` deliberately have NO Quest
+            // binding of their own: in VR reloading is the physical
+            // clip-insert gesture, and the rest are reached through the face
+            // button of the hand actually holding the weapon - which names a
+            // hand, where a hand-agnostic binding could not say which weapon
+            // it meant. All remain reachable everywhere else (flat keys, HTTP,
+            // the SDK).
             _ => None,
         }
     }
