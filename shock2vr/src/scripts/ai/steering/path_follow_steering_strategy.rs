@@ -219,7 +219,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
 
     fn steer(
         &mut self,
-        _current_heading: Deg<f32>,
+        current_heading: Deg<f32>,
         world: &World,
         physics: &PhysicsWorld,
         entity_id: EntityId,
@@ -249,15 +249,17 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // know we stood on) so the next route doesn't start from the wedged
         // pose and reproduce the wedge
         if let Some((seconds_left, retreat)) = self.recovery {
-            let seconds_left = seconds_left - time.elapsed.as_secs_f32();
+            let steering =
+                Steering::turn_to_point(vec3_to_point3(position), vec3_to_point3(retreat));
+            let heading_error =
+                ai_util::clamp_to_minimal_delta_angle(steering.desired_heading - current_heading);
+            let seconds_left =
+                seconds_left - retreat_seconds_spent(heading_error, time.elapsed.as_secs_f32());
             if seconds_left <= 0.0 || xz_distance(position, retreat) < WAYPOINT_ADVANCE_DISTANCE {
                 self.recovery = None;
             } else {
                 self.recovery = Some((seconds_left, retreat));
-                return Some((
-                    Steering::turn_to_point(vec3_to_point3(position), vec3_to_point3(retreat)),
-                    Effect::NoEffect,
-                ));
+                return Some((steering, Effect::NoEffect));
             }
         }
 
@@ -741,6 +743,23 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
     }
 }
 
+/// How much of the retreat budget this frame spends. A body that wedged was
+/// pushing AT the obstacle, so backing out starts with a half-turn it cannot
+/// walk through - locomotion is zero above a right angle of heading error -
+/// and a plain wall clock would spend most of the window pivoting on the
+/// spot, leaving the body still in contact when the re-path fires. Spending
+/// the budget only while the body can actually move keeps
+/// `STALL_RECOVERY_SECONDS` worth of real backing out.
+fn retreat_seconds_spent(heading_error: Deg<f32>, elapsed: f32) -> f32 {
+    if crate::scripts::ai::animated_monster_ai::locomotion_scale_for_heading_error(heading_error)
+        > 0.0
+    {
+        elapsed
+    } else {
+        0.0
+    }
+}
+
 /// How far the AI's believed target is, or None when it has no target at
 /// all (nothing has ever published awareness for it).
 fn target_awareness_distance(
@@ -1084,6 +1103,17 @@ mod tests {
             &[vec3(10.0, 0.0, 10.0)],
             vec3(10.0, -4.8, 10.0)
         ));
+    }
+
+    #[test]
+    fn a_pivoting_retreat_does_not_burn_its_budget() {
+        // Backing out of a wedge starts with a half-turn the body cannot
+        // walk through; the clock waits for it
+        assert_eq!(retreat_seconds_spent(Deg(180.0), 0.1), 0.0);
+        assert_eq!(retreat_seconds_spent(Deg(-120.0), 0.1), 0.0);
+        // ...and runs once it is moving again
+        assert_eq!(retreat_seconds_spent(Deg(45.0), 0.1), 0.1);
+        assert_eq!(retreat_seconds_spent(Deg(0.0), 0.1), 0.1);
     }
 
     #[test]

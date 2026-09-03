@@ -116,18 +116,18 @@ fn should_orient_on_target(
 /// is trying to get around - which is exactly where patrol reversals wedge.
 /// Turning is unaffected by the scale, so a stopped body still pivots and
 /// walks off again the moment its error is back under 90.
-fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
+pub(crate) fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
     const TURN_SLOW_ANGLE: f32 = 60.0;
     const TURN_IN_PLACE_ANGLE: f32 = 90.0;
-    const MIN_MOVING_SCALE: f32 = 0.33;
+    const TURN_SLOW_SCALE: f32 = 0.33;
     let error = delta.0.abs();
     if error >= TURN_IN_PLACE_ANGLE {
         0.0
     } else if error >= TURN_SLOW_ANGLE {
         let past_slow = (error - TURN_SLOW_ANGLE) / (TURN_IN_PLACE_ANGLE - TURN_SLOW_ANGLE);
-        MIN_MOVING_SCALE * (1.0 - past_slow)
+        TURN_SLOW_SCALE * (1.0 - past_slow)
     } else {
-        1.0 - (error / TURN_SLOW_ANGLE) * (1.0 - MIN_MOVING_SCALE)
+        1.0 - (error / TURN_SLOW_ANGLE) * (1.0 - TURN_SLOW_SCALE)
     }
 }
 

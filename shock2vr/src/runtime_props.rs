@@ -41,9 +41,8 @@ pub struct RuntimePropAITargetAwareness {
 // each frame: full speed when facing the travel direction, ramping down to
 // a third by 60 degrees of heading error and to zero by 90, where the body
 // turns in place (see locomotion_scale_for_heading_error). The animation
-// velocity write
-// multiplies by this and consumes the component; absent = 1.0 (non-AI
-// animation players are unaffected).
+// velocity write multiplies by this and consumes the component; absent =
+// 1.0 (non-AI animation players are unaffected).
 #[derive(Component, Clone, Copy)]
 pub struct RuntimePropLocomotionScale(pub f32);
 
