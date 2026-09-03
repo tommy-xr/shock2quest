@@ -15,7 +15,7 @@ import { fireOnce } from "./helpers/weapon.js";
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-/** The trainer stat cap - the highest PSI the sheet can reach. */
+/** STAT_CAP - the highest stat `POST /v1/player/stats` will provision. */
 const PSI_STAT = 6;
 
 test(

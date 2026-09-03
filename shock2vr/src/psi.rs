@@ -91,6 +91,16 @@ pub const OVERLOAD_ZONE_START: f32 = 0.85;
 pub const OVERLOAD_PSI_BONUS: i32 = 2;
 pub const OVERLOAD_MAX_EFFECTIVE_PSI: i32 = 10;
 
+/// The effective PSI a cast resolves at: the caster's PSI stat, plus the
+/// overload bonus when the charge released in the end zone, capped.
+pub fn effective_psi_for_cast(psi_stat: i32, overload: bool) -> i32 {
+    if overload {
+        (psi_stat + OVERLOAD_PSI_BONUS).min(OVERLOAD_MAX_EFFECTIVE_PSI)
+    } else {
+        psi_stat
+    }
+}
+
 /// Burnout damage: 3 per tier of the burned power.
 pub const BURNOUT_DAMAGE_PER_TIER: i32 = 3;
 
@@ -453,6 +463,16 @@ mod tests {
         let entry = &normalized["psi6"];
         assert!(!entry.contains('\\'), "{entry:?} still carries an escape");
         assert_eq!(entry.lines().next(), Some("Projected Cryokinesis"));
+    }
+
+    #[test]
+    fn overload_adds_the_bonus_and_caps() {
+        assert_eq!(effective_psi_for_cast(2, false), 2);
+        assert_eq!(effective_psi_for_cast(2, true), 2 + OVERLOAD_PSI_BONUS);
+        assert_eq!(
+            effective_psi_for_cast(OVERLOAD_MAX_EFFECTIVE_PSI - 1, true),
+            OVERLOAD_MAX_EFFECTIVE_PSI
+        );
     }
 
     #[test]

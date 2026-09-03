@@ -71,7 +71,10 @@ pub const ENDURANCE_HP_PER_LEVEL: u32 = 5;
 /// Keep this gate shared by display, immediate feedback, and authoritative
 /// effect handling so a future caller cannot bypass the module-loss guard.
 pub fn stat_upgrade_available(stat: Stat) -> bool {
-    matches!(stat, Stat::Strength | Stat::Endurance | Stat::CyberAffinity)
+    matches!(
+        stat,
+        Stat::Strength | Stat::Endurance | Stat::CyberAffinity | Stat::PsionicAbility
+    )
 }
 
 /// The cost of buying `target`'s next level given the player's current sheet,
@@ -553,12 +556,15 @@ mod tests {
             Some(3),
             "Strength is purchasable once backpack capacity consumes it"
         );
-        for unsupported in [Stat::PsionicAbility, Stat::Agility] {
-            assert_eq!(
-                upgrade_quote(&costs, &stats, TrainerTarget::Stat(unsupported)),
-                None,
-                "{unsupported:?} must not be sold until it has a gameplay effect"
-            );
-        }
+        assert_eq!(
+            upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::PsionicAbility)),
+            Some(3),
+            "PSI is purchasable now that psi casts scale with it"
+        );
+        assert_eq!(
+            upgrade_quote(&costs, &stats, TrainerTarget::Stat(Stat::Agility)),
+            None,
+            "Agility must not be sold until it has a gameplay effect"
+        );
     }
 }

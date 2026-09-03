@@ -17,7 +17,7 @@ import { fireOnce } from "./helpers/weapon.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const INVISO_COST = 4;
-/** The trainer stat cap - the highest PSI the sheet can reach. */
+/** STAT_CAP - the highest stat `POST /v1/player/stats` will provision. */
 const PSI_STAT = 6;
 /** Inviso duration at `PSI_STAT`: 5 + 5*PSI seconds. */
 const INVISO_DURATION_FRAMES = (5 + 5 * PSI_STAT) * 60;
