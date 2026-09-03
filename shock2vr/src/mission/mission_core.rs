@@ -1373,6 +1373,13 @@ pub struct GlobalTemplateObjIcons(pub HashMap<i32, String>);
 #[derive(Unique, Clone, Default)]
 pub struct GlobalGunSettingHeaders(pub [HashMap<String, String>; 2]);
 
+/// The `SETT1`/`SETT2` string tables - the description of a gun's first /
+/// second fire setting ("This is the normal single-shot firing mode."), shown
+/// on the weapon settings MFD. Loaded here beside the headers for the same
+/// reason: the panel has no asset cache at draw time.
+#[derive(Unique, Clone, Default)]
+pub struct GlobalGunSettingTexts(pub [HashMap<String, String>; 2]);
+
 /// The synthetic player-owned entity hosting the automap panel (`MapGui`).
 /// Created at mission init; `Effect::ToggleMap` opens/closes its panel in the
 /// flat host. See `projects/flat-ui-panels.md` §5.
@@ -1384,6 +1391,12 @@ pub struct MapPanelEntity(pub EntityId);
 /// so a persisted `(deck, log)` can be localized and replayed anywhere.
 #[derive(Unique, Clone, Copy)]
 pub struct MediaPanelEntity(pub EntityId);
+
+/// Nonserialized player-owned host for the weapon settings MFD. The panel
+/// presents the *wielded* gun rather than a world object, so one host serves
+/// every weapon and `Effect::OpenWeaponSettings` binds it to the panel slot.
+#[derive(Unique, Clone, Copy)]
+pub struct WeaponSettingsPanelEntity(pub EntityId);
 
 /// The automap location (`PropMapLoc`) of the mapped room the player most
 /// recently entered - the player's *current* map location. The automap uses it
@@ -1551,6 +1564,9 @@ pub struct MissionCore {
     /// dimmed behind it and the wielded weapon safed. Unlike the pause menu,
     /// the world keeps simulating while it is up.
     pub use_mode: bool,
+    /// The gun an open weapon settings panel was opened for; the panel is
+    /// dismissed as soon as that gun stops being wielded.
+    weapon_settings_gun: Option<EntityId>,
 
     /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the rim
     /// vignette (both presentations), the VR comfort dim's strength, and the
@@ -1829,15 +1845,19 @@ impl MissionCore {
         {
             crate::psi::apply_display_names(&mut psi_powers, &psi_strings);
         }
-        let mut gun_setting_header_table = |file| {
+        let mut gun_setting_string_table = |file| {
             asset_cache
                 .get_opt(&dark::importers::STRINGS_IMPORTER, file)
                 .map(|strings| (*strings).clone())
                 .unwrap_or_default()
         };
         world.add_unique(GlobalGunSettingHeaders([
-            gun_setting_header_table("shead1.str"),
-            gun_setting_header_table("shead2.str"),
+            gun_setting_string_table("shead1.str"),
+            gun_setting_string_table("shead2.str"),
+        ]));
+        world.add_unique(GlobalGunSettingTexts([
+            gun_setting_string_table("sett1.str"),
+            gun_setting_string_table("sett2.str"),
         ]));
         // Debug scenes unlock every power (debug_psi exercises the whole
         // registry); real missions start with the player template's learned
@@ -2022,6 +2042,27 @@ impl MissionCore {
             RuntimePropDoNotSerialize,
         ));
         world.add_unique(MediaPanelEntity(media_panel));
+
+        // The weapon settings MFD's host. Like the reader above it has no world
+        // object of its own: it presents whichever gun is wielded, so it is
+        // rebuilt per mission and never serialized.
+        let weapon_settings_panel = world.add_entity((
+            Links::empty(),
+            PropScripts {
+                scripts: vec!["internal_weapon_settings".to_owned()],
+                inherits: false,
+            },
+            dark::properties::PropTemplateId { template_id: -1 },
+            PropSymName("Weapon Settings".to_owned()),
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                cell: 0,
+            },
+            RuntimePropTransform(Matrix4::identity()),
+            RuntimePropDoNotSerialize,
+        ));
+        world.add_unique(WeaponSettingsPanelEntity(weapon_settings_panel));
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
 
@@ -2429,6 +2470,7 @@ impl MissionCore {
             player_footsteps: crate::mission::player_footsteps::PlayerFootsteps::new(),
             flat_melee_anim: None,
             use_mode: false,
+            weapon_settings_gun: None,
             use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp::new(),
             vr_use_mode_anchor: crate::ui::FrontendPanelAnchor::new(),
             vr_use_mode_head: crate::ui::world_dim::UNTRACKED_HEAD,
@@ -3375,6 +3417,32 @@ impl MissionCore {
         // now-current transform, so they track a moving parent rather than their
         // spawn pose. Runs after physics sync so parents' transforms are current.
         self.update_attached_entities();
+
+        // The weapon settings MFD belongs to one gun: putting that gun away -
+        // dropping it, holstering it, cycling weapons - dismisses the panel.
+        // The flag means "our panel is docked", so it is also dropped when the
+        // slot went elsewhere (close button, Tab, another panel opening); that
+        // keeps it from outliving the panel it describes.
+        if let Some(opened_for) = self.weapon_settings_gun {
+            let panel = self
+                .world
+                .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
+                .map(|panel| panel.0)
+                .ok();
+            let ours_is_docked = panel.is_some() && self.flat_ui.active_panel() == panel;
+            let put_away = crate::scripts::gui::should_close_settings_panel(
+                opened_for,
+                crate::wielded_weapon::wielded_weapon(&self.world),
+            );
+            if put_away {
+                if ours_is_docked {
+                    self.flat_ui.close();
+                }
+                self.weapon_settings_gun = None;
+            } else if !ours_is_docked {
+                self.weapon_settings_gun = None;
+            }
+        }
 
         // Flat-mode MFD panel input: map the 2D pointer onto the active panel
         // and drive it through the same GUIHover contract the VR hand ray
@@ -4640,7 +4708,11 @@ impl MissionCore {
                 let step = |axis, forward| vec![Effect::StepPsiSelection { axis, forward }];
                 match button {
                     ReadoutButton::CycleAmmo => vec![Effect::CycleAmmo],
-                    ReadoutButton::GunSetting => vec![Effect::CycleGunSetting],
+                    // The exception: SETTING opens the weapon settings MFD
+                    // (the original's own behavior for this button), where the
+                    // mode is *chosen* from a described list. The
+                    // `CycleGunSetting` action (F) still toggles directly.
+                    ReadoutButton::GunSetting => vec![Effect::OpenWeaponSettings],
                     ReadoutButton::Reload => vec![Effect::ReloadWeapon],
                     ReadoutButton::PsiTierPrev => step(PsiSelectionAxis::Tier, false),
                     ReadoutButton::PsiTierNext => step(PsiSelectionAxis::Tier, true),
@@ -5486,6 +5558,42 @@ impl MissionCore {
                 Effect::SetGunSetting { entity_id, setting } => {
                     if let Some(cue) = self.set_gun_setting(entity_id, setting) {
                         effects.push_back(cue);
+                    }
+                }
+
+                Effect::UnloadWeapon { entity_id } => {
+                    self.eject_magazine(asset_cache, entity_id);
+                }
+
+                Effect::OpenWeaponSettings => {
+                    // The MFD presents the *wielded* gun, so it opens only with
+                    // one in hand and is remembered so it can be dismissed when
+                    // that gun is put away. Unbound: the host is synthetic, so
+                    // there is no world object to walk away from.
+                    //
+                    // The panel slot has to actually be presented, or this would
+                    // dock a panel nothing draws and nothing can dismiss. Flat
+                    // always presents it; VR presents it only inside the cyber
+                    // interface, which is also the only place a VR pointer could
+                    // ever press the button that emits this.
+                    let slot_is_presented = game_options.presentation_mode
+                        == crate::PresentationMode::Flat
+                        || self.use_mode;
+                    if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world)
+                        .filter(|_| slot_is_presented)
+                    {
+                        let panel = self
+                            .world
+                            .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
+                            .map(|panel| panel.0);
+                        if let Ok(panel) = panel {
+                            self.script_world.dispatch(Message {
+                                to: panel,
+                                payload: MessagePayload::PanelOpened,
+                            });
+                            self.flat_ui.open_unbound(panel);
+                            self.weapon_settings_gun = Some(weapon);
+                        }
                     }
                 }
 
@@ -7872,11 +7980,7 @@ impl MissionCore {
         if !crate::scripts::script_util::can_cycle_ammo(&self.world, weapon) {
             return;
         }
-        if let Some((clip_template, rounds)) =
-            crate::mission::reload::unload_to_reserve(&self.world, weapon).spawn_clip
-        {
-            self.give_ejected_clip(asset_cache, weapon, clip_template, rounds);
-        }
+        self.eject_magazine(asset_cache, weapon);
         // The switch is earned by an empty magazine, never assumed. Every way an
         // eject can fall short - the fresh clip refused by the backpack, a
         // borrow that did not come through - leaves rounds loaded, and switching
@@ -7952,6 +8056,20 @@ impl MissionCore {
             name: "bset".to_owned(),
             spatial: false,
         })
+    }
+
+    /// Eject `weapon`'s magazine back to the backpack, as clips of the ammo
+    /// type the rounds already are. Shared by the ammo-type switch (which has
+    /// to empty the gun before it may change type) and the settings MFD's
+    /// UNLOAD button (where emptying it *is* the point). A magazine that cannot
+    /// be returned - no clip archetype, or a backpack that refuses it - is left
+    /// loaded.
+    fn eject_magazine(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) {
+        if let Some((clip_template, rounds)) =
+            crate::mission::reload::unload_to_reserve(&self.world, weapon).spawn_clip
+        {
+            self.give_ejected_clip(asset_cache, weapon, clip_template, rounds);
+        }
     }
 
     /// Mint `rounds` rounds of `clip_template` into the backpack - the half of

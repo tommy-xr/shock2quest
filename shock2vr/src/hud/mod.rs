@@ -19,6 +19,10 @@ pub(crate) use flat_hud::*;
 /// MISC.STR, for a data install that lacks the table.
 const FALLBACK_RELOAD_LABEL: &str = "RELOAD";
 
+/// The English fallback for the weapon-settings modification line, verbatim
+/// from the shipped MISC.STR (`%d` is the gun's `PropGunState.modification`).
+const FALLBACK_MOD_LEVEL_LABEL: &str = "Modification Level %d";
+
 /// HUD label strings preloaded from MISC.STR, stored as a world `Unique`
 /// because the readout layout has no `AssetCache` at draw time (the
 /// `ElevatorContext` pattern).
@@ -26,12 +30,16 @@ const FALLBACK_RELOAD_LABEL: &str = "RELOAD";
 pub struct HudStrings {
     /// MISC.STR `Reload` ("RELOAD"), the AMMOFULL reload button's label.
     pub reload_label: String,
+    /// MISC.STR `ModLevel` ("Modification Level %d"), the settings MFD's
+    /// modification line. The `%d` is substituted at draw time.
+    pub mod_level_label: String,
 }
 
 impl Default for HudStrings {
     fn default() -> Self {
         Self {
             reload_label: FALLBACK_RELOAD_LABEL.to_owned(),
+            mod_level_label: FALLBACK_MOD_LEVEL_LABEL.to_owned(),
         }
     }
 }
@@ -44,6 +52,11 @@ impl HudStrings {
                 strings.as_deref(),
                 "reload",
                 FALLBACK_RELOAD_LABEL,
+            ),
+            mod_level_label: crate::ui::resolve_menu_label(
+                strings.as_deref(),
+                "modlevel",
+                FALLBACK_MOD_LEVEL_LABEL,
             ),
         }
     }

@@ -38,7 +38,7 @@ async function labels(game: GameServer): Promise<string[]> {
 }
 
 test(
-  "the setting button is labeled with the fire mode and clicking it switches modes",
+  "the setting button is labeled with the fire mode and opens the settings MFD",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({ mission: "debug_weapons" });
@@ -65,16 +65,27 @@ test(
     );
     assert.equal(setting.text, "NORM");
 
+    // The button OPENS the settings MFD (as the original does) rather than
+    // toggling in place - the mode is chosen there, from a described list.
+    // `weapon-settings-mfd.e2e.test.ts` covers the panel itself.
     await clickUiElement(game, setting);
-    const after = (await game.info()).player;
-    assert.equal(after.wielded_gun_setting, 1, "the click switched the fire mode");
-    assert.equal(after.wielded_gun_setting_header, "BURST");
-    // ...and the button now says so.
-    assert.equal((await button(game, "gun_setting")).text, "BURST");
+    await game.step({ frames: 3 });
+    assert.equal(
+      (await game.ui.state()).active_panel?.name,
+      "Weapon Settings",
+      "SETTING docks the weapon settings MFD",
+    );
+    assert.equal(
+      (await game.info()).player.wielded_gun_setting,
+      0,
+      "opening the panel does not itself switch modes",
+    );
 
-    // There are only two modes: clicking again comes back.
-    await clickUiElement(game, await button(game, "gun_setting"));
-    assert.equal((await game.info()).player.wielded_gun_setting_header, "NORM");
+    // The direct action (F) still toggles, and the button relabels with it.
+    await game.input.trigger("CycleGunSetting");
+    await game.step({ frames: 3 });
+    assert.equal((await game.info()).player.wielded_gun_setting_header, "BURST");
+    assert.equal((await button(game, "gun_setting")).text, "BURST");
   },
 );
 
@@ -127,10 +138,11 @@ test(
     const setting = await button(game, "gun_setting");
     assert.ok(setting.text, "the laser names its fire mode");
     await clickUiElement(game, setting);
+    await game.step({ frames: 3 });
     assert.equal(
-      (await game.info()).player.wielded_gun_setting,
-      1,
-      "the laser switches to its overcharge mode",
+      (await game.ui.state()).active_panel?.name,
+      "Weapon Settings",
+      "the laser's SETTING button opens the same MFD",
     );
   },
 );

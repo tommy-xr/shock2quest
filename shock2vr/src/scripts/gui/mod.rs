@@ -10,6 +10,7 @@ mod replicator;
 mod research;
 mod trainer;
 mod traits;
+mod weapon_settings;
 
 pub use computer::*;
 pub use container::*;
@@ -23,3 +24,4 @@ pub use replicator::*;
 pub use research::*;
 pub use trainer::*;
 pub use traits::*;
+pub use weapon_settings::*;

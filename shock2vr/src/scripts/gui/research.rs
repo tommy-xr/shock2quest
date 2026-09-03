@@ -241,7 +241,9 @@ fn property_fallback(world: &World, entity_id: EntityId, report: bool) -> String
     }
 }
 
-fn localized_fallback(value: &str) -> String {
+/// The English text out of an object string (`key: "text"`), for a data
+/// install whose string table does not resolve the key.
+pub(super) fn localized_fallback(value: &str) -> String {
     value
         .split_once('"')
         .and_then(|(_, tail)| tail.rsplit_once('"').map(|(text, _)| text))

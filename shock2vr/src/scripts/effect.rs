@@ -244,6 +244,17 @@ pub enum Effect {
     /// nothing is wielded or the gun has no second mode (turrets, the psi amp).
     CycleGunSetting,
 
+    /// Open the weapon settings MFD for the wielded gun in the presentation's
+    /// panel slot. No-op when nothing is wielded.
+    OpenWeaponSettings,
+
+    /// Eject `entity_id`'s magazine back to the backpack, as clips of the ammo
+    /// type the rounds already are. No-op for an empty gun, or one whose
+    /// projectile has no clip archetype to return to.
+    UnloadWeapon {
+        entity_id: EntityId,
+    },
+
     /// Equip a weapon of this gamesys class from the player's carried items.
     /// The handler resolves the live entity through the template hierarchy and
     /// then reuses `GrabEntity`, so no item is spawned and a displaced flat
