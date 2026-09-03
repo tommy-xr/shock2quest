@@ -21,6 +21,15 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const NAMED_ITEM = "Basketball";
 const NAMED_ITEM_READOUT = "A basketball";
 
+/**
+ * The Wrench carries no `P$ObjName` at all - only `P$SymName` ("Wrench"),
+ * inherited unmodified. The readout must still fall back to `objname.str`
+ * keyed by that symbolic name ("wrench" -> "A very solid wrench."), not go
+ * blank.
+ */
+const SYMNAME_ONLY_ITEM = "Wrench";
+const SYMNAME_ONLY_ITEM_READOUT = "A very solid wrench";
+
 /** SpawnDebugMonster's template (grunt og-pipe), named "A hybrid". */
 const DEBUG_MONSTER_TEMPLATE = -397;
 
@@ -85,6 +94,28 @@ test(
     const shooter = await game.ui.state();
     assert.equal(shooter.mode, "shooter");
     assert.equal(shooter.name_strip, null, "no inventory bar, no readout");
+  },
+);
+
+test(
+  "flat use mode names a SymName-only item via its objname.str fallback",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "medsci1.mis" });
+    await game.step({ frames: 30 });
+
+    const item = await game.player.spawnItem(SYMNAME_ONLY_ITEM);
+    const ui = await openUseMode(game);
+    assert.equal(ui.mode, "use");
+
+    const [sx, sy, sw, sh] = slotFor(ui, item.entity_id).screen_rect;
+    await game.input.set("pointer.position", [sx + sw / 2, sy + sh / 2]);
+    await game.step({ frames: 3 });
+    assert.equal(
+      (await game.ui.state()).name_strip,
+      SYMNAME_ONLY_ITEM_READOUT,
+      "a SymName-only item still gets a readout, not a blank strip",
+    );
   },
 );
 
