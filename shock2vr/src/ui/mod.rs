@@ -470,8 +470,9 @@ where
         v: VAlign,
         alpha: f32,
         /// When set, text wider than its rect is shortened with a trailing
-        /// ellipsis instead of spilling over neighbouring widgets. Only the
-        /// screen-space path honours this (see [`UiCanvas::text_native_fit`]).
+        /// ellipsis instead of spilling over neighbouring widgets. Applied in
+        /// the shared layout pass, so every presentation shortens the same
+        /// text the same way (see [`UiCanvas::text_native_fit`]).
         fit_to_rect: bool,
     },
 }

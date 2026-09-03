@@ -3399,6 +3399,20 @@ impl MissionCore {
             effects.extend(drag_effects);
         }
 
+        // The inventory bar's mini-frame name line: what the canvas pointer is
+        // on, and failing that the world object the player is aiming at - the
+        // same pick the HUD brackets frame, resolved through the same
+        // `resolve_item_name`, so an object is never called two things at once.
+        // Unlike the brackets this readout is not gated on `P$HUDSelect`: a
+        // door gets no brackets but does get named here.
+        let name_strip = self.flat_ui.strip_entity().is_some().then(|| {
+            self.flat_ui
+                .pointed_item()
+                .or_else(|| self.interaction.highlighted_entities().first().copied())
+                .and_then(|entity| crate::hud::resolve_item_name(asset_cache, &self.world, entity))
+        });
+        self.flat_ui.set_name_strip(name_strip.flatten());
+
         // Update scripts
         let mut script_effects = profile!(
             scope: "game", level: DEBUG, "script_world.update",
@@ -10471,6 +10485,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             },
             active_panel,
             strip,
+            name_strip: self.flat_ui.name_strip_debug(),
             cursor: self.flat_ui.cursor_debug(),
             ammo_cycle: self.flat_ui.ammo_cycle_debug(),
             pointer: self.flat_ui.pointer_debug(),
