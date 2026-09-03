@@ -32,11 +32,26 @@ use super::{
     weapon_script::{create_muzzle_flash, create_projectile},
 };
 
-/// The caster's effective PSI stat, used to pick the power's projectile
-/// (links are ordered by PSI level 1..8) - a mid-range placeholder until
-/// player stats are tracked (P$BaseStats authors all stats at 1, pending
-/// character creation/training).
-const EFFECTIVE_PSI_STAT: i32 = 5;
+/// The caster's PSI stat from the character sheet, used to pick the power's
+/// projectile (links are ordered by PSI level 1..8) and to scale sustained
+/// durations. Falls back to the sheet's baseline when the scene has no
+/// `QuestInfo` (a bare debug scene).
+fn player_psi_stat(world: &World) -> i32 {
+    world
+        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+        .map(|quests| quests.player_stats().psionic_ability)
+        .unwrap_or_else(|_| crate::player_stats::PlayerStats::default().psionic_ability)
+}
+
+/// The effective PSI a cast resolves at: the character sheet's PSI, plus the
+/// overload bonus when the charge released in the end zone, capped.
+fn effective_psi_for_cast(psi_stat: i32, overload: bool) -> i32 {
+    if overload {
+        (psi_stat + psi::OVERLOAD_PSI_BONUS).min(psi::OVERLOAD_MAX_EFFECTIVE_PSI)
+    } else {
+        psi_stat
+    }
+}
 
 /// The amp's charge/result state while the meter is on screen.
 enum ChargeState {
@@ -120,7 +135,7 @@ impl Script for PsiAmpScript {
                         phase: PsiChargePhase::Charging,
                     }
                 } else {
-                    cast_selected_power(world, entity_id, EFFECTIVE_PSI_STAT)
+                    cast_selected_power(world, entity_id, player_psi_stat(world))
                 }
             }
             MessagePayload::TriggerRelease => {
@@ -144,12 +159,7 @@ impl Script for PsiAmpScript {
                 }
                 let fraction = elapsed / duration;
                 let overload = fraction >= psi::OVERLOAD_ZONE_START;
-                let effective_psi = if overload {
-                    (EFFECTIVE_PSI_STAT + psi::OVERLOAD_PSI_BONUS)
-                        .min(psi::OVERLOAD_MAX_EFFECTIVE_PSI)
-                } else {
-                    EFFECTIVE_PSI_STAT
-                };
+                let effective_psi = effective_psi_for_cast(player_psi_stat(world), overload);
                 let cast = cast_selected_power(world, entity_id, effective_psi);
                 // A successful overload flashes the success art briefly; a
                 // normal cast - or a fizzle (no psi / power not implemented)
@@ -427,4 +437,40 @@ fn amp_cast_flashes(world: &World, amp_entity: EntityId) -> Vec<Effect> {
     .into_iter()
     .map(|(template_id, options)| create_muzzle_flash(world, amp_entity, template_id, &options))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::quest_info::QuestInfo;
+
+    #[test]
+    fn psi_stat_comes_from_the_character_sheet() {
+        let world = World::new();
+        let mut quests = QuestInfo::new();
+        quests.player_stats_mut().psionic_ability = 6;
+        world.add_unique(quests);
+
+        assert_eq!(player_psi_stat(&world), 6);
+    }
+
+    #[test]
+    fn psi_stat_falls_back_to_the_sheet_baseline_without_quest_info() {
+        let world = World::new();
+
+        assert_eq!(
+            player_psi_stat(&world),
+            crate::player_stats::PlayerStats::default().psionic_ability
+        );
+    }
+
+    #[test]
+    fn overload_adds_the_bonus_and_caps() {
+        assert_eq!(effective_psi_for_cast(2, false), 2);
+        assert_eq!(effective_psi_for_cast(2, true), 2 + psi::OVERLOAD_PSI_BONUS);
+        assert_eq!(
+            effective_psi_for_cast(psi::OVERLOAD_MAX_EFFECTIVE_PSI, true),
+            psi::OVERLOAD_MAX_EFFECTIVE_PSI
+        );
+    }
 }
