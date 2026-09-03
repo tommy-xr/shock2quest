@@ -738,13 +738,22 @@ impl AnimatedMonsterAI {
         let waited = waited + time.elapsed.as_secs_f32();
         // No progress to read (not a door any more, or one that cannot move)
         // means there is nothing to wait for.
-        let clear = match script_util::door_open_progress(world, door_ent) {
+        let progress = script_util::door_open_progress(world, door_ent);
+        let clear = match progress {
             None => true,
             Some((fraction, rise)) => {
                 door_is_passable(fraction, rise, creature_height(world, entity_id))
             }
         };
         if clear || waited >= DOOR_WAIT_TIMEOUT {
+            tracing::debug!(
+                "ai {:?} resumes past door {:?} after {:.2}s (clear: {}, progress: {:?})",
+                entity_id,
+                door_ent,
+                waited,
+                clear,
+                progress
+            );
             self.door_wait = None;
             return false;
         }
@@ -876,6 +885,7 @@ impl AnimatedMonsterAI {
             self.door_cooldown = DOOR_INTERACT_COOLDOWN;
             // Stand off until the leaf has travelled clear (#1255): the AI
             // used to keep walking into a leaf still crossing the doorway.
+            tracing::debug!("ai {:?} waits for door {:?} to clear", entity_id, door_ent);
             self.door_wait = Some((door_ent, 0.0));
             return Effect::Send {
                 msg: Message {
