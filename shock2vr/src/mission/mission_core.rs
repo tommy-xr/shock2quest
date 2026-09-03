@@ -3405,13 +3405,13 @@ impl MissionCore {
         // `resolve_item_name`, so an object is never called two things at once.
         // Unlike the brackets this readout is not gated on `P$HUDSelect`: a
         // door gets no brackets but does get named here.
-        let name_strip = self.flat_ui.strip_entity().is_some().then(|| {
+        let name_strip = self.flat_ui.strip_entity().and_then(|_| {
             self.flat_ui
                 .pointed_item()
-                .or_else(|| self.interaction.highlighted_entities().first().copied())
+                .or_else(|| self.name_strip_world_pick(game_options))
                 .and_then(|entity| crate::hud::resolve_item_name(asset_cache, &self.world, entity))
         });
-        self.flat_ui.set_name_strip(name_strip.flatten());
+        self.flat_ui.set_name_strip(name_strip);
 
         // Update scripts
         let mut script_effects = profile!(
@@ -7966,6 +7966,31 @@ impl MissionCore {
         self.hit_boxes
             .hit_box_bounds(&self.physics, entity_id)
             .or_else(|| self.physics.get_aabb2(entity_id))
+    }
+
+    /// The world object the mini-frame names when the canvas pointer is on
+    /// nothing.
+    ///
+    /// Flat aims with one reticle. In VR each hand aims on its own and a hand
+    /// resting on the panel is a UI pointer, not an aim - so the readout takes
+    /// the pick of a hand that is *off* the panel, and names nothing while both
+    /// hands are on it.
+    fn name_strip_world_pick(&self, game_options: &GameOptions) -> Option<EntityId> {
+        use crate::vr_config::Handedness;
+        if game_options.presentation_mode != crate::PresentationMode::Vr {
+            return self.interaction.highlighted_entity(Handedness::Right);
+        }
+        let on_panel = |hand: Handedness| {
+            self.vr_use_mode_pointer.as_ref().is_some_and(|pass| {
+                pass.rays
+                    .iter()
+                    .any(|ray| ray.handedness == hand && ray.canvas_hit.is_some())
+            })
+        };
+        [Handedness::Left, Handedness::Right]
+            .into_iter()
+            .filter(|hand| !on_panel(*hand))
+            .find_map(|hand| self.interaction.highlighted_entity(hand))
     }
 
     pub fn render_per_eye(

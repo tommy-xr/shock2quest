@@ -63,17 +63,6 @@ const CLOSE_BUTTON_MARGIN: Vector2<f32> = Vector2::new(25.0, 8.0);
 /// `CURSOR.PCX` native size.
 const CURSOR_SIZE: Vector2<f32> = Vector2::new(12.0, 16.0);
 
-/// The original's "mini-frame" name line: `FRAME.PCX` (256x16) over the blank
-/// slot baked into `invback.pcx` between the INVENTORY and EQUIP labels, at the
-/// HUD rect `{192,0}-{447,17}`. It reads out whatever the player is currently
-/// pointing at.
-const NAME_STRIP_RECT: Rect = Rect::new(192.0, 0.0, 256.0, 16.0);
-
-/// The text line inside [`NAME_STRIP_RECT`]: clear of the frame's 2px left
-/// bevel and the cyan arrow glyph drawn at its left end, and of the matching
-/// bevel on the right.
-const NAME_STRIP_TEXT_RECT: Rect = Rect::new(203.0, 0.0, 240.0, 16.0);
-
 /// The HUD's data font, as the rest of this canvas uses.
 const NAME_STRIP_FONT: &str = "mainfont.fon";
 
@@ -471,6 +460,10 @@ impl FlatUiHost {
     /// entity, whose `GuiScript` already emits `SetUI` every frame - the
     /// strip just stashes and re-anchors it.
     pub fn set_strip(&mut self, entity: Option<EntityId>) {
+        // The readout belongs to the bar: leaving use mode must not leave a
+        // stale name behind for `/v1/ui` (the mission's per-frame update runs
+        // before the effect that unbinds the strip).
+        self.name_strip = None;
         self.strip = entity.map(|entity| StripSlot {
             entity,
             size_px: None,
@@ -928,15 +921,10 @@ impl FlatUiHost {
             // The mini-frame sits in the inventory bar, so it is up exactly
             // while the bar is. Placement is decided here, once, in canvas
             // pixels - both presentations map this rect (AGENTS.md 3).
-            canvas.image(NAME_STRIP_RECT, "frame.pcx");
+            let (frame, text) = name_strip_rects(rect);
+            canvas.image(frame, "frame.pcx");
             if let Some(name) = self.name_strip.as_deref() {
-                canvas.text_native_fit(
-                    NAME_STRIP_TEXT_RECT,
-                    name,
-                    NAME_STRIP_FONT,
-                    HAlign::Left,
-                    VAlign::Middle,
-                );
+                canvas.text_native_fit(text, name, NAME_STRIP_FONT, HAlign::Left, VAlign::Middle);
             }
         }
         if let Some(rect) = panel_rect {
@@ -1153,6 +1141,22 @@ fn strip_canvas_rect(strip_size_px: Vector2<f32>) -> Rect {
 /// runs unchanged. The click button maps to LMB on flat and the trigger in VR;
 /// the grab gesture is the VR squeeze (flat has none), and the hand it is
 /// reported for is where a `GrabEntity` from the panel lands.
+/// The original's "mini-frame" name line, as an inlay of the inventory bar:
+/// `FRAME.PCX` (256x16) over the blank slot `invback.pcx` leaves between its
+/// INVENTORY and EQUIP labels (a black plate at invback pixels x192..442,
+/// y0..12). Returns `(frame, text line)` in canvas pixels.
+///
+/// Derived from the bar's own rect rather than written out absolutely, so the
+/// frame cannot drift off the slot if the bar's anchor moves.
+fn name_strip_rects(strip: Rect) -> (Rect, Rect) {
+    let frame = Rect::new(strip.x + 190.0, strip.y, 256.0, 16.0);
+    // Inside the plate: clear of the frame's left bevel and the cyan arrow
+    // glyph baked into it, and only as tall as the plate, so the line centres
+    // on that arrow rather than on the bevel below it.
+    let text = Rect::new(frame.x + 11.0, frame.y, frame.w - 16.0, 12.0);
+    (frame, text)
+}
+
 fn gui_hover(
     to: EntityId,
     rect: Rect,
@@ -1580,6 +1584,10 @@ mod tests {
         let slot_left = STRIP_ANCHOR.x + 192.0;
         let slot_right = STRIP_ANCHOR.x + 442.0;
         assert!(frame.rect().x <= slot_left && frame.rect().x + frame.rect().w >= slot_right);
+        // ...and it follows the bar rather than sitting at a hardcoded spot:
+        // move the bar and the frame moves with it, by the same offset.
+        let moved = name_strip_rects(Rect::new(12.0, 40.0, 635.0, 120.0)).0;
+        assert_eq!(moved, Rect::new(202.0, 40.0, 256.0, 16.0));
     }
 
     /// The name line is the readout, not the frame: it is drawn inside the
@@ -1626,11 +1634,16 @@ mod tests {
         assert_eq!(text.0, "Laser Rapier");
         assert_eq!(text.1, NAME_STRIP_FONT);
         assert!(text.2, "an unbounded object name must ellipsize");
-        let frame = NAME_STRIP_RECT;
+        // The line is laid out inside the frame's opaque plate (`FRAME.PCX` is
+        // 16 tall, of which only y0..12 is plate - below that is its bevel),
+        // and clear of the arrow glyph at the plate's left end. Ellipsizing
+        // itself happens in the shared layout pass, which has its own tests.
+        let (frame, plate) = name_strip_rects(strip_canvas_rect(vec2(635.0, 120.0)));
         let r = text.3;
+        assert_eq!(r, plate);
         assert!(
-            r.x >= frame.x && r.x + r.w <= frame.x + frame.w,
-            "the name line stays inside the frame: {r:?}"
+            r.x > frame.x && r.x + r.w <= frame.x + frame.w && r.y + r.h <= frame.y + 12.0,
+            "the name line stays on the frame's plate: {r:?} in {frame:?}"
         );
     }
 
