@@ -100,6 +100,13 @@ const SEPARATION_RADIUS: f32 = 6.0 / SCALE_FACTOR;
 /// steer an AI backwards, it just bows its line around the neighbors
 /// (issue #487).
 const SEPARATION_MAX_OFFSET: f32 = 3.0 / SCALE_FACTOR;
+/// AI-to-AI repel (the original engine's object regulator): a neighbour
+/// this close pushes back, ramping from nothing here...
+const REPEL_RADIUS: f32 = 4.5 / SCALE_FACTOR;
+/// ...to a full push at this distance. Far stronger near-field than crowd
+/// separation, which fades linearly over six feet and so barely registers
+/// at the range where bodies actually stack up (a doorway).
+const REPEL_FULL_DISTANCE: f32 = 1.5 / SCALE_FACTOR;
 
 /// A partial route counts as reaching its goal anyway when its last waypoint
 /// lands within this distance (6 Dark feet). A* answers an unreachable goal
@@ -427,12 +434,23 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // No route (or none yet) - let the next strategy in the chain steer
         let waypoint = *self.path.get(self.next_waypoint)?;
 
-        // Crowd separation: bend the aim point away from nearby living
-        // creatures so converging AIs pass around each other instead of
-        // pushing capsule-to-capsule into a gridlock. The waypoint (and the
-        // path) stay authoritative - the bias is capped well below the
-        // waypoint spacing.
-        let separation = ai_util::separation_bias(world, entity_id, position, SEPARATION_RADIUS);
+        // Crowd bias: bend the aim point away from nearby living creatures
+        // so converging AIs pass around each other instead of pushing
+        // capsule-to-capsule into a gridlock. The waypoint (and the path)
+        // stay authoritative - the bias is capped well below the waypoint
+        // spacing.
+        //
+        // The near-field repel is suppressed once we are inside melee reach
+        // of the chase target: an attacker closing on the player is not
+        // crowding, and pushing it off the target would cost it the blow.
+        let repel = ai_util::chase_target_distance(world, entity_id)
+            .map(|distance| distance >= ai_util::MELEE_ATTACK_RANGE)
+            .unwrap_or(true)
+            .then_some(ai_util::CrowdRepel {
+                full: REPEL_FULL_DISTANCE,
+                none: REPEL_RADIUS,
+            });
+        let crowd = ai_util::crowd_bias(world, entity_id, position, SEPARATION_RADIUS, repel);
         // ...and the same treatment for static geometry the navigation mesh
         // doesn't model (a railing, a crate left on the route): whiskers bend
         // the line around it before the body wedges, without ever taking the
@@ -443,7 +461,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         let aim = aim_with_bias(
             position,
             waypoint,
-            capped(separation + whiskers, SEPARATION_MAX_OFFSET),
+            capped(crowd + whiskers, SEPARATION_MAX_OFFSET),
         );
 
         // Stall escape: if we stop making progress toward the current
@@ -1025,6 +1043,16 @@ mod tests {
 
     #[test]
     fn biases_are_capped_together() {
+        // Crowd separation, near-field repel and whiskers all sum into one
+        // offset that is shortened once - three pushes the same way still
+        // bend the line no further than one may.
+        let shortened = capped(
+            vec3(1.0, 0.0, 0.0) + vec3(2.0, 0.0, 0.0) + vec3(0.0, 0.0, 4.0),
+            2.5,
+        );
+        assert!(
+            ((shortened.x * shortened.x + shortened.z * shortened.z).sqrt() - 2.5).abs() < 1e-5
+        );
         let shortened = capped(vec3(3.0, 0.0, 4.0), 2.5);
         assert!(
             ((shortened.x * shortened.x + shortened.z * shortened.z).sqrt() - 2.5).abs() < 1e-5
