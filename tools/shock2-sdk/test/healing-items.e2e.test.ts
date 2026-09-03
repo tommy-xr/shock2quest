@@ -5,7 +5,7 @@ import { GameServer } from "../src/index.js";
 import type { EntitySummary, UiElement, Vec3 } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
 import { clickUiElement } from "./helpers/ui.js";
-import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import { LOOT_PANEL_SIZE_PX, add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
 
 // End-to-end regression for #668, reproducing the campaign's exact production
 // path before covering the sibling item and flat presentation:
@@ -28,7 +28,6 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const MEDSCI2_DESK_WITH_PATCH = 471;
 const MEDSCI2_PATCH = 1054;
 const PANEL_PIXEL_TO_WORLD = 1 / 250;
-const LOOT_PANEL_SIZE_PX: Vec3 = [188, 296, 0];
 const BACKPACK_PANEL_SIZE_PX: Vec3 = [635, 120, 0];
 const VR_BACKPACK_SCALE = 0.55;
 

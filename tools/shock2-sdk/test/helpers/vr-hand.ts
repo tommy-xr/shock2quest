@@ -149,8 +149,12 @@ export async function aimVrHandAt(
 /** One canvas pixel of a world panel in world units (`gui::GUI_PIXEL_TO_WORLD_SIZE`). */
 export const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
 
-/** The retail MFD canvas the loot panel is drawn on. */
-export const LOOT_PANEL_SIZE_PX: Vec3 = [188, 296, 0];
+/**
+ * The loot panel's canvas in panel pixels (`ContainerGui::loot_container`):
+ * the 188px width of the MFD slot it docks into, and just enough height for
+ * its 4x4 hologram grid plus margins.
+ */
+export const LOOT_PANEL_SIZE_PX: Vec3 = [188, 152, 0];
 
 /**
  * Squeeze one element of an open world panel with the production VR hand.

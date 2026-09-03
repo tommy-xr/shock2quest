@@ -26,6 +26,11 @@ import { clickUiElement } from "./helpers/ui.js";
 // assertion fails and the clip can never be reached.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
+/// The loot panel's hologram grid tile - the art a container panel draws
+/// (`ContainerGui::loot_container`), and how a loot panel is told apart from
+/// the hack board.
+const LOOT_GRID_TEXTURE = "s45.pcx";
+
 const CLIP_CRATE = 325; // Contains -> Small HE Clip
 const BIG_NANITE_PILE = -1591;
 
@@ -85,7 +90,7 @@ async function playHackBoardToWin(game: GameServer): Promise<UiPanel> {
   ];
   for (let attempt = 0; attempt < 15; attempt += 1) {
     let panel = await activePanel(game);
-    if (hasTexture(panel, "contain.pcx")) return panel;
+    if (hasTexture(panel, LOOT_GRID_TEXTURE)) return panel;
     // A ruined crate is terminal - fail loudly rather than spin.
     assert.ok(
       !hasTexture(panel, "loseh.pcx"),
@@ -115,7 +120,7 @@ async function playHackBoardToWin(game: GameServer): Promise<UiPanel> {
 
     for (const label of routes[attempt % routes.length]) {
       panel = await activePanel(game);
-      if (hasTexture(panel, "contain.pcx")) return panel;
+      if (hasTexture(panel, LOOT_GRID_TEXTURE)) return panel;
       if (hasTexture(panel, "failh.pcx") || hasTexture(panel, "loseh.pcx")) break;
       await clickUiElement(game, button(panel, label));
     }
@@ -204,7 +209,7 @@ test(
     // into the ordinary loot MFD showing the authored contents. ---
     const loot = await playHackBoardToWin(game);
     assert.ok(
-      hasTexture(loot, "contain.pcx"),
+      hasTexture(loot, LOOT_GRID_TEXTURE),
       "a won hack should turn the crate into the normal loot MFD",
     );
     assert.ok(
@@ -253,7 +258,7 @@ test(
     await frobCrate(game, reloadedCrate.id);
     const reloadedPanel = await activePanel(game);
     assert.ok(
-      hasTexture(reloadedPanel, "contain.pcx") &&
+      hasTexture(reloadedPanel, LOOT_GRID_TEXTURE) &&
         !hasTexture(reloadedPanel, "hack.pcx"),
       "a hacked crate must stay hacked across save/load, not relock",
     );

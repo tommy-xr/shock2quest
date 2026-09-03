@@ -10,7 +10,7 @@ import type {
   Vec3,
 } from "../src/index.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { aimVrHandAt } from "./helpers/vr-hand.js";
+import { LOOT_PANEL_SIZE_PX as PANEL_SIZE_PX, aimVrHandAt } from "./helpers/vr-hand.js";
 
 // Production regression for #978. The MedSci1 Wrench is a concrete mission
 // object (990), but its authored melee class is the gamesys Wrench (-928).
@@ -26,7 +26,6 @@ const MONKEY = 543;
 const PIPE_HYBRID = 1293;
 const SHOTGUN_HYBRID = 1392;
 const BREAKABLE_PANE = 237;
-const PANEL_SIZE_PX: Vec3 = [188, 296, 0];
 const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
 const WRENCH_WINDUP_DISTANCE = 1.5;
 const WRENCH_SWEEP_END_DISTANCE = -0.75;
