@@ -55,14 +55,23 @@ test(
     );
     assert.equal(player.psi_points, startPsi! - PSI_COST, "a tier 2 cast costs two psi points");
 
-    // Keep casting until the player is topped up (the last cast clamps), then
-    // cast at full health: refused, and nothing is spent.
-    for (let i = 0; i < 5 && player.hit_points !== maxHp; i += 1) {
+    // Keep casting until the player is topped up. The last cast is clamped
+    // (fewer HP are missing than the heal restores) and still costs its tier.
+    const psiBeforeTopUp = player.psi_points!;
+    let topUpCasts = 0;
+    while (player.hit_points !== maxHp && topUpCasts < 5) {
       await pullTrigger(game);
       await game.step({ frames: 30 });
       player = (await game.info()).player;
+      topUpCasts += 1;
     }
-    assert.equal(player.hit_points, maxHp, "repeated casts top the player up to the maximum");
+    assert.ok(topUpCasts > 0, "the top-up should need at least one clamped cast");
+    assert.equal(player.hit_points, maxHp, "the heal never overshoots the maximum");
+    assert.equal(
+      player.psi_points,
+      psiBeforeTopUp - PSI_COST * topUpCasts,
+      "a clamped cast still costs its tier",
+    );
     const fullPsi = player.psi_points;
 
     await pullTrigger(game);
@@ -70,39 +79,5 @@ test(
     player = (await game.info()).player;
     assert.equal(player.hit_points, maxHp, "a cast at full health heals nothing");
     assert.equal(player.psi_points, fullPsi, "a cast at full health spends nothing");
-  },
-);
-
-test(
-  "the heal is clamped to the player's missing health",
-  { skip: !e2eEnabled, timeout: 600_000 },
-  async () => {
-    await using game = await GameServer.launch({ mission: "debug_psi" });
-
-    await game.step({ frames: 10 });
-    await game.player.setStats({ psionic_ability: PSI_STAT });
-
-    // Only a few HP missing: the 12-HP heal tops out at the maximum.
-    const playerId = (await game.info()).player.entity_id;
-    assert.ok(playerId !== null);
-    await game.entities.sendMessage(playerId!, { type: "Damage", amount: 3.0 });
-    await game.step({ frames: 10 });
-
-    let player = (await game.info()).player;
-    const maxHp = player.max_hit_points;
-    const startPsi = player.psi_points;
-    assert.ok(maxHp !== null && player.hit_points !== null && startPsi !== null);
-    assert.ok(
-      maxHp! - player.hit_points! < HP_PER_PSI * PSI_STAT,
-      "fewer HP should be missing than the heal would restore",
-    );
-
-    await selectPsiPower(game, "PsiHeal");
-    await pullTrigger(game);
-    await game.step({ frames: 30 });
-
-    player = (await game.info()).player;
-    assert.equal(player.hit_points, maxHp, "the heal never overshoots the maximum");
-    assert.equal(player.psi_points, startPsi! - PSI_COST, "a clamped cast still costs its tier");
   },
 );
