@@ -125,12 +125,44 @@ impl SceneObject {
         position: Vector2<f32>,
         size: Vector2<f32>,
     ) -> SceneObject {
+        Self::screen_space_geometry_object(material, position, size, Box::new(quad::create()))
+    }
+
+    /// As [`Self::screen_space_quad_object`], for geometry that is not the
+    /// shared unit quad (a quad sampling a texture sub-rectangle).
+    fn screen_space_geometry_object(
+        material: Box<dyn Material>,
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        geometry: Box<dyn Geometry>,
+    ) -> SceneObject {
         let xform = Matrix4::from_translation(vec3(position.x, position.y, 0.0))
             * Matrix4::from_nonuniform_scale(size.x, size.y, 1.0)
             * Matrix4::from_translation(vec3(0.5, 0.5, 0.0));
-        let mut ret = Self::new(material, Box::new(quad::create()));
+        let mut ret = Self::new(material, geometry);
         ret.set_local_transform(xform);
         ret
+    }
+
+    /// A screen-space quad sampling `uv_min`..`uv_max` of its texture instead
+    /// of the whole of it. A range outside 0..1 tiles the texture, so a grid
+    /// bitmap can repeat across the quad.
+    pub fn screen_space_quad_uv(
+        texture: Rc<dyn TextureTrait>,
+        position: Vector2<f32>,
+        size: Vector2<f32>,
+        opacity: f32,
+        uv_min: Vector2<f32>,
+        uv_max: Vector2<f32>,
+    ) -> SceneObject {
+        let material =
+            materials::ScreenSpaceMaterial::create(texture, vec4(1.0, 1.0, 1.0, opacity));
+        Self::screen_space_geometry_object(
+            material,
+            position,
+            size,
+            Box::new(quad::create_with_uv(uv_min, uv_max)),
+        )
     }
 
     pub fn screen_space_quad2(

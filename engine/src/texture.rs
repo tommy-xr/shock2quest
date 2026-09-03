@@ -141,6 +141,11 @@ pub struct TextureOptions {
     /// (PCX). Dark bitmap sprites (particles) are keyed this way; wall/UI
     /// textures are not, so this is opt-in.
     pub transparent_index_0: bool,
+    /// Turn opaque line art into a translucent tinted overlay: each texel's
+    /// alpha becomes its luminance and its colour becomes this tint. Black
+    /// therefore drops out entirely, which is what makes a grid bitmap read as
+    /// a hologram over the world instead of a black panel.
+    pub luminance_alpha_tint: Option<[u8; 3]>,
     pub filter: TextureFilter,
 }
 
@@ -149,6 +154,7 @@ impl Default for TextureOptions {
         TextureOptions {
             wrap: true,
             transparent_index_0: false,
+            luminance_alpha_tint: None,
             filter: TextureFilter::Linear,
         }
     }

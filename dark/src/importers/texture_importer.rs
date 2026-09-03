@@ -16,13 +16,18 @@ pub(crate) fn load_texture(
     let extension = Path::new(&name).extension().unwrap();
     let mut buf = Vec::new();
     reader.read_to_end(&mut buf).unwrap();
-    if config.transparent_index_0 && extension.eq_ignore_ascii_case("pcx") {
-        return engine::texture_format::PCX.load_indexed(&buf, true);
+    let raw = if config.transparent_index_0 && extension.eq_ignore_ascii_case("pcx") {
+        engine::texture_format::PCX.load_indexed(&buf, true)
+    } else {
+        let format =
+            engine::texture_format::extension_to_format(extension.to_str().unwrap().to_string())
+                .unwrap();
+        format.load(&buf)
+    };
+    match config.luminance_alpha_tint {
+        Some(tint) => engine::texture_format::tint_alpha_from_luminance(raw, tint),
+        None => raw,
     }
-    let format =
-        engine::texture_format::extension_to_format(extension.to_str().unwrap().to_string())
-            .unwrap();
-    format.load(&buf)
 }
 
 pub(crate) fn process_texture(
