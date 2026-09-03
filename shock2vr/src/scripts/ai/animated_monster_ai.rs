@@ -60,6 +60,12 @@ const DOOR_WAIT_TIMEOUT: f32 = 10.0;
 /// worth showing. Longer than the stall system's own recovery window, so the
 /// gesture marks a body that is genuinely stuck rather than every hitch.
 const FRUSTRATION_STALL_SECONDS: f32 = 5.0;
+/// How long a door has to keep the AI waiting before that reads as
+/// impatience. A shipped sliding leaf clears in about half a second, and an
+/// AI is not thwarted by a door that opens for it - gesturing at every one
+/// would also park a body in the doorway (the gesture has no root motion)
+/// long enough to dam the creatures queued behind it.
+const FRUSTRATION_DOOR_WAIT_SECONDS: f32 = 2.5;
 /// Rate limit on the frustration gesture, jittered per play so a knot of
 /// AIs blocked on the same thing doesn't gesture in unison.
 const FRUSTRATION_COOLDOWN_MIN: f32 = 20.0;
@@ -145,11 +151,14 @@ pub(crate) fn door_is_passable(fraction: f32, rise: f32, actor_height: f32) -> b
 /// target (an AI in a position to swing is fighting, not thwarted), and
 /// never over a performance the level authored.
 pub(crate) fn should_gesture_frustration(
-    blocked: bool,
+    door_wait_seconds: Option<f32>,
+    stall_seconds: f32,
     cooldown_remaining: f32,
     target_distance: Option<f32>,
     scripted: ScriptedState,
 ) -> bool {
+    let blocked = door_wait_seconds.is_some_and(|s| s >= FRUSTRATION_DOOR_WAIT_SECONDS)
+        || stall_seconds >= FRUSTRATION_STALL_SECONDS;
     blocked
         && cooldown_remaining <= 0.0
         && scripted != ScriptedState::Running
@@ -731,10 +740,8 @@ impl AnimatedMonsterAI {
     /// Hold position while a door this AI just opened travels clear, rather
     /// than walking into a leaf still crossing the doorway. Returns whether
     /// the AI is holding this frame.
-    fn update_door_wait(&mut self, world: &World, entity_id: EntityId, time: &Time) -> bool {
-        let Some((door_ent, waited)) = self.door_wait else {
-            return false;
-        };
+    fn update_door_wait(&mut self, world: &World, entity_id: EntityId, time: &Time) -> Option<f32> {
+        let (door_ent, waited) = self.door_wait?;
         let waited = waited + time.elapsed.as_secs_f32();
         // No progress to read (not a door any more, or one that cannot move)
         // means there is nothing to wait for.
@@ -755,10 +762,10 @@ impl AnimatedMonsterAI {
                 progress
             );
             self.door_wait = None;
-            return false;
+            return None;
         }
         self.door_wait = Some((door_ent, waited));
-        true
+        Some(waited)
     }
 
     /// Show frustration at whatever is in the way - a door still opening, or
@@ -769,15 +776,14 @@ impl AnimatedMonsterAI {
         &mut self,
         world: &World,
         entity_id: EntityId,
-        holding_for_door: bool,
+        door_wait_seconds: Option<f32>,
         time: &Time,
     ) -> Effect {
         self.frustration_cooldown =
             (self.frustration_cooldown - time.elapsed.as_secs_f32()).max(0.0);
-        let blocked =
-            holding_for_door || path_stall_seconds(world, entity_id) >= FRUSTRATION_STALL_SECONDS;
         if !should_gesture_frustration(
-            blocked,
+            door_wait_seconds,
+            path_stall_seconds(world, entity_id),
             self.frustration_cooldown,
             target_awareness_distance(world, entity_id),
             self.current_behavior.borrow().scripted_state(),
@@ -786,6 +792,11 @@ impl AnimatedMonsterAI {
         }
         self.frustration_cooldown =
             rand::thread_rng().gen_range(FRUSTRATION_COOLDOWN_MIN..FRUSTRATION_COOLDOWN_MAX);
+        tracing::debug!(
+            "ai {:?} shows frustration (door wait: {:?}s)",
+            entity_id,
+            door_wait_seconds
+        );
         frustration_gesture(entity_id)
     }
 
@@ -1208,10 +1219,14 @@ impl Script for AnimatedMonsterAI {
             steering_output
         };
 
-        let holding_for_door = self.update_door_wait(world, entity_id, time);
-        let rotation_effect =
-            self.apply_steering_output(steering_output, time, entity_id, holding_for_door);
-        let frustration_effect = self.update_frustration(world, entity_id, holding_for_door, time);
+        let door_wait_seconds = self.update_door_wait(world, entity_id, time);
+        let rotation_effect = self.apply_steering_output(
+            steering_output,
+            time,
+            entity_id,
+            door_wait_seconds.is_some(),
+        );
+        let frustration_effect = self.update_frustration(world, entity_id, door_wait_seconds, time);
 
         // A finished scripted sequence (its final queued effects were drained
         // by the steer above - scripted_state only reports Finished once they
@@ -2167,16 +2182,52 @@ mod tests {
         assert!(door_is_passable(1.0, 0.0, TEST_ACTOR_HEIGHT));
     }
 
+    /// A door wait long enough to read as impatience.
+    const LONG_WAIT: Option<f32> = Some(FRUSTRATION_DOOR_WAIT_SECONDS + 1.0);
+
     #[test]
     fn frustration_needs_a_block() {
         assert!(!should_gesture_frustration(
-            false,
+            None,
+            0.0,
             0.0,
             None,
             ScriptedState::NotScripted
         ));
         assert!(should_gesture_frustration(
-            true,
+            LONG_WAIT,
+            0.0,
+            0.0,
+            None,
+            ScriptedState::NotScripted
+        ));
+    }
+
+    #[test]
+    fn a_door_that_opens_promptly_draws_no_gesture() {
+        // Every shipped sliding leaf clears in about half a second; an AI
+        // that gestured at each one would dam the doorway behind it.
+        assert!(!should_gesture_frustration(
+            Some(0.5),
+            0.0,
+            0.0,
+            None,
+            ScriptedState::NotScripted
+        ));
+    }
+
+    #[test]
+    fn a_sustained_stall_draws_a_gesture() {
+        assert!(!should_gesture_frustration(
+            None,
+            FRUSTRATION_STALL_SECONDS - 1.0,
+            0.0,
+            None,
+            ScriptedState::NotScripted
+        ));
+        assert!(should_gesture_frustration(
+            None,
+            FRUSTRATION_STALL_SECONDS,
             0.0,
             None,
             ScriptedState::NotScripted
@@ -2186,7 +2237,8 @@ mod tests {
     #[test]
     fn frustration_is_rate_limited() {
         assert!(!should_gesture_frustration(
-            true,
+            LONG_WAIT,
+            0.0,
             3.0,
             None,
             ScriptedState::NotScripted
@@ -2198,13 +2250,15 @@ mod tests {
         let inside = Some(MELEE_ATTACK_RANGE * 0.5);
         let outside = Some(MELEE_ATTACK_RANGE * 2.0);
         assert!(!should_gesture_frustration(
-            true,
+            LONG_WAIT,
+            0.0,
             0.0,
             inside,
             ScriptedState::NotScripted
         ));
         assert!(should_gesture_frustration(
-            true,
+            LONG_WAIT,
+            0.0,
             0.0,
             outside,
             ScriptedState::NotScripted
@@ -2214,7 +2268,8 @@ mod tests {
     #[test]
     fn frustration_never_interrupts_an_authored_performance() {
         assert!(!should_gesture_frustration(
-            true,
+            LONG_WAIT,
+            0.0,
             0.0,
             None,
             ScriptedState::Running
