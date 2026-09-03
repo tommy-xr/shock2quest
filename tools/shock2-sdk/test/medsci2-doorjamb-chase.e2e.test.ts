@@ -67,7 +67,7 @@ test(
       // The hybrids chase a player who does not fight back, so the mission
       // ends when they reach him. Everything before that is the window
       // under test.
-      if (!(await game.pathfinding.stats())) break;
+      if (!(await game.pathfinding.stats().catch(() => null))) break;
       sampled++;
       for (const pipe of pipes.entities) {
         const detail = await game.entities.detail(pipe.id).catch(() => null);

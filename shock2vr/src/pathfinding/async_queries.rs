@@ -298,7 +298,7 @@ mod tests {
         let response = wait_for_result(&async_pf, 21).expect("worker must respond");
         assert_eq!(response.outcome, AiPathOutcome::Full);
         assert!(
-            response.waypoints.iter().any(|w| w.z > 1.9),
+            crate::pathfinding::tests::took_the_detour(&response.waypoints),
             "the second AI must take the detour: {:?}",
             response.waypoints
         );

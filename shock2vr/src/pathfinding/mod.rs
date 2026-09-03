@@ -14,7 +14,6 @@ use dark::{
         path_database::{MovementBits, NO_ZONE, PathCell, PathCellFlags, PathCellLink},
     },
 };
-use rand::Rng;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -83,9 +82,6 @@ const MAX_BLOCKED_LINKS: usize = 64;
 /// common cause (an AI wedged in it right now) clears as soon as that AI
 /// frees itself.
 const STALLED_CELL_TTL_SECONDS: f32 = 10.0;
-/// Jitter applied to each cell TTL so a pile-up of AIs reporting the same
-/// cell in the same second doesn't reopen it for all of them at once.
-const STALLED_CELL_TTL_JITTER: std::ops::Range<f32> = 0.8..1.2;
 /// Cap on remembered stalled cells (see `MAX_BLOCKED_LINKS`)
 const MAX_BLOCKED_CELLS: usize = 64;
 /// Extra cost (Dark feet, the unit link costs and the heuristic use) for
@@ -411,7 +407,7 @@ impl PathfindingService {
     }
 
     /// Remember that an AI stalled inside `cell`. The cell stays expensive
-    /// to ENTER for a jittered ~10 seconds, so other AIs' routes prefer
+    /// to ENTER for ~10 seconds, so other AIs' routes prefer
     /// another way round and the stalled AI's own re-path does not turn
     /// back into it. Unlike a blocked crossing this is a cost penalty, not
     /// an exclusion - a wholly blocked-in AI must still be able to leave.
@@ -423,10 +419,9 @@ impl PathfindingService {
         if blocked.len() >= MAX_BLOCKED_CELLS && !blocked.contains_key(&cell) {
             return; // full of live entries - drop rather than grow unbounded
         }
-        let ttl = STALLED_CELL_TTL_SECONDS * rand::thread_rng().gen_range(STALLED_CELL_TTL_JITTER);
-        let expiry = now_seconds + ttl;
         // Re-reporting a cell (an escalating stall) extends its TTL, never
         // shortens it
+        let expiry = now_seconds + STALLED_CELL_TTL_SECONDS;
         let entry = blocked.entry(cell).or_insert(expiry);
         *entry = entry.max(expiry);
     }
@@ -793,6 +788,20 @@ impl PathfindingService {
                 self.link_at(idx).to_cell == to_cell && self.can_use_link(idx, movement_bits)
             })
             .map(|idx| self.link_at(idx))
+    }
+
+    /// Whether the mesh actually has a crossing from one cell to another.
+    /// Steering names candidate pairs from waypoints, which sit on cell
+    /// edges and can be denser than the mesh - a pair that is not a link
+    /// would occupy a blacklist slot while excluding nothing.
+    pub fn has_link(&self, from_cell: u32, to_cell: u32) -> bool {
+        self.links_by_cell
+            .get(from_cell as usize)
+            .is_some_and(|links| {
+                links
+                    .iter()
+                    .any(|&idx| self.link_at(idx).to_cell == to_cell)
+            })
     }
 
     /// Find the closest reachable cell to a goal position
@@ -1670,35 +1679,26 @@ pub(crate) mod tests {
         }
     }
 
-    /// Start (0) -> goal (2) two ways: straight through the middle cell 1
-    /// (cost 10) or the long way round through cell 3 (cost 40). Lets a
-    /// test see whether a penalty on cell 1 is enough to buy the detour.
+    /// `three_cell_db` plus a long way round: start (0) reaches goal (2)
+    /// either straight through the middle cell 1 (cost 10) or through the
+    /// detour lane, cell 3, to its north (cost 40). Lets a test see whether
+    /// a penalty on cell 1 is enough to buy the detour.
     pub(crate) fn detour_db() -> PathDatabase {
-        let vertices = vec![
-            vec3(0.0, 0.0, 0.0),
-            vec3(2.0, 0.0, 0.0),
-            vec3(2.0, 0.0, 2.0),
-            vec3(0.0, 0.0, 2.0),
-            vec3(4.0, 0.0, 0.0),
-            vec3(4.0, 0.0, 2.0),
-            vec3(6.0, 0.0, 0.0),
-            vec3(6.0, 0.0, 2.0),
-            vec3(0.0, 0.0, 4.0),
-            vec3(6.0, 0.0, 4.0),
-        ];
-        let cell = |id: u32, center: Vector3<f32>, vertex_indices: Vec<u32>| PathCell {
-            id,
-            center,
-            vertex_indices,
+        let mut db = three_cell_db(PathCellFlags::empty());
+        // Plain walking, both ways: three_cell_db gates 1 -> 2 on STRESSED,
+        // which would leave the detour as the only route rather than a choice
+        for link in &mut db.links {
+            link.ok_bits = MovementBits::WALK;
+        }
+        // The detour lane's two far corners; its near ones are cells 0/2's
+        db.vertices.push(vec3(0.0, 0.0, 4.0)); // 8
+        db.vertices.push(vec3(6.0, 0.0, 4.0)); // 9
+        db.cells.push(PathCell {
+            id: 3,
+            center: vec3(3.0, 0.0, 3.0),
+            vertex_indices: vec![3, 7, 9, 8],
             flags: PathCellFlags::empty(),
-        };
-        let cells = vec![
-            cell(0, vec3(1.0, 0.0, 1.0), vec![0, 1, 2, 3]),
-            cell(1, vec3(3.0, 0.0, 1.0), vec![1, 4, 5, 2]),
-            cell(2, vec3(5.0, 0.0, 1.0), vec![4, 6, 7, 5]),
-            // The detour lane, north of all three
-            cell(3, vec3(3.0, 0.0, 3.0), vec![3, 7, 9, 8]),
-        ];
+        });
         let link = |from_cell: u32, to_cell: u32, a: u32, b: u32, cost: u8| PathCellLink {
             from_cell,
             to_cell,
@@ -1707,24 +1707,21 @@ pub(crate) mod tests {
             ok_bits: MovementBits::WALK,
             cost,
         };
-        let links = vec![
-            link(0, 1, 1, 2, 5),
-            link(1, 0, 1, 2, 5),
-            link(1, 2, 4, 5, 5),
-            link(2, 1, 4, 5, 5),
-            link(0, 3, 3, 2, 20),
-            link(3, 0, 3, 2, 20),
-            link(3, 2, 5, 7, 20),
-            link(2, 3, 5, 7, 20),
-        ];
-        PathDatabase {
-            cells,
-            vertices,
-            links,
-            cell_doors: Vec::new(),
-            cell_zones: Vec::new(),
-            zone_pairs: Vec::new(),
-        }
+        // three_cell_db is one-way; the detour is only a choice if the
+        // straight route can be walked in both directions too
+        db.links.push(link(1, 0, 1, 2, 5));
+        db.links.push(link(2, 1, 4, 5, 5));
+        db.links.push(link(0, 3, 3, 2, 20));
+        db.links.push(link(3, 0, 3, 2, 20));
+        db.links.push(link(3, 2, 5, 7, 20));
+        db.links.push(link(2, 3, 5, 7, 20));
+        db
+    }
+
+    /// How far north a route ran: only the detour through cell 3 crosses
+    /// the z = 2 line.
+    pub(crate) fn took_the_detour(waypoints: &[Vector3<f32>]) -> bool {
+        waypoints.iter().any(|w| w.z > 1.9)
     }
 
     fn service(db: PathDatabase) -> PathfindingService {
@@ -2260,12 +2257,6 @@ pub(crate) mod tests {
             !path.iter().any(|w| w.x > 4.0 && w.z < 2.0),
             "route threaded the pinch: {path:?}"
         );
-    }
-
-    /// How far north a route ran: only the detour through cell 3 crosses
-    /// the z = 2 line.
-    fn took_the_detour(waypoints: &[Vector3<f32>]) -> bool {
-        waypoints.iter().any(|w| w.z > 1.9)
     }
 
     #[test]

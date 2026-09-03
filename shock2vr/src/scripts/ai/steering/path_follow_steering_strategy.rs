@@ -85,12 +85,9 @@ const UNSTICK_NUDGE_DISTANCE: f32 = 2.0 / SCALE_FACTOR;
 /// off the shared edge without skipping a narrow destination cell (0.5
 /// Dark feet)
 const BLOCKED_PROBE_DISTANCE: f32 = 0.5 / SCALE_FACTOR;
-/// How many leading waypoints of the pre-stall route are remembered to
-/// check whether the re-path actually produced a different route
+/// How many leading cells of the pre-stall route are remembered to check
+/// whether the re-path actually produced a different route
 const STALL_ROUTE_PREFIX: usize = 3;
-/// Two waypoints this close (Dark feet) count as the same waypoint when
-/// comparing a fresh route against the one that stalled
-const SAME_WAYPOINT_DISTANCE: f32 = 0.5 / SCALE_FACTOR;
 /// How many times one stall incident may escalate (blacklist more of the
 /// reproduced route) before falling through to the physical nudge. Bounded
 /// so a genuinely one-way corridor can't be sealed link by link.
@@ -141,12 +138,14 @@ pub struct PathFollowSteeringStrategy {
     goal_unreachable: bool,
     /// Static-geometry whiskers, biasing the aim point (see `aim_with_bias`)
     whiskers: WhiskerAvoidance,
-    /// The leading waypoints of the route that was in force when the last
-    /// stall fired, kept until the next route is adopted. If the fresh
-    /// route starts the same way, the re-path reproduced the doomed route
-    /// and walking it again just grinds - escalate instead (see
-    /// `MAX_STALL_ESCALATIONS`).
-    stall_route_prefix: Option<Vec<Vector3<f32>>>,
+    /// The leading CELLS of the route that was in force when the last stall
+    /// fired, kept until the next route is adopted. Cells, not waypoints:
+    /// waypoints are pulled taut backwards from the goal, so a chase whose
+    /// goal moved a foot renames every one of them while the route is the
+    /// same route. If the fresh route walks the same cells, the re-path
+    /// reproduced the doomed route and walking it again just grinds -
+    /// escalate instead (see `MAX_STALL_ESCALATIONS`).
+    stall_route_cells: Option<Vec<u32>>,
     /// Escalations spent on the current stall incident; reset once the body
     /// actually moves
     stall_escalations: u32,
@@ -180,7 +179,7 @@ impl PathFollowSteeringStrategy {
             last_stall_position: None,
             goal_unreachable: false,
             whiskers: WhiskerAvoidance::new(),
-            stall_route_prefix: None,
+            stall_route_cells: None,
             stall_escalations: 0,
         }
     }
@@ -279,7 +278,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         self.goal_unreachable = true;
                         self.clear_path();
                         // Nothing to compare a stalled route against
-                        self.stall_route_prefix = None;
+                        self.stall_route_cells = None;
                         // No route (even partially) - back off before asking
                         // again; the fallback chain is the worker's most
                         // expensive outcome
@@ -303,24 +302,29 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         // it and ask once more (bounded, so a genuinely
                         // one-way corridor still gets walked and the
                         // existing nudge remains the last resort).
-                        if let Some(prefix) = self.stall_route_prefix.take() {
+                        if let Some(stalled) = self.stall_route_cells.take() {
+                            let fresh =
+                                route_cells(&service, position, &self.path[self.next_waypoint..]);
                             if self.stall_escalations < MAX_STALL_ESCALATIONS
-                                && route_starts_the_same(&prefix, &self.path[self.next_waypoint..])
+                                && repeats_route(&stalled, &fresh)
                             {
+                                // The cell penalty alone was outbid. Cut the
+                                // crossing this route opens with, so the next
+                                // query cannot answer with it again - one per
+                                // escalation, or a single creature's bad
+                                // minute would seal a corridor for everyone.
                                 self.stall_escalations += 1;
-                                escalate_blocked_route(
-                                    &service,
-                                    position,
-                                    &prefix,
-                                    time.total.as_secs_f32(),
-                                );
+                                report_stall(&service, &fresh, time.total.as_secs_f32());
                                 self.clear_path();
                                 self.repath_cooldown = REPATH_COOLDOWN_SECONDS
                                     * rand::thread_rng().gen_range(0.8..1.2);
                             }
                         }
                     }
-                    _ => {}
+                    _ => {
+                        // A discarded result is no comparison either
+                        self.stall_route_cells = None;
+                    }
                 }
             }
         }
@@ -503,47 +507,27 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 } else {
                     None
                 };
-                if let Some(from) = service.cell_from_position(position) {
-                    // The cell we are stuck in is reported EVERY stall, not
-                    // only when the crossing is unknown. Two things need it:
-                    // a stall entirely inside one cell has no crossing to
-                    // blacklist at all (the body never reached an edge), and
-                    // a cell somebody is wedged in is a bad place to route
-                    // the next AI through - otherwise followers inherit the
-                    // doomed route and pile in behind (three hybrids in one
-                    // medsci2 door jamb).
-                    service.report_blocked_cell(from, now_seconds);
-                    // Nothing across the waypoint means the body never
-                    // reached the edge; the crossing that is actually
-                    // blocked is then the next one along the route (the
-                    // medsci2 Science-door jamb is exactly this - the body
-                    // presses into the jamb feet short of the boundary).
-                    let crossing = crossing_into
-                        .filter(|to| *to != from)
-                        .map(|to| (from, to))
-                        .or_else(|| {
-                            first_crossing_along(&service, from, &self.path[self.next_waypoint..])
-                        });
-                    if let Some((from, to)) = crossing {
-                        // The cell we could not get into is blacklisted as
-                        // well as the crossing. Waypoints sit on cell edges
-                        // and a route can be denser than the mesh, so the
-                        // pair we can name is not always an actual graph
-                        // link - the cell penalty bites whichever way A*
-                        // would have come in.
-                        service.report_blocked_cell(to, now_seconds);
-                        service.report_blocked_link(from, to, now_seconds);
+                // The route ahead, as cells: what a stall can name, and
+                // what the re-path is later checked against.
+                let route = route_cells(&service, position, &self.path[self.next_waypoint..]);
+                // The probe cell is the better blame when the body reached
+                // the edge; a stall short of any edge (the medsci2 Science
+                // door jamb - the body presses into the jamb feet before the
+                // boundary) has only the route to go on.
+                let route = match crossing_into.filter(|to| Some(*to) != route.first().copied()) {
+                    Some(to)
+                        if route
+                            .first()
+                            .is_some_and(|from| service.has_link(*from, to)) =>
+                    {
+                        vec![route[0], to]
                     }
-                }
+                    _ => route,
+                };
+                report_stall(&service, &route, now_seconds);
                 // Remember how the route that failed began, so the re-path
                 // can be checked against it when it lands
-                self.stall_route_prefix = Some(
-                    self.path[self.next_waypoint..]
-                        .iter()
-                        .take(STALL_ROUTE_PREFIX)
-                        .copied()
-                        .collect(),
-                );
+                self.stall_route_cells = Some(route);
                 // ALWAYS back out toward the previous waypoint before
                 // re-pathing, reported or not: the retreat both disengages
                 // the body from whatever it wedged on (an AI boxed among
@@ -573,7 +557,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 self.last_stall_position = Some(position);
                 let unstick_effect = if pinned {
                     let dir = retreat - position;
-                    let len = (dir.x * dir.x + dir.z * dir.z).sqrt();
+                    let len = xz_distance(retreat, position);
                     if len > 1e-3 {
                         let step = UNSTICK_NUDGE_DISTANCE.min(len);
                         let nudged = Vector3::new(
@@ -589,24 +573,34 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         // mesh, step toward the current cell's middle
                         // instead - still away from whatever the body is
                         // pressed against, and known-navigable.
-                        let landing = on_mesh(&service, nudged).or_else(|| {
-                            let cell = service.cell_from_position(position)?;
-                            let center = service.path_database.cells.get(cell as usize)?.center;
-                            let away = center - position;
-                            let len = (away.x * away.x + away.z * away.z).sqrt();
-                            if len <= 1e-3 {
-                                return None;
-                            }
-                            let step = UNSTICK_NUDGE_DISTANCE.min(len);
-                            on_mesh(
-                                &service,
-                                Vector3::new(
-                                    position.x + away.x / len * step,
-                                    position.y,
-                                    position.z + away.z / len * step,
-                                ),
-                            )
-                        });
+                        let landing = on_mesh(&service, nudged)
+                            .or_else(|| {
+                                let cell = service.cell_from_position(position)?;
+                                let center = service.path_database.cells.get(cell as usize)?.center;
+                                let len = xz_distance(center, position);
+                                if len <= 1e-3 {
+                                    return None;
+                                }
+                                let step = UNSTICK_NUDGE_DISTANCE.min(len);
+                                on_mesh(
+                                    &service,
+                                    Vector3::new(
+                                        position.x + (center.x - position.x) / len * step,
+                                        position.y,
+                                        position.z + (center.z - position.z) / len * step,
+                                    ),
+                                )
+                            })
+                            // A body ALREADY off the mesh is the case the
+                            // unstick exists for; refusing to move it is the
+                            // permanent freeze, not a safeguard. It cannot be
+                            // made worse by a step toward route ground.
+                            .or_else(|| {
+                                service
+                                    .cell_from_position(position)
+                                    .is_none()
+                                    .then_some(nudged)
+                            });
                         match landing {
                             Some(landing) => Effect::SetPositionRotation {
                                 entity_id,
@@ -720,8 +714,6 @@ fn answers_goal(
     }
 }
 
-/// Whether a route actually arrives at the goal it was computed for. An
-/// empty route arrives nowhere.
 /// `point` if it sits on a navigable cell, else None - a teleport target
 /// off the mesh is a body dropped out of the level.
 fn on_mesh(
@@ -731,60 +723,59 @@ fn on_mesh(
     service.cell_from_position(point).map(|_| point)
 }
 
-/// Whether a fresh route begins the same way the route that stalled did.
-/// A shorter fresh route is by definition a different one.
-fn route_starts_the_same(previous: &[Vector3<f32>], fresh: &[Vector3<f32>]) -> bool {
-    if previous.is_empty() || fresh.len() < previous.len() {
-        return false;
-    }
-    previous.iter().zip(fresh).all(|(a, b)| {
-        xz_distance(*a, *b) < SAME_WAYPOINT_DISTANCE && (a.y - b.y).abs() < SAME_WAYPOINT_DISTANCE
-    })
-}
-
-/// Blacklist more of a route the AI could not walk: the cell it is standing
-/// in (refreshing that entry's TTL) plus the first cell crossing along the
-/// reproduced route, so the next query cannot answer with the same route
-/// again. One crossing per escalation - sealing the whole prefix at once
-/// would shut a corridor for every AI on a single creature's bad minute.
-fn escalate_blocked_route(
+/// The leading cells a route walks, starting with the one `position` is in.
+/// Consecutive waypoints inside one cell collapse to a single entry, so this
+/// is the route's shape on the mesh rather than its geometry - two queries a
+/// second apart at a moving goal name different waypoints for the same cells.
+fn route_cells(
     service: &crate::pathfinding::PathfindingService,
     position: Vector3<f32>,
-    prefix: &[Vector3<f32>],
-    now_seconds: f32,
-) {
-    let Some(from) = service.cell_from_position(position) else {
+    waypoints: &[Vector3<f32>],
+) -> Vec<u32> {
+    let mut cells = Vec::new();
+    for point in std::iter::once(&position).chain(waypoints) {
+        let Some(cell) = service.cell_from_position(*point) else {
+            continue;
+        };
+        if cells.last() != Some(&cell) {
+            cells.push(cell);
+        }
+        if cells.len() > STALL_ROUTE_PREFIX {
+            break;
+        }
+    }
+    cells
+}
+
+/// Whether a fresh route walks the cells the stalled one did. A contiguous
+/// match anywhere, not just at the head: backing out of the wedge can leave
+/// the body a cell short of where it stalled, which shifts the sequence
+/// without changing the route.
+fn repeats_route(stalled: &[u32], fresh: &[u32]) -> bool {
+    !stalled.is_empty() && fresh.windows(stalled.len()).any(|window| window == stalled)
+}
+
+/// Blacklist what a route the AI could not walk can be blamed on: the cell
+/// it is standing in (a stall inside one cell has nothing else to name), and
+/// the first crossing along the route that is a real mesh link. Only real
+/// links: a pair named from waypoints need not be one, and an inert entry
+/// would hold one of the bounded blacklist slots while excluding nothing.
+fn report_stall(service: &crate::pathfinding::PathfindingService, route: &[u32], now_seconds: f32) {
+    let Some(&from) = route.first() else {
         return;
     };
     service.report_blocked_cell(from, now_seconds);
-    if let Some((from, to)) = first_crossing_along(service, from, prefix) {
+    if let Some((from, to)) = route
+        .windows(2)
+        .map(|pair| (pair[0], pair[1]))
+        .find(|&(from, to)| service.has_link(from, to))
+    {
         service.report_blocked_link(from, to, now_seconds);
     }
 }
 
-/// The first cell crossing a route makes after `from`, as an adjacent
-/// `(from, to)` pair - what `report_blocked_link` needs, and what a stall
-/// that happened short of any cell edge has no other way to name. Only the
-/// leading waypoints are considered; a blockage further away than that is
-/// not what stopped the body.
-fn first_crossing_along(
-    service: &crate::pathfinding::PathfindingService,
-    from: u32,
-    waypoints: &[Vector3<f32>],
-) -> Option<(u32, u32)> {
-    let mut previous = from;
-    for waypoint in waypoints.iter().take(STALL_ROUTE_PREFIX) {
-        let Some(cell) = service.cell_from_position(*waypoint) else {
-            continue;
-        };
-        if cell != previous {
-            return Some((previous, cell));
-        }
-        previous = cell;
-    }
-    None
-}
-
+/// Whether a route actually arrives at the goal it was computed for. An
+/// empty route arrives nowhere.
 fn route_reaches_goal(waypoints: &[Vector3<f32>], goal: Vector3<f32>) -> bool {
     waypoints
         .last()
@@ -994,25 +985,44 @@ mod tests {
 
     #[test]
     fn a_repath_that_repeats_the_stalled_route_is_recognized() {
-        let stalled = vec![vec3(1.0, 0.0, 0.0), vec3(2.0, 0.0, 0.0)];
-        // Same route back, plus more of it: still the same doomed opening
-        let same = vec![
-            vec3(1.0, 0.0, 0.0),
-            vec3(2.0, 0.0, 0.0),
-            vec3(3.0, 0.0, 0.0),
-        ];
-        assert!(route_starts_the_same(&stalled, &same));
+        let stalled = vec![7, 8];
+        // The same cells, plus more of the route: still the same opening
+        assert!(repeats_route(&stalled, &[7, 8, 9]));
+        // ...and still the same route when the retreat left the body one
+        // cell further back than it stalled in
+        assert!(repeats_route(&stalled, &[6, 7, 8]));
     }
 
     #[test]
     fn a_repath_that_turns_away_is_a_different_route() {
-        let stalled = vec![vec3(1.0, 0.0, 0.0), vec3(2.0, 0.0, 0.0)];
-        let different = vec![vec3(1.0, 0.0, 0.0), vec3(2.0, 0.0, 5.0)];
-        assert!(!route_starts_the_same(&stalled, &different));
-        // A route on another floor is different even directly overhead
-        let stacked = vec![vec3(1.0, 5.0, 0.0), vec3(2.0, 5.0, 0.0)];
-        assert!(!route_starts_the_same(&stalled, &stacked));
-        // ...and so is one that stops short
-        assert!(!route_starts_the_same(&stalled, &stalled[..1]));
+        let stalled = vec![7, 8];
+        assert!(!repeats_route(&stalled, &[7, 12]));
+        // A route that stops short is different too
+        assert!(!repeats_route(&stalled, &[7]));
+        // Nothing to compare against is not a repeat
+        assert!(!repeats_route(&[], &[7, 8]));
+    }
+
+    #[test]
+    fn a_stall_reports_only_crossings_the_mesh_actually_has() {
+        use crate::pathfinding::PathfindingService;
+        use std::sync::Arc;
+
+        // 0 -> 1 -> 2 is a real chain; the route below also names 0 -> 2,
+        // which is not a link and must not eat a blacklist slot.
+        let service = PathfindingService::new(Arc::new(crate::pathfinding::tests::three_cell_db(
+            dark::mission::path_database::PathCellFlags::empty(),
+        )));
+        report_stall(&service, &[0, 2, 1], 0.0);
+        let avoidance = service.avoidance(1.0);
+        assert!(avoidance.cells.contains(&0), "the stalled cell is reported");
+        assert_eq!(
+            avoidance.links.into_iter().collect::<Vec<_>>(),
+            Vec::new(),
+            "0 -> 2 is not a link, and 2 -> 1 is not a crossing this route makes first"
+        );
+
+        report_stall(&service, &[0, 1], 0.0);
+        assert!(service.avoidance(1.0).links.contains(&(0, 1)));
     }
 }
