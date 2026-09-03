@@ -232,13 +232,13 @@ impl InputAction {
             // The right controller's menu button is reserved by the Quest
             // system UI; the left one is the app's.
             InputAction::TogglePauseMenu => Some("/user/hand/left/input/menu/click"),
-            // `Reload`, `CycleAmmo` and `EjectClip` deliberately have NO Quest
-            // binding of their own: in VR reloading is the physical
-            // clip-insert gesture and an eject is the gun hand's lower face
-            // button, both of which name a hand and so work while dual
-            // wielding, where a hand-agnostic action cannot say which gun it
-            // meant. All three remain reachable everywhere else (flat keys,
-            // HTTP, the SDK).
+            // `Reload`, `CycleAmmo`, `EjectClip` and `CycleGunSetting`
+            // deliberately have NO Quest binding of their own: in VR reloading
+            // is the physical clip-insert gesture, an eject is the gun hand's
+            // lower face button and a fire-mode switch its upper one - each
+            // names a hand and so works while dual wielding, where a
+            // hand-agnostic action cannot say which gun it meant. All four
+            // remain reachable everywhere else (flat keys, HTTP, the SDK).
             _ => None,
         }
     }

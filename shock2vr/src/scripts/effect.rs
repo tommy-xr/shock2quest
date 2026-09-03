@@ -240,9 +240,18 @@ pub enum Effect {
         setting: i32,
     },
 
-    /// Switch the player's wielded gun to its other fire setting. No-op when
-    /// nothing is wielded or the gun has no second mode (turrets, the psi amp).
-    CycleGunSetting,
+    /// Switch a gun to its other fire setting.
+    ///
+    /// `hand` names the gun, as [`Effect::EjectClip`] does: `Some(hand)` is the
+    /// gun in that hand - what a per-hand face button means, so a dual-wielding
+    /// player switches the one they pressed - and `None` is the hand-agnostic
+    /// `InputAction::CycleGunSetting`, meaning whichever weapon is wielded.
+    ///
+    /// No-op when that hand holds no weapon, or the gun has no second mode
+    /// (turrets, the psi amp).
+    CycleGunSetting {
+        hand: Option<Handedness>,
+    },
 
     /// Open the weapon settings MFD for the wielded gun in the presentation's
     /// panel slot. No-op when nothing is wielded.

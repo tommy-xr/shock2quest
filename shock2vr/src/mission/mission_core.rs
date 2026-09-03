@@ -5591,9 +5591,12 @@ impl MissionCore {
                     }
                 }
 
-                Effect::CycleGunSetting => {
-                    // Whichever hand holds the gun, like ReloadWeapon above.
-                    if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world) {
+                Effect::CycleGunSetting { hand } => {
+                    // The gun goes with the hand that pressed; the hand-agnostic
+                    // action means whichever hand holds one.
+                    if let Some(weapon) =
+                        crate::wielded_weapon::hand_weapon_target(&self.world, hand)
+                    {
                         // An SS2 gun has exactly two modes, so the switch is a
                         // toggle - and any other stored value lands on mode 0.
                         let current =
@@ -5651,7 +5654,9 @@ impl MissionCore {
                 }
 
                 Effect::EjectClip { hand } => {
-                    if let Some(weapon) = crate::wielded_weapon::eject_target(&self.world, hand) {
+                    if let Some(weapon) =
+                        crate::wielded_weapon::hand_weapon_target(&self.world, hand)
+                    {
                         if let Some(cue) = self.eject_magazine(asset_cache, weapon) {
                             effects.push_back(cue);
                         }
@@ -5683,9 +5688,11 @@ impl MissionCore {
                         Some(crate::input::InputAction::EjectClip) => {
                             effects.push_front(Effect::EjectClip { hand: Some(hand) })
                         }
-                        // The psi amp's buttons, and a gun hand's upper one
-                        // (the fire-mode toggle), resolve to nothing yet -
-                        // their arms land with the actions themselves.
+                        Some(crate::input::InputAction::CycleGunSetting) => {
+                            effects.push_front(Effect::CycleGunSetting { hand: Some(hand) })
+                        }
+                        // The psi amp's buttons resolve to nothing yet - their
+                        // arms land with the power-selection action itself.
                         None => {}
                         Some(action) => warn!("unroutable hand button action: {action}"),
                     }
