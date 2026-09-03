@@ -813,6 +813,12 @@ export interface UiState {
    * mapping it through this pose - see `test/helpers/vr-hand.ts`.
    */
   panel_pose: UiPanelPose | null;
+  /**
+   * The HUD status-message lines showing right now, oldest first - the channel
+   * a `TrapMessage` writes its `P$UseMsg` text to. Each line clears five
+   * seconds after it was added.
+   */
+  messages: string[];
 }
 
 /** One frame of pointing at the shared UI canvas. */

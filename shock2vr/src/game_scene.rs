@@ -578,6 +578,9 @@ pub struct DebugUiState {
     /// while the interface is up in VR. Lets a client aim a controller at a
     /// canvas rect without re-deriving the panel's placement.
     pub panel_pose: Option<DebugUiPanelPose>,
+    /// The HUD status-message lines showing right now, oldest first (the
+    /// channel `TrapMessage` and friends write to). Empty when none are up.
+    pub messages: Vec<String>,
 }
 
 /// One frame of pointing at the shared UI canvas.
@@ -903,6 +906,7 @@ pub trait DebuggableScene {
             readout: Vec::new(),
             pointer: None,
             panel_pose: None,
+            messages: Vec::new(),
         }
     }
 

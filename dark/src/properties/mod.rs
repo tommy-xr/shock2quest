@@ -435,6 +435,12 @@ impl PropObjectNameType {
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjShortName(pub String);
 
+/// `P$UseMsg`: the status-line message an object shows the player - either a
+/// key into USEMSG.STR or, when the value carries its own quoted text, that
+/// text (see `resolve_localized_property_string`).
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropUseMsg(pub String);
+
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropPhysState {
     pub position: Vector3<f32>,
@@ -1744,6 +1750,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$UseMsg",
+            read_variable_length_string,
+            PropUseMsg,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$PsiPower",
             PropPsiPower::read,
             identity,
@@ -2574,6 +2586,19 @@ mod tests {
         let options = PhysAttachOptions::read(&mut cursor, 12);
 
         assert_eq!(options.offset, vec3(4.0, -0.2, -0.075));
+    }
+
+    /// The eng2 "Message Trap" P$UseMsg chunk: a leading u32 the readers
+    /// ignore, then the NUL-terminated key ("OutOfOrder", 15 bytes total).
+    #[test]
+    fn use_message_reads_its_key_from_a_variable_length_string_chunk() {
+        let mut bytes = 11u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(b"OutOfOrder\0");
+        let mut cursor = Cursor::new(bytes);
+
+        let property = PropUseMsg(read_variable_length_string(&mut cursor, 15));
+
+        assert_eq!(property.0, "OutOfOrder");
     }
 
     #[test]
