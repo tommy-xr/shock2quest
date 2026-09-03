@@ -35,6 +35,11 @@ pub const INVISO_TEMPLATE_ID: i32 = -3157;
 /// (`duration_base + duration_per_psi × PSI` seconds).
 pub const ACTIVATION_TYPE_SUSTAINED: i32 = 1;
 
+/// `PropPsiPower::activation_type` for instant self-targeted effects - the
+/// power resolves immediately on cast, with no duration and no projectile
+/// (e.g. PsiHeal, Major Heal, SomaDrain).
+pub const ACTIVATION_TYPE_INSTANT: i32 = 2;
+
 /// The powers that support hold-to-overload (per the published gameplay
 /// tables), by template id. Comments give the gamesys name and the
 /// discipline name players know it by.
