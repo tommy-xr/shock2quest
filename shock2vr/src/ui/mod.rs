@@ -931,6 +931,14 @@ fn texture_options(kind: ImageKind) -> TextureOptions {
         wrap: hologram,
         transparent_index_0: kind.transparent_index_0(),
         luminance_alpha_tint: hologram.then_some(HOLOGRAM_TINT),
+        // The grid's lines are a texel wide and are drawn well under their
+        // authored size, at a distance the VR viewer changes at will; without
+        // mipmaps they alias into a swimming, unevenly-bright grid.
+        filter: if hologram {
+            engine::texture::TextureFilter::LinearMipmap
+        } else {
+            engine::texture::TextureFilter::Linear
+        },
         ..Default::default()
     }
 }
@@ -1383,6 +1391,10 @@ mod tests {
         });
         assert!(options.wrap);
         assert_eq!(options.luminance_alpha_tint, Some(HOLOGRAM_TINT));
+        assert!(matches!(
+            options.filter,
+            engine::texture::TextureFilter::LinearMipmap
+        ));
         assert!(!options.transparent_index_0);
 
         let ui = texture_options(ImageKind::Ui);

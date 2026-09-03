@@ -132,6 +132,11 @@ pub enum TextureFilter {
     /// minified: blending across the key boundary turns it into a visible
     /// fringe that no colour-key test can then recognize.
     Nearest,
+    /// Linear, with mipmaps for minification. Right for fine line art drawn
+    /// smaller than its texels and at a viewpoint-dependent scale (a hologram
+    /// grid on a VR panel): plain `Linear` point-samples the lines, so their
+    /// brightness swims with sub-pixel phase as the panel moves.
+    LinearMipmap,
 }
 
 #[derive(Hash)]
@@ -182,12 +187,13 @@ pub fn init_from_memory2(raw_texture_data: RawTextureData, options: &TextureOpti
         // gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
 
         // set texture filtering parameters
-        let filter = match options.filter {
-            TextureFilter::Linear => gl::LINEAR,
-            TextureFilter::Nearest => gl::NEAREST,
+        let (min_filter, mag_filter) = match options.filter {
+            TextureFilter::Linear => (gl::LINEAR, gl::LINEAR),
+            TextureFilter::Nearest => (gl::NEAREST, gl::NEAREST),
+            TextureFilter::LinearMipmap => (gl::LINEAR_MIPMAP_LINEAR, gl::LINEAR),
         };
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, filter as i32);
-        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, filter as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, min_filter as i32);
+        gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, mag_filter as i32);
     }
 
     let pixel_format = match raw_texture_data.format {
@@ -222,7 +228,9 @@ pub fn init_from_memory2(raw_texture_data: RawTextureData, options: &TextureOpti
             gl::UNSIGNED_BYTE,
             &raw_texture_data.bytes[0] as *const u8 as *const c_void,
         );
-        //gl::GenerateMipmap(gl::TEXTURE_2D);
+        if matches!(options.filter, TextureFilter::LinearMipmap) {
+            gl::GenerateMipmap(gl::TEXTURE_2D);
+        }
     }
 
     Texture {
