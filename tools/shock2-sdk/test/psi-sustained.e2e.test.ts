@@ -8,16 +8,19 @@ import { fireOnce } from "./helpers/weapon.js";
 // End-to-end tests for sustained (timed) psi powers. Photonic Redirection
 // ("Inviso" in the gamesys, tier 4) is the reference power: casting it spends
 // 4 psi points and makes the player invisible to AI/cameras for
-// duration_base + duration_per_psi x PSI = 5 + 5*5 = 30 seconds; the active
-// power list is published via /v1/info as player.active_psi_powers.
+// duration_base + duration_per_psi x PSI seconds (5 + 5*PSI, from the
+// player's PSI stat); the active power list is published via /v1/info as
+// player.active_psi_powers.
 //
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const INVISO_COST = 4;
-/** Inviso duration at the effective PSI stat of 5: 5 + 5*5 seconds. */
-const INVISO_DURATION_FRAMES = 30 * 60;
+/** The trainer stat cap - the highest PSI the sheet can reach. */
+const PSI_STAT = 6;
+/** Inviso duration at `PSI_STAT`: 5 + 5*PSI seconds. */
+const INVISO_DURATION_FRAMES = (5 + 5 * PSI_STAT) * 60;
 
 function aiProp(detail: EntityDetailResult, name: string): string | undefined {
   return detail.properties.find((p) => p.name === name)?.value;
@@ -52,6 +55,7 @@ test(
 
     // The scene auto-equips the Psi Amp on the first update.
     await game.step({ frames: 10 });
+    await game.player.setStats({ psionic_ability: PSI_STAT });
     let player = (await game.info()).player;
     assert.ok(player.wielded_entity_id !== null, "psi amp should be auto-wielded");
     assert.deepEqual(player.active_psi_powers, [], "no sustained powers active at start");
@@ -71,7 +75,7 @@ test(
     assert.equal(player.psi_points, startPsi! - 2 * INVISO_COST, "re-cast spends again");
     assert.deepEqual(player.active_psi_powers, ["Inviso"], "re-cast refreshes, not duplicates");
 
-    // Still active just before the 30 s duration elapses...
+    // Still active just before the duration elapses...
     await stepFrames(game, INVISO_DURATION_FRAMES - 60);
     player = (await game.info()).player;
     assert.deepEqual(player.active_psi_powers, ["Inviso"], "still active before expiry");
@@ -79,7 +83,11 @@ test(
     // ...and expired just after.
     await stepFrames(game, 120);
     player = (await game.info()).player;
-    assert.deepEqual(player.active_psi_powers, [], "Inviso expires after 30 seconds");
+    assert.deepEqual(
+      player.active_psi_powers,
+      [],
+      `Inviso expires after ${INVISO_DURATION_FRAMES / 60} seconds`,
+    );
   },
 );
 
@@ -121,6 +129,7 @@ test(
         mission: "debug_camera",
       });
       await game.step({ frames: 10 });
+      await game.player.setStats({ psionic_ability: PSI_STAT });
       const camera = (await game.entities.list({ filter: "Security Camera", limit: 5 }))
         .entities[0];
       assert.ok(camera, "debug_camera should contain a Security Camera");
