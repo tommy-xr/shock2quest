@@ -92,7 +92,7 @@ const SLOT_PITCH: Vector2<f32> = Vector2::new(35.0, 34.0);
 /// width the flat MFD slot reserves, with the same margin at the top.
 const LOOT_GRID_ORIGIN: Vector2<f32> = Vector2::new(
     (LOOT_PANEL_WIDTH - SLOT_PITCH.x * LOOT_SLOTS.0 as f32) / 2.0,
-    LOOT_GRID_MARGIN,
+    LOOT_GRID_TOP_MARGIN,
 );
 
 /// The loot panel keeps the 188px width of the flat MFD slot it docks into.
@@ -101,10 +101,14 @@ const LOOT_PANEL_WIDTH: f32 = 188.0;
 /// Cells in the loot grid.
 const LOOT_SLOTS: (usize, usize) = (4, 4);
 
-/// Breathing room around the loot grid, so the hologram's outer separators are
-/// not flush with the panel edge (and the flat host's close button, which hugs
-/// the panel's top-right corner, does not sit on the grid).
+/// Breathing room below and beside the loot grid, so the hologram's outer
+/// separators are not flush with the panel edge.
 const LOOT_GRID_MARGIN: f32 = 8.0;
+
+/// Clearance above the grid: the flat host draws its close button hugging the
+/// panel's top-right corner (21px tall at y=8), and a grid tucked under it
+/// would hand that corner cell's clicks to the close button.
+const LOOT_GRID_TOP_MARGIN: f32 = 34.0;
 
 /// Top-left of the backpack strip's 15x3 item grid, in `invback.pcx` pixels:
 /// separators at x = 2 + 35n and y = 15 + 34n, so this sits 2px inside the
@@ -203,6 +207,10 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             // between the lines.
             PanelBackdrop::HologramGrid => gui::image(self.backdrop.texture())
                 .with_hologram(self.num_slots_x as u8, self.num_slots_y as u8)
+                // Fully opaque: the grid's own translucency is in its alpha,
+                // and `gui::image`'s 0.5 default would otherwise halve the
+                // lines in VR while the flat host draws them at full strength.
+                .with_alpha(1.0)
                 .with_position(vec2(self.inv_offset_x, self.inv_offset_y))
                 .with_size(vec2(
                     SLOT_PITCH.x * self.num_slots_x as f32,
@@ -776,7 +784,7 @@ mod tests {
         let (world, container, item, _inventory) = loot_world();
 
         for (gui, expected_origin) in [
-            (ContainerGui::loot_container(), vec2(24.0, 8.0)),
+            (ContainerGui::loot_container(), vec2(24.0, 34.0)),
             (ContainerGui::inv_container(), vec2(4.0, 17.0)),
         ] {
             let components = gui.get_components(&None, container, &world, &ContainerGuiState {});

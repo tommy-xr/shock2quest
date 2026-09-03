@@ -4,7 +4,13 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { LOOT_PANEL_SIZE_PX as PANEL_SIZE_PX, add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import {
+  LOOT_PANEL_SIZE_PX as PANEL_SIZE_PX,
+  LOOT_SLOT_CENTER_PX,
+  add,
+  aimVrHandAt,
+  quatRotate,
+} from "./helpers/vr-hand.js";
 
 // Default-VR regression for #940. The mission data and gameplay path are the
 // real ones:
@@ -20,7 +26,7 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const CORPSE_PSI_AMP = 219;
 const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
-const LOOT_SLOT_CENTER_PX: Vec3 = [24 + 35 / 2, 8 + 34 / 2, 0];
+
 
 test(
   "default VR opens a container world panel and grabs contained loot through the hand ray",

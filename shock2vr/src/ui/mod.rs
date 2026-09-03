@@ -379,9 +379,11 @@ pub enum ImageKind {
     Hologram { tiles_x: u8, tiles_y: u8 },
 }
 
-/// The grid tile every hologram panel is drawn from (`fam/SHODAN/S45.PCX`):
-/// 128x128, a black cell bounded by a bright 1px cross at row/column 64, with
-/// a faint dotted sub-grid and a DIM line along the wrap edge at row/column 0.
+/// The grid tile every hologram panel is drawn from (`shodan/s45.pcx`): a black
+/// cell bounded by a bright cross at row/column 64 (a 1px peak with a few
+/// texels of glow), with a faint dotted sub-grid and a DIM line along the wrap
+/// edge at row/column 0. Its size is fixed at the shipped asset's 128x128 - a
+/// mod that replaced it with a different resolution would need this updated.
 const HOLOGRAM_TILE_PX: f32 = 128.0;
 
 /// The hologram's line colour. The tile's own art is near-white; a cyan tint
@@ -389,7 +391,7 @@ const HOLOGRAM_TILE_PX: f32 = 128.0;
 const HOLOGRAM_TINT: [u8; 3] = [90, 226, 255];
 
 /// The tile bitmap for [`ImageKind::Hologram`].
-pub const HOLOGRAM_TILE_TEXTURE: &str = "s45.pcx";
+pub const HOLOGRAM_TILE_TEXTURE: &str = "shodan/s45.pcx";
 
 impl ImageKind {
     pub(crate) fn transparent_index_0(self) -> bool {
@@ -400,18 +402,20 @@ impl ImageKind {
     /// the whole texture. Both presentations ask this one question, so a
     /// hologram cannot tile differently on a flat panel than on a VR quad.
     ///
-    /// A hologram starts half a tile in and ends half a tile past the last
-    /// tile, so the tile's bright cross lands on every cell border - the outer
-    /// edges included, where the tile's own dim wrap-edge line would otherwise
-    /// fall. The half-texel margin keeps the border line whole rather than
-    /// clipped in half.
+    /// A hologram spans exactly `tiles` whole tiles, starting at the CENTER of
+    /// the tile's bright cross. Every cell border therefore lands on that
+    /// bright line - the outer edges included - at the same sub-texel phase, so
+    /// the separators are evenly bright and the cells line up exactly with the
+    /// item grid's pitch. (A span that is not a whole number of tiles drifts:
+    /// the borders creep off the item grid and each one samples the line at a
+    /// different point, which renders them at visibly different brightness.)
     pub(crate) fn uv_rect(self) -> Option<(Vector2<f32>, Vector2<f32>)> {
         match self {
             Self::Hologram { tiles_x, tiles_y } => {
-                let margin = 0.5 + 1.0 / HOLOGRAM_TILE_PX;
+                let first = (HOLOGRAM_TILE_PX / 2.0 + 0.5) / HOLOGRAM_TILE_PX;
                 Some((
-                    vec2(0.5 - 1.0 / HOLOGRAM_TILE_PX, 0.5 - 1.0 / HOLOGRAM_TILE_PX),
-                    vec2(tiles_x as f32 + margin, tiles_y as f32 + margin),
+                    vec2(first, first),
+                    vec2(first + tiles_x as f32, first + tiles_y as f32),
                 ))
             }
             _ => None,
@@ -1338,22 +1342,32 @@ mod tests {
         );
     }
 
-    /// One cell = one whole tile, bounded by the tile's bright cross. Half a
-    /// tile in on each side is what puts a bright line on all four outer
-    /// edges too, instead of the tile's dim wrap-edge line.
+    /// One cell = one whole tile, bounded by the tile's bright cross - and
+    /// every border, outer edges included, samples that line at the SAME
+    /// sub-texel phase. A span that is not a whole number of tiles (an outward
+    /// margin, say) fails this: the phase drifts across the panel and the
+    /// separators render at visibly different brightness.
     #[test]
-    fn a_hologram_puts_a_bright_separator_on_every_cell_border() {
+    fn a_hologram_puts_every_cell_border_on_the_bright_line() {
+        const TILES: u8 = 4;
         let (uv_min, uv_max) = ImageKind::Hologram {
-            tiles_x: 4,
-            tiles_y: 4,
+            tiles_x: TILES,
+            tiles_y: TILES,
         }
         .uv_rect()
         .expect("a hologram samples a sub-rectangle");
-        let texel = 1.0 / 128.0;
-        assert_eq!(uv_min, vec2(0.5 - texel, 0.5 - texel));
-        assert_eq!(uv_max, vec2(4.5 + texel, 4.5 + texel));
-        // Bright lines land at every half-tile boundary: 5 of them across 4 cells.
-        assert!(((uv_max.x - uv_min.x) - (4.0 + 2.0 * texel)).abs() < 1e-6);
+
+        let bright_texel_center = 64.5 / 128.0;
+        for border in 0..=TILES {
+            let u = uv_min.x + (uv_max.x - uv_min.x) * (border as f32 / TILES as f32);
+            assert!(
+                (u.fract() - bright_texel_center).abs() < 1e-6,
+                "border {border} samples texel {} of its tile, not the bright cross",
+                u.fract() * 128.0
+            );
+        }
+        assert_eq!(uv_max.x - uv_min.x, TILES as f32, "a whole number of tiles");
+        assert_eq!(uv_min.x, uv_min.y, "square cells sample squarely");
 
         assert_eq!(ImageKind::Ui.uv_rect(), None);
         assert_eq!(ImageKind::ObjectIcon.uv_rect(), None);

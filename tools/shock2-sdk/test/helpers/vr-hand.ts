@@ -154,7 +154,10 @@ export const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
  * the 188px width of the MFD slot it docks into, and just enough height for
  * its 4x4 hologram grid plus margins.
  */
-export const LOOT_PANEL_SIZE_PX: Vec3 = [188, 152, 0];
+export const LOOT_PANEL_SIZE_PX: Vec3 = [188, 178, 0];
+
+/** Center of the loot panel's first 35x34 cell, in panel pixels. */
+export const LOOT_SLOT_CENTER_PX: Vec3 = [24 + 35 / 2, 34 + 34 / 2, 0];
 
 /**
  * Squeeze one element of an open world panel with the production VR hand.

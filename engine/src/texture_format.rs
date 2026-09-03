@@ -75,7 +75,7 @@ pub fn tint_alpha_from_luminance(data: RawTextureData, tint: [u8; 3]) -> RawText
         let g = data.bytes[src + 1] as u32;
         let b = data.bytes[src + 2] as u32;
         // Rec. 601 luma, the usual perceptual weighting.
-        let luma = ((r * 299 + g * 587 + b * 114) / 1000).min(255) as u8;
+        let luma = ((r * 299 + g * 587 + b * 114) / 1000) as u8;
         // A source alpha (a colour key, say) still wins: a keyed-out texel
         // must not come back as a lit line.
         let alpha = if has_alpha {

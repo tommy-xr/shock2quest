@@ -358,6 +358,19 @@ where
     /// the element's rect (see [`ImageKind`]). The rect still defines layout
     /// and hit-testing.
     pub fn with_object_icon(self) -> GuiComponent<TEvent> {
+        self.with_kind(ImageKind::ObjectIcon)
+    }
+
+    /// Declare this element's art to be a holographic grid tile, repeated
+    /// `tiles_x` x `tiles_y` across the element's rect (see
+    /// [`ImageKind::Hologram`]).
+    pub fn with_hologram(self, tiles_x: u8, tiles_y: u8) -> GuiComponent<TEvent> {
+        self.with_kind(ImageKind::Hologram { tiles_x, tiles_y })
+    }
+
+    /// How this element's art is keyed and sized. No-op for components that
+    /// draw no art.
+    fn with_kind(self, kind: ImageKind) -> GuiComponent<TEvent> {
         match self {
             Self::Image {
                 position,
@@ -370,7 +383,7 @@ where
                 size,
                 texture,
                 alpha,
-                kind: ImageKind::ObjectIcon,
+                kind,
             },
             Self::Button {
                 position,
@@ -393,29 +406,7 @@ where
                 alpha,
                 entity,
                 label,
-                kind: ImageKind::ObjectIcon,
-            },
-            other => other,
-        }
-    }
-
-    /// Declare this element's art to be a holographic grid tile, repeated
-    /// `tiles_x` x `tiles_y` across the element's rect (see
-    /// [`ImageKind::Hologram`]).
-    pub fn with_hologram(self, tiles_x: u8, tiles_y: u8) -> GuiComponent<TEvent> {
-        match self {
-            Self::Image {
-                position,
-                size,
-                texture,
-                alpha,
-                ..
-            } => Self::Image {
-                position,
-                size,
-                texture,
-                alpha,
-                kind: ImageKind::Hologram { tiles_x, tiles_y },
+                kind,
             },
             other => other,
         }

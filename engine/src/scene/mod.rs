@@ -39,7 +39,7 @@ pub mod cube;
 pub use cube::Cube;
 
 pub mod quad;
-pub use quad::{Quad, QuadUv, create as create_quad, create_with_uv as create_quad_with_uv};
+pub use quad::{Quad, create as create_quad};
 
 pub mod quad_unit;
 pub use quad_unit::{QuadUnit, create as create_quad_unit};

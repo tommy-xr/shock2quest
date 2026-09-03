@@ -29,7 +29,7 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 /// The loot panel's hologram grid tile - the art a container panel draws
 /// (`ContainerGui::loot_container`), and how a loot panel is told apart from
 /// the hack board.
-const LOOT_GRID_TEXTURE = "s45.pcx";
+const LOOT_GRID_TEXTURE = "shodan/s45.pcx";
 
 const CLIP_CRATE = 325; // Contains -> Small HE Clip
 const BIG_NANITE_PILE = -1591;

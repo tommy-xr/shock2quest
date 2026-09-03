@@ -4,7 +4,13 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { PhysicsBodySummary, UiPanel, Vec3 } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { LOOT_PANEL_SIZE_PX as PANEL_SIZE_PX, add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import {
+  LOOT_PANEL_SIZE_PX as PANEL_SIZE_PX,
+  LOOT_SLOT_CENTER_PX as LOG_SLOT_CENTER_PX,
+  add,
+  aimVrHandAt,
+  quatRotate,
+} from "./helpers/vr-hand.js";
 
 // Exact MedSci campaign regression for #921. This uses the authentic production
 // VR chain rather than a debug Frob shortcut:
@@ -22,7 +28,7 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const AMANPOUR_CORPSE = 1680;
 const AMANPOUR_LOG = 1608;
 const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
-const LOG_SLOT_CENTER_PX: Vec3 = [24 + 35 / 2, 8 + 34 / 2, 0];
+
 
 const uiBodies = async (game: GameServer): Promise<PhysicsBodySummary[]> =>
   (await game.physics.bodies()).bodies.filter((body) =>
