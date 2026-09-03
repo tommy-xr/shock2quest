@@ -35,21 +35,24 @@ use super::{
 /// The caster's PSI stat from the character sheet, used to pick the power's
 /// projectile (links are ordered by PSI level 1..8) and to scale sustained
 /// durations. Falls back to the sheet's baseline when the scene has no
-/// `QuestInfo` (a bare debug scene).
+/// `QuestInfo` (a bare debug scene) - logged, because the same borrow also
+/// fails if something else holds `QuestInfo` mutably, and a silent fallback
+/// would cast at the wrong tier.
 fn player_psi_stat(world: &World) -> i32 {
-    world
-        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-        .map(|quests| quests.player_stats().psionic_ability)
-        .unwrap_or_else(|_| crate::player_stats::PlayerStats::default().psionic_ability)
-}
-
-/// The effective PSI a cast resolves at: the character sheet's PSI, plus the
-/// overload bonus when the charge released in the end zone, capped.
-fn effective_psi_for_cast(psi_stat: i32, overload: bool) -> i32 {
-    if overload {
-        (psi_stat + psi::OVERLOAD_PSI_BONUS).min(psi::OVERLOAD_MAX_EFFECTIVE_PSI)
-    } else {
-        psi_stat
+    match world.borrow::<UniqueView<crate::quest_info::QuestInfo>>() {
+        Ok(quests) => quests
+            .player_stats()
+            .stat_level(crate::player_stats::Stat::PsionicAbility),
+        Err(err) => {
+            let baseline = crate::player_stats::PlayerStats::default().psionic_ability;
+            game_log!(
+                WARN,
+                "No character sheet for the psi cast ({}); casting at PSI {}",
+                err,
+                baseline
+            );
+            baseline
+        }
     }
 }
 
@@ -159,7 +162,7 @@ impl Script for PsiAmpScript {
                 }
                 let fraction = elapsed / duration;
                 let overload = fraction >= psi::OVERLOAD_ZONE_START;
-                let effective_psi = effective_psi_for_cast(player_psi_stat(world), overload);
+                let effective_psi = psi::effective_psi_for_cast(player_psi_stat(world), overload);
                 let cast = cast_selected_power(world, entity_id, effective_psi);
                 // A successful overload flashes the success art briefly; a
                 // normal cast - or a fizzle (no psi / power not implemented)
@@ -461,16 +464,6 @@ mod tests {
         assert_eq!(
             player_psi_stat(&world),
             crate::player_stats::PlayerStats::default().psionic_ability
-        );
-    }
-
-    #[test]
-    fn overload_adds_the_bonus_and_caps() {
-        assert_eq!(effective_psi_for_cast(2, false), 2);
-        assert_eq!(effective_psi_for_cast(2, true), 2 + psi::OVERLOAD_PSI_BONUS);
-        assert_eq!(
-            effective_psi_for_cast(psi::OVERLOAD_MAX_EFFECTIVE_PSI, true),
-            psi::OVERLOAD_MAX_EFFECTIVE_PSI
         );
     }
 }
