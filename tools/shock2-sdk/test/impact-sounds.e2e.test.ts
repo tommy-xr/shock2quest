@@ -7,6 +7,7 @@ import {
   describeSounds as describe,
   tagValue,
 } from "./helpers/audio.js";
+import { waitForShotReady } from "./helpers/weapon.js";
 
 // End-to-end test for weapon impact sounds: a bullet hit plays the
 // material-tagged collision schema (event=collision + the projectile's
@@ -119,6 +120,10 @@ test(
     await game.player.teleport({ x: spawn[0], y: spawn[1], z: spawn[2] });
     await game.input.set("head.look", [0, 0]);
     await game.step({ frames: 5 });
+
+    // The pistol waits 500 ms between shots; the creature shot above is still
+    // being paid for.
+    await waitForShotReady(game);
 
     const beforeTerrain =
       (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;

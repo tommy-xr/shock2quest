@@ -212,6 +212,13 @@ pub enum Effect {
         delta: i32,
     },
 
+    /// Start the wait a gun's fire setting imposes between shots
+    /// (`RuntimePropShotCooldown`), in seconds. Pulls during it do nothing.
+    BeginShotCooldown {
+        entity_id: EntityId,
+        seconds: f32,
+    },
+
     /// Raise an energy weapon's charge to at least its authored capacity.
     /// Applied against the live gun state so duplicate recharge messages in one
     /// tick remain idempotent. No-op for entities without a gun state.

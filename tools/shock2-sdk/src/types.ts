@@ -508,6 +508,9 @@ export interface PlayerSnapshot {
    * `CycleGunSetting` input action. */
   wielded_gun_setting: number | null;
   wielded_gun_setting_header: string | null;
+  /** Milliseconds left of the wielded gun's between-shots wait (0 = ready to
+   * fire, null = nothing wielded). A pull during the wait is ignored. */
+  wielded_gun_cooldown_ms: number | null;
   /** The player's current / maximum hit points, or null when the player has
    * no health pool. Drained by psi burnout. */
   hit_points: number | null;

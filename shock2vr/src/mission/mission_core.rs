@@ -92,7 +92,8 @@ use crate::{
         RuntimePropAIBehavior, RuntimePropAttachment, RuntimePropDeathPose,
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
         RuntimePropLaunchedProjectile, RuntimePropReloading, RuntimePropSelectedAmmo,
-        RuntimePropTransform, RuntimePropVhots, RuntimePropVrGripOffset,
+        RuntimePropShotCooldown, RuntimePropShotModifiers, RuntimePropTransform, RuntimePropVhots,
+        RuntimePropVrGripOffset,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -3361,6 +3362,9 @@ impl MissionCore {
         // Advance any in-progress reload (clears itself when complete).
         self.update_flat_reload_anim(time.elapsed);
 
+        // Advance the between-shots wait a fire setting imposes on a gun.
+        self.update_shot_cooldowns(time.elapsed);
+
         // Sync up the position of all the physics objects
         // The timing of this is important - things like the GUI rendering depend on an up-to-date position
         // from physics
@@ -4922,6 +4926,11 @@ impl MissionCore {
         info
     }
 
+    /// Launch speed (Dark units/s) above which a projectile is resolved by
+    /// raycast instead of simulated: a bullet crosses a room inside one frame,
+    /// so stepping it as a physics body tunnels it through walls.
+    const FAST_PROJECTILE_SPEED: f32 = 80.0;
+
     fn finish_instantiating_entity(
         id_to_model: &mut HashMap<EntityId, Model>,
         id_to_bitmap: &mut HashMap<EntityId, Rc<BitmapAnimation>>,
@@ -4956,9 +4965,16 @@ impl MissionCore {
                 //.map(|v| vec3(v.0.z.abs(), v.0.y.abs(), v.0.x.abs()))
                 .unwrap_or(vec3(0.0, 0.0, 0.0));
 
+            // The launch speed is the projectile's authored one scaled by the
+            // fire mode that fired it (the fusion cannon's DEATH lob leaves at
+            // 0.4x). The raycast/simulated split below stays on the AUTHORED
+            // speed: it says which kind of projectile this is, and the two
+            // paths do not deal the same damage, so letting a modifier move a
+            // shot across it would change far more than its speed.
+            let modifiers = RuntimePropShotModifiers::of(world, created_entity.entity_id);
             let mag = initial_velocity.magnitude();
-            let x_velocity = root_transform.transform_vector(vec3(0.0, 0.0, mag));
-            if initial_velocity.magnitude() > 80.0 {
+            let x_velocity = root_transform.transform_vector(vec3(0.0, 0.0, mag * modifiers.speed));
+            if mag > Self::FAST_PROJECTILE_SPEED {
                 // Use raycast strategy for fast moving objects
                 script_world.add_entity2(
                     created_entity.entity_id,
@@ -5386,6 +5402,11 @@ impl MissionCore {
                     if let Ok(gun_state) = (&mut v_gun_state).get(entity_id) {
                         gun_state.ammo = (gun_state.ammo + delta).max(0);
                     }
+                }
+
+                Effect::BeginShotCooldown { entity_id, seconds } => {
+                    self.world
+                        .add_component(entity_id, RuntimePropShotCooldown { remaining: seconds });
                 }
 
                 Effect::RechargeAmmo {
@@ -7988,27 +8009,45 @@ impl MissionCore {
         Ok(info.entity_id)
     }
 
+    /// Advance any running between-shots cooldown by `dt` and clear it when the
+    /// gun is ready again.
+    fn update_shot_cooldowns(&self, dt: std::time::Duration) {
+        self.advance_timer_prop(dt, |cooldown: &mut RuntimePropShotCooldown, dt_s| {
+            cooldown.remaining -= dt_s;
+            cooldown.remaining <= 0.0
+        });
+    }
+
     /// Advance any in-progress reload by `dt` and clear it when complete.
     fn update_flat_reload_anim(&self, dt: std::time::Duration) {
+        self.advance_timer_prop(dt, |reload: &mut RuntimePropReloading, dt_s| {
+            reload.elapsed += dt_s;
+            reload.is_done()
+        });
+    }
+
+    /// Advance every instance of a runtime timer component by `dt` and remove
+    /// the ones `advance` reports finished. Removal is a second pass: the
+    /// storage is still borrowed while the first one iterates it.
+    fn advance_timer_prop<
+        T: shipyard::Component<Tracking = shipyard::track::Untracked> + Send + Sync,
+    >(
+        &self,
+        dt: std::time::Duration,
+        mut advance: impl FnMut(&mut T, f32) -> bool,
+    ) {
         let dt_s = dt.as_secs_f32();
         let mut done = Vec::new();
         {
-            let mut v = self
-                .world
-                .borrow::<ViewMut<RuntimePropReloading>>()
-                .unwrap();
-            for (id, r) in (&mut v).iter().with_id() {
-                r.elapsed += dt_s;
-                if r.is_done() {
+            let mut v = self.world.borrow::<ViewMut<T>>().unwrap();
+            for (id, timer) in (&mut v).iter().with_id() {
+                if advance(timer, dt_s) {
                     done.push(id);
                 }
             }
         }
         if !done.is_empty() {
-            let mut v = self
-                .world
-                .borrow::<ViewMut<RuntimePropReloading>>()
-                .unwrap();
+            let mut v = self.world.borrow::<ViewMut<T>>().unwrap();
             for id in done {
                 v.remove(id);
             }

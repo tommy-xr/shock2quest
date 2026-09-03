@@ -683,6 +683,10 @@ pub struct PlayerStateSnapshot {
     /// with the `CycleGunSetting` input action.
     pub wielded_gun_setting: Option<i32>,
     pub wielded_gun_setting_header: Option<String>,
+    /// Milliseconds left of the between-shots wait the wielded gun's fire
+    /// setting imposes - 0 when it is ready to fire, `None` when nothing is
+    /// wielded. A trigger pull while this is above zero does nothing.
+    pub wielded_gun_cooldown_ms: Option<i32>,
     /// The player's hit points (current, max), or `None` when the player has
     /// no health pool. Seeded from `The Player` template and consumed by every
     /// damage path, with zero entering the player death lifecycle.
@@ -798,6 +802,18 @@ impl Game {
             wielded_ammo_type: crate::hud::get_wielded_ammo_type(world),
             wielded_gun_setting: gun_setting.as_ref().map(|(setting, _)| *setting),
             wielded_gun_setting_header: gun_setting.and_then(|(_, header)| header),
+            wielded_gun_cooldown_ms: wielded.map(|weapon| {
+                world
+                    .borrow::<shipyard::View<crate::runtime_props::RuntimePropShotCooldown>>()
+                    .ok()
+                    .and_then(|v| {
+                        use shipyard::Get;
+                        v.get(weapon)
+                            .ok()
+                            .map(|c| (c.remaining * 1000.0).ceil() as i32)
+                    })
+                    .unwrap_or(0)
+            }),
             hit_points: (|| {
                 use dark::properties::{PropHitPoints, PropMaxHitPoints};
                 let v_hp = world.borrow::<shipyard::View<PropHitPoints>>().ok()?;

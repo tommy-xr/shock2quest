@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { waitForShotReady } from "./helpers/weapon.js";
 
 // End-to-end test for data-driven impact spangs: a projectile spawns the spang
 // its authored links say, not a hardcoded effect.
@@ -106,10 +107,12 @@ test(
 
     // Shot 2 - terrain, from back at spawn (the shot hybrid is alerted and
     // closing in, but a wall can't walk out of the aim): the default facing
-    // (yaw 0) looks at a wall.
+    // (yaw 0) looks at a wall. The pistol waits 500 ms between shots, so shot 1
+    // is still being paid for here.
     await game.player.teleport({ x: spawn[0], y: spawn[1], z: spawn[2] });
     await game.input.set("head.look", [0, 0]);
     await game.step({ frames: 5 });
+    await waitForShotReady(game);
     await game.input.set("right_hand.trigger", 1.0);
     await game.step({ frames: 2 });
     await game.input.set("right_hand.trigger", 0.0);
