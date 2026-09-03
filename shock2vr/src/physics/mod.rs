@@ -2243,6 +2243,47 @@ pub struct CollisionContact {
     pub closing_speed: Option<f32>,
 }
 
+/// How hard a swing landed: the smaller of two readings, because a blow has to
+/// be both.
+///
+/// - **A real closing speed** (`weapon - victim`). Two bodies keeping station
+///   are not hitting each other however fast they travel - a player
+///   backpedalling from a creature that chases at the same speed is not
+///   swinging at it.
+/// - **Not merely the player's own locomotion** (`weapon - player - victim`).
+///   A held weapon rides the player, so walking carries it at ~10 world
+///   units/s, five times the gate; that alone billed a free authored hit on
+///   anything walked into.
+///
+/// Each is wrong by itself in one direction, and the smaller of the two is
+/// right in every case: a hand swing clears the gate whether the player is
+/// walking or standing, while walking, riding and backpedalling all read ~0.
+/// A creature charging onto a held blade still impales itself - both readings
+/// see its approach.
+///
+/// The velocities are taken along the surface that was touched, because
+/// sliding a weapon *along* something is fast but closes on nothing. `abs`
+/// because the normal's orientation depends on which collider Rapier listed
+/// first; with no contact geometry there is no surface to project onto, so the
+/// speeds are taken whole.
+///
+/// Only *translation* is divided out - a player who turns on the spot still
+/// swings the weapon head around at arm's length, and that reads as the swing
+/// it looks like.
+pub fn relative_swing_speed(
+    weapon_velocity: Vector3<f32>,
+    player_velocity: Vector3<f32>,
+    victim_velocity: Vector3<f32>,
+    normal: Option<Vector3<f32>>,
+) -> f32 {
+    let speed_of = |velocity: Vector3<f32>| match normal {
+        Some(normal) => velocity.dot(normal).abs(),
+        None => velocity.magnitude(),
+    };
+    let closing = weapon_velocity - victim_velocity;
+    speed_of(closing).min(speed_of(closing - player_velocity))
+}
+
 /// Predicate selecting *only* sensor colliders - the volumes the player's
 /// ENTER/EXIT tracking is built from. Shared by the per-frame poll in
 /// [`PhysicsWorld::move_player`] and the swept poll in
@@ -2460,6 +2501,18 @@ pub struct PhysicsWorld {
     // Rapier joint motors. Keyed by the weapon body handle so the normal
     // set_position_rotation path can redirect hand poses to the target.
     held_melee_drives: HashMap<RigidBodyHandle, HeldMeleeDrive>,
+
+    // The player's travel over the previous frame, in world units per second,
+    // and where they were when it was sampled. A held weapon rides the player,
+    // so this is what the melee swing gate divides out of the weapon's motion
+    // (see [`relative_swing_speed`]).
+    //
+    // Sampled at the top of a frame rather than when the player moves, because
+    // the hand poses this is subtracted from are one frame old: they were
+    // composed onto the player's position as of the END of the previous frame.
+    // Derived per-frame state, so nothing saves it.
+    player_velocity: Vector3<f32>,
+    last_player_translation: Option<Vector3<f32>>,
 
     // TODO:
     // physics_hooks: Box<dyn PhysicsHooks>,
@@ -3040,6 +3093,11 @@ impl PhysicsWorld {
             .unwrap();
         character_body.enable_ccd(true);
         character_body.set_translation(vec_to_nvec(position), true);
+        // A relocation is not travel. Re-seat the swing gate's sampler on the
+        // destination, or the jump reads as hundreds of units/s of "player
+        // motion" for one frame - which, subtracted from a still weapon, bills
+        // a free blow on whatever the player lands touching.
+        self.last_player_translation = Some(position);
         // Whatever the player was riding, they are not standing on it here.
         // Re-probe now rather than just forgetting: a stale support would carry
         // them by a platform's next step from clear across the level, and an
@@ -3605,6 +3663,43 @@ impl PhysicsWorld {
         }
     }
 
+    /// How fast the player themselves travelled over the previous frame, in
+    /// world units per second. A held melee weapon rides the player, so a
+    /// swing gate must divide this out: walking carries a wrench at ~10 u/s,
+    /// five times the swing threshold.
+    pub fn player_velocity(&self) -> Vector3<f32> {
+        self.player_velocity
+    }
+
+    /// The velocity the player's hand is driving a held melee weapon at, at a
+    /// world-space point on it - read from the invisible controller target
+    /// rather than the weapon body.
+    ///
+    /// The two differ whenever the drive is catching up: a weapon held back by
+    /// world geometry and then released covers the accumulated error in one
+    /// step, and the weapon body reports that catch-up as speed the hand never
+    /// had. `None` when this entity is not a driven held melee weapon.
+    pub fn held_melee_target_velocity_at_point(
+        &self,
+        entity_id: EntityId,
+        point: Vector3<f32>,
+    ) -> Option<Vector3<f32>> {
+        let handle = self.entity_id_to_body.get(&entity_id)?;
+        let target = self.held_melee_drives.get(handle)?.target;
+        self.body_velocity_at_point(target, point)
+    }
+
+    fn body_velocity_at_point(
+        &self,
+        handle: RigidBodyHandle,
+        point: Vector3<f32>,
+    ) -> Option<Vector3<f32>> {
+        let body = self.rigid_body_set.get(handle)?;
+        Some(nvec_to_cgmath(
+            body.velocity_at_point(&Point::from(vec_to_nvec(point))),
+        ))
+    }
+
     /// Velocity of `entity_id`'s body at a world-space point on it.
     ///
     /// Differs from [`Self::get_velocity`] by including the `omega x r` term:
@@ -3616,11 +3711,8 @@ impl PhysicsWorld {
         entity_id: EntityId,
         point: Vector3<f32>,
     ) -> Option<Vector3<f32>> {
-        let handle = self.entity_id_to_body.get(&entity_id)?;
-        let rigid_body = self.rigid_body_set.get(*handle)?;
-        Some(nvec_to_cgmath(
-            rigid_body.velocity_at_point(&Point::from(vec_to_nvec(point))),
-        ))
+        let handle = *self.entity_id_to_body.get(&entity_id)?;
+        self.body_velocity_at_point(handle, point)
     }
 
     pub fn set_velocity(&mut self, entity_id: EntityId, velocity: Vector3<f32>) {
@@ -4004,6 +4096,23 @@ impl PhysicsWorld {
     /// movement volume wider than the creature, and stopping on it would halt
     /// the weapon in the air beside its target. Loose props are likewise
     /// better swept through than treated as walls.
+    /// Record how far the player travelled over the previous frame, as the
+    /// velocity a held weapon rides along with.
+    ///
+    /// Measured from the character body's own displacement, so it covers every
+    /// way the player moves - walking, a moving platform, a relocation - which
+    /// is what the hand poses composed onto it did too. Whatever this misses
+    /// is billed as a swing, so it deliberately over-covers.
+    fn sample_player_velocity(&mut self, player_handle: &PlayerHandle) {
+        let translation = self.get_player_translation(player_handle);
+        let dt = self.integration_parameters.dt;
+        self.player_velocity = match self.last_player_translation {
+            Some(previous) if dt > 0.0 => (translation - previous) / dt,
+            _ => Vector3::new(0.0, 0.0, 0.0),
+        };
+        self.last_player_translation = Some(translation);
+    }
+
     fn drive_held_melee(&mut self) {
         let max_step = crate::dev_params::get(crate::dev_params::MELEE_MAX_SPEED)
             * self.integration_parameters.dt;
@@ -4085,7 +4194,18 @@ impl PhysicsWorld {
                     0.0
                 };
                 let heading = delta / distance;
-                let speed = travel * heading.dot(&vec_to_nvec(stop.normal)).abs();
+                // Minus the player's own motion: the target pose is world
+                // space, so walking a weapon into a creature moves it just as
+                // fast as swinging it does. The travel itself is still the
+                // drive's - it carries whatever error the weapon had accrued
+                // behind the hand - which is why the script path reads the
+                // hand target instead of a body that has been obstructed.
+                let speed = relative_swing_speed(
+                    nvec_to_cgmath(heading * travel),
+                    self.player_velocity,
+                    Vector3::new(0.0, 0.0, 0.0),
+                    Some(stop.normal),
+                );
                 self.pending_melee_sweep_events
                     .push(CollisionEvent::CollisionStarted {
                         entity1_id: weapon_entity,
@@ -4462,6 +4582,8 @@ impl PhysicsWorld {
             pending_player_push_velocity: HashMap::new(),
             kinematic_attachments: HashMap::new(),
             held_melee_drives: HashMap::new(),
+            player_velocity: Vector3::new(0.0, 0.0, 0.0),
+            last_player_translation: None,
 
             debug_pipeline,
 
@@ -4691,6 +4813,7 @@ impl PhysicsWorld {
         // (tram floor + walls/buttons) therefore advance as one physical body,
         // matching Dark's source->destination attachment flow.
         self.update_kinematic_attachments();
+        self.sample_player_velocity(player_handle);
         self.drive_held_melee();
 
         // Attribute any non-finite body state to its entity before the step
