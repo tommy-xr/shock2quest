@@ -6,7 +6,7 @@ use dark::{
     },
     properties::{
         ObjectNameType, PropGunState, PropHUDSelect, PropHitPoints, PropLog, PropMaxHitPoints,
-        PropObjName, PropObjectNameType, PropShowHP, PropStackCount, PropTemplateId,
+        PropObjName, PropObjectNameType, PropShowHP, PropStackCount, PropSymName, PropTemplateId,
     },
 };
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
@@ -137,8 +137,35 @@ fn localized_weapon_condition(
         .cloned()
 }
 
+/// An object with no `P$ObjName` of its own (e.g. the Wrench, which inherits
+/// only a symbolic name) falls back to looking its `P$SymName` up in
+/// `objname.str` directly - no embedded fallback text, since there is no
+/// property to carry one. A multi-word symbolic name ("Laser Pistol") is
+/// tried with spaces replaced by underscores too, the same convention
+/// `resolve_gun_setting_string` uses for its own symbolic-name fallback,
+/// since the table keys multi-word entries that way ("laser_pistol").
+fn resolve_symname_fallback(
+    world: &World,
+    entity_id: EntityId,
+    object_name_strings: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let sym_name = world
+        .borrow::<View<PropSymName>>()
+        .ok()?
+        .get(entity_id)
+        .ok()?
+        .0
+        .clone();
+    let key = sym_name.to_ascii_lowercase();
+    object_name_strings
+        .get(&key)
+        .or_else(|| object_name_strings.get(&key.replace(' ', "_")))
+        .cloned()
+}
+
 /// The player-facing display name of `entity_id`: its `P$ObjName` resolved
-/// through `objname.str` and then through whatever substitution its
+/// through `objname.str`, falling back to its `P$SymName` when it has no
+/// `P$ObjName` of its own, and then through whatever substitution its
 /// `P$ObjectNameType` asks for (a stack count, a log's title, a gun's
 /// condition word). `None` when the object has no name to show.
 ///
@@ -150,17 +177,18 @@ pub fn resolve_item_name(
     world: &World,
     entity_id: EntityId,
 ) -> Option<String> {
-    let obj_name = {
-        let v_prop_obj_name = world.borrow::<View<PropObjName>>().ok()?;
-        let prop_obj_name = v_prop_obj_name.get(entity_id).ok()?;
-        if prop_obj_name.0.is_empty() {
-            return None;
-        }
-        prop_obj_name.0.clone()
-    };
+    let obj_name = world
+        .borrow::<View<PropObjName>>()
+        .ok()
+        .and_then(|v_prop_obj_name| v_prop_obj_name.get(entity_id).ok().cloned())
+        .filter(|prop| !prop.0.is_empty())
+        .map(|prop| prop.0);
 
     let object_name_strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
-    let localized_name = resolve_localized_property_string(&obj_name, &object_name_strings);
+    let localized_name = match &obj_name {
+        Some(obj_name) => resolve_localized_property_string(obj_name, &object_name_strings),
+        None => resolve_symname_fallback(world, entity_id, &object_name_strings)?,
+    };
     if localized_name.is_empty() {
         return None;
     }
@@ -534,6 +562,49 @@ mod tests {
             format_stack_aware_item_name(r#"Nanites: "%d nanites.""#, None),
             r#"Nanites: "%d nanites.""#,
         );
+    }
+
+    /// The Wrench inherits only `P$SymName`, never `P$ObjName`; without the
+    /// fallback, `resolve_symname_fallback` (and so `resolve_item_name`) has
+    /// nothing to key `objname.str` with.
+    #[test]
+    fn symname_only_entity_resolves_via_the_objname_table() {
+        let strings = HashMap::from([("wrench".to_string(), "A very solid wrench.".to_string())]);
+        let mut world = World::new();
+        let id = world.add_entity(PropSymName("Wrench".to_owned()));
+
+        assert_eq!(
+            resolve_symname_fallback(&world, id, &strings),
+            Some("A very solid wrench.".to_string()),
+        );
+    }
+
+    /// Multi-word symbolic names are keyed with underscores in the shipped
+    /// table ("Laser Pistol" -> "laser_pistol"), the same convention
+    /// `resolve_gun_setting_string` already uses for its own symbolic-name
+    /// fallback.
+    #[test]
+    fn multi_word_symname_falls_back_to_its_underscored_key() {
+        let strings = HashMap::from([("laser_pistol".to_string(), "A laser pistol.".to_string())]);
+        let mut world = World::new();
+        let id = world.add_entity(PropSymName("Laser Pistol".to_owned()));
+
+        assert_eq!(
+            resolve_symname_fallback(&world, id, &strings),
+            Some("A laser pistol.".to_string()),
+        );
+    }
+
+    /// A symbolic name absent from the table (an internal/abstract
+    /// archetype, not a player-facing object) still yields no name - the
+    /// fallback must not invent text the original wouldn't show either.
+    #[test]
+    fn unknown_symname_has_no_fallback() {
+        let strings = HashMap::new();
+        let mut world = World::new();
+        let id = world.add_entity(PropSymName("Ammo".to_owned()));
+
+        assert_eq!(resolve_symname_fallback(&world, id, &strings), None);
     }
 }
 
