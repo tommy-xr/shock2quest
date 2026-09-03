@@ -597,6 +597,11 @@ pub struct UiStateResult {
     /// The top-docked inventory strip (Tab metagame mode); `Some` exactly in
     /// "use" mode.
     pub strip: Option<shock2vr::game_scene::DebugUiPanel>,
+    /// The inventory bar's mini-frame name line: the display name of whatever
+    /// the player is pointing at (a strip/panel item, the lifted item, or the
+    /// world object under the aim). `None` when the bar is down or nothing
+    /// named is under the point.
+    pub name_strip: Option<String>,
     /// The item held on the cursor mid-drag (cursor-is-the-item); `Some`
     /// between a lift and the place/throw that clears it.
     pub cursor: Option<shock2vr::game_scene::DebugUiCursor>,
