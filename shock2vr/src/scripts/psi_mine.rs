@@ -15,17 +15,14 @@
 
 use cgmath::{InnerSpace, Point3, Transform, point3};
 use collision::Aabb3;
-use dark::properties::{PropCreature, PropPhysDimensions};
+use dark::properties::{PropAI, PropHitPoints, PropPhysDimensions};
 use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 use std::time::Duration;
 
 use crate::{physics::PhysicsWorld, runtime_props::RuntimePropTransform, time::Time};
 
-use super::{
-    Effect, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
-    ai::ai_util::is_killed,
-};
+use super::{Effect, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError};
 
 /// How long after the cast the mine starts sensing: enough to clear the
 /// caster's own body (it is lobbed from their position, and the blast reaches
@@ -33,9 +30,9 @@ use super::{
 /// live by the time it arrives.
 const ARM_DELAY: Duration = Duration::from_millis(100);
 
-/// Sensing reach when the mine authors no physics dimensions, which the shipped
-/// `PsiMine Projectile` does (`radius0` 1.4 - seven times the projectile
-/// default, the mine's own body).
+/// Sensing reach for a mine that authors no physics dimensions. The shipped
+/// `PsiMine Projectile` authors `radius0` 1.4 - seven times the projectile
+/// default, the mine's own body - and that authored value is what is used.
 const DEFAULT_TRIGGER_RADIUS: f32 = 1.4;
 
 /// How long an untripped mine lasts before it quietly expires, so a cast that
@@ -125,10 +122,14 @@ impl Script for PsiMine {
     }
 }
 
-/// Whether a living creature has come within the mine's sensing reach - its own
-/// authored body radius, measured to the creature's collider rather than to its
-/// origin, so a body standing beside the mine trips it and one across the room
-/// does not.
+/// Whether a live AI has come within the mine's sensing reach - its own
+/// authored body radius, measured to the bounds of the creature's collider
+/// rather than to its origin, so a body standing beside the mine trips it and
+/// one across the room does not.
+///
+/// "Live AI" is `P$AI` plus hit points left, not `PropCreature`: the authored
+/// corpses scattered through the levels carry `PropCreature` with no hit
+/// points at all, and a mine must not go off on the scenery.
 fn creature_in_reach(world: &World, physics: &PhysicsWorld, mine_entity_id: EntityId) -> bool {
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let Ok(mine_transform) = v_transform.get(mine_entity_id) else {
@@ -142,18 +143,20 @@ fn creature_in_reach(world: &World, physics: &PhysicsWorld, mine_entity_id: Enti
         .filter(|radius| *radius > 0.0)
         .unwrap_or(DEFAULT_TRIGGER_RADIUS);
 
-    let v_creature = world.borrow::<View<PropCreature>>().unwrap();
+    let v_ai = world.borrow::<View<PropAI>>().unwrap();
+    let v_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
 
-    v_creature.iter().with_id().any(
-        |(entity_id, _creature)| match physics.get_aabb2(entity_id) {
-            Some(bounds) => {
-                !is_killed(entity_id, world) && distance_to_bounds(mine_position, &bounds) <= radius
-            }
-            // A creature with no live collider (contained, not yet in the
-            // world) is nothing to trip on.
-            None => false,
-        },
-    )
+    (&v_ai, &v_hit_points)
+        .iter()
+        .with_id()
+        .any(|(entity_id, (_ai, hit_points))| {
+            hit_points.hit_points > 0
+                // No live collider (contained, not yet in the world) is
+                // nothing to trip on.
+                && physics
+                    .get_aabb2(entity_id)
+                    .is_some_and(|bounds| distance_to_bounds(mine_position, &bounds) <= radius)
+        })
 }
 
 /// Distance from a point to the nearest point of a box - zero inside it.
@@ -171,45 +174,62 @@ mod tests {
     use super::*;
     use crate::physics::CollisionGroup;
     use cgmath::{Matrix4, Quaternion, vec3};
-    use dark::properties::PropHitPoints;
+    use dark::properties::PropCreature;
     use std::collections::HashMap;
 
-    /// A mine at the origin and one human creature, its collider a 1-unit cube
-    /// centered on `creature_position`.
+    fn dimensions(radius0: f32) -> PropPhysDimensions {
+        PropPhysDimensions {
+            radius0,
+            radius1: 0.0,
+            offset0: vec3(0.0, 0.0, 0.0),
+            offset1: vec3(0.0, 0.0, 0.0),
+            size: vec3(0.0, 0.0, 0.0),
+            unk1: 1,
+            unk2: 1,
+        }
+    }
+
+    /// A mine at the origin with the authored sensing radius, and one live AI
+    /// whose collider is a 1-unit cube centered on `creature_position`.
     fn mine_world(
         creature_position: cgmath::Vector3<f32>,
         hit_points: i32,
+        mine_radius: f32,
     ) -> (World, PhysicsWorld, EntityId) {
-        let mut world = World::new();
-        let mut physics = PhysicsWorld::new();
+        let (mut world, mut physics, mine) = empty_mine_world(mine_radius);
+        let creature = world.add_entity((PropAI("Grunt".to_owned()), PropHitPoints { hit_points }));
+        add_body(&mut physics, creature, creature_position);
+        settle(&mut physics);
+        (world, physics, mine)
+    }
 
+    fn empty_mine_world(mine_radius: f32) -> (World, PhysicsWorld, EntityId) {
+        let mut world = World::new();
+        let physics = PhysicsWorld::new();
         let mine = world.add_entity((
             RuntimePropTransform(Matrix4::from_translation(vec3(0.0, 0.0, 0.0))),
-            PropPhysDimensions {
-                radius0: DEFAULT_TRIGGER_RADIUS,
-                radius1: 0.0,
-                offset0: vec3(0.0, 0.0, 0.0),
-                offset1: vec3(0.0, 0.0, 0.0),
-                size: vec3(0.0, 0.0, 0.0),
-                unk1: 1,
-                unk2: 1,
-            },
+            dimensions(mine_radius),
         ));
-        let creature = world.add_entity((PropCreature(0), PropHitPoints { hit_points }));
+        (world, physics, mine)
+    }
+
+    fn add_body(physics: &mut PhysicsWorld, entity_id: EntityId, position: cgmath::Vector3<f32>) {
         physics.add_kinematic(
-            creature,
-            creature_position,
+            entity_id,
+            position,
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             vec3(0.0, 0.0, 0.0),
             vec3(1.0, 1.0, 1.0),
             CollisionGroup::actor(),
             false,
         );
+    }
+
+    /// One step so the broad phase sees the fresh bodies.
+    fn settle(physics: &mut PhysicsWorld) {
         let mut player =
             physics.create_player(vec3(0.0, 0.0, -50.0), EntityId::from_inner(9).unwrap());
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
-
-        (world, physics, mine)
     }
 
     fn update(
@@ -233,7 +253,7 @@ mod tests {
     #[test]
     fn an_armed_mine_detonates_on_a_creature_within_reach() {
         // Collider face at x = 1.4, exactly the mine's authored reach.
-        let (world, physics, mine) = mine_world(vec3(1.9, 0.0, 0.0), 12);
+        let (world, physics, mine) = mine_world(vec3(1.9, 0.0, 0.0), 12, DEFAULT_TRIGGER_RADIUS);
         let mut script = PsiMine::new();
 
         let effect = update(&mut script, &world, &physics, mine, ARM_DELAY);
@@ -248,7 +268,7 @@ mod tests {
     /// on whatever stands there before it has left the hand.
     #[test]
     fn an_unarmed_mine_ignores_a_creature_on_top_of_it() {
-        let (world, physics, mine) = mine_world(vec3(0.5, 0.0, 0.0), 12);
+        let (world, physics, mine) = mine_world(vec3(0.5, 0.0, 0.0), 12, DEFAULT_TRIGGER_RADIUS);
         let mut script = PsiMine::new();
 
         let effect = update(&mut script, &world, &physics, mine, ARM_DELAY / 2);
@@ -258,7 +278,7 @@ mod tests {
 
     #[test]
     fn an_armed_mine_ignores_a_creature_out_of_reach() {
-        let (world, physics, mine) = mine_world(vec3(3.0, 0.0, 0.0), 12);
+        let (world, physics, mine) = mine_world(vec3(3.0, 0.0, 0.0), 12, DEFAULT_TRIGGER_RADIUS);
         let mut script = PsiMine::new();
 
         let effect = update(&mut script, &world, &physics, mine, ARM_DELAY);
@@ -266,9 +286,36 @@ mod tests {
         assert!(matches!(effect, Effect::NoEffect));
     }
 
+    /// The reach is the mine's own authored radius, not a constant: the same
+    /// creature that is out of reach above trips a wider-bodied mine.
     #[test]
-    fn a_corpse_does_not_trip_a_mine() {
-        let (world, physics, mine) = mine_world(vec3(1.0, 0.0, 0.0), 0);
+    fn the_reach_comes_from_the_mines_authored_dimensions() {
+        let (world, physics, mine) = mine_world(vec3(3.0, 0.0, 0.0), 12, 3.0);
+        let mut script = PsiMine::new();
+
+        let effect = update(&mut script, &world, &physics, mine, ARM_DELAY);
+
+        assert!(matches!(effect, Effect::SlayEntity { entity_id } if entity_id == mine));
+    }
+
+    #[test]
+    fn a_dead_creature_does_not_trip_a_mine() {
+        let (world, physics, mine) = mine_world(vec3(1.0, 0.0, 0.0), 0, DEFAULT_TRIGGER_RADIUS);
+        let mut script = PsiMine::new();
+
+        let effect = update(&mut script, &world, &physics, mine, ARM_DELAY);
+
+        assert!(matches!(effect, Effect::NoEffect));
+    }
+
+    /// The levels are littered with authored corpse props: `PropCreature` with
+    /// no AI and no hit points. A mine must not go off on the scenery.
+    #[test]
+    fn an_authored_corpse_does_not_trip_a_mine() {
+        let (mut world, mut physics, mine) = empty_mine_world(DEFAULT_TRIGGER_RADIUS);
+        let corpse = world.add_entity(PropCreature(0));
+        add_body(&mut physics, corpse, vec3(1.0, 0.0, 0.0));
+        settle(&mut physics);
         let mut script = PsiMine::new();
 
         let effect = update(&mut script, &world, &physics, mine, ARM_DELAY);
@@ -278,7 +325,7 @@ mod tests {
 
     #[test]
     fn an_untripped_mine_expires() {
-        let (world, physics, mine) = mine_world(vec3(100.0, 0.0, 0.0), 12);
+        let (world, physics, mine) = mine_world(vec3(100.0, 0.0, 0.0), 12, DEFAULT_TRIGGER_RADIUS);
         let mut script = PsiMine::new();
 
         let effect = update(&mut script, &world, &physics, mine, LIFETIME);
@@ -288,7 +335,7 @@ mod tests {
 
     #[test]
     fn a_damaged_mine_detonates() {
-        let (world, physics, mine) = mine_world(vec3(100.0, 0.0, 0.0), 12);
+        let (world, physics, mine) = mine_world(vec3(100.0, 0.0, 0.0), 12, DEFAULT_TRIGGER_RADIUS);
         let mut script = PsiMine::new();
 
         let effect = script.handle_message(
@@ -308,7 +355,7 @@ mod tests {
     /// still armed on load, and still expires on schedule.
     #[test]
     fn the_fuse_survives_save_and_load() {
-        let (world, physics, mine) = mine_world(vec3(100.0, 0.0, 0.0), 12);
+        let (world, physics, mine) = mine_world(vec3(100.0, 0.0, 0.0), 12, DEFAULT_TRIGGER_RADIUS);
         let mut before_save = PsiMine::new();
         update(
             &mut before_save,
