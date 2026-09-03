@@ -62,8 +62,15 @@ const STALL_RECOVERY_SECONDS: f32 = 0.8;
 /// Progress smaller than this doesn't count toward un-stalling (jitter)
 const STALL_PROGRESS_EPSILON: f32 = 0.25 / SCALE_FACTOR;
 /// Displacement watchdog: with an active waypoint, failing to move this far
-/// (XZ, 1 Dark foot) ...
-const DISPLACEMENT_STALL_DISTANCE: f32 = 1.0 / SCALE_FACTOR;
+/// (XZ, 3 Dark feet) ...
+///
+/// One foot was under the amplitude of a wedged body's own sliding: a
+/// hybrid pressed into medsci2's stair rail rocked ~1 foot about a fixed
+/// spot and reset the anchor forever, so no stall ever fired and the route
+/// never changed (measured). A walking creature covers many times this in
+/// the window below, so the wider bar only catches bodies that are going
+/// nowhere.
+const DISPLACEMENT_STALL_DISTANCE: f32 = 3.0 / SCALE_FACTOR;
 /// ...within this long also counts as a stall. Micro-sliding around a
 /// blocking capsule (another creature, a prop corner) can keep improving
 /// the waypoint distance by more than the epsilon, resetting the progress
@@ -505,7 +512,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 };
                 if let Some(from) = service.cell_from_position(position) {
                     // The cell we are stuck in is reported EVERY stall, not
-                    // only when the waypoint shares it. Two things need it:
+                    // only when the crossing is unknown. Two things need it:
                     // a stall entirely inside one cell has no crossing to
                     // blacklist at all (the body never reached an edge), and
                     // a cell somebody is wedged in is a bad place to route
@@ -513,7 +520,25 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     // doomed route and pile in behind (three hybrids in one
                     // medsci2 door jamb).
                     service.report_blocked_cell(from, now_seconds);
-                    if let Some(to) = crossing_into.filter(|to| *to != from) {
+                    // Nothing across the waypoint means the body never
+                    // reached the edge; the crossing that is actually
+                    // blocked is then the next one along the route (the
+                    // medsci2 Science-door jamb is exactly this - the body
+                    // presses into the jamb feet short of the boundary).
+                    let crossing = crossing_into
+                        .filter(|to| *to != from)
+                        .map(|to| (from, to))
+                        .or_else(|| {
+                            first_crossing_along(&service, from, &self.path[self.next_waypoint..])
+                        });
+                    if let Some((from, to)) = crossing {
+                        // The cell we could not get into is blacklisted as
+                        // well as the crossing. Waypoints sit on cell edges
+                        // and a route can be denser than the mesh, so the
+                        // pair we can name is not always an actual graph
+                        // link - the cell penalty bites whichever way A*
+                        // would have come in.
+                        service.report_blocked_cell(to, now_seconds);
                         service.report_blocked_link(from, to, now_seconds);
                     }
                 }
@@ -699,17 +724,32 @@ fn escalate_blocked_route(
         return;
     };
     service.report_blocked_cell(from, now_seconds);
+    if let Some((from, to)) = first_crossing_along(service, from, prefix) {
+        service.report_blocked_link(from, to, now_seconds);
+    }
+}
+
+/// The first cell crossing a route makes after `from`, as an adjacent
+/// `(from, to)` pair - what `report_blocked_link` needs, and what a stall
+/// that happened short of any cell edge has no other way to name. Only the
+/// leading waypoints are considered; a blockage further away than that is
+/// not what stopped the body.
+fn first_crossing_along(
+    service: &crate::pathfinding::PathfindingService,
+    from: u32,
+    waypoints: &[Vector3<f32>],
+) -> Option<(u32, u32)> {
     let mut previous = from;
-    for waypoint in prefix {
+    for waypoint in waypoints.iter().take(STALL_ROUTE_PREFIX) {
         let Some(cell) = service.cell_from_position(*waypoint) else {
             continue;
         };
         if cell != previous {
-            service.report_blocked_link(previous, cell, now_seconds);
-            return;
+            return Some((previous, cell));
         }
         previous = cell;
     }
+    None
 }
 
 fn route_reaches_goal(waypoints: &[Vector3<f32>], goal: Vector3<f32>) -> bool {
