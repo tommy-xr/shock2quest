@@ -1328,7 +1328,7 @@ fn process_command(
                         active_panel: ui.active_panel,
                         strip: ui.strip,
                         cursor: ui.cursor,
-                        ammo_cycle: ui.ammo_cycle,
+                        readout: ui.readout,
                         pointer: ui.pointer,
                         panel_pose: ui.panel_pose,
                     }
@@ -1338,7 +1338,7 @@ fn process_command(
                     active_panel: None,
                     strip: None,
                     cursor: None,
-                    ammo_cycle: None,
+                    readout: Vec::new(),
                     pointer: None,
                     panel_pose: None,
                 });

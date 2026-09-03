@@ -67,6 +67,14 @@ fn is_weapon(world: &World, entity: EntityId) -> bool {
     is_psi_amp(world, entity)
 }
 
+/// Whether `entity` is an energy weapon - one that recharges instead of taking
+/// clips, so it offers no reload control. Identified by the `EnergyWeapon`
+/// script the `Energy` archetype hands down, which is the thing that makes it
+/// rechargeable.
+pub(crate) fn is_energy_weapon(world: &World, entity: EntityId) -> bool {
+    crate::scripts::script_util::entity_has_script(world, entity, "energyweapon")
+}
+
 /// Whether `entity`'s template carries the `weapontype psiamp` class tag.
 pub(crate) fn is_psi_amp(world: &World, entity: EntityId) -> bool {
     let Some(template_id) = crate::scripts::script_util::entity_class_template_id(world, entity)

@@ -10,11 +10,8 @@ use cgmath::{Vector2, vec2};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::World;
 
-use super::ammo_panel::{self, AmmoReadout};
-use super::{
-    get_health_percentage, get_psi_percentage, get_wielded_ammo, get_wielded_psi_charge,
-    get_wielded_psi_power,
-};
+use super::ammo_panel::{self, AmmoReadout, ReadoutButtonSpec};
+use super::{get_health_percentage, get_psi_percentage, get_wielded_psi_charge};
 use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
 use crate::ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign};
 
@@ -68,11 +65,9 @@ const AMMO_GAUGE: Rect = Rect::new(AMMO_X, AMMO_Y, AMMO_W, AMMO_H);
 //    the left crop of BIOFULL.PCX, so the bars/numbers land identically). The
 //    right half is baked research/query/map + nanite/cyber chrome (art stub).
 //  - AMMOFULL: use ("mouse") mode expands the ammo panel LEFT by
-//    166 (AMMOBACK 94 -> AMMOFULL 260), UL = (378,414); the
-//    ammo-type CYCLE button is {{186,15},{198,56}} panel-local
-//    (art ammoarw0/1), i.e. canvas (564,429,12,41). The round count/icon stay
-//    in the panel's right gauge (the AMMOBACK footprint), so their compact
-//    offsets are reused.
+//    166 (AMMOBACK 94 -> AMMOFULL 260), UL = (378,414). Everything inside the
+//    panel - the readout and its SETTING / RELOAD / ammo-cycle / psi-selector
+//    buttons - is laid out once in `ammo_panel` in panel pixels.
 const METERS_FULL_W: f32 = 260.0;
 const AMMO_FULL_MODE_DX: f32 = 166.0;
 const AMMO_FULL_X: f32 = AMMO_X - AMMO_FULL_MODE_DX; // 378
@@ -83,11 +78,6 @@ const AMMO_FULL_GAUGE: Rect = Rect::new(AMMO_FULL_X, AMMO_Y, METERS_FULL_W, AMMO
 /// panel pixels and placed relative to this - the VR forearm draws the same
 /// panel with its own origin.
 const AMMO_PANEL_ORIGIN: Vector2<f32> = vec2(AMMO_FULL_X, AMMO_Y);
-/// The AMMOFULL ammo-type cycle button (the original's cycle hotspot, ammoarw
-/// art). Clicking it cycles the wielded weapon's ammo type. Exposed so the
-/// flat pointer host can hit-test the same rect it is drawn at.
-pub(crate) const AMMO_CYCLE_BUTTON: Rect =
-    ammo_panel::at(AMMO_PANEL_ORIGIN, ammo_panel::CYCLE_BUTTON);
 
 // Psi overload meter - drawn center-screen below the crosshair while the psi
 // amp's trigger is held on an overloadable power (and briefly after release,
@@ -209,54 +199,49 @@ pub(crate) fn create_flat_hud(
         get_health_percentage(world),
         get_psi_percentage(world),
         get_wielded_psi_charge(world),
-        // The same predicate the pointer hit-test uses, so drawn == clickable.
-        &AmmoReadout::from_world(world, ammo_cycle_button_visible(world, use_mode)),
+        // The buttons are drawn exactly when the pointer can reach them - use
+        // mode - and the hit-test below reads the same readout.
+        &AmmoReadout::from_world(world, use_mode),
     );
     // Keep the crosshair square and bars undistorted on non-4:3 windows.
     canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
 }
 
-/// Whether the wielded weapon may cycle ammo (2+ selectable projectile types,
-/// and a magazine that can be ejected if it is loaded). Uses the same predicate
-/// as `cycle_ammo`.
-pub(crate) fn can_cycle_wielded_ammo(world: &World) -> bool {
-    let Some(weapon) = crate::wielded_weapon::wielded_weapon(world) else {
-        return false;
-    };
-    crate::scripts::script_util::can_cycle_ammo(world, weapon)
-}
-
-/// The single source of truth for whether the AMMOFULL ammo-cycle button is
-/// shown/active this frame - used for BOTH rendering (via `create_flat_hud`'s
-/// `can_cycle_ammo`) and pointer hit-testing (`mission_core`), so the drawn and
-/// clickable regions never diverge. Requires use mode, a wielded gun that may
-/// cycle (2+ ammo types, and an ejectable magazine when loaded), and no psi-amp
-/// display (which replaces the ammo section - `build_flat_hud_canvas`'s
-/// psi-power early return).
-pub(crate) fn ammo_cycle_button_visible(world: &World, use_mode: bool) -> bool {
-    use_mode
-        && get_wielded_psi_power(world).is_none()
-        && get_wielded_ammo(world).is_some()
-        && can_cycle_wielded_ammo(world)
+/// The readout's clickable buttons this frame, on the 640x480 HUD canvas.
+///
+/// The single source of truth for BOTH rendering and pointer hit-testing: the
+/// rects come from the shared `ammo_panel` layout that drew them, mapped
+/// through the same panel origin, so the drawn and clickable regions cannot
+/// diverge.
+pub(crate) fn readout_buttons(world: &World, use_mode: bool) -> Vec<ReadoutButtonSpec> {
+    ammo_panel::buttons(&AmmoReadout::from_world(world, use_mode))
+        .into_iter()
+        .map(|spec| ReadoutButtonSpec {
+            rect: ammo_panel::at(AMMO_PANEL_ORIGIN, spec.rect),
+            ..spec
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `AmmoReadout` for the common test shapes.
+    /// `AmmoReadout` for the common test shapes. `cycle` stands in for a
+    /// multi-ammo weapon; nothing else offers a button.
     fn readout(
         ammo: Option<i32>,
         ammo_icon: Option<&str>,
         ammo_type: Option<&str>,
-        show_cycle_button: bool,
+        cycle: bool,
     ) -> AmmoReadout {
         AmmoReadout {
-            psi_power: None,
             ammo,
             ammo_icon: ammo_icon.map(str::to_string),
             ammo_type: ammo_type.map(str::to_string),
-            show_cycle_button,
+            can_cycle_ammo: cycle,
+            show_buttons: cycle,
+            ..Default::default()
         }
     }
 
@@ -304,8 +289,8 @@ mod tests {
 
     #[test]
     fn psi_amp_shows_discipline_instead_of_clip() {
-        // Base 6 + gauge backdrop + tier badge + tier count + name = 10;
-        // the clip readout is suppressed even though the amp has ammo=0.
+        // Base 6 + gauge backdrop + tier badge + discipline name = 9; the clip
+        // readout is suppressed even though the amp has ammo=0.
         let canvas = build_flat_hud_canvas(
             true,
             false,
@@ -318,14 +303,14 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(canvas.element_count(), 10);
+        assert_eq!(canvas.element_count(), 9);
     }
 
     #[test]
     fn use_mode_expands_readouts_and_adds_the_ammo_cycle_button() {
         // Shooter with a multi-ammo weapon: crosshair + bio + 2 bars + 2
-        // numbers + ammo backdrop + count = 8; NO cycle button (the caller
-        // gates it on use mode, see `ammo_cycle_button_visible`).
+        // numbers + ammo backdrop + count = 8; NO cycle button (the pointer
+        // cannot reach it outside use mode).
         let shooter = build_flat_hud_canvas(
             true,
             false,
@@ -359,44 +344,43 @@ mod tests {
         assert_eq!(single_ammo.element_count(), 7);
     }
 
+    /// Every control the layout offers is inside the expanded AMMOFULL gauge,
+    /// which is the only backdrop that is up while they are clickable.
     #[test]
-    fn ammo_cycle_button_sits_in_the_ammofull_panel() {
-        // The cycle button (the original's cycle hotspot) is inside the expanded
-        // AMMOFULL gauge and left of the compact AMMOBACK footprint.
-        assert!(AMMO_FULL_GAUGE.x <= AMMO_CYCLE_BUTTON.x);
-        assert!(AMMO_CYCLE_BUTTON.x + AMMO_CYCLE_BUTTON.w <= AMMO_FULL_GAUGE.x + AMMO_FULL_GAUGE.w);
+    fn every_readout_button_sits_in_the_ammofull_panel() {
+        for rect in [
+            ammo_panel::CYCLE_BUTTON,
+            ammo_panel::SETTING_BUTTON,
+            ammo_panel::RELOAD_BUTTON,
+            ammo_panel::PSI_TIER_PREV,
+            ammo_panel::PSI_TIER_NEXT,
+            ammo_panel::PSI_POWER_PREV,
+            ammo_panel::PSI_POWER_NEXT,
+        ] {
+            let placed = ammo_panel::at(AMMO_PANEL_ORIGIN, rect);
+            assert!(AMMO_FULL_GAUGE.x <= placed.x, "{placed:?}");
+            assert!(placed.x + placed.w <= AMMO_FULL_GAUGE.x + AMMO_FULL_GAUGE.w);
+        }
     }
 
-    /// The shared panel layout must keep landing where the flat HUD authored
-    /// it: the ammo readout moved into `ammo_panel` in panel-local pixels, and
-    /// these are the absolute canvas rects it replaced.
+    /// The readout proper stays inside the COMPACT gauge too, so shooter mode
+    /// is not drawing half the readout onto bare 3D view.
     #[test]
-    fn shared_panel_layout_reproduces_the_authored_flat_rects() {
-        let placed = |rect| ammo_panel::at(AMMO_PANEL_ORIGIN, rect);
-        assert_eq!(
-            placed(ammo_panel::CYCLE_BUTTON),
-            Rect::new(564.0, 429.0, 12.0, 41.0)
-        );
-        assert_eq!(
-            placed(ammo_panel::COUNT),
-            Rect::new(544.0, 436.0, 94.0, 20.0)
-        );
-        assert_eq!(
-            placed(ammo_panel::ICON),
-            Rect::new(504.0, 430.0, 32.0, 32.0)
-        );
-        assert_eq!(
-            placed(ammo_panel::TYPE_LABEL),
-            Rect::new(544.0, 458.0, 94.0, 16.0)
-        );
-        assert_eq!(
-            placed(ammo_panel::PSI_TIER_BADGE),
-            Rect::new(500.0, 436.0, 32.0, 19.0)
-        );
-        assert_eq!(
-            placed(ammo_panel::PSI_POWER_NAME),
-            Rect::new(484.0, 458.0, 154.0, 16.0)
-        );
+    fn the_readout_sits_inside_the_compact_gauge() {
+        for rect in [
+            ammo_panel::COUNT,
+            ammo_panel::ICON,
+            ammo_panel::TYPE_LABEL,
+            ammo_panel::PSI_TIER_BADGE,
+            ammo_panel::PSI_POWER_NAME,
+        ] {
+            let placed = ammo_panel::at(AMMO_PANEL_ORIGIN, rect);
+            assert!(AMMO_GAUGE.x <= placed.x, "{placed:?} left of AMMOBACK");
+            assert!(
+                placed.x + placed.w <= AMMO_GAUGE.x + AMMO_GAUGE.w,
+                "{placed:?} right of AMMOBACK"
+            );
+        }
     }
 
     #[test]
