@@ -25,12 +25,18 @@ use crate::{mission::PlayerInfo, vr_config::Handedness};
 /// The weapon held in `hand`, or `None` when that hand is empty or holds
 /// something with no ammo/charge of its own (a medkit, a melee weapon).
 pub fn weapon_in_hand(world: &World, hand: Handedness) -> Option<EntityId> {
+    let held = held_by_hand(world, hand)?;
+    is_weapon(world, held).then_some(held)
+}
+
+/// Whatever `hand` holds, weapon or not. The one place `PlayerInfo`'s two
+/// slots are read by handedness.
+pub fn held_by_hand(world: &World, hand: Handedness) -> Option<EntityId> {
     let player_info = world.borrow::<UniqueView<PlayerInfo>>().ok()?;
-    let held = match hand {
+    match hand {
         Handedness::Left => player_info.left_hand_entity_id,
         Handedness::Right => player_info.right_hand_entity_id,
-    }?;
-    is_weapon(world, held).then_some(held)
+    }
 }
 
 /// Whether the player holds `entity` in either hand. Unlike

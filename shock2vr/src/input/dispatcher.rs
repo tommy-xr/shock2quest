@@ -1,5 +1,7 @@
+use crate::hand_buttons::HandButton;
 use crate::input_context::InputContext;
 use crate::scripts::{Effect, GlobalEffect};
+use crate::vr_config::Handedness;
 use dark::properties::AIAlertLevel;
 
 use super::{InputAction, InputActionState};
@@ -42,6 +44,30 @@ const CARRIED_WEAPON_ACTIONS: &[(InputAction, i32)] = &[
     (InputAction::EquipViralProliferator, -29),
     (InputAction::EquipWormLauncher, -27),
     (InputAction::EquipPsiAmp, -247),
+];
+
+/// The raw per-hand face buttons, in the terms `crate::hand_buttons` resolves.
+const HAND_BUTTON_ACTIONS: &[(InputAction, Handedness, HandButton)] = &[
+    (
+        InputAction::LeftHandLowerButton,
+        Handedness::Left,
+        HandButton::Lower,
+    ),
+    (
+        InputAction::LeftHandUpperButton,
+        Handedness::Left,
+        HandButton::Upper,
+    ),
+    (
+        InputAction::RightHandLowerButton,
+        Handedness::Right,
+        HandButton::Lower,
+    ),
+    (
+        InputAction::RightHandUpperButton,
+        Handedness::Right,
+        HandButton::Upper,
+    ),
 ];
 
 pub struct ActionDispatcher;
@@ -144,6 +170,15 @@ impl ActionDispatcher {
         }
         if state.just_triggered(InputAction::ReadLastUnreadLog) {
             effects.push(Effect::ReadLastUnreadLog);
+        }
+        // The face buttons are forwarded RAW, hand and position intact: what a
+        // press means depends on what that hand is holding, which only the
+        // mission can see. This dispatcher stays non-contextual; the table
+        // lives in `crate::hand_buttons`.
+        for &(action, hand, button) in HAND_BUTTON_ACTIONS {
+            if state.just_triggered(action) {
+                effects.push(Effect::HandButton { hand, button });
+            }
         }
         // `InputAction::TogglePauseMenu` deliberately produces no effect: the
         // pause overlay is owned by `Game`, which reads the action directly

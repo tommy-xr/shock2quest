@@ -1,5 +1,6 @@
 pub mod audio_log;
 pub mod game_scene;
+pub mod hand_buttons;
 pub mod hand_pose;
 pub mod hand_pose_library;
 pub mod hit_feedback;
@@ -1386,10 +1387,17 @@ impl Game {
         // for HTTP injection alike, so no input path can drift from the rule
         // that the toggle is inert until the Developer screen enables it.
         self.free_camera.sync_gate();
-        if actions.just_triggered(input::InputAction::ToggleFreeCamera)
-            && free_camera::FreeCamera::is_enabled()
-        {
-            self.free_camera.toggle();
+        if free_camera::FreeCamera::is_enabled() {
+            // The chord IS the right hand's own two face buttons, and a chord
+            // is pressed one button at a time - so without this the press on
+            // the way to A+B would first open the cyber interface. Arming the
+            // developer toggle costs that hand its contextual buttons; nothing
+            // else can reach them anyway while the camera is being flown.
+            actions.suppress(input::InputAction::RightHandLowerButton);
+            actions.suppress(input::InputAction::RightHandUpperButton);
+            if actions.just_triggered(input::InputAction::ToggleFreeCamera) {
+                self.free_camera.toggle();
+            }
         }
 
         // Drive a background transition: the loading screen animates while the parse

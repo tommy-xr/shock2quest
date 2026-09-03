@@ -316,6 +316,15 @@ pub enum Effect {
     /// rotation sampled at the input edge.
     ReadLastUnreadLog,
 
+    /// A face button was pressed on one hand, before anything decided what it
+    /// means. The mission resolves it against what that hand holds and
+    /// whether the cyber interface is up - see [`crate::hand_buttons`] - and
+    /// emits the resolved effect, if any.
+    HandButton {
+        hand: Handedness,
+        button: crate::hand_buttons::HandButton,
+    },
+
     /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
     /// `M` key, `kOverlayMap 26`). Opens the wide map MFD bound to the
     /// synthetic map-panel entity, or closes it if it is already open. No-op in

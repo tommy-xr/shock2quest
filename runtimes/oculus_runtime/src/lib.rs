@@ -349,12 +349,24 @@ fn main() {
         .create_action::<bool>("crouch", "Crouch Toggle", &[])
         .unwrap();
 
-    let use_mode_action = action_set
-        .create_action::<bool>("use_mode", "Cyber Interface (Use Mode)", &[])
+    // The four face buttons, bound RAW by hand and position (lower = left X /
+    // right A, upper = left Y / right B). What a press means depends on what
+    // that hand is holding, and is resolved in the mission - see
+    // `shock2vr::hand_buttons`.
+    let left_lower_action = action_set
+        .create_action::<bool>("left_lower_face", "Left Hand Lower Button (X)", &[])
         .unwrap();
 
-    let audio_log_action = action_set
-        .create_action::<bool>("audio_log_reader", "Audio Log Reader", &[])
+    let left_upper_action = action_set
+        .create_action::<bool>("left_upper_face", "Left Hand Upper Button (Y)", &[])
+        .unwrap();
+
+    let right_lower_action = action_set
+        .create_action::<bool>("right_lower_face", "Right Hand Lower Button (A)", &[])
+        .unwrap();
+
+    let right_upper_action = action_set
+        .create_action::<bool>("right_upper_face", "Right Hand Upper Button (B)", &[])
         .unwrap();
 
     // The left controller's Menu button. (The right controller's is reserved
@@ -362,21 +374,6 @@ fn main() {
     let menu_action = action_set
         .create_action::<bool>("menu", "Pause Menu", &[])
         .unwrap();
-
-    // The right controller's two face buttons. Nothing binds them singly - VR
-    // reloading is the physical clip-insert gesture - so they exist only as the
-    // two halves of the free-camera chord.
-    let free_camera_a_action = action_set
-        .create_action::<bool>("free_camera_a", "Free Camera Chord (A)", &[])
-        .unwrap();
-
-    let free_camera_b_action = action_set
-        .create_action::<bool>("free_camera_b", "Free Camera Chord (B)", &[])
-        .unwrap();
-
-    let free_camera_chord = shock2vr::input::InputAction::ToggleFreeCamera
-        .quest_touch_chord_paths()
-        .expect("Quest free-camera chord binding");
 
     // Bind our actions to input devices using the given profile
     // If you want to access inputs specific to a particular device you may specify a different
@@ -460,22 +457,42 @@ fn main() {
                         .unwrap(),
                 ),
                 xr::Binding::new(
-                    &use_mode_action,
+                    &left_lower_action,
                     xr_instance
                         .string_to_path(
-                            shock2vr::input::InputAction::ToggleUseMode
+                            shock2vr::input::InputAction::LeftHandLowerButton
                                 .quest_touch_click_path()
-                                .expect("Quest use-mode binding"),
+                                .expect("Quest left lower face-button binding"),
                         )
                         .unwrap(),
                 ),
                 xr::Binding::new(
-                    &audio_log_action,
+                    &left_upper_action,
                     xr_instance
                         .string_to_path(
-                            shock2vr::input::InputAction::ReadLastUnreadLog
+                            shock2vr::input::InputAction::LeftHandUpperButton
                                 .quest_touch_click_path()
-                                .expect("Quest audio-log binding"),
+                                .expect("Quest left upper face-button binding"),
+                        )
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &right_lower_action,
+                    xr_instance
+                        .string_to_path(
+                            shock2vr::input::InputAction::RightHandLowerButton
+                                .quest_touch_click_path()
+                                .expect("Quest right lower face-button binding"),
+                        )
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &right_upper_action,
+                    xr_instance
+                        .string_to_path(
+                            shock2vr::input::InputAction::RightHandUpperButton
+                                .quest_touch_click_path()
+                                .expect("Quest right upper face-button binding"),
                         )
                         .unwrap(),
                 ),
@@ -488,14 +505,6 @@ fn main() {
                                 .expect("Quest pause-menu binding"),
                         )
                         .unwrap(),
-                ),
-                xr::Binding::new(
-                    &free_camera_a_action,
-                    xr_instance.string_to_path(free_camera_chord.0).unwrap(),
-                ),
-                xr::Binding::new(
-                    &free_camera_b_action,
-                    xr_instance.string_to_path(free_camera_chord.1).unwrap(),
                 ),
             ],
         )
@@ -682,8 +691,12 @@ fn main() {
                             // otherwise resume invisibly crouched).
                             crouch_toggled = false;
                             crouch_button_was_pressed = false;
-                            action_state.release(shock2vr::input::InputAction::ToggleUseMode);
-                            action_state.release(shock2vr::input::InputAction::ReadLastUnreadLog);
+                            action_state.release(shock2vr::input::InputAction::LeftHandLowerButton);
+                            action_state.release(shock2vr::input::InputAction::LeftHandUpperButton);
+                            action_state
+                                .release(shock2vr::input::InputAction::RightHandLowerButton);
+                            action_state
+                                .release(shock2vr::input::InputAction::RightHandUpperButton);
                         }
                         xr::SessionState::STOPPING => {
                             session.end().unwrap();
@@ -800,15 +813,11 @@ fn main() {
             .unwrap()
             .current_state;
         let crouch_state = crouch_action.state(&session, xr::Path::NULL).unwrap();
-        let use_mode_state = use_mode_action.state(&session, xr::Path::NULL).unwrap();
-        let audio_log_state = audio_log_action.state(&session, xr::Path::NULL).unwrap();
+        let left_lower_state = left_lower_action.state(&session, xr::Path::NULL).unwrap();
+        let left_upper_state = left_upper_action.state(&session, xr::Path::NULL).unwrap();
+        let right_lower_state = right_lower_action.state(&session, xr::Path::NULL).unwrap();
+        let right_upper_state = right_upper_action.state(&session, xr::Path::NULL).unwrap();
         let menu_state = menu_action.state(&session, xr::Path::NULL).unwrap();
-        let free_camera_a_state = free_camera_a_action
-            .state(&session, xr::Path::NULL)
-            .unwrap();
-        let free_camera_b_state = free_camera_b_action
-            .state(&session, xr::Path::NULL)
-            .unwrap();
         // Only edge-detect while the action is live: with the session merely
         // VISIBLE (system overlay up), current_state reads false even though
         // the button may still be physically held, and treating that as a
@@ -819,29 +828,41 @@ fn main() {
             }
             crouch_button_was_pressed = crouch_state.current_state;
         }
-        action_state.sync_discrete_button(
-            shock2vr::input::InputAction::ToggleUseMode,
-            use_mode_state.is_active,
-            use_mode_state.changed_since_last_sync,
-            use_mode_state.current_state,
-        );
-        action_state.sync_discrete_button(
-            shock2vr::input::InputAction::ReadLastUnreadLog,
-            audio_log_state.is_active,
-            audio_log_state.changed_since_last_sync,
-            audio_log_state.current_state,
-        );
+        for (action, state) in [
+            (
+                shock2vr::input::InputAction::LeftHandLowerButton,
+                &left_lower_state,
+            ),
+            (
+                shock2vr::input::InputAction::LeftHandUpperButton,
+                &left_upper_state,
+            ),
+            (
+                shock2vr::input::InputAction::RightHandLowerButton,
+                &right_lower_state,
+            ),
+            (
+                shock2vr::input::InputAction::RightHandUpperButton,
+                &right_upper_state,
+            ),
+        ] {
+            action_state.sync_discrete_button(
+                action,
+                state.is_active,
+                state.changed_since_last_sync,
+                state.current_state,
+            );
+        }
         action_state.sync_discrete_button(
             shock2vr::input::InputAction::TogglePauseMenu,
             menu_state.is_active,
             menu_state.changed_since_last_sync,
             menu_state.current_state,
         );
-        // Right A and B are the free camera's chord and nothing else: gun
-        // handling in VR is the physical clip-insert gesture, so neither button
-        // carries an action of its own and pressing one alone does nothing.
-        // (That is what retires #1144's second-press suppression - there is no
-        // longer an ammo swap for completing the chord to trigger.)
+        // The free camera is right A+B together - the same two buttons the
+        // right hand carries singly, so while its dev option is on `Game`
+        // suppresses that hand's contextual buttons and the pair is the chord
+        // and nothing else.
         //
         // A chord is edge-detected from the pair's raw states, so it takes
         // them directly rather than through `sync_discrete_button`. Activity
@@ -851,9 +872,9 @@ fn main() {
         // the same hazard the latched crouch above guards against.
         action_state.sync_chord(
             shock2vr::input::InputAction::ToggleFreeCamera,
-            free_camera_a_state.is_active && free_camera_b_state.is_active,
-            free_camera_a_state.current_state,
-            free_camera_b_state.current_state,
+            right_lower_state.is_active && right_upper_state.is_active,
+            right_lower_state.current_state,
+            right_upper_state.current_state,
         );
 
         let left_trigger_value = left_trigger

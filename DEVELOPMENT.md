@@ -121,9 +121,9 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | `B` | `DebugCycleWeapon` | spawns and wields the next weapon (unlike the number row) |
 | `T` / `Y` | `CycleAmmo` / `CyclePsiPower` | no Quest binding - in VR ammo is swapped by inserting a clip of the other type |
 | `F` | `CycleGunSetting` | switch the wielded gun's fire mode (e.g. NORM / BURST); flat only |
-| `U` | `ReadLastUnreadLog` | Quest: left `Y` |
+| `U` | `ReadLastUnreadLog` | on Quest an *upper* face button resolves to this - see below |
 | `M` | `ToggleMap` | flat only |
-| `Tab` / `I` | `ToggleUseMode` | the cyber interface; Quest: left `X` |
+| `Tab` / `I` | `ToggleUseMode` | the cyber interface; on Quest a *lower* face button resolves to this |
 | `Esc` | `TogglePauseMenu` | Quest: left `Menu` |
 | `Alt+S` / `Alt+L` | `QuickSave` / `QuickLoad` | |
 | `Alt+G` | `DebugForceChase` | every monster hunts the player, pinned |
@@ -133,6 +133,25 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 Every action is also triggerable without a keyboard - over HTTP on the debug
 runtime (`POST /v1/input/action`) or through the SDK (`game.input.trigger(...)`).
 `GET /v1/input/actions` lists them.
+
+#### Quest face buttons are per-hand and contextual
+
+The four face buttons are bound raw, by hand and position - lower is left `X` /
+right `A`, upper is left `Y` / right `B` (`LeftHandLowerButton` ..
+`RightHandUpperButton`). What a press does is resolved per hand against what
+that hand holds (`shock2vr/src/hand_buttons.rs`):
+
+| that hand holds | lower | upper |
+| --- | --- | --- |
+| nothing, a melee weapon, or any other item | `ToggleUseMode` (cyber interface) | `ReadLastUnreadLog` |
+| a gun | reserved for gun handling - inert for now | reserved for gun handling - inert for now |
+| the psi amp | reserved for power selection - inert for now | reserved for power selection - inert for now |
+
+Mode first: while the cyber interface is up both buttons keep their interface
+meaning on both hands whatever is held, so it can always be closed. With a gun
+in each hand neither panel is reachable until a hand is free. While the **Free
+camera** developer option is on, the right hand's two buttons are the chord and
+nothing else - they resolve to nothing at all.
 
 ### Developer options
 
