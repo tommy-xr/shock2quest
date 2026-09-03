@@ -62,15 +62,8 @@ const STALL_RECOVERY_SECONDS: f32 = 0.8;
 /// Progress smaller than this doesn't count toward un-stalling (jitter)
 const STALL_PROGRESS_EPSILON: f32 = 0.25 / SCALE_FACTOR;
 /// Displacement watchdog: with an active waypoint, failing to move this far
-/// (XZ, 3 Dark feet) ...
-///
-/// One foot was under the amplitude of a wedged body's own sliding: a
-/// hybrid pressed into medsci2's stair rail rocked ~1 foot about a fixed
-/// spot and reset the anchor forever, so no stall ever fired and the route
-/// never changed (measured). A walking creature covers many times this in
-/// the window below, so the wider bar only catches bodies that are going
-/// nowhere.
-const DISPLACEMENT_STALL_DISTANCE: f32 = 3.0 / SCALE_FACTOR;
+/// (XZ, 1 Dark foot) ...
+const DISPLACEMENT_STALL_DISTANCE: f32 = 1.0 / SCALE_FACTOR;
 /// ...within this long also counts as a stall. Micro-sliding around a
 /// blocking capsule (another creature, a prop corner) can keep improving
 /// the waypoint distance by more than the epsilon, resetting the progress
@@ -588,10 +581,41 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                             position.y,
                             position.z + dir.z / len * step,
                         );
-                        Effect::SetPositionRotation {
-                            entity_id,
-                            position: nudged,
-                            rotation: crate::util::get_rotation_from_transform(world, entity_id),
+                        // Only onto navigable floor. A nudge is a teleport,
+                        // and one aimed through a wall drops the body out of
+                        // the level entirely (a creature a thousand units
+                        // from everything, once stalls became easier to
+                        // detect). When the retreat direction leaves the
+                        // mesh, step toward the current cell's middle
+                        // instead - still away from whatever the body is
+                        // pressed against, and known-navigable.
+                        let landing = on_mesh(&service, nudged).or_else(|| {
+                            let cell = service.cell_from_position(position)?;
+                            let center = service.path_database.cells.get(cell as usize)?.center;
+                            let away = center - position;
+                            let len = (away.x * away.x + away.z * away.z).sqrt();
+                            if len <= 1e-3 {
+                                return None;
+                            }
+                            let step = UNSTICK_NUDGE_DISTANCE.min(len);
+                            on_mesh(
+                                &service,
+                                Vector3::new(
+                                    position.x + away.x / len * step,
+                                    position.y,
+                                    position.z + away.z / len * step,
+                                ),
+                            )
+                        });
+                        match landing {
+                            Some(landing) => Effect::SetPositionRotation {
+                                entity_id,
+                                position: landing,
+                                rotation: crate::util::get_rotation_from_transform(
+                                    world, entity_id,
+                                ),
+                            },
+                            None => Effect::NoEffect,
                         }
                     } else {
                         Effect::NoEffect
@@ -698,6 +722,15 @@ fn answers_goal(
 
 /// Whether a route actually arrives at the goal it was computed for. An
 /// empty route arrives nowhere.
+/// `point` if it sits on a navigable cell, else None - a teleport target
+/// off the mesh is a body dropped out of the level.
+fn on_mesh(
+    service: &crate::pathfinding::PathfindingService,
+    point: Vector3<f32>,
+) -> Option<Vector3<f32>> {
+    service.cell_from_position(point).map(|_| point)
+}
+
 /// Whether a fresh route begins the same way the route that stalled did.
 /// A shorter fresh route is by definition a different one.
 fn route_starts_the_same(previous: &[Vector3<f32>], fresh: &[Vector3<f32>]) -> bool {
