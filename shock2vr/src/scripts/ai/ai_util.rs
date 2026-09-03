@@ -36,6 +36,21 @@ pub fn random_binomial() -> f32 {
     a - b
 }
 
+/// Height to fall back on when the creature has no definition (world units)
+const CREATURE_DEFAULT_HEIGHT: f32 = 6.5 / SCALE_FACTOR;
+
+/// The creature's height in world units. Fractions of it (rather than fixed
+/// feet) are what let the same reasoning work on a monkey and on a hybrid.
+pub fn creature_height(world: &World, entity_id: EntityId) -> f32 {
+    world
+        .borrow::<View<PropCreature>>()
+        .ok()
+        .and_then(|v_creature| v_creature.get(entity_id).ok().map(|creature| creature.0))
+        .and_then(crate::creature::get_creature_definition)
+        .map(|definition| definition.bounding_size.y / SCALE_FACTOR)
+        .unwrap_or(CREATURE_DEFAULT_HEIGHT)
+}
+
 pub fn get_position_and_forward(
     world: &shipyard::World,
     entity_id: shipyard::EntityId,

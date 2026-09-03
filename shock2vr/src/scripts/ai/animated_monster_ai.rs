@@ -8,7 +8,7 @@ use dark::{
         AIAlertLevel, Link, PropAIAlertCap, PropAIAwareDelay, PropAISignalResponse, PropPosition,
     },
 };
-use rand;
+use rand::Rng;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
@@ -48,6 +48,22 @@ const DOOR_POLL_INTERVAL: f32 = 0.3;
 /// enough that the door has left its closed position, so TurnOn (and its
 /// sound) isn't re-sent while it swings.
 const DOOR_INTERACT_COOLDOWN: f32 = 2.0;
+/// A door is passable once its leaf has travelled at least this far. A leaf
+/// that slides sideways never gains height, so height clearance alone would
+/// hold an AI at it forever.
+const DOOR_OPEN_FRACTION: f32 = 0.95;
+/// Ceiling on the door wait, so a leaf that stops halfway (halted, or shoved
+/// by something) can never park an AI in a doorway for the rest of the
+/// mission. Comfortably longer than the slowest shipped door's travel.
+const DOOR_WAIT_TIMEOUT: f32 = 10.0;
+/// How long a path-follow stall must persist before it reads as frustration
+/// worth showing. Longer than the stall system's own recovery window, so the
+/// gesture marks a body that is genuinely stuck rather than every hitch.
+const FRUSTRATION_STALL_SECONDS: f32 = 5.0;
+/// Rate limit on the frustration gesture, jittered per play so a knot of
+/// AIs blocked on the same thing doesn't gesture in unison.
+const FRUSTRATION_COOLDOWN_MIN: f32 = 20.0;
+const FRUSTRATION_COOLDOWN_MAX: f32 = 45.0;
 /// After giving up at a locked door, wait this long before re-frustrating -
 /// bounds the "thwarted" gesture for an AI whose alert cap keeps it in a
 /// pursuing state even after the give-up's alertness drop.
@@ -116,6 +132,68 @@ fn should_orient_on_target(
 /// is trying to get around - which is exactly where patrol reversals wedge.
 /// Turning is unaffected by the scale, so a stopped body still pivots and
 /// walks off again the moment its error is back under 90.
+/// Whether a door's leaf has travelled far enough for a creature of
+/// `actor_height` to walk under (or past) it: either the leaf has finished
+/// its travel, or it has risen clear of the creature's head. A closed leaf
+/// starts at floor level, so its rise IS the height of the gap beneath it.
+pub(crate) fn door_is_passable(fraction: f32, rise: f32, actor_height: f32) -> bool {
+    fraction >= DOOR_OPEN_FRACTION || rise >= actor_height
+}
+
+/// Whether to show frustration now: only while actually blocked, only once
+/// the rate limit has expired, never inside melee reach of the believed
+/// target (an AI in a position to swing is fighting, not thwarted), and
+/// never over a performance the level authored.
+pub(crate) fn should_gesture_frustration(
+    blocked: bool,
+    cooldown_remaining: f32,
+    target_distance: Option<f32>,
+    scripted: ScriptedState,
+) -> bool {
+    blocked
+        && cooldown_remaining <= 0.0
+        && scripted != ScriptedState::Running
+        && !matches!(target_distance, Some(d) if d <= MELEE_ATTACK_RANGE)
+}
+
+/// The "thwarted" performance. The motion database files the tag under
+/// `discover`, so the bare tag resolves to nothing at all - the query has to
+/// name the branch as well as the leaf.
+fn frustration_gesture(entity_id: EntityId) -> Effect {
+    Effect::PlayAnimationBySchema {
+        entity_id,
+        motion_queries: vec![vec![
+            MotionQueryItem::new("discover"),
+            MotionQueryItem::new("thwarted"),
+        ]],
+        selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
+    }
+}
+
+/// How long path-following has been making no progress, as published by the
+/// steering strategy. Zero for an AI that isn't following a route.
+fn path_stall_seconds(world: &World, entity_id: EntityId) -> f32 {
+    world
+        .borrow::<UniqueView<GlobalPathfinding>>()
+        .ok()
+        .and_then(|g| g.0.clone())
+        .and_then(|service| service.ai_steering(entity_id.inner()))
+        .map(|steering| steering.stall_seconds)
+        .unwrap_or(0.0)
+}
+
+/// How far away the AI believes its target is, or `None` when nothing has
+/// ever published awareness for it.
+fn target_awareness_distance(world: &World, entity_id: EntityId) -> Option<f32> {
+    let v_awareness = world
+        .borrow::<View<crate::runtime_props::RuntimePropAITargetAwareness>>()
+        .ok()?;
+    let last_known = v_awareness.get(entity_id).ok()?.last_known_pos;
+    let (position, _) = get_position_and_forward(world, entity_id);
+    let delta = position.to_vec() - last_known;
+    Some((delta.x * delta.x + delta.z * delta.z).sqrt())
+}
+
 pub(crate) fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
     const TURN_SLOW_ANGLE: f32 = 60.0;
     const TURN_IN_PLACE_ANGLE: f32 = 90.0;
@@ -167,6 +245,11 @@ pub struct AnimatedMonsterAI {
     published_awareness: Option<(cgmath::Vector3<f32>, bool)>,
     /// Throttle between door interactions (open / locked-door give-up)
     door_cooldown: f32,
+    /// The door this AI is standing off from, and how long it has waited, while
+    /// the leaf travels clear (see `update_door_wait`)
+    door_wait: Option<(EntityId, f32)>,
+    /// Seconds left before this AI may show frustration again
+    frustration_cooldown: f32,
     /// Pinned alertness (DebugForceChase): treated as permanent sight of the
     /// player - no decay, live target position - until cleared
     alertness_pinned: bool,
@@ -193,6 +276,8 @@ impl AnimatedMonsterAI {
             last_known_player_pos: None,
             published_awareness: None,
             door_cooldown: 0.0,
+            door_wait: None,
+            frustration_cooldown: 0.0,
         }
     }
 
@@ -217,6 +302,8 @@ impl AnimatedMonsterAI {
             last_known_player_pos: None,
             published_awareness: None,
             door_cooldown: 0.0,
+            door_wait: None,
+            frustration_cooldown: 0.0,
         }
     }
 
@@ -321,6 +408,7 @@ impl AnimatedMonsterAI {
         steering_output: SteeringOutput,
         time: &Time,
         entity_id: EntityId,
+        hold_position: bool,
     ) -> Effect {
         let turn_velocity = self.current_behavior.borrow().turn_speed().0;
         let delta =
@@ -338,7 +426,13 @@ impl AnimatedMonsterAI {
         // full stride while the heading catches up (the cause of orbiting a
         // close target): full speed facing the travel direction, ramping to
         // a third by 60 degrees of error and to a standstill by 90.
-        let scale = locomotion_scale_for_heading_error(delta);
+        // Holding for a door still turns (so the AI keeps facing the way
+        // through) - only the stride is cut.
+        let scale = if hold_position {
+            0.0
+        } else {
+            locomotion_scale_for_heading_error(delta)
+        };
 
         Effect::Multiple(vec![
             Effect::SetRotation {
@@ -634,6 +728,58 @@ impl AnimatedMonsterAI {
         }
     }
 
+    /// Hold position while a door this AI just opened travels clear, rather
+    /// than walking into a leaf still crossing the doorway. Returns whether
+    /// the AI is holding this frame.
+    fn update_door_wait(&mut self, world: &World, entity_id: EntityId, time: &Time) -> bool {
+        let Some((door_ent, waited)) = self.door_wait else {
+            return false;
+        };
+        let waited = waited + time.elapsed.as_secs_f32();
+        // No progress to read (not a door any more, or one that cannot move)
+        // means there is nothing to wait for.
+        let clear = match script_util::door_open_progress(world, door_ent) {
+            None => true,
+            Some((fraction, rise)) => {
+                door_is_passable(fraction, rise, creature_height(world, entity_id))
+            }
+        };
+        if clear || waited >= DOOR_WAIT_TIMEOUT {
+            self.door_wait = None;
+            return false;
+        }
+        self.door_wait = Some((door_ent, waited));
+        true
+    }
+
+    /// Show frustration at whatever is in the way - a door still opening, or
+    /// a route that has stopped making progress. The gesture is an animation
+    /// only: it plays over the block without touching the wait or the stall
+    /// system's own recovery.
+    fn update_frustration(
+        &mut self,
+        world: &World,
+        entity_id: EntityId,
+        holding_for_door: bool,
+        time: &Time,
+    ) -> Effect {
+        self.frustration_cooldown =
+            (self.frustration_cooldown - time.elapsed.as_secs_f32()).max(0.0);
+        let blocked =
+            holding_for_door || path_stall_seconds(world, entity_id) >= FRUSTRATION_STALL_SECONDS;
+        if !should_gesture_frustration(
+            blocked,
+            self.frustration_cooldown,
+            target_awareness_distance(world, entity_id),
+            self.current_behavior.borrow().scripted_state(),
+        ) {
+            return Effect::NoEffect;
+        }
+        self.frustration_cooldown =
+            rand::thread_rng().gen_range(FRUSTRATION_COOLDOWN_MIN..FRUSTRATION_COOLDOWN_MAX);
+        frustration_gesture(entity_id)
+    }
+
     /// While pursuing, open the (unlocked) door gating the AI's route so it
     /// can follow the player through, or give up at a locked one. The graph
     /// treats doors as passable, so the AI paths straight at a closed door
@@ -722,17 +868,15 @@ impl AnimatedMonsterAI {
                 // handler starts the Low behavior's clip after the gesture.
                 let downgrade =
                     self.force_alertness_state(AIAlertLevel::Low, world, physics, entity_id);
-                let thwarted = Effect::PlayAnimationBySchema {
-                    entity_id,
-                    motion_queries: vec![vec![MotionQueryItem::new("thwarted")]],
-                    selection_strategy: dark::motion::MotionQuerySelectionStrategy::Random,
-                };
-                return Effect::combine(vec![downgrade, thwarted]);
+                return Effect::combine(vec![downgrade, frustration_gesture(entity_id)]);
             }
             // Unlocked: open it and keep chasing through. The longer cooldown
             // avoids re-sending TurnOn (and replaying the open sound) while
             // the door is still swinging.
             self.door_cooldown = DOOR_INTERACT_COOLDOWN;
+            // Stand off until the leaf has travelled clear (#1255): the AI
+            // used to keep walking into a leaf still crossing the doorway.
+            self.door_wait = Some((door_ent, 0.0));
             return Effect::Send {
                 msg: Message {
                     to: door_ent,
@@ -1054,7 +1198,10 @@ impl Script for AnimatedMonsterAI {
             steering_output
         };
 
-        let rotation_effect = self.apply_steering_output(steering_output, time, entity_id);
+        let holding_for_door = self.update_door_wait(world, entity_id, time);
+        let rotation_effect =
+            self.apply_steering_output(steering_output, time, entity_id, holding_for_door);
+        let frustration_effect = self.update_frustration(world, entity_id, holding_for_door, time);
 
         // A finished scripted sequence (its final queued effects were drained
         // by the steer above - scripted_state only reports Finished once they
@@ -1115,6 +1262,7 @@ impl Script for AnimatedMonsterAI {
             fov_debug_effect,
             behavior_publish_effect,
             door_effect,
+            frustration_effect,
         ])
     }
 
@@ -1968,6 +2116,99 @@ mod tests {
         assert_eq!(at_30, locomotion_scale_for_heading_error(Deg(-30.0)));
         // A third of full speed by 60 degrees
         assert_eq!(locomotion_scale_for_heading_error(Deg(60.0)), 0.33);
+    }
+
+    /// A hybrid is ~6.5 ft tall; the door leaf it walks under has to have
+    /// risen at least that far before the gap is worth entering.
+    const TEST_ACTOR_HEIGHT: f32 = 6.5 / SCALE_FACTOR;
+
+    #[test]
+    fn a_barely_open_door_is_not_passable() {
+        // The leaf has just left its closed pose: the doorway is still solid
+        // at head height, so the AI must wait rather than walk into it.
+        assert!(!door_is_passable(
+            0.05,
+            0.2 / SCALE_FACTOR,
+            TEST_ACTOR_HEIGHT
+        ));
+        assert!(!door_is_passable(
+            0.5,
+            3.0 / SCALE_FACTOR,
+            TEST_ACTOR_HEIGHT
+        ));
+    }
+
+    #[test]
+    fn a_leaf_risen_clear_of_the_head_is_passable() {
+        assert!(door_is_passable(0.6, 7.0 / SCALE_FACTOR, TEST_ACTOR_HEIGHT));
+    }
+
+    #[test]
+    fn a_short_creature_clears_a_leaf_a_hybrid_still_waits_for() {
+        let rise = 4.0 / SCALE_FACTOR;
+        assert!(door_is_passable(0.5, rise, 3.0 / SCALE_FACTOR));
+        assert!(!door_is_passable(0.5, rise, TEST_ACTOR_HEIGHT));
+    }
+
+    #[test]
+    fn a_fully_travelled_leaf_is_passable_without_gaining_height() {
+        // A door that slides sideways never rises, so height clearance alone
+        // would hold an AI at it forever.
+        assert!(door_is_passable(1.0, 0.0, TEST_ACTOR_HEIGHT));
+    }
+
+    #[test]
+    fn frustration_needs_a_block() {
+        assert!(!should_gesture_frustration(
+            false,
+            0.0,
+            None,
+            ScriptedState::NotScripted
+        ));
+        assert!(should_gesture_frustration(
+            true,
+            0.0,
+            None,
+            ScriptedState::NotScripted
+        ));
+    }
+
+    #[test]
+    fn frustration_is_rate_limited() {
+        assert!(!should_gesture_frustration(
+            true,
+            3.0,
+            None,
+            ScriptedState::NotScripted
+        ));
+    }
+
+    #[test]
+    fn frustration_is_silent_within_reach_of_the_target() {
+        let inside = Some(MELEE_ATTACK_RANGE * 0.5);
+        let outside = Some(MELEE_ATTACK_RANGE * 2.0);
+        assert!(!should_gesture_frustration(
+            true,
+            0.0,
+            inside,
+            ScriptedState::NotScripted
+        ));
+        assert!(should_gesture_frustration(
+            true,
+            0.0,
+            outside,
+            ScriptedState::NotScripted
+        ));
+    }
+
+    #[test]
+    fn frustration_never_interrupts_an_authored_performance() {
+        assert!(!should_gesture_frustration(
+            true,
+            0.0,
+            None,
+            ScriptedState::Running
+        ));
     }
 
     #[test]
