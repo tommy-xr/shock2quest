@@ -678,6 +678,11 @@ pub struct PlayerStateSnapshot {
     /// links (melee). Reported whenever there is a projectile link, even if there
     /// is only one (it just cannot be cycled).
     pub wielded_ammo_type: Option<String>,
+    /// The wielded gun's fire setting (0 or 1) and the short header for it
+    /// ("NORM" / "BURST"), or `None` when nothing gun-like is wielded. Cycle
+    /// with the `CycleGunSetting` input action.
+    pub wielded_gun_setting: Option<i32>,
+    pub wielded_gun_setting_header: Option<String>,
     /// The player's hit points (current, max), or `None` when the player has
     /// no health pool. Seeded from `The Player` template and consumed by every
     /// damage path, with zero entering the player death lifecycle.
@@ -770,6 +775,7 @@ impl Game {
                     v.get(weapon).ok().map(|r| (r.pitch_deg(), r.progress()))
                 })
         });
+        let gun_setting = crate::hud::get_wielded_gun_setting(world);
         Some(PlayerStateSnapshot {
             entity_id: info.entity_id.inner() as i32,
             inventory_entity_id: info.inventory_entity_id.inner() as i32,
@@ -790,6 +796,8 @@ impl Game {
             reload_pitch_deg: reload.map(|(p, _)| p).unwrap_or(0.0),
             reload_progress: reload.map(|(_, p)| p).unwrap_or(0.0),
             wielded_ammo_type: crate::hud::get_wielded_ammo_type(world),
+            wielded_gun_setting: gun_setting.as_ref().map(|(setting, _)| *setting),
+            wielded_gun_setting_header: gun_setting.and_then(|(_, header)| header),
             hit_points: (|| {
                 use dark::properties::{PropHitPoints, PropMaxHitPoints};
                 let v_hp = world.borrow::<shipyard::View<PropHitPoints>>().ok()?;

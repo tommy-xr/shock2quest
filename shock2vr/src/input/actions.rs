@@ -51,6 +51,9 @@ pub enum InputAction {
     EquipPsiAmp,
     /// Cycle an empty wielded weapon's ammo type (its next Projectile link).
     CycleAmmo,
+    /// Switch the wielded gun between its two fire modes (e.g. the pistol's
+    /// single shot and its 3-round burst).
+    CycleGunSetting,
     /// Reload the wielded weapon from compatible backpack reserve.
     Reload,
     /// Select the next psi power (used when firing the psi amp).
@@ -130,6 +133,7 @@ impl InputAction {
             InputAction::EquipWormLauncher,
             InputAction::EquipPsiAmp,
             InputAction::CycleAmmo,
+            InputAction::CycleGunSetting,
             InputAction::Reload,
             InputAction::CyclePsiPower,
             InputAction::DebugReloadLevel,
@@ -168,6 +172,7 @@ impl InputAction {
             InputAction::EquipWormLauncher => "EquipWormLauncher",
             InputAction::EquipPsiAmp => "EquipPsiAmp",
             InputAction::CycleAmmo => "CycleAmmo",
+            InputAction::CycleGunSetting => "CycleGunSetting",
             InputAction::Reload => "Reload",
             InputAction::CyclePsiPower => "CyclePsiPower",
             InputAction::DebugReloadLevel => "DebugReloadLevel",

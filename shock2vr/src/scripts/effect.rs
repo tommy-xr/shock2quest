@@ -225,6 +225,18 @@ pub enum Effect {
     /// two projectile links, or while its magazine still has loaded rounds.
     CycleAmmo,
 
+    /// Switch `entity_id`'s gun to fire setting `setting`, remapping its
+    /// selected ammo type by `ProjectileOptions.order` so the same ammo stays
+    /// chosen across the switch. No-op for a gun with no second fire mode.
+    SetGunSetting {
+        entity_id: EntityId,
+        setting: i32,
+    },
+
+    /// Switch the player's wielded gun to its other fire setting. No-op when
+    /// nothing is wielded or the gun has no second mode (turrets, the psi amp).
+    CycleGunSetting,
+
     /// Equip a weapon of this gamesys class from the player's carried items.
     /// The handler resolves the live entity through the template hierarchy and
     /// then reuses `GrabEntity`, so no item is spawned and a displaced flat

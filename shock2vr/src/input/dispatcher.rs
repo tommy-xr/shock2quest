@@ -99,6 +99,9 @@ impl ActionDispatcher {
         if state.just_triggered(InputAction::CycleAmmo) {
             effects.push(Effect::CycleAmmo);
         }
+        if state.just_triggered(InputAction::CycleGunSetting) {
+            effects.push(Effect::CycleGunSetting);
+        }
         if state.just_triggered(InputAction::Reload) {
             effects.push(Effect::ReloadWeapon);
         }

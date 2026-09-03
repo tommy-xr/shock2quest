@@ -9,7 +9,8 @@ use dark::{
     EnvSoundQuery,
     properties::{
         GunSettingDesc, Link, Links, ProjectileOptions, PropBaseGunDesc, PropClassTag,
-        PropGunState, PropMaterial, PropSymName, PropTemplateId, PropTweqModelConfig, ToLink,
+        PropGunSettingHeader1, PropGunSettingHeader2, PropGunState, PropMaterial, PropSymName,
+        PropTemplateId, PropTweqModelConfig, ToLink,
     },
     ss2_entity_info::SystemShock2EntityInfo,
 };
@@ -264,7 +265,7 @@ pub fn has_death_links(world: &World, entity_id: EntityId) -> bool {
 
 /// `weapon`'s selected fire setting, 0 when it has no gun state. Ammo-type
 /// selection and the firing description both key off this, so they agree.
-fn current_gun_setting(world: &World, weapon: EntityId) -> i32 {
+pub fn current_gun_setting(world: &World, weapon: EntityId) -> i32 {
     world
         .borrow::<View<PropGunState>>()
         .ok()
@@ -296,14 +297,100 @@ pub fn active_gun_setting(world: &World, weapon: EntityId) -> Option<GunSettingD
 /// otherwise it must match the weapon's current `PropGunState.setting`
 /// (defaulting to 0 when the weapon has no gun state).
 pub fn ordered_projectile_links(world: &World, weapon: EntityId) -> Vec<(i32, ProjectileOptions)> {
-    let setting = current_gun_setting(world, weapon);
-    let mut links = get_all_links_with_template(world, weapon, |link| match link {
-        Link::Projectile(data) => Some(*data),
-        _ => None,
-    });
+    ordered_projectile_links_for_setting(world, weapon, current_gun_setting(world, weapon))
+}
+
+/// [`ordered_projectile_links`] against an arbitrary fire setting - what the
+/// ammo list *would* be in that mode, which a mode switch needs before it
+/// commits to the new setting.
+pub fn ordered_projectile_links_for_setting(
+    world: &World,
+    weapon: EntityId,
+    setting: i32,
+) -> Vec<(i32, ProjectileOptions)> {
+    let mut links = all_projectile_links(world, weapon);
     links.retain(|(_, opts)| opts.setting < 0 || opts.setting == setting);
     links.sort_by_key(|(_, opts)| opts.order);
     links
+}
+
+fn all_projectile_links(world: &World, weapon: EntityId) -> Vec<(i32, ProjectileOptions)> {
+    get_all_links_with_template(world, weapon, |link| match link {
+        Link::Projectile(data) => Some(*data),
+        _ => None,
+    })
+}
+
+/// Whether a gun offers a second fire mode at all. Two independent signals in
+/// the shipped data, either of which is enough: the gun links ammo that belongs
+/// to setting 1 (the shotgun's double load, the laser's overcharge), or it
+/// NAMES the mode in its display strings (the pistol's BURST and the assault
+/// rifle's AUTO fire the same ammo, so links alone miss them). Guns with
+/// neither - the psi amp, turrets - have one mode.
+///
+/// The second setting's magazine is deliberately not a signal: a gun that never
+/// authored setting 1 still carries the editor's default record there, clip
+/// included, so `clip != 0` would give the psi amp a mode it does not have.
+fn has_second_fire_mode(second_header: Option<&str>, links: &[(i32, ProjectileOptions)]) -> bool {
+    second_header.is_some() || links.iter().any(|(_, opts)| opts.setting == 1)
+}
+
+/// Whether `weapon` can switch fire modes. See [`has_second_fire_mode`].
+pub fn can_cycle_gun_setting(world: &World, weapon: EntityId) -> bool {
+    let links = all_projectile_links(world, weapon);
+    let second_header = gun_setting_header(world, weapon, 1);
+    has_second_fire_mode(second_header.as_deref(), &links)
+}
+
+/// The short header for `weapon`'s fire setting `setting` - "NORM" / "BURST" -
+/// or `None` when the gun names no such setting. Resolved from the gun's own
+/// `P$SHead1`/`P$SHead2` against the matching string table, which also covers
+/// the guns that author no header property of their own.
+pub fn gun_setting_header(world: &World, weapon: EntityId, setting: i32) -> Option<String> {
+    let raw = match setting {
+        0 => world
+            .borrow::<View<PropGunSettingHeader1>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|header| header.0.clone())),
+        1 => world
+            .borrow::<View<PropGunSettingHeader2>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|header| header.0.clone())),
+        _ => return None,
+    };
+    let sym_name = world
+        .borrow::<View<PropSymName>>()
+        .ok()
+        .and_then(|v| v.get(weapon).ok().map(|name| name.0.clone()));
+    let tables = world
+        .borrow::<UniqueView<crate::mission::mission_core::GlobalGunSettingHeaders>>()
+        .ok()?;
+    let table = tables.0.get(setting as usize)?;
+    dark::importers::resolve_gun_setting_string(raw.as_deref(), sym_name.as_deref(), table)
+}
+
+/// The ammo index to select after a fire-mode switch. `order` is the ammo
+/// type's identity (the shotgun's pellets carry the same `order` in both
+/// modes), so the selection follows its order across the switch and falls back
+/// to the first entry when the new mode has no counterpart.
+///
+/// Every shipped gun happens to author the same order set in both modes, which
+/// makes this the identity mapping today - it is what keeps the switch honest
+/// if a mode ever offers a different set.
+pub fn remap_selected_ammo(
+    current: &[(i32, ProjectileOptions)],
+    selected: usize,
+    next: &[(i32, ProjectileOptions)],
+) -> usize {
+    if current.is_empty() {
+        return 0;
+    }
+    // Wrap the index the way every other reader of `RuntimePropSelectedAmmo`
+    // does, so the switch remaps the ammo the HUD and the shot agree is chosen.
+    let (_, opts) = &current[selected % current.len()];
+    next.iter()
+        .position(|(_, candidate)| candidate.order == opts.order)
+        .unwrap_or(0)
 }
 
 /// Whether `weapon` may select a different projectile type: it needs two or
@@ -1022,16 +1109,16 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 mod tests {
     use super::{
         active_gun_setting, debit_player_nanites, door_blocks_pathfinding, door_is_closed,
-        is_always_collected, is_nanite_pickup, plan_stack_payment, player_nanite_total,
-        spend_player_nanites, stat_nanite_balance,
+        has_second_fire_mode, is_always_collected, is_nanite_pickup, plan_stack_payment,
+        player_nanite_total, remap_selected_ammo, spend_player_nanites, stat_nanite_balance,
     };
     use crate::mission::PlayerInfo;
     use crate::quest_info::QuestInfo;
     use crate::runtime_props::RuntimePropTransform;
     use cgmath::{Matrix4, Quaternion, Vector3, vec3};
     use dark::properties::{
-        GunSettingDesc, Link, Links, PropBaseGunDesc, PropGunState, PropObjIcon, PropStackCount,
-        PropTranslatingDoor, ToLink, WrappedEntityId,
+        GunSettingDesc, Link, Links, ProjectileOptions, PropBaseGunDesc, PropGunState, PropObjIcon,
+        PropStackCount, PropTranslatingDoor, ToLink, WrappedEntityId,
     };
     use shipyard::{EntityId, Get, View, World};
 
@@ -1077,6 +1164,73 @@ mod tests {
         let not_a_gun = world.add_entity(gun_state(0));
 
         assert!(active_gun_setting(&world, not_a_gun).is_none());
+    }
+
+    fn projectile(order: i32, setting: i32) -> ProjectileOptions {
+        ProjectileOptions { order, setting }
+    }
+
+    /// The shotgun: pellets and slugs in each mode, the same `order` in both.
+    fn shotgun_ammo() -> (Vec<(i32, ProjectileOptions)>, Vec<(i32, ProjectileOptions)>) {
+        (
+            vec![(-524, projectile(0, 0)), (-516, projectile(1, 0))],
+            vec![(-3423, projectile(0, 1)), (-3422, projectile(1, 1))],
+        )
+    }
+
+    /// The pistol: one ammo set shared by both modes, so only its BURST header
+    /// says the second mode exists.
+    #[test]
+    fn a_gun_that_names_its_second_mode_has_one() {
+        let shared_ammo = [
+            (-362, projectile(1, -1)),
+            (-492, projectile(2, -1)),
+            (-33, projectile(3, -1)),
+        ];
+
+        assert!(has_second_fire_mode(Some("BURST"), &shared_ammo));
+    }
+
+    /// The shotgun: setting-1 ammo, so the links alone settle it.
+    #[test]
+    fn a_gun_with_setting_specific_ammo_has_a_second_fire_mode() {
+        let (normal, double) = shotgun_ammo();
+        let links = [normal, double].concat();
+
+        assert!(has_second_fire_mode(None, &links));
+    }
+
+    /// The psi amp: no setting-1 ammo and no name for a second mode.
+    #[test]
+    fn a_gun_with_neither_has_no_second_fire_mode() {
+        assert!(!has_second_fire_mode(None, &[(-362, projectile(1, -1))]));
+        assert!(!has_second_fire_mode(None, &[]));
+    }
+
+    #[test]
+    fn a_switch_keeps_the_selected_ammo_order() {
+        let (normal, double) = shotgun_ammo();
+
+        // Slugs (order 1) stay slugs; pellets (order 0) stay pellets.
+        assert_eq!(remap_selected_ammo(&normal, 1, &double), 1);
+        assert_eq!(remap_selected_ammo(&normal, 0, &double), 0);
+        assert_eq!(remap_selected_ammo(&double, 1, &normal), 1);
+    }
+
+    #[test]
+    fn a_switch_falls_back_to_the_first_ammo_when_the_order_is_gone() {
+        let (normal, _) = shotgun_ammo();
+        let only_pellets = vec![(-3423, projectile(0, 1))];
+
+        assert_eq!(remap_selected_ammo(&normal, 1, &only_pellets), 0);
+    }
+
+    #[test]
+    fn a_switch_wraps_an_out_of_range_selection_like_every_other_reader() {
+        let (normal, double) = shotgun_ammo();
+
+        assert_eq!(remap_selected_ammo(&normal, 7, &double), 1, "7 % 2 = slugs");
+        assert_eq!(remap_selected_ammo(&[], 0, &double), 0, "no ammo at all");
     }
 
     fn door_world(

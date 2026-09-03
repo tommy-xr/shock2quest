@@ -131,6 +131,11 @@ impl DesktopInputMapper {
                 action: InputAction::CycleAmmo,
             },
             Binding {
+                key: Key::F,
+                modifier: Modifier::None,
+                action: InputAction::CycleGunSetting,
+            },
+            Binding {
                 key: Key::Y,
                 modifier: Modifier::None,
                 action: InputAction::CyclePsiPower,

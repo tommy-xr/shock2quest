@@ -2353,6 +2353,10 @@ fn capture_frame_snapshot(
                 reload_pitch_deg: state.as_ref().map(|s| s.reload_pitch_deg).unwrap_or(0.0),
                 reload_progress: state.as_ref().map(|s| s.reload_progress).unwrap_or(0.0),
                 wielded_ammo_type: state.as_ref().and_then(|s| s.wielded_ammo_type.clone()),
+                wielded_gun_setting: state.as_ref().and_then(|s| s.wielded_gun_setting),
+                wielded_gun_setting_header: state
+                    .as_ref()
+                    .and_then(|s| s.wielded_gun_setting_header.clone()),
                 hit_points: state
                     .as_ref()
                     .and_then(|s| s.hit_points.map(|(cur, _)| cur)),

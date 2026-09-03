@@ -20,6 +20,7 @@ export type InputAction =
   | "EquipWormLauncher"
   | "EquipPsiAmp"
   | "CycleAmmo"
+  | "CycleGunSetting"
   | "Reload"
   | "CyclePsiPower"
   | "ToggleUseMode"
@@ -502,6 +503,11 @@ export interface PlayerSnapshot {
   /** The wielded weapon's selected ammo type (e.g. "std"/"he"/"ap"), or null
    * when unarmed / melee (no projectile links). */
   wielded_ammo_type: string | null;
+  /** The wielded gun's fire setting (0 or 1) and its short header ("NORM" /
+   * "BURST"), or null when nothing gun-like is wielded. Switch modes with the
+   * `CycleGunSetting` input action. */
+  wielded_gun_setting: number | null;
+  wielded_gun_setting_header: string | null;
   /** The player's current / maximum hit points, or null when the player has
    * no health pool. Drained by psi burnout. */
   hit_points: number | null;
