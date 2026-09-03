@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { GameServer } from "../src/index.js";
-import { GameServer as Server } from "../src/index.js";
+import { GameServer } from "../src/index.js";
+import { selectPsiPower } from "./helpers/psi.js";
 import { pullTrigger } from "./helpers/weapon.js";
 
 // End-to-end test for Cerebro-stimulated Regeneration (PsiHeal), the first
@@ -19,21 +19,11 @@ const HP_PER_PSI = 2;
 const PSI_STAT = 6;
 const PSI_COST = 2;
 
-/** Cycle the psi selection until `name` is selected. */
-async function selectPower(game: GameServer, name: string): Promise<void> {
-  for (let i = 0; i < 40; i += 1) {
-    if ((await game.info()).player.selected_psi_power === name) return;
-    await game.input.trigger("CyclePsiPower");
-    await game.step({ frames: 2 });
-  }
-  throw new Error(`CyclePsiPower never reached ${name}`);
-}
-
 test(
   "Cerebro-stimulated Regeneration heals the caster and spends its tier",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
-    await using game = await Server.launch({ mission: "debug_psi" });
+    await using game = await GameServer.launch({ mission: "debug_psi" });
 
     // The scene auto-equips the Psi Amp on the first update.
     await game.step({ frames: 10 });
@@ -53,7 +43,7 @@ test(
     assert.ok(hurtHp! < maxHp!, `player should be hurt (${hurtHp}/${maxHp})`);
     assert.ok(maxHp! - hurtHp! > HP_PER_PSI * PSI_STAT, "the heal should not be clamped here");
 
-    await selectPower(game, "PsiHeal");
+    await selectPsiPower(game, "PsiHeal");
     await pullTrigger(game);
     await game.step({ frames: 30 });
 
@@ -87,7 +77,7 @@ test(
   "the heal is clamped to the player's missing health",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
-    await using game = await Server.launch({ mission: "debug_psi" });
+    await using game = await GameServer.launch({ mission: "debug_psi" });
 
     await game.step({ frames: 10 });
     await game.player.setStats({ psionic_ability: PSI_STAT });
@@ -107,7 +97,7 @@ test(
       "fewer HP should be missing than the heal would restore",
     );
 
-    await selectPower(game, "PsiHeal");
+    await selectPsiPower(game, "PsiHeal");
     await pullTrigger(game);
     await game.step({ frames: 30 });
 

@@ -471,7 +471,8 @@ fn cast_self_heal(
     power: &PsiPowerInfo,
     effective_psi: i32,
 ) -> Effect {
-    let Some((player_entity, current_hp, max_hp)) = player_hit_points(world) else {
+    let Some((player_entity, current_hp, max_hp)) = super::script_util::player_hit_points(world)
+    else {
         game_log!(WARN, "No player hit points for {}", power.name);
         return Effect::NoEffect;
     };
@@ -524,25 +525,6 @@ fn self_heal_amount(data: &[f32; 4], effective_psi: i32, current_hp: i32, max_hp
     }
     let missing = (max_hp - current_hp).max(0);
     (amount.floor() as i32).clamp(0, missing)
-}
-
-/// The player entity with its (current, maximum) hit points.
-fn player_hit_points(world: &World) -> Option<(EntityId, i32, i32)> {
-    let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?.entity_id;
-    let current = world
-        .borrow::<View<dark::properties::PropHitPoints>>()
-        .ok()?
-        .get(player)
-        .ok()?
-        .hit_points;
-    let max = world
-        .borrow::<View<dark::properties::PropMaxHitPoints>>()
-        .ok()?
-        .get(player)
-        .ok()?
-        .hit_points
-        .min(i32::MAX as u32) as i32;
-    Some((player, current, max))
 }
 
 /// The amp's `GunFlash` links supply the cast visual (Spinning Psi Ring).
