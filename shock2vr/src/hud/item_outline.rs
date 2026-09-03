@@ -3,6 +3,7 @@ use collision::{Aabb2, Aabb3};
 use dark::{
     importers::{
         FONT_IMPORTER, STRINGS_IMPORTER, TEXTURE_IMPORTER, resolve_localized_property_string,
+        resolve_symbolic_name,
     },
     properties::{
         ObjectNameType, PropGunState, PropHUDSelect, PropHitPoints, PropLog, PropMaxHitPoints,
@@ -140,27 +141,14 @@ fn localized_weapon_condition(
 /// An object with no `P$ObjName` of its own (e.g. the Wrench, which inherits
 /// only a symbolic name) falls back to looking its `P$SymName` up in
 /// `objname.str` directly - no embedded fallback text, since there is no
-/// property to carry one. A multi-word symbolic name ("Laser Pistol") is
-/// tried with spaces replaced by underscores too, the same convention
-/// `resolve_gun_setting_string` uses for its own symbolic-name fallback,
-/// since the table keys multi-word entries that way ("laser_pistol").
+/// property to carry one.
 fn resolve_symname_fallback(
     world: &World,
     entity_id: EntityId,
     object_name_strings: &std::collections::HashMap<String, String>,
 ) -> Option<String> {
-    let sym_name = world
-        .borrow::<View<PropSymName>>()
-        .ok()?
-        .get(entity_id)
-        .ok()?
-        .0
-        .clone();
-    let key = sym_name.to_ascii_lowercase();
-    object_name_strings
-        .get(&key)
-        .or_else(|| object_name_strings.get(&key.replace(' ', "_")))
-        .cloned()
+    let sym_name = world.borrow::<View<PropSymName>>().ok()?;
+    resolve_symbolic_name(&sym_name.get(entity_id).ok()?.0, object_name_strings)
 }
 
 /// The player-facing display name of `entity_id`: its `P$ObjName` resolved
@@ -177,12 +165,14 @@ pub fn resolve_item_name(
     world: &World,
     entity_id: EntityId,
 ) -> Option<String> {
+    // Own property present (even empty) vs. absent entirely - only the
+    // latter falls back to SymName, matching the original: an empty
+    // P$ObjName resolves to "" (caught by the emptiness check below) rather
+    // than borrowing a name from elsewhere.
     let obj_name = world
         .borrow::<View<PropObjName>>()
         .ok()
-        .and_then(|v_prop_obj_name| v_prop_obj_name.get(entity_id).ok().cloned())
-        .filter(|prop| !prop.0.is_empty())
-        .map(|prop| prop.0);
+        .and_then(|v_prop_obj_name| v_prop_obj_name.get(entity_id).ok().map(|p| p.0.clone()));
 
     let object_name_strings = asset_cache.get(&STRINGS_IMPORTER, "objname.str");
     let localized_name = match &obj_name {
