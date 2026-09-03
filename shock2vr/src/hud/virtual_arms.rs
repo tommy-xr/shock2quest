@@ -6,7 +6,12 @@ use dark::{
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
 use shipyard::{Get, UniqueView, View, World};
 
-use crate::{mission::PlayerInfo, vr_config::Handedness};
+use crate::{
+    hud::{ammo_panel, readouts},
+    mission::PlayerInfo,
+    ui::UiCanvas,
+    vr_config::Handedness,
+};
 
 /// Offset from hand position to forearm HUD panel *centre*. The panel's width
 /// axis runs along the arm (hand-local +Z), so it spans
@@ -19,48 +24,46 @@ pub(crate) const FOREARM_OFFSET: Vector3<f32> = vec3(0.0, 0.0, 0.25); // world u
 pub(crate) const HUD_PANEL_WIDTH: f32 = 0.26; // world units: 0.26 * 0.762 = 20 cm along the arm
 const HUD_PANEL_HEIGHT: f32 = 0.064; // 6.4cm tall (260:64 = 4.0625:1 ratio)
 
-/// BIOFULL.PCX texture dimensions
-const BIOFULL_WIDTH: f32 = 260.0;
-const BIOFULL_HEIGHT: f32 = 64.0;
-
-const BAR_VERTICAL_OFFSET: f32 = -8.0;
-const BAR_HORIZONTAL_OFFSET: f32 = 1.0;
-
-/// Health bar overlay coordinates (pixel space on BIOFULL.PCX)
-const HEALTH_BAR_START: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 8.0, 40.0 + BAR_VERTICAL_OFFSET);
-const HEALTH_BAR_END: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 88.0, 54.0 + BAR_VERTICAL_OFFSET);
-
-/// Psi bar overlay coordinates (pixel space on BIOFULL.PCX)
-const PSI_BAR_START: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 8.0, 17.0 + BAR_VERTICAL_OFFSET);
-const PSI_BAR_END: (f32, f32) = (BAR_HORIZONTAL_OFFSET + 88.0, 31.0 + BAR_VERTICAL_OFFSET);
-
 /// Z-offset for overlay layers to ensure proper rendering order
 const OVERLAY_Z_OFFSET: f32 = 0.001;
 
-/// Create HUD panels for both arms with health/psi overlays
+/// Create the forearm HUD panels: BIOFULL (health/psi) on the left arm,
+/// AMMOFULL (the live ammo readout) on the right.
+///
+/// `use_mode` silences both: the cyber interface carries the expanded BIOFULL
+/// and AMMOFULL readouts on its canvas while it is up (`hud::readouts`), so
+/// leaving the arms lit would show a VR player the same numbers twice, at two
+/// scales and orientations (issue #1268). Flat drops its compact overlay in
+/// use mode for the same reason (`hud::flat_hud`).
 pub fn create_arm_hud_panels(
     asset_cache: &mut AssetCache,
     world: &World,
+    use_mode: bool,
     left_hand_position: Vector3<f32>,
     left_hand_rotation: Quaternion<f32>,
     right_hand_position: Vector3<f32>,
     right_hand_rotation: Quaternion<f32>,
 ) -> Vec<SceneObject> {
-    let mut scene_objects = Vec::new();
+    if use_mode {
+        return Vec::new();
+    }
 
-    // Create left arm HUD with health/psi overlays (BIOFULL base)
-    let mut left_hud_layers = create_forearm_hud_with_overlays(
+    // The bio monitor on the left arm, the ammo gauge on the right - each the
+    // shared layout's own canvas, hung by the one compositor below.
+    let mut scene_objects = forearm_readout_panel(
         asset_cache,
-        world,
         left_hand_position,
         left_hand_rotation,
+        Handedness::Left,
+        readouts::build_bio_readout_canvas(&readouts::BioReadout::from_world(world)),
     );
-    scene_objects.append(&mut left_hud_layers);
-
-    // Create right arm HUD (AMMOFULL) with the live ammo readout on it
-    let mut right_hud_layers =
-        create_ammo_forearm_panel(asset_cache, world, right_hand_position, right_hand_rotation);
-    scene_objects.append(&mut right_hud_layers);
+    scene_objects.append(&mut forearm_readout_panel(
+        asset_cache,
+        right_hand_position,
+        right_hand_rotation,
+        Handedness::Right,
+        ammo_panel::build_readout_canvas(&ammo_panel::AmmoReadout::from_world(world, false)),
+    ));
 
     // Part of the player's hand visuals: labelled here rather than at the call
     // sites so the `debug_hud` scene, which emits these without an interaction
@@ -68,51 +71,6 @@ pub fn create_arm_hud_panels(
     crate::util::tag_render_source(&mut scene_objects, crate::util::render_source::PLAYER_HANDS);
 
     scene_objects
-}
-
-/// Convert pixel coordinates to UV coordinates (0.0 to 1.0)
-fn pixel_to_uv(pixel_coords: (f32, f32)) -> (f32, f32) {
-    (
-        pixel_coords.0 / BIOFULL_WIDTH,
-        pixel_coords.1 / BIOFULL_HEIGHT,
-    )
-}
-
-/// Calculate overlay quad dimensions and position in world space
-fn create_overlay_transform(
-    base_position: Vector3<f32>,
-    base_rotation: Quaternion<f32>,
-    pixel_start: (f32, f32),
-    pixel_end: (f32, f32),
-    z_offset: f32,
-) -> (Matrix4<f32>, f32, f32) {
-    // Convert pixel coordinates to UV space
-    let uv_start = pixel_to_uv(pixel_start);
-    let uv_end = pixel_to_uv(pixel_end);
-
-    // Calculate overlay dimensions as fraction of base HUD
-    let overlay_width = (uv_end.0 - uv_start.0) * HUD_PANEL_WIDTH;
-    let overlay_height = (uv_end.1 - uv_start.1) * HUD_PANEL_HEIGHT;
-
-    // Calculate center offset relative to base HUD center
-    let center_u = (uv_start.0 + uv_end.0) / 2.0 - 0.5; // -0.5 to center
-    let center_v = (uv_start.1 + uv_end.1) / 2.0 - 0.5; // -0.5 to center
-
-    // Convert UV offsets to world space offsets
-    let offset_x = center_u * HUD_PANEL_WIDTH;
-    let offset_y = -center_v * HUD_PANEL_HEIGHT; // Flip Y for correct orientation
-
-    // Apply base rotation to offsets
-    let local_offset = vec3(offset_x, offset_y, z_offset);
-    let world_offset = base_rotation.rotate_vector(local_offset);
-
-    let overlay_position = base_position + world_offset;
-
-    let transform = Matrix4::from_translation(overlay_position)
-        * Matrix4::from(base_rotation)
-        * Matrix4::from_nonuniform_scale(overlay_width, overlay_height, 1.0);
-
-    (transform, overlay_width, overlay_height)
 }
 
 /// Get player health percentage (0.0 to 1.0)
@@ -254,99 +212,45 @@ pub(crate) fn get_wielded_ammo_icon(world: &World) -> Option<String> {
     icons.0.get(&template_id).cloned()
 }
 
-/// Create the left forearm's layered BIOFULL HUD with health and psi bar
-/// overlays. (The right forearm is [`create_ammo_forearm_panel`]'s.)
-fn create_forearm_hud_with_overlays(
+/// One forearm panel: the backdrop art for `handedness` with `readout` - a
+/// panel-sized canvas drawn at panel origin (0,0) - composited one overlay step
+/// in front of it.
+///
+/// The backdrop stays a plain lit quad rather than a canvas element (the canvas
+/// presenter draws its elements fully emissive, which suits a readout but would
+/// make the panel glow), and `readout` is whatever the SHARED presentation-
+/// agnostic layout emitted, so an arm cannot drift from the interface canvas or
+/// the flat HUD (AGENTS.md section 3). Both arms composite identically here, so
+/// a change to how one is hung cannot miss the other.
+///
+/// No controls on either arm: the VR pointer only hits the cyber-interface
+/// panel, never these quads, so drawing a SETTING/RELOAD/cycle button nobody can
+/// press would be a lie. Only the interactive layer differs, and it differs by
+/// whether a pointer can reach it, not by presentation.
+fn forearm_readout_panel(
     asset_cache: &mut AssetCache,
-    world: &World,
     hand_position: Vector3<f32>,
     hand_rotation: Quaternion<f32>,
+    handedness: Handedness,
+    readout: UiCanvas,
 ) -> Vec<SceneObject> {
-    let mut layers = Vec::new();
-
-    // Calculate base HUD position and rotation
-    let (forearm_position, final_rotation) =
-        forearm_pose(hand_position, hand_rotation, Handedness::Left);
-
-    // Layer 1: Base BIOFULL panel
-    let base_panel =
-        create_forearm_hud_panel(asset_cache, hand_position, hand_rotation, Handedness::Left);
-    layers.push(base_panel);
-
-    // Layer 2: Health bar overlay
-    let health_percentage = get_health_percentage(world);
-    if let Some(health_overlay) = create_bar_overlay(
+    let mut objects = vec![create_forearm_hud_panel(
         asset_cache,
-        "HPBAR.PCX",
-        forearm_position,
-        final_rotation,
-        HEALTH_BAR_START,
-        HEALTH_BAR_END,
-        health_percentage,
+        hand_position,
+        hand_rotation,
+        handedness,
+    )];
+
+    objects.append(&mut readout.render_world_space(
+        asset_cache,
+        forearm_panel_transform(hand_position, hand_rotation, handedness)
+            * Matrix4::from_translation(vec3(0.0, 0.0, OVERLAY_Z_OFFSET)),
+        None,
+        None,
         OVERLAY_Z_OFFSET,
-    ) {
-        layers.push(health_overlay);
-    }
+    ));
 
-    // Layer 3: Psi bar overlay
-    let psi_percentage = get_psi_percentage(world);
-    if let Some(psi_overlay) = create_bar_overlay(
-        asset_cache,
-        "PSIBAR.PCX",
-        forearm_position,
-        final_rotation,
-        PSI_BAR_START,
-        PSI_BAR_END,
-        psi_percentage,
-        OVERLAY_Z_OFFSET * 2.0, // Stack above health bar
-    ) {
-        layers.push(psi_overlay);
-    }
-
-    layers
-}
-
-/// Create a clipped bar overlay at specific pixel coordinates
-fn create_bar_overlay(
-    asset_cache: &mut AssetCache,
-    texture_name: &str,
-    base_position: Vector3<f32>,
-    base_rotation: Quaternion<f32>,
-    pixel_start: (f32, f32),
-    pixel_end: (f32, f32),
-    clip_percentage: f32,
-    z_offset: f32,
-) -> Option<SceneObject> {
-    // Load bar texture
-    let texture_options = TextureOptions {
-        wrap: false,
-        ..Default::default()
-    };
-    let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, texture_name, &texture_options);
-
-    // Create clipped screen material
-    let material = engine::scene::clipped_screen_material::create(
-        texture.clone() as std::rc::Rc<dyn engine::texture::TextureTrait>,
-        clip_percentage,
-    );
-
-    // Create geometry
-    let geometry = Box::new(engine::scene::quad::create());
-
-    // Calculate overlay transform
-    let (transform, _width, _height) = create_overlay_transform(
-        base_position,
-        base_rotation,
-        pixel_start,
-        pixel_end,
-        z_offset,
-    );
-
-    // Create scene object
-    let mut scene_object = SceneObject::new(material, geometry);
-    scene_object.set_transform(transform);
-
-    Some(scene_object)
+    objects
 }
 
 /// Create a single forearm HUD panel
@@ -423,48 +327,32 @@ fn forearm_panel_transform(
         * Matrix4::from_nonuniform_scale(HUD_PANEL_WIDTH, HUD_PANEL_HEIGHT, 1.0)
 }
 
-/// The right forearm's AMMOFULL panel, with the live ammo readout composited
-/// on it - the VR counterpart of the flat HUD's ammo gauge.
-///
-/// The backdrop stays the plain panel quad the left forearm uses, so both
-/// forearm panels are lit identically (the canvas presenter draws its elements
-/// fully emissive, which suits a readout but would make this panel glow beside
-/// its BIOFULL twin). The readout itself is a panel-sized canvas laid one
-/// overlay step in front, drawn by the shared [`crate::hud::ammo_panel`]
-/// layout at panel origin (0,0) - flat emits the identical elements at the
-/// panel's origin on its 640x480 canvas (AGENTS.md section 3 - one layout, two
-/// presentations).
-fn create_ammo_forearm_panel(
-    asset_cache: &mut AssetCache,
-    world: &World,
-    hand_position: Vector3<f32>,
-    hand_rotation: Quaternion<f32>,
-) -> Vec<SceneObject> {
-    use crate::hud::ammo_panel;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine::assets::asset_paths::AssetPath;
 
-    let mut objects = vec![create_forearm_hud_panel(
-        asset_cache,
-        hand_position,
-        hand_rotation,
-        Handedness::Right,
-    )];
-
-    // No controls on the forearm: the VR pointer only hits the cyber-interface
-    // panel, never this quad, so drawing a SETTING/RELOAD/cycle button nobody
-    // can press would be a lie. The readout itself is placed identically to
-    // flat's (AGENTS.md section 3) - only the interactive layer differs, and
-    // it differs by whether a pointer can reach it, not by presentation.
-    let readout = ammo_panel::AmmoReadout::from_world(world, false);
-    objects.append(
-        &mut ammo_panel::build_readout_canvas(&readout).render_world_space(
-            asset_cache,
-            forearm_panel_transform(hand_position, hand_rotation, Handedness::Right)
-                * Matrix4::from_translation(vec3(0.0, 0.0, OVERLAY_Z_OFFSET)),
-            None,
-            None,
-            OVERLAY_Z_OFFSET,
-        ),
-    );
-
-    objects
+    /// With the cyber interface up, the forearms emit nothing at all - the
+    /// interface canvas is the single copy of both readouts (issue #1268).
+    ///
+    /// The gate short-circuits before the world or the asset cache is touched,
+    /// which is what makes an empty `World` (no `PlayerInfo`) and an asset path
+    /// that resolves nothing a sufficient fixture: an ungated build reaches
+    /// both and fails.
+    #[test]
+    fn the_forearms_go_quiet_while_use_mode_is_up() {
+        // No mounts: every lookup misses, so touching the cache is the failure
+        // this test is looking for.
+        let mut assets = AssetCache::new(String::new(), AssetPath::combine(vec![]));
+        let objects = create_arm_hud_panels(
+            &mut assets,
+            &World::new(),
+            true,
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::from(Euler::new(Deg(0.0), Deg(0.0), Deg(0.0))),
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::from(Euler::new(Deg(0.0), Deg(0.0), Deg(0.0))),
+        );
+        assert!(objects.is_empty());
+    }
 }

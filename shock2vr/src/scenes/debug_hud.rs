@@ -203,6 +203,9 @@ impl GameScene for DebugHudScene {
         let hud_panels = create_arm_hud_panels(
             asset_cache,
             &self.world,
+            // The debug scene has no cyber interface, so the arms are never
+            // duplicating it.
+            false,
             self.left_hand_position,
             self.left_hand_rotation,
             self.right_hand_position,
