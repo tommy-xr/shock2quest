@@ -10,11 +10,12 @@ use cgmath::{Vector2, vec2};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::World;
 
-use super::ammo_panel::{self, AmmoReadout, ReadoutButtonSpec};
+use super::ammo_panel::{self, AmmoReadout};
 use super::message_line;
+use super::readouts::{self, BioReadout};
 use super::{get_health_percentage, get_psi_percentage, get_wielded_psi_charge};
 use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
-use crate::ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign};
+use crate::ui::{Rect, ScaleMode, UiCanvas};
 
 /// The original SS2 HUD is authored against a 640x480 display.
 const VIRTUAL_W: f32 = 640.0;
@@ -28,28 +29,10 @@ const CROSSHAIR: Rect = Rect::new(
     CROSSHAIR_SIZE,
 );
 
-// Health/PSI meters - positions matching the original SS2 bio-monitor
-// layout: a block at (2, 414), with health ABOVE psi (y-offsets 18 and 41)
-// and the numeric readouts at the block's x+92. The bar art
-// (HPBAR/PSIBAR.PCX) is 80x14. We draw the compact bio-monitor (BIO.PCX,
-// 128x64) as the backdrop; it is the left crop of the wider BIOFULL.PCX, so
-// the icon/bar/readout offsets below land identically on it.
-const METERS_X: f32 = 2.0;
-const METERS_Y: f32 = 414.0;
-const METERS_W: f32 = 128.0;
-const METERS_H: f32 = 64.0;
-const BAR_W: f32 = 80.0;
-const BAR_H: f32 = 14.0;
-const TEXT_W: f32 = 60.0;
-
-/// Bio-monitor backdrop (BIO.PCX, 128x64) the bars/numbers sit on, the
-/// health/psi equivalent of the ammo gauge's AMMOBACK frame.
-const METERS_BACKDROP: Rect = Rect::new(METERS_X, METERS_Y, METERS_W, METERS_H);
-
-const HEALTH_BAR: Rect = Rect::new(METERS_X + 8.0, METERS_Y + 18.0, BAR_W, BAR_H); // (10, 432)
-const PSI_BAR: Rect = Rect::new(METERS_X + 8.0, METERS_Y + 41.0, BAR_W, BAR_H); //   (10, 455)
-const HEALTH_TEXT: Rect = Rect::new(METERS_X + 92.0, METERS_Y + 17.0, TEXT_W, BAR_H);
-const PSI_TEXT: Rect = Rect::new(METERS_X + 92.0, METERS_Y + 40.0, TEXT_W, BAR_H);
+/// Bio-monitor anchor: the compact BIO.PCX (128x64) at (2, 414), the left crop
+/// of the wider BIOFULL.PCX the interface canvas expands to. The bars and
+/// numbers inside it are laid out once in [`readouts`] in panel pixels.
+const METERS_ORIGIN: Vector2<f32> = readouts::BIO_ORIGIN;
 
 // Ammo gauge - matching the original SS2 HUD: the compact AMMOBACK.PCX
 // (94x64) anchored at (544, 414), bottom-right, with the round count drawn
@@ -60,25 +43,10 @@ const AMMO_W: f32 = 94.0;
 const AMMO_H: f32 = 64.0;
 const AMMO_GAUGE: Rect = Rect::new(AMMO_X, AMMO_Y, AMMO_W, AMMO_H);
 
-// Use-mode expanded readouts (flat UI 5). Anchors match the original layout:
-//  - BIOFULL: the original meters rect is {{2,414},{262,478}} - the bio
-//    panel stays at (2,414); only the backdrop art widens 128->260 (BIO.PCX is
-//    the left crop of BIOFULL.PCX, so the bars/numbers land identically). The
-//    right half is baked research/query/map + nanite/cyber chrome (art stub).
-//  - AMMOFULL: use ("mouse") mode expands the ammo panel LEFT by
-//    166 (AMMOBACK 94 -> AMMOFULL 260), UL = (378,414). Everything inside the
-//    panel - the readout and its SETTING / RELOAD / ammo-cycle / psi-selector
-//    buttons - is laid out once in `ammo_panel` in panel pixels.
-const METERS_FULL_W: f32 = 260.0;
-const AMMO_FULL_MODE_DX: f32 = 166.0;
-const AMMO_FULL_X: f32 = AMMO_X - AMMO_FULL_MODE_DX; // 378
-const AMMO_FULL_GAUGE: Rect = Rect::new(AMMO_FULL_X, AMMO_Y, METERS_FULL_W, AMMO_H);
-/// Where the AMMOFULL panel's upper-left corner lands on the 640x480 HUD
-/// canvas. Everything *inside* the panel (round count, ammo icon and label,
-/// psi discipline, the cycle button) is laid out once in [`ammo_panel`] in
-/// panel pixels and placed relative to this - the VR forearm draws the same
-/// panel with its own origin.
-const AMMO_PANEL_ORIGIN: Vector2<f32> = vec2(AMMO_FULL_X, AMMO_Y);
+/// The ammo readout's panel origin. Its contents are laid out in AMMOFULL
+/// panel pixels, and the compact AMMOBACK crop is that panel's right 94 px, so
+/// the same origin places them over either backdrop.
+const AMMO_PANEL_ORIGIN: Vector2<f32> = readouts::AMMO_ORIGIN;
 
 // Psi overload meter - drawn center-screen below the crosshair while the psi
 // amp's trigger is held on an overloadable power (and briefly after release,
@@ -96,11 +64,13 @@ const OVERLOAD_METER: Rect = Rect::new(
 
 /// Build the flat HUD as a resolution-independent canvas for the given player
 /// stat fractions and (optional) wielded-weapon ammo. Pure (no asset/GL
-/// access), so it is unit-testable. `crosshair` is false in use mode - the
-/// original turns the crosshair overlay off while the cursor is up
-/// (`ShockOverlayMouseMode`, projects/flat-ui.md §2.1).
+/// access), so it is unit-testable.
+///
+/// `use_mode` is the whole shooter/interface split: the original turns the
+/// crosshair overlay off while the cursor is up (`ShockOverlayMouseMode`,
+/// projects/flat-ui.md §2.1), and the bottom readouts move to the interface
+/// canvas - so in use mode this draws neither.
 pub(crate) fn build_flat_hud_canvas(
-    crosshair: bool,
     use_mode: bool,
     health_fraction: f32,
     psi_fraction: f32,
@@ -110,50 +80,27 @@ pub(crate) fn build_flat_hud_canvas(
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(VIRTUAL_W, VIRTUAL_H));
 
-    // Use mode expands the compact bottom readouts in place (flat UI 5): the
-    // bio panel widens to BIOFULL and the ammo gauge to AMMOFULL. The bars,
-    // numbers, and ammo count/icon keep their compact offsets (the FULL art is
-    // a superset with the same crops), so only the backdrops swap.
-    let (meters_backdrop, meters_art) = if use_mode {
-        (
-            Rect::new(METERS_X, METERS_Y, METERS_FULL_W, METERS_H),
-            "BIOFULL.PCX",
-        )
-    } else {
-        (METERS_BACKDROP, "BIO.PCX")
-    };
-    let (ammo_backdrop, ammo_art) = if use_mode {
-        (AMMO_FULL_GAUGE, "AMMOFULL.PCX")
-    } else {
-        (AMMO_GAUGE, "AMMOBACK.PCX")
-    };
-
-    if crosshair {
+    if !use_mode {
         canvas.image(CROSSHAIR, "CROSSHAI.PCX");
     }
-    canvas
-        // Bio-monitor backdrop first; the bars + numbers render on top of it.
-        .image(meters_backdrop, meters_art)
-        .bar(HEALTH_BAR, "HPBAR.PCX", health_fraction)
-        .bar(PSI_BAR, "PSIBAR.PCX", psi_fraction);
 
-    let health_pct = (health_fraction.clamp(0.0, 1.0) * 100.0).round() as i32;
-    let psi_pct = (psi_fraction.clamp(0.0, 1.0) * 100.0).round() as i32;
-    canvas
-        .text_native(
-            HEALTH_TEXT,
-            &format!("{health_pct}"),
-            "mainfont.fon",
-            HAlign::Left,
-            VAlign::Middle,
-        )
-        .text_native(
-            PSI_TEXT,
-            &format!("{psi_pct}"),
-            "mainfont.fon",
-            HAlign::Left,
-            VAlign::Middle,
+    // Shooter mode draws the compact readouts here. In use mode both expand to
+    // their full art and move onto the shared interface canvas the pointer host
+    // owns (`readouts::emit_use_mode`), so the VR cyber interface carries the
+    // same two panels the flat cursor clicks - one emit, not one per
+    // presentation.
+    if !use_mode {
+        readouts::emit_bio(
+            &mut canvas,
+            METERS_ORIGIN,
+            "BIO.PCX",
+            readouts::BIO_SIZE,
+            &BioReadout {
+                health_fraction,
+                psi_fraction,
+            },
         );
+    }
 
     // Psi overload meter (only while the amp is charging / flashing a result).
     if let Some(charge) = psi_charge {
@@ -174,12 +121,12 @@ pub(crate) fn build_flat_hud_canvas(
         }
     }
 
-    // Ammo gauge (a weapon with a clip, or the psi amp's selected discipline
-    // in its place). The backdrop art is flat's to choose - use mode expands
-    // it - but everything drawn inside the panel is placed by the shared
-    // `ammo_panel` layout the VR forearm uses.
-    if !ammo_readout.is_empty() {
-        canvas.image(ammo_backdrop, ammo_art);
+    // Compact ammo gauge (a weapon with a clip, or the psi amp's selected
+    // discipline in its place), over the AMMOBACK crop. Everything drawn inside
+    // the panel is placed by the shared `ammo_panel` layout the VR forearm and
+    // the expanded use-mode readout use.
+    if !use_mode && !ammo_readout.is_empty() {
+        canvas.image(AMMO_GAUGE, "AMMOBACK.PCX");
         ammo_panel::emit(&mut canvas, AMMO_PANEL_ORIGIN, ammo_readout);
     }
 
@@ -190,45 +137,28 @@ pub(crate) fn build_flat_hud_canvas(
     canvas
 }
 
-/// Build and render the flat HUD as screen-space scene objects. `use_mode`
-/// (Tab metagame mode) expands the compact readouts to BIOFULL/AMMOFULL.
+/// Build and render the flat HUD as screen-space scene objects. In `use_mode`
+/// (Tab metagame mode) the bottom readouts are drawn by the interface canvas
+/// instead, expanded to BIOFULL/AMMOFULL, so the HUD leaves them out.
 pub(crate) fn create_flat_hud(
     asset_cache: &mut AssetCache,
     world: &World,
     screen_size: cgmath::Vector2<f32>,
-    crosshair: bool,
     use_mode: bool,
     messages: &[String],
 ) -> Vec<SceneObject> {
     let canvas = build_flat_hud_canvas(
-        crosshair,
         use_mode,
         get_health_percentage(world),
         get_psi_percentage(world),
         get_wielded_psi_charge(world),
-        // The buttons are drawn exactly when the pointer can reach them - use
-        // mode - and the hit-test below reads the same readout.
-        &AmmoReadout::from_world(world, use_mode),
+        // The compact gauge has no clickable controls: the pointer only exists
+        // in use mode, where the interface canvas draws the expanded panel.
+        &AmmoReadout::from_world(world, false),
         messages,
     );
     // Keep the crosshair square and bars undistorted on non-4:3 windows.
     canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
-}
-
-/// The readout's clickable buttons this frame, on the 640x480 HUD canvas.
-///
-/// The single source of truth for BOTH rendering and pointer hit-testing: the
-/// rects come from the shared `ammo_panel` layout that drew them, mapped
-/// through the same panel origin, so the drawn and clickable regions cannot
-/// diverge.
-pub(crate) fn readout_buttons(world: &World, use_mode: bool) -> Vec<ReadoutButtonSpec> {
-    ammo_panel::buttons(&AmmoReadout::from_world(world, use_mode))
-        .into_iter()
-        .map(|spec| ReadoutButtonSpec {
-            rect: ammo_panel::at(AMMO_PANEL_ORIGIN, spec.rect),
-            ..spec
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -257,7 +187,6 @@ mod tests {
     fn canvas_has_crosshair_bio_backdrop_bars_and_readouts() {
         // Crosshair + bio backdrop + 2 bars + 2 stat numbers = 6 (no weapon).
         let canvas = build_flat_hud_canvas(
-            true,
             false,
             1.0,
             0.75,
@@ -272,7 +201,6 @@ mod tests {
     fn wielding_a_weapon_adds_the_ammo_gauge() {
         // ...plus the ammo backdrop + count when a clip is present.
         let canvas = build_flat_hud_canvas(
-            true,
             false,
             1.0,
             0.75,
@@ -287,7 +215,6 @@ mod tests {
     fn ammo_type_adds_icon_and_label() {
         // ...plus the ammo-type icon + label when a type is selected.
         let canvas = build_flat_hud_canvas(
-            true,
             false,
             1.0,
             0.75,
@@ -303,7 +230,6 @@ mod tests {
         // Base 6 + gauge backdrop + tier badge + discipline name = 9; the clip
         // readout is suppressed even though the amp has ammo=0.
         let canvas = build_flat_hud_canvas(
-            true,
             false,
             1.0,
             0.75,
@@ -318,13 +244,12 @@ mod tests {
         assert_eq!(canvas.element_count(), 9);
     }
 
+    /// Use mode hands the bottom readouts to the interface canvas and turns
+    /// the crosshair off (the original's `ShockOverlayMouseMode`), so the HUD
+    /// keeps only the overlays that are its own - here, none.
     #[test]
-    fn use_mode_expands_readouts_and_adds_the_ammo_cycle_button() {
-        // Shooter with a multi-ammo weapon: crosshair + bio + 2 bars + 2
-        // numbers + ammo backdrop + count = 8; NO cycle button (the pointer
-        // cannot reach it outside use mode).
+    fn use_mode_leaves_the_bottom_readouts_to_the_interface_canvas() {
         let shooter = build_flat_hud_canvas(
-            true,
             false,
             1.0,
             0.75,
@@ -333,49 +258,34 @@ mod tests {
             &[],
         );
         assert_eq!(shooter.element_count(), 8);
-        // Use mode (crosshair off) with an empty multi-ammo weapon: the same
-        // readouts (expanded backdrops swap in place, same element count) PLUS
-        // the AMMOFULL cycle button = 8 - 1 (crosshair) + 1 (cycle) = 8.
         let use_mode = build_flat_hud_canvas(
-            false,
             true,
             1.0,
             0.75,
             None,
-            &readout(Some(0), None, None, true),
+            &readout(Some(12), None, None, false),
             &[],
         );
-        assert_eq!(use_mode.element_count(), 8);
-        // The cycle button only appears when the weapon can actually cycle.
-        let single_ammo = build_flat_hud_canvas(
-            false,
-            true,
-            1.0,
-            0.75,
-            None,
-            &readout(Some(0), None, None, false),
-            &[],
-        );
-        assert_eq!(single_ammo.element_count(), 7);
+        assert_eq!(use_mode.element_count(), 0);
     }
 
-    /// Every control the layout offers is inside the expanded AMMOFULL gauge,
-    /// which is the only backdrop that is up while they are clickable.
+    /// The psi overload meter is the HUD's own overlay and stays up in use
+    /// mode - it is not part of the readout pair that moved.
     #[test]
-    fn every_readout_button_sits_in_the_ammofull_panel() {
-        for rect in [
-            ammo_panel::CYCLE_BUTTON,
-            ammo_panel::SETTING_BUTTON,
-            ammo_panel::RELOAD_BUTTON,
-            ammo_panel::PSI_TIER_PREV,
-            ammo_panel::PSI_TIER_NEXT,
-            ammo_panel::PSI_POWER_PREV,
-            ammo_panel::PSI_POWER_NEXT,
-        ] {
-            let placed = ammo_panel::at(AMMO_PANEL_ORIGIN, rect);
-            assert!(AMMO_FULL_GAUGE.x <= placed.x, "{placed:?}");
-            assert!(placed.x + placed.w <= AMMO_FULL_GAUGE.x + AMMO_FULL_GAUGE.w);
-        }
+    fn the_overload_meter_survives_use_mode() {
+        let canvas = build_flat_hud_canvas(
+            true,
+            1.0,
+            0.75,
+            Some(RuntimePropPsiCharge {
+                phase: PsiChargePhase::Charging,
+                fraction: 0.5,
+            }),
+            &readout(Some(12), None, None, false),
+            &[],
+        );
+        // The charging meter is a backdrop + its fill.
+        assert_eq!(canvas.element_count(), 2);
     }
 
     /// The readout proper stays inside the COMPACT gauge too, so shooter mode
@@ -399,24 +309,8 @@ mod tests {
     }
 
     #[test]
-    fn health_sits_above_psi() {
-        // Matches the original SS2 HUD: health sits above psi (18 < 41).
-        assert!(HEALTH_BAR.y < PSI_BAR.y);
-    }
-
-    #[test]
     fn crosshair_is_centered() {
         assert_eq!(CROSSHAIR.center(), vec2(VIRTUAL_W / 2.0, VIRTUAL_H / 2.0));
-    }
-
-    #[test]
-    fn use_mode_hides_the_crosshair() {
-        // The original turns the crosshair overlay off while the cursor is
-        // up (ShockOverlayMouseMode) - one fewer element than shooter mode.
-        let empty = readout(None, None, None, false);
-        let shooter = build_flat_hud_canvas(true, false, 1.0, 0.75, None, &empty, &[]);
-        let use_mode = build_flat_hud_canvas(false, false, 1.0, 0.75, None, &empty, &[]);
-        assert_eq!(use_mode.element_count(), shooter.element_count() - 1);
     }
 
     /// A status message adds one text element per line, at the shared
@@ -424,9 +318,8 @@ mod tests {
     #[test]
     fn a_status_message_adds_a_line_to_the_hud() {
         let empty = readout(None, None, None, false);
-        let base = build_flat_hud_canvas(true, false, 1.0, 0.75, None, &empty, &[]);
+        let base = build_flat_hud_canvas(false, 1.0, 0.75, None, &empty, &[]);
         let with_message = build_flat_hud_canvas(
-            true,
             false,
             1.0,
             0.75,
@@ -444,7 +337,6 @@ mod tests {
     fn out_of_range_fractions_do_not_panic() {
         // Fills are clamped inside `UiCanvas::bar`.
         let _ = build_flat_hud_canvas(
-            true,
             false,
             2.0,
             -1.0,

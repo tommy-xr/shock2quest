@@ -136,6 +136,25 @@ Every action is also triggerable without a keyboard - over HTTP on the debug
 runtime (`POST /v1/input/action`) or through the SDK (`game.input.trigger(...)`).
 `GET /v1/input/actions` lists them.
 
+#### The cyber interface carries the use-mode readouts
+
+The expanded bio (BIOFULL) and ammo (AMMOFULL) readouts along the bottom of the
+640x480 interface canvas are part of the interface itself, not the flat HUD -
+one emit (`shock2vr/src/hud/readouts.rs`) drawn by the pointer host, so the VR
+cyber-interface panel shows the same pair at the same pixels the flat cursor
+clicks. Their SETTING / RELOAD / ammo-cycle / psi-selector controls are
+hit-tested from that same layout, so the weapon settings and psi power MFDs open
+from the readout with the controller ray exactly as they do with the mouse.
+`GET /v1/ui` reports everything they draw as `readout_elements` (derived by
+replaying the same emit, so it cannot drift) and their controls as `readout`, in
+both presentations. Outside use mode flat keeps its compact
+BIO/AMMOBACK overlay and VR its forearm panels.
+
+The VR **forearm** panels are not suppressed while the interface is up, so in
+VR use mode the same bio and ammo readings appear both on the arms and on the
+interface - deliberately left alone for now (issue #1268), unlike flat, which
+does drop its compact pair.
+
 #### Quest face buttons are per-hand and contextual
 
 The four face buttons are bound raw, by hand and position - lower is left `X` /

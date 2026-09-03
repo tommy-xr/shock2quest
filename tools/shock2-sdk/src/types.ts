@@ -793,7 +793,12 @@ export interface UiElement {
   entity_id: number | null;
   /** Canvas-space rect [x, y, w, h] (640x480 virtual canvas). */
   rect: [number, number, number, number];
-  /** Normalized screen-space rect [x, y, w, h]. */
+  /**
+   * Normalized screen-space rect [x, y, w, h] - the flat mouse target. Only
+   * meaningful in the flat presentation: in VR nothing maps the canvas to a
+   * screen, so this degenerates to the canvas rect. Aim a VR controller with
+   * `rect` and the interface's `panel_pose` instead.
+   */
   screen_rect: [number, number, number, number];
 }
 
@@ -848,6 +853,15 @@ export interface UiState {
    * outside use mode. Click a control's `screen_rect` center to invoke it.
    */
   readout: UiElement[];
+  /**
+   * Everything the expanded use-mode readouts drew along the bottom of the
+   * shared interface canvas: the `biofull` / `ammofull` backdrops, the
+   * `hpbar` / `psibar` bars, and the numbers and labels over them (images and
+   * bars are labeled with their art's stem; text carries no label). Empty
+   * outside use mode. Present in BOTH presentations - the VR cyber interface
+   * carries the same readouts the flat cursor clicks.
+   */
+  readout_elements: UiElement[];
   /**
    * Where the pointer last landed on the shared canvas: the mouse on flat, the
    * controller ray on the VR cyber-interface panel. null when nothing is

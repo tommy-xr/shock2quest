@@ -637,6 +637,9 @@ pub struct UiStateResult {
     /// RELOAD, the ammo-cycle arrow, the psi selector arrows), labeled by
     /// meaning. Empty outside use mode.
     pub readout: Vec<shock2vr::game_scene::DebugUiElement>,
+    /// Everything the expanded use-mode readouts drew along the bottom of the
+    /// shared interface canvas, in both presentations. Empty outside use mode.
+    pub readout_elements: Vec<shock2vr::game_scene::DebugUiElement>,
     /// Where the pointer last landed on the shared canvas (flat: the mouse;
     /// VR: the controller ray on the cyber-interface panel).
     pub pointer: Option<shock2vr::game_scene::DebugUiPointer>,

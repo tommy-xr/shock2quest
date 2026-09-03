@@ -3696,13 +3696,9 @@ impl MissionCore {
         // and drive it through the same GUIHover contract the VR hand ray
         // uses. Dispatched before the script update so hovers/clicks are
         // processed this frame.
+        self.refresh_readouts();
         let (ui_messages, ui_drag_actions) = match game_options.presentation_mode {
             crate::PresentationMode::Flat => {
-                // Expose the AMMOFULL readout's controls for hit-testing from
-                // the same shared layout that drew them, so a clickable rect
-                // can never diverge from a rendered button.
-                self.flat_ui
-                    .set_readout_buttons(crate::hud::readout_buttons(&self.world, self.use_mode));
                 self.flat_ui.update(&self.world, input_context.pointer)
             }
             // The cyber interface's pointer bridge: the controller ray's canvas
@@ -5571,10 +5567,31 @@ impl MissionCore {
     ///
     /// Shared by `ToggleUseMode` and `CloseUseMode` so the two exits from use
     /// mode cannot drift apart.
+    /// Hand the interface host this frame's use-mode readouts (bio + ammo), or
+    /// `None` outside the mode. The host both DRAWS them on the shared canvas
+    /// and hit-tests their controls, in both presentations, so the VR ray
+    /// reaches the SETTING / RELOAD / cycle / psi controls exactly as the flat
+    /// cursor does.
+    ///
+    /// Called once per update for live values, and again from
+    /// [`enter_use_mode`](Self::enter_use_mode) /
+    /// [`leave_use_mode`](Self::leave_use_mode) - beside `set_strip`, for the
+    /// same reason it is there: who owns the readouts is part of the mode, and
+    /// the mode is entered and left from paths outside the update. Rendering
+    /// reads this and `use_mode` independently (the flat HUD skips what the
+    /// interface draws), so the two must never disagree on a frame.
+    fn refresh_readouts(&mut self) {
+        self.flat_ui.set_readouts(
+            self.use_mode
+                .then(|| crate::hud::readouts::UseModeReadouts::from_world(&self.world)),
+        );
+    }
+
     fn leave_use_mode(&mut self) -> Effect {
         self.use_mode = false;
         self.flat_ui.take_cursor_item();
         self.flat_ui.set_strip(None);
+        self.refresh_readouts();
         // The mode owns the whole canvas, panel slot included: leaving it with
         // a panel still bound would keep the log reader alive and reported by
         // `/v1/ui` with nothing presenting it. Inert on flat's Tab path (that
@@ -5680,6 +5697,7 @@ impl MissionCore {
             .ok()
             .map(|player| player.inventory_entity_id);
         self.flat_ui.set_strip(strip_entity);
+        self.refresh_readouts();
         // Entered "already pressed": the button that opened the mode may still
         // be down (in VR the interface can be opened with the trigger held), and
         // a held press must never read as a click on whatever the pointer first
@@ -9211,16 +9229,13 @@ impl MissionCore {
 
             // Flat 2D HUD (screen size is available here; the VR forearm HUD is
             // built in `render`). Drawn after the viewmodel so it stays on top.
+            // Use mode replaces the crosshair with the cursor and hands the
+            // bottom readouts to the interface canvas, so the HUD draws neither.
             let messages = self.hud_messages();
             ret.extend(crate::hud::create_flat_hud(
                 asset_cache,
                 &self.world,
                 screen_size,
-                // The crosshair is a shooter-mode overlay; use mode replaces
-                // it with the cursor (the original's ShockOverlayMouseMode
-                // turns kOverlayCrosshair off while the cursor is up).
-                !self.use_mode,
-                // Use mode expands the compact readouts to BIOFULL/AMMOFULL.
                 self.use_mode,
                 &messages,
             ));
@@ -11657,6 +11672,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             name_strip: self.flat_ui.name_strip_debug(),
             cursor: self.flat_ui.cursor_debug(),
             readout: self.flat_ui.readout_buttons_debug(),
+            readout_elements: self.flat_ui.readout_elements_debug(),
             pointer: self.flat_ui.pointer_debug(),
             // The panel a client aims a controller at, reported straight off
             // the anchor that placed it - so a test cannot aim at a placement

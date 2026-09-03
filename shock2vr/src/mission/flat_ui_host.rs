@@ -28,10 +28,11 @@ use shipyard::{EntitiesView, EntityId, Get, UniqueView, View, World};
 use crate::{
     gui::GuiComponentRenderInfo,
     hud::ammo_panel::{ReadoutButton, ReadoutButtonSpec},
+    hud::readouts::{self, UseModeReadouts},
     input_context::Pointer2D,
     mission::PlayerInfo,
     scripts::{Message, MessagePayload},
-    ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign, pointer_to_canvas},
+    ui::{HAlign, Rect, ScaleMode, UiCanvas, UiElement, VAlign, pointer_to_canvas},
     vr_config::Handedness,
 };
 
@@ -233,10 +234,12 @@ pub struct FlatUiHost {
     /// The most recent lift, for double-click (wield) detection. Counts down
     /// each frame and clears when the window elapses.
     last_lift: Option<LiftMark>,
-    /// The AMMOFULL readout's clickable controls on the 640x480 canvas, set
-    /// each frame by the mission from the same shared layout that drew them
-    /// (empty outside use mode). Clicking one emits `FlatUiDragAction::Readout`.
-    readout_buttons: Vec<ReadoutButtonSpec>,
+    /// The use-mode bio + ammo readouts the interface canvas carries along its
+    /// bottom edge, set each frame by the mission (`None` outside use mode).
+    /// The host both DRAWS them and hit-tests their controls off this one
+    /// value, so a clickable rect cannot diverge from a drawn button - in
+    /// either presentation. Clicking one emits `FlatUiDragAction::Readout`.
+    readouts: Option<UseModeReadouts>,
     /// The active panel was opened unbound (the automap): it has no world
     /// object, so the walk-away distance auto-close is skipped. Cleared on
     /// open/close.
@@ -283,7 +286,7 @@ impl FlatUiHost {
             strip: None,
             cursor_item: None,
             last_lift: None,
-            readout_buttons: Vec::new(),
+            readouts: None,
             sticky_panel: false,
             name_strip: None,
             cursor_canvas: None,
@@ -402,17 +405,24 @@ impl FlatUiHost {
         self.last_pointer_pressed = true;
     }
 
-    /// Set the AMMOFULL readout's clickable controls for this frame. The
-    /// mission passes exactly what the flat HUD drew, so a control is
-    /// clickable if and only if it is on screen.
-    pub fn set_readout_buttons(&mut self, buttons: Vec<ReadoutButtonSpec>) {
-        self.readout_buttons = buttons;
+    /// Set the use-mode readouts for this frame (`None` outside use mode).
+    pub(crate) fn set_readouts(&mut self, readouts: Option<UseModeReadouts>) {
+        self.readouts = readouts;
+    }
+
+    /// The readout's clickable controls on the canvas this frame - exactly the
+    /// ones [`readouts::emit_use_mode`] drew.
+    fn readout_buttons(&self) -> Vec<ReadoutButtonSpec> {
+        self.readouts
+            .as_ref()
+            .map(readouts::buttons)
+            .unwrap_or_default()
     }
 
     /// The readout's controls as `/v1/ui` elements (so tests click them by
     /// meaning), empty when none are shown.
     pub fn readout_buttons_debug(&self) -> Vec<crate::game_scene::DebugUiElement> {
-        self.readout_buttons
+        self.readout_buttons()
             .iter()
             .map(|spec| crate::game_scene::DebugUiElement {
                 kind: "button".to_string(),
@@ -422,6 +432,44 @@ impl FlatUiHost {
                 entity_id: None,
                 rect: [spec.rect.x, spec.rect.y, spec.rect.w, spec.rect.h],
                 screen_rect: self.to_screen_rect(spec.rect),
+            })
+            .collect()
+    }
+
+    /// Everything the use-mode readouts DREW on the canvas this frame - the
+    /// BIOFULL/AMMOFULL backdrops, the bars, the numbers, the labels - so a
+    /// client can see the readouts are present and where, not merely that some
+    /// buttons are clickable. Empty outside use mode.
+    ///
+    /// Derived by replaying the same [`readouts::emit_use_mode`] that drew
+    /// them, so it cannot drift from what is on screen. Images and bars label
+    /// as their art's stem (`biofull`, `hpbar`); text has no label.
+    pub fn readout_elements_debug(&self) -> Vec<crate::game_scene::DebugUiElement> {
+        let Some(readouts) = self.readouts.as_ref() else {
+            return Vec::new();
+        };
+        let mut canvas = UiCanvas::new(CANVAS_SIZE);
+        readouts::emit_use_mode(&mut canvas, readouts);
+        canvas
+            .elements()
+            .iter()
+            .map(|element| {
+                let (kind, texture, text) = match element {
+                    UiElement::Image { texture, .. } => ("image", Some(texture), None),
+                    UiElement::Bar { texture, .. } => ("bar", Some(texture), None),
+                    UiElement::Text { text, .. } => ("text", None, Some(text)),
+                    UiElement::Button { texture, .. } => ("button", Some(texture), None),
+                };
+                let rect = element.rect();
+                crate::game_scene::DebugUiElement {
+                    kind: kind.to_string(),
+                    texture: texture.cloned(),
+                    text: text.cloned(),
+                    label: texture.and_then(|t| art_stem(t)),
+                    entity_id: None,
+                    rect: [rect.x, rect.y, rect.w, rect.h],
+                    screen_rect: self.to_screen_rect(rect),
+                }
             })
             .collect()
     }
@@ -752,8 +800,8 @@ impl FlatUiHost {
             .map(|r| r.contains(canvas_pos) || close_button_canvas_rect(r).contains(canvas_pos))
             .unwrap_or(false);
         let readout_hit = self
-            .readout_buttons
-            .iter()
+            .readout_buttons()
+            .into_iter()
             .find(|spec| spec.rect.contains(canvas_pos))
             .map(|spec| spec.button);
         let over_ammo = readout_hit.is_some();
@@ -954,10 +1002,16 @@ impl FlatUiHost {
     fn build_canvas(&self) -> Option<UiCanvas> {
         let strip_rect = self.strip_rect();
         let panel_rect = self.panel_rect();
-        if strip_rect.is_none() && panel_rect.is_none() {
+        if strip_rect.is_none() && panel_rect.is_none() && self.readouts.is_none() {
             return None;
         }
         let mut canvas = UiCanvas::new(CANVAS_SIZE);
+        // The bottom readouts paint FIRST, so the MFD slot keeps the 10 px it
+        // overlaps the bio panel by - the stacking the flat HUD had when it
+        // drew them under this canvas.
+        if let Some(readouts) = self.readouts.as_ref() {
+            readouts::emit_use_mode(&mut canvas, readouts);
+        }
         if let (Some(strip), Some(rect)) = (self.strip.as_ref(), strip_rect) {
             // Hide the item riding the cursor from the strip grid (it is drawn
             // as the cursor instead).
@@ -1349,6 +1403,13 @@ fn semantic_label(texture: &str) -> Option<String> {
 
 /// `GuiScript` appends a panel-local `cursor.pcx` image for the VR quads;
 /// the flat host draws its own screen-space cursor instead.
+/// An art path's stem, lowercased, as a `/v1/ui` label: `"BIOFULL.PCX"` ->
+/// `"biofull"`, `"iface/psi1.pcx"` -> `"psi1"`.
+fn art_stem(texture: &str) -> Option<String> {
+    let file = texture.rsplit('/').next()?;
+    Some(file.split('.').next()?.to_ascii_lowercase())
+}
+
 fn is_gui_cursor(info: &GuiComponentRenderInfo) -> bool {
     matches!(
         info,
@@ -2281,28 +2342,26 @@ mod tests {
         assert_eq!(host.strip_item_at(vec2(58.5, 34.0)), None);
     }
 
-    /// The AMMOFULL readout controls as the flat HUD places them on the canvas.
-    fn readout_fixture() -> Vec<ReadoutButtonSpec> {
-        vec![
-            ReadoutButtonSpec {
-                button: ReadoutButton::CycleAmmo,
-                rect: Rect::new(564.0, 429.0, 12.0, 41.0),
-                texture: Some("ammoarw0.pcx"),
-                text: None,
+    /// A use-mode readout for a multi-ammo gun on NORM: the host derives the
+    /// SETTING and cycle controls from it at the canvas rects it drew them at
+    /// ((496,429) and (564,429)).
+    fn readout_fixture() -> UseModeReadouts {
+        UseModeReadouts {
+            bio: Default::default(),
+            ammo: crate::hud::ammo_panel::AmmoReadout {
+                ammo: Some(12),
+                gun_setting_header: Some("NORM".to_string()),
+                can_cycle_ammo: true,
+                show_buttons: true,
+                ..Default::default()
             },
-            ReadoutButtonSpec {
-                button: ReadoutButton::GunSetting,
-                rect: Rect::new(496.0, 429.0, 66.0, 20.0),
-                texture: None,
-                text: Some("NORM".to_string()),
-            },
-        ]
+        }
     }
 
     #[test]
     fn clicking_a_readout_button_emits_its_action() {
         let (world, mut host, _wrench, _inv) = drag_world();
-        host.set_readout_buttons(readout_fixture());
+        host.set_readouts(Some(readout_fixture()));
         // A click on the cycle arrow's center (570, 449) cycles the ammo.
         let actions = press_edge(&mut host, &world, (570.0, 449.0));
         assert_eq!(
@@ -2323,9 +2382,9 @@ mod tests {
                 .iter()
                 .map(|e| e.label.as_deref().unwrap())
                 .collect::<Vec<_>>(),
-            vec!["cycle_ammo", "gun_setting"]
+            vec!["gun_setting", "cycle_ammo"]
         );
-        assert_eq!(elements[1].text.as_deref(), Some("NORM"));
+        assert_eq!(elements[0].text.as_deref(), Some("NORM"));
         assert!(elements.iter().all(|e| e.kind == "button"));
         let el = host.ammo_cycle_debug().expect("the arrow is exposed");
         assert_eq!(el.label.as_deref(), Some("cycle_ammo"));
@@ -2333,7 +2392,7 @@ mod tests {
         let actions = press_edge(&mut host, &world, (300.0, 300.0));
         assert!(actions.is_empty());
         // Cleared when not shown.
-        host.set_readout_buttons(Vec::new());
+        host.set_readouts(None);
         assert!(host.ammo_cycle_debug().is_none());
         assert!(host.readout_buttons_debug().is_empty());
     }
@@ -2344,7 +2403,7 @@ mod tests {
         // the ammo-cycle button mid-drag protects the held item (no throw, no
         // cycle) rather than treating it as a bare-view throw.
         let (world, mut host, _wrench, _inv) = drag_world();
-        host.set_readout_buttons(readout_fixture());
+        host.set_readouts(Some(readout_fixture()));
         press_edge(&mut host, &world, (23.5, 34.0)); // lift the Wrench
         assert!(host.cursor_debug().is_some());
         let actions = press_edge(&mut host, &world, (570.0, 449.0)); // click the ammo button
@@ -2482,6 +2541,68 @@ mod tests {
             .cursor_debug()
             .expect("the trigger should lift the item");
         assert_eq!(cursor.entity_id, wrench.inner() as i32);
+    }
+
+    /// The interface canvas carries the use-mode readouts, so the VR panel
+    /// shows the same BIOFULL/AMMOFULL pair the flat cursor clicks - at the
+    /// flat canvas rects, from the one shared emit.
+    #[test]
+    fn the_interface_canvas_carries_the_use_mode_readouts() {
+        let (_world, mut host, _wrench, _inv) = drag_world();
+        host.set_readouts(Some(readout_fixture()));
+        let canvas = host
+            .build_canvas()
+            .expect("the readouts alone are a canvas");
+        let art: Vec<(String, Rect)> = canvas
+            .elements()
+            .iter()
+            .filter_map(|el| match el {
+                crate::ui::UiElement::Image { texture, .. } => Some((texture.clone(), el.rect())),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            art.contains(&(
+                "BIOFULL.PCX".to_string(),
+                Rect::new(2.0, 414.0, 260.0, 64.0)
+            )),
+            "the bio readout must sit at the flat use-mode anchor: {art:?}"
+        );
+        assert!(
+            art.contains(&(
+                "AMMOFULL.PCX".to_string(),
+                Rect::new(378.0, 414.0, 260.0, 64.0)
+            )),
+            "the ammo readout must sit at the flat use-mode anchor: {art:?}"
+        );
+        // ...and they paint first, so the MFD slot keeps the 10 px it overlaps
+        // the bio panel by - the stacking flat had when the HUD drew them
+        // underneath this canvas.
+        assert_eq!(art[0].0, "BIOFULL.PCX");
+    }
+
+    /// The whole point of putting them there: the VR ray reaches the readout's
+    /// controls, so the settings and psi MFDs are openable in VR.
+    #[test]
+    fn a_vr_ray_clicks_a_readout_button() {
+        let (world, mut host, _wrench, _inv) = drag_world();
+        host.set_readouts(Some(readout_fixture()));
+        // The SETTING button's center on the canvas (496,429 + 66x20).
+        let setting = (529.0, 439.0);
+
+        let (_, actions) = host.update_canvas(
+            &world,
+            Some(vr_pointer(Handedness::Right, Some(setting), 0.0, 0.0)),
+        );
+        assert!(actions.is_empty(), "hovering must not press the button");
+        let (_, actions) = host.update_canvas(
+            &world,
+            Some(vr_pointer(Handedness::Right, Some(setting), 1.0, 0.0)),
+        );
+        assert_eq!(
+            actions,
+            vec![FlatUiDragAction::Readout(ReadoutButton::GunSetting)]
+        );
     }
 
     /// Rule 6 of the vr-ui-design skill: a trigger already held as the
