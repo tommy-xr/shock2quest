@@ -138,12 +138,18 @@ test(
       "the ray is off the panel",
     );
 
-    await aimVrHandAt(game, monster.position);
-    await game.step({ frames: 5 });
-    assert.equal(
-      (await game.ui.state()).name_strip,
-      "A hybrid",
-      "pointing at a world object names it, panel or no panel",
-    );
+    // The hybrid is awake and moving, so re-aim from its current position
+    // until the ray lands on it.
+    let named: string | null = null;
+    for (let attempt = 0; attempt < 10 && named === null; attempt += 1) {
+      const live = (await game.entities.list({ limit: 400 })).entities.find(
+        (e) => e.template_id === DEBUG_MONSTER_TEMPLATE,
+      );
+      assert.ok(live, "the hybrid must stay alive");
+      await aimVrHandAt(game, live.position);
+      await game.step({ frames: 3 });
+      named = (await game.ui.state()).name_strip;
+    }
+    assert.equal(named, "A hybrid", "pointing at a world object names it");
   },
 );
