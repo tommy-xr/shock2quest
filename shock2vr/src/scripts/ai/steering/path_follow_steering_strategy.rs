@@ -305,9 +305,20 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         if let Some(stalled) = self.stall_route_cells.take() {
                             let fresh =
                                 route_cells(&service, position, &self.path[self.next_waypoint..]);
-                            if self.stall_escalations < MAX_STALL_ESCALATIONS
-                                && repeats_route(&stalled, &fresh)
-                            {
+                            let repeats = repeats_route(&stalled, &fresh);
+                            tracing::debug!(
+                                "ai {:?}: repath adopted, cells {:?} -> {:?}, repeats={}",
+                                entity_id,
+                                stalled,
+                                fresh,
+                                repeats
+                            );
+                            if self.stall_escalations < MAX_STALL_ESCALATIONS && repeats {
+                                tracing::debug!(
+                                    "ai {:?}: escalate #{} on the reproduced route",
+                                    entity_id,
+                                    self.stall_escalations + 1
+                                );
                                 // The cell penalty alone was outbid. Cut the
                                 // crossing this route opens with, so the next
                                 // query cannot answer with it again - one per
@@ -492,6 +503,24 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 // resolves to the cell beyond the crossing; keeping Y fixed
                 // avoids blacklisting a stacked floor's cell).
                 let now_seconds = time.total.as_secs_f32();
+                tracing::debug!(
+                    "ai {:?}: stall ({}) at {:.2},{:.2},{:.2} cell={:?} wp[{}]={:.2},{:.2},{:.2} d={:.2}",
+                    entity_id,
+                    if displaced_stall {
+                        "displacement"
+                    } else {
+                        "no-progress"
+                    },
+                    position.x,
+                    position.y,
+                    position.z,
+                    service.cell_from_position(position),
+                    self.next_waypoint,
+                    waypoint.x,
+                    waypoint.y,
+                    waypoint.z,
+                    distance
+                );
                 let toward = waypoint - position;
                 let toward_len = (toward.x * toward.x + toward.z * toward.z).sqrt();
                 let crossing_into = if toward_len > 1e-3 {
@@ -524,6 +553,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     }
                     _ => route,
                 };
+                tracing::debug!("ai {:?}: blocked report cells={:?}", entity_id, route);
                 report_stall(&service, &route, now_seconds);
                 // Remember how the route that failed began, so the re-path
                 // can be checked against it when it lands
@@ -555,6 +585,16 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     .map(|prev| xz_distance(position, prev) < DISPLACEMENT_STALL_DISTANCE)
                     .unwrap_or(false);
                 self.last_stall_position = Some(position);
+                tracing::debug!(
+                    "ai {:?}: backout to {:.2},{:.2},{:.2} (heading {:.2},{:.2}) pinned={}",
+                    entity_id,
+                    retreat.x,
+                    retreat.y,
+                    retreat.z,
+                    retreat.x - position.x,
+                    retreat.z - position.z,
+                    pinned
+                );
                 let unstick_effect = if pinned {
                     let dir = retreat - position;
                     let len = xz_distance(retreat, position);
@@ -602,16 +642,33 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                                     .then_some(nudged)
                             });
                         match landing {
-                            Some(landing) => Effect::SetPositionRotation {
-                                entity_id,
-                                position: landing,
-                                rotation: crate::util::get_rotation_from_transform(
-                                    world, entity_id,
-                                ),
-                            },
-                            None => Effect::NoEffect,
+                            Some(landing) => {
+                                tracing::debug!(
+                                    "ai {:?}: nudge {:.2},{:.2} -> {:.2},{:.2}",
+                                    entity_id,
+                                    position.x,
+                                    position.z,
+                                    landing.x,
+                                    landing.z
+                                );
+                                Effect::SetPositionRotation {
+                                    entity_id,
+                                    position: landing,
+                                    rotation: crate::util::get_rotation_from_transform(
+                                        world, entity_id,
+                                    ),
+                                }
+                            }
+                            None => {
+                                tracing::debug!(
+                                    "ai {:?}: nudge refused, no navigable landing",
+                                    entity_id
+                                );
+                                Effect::NoEffect
+                            }
                         }
                     } else {
+                        tracing::debug!("ai {:?}: nudge refused, retreat is here", entity_id);
                         Effect::NoEffect
                     }
                 } else {
