@@ -252,13 +252,9 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // desire is discarded (the submit below re-queries).
         if advancing {
             if let Some(response) = async_pathfinding.take_result(entity_id.inner()) {
-                let goal_current = match desired_goal {
-                    Some(now) => xz_distance(response.goal, now) <= REPATH_TARGET_DRIFT,
-                    // Wander/Point requested this exact goal
-                    None => true,
-                };
+                let goal_current = answers_goal(&self.target, response.goal, desired_goal);
                 match response.outcome {
-                    AiPathOutcome::Failed => {
+                    AiPathOutcome::Failed if goal_current => {
                         self.goal_unreachable = true;
                         self.clear_path();
                         // No route (even partially) - back off before asking
@@ -585,6 +581,29 @@ fn aim_with_bias(
     }
 }
 
+/// Whether a completed query answers the goal this strategy wants *now*.
+/// Queries are keyed by entity, so a result can outlive the strategy that
+/// asked for it - a patrol that gives up on a point builds a fresh follower
+/// while the old query is still in flight. Adopting that answer would steer
+/// the body along the abandoned point's route and, worse, carry its
+/// reachability verdict over to a point nothing ever asked about.
+fn answers_goal(
+    target: &PathTarget,
+    response_goal: Vector3<f32>,
+    desired_goal: Option<Vector3<f32>>,
+) -> bool {
+    match (target, desired_goal) {
+        // A moving target (the player): the answer is current if it was
+        // computed near where the target is now
+        (_, Some(now)) => xz_distance(response_goal, now) <= REPATH_TARGET_DRIFT,
+        // A fixed point is requested verbatim and echoed back verbatim, so
+        // any other goal belongs to a request this strategy did not make
+        (PathTarget::Point(point), None) => response_goal == *point,
+        // Wander picks its goal inside this strategy, so any answer is its own
+        (_, None) => true,
+    }
+}
+
 /// Whether a route actually arrives at the goal it was computed for. An
 /// empty route arrives nowhere.
 fn route_reaches_goal(waypoints: &[Vector3<f32>], goal: Vector3<f32>) -> bool {
@@ -721,6 +740,28 @@ mod tests {
             vec3(-2.0, 0.0, 1.0),
         );
         assert_eq!(aim, vec3(10.0, 0.0, 1.0));
+    }
+
+    /// Queries are keyed by entity, so an answer can outlive the strategy
+    /// that asked for it - a patrol that gives up on a point builds a fresh
+    /// follower while the old query is still in flight. That answer says
+    /// nothing about the new point and must not be adopted (its route would
+    /// steer the body back at the abandoned point, and its verdict would
+    /// declare the new point unreachable without anyone asking).
+    #[test]
+    fn an_answer_for_an_abandoned_point_is_not_adopted() {
+        let point = vec3(10.0, 0.0, 10.0);
+        let target = PathTarget::Point(point);
+        assert!(answers_goal(&target, point, None), "its own answer");
+        assert!(
+            !answers_goal(&target, vec3(30.0, 0.0, 30.0), None),
+            "an answer for the point the patrol just gave up on"
+        );
+        // A goal on the floor below is a different point, however close in XZ
+        assert!(
+            !answers_goal(&target, vec3(10.0, -6.0, 10.0), None),
+            "an answer for a goal below this one"
+        );
     }
 
     #[test]
