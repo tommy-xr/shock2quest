@@ -65,7 +65,7 @@ pub enum HandButtonMode {
 /// | hand holds | lower | upper |
 /// |---|---|---|
 /// | nothing, melee, or any other item | `ToggleUseMode` | `ReadLastUnreadLog` |
-/// | a gun | gun handling (not yet bound) | gun handling (not yet bound) |
+/// | a gun | `EjectClip` (that hand's gun) | fire-mode toggle (not yet bound) |
 /// | the psi amp | power selection (not yet bound) | power selection (not yet bound) |
 ///
 /// **Mode first.** While the interface is up both buttons keep their interface
@@ -76,9 +76,10 @@ pub enum HandButtonMode {
 /// reader is reachable until a hand is free. That is the point of a per-hand
 /// mapping - free a hand, or use the one that is already free.
 ///
-/// `hand` does not change the outcome today (the mapping is symmetric); it is
-/// taken because a gun/psi row resolves to an action *about that hand's
-/// weapon*, which the later PRs bind.
+/// `hand` does not change which action is returned (the mapping is symmetric);
+/// it is taken because a gun/psi row resolves to an action *about that hand's
+/// weapon* - `EjectClip` ejects the gun in the hand that pressed it, so the
+/// caller must carry the hand through.
 pub fn resolve_hand_button(
     mode: HandButtonMode,
     hand: Handedness,
@@ -98,10 +99,16 @@ pub fn resolve_hand_button(
 
     match held {
         HeldKind::Empty | HeldKind::Melee | HeldKind::Other => Some(interface_action),
-        // Reserved for the gun and psi-amp handling actions; deliberately
-        // inert until those land, rather than falling through to the panels
-        // and having to be taken away again.
-        HeldKind::Gun | HeldKind::PsiAmp => None,
+        // The gun hand's lower button ejects that gun's magazine. Its upper
+        // button is reserved for the fire-mode toggle and is not bound yet -
+        // inert rather than falling through to the panels and having to be
+        // taken away again.
+        HeldKind::Gun => match button {
+            HandButton::Lower => Some(InputAction::EjectClip),
+            HandButton::Upper => None,
+        },
+        // Reserved for power selection, likewise not yet bound.
+        HeldKind::PsiAmp => None,
     }
 }
 
@@ -162,17 +169,44 @@ mod tests {
         }
     }
 
-    /// Rows 2 and 3: a weapon hand's buttons are its weapon's, and no action
-    /// is bound to them yet - so they do nothing rather than quietly keeping
-    /// the panels they are about to lose.
+    /// Rows 2 and 3: a weapon hand's buttons are its weapon's, so neither
+    /// reaches a panel - whether or not the weapon's own action is bound yet.
     #[test]
     fn a_weapon_hand_reaches_neither_panel() {
         for hand in HANDS {
             for held in [HeldKind::Gun, HeldKind::PsiAmp] {
                 for button in BUTTONS {
-                    assert_eq!(resolve(held, hand, button), None, "{held:?} in {hand:?}");
+                    let resolved = resolve(held, hand, button);
+                    assert!(
+                        resolved != Some(InputAction::ToggleUseMode)
+                            && resolved != Some(InputAction::ReadLastUnreadLog),
+                        "{held:?} in {hand:?} reached a panel: {resolved:?}"
+                    );
                 }
             }
+        }
+    }
+
+    /// Row 2, lower: the gun hand's lower button ejects the magazine - on
+    /// either hand, since the action is resolved against the hand that pressed
+    /// it.
+    #[test]
+    fn a_gun_hands_lower_button_ejects_its_clip() {
+        for hand in HANDS {
+            assert_eq!(
+                resolve(HeldKind::Gun, hand, HandButton::Lower),
+                Some(InputAction::EjectClip),
+                "{hand:?}"
+            );
+        }
+    }
+
+    /// Row 2, upper: the fire-mode toggle is not wired to this button yet, so
+    /// it is inert rather than borrowing another meaning.
+    #[test]
+    fn a_gun_hands_upper_button_is_not_bound_yet() {
+        for hand in HANDS {
+            assert_eq!(resolve(HeldKind::Gun, hand, HandButton::Upper), None);
         }
     }
 
@@ -199,17 +233,6 @@ mod tests {
                     Some(InputAction::ReadLastUnreadLog),
                     "{held:?} in {hand:?}"
                 );
-            }
-        }
-    }
-
-    /// Dual wielding costs the player both panels until a hand is free -
-    /// intended, and asserted so it is a decision rather than a surprise.
-    #[test]
-    fn dual_wielding_reaches_no_panel_on_either_hand() {
-        for hand in HANDS {
-            for button in BUTTONS {
-                assert_eq!(resolve(HeldKind::Gun, hand, button), None);
             }
         }
     }

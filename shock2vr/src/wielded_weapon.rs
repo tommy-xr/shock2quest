@@ -59,6 +59,18 @@ pub fn wielded_weapon(world: &World) -> Option<EntityId> {
     weapon_in_hand(world, Handedness::Right).or_else(|| weapon_in_hand(world, Handedness::Left))
 }
 
+/// The weapon an eject applies to. `Some(hand)` - a per-hand face button -
+/// means the weapon in THAT hand, so a dual-wielding player ejects the
+/// magazine of the gun they pressed; `None` - the hand-agnostic input action -
+/// means whichever weapon is wielded. Both arms filter to weapons, so a hand
+/// carrying a medkit is not an eject target.
+pub fn eject_target(world: &World, hand: Option<Handedness>) -> Option<EntityId> {
+    match hand {
+        Some(hand) => weapon_in_hand(world, hand),
+        None => wielded_weapon(world),
+    }
+}
+
 /// Whether the held `entity` is a weapon the ammo readout and the reload /
 /// ammo-cycle actions apply to: a gun (it has a `PropGunState` clip) or the
 /// psi amp (whose readout is its selected power, not a clip).
@@ -92,4 +104,78 @@ pub(crate) fn is_psi_amp(world: &World, entity: EntityId) -> bool {
         .ok()
         .and_then(|tags| tags.0.get(&template_id)?.get("weapontype").cloned())
         .is_some_and(|weapon_type| weapon_type == "psiamp")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cgmath::{Quaternion, Vector3};
+
+    /// A world whose player holds a GUN in each named hand, returned with the
+    /// two held ids.
+    fn player_holding(left: bool, right: bool) -> (World, Option<EntityId>, Option<EntityId>) {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let inventory = world.add_entity(());
+        let mut gun = |world: &mut World| {
+            world.add_entity((PropGunState {
+                ammo: 12,
+                condition: 1.0,
+                setting: 0,
+                modification: 0,
+                silence_value: 0.0,
+            },))
+        };
+        let left_hand_entity_id = left.then(|| gun(&mut world));
+        let right_hand_entity_id = right.then(|| gun(&mut world));
+        world.add_unique(PlayerInfo {
+            pos: Vector3::new(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id,
+            right_hand_entity_id,
+            inventory_entity_id: inventory,
+        });
+        (world, left_hand_entity_id, right_hand_entity_id)
+    }
+
+    /// A per-hand eject means the gun in that hand and no other - the whole
+    /// point of carrying the hand through, since dual wielding otherwise
+    /// ejects whichever gun `wielded_weapon` happens to prefer.
+    #[test]
+    fn a_per_hand_eject_targets_only_that_hand() {
+        let (world, left_gun, right_gun) = player_holding(true, true);
+
+        assert_eq!(eject_target(&world, Some(Handedness::Right)), right_gun);
+        assert_eq!(eject_target(&world, Some(Handedness::Left)), left_gun);
+        assert_ne!(left_gun, right_gun);
+    }
+
+    /// An empty hand ejects nothing, even with a gun in the other one.
+    #[test]
+    fn an_empty_hand_has_nothing_to_eject() {
+        let (world, _, _) = player_holding(false, true);
+
+        assert_eq!(eject_target(&world, Some(Handedness::Left)), None);
+    }
+
+    /// A hand carrying something that is not a weapon is not an eject target
+    /// either - both arms filter the same way.
+    #[test]
+    fn a_hand_holding_something_that_is_not_a_weapon_has_nothing_to_eject() {
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let inventory = world.add_entity(());
+        let medkit = world.add_entity(());
+        world.add_unique(PlayerInfo {
+            pos: Vector3::new(0.0, 0.0, 0.0),
+            rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            left_hand_entity_id: None,
+            right_hand_entity_id: Some(medkit),
+            inventory_entity_id: inventory,
+        });
+
+        assert_eq!(eject_target(&world, Some(Handedness::Right)), None);
+    }
 }

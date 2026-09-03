@@ -119,6 +119,7 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | --- | ------ | ----- |
 | `P` | `PathfindingTestCycle` | set start → set goal → show path |
 | `B` | `DebugCycleWeapon` | spawns and wields the next weapon (unlike the number row) |
+| `Alt+X` | `EjectClip` | magazine back to the backpack reserve; Quest: the gun hand's *lower* face button |
 | `T` / `Y` | `CycleAmmo` / `CyclePsiPower` | no Quest binding - in VR ammo is swapped by inserting a clip of the other type |
 | `F` | `CycleGunSetting` | switch the wielded gun's fire mode (e.g. NORM / BURST); flat only |
 | `U` | `ReadLastUnreadLog` | on Quest an *upper* face button resolves to this - see below |
@@ -144,7 +145,7 @@ that hand holds (`shock2vr/src/hand_buttons.rs`):
 | that hand holds | lower | upper |
 | --- | --- | --- |
 | nothing, a melee weapon, or any other item | `ToggleUseMode` (cyber interface) | `ReadLastUnreadLog` |
-| a gun | reserved for gun handling - inert for now | reserved for gun handling - inert for now |
+| a gun | `EjectClip` - that hand's gun, so dual wielding ejects the one pressed | reserved for the fire-mode toggle - inert for now |
 | the psi amp | reserved for power selection - inert for now | reserved for power selection - inert for now |
 
 Mode first: while the cyber interface is up both buttons keep their interface

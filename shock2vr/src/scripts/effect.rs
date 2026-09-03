@@ -316,6 +316,21 @@ pub enum Effect {
     /// rotation sampled at the input edge.
     ReadLastUnreadLog,
 
+    /// Return a gun's loaded magazine to the backpack reserve, as clips of the
+    /// ammo type the rounds already are (`reload::unload_to_reserve`). No
+    /// physical clip is dropped into the world.
+    ///
+    /// `hand` names the gun: `Some(hand)` is the gun in that hand, which is
+    /// what a per-hand face button means and what makes the eject dual-wield
+    /// safe; `None` is the hand-agnostic `InputAction::EjectClip` and means
+    /// whichever weapon is wielded.
+    ///
+    /// No-op with nothing loaded, and on a weapon whose ammo has no clip
+    /// archetype to return to (an energy weapon).
+    EjectClip {
+        hand: Option<Handedness>,
+    },
+
     /// A face button was pressed on one hand, before anything decided what it
     /// means. The mission resolves it against what that hand holds and
     /// whether the cyber interface is up - see [`crate::hand_buttons`] - and
