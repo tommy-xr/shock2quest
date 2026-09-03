@@ -690,6 +690,9 @@ pub struct CrowdRepel {
     pub full: f32,
     /// At or beyond this distance there is no push at all
     pub none: f32,
+    /// Overall multiplier, so a caller can fade the whole term in and out
+    /// smoothly (see the melee suppression in the path-follow strategy)
+    pub strength: f32,
 }
 
 /// Repel strength for one neighbour: 0 at (or beyond) `none`, 1 at (or
@@ -717,8 +720,10 @@ pub fn repel_ramp(distance: f32, full: f32, none: f32) -> f32 {
 ///   `separation_radius`, which keeps a group's lines from converging; and
 /// - `repel` (optional), the near-field push modelled on the original
 ///   engine's object regulator, which is what actually stops bodies from
-///   stacking up in a doorway. The chase target (the player) is never
-///   repelled from - closing on the target is the point.
+///   stacking up in a doorway.
+///
+/// The player is not a creature body (no `PropCreature`), so nothing here
+/// ever pushes an AI off its chase target.
 pub fn crowd_bias(
     world: &World,
     entity_id: EntityId,
@@ -729,10 +734,6 @@ pub fn crowd_bias(
     let v_creature = world.borrow::<View<PropCreature>>().unwrap();
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let v_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
-    let player = world
-        .borrow::<UniqueView<PlayerInfo>>()
-        .ok()
-        .map(|player| player.entity_id);
     let reach = repel
         .as_ref()
         .map(|repel| separation_radius.max(repel.none))
@@ -760,15 +761,11 @@ pub fn crowd_bias(
         if distance >= reach || distance < 1e-3 {
             continue;
         }
-        let mut weight = if distance < separation_radius {
-            (separation_radius - distance) / separation_radius
-        } else {
-            0.0
-        };
+        // Two ramps with different knees: separation fades in gently from
+        // the whole radius, repel bites hard up close.
+        let mut weight = repel_ramp(distance, 0.0, separation_radius);
         if let Some(repel) = &repel {
-            if Some(other_id) != player {
-                weight += repel_ramp(distance, repel.full, repel.none);
-            }
+            weight += repel.strength * repel_ramp(distance, repel.full, repel.none);
         }
         if weight <= 0.0 {
             continue;
@@ -1261,10 +1258,10 @@ mod separation_tests {
     }
 
     #[test]
-    fn repel_outpushes_separation_up_close_and_spares_the_player() {
+    fn repel_outpushes_separation_up_close() {
         let mut world = World::new();
         let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
-        let neighbor = spawn_creature(&mut world, vec3(1.5, 0.0, 0.0), 10);
+        spawn_creature(&mut world, vec3(1.5, 0.0, 0.0), 10);
 
         let separation_only = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 6.0, None);
         let with_repel = crowd_bias(
@@ -1275,6 +1272,7 @@ mod separation_tests {
             Some(CrowdRepel {
                 full: 1.5,
                 none: 4.5,
+                strength: 1.0,
             }),
         );
         assert!(
@@ -1283,16 +1281,8 @@ mod separation_tests {
              than separation alone: {with_repel:?} vs {separation_only:?}"
         );
 
-        // ...but not when that neighbor is the chase target
-        world.add_unique(PlayerInfo {
-            pos: vec3(1.5, 0.0, 0.0),
-            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            entity_id: neighbor,
-            left_hand_entity_id: None,
-            right_hand_entity_id: None,
-            inventory_entity_id: neighbor,
-        });
-        let spared = crowd_bias(
+        // ...and a faded-out repel is exactly the separation bias again
+        let faded = crowd_bias(
             &world,
             me,
             vec3(0.0, 0.0, 0.0),
@@ -1300,11 +1290,12 @@ mod separation_tests {
             Some(CrowdRepel {
                 full: 1.5,
                 none: 4.5,
+                strength: 0.0,
             }),
         );
         assert!(
-            (spared.x - separation_only.x).abs() < 1e-6,
-            "the player is never repelled from: {spared:?} vs {separation_only:?}"
+            (faded.x - separation_only.x).abs() < 1e-6,
+            "{faded:?} vs {separation_only:?}"
         );
     }
 

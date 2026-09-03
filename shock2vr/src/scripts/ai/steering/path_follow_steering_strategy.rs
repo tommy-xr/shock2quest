@@ -2,7 +2,7 @@ use cgmath::{Deg, EuclideanSpace, Vector3, vec4};
 use dark::SCALE_FACTOR;
 use dark::mission::path_database::MovementBits;
 use rand::Rng;
-use shipyard::{EntityId, UniqueView, World};
+use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     mission::{GlobalAsyncPathfinding, GlobalPathfinding},
@@ -103,10 +103,16 @@ const SEPARATION_MAX_OFFSET: f32 = 3.0 / SCALE_FACTOR;
 /// AI-to-AI repel (the original engine's object regulator): a neighbour
 /// this close pushes back, ramping from nothing here...
 const REPEL_RADIUS: f32 = 4.5 / SCALE_FACTOR;
-/// ...to a full push at this distance. Far stronger near-field than crowd
-/// separation, which fades linearly over six feet and so barely registers
-/// at the range where bodies actually stack up (a doorway).
+/// ...to a full push at this distance. Crowd separation is not steep
+/// enough near contact to unstack bodies - it fades linearly over its
+/// whole six feet, so between two AIs already shoulder to shoulder it
+/// barely changes as they close the last foot. This term does.
 const REPEL_FULL_DISTANCE: f32 = 1.5 / SCALE_FACTOR;
+/// The repel fades out as an AI closes on its target - off at
+/// `MELEE_ATTACK_RANGE`, full again by this distance. A hard switch would
+/// step the aim point sideways by the whole offset budget in the frame the
+/// target drifted across the boundary.
+const REPEL_MELEE_FADE_DISTANCE: f32 = 12.0 / SCALE_FACTOR;
 
 /// A partial route counts as reaching its goal anyway when its last waypoint
 /// lands within this distance (6 Dark feet). A* answers an unreachable goal
@@ -440,16 +446,28 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // stay authoritative - the bias is capped well below the waypoint
         // spacing.
         //
-        // The near-field repel is suppressed once we are inside melee reach
-        // of the chase target: an attacker closing on the player is not
-        // crowding, and pushing it off the target would cost it the blow.
-        let repel = ai_util::chase_target_distance(world, entity_id)
-            .map(|distance| distance >= ai_util::MELEE_ATTACK_RANGE)
-            .unwrap_or(true)
-            .then_some(ai_util::CrowdRepel {
-                full: REPEL_FULL_DISTANCE,
-                none: REPEL_RADIUS,
-            });
+        // The near-field repel fades out as we close on the chase target:
+        // an attacker in reach of the player is not crowding, and pushing
+        // it off the target would cost it the blow.
+        // Only an AI that actually HAS a target fades: `chase_target`
+        // answers with the player's true position for one that has never
+        // seen them, and a patrol passing a wall away from the player must
+        // still repel.
+        let strength = match target_awareness_distance(world, entity_id, position) {
+            Some(distance) => {
+                1.0 - ai_util::repel_ramp(
+                    distance,
+                    ai_util::MELEE_ATTACK_RANGE,
+                    REPEL_MELEE_FADE_DISTANCE,
+                )
+            }
+            None => 1.0,
+        };
+        let repel = (strength > 0.0).then_some(ai_util::CrowdRepel {
+            full: REPEL_FULL_DISTANCE,
+            none: REPEL_RADIUS,
+            strength,
+        });
         let crowd = ai_util::crowd_bias(world, entity_id, position, SEPARATION_RADIUS, repel);
         // ...and the same treatment for static geometry the navigation mesh
         // doesn't model (a railing, a crate left on the route): whiskers bend
@@ -461,7 +479,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         let aim = aim_with_bias(
             position,
             waypoint,
-            capped(crowd + whiskers, SEPARATION_MAX_OFFSET),
+            blend_biases(crowd, whiskers, SEPARATION_MAX_OFFSET),
         );
 
         // Stall escape: if we stop making progress toward the current
@@ -721,6 +739,33 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             Effect::DrawDebugLines { lines },
         ))
     }
+}
+
+/// How far the AI's believed target is, or None when it has no target at
+/// all (nothing has ever published awareness for it).
+fn target_awareness_distance(
+    world: &World,
+    entity_id: EntityId,
+    position: Vector3<f32>,
+) -> Option<f32> {
+    let v_awareness = world
+        .borrow::<View<crate::runtime_props::RuntimePropAITargetAwareness>>()
+        .ok()?;
+    let awareness = v_awareness.get(entity_id).ok()?;
+    Some(xz_distance(position, awareness.last_known_pos))
+}
+
+/// Combine the crowd bias with the whisker bias into one aim offset.
+///
+/// The crowd term is a sum of per-neighbour weights with no bound of its
+/// own, so it is shortened to the offset budget BEFORE the sum: otherwise
+/// a dense crowd - or simply a stronger repel term - buys magnitude out of
+/// the whiskers' share and bends the line into the very geometry the
+/// whiskers are there to avoid. The blend is then shortened once, so two
+/// biases pointing the same way still cannot bend the line further than
+/// one of them may.
+fn blend_biases(crowd: Vector3<f32>, whiskers: Vector3<f32>, max: f32) -> Vector3<f32> {
+    capped(capped(crowd, max) + whiskers, max)
 }
 
 /// Shorten a horizontal bias to at most `max`.
@@ -1042,17 +1087,26 @@ mod tests {
     }
 
     #[test]
-    fn biases_are_capped_together() {
-        // Crowd separation, near-field repel and whiskers all sum into one
-        // offset that is shortened once - three pushes the same way still
-        // bend the line no further than one may.
-        let shortened = capped(
-            vec3(1.0, 0.0, 0.0) + vec3(2.0, 0.0, 0.0) + vec3(0.0, 0.0, 4.0),
-            2.5,
-        );
+    fn a_crowd_cannot_outbid_the_whiskers() {
+        // A huge crowd push (many neighbors, or a saturated repel) plus a
+        // whisker push at right angles: the crowd is shortened to the
+        // budget first, so the geometry it is steering around keeps half
+        // the blend instead of being rounded away.
+        let blended = blend_biases(vec3(100.0, 0.0, 0.0), vec3(0.0, 0.0, 2.5), 2.5);
         assert!(
-            ((shortened.x * shortened.x + shortened.z * shortened.z).sqrt() - 2.5).abs() < 1e-5
+            (blended.z - blended.x).abs() < 1e-4,
+            "an unbounded crowd must not outweigh the whiskers: {blended:?}"
         );
+        // ...and the blend is still shortened once, to the budget
+        let magnitude = (blended.x * blended.x + blended.z * blended.z).sqrt();
+        assert!((magnitude - 2.5).abs() < 1e-4, "got {magnitude}");
+        // A crowd on its own is capped like any other bias
+        let alone = blend_biases(vec3(100.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), 2.5);
+        assert!((alone.x - 2.5).abs() < 1e-4, "got {alone:?}");
+    }
+
+    #[test]
+    fn biases_are_capped_together() {
         let shortened = capped(vec3(3.0, 0.0, 4.0), 2.5);
         assert!(
             ((shortened.x * shortened.x + shortened.z * shortened.z).sqrt() - 2.5).abs() < 1e-5
