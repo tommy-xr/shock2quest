@@ -57,6 +57,18 @@ const PEN_WALL_HEIGHT: f32 = 1.2;
 /// ahead (-X, the default-view forward), behind the pen.
 const WALL_DISTANCE: f32 = 15.0;
 
+/// The hazard patch: `Rad Burst`, the persistent radius radiation source the
+/// game spawns from a destroyed rad barrel (`StimSource` Radiation, intensity
+/// 8, radius 6). It renders nothing, so a floor patch marks it.
+const RADIATION_SOURCE_TEMPLATE_ID: i32 = -1219;
+const RADIATION_SOURCE_RADIUS: f32 = 6.0;
+
+/// Where the hazard patch sits, as (x, z): beside the player and off the
+/// firing line, far enough that the spawn point is outside the source's
+/// 6-unit radius - so the player starts clean and only gets irradiated after
+/// a deliberate `POST /v1/player/teleport` into it.
+const RADIATION_SOURCE_POSITION: (f32, f32) = (0.0, 9.0);
+
 pub fn create_debug_psi_scene(
     global_context: &GlobalContext,
     game_options: &GameOptions,
@@ -90,6 +102,20 @@ pub fn create_debug_psi_scene(
             vec3(-PEN_FAR, PEN_WALL_HEIGHT / 2.0, 0.0),
             vec3(1.0, PEN_WALL_HEIGHT, 2.0 * PEN_HALF_WIDTH),
         ),
+        // hazard patch: a floor marker under the (invisible) radiation source
+        (
+            vec3(0.15, 0.45, 0.15),
+            vec3(
+                RADIATION_SOURCE_POSITION.0,
+                0.02,
+                RADIATION_SOURCE_POSITION.1,
+            ),
+            vec3(
+                2.0 * RADIATION_SOURCE_RADIUS,
+                0.04,
+                2.0 * RADIATION_SOURCE_RADIUS,
+            ),
+        ),
         // pen: sides
         (
             pen_wall,
@@ -117,7 +143,9 @@ pub fn create_debug_psi_scene(
     println!(
         "[debug_psi] Player is equipped with the Psi Amp, psi pool full, every stat at cap.\n\
          Select a power with the `CyclePsiPower` input action (`Y` on desktop),\n\
-         then fire to cast it. Two pipe hybrids stand in the pen ahead."
+         then fire to cast it. Two pipe hybrids stand in the pen ahead,\n\
+         and a radiation hazard patch sits to the side (+Z); teleport into it\n\
+         to accumulate radiation."
     );
     builder.build_with_hooks(
         DebugSceneBuildOptions {
@@ -167,10 +195,18 @@ impl DebugSceneHooks for PsiHooks {
                 },
             );
 
-            let spawns = TARGET_POSITIONS
+            let mut spawns: Vec<Effect> = TARGET_POSITIONS
                 .iter()
                 .map(|(x, z)| spawn_at(TARGET_CREATURE, Point3::new(-x, 1.0, *z)))
                 .collect();
+            spawns.push(spawn_at(
+                RADIATION_SOURCE_TEMPLATE_ID,
+                Point3::new(
+                    RADIATION_SOURCE_POSITION.0,
+                    1.0,
+                    RADIATION_SOURCE_POSITION.1,
+                ),
+            ));
             core.handle_effects(
                 spawns,
                 global_context,

@@ -39,6 +39,10 @@ pub const INVISO_TEMPLATE_ID: i32 = -3157;
 /// their health (see `scripts::berserk`).
 pub const BERSERK_TEMPLATE_ID: i32 = -3155;
 
+/// `Rad Shield` - Neural Decontamination (tier 2 sustained power): while
+/// active, accumulated radiation bleeds off and new exposure is ignored.
+pub const RAD_SHIELD_TEMPLATE_ID: i32 = -1114;
+
 /// `PropPsiPower::activation_type` for sustained/timed self effects - the
 /// power activates for a duration given by its `P$PsiShield` data
 /// (`duration_base + duration_per_psi × PSI` seconds).

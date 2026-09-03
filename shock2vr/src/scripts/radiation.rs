@@ -20,6 +20,9 @@ pub const RADIATION_DAMAGE_INTERVAL_SECS: f32 = 6.0;
 pub const RADIATION_CHECK_INTERVAL_SECS: f32 = 0.1;
 const RADIATION_DAMAGE_PER_LEVEL: f32 = 0.25;
 const DEFAULT_RADIATION_ABSORB: f32 = 0.05;
+/// Fallback decontamination rate if `Rad Shield`'s authored `data[0]` is
+/// missing, matching the shipped value.
+const DEFAULT_DECONTAMINATION_PER_SEC: f32 = 5.0;
 const DEFAULT_RADIATION_RECOVERY: f32 = 3.0;
 
 /// Retail `RadPatch`: clear part of the player's accumulated radiation and
@@ -119,11 +122,14 @@ impl ActiveRadiation {
 
     /// Advance the retail 6-second damage/recovery clock and return ordinary
     /// hit-point damage for MissionCore's central HP effect handler.
+    /// `decontamination_per_sec` is the active Neural Decontamination
+    /// (`Rad Shield`) purge rate, or 0 when the power is not active.
     pub fn advance(
         &mut self,
         elapsed_secs: f32,
         absorb_per_check: f32,
         recovery_per_tick: f32,
+        decontamination_per_sec: f32,
     ) -> i32 {
         if !elapsed_secs.is_finite() || elapsed_secs <= 0.0 {
             return 0;
@@ -155,6 +161,19 @@ impl ActiveRadiation {
             DEFAULT_RADIATION_RECOVERY
         };
 
+        // Neural Decontamination: while the sustained power is active the
+        // caster is sealed off - ambient exposure never reaches stored level,
+        // the stored level bleeds off, and the 6 s clock deals no damage.
+        // ASSUMPTION: the power's authored `data[0]` (5.0) reads as a
+        // per-second purge rate; retail could instead mean a resistance
+        // percentage. At 5/s any realistic level clears within ~2 s, which is
+        // what "clears accumulated radiation" is asking for either way.
+        let shielded = decontamination_per_sec.is_finite() && decontamination_per_sec > 0.0;
+        if shielded {
+            self.ambient_level = 0.0;
+            self.level = (self.level - decontamination_per_sec * elapsed_secs).max(0.0);
+        }
+
         self.seconds_until_check -= elapsed_secs;
         while self.seconds_until_check <= 0.0 {
             if self.ambient_level > self.level {
@@ -166,7 +185,7 @@ impl ActiveRadiation {
         self.seconds_until_damage -= elapsed_secs;
         let mut damage = 0_i32;
         while self.seconds_until_damage <= 0.0 {
-            if self.level >= 1.0 {
+            if !shielded && self.level >= 1.0 {
                 let pulse = (self.level * RADIATION_DAMAGE_PER_LEVEL)
                     .trunc()
                     .clamp(0.0, i32::MAX as f32) as i32;
@@ -212,6 +231,31 @@ pub fn apply_player_stimulus(
         .is_ok_and(|mut radiation| radiation.observe_ambient(amount))
 }
 
+/// The purge rate of an active Neural Decontamination (`Rad Shield`), read
+/// from the power's authored `data[0]`, or 0 when it is not active. Kept in
+/// the radiation tick rather than the psi code so it composes with the
+/// anti-rad patch and any future radiation-absorb path.
+fn active_decontamination_rate(world: &World) -> f32 {
+    let active = world
+        .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+        .is_ok_and(|active| active.is_active(crate::psi::RAD_SHIELD_TEMPLATE_ID));
+    if !active {
+        return 0.0;
+    }
+    world
+        .borrow::<UniqueView<crate::psi::GlobalPsiPowers>>()
+        .ok()
+        .and_then(|powers| {
+            powers
+                .0
+                .iter()
+                .find(|p| p.template_id == crate::psi::RAD_SHIELD_TEMPLATE_ID)
+                .map(|p| p.power.data[0])
+        })
+        .filter(|rate| rate.is_finite() && *rate > 0.0)
+        .unwrap_or(DEFAULT_DECONTAMINATION_PER_SEC)
+}
+
 pub fn tick_player_radiation(world: &World, elapsed_secs: f32) -> Option<Effect> {
     let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?.entity_id;
     let recovery = world
@@ -224,10 +268,11 @@ pub fn tick_player_radiation(world: &World, elapsed_secs: f32) -> Option<Effect>
         .ok()
         .and_then(|values| values.get(player).ok().map(|value| value.0))
         .unwrap_or(DEFAULT_RADIATION_ABSORB);
+    let decontamination = active_decontamination_rate(world);
     let damage = world
         .borrow::<shipyard::UniqueViewMut<ActiveRadiation>>()
         .ok()
-        .map(|mut radiation| radiation.advance(elapsed_secs, absorb, recovery))
+        .map(|mut radiation| radiation.advance(elapsed_secs, absorb, recovery, decontamination))
         .unwrap_or(0);
     (damage > 0).then_some(Effect::AdjustHitPoints {
         entity_id: player,
@@ -300,12 +345,12 @@ mod tests {
     fn patch_clears_level_without_granting_future_protection() {
         let mut radiation = ActiveRadiation::default();
         assert!(radiation.observe_ambient(8.0));
-        assert_eq!(radiation.advance(0.1, 8.0, 3.0), 0);
+        assert_eq!(radiation.advance(0.1, 8.0, 3.0, 0.0), 0);
         assert!(radiation.clear(6.0));
         assert_eq!(radiation.level(), 2.0);
 
         assert!(radiation.observe_ambient(6.0));
-        assert_eq!(radiation.advance(0.1, 4.0, 3.0), 0);
+        assert_eq!(radiation.advance(0.1, 4.0, 3.0, 0.0), 0);
         assert_eq!(radiation.level(), 6.0);
     }
 
@@ -313,14 +358,49 @@ mod tests {
     fn damage_and_recovery_follow_the_retail_six_second_clock() {
         let mut radiation = ActiveRadiation::default();
         assert!(radiation.observe_ambient(8.0));
-        assert_eq!(radiation.advance(0.1, 8.0, 3.0), 0);
+        assert_eq!(radiation.advance(0.1, 8.0, 3.0, 0.0), 0);
         assert!(radiation.observe_ambient(8.0));
-        assert_eq!(radiation.advance(5.89, 0.05, 3.0), 0);
+        assert_eq!(radiation.advance(5.89, 0.05, 3.0, 0.0), 0);
         assert!(radiation.observe_ambient(8.0));
-        assert_eq!(radiation.advance(0.02, 0.05, 3.0), 2);
+        assert_eq!(radiation.advance(0.02, 0.05, 3.0, 0.0), 2);
         assert_eq!(radiation.level(), 8.0, "active exposure delays recovery");
-        assert_eq!(radiation.advance(6.0, 0.05, 3.0), 2);
+        assert_eq!(radiation.advance(6.0, 0.05, 3.0, 0.0), 2);
         assert_eq!(radiation.level(), 5.0);
+    }
+
+    #[test]
+    fn rad_shield_purges_and_blocks_while_active() {
+        let mut radiation = ActiveRadiation::default();
+        assert!(radiation.observe_ambient(8.0));
+        assert_eq!(radiation.advance(0.1, 8.0, 3.0, 0.0), 0);
+        assert_eq!(radiation.level(), 8.0);
+
+        // One second of shielded exposure: ambient is ignored and 5.0 bleeds
+        // off, so a level that would otherwise hold at 8 falls to 3.
+        assert!(radiation.observe_ambient(8.0));
+        assert_eq!(radiation.advance(1.0, 8.0, 3.0, 5.0), 0);
+        assert_eq!(radiation.level(), 3.0);
+
+        // ...and it reaches zero and stays there while the shield holds.
+        assert!(radiation.observe_ambient(8.0));
+        assert_eq!(radiation.advance(1.0, 8.0, 3.0, 5.0), 0);
+        assert_eq!(radiation.level(), 0.0);
+
+        // Expiry: exposure accumulates again from the shipped absorb step.
+        assert!(radiation.observe_ambient(8.0));
+        assert_eq!(radiation.advance(0.1, 0.05, 3.0, 0.0), 0);
+        assert_eq!(radiation.level(), 0.05);
+    }
+
+    #[test]
+    fn rad_shield_suppresses_the_six_second_damage_pulse() {
+        let mut radiation = ActiveRadiation::default();
+        assert!(radiation.observe_ambient(8.0));
+        assert_eq!(radiation.advance(0.1, 8.0, 3.0, 0.0), 0);
+
+        // Unshielded this tick deals 2 damage (see the retail-clock test).
+        assert!(radiation.observe_ambient(8.0));
+        assert_eq!(radiation.advance(6.0, 0.05, 3.0, 5.0), 0);
     }
 
     #[test]
@@ -332,7 +412,7 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(radiation.advance(1.0 / 60.0, 0.05, 3.0), 0);
+        assert_eq!(radiation.advance(1.0 / 60.0, 0.05, 3.0, 0.0), 0);
         assert_eq!(radiation.level(), 8.0);
     }
 
@@ -378,7 +458,7 @@ mod tests {
             world
                 .borrow::<shipyard::UniqueViewMut<ActiveRadiation>>()
                 .unwrap()
-                .advance(0.1, 0.05, 3.0),
+                .advance(0.1, 0.05, 3.0, 0.0),
             0
         );
         assert_eq!(
