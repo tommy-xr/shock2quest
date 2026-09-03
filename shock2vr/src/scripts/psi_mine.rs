@@ -19,15 +19,19 @@ use crate::{physics::PhysicsWorld, runtime_props::RuntimePropTransform, time::Ti
 
 use super::{Effect, MessagePayload, Script};
 
-/// How long after the cast the mine starts sensing. The mine leaves the amp at
-/// the caster's own position, so it must not trip on whatever the caster is
-/// standing next to; this is also roughly the time it takes to land.
-const ARM_DELAY: Duration = Duration::from_millis(750);
+/// How long after the cast the mine starts sensing: long enough to leave the
+/// caster (it is lobbed from their own position, and the blast reaches them
+/// too), short enough that a mine thrown at a creature a few paces away is
+/// live by the time it gets there.
+const ARM_DELAY: Duration = Duration::from_millis(250);
 
-/// How close a creature must come to set the mine off. Matched to the authored
-/// blast radius (`Psi Mine Explosion`'s stim source, 4.0) so anything that
-/// trips the mine is inside the blast.
-const TRIGGER_RADIUS: f32 = 4.0;
+/// How close a creature must come to set the mine off, measured to the
+/// creature's origin. Inside the authored blast radius (`Psi Mine Explosion`'s
+/// stim source is 30.0 @ r4.0), whose damage falls off linearly to nothing at
+/// its edge - a mine that tripped at the full radius would deal nothing to
+/// what tripped it - but with room for the body's own extent around that
+/// origin.
+const TRIGGER_RADIUS: f32 = 3.0;
 
 /// How long an untripped mine lasts before it quietly expires, so a cast that
 /// found nothing does not leave a live sensor in the level forever.
