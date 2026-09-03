@@ -399,6 +399,28 @@ where
         }
     }
 
+    /// Declare this element's art to be a holographic grid tile, repeated
+    /// `tiles_x` x `tiles_y` across the element's rect (see
+    /// [`ImageKind::Hologram`]).
+    pub fn with_hologram(self, tiles_x: u8, tiles_y: u8) -> GuiComponent<TEvent> {
+        match self {
+            Self::Image {
+                position,
+                size,
+                texture,
+                alpha,
+                ..
+            } => Self::Image {
+                position,
+                size,
+                texture,
+                alpha,
+                kind: ImageKind::Hologram { tiles_x, tiles_y },
+            },
+            other => other,
+        }
+    }
+
     /// Tag a `Button` with the world entity it stands for (no-op for other
     /// component kinds) - see `GuiComponent::Button::entity`.
     pub fn with_entity(self, new_entity: EntityId) -> GuiComponent<TEvent> {

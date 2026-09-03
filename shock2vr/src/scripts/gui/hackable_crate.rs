@@ -371,8 +371,8 @@ mod tests {
         );
 
         assert!(
-            has_texture(&components, "contain.pcx"),
-            "a hacked crate should draw the loot panel backdrop"
+            has_texture(&components, crate::ui::HOLOGRAM_TILE_TEXTURE),
+            "a hacked crate should draw the loot panel's hologram grid"
         );
         assert!(
             button_for(&components, clip),

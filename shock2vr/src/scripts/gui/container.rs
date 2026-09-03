@@ -15,8 +15,27 @@ use crate::gui;
 
 use crate::scripts::{Effect, MessagePayload};
 
+/// What a panel draws behind its item cells.
+enum PanelBackdrop {
+    /// The original panel bitmap, filling the whole panel.
+    Art(String),
+    /// A bare holographic grid over the item cells and nothing else - no
+    /// backdrop, no chrome (see [`ImageKind::Hologram`]).
+    HologramGrid,
+}
+
+impl PanelBackdrop {
+    /// The bitmap this backdrop draws from.
+    fn texture(&self) -> &str {
+        match self {
+            Self::Art(texture) => texture.as_str(),
+            Self::HologramGrid => crate::ui::HOLOGRAM_TILE_TEXTURE,
+        }
+    }
+}
+
 pub struct ContainerGui {
-    background_image: String,
+    backdrop: PanelBackdrop,
     width: f32,
     height: f32,
     inv_offset_x: f32,
@@ -68,12 +87,24 @@ fn creature_is_lootable(world: &World, entity_id: EntityId) -> bool {
 /// 35px apart horizontally and 34px apart vertically.
 const SLOT_PITCH: Vector2<f32> = Vector2::new(35.0, 34.0);
 
-/// Top-left of the loot panel's 4x4 item grid, in `contain.pcx` pixels. Its
-/// cell separators run at x = 13 + 35n and y = 150 + 34n; both are 2px wide,
-/// so this is flush with the first cell's interior horizontally and one row
-/// below it vertically. The two panels' insets differ - that asymmetry is the
-/// original's, not a rounding of ours.
-const LOOT_GRID_ORIGIN: Vector2<f32> = Vector2::new(15.0, 153.0);
+/// Top-left of the loot panel's 4x4 item grid. The panel is nothing but the
+/// grid now, so this is a plain margin: horizontally centered in the 188px
+/// width the flat MFD slot reserves, with the same margin at the top.
+const LOOT_GRID_ORIGIN: Vector2<f32> = Vector2::new(
+    (LOOT_PANEL_WIDTH - SLOT_PITCH.x * LOOT_SLOTS.0 as f32) / 2.0,
+    LOOT_GRID_MARGIN,
+);
+
+/// The loot panel keeps the 188px width of the flat MFD slot it docks into.
+const LOOT_PANEL_WIDTH: f32 = 188.0;
+
+/// Cells in the loot grid.
+const LOOT_SLOTS: (usize, usize) = (4, 4);
+
+/// Breathing room around the loot grid, so the hologram's outer separators are
+/// not flush with the panel edge (and the flat host's close button, which hugs
+/// the panel's top-right corner, does not sit on the grid).
+const LOOT_GRID_MARGIN: f32 = 8.0;
 
 /// Top-left of the backpack strip's 15x3 item grid, in `invback.pcx` pixels:
 /// separators at x = 2 + 35n and y = 15 + 34n, so this sits 2px inside the
@@ -105,13 +136,13 @@ pub fn backpack_cell_at(panel_pos: Vector2<f32>, grid: (usize, usize)) -> Option
 impl ContainerGui {
     pub fn loot_container() -> ContainerGui {
         ContainerGui {
-            background_image: "contain.pcx".to_owned(),
-            width: 188.0,
-            height: 296.0,
+            backdrop: PanelBackdrop::HologramGrid,
+            width: LOOT_PANEL_WIDTH,
+            height: LOOT_GRID_ORIGIN.y + SLOT_PITCH.y * LOOT_SLOTS.1 as f32 + LOOT_GRID_MARGIN,
             inv_offset_x: LOOT_GRID_ORIGIN.x,
             inv_offset_y: LOOT_GRID_ORIGIN.y,
-            num_slots_x: 4,
-            num_slots_y: 4,
+            num_slots_x: LOOT_SLOTS.0,
+            num_slots_y: LOOT_SLOTS.1,
             take_on_click: true,
             require_lootable_creature: false,
         }
@@ -130,7 +161,7 @@ impl ContainerGui {
 
     pub fn inv_container() -> ContainerGui {
         ContainerGui {
-            background_image: "invback.pcx".to_owned(),
+            backdrop: PanelBackdrop::Art("invback.pcx".to_owned()),
             width: 635.0,
             height: 120.0,
             inv_offset_x: BACKPACK_GRID_ORIGIN.x,
@@ -163,11 +194,21 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         world: &World,
         _state: &ContainerGuiState,
     ) -> Vec<GuiComponent<ContainerGuiMsg>> {
-        let mut components: Vec<GuiComponent<ContainerGuiMsg>> = vec![
-            gui::image(self.background_image.as_str())
+        let mut components: Vec<GuiComponent<ContainerGuiMsg>> = vec![match &self.backdrop {
+            PanelBackdrop::Art(_) => gui::image(self.backdrop.texture())
                 .with_position(vec2(0.0, 0.0))
                 .with_size(vec2(self.width, self.height)),
-        ];
+            // One hologram cell per item cell, drawn over the item grid only:
+            // the panel has no backdrop of its own, so the world shows through
+            // between the lines.
+            PanelBackdrop::HologramGrid => gui::image(self.backdrop.texture())
+                .with_hologram(self.num_slots_x as u8, self.num_slots_y as u8)
+                .with_position(vec2(self.inv_offset_x, self.inv_offset_y))
+                .with_size(vec2(
+                    SLOT_PITCH.x * self.num_slots_x as f32,
+                    SLOT_PITCH.y * self.num_slots_y as f32,
+                )),
+        }];
 
         // Resolve the usable grid once in panel pixels. Both flat and VR
         // presentations consume this same component list, so blocked-cell and
@@ -726,16 +767,16 @@ mod tests {
         }
     }
 
-    /// Both panels' item grids must land on the cell separators authored into
-    /// their backdrops - `contain.pcx` (loot) and `invback.pcx` (backpack) -
-    /// stepping by the shared 35x34 cell pitch. A 1x1 item therefore occupies
-    /// exactly one cell at the grid origin.
+    /// Both panels' item grids must land on their cell separators - the loot
+    /// panel's hologram lines, the backpack's `invback.pcx` art - stepping by
+    /// the shared 35x34 cell pitch. A 1x1 item therefore occupies exactly one
+    /// cell at the grid origin.
     #[test]
     fn item_grids_sit_on_the_authored_backdrop_cells() {
         let (world, container, item, _inventory) = loot_world();
 
         for (gui, expected_origin) in [
-            (ContainerGui::loot_container(), vec2(15.0, 153.0)),
+            (ContainerGui::loot_container(), vec2(24.0, 8.0)),
             (ContainerGui::inv_container(), vec2(4.0, 17.0)),
         ] {
             let components = gui.get_components(&None, container, &world, &ContainerGuiState {});
@@ -823,14 +864,14 @@ mod tests {
             ContainerGui::loot_container(),
             ContainerGui::inv_container(),
         ] {
-            let backdrop = gui.background_image.clone();
+            let backdrop = gui.backdrop.texture().to_owned();
             let components = gui.get_components(&cursor, container, &world, &ContainerGuiState {});
             let kinds: Vec<ImageKind> = components
                 .iter()
                 .filter_map(|c| match c {
                     GuiComponent::Button { kind, .. } => Some(*kind),
-                    // The panel's own backdrop is the only art that is not
-                    // an item icon.
+                    // The panel's own backdrop (art or hologram grid) is the
+                    // only image that is not an item icon.
                     GuiComponent::Image { kind, texture, .. } if *texture != backdrop => {
                         Some(*kind)
                     }

@@ -373,11 +373,49 @@ pub enum ImageKind {
     /// without stretching or overlapping adjacent rows. Smaller art remains
     /// at its authored size.
     ObjectIconFit,
+    /// A holographic grid: the SHODAN family grid tile repeated `tiles_x` x
+    /// `tiles_y` times across the element's rect, with its black dropped and
+    /// its lines tinted (see [`HOLOGRAM_TINT`]). Sized like [`Self::Ui`].
+    Hologram { tiles_x: u8, tiles_y: u8 },
 }
+
+/// The grid tile every hologram panel is drawn from (`fam/SHODAN/S45.PCX`):
+/// 128x128, a black cell bounded by a bright 1px cross at row/column 64, with
+/// a faint dotted sub-grid and a DIM line along the wrap edge at row/column 0.
+const HOLOGRAM_TILE_PX: f32 = 128.0;
+
+/// The hologram's line colour. The tile's own art is near-white; a cyan tint
+/// is what makes it read as SHODAN's projection rather than as white chrome.
+const HOLOGRAM_TINT: [u8; 3] = [90, 226, 255];
+
+/// The tile bitmap for [`ImageKind::Hologram`].
+pub const HOLOGRAM_TILE_TEXTURE: &str = "s45.pcx";
 
 impl ImageKind {
     pub(crate) fn transparent_index_0(self) -> bool {
         matches!(self, Self::ObjectIcon | Self::ObjectIconFit)
+    }
+
+    /// The texture rectangle this art samples, in texture units, or `None` for
+    /// the whole texture. Both presentations ask this one question, so a
+    /// hologram cannot tile differently on a flat panel than on a VR quad.
+    ///
+    /// A hologram starts half a tile in and ends half a tile past the last
+    /// tile, so the tile's bright cross lands on every cell border - the outer
+    /// edges included, where the tile's own dim wrap-edge line would otherwise
+    /// fall. The half-texel margin keeps the border line whole rather than
+    /// clipped in half.
+    pub(crate) fn uv_rect(self) -> Option<(Vector2<f32>, Vector2<f32>)> {
+        match self {
+            Self::Hologram { tiles_x, tiles_y } => {
+                let margin = 0.5 + 1.0 / HOLOGRAM_TILE_PX;
+                Some((
+                    vec2(0.5 - 1.0 / HOLOGRAM_TILE_PX, 0.5 - 1.0 / HOLOGRAM_TILE_PX),
+                    vec2(tiles_x as f32 + margin, tiles_y as f32 + margin),
+                ))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -882,9 +920,13 @@ impl UiCanvas<()> {
 /// How a `kind`'s art is sampled. Shared so layout and the presenters key the
 /// asset cache the same way.
 fn texture_options(kind: ImageKind) -> TextureOptions {
+    let hologram = matches!(kind, ImageKind::Hologram { .. });
     TextureOptions {
-        wrap: false,
+        // A hologram repeats one tile across its cells, so it - and only it -
+        // needs the sampler to wrap.
+        wrap: hologram,
         transparent_index_0: kind.transparent_index_0(),
+        luminance_alpha_tint: hologram.then_some(HOLOGRAM_TINT),
         ..Default::default()
     }
 }
@@ -990,12 +1032,22 @@ fn present_screen(
     match &element.content {
         PlacedContent::Image { texture, kind } => {
             let texture = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options(*kind));
-            SceneObject::screen_space_quad2(
-                texture.clone() as Rc<dyn TextureTrait>,
-                vec2(rect.x, rect.y),
-                vec2(rect.w, rect.h),
-                element.alpha,
-            )
+            match kind.uv_rect() {
+                Some((uv_min, uv_max)) => SceneObject::screen_space_quad_uv(
+                    texture.clone() as Rc<dyn TextureTrait>,
+                    vec2(rect.x, rect.y),
+                    vec2(rect.w, rect.h),
+                    element.alpha,
+                    uv_min,
+                    uv_max,
+                ),
+                None => SceneObject::screen_space_quad2(
+                    texture.clone() as Rc<dyn TextureTrait>,
+                    vec2(rect.x, rect.y),
+                    vec2(rect.w, rect.h),
+                    element.alpha,
+                ),
+            }
         }
         PlacedContent::Bar { texture, fill } => {
             let texture =
@@ -1045,7 +1097,13 @@ fn present_world(
                 1.0,
                 1.0 - alpha,
             );
-            SceneObject::new(material, Box::new(engine::scene::quad::create()))
+            match kind.uv_rect() {
+                Some((uv_min, uv_max)) => SceneObject::new(
+                    material,
+                    Box::new(engine::scene::quad::create_with_uv(uv_min, uv_max)),
+                ),
+                None => SceneObject::new(material, Box::new(engine::scene::quad::create())),
+            }
         }
         PlacedContent::Bar { texture, fill } => {
             let texture =
@@ -1080,7 +1138,7 @@ pub(crate) fn drawn_rect(
     kind: ImageKind,
 ) -> (Vector2<f32>, Vector2<f32>) {
     match kind {
-        ImageKind::Ui => (position, size),
+        ImageKind::Ui | ImageKind::Hologram { .. } => (position, size),
         ImageKind::ObjectIcon => (position + centered_offset(size, texture_px), texture_px),
         ImageKind::ObjectIconFit => {
             let scale = (size.x / texture_px.x).min(size.y / texture_px.y).min(1.0);
@@ -1277,6 +1335,64 @@ mod tests {
         assert_eq!(
             centered_offset(vec2(35.0, 34.0), vec2(66.0, 68.0)),
             vec2(0.0, 0.0)
+        );
+    }
+
+    /// One cell = one whole tile, bounded by the tile's bright cross. Half a
+    /// tile in on each side is what puts a bright line on all four outer
+    /// edges too, instead of the tile's dim wrap-edge line.
+    #[test]
+    fn a_hologram_puts_a_bright_separator_on_every_cell_border() {
+        let (uv_min, uv_max) = ImageKind::Hologram {
+            tiles_x: 4,
+            tiles_y: 4,
+        }
+        .uv_rect()
+        .expect("a hologram samples a sub-rectangle");
+        let texel = 1.0 / 128.0;
+        assert_eq!(uv_min, vec2(0.5 - texel, 0.5 - texel));
+        assert_eq!(uv_max, vec2(4.5 + texel, 4.5 + texel));
+        // Bright lines land at every half-tile boundary: 5 of them across 4 cells.
+        assert!(((uv_max.x - uv_min.x) - (4.0 + 2.0 * texel)).abs() < 1e-6);
+
+        assert_eq!(ImageKind::Ui.uv_rect(), None);
+        assert_eq!(ImageKind::ObjectIcon.uv_rect(), None);
+    }
+
+    /// A hologram tiles (so its sampler must wrap) and drops its black (so the
+    /// world shows through between the lines).
+    #[test]
+    fn hologram_art_tiles_and_drops_its_black() {
+        let options = texture_options(ImageKind::Hologram {
+            tiles_x: 4,
+            tiles_y: 4,
+        });
+        assert!(options.wrap);
+        assert_eq!(options.luminance_alpha_tint, Some(HOLOGRAM_TINT));
+        assert!(!options.transparent_index_0);
+
+        let ui = texture_options(ImageKind::Ui);
+        assert!(!ui.wrap);
+        assert_eq!(ui.luminance_alpha_tint, None);
+    }
+
+    /// A hologram fills its slot like ordinary UI art - the tile scales to the
+    /// cells, it is not blitted at its authored 128px.
+    #[test]
+    fn a_hologram_stretches_to_its_rect() {
+        let at = vec2(15.0, 8.0);
+        let size = vec2(140.0, 136.0);
+        assert_eq!(
+            drawn_rect(
+                at,
+                size,
+                vec2(128.0, 128.0),
+                ImageKind::Hologram {
+                    tiles_x: 4,
+                    tiles_y: 4
+                }
+            ),
+            (at, size)
         );
     }
 
