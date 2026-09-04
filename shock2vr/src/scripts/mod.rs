@@ -58,6 +58,7 @@ pub mod script_util;
 mod setup_initial_debrief;
 mod std_door;
 mod tool_consumable;
+pub(crate) mod toxin_shield;
 mod transluce;
 mod trap_delay;
 mod trap_destroyer;

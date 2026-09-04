@@ -39,6 +39,11 @@ pub const INVISO_TEMPLATE_ID: i32 = -3157;
 /// their health (see `scripts::berserk`).
 pub const BERSERK_TEMPLATE_ID: i32 = -3155;
 
+/// `Toxin Shield` - Neural Toxin-blocker (tier 3 sustained power): while
+/// active, the caster resists the toxin stim by the power's authored
+/// `data[0]` percentage (see `scripts::toxin_shield`).
+pub const TOXIN_SHIELD_TEMPLATE_ID: i32 = -1113;
+
 /// `PropPsiPower::activation_type` for sustained/timed self effects - the
 /// power activates for a duration given by its `P$PsiShield` data
 /// (`duration_base + duration_per_psi × PSI` seconds).

@@ -57,6 +57,20 @@ const PEN_WALL_HEIGHT: f32 = 1.2;
 /// ahead (-X, the default-view forward), behind the pen.
 const WALL_DISTANCE: f32 = 15.0;
 
+/// The toxin hazard patch: `EggGooCloud`, the authored annelid goo cloud
+/// (`StimSource` Venom, intensity 2, radius 4) - the shipped radius toxin
+/// source. Note the port does not pulse ambient radius sources other than
+/// radiation yet (`internal_radiation_source` is attached by stim archetype),
+/// so this station stands the hazard up for the scene rather than dealing
+/// toxin today; see `scripts::toxin_shield`.
+const TOXIN_SOURCE_TEMPLATE_ID: i32 = -438;
+const TOXIN_SOURCE_RADIUS: f32 = 4.0;
+
+/// Where the toxin patch sits, as (x, z): beside the player and off the
+/// firing line, opposite the radiation patch, far enough out that the spawn
+/// point is outside the source's radius.
+const TOXIN_SOURCE_POSITION: (f32, f32) = (0.0, -9.0);
+
 pub fn create_debug_psi_scene(
     global_context: &GlobalContext,
     game_options: &GameOptions,
@@ -90,6 +104,18 @@ pub fn create_debug_psi_scene(
             vec3(-PEN_FAR, PEN_WALL_HEIGHT / 2.0, 0.0),
             vec3(1.0, PEN_WALL_HEIGHT, 2.0 * PEN_HALF_WIDTH),
         ),
+        // toxin hazard patch: a floor marker for the goo cloud. The field is
+        // a 4-unit sphere; the marker is the square inscribed in it, sitting
+        // 2 cm proud of the floor slab so coplanar faces do not z-fight.
+        (
+            vec3(0.13, 0.45, 0.13),
+            vec3(TOXIN_SOURCE_POSITION.0, 0.01, TOXIN_SOURCE_POSITION.1),
+            vec3(
+                TOXIN_SOURCE_RADIUS * std::f32::consts::SQRT_2,
+                0.02,
+                TOXIN_SOURCE_RADIUS * std::f32::consts::SQRT_2,
+            ),
+        ),
         // pen: sides
         (
             pen_wall,
@@ -117,7 +143,8 @@ pub fn create_debug_psi_scene(
     println!(
         "[debug_psi] Player is equipped with the Psi Amp, psi pool full, every stat at cap.\n\
          Select a power with the `CyclePsiPower` input action (`Y` on desktop),\n\
-         then fire to cast it. Two pipe hybrids stand in the pen ahead."
+         then fire to cast it. Two pipe hybrids stand in the pen ahead,\n\
+         and a toxin hazard patch sits to the side (-Z)."
     );
     builder.build_with_hooks(
         DebugSceneBuildOptions {
@@ -167,10 +194,14 @@ impl DebugSceneHooks for PsiHooks {
                 },
             );
 
-            let spawns = TARGET_POSITIONS
+            let mut spawns: Vec<Effect> = TARGET_POSITIONS
                 .iter()
                 .map(|(x, z)| spawn_at(TARGET_CREATURE, Point3::new(-x, 1.0, *z)))
                 .collect();
+            spawns.push(spawn_at(
+                TOXIN_SOURCE_TEMPLATE_ID,
+                Point3::new(TOXIN_SOURCE_POSITION.0, 1.0, TOXIN_SOURCE_POSITION.1),
+            ));
             core.handle_effects(
                 spawns,
                 global_context,
