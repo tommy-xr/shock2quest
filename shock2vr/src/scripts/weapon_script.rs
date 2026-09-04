@@ -108,12 +108,34 @@ fn shot_multiplier(raw: f32) -> f32 {
 
 /// The damage and speed multipliers this fire setting puts on the projectile it
 /// launches (the EMP rifle's overcharge hits 3x; the fusion cannon's DEATH lob
-/// travels at 0.4x).
-fn shot_modifiers(setting: &GunSettingDesc) -> RuntimePropShotModifiers {
+/// travels at 0.4x), times the shooter's own damage scale.
+///
+/// Sharpshooter rides here rather than at the impact: the projectile carries
+/// one damage scale, so the two impact paths bill the upgrade exactly once
+/// without either of them knowing who fired.
+fn shot_modifiers(setting: &GunSettingDesc, shooter_damage_scale: f32) -> RuntimePropShotModifiers {
     RuntimePropShotModifiers {
-        stim: shot_multiplier(setting.stim_modifier),
+        stim: shot_multiplier(setting.stim_modifier) * shooter_damage_scale,
         speed: shot_multiplier(setting.speed_modifier),
     }
+}
+
+/// The damage scale the entity firing `weapon` applies to its shots. Only a
+/// weapon in the player's own hands earns Sharpshooter - an AI's, a turret's
+/// and the psi amp's shots all launch with the neutral default modifiers and
+/// never reach this path, and a loose gun going off is nobody's aim.
+///
+/// Note the slow (physics) projectile path bills its placeholder 1.0 damage
+/// through this scale, so 1.15 still rounds to 1 there until that damage is
+/// resolved from authored data (the TODO in `internal_collision_type`).
+fn shooter_damage_scale(world: &World, weapon: EntityId) -> f32 {
+    crate::scripts::gui::sharpshooter_damage_scale(
+        crate::wielded_weapon::held_in_hand(world, weapon)
+            && crate::scripts::gui::player_has_os_trait(
+                world,
+                crate::scripts::gui::TRAIT_SHARPSHOOTER,
+            ),
+    )
 }
 
 /// Whether `entity_id` is still inside the wait its last shot imposed.
@@ -380,7 +402,7 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
                     entity_id,
                     template_id,
                     &options,
-                    shot_modifiers(setting),
+                    shot_modifiers(setting, shooter_damage_scale(world, entity_id)),
                 )
             })
             .collect(),
@@ -815,7 +837,7 @@ mod tests {
             speed_modifier: 0.8,
             ..GunSettingDesc::default()
         };
-        let modifiers = shot_modifiers(&emp_over);
+        let modifiers = shot_modifiers(&emp_over, 1.0);
         assert_eq!(modifiers.stim, 3.0);
         assert_eq!(modifiers.speed, 0.8);
 
@@ -826,9 +848,60 @@ mod tests {
             speed_modifier: 0.0,
             ..GunSettingDesc::default()
         };
-        let modifiers = shot_modifiers(&unauthored);
+        let modifiers = shot_modifiers(&unauthored, 1.0);
         assert_eq!(modifiers.stim, 1.0);
         assert_eq!(modifiers.speed, 1.0);
+    }
+
+    /// Sharpshooter reaches a shot only when the gun is in the player's own
+    /// hands. A gun nobody is holding - and an AI's, which never comes down
+    /// this path at all - fires at its authored damage.
+    #[test]
+    fn only_the_players_own_gun_earns_sharpshooter() {
+        let scale = |held: bool, traited: bool| {
+            let mut world = World::new();
+            let weapon = world.add_entity(());
+            let player = world.add_entity(());
+            world.add_unique(crate::mission::PlayerInfo {
+                pos: vec3(0.0, 0.0, 0.0),
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                entity_id: player,
+                left_hand_entity_id: None,
+                right_hand_entity_id: held.then_some(weapon),
+                inventory_entity_id: player,
+            });
+            let mut quests = crate::quest_info::QuestInfo::new();
+            if traited {
+                quests
+                    .player_stats_mut()
+                    .add_os_trait(crate::scripts::gui::TRAIT_SHARPSHOOTER);
+            }
+            world.add_unique(quests);
+            shooter_damage_scale(&world, weapon)
+        };
+
+        assert_eq!(scale(true, false), 1.0);
+        assert_eq!(scale(true, true), 1.15);
+        assert_eq!(
+            scale(false, true),
+            1.0,
+            "a gun nobody holds is nobody's aim"
+        );
+    }
+
+    /// Sharpshooter multiplies the setting's own damage modifier rather than
+    /// replacing it, and leaves launch speed alone.
+    #[test]
+    fn the_shooters_damage_scale_compounds_with_the_settings() {
+        let emp_over = GunSettingDesc {
+            stim_modifier: 3.0,
+            speed_modifier: 0.8,
+            ..GunSettingDesc::default()
+        };
+        let scale = crate::scripts::gui::sharpshooter_damage_scale(true);
+        let modifiers = shot_modifiers(&emp_over, scale);
+        assert!((modifiers.stim - 3.45).abs() < 1e-5, "3.0 * 1.15");
+        assert_eq!(modifiers.speed, 0.8);
     }
 
     #[test]

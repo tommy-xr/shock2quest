@@ -3,10 +3,11 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { EntityDetailResult } from "../src/index.js";
+import { fireOnce } from "./helpers/weapon.js";
 
 // End-to-end coverage for the round-1 O/S upgrade effects: Speedy (4),
-// Lethal Weapon (9), Power Psi (14), Spatially Aware (16), and
-// Pharmo-Friendly's (2) psi-hypo half. (Strong Metabolism is unit-tested only;
+// Sharpshooter (5), Lethal Weapon (9), Power Psi (14), Spatially Aware (16),
+// and Pharmo-Friendly's (2) psi-hypo half. (Strong Metabolism is unit-tested only;
 // see the note further down.)
 //
 // Traits are granted through the debug provisioning path
@@ -24,12 +25,14 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const TRAIT_PHARMO_FRIENDLY = 2;
 const TRAIT_SPEEDY = 4;
+const TRAIT_SHARPSHOOTER = 5;
 const TRAIT_LETHAL_WEAPON = 9;
 const TRAIT_POWER_PSI = 14;
 const TRAIT_SPATIALLY_AWARE = 16;
 
 const TRAINING_DROID = 593;
 const WRENCH = -928;
+const PISTOL = -17;
 
 function hitPoints(detail: EntityDetailResult): number {
   const property = detail.properties.find(
@@ -250,5 +253,52 @@ test(
       next.total,
       "arriving on a new deck arrives with its map already revealed",
     );
+  },
+);
+
+test(
+  "Sharpshooter: a pistol shot lands 15% harder",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "earth.mis" });
+    await game.step({ frames: 5 });
+
+    await game.player.spawnItem(PISTOL);
+    await game.player.spawnItem("Small Standard Clip");
+    await game.input.trigger("EquipPistol");
+    await game.step({ frames: 10 });
+
+    const [droid] = await game.entities.byTemplate(TRAINING_DROID);
+    assert.ok(droid, "Earth should contain its authored Training Droid");
+    const [x, y, z] = (await game.entities.detail(droid.id)).position;
+    await game.player.teleport({ x: x + 2.5, y: y + 1, z });
+    await game.step({ frames: 60 });
+
+    // One aimed round, measured on the victim's own hit points - the same pool
+    // the projectile's impact paths bill.
+    const shoot = async () => {
+      const aim = await game.player.aimAt(droid, {
+        hitbox: "torso",
+        visibility: "required",
+      });
+      assert.equal(aim.entity_id, droid.id);
+      await game.step({ frames: 3 });
+      const before = hitPoints(await game.entities.detail(droid.id));
+      await fireOnce(game);
+      await game.step({ frames: 30 });
+      const after = hitPoints(await game.entities.detail(droid.id));
+      // A dead droid's pool clamps at zero, which would under-report the
+      // second shot and read exactly like "the trait did nothing".
+      assert.ok(after > 0, "the droid must survive the shot being measured");
+      return before - after;
+    };
+
+    const plain = await shoot();
+    assert.equal(plain, 6, "the untraited pistol shot deals the flat path's 6");
+
+    await game.player.setStats({ os_traits: [TRAIT_SHARPSHOOTER] });
+    const sharp = await shoot();
+    // 6 * 1.15 = 6.9, on an integer hit-point pool.
+    assert.equal(sharp, 7, `Sharpshooter should bill 6 * 1.15; got ${sharp}`);
   },
 );

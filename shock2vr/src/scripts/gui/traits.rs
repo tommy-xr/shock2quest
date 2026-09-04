@@ -52,6 +52,7 @@ pub const TRAIT_STRONG_METABOLISM: u8 = 1;
 pub const TRAIT_PHARMO_FRIENDLY: u8 = 2;
 pub const TRAIT_PACK_RAT: u8 = 3;
 pub const TRAIT_SPEEDY: u8 = 4;
+pub const TRAIT_SHARPSHOOTER: u8 = 5;
 pub const TRAIT_NATURALLY_ABLE: u8 = 6;
 pub const TRAIT_TANK: u8 = 8;
 pub const TRAIT_LETHAL_WEAPON: u8 = 9;
@@ -77,6 +78,11 @@ pub const SPEEDY_MOVE_SCALE: f32 = 1.15;
 /// melee only - AI melee resolves through its own attack path.
 pub const LETHAL_WEAPON_DAMAGE_SCALE: f32 = 1.35;
 
+/// Sharpshooter: ranged weapons hit 15% harder (Trait5). The player's own
+/// shots only. 15% is the figure the trait's own description states; retail
+/// play measures a larger bonus, and this port implements the stated 15%.
+pub const SHARPSHOOTER_DAMAGE_SCALE: f32 = 1.15;
+
 /// Strong Metabolism: radiation damage is cut by a quarter (Trait1). The
 /// retail trait also resists toxins; this port has no toxin system yet, so
 /// only the radiation half has anything to scale.
@@ -97,6 +103,16 @@ pub fn lethal_weapon_damage(base: f32, has_trait: bool) -> f32 {
         base * LETHAL_WEAPON_DAMAGE_SCALE
     } else {
         base
+    }
+}
+
+/// Sharpshooter's multiplier on a player-fired shot's damage - folded into the
+/// projectile's fire-time stim modifier so every impact path bills it once.
+pub fn sharpshooter_damage_scale(has_trait: bool) -> f32 {
+    if has_trait {
+        SHARPSHOOTER_DAMAGE_SCALE
+    } else {
+        1.0
     }
 }
 
@@ -484,6 +500,7 @@ pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
         TRAIT_PHARMO_FRIENDLY => Some("20% med and psi hypo bonus"),
         TRAIT_PACK_RAT => Some("+3 backpack slots"),
         TRAIT_SPEEDY => Some("15% faster movement"),
+        TRAIT_SHARPSHOOTER => Some("15% more ranged damage"),
         TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
         TRAIT_TANK => Some("+5 max hit points"),
         TRAIT_LETHAL_WEAPON => Some("35% more melee damage"),
@@ -562,7 +579,7 @@ mod tests {
             machine,
             &world,
             &TraitGuiState::default(),
-            &TraitGuiMsg::Pick(5), // Sharpshooter has no aiming consumer yet.
+            &TraitGuiMsg::Pick(7), // Cybernetically Enhanced has no consumer yet.
         );
 
         assert!(matches!(effect, Effect::NoEffect));
@@ -605,6 +622,7 @@ mod tests {
         for trait_id in [
             TRAIT_STRONG_METABOLISM,
             TRAIT_SPEEDY,
+            TRAIT_SHARPSHOOTER,
             TRAIT_LETHAL_WEAPON,
             TRAIT_POWER_PSI,
             TRAIT_SPATIALLY_AWARE,
@@ -630,9 +648,9 @@ mod tests {
 
     #[test]
     fn traits_without_an_effect_are_still_refused() {
-        // 5 Sharpshooter, 7 Cybernetically Enhanced, 10 Security Expert,
-        // 11 Smasher, 12 Cyber-Assimilation, 15 Tinker.
-        for trait_id in [5, 7, 10, 11, 12, 15] {
+        // 7 Cybernetically Enhanced, 10 Security Expert, 11 Smasher,
+        // 12 Cyber-Assimilation, 15 Tinker.
+        for trait_id in [7, 10, 11, 12, 15] {
             let mut world = World::new();
             world.add_unique(QuestInfo::new());
             let machine =
@@ -663,6 +681,9 @@ mod tests {
 
         assert_eq!(strong_metabolism_damage(4.0, false), 4.0);
         assert_eq!(strong_metabolism_damage(4.0, true), 3.0);
+
+        assert_eq!(sharpshooter_damage_scale(false), 1.0);
+        assert_eq!(sharpshooter_damage_scale(true), 1.15);
 
         assert_eq!(power_psi_burnout_damage(9, false), 9);
         assert_eq!(power_psi_burnout_damage(9, true), 0);
