@@ -87,6 +87,45 @@ test(
 );
 
 test(
+  "a creature beyond the authored range is out of reach",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_psi" });
+
+    await game.step({ frames: 10 });
+    const monster = await spawnTarget(game);
+    const monsterStartHp = await hitPoints(game, monster.id);
+
+    const playerId = (await game.info()).player.entity_id;
+    assert.ok(playerId !== null);
+    await game.entities.sendMessage(playerId!, { type: "Damage", amount: 20.0 });
+    await game.step({ frames: 10 });
+
+    await selectPsiPower(game, "SomaDrain");
+
+    // The scene faces -X and the hybrid spawned ~4 units that way. Backing up
+    // along +X leaves it dead ahead but past the authored 5-unit reach - the
+    // case a raycast that ignored the range would silently still drain. Cast
+    // immediately: the hybrid aggros on the spawn and closes the gap.
+    const start = await game.player.position();
+    await game.player.teleport({ x: start.x + 6, y: start.y, z: start.z });
+    await game.step({ frames: 2 });
+
+    const before = (await game.info()).player;
+    await pullTrigger(game);
+    await game.step({ frames: 30 });
+
+    const after = (await game.info()).player;
+    assert.equal(after.psi_points, before.psi_points, "an out-of-range drain spends nothing");
+    assert.equal(
+      await hitPoints(game, monster.id),
+      monsterStartHp,
+      "an out-of-range drain damages nothing",
+    );
+  },
+);
+
+test(
   "a drain with nothing in its sights changes nothing and spends nothing",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {

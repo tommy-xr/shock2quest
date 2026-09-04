@@ -50,8 +50,8 @@ pub const ACTIVATION_TYPE_SUSTAINED: i32 = 1;
 
 /// `PropPsiPower::activation_type` for instant/special powers - they resolve
 /// immediately on cast, with no duration and no projectile. Self-targeted
-/// (the heals, SomaDrain) and remote (CyberHack, ForceWall) powers both land
-/// here.
+/// (the heals), aimed (SomaDrain) and remote (CyberHack, ForceWall) powers all
+/// land here.
 pub const ACTIVATION_TYPE_INSTANT: i32 = 2;
 
 /// `PsiHeal` - Cerebro-stimulated Regeneration (tier 2 instant power): heals
