@@ -48,6 +48,16 @@ pub const STABILITY_TEMPLATE_ID: i32 = -3148;
 /// (`duration_base + duration_per_psi × PSI` seconds).
 pub const ACTIVATION_TYPE_SUSTAINED: i32 = 1;
 
+/// `PropPsiPower::activation_type` for instant/special powers - they resolve
+/// immediately on cast, with no duration and no projectile. Self-targeted
+/// (the heals, SomaDrain) and remote (CyberHack, ForceWall) powers both land
+/// here.
+pub const ACTIVATION_TYPE_INSTANT: i32 = 2;
+
+/// `PsiHeal` - Cerebro-stimulated Regeneration (tier 2 instant power): heals
+/// the caster.
+pub const PSI_HEAL_TEMPLATE_ID: i32 = -1017;
+
 /// The powers that support hold-to-overload (per the published gameplay
 /// tables), by template id. Comments give the gamesys name and the
 /// discipline name players know it by.

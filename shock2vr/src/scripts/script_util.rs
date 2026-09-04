@@ -673,6 +673,30 @@ pub fn player_carried_items(world: &World) -> Vec<EntityId> {
     out
 }
 
+/// The player entity with its current and maximum hit points. `None` when the
+/// scene has no player or the player has no health pool (e.g. a bare debug
+/// scene).
+pub fn player_hit_points(world: &World) -> Option<(EntityId, i32, i32)> {
+    let player = world
+        .borrow::<UniqueView<crate::mission::PlayerInfo>>()
+        .ok()?
+        .entity_id;
+    let current = world
+        .borrow::<View<dark::properties::PropHitPoints>>()
+        .ok()?
+        .get(player)
+        .ok()?
+        .hit_points;
+    let maximum = world
+        .borrow::<View<dark::properties::PropMaxHitPoints>>()
+        .ok()?
+        .get(player)
+        .ok()?
+        .hit_points
+        .min(i32::MAX as u32) as i32;
+    Some((player, current, maximum))
+}
+
 /// The player's persistent nanite stat balance (0 if there is no player /
 /// `QuestInfo`, e.g. a debug scene).
 fn stat_nanite_balance(world: &World) -> i32 {
