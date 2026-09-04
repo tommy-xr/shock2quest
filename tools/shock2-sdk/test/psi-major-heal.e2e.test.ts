@@ -17,8 +17,13 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 /** Major Heal's authored data is `[5, 5]`: 5 HP + 5 per point of PSI. */
 const HP_BASE = 5;
 const HP_PER_PSI = 5;
-const PSI_STAT = 6;
 const PSI_COST = 5;
+// Deliberately low: the first heal has to be smaller than the player's
+// missing health, or the clamp to full hides the authored numbers (any heal
+// past the deficit would pass). 5 + 5 x 2 = 15, and unmistakably not
+// PsiHeal's 2 x 2.
+const PSI_STAT = 2;
+const HEAL = HP_BASE + HP_PER_PSI * PSI_STAT;
 
 test(
   "Advanced Cerebro-stimulated Regeneration heals the caster and spends its tier",
@@ -42,22 +47,29 @@ test(
     const startPsi = player.psi_points;
     assert.ok(maxHp !== null && hurtHp !== null && startPsi !== null);
     assert.ok(hurtHp! < maxHp!, `player should be hurt (${hurtHp}/${maxHp})`);
+    assert.ok(maxHp! - hurtHp! > HEAL, "the first heal should not be clamped");
 
     await selectPsiPower(game, "Major Heal");
     await pullTrigger(game);
     await game.step({ frames: 30 });
 
-    const expectedHeal = Math.min(HP_BASE + HP_PER_PSI * PSI_STAT, maxHp! - hurtHp!);
     player = (await game.info()).player;
-    assert.equal(
-      player.hit_points,
-      hurtHp! + expectedHeal,
-      "the cast heals 5 + 5 per point of PSI, clamped to the missing health",
-    );
+    assert.equal(player.hit_points, hurtHp! + HEAL, "the cast heals 5 HP + 5 per point of PSI");
     assert.equal(player.psi_points, startPsi! - PSI_COST, "a tier 5 cast costs five psi points");
 
+    // The next cast has fewer HP missing than it restores: it clamps to the
+    // maximum, and still costs its tier.
+    await pullTrigger(game);
+    await game.step({ frames: 30 });
+    player = (await game.info()).player;
+    assert.equal(player.hit_points, maxHp, "the heal never overshoots the maximum");
+    assert.equal(
+      player.psi_points,
+      startPsi! - 2 * PSI_COST,
+      "a clamped cast still costs its tier",
+    );
+
     // A cast with nothing left to heal is refused outright.
-    assert.equal(player.hit_points, maxHp, "the heal tops the player up here");
     const fullPsi = player.psi_points;
     await pullTrigger(game);
     await game.step({ frames: 30 });

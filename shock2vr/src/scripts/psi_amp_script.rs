@@ -616,14 +616,6 @@ mod tests {
         assert!(!is_self_heal_power(psi::INVISO_TEMPLATE_ID));
     }
 
-    /// Major Heal's authored data is `[5, 5]`: 5 + 5 x PSI.
-    #[test]
-    fn major_heal_is_the_large_version_of_the_same_curve() {
-        assert_eq!(self_heal_amount(&[5.0, 5.0, 0.0, 0.0], 6), 35);
-        // Clamped to the missing health, like any other self-heal.
-        assert_eq!(clamped_self_heal(&[5.0, 5.0, 0.0, 0.0], 6, 5, 30), 25);
-    }
-
     #[test]
     fn psi_stat_comes_from_the_character_sheet() {
         let world = World::new();
