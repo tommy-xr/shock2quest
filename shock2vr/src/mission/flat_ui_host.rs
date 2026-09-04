@@ -75,12 +75,18 @@ const NAME_STRIP_FONT: &str = "mainfont.fon";
 /// container** (the host just hides it from the strip while it rides the
 /// cursor), so it is always reachable and serializes correctly on
 /// save/transition. Only committing the drag reaches the world: **Throw**
-/// detaches it and gives it world presence with an impulse along the view ray;
-/// **Wield** equips/uses it (a double-click) via the same effect as a backpack
-/// click, acting on the still-contained item.
+/// detaches it and gives it world presence with an impulse along the aim ray
+/// (flat: the view ray; VR: the throwing hand's controller ray); **Wield**
+/// equips/uses it (a double-click) via the same effect as a backpack click,
+/// acting on the still-contained item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlatUiDragAction {
-    Throw(EntityId),
+    Throw {
+        entity: EntityId,
+        /// The hand whose ray aims the throw. Flat has one pointer, so it is
+        /// always `Right` there and the applier ignores it.
+        hand: Handedness,
+    },
     Wield(EntityId),
     /// One of the AMMOFULL readout's controls was clicked (fire-mode setting,
     /// reload, ammo cycle, psi selector). Not tied to a cursor item - the
@@ -114,8 +120,9 @@ const DOUBLE_CLICK_RADIUS: f32 = 24.0;
 pub enum BareViewPress {
     /// Flat: a press off the widgets is a click on the 3D view behind them.
     Exit,
-    /// VR: a press off the widgets is not an exit gesture. (Throwing a held
-    /// item into the world from the panel is a later slice.)
+    /// VR: a press off the widgets is not an exit gesture. Empty panel
+    /// pixels keep a held item; only a press with the ray *off the panel*
+    /// throws it (the VR reading of "click the world").
     Ignore,
 }
 
@@ -172,10 +179,20 @@ pub fn vr_canvas_pointer(
     pass: &crate::ui::FrontendPointerPass,
     input_context: &crate::input_context::InputContext,
 ) -> CanvasPointer {
+    // Off the panel there is no owning ray, so the hand is whichever one is
+    // pulling the trigger - the throw of a cursor item aims along its ray.
+    let held =
+        |hand: &crate::input_context::Hand| hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD;
     let hand = pass
         .active_ray()
         .map(|ray| ray.handedness)
-        .unwrap_or(Handedness::Right);
+        .unwrap_or_else(|| {
+            if held(&input_context.left_hand) && !held(&input_context.right_hand) {
+                Handedness::Left
+            } else {
+                Handedness::Right
+            }
+        });
     let squeezing = |input_hand: &crate::input_context::Hand| {
         input_hand.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD
     };
@@ -773,15 +790,25 @@ impl FlatUiHost {
             self.hover_close = false;
         }
 
-        // A press fully outside the canvas (flat: the letterbox bars) is a
-        // bare-view click: throw a held item, else close the panel. In VR the
-        // canvas is the panel, so an off-panel press belongs to the world hand.
+        // A press fully outside the canvas is a click on the world (flat: the
+        // letterbox bars; VR: the ray off the panel): it throws a held item in
+        // both presentations. With nothing held it is flat's exit gesture only
+        // - in VR the off-panel hand is a world hand and the press is its own.
         let Some(canvas_pos) = canvas_pos else {
-            if pressed_edge && pointer.bare_view == BareViewPress::Exit {
+            if pressed_edge {
                 if let Some(held) = self.cursor_item.take() {
-                    return (Vec::new(), vec![FlatUiDragAction::Throw(held.entity)]);
+                    self.last_lift = None;
+                    return (
+                        Vec::new(),
+                        vec![FlatUiDragAction::Throw {
+                            entity: held.entity,
+                            hand: pointer.hand,
+                        }],
+                    );
                 }
-                self.close();
+                if pointer.bare_view == BareViewPress::Exit {
+                    self.close();
+                }
             }
             return (Vec::new(), Vec::new());
         };
@@ -867,7 +894,13 @@ impl FlatUiHost {
             // Bare 3D view: throw the held item along the view ray.
             let held = self.cursor_item.take().unwrap();
             self.last_lift = None;
-            return (Vec::new(), vec![FlatUiDragAction::Throw(held.entity)]);
+            return (
+                Vec::new(),
+                vec![FlatUiDragAction::Throw {
+                    entity: held.entity,
+                    hand: pointer.hand,
+                }],
+            );
         }
 
         // --- AMMOFULL readout controls (use mode): a click acts on the
@@ -968,6 +1001,12 @@ impl FlatUiHost {
                 && mark.frames_left > 0
                 && (mark.canvas_pos - canvas_pos).magnitude() <= DOUBLE_CLICK_RADIUS
         })
+    }
+
+    /// Whether an item is riding the cursor (VR masks the world trigger while
+    /// one is, so the throw that commits it cannot double as a frob).
+    pub fn has_cursor_item(&self) -> bool {
+        self.cursor_item.is_some()
     }
 
     /// The entity currently hidden from the strip because it is on the cursor.
@@ -2310,7 +2349,13 @@ mod tests {
         press_edge(&mut host, &world, (23.5, 34.0)); // lift
         // Below the strip (y > 121), no panel open: the bare 3D view.
         let actions = press_edge(&mut host, &world, (320.0, 300.0));
-        assert_eq!(actions, vec![FlatUiDragAction::Throw(wrench)]);
+        assert_eq!(
+            actions,
+            vec![FlatUiDragAction::Throw {
+                entity: wrench,
+                hand: Handedness::Right
+            }]
+        );
         assert!(host.cursor_debug().is_none(), "throwing clears the cursor");
     }
 
@@ -2691,7 +2736,10 @@ mod tests {
         let actions = press_edge(&mut host, &world, empty);
         assert_eq!(
             actions,
-            vec![FlatUiDragAction::Throw(wrench)],
+            vec![FlatUiDragAction::Throw {
+                entity: wrench,
+                hand: Handedness::Right
+            }],
             "flat: a click on the bare 3D view throws the held item"
         );
 
@@ -2897,5 +2945,58 @@ mod tests {
             0,
             "sweeping a held squeeze onto another slot must not take it too"
         );
+    }
+
+    /// The VR reading of "click the world": with an item on the cursor, a
+    /// trigger pull with the ray OFF the panel throws it, aimed by the hand
+    /// that pulled - the same commit gesture as flat's bare-view click. Without
+    /// a cursor item the off-panel press is that hand's own world press, so
+    /// the interface must neither close nor act.
+    #[test]
+    fn an_off_panel_press_in_vr_throws_the_cursor_item_along_that_hand() {
+        let (world, mut host, wrench, _inv) = drag_world();
+        // Nothing held: the off-panel press is not an exit gesture in VR.
+        host.update_canvas(&world, Some(vr_pointer(Handedness::Left, None, 0.0, 0.0)));
+        let (_msgs, actions) =
+            host.update_canvas(&world, Some(vr_pointer(Handedness::Left, None, 1.0, 0.0)));
+        assert!(actions.is_empty());
+        assert!(
+            host.strip_item_at(vec2(23.5, 34.0)).is_some(),
+            "the panel stays open"
+        );
+        host.update_canvas(&world, Some(vr_pointer(Handedness::Left, None, 0.0, 0.0)));
+
+        // Lift, then pull the LEFT trigger with its ray off the panel.
+        host.update_canvas(
+            &world,
+            Some(vr_pointer(Handedness::Left, Some((23.5, 34.0)), 1.0, 0.0)),
+        );
+        assert!(
+            host.cursor_debug().is_some(),
+            "the trigger on the slot lifts the item"
+        );
+        host.update_canvas(&world, Some(vr_pointer(Handedness::Left, None, 0.0, 0.0)));
+        let (_msgs, actions) =
+            host.update_canvas(&world, Some(vr_pointer(Handedness::Left, None, 1.0, 0.0)));
+        assert_eq!(
+            actions,
+            vec![FlatUiDragAction::Throw {
+                entity: wrench,
+                hand: Handedness::Left
+            }],
+            "the throw aims along the hand that pulled"
+        );
+        assert!(host.cursor_debug().is_none(), "throwing clears the cursor");
+    }
+
+    /// Off the panel no ray owns the point, so the pointer's hand is the one
+    /// pulling the trigger - otherwise a left-hand throw would launch along
+    /// the idle right controller's ray.
+    #[test]
+    fn off_panel_the_pointer_hand_is_the_one_pulling_the_trigger() {
+        let pointer = vr_pointer(Handedness::Left, None, 1.0, 0.0);
+        assert_eq!(pointer.canvas_pos, None);
+        assert_eq!(pointer.hand, Handedness::Left);
+        assert!(pointer.pressed);
     }
 }

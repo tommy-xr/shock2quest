@@ -211,16 +211,23 @@ fn update_squeeze_swallow(
 ///   but cannot fire.
 /// - Any other hand off the panel keeps its own trigger, so an empty hand can
 ///   still Frob the world and a held consumable still works.
+/// - While an item rides the cursor, both triggers belong to the drag: the
+///   off-panel pull that throws it must not also frob whatever it is aimed at.
 ///
 /// This is the per-frame decision only; [`latch_trigger_safe`] freezes it for
 /// the length of a pull, and the caller ORs in `vr_trigger_swallow` afterwards.
 ///
 /// Pure, so the matrix is exercised directly rather than through a mission.
-fn trigger_safe_mask(use_mode: bool, on_panel: [bool; 2], holds_weapon: [bool; 2]) -> [bool; 2] {
+fn trigger_safe_mask(
+    use_mode: bool,
+    on_panel: [bool; 2],
+    holds_weapon: [bool; 2],
+    cursor_loaded: bool,
+) -> [bool; 2] {
     let mut mask = [false; 2];
     if use_mode {
         for slot in 0..mask.len() {
-            mask[slot] = on_panel[slot] || holds_weapon[slot];
+            mask[slot] = on_panel[slot] || holds_weapon[slot] || cursor_loaded;
         }
     }
     mask
@@ -3963,7 +3970,12 @@ impl MissionCore {
         let mut trigger_safe = latch_trigger_safe(
             &mut self.vr_trigger_safe_latch,
             pressed,
-            trigger_safe_mask(self.use_mode, on_panel, holds_weapon),
+            trigger_safe_mask(
+                self.use_mode,
+                on_panel,
+                holds_weapon,
+                self.flat_ui.has_cursor_item(),
+            ),
         );
         for safe in trigger_safe.iter_mut() {
             *safe |= self.vr_trigger_swallow;
@@ -5559,8 +5571,8 @@ impl MissionCore {
     ) -> Vec<Effect> {
         use crate::mission::flat_ui_host::FlatUiDragAction;
         match action {
-            FlatUiDragAction::Throw(entity_id) => {
-                self.throw_entity_into_world(entity_id);
+            FlatUiDragAction::Throw { entity, hand } => {
+                self.throw_entity_into_world(entity, hand);
                 Vec::new()
             }
             // The AMMOFULL readout's controls emit the same effects as their
@@ -5636,7 +5648,7 @@ impl MissionCore {
     /// confirmed, so an aborted throw (no view ray, or a modelless item with no
     /// physics representation) leaves it in the backpack rather than lost or
     /// frozen mid-air.
-    fn throw_entity_into_world(&mut self, entity_id: EntityId) {
+    fn throw_entity_into_world(&mut self, entity_id: EntityId, hand: crate::vr_config::Handedness) {
         /// How far ahead of the camera the item materializes (world units).
         /// The eye sits on the standing capsule's axis, so this must clear the
         /// capsule's radius or a downward throw spawns the item inside the
@@ -5645,9 +5657,25 @@ impl MissionCore {
         /// Launch speed along the view ray (world units/sec).
         const THROW_SPEED: f32 = 6.0;
 
-        // Origin + direction: the flat aim ray (camera + view forward). Only
-        // set in flat presentation; without it, leave the item in the backpack.
-        let Some((origin, forward)) = self.interaction.flat_aim_ray() else {
+        // Origin + direction: the flat aim ray (camera + view forward), or in
+        // VR the throwing hand's controller ray off the same pointer pass that
+        // resolved the press. Without either, leave the item in the backpack.
+        let vr_hand_ray = || {
+            let ray = self
+                .vr_use_mode_pointer
+                .as_ref()?
+                .rays
+                .iter()
+                .find(|ray| ray.handedness == hand)?;
+            // The pass rays are in pawn space (the tracked controller pose);
+            // the throw lands in the world, so map through the pawn like
+            // `VirtualHand` does.
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            let origin = player.pos + player.rotation.rotate_vector(ray.origin);
+            let forward = player.rotation.rotate_vector(ray.direction);
+            Some((Point3::from_vec(origin), forward))
+        };
+        let Some((origin, forward)) = self.interaction.flat_aim_ray().or_else(vr_hand_ray) else {
             return;
         };
 
@@ -13445,7 +13473,7 @@ mod vr_trigger_safe_tests {
     /// the interact with it.
     #[test]
     fn an_off_panel_empty_hand_keeps_its_trigger() {
-        let mask = trigger_safe_mask(true, NEITHER, NEITHER);
+        let mask = trigger_safe_mask(true, NEITHER, NEITHER, false);
         assert_eq!(
             mask, NEITHER,
             "an empty hand off the panel must still be able to frob the world"
@@ -13457,7 +13485,7 @@ mod vr_trigger_safe_tests {
     #[test]
     fn a_hand_on_the_panel_is_masked() {
         assert_eq!(
-            trigger_safe_mask(true, [true, false], NEITHER),
+            trigger_safe_mask(true, [true, false], NEITHER, false),
             [true, false]
         );
     }
@@ -13467,11 +13495,11 @@ mod vr_trigger_safe_tests {
     #[test]
     fn a_wielding_hand_is_safed_wherever_it_points() {
         assert_eq!(
-            trigger_safe_mask(true, NEITHER, [false, true]),
+            trigger_safe_mask(true, NEITHER, [false, true], false),
             [false, true]
         );
         assert_eq!(
-            trigger_safe_mask(true, [false, true], [false, true]),
+            trigger_safe_mask(true, [false, true], [false, true], false),
             [false, true]
         );
     }
@@ -13480,7 +13508,7 @@ mod vr_trigger_safe_tests {
     #[test]
     fn the_hands_are_masked_independently() {
         // Left wields a weapon, right is empty and off the panel.
-        let mask = trigger_safe_mask(true, NEITHER, [true, false]);
+        let mask = trigger_safe_mask(true, NEITHER, [true, false], false);
         assert!(mask[LEFT], "the wielding hand cannot fire");
         assert!(!mask[RIGHT], "the free hand can still frob");
     }
@@ -13489,7 +13517,14 @@ mod vr_trigger_safe_tests {
     /// across-exit swallow is ORed in by the caller, outside this rule).
     #[test]
     fn a_closed_interface_masks_nothing() {
-        assert_eq!(trigger_safe_mask(false, BOTH, BOTH), NEITHER);
+        assert_eq!(trigger_safe_mask(false, BOTH, BOTH, true), NEITHER);
+    }
+
+    /// An item riding the cursor owns both triggers: the off-panel pull that
+    /// throws it must not reach the world as a frob on whatever it is aimed at.
+    #[test]
+    fn a_loaded_cursor_masks_both_triggers() {
+        assert_eq!(trigger_safe_mask(true, NEITHER, NEITHER, true), BOTH);
     }
 
     /// The latch's reason to exist: a click begun on the panel keeps being

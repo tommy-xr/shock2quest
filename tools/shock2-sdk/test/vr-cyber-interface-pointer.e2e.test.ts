@@ -177,3 +177,63 @@ test(
     );
   },
 );
+
+// The VR reading of flat's "click the bare 3D view": with an item riding the
+// cursor, a trigger pull with the ray OFF the panel throws it into the world
+// along that hand's ray. Negative-first: on the parent an off-panel press is
+// ignored, so the cursor keeps the item and no body ever appears.
+test(
+  "an off-panel trigger pull throws the cursor item into the world",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 30 });
+
+    const wrench = await game.player.spawnItem("Wrench");
+    let ui = await openInterface(game);
+    const panel = requirePanel(ui);
+    await aimVrHandAtCanvas(game, panel, [320, 240], {
+      hand: "left",
+      facing: "away",
+    });
+    const slot = slotFor(ui, wrench.entity_id);
+    assert.ok(slot, "the provisioned wrench must occupy a strip slot");
+
+    await clickAt(game, panel, center(slot));
+    ui = await game.ui.state();
+    assert.equal(ui.cursor?.entity_id, wrench.entity_id, "the wrench rides the cursor");
+
+    // Point the right controller away from the panel and pull the trigger.
+    const playerBefore = await game.player.position();
+    await aimVrHandAtCanvas(game, panel, [320, 240], { facing: "away", trigger: 0 });
+    await game.step({ frames: 2 });
+    await aimVrHandAtCanvas(game, panel, [320, 240], { facing: "away", trigger: 1 });
+    await game.step({ frames: 2 });
+    await aimVrHandAtCanvas(game, panel, [320, 240], { facing: "away", trigger: 0 });
+    await game.step({ frames: 10 });
+
+    ui = await game.ui.state();
+    assert.equal(ui.cursor ?? null, null, "the throw clears the cursor");
+    assert.equal(slotFor(ui, wrench.entity_id), undefined, "the thrown wrench leaves the strip");
+    const carried = await game.player.inventory();
+    assert.ok(
+      !carried.items.some((item) => item.entity_id === wrench.entity_id),
+      "the thrown wrench is no longer carried",
+    );
+    const bodies = await game.physics.bodies({ entityId: wrench.entity_id });
+    assert.ok(bodies.bodies.length > 0, "the thrown wrench has a physics body");
+    const p = bodies.bodies[0].position;
+    const dist = Math.hypot(
+      p[0] - playerBefore.x,
+      p[1] - playerBefore.y,
+      p[2] - playerBefore.z,
+    );
+    assert.ok(
+      Number.isFinite(dist) && dist < 10,
+      `the thrown wrench lands near the player (dist ${dist.toFixed(2)})`,
+    );
+  },
+);
