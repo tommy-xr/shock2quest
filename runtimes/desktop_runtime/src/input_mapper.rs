@@ -130,6 +130,15 @@ impl DesktopInputMapper {
                 modifier: Modifier::None,
                 action: InputAction::CycleAmmo,
             },
+            // Alt-modified so a stray press cannot dump a magazine mid-fight;
+            // in VR this is the gun hand's lower face button instead. NOT
+            // `Alt+R`: `poll` keys its edges on the action, so with `R` held
+            // down a mere Alt tap would flip `Reload` off and fire the eject.
+            Binding {
+                key: Key::X,
+                modifier: Modifier::Alt,
+                action: InputAction::EjectClip,
+            },
             Binding {
                 key: Key::F,
                 modifier: Modifier::None,

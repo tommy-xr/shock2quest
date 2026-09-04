@@ -5733,7 +5733,10 @@ impl MissionCore {
                 }
 
                 Effect::UnloadWeapon { entity_id } => {
-                    self.eject_magazine(asset_cache, entity_id);
+                    // Same ejection the VR eject button performs, cue included.
+                    if let Some(cue) = self.eject_magazine(asset_cache, entity_id) {
+                        effects.push_back(cue);
+                    }
                 }
 
                 Effect::OpenWeaponSettings => {
@@ -5768,6 +5771,14 @@ impl MissionCore {
                     }
                 }
 
+                Effect::EjectClip { hand } => {
+                    if let Some(weapon) = crate::wielded_weapon::eject_target(&self.world, hand) {
+                        if let Some(cue) = self.eject_magazine(asset_cache, weapon) {
+                            effects.push_back(cue);
+                        }
+                    }
+                }
+
                 Effect::HandButton { hand, button } => {
                     // A face button means whatever the hand that pressed it is
                     // holding says it means - except while the cyber interface
@@ -5788,9 +5799,14 @@ impl MissionCore {
                         Some(crate::input::InputAction::ReadLastUnreadLog) => {
                             effects.push_front(Effect::ReadLastUnreadLog)
                         }
-                        // A weapon hand resolves to nothing yet - the gun and
-                        // psi-amp handling actions add their arms here when
-                        // they land.
+                        // The gun goes with the hand that pressed, so a
+                        // dual-wielding player ejects the magazine they meant.
+                        Some(crate::input::InputAction::EjectClip) => {
+                            effects.push_front(Effect::EjectClip { hand: Some(hand) })
+                        }
+                        // The psi amp's buttons, and a gun hand's upper one
+                        // (the fire-mode toggle), resolve to nothing yet -
+                        // their arms land with the actions themselves.
                         None => {}
                         Some(action) => warn!("unroutable hand button action: {action}"),
                     }
@@ -8248,6 +8264,16 @@ impl MissionCore {
         crate::scripts::script_util::active_gun_setting(&self.world, weapon).map(|d| d.clip)
     }
 
+    /// How many rounds `weapon`'s magazine currently holds (0 for anything
+    /// with no magazine at all).
+    fn magazine_rounds(&self, weapon: EntityId) -> i32 {
+        self.world
+            .borrow::<View<dark::properties::PropGunState>>()
+            .ok()
+            .and_then(|states| states.get(weapon).ok().map(|state| state.ammo))
+            .unwrap_or(0)
+    }
+
     /// The world position of `entity`'s live transform.
     fn entity_world_position(&self, entity: EntityId) -> Option<Vector3<f32>> {
         use cgmath::Transform as _;
@@ -8277,7 +8303,7 @@ impl MissionCore {
         }
         let Some(index) = crate::mission::reload::clip_projectile_index(&self.world, weapon, clip)
         else {
-            return vec![self.refuse_clip_insert(weapon)];
+            return vec![self.refuse_clip_handling(weapon)];
         };
         // Nothing below may run unless rounds could actually MOVE. Both halves
         // of the swap - the eject and the selection change - are committed
@@ -8285,28 +8311,17 @@ impl MissionCore {
         // empty clip entity would otherwise dump the magazine and switch the
         // ammo type having loaded nothing at all.
         if capacity <= 0 || crate::mission::reload::clip_rounds(&self.world, clip) <= 0 {
-            return vec![self.refuse_clip_insert(weapon)];
+            return vec![self.refuse_clip_handling(weapon)];
         }
 
         if index != crate::mission::reload::selected_ammo_index(&self.world, weapon) {
             // A different ammo type: the loaded rounds go back to the backpack
             // as what they already are, exactly as an ammo-cycle ejects them.
-            if let Some((clip_template, rounds)) =
-                crate::mission::reload::unload_to_reserve(&self.world, weapon).spawn_clip
-            {
-                self.give_ejected_clip(asset_cache, weapon, clip_template, rounds);
-            }
             // The swap is earned by an empty magazine, never assumed - see
             // `cycle_ammo`. Rounds that could not be returned stay loaded, and
             // switching over them would convert them for free.
-            let still_loaded = self
-                .world
-                .borrow::<View<dark::properties::PropGunState>>()
-                .ok()
-                .and_then(|states| states.get(weapon).ok().map(|state| state.ammo > 0))
-                .unwrap_or(false);
-            if still_loaded {
-                return vec![self.refuse_clip_insert(weapon)];
+            if !self.unload_magazine(asset_cache, weapon) {
+                return vec![self.refuse_clip_handling(weapon)];
             }
             self.world
                 .add_component(weapon, RuntimePropSelectedAmmo(index));
@@ -8338,12 +8353,13 @@ impl MissionCore {
         )]
     }
 
-    /// The insert-refused cue: `repfail`, the game's own "that request is not
-    /// going to happen" chime (the replicator plays it for an unaffordable
-    /// purchase). Deliberately NOT the weapon's dry-fire schema - most guns,
-    /// the pistol included, author no `dryfire` event at all, so the refusal
-    /// would be silent on exactly the weapons a player reloads most.
-    fn refuse_clip_insert(&self, weapon: EntityId) -> Effect {
+    /// The clip-handling refusal cue: `repfail`, the game's own "that request
+    /// is not going to happen" chime (the replicator plays it for an
+    /// unaffordable purchase). Deliberately NOT the weapon's dry-fire schema -
+    /// most guns, the pistol included, author no `dryfire` event at all, so
+    /// the refusal would be silent on exactly the weapons a player reloads
+    /// most.
+    fn refuse_clip_handling(&self, weapon: EntityId) -> Effect {
         Effect::PlaySound {
             handle: AudioHandle::new(),
             source: Some(weapon),
@@ -8365,19 +8381,12 @@ impl MissionCore {
         if !crate::scripts::script_util::can_cycle_ammo(&self.world, weapon) {
             return;
         }
-        self.eject_magazine(asset_cache, weapon);
         // The switch is earned by an empty magazine, never assumed. Every way an
         // eject can fall short - the fresh clip refused by the backpack, a
         // borrow that did not come through - leaves rounds loaded, and switching
         // then would convert them to the next type for free, which is the exact
         // thing this ejection exists to prevent.
-        let still_loaded = self
-            .world
-            .borrow::<View<dark::properties::PropGunState>>()
-            .ok()
-            .and_then(|states| states.get(weapon).ok().map(|state| state.ammo > 0))
-            .unwrap_or(false);
-        if still_loaded {
+        if !self.unload_magazine(asset_cache, weapon) {
             return;
         }
         let count =
@@ -8443,17 +8452,56 @@ impl MissionCore {
         })
     }
 
-    /// Eject `weapon`'s magazine back to the backpack, as clips of the ammo
-    /// type the rounds already are. Shared by the ammo-type switch (which has
-    /// to empty the gun before it may change type) and the settings MFD's
-    /// UNLOAD button (where emptying it *is* the point). A magazine that cannot
-    /// be returned - no clip archetype, or a backpack that refuses it - is left
-    /// loaded.
-    fn eject_magazine(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) {
-        if let Some((clip_template, rounds)) =
-            crate::mission::reload::unload_to_reserve(&self.world, weapon).spawn_clip
+    /// Return `weapon`'s loaded rounds to the backpack as clips of the ammo
+    /// type they already are - the ammo cycle's ejection on its own, without
+    /// the type switch. Nothing is dropped into the world: a clip on the floor
+    /// is a chore to pick up in VR, and the rounds are as usable in the
+    /// backpack.
+    ///
+    /// Returns the cue to play. Silent when there was nothing to eject - an
+    /// empty magazine, or ammo with no clip archetype to return to (an energy
+    /// weapon's charge) - because a cue for an eject that did not happen would
+    /// be a lie. A refusal the player *earned* (the backpack could not take
+    /// the clip) is audible instead: silence there is indistinguishable from a
+    /// dead button.
+    fn eject_magazine(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) -> Option<Effect> {
+        if self.magazine_rounds(weapon) <= 0
+            || !crate::mission::reload::can_unload(&self.world, weapon)
         {
-            self.give_ejected_clip(asset_cache, weapon, clip_template, rounds);
+            return None;
+        }
+        if !self.unload_magazine(asset_cache, weapon) {
+            return Some(self.refuse_clip_handling(weapon));
+        }
+        // The gun's own clip-handling schema, as the physical clip insert
+        // plays on the way in.
+        Some(crate::scripts::script_util::play_environmental_sound(
+            &self.world,
+            weapon,
+            "reload",
+            vec![],
+            AudioHandle::new(),
+        ))
+    }
+
+    /// Move `weapon`'s loaded rounds to the backpack reserve, minting the clip
+    /// [`reload::unload_to_reserve`] asks for when no carried stack absorbs
+    /// them. The one implementation behind every ejection: the eject button,
+    /// the ammo cycle, and the clip insert that swaps ammo type.
+    ///
+    /// Returns whether the magazine is now EMPTY. `false` means the rounds are
+    /// still loaded - the backpack refused the fresh clip, or this ammo has no
+    /// clip archetype at all - so whatever the caller meant to do next is
+    /// unearned. Rounds exist in exactly one place at every instant.
+    fn unload_magazine(&mut self, asset_cache: &mut AssetCache, weapon: EntityId) -> bool {
+        let outcome = crate::mission::reload::unload_to_reserve(&self.world, weapon);
+        match outcome.spawn_clip {
+            Some((clip_template, rounds)) => {
+                self.give_ejected_clip(asset_cache, weapon, clip_template, rounds)
+            }
+            // No clip to place: the rounds either merged into a carried stack
+            // or never moved, and only the magazine can say which.
+            None => outcome.rounds_unloaded > 0 || self.magazine_rounds(weapon) == 0,
         }
     }
 
@@ -8464,18 +8512,20 @@ impl MissionCore {
     /// The magazine is emptied only AFTER the fresh clip is genuinely carried,
     /// so the rounds exist in exactly one place at every instant: a refused
     /// clip simply leaves the weapon loaded and the swap unearned.
+    /// Returns whether the clip was carried - and so whether the magazine was
+    /// emptied.
     fn give_ejected_clip(
         &mut self,
         asset_cache: &mut AssetCache,
         weapon: EntityId,
         clip_template: i32,
         rounds: i32,
-    ) {
+    ) -> bool {
         let entity_id = match self.spawn_into_backpack(asset_cache, clip_template) {
             Ok(entity_id) => entity_id,
             Err(e) => {
                 game_log!(WARN, "Ejected clip could not be carried: {e}");
-                return;
+                return false;
             }
         };
         // The archetype carries its authored stack size; this clip holds
@@ -8483,6 +8533,7 @@ impl MissionCore {
         self.world
             .add_component(entity_id, dark::properties::PropStackCount(rounds));
         crate::mission::reload::empty_magazine(&self.world, weapon);
+        true
     }
 
     /// Instantiate `template_id` and route it through the ordinary pickup path

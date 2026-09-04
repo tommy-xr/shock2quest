@@ -165,6 +165,11 @@ impl ActionDispatcher {
         if state.just_triggered(InputAction::ToggleUseMode) {
             effects.push(Effect::ToggleUseMode);
         }
+        if state.just_triggered(InputAction::EjectClip) {
+            // Hand-agnostic: the flat key and HTTP mean "the wielded weapon".
+            // A per-hand press arrives as `Effect::HandButton` instead.
+            effects.push(Effect::EjectClip { hand: None });
+        }
         if state.just_triggered(InputAction::ToggleMap) {
             effects.push(Effect::ToggleMap);
         }
