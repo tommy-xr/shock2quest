@@ -14,7 +14,7 @@ import {
   scale,
   sub,
 } from "./helpers/vr-hand.js";
-import type { Quat } from "./helpers/vr-hand.js";
+import type { Hand, Quat } from "./helpers/vr-hand.js";
 
 // A VR-wielded weapon must fire from its model's muzzle vhot, travelling along
 // the rendered barrel. Both are checkable numerically: the runtime reports the
@@ -77,15 +77,9 @@ async function entityTransform(game: GameServer, id: number): Promise<EntityTran
   };
 }
 
-type Hand = "left" | "right";
-
 /** Reach out with the production VR hand and squeeze to pick `target` up. */
-async function grabWithRightHand(game: GameServer, target: Vec3): Promise<void> {
-  await grabWith(game, "right", target);
-}
-
 async function grabWith(game: GameServer, hand: Hand, target: Vec3): Promise<void> {
-  await aimVrHandAt(game, target, 0.3, 0, 0, hand);
+  await aimVrHandAt(game, target, 0.3, 0, 0, { hand });
   await game.input.set(`${hand}_hand.squeeze`, 1);
   await game.step({ frames: 8 });
 }
@@ -205,7 +199,7 @@ test(
     // DebugCycleWeapon drops each weapon in front of the player in VR.
     const laser = await cycleToWeapon(game, (e) => e.template_id === LASER_PISTOL);
 
-    await grabWithRightHand(game, laser.position as Vec3);
+    await grabWith(game, "right", laser.position as Vec3);
     const held = await game.info();
     assert.equal(held.player.right_hand_entity_id, laser.id, "the hand must hold the pistol");
 
@@ -275,7 +269,7 @@ test(
     const amp = (await game.entities.list()).entities.find((e) => e.template_id === PSI_AMP);
     assert.ok(amp, "debug_psi must place the Psi Amp in the scene");
 
-    await grabWithRightHand(game, amp.position as Vec3);
+    await grabWith(game, "right", amp.position as Vec3);
     const held = await game.info();
     assert.equal(held.player.right_hand_entity_id, amp.id, "the hand must hold the amp");
 

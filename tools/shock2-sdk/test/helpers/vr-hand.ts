@@ -2,6 +2,7 @@ import type { GameServer } from "../../src/index.js";
 import type { UiPanelPose, Vec3 } from "../../src/types.js";
 
 export type Quat = [number, number, number, number];
+export type Hand = "left" | "right";
 
 export const add = (a: Vec3, b: Vec3): Vec3 => [
   a[0] + b[0],
@@ -118,7 +119,7 @@ export async function aimVrHandAt(
   standOff = 0.45,
   squeeze = 0,
   trigger = 0,
-  hand: "left" | "right" = "right",
+  { hand = "right" }: { hand?: Hand } = {},
 ): Promise<{ start: Vec3; target: Vec3 }> {
   const snapshot = await game.info();
   const pawn = snapshot.player.position;
