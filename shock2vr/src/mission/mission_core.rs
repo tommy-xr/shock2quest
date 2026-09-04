@@ -3974,7 +3974,10 @@ impl MissionCore {
                 self.use_mode,
                 on_panel,
                 holds_weapon,
-                self.flat_ui.has_cursor_item(),
+                // Read before this frame's `update_canvas`, so it lags the
+                // cursor by a frame; the latch covers both edges of a throw.
+                game_options.presentation_mode == crate::PresentationMode::Vr
+                    && self.flat_ui.has_cursor_item(),
             ),
         );
         for safe in trigger_safe.iter_mut() {
@@ -5661,17 +5664,18 @@ impl MissionCore {
         // VR the throwing hand's controller ray off the same pointer pass that
         // resolved the press. Without either, leave the item in the backpack.
         let vr_hand_ray = || {
-            let ray = self
-                .vr_use_mode_pointer
-                .as_ref()?
-                .rays
+            // An untracked throwing hand contributes no ray; rather than
+            // silently un-throw, aim along whichever controller is tracked.
+            let rays = &self.vr_use_mode_pointer.as_ref()?.rays;
+            let ray = rays
                 .iter()
-                .find(|ray| ray.handedness == hand)?;
+                .find(|ray| ray.handedness == hand)
+                .or_else(|| rays.first())?;
             // The pass rays are in pawn space (the tracked controller pose);
-            // the throw lands in the world, so map through the pawn like
-            // `VirtualHand` does.
+            // the throw lands in the world.
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
-            let origin = player.pos + player.rotation.rotate_vector(ray.origin);
+            let origin =
+                crate::virtual_hand::hand_world_position(player.pos, player.rotation, ray.origin);
             let forward = player.rotation.rotate_vector(ray.direction);
             Some((Point3::from_vec(origin), forward))
         };

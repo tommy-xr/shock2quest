@@ -8,7 +8,7 @@ import {
   clickCanvasWithRay,
   requirePanelPose as requirePanel,
 } from "./helpers/ui.js";
-import { aimVrHandAtCanvas } from "./helpers/vr-hand.js";
+import { aimVrHandAtCanvas, dot, normalize } from "./helpers/vr-hand.js";
 
 // The VR cyber interface's pointer bridge (slice 3): a controller ray meets
 // the anchored panel, and where it lands drives the SAME host the flat mouse
@@ -202,17 +202,62 @@ test(
     const slot = slotFor(ui, wrench.entity_id);
     assert.ok(slot, "the provisioned wrench must occupy a strip slot");
 
-    await clickAt(game, panel, center(slot));
+    await clickCanvasWithRay(game, panel, center(slot));
     ui = await game.ui.state();
     assert.equal(ui.cursor?.entity_id, wrench.entity_id, "the wrench rides the cursor");
 
-    // Point the right controller away from the panel and pull the trigger.
+    // The launch velocity is set on the throw frame, so read it one frame in,
+    // before gravity and the floor have had a say.
+    const launchVelocity = async (entityId: number) => {
+      const launched = await game.physics.bodies({ entityId });
+      assert.ok(launched.bodies.length > 0, "the throw gives the item a body");
+      return normalize(launched.bodies[0].velocity);
+    };
+
+    // Throw 1: the RIGHT hand, past the panel's right edge (its ray misses the
+    // canvas, so it is a world hand) - aimed forward, into the panel plane.
     const playerBefore = await game.player.position();
-    await aimVrHandAtCanvas(game, panel, [320, 240], { facing: "away", trigger: 0 });
+    const rightOff: [number, number] = [1000, 240];
+    await aimVrHandAtCanvas(game, panel, rightOff, { trigger: 0 });
     await game.step({ frames: 2 });
-    await aimVrHandAtCanvas(game, panel, [320, 240], { facing: "away", trigger: 1 });
+    assert.equal(
+      (await game.ui.state()).cursor?.entity_id,
+      wrench.entity_id,
+      "an off-panel hand at rest must not disturb the cursor",
+    );
+    await aimVrHandAtCanvas(game, panel, rightOff, { trigger: 1 });
+    await game.step({ frames: 1 });
+    const forwardThrow = await launchVelocity(wrench.entity_id);
+    await aimVrHandAtCanvas(game, panel, rightOff, { trigger: 0 });
+    await game.step({ frames: 10 });
+
+    // Throw 2: lift a second wrench with the right hand (which then rests on
+    // the panel, trigger up), and throw it with the LEFT hand turned AWAY from
+    // the panel. A throw aimed by the wrong hand - the right one, or the head
+    // - would fly forward like the first; the left hand's own ray points the
+    // other way, so the two throws must be anti-parallel.
+    const second = await game.player.spawnItem("Wrench");
     await game.step({ frames: 2 });
-    await aimVrHandAtCanvas(game, panel, [320, 240], { facing: "away", trigger: 0 });
+    const secondSlot = slotFor(await game.ui.state(), second.entity_id);
+    assert.ok(secondSlot, "the second wrench must occupy a strip slot");
+    await clickCanvasWithRay(game, panel, center(secondSlot));
+    assert.equal((await game.ui.state()).cursor?.entity_id, second.entity_id);
+    await aimVrHandAtCanvas(game, panel, [320, 240], {
+      hand: "left",
+      facing: "away",
+      trigger: 1,
+    });
+    await game.step({ frames: 1 });
+    const backwardThrow = await launchVelocity(second.entity_id);
+    assert.ok(
+      dot(forwardThrow, backwardThrow) < -0.9,
+      `each throw must fly along the ray of the hand that pulled (cos ${dot(forwardThrow, backwardThrow).toFixed(2)})`,
+    );
+    await aimVrHandAtCanvas(game, panel, [320, 240], {
+      hand: "left",
+      facing: "away",
+      trigger: 0,
+    });
     await game.step({ frames: 10 });
 
     ui = await game.ui.state();

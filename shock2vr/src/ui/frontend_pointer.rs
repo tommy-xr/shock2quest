@@ -85,7 +85,9 @@ impl PointerEngagement {
 /// points, and where it lands on the canvas (if it lands at all).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FrontendRay {
-    /// The controller's position, in world space.
+    /// The controller's position, in pawn (tracking) space - the space the
+    /// input hands and the panel are both expressed in. Map through the pawn
+    /// (`virtual_hand::hand_world_position`) before using it in the world.
     pub origin: Vector3<f32>,
     /// The direction the controller points (its local -Z), normalized.
     pub direction: Vector3<f32>,
@@ -137,6 +139,11 @@ pub struct FrontendPointerPass {
     /// Index into `rays` of the controller actually driving the menu, when one
     /// of them is on the panel.
     active: Option<usize>,
+    /// The hand claiming the panel this frame whether or not its ray is on it
+    /// (a held trigger claims it from anywhere; ties and idle triggers fall
+    /// back to the right hand). This is the hand an off-panel gesture belongs
+    /// to - the throw of a cursor item aims along its ray.
+    pub claiming_hand: Handedness,
     /// Whether either trigger is held.
     pub pressed: bool,
 }
@@ -251,6 +258,7 @@ pub fn vr_pointer_pass(
     FrontendPointerPass {
         rays,
         active,
+        claiming_hand: handedness[order[0]],
         // Nothing may be pointing at the screen; report the trigger anyway so a
         // press that starts off-panel is still consumed as "held" rather than
         // becoming a fresh edge the moment the ray crosses onto a button. This

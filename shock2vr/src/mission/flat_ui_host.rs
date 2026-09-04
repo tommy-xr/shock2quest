@@ -179,20 +179,12 @@ pub fn vr_canvas_pointer(
     pass: &crate::ui::FrontendPointerPass,
     input_context: &crate::input_context::InputContext,
 ) -> CanvasPointer {
-    // Off the panel there is no owning ray, so the hand is whichever one is
-    // pulling the trigger - the throw of a cursor item aims along its ray.
-    let held =
-        |hand: &crate::input_context::Hand| hand.trigger_value > crate::ui::VR_TRIGGER_THRESHOLD;
+    // Off the panel no ray owns the point, so the hand is the one the pass
+    // says is claiming the panel - the throw of a cursor item aims along it.
     let hand = pass
         .active_ray()
         .map(|ray| ray.handedness)
-        .unwrap_or_else(|| {
-            if held(&input_context.left_hand) && !held(&input_context.right_hand) {
-                Handedness::Left
-            } else {
-                Handedness::Right
-            }
-        });
+        .unwrap_or(pass.claiming_hand);
     let squeezing = |input_hand: &crate::input_context::Hand| {
         input_hand.squeeze_value > crate::ui::VR_TRIGGER_THRESHOLD
     };

@@ -7,9 +7,11 @@ use crate::runtime_props::RuntimePropVrGripOffset;
 use once_cell::sync::Lazy;
 use shipyard::{EntityId, Get, View, World};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Defaults to `Right`: it is the fallback hand wherever an arbitration ties.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Handedness {
     Left,
+    #[default]
     Right,
 }
 
