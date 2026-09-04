@@ -11,6 +11,7 @@ use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::World;
 
 use super::ammo_panel::{self, AmmoReadout, ReadoutButtonSpec};
+use super::message_line;
 use super::{get_health_percentage, get_psi_percentage, get_wielded_psi_charge};
 use crate::runtime_props::{PsiChargePhase, RuntimePropPsiCharge};
 use crate::ui::{HAlign, Rect, ScaleMode, UiCanvas, VAlign};
@@ -105,6 +106,7 @@ pub(crate) fn build_flat_hud_canvas(
     psi_fraction: f32,
     psi_charge: Option<RuntimePropPsiCharge>,
     ammo_readout: &AmmoReadout,
+    messages: &[String],
 ) -> UiCanvas {
     let mut canvas = UiCanvas::new(vec2(VIRTUAL_W, VIRTUAL_H));
 
@@ -181,6 +183,10 @@ pub(crate) fn build_flat_hud_canvas(
         ammo_panel::emit(&mut canvas, AMMO_PANEL_ORIGIN, ammo_readout);
     }
 
+    // Status messages, placed by the shared `message_line` layout the VR head
+    // panel draws with.
+    message_line::emit(&mut canvas, message_line::flat_origin(), messages);
+
     canvas
 }
 
@@ -192,6 +198,7 @@ pub(crate) fn create_flat_hud(
     screen_size: cgmath::Vector2<f32>,
     crosshair: bool,
     use_mode: bool,
+    messages: &[String],
 ) -> Vec<SceneObject> {
     let canvas = build_flat_hud_canvas(
         crosshair,
@@ -202,6 +209,7 @@ pub(crate) fn create_flat_hud(
         // The buttons are drawn exactly when the pointer can reach them - use
         // mode - and the hit-test below reads the same readout.
         &AmmoReadout::from_world(world, use_mode),
+        messages,
     );
     // Keep the crosshair square and bars undistorted on non-4:3 windows.
     canvas.render_screen_space(asset_cache, screen_size, ScaleMode::PreserveAspect)
@@ -255,6 +263,7 @@ mod tests {
             0.75,
             None,
             &readout(None, None, None, false),
+            &[],
         );
         assert_eq!(canvas.element_count(), 6);
     }
@@ -269,6 +278,7 @@ mod tests {
             0.75,
             None,
             &readout(Some(12), None, None, false),
+            &[],
         );
         assert_eq!(canvas.element_count(), 8);
     }
@@ -283,6 +293,7 @@ mod tests {
             0.75,
             None,
             &readout(Some(12), Some("STD_I.PCX"), Some("std"), false),
+            &[],
         );
         assert_eq!(canvas.element_count(), 10);
     }
@@ -302,6 +313,7 @@ mod tests {
                 ammo: Some(0),
                 ..Default::default()
             },
+            &[],
         );
         assert_eq!(canvas.element_count(), 9);
     }
@@ -318,6 +330,7 @@ mod tests {
             0.75,
             None,
             &readout(Some(12), None, None, false),
+            &[],
         );
         assert_eq!(shooter.element_count(), 8);
         // Use mode (crosshair off) with an empty multi-ammo weapon: the same
@@ -330,6 +343,7 @@ mod tests {
             0.75,
             None,
             &readout(Some(0), None, None, true),
+            &[],
         );
         assert_eq!(use_mode.element_count(), 8);
         // The cycle button only appears when the weapon can actually cycle.
@@ -340,6 +354,7 @@ mod tests {
             0.75,
             None,
             &readout(Some(0), None, None, false),
+            &[],
         );
         assert_eq!(single_ammo.element_count(), 7);
     }
@@ -399,9 +414,30 @@ mod tests {
         // The original turns the crosshair overlay off while the cursor is
         // up (ShockOverlayMouseMode) - one fewer element than shooter mode.
         let empty = readout(None, None, None, false);
-        let shooter = build_flat_hud_canvas(true, false, 1.0, 0.75, None, &empty);
-        let use_mode = build_flat_hud_canvas(false, false, 1.0, 0.75, None, &empty);
+        let shooter = build_flat_hud_canvas(true, false, 1.0, 0.75, None, &empty, &[]);
+        let use_mode = build_flat_hud_canvas(false, false, 1.0, 0.75, None, &empty, &[]);
         assert_eq!(use_mode.element_count(), shooter.element_count() - 1);
+    }
+
+    /// A status message adds one text element per line, at the shared
+    /// `message_line` block's origin on the HUD canvas.
+    #[test]
+    fn a_status_message_adds_a_line_to_the_hud() {
+        let empty = readout(None, None, None, false);
+        let base = build_flat_hud_canvas(true, false, 1.0, 0.75, None, &empty, &[]);
+        let with_message = build_flat_hud_canvas(
+            true,
+            false,
+            1.0,
+            0.75,
+            None,
+            &empty,
+            &["This lift has been taken offline for repairs.".to_string()],
+        );
+
+        assert_eq!(with_message.element_count(), base.element_count() + 1);
+        let line = with_message.elements().last().unwrap().rect();
+        assert_eq!(vec2(line.x, line.y), message_line::flat_origin());
     }
 
     #[test]
@@ -414,6 +450,7 @@ mod tests {
             -1.0,
             None,
             &readout(None, None, None, false),
+            &[],
         );
     }
 }

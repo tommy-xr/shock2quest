@@ -843,6 +843,12 @@ pub enum Effect {
         components: Vec<GuiComponentRenderInfo>,
     },
 
+    /// Put a line on the HUD's status-message channel, where it stays for the
+    /// original's five-second message time.
+    ShowMessage {
+        text: String,
+    },
+
     Multiple(Vec<Effect>),
     // Deprecated:
     // Use Multiple instead

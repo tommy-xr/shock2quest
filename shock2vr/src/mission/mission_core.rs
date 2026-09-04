@@ -1930,6 +1930,7 @@ impl MissionCore {
         world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
         world.add_unique(crate::scripts::radiation::ActiveRadiation::default());
         world.add_unique(DamageFlash::default());
+        world.add_unique(crate::hud::HudMessages::default());
 
         // ** Entity creation
 
@@ -2227,6 +2228,10 @@ impl MissionCore {
         // Preload the elevator floor labels (MISC.STR) + current mission so the
         // AssetCache-less ElevatorGui can label/gate floors at draw time.
         world.add_unique(crate::hud::HudStrings::load(asset_cache));
+        // USEMSG.STR, which TrapMessage resolves its P$UseMsg key against.
+        world.add_unique(crate::scripts::trap_message::UseMessageStrings::load(
+            asset_cache,
+        ));
         world.add_unique(crate::scripts::ElevatorContext::load(asset_cache, &mission));
         world.add_unique(crate::scripts::gui::TraitsContext::load(asset_cache));
         world.add_unique(crate::scripts::gui::ComputerContext::load(asset_cache));
@@ -7286,6 +7291,14 @@ impl MissionCore {
                         door.base_location = base_location;
                     }
                 }
+                Effect::ShowMessage { text } => {
+                    let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                    self.world
+                        .borrow::<UniqueViewMut<crate::hud::HudMessages>>()
+                        .unwrap()
+                        .push(text, now);
+                }
+
                 Effect::SetQuestBit {
                     quest_bit_name,
                     quest_bit_value,
@@ -8490,6 +8503,7 @@ impl MissionCore {
 
             // Flat 2D HUD (screen size is available here; the VR forearm HUD is
             // built in `render`). Drawn after the viewmodel so it stays on top.
+            let messages = self.hud_messages();
             ret.extend(crate::hud::create_flat_hud(
                 asset_cache,
                 &self.world,
@@ -8500,6 +8514,7 @@ impl MissionCore {
                 !self.use_mode,
                 // Use mode expands the compact readouts to BIOFULL/AMMOFULL.
                 self.use_mode,
+                &messages,
             ));
 
             // Flat MFD panel (keypad, container, ...) + cursor, drawn over
@@ -8548,6 +8563,55 @@ impl MissionCore {
     /// screen this is a mode of play, so the player's own hands are still being
     /// rendered by the interaction controller, and a second static glove would
     /// stack on top of them (the defect issue #1018 fixed for the pause menu).
+    /// The status-message lines showing this frame, oldest first. Expired
+    /// lines are dropped here (the `DamageFlash` pattern), so they clear
+    /// whether or not the message block is being drawn.
+    fn hud_messages(&self) -> Vec<String> {
+        let now = self
+            .world
+            .borrow::<UniqueView<Time>>()
+            .map(|time| time.total)
+            .unwrap_or_default();
+        self.world
+            .borrow::<UniqueViewMut<crate::hud::HudMessages>>()
+            .map(|mut messages| messages.active(now))
+            .unwrap_or_default()
+    }
+
+    /// The status-message block in VR: the same canvas flat draws into its HUD,
+    /// on a small panel hung off the head. The original's placement is a line
+    /// near the top of a 640x480 screen, which has no world position - so the
+    /// one thing this presentation decides for itself is where to hang the
+    /// block; everything on it is placed by the shared `message_line` layout.
+    /// Head-locked rather than world-locked (a `FrontendPanelAnchor` placement)
+    /// because a message is read at a glance and then gone, not inspected.
+    fn render_vr_messages(
+        &self,
+        asset_cache: &mut AssetCache,
+        messages: &[String],
+    ) -> Vec<SceneObject> {
+        let placement =
+            crate::ui::PanelPlacement::from_head(self.last_head_position, self.last_head_rotation);
+        let panel = placement.panel();
+        let size = crate::hud::message_line::PANEL_SIZE;
+        // Sized off the frontend panel (which is FRONTEND_PANEL_SIZE wide for a
+        // 640-pixel canvas), so a message glyph subtends the same angle it
+        // would on a frontend screen, and lifted above the gaze so it does not
+        // sit over what the player is aiming at.
+        let scale = panel.size.x / crate::mission::flat_ui_host::CANVAS_SIZE.x;
+        let root = Matrix4::from_translation(
+            panel.center + panel.rotation * vec3(0.0, size.y * scale * 0.5 + 0.2, 0.0),
+        ) * Matrix4::from(panel.rotation)
+            * Matrix4::from_nonuniform_scale(size.x * scale, size.y * scale, 1.0);
+        crate::hud::message_line::build_message_canvas(messages).render_world_space(
+            asset_cache,
+            root,
+            None,
+            None,
+            0.001,
+        )
+    }
+
     fn render_vr_use_mode(&self, asset_cache: &mut AssetCache) -> Vec<SceneObject> {
         use crate::ui::world_dim;
         let panel = self.vr_use_mode_anchor.panel();
@@ -8978,6 +9042,22 @@ impl MissionCore {
                 object.set_transform(pawn_to_world * object.get_transform());
             }
             scene.extend(use_mode_objects);
+        }
+
+        // Status messages in VR: flat draws them into its 2D HUD above, so this
+        // is the VR half of the same shared canvas.
+        if options.presentation_mode == crate::PresentationMode::Vr {
+            let messages = self.hud_messages();
+            if !messages.is_empty() {
+                let pawn_to_world =
+                    Matrix4::from_translation(player.pos) * Matrix4::from(player.rotation);
+                let mut objects = self.render_vr_messages(asset_cache, &messages);
+                for object in &mut objects {
+                    object.set_render_layer(RenderLayer::SystemOverlay);
+                    object.set_transform(pawn_to_world * object.get_transform());
+                }
+                scene.extend(objects);
+            }
         }
 
         // Floating damage readouts, in the shared world pass so flat and VR
@@ -10782,6 +10862,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     ],
                 }
             }),
+            messages: self.hud_messages(),
         }
     }
 

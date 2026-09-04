@@ -63,6 +63,7 @@ mod trap_destroyer;
 mod trap_email;
 mod trap_exp_once;
 mod trap_inverter;
+pub mod trap_message;
 mod trap_new_tripwire;
 mod trap_off_filter;
 mod trap_on_filter;
@@ -133,6 +134,7 @@ use self::radiation::RadPatchScript;
 use self::reduce_psi::ReducePsi;
 use self::reroute_elevator_button::RerouteElevatorButton;
 use self::researchable::ResearchableScript;
+use self::trap_message::TrapMessage;
 use self::trap_signal::TrapSignal;
 use self::{
     auto_install_soft::AutoInstallSoft,
@@ -946,7 +948,7 @@ impl ScriptWorld {
             // TODO: Should these actually be implemented?
             "earthtext" => Box::new(NoopScript::new()),
             "trapgravity" => Box::new(NoopScript {}), // medsci1 - vent that falls
-            "trapmessage" => Box::new(NoopScript {}), // eng2 - installing override. What prop for message? Where to load string?
+            "trapmessage" => Box::new(TrapMessage::new()),
             "charmable" => Box::new(NoopScript::new()),
             "transientcorpse" => Box::new(NoopScript::new()),
             "whiteout" => Box::new(WhiteOut::new()),
