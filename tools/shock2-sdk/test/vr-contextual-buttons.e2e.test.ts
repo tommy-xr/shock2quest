@@ -6,13 +6,14 @@ import type { Vec3 } from "../src/index.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
 import { cycleToWeapon } from "./helpers/weapon.js";
 
-// The Touch face buttons are per-hand and contextual: lower (left X / right A)
-// and upper (left Y / right B) mean the player-owned panels while that hand is
-// free, and belong to the weapon while it holds one. The interface outranks
-// both, so the press that opened it always closes it.
+// The Touch face buttons: the LOWER one (left X / right A) is jump on both
+// hands whatever they hold, and the UPPER one (left Y / right B) is contextual
+// - the log reader while that hand is free, the weapon's own control while it
+// holds one. The cyber interface outranks both, so the buttons can always shut
+// it again.
 //
-// Negative-first: on the parent these actions do not exist at all
-// (`/v1/input/action` rejects the name), and right A/B carried nothing.
+// The interface itself is reached from the Menu button now
+// (`vr-buttons-v2.e2e.test.ts`), which is what these tests use to open it.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8656);
 
@@ -46,7 +47,7 @@ async function grabPistol(game: GameServer): Promise<number> {
 }
 
 test(
-  "a free right hand's lower button opens and closes the cyber interface",
+  "a free hand's upper button reaches the log reader, on either hand",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" },
   async () => {
     await using game = await GameServer.launch({
@@ -57,31 +58,30 @@ test(
     await game.step({ frames: 30 });
     assert.equal(await uiMode(game), "shooter");
 
-    // Right A, mirroring left X - the new half of the symmetry.
-    await press(game, "RightHandLowerButton");
-    assert.equal(
-      await uiMode(game),
-      "use",
-      "right A with an empty hand must open the cyber interface",
-    );
-
+    // No lower button opens the interface any more: they jump.
     await press(game, "RightHandLowerButton");
     assert.equal(
       await uiMode(game),
       "shooter",
-      "right A must close what it opened",
+      "right A must not open the cyber interface",
+    );
+    await press(game, "LeftHandLowerButton");
+    assert.equal(
+      await uiMode(game),
+      "shooter",
+      "and neither must left X",
     );
 
-    // The left hand's own buttons are unchanged.
-    await press(game, "LeftHandLowerButton");
-    assert.equal(await uiMode(game), "use", "left X must still open it");
-    await press(game, "LeftHandLowerButton");
+    // The Menu button is the way in and out.
+    await press(game, "MenuButton");
+    assert.equal(await uiMode(game), "use");
+    await press(game, "MenuButton");
     assert.equal(await uiMode(game), "shooter");
   },
 );
 
 test(
-  "a gun takes its own hand's buttons, and only its own",
+  "a gun takes its own hand's upper button, and only its own",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" },
   async () => {
     await using game = await GameServer.launch({
@@ -92,27 +92,23 @@ test(
     await game.step({ frames: 30 });
     await grabPistol(game);
 
-    // The gun hand's buttons are the gun's now - they handle the weapon
-    // (eject, fire mode) rather than reaching the panels.
-    await press(game, "RightHandLowerButton");
-    assert.equal(
-      await uiMode(game),
-      "shooter",
-      "right A must not open the interface while that hand holds a gun",
-    );
+    // The gun hand's upper button handles the weapon rather than reaching a
+    // player-owned panel.
+    const header = (await game.info()).player.wielded_gun_setting_header;
     await press(game, "RightHandUpperButton");
-    assert.equal(
-      await uiMode(game),
-      "shooter",
-      "right B must not open the reader while that hand holds a gun",
+    assert.notEqual(
+      (await game.info()).player.wielded_gun_setting_header,
+      header,
+      "right B must switch the fire mode of the gun in that hand",
     );
 
-    // The free hand still owns the panels: per-hand, not per-player.
-    await press(game, "LeftHandLowerButton");
+    // The free hand keeps its own: per-hand, not per-player.
+    const switched = (await game.info()).player.wielded_gun_setting_header;
+    await press(game, "LeftHandUpperButton");
     assert.equal(
-      await uiMode(game),
-      "use",
-      "the free left hand must still reach the interface",
+      (await game.info()).player.wielded_gun_setting_header,
+      switched,
+      "the free left hand must not reach the right hand's gun",
     );
   },
 );
@@ -129,17 +125,17 @@ test(
     await game.step({ frames: 30 });
     const pistol = await grabPistol(game);
 
-    await press(game, "LeftHandLowerButton");
-    assert.equal(await uiMode(game), "use", "the free hand opens it");
+    await press(game, "MenuButton");
+    assert.equal(await uiMode(game), "use", "the Menu button opens it");
     assert.equal(
       (await game.info()).player.right_hand_entity_id,
       pistol,
       "the gun stays held while the interface is up (it is safed, not taken)",
     );
 
-    // Mode first: the gun hand's own button closes the interface rather than
-    // being swallowed by the weapon it holds - otherwise picking a gun up
-    // inside the interface could strand the player in it.
+    // Mode first: the gun hand's own lower button closes the interface rather
+    // than jumping - otherwise the buttons would mean one thing inside a menu
+    // and another outside it, on a canvas the player is pointing at.
     await press(game, "RightHandLowerButton");
     assert.equal(
       await uiMode(game),
@@ -147,12 +143,12 @@ test(
       "right A must close the interface even with a gun in that hand",
     );
 
-    // ...and once it is closed, that button belongs to the gun again.
+    // ...and once it is closed, that button is jump again, not a re-open.
     await press(game, "RightHandLowerButton");
     assert.equal(
       await uiMode(game),
       "shooter",
-      "with the interface down the gun hand's button is the gun's again",
+      "with the interface down the lower button jumps rather than re-opening it",
     );
   },
 );
@@ -167,29 +163,31 @@ test(
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
+    await press(game, "MenuButton");
+    assert.equal(await uiMode(game), "use");
 
-    // The chord IS right A+B, and a chord is pressed one button at a time -
-    // so while its developer option is on, A must not open the interface on
-    // the way to A+B.
+    // The chord IS right A+B, and a chord is pressed one button at a time - so
+    // while its developer option is on, A must not close the interface on the
+    // way to A+B.
     await game.devParams.set("free_camera", 1);
     await game.step({ frames: 2 });
     await press(game, "RightHandLowerButton");
     assert.equal(
       await uiMode(game),
-      "shooter",
+      "use",
       "right A must be inert while the free-camera chord is armed",
     );
     await press(game, "RightHandUpperButton");
-    assert.equal(await uiMode(game), "shooter", "and so must right B");
+    assert.equal(await uiMode(game), "use", "and so must right B");
 
     // The left hand keeps its buttons - the chord is right-handed.
     await press(game, "LeftHandLowerButton");
     assert.equal(
       await uiMode(game),
-      "use",
+      "shooter",
       "the left hand is unaffected by the chord",
     );
-    await press(game, "LeftHandLowerButton");
+    await press(game, "MenuButton");
 
     // Disarmed again, the right hand gets them back.
     await game.devParams.set("free_camera", 0);
@@ -197,8 +195,8 @@ test(
     await press(game, "RightHandLowerButton");
     assert.equal(
       await uiMode(game),
-      "use",
-      "right A works again once the chord is disarmed",
+      "shooter",
+      "right A closes the interface again once the chord is disarmed",
     );
   },
 );

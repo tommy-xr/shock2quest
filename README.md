@@ -43,7 +43,12 @@ However, you can play with a keyboard and a mouse, using the following hard-code
 - `Space` - jump
 - `Tab` / `I` - toggle the cyber interface ("use" mode): a cursor-driven UI over the 3D view
 - `Alt+S` / `Alt+L` - quick save / quick load
-- Quest VR: press the left controller's `X` button to toggle the cyber interface.
+- Quest VR: press the left controller's `Menu` button to toggle the cyber
+  interface; hold it for half a second - a ring fills in front of you - to open
+  the pause menu instead. The interface also carries a `MENU` button that opens
+  it directly.
+- Quest VR: either lower face button (left `X` / right `A`) jumps, whatever
+  your hands are holding.
 - Quest VR: reload by hand. Pull a clip out of the cyber interface's inventory
   strip with your free hand and bring it to the gun the other hand is holding -
   the clip goes in and the weapon is loaded. A clip of a different ammo type
@@ -51,9 +56,11 @@ However, you can play with a keyboard and a mouse, using the following hard-code
   insert is the only way to change ammo type in the headset, so the types you
   can select are the ones you are carrying clips for. There is no reload or
   ammo-swap button on the controllers; the gesture is the control.
-- Quest VR: press the left controller's `Y` button to open the newest unread
-  audio log. Press `Y` again to close it; after every log is read, `Y` replays
-  the most recently collected log.
+- Quest VR: with that hand free, press an upper face button (left `Y` / right
+  `B`) to open the newest unread audio log. Press it again to close it; after
+  every log is read, it replays the most recently collected log. Holding a
+  weapon, that hand's upper button is the weapon's instead: a gun's fire mode,
+  the psi amp's power selector.
 - Directly equip a matching carried weapon with the original number-row bindings:
   `1` Wrench, `2` Pistol, `3` Shotgun, `4` Assault Rifle, `5` Laser Pistol,
   `6` EMP Rifle, `7` Electro Shock, `8` Grenade Launcher, `9` Stasis Field

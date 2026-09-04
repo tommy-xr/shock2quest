@@ -181,6 +181,9 @@ impl ActionDispatcher {
         if state.just_triggered(InputAction::ReadLastUnreadLog) {
             effects.push(Effect::ReadLastUnreadLog);
         }
+        if state.just_triggered(InputAction::Jump) {
+            effects.push(Effect::Jump);
+        }
         // The face buttons are forwarded RAW, hand and position intact: what a
         // press means depends on what that hand is holding, which only the
         // mission can see. This dispatcher stays non-contextual; the table
@@ -190,6 +193,10 @@ impl ActionDispatcher {
                 effects.push(Effect::HandButton { hand, button });
             }
         }
+        // `InputAction::MenuButton` deliberately produces no effect either:
+        // it is raw, and `Game` splits it into a short press (the interface)
+        // and a long one (the pause menu) before dispatching.
+        //
         // `InputAction::TogglePauseMenu` deliberately produces no effect: the
         // pause overlay is owned by `Game`, which reads the action directly
         // before dispatching. Routing it through the scene would make it

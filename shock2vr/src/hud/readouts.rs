@@ -17,7 +17,7 @@
 use cgmath::{Vector2, vec2};
 use shipyard::World;
 
-use super::ammo_panel::{self, AmmoReadout, ReadoutButtonSpec};
+use super::ammo_panel::{self, AmmoReadout, ReadoutButton, ReadoutButtonSpec};
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 
 /// The font the bio numbers use (the original's HUD font).
@@ -47,6 +47,30 @@ pub(crate) const PSI_TEXT: Rect = Rect::new(92.0, 40.0, TEXT_W, BAR_H);
 /// AMMOFULL 260).
 pub(crate) const BIO_ORIGIN: Vector2<f32> = vec2(2.0, 414.0);
 pub(crate) const AMMO_ORIGIN: Vector2<f32> = vec2(378.0, 414.0);
+
+/// The system-menu affordance: the pause menu's only *discoverable* control in
+/// VR, since the Menu button's long press advertises nothing until it is held.
+/// IFBTN00.PCX is the original's blank 38x36 interface button.
+///
+/// Placed in the empty column between the interface's occupied regions - below
+/// the inventory strip (`(2,0)`, 636x121), right of the left MFD slot
+/// (`(2,124)`, 188x300) and its close gadget, left of the reserved right slot
+/// (x 450), and above both bottom readouts (y 414) - and horizontally centred
+/// on the canvas.
+pub(crate) const SYSTEM_BUTTON: Rect = Rect::new(288.0, 372.0, 64.0, 36.0);
+
+/// The system button as one spec, so [`emit_use_mode`] draws exactly what
+/// [`buttons`] hit-tests.
+fn system_button() -> ReadoutButtonSpec {
+    ReadoutButtonSpec {
+        button: ReadoutButton::SystemMenu,
+        rect: SYSTEM_BUTTON,
+        // The original's blank interface-button plate, widened from its
+        // authored 38 px so the label sits inside the bevel rather than on it.
+        texture: Some("IFBTN00.PCX"),
+        text: Some("MENU".to_owned()),
+    }
+}
 
 /// What the bio monitor says this frame. Presentation-agnostic, like
 /// [`AmmoReadout`].
@@ -162,6 +186,9 @@ pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
         );
         ammo_panel::emit(canvas, AMMO_ORIGIN, &readouts.ammo);
     }
+    // Always: the way out of the game does not depend on what is wielded.
+    let system = system_button();
+    ammo_panel::draw_button(canvas, &system, system.rect);
 }
 
 /// The readout's clickable controls on the 640x480 canvas.
@@ -171,9 +198,11 @@ pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
 /// through the same panel origin, so the drawn and clickable regions cannot
 /// diverge - in either presentation.
 pub(crate) fn buttons(readouts: &UseModeReadouts) -> Vec<ReadoutButtonSpec> {
+    // Drawn unconditionally above, so it is clickable unconditionally.
+    let system = system_button();
     if readouts.ammo.is_empty() {
         // The gauge is not drawn, so nothing on it is clickable.
-        return Vec::new();
+        return vec![system];
     }
     ammo_panel::buttons(&readouts.ammo)
         .into_iter()
@@ -181,6 +210,7 @@ pub(crate) fn buttons(readouts: &UseModeReadouts) -> Vec<ReadoutButtonSpec> {
             rect: ammo_panel::at(AMMO_ORIGIN, spec.rect),
             ..spec
         })
+        .chain([system])
         .collect()
 }
 
@@ -203,12 +233,15 @@ mod tests {
         }
     }
 
+    /// The system button's art + label, drawn whatever else the canvas shows.
+    const SYSTEM_ELEMENTS: usize = 2;
+
     #[test]
     fn the_bio_monitor_is_always_drawn() {
         // Backdrop + 2 bars + 2 numbers, with no weapon wielded.
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
         emit_use_mode(&mut canvas, &readouts(None, false));
-        assert_eq!(canvas.element_count(), 5);
+        assert_eq!(canvas.element_count(), 5 + SYSTEM_ELEMENTS);
     }
 
     #[test]
@@ -216,7 +249,47 @@ mod tests {
         // ...plus the AMMOFULL backdrop + the round count.
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
         emit_use_mode(&mut canvas, &readouts(Some(12), false));
-        assert_eq!(canvas.element_count(), 7);
+        assert_eq!(canvas.element_count(), 7 + SYSTEM_ELEMENTS);
+    }
+
+    /// The interface's way to the pause menu is on the canvas whatever is
+    /// wielded, and is hit-tested at exactly the rect it was drawn at - one
+    /// list for both, so a VR ray reaches what a flat cursor does.
+    #[test]
+    fn the_system_button_is_drawn_and_clickable_at_the_same_rect() {
+        for readouts in [readouts(None, false), readouts(Some(12), true)] {
+            let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
+            emit_use_mode(&mut canvas, &readouts);
+
+            let drawn: Vec<_> = canvas
+                .elements()
+                .iter()
+                .filter(|element| element.rect() == SYSTEM_BUTTON)
+                .collect();
+            assert_eq!(drawn.len(), 2, "art + label");
+
+            let clickable = buttons(&readouts)
+                .into_iter()
+                .find(|spec| spec.button == ReadoutButton::SystemMenu)
+                .expect("the system button is always clickable");
+            assert_eq!(clickable.rect, SYSTEM_BUTTON);
+        }
+    }
+
+    /// It sits in the canvas's one free column: clear of the strip, the left
+    /// MFD slot, the reserved right slot and both bottom readouts.
+    #[test]
+    fn the_system_button_collides_with_nothing_on_the_canvas() {
+        assert!(SYSTEM_BUTTON.y >= 121.0, "below the inventory strip");
+        assert!(SYSTEM_BUTTON.x >= 190.0, "right of the left MFD slot");
+        assert!(
+            SYSTEM_BUTTON.x + SYSTEM_BUTTON.w <= 450.0,
+            "left of the right slot"
+        );
+        assert!(
+            SYSTEM_BUTTON.y + SYSTEM_BUTTON.h <= BIO_ORIGIN.y,
+            "above the bottom readouts"
+        );
     }
 
     #[test]
@@ -292,8 +365,14 @@ mod tests {
     /// A readout with nothing to say offers no controls, even though the
     /// composition is only ever drawn in use mode.
     #[test]
-    fn an_empty_gauge_offers_no_buttons() {
-        assert!(buttons(&readouts(None, true)).is_empty());
-        assert_eq!(buttons(&readouts(Some(0), true)).len(), 1);
+    fn an_empty_gauge_offers_no_gauge_buttons() {
+        let gauge = |r| {
+            buttons(&r)
+                .into_iter()
+                .filter(|spec| spec.button != ReadoutButton::SystemMenu)
+                .count()
+        };
+        assert_eq!(gauge(readouts(None, true)), 0);
+        assert_eq!(gauge(readouts(Some(0), true)), 1);
     }
 }

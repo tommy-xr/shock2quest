@@ -27,7 +27,7 @@ use crate::{
     },
 };
 
-use super::cutscene_skip::{self, SkipHold};
+use super::cutscene_skip::{RingArt, SkipHold};
 
 #[cfg(feature = "ffmpeg")]
 use engine_ffmpeg::{AudioPlayer, VideoPlayer};
@@ -58,9 +58,9 @@ pub struct CutscenePlayerScene {
     completion_emitted: bool,
     /// Holding either trigger finishes the cutscene early.
     skip_hold: SkipHold,
-    /// The generated progress-ring art, keyed on the fill step it was built
+    /// The generated progress-ring art, cached by the fill step it was built
     /// for, so a held trigger does not re-upload it every frame.
-    ring_art: Option<(u32, Rc<dyn TextureTrait>)>,
+    ring_art: RingArt,
     #[cfg(feature = "ffmpeg")]
     audio_handle: engine::audio::AudioHandle,
     #[cfg(feature = "ffmpeg")]
@@ -187,7 +187,7 @@ impl CutscenePlayerScene {
                 on_complete,
                 completion_emitted: false,
                 skip_hold: SkipHold::default(),
-                ring_art: None,
+                ring_art: RingArt::default(),
                 audio_handle,
                 video_player,
             });
@@ -208,7 +208,7 @@ impl CutscenePlayerScene {
                 on_complete,
                 completion_emitted: false,
                 skip_hold: SkipHold::default(),
-                ring_art: None,
+                ring_art: RingArt::default(),
             })
         }
     }
@@ -281,32 +281,10 @@ impl CutscenePlayerScene {
     }
 
     /// The radial hold-to-skip progress ring, drawn on the video screen while
-    /// the trigger is touched.
+    /// the trigger is touched. The ring is the shared hold readout; only where
+    /// it hangs is the cutscene's own.
     fn build_skip_ring(&mut self, basis: &ScreenBasis, alpha: f32) -> SceneObject {
-        // The art changes only when the fill crosses a step, so a held trigger
-        // rasterizes and uploads a few dozen textures rather than one a frame.
-        let step = cutscene_skip::ring_step(self.skip_hold.progress());
-        let texture = match &self.ring_art {
-            Some((cached_step, texture)) if *cached_step == step => texture.clone(),
-            _ => {
-                let texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
-                    cutscene_skip::ring_texture_for_step(step),
-                    &TextureOptions {
-                        wrap: false,
-                        ..Default::default()
-                    },
-                ));
-                self.ring_art = Some((step, texture.clone()));
-                texture
-            }
-        };
-
-        // Held just under fully opaque: the material only joins the blended
-        // pass when it is transparent at all, and the ring is nothing but
-        // per-pixel alpha.
-        let transparency = (1.0 - alpha).max(0.02);
-        let material = basic_material::create(texture, 1.0, transparency);
-        let mut quad = SceneObject::new(material, Box::new(engine::scene::quad::create()));
+        let mut quad = self.ring_art.quad(self.skip_hold.progress(), alpha);
 
         let size = basis.height * RING_SIZE;
         let center = basis.panel.center

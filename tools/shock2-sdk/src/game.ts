@@ -417,6 +417,30 @@ export class InputApi {
     );
   }
 
+  /**
+   * Press a discrete action and KEEP it held, so a hold-to-activate button can
+   * be driven without a controller (the Menu button's long press). Step to let
+   * the hold accumulate, then `release`.
+   */
+  async hold(action: InputAction): Promise<CommandResult> {
+    return unwrap(
+      await this.client.post<CommandResult>("/v1/input/action", {
+        action,
+        hold: true,
+      }),
+    );
+  }
+
+  /** Release an action held by `hold`. */
+  async release(action: InputAction): Promise<CommandResult> {
+    return unwrap(
+      await this.client.post<CommandResult>("/v1/input/action", {
+        action,
+        hold: false,
+      }),
+    );
+  }
+
   /** List action names accepted by trigger(). */
   async actions(): Promise<string[]> {
     const result = await this.client.get<{ actions: string[] }>("/v1/input/actions");

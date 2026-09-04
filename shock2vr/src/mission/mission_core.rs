@@ -1594,6 +1594,10 @@ pub struct MissionCore {
     /// held stick steps once rather than every frame.
     psi_nav_latched: bool,
 
+    /// A discrete [`Effect::Jump`] waiting for the next movement pass. One
+    /// frame of the held jump channel; see where it is consumed in `update`.
+    button_jump: bool,
+
     /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the rim
     /// vignette (both presentations), the VR comfort dim's strength, and the
     /// flat FOV pull - see [`crate::ui::entry_ramp`]. Advanced every update
@@ -2549,6 +2553,7 @@ impl MissionCore {
             weapon_settings_gun: None,
             psi_powers_open: false,
             psi_nav_latched: false,
+            button_jump: false,
             use_mode_shortcut: None,
             use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp::new(),
             vr_use_mode_anchor: crate::ui::FrontendPanelAnchor::new(),
@@ -2874,6 +2879,10 @@ impl MissionCore {
         let input_context = if self.player_is_alive() && self.player_controls_enabled {
             input_context
         } else {
+            // The discrete jump is latched separately from the context, so it
+            // has to be dropped here too - otherwise a face button pressed as
+            // the player died would hop the corpse.
+            self.button_jump = false;
             &suppressed_input
         };
         // Refill the per-frame AI pathfind budget - only on advancing frames,
@@ -3177,12 +3186,17 @@ impl MissionCore {
             if let Some(launch) = hand_climb.launch {
                 self.physics.launch_player(launch, &mut self.player_handle);
             }
+            // A discrete jump (a Quest hand's lower face button, an injected
+            // `Jump` action) rides the same held channel the runtimes drive,
+            // for exactly one frame - so the controller's edge detection sees
+            // one jump per press however the request arrived.
+            let jump = input_context.jump || std::mem::take(&mut self.button_jump);
             let request = match hand_climb.translation {
                 Some(translation) => crate::physics::PlayerMoveRequest::HandClimb { translation },
                 None => crate::physics::PlayerMoveRequest::Walk {
                     movement: forward + cgmath::vec3(0.0, up_value, 0.0),
                     facing,
-                    jump_pressed: input_context.jump,
+                    jump_pressed: jump,
                     // Push-to-climb is the FLAT climb input; VR's hands are
                     // its own (see `vr_climb`).
                     push_to_climb: game_options.presentation_mode == crate::PresentationMode::Flat,
@@ -4980,6 +4994,11 @@ impl MissionCore {
                     // SETTING opens the weapon settings one: the arrows step,
                     // the readout itself offers the described grid.
                     ReadoutButton::PsiSelect => vec![Effect::OpenPsiPowers],
+                    // The pause menu lives above the scene, so it is reached
+                    // through a global effect rather than opened from here.
+                    ReadoutButton::SystemMenu => {
+                        vec![Effect::GlobalEffect(GlobalEffect::OpenPauseMenu)]
+                    }
                 }
             }
             // Double-click = equip/use, acting on the still-contained item -
@@ -5964,6 +5983,11 @@ impl MissionCore {
                     }
                 }
 
+                // One frame of the held jump channel, consumed by the next
+                // movement pass - the effect is handled after this frame's,
+                // and the physics controller wants a rising edge, not a level.
+                Effect::Jump => self.button_jump = true,
+
                 Effect::EjectClip { hand } => {
                     if let Some(weapon) =
                         crate::wielded_weapon::hand_weapon_target(&self.world, hand)
@@ -5994,25 +6018,18 @@ impl MissionCore {
                         Some(crate::input::InputAction::ReadLastUnreadLog) => {
                             effects.push_front(Effect::ReadLastUnreadLog)
                         }
+                        // The lower button, whatever the hand holds.
+                        Some(crate::input::InputAction::Jump) => effects.push_front(Effect::Jump),
                         // The gun goes with the hand that pressed, so a
-                        // dual-wielding player ejects the magazine they meant.
-                        Some(crate::input::InputAction::EjectClip) => {
-                            effects.push_front(Effect::EjectClip { hand: Some(hand) })
-                        }
+                        // dual-wielding player switches the mode they meant.
                         Some(crate::input::InputAction::CycleGunSetting) => {
                             effects.push_front(Effect::CycleGunSetting { hand: Some(hand) })
                         }
-                        // The amp's buttons: lower opens the selection MFD,
-                        // upper quick-cycles. Neither names a hand - there is
-                        // one psi selection however many amps are held.
+                        // The amp hand's upper button opens the selection MFD.
+                        // It names no hand - there is one psi selection
+                        // however many amps are held.
                         Some(crate::input::InputAction::SelectPsiPower) => {
                             effects.push_front(Effect::OpenPsiPowers)
-                        }
-                        Some(crate::input::InputAction::CyclePsiPower) => {
-                            effects.push_front(Effect::StepPsiSelection {
-                                axis: crate::psi::PsiSelectionAxis::Any,
-                                forward: true,
-                            })
                         }
                         None => {}
                         Some(action) => warn!("unroutable hand button action: {action}"),

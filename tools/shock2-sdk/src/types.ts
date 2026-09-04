@@ -32,6 +32,10 @@ export type InputAction =
   | "LeftHandUpperButton"
   | "RightHandLowerButton"
   | "RightHandUpperButton"
+  // The raw left Menu button: a short press toggles the cyber interface, a
+  // long one (>= 0.5 s, held via input.hold) opens the pause menu.
+  | "MenuButton"
+  | "Jump"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
 

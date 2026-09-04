@@ -33,8 +33,16 @@ async function button(game: GameServer, label: string): Promise<UiElement> {
   return found;
 }
 
+/**
+ * The GAUGE's controls. The interface canvas also carries a `system_menu`
+ * button (the pause menu's visible way in), which is always there whatever is
+ * wielded and so says nothing about the readout - `vr-buttons-v2.e2e.test.ts`
+ * covers it.
+ */
 async function labels(game: GameServer): Promise<string[]> {
-  return (await readout(game)).map((e) => e.label ?? "");
+  return (await readout(game))
+    .map((e) => e.label ?? "")
+    .filter((label) => label !== "system_menu");
 }
 
 test(

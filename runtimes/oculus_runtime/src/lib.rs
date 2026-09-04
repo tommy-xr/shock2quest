@@ -341,10 +341,6 @@ fn main() {
         .create_action::<xr::Vector2f>("right_hand_thumbstick", "Right Hand Thumbstick", &[])
         .unwrap();
 
-    let jump_action = action_set
-        .create_action::<bool>("jump", "Jump", &[])
-        .unwrap();
-
     let crouch_action = action_set
         .create_action::<bool>("crouch", "Crouch Toggle", &[])
         .unwrap();
@@ -372,7 +368,7 @@ fn main() {
     // The left controller's Menu button. (The right controller's is reserved
     // by the Quest system UI, so it can never be the app's.)
     let menu_action = action_set
-        .create_action::<bool>("menu", "Pause Menu", &[])
+        .create_action::<bool>("menu", "Interface / Pause Menu", &[])
         .unwrap();
 
     // Bind our actions to input devices using the given profile
@@ -444,12 +440,9 @@ fn main() {
                         .string_to_path("/user/hand/right/input/thumbstick")
                         .unwrap(),
                 ),
-                xr::Binding::new(
-                    &jump_action,
-                    xr_instance
-                        .string_to_path("/user/hand/right/input/thumbstick/click")
-                        .unwrap(),
-                ),
+                // The RIGHT thumbstick click is deliberately unbound: jump
+                // moved to the lower face buttons, where it is reachable
+                // whatever the hands hold.
                 xr::Binding::new(
                     &crouch_action,
                     xr_instance
@@ -500,9 +493,9 @@ fn main() {
                     &menu_action,
                     xr_instance
                         .string_to_path(
-                            shock2vr::input::InputAction::TogglePauseMenu
+                            shock2vr::input::InputAction::MenuButton
                                 .quest_touch_click_path()
-                                .expect("Quest pause-menu binding"),
+                                .expect("Quest menu-button binding"),
                         )
                         .unwrap(),
                 ),
@@ -581,9 +574,9 @@ fn main() {
     let mut vr_crouch = VrCrouchDetector::default();
     let mut pending_stage_change_time = None;
     // Button-crouch alternative to the physical detector: left thumbstick
-    // click toggles a latched crouch request (mirroring jump on the right
-    // stick). Either source requests the crouch; the game's headroom-gated
-    // stand-up still decides when standing is actually possible.
+    // click toggles a latched crouch request. Either source requests the
+    // crouch; the game's headroom-gated stand-up still decides when standing
+    // is actually possible.
     let mut crouch_toggled = false;
     let mut crouch_button_was_pressed = false;
 
@@ -697,6 +690,11 @@ fn main() {
                                 .release(shock2vr::input::InputAction::RightHandLowerButton);
                             action_state
                                 .release(shock2vr::input::InputAction::RightHandUpperButton);
+                            // The Menu button is a HOLD, so releasing it is not
+                            // enough: the release would read as its short press.
+                            // Forget the press instead.
+                            action_state.release(shock2vr::input::InputAction::MenuButton);
+                            game.cancel_menu_hold();
                         }
                         xr::SessionState::STOPPING => {
                             session.end().unwrap();
@@ -808,10 +806,6 @@ fn main() {
             .state(&session, xr::Path::NULL)
             .unwrap()
             .current_state;
-        let jump_pressed = jump_action
-            .state(&session, xr::Path::NULL)
-            .unwrap()
-            .current_state;
         let crouch_state = crouch_action.state(&session, xr::Path::NULL).unwrap();
         let left_lower_state = left_lower_action.state(&session, xr::Path::NULL).unwrap();
         let left_upper_state = left_upper_action.state(&session, xr::Path::NULL).unwrap();
@@ -853,8 +847,12 @@ fn main() {
                 state.current_state,
             );
         }
+        // Raw, like the face buttons: a short press jacks into the cyber
+        // interface and a long one opens the pause menu, and only `Game` (via
+        // `MenuHold`) can tell those apart - so both the press and the release
+        // have to reach it.
         action_state.sync_discrete_button(
-            shock2vr::input::InputAction::TogglePauseMenu,
+            shock2vr::input::InputAction::MenuButton,
             menu_state.is_active,
             menu_state.changed_since_last_sync,
             menu_state.current_state,
@@ -1008,7 +1006,9 @@ fn main() {
         input_context.left_hand.squeeze_value = left_squeeze_value;
         input_context.left_hand.thumbstick =
             vec2(-left_thumbstick_value.x, left_thumbstick_value.y);
-        input_context.jump = jump_pressed;
+        // Jump is a hand's LOWER face button now, which arrives as an action
+        // and is resolved per hand - so no runtime channel drives it in VR.
+        input_context.jump = false;
         // The detector was already fed exactly once above (it keeps its
         // standing calibration warm even while the button latch is active).
         input_context.crouch = physically_crouched || crouch_toggled;

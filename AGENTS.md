@@ -224,9 +224,16 @@ Quest button/chord paths live beside their actions in
 mapping is host-testable even though `oculus_runtime` only builds for Android.
 The four Touch **face buttons** are bound there RAW, by hand and position
 (`LeftHandLowerButton` .. `RightHandUpperButton`); what a press means is
-resolved per hand against what that hand holds, by the pure table in
-`shock2vr/src/hand_buttons.rs` (`resolve_hand_button`), which the mission
-applies. The current key and controller bindings are listed in
+resolved per hand by the pure table in `shock2vr/src/hand_buttons.rs`
+(`resolve_hand_button`), which the mission applies. The **lower** button (left
+`X` / right `A`) is `Jump` on both hands whatever they hold - a hand full of gun
+still has to be able to jump - and only the **upper** one (left `Y` / right `B`)
+is contextual: the log reader with a free hand, the gun's fire mode with a gun,
+the psi selection MFD with the amp. While the cyber interface is up, lower
+closes it instead. The left **Menu** button is raw too (`MenuButton`): `Game`
+splits it with `input::MenuHold` into a short press (toggle the cyber interface)
+and a 0.5 s hold (the pause menu, with the cutscene skip's ring as its hold
+readout). The current key and controller bindings are listed in
 [DEVELOPMENT.md](DEVELOPMENT.md#debug--developer-keys).
 
 - **`InputAction`** (`input/actions.rs`) - serde-enabled enum of all discrete actions

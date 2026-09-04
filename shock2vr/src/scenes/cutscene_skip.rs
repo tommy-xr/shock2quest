@@ -1,10 +1,19 @@
 //! Hold-to-skip for the cutscene player: the hold latch and the radial progress
 //! art it draws. Both are pure, so the timing rule and the ring are testable
 //! without a running game.
+//!
+//! The ring itself is the game's one hold-progress readout: [`RingArt`] draws
+//! it for the cutscene skip (on the video screen) and for the Menu button's
+//! long press (head-locked). Only the placement differs.
 
+use std::rc::Rc;
 use std::time::Duration;
 
-use engine::texture_format::{PixelFormat, RawTextureData};
+use engine::{
+    scene::{SceneObject, basic_material},
+    texture::{TextureOptions, TextureTrait, init_from_memory2},
+    texture_format::{PixelFormat, RawTextureData},
+};
 
 /// How long either trigger must be held to skip. Long enough that a trigger
 /// brushed on the way into a cutscene does not dismiss it.
@@ -70,22 +79,63 @@ impl SkipHold {
     }
 }
 
+/// The ring's art, rasterized on demand and cached by fill step, plus the quad
+/// that carries it. Shared by every hold in the game, so the readout cannot
+/// look like two different things - the caller supplies only the transform.
+#[derive(Default)]
+pub struct RingArt {
+    cached: Option<(u32, Rc<dyn TextureTrait>)>,
+}
+
+impl RingArt {
+    /// A UNIT quad (1x1, centered, facing +Z) showing the ring filled to
+    /// `progress` at `alpha` opacity. The caller places and scales it.
+    pub fn quad(&mut self, progress: f32, alpha: f32) -> SceneObject {
+        // The art changes only when the fill crosses a step, so a held button
+        // rasterizes and uploads a few dozen textures rather than one a frame.
+        let step = ring_step(progress);
+        let texture = match &self.cached {
+            Some((cached_step, texture)) if *cached_step == step => texture.clone(),
+            _ => {
+                let texture: Rc<dyn TextureTrait> = Rc::new(init_from_memory2(
+                    ring_texture_for_step(step),
+                    &TextureOptions {
+                        wrap: false,
+                        ..Default::default()
+                    },
+                ));
+                self.cached = Some((step, texture.clone()));
+                texture
+            }
+        };
+
+        // Held just under fully opaque: the material only joins the blended
+        // pass when it is transparent at all, and the ring is nothing but
+        // per-pixel alpha.
+        let transparency = (1.0 - alpha).max(0.02);
+        SceneObject::new(
+            basic_material::create(texture, 1.0, transparency),
+            Box::new(engine::scene::quad::create()),
+        )
+    }
+}
+
 /// Edge length of the generated ring texture. Small: the ring draws a few dozen
 /// pixels across, so anything larger is only oversampling.
 const RING_TEXTURE_SIZE: usize = 64;
 
-/// Steps the fill is drawn in. The art changes only when the arc crosses one, so
-/// a caller keyed on [`ring_step`] rebuilds and re-uploads the texture this many
-/// times over a hold rather than once per frame.
-pub const RING_STEPS: u32 = 48;
+/// Steps the fill is drawn in. The art changes only when the arc crosses one,
+/// so a hold rebuilds and re-uploads the texture this many times rather than
+/// once per frame.
+const RING_STEPS: u32 = 48;
 
 /// Which step `progress` falls in - the cache key for [`ring_texture`].
-pub fn ring_step(progress: f32) -> u32 {
+fn ring_step(progress: f32) -> u32 {
     (progress.clamp(0.0, 1.0) * RING_STEPS as f32).round() as u32
 }
 
 /// The ring art for a step from [`ring_step`].
-pub fn ring_texture_for_step(step: u32) -> RawTextureData {
+fn ring_texture_for_step(step: u32) -> RawTextureData {
     ring_texture(step as f32 / RING_STEPS as f32)
 }
 
@@ -99,7 +149,7 @@ const TRACK_ALPHA: u8 = 90;
 /// The radial progress ring for a hold `progress` in 0.0..=1.0: a white arc
 /// filling clockwise from twelve o'clock over a faint full-circle track,
 /// transparent everywhere else.
-pub fn ring_texture(progress: f32) -> RawTextureData {
+fn ring_texture(progress: f32) -> RawTextureData {
     let progress = progress.clamp(0.0, 1.0);
     let size = RING_TEXTURE_SIZE;
     let half = size as f32 / 2.0;

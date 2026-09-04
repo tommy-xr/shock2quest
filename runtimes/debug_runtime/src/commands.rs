@@ -124,7 +124,12 @@ pub enum RuntimeCommand {
     PathfindingTest(String, oneshot::Sender<CommandResult>),
 
     /// Trigger a discrete input action (as if a bound key was pressed)
-    TriggerAction(InputAction, oneshot::Sender<CommandResult>),
+    /// Fire a discrete action. `hold` is the button's level: `None` presses
+    /// and releases it in one frame (the ordinary single-shot injection),
+    /// `Some(true)` presses and keeps it down, `Some(false)` releases it -
+    /// which is how a hold-to-activate button (the Menu button's long press)
+    /// is driven without a controller.
+    TriggerAction(InputAction, Option<bool>, oneshot::Sender<CommandResult>),
 
     /// Get the current pathfinding test status
     GetPathfindingTestStatus(oneshot::Sender<PathfindingTestStatusResult>),
