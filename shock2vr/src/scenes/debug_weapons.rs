@@ -13,12 +13,8 @@
 //! on entry - so reload, ammo cycling, and the VR clip-insert gesture can all
 //! be exercised without provisioning anything first.
 
-use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, vec3};
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::{SceneObject, color_material, cube},
-};
+use cgmath::{Deg, Point3, Quaternion, Rotation3, vec3};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use rapier3d::prelude::{ColliderBuilder, Isometry, SharedShape};
 use shipyard::EntityId;
 
@@ -26,7 +22,9 @@ use crate::{
     GameOptions,
     game_scene::{DebugPlayerStatsRequest, DebugSkillLevelsRequest, DebuggableScene, GameScene},
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
-    scenes::debug_common::{DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, spawn_at},
+    scenes::debug_common::{
+        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, cube_object, spawn_at,
+    },
     scripts::Effect,
     scripts::gui::{PSI_TIER_CAP, SKILL_CAP, STAT_CAP},
 };
@@ -84,19 +82,6 @@ const AMMO_SPACING: f32 = 0.6;
 /// Height of the retaining lip above the bench top.
 const BENCH_LIP_HEIGHT: f32 = 0.5;
 const BENCH_LIP_THICKNESS: f32 = 0.08;
-
-fn cube_object(
-    color: cgmath::Vector3<f32>,
-    translation: cgmath::Vector3<f32>,
-    scale: cgmath::Vector3<f32>,
-) -> SceneObject {
-    let mut object = SceneObject::new(color_material::create(color), Box::new(cube::create()));
-    object.set_transform(
-        Matrix4::from_translation(translation)
-            * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z),
-    );
-    object
-}
 
 pub fn create_debug_weapons_scene(
     global_context: &GlobalContext,

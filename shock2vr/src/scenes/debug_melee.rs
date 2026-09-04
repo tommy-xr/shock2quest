@@ -20,12 +20,8 @@
 //! between them is the calibration error, and it is only visible with both on
 //! screen at once.
 
-use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, Vector3, vec3};
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::{SceneObject, color_material, cube},
-};
+use cgmath::{Deg, Point3, Quaternion, Rotation3, Vector3, vec3};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use rapier3d::prelude::{ColliderBuilder, Isometry, SharedShape};
 use shipyard::EntityId;
 
@@ -34,7 +30,8 @@ use crate::{
     game_scene::GameScene,
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     scenes::debug_common::{
-        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene, spawn_at,
+        DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene, cube_object,
+        spawn_at,
     },
     scripts::Effect,
 };
@@ -81,15 +78,6 @@ const WALL_DISTANCE: f32 = 13.0;
 /// picked up without walking.
 const RACK_HEIGHT: f32 = 1.1;
 const RACK_DISTANCE: f32 = 1.0;
-
-fn cube_object(color: Vector3<f32>, translation: Vector3<f32>, scale: Vector3<f32>) -> SceneObject {
-    let mut object = SceneObject::new(color_material::create(color), Box::new(cube::create()));
-    object.set_transform(
-        Matrix4::from_translation(translation)
-            * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z),
-    );
-    object
-}
 
 pub fn create_debug_melee_scene(
     global_context: &GlobalContext,

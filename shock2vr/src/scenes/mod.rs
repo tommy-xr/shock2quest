@@ -28,6 +28,7 @@ pub mod debug_hand_poses;
 pub mod debug_hitbox;
 pub mod debug_hud;
 pub mod debug_joint_constraint;
+pub mod debug_ladder;
 pub mod debug_map;
 pub mod debug_melee;
 pub mod debug_minimal;
@@ -52,6 +53,7 @@ pub use debug_hand_poses::DebugHandPosesScene;
 pub use debug_hitbox::DebugHitboxScene;
 pub use debug_hud::DebugHudScene;
 pub use debug_joint_constraint::DebugJointConstraintScene;
+pub use debug_ladder::create_debug_ladder_scene;
 pub use debug_map::DebugMapScene;
 pub use debug_melee::create_debug_melee_scene;
 pub use debug_minimal::DebugMinimalScene;
@@ -166,6 +168,7 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     }),
     ("debug_weapons", create_debug_weapons_scene),
     ("debug_melee", create_debug_melee_scene),
+    ("debug_ladder", create_debug_ladder_scene),
     ("debug_psi", create_debug_psi_scene),
     ("debug_teleport", |global, options, assets, audio| {
         Box::new(DebugTeleportScene::create(global, options, assets, audio))

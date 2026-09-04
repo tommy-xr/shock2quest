@@ -7,12 +7,8 @@
 //! powers (Cryokinesis, Pyrokinesis, ...) land on the wall, and the psi bar
 //! on the HUD drains by the power's tier per cast.
 
-use cgmath::{Deg, Matrix4, Quaternion, Rotation3, vec3};
-use engine::{
-    assets::asset_cache::AssetCache,
-    audio::AudioContext,
-    scene::{SceneObject, color_material, cube},
-};
+use cgmath::{Deg, Quaternion, Rotation3, vec3};
+use engine::{assets::asset_cache::AssetCache, audio::AudioContext};
 use rapier3d::prelude::{ColliderBuilder, Isometry, SharedShape};
 use shipyard::EntityId;
 
@@ -23,7 +19,7 @@ use crate::{
 };
 
 use super::debug_common::{
-    AutoEquipHooks, DebugSceneBuildOptions, DebugSceneBuilder, HookedDebugScene,
+    AutoEquipHooks, DebugSceneBuildOptions, DebugSceneBuilder, HookedDebugScene, cube_object,
 };
 
 /// The Psi Amp player weapon.
@@ -32,19 +28,6 @@ const PSI_AMP_TEMPLATE_ID: i32 = -247;
 /// Distance (world units) from the player to the test wall, straight ahead
 /// (-X, the default-view forward).
 const WALL_DISTANCE: f32 = 12.0;
-
-fn cube_object(
-    color: cgmath::Vector3<f32>,
-    translation: cgmath::Vector3<f32>,
-    scale: cgmath::Vector3<f32>,
-) -> SceneObject {
-    let mut object = SceneObject::new(color_material::create(color), Box::new(cube::create()));
-    object.set_transform(
-        Matrix4::from_translation(translation)
-            * Matrix4::from_nonuniform_scale(scale.x, scale.y, scale.z),
-    );
-    object
-}
 
 pub fn create_debug_psi_scene(
     global_context: &GlobalContext,
