@@ -87,20 +87,20 @@ pub fn contact_stim_damage(world: &World, emitter_template: i32, victim: EntityI
 }
 
 fn victim_receptrons(world: &World, victim: EntityId) -> Vec<(i32, ReceptronOptions)> {
+    // Immolate's caster is fireproof against contact stims too, not just the
+    // radius ones - the power reads as a metaproperty on the player.
+    let mut receptrons = crate::scripts::immolate::immolate_caster_receptrons(world, victim);
     let Ok(v_links) = world.borrow::<View<Links>>() else {
-        return Vec::new();
+        return receptrons;
     };
     let Ok(links) = v_links.get(victim) else {
-        return Vec::new();
+        return receptrons;
     };
-    links
-        .to_links
-        .iter()
-        .filter_map(|link| match &link.link {
-            Link::Receptron(options) => Some((link.to_template_id, options.clone())),
-            _ => None,
-        })
-        .collect()
+    receptrons.extend(links.to_links.iter().filter_map(|link| match &link.link {
+        Link::Receptron(options) => Some((link.to_template_id, options.clone())),
+        _ => None,
+    }));
+    receptrons
 }
 
 /// Resolve what damage a stim deals to a receiver, given the receiver's

@@ -29,6 +29,7 @@ mod exp_cookie;
 mod frob_qb;
 pub mod gui;
 pub mod healing_item;
+pub mod immolate;
 mod internal_collision_type;
 mod internal_explosion;
 pub mod internal_fast_projectile;

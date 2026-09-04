@@ -39,6 +39,11 @@ pub const INVISO_TEMPLATE_ID: i32 = -3157;
 /// their health (see `scripts::berserk`).
 pub const BERSERK_TEMPLATE_ID: i32 = -3155;
 
+/// `Immolate` - Localized Pyrokinesis (tier 2 sustained power): while active,
+/// the caster burns everything within the aura authored on this template
+/// (see `scripts::immolate`).
+pub const IMMOLATE_TEMPLATE_ID: i32 = -3152;
+
 /// `PropPsiPower::activation_type` for sustained/timed self effects - the
 /// power activates for a duration given by its `P$PsiShield` data
 /// (`duration_base + duration_per_psi × PSI` seconds).

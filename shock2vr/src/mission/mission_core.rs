@@ -1861,6 +1861,9 @@ impl MissionCore {
         world.add_unique(
             crate::mission::stim_response::GlobalContactStims::from_entity_info(&entity_info_rc),
         );
+        world.add_unique(crate::scripts::immolate::ImmolateAura::from_entity_info(
+            &entity_info_rc,
+        ));
         // Reuse the obj-icons already hydrated into the template metadata above
         // (keyed by template id) rather than rescanning every template.
         let template_obj_icons: HashMap<i32, String> = template_name_to_template_id
@@ -2638,6 +2641,15 @@ impl MissionCore {
             .borrow::<UniqueViewMut<PlayerLifeState>>()
             .unwrap() = next_state;
 
+        // Death ends every sustained psi power: a corpse must not keep burning
+        // (Immolate) or stay invisible (Inviso) through the death sequence and
+        // out the other side of a QBR reconstruction.
+        self.world
+            .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
+            .unwrap()
+            .0
+            .clear();
+
         self.death_camera = Some(self.begin_death_camera());
 
         vec![Effect::PlaySound {
@@ -2999,6 +3011,11 @@ impl MissionCore {
             crate::scripts::berserk::tick_player_drain(&self.world, time.elapsed.as_secs_f32())
         {
             effects.push(drain);
+        }
+        if let Some(aura) =
+            crate::scripts::immolate::tick_immolate_aura(&self.world, time.elapsed.as_secs_f32())
+        {
+            effects.push(aura);
         }
         effects.extend(command_effects);
 
@@ -4441,11 +4458,17 @@ impl MissionCore {
         }
 
         for (entity_id, felt_intensity) in in_range {
-            let receptrons =
+            let mut receptrons =
                 get_all_links_with_template(&self.world, entity_id, |link| match link {
                     Link::Receptron(options) => Some(options.clone()),
                     _ => None,
                 });
+            // Immolate's Amplify 0.0 on Incendiary is what keeps the burning
+            // player from cooking in their own aura.
+            receptrons.extend(crate::scripts::immolate::immolate_caster_receptrons(
+                &self.world,
+                entity_id,
+            ));
             let maybe_damage = crate::mission::stim_response::resolve_stim_damage(
                 &receptrons,
                 stim_template_id,
