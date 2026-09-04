@@ -109,14 +109,20 @@ pub fn resolve_localized_property_string(raw: &str, strings: &HashMap<String, St
     lookup(strings, key).unwrap_or_else(|| fallback.to_owned())
 }
 
+/// Resolve a symbolic name (`P$SymName`) directly against a string table,
+/// underscoring spaces first - multi-word entries are keyed that way in the
+/// shipped tables (`Stasis_Field_Generator`, `laser_pistol`).
+pub fn resolve_symbolic_name(sym_name: &str, strings: &HashMap<String, String>) -> Option<String> {
+    lookup(strings, &sym_name.replace(' ', "_"))
+}
+
 /// Resolve a gun fire-setting string (`P$Sett1`/`P$SHead2`/...) against its
 /// `SETT*`/`SHEAD*` table.
 ///
 /// Some guns author no setting property at all - the Stasis Field Generator,
 /// Worm Launcher and Viral Proliferator - yet the tables carry entries for
-/// them, keyed by their symbolic name with spaces underscored
-/// (`Stasis_Field_Generator`). So the symbolic name is tried whenever the
-/// property is missing or its own key misses.
+/// them, keyed by their symbolic name. So the symbolic name is tried
+/// whenever the property is missing or its own key misses.
 pub fn resolve_gun_setting_string(
     raw: Option<&str>,
     sym_name: Option<&str>,
@@ -124,7 +130,7 @@ pub fn resolve_gun_setting_string(
 ) -> Option<String> {
     let (key, fallback) = raw.map_or(("", ""), split_object_string);
     lookup(strings, key)
-        .or_else(|| lookup(strings, &sym_name.unwrap_or_default().replace(' ', "_")))
+        .or_else(|| sym_name.and_then(|name| resolve_symbolic_name(name, strings)))
         .or_else(|| (!fallback.is_empty()).then(|| fallback.to_owned()))
 }
 
