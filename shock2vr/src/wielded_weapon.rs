@@ -59,12 +59,12 @@ pub fn wielded_weapon(world: &World) -> Option<EntityId> {
     weapon_in_hand(world, Handedness::Right).or_else(|| weapon_in_hand(world, Handedness::Left))
 }
 
-/// The weapon an eject applies to. `Some(hand)` - a per-hand face button -
-/// means the weapon in THAT hand, so a dual-wielding player ejects the
-/// magazine of the gun they pressed; `None` - the hand-agnostic input action -
-/// means whichever weapon is wielded. Both arms filter to weapons, so a hand
-/// carrying a medkit is not an eject target.
-pub fn eject_target(world: &World, hand: Option<Handedness>) -> Option<EntityId> {
+/// The weapon a per-hand gun action (eject, fire-mode toggle) applies to.
+/// `Some(hand)` - a face button - means the weapon in THAT hand, so a
+/// dual-wielding player acts on the gun they pressed; `None` - the
+/// hand-agnostic input action - means whichever weapon is wielded. Both arms
+/// filter to weapons, so a hand carrying a medkit is not a target.
+pub fn hand_weapon_target(world: &World, hand: Option<Handedness>) -> Option<EntityId> {
     match hand {
         Some(hand) => weapon_in_hand(world, hand),
         None => wielded_weapon(world),
@@ -139,15 +139,18 @@ mod tests {
         (world, left_hand_entity_id, right_hand_entity_id)
     }
 
-    /// A per-hand eject means the gun in that hand and no other - the whole
-    /// point of carrying the hand through, since dual wielding otherwise
-    /// ejects whichever gun `wielded_weapon` happens to prefer.
+    /// A per-hand action means the gun in that hand and no other - the whole
+    /// point of carrying the hand through, since dual wielding otherwise hits
+    /// whichever gun `wielded_weapon` happens to prefer.
     #[test]
-    fn a_per_hand_eject_targets_only_that_hand() {
+    fn a_per_hand_action_targets_only_that_hand() {
         let (world, left_gun, right_gun) = player_holding(true, true);
 
-        assert_eq!(eject_target(&world, Some(Handedness::Right)), right_gun);
-        assert_eq!(eject_target(&world, Some(Handedness::Left)), left_gun);
+        assert_eq!(
+            hand_weapon_target(&world, Some(Handedness::Right)),
+            right_gun
+        );
+        assert_eq!(hand_weapon_target(&world, Some(Handedness::Left)), left_gun);
         assert_ne!(left_gun, right_gun);
     }
 
@@ -156,7 +159,7 @@ mod tests {
     fn an_empty_hand_has_nothing_to_eject() {
         let (world, _, _) = player_holding(false, true);
 
-        assert_eq!(eject_target(&world, Some(Handedness::Left)), None);
+        assert_eq!(hand_weapon_target(&world, Some(Handedness::Left)), None);
     }
 
     /// A hand carrying something that is not a weapon is not an eject target
@@ -176,6 +179,6 @@ mod tests {
             inventory_entity_id: inventory,
         });
 
-        assert_eq!(eject_target(&world, Some(Handedness::Right)), None);
+        assert_eq!(hand_weapon_target(&world, Some(Handedness::Right)), None);
     }
 }

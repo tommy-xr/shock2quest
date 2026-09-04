@@ -65,7 +65,7 @@ pub enum HandButtonMode {
 /// | hand holds | lower | upper |
 /// |---|---|---|
 /// | nothing, melee, or any other item | `ToggleUseMode` | `ReadLastUnreadLog` |
-/// | a gun | `EjectClip` (that hand's gun) | fire-mode toggle (not yet bound) |
+/// | a gun | `EjectClip` (that hand's gun) | `CycleGunSetting` (that hand's gun) |
 /// | the psi amp | power selection (not yet bound) | power selection (not yet bound) |
 ///
 /// **Mode first.** While the interface is up both buttons keep their interface
@@ -78,8 +78,8 @@ pub enum HandButtonMode {
 ///
 /// `hand` does not change which action is returned (the mapping is symmetric);
 /// it is taken because a gun/psi row resolves to an action *about that hand's
-/// weapon* - `EjectClip` ejects the gun in the hand that pressed it, so the
-/// caller must carry the hand through.
+/// weapon* - `EjectClip` and `CycleGunSetting` act on the gun in the hand that
+/// pressed, so the caller must carry the hand through.
 pub fn resolve_hand_button(
     mode: HandButtonMode,
     hand: Handedness,
@@ -99,15 +99,13 @@ pub fn resolve_hand_button(
 
     match held {
         HeldKind::Empty | HeldKind::Melee | HeldKind::Other => Some(interface_action),
-        // The gun hand's lower button ejects that gun's magazine. Its upper
-        // button is reserved for the fire-mode toggle and is not bound yet -
-        // inert rather than falling through to the panels and having to be
-        // taken away again.
+        // The gun hand's own handling controls: lower ejects that gun's
+        // magazine, upper toggles its fire mode.
         HeldKind::Gun => match button {
             HandButton::Lower => Some(InputAction::EjectClip),
-            HandButton::Upper => None,
+            HandButton::Upper => Some(InputAction::CycleGunSetting),
         },
-        // Reserved for power selection, likewise not yet bound.
+        // Reserved for power selection, not yet bound.
         HeldKind::PsiAmp => None,
     }
 }
@@ -201,12 +199,16 @@ mod tests {
         }
     }
 
-    /// Row 2, upper: the fire-mode toggle is not wired to this button yet, so
-    /// it is inert rather than borrowing another meaning.
+    /// Row 2, upper: the gun hand's upper button toggles that gun's fire mode
+    /// - on either hand, resolved against the hand that pressed it.
     #[test]
-    fn a_gun_hands_upper_button_is_not_bound_yet() {
+    fn a_gun_hands_upper_button_toggles_its_fire_mode() {
         for hand in HANDS {
-            assert_eq!(resolve(HeldKind::Gun, hand, HandButton::Upper), None);
+            assert_eq!(
+                resolve(HeldKind::Gun, hand, HandButton::Upper),
+                Some(InputAction::CycleGunSetting),
+                "{hand:?}"
+            );
         }
     }
 

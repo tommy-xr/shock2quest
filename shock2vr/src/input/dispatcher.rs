@@ -126,7 +126,9 @@ impl ActionDispatcher {
             effects.push(Effect::CycleAmmo);
         }
         if state.just_triggered(InputAction::CycleGunSetting) {
-            effects.push(Effect::CycleGunSetting);
+            // Hand-agnostic: the flat key and HTTP mean "the wielded weapon".
+            // A per-hand press arrives as `Effect::HandButton` instead.
+            effects.push(Effect::CycleGunSetting { hand: None });
         }
         if state.just_triggered(InputAction::Reload) {
             effects.push(Effect::ReloadWeapon);

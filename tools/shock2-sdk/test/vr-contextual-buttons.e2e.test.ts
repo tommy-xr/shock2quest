@@ -92,8 +92,8 @@ test(
     await game.step({ frames: 30 });
     await grabPistol(game);
 
-    // The gun hand's buttons are the gun's now - and nothing is bound to them
-    // yet, so they do nothing at all rather than reaching the panels.
+    // The gun hand's buttons are the gun's now - they handle the weapon
+    // (eject, fire mode) rather than reaching the panels.
     await press(game, "RightHandLowerButton");
     assert.equal(
       await uiMode(game),
@@ -152,7 +152,7 @@ test(
     assert.equal(
       await uiMode(game),
       "shooter",
-      "with the interface down the gun hand's button is inert again",
+      "with the interface down the gun hand's button is the gun's again",
     );
   },
 );
