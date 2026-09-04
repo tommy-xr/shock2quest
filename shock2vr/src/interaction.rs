@@ -42,11 +42,36 @@ pub struct InteractionContext<'a> {
     pub eye_height: f32,
 }
 
+/// Read-only per-frame inputs for the VR hand-climb resolve. Separate from
+/// [`InteractionContext`] because it runs BEFORE the movement pass - its
+/// result IS the movement - while the hands update after it.
+pub struct ClimbContext<'a> {
+    pub physics: &'a PhysicsWorld,
+    pub world: &'a World,
+    pub input: &'a InputContext,
+    pub pawn_pos: Vector3<f32>,
+    pub pawn_rotation: Quaternion<f32>,
+    /// World height of the player's feet, for the ledge grip test.
+    pub feet_y: f32,
+}
+
 /// How the player interacts with the world. The effects returned by `update`
 /// (and `grab`/`wield`) are applied by `mission_core::process_virtual_hand_effects`.
 pub trait PlayerInteraction {
     /// Per-frame update; returns effects to apply.
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect>;
+
+    /// Resolve this frame's hand-climb intent: the body translation a gripping
+    /// hand demands, or `None` when no hand holds a climb hold. Flat climbs by
+    /// pushing into a ladder instead and never grips.
+    fn update_hand_climb(&mut self, _ctx: &ClimbContext) -> Option<Vector3<f32>> {
+        None
+    }
+
+    /// Hand-climb state, for debug introspection (`/v1/info`).
+    fn hand_climb(&self) -> Option<&crate::vr_climb::HandClimb> {
+        None
+    }
 
     /// Entities held in (left, right) - for `PlayerInfo`. Flat reports its
     /// wielded weapon as the "left".
@@ -130,6 +155,8 @@ pub struct VrInteraction {
     /// `Option` is "have we tried yet" - a glove that failed to load stays
     /// `Some(None)` so we don't hit the asset cache's miss path every frame.
     glove_renderer: RefCell<Option<Option<GloveRenderer>>>,
+    /// Which hands hold a climbing hold, and which one moves the body.
+    hand_climb: crate::vr_climb::HandClimb,
 }
 
 impl VrInteraction {
@@ -138,6 +165,7 @@ impl VrInteraction {
             left_hand: VirtualHand::new(Handedness::Left),
             right_hand: VirtualHand::new(Handedness::Right),
             glove_renderer: RefCell::new(None),
+            hand_climb: crate::vr_climb::HandClimb::default(),
         }
     }
 }
@@ -149,6 +177,41 @@ impl Default for VrInteraction {
 }
 
 impl PlayerInteraction for VrInteraction {
+    fn update_hand_climb(&mut self, ctx: &ClimbContext) -> Option<Vector3<f32>> {
+        use shipyard::EntitiesView;
+
+        let hand_input = |hand: &VirtualHand, input: &crate::input_context::Hand| {
+            crate::vr_climb::ClimbHandInput {
+                local_position: input.position,
+                squeeze: input.squeeze_value,
+                // A hand that is carrying something cannot also hold a ladder.
+                is_empty: hand.get_held_entity().is_none(),
+            }
+        };
+        self.hand_climb.update(
+            ctx.pawn_pos,
+            ctx.pawn_rotation,
+            [
+                hand_input(&self.left_hand, &ctx.input.left_hand),
+                hand_input(&self.right_hand, &ctx.input.right_hand),
+            ],
+            |point| {
+                ctx.physics
+                    .climbable_grip_at(point, crate::physics::CLIMB_GRIP_RADIUS, ctx.feet_y)
+            },
+            // "Cannot check" is not "gone" - a failed borrow keeps the hold.
+            |entity_id| {
+                ctx.world
+                    .borrow::<EntitiesView>()
+                    .map_or(true, |entities| entities.is_alive(entity_id))
+            },
+        )
+    }
+
+    fn hand_climb(&self) -> Option<&crate::vr_climb::HandClimb> {
+        Some(&self.hand_climb)
+    }
+
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
         let left_held_entity = self.left_hand.get_held_entity();
         let (right_hand, mut right_msgs) = VirtualHand::update(

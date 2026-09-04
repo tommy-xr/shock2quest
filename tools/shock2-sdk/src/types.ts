@@ -559,6 +559,25 @@ export interface PlayerSnapshot {
   /** The automap locations explored in the current mission (ascending).
    * Persisted per mission in QuestInfo; survives save/load. */
   explored_map_locations: number[];
+  /** Climb state: ladder/hand climbing, and (VR) the hands holding on. */
+  climb: ClimbState;
+}
+
+/** One hand's hold in the /v1/info climb readout. */
+export interface ClimbHold {
+  hand: "left" | "right";
+  kind: "ladder" | "ledge";
+  entity_id: number | null;
+  point: Vec3;
+}
+
+/** The player's climb state (GET /v1/info). Flat climbs ladders by pushing
+ * into them and holds nothing, so `is_climbing` is not implied by `grips`. */
+export interface ClimbState {
+  is_climbing: boolean;
+  /** The hand currently moving the body, or null. */
+  anchor_hand: "left" | "right" | null;
+  grips: ClimbHold[];
 }
 
 /** One audio log the player has collected, keyed by its per-deck identity. */

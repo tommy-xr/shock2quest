@@ -2207,6 +2207,25 @@ pub struct ClimbGrip {
     pub normal: Vector3<f32>,
 }
 
+/// What the player's movement pass is being asked to do this frame.
+///
+/// Physics stays presentation-agnostic: flat resolves "push into a ladder"
+/// and VR resolves "a hand is gripping here", and both arrive as a request.
+#[derive(Clone, Copy, Debug)]
+pub enum PlayerMoveRequest {
+    /// Ordinary locomotion. `push_to_climb` enables the flat push-into-ladder
+    /// climb; VR turns it off and climbs with its hands instead.
+    Walk {
+        movement: Vector3<f32>,
+        facing: Vector3<f32>,
+        jump_pressed: bool,
+        push_to_climb: bool,
+    },
+    /// A gripping VR hand demands this body translation (see
+    /// [`crate::vr_climb`]). Gravity and the walk pass are both suspended.
+    HandClimb { translation: Vector3<f32> },
+}
+
 /// Dark's `PropPhysAttr.climbable` is a per-face bitmask over the six OBB
 /// faces in Dark's Z-up local frame: 1=+X, 2=+Y, 4=+Z (top), 8=-X, 16=-Y,
 /// 32=-Z (bottom). The importer maps a Dark vector (x, y, z) to engine
@@ -3317,6 +3336,20 @@ impl PhysicsWorld {
             .get(player_handle.character_handle)
             .unwrap();
         nvec_to_cgmath(*character_body.translation())
+    }
+
+    /// The pose the next step will move the character body to - the queued
+    /// kinematic target, which is where this frame's movement will be cast
+    /// FROM. The pawn-space hand composition has to use this: composing
+    /// against the already-superseded `get_player_translation` applies each
+    /// correction on top of a body that has already absorbed the last one,
+    /// which rings instead of settling.
+    pub fn get_player_next_translation(&self, player_handle: &PlayerHandle) -> Vector3<f32> {
+        let character_body = self
+            .rigid_body_set
+            .get(player_handle.character_handle)
+            .unwrap();
+        nvec_to_cgmath(character_body.next_position().translation.vector)
     }
 
     fn top_out_save_pose_is_clear(
@@ -4765,6 +4798,27 @@ impl PhysicsWorld {
         jump_pressed: bool,
         player_handle: &mut PlayerHandle,
     ) -> (Vector3<f32>, Vec<CollisionEvent>) {
+        self.update_player_movement(
+            PlayerMoveRequest::Walk {
+                movement: desired_movement,
+                facing,
+                jump_pressed,
+                push_to_climb: true,
+            },
+            player_handle,
+        )
+    }
+
+    /// Step the simulation and resolve one frame of player movement.
+    ///
+    /// How far the player actually got is
+    /// [`PlayerHandle::self_translation`]; a hand climb's leftover separation
+    /// (the hand's drift from its hold) is what breaks its grip.
+    pub fn update_player_movement(
+        &mut self,
+        request: PlayerMoveRequest,
+        player_handle: &mut PlayerHandle,
+    ) -> (Vector3<f32>, Vec<CollisionEvent>) {
         // Queue every PhysAttach child at its parent's same next-frame target
         // before Rapier derives kinematic velocities. Moving-terrain assemblies
         // (tram floor + walls/buttons) therefore advance as one physical body,
@@ -4797,10 +4851,7 @@ impl PhysicsWorld {
         self.has_stepped = true;
 
         // Update character controller
-        let desired_movement = vec_to_nvec(desired_movement);
-        let facing = vec_to_nvec(facing);
-        let (mut collision_events, character_body) =
-            { self.move_player(desired_movement, facing, jump_pressed, player_handle) };
+        let (mut collision_events, character_body) = { self.move_player(request, player_handle) };
         let translation = nvec_to_cgmath(*character_body.translation());
 
         let mut additional_collision_events = { self.events.get_and_clear_events() };
@@ -4980,11 +5031,41 @@ impl PhysicsWorld {
 
     fn move_player(
         &mut self,
-        desired_movement: Vector<Real>,
-        facing: Vector<Real>,
-        jump_pressed: bool,
+        request: PlayerMoveRequest,
         player_handle: &mut PlayerHandle,
     ) -> (Vec<CollisionEvent>, &RigidBody) {
+        let hand_climb = match request {
+            PlayerMoveRequest::HandClimb { translation } => Some(vec_to_nvec(translation)),
+            PlayerMoveRequest::Walk { .. } => None,
+        };
+        let (desired_movement, facing, jump_pressed, push_to_climb) = match request {
+            PlayerMoveRequest::Walk {
+                movement,
+                facing,
+                jump_pressed,
+                push_to_climb,
+            } => (
+                vec_to_nvec(movement),
+                vec_to_nvec(facing),
+                jump_pressed,
+                push_to_climb,
+            ),
+            // A hand climb has no locomotion input at all. Reporting the jump
+            // button as unchanged leaves its edge state exactly where the last
+            // walking frame left it, so a button held across a climb neither
+            // fires nor re-arms.
+            PlayerMoveRequest::HandClimb { .. } => (
+                Vector::zeros(),
+                Vector::zeros(),
+                player_handle.jump_was_pressed,
+                false,
+            ),
+        };
+        if hand_climb.is_some() {
+            // Hanging: the hand owns the body, so any ballistic arc ends here
+            // and no gravity pass runs below.
+            player_handle.jump_velocity = None;
+        }
         let jump_edge = jump_pressed && !player_handle.jump_was_pressed;
         player_handle.jump_was_pressed = jump_pressed;
         let launch_jump = jump_edge && player_handle.is_grounded && player_handle.top_out.is_none();
@@ -5017,7 +5098,7 @@ impl PhysicsWorld {
         // Flat climbing: when the player overlaps a climbable surface (ladder)
         // and pushes toward it, redirect that input to vertical movement and
         // suppress the gravity pass for this frame (see `climb_redirect`).
-        let climb_movement = if player_handle.jump_velocity.is_some() {
+        let climb_movement = if !push_to_climb || player_handle.jump_velocity.is_some() {
             None
         } else {
             let climb_filter = QueryFilter::new()
@@ -5163,6 +5244,31 @@ impl PhysicsWorld {
                     movement,
                     is_climbing: true,
                     top_out,
+                    slope_displacement: Vector::zeros(),
+                    actor_collisions: Vec::new(),
+                }
+            } else if let Some(translation) = hand_climb {
+                // The gripping hand IS the movement: no walk, no gravity, and
+                // the same climbable-excluding cast the ladder pass uses, so a
+                // body pulled up a ladder passes through the slab it holds.
+                //
+                // A scripted mantle outranks it (above): that state runs on a
+                // temporary compressed collider, and abandoning it mid-lip
+                // would restore the full capsule inside the geometry it is
+                // crossing.
+                let mvt = player_handle.controller.move_shape(
+                    self.integration_parameters.dt,
+                    &queries.with_filter(climb_pass_filter),
+                    character_shape.as_ref(),
+                    &character_pos,
+                    translation,
+                    |_c| (),
+                );
+                PlayerMovement {
+                    self_translation: mvt.translation,
+                    movement: mvt,
+                    is_climbing: true,
+                    top_out: None,
                     slope_displacement: Vector::zeros(),
                     actor_collisions: Vec::new(),
                 }

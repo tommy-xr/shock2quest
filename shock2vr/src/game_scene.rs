@@ -347,6 +347,26 @@ pub struct DebugClimbGrip {
     pub normal: [f32; 3],
 }
 
+/// One hand's hold, in the `/v1/info` climb readout.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugClimbHold {
+    pub hand: &'static str,
+    pub kind: &'static str,
+    pub entity_id: Option<i32>,
+    pub point: [f32; 3],
+}
+
+/// The player's hand-climb state (see `crate::vr_climb`), reported by
+/// `/v1/info`. Flatscreen holds nothing, but still climbs ladders by pushing
+/// into them, so `is_climbing` is not implied by `grips`.
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct DebugClimbState {
+    pub is_climbing: bool,
+    /// The hand currently moving the body ("left"/"right"), if any.
+    pub anchor_hand: Option<&'static str>,
+    pub grips: Vec<DebugClimbHold>,
+}
+
 /// Raycast mask for collision group filtering
 #[derive(Debug, Clone)]
 pub struct RaycastMask {
@@ -803,6 +823,12 @@ pub trait DebuggableScene {
         _radius: Option<f32>,
         _feet_y: Option<f32>,
     ) -> Option<DebugClimbGrip> {
+        None
+    }
+
+    /// The player's climb state (see [`DebugClimbState`]). Scenes without a
+    /// player report nothing.
+    fn player_climb(&self) -> Option<DebugClimbState> {
         None
     }
 
