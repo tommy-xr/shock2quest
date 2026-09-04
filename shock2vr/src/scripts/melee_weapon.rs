@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cgmath::{EuclideanSpace, InnerSpace, vec3};
+use cgmath::{EuclideanSpace, InnerSpace, Vector3, vec3};
 use dark::properties::{CollisionType, PropCollisionType};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
@@ -141,8 +141,9 @@ impl Script for HeldMeleeWeapon {
                 // - keeps being hit, and heard, on its capsule.
                 let owner = crate::util::resolve_proxy_entity(world, *with);
                 let is_capsule_contact = owner == *with;
+                let is_held = self.is_held(world, entity_id);
                 if is_capsule_contact
-                    && self.is_held(world, entity_id)
+                    && is_held
                     && crate::creature::has_live_hit_boxes(world, owner)
                 {
                     return Effect::NoEffect;
@@ -152,8 +153,17 @@ impl Script for HeldMeleeWeapon {
                 // by the swing threshold and the victim's authored receptrons;
                 // *hitting something* is audible regardless - a wrench on a
                 // bulkhead or a bench does nothing but must still clang.
+
+                // A held weapon rides the player, so the player's own motion
+                // is not part of the swing. A loose one on the floor does not
+                // ride anything, and nothing may be subtracted from it.
+                let player_velocity = if is_held {
+                    physics.player_velocity()
+                } else {
+                    vec3(0.0, 0.0, 0.0)
+                };
                 let damage = self
-                    .may_damage(entity_id, owner, physics, *contact)
+                    .may_damage(entity_id, owner, physics, *contact, player_velocity)
                     .then(|| authored_contact_damage(world, entity_id, owner))
                     .flatten();
 
@@ -207,11 +217,14 @@ impl HeldMeleeWeapon {
         with: EntityId,
         physics: &PhysicsWorld,
         contact: Option<crate::physics::CollisionContact>,
+        player_velocity: Vector3<f32>,
     ) -> bool {
         if self.free_swing_cooldowns.contains_key(&with) {
             return false;
         }
-        if closing_speed(entity_id, with, physics, contact) < free_swing_speed_threshold() {
+        if closing_speed(entity_id, with, physics, contact, player_velocity)
+            < free_swing_speed_threshold()
+        {
             return false;
         }
         self.free_swing_cooldowns
@@ -232,11 +245,13 @@ impl HeldMeleeWeapon {
     /// every 0.15 s for the length of the corridor. `abs` because the normal's
     /// orientation depends on which collider Rapier listed first.
     ///
-    /// The damage rule above now measures the same way, via [`closing_speed`],
-    /// which additionally subtracts the victim's own motion. The two stay
-    /// separate functions because they answer different questions at different
-    /// thresholds - audible is a much lower bar than damaging, and a contact
-    /// that is too gentle to bill should still clink.
+    /// The damage rule above projects the same way but measures a different
+    /// quantity - it also divides out the victim's motion and the player's own
+    /// locomotion, and reads the hand rather than the weapon body. The two
+    /// stay separate because they answer different questions at different
+    /// thresholds: audible is a much lower bar than damaging, a contact too
+    /// gentle to bill should still clink, and a wrench carried head-on into a
+    /// bulkhead should clang even though walking is not a swing.
     /// Whether this contact thuds. Same speed question as [`Self::may_damage`],
     /// a lower bar - and the same reason for reading the sweep's own
     /// measurement: a swing stopped on a limb has no live velocity left to
@@ -278,30 +293,29 @@ fn is_vr(world: &World) -> bool {
 /// How fast the two bodies were closing on each other, at the point where they
 /// touched, along the surface they touched on.
 ///
-/// Three things this is not, each of which was wrong in a way that showed:
+/// Four things this is not, each of which was wrong in a way that showed:
 ///
 /// - **Not the weapon's centre-of-mass velocity.** A weapon swung about the
 ///   wrist moves its *head* fast while its centre barely moves, so a wrist
 ///   flick under-read badly. `velocity_at_point` carries the `omega x r` term.
-/// - **Not the weapon's velocity alone.** A held weapon rides the player, so
+/// - **Not the weapon's world velocity.** A held weapon rides the player, so
 ///   walking into a creature read as a full-speed swing and billed a free hit.
-///   Subtracting the victim's velocity also makes a creature that charges onto
-///   a held blade impale itself, which is the same rule read the other way and
-///   is worth having.
+/// - **Not the weapon body's own velocity.** It lags the hand and then catches
+///   up in one step, which is speed the player never produced; the driven hand
+///   target is what the player actually did.
 /// - **Not a raw magnitude.** Sliding a weapon *along* a surface is fast but
-///   closes on nothing.
+///   closes on nothing. Subtracting the victim's motion also makes a creature
+///   that charges onto a held blade impale itself.
 ///
 /// The exception is a contact that already knows: see `closing_speed` on
-/// [`crate::physics::CollisionContact`].
-///
-/// `abs` because the normal's orientation depends on which collider Rapier
-/// listed first. With no contact geometry there is no surface to project onto,
-/// so the relative speed is taken whole.
+/// [`crate::physics::CollisionContact`]. The arithmetic itself lives in
+/// [`crate::physics::relative_swing_speed`].
 fn closing_speed(
     weapon: EntityId,
     victim: EntityId,
     physics: &PhysicsWorld,
     contact: Option<crate::physics::CollisionContact>,
+    player_velocity: Vector3<f32>,
 ) -> f32 {
     // A blow the swing sweep found carries the speed it measured. It has to:
     // the sweep stops the weapon on the limb, so by the time this runs the
@@ -316,14 +330,37 @@ fn closing_speed(
         let victim_velocity = physics
             .get_velocity(victim)
             .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
-        return (weapon_velocity - victim_velocity).magnitude();
+        return crate::physics::relative_swing_speed(
+            weapon_velocity,
+            player_velocity,
+            victim_velocity,
+            None,
+        );
     };
     let at = |entity| {
         physics
             .velocity_at_point(entity, contact.point)
             .unwrap_or_else(|| vec3(0.0, 0.0, 0.0))
     };
-    (at(weapon) - at(victim)).dot(contact.normal).abs()
+    let speed_of = |weapon_velocity| {
+        crate::physics::relative_swing_speed(
+            weapon_velocity,
+            player_velocity,
+            at(victim),
+            Some(contact.normal),
+        )
+    };
+    // A held weapon is billed on the SLOWER of two readings - what the hand
+    // did, and what the weapon did - because each alone is wrong in one
+    // direction. The weapon body reports its own catch-up after an obstruction
+    // lets go (measured at 34 u/s against a hand doing 10); the hand keeps
+    // reading a swing while the weapon is pinned against the body it already
+    // struck, which bills leaning on a creature as a second blow. A loose
+    // weapon has no hand and answers for itself.
+    match physics.held_melee_target_velocity_at_point(weapon, contact.point) {
+        Some(hand) => speed_of(hand).min(speed_of(at(weapon))),
+        None => speed_of(at(weapon)),
+    }
 }
 
 /// Damage the weapon's own authored `Contact` stims deal to this victim,
@@ -459,6 +496,9 @@ mod tests {
         physics.set_velocity(entity, velocity);
     }
 
+    /// The player standing still: whatever the weapon is doing is the swing.
+    const STILL_PLAYER: cgmath::Vector3<f32> = cgmath::Vector3::new(0.0, 0.0, 0.0);
+
     fn head_on_contact(point: cgmath::Vector3<f32>) -> Option<crate::physics::CollisionContact> {
         Some(crate::physics::CollisionContact {
             point,
@@ -484,7 +524,10 @@ mod tests {
             closing_speed: Some(7.5),
         });
 
-        assert_eq!(closing_speed(weapon, victim, &physics, swept), 7.5);
+        assert_eq!(
+            closing_speed(weapon, victim, &physics, swept, STILL_PLAYER),
+            7.5
+        );
         // Neither body exists in this world, so an ordinary contact - which
         // reads the live bodies - has nothing to report.
         let _ = &mut physics;
@@ -493,7 +536,8 @@ mod tests {
                 weapon,
                 victim,
                 &physics,
-                head_on_contact(vec3(0.0, 0.0, 0.0))
+                head_on_contact(vec3(0.0, 0.0, 0.0)),
+                STILL_PLAYER
             ),
             0.0
         );
@@ -534,11 +578,83 @@ mod tests {
             victim,
             &physics,
             head_on_contact(vec3(0.5, 0.0, 0.0)),
+            STILL_PLAYER,
         );
 
         assert!(
             speed < gate,
             "walking pace must fall below the swing gate {gate}, read {speed}"
+        );
+    }
+
+    /// Walking a held weapon into something is not a swing. The weapon rides
+    /// the player, so its world velocity is the player's - measured at 10
+    /// units/s, five times the gate.
+    ///
+    /// Negative-first: without the player's motion divided out this reads the
+    /// full 10.
+    #[test]
+    fn walking_a_weapon_into_a_still_victim_is_not_a_swing() {
+        let gate = crate::dev_params::spec(crate::dev_params::MELEE_FREE_SWING_SPEED).default;
+        let mut physics = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        let walking = vec3(10.0, 0.0, 0.0);
+        moving_body(&mut physics, weapon, vec3(0.0, 0.0, 0.0), walking);
+        moving_body(
+            &mut physics,
+            victim,
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+        );
+
+        let speed = closing_speed(
+            weapon,
+            victim,
+            &physics,
+            head_on_contact(vec3(0.5, 0.0, 0.0)),
+            walking,
+        );
+
+        assert!(
+            speed < gate,
+            "a carried weapon must fall below the swing gate {gate}, read {speed}"
+        );
+    }
+
+    /// The other half: a real swing thrown while walking still bills, because
+    /// only the player's share comes out.
+    #[test]
+    fn swinging_while_walking_is_still_a_swing() {
+        let gate = crate::dev_params::spec(crate::dev_params::MELEE_FREE_SWING_SPEED).default;
+        let mut physics = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        let walking = vec3(10.0, 0.0, 0.0);
+        moving_body(
+            &mut physics,
+            weapon,
+            vec3(0.0, 0.0, 0.0),
+            walking + vec3(4.0, 0.0, 0.0),
+        );
+        moving_body(
+            &mut physics,
+            victim,
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+        );
+
+        let speed = closing_speed(
+            weapon,
+            victim,
+            &physics,
+            head_on_contact(vec3(0.5, 0.0, 0.0)),
+            walking,
+        );
+
+        assert!(
+            speed > gate,
+            "a swing thrown while walking must clear the gate {gate}, read {speed}"
         );
     }
 
@@ -568,11 +684,42 @@ mod tests {
             victim,
             &physics,
             head_on_contact(vec3(0.5, 0.0, 0.0)),
+            STILL_PLAYER,
         );
 
         assert!(
             speed > 2.5,
             "a charging victim must register as an impact, read {speed}"
+        );
+    }
+
+    /// Backing away from a creature that chases at the same speed: the weapon
+    /// and the victim keep station, so nothing is closing and nothing may be
+    /// billed - however fast both are travelling through the world.
+    ///
+    /// Negative-first: subtracting the player's motion from a world-frame
+    /// victim reads the full chase speed here.
+    #[test]
+    fn retreating_from_a_creature_that_keeps_pace_is_not_a_blow() {
+        let gate = crate::dev_params::spec(crate::dev_params::MELEE_FREE_SWING_SPEED).default;
+        let mut physics = PhysicsWorld::new();
+        let weapon = EntityId::from_inner(1).unwrap();
+        let victim = EntityId::from_inner(2).unwrap();
+        let retreat = vec3(-10.0, 0.0, 0.0);
+        moving_body(&mut physics, weapon, vec3(0.0, 0.0, 0.0), retreat);
+        moving_body(&mut physics, victim, vec3(1.0, 0.0, 0.0), retreat);
+
+        let speed = closing_speed(
+            weapon,
+            victim,
+            &physics,
+            head_on_contact(vec3(0.5, 0.0, 0.0)),
+            retreat,
+        );
+
+        assert!(
+            speed < gate,
+            "two bodies keeping station must fall below the swing gate {gate}, read {speed}"
         );
     }
 
@@ -603,6 +750,7 @@ mod tests {
             victim,
             &physics,
             head_on_contact(vec3(0.5, 0.0, 0.0)),
+            STILL_PLAYER,
         );
 
         assert!(

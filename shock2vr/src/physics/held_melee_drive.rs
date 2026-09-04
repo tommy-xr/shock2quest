@@ -445,6 +445,83 @@ fn melee_drive_trace() {
     }
 }
 
+/// Walking is not swinging. A held weapon rides the player, so a player who
+/// simply walks a still hand into a creature moves the weapon exactly as fast
+/// as a swing does - and billed the same authored blow for it.
+///
+/// Negative-first: with the player's own motion left in, the sweep reports the
+/// full walking speed here, five times the gate.
+#[test]
+fn walking_a_weapon_into_a_limb_is_not_a_swing() {
+    let (mut world, mut player) = world_with_floor();
+    let (weapon, _) = spawn_held_wrench(&mut world, vec3(0.0, 1.2, 0.0));
+
+    let limb = EntityId::from_inner(7).unwrap();
+    world.add_kinematic(
+        limb,
+        vec3(0.0, 1.2, 1.5),
+        identity_quat(),
+        Vector3::new(0.0, 0.0, 0.0),
+        vec3(0.6, 0.6, 0.6),
+        CollisionGroup::hitbox(),
+        false,
+    );
+
+    // The hand holds still in front of the player; the player walks it into
+    // the limb at the shipped walking speed (10 units/s at 60 Hz).
+    let step = 10.0 / 60.0;
+    let mut reported = None;
+    for frame in 0..30 {
+        let z = step * frame as f32;
+        world.set_position_rotation2(weapon, vec3(0.0, 1.2, z), identity_quat());
+        let (_, events) = world.update(vec3(0.0, 0.0, step), &mut player);
+        for event in events {
+            if let super::CollisionEvent::CollisionStarted {
+                entity1_id,
+                entity2_id,
+                contact: Some(contact),
+            } = event
+            {
+                if entity1_id == weapon && entity2_id == limb {
+                    reported = Some(contact);
+                }
+            }
+        }
+        if reported.is_some() {
+            break;
+        }
+    }
+
+    let contact = reported.expect("the carried weapon should still report the limb it stopped on");
+    let gate = crate::dev_params::spec(crate::dev_params::MELEE_FREE_SWING_SPEED).default;
+    let speed = contact.closing_speed.unwrap_or(0.0);
+    assert!(
+        speed < gate,
+        "walking must read below the swing gate {gate}, got {speed}"
+    );
+}
+
+/// A relocation is not travel. The swing gate divides the player's own motion
+/// out of a held weapon's, so a teleport that jumped the sampler would read as
+/// hundreds of units/s for a frame and bill a free blow on arrival.
+///
+/// Negative-first: without re-seating the sampler this reads the whole jump
+/// divided by one frame.
+#[test]
+fn relocating_the_player_is_not_player_velocity() {
+    let (mut world, mut player) = world_with_floor();
+    world.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+    world.set_player_translation(vec3(1050.0, 1000.0, 1000.0), &mut player);
+    world.update(vec3(0.0, 0.0, 0.0), &mut player);
+
+    let speed = world.player_velocity().magnitude();
+    assert!(
+        speed < 1.0,
+        "a relocation must not register as player velocity, read {speed}"
+    );
+}
+
 /// A swing stopped by a limb reports the blow, and reports it pointing the way
 /// the weapon was going. The contact's normal drives the killing blow's ragdoll
 /// impulse (`rag_doll::apply_killing_blow`), so an inverted one throws the
