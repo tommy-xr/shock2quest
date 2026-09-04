@@ -12,11 +12,15 @@ import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
 //   corpse 1680 --Contains(0)--> Amanpour Log 1608
 //   hand trigger -> corpse ContainerGui world panel
 //   hand trigger on the rendered slot -> LogDiscScript collection
-//   Quest Y's semantic action -> player-owned MediaGui world panel
+//   Quest Y's semantic action -> the cyber interface, opened onto the reader
 //
 // Negative-first on PR #967's head: collection auto-plays LOG0220, the semantic
 // action marks it read and plays it again, but the corpse panel stays active and
 // no VR transcript ever renders. There is also no Oculus Y binding.
+//
+// Negative-first again for the cyber-interface surface: before that change Y
+// spawned a bespoke reader world quad, so `ui.mode` stayed "shooter" and the
+// reader carried its own `ui` collision body - both asserted against below.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const AMANPOUR_CORPSE = 1680;
@@ -108,8 +112,19 @@ async function collectAmanpourThroughVrCorpse(game: GameServer): Promise<void> {
 }
 
 async function assertAmanpourReader(game: GameServer): Promise<UiPanel> {
-  const panel = (await game.ui.state()).active_panel;
+  const ui = await game.ui.state();
+  const panel = ui.active_panel;
   assert.ok(panel, "ReadLastUnreadLog must expose the active VR MediaGui panel");
+  assert.equal(
+    ui.mode,
+    "use",
+    "Y must open the cyber interface, not a bespoke reader quad",
+  );
+  assert.ok(ui.strip, "the cyber interface binds the inventory strip either way in");
+  assert.ok(
+    ui.panel_pose,
+    "the reader must ride the head-anchored cyber-interface panel",
+  );
   assert.equal(panel.template_id, -1, "the reader must use its player-owned host");
   const text = panelText(panel);
   assert.ok(text.includes("45100"), `reader transcript must visibly contain 45100: ${text}`);
@@ -120,7 +135,11 @@ async function assertAmanpourReader(game: GameServer): Promise<UiPanel> {
   assert.ok(textures.includes("iface/log.pcx"));
   assert.ok(textures.includes("amanpour.pcx") || textures.includes("amanpour.png"));
   assert.ok(textures.includes("medicon.pcx") || textures.includes("medicon.png"));
-  assert.equal((await uiBodies(game)).length, 1, "reader must replace, not overlap, corpse UI");
+  assert.equal(
+    (await uiBodies(game)).length,
+    0,
+    "the reader is the shared canvas on the cyber-interface panel - no world quad",
+  );
   return panel;
 }
 
@@ -151,16 +170,29 @@ test(
     assert.equal(await log0220Count(game), beforeCollectionAudio + 1);
     await game.screenshot("vr-amanpour-reader-45100.png");
 
-    // Quest Y toggles the reader closed, then reopens/replays the latest entry
-    // even though it is already read.
+    // Quest Y toggles the reader closed. Y opened the interface, so Y closes
+    // all of it - and the log's audio is left playing rather than cut.
     await game.input.trigger("ReadLastUnreadLog");
     await game.step({ frames: 5 });
-    assert.equal((await game.ui.state()).active_panel, null);
+    const closed = await game.ui.state();
+    assert.equal(closed.active_panel, null);
+    assert.equal(closed.mode, "shooter", "Y-again must close the interface Y opened");
+    assert.equal(closed.strip, null);
     assert.equal((await uiBodies(game)).length, 0);
+    assert.equal(
+      await log0220Count(game),
+      beforeCollectionAudio + 1,
+      "closing the reader must not stop or restart the log audio",
+    );
+
+    // Reopens/replays the latest entry even though it is already read.
     await game.input.trigger("ReadLastUnreadLog");
     await game.step({ frames: 5 });
     await assertAmanpourReader(game);
     assert.equal(await log0220Count(game), beforeCollectionAudio + 2);
+    await game.input.trigger("ReadLastUnreadLog");
+    await game.step({ frames: 5 });
+    assert.equal((await game.ui.state()).mode, "shooter");
 
     const saveName = `issue921_vr_log_${Date.now()}`;
     assert.equal((await game.save(saveName)).success, true);
@@ -177,16 +209,53 @@ test(
     await game.input.trigger("ReadLastUnreadLog");
     await game.step({ frames: 5 });
     await assertAmanpourReader(game);
+    await game.input.trigger("ReadLastUnreadLog");
+    await game.step({ frames: 5 });
+    assert.equal((await game.ui.state()).mode, "shooter");
 
-    // Left-X (now the cyber-interface use-mode toggle - the world-quad
-    // backpack it used to open is gone) stays independent of Y: it brings up
-    // the use-mode strip without disturbing the reader lifecycle, and
-    // toggles away cleanly.
+    // Left-X (the cyber-interface use-mode toggle) opens the same interface
+    // deliberately, onto the inventory rather than a reader.
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
-    const ui = await game.ui.state();
-    assert.equal(ui.mode, "use", "Quest X must open the cyber interface");
-    assert.ok(ui.strip, "the cyber interface must bind the inventory strip");
+    const opened = await game.ui.state();
+    assert.equal(opened.mode, "use", "Quest X must open the cyber interface");
+    assert.ok(opened.strip, "the cyber interface must bind the inventory strip");
+    assert.equal(opened.active_panel, null, "X opens onto the inventory, not a reader");
+
+    // Edge policy: Y inside an interface the player already opened switches the
+    // panel slot to the reader (flat's semantics - the reader is an MFD over the
+    // strip), and Y again puts only the reader away, leaving the interface up.
+    await game.input.trigger("ReadLastUnreadLog");
+    await game.step({ frames: 5 });
+    await assertAmanpourReader(game);
+    // X out with the reader still bound: leaving the mode must release the
+    // panel slot too, or `/v1/ui` keeps reporting a reader nothing presents.
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    const exited = await game.ui.state();
+    assert.equal(exited.mode, "shooter");
+    assert.equal(
+      exited.active_panel,
+      null,
+      "leaving the interface must not orphan the reader in the panel slot",
+    );
+
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    await game.input.trigger("ReadLastUnreadLog");
+    await game.step({ frames: 5 });
+    await assertAmanpourReader(game);
+    await game.input.trigger("ReadLastUnreadLog");
+    await game.step({ frames: 5 });
+    const backToStrip = await game.ui.state();
+    assert.equal(backToStrip.active_panel, null, "Y-again dismisses the reader");
+    assert.equal(
+      backToStrip.mode,
+      "use",
+      "an interface the player opened with X must survive dismissing the reader",
+    );
+    assert.ok(backToStrip.strip);
+
     await game.input.trigger("ToggleUseMode");
     await game.step({ frames: 5 });
     assert.equal((await game.ui.state()).mode, "shooter");

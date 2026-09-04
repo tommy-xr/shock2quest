@@ -29,6 +29,19 @@ pub const DEFAULT_ENTRY_EXIT: RampParams = RampParams {
     fov_pull_deg: 6.0,
 };
 
+/// Opening straight onto the log reader (Quest's Y button): the same
+/// interface, but reached in passing rather than deliberately jacked into.
+/// Reading a log is something the player does mid-corridor, often repeatedly,
+/// so the ramp is shorter and lighter than [`DEFAULT_ENTRY_EXIT`] on every
+/// axis - enough to say "the world stepped back", not enough to feel like a
+/// scene change each time.
+pub const LOG_READER_ENTRY_EXIT: RampParams = RampParams {
+    attack_secs: 0.18,
+    release_secs: 0.14,
+    vignette_peak: 0.28,
+    fov_pull_deg: 3.0,
+};
+
 /// The rim tint blended in for the cyber interface - a cool cyan rather than
 /// [`crate::hit_feedback`]'s arterial red, so the two read as different
 /// things when they land on screen together.
@@ -274,6 +287,34 @@ mod tests {
         assert_eq!(ramp.progress(), before);
         ramp.update(0.0);
         assert_eq!(ramp.progress(), before);
+    }
+
+    /// The log-reader shortcut must actually be the softer, shorter variant -
+    /// if it ever equals the deliberate open, the "different `RampParams`"
+    /// the caller builds is decoration.
+    #[test]
+    fn the_log_reader_ramp_is_shorter_and_softer_than_the_deliberate_open() {
+        assert!(LOG_READER_ENTRY_EXIT.attack_secs < DEFAULT_ENTRY_EXIT.attack_secs);
+        assert!(LOG_READER_ENTRY_EXIT.release_secs < DEFAULT_ENTRY_EXIT.release_secs);
+        assert!(LOG_READER_ENTRY_EXIT.vignette_peak < DEFAULT_ENTRY_EXIT.vignette_peak);
+        assert!(LOG_READER_ENTRY_EXIT.fov_pull_deg < DEFAULT_ENTRY_EXIT.fov_pull_deg);
+        assert!(LOG_READER_ENTRY_EXIT.attack_secs > 0.0);
+        assert!(LOG_READER_ENTRY_EXIT.release_secs > 0.0);
+    }
+
+    /// And the ramp must honor those params rather than the default it was
+    /// constructed with: half a log-reader attack is already past half a
+    /// *default* attack.
+    #[test]
+    fn opening_with_the_log_reader_params_uses_their_timing() {
+        let mut ramp = EntryExitRamp::new();
+        ramp.open(LOG_READER_ENTRY_EXIT);
+        ramp.update(LOG_READER_ENTRY_EXIT.attack_secs);
+        assert_eq!(ramp.progress(), 1.0);
+        assert_eq!(
+            ramp.vignette_intensity(),
+            LOG_READER_ENTRY_EXIT.vignette_peak
+        );
     }
 
     #[test]

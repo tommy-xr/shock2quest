@@ -310,12 +310,11 @@ pub enum Effect {
     /// once all are read. Opens the localized player-owned reader before
     /// marking it read and playing its `LOG<dd><nn>` audio. No-op only when the
     /// collection is empty or the authored transcript is unavailable.
-    ReadLastUnreadLog {
-        /// Head rotation at the input edge. VR uses it to place the
-        /// player-owned reader comfortably in the player's current gaze;
-        /// flat presentation ignores it.
-        head_rotation: Quaternion<f32>,
-    },
+    /// Carries no payload: both presentations place the reader from state
+    /// they already own - flat's MFD slot, and VR's head-anchored cyber-
+    /// interface anchor, which tracks the live head pose rather than a
+    /// rotation sampled at the input edge.
+    ReadLastUnreadLog,
 
     /// Toggle the flat-mode automap panel (the original's BIOFULL MAP button /
     /// `M` key, `kOverlayMap 26`). Opens the wide map MFD bound to the
