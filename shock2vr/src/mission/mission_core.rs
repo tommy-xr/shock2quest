@@ -8576,22 +8576,22 @@ impl MissionCore {
     /// Where `weapon`'s magazine zone is centred in the world: its per-model
     /// anchor (`vr_config`) carried by the live transform.
     fn magazine_anchor_world(&self, weapon: EntityId) -> Option<Vector3<f32>> {
-        use cgmath::Transform as _;
         let anchor = crate::vr_config::magazine_anchor_from_entity(&self.world, weapon);
-        let transforms = self.world.borrow::<View<RuntimePropTransform>>().ok()?;
-        let transform = transforms.get(weapon).ok()?;
-        Some(crate::util::point3_to_vec3(
-            transform.0.transform_point(Point3::from_vec(anchor)),
-        ))
+        self.entity_point_world(weapon, anchor)
     }
 
     /// The world position of `entity`'s live transform.
     fn entity_world_position(&self, entity: EntityId) -> Option<Vector3<f32>> {
+        self.entity_point_world(entity, vec3(0.0, 0.0, 0.0))
+    }
+
+    /// A point in `entity`'s local frame, carried by its live transform.
+    fn entity_point_world(&self, entity: EntityId, local: Vector3<f32>) -> Option<Vector3<f32>> {
         use cgmath::Transform as _;
         let transforms = self.world.borrow::<View<RuntimePropTransform>>().ok()?;
         let transform = transforms.get(entity).ok()?;
         Some(crate::util::point3_to_vec3(
-            transform.0.transform_point(Point3::new(0.0, 0.0, 0.0)),
+            transform.0.transform_point(Point3::from_vec(local)),
         ))
     }
 

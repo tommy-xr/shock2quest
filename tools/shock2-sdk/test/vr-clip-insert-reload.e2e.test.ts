@@ -9,6 +9,7 @@ import {
   add,
   quatConjugate,
   quatRotate,
+  scale,
   sub,
   type Quat,
 } from "./helpers/vr-hand.js";
@@ -283,7 +284,7 @@ test(
       (await entityById(game, pistol.id))!.position as Vec3,
     );
     assert.ok(
-      magnitude(anchorOffset) > 0.1,
+      2 * magnitude(anchorOffset) > CLIP_INSERT_EXIT_RADIUS,
       `the pistol's magazine anchor must sit off its origin (offset ${JSON.stringify(anchorOffset)})`,
     );
     // The debug pistol spawns with a FULL magazine, so what it holds now is its
@@ -305,8 +306,28 @@ test(
       clip.rounds >= capacity,
       `this scenario needs a clip that can fill the magazine (${clip.rounds} vs ${capacity})`,
     );
-    const parked = await takeClipIntoOffHand(game, clip.id, pistol.id);
+    let parked = await takeClipIntoOffHand(game, clip.id, pistol.id);
     const before = await lastSound(game);
+
+    // The zone moved with the anchor: the point mirrored across the model
+    // origin is twice the anchor's offset from it - reaching it must NOT
+    // load. Approached along the ray out of the anchor (from well beyond the
+    // mirror point), so the clip never strays inside the zone on the way.
+    const alongAnchorRay = async (steps: number): Promise<Vec3> =>
+      sub(await magazineAnchor(game, pistol.id), scale(anchorOffset, steps));
+    const far = await steerHeldClip(game, "left", parked, clip.id, () =>
+      alongAnchorRay(8),
+    );
+    const mirrored = await steerHeldClip(game, "left", far.handPosition, clip.id, () =>
+      alongAnchorRay(2),
+    );
+    await game.step({ frames: 5 });
+    assert.equal(
+      ammoOf(await game.entities.detail(pistol.id)),
+      0,
+      "a clip carried to the far side of the gun's origin must miss the magazine",
+    );
+    parked = mirrored.handPosition;
 
     await insertClip(game, parked, clip.id, pistol.id);
 

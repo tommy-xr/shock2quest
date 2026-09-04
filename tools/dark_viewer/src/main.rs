@@ -291,6 +291,12 @@ pub fn main() {
         println!("Debug no-render mode enabled.");
     }
 
+    // A model dump needs the asset mounts and nothing else: no audio device,
+    // no window, no GL - so it runs headless (and exits nonzero on failure).
+    if cli.debug_subobjects {
+        std::process::exit(print_sub_objects(&filename));
+    }
+
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
     tracing_subscriber::fmt::init();
@@ -332,11 +338,6 @@ pub fn main() {
     let engine = engine::opengl();
     let bundle_storage = engine.get_storage();
     let mut game = shock2vr::Game::init(GameOptions::default(), bundle_storage);
-
-    if cli.debug_subobjects {
-        print_sub_objects(&filename, &game.asset_cache);
-        return;
-    }
 
     if cli.debug_no_render {
         match create_scene(
@@ -457,17 +458,29 @@ fn process_events(
 }
 
 /// `--debug-subobjects`: dump a .bin object model's sub-objects and their
-/// model-space bounds, so an anchor can be read off the art.
-fn print_sub_objects(filename: &str, asset_cache: &engine::assets::asset_cache::AssetCache) {
+/// model-space bounds, so an anchor can be read off the art. Returns the
+/// process exit code.
+fn print_sub_objects(filename: &str) -> i32 {
+    let storage =
+        engine::file_system::storage::init(Box::new(engine::file_system::DefaultFileSystem {
+            root_path: Box::new(std::path::Path::new("./assets/")),
+        }));
+    let asset_cache = engine::assets::asset_cache::AssetCache::new(
+        shock2vr::paths::data_root().to_string_lossy().into_owned(),
+        shock2vr::game_asset_mounts(storage),
+    );
     let Some(reader) = asset_cache.get_raw_reader(filename) else {
-        println!("Could not open {filename}");
-        return;
+        eprintln!("Could not open {filename}");
+        return 1;
     };
     let mut reader = reader.borrow_mut();
     let common_header = dark::ss2_bin_header::read(&mut *reader);
-    if !matches!(common_header.bin_type, dark::ss2_bin_header::BinFileType::Obj) {
-        println!("{filename} is not an object (.bin LGMD) model");
-        return;
+    if !matches!(
+        common_header.bin_type,
+        dark::ss2_bin_header::BinFileType::Obj
+    ) {
+        eprintln!("{filename} is not an object (.bin LGMD) model");
+        return 1;
     }
     let mesh = dark::ss2_bin_obj_loader::read(&mut *reader, &common_header);
     let bb = mesh.bounding_box;
@@ -484,4 +497,5 @@ fn print_sub_objects(filename: &str, asset_cache: &engine::assets::asset_cache::
             None => println!("  {name:<16} (no vertices)"),
         }
     }
+    0
 }
