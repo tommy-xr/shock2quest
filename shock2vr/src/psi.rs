@@ -58,6 +58,11 @@ pub const ACTIVATION_TYPE_INSTANT: i32 = 2;
 /// the caster.
 pub const PSI_HEAL_TEMPLATE_ID: i32 = -1017;
 
+/// `Major Heal` - Advanced Cerebro-stimulated Regeneration (tier 5 instant
+/// power): the large version of [`PSI_HEAL_TEMPLATE_ID`] - same script, same
+/// `data` shape, bigger numbers.
+pub const MAJOR_HEAL_TEMPLATE_ID: i32 = -1139;
+
 /// The powers that support hold-to-overload (per the published gameplay
 /// tables), by template id. Comments give the gamesys name and the
 /// discipline name players know it by.
