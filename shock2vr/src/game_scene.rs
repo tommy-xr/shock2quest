@@ -158,6 +158,12 @@ pub trait GameScene {
         false
     }
 
+    /// Whether a VR hand is holding a climb hold (see `crate::vr_climb`).
+    /// VR runtimes freeze their physical-crouch detector while it is true.
+    fn player_is_gripping(&self) -> bool {
+        false
+    }
+
     /// Degrees to pull the flat FOV in by this frame (subtracted from the
     /// base FOV), eased over a personal-UI mode's entry/exit ramp - see the
     /// cyber interface's `ui::entry_ramp`. Implementations must return 0 in

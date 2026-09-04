@@ -4,7 +4,9 @@
 //! State only - the grip probe and the resulting body motion belong to
 //! `physics`. Owned by `VrInteraction`, which already drives both hands.
 
-use cgmath::{InnerSpace, Quaternion, Vector3};
+use std::collections::VecDeque;
+
+use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, Zero};
 
 use crate::{physics::ClimbGrip, virtual_hand::hand_world_position, vr_config::Handedness};
 
@@ -13,6 +15,61 @@ use crate::{physics::ClimbGrip, virtual_hand::hand_world_position, vr_config::Ha
 /// frame at exactly the offset the hand opened up, so a persistent gap means
 /// something blocked it. Roughly Dark's 2 ft climb-detach distance.
 pub const CLIMB_STRETCH_BREAK: f32 = 0.6;
+
+/// How many frames of hand travel a release averages over. Long enough to ride
+/// out one noisy tracked frame, short enough to still read as the flick the
+/// player just made.
+const RELEASE_SAMPLE_FRAMES: usize = 4;
+
+/// Ceiling on the speed a release throws the body with (world units/s).
+pub(crate) const CLIMB_RELEASE_MAX_SPEED: f32 = 12.0;
+
+/// Tighter ceiling on the UPWARD component, at the ordinary jump's own launch
+/// speed: a haul-and-let-go can never rise higher than a jump, so it can never
+/// drop the player further than a jump either (SS2 scores falls - issue #802).
+pub(crate) const CLIMB_RELEASE_MAX_UP_SPEED: f32 = crate::physics::PLAYER_JUMP_LAUNCH_SPEED;
+
+/// Below this a release is just letting go: not worth putting the body into a
+/// ballistic arc (world units/s).
+pub(crate) const CLIMB_RELEASE_MIN_SPEED: f32 = 0.5;
+
+/// The body velocity a release throws the player with, from the anchor hand's
+/// recent per-frame travel relative to the pawn (newest last).
+///
+/// Negated: a hand hauled DOWN past the body throws the body up, the VR
+/// climbing convention (Climbey, Boneworks, Stride). `None` when there is
+/// nothing to throw with.
+///
+/// `step_dt` is the timestep the resulting arc will be INTEGRATED with, not
+/// the wall clock: one sample of travel per game update becomes one physics
+/// step of flight, so dividing by anything else makes the throw faster or
+/// slower than the pull that produced it at any frame rate but 60 Hz.
+pub(crate) fn release_velocity(travel: &[Vector3<f32>], step_dt: f32) -> Option<Vector3<f32>> {
+    if travel.is_empty() || step_dt <= 0.0 {
+        return None;
+    }
+    let mean = travel
+        .iter()
+        .fold(Vector3::zero(), |sum, delta| sum + delta)
+        / travel.len() as f32;
+    let mut velocity = -mean / step_dt;
+    let speed = velocity.magnitude();
+    if speed > CLIMB_RELEASE_MAX_SPEED {
+        velocity *= CLIMB_RELEASE_MAX_SPEED / speed;
+    }
+    velocity.y = velocity.y.min(CLIMB_RELEASE_MAX_UP_SPEED);
+    (velocity.magnitude() > CLIMB_RELEASE_MIN_SPEED).then_some(velocity)
+}
+
+/// What one frame of hand climbing asks of the body.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClimbFrame {
+    /// Body translation the anchor hand demands, or `None` when no hand holds.
+    pub translation: Option<Vector3<f32>>,
+    /// Velocity to launch the body with, set on the frame the LAST hold is
+    /// voluntarily released (see [`release_velocity`]).
+    pub launch: Option<Vector3<f32>>,
+}
 
 /// One hand's hold: what it grabbed, and where the hand was in the world when
 /// it did. The body is moved to keep the hand back at that point.
@@ -63,6 +120,12 @@ pub struct HandClimb {
     /// lost its hold (over-stretched, or the object went away) must not
     /// silently re-grab while the same squeeze is still held.
     was_squeezing: [bool; 2],
+    /// The anchor hand's recent travel relative to the pawn, in world axes,
+    /// newest last - the pull, which a release throws the body with. Cleared
+    /// when the anchor changes: the history belongs to the hand that made it.
+    recent_anchor_travel: VecDeque<Vector3<f32>>,
+    /// That hand's pawn-space position last frame, to difference against.
+    last_anchor_local: Option<Vector3<f32>>,
 }
 
 impl HandClimb {
@@ -76,13 +139,37 @@ impl HandClimb {
         &mut self,
         pawn_pos: Vector3<f32>,
         pawn_rotation: Quaternion<f32>,
+        step_dt: f32,
         hands: [ClimbHandInput; 2],
         probe: impl Fn(Vector3<f32>) -> Option<ClimbGrip>,
         is_alive: impl Fn(shipyard::EntityId) -> bool,
-    ) -> Option<Vector3<f32>> {
+    ) -> ClimbFrame {
+        let previous_anchor = self.anchor;
+        let had_a_hold = self.grips.iter().any(Option::is_some);
+        // Per hand: was this the player opening their hand? A hold torn off by
+        // an over-stretched (blocked) body, or by the entity going away,
+        // recorded travel that was the body failing to follow, not a pull -
+        // and one hand's break must not swallow the other hand's throw.
+        let mut let_go_cleanly = [true; 2];
         let hand_world = hands
             .each_ref()
             .map(|hand| hand_world_position(pawn_pos, pawn_rotation, hand.local_position));
+
+        // Sample the anchor's travel BEFORE the releases below, so the flick
+        // on the very frame the hand opens is part of what throws the body.
+        if let Some(hand) = previous_anchor {
+            let local = hands[slot(hand)].local_position;
+            match self.last_anchor_local.replace(local) {
+                Some(previous) => {
+                    if self.recent_anchor_travel.len() == RELEASE_SAMPLE_FRAMES {
+                        self.recent_anchor_travel.pop_front();
+                    }
+                    self.recent_anchor_travel
+                        .push_back(pawn_rotation.rotate_vector(local - previous));
+                }
+                None => self.recent_anchor_travel.clear(),
+            }
+        }
 
         for (index, hand) in hands.iter().enumerate() {
             let squeezing = hand.squeeze > crate::ui::VR_TRIGGER_THRESHOLD;
@@ -98,6 +185,7 @@ impl HandClimb {
                     // go of the ladder rather than holding both.
                     if !squeezing || !hand.is_empty || over_stretched || gone {
                         self.grips[index] = None;
+                        let_go_cleanly[index] = !squeezing && !over_stretched && !gone;
                     }
                 }
                 None if squeezing && !was_squeezing && hand.is_empty => {
@@ -130,14 +218,36 @@ impl HandClimb {
             }
         }
 
-        let index = slot(self.anchor?);
-        let anchor = self.grips[index]?;
-        Some(anchored_body_translation(
-            anchor.hand_world_at_grab,
-            pawn_pos,
-            pawn_rotation,
-            hands[index].local_position,
-        ))
+        let launch = if had_a_hold
+            && self.anchor.is_none()
+            && previous_anchor.is_some_and(|hand| let_go_cleanly[slot(hand)])
+        {
+            release_velocity(self.recent_anchor_travel.make_contiguous(), step_dt)
+        } else {
+            None
+        };
+
+        // A new anchor starts a fresh history: the travel so far is the other
+        // hand's, and a re-based hold is a new pull.
+        if self.anchor != previous_anchor {
+            self.recent_anchor_travel.clear();
+            self.last_anchor_local = self.anchor.map(|hand| hands[slot(hand)].local_position);
+        }
+
+        let translation = self.anchor.and_then(|hand| {
+            let index = slot(hand);
+            let anchor = self.grips[index]?;
+            Some(anchored_body_translation(
+                anchor.hand_world_at_grab,
+                pawn_pos,
+                pawn_rotation,
+                hands[index].local_position,
+            ))
+        });
+        ClimbFrame {
+            translation,
+            launch,
+        }
     }
 
     /// The hand currently moving the body, if any.
@@ -159,6 +269,9 @@ mod tests {
     use super::*;
     use crate::physics::{ClimbGrip, ClimbGripKind};
     use cgmath::{Rotation3, Zero, vec3};
+
+    /// One 60 Hz frame.
+    const DT: f32 = 1.0 / 60.0;
 
     fn ladder_grip(point: Vector3<f32>) -> ClimbGrip {
         ClimbGrip {
@@ -182,8 +295,10 @@ mod tests {
     }
 
     #[track_caller]
-    fn assert_translation(actual: Option<Vector3<f32>>, expected: Vector3<f32>) {
-        let actual = actual.expect("expected a gripping hand to move the body");
+    fn assert_translation(actual: ClimbFrame, expected: Vector3<f32>) {
+        let actual = actual
+            .translation
+            .expect("expected a gripping hand to move the body");
         assert!(
             (actual - expected).magnitude() < 1.0e-5,
             "expected {expected:?}, got {actual:?}"
@@ -231,6 +346,7 @@ mod tests {
         let first = climb.update(
             pawn,
             identity,
+            DT,
             [no_hand(), hand(reach, 1.0)],
             |point| Some(ladder_grip(point)),
             |_| true,
@@ -242,6 +358,7 @@ mod tests {
         let pull = climb.update(
             pawn,
             identity,
+            DT,
             [no_hand(), hand(reach - vec3(0.0, 0.4, 0.0), 1.0)],
             |_| None,
             |_| true,
@@ -252,11 +369,12 @@ mod tests {
         let released = climb.update(
             pawn,
             identity,
+            DT,
             [no_hand(), hand(reach, 0.0)],
             |_| None,
             |_| true,
         );
-        assert_eq!(released, None);
+        assert_eq!(released.translation, None);
         assert_eq!(climb.anchor(), None);
         assert_eq!(climb.grips().count(), 0);
     }
@@ -271,26 +389,32 @@ mod tests {
         let mut full = hand(reach, 1.0);
         full.is_empty = false;
         assert_eq!(
-            climb.update(
-                pawn,
-                identity,
-                [no_hand(), full],
-                |p| Some(ladder_grip(p)),
-                |_| true
-            ),
+            climb
+                .update(
+                    pawn,
+                    identity,
+                    DT,
+                    [no_hand(), full],
+                    |p| Some(ladder_grip(p)),
+                    |_| true
+                )
+                .translation,
             None,
         );
 
         // The squeeze was already down last frame, so an empty hand arriving
         // now still needs a fresh press.
         assert_eq!(
-            climb.update(
-                pawn,
-                identity,
-                [no_hand(), hand(reach, 1.0)],
-                |p| Some(ladder_grip(p)),
-                |_| true
-            ),
+            climb
+                .update(
+                    pawn,
+                    identity,
+                    DT,
+                    [no_hand(), hand(reach, 1.0)],
+                    |p| Some(ladder_grip(p)),
+                    |_| true
+                )
+                .translation,
             None,
         );
     }
@@ -304,6 +428,7 @@ mod tests {
         climb.update(
             pawn,
             identity,
+            DT,
             [no_hand(), hand(reach, 1.0)],
             |p| Some(ladder_grip(p)),
             |_| true,
@@ -314,6 +439,7 @@ mod tests {
         let held = climb.update(
             pawn,
             identity,
+            DT,
             [
                 no_hand(),
                 hand(reach - vec3(0.0, CLIMB_STRETCH_BREAK - 0.05, 0.0), 1.0),
@@ -321,20 +447,23 @@ mod tests {
             |_| None,
             |_| true,
         );
-        assert!(held.is_some());
+        assert!(held.translation.is_some());
 
         // ... and past it the hand comes off.
         assert_eq!(
-            climb.update(
-                pawn,
-                identity,
-                [
-                    no_hand(),
-                    hand(reach - vec3(0.0, CLIMB_STRETCH_BREAK + 0.05, 0.0), 1.0)
-                ],
-                |_| None,
-                |_| true
-            ),
+            climb
+                .update(
+                    pawn,
+                    identity,
+                    DT,
+                    [
+                        no_hand(),
+                        hand(reach - vec3(0.0, CLIMB_STRETCH_BREAK + 0.05, 0.0), 1.0)
+                    ],
+                    |_| None,
+                    |_| true
+                )
+                .translation,
             None,
         );
     }
@@ -350,6 +479,7 @@ mod tests {
         climb.update(
             pawn,
             identity,
+            DT,
             [no_hand(), hand(right, 1.0)],
             |p| Some(ladder_grip(p)),
             |_| true,
@@ -357,6 +487,7 @@ mod tests {
         climb.update(
             pawn,
             identity,
+            DT,
             [hand(left, 1.0), hand(right, 1.0)],
             |p| Some(ladder_grip(p)),
             |_| true,
@@ -369,6 +500,7 @@ mod tests {
         climb.update(
             pawn,
             identity,
+            DT,
             [hand(left + travel, 1.0), hand(right + travel, 1.0)],
             |_| None,
             |_| true,
@@ -379,6 +511,7 @@ mod tests {
         let handoff = climb.update(
             pawn,
             identity,
+            DT,
             [hand(left + travel, 0.0), hand(right + travel, 1.0)],
             |_| None,
             |_| true,
@@ -390,6 +523,7 @@ mod tests {
         let after = climb.update(
             pawn,
             identity,
+            DT,
             [
                 hand(left + travel, 0.0),
                 hand(right + travel - vec3(0.0, 0.2, 0.0), 1.0),
@@ -398,6 +532,174 @@ mod tests {
             |_| true,
         );
         assert_translation(after, vec3(0.0, 0.2, 0.0));
+    }
+
+    #[test]
+    fn a_release_throws_the_body_against_the_pull() {
+        // A hand hauled down 0.1 wu per frame throws the body up at 6 wu/s.
+        let velocity = release_velocity(&[vec3(0.0, -0.1, 0.0); 4], DT)
+            .expect("a real pull should throw the body");
+        assert!(
+            (velocity - vec3(0.0, 6.0, 0.0)).magnitude() < 1.0e-4,
+            "{velocity:?}"
+        );
+
+        // The mean is what counts: one frame of tracking noise cannot double it.
+        let averaged = release_velocity(
+            &[
+                vec3(0.0, -0.1, 0.0),
+                vec3(0.0, -0.3, 0.0),
+                vec3(0.0, -0.1, 0.0),
+                vec3(0.0, 0.1, 0.0),
+            ],
+            DT,
+        )
+        .expect("a real pull should throw the body");
+        assert!((averaged.y - 6.0).abs() < 1.0e-4, "{averaged:?}");
+    }
+
+    #[test]
+    fn a_release_is_clamped_to_jump_speed_and_never_lofts_higher() {
+        // A yank far faster than anything a jump does.
+        let sideways = release_velocity(&[vec3(-1.0, 0.0, 0.0)], DT).unwrap();
+        assert!(
+            (sideways.magnitude() - CLIMB_RELEASE_MAX_SPEED).abs() < 1.0e-4,
+            "{sideways:?}"
+        );
+        assert!(sideways.x > 0.0, "the throw opposes the pull: {sideways:?}");
+
+        // The up cap is tighter than the magnitude clamp, so a near-vertical
+        // yank loses the excess rise and keeps its horizontal reach.
+        let steep = release_velocity(&[vec3(0.0, -1.0, -0.15)], DT).unwrap();
+        assert!(
+            (steep.y - CLIMB_RELEASE_MAX_UP_SPEED).abs() < 1.0e-4,
+            "{steep:?}"
+        );
+        assert!(steep.z > 1.0, "{steep:?}");
+    }
+
+    #[test]
+    fn barely_moving_hands_and_a_frozen_frame_throw_nothing() {
+        assert_eq!(release_velocity(&[vec3(0.0, -0.001, 0.0); 4], DT), None);
+        assert_eq!(release_velocity(&[], DT), None);
+        assert_eq!(release_velocity(&[vec3(0.0, -0.1, 0.0)], 0.0), None);
+    }
+
+    /// Grab, pull `travel` per frame for `frames`, then end the grip the way
+    /// `finish` says. Returns the frame the last hold came off on.
+    fn pull_and_finish(
+        frames: usize,
+        travel: Vector3<f32>,
+        mut finish: impl FnMut(&mut HandClimb, Vector3<f32>) -> ClimbFrame,
+    ) -> ClimbFrame {
+        let mut climb = HandClimb::default();
+        let pawn = Vector3::zero();
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let reach = vec3(0.0, 1.0, -1.0);
+        climb.update(
+            pawn,
+            identity,
+            DT,
+            [no_hand(), hand(reach, 1.0)],
+            |p| Some(ladder_grip(p)),
+            |_| true,
+        );
+        let mut at = reach;
+        for _ in 0..frames {
+            at += travel;
+            climb.update(
+                pawn,
+                identity,
+                DT,
+                [no_hand(), hand(at, 1.0)],
+                |_| None,
+                |_| true,
+            );
+        }
+        finish(&mut climb, at)
+    }
+
+    fn open_the_hand(climb: &mut HandClimb, at: Vector3<f32>) -> ClimbFrame {
+        climb.update(
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            DT,
+            [no_hand(), hand(at, 0.0)],
+            |_| None,
+            |_| true,
+        )
+    }
+
+    #[test]
+    fn letting_go_of_the_last_hold_launches_the_body() {
+        // A quick haul: 0.1 wu of hand travel per frame, let go mid-pull.
+        let released = pull_and_finish(4, vec3(0.0, -0.1, 0.0), |climb, at| {
+            open_the_hand(climb, at + vec3(0.0, -0.1, 0.0))
+        });
+        let launch = released.launch.expect("a quick pull should launch");
+        assert!((launch.y - 6.0).abs() < 0.1, "{launch:?}");
+        assert_eq!(released.translation, None);
+
+        // Stopping the hand before opening it is part of the pull: the same
+        // haul, released from rest, throws proportionally less.
+        let stopped = pull_and_finish(4, vec3(0.0, -0.1, 0.0), open_the_hand);
+        let stopped = stopped.launch.expect("a quick pull should launch");
+        assert!(stopped.y > 0.0 && stopped.y < launch.y, "{stopped:?}");
+    }
+
+    #[test]
+    fn a_grip_torn_off_by_a_blocked_body_launches_nothing() {
+        // Same hand travel, but the body never followed: the hand ran past the
+        // stretch break instead of being opened, so the "pull" was the body
+        // failing to move and there is nothing to throw it with.
+        let mut broke = ClimbFrame::default();
+        pull_and_finish(
+            (CLIMB_STRETCH_BREAK / 0.1) as usize + 2,
+            vec3(0.0, -0.1, 0.0),
+            |climb, at| {
+                broke = climb.update(
+                    Vector3::zero(),
+                    Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                    DT,
+                    [no_hand(), hand(at, 1.0)],
+                    |_| None,
+                    |_| true,
+                );
+                broke
+            },
+        );
+        assert_eq!(broke.translation, None, "the grip should have broken");
+        assert_eq!(broke.launch, None);
+    }
+
+    #[test]
+    fn handing_over_to_the_other_hand_is_not_a_release() {
+        let mut climb = HandClimb::default();
+        let pawn = Vector3::zero();
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let right = vec3(0.3, 1.0, -1.0);
+        let left = vec3(-0.3, 1.6, -1.0);
+        let step = |climb: &mut HandClimb, hands: [ClimbHandInput; 2], probe: bool| {
+            climb.update(
+                pawn,
+                identity,
+                DT,
+                hands,
+                |p| probe.then(|| ladder_grip(p)),
+                |_| true,
+            )
+        };
+        step(&mut climb, [hand(left, 1.0), hand(right, 1.0)], true);
+        let mut at = left;
+        for _ in 0..4 {
+            at += vec3(0.0, -0.1, 0.0);
+            step(&mut climb, [hand(at, 1.0), hand(right, 1.0)], false);
+        }
+        // The left opens while the right is still on: the body keeps climbing,
+        // it does not get thrown.
+        let handoff = step(&mut climb, [hand(at, 0.0), hand(right, 1.0)], false);
+        assert_eq!(handoff.launch, None);
+        assert_eq!(climb.anchor(), Some(Handedness::Right));
     }
 
     #[test]
@@ -411,6 +713,7 @@ mod tests {
         climb.update(
             pawn,
             identity,
+            DT,
             [no_hand(), hand(reach, 1.0)],
             |point| {
                 ClimbGrip {
@@ -424,13 +727,16 @@ mod tests {
         assert_eq!(climb.grips().count(), 1);
 
         assert_eq!(
-            climb.update(
-                pawn,
-                identity,
-                [no_hand(), hand(reach, 1.0)],
-                |_| None,
-                |_| false
-            ),
+            climb
+                .update(
+                    pawn,
+                    identity,
+                    DT,
+                    [no_hand(), hand(reach, 1.0)],
+                    |_| None,
+                    |_| false
+                )
+                .translation,
             None,
         );
     }

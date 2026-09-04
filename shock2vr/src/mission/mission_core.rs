@@ -2978,9 +2978,10 @@ impl MissionCore {
                             - crate::physics::player_center_above_floor(
                                 self.player_handle.is_crouched(),
                             ),
+                        step_dt: self.physics.player_step_dt(),
                     })
             })
-            .flatten();
+            .unwrap_or_default();
 
         // Skip physics while time is frozen (the debug runtime's paused state
         // calls update with zero dt): the Rapier pipeline advances by a fixed
@@ -3001,13 +3002,20 @@ impl MissionCore {
             // feet-planted; standing up is refused without headroom (the
             // actual state is read back via `player_is_crouched`). Not while a
             // hand grips: the swap shifts the capsule centre further than the
-            // grip's stretch tolerance, so a VR player who ducks (or whose
-            // tracked head dips) on a ladder would be dropped by it.
-            if hand_climb.is_none() {
+            // grip's stretch tolerance, so a VR player who ducks on a ladder
+            // would be dropped by it. The VR runtime also freezes its physical
+            // crouch detector while gripping (`vr_crouch`); this covers the
+            // crouch *button*, which no detector sees.
+            if hand_climb.translation.is_none() {
                 self.physics
                     .set_player_crouch(input_context.crouch, &mut self.player_handle);
             }
-            let request = match hand_climb {
+            // Letting go of the last hold throws the body with the momentum of
+            // the pull, so a hard haul-and-release sails on past the hold.
+            if let Some(launch) = hand_climb.launch {
+                self.physics.launch_player(launch, &mut self.player_handle);
+            }
+            let request = match hand_climb.translation {
                 Some(translation) => crate::physics::PlayerMoveRequest::HandClimb { translation },
                 None => crate::physics::PlayerMoveRequest::Walk {
                     movement: forward + cgmath::vec3(0.0, up_value, 0.0),
@@ -9177,6 +9185,13 @@ impl MissionCore {
     /// for lack of headroom, so this can lag the crouch input).
     pub fn player_is_crouched(&self) -> bool {
         self.player_handle.is_crouched()
+    }
+
+    /// Whether either VR hand currently holds a climb hold.
+    pub fn player_is_gripping(&self) -> bool {
+        self.interaction
+            .hand_climb()
+            .is_some_and(|climb| climb.grips().next().is_some())
     }
 
     pub fn player_save_position(&self) -> Result<Vector3<f32>, PlayerSavePoseError> {

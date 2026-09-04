@@ -266,6 +266,10 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.player_is_crouched()
     }
 
+    fn player_is_gripping(&self) -> bool {
+        self.mission_core.player_is_gripping()
+    }
+
     fn fov_pull_deg(&self, game_options: &GameOptions) -> f32 {
         self.mission_core.fov_pull_deg(game_options)
     }

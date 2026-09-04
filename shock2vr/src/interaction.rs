@@ -53,6 +53,9 @@ pub struct ClimbContext<'a> {
     pub pawn_rotation: Quaternion<f32>,
     /// World height of the player's feet, for the ledge grip test.
     pub feet_y: f32,
+    /// The fixed timestep the coming movement frame integrates with, for the
+    /// release velocity (NOT the wall clock - see `vr_climb`).
+    pub step_dt: f32,
 }
 
 /// How the player interacts with the world. The effects returned by `update`
@@ -62,10 +65,10 @@ pub trait PlayerInteraction {
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect>;
 
     /// Resolve this frame's hand-climb intent: the body translation a gripping
-    /// hand demands, or `None` when no hand holds a climb hold. Flat climbs by
-    /// pushing into a ladder instead and never grips.
-    fn update_hand_climb(&mut self, _ctx: &ClimbContext) -> Option<Vector3<f32>> {
-        None
+    /// hand demands, and the velocity a release throws the body with. Flat
+    /// climbs by pushing into a ladder instead and never grips.
+    fn update_hand_climb(&mut self, _ctx: &ClimbContext) -> crate::vr_climb::ClimbFrame {
+        crate::vr_climb::ClimbFrame::default()
     }
 
     /// Hand-climb state, for debug introspection (`/v1/info`).
@@ -177,7 +180,7 @@ impl Default for VrInteraction {
 }
 
 impl PlayerInteraction for VrInteraction {
-    fn update_hand_climb(&mut self, ctx: &ClimbContext) -> Option<Vector3<f32>> {
+    fn update_hand_climb(&mut self, ctx: &ClimbContext) -> crate::vr_climb::ClimbFrame {
         use shipyard::EntitiesView;
 
         let hand_input = |hand: &VirtualHand, input: &crate::input_context::Hand| {
@@ -191,6 +194,7 @@ impl PlayerInteraction for VrInteraction {
         self.hand_climb.update(
             ctx.pawn_pos,
             ctx.pawn_rotation,
+            ctx.step_dt,
             [
                 hand_input(&self.left_hand, &ctx.input.left_hand),
                 hand_input(&self.right_hand, &ctx.input.right_hand),
