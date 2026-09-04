@@ -200,10 +200,12 @@ impl InputAction {
             // The right controller's menu button is reserved by the Quest
             // system UI; the left one is the app's.
             InputAction::TogglePauseMenu => Some("/user/hand/left/input/menu/click"),
-            // The right controller holds the gun, so its two face buttons own
-            // the two gun-handling actions - A reloads, B swaps ammo type.
-            InputAction::Reload => Some("/user/hand/right/input/a/click"),
-            InputAction::CycleAmmo => Some("/user/hand/right/input/b/click"),
+            // `Reload` and `CycleAmmo` deliberately have NO Quest binding: in
+            // VR reloading is the physical clip-insert gesture, which is
+            // unambiguous per weapon and therefore works while dual wielding,
+            // where a face button on one controller cannot say which gun it
+            // meant. Both actions remain reachable everywhere else (flat keys,
+            // HTTP, the SDK).
             _ => None,
         }
     }
@@ -211,18 +213,12 @@ impl InputAction {
     /// Production Meta Quest Touch binding for actions reached by a two-button
     /// **chord** rather than a button of their own.
     ///
-    /// The Touch has no button left to give: `X`, `Y` and the left `Menu` are
-    /// taken, both thumbstick clicks are jump and crouch, right `A` and `B`
-    /// are reload and swap-ammo, and the right `Menu` belongs to the Quest
-    /// system UI. So a debug toggle *shares* a pair rather than owning one -
-    /// here right `A`+`B`, whose own actions only matter with a weapon in
-    /// hand. The pair's edge is resolved by [`InputActionState::sync_chord`].
-    ///
-    /// Sharing is safe because the chord is dead unless the free camera's
-    /// developer option is on. While it IS on, `oculus_runtime` suppresses
-    /// whichever button is pressed *second*, so completing the chord cannot
-    /// also swap your ammo; the first press still fires its own action, which
-    /// is why the harmless one (`Reload`) is the natural opener.
+    /// The Touch has few buttons to give: `X`, `Y` and the left `Menu` are
+    /// taken, both thumbstick clicks are jump and crouch, and the right `Menu`
+    /// belongs to the Quest system UI. A debug toggle takes a *pair* rather
+    /// than a scarce single button - here right `A`+`B`, which the physical
+    /// clip-insert reload freed of the gun-handling actions they used to
+    /// carry. The pair's edge is resolved by [`InputActionState::sync_chord`].
     ///
     /// [`InputActionState::sync_chord`]: crate::input::InputActionState::sync_chord
     pub fn quest_touch_chord_paths(&self) -> Option<(&'static str, &'static str)> {
@@ -308,24 +304,12 @@ mod tests {
     /// The free camera is a chord, not a button, and must never quietly
     /// become one: a single-path binding here would consume a face button the
     /// Touch does not have to spare.
-    ///
-    /// Its two halves deliberately DO collide with `Reload` and `CycleAmmo`
-    /// (#1144) - there is no unbound button left - which is exactly why
-    /// `oculus_runtime` suppresses the second press while the developer
-    /// option is on. Pinning that here means a future rebinding of either gun
-    /// action has to come back and re-read the suppression rule rather than
-    /// silently making the chord fire both.
     #[test]
-    fn the_free_camera_chord_shares_the_two_gun_buttons() {
+    fn the_free_camera_chord_owns_the_right_face_buttons() {
         assert_eq!(InputAction::ToggleFreeCamera.quest_touch_click_path(), None);
         let (first, second) = InputAction::ToggleFreeCamera
             .quest_touch_chord_paths()
             .expect("free camera chord binding");
-        assert_eq!(first, InputAction::Reload.quest_touch_click_path().unwrap());
-        assert_eq!(
-            second,
-            InputAction::CycleAmmo.quest_touch_click_path().unwrap()
-        );
         assert_eq!(first, "/user/hand/right/input/a/click");
         assert_eq!(second, "/user/hand/right/input/b/click");
     }
@@ -342,16 +326,20 @@ mod tests {
         }
     }
 
+    /// Gun handling is a GESTURE in VR, not a button. A face button lives on
+    /// one controller, so it cannot say which of two wielded guns it meant;
+    /// carrying a clip to a magazine always can. Both actions stay fully
+    /// drivable elsewhere - flat keys, HTTP, the SDK - which is what the e2e
+    /// coverage uses.
     #[test]
-    fn quest_touch_assigns_the_right_face_buttons_to_gun_handling() {
-        assert_eq!(
-            InputAction::Reload.quest_touch_click_path(),
-            Some("/user/hand/right/input/a/click")
-        );
-        assert_eq!(
-            InputAction::CycleAmmo.quest_touch_click_path(),
-            Some("/user/hand/right/input/b/click")
-        );
+    fn quest_touch_leaves_gun_handling_to_the_clip_insert_gesture() {
+        assert_eq!(InputAction::Reload.quest_touch_click_path(), None);
+        assert_eq!(InputAction::CycleAmmo.quest_touch_click_path(), None);
+        assert!(InputAction::Reload.quest_touch_chord_paths().is_none());
+        assert!(InputAction::CycleAmmo.quest_touch_chord_paths().is_none());
+        // Still first-class actions, just not Quest-bound ones.
+        assert!(InputAction::all().contains(&InputAction::Reload));
+        assert!(InputAction::all().contains(&InputAction::CycleAmmo));
     }
 
     #[test]

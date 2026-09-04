@@ -363,14 +363,20 @@ fn main() {
         .create_action::<bool>("menu", "Pause Menu", &[])
         .unwrap();
 
-    // The gun hand's two face buttons: A reloads, B swaps ammo type.
-    let reload_action = action_set
-        .create_action::<bool>("reload", "Reload Weapon", &[])
+    // The right controller's two face buttons. Nothing binds them singly - VR
+    // reloading is the physical clip-insert gesture - so they exist only as the
+    // two halves of the free-camera chord.
+    let free_camera_a_action = action_set
+        .create_action::<bool>("free_camera_a", "Free Camera Chord (A)", &[])
         .unwrap();
 
-    let cycle_ammo_action = action_set
-        .create_action::<bool>("cycle_ammo", "Cycle Ammo Type", &[])
+    let free_camera_b_action = action_set
+        .create_action::<bool>("free_camera_b", "Free Camera Chord (B)", &[])
         .unwrap();
+
+    let free_camera_chord = shock2vr::input::InputAction::ToggleFreeCamera
+        .quest_touch_chord_paths()
+        .expect("Quest free-camera chord binding");
 
     // Bind our actions to input devices using the given profile
     // If you want to access inputs specific to a particular device you may specify a different
@@ -484,24 +490,12 @@ fn main() {
                         .unwrap(),
                 ),
                 xr::Binding::new(
-                    &reload_action,
-                    xr_instance
-                        .string_to_path(
-                            shock2vr::input::InputAction::Reload
-                                .quest_touch_click_path()
-                                .expect("Quest reload binding"),
-                        )
-                        .unwrap(),
+                    &free_camera_a_action,
+                    xr_instance.string_to_path(free_camera_chord.0).unwrap(),
                 ),
                 xr::Binding::new(
-                    &cycle_ammo_action,
-                    xr_instance
-                        .string_to_path(
-                            shock2vr::input::InputAction::CycleAmmo
-                                .quest_touch_click_path()
-                                .expect("Quest cycle-ammo binding"),
-                        )
-                        .unwrap(),
+                    &free_camera_b_action,
+                    xr_instance.string_to_path(free_camera_chord.1).unwrap(),
                 ),
             ],
         )
@@ -809,8 +803,12 @@ fn main() {
         let use_mode_state = use_mode_action.state(&session, xr::Path::NULL).unwrap();
         let audio_log_state = audio_log_action.state(&session, xr::Path::NULL).unwrap();
         let menu_state = menu_action.state(&session, xr::Path::NULL).unwrap();
-        let reload_state = reload_action.state(&session, xr::Path::NULL).unwrap();
-        let cycle_ammo_state = cycle_ammo_action.state(&session, xr::Path::NULL).unwrap();
+        let free_camera_a_state = free_camera_a_action
+            .state(&session, xr::Path::NULL)
+            .unwrap();
+        let free_camera_b_state = free_camera_b_action
+            .state(&session, xr::Path::NULL)
+            .unwrap();
         // Only edge-detect while the action is live: with the session merely
         // VISIBLE (system overlay up), current_state reads false even though
         // the button may still be physically held, and treating that as a
@@ -839,38 +837,12 @@ fn main() {
             menu_state.changed_since_last_sync,
             menu_state.current_state,
         );
-        // Right A and B carry two meanings: on their own they reload and swap
-        // ammo (#1144), and together they toggle the free camera. There is no
-        // unbound button left on the Touch to give the camera, so it shares
-        // these - and only while its developer option is on, which is the one
-        // time the player is deliberately debugging rather than shooting.
+        // Right A and B are the free camera's chord and nothing else: gun
+        // handling in VR is the physical clip-insert gesture, so neither button
+        // carries an action of its own and pressing one alone does nothing.
+        // (That is what retires #1144's second-press suppression - there is no
+        // longer an ammo swap for completing the chord to trigger.)
         //
-        // While the gate is on, a button whose partner is ALREADY held is
-        // suppressed, so completing the chord cannot also swap your ammo. The
-        // first button pressed still fires its own action (its edge lands
-        // before the chord exists), which is why the pair is A-reloads-first
-        // rather than B: an extra reload costs nothing, an ammo swap is a
-        // change you have to undo. With the option off, both behave exactly as
-        // #1144 defines them.
-        let free_camera_gate = shock2vr::free_camera::FreeCamera::is_enabled();
-        let suppress_reload = free_camera_gate && cycle_ammo_state.current_state;
-        let suppress_cycle_ammo = free_camera_gate && reload_state.current_state;
-        if !suppress_reload {
-            action_state.sync_discrete_button(
-                shock2vr::input::InputAction::Reload,
-                reload_state.is_active,
-                reload_state.changed_since_last_sync,
-                reload_state.current_state,
-            );
-        }
-        if !suppress_cycle_ammo {
-            action_state.sync_discrete_button(
-                shock2vr::input::InputAction::CycleAmmo,
-                cycle_ammo_state.is_active,
-                cycle_ammo_state.changed_since_last_sync,
-                cycle_ammo_state.current_state,
-            );
-        }
         // A chord is edge-detected from the pair's raw states, so it takes
         // them directly rather than through `sync_discrete_button`. Activity
         // is passed through rather than folded into the button states: while
@@ -879,9 +851,9 @@ fn main() {
         // the same hazard the latched crouch above guards against.
         action_state.sync_chord(
             shock2vr::input::InputAction::ToggleFreeCamera,
-            reload_state.is_active && cycle_ammo_state.is_active,
-            reload_state.current_state,
-            cycle_ammo_state.current_state,
+            free_camera_a_state.is_active && free_camera_b_state.is_active,
+            free_camera_a_state.current_state,
+            free_camera_b_state.current_state,
         );
 
         let left_trigger_value = left_trigger

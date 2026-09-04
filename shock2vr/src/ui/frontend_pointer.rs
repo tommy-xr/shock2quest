@@ -56,15 +56,27 @@ fn grabbing(hand: &Hand) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerEngagement {
     Trigger,
-    TriggerOrGrab,
+    TriggerOrGrab {
+        /// Which hands are already CARRYING something, by
+        /// [`crate::vr_config::hand_slot`].
+        ///
+        /// A carrying hand squeezes to keep hold of its object, for as long as
+        /// it carries it - that squeeze is not a gesture aimed at the panel and
+        /// must not claim it, or a player with a gun in one hand can never
+        /// reach the inventory strip with the other. Its TRIGGER still claims
+        /// the panel normally.
+        carrying: [bool; 2],
+    },
 }
 
 impl PointerEngagement {
-    /// Whether `hand` is actively working the panel under this policy.
-    fn engaged(self, hand: &Hand) -> bool {
+    /// Whether `hand` is making a gesture the panel should listen to.
+    fn engaged(self, hand: &Hand, handedness: Handedness) -> bool {
         match self {
             Self::Trigger => held(hand),
-            Self::TriggerOrGrab => held(hand) || grabbing(hand),
+            Self::TriggerOrGrab { carrying } => {
+                held(hand) || (grabbing(hand) && !carrying[crate::vr_config::hand_slot(handedness)])
+            }
         }
     }
 }
@@ -192,8 +204,27 @@ pub fn vr_pointer_pass(
         }
     }
 
-    let any_engaged = engagement.engaged(hands[0]) || engagement.engaged(hands[1]);
-    let order = if engagement.engaged(hands[1]) && !engagement.engaged(hands[0]) {
+    // Which hand is claiming the panel this frame.
+    //
+    // A held TRIGGER claims it wherever it points: `pressed` below is reported
+    // for either hand, so letting an idle hand supply the point while a press
+    // is in flight would land that press on whatever the idle hand happens to
+    // hover.
+    //
+    // A held SQUEEZE claims it only while actually pointing at it. Under
+    // `TriggerOrGrab` the squeeze is also how a VR player keeps HOLD of an
+    // object - a hand carrying a gun squeezes for as long as it carries it - so
+    // treating that as working the panel hands it the panel from across the
+    // room, and the free hand cannot so much as hover a slot. The grab is
+    // edge-detected per hand downstream, so an off-panel squeeze has nothing in
+    // flight for an idle hand to land.
+    let working_the_panel = |slot: usize| {
+        held(hands[slot])
+            || (engagement.engaged(hands[slot], handedness[slot])
+                && ray_of_hand[slot].is_some_and(|index| rays[index].canvas_hit.is_some()))
+    };
+    let any_engaged = working_the_panel(0) || working_the_panel(1);
+    let order = if working_the_panel(1) && !working_the_panel(0) {
         [1, 0]
     } else {
         [0, 1]
@@ -205,7 +236,7 @@ pub fn vr_pointer_pass(
         // point: otherwise an idle hand resting on the panel would report
         // "not pressed" and clear the held state, so sweeping the pressed hand
         // onto a button would read as a fresh edge and click it.
-        if any_engaged && !engagement.engaged(hands[slot]) {
+        if any_engaged && !working_the_panel(slot) {
             continue;
         }
         let Some(index) = ray_of_hand[slot] else {
@@ -367,6 +398,119 @@ mod tests {
             point, None,
             "the idle hand must not supply a point while the other is pressed"
         );
+    }
+
+    /// The squeeze half of `TriggerOrGrab` is not a gesture aimed at the panel
+    /// - it is also how a VR player keeps hold of whatever is in that hand. A
+    /// hand carrying a gun at their side must not own the cyber interface, or
+    /// the free hand can never reach the inventory strip (which is how a clip
+    /// gets out of it, and therefore how the physical reload starts).
+    #[test]
+    fn a_hand_squeezing_a_carried_object_off_panel_does_not_own_the_interface() {
+        let carrying_right = Hand {
+            squeeze_value: 1.0,
+            ..hand_aimed_away(0.0)
+        };
+        let reaching_left = hand_aimed_at(CANVAS, vec2(23.5, 34.0), 0.0);
+        let pass = vr_pointer_pass(
+            &vr_input(carrying_right, reaching_left),
+            CANVAS,
+            &test_panel(),
+            PointerEngagement::TriggerOrGrab {
+                carrying: [false; 2],
+            },
+        );
+
+        assert_eq!(
+            pass.active_ray().map(|ray| ray.handedness),
+            Some(Handedness::Left),
+            "the free hand must own the panel"
+        );
+        assert!(pass.point().is_some(), "and it must supply a point");
+    }
+
+    /// The harder half of the same problem: the panel is head-anchored, so the
+    /// gun hand's ray crosses it constantly. Its permanently-held squeeze must
+    /// not claim the panel THERE either, or the free hand loses the tie (the
+    /// right hand wins ties) and can still never reach a slot.
+    #[test]
+    fn a_carrying_hand_does_not_claim_the_panel_its_ray_happens_to_cross() {
+        let slot = vec2(23.5, 34.0);
+        let carrying_right = Hand {
+            squeeze_value: 1.0,
+            ..hand_aimed_at(CANVAS, vec2(400.0, 200.0), 0.0)
+        };
+        let reaching_left = Hand {
+            squeeze_value: 1.0,
+            ..hand_aimed_at(CANVAS, slot, 0.0)
+        };
+        let mut carrying = [false; 2];
+        carrying[crate::vr_config::hand_slot(Handedness::Right)] = true;
+
+        let pass = vr_pointer_pass(
+            &vr_input(carrying_right, reaching_left),
+            CANVAS,
+            &test_panel(),
+            PointerEngagement::TriggerOrGrab { carrying },
+        );
+
+        assert_eq!(
+            pass.active_ray().map(|ray| ray.handedness),
+            Some(Handedness::Left),
+            "the empty hand's squeeze must outrank the carrying hand's"
+        );
+        let point = pass.point().expect("the free hand must supply a point");
+        assert!(
+            (point.x - slot.x).abs() < 1.0 && (point.y - slot.y).abs() < 1.0,
+            "and it must be the slot it aimed at, got {point:?}"
+        );
+    }
+
+    /// ...but a hand carrying nothing keeps its squeeze claim, which is what
+    /// takes an item out of a slot in the first place.
+    #[test]
+    fn an_empty_hands_squeeze_still_claims_the_panel() {
+        let pass = vr_pointer_pass(
+            &vr_input(
+                Hand {
+                    squeeze_value: 1.0,
+                    ..hand_aimed_at(CANVAS, vec2(23.5, 34.0), 0.0)
+                },
+                hand_aimed_at(CANVAS, vec2(400.0, 200.0), 0.0),
+            ),
+            CANVAS,
+            &test_panel(),
+            PointerEngagement::TriggerOrGrab {
+                carrying: [false; 2],
+            },
+        );
+
+        assert_eq!(
+            pass.active_ray().map(|ray| ray.handedness),
+            Some(Handedness::Right)
+        );
+    }
+
+    /// The trigger half is the opposite: a press in flight is reported for
+    /// either hand (`pressed` below), so a hand holding one owns the panel
+    /// wherever it points - otherwise the idle hand's hover would take a click
+    /// the pressing hand aimed somewhere else entirely.
+    #[test]
+    fn a_hand_holding_a_trigger_off_panel_still_owns_the_interface() {
+        let pass = vr_pointer_pass(
+            &vr_input(
+                hand_aimed_at(CANVAS, vec2(23.5, 34.0), 0.0),
+                hand_aimed_away(1.0),
+            ),
+            CANVAS,
+            &test_panel(),
+            PointerEngagement::TriggerOrGrab {
+                carrying: [false; 2],
+            },
+        );
+
+        assert_eq!(pass.point(), None);
+        assert!(pass.pressed);
     }
 
     #[test]
