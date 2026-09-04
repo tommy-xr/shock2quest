@@ -638,6 +638,16 @@ pub enum Effect {
         motion_queries: Vec<Vec<MotionQueryItem>>,
     },
 
+    /// Pivot in place with the creature's own authored turn clip: the applier
+    /// picks the stand-schema clip whose authored facing change is nearest
+    /// `delta` and plays it, reporting back with `TurnClipStarted`. No clip
+    /// covers a small pivot, and a creature without turn clips gets none - in
+    /// both cases nothing plays and no report comes back.
+    PlayTurnClip {
+        entity_id: EntityId,
+        delta: cgmath::Deg<f32>,
+    },
+
     ReplaceEntity {
         entity_id: EntityId,
         template_id: i32,

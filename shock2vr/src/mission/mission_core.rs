@@ -3970,12 +3970,17 @@ impl MissionCore {
         motion_queries: Vec<Vec<MotionQueryItem>>,
         selection_strategy: MotionQuerySelectionStrategy,
         apply: fn(&AnimationPlayer, Rc<AnimationClip>) -> AnimationPlayer,
+        // Pivot in place: pick the stand-schema clip whose authored facing
+        // change is nearest this heading change, and report it back (see
+        // `Effect::PlayTurnClip`).
+        turn: Option<cgmath::Deg<f32>>,
     ) {
         let is_death_query = motion_queries
             .iter()
             .flatten()
             .any(|item| item.tag_name() == "crumple");
         let mut resolved_death_pose = None;
+        let mut turn_started = None;
         let maybe_player = self.id_to_animation_player.get_mut(&entity_id);
         if let Some(player) = maybe_player {
             let v_creature_type = self.world.borrow::<View<PropCreature>>().unwrap();
@@ -3998,11 +4003,36 @@ impl MissionCore {
 
                 let mut tried_queries = Vec::new();
                 let maybe_next_animation = motion_queries.into_iter().find_map(|items| {
+                    // The turn clips sit in the same schema as the idle stand
+                    // clip, told apart only by their authored facing change.
+                    let is_stand_query = items.iter().any(|item| item.tag_name() == "stand");
                     let mut query_items = items;
                     query_items.extend(actor_tags.iter().cloned());
                     let query = MotionQuery::new(actor_type, query_items)
                         .with_selection_strategy(selection_strategy.clone());
-                    let result = if is_death_query {
+                    let end_direction = |name: &String| {
+                        global_context
+                            .motiondb
+                            .get_motion_stuff(name.clone())
+                            .end_direction
+                    };
+                    let result = if let Some(delta) = turn {
+                        let options = global_context.motiondb.query_all(query.clone());
+                        let ends = options.iter().map(end_direction).collect::<Vec<_>>();
+                        dark::motion::nearest_turn_clip(delta, &ends)
+                            .map(|index| options[index].clone())
+                    } else if is_stand_query {
+                        // Standing still must not play a turn: the schema's
+                        // pivots would swing the creature's body with no
+                        // heading change behind it.
+                        let options = global_context
+                            .motiondb
+                            .query_all(query.clone())
+                            .into_iter()
+                            .filter(|name| !dark::motion::is_turn_clip(end_direction(name)))
+                            .collect::<Vec<_>>();
+                        select_motion_option(&options, &selection_strategy)
+                    } else if is_death_query {
                         let options = global_context
                             .motiondb
                             .query_all(query.clone())
@@ -4071,6 +4101,17 @@ impl MissionCore {
                             _ => clip,
                         };
                         self.failed_animation_queries.remove(&entity_id);
+                        if turn.is_some() {
+                            turn_started = Some((
+                                dark::motion::signed_end_direction(
+                                    global_context
+                                        .motiondb
+                                        .get_motion_stuff(next_animation.clone())
+                                        .end_direction,
+                                ),
+                                clip.duration.as_secs_f32(),
+                            ));
+                        }
                         *player = apply(player, clip);
 
                         // The motion query is random, so its resolved clip name
@@ -4133,6 +4174,13 @@ impl MissionCore {
 
         if let Some(death_pose) = resolved_death_pose {
             self.world.add_component(entity_id, death_pose);
+        }
+
+        if let Some((turn, duration)) = turn_started {
+            self.script_world.dispatch(Message {
+                to: entity_id,
+                payload: MessagePayload::TurnClipStarted { turn, duration },
+            });
         }
     }
 
@@ -6921,6 +6969,7 @@ impl MissionCore {
                         motion_queries,
                         selection_strategy,
                         AnimationPlayer::queue_animation,
+                        None,
                     );
                 }
 
@@ -6936,6 +6985,19 @@ impl MissionCore {
                         motion_queries,
                         selection_strategy,
                         AnimationPlayer::play_animation,
+                        None,
+                    );
+                }
+
+                Effect::PlayTurnClip { entity_id, delta } => {
+                    self.apply_animation_by_schema(
+                        global_context,
+                        asset_cache,
+                        entity_id,
+                        vec![vec![MotionQueryItem::new("stand")]],
+                        MotionQuerySelectionStrategy::Random,
+                        AnimationPlayer::play_animation,
+                        Some(delta),
                     );
                 }
 
