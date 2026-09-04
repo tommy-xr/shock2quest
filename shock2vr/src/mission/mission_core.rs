@@ -2641,6 +2641,15 @@ impl MissionCore {
             .borrow::<UniqueViewMut<PlayerLifeState>>()
             .unwrap() = next_state;
 
+        // Death ends every sustained psi power: a corpse must not keep burning
+        // (Immolate) or stay invisible (Inviso) through the death sequence and
+        // out the other side of a QBR reconstruction.
+        self.world
+            .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
+            .unwrap()
+            .0
+            .clear();
+
         self.death_camera = Some(self.begin_death_camera());
 
         vec![Effect::PlaySound {
@@ -4454,11 +4463,9 @@ impl MissionCore {
                     Link::Receptron(options) => Some(options.clone()),
                     _ => None,
                 });
-            // A sustained psi power's own receptrons act as if the power were a
-            // metaproperty on the caster (retail attaches it): Immolate's
-            // Amplify 0.0 on Incendiary is what keeps the burning player from
-            // cooking in their own aura.
-            receptrons.extend(crate::scripts::immolate::active_power_receptrons(
+            // Immolate's Amplify 0.0 on Incendiary is what keeps the burning
+            // player from cooking in their own aura.
+            receptrons.extend(crate::scripts::immolate::immolate_caster_receptrons(
                 &self.world,
                 entity_id,
             ));
