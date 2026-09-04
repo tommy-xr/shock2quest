@@ -13426,7 +13426,7 @@ mod radiation_patch_use_tests {
             .borrow::<shipyard::UniqueViewMut<ActiveRadiation>>()
             .unwrap();
         assert!(radiation.observe_ambient(level));
-        assert_eq!(radiation.advance(0.1, level, 3.0), 0);
+        assert_eq!(radiation.advance(0.1, level, 3.0, 0.0), 0);
     }
 
     #[test]

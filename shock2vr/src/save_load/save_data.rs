@@ -141,7 +141,7 @@ mod tests {
     fn active_radiation_round_trips_and_older_saves_default_clear() {
         let mut original = global_data(Some(sample_vitals()));
         assert!(original.active_radiation.observe_ambient(8.0));
-        assert_eq!(original.active_radiation.advance(0.1, 8.0, 3.0), 0);
+        assert_eq!(original.active_radiation.advance(0.1, 8.0, 3.0, 0.0), 0);
         let encoded = serde_json::to_value(&original).unwrap();
         let decoded: GlobalData = serde_json::from_value(encoded.clone()).unwrap();
         assert_eq!(decoded.active_radiation, original.active_radiation);
