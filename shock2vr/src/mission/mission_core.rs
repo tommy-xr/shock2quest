@@ -9673,6 +9673,42 @@ impl MissionCore {
             }
         }
 
+        // Clip-insert zones of held guns, in the same shared world pass. The
+        // zone belongs to the gun; it is engaged by the clip in the OTHER
+        // hand, so its engaged state lives in that hand's slot.
+        if options.presentation_mode == crate::PresentationMode::Vr
+            && crate::dev_params::get_bool(crate::dev_params::CLIP_ZONE)
+        {
+            let (left, right) = self.interaction.held_entities();
+            for (slot, weapon) in [left, right].into_iter().enumerate() {
+                let Some(weapon) = weapon else {
+                    continue;
+                };
+                if self.magazine_capacity(weapon).is_none() {
+                    continue;
+                }
+                let Some(anchor) = self.magazine_anchor_world(weapon) else {
+                    continue;
+                };
+                let engaged = self.vr_clip_insert_engaged[1 - slot];
+                let enter_color = if engaged {
+                    vec3(1.0, 0.2, 0.2)
+                } else {
+                    vec3(0.2, 1.0, 0.3)
+                };
+                scene.push(dark::hit_box::draw_debug_wire_sphere(
+                    anchor,
+                    crate::mission::reload::CLIP_INSERT_ENTER_RADIUS,
+                    enter_color,
+                ));
+                scene.push(dark::hit_box::draw_debug_wire_sphere(
+                    anchor,
+                    crate::mission::reload::CLIP_INSERT_EXIT_RADIUS,
+                    vec3(0.35, 0.35, 0.2),
+                ));
+            }
+        }
+
         // Render debug pathfinding
         if options.debug_pathfinding {
             if let Some(ref path_database) = self.path_database {

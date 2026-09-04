@@ -196,6 +196,49 @@ pub fn draw_debug_hit_box_shapes(
     )]
 }
 
+/// A world-space wire sphere - three orthogonal great circles - as one
+/// `SceneObject` of colored lines. For overlays that mark a spherical volume
+/// (a gesture zone, a trigger radius) rather than a fitted body part.
+pub fn draw_debug_wire_sphere(
+    center: Vector3<f32>,
+    radius: f32,
+    color: Vector3<f32>,
+) -> SceneObject {
+    SceneObject::new(
+        color_material::create(color),
+        Box::new(lines_mesh::create(wire_sphere_segments(center, radius))),
+    )
+}
+
+/// The line segments of [`draw_debug_wire_sphere`], two vertices each: three
+/// closed rings of `WIRE_SEGMENTS` around X, Y and Z.
+fn wire_sphere_segments(center: Vector3<f32>, radius: f32) -> Vec<VertexPosition> {
+    let identity = Matrix4::from_scale(1.0);
+    let mut verts: Vec<VertexPosition> = Vec::new();
+    let axes = [
+        (Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0)),
+        (Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
+        (Vector3::new(0.0, 0.0, 1.0), Vector3::new(1.0, 0.0, 0.0)),
+    ];
+    for (u, v) in axes {
+        let ring: Vec<Vector3<f32>> = (0..WIRE_SEGMENTS)
+            .map(|k| {
+                let t = (k as f32) / (WIRE_SEGMENTS as f32) * std::f32::consts::TAU;
+                center + (u * t.cos() + v * t.sin()) * radius
+            })
+            .collect();
+        for k in 0..WIRE_SEGMENTS {
+            push_segment(
+                &mut verts,
+                &identity,
+                ring[k],
+                ring[(k + 1) % WIRE_SEGMENTS],
+            );
+        }
+    }
+    verts
+}
+
 /// Transform a joint-local point to world space (homogeneous, w=1).
 fn xform_point(xform: &Matrix4<f32>, p: Vector3<f32>) -> Vector3<f32> {
     let c = xform * Vector4::new(p.x, p.y, p.z, 1.0);
@@ -315,6 +358,25 @@ fn append_capsule_lines(
             for k in 0..WIRE_SEGMENTS {
                 push_segment(verts, xform, pts[k], pts[k + 1]);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Three great circles, each a closed loop of `WIRE_SEGMENTS` segments -
+    /// two vertices per segment, every vertex on the sphere - so the zone
+    /// reads as a sphere from any angle rather than as a single ring.
+    #[test]
+    fn a_wire_sphere_is_three_closed_rings_on_the_sphere() {
+        let center = Vector3::new(1.0, 2.0, 3.0);
+        let verts = wire_sphere_segments(center, 0.25);
+        assert_eq!(verts.len(), 3 * WIRE_SEGMENTS * 2);
+        for vertex in &verts {
+            let r = (vertex.position - center).magnitude();
+            assert!((r - 0.25).abs() < 1e-5, "vertex off the sphere: r = {r}");
         }
     }
 }
