@@ -188,27 +188,51 @@ pub fn set_entity_locked(world: &mut World, entity_id: EntityId, locked: bool) {
 /// from its authored state. `None` for entities that aren't translating doors.
 pub fn door_is_closed(world: &World, entity_id: EntityId) -> Option<bool> {
     use cgmath::InnerSpace;
-    let v_door = world
-        .borrow::<View<dark::properties::PropTranslatingDoor>>()
-        .unwrap();
-    let door = v_door.get(entity_id).ok()?;
     // A door with no travel can never leave its authored pose, and both
     // endpoints sit on top of each other - the distance test below is
     // degenerate there (equal distances always read as "closed"). Answer from
     // the authored state instead, so a permanently open doorway isn't
     // reported shut (#602).
-    if !door.has_travel() {
-        return Some(!door.is_permanently_open());
+    let no_travel_state = {
+        let v_door = world
+            .borrow::<View<dark::properties::PropTranslatingDoor>>()
+            .unwrap();
+        let door = v_door.get(entity_id).ok()?;
+        (!door.has_travel()).then(|| !door.is_permanently_open())
+    };
+    if let Some(closed) = no_travel_state {
+        return Some(closed);
     }
-    // StdDoor drives the live transform via SetPosition each frame.
+    let (from_closed, travel) = door_travel(world, entity_id)?;
+    let to_open = (from_closed - travel).magnitude2();
+    Some(from_closed.magnitude2() <= to_open)
+}
+
+/// Where a travelling door's leaf currently sits, as `(from_closed, travel)`:
+/// the offset of the live leaf from its closed pose, and the full closed ->
+/// open vector. `None` for entities that are not translating doors and for a
+/// door with no travel (both endpoints coincide, so neither vector says
+/// anything).
+///
+/// StdDoor drives the live transform via SetPosition each frame, so the
+/// transform - not the property - is where the leaf actually is.
+fn door_travel(world: &World, entity_id: EntityId) -> Option<(Vector3<f32>, Vector3<f32>)> {
+    let v_door = world
+        .borrow::<View<dark::properties::PropTranslatingDoor>>()
+        .unwrap();
+    let door = v_door.get(entity_id).ok()?;
+    if !door.has_travel() {
+        return None;
+    }
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let current = v_transform
         .get(entity_id)
         .ok()
         .map(|t| point3_to_vec3(t.0.transform_point(point3(0.0, 0.0, 0.0))))?;
-    let to_closed = (current - door.base_closed_location).magnitude2();
-    let to_open = (current - door.base_open_location).magnitude2();
-    Some(to_closed <= to_open)
+    Some((
+        current - door.base_closed_location,
+        door.base_open_location - door.base_closed_location,
+    ))
 }
 
 /// How far a translating door's leaf has travelled away from its closed
@@ -223,20 +247,7 @@ pub fn door_is_closed(world: &World, entity_id: EntityId) -> Option<bool> {
 /// sideways never gains any, so a caller must also accept a full fraction.
 pub fn door_open_progress(world: &World, entity_id: EntityId) -> Option<(f32, f32)> {
     use cgmath::InnerSpace;
-    let v_door = world
-        .borrow::<View<dark::properties::PropTranslatingDoor>>()
-        .unwrap();
-    let door = v_door.get(entity_id).ok()?;
-    if !door.has_travel() {
-        return None;
-    }
-    let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
-    let current = v_transform
-        .get(entity_id)
-        .ok()
-        .map(|t| point3_to_vec3(t.0.transform_point(point3(0.0, 0.0, 0.0))))?;
-    let travel = door.base_open_location - door.base_closed_location;
-    let from_closed = current - door.base_closed_location;
+    let (from_closed, travel) = door_travel(world, entity_id)?;
     let fraction = (from_closed.dot(travel) / travel.magnitude2()).clamp(0.0, 1.0);
     Some((fraction, from_closed.y))
 }

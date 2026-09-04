@@ -52,20 +52,25 @@ const DOOR_INTERACT_COOLDOWN: f32 = 2.0;
 /// that slides sideways never gains height, so height clearance alone would
 /// hold an AI at it forever.
 const DOOR_OPEN_FRACTION: f32 = 0.95;
-/// Ceiling on the door wait, so a leaf that stops halfway (halted, or shoved
-/// by something) can never park an AI in a doorway for the rest of the
-/// mission. Comfortably longer than the slowest shipped door's travel.
-const DOOR_WAIT_TIMEOUT: f32 = 10.0;
+/// Ceiling on the door wait, so a leaf that stops halfway (halted, jammed,
+/// or frobbed shut again) can never park an AI in a doorway. It is also
+/// deliberately SHORTER than the path-follower's stall window: a held body
+/// makes no progress toward its waypoint, so a longer hold would read as a
+/// wedge, blacklist the crossing the AI just opened, and route it back away
+/// from the door. Longer than the slowest shipped leaf's travel (~1.6 s).
+const DOOR_WAIT_TIMEOUT: f32 = 2.5;
 /// How long a path-follow stall must persist before it reads as frustration
-/// worth showing. Longer than the stall system's own recovery window, so the
-/// gesture marks a body that is genuinely stuck rather than every hitch.
-const FRUSTRATION_STALL_SECONDS: f32 = 5.0;
+/// worth showing - just under the point where the stall system gives up on
+/// the route and retreats. The published counter is reset by that recovery,
+/// so it never climbs past the stall window and a higher threshold here
+/// would simply never fire.
+const FRUSTRATION_STALL_SECONDS: f32 = 2.5;
 /// How long a door has to keep the AI waiting before that reads as
 /// impatience. A shipped sliding leaf clears in about half a second, and an
 /// AI is not thwarted by a door that opens for it - gesturing at every one
 /// would also park a body in the doorway (the gesture has no root motion)
 /// long enough to dam the creatures queued behind it.
-const FRUSTRATION_DOOR_WAIT_SECONDS: f32 = 2.5;
+const FRUSTRATION_DOOR_WAIT_SECONDS: f32 = 1.75;
 /// Rate limit on the frustration gesture, jittered per play so a knot of
 /// AIs blocked on the same thing doesn't gesture in unison.
 const FRUSTRATION_COOLDOWN_MIN: f32 = 20.0;
@@ -189,18 +194,6 @@ fn path_stall_seconds(world: &World, entity_id: EntityId) -> f32 {
         .and_then(|service| service.ai_steering(entity_id.inner()))
         .map(|steering| steering.stall_seconds)
         .unwrap_or(0.0)
-}
-
-/// How far away the AI believes its target is, or `None` when nothing has
-/// ever published awareness for it.
-fn target_awareness_distance(world: &World, entity_id: EntityId) -> Option<f32> {
-    let v_awareness = world
-        .borrow::<View<crate::runtime_props::RuntimePropAITargetAwareness>>()
-        .ok()?;
-    let last_known = v_awareness.get(entity_id).ok()?.last_known_pos;
-    let (position, _) = get_position_and_forward(world, entity_id);
-    let delta = position.to_vec() - last_known;
-    Some((delta.x * delta.x + delta.z * delta.z).sqrt())
 }
 
 pub(crate) fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
@@ -742,6 +735,13 @@ impl AnimatedMonsterAI {
     /// the AI is holding this frame.
     fn update_door_wait(&mut self, world: &World, entity_id: EntityId, time: &Time) -> Option<f32> {
         let (door_ent, waited) = self.door_wait?;
+        // Only a pursuing behavior opens doors, so only a pursuing behavior
+        // waits at one; anything else (a scripted performance takes over, the
+        // AI calms down) walks away from the doorway rather than holding.
+        if !matches!(self.current_behavior.borrow().name(), "Chase" | "Search") {
+            self.door_wait = None;
+            return None;
+        }
         let waited = waited + time.elapsed.as_secs_f32();
         // No progress to read (not a door any more, or one that cannot move)
         // means there is nothing to wait for.
@@ -768,6 +768,12 @@ impl AnimatedMonsterAI {
         Some(waited)
     }
 
+    /// Jittered rate limit, so a knot of AIs blocked on the same thing does
+    /// not gesture in unison.
+    fn next_frustration_cooldown(&self) -> f32 {
+        rand::thread_rng().gen_range(FRUSTRATION_COOLDOWN_MIN..FRUSTRATION_COOLDOWN_MAX)
+    }
+
     /// Show frustration at whatever is in the way - a door still opening, or
     /// a route that has stopped making progress. The gesture is an animation
     /// only: it plays over the block without touching the wait or the stall
@@ -777,21 +783,26 @@ impl AnimatedMonsterAI {
         world: &World,
         entity_id: EntityId,
         door_wait_seconds: Option<f32>,
+        started_a_clip: bool,
         time: &Time,
     ) -> Effect {
+        // The rate limit ticks whether or not a gesture is due, so a
+        // suppressed frame doesn't stretch it.
         self.frustration_cooldown =
             (self.frustration_cooldown - time.elapsed.as_secs_f32()).max(0.0);
+        if started_a_clip {
+            return Effect::NoEffect;
+        }
         if !should_gesture_frustration(
             door_wait_seconds,
             path_stall_seconds(world, entity_id),
             self.frustration_cooldown,
-            target_awareness_distance(world, entity_id),
+            chase_target_distance(world, entity_id),
             self.current_behavior.borrow().scripted_state(),
         ) {
             return Effect::NoEffect;
         }
-        self.frustration_cooldown =
-            rand::thread_rng().gen_range(FRUSTRATION_COOLDOWN_MIN..FRUSTRATION_COOLDOWN_MAX);
+        self.frustration_cooldown = self.next_frustration_cooldown();
         tracing::debug!(
             "ai {:?} shows frustration (door wait: {:?}s)",
             entity_id,
@@ -882,12 +893,19 @@ impl AnimatedMonsterAI {
                 // pursuing level.
                 self.door_cooldown = DOOR_GIVEUP_COOLDOWN;
                 self.last_known_player_pos = None;
+                // Giving up on the door also gives up waiting for it - the
+                // wander this drops to has no business standing at it.
+                self.door_wait = None;
                 // State-only downgrade: the thwarted gesture replaces the
                 // queue this frame (a second Play here would blend from an
                 // unseen frame-0 pose and waste a clip load); the completion
                 // handler starts the Low behavior's clip after the gesture.
                 let downgrade =
                     self.force_alertness_state(AIAlertLevel::Low, world, physics, entity_id);
+                // Same rate limit as the wait/stall gesture: both paths
+                // emit the one performance, so they must not take turns
+                // playing it past the limit either claims.
+                self.frustration_cooldown = self.next_frustration_cooldown();
                 return Effect::combine(vec![downgrade, frustration_gesture(entity_id)]);
             }
             // Unlocked: open it and keep chasing through. The longer cooldown
@@ -896,8 +914,14 @@ impl AnimatedMonsterAI {
             self.door_cooldown = DOOR_INTERACT_COOLDOWN;
             // Stand off until the leaf has travelled clear (#1255): the AI
             // used to keep walking into a leaf still crossing the doorway.
-            tracing::debug!("ai {:?} waits for door {:?} to clear", entity_id, door_ent);
-            self.door_wait = Some((door_ent, 0.0));
+            // Re-sending TurnOn to a leaf that has not left its closed half
+            // is idempotent, but restarting the clock here is not: the wait
+            // would never age out and a jammed door could hold the AI for
+            // good. Only a DIFFERENT door starts a fresh wait.
+            if !matches!(self.door_wait, Some((waiting_on, _)) if waiting_on == door_ent) {
+                tracing::debug!("ai {:?} waits for door {:?} to clear", entity_id, door_ent);
+                self.door_wait = Some((door_ent, 0.0));
+            }
             return Effect::Send {
                 msg: Message {
                     to: door_ent,
@@ -1226,7 +1250,6 @@ impl Script for AnimatedMonsterAI {
             entity_id,
             door_wait_seconds.is_some(),
         );
-        let frustration_effect = self.update_frustration(world, entity_id, door_wait_seconds, time);
 
         // A finished scripted sequence (its final queued effects were drained
         // by the steer above - scripted_state only reports Finished once they
@@ -1247,6 +1270,17 @@ impl Script for AnimatedMonsterAI {
         } else {
             Effect::NoEffect
         };
+
+        // Emitted last of the animation effects, so it is checked against
+        // every clip this frame may already have started: the gesture PLAYS
+        // (it does not queue), so firing it on the same frame as a behavior's
+        // own clip would drop that clip for a frame. Suppressing rather than
+        // reordering also leaves the rate limit unarmed, so the gesture
+        // simply comes on a later frame.
+        let started_a_clip = !matches!(behavior_change_effect, Effect::NoEffect)
+            || !matches!(handback_effect, Effect::NoEffect);
+        let frustration_effect =
+            self.update_frustration(world, entity_id, door_wait_seconds, started_a_clip, time);
 
         let sensor_effect = self.try_tickle_sensor(world, physics, entity_id);
 
@@ -2232,6 +2266,29 @@ mod tests {
             None,
             ScriptedState::NotScripted
         ));
+    }
+
+    #[test]
+    fn the_door_wait_can_never_outlast_the_path_follower_patience() {
+        // A held body makes no progress toward its waypoint. If the hold
+        // could outlast the stall window, the stall system would blacklist
+        // the very crossing this AI just opened and route it back away from
+        // the door.
+        assert!(DOOR_WAIT_TIMEOUT < crate::scripts::ai::steering::STALL_SECONDS);
+    }
+
+    #[test]
+    fn impatience_is_reached_before_the_wait_times_out() {
+        // A threshold above the ceiling would be a gesture that never plays.
+        assert!(FRUSTRATION_DOOR_WAIT_SECONDS < DOOR_WAIT_TIMEOUT);
+    }
+
+    #[test]
+    fn a_stall_gesture_threshold_the_stall_clock_can_actually_reach() {
+        // The published stall counter is reset by the stall system's own
+        // recovery, so it never climbs past that window - a threshold at or
+        // above it would never fire.
+        assert!(FRUSTRATION_STALL_SECONDS < crate::scripts::ai::steering::STALL_SECONDS);
     }
 
     #[test]
