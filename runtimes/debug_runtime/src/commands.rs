@@ -729,6 +729,9 @@ pub struct EntityDetailResult {
     /// entity: the union of its hitboxes where it has them, otherwise its own
     /// collider.
     pub selection_bounds: Option<[[f32; 3]; 2]>,
+    /// World-space centre of a gun's magazine zone (VR clip insert); None
+    /// when the entity takes no magazine.
+    pub magazine_anchor: Option<[f32; 3]>,
 }
 
 #[derive(Debug, Serialize)]

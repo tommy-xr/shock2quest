@@ -635,6 +635,35 @@ pub fn sub_object_transforms(mesh: &SystemShock2ObjectMesh) -> Vec<(String, Matr
         .collect()
 }
 
+/// The model-space bounding box of every sub-object's own vertices, paired
+/// with its name - where each authored part actually sits once its transform
+/// chain is applied. Empty parts (pure pivots) report `None`.
+///
+/// This is how a per-model anchor gets derived from the art (a magazine, a
+/// grip, a sight) instead of eyeballed in a debug scene.
+pub fn sub_object_bounds(mesh: &SystemShock2ObjectMesh) -> Vec<(String, Option<Aabb3<f32>>)> {
+    let transforms = sub_object_transforms(mesh);
+    mesh.sub_objects
+        .iter()
+        .zip(transforms)
+        .map(|(sub_object, (name, transform))| {
+            use collision::Aabb as _;
+            let mut bounds: Option<Aabb3<f32>> = None;
+            for index in sub_object.point_start..sub_object.point_stop {
+                let Some(vertex) = mesh.vertices.get(index as usize) else {
+                    continue;
+                };
+                let point = transform.transform_point(point3(vertex.x, vertex.y, vertex.z));
+                bounds = Some(match bounds {
+                    None => Aabb3::new(point, point),
+                    Some(aabb) => aabb.grow(point),
+                });
+            }
+            (name, bounds)
+        })
+        .collect()
+}
+
 pub fn to_vertices(
     mesh: &SystemShock2ObjectMesh,
 ) -> HashMap<u16, Vec<VertexPositionTextureSkinnedNormal>> {

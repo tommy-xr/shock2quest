@@ -8541,10 +8541,10 @@ impl MissionCore {
             let engaged = pair
                 .and_then(|(clip, weapon, _)| {
                     let clip_position = self.entity_world_position(clip)?;
-                    let weapon_position = self.entity_world_position(weapon)?;
+                    let magazine = self.magazine_anchor_world(weapon)?;
                     Some(crate::mission::reload::clip_insert_zone_engaged(
                         self.vr_clip_insert_engaged[slot],
-                        (clip_position - weapon_position).magnitude(),
+                        (clip_position - magazine).magnitude(),
                     ))
                 })
                 .unwrap_or(false);
@@ -8571,6 +8571,18 @@ impl MissionCore {
             .ok()
             .and_then(|states| states.get(weapon).ok().map(|state| state.ammo))
             .unwrap_or(0)
+    }
+
+    /// Where `weapon`'s magazine zone is centred in the world: its per-model
+    /// anchor (`vr_config`) carried by the live transform.
+    fn magazine_anchor_world(&self, weapon: EntityId) -> Option<Vector3<f32>> {
+        use cgmath::Transform as _;
+        let anchor = crate::vr_config::magazine_anchor_from_entity(&self.world, weapon);
+        let transforms = self.world.borrow::<View<RuntimePropTransform>>().ok()?;
+        let transform = transforms.get(weapon).ok()?;
+        Some(crate::util::point3_to_vec3(
+            transform.0.transform_point(Point3::from_vec(anchor)),
+        ))
     }
 
     /// The world position of `entity`'s live transform.
@@ -11249,6 +11261,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .map(|link| link.target_id);
 
                 let selection_bounds = self.selection_bounds(id);
+                let magazine_anchor = self
+                    .magazine_capacity(id)
+                    .and_then(|_| self.magazine_anchor_world(id))
+                    .map(|anchor| [anchor.x, anchor.y, anchor.z]);
                 Some(DebugEntityDetail {
                     entity_id: id.inner() as i32,
                     name,
@@ -11265,6 +11281,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     incoming_links,
                     contained_by,
                     aim_points: aim_points.clone(),
+                    magazine_anchor,
                     selection_bounds: selection_bounds.map(|bounds| {
                         [
                             [bounds.min.x, bounds.min.y, bounds.min.z],

@@ -76,6 +76,11 @@ struct Cli {
     #[arg(long)]
     debug_no_render: bool,
 
+    /// Print every sub-object of a .bin object model with its model-space
+    /// bounding box (for deriving per-model anchors from the art), then exit.
+    #[arg(long)]
+    debug_subobjects: bool,
+
     /// Overlay skeleton joints for supported model files (.bin/.ai).
     #[arg(long)]
     debug_skeletons: bool,
@@ -328,6 +333,11 @@ pub fn main() {
     let bundle_storage = engine.get_storage();
     let mut game = shock2vr::Game::init(GameOptions::default(), bundle_storage);
 
+    if cli.debug_subobjects {
+        print_sub_objects(&filename, &game.asset_cache);
+        return;
+    }
+
     if cli.debug_no_render {
         match create_scene(
             &filename,
@@ -444,4 +454,34 @@ fn process_events(
     }
 
     InputContext::default()
+}
+
+/// `--debug-subobjects`: dump a .bin object model's sub-objects and their
+/// model-space bounds, so an anchor can be read off the art.
+fn print_sub_objects(filename: &str, asset_cache: &engine::assets::asset_cache::AssetCache) {
+    let Some(reader) = asset_cache.get_raw_reader(filename) else {
+        println!("Could not open {filename}");
+        return;
+    };
+    let mut reader = reader.borrow_mut();
+    let common_header = dark::ss2_bin_header::read(&mut *reader);
+    if !matches!(common_header.bin_type, dark::ss2_bin_header::BinFileType::Obj) {
+        println!("{filename} is not an object (.bin LGMD) model");
+        return;
+    }
+    let mesh = dark::ss2_bin_obj_loader::read(&mut *reader, &common_header);
+    let bb = mesh.bounding_box;
+    println!(
+        "{filename}: bbox min ({:.3}, {:.3}, {:.3}) max ({:.3}, {:.3}, {:.3})",
+        bb.min.x, bb.min.y, bb.min.z, bb.max.x, bb.max.y, bb.max.z
+    );
+    for (name, bounds) in dark::ss2_bin_obj_loader::sub_object_bounds(&mesh) {
+        match bounds {
+            Some(aabb) => println!(
+                "  {name:<16} min ({:>7.3}, {:>7.3}, {:>7.3}) max ({:>7.3}, {:>7.3}, {:>7.3})",
+                aabb.min.x, aabb.min.y, aabb.min.z, aabb.max.x, aabb.max.y, aabb.max.z
+            ),
+            None => println!("  {name:<16} (no vertices)"),
+        }
+    }
 }
