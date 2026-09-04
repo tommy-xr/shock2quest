@@ -311,10 +311,13 @@ const VR_25AE_VIEW_MODELS: &[&str] = &[
 // 0.762 m), the space `RuntimePropTransform` lives in.
 
 /// Per-model magazine anchors, keyed like [`HAND_MODEL_POSITIONING`]
-/// (lowercased `PropModelName`). Read off each 25AE view model's own art with
-/// `cargo dv <model>.bin --debug-subobjects`: the centre of the authored clip
-/// part where the model has one (`ar15_h`'s `@s02_cli`, `fsn_h`'s `@01_core`),
-/// otherwise the underside of the grip or receiver the classic reload feeds.
+/// (lowercased `PropModelName`). Where the art has a clip part (`ar15_h`'s
+/// `@s02_cli`, `fsn_h`'s `@01_core`, found with `cargo dv <model>.bin
+/// --debug-subobjects`) the anchor is its centre; the rest sit on the grip or
+/// loading port. Every value is placed against the rendered wield with the
+/// `clip_zone` dev param (which also marks the model origin), not from the
+/// dump alone - the pistol's origin, for one, renders at the wrist, well
+/// behind where its sub-object bounds suggest.
 ///
 /// A model with no entry keeps the zone on its own origin: a classic install's
 /// world models; the energy weapons (`lasehand`, `empgun_h`), which recharge
@@ -322,10 +325,10 @@ const VR_25AE_VIEW_MODELS: &[&str] = &[
 /// model and is not trusted yet; and `al_h` / `viro_h`, not measured yet.
 static MAGAZINE_ANCHORS: Lazy<HashMap<&str, Vector3<f32>>> = Lazy::new(|| {
     HashMap::from([
-        ("atek_h", vec3(0.10, -0.18, 0.0)),
+        ("atek_h", vec3(-0.20, -0.15, 0.0)),
         ("ar15_h", vec3(-0.04, -0.20, 0.0)),
-        ("sg_h", vec3(0.20, -0.20, 0.0)),
-        ("gren_h", vec3(0.0, -0.20, 0.0)),
+        ("sg_h", vec3(0.08, -0.10, 0.0)),
+        ("gren_h", vec3(0.10, -0.05, 0.0)),
         ("fsn_h", vec3(-0.65, 0.0, 0.0)),
     ])
 });
