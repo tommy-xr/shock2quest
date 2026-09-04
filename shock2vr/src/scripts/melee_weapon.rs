@@ -165,7 +165,17 @@ impl Script for HeldMeleeWeapon {
                 let damage = self
                     .may_damage(entity_id, owner, physics, *contact, player_velocity)
                     .then(|| authored_contact_damage(world, entity_id, owner))
-                    .flatten();
+                    .flatten()
+                    // Adrenaline Overproduction scales the *player's* swing,
+                    // so only a weapon in their hand gets the bonus (a wrench
+                    // knocked into a creature is nobody's swing).
+                    .map(|amount| {
+                        if self.is_held(world, entity_id) {
+                            amount * crate::scripts::berserk::melee_damage_multiplier(world)
+                        } else {
+                            amount
+                        }
+                    });
 
                 let mut effects = Vec::new();
                 if let Some(amount) = damage {

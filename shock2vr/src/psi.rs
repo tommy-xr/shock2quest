@@ -30,6 +30,11 @@ const PSI_POWERS_ROOT_TEMPLATE_ID: i32 = -962;
 /// the player is invisible to AI and security devices.
 pub const INVISO_TEMPLATE_ID: i32 = -3157;
 
+/// `Berserk` - Adrenaline Overproduction (tier 2 sustained power): while
+/// active, the player's melee hits do more damage and the adrenaline drains
+/// their health (see `scripts::berserk`).
+pub const BERSERK_TEMPLATE_ID: i32 = -3155;
+
 /// `PropPsiPower::activation_type` for sustained/timed self effects - the
 /// power activates for a duration given by its `P$PsiShield` data
 /// (`duration_base + duration_per_psi × PSI` seconds).

@@ -2918,6 +2918,13 @@ impl MissionCore {
         ) {
             effects.push(radiation);
         }
+        // Runs before the sustained-power countdown below, which is the
+        // decrement the drain's per-second accounting predicts.
+        if let Some(drain) =
+            crate::scripts::berserk::tick_player_drain(&self.world, time.elapsed.as_secs_f32())
+        {
+            effects.push(drain);
+        }
         effects.extend(command_effects);
 
         let player = {

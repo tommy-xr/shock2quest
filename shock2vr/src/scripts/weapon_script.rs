@@ -464,7 +464,9 @@ fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World
             msg: Message {
                 to: target,
                 payload: MessagePayload::Damage {
-                    amount: MELEE_DAMAGE,
+                    // Adrenaline Overproduction scales the player's melee
+                    // damage while it is active (1.0 otherwise).
+                    amount: MELEE_DAMAGE * crate::scripts::berserk::melee_damage_multiplier(world),
                     // Swing direction + contact point seed the victim's
                     // death-ragdoll reaction. No bone: melee resolves a hitbox
                     // proxy to its parent BEFORE sending (so HitBoxScript
