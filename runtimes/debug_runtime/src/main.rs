@@ -211,6 +211,32 @@ fn default_camera_head_rotation() -> Quaternion<f32> {
     head_rotation_from_yaw_pitch(0.0, 0.0)
 }
 
+/// How far in front of the pawn the default VR hands rest, in world units
+/// (forward is -X). Far enough out that the forearm panels - which hang back
+/// toward the elbow, a quarter unit behind the hand - are still in front of
+/// the eye rather than beside it.
+const VR_HAND_FORWARD: f32 = 0.75;
+/// How far *below* the eye the default VR hands rest. The forearm HUD panels
+/// lie flat on top of the arms, so hands above the eye (as this pose once was)
+/// show the panels their blank underside if they are in frame at all - which
+/// is why offscreen `--vr` captures came back with no panels in them.
+const VR_HAND_DROP_BELOW_EYE: f32 = 0.14;
+/// Lateral spread of the default VR hands, either side of the pawn's centre.
+const VR_HAND_SPREAD: f32 = 0.18;
+
+/// Rest positions for the simulated VR hands, `(left, right)`, pawn-local.
+///
+/// `eye_height` is the same eye the render camera is composed from
+/// (`tracked_head`), so the hands are placed *relative to the view* rather than
+/// at a magic height that silently drifts above it.
+fn default_vr_hand_positions(eye_height: f32) -> (Vector3<f32>, Vector3<f32>) {
+    let y = eye_height - VR_HAND_DROP_BELOW_EYE;
+    (
+        vec3(-VR_HAND_FORWARD, y, VR_HAND_SPREAD),
+        vec3(-VR_HAND_FORWARD, y, -VR_HAND_SPREAD),
+    )
+}
+
 /// Parse mission string (supports mission:spawn_location format)
 fn parse_mission(mission: &str) -> (String, SpawnLocation) {
     if !mission.contains(':') {
@@ -631,15 +657,16 @@ fn run_game_blocking(
     current_input.head.rotation = default_camera_head_rotation();
     // In VR mode, give the simulated hands a natural first-person rest pose
     // (pawn-local; forward is -X, matching the desktop camera convention) so
-    // `--vr` shows the glove hands at the bottom of the view without any
+    // `--vr` shows the glove hands and their forearm HUD panels without any
     // /v1/control/input setup. The yaw-90 rotation aims each hand's -Z
     // (raycast/fingers) at pawn-forward, like desktop_runtime's default hand
     // yaw. HTTP patches override these as usual.
     if args.vr {
         let aim_forward = Quaternion::from_angle_y(cgmath::Deg(90.0));
-        current_input.right_hand.position = vec3(-0.55, 1.4, -0.2);
+        let (left, right) = default_vr_hand_positions(game.player_eye_height() / SCALE_FACTOR);
+        current_input.right_hand.position = right;
         current_input.right_hand.rotation = aim_forward;
-        current_input.left_hand.position = vec3(-0.55, 1.4, 0.2);
+        current_input.left_hand.position = left;
         current_input.left_hand.rotation = aim_forward;
     }
 
@@ -4268,6 +4295,93 @@ mod screenshot_size_tests {
             screenshot_target_size(1600, 1200, 800, 600, Some(0)),
             (800, 600)
         );
+    }
+}
+
+/// The default `--vr` hands exist so an offscreen capture photographs the VR
+/// forearm HUD without any `/v1/control/input` setup. That only holds if the
+/// panels they carry land inside the picture and face the eye, which is
+/// geometry - assert it here rather than discovering black screenshots.
+#[cfg(test)]
+mod vr_hand_pose_tests {
+    use super::*;
+    use cgmath::{InnerSpace, Rotation};
+    use shock2vr::Handedness;
+    use shock2vr::forearm_pose;
+
+    /// Both forearm panels, as `(centre, outward normal)` in pawn space, for
+    /// the runtime's own default VR pose.
+    fn default_panels(eye_height: f32) -> Vec<(Vector3<f32>, Vector3<f32>)> {
+        let aim_forward = Quaternion::from_angle_y(cgmath::Deg(90.0));
+        let (left, right) = default_vr_hand_positions(eye_height);
+        [(left, Handedness::Left), (right, Handedness::Right)]
+            .into_iter()
+            .map(|(hand_position, handedness)| {
+                let (centre, rotation) = forearm_pose(hand_position, aim_forward, handedness);
+                (
+                    centre,
+                    rotation.rotate_vector(vec3(0.0, 0.0, 1.0)).normalize(),
+                )
+            })
+            .collect()
+    }
+
+    /// Where a panel sits relative to a level-gazed eye: how far in front, and
+    /// its angles off the view axis (positive = below / off-centre).
+    fn framing(eye_height: f32, centre: Vector3<f32>) -> (f32, f32, f32) {
+        // Pawn forward is -X, the pawn's lateral axis is Z.
+        let forward = -centre.x;
+        let down_deg = ((eye_height - centre.y) / forward).atan().to_degrees();
+        let across_deg = (centre.z.abs() / forward).atan().to_degrees();
+        (forward, down_deg, across_deg)
+    }
+
+    #[test]
+    fn the_default_vr_forearm_panels_sit_inside_the_default_view() {
+        let eye_height = shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR;
+        // The runtime's own projection: a vertical FOV over a 4:3 framebuffer.
+        let half_v = shock2vr::DEFAULT_FOV_DEG / 2.0;
+        let half_h = (half_v.to_radians().tan() * SCR_WIDTH as f32 / SCR_HEIGHT as f32)
+            .atan()
+            .to_degrees();
+
+        for (centre, normal) in default_panels(eye_height) {
+            let (forward, down_deg, across_deg) = framing(eye_height, centre);
+            assert!(forward > 0.0, "panel is behind the eye: {centre:?}");
+            assert!(
+                down_deg.abs() < half_v,
+                "panel is outside the vertical FOV ({down_deg} deg, half-FOV {half_v})"
+            );
+            assert!(
+                across_deg < half_h,
+                "panel is outside the horizontal FOV ({across_deg} deg, half-FOV {half_h})"
+            );
+
+            // ...and it is the panel's face, not its blank back, that the eye
+            // sees: the panel lies flat on the arm, so this holds only while
+            // the hands rest *below* the eye.
+            let to_eye = (vec3(0.0, eye_height, 0.0) - centre).normalize();
+            assert!(
+                normal.dot(to_eye) > 0.0,
+                "panel faces away from the eye (dot {})",
+                normal.dot(to_eye)
+            );
+        }
+    }
+
+    /// The pose that shipped before: hands parked above the eye, which put the
+    /// panels out of frame *and* upside down to the camera.
+    #[test]
+    fn hands_above_the_eye_would_not_be_photographable() {
+        let eye_height = shock2vr::PLAYER_EYE_HEIGHT / SCALE_FACTOR;
+        let aim_forward = Quaternion::from_angle_y(cgmath::Deg(90.0));
+        let (centre, rotation) =
+            forearm_pose(vec3(-0.55, 1.4, -0.2), aim_forward, Handedness::Right);
+        let (_, down_deg, _) = framing(eye_height, centre);
+        assert!(down_deg.abs() > shock2vr::DEFAULT_FOV_DEG / 2.0);
+        let normal = rotation.rotate_vector(vec3(0.0, 0.0, 1.0)).normalize();
+        let to_eye = (vec3(0.0, eye_height, 0.0) - centre).normalize();
+        assert!(normal.dot(to_eye) < 0.0);
     }
 }
 

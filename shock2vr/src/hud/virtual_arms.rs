@@ -396,7 +396,9 @@ fn create_forearm_hud_panel(
 /// toward the body and tilted flat against the arm like a wrist computer.
 /// The single source of forearm placement - the panel quad, its overlays and
 /// the ammo readout canvas all derive from this, so they cannot drift apart.
-fn forearm_pose(
+/// Public so a host can place its hands where the panels are actually visible
+/// (the debug runtime's default VR pose asserts on this).
+pub fn forearm_pose(
     hand_position: Vector3<f32>,
     hand_rotation: Quaternion<f32>,
     handedness: Handedness,
