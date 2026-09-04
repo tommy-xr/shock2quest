@@ -446,8 +446,8 @@ fn cast_sustained_power(
 
 /// Cast an instant (activation type 2) power: it resolves on the spot, with
 /// no duration and no projectile. Dispatch is by template id so the remaining
-/// instant powers (Major Heal, SomaDrain, ForceWall, CyberHack) slot in
-/// beside this one.
+/// instant powers (SomaDrain, ForceWall, CyberHack) slot in beside the
+/// heals.
 fn cast_instant_power(
     world: &World,
     amp_entity: EntityId,
@@ -455,8 +455,9 @@ fn cast_instant_power(
     effective_psi: i32,
 ) -> Effect {
     match power.template_id {
-        // Cerebro-stimulated Regeneration: restores the caster's health.
-        psi::PSI_HEAL_TEMPLATE_ID => cast_self_heal(world, amp_entity, power, effective_psi),
+        // Cerebro-stimulated Regeneration and its Advanced (tier 5) version:
+        // both restore the caster's health from the same authored data.
+        id if is_self_heal_power(id) => cast_self_heal(world, amp_entity, power, effective_psi),
         _ => {
             game_log!(
                 INFO,
@@ -524,6 +525,12 @@ fn cast_self_heal(
     Effect::Multiple(effects)
 }
 
+/// The instant powers that heal the caster: Cerebro-stimulated Regeneration
+/// and its Advanced version, which share a script and a `data` shape.
+fn is_self_heal_power(template_id: i32) -> bool {
+    template_id == psi::PSI_HEAL_TEMPLATE_ID || template_id == psi::MAJOR_HEAL_TEMPLATE_ID
+}
+
 /// The HP an instant self-heal restores at full strength (the caller clamps
 /// it to the caster's missing health): `data[0] + data[1] x effective PSI`.
 /// 0 for a power with no (or unusable) heal data.
@@ -543,7 +550,7 @@ fn self_heal_amount(data: &[f32; 4], effective_psi: i32) -> i32 {
 /// no health missing). Checked before a charge starts so a pointless cast
 /// cannot be over-held into a burnout, which spends points and deals damage.
 fn instant_cast_is_futile(world: &World, power: &PsiPowerInfo, effective_psi: i32) -> bool {
-    if power.template_id != psi::PSI_HEAL_TEMPLATE_ID {
+    if !is_self_heal_power(power.template_id) {
         return false;
     }
     let Some((_, current_hp, max_hp)) = super::script_util::player_hit_points(world) else {
@@ -600,6 +607,21 @@ mod tests {
         assert_eq!(clamped_self_heal(&[0.0, 2.0, 0.0, 0.0], 5, 100, 100), 0);
         // Over-healed (or a bogus maximum) never produces a negative delta.
         assert_eq!(clamped_self_heal(&[0.0, 2.0, 0.0, 0.0], 5, 120, 100), 0);
+    }
+
+    #[test]
+    fn both_regeneration_powers_heal() {
+        assert!(is_self_heal_power(psi::PSI_HEAL_TEMPLATE_ID));
+        assert!(is_self_heal_power(psi::MAJOR_HEAL_TEMPLATE_ID));
+        assert!(!is_self_heal_power(psi::INVISO_TEMPLATE_ID));
+    }
+
+    /// Major Heal's authored data is `[5, 5]`: 5 + 5 x PSI.
+    #[test]
+    fn major_heal_is_the_large_version_of_the_same_curve() {
+        assert_eq!(self_heal_amount(&[5.0, 5.0, 0.0, 0.0], 6), 35);
+        // Clamped to the missing health, like any other self-heal.
+        assert_eq!(clamped_self_heal(&[5.0, 5.0, 0.0, 0.0], 6, 5, 30), 25);
     }
 
     #[test]
