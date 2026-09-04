@@ -7161,7 +7161,31 @@ impl MissionCore {
                             continue;
                         };
 
-                        let vhots = new_model.vhots();
+                        let mut vhots = new_model.vhots();
+                        // Which hand a VR wield renders for. The `_h` models
+                        // are all authored right-handed, so a left-hand wield
+                        // draws the mirror image. A model applied while
+                        // nothing holds it (a restore before the grab) has no
+                        // hand yet; the right-handed default matches what the
+                        // rig is authored as, and the grab's own ChangeModel
+                        // re-derives this.
+                        let hand = self
+                            .interaction
+                            .holding_hand(entity_id)
+                            .unwrap_or(crate::vr_config::Handedness::Right);
+                        // A gun in the LEFT hand: reflect across the gun,
+                        // muzzle vhots included, so the baked hand is a left
+                        // hand and the shot still leaves the reflected barrel.
+                        // Melee rigs mirror in their own frame below. The
+                        // model's authored bounding box is left as-is: a held
+                        // gun is unphysical, and nothing frames it by that box.
+                        if vr_held && !is_melee_weapon(&self.world, entity_id) {
+                            let mirror = hand.gun_mirror();
+                            new_model.apply_local_transform(mirror);
+                            for vhot in vhots.iter_mut() {
+                                vhot.point = mirror.transform_point(vhot.point);
+                            }
+                        }
                         // An articulated VR-wielded first-person model (hand +
                         // arm + gun as skeleton sub-objects) renders unposed
                         // without a player, so give it the empty bind pose (it
@@ -7189,12 +7213,7 @@ impl MissionCore {
                             // cancelled for the same reason as flat: the
                             // entity transform is re-anchored (there to the
                             // camera, here to the tracked hand) every frame.
-                            let is_melee = self
-                                .world
-                                .borrow::<View<PropLimbModel>>()
-                                .ok()
-                                .is_some_and(|v| v.get(entity_id).is_ok());
-                            if is_melee {
+                            if is_melee_weapon(&self.world, entity_id) {
                                 let player = asset_cache
                                     .get_opt(
                                         &ANIMATION_CLIP_IMPORTER,
@@ -7222,21 +7241,10 @@ impl MissionCore {
                                     )
                                 });
                                 if let Some(arm) = arm {
-                                    // Which arm to draw. The `_h` rigs are all
-                                    // authored as a right arm, so a left-hand
-                                    // wield renders the mirror image - and the
-                                    // contact offset below is mirrored with
-                                    // it, keeping the collider on the rendered
-                                    // head. A model applied while nothing
-                                    // holds it (a restore before the grab) has
-                                    // no hand yet; the right-handed default
-                                    // matches what the rig is authored as, and
-                                    // the grab's own ChangeModel re-derives
-                                    // this.
-                                    let hand = self
-                                        .interaction
-                                        .holding_hand(entity_id)
-                                        .unwrap_or(crate::vr_config::Handedness::Right);
+                                    // Which arm to draw: the left hand renders
+                                    // the mirror image, and the contact offset
+                                    // below is mirrored with it, keeping the
+                                    // collider on the rendered head.
                                     let correction =
                                         crate::vr_config::melee_wield_pose_correction(arm, hand);
                                     new_model.apply_local_transform(correction);

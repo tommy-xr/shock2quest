@@ -315,7 +315,7 @@ impl VirtualHand {
                         // grip in the palm), so it must rotate with the hand
                         position: hand_position + hand_rotation.rotate_vector(vr_offsets.offset),
                         rotation: hand_rotation * vr_offsets.rotation,
-                        scale: vec3(1.0, 1.0, 1.0), //vr_offsets.scale,
+                        scale: vec3(1.0, 1.0, 1.0),
                     });
 
                     let updated_hand = VirtualHand {

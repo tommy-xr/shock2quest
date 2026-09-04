@@ -14,7 +14,7 @@ import {
   scale,
   sub,
 } from "./helpers/vr-hand.js";
-import type { Quat } from "./helpers/vr-hand.js";
+import type { Hand, Quat } from "./helpers/vr-hand.js";
 
 // A VR-wielded weapon must fire from its model's muzzle vhot, travelling along
 // the rendered barrel. Both are checkable numerically: the runtime reports the
@@ -78,10 +78,19 @@ async function entityTransform(game: GameServer, id: number): Promise<EntityTran
 }
 
 /** Reach out with the production VR hand and squeeze to pick `target` up. */
-async function grabWithRightHand(game: GameServer, target: Vec3): Promise<void> {
-  await aimVrHandAt(game, target, 0.3);
-  await game.input.set("right_hand.squeeze", 1);
+async function grabWith(game: GameServer, hand: Hand, target: Vec3): Promise<void> {
+  await aimVrHandAt(game, target, 0.3, 0, 0, { hand });
+  await game.input.set(`${hand}_hand.squeeze`, 1);
   await game.step({ frames: 8 });
+}
+
+/** The model's muzzle vhot as the wielding hand renders it: the left hand
+ * draws the right-handed model reflected across the gun (its Z), muzzle
+ * included, so a left-hand shot must leave the reflected point. */
+function muzzleVhotFor(model: string, hand: Hand): Vec3 | undefined {
+  const authored = MUZZLE_VHOT[model];
+  if (!authored) return undefined;
+  return hand === "left" ? [authored[0], authored[1], -authored[2]] : authored;
 }
 
 /**
@@ -101,6 +110,7 @@ async function fireAndTrack(
   handLocalPosition: Vec3,
   aimDirection: Vec3,
   projectileMatches: (entity: EntitySummary) => boolean,
+  hand: Hand = "right",
 ): Promise<{
   barrelDeviationDeg: number;
   lateralError: number;
@@ -108,22 +118,22 @@ async function fireAndTrack(
   frameStep: number;
   distanceTravelled: number;
 }> {
-  await game.input.set("right_hand.position", handLocalPosition);
-  await game.input.set("right_hand.rotation", quatFromTo([0, 0, -1], normalize(aimDirection)));
-  await game.input.set("right_hand.squeeze", 1);
+  await game.input.set(`${hand}_hand.position`, handLocalPosition);
+  await game.input.set(`${hand}_hand.rotation`, quatFromTo([0, 0, -1], normalize(aimDirection)));
+  await game.input.set(`${hand}_hand.squeeze`, 1);
   await game.step({ frames: 5 });
 
   const weapon = await entityTransform(game, weaponId);
-  const vhot = MUZZLE_VHOT[weapon.model];
+  const vhot = muzzleVhotFor(weapon.model, hand);
   assert.ok(vhot, `VR should wield a view model with a known muzzle vhot, got "${weapon.model}"`);
   const muzzle = add(weapon.position, quatRotate(weapon.rotation, vhot));
   // The 25AE view models are authored with the barrel along the model's -X.
   const barrel = quatRotate(weapon.rotation, [-1, 0, 0]);
 
   const before = new Set((await game.entities.list()).entities.map((e) => e.id));
-  await game.input.set("right_hand.trigger", 1);
+  await game.input.set(`${hand}_hand.trigger`, 1);
   await game.step({ frames: 1 });
-  await game.input.set("right_hand.trigger", 0);
+  await game.input.set(`${hand}_hand.trigger`, 0);
   // The trigger frame spawns the projectile and integrates it once; the first
   // loop iteration below steps once more before it can be observed. So the
   // first sample sits FLIGHT_FRAMES_BEFORE_FIRST_SAMPLE frames down the barrel
@@ -189,7 +199,7 @@ test(
     // DebugCycleWeapon drops each weapon in front of the player in VR.
     const laser = await cycleToWeapon(game, (e) => e.template_id === LASER_PISTOL);
 
-    await grabWithRightHand(game, laser.position as Vec3);
+    await grabWith(game, "right", laser.position as Vec3);
     const held = await game.info();
     assert.equal(held.player.right_hand_entity_id, laser.id, "the hand must hold the pistol");
 
@@ -213,6 +223,39 @@ test(
   },
 );
 
+// A gun wielded in the LEFT hand draws the mirror image of its right-handed
+// model (the baked hand becomes a left hand), and the muzzle reflects with it.
+// Negative-first: unmirrored, the laser's muzzle sits 0.064 units the other
+// side of the barrel plane, so the shot misses the reflected point by 0.128 -
+// past the 0.05 tolerance below.
+test(
+  "a laser pistol wielded in the LEFT hand fires from its mirrored muzzle",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "debug_weapons",
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 30 });
+
+    const laser = await cycleToWeapon(game, (e) => e.template_id === LASER_PISTOL);
+    await grabWith(game, "left", laser.position as Vec3);
+    const held = await game.info();
+    assert.equal(held.player.wielded_entity_id, laser.id, "the LEFT hand slot must hold the pistol");
+    assert.equal(held.player.right_hand_entity_id, null, "the right hand stays empty");
+
+    const shot = await fireAndTrack(
+      game,
+      laser.id,
+      [0, 1, -2],
+      [-1, 0, 0],
+      (e) => e.name === "Laser Shot",
+      "left",
+    );
+    assertLeftTheMuzzle(shot, "left-hand bolt");
+  },
+);
+
 test(
   "a VR-wielded psi amp casts from its muzzle vhot along the barrel",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" },
@@ -226,7 +269,7 @@ test(
     const amp = (await game.entities.list()).entities.find((e) => e.template_id === PSI_AMP);
     assert.ok(amp, "debug_psi must place the Psi Amp in the scene");
 
-    await grabWithRightHand(game, amp.position as Vec3);
+    await grabWith(game, "right", amp.position as Vec3);
     const held = await game.info();
     assert.equal(held.player.right_hand_entity_id, amp.id, "the hand must hold the amp");
 

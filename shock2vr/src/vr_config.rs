@@ -23,10 +23,9 @@ impl Handedness {
     /// [`crate::hand_glove`] and the melee wield, so the arm and the glove
     /// cannot disagree about which way round the left hand is.
     ///
-    /// Note this is *not* what held guns do: [`VRHandModelPerHandAdjustments::flip_x`]
-    /// mirrors only a `scale` field that never reaches the world
-    /// (`VirtualHand::SetPositionRotation` hardcodes scale 1), so a held gun is
-    /// drawn unmirrored in both hands.
+    /// Held guns reflect across a different plane of their own frame - see
+    /// [`Self::gun_mirror`] - because their authored axes differ from the arm
+    /// rigs'.
     ///
     /// A reflection has a negative determinant, which reverses the triangle
     /// winding the GPU sees. Geometry that culls backfaces must flip its
@@ -49,6 +48,26 @@ impl Handedness {
 
         self.mirror().transform_vector(point)
     }
+
+    /// The reflection that turns a right-handed 25AE gun view model into this
+    /// hand's, in the model's own frame.
+    ///
+    /// The `_h` guns bake a right hand onto the grip, so a left-hand wield
+    /// draws the mirror image. Their authored frame runs the barrel along -X
+    /// with +Y up, so the mirror plane is the one holding the barrel and the
+    /// sights - it negates Z, "across the gun" - and the barrel keeps pointing
+    /// the same way. The grip's thumb-side offset
+    /// ([`VRHandModelPerHandAdjustments::flip_x`]) and the muzzle vhots
+    /// reflect with it; the negative determinant is what
+    /// [`dark::model::Model::apply_local_transform`] flips the winding for.
+    pub fn gun_mirror(self) -> cgmath::Matrix4<f32> {
+        use cgmath::{Matrix4, SquareMatrix};
+
+        match self {
+            Handedness::Right => Matrix4::identity(),
+            Handedness::Left => Matrix4::from_nonuniform_scale(1.0, 1.0, -1.0),
+        }
+    }
 }
 
 /// The index a hand occupies in a `[_; 2]` of per-hand state.
@@ -68,7 +87,6 @@ pub fn hand_slot(hand: Handedness) -> usize {
 pub struct VRHandModelPerHandAdjustments {
     pub offset: Vector3<f32>,
     pub rotation: Quaternion<f32>,
-    pub scale: Vector3<f32>,
 }
 
 impl VRHandModelPerHandAdjustments {
@@ -76,7 +94,6 @@ impl VRHandModelPerHandAdjustments {
         VRHandModelPerHandAdjustments {
             offset: Vector3::new(0.0, 0.0, 0.0),
             rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            scale: Vector3::new(1.0, 1.0, 1.0),
         }
     }
 
@@ -87,14 +104,15 @@ impl VRHandModelPerHandAdjustments {
         }
     }
 
+    /// The left hand's grip for a gun whose model is drawn reflected by
+    /// [`Handedness::gun_mirror`]: the thumb-side component of the hand-local
+    /// offset mirrors with the geometry, so the reflected gun seats on the
+    /// left palm exactly where the authored one seats on the right. Only for
+    /// models that ARE reflected (the `_h` set) - an unmirrored world model
+    /// keeps the same grip in both hands.
     pub fn flip_x(self) -> VRHandModelPerHandAdjustments {
-        // NOTE: the scale mirror is currently inert (SetPositionRotation
-        // hardcodes scale 1), so the left hand holds the *unmirrored* model.
-        // The offset must therefore NOT be mirrored - it seats the same
-        // unmirrored geometry at the same hand-local point (verified against
-        // left-hand grip screenshots).
         VRHandModelPerHandAdjustments {
-            scale: vec3(-self.scale.x, self.scale.y, self.scale.z),
+            offset: vec3(-self.offset.x, self.offset.y, self.offset.z),
             ..self
         }
     }
@@ -128,7 +146,9 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
     let mut map = HashMap::new();
 
     let held_weapon_right = VRHandModelPerHandAdjustments::new().rotate_y(Deg(-90.0));
-    let held_weapon_left = held_weapon_right.clone().flip_x();
+    // World models are drawn unmirrored in either hand, so the left grip is
+    // the right grip as-is.
+    let held_weapon_left = held_weapon_right.clone();
     let held_weapon = VRHandModelAdjustments::new(held_weapon_left, held_weapon_right.clone());
 
     // The wrench's long axis runs opposite the guns' after the -90 yaw (its
@@ -144,10 +164,16 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
     // Hand model adjustments for VR
     // Specify overrides for particular models with how they should be oriented
     // relative ot the virtual hand
-    // A weapon whose left-hand placement is the right-hand adjustments
-    // mirrored (flip_x)
+    // A 25AE `_h` gun: the left hand draws the model reflected
+    // (`Handedness::gun_mirror`), so its grip is the right grip reflected too
+    // (`flip_x`).
     fn symmetric(right: VRHandModelPerHandAdjustments) -> VRHandModelAdjustments {
         VRHandModelAdjustments::new(right.clone().flip_x(), right)
+    }
+    // A world model: drawn unmirrored in either hand, so both grips are the
+    // right-hand one.
+    fn same_grip(right: VRHandModelPerHandAdjustments) -> VRHandModelAdjustments {
+        VRHandModelAdjustments::new(right.clone(), right)
     }
 
     let items = vec![
@@ -227,7 +253,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         // this and show the world models grip fine with the same offsets.
         (
             "atek_w",
-            symmetric(
+            same_grip(
                 held_weapon_right
                     .clone()
                     .with_offset(vec3(0.02, 0.04, -0.045)),
@@ -235,7 +261,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         ),
         (
             "ar15_w",
-            symmetric(
+            same_grip(
                 held_weapon_right
                     .clone()
                     .with_offset(vec3(-0.19, 0.0, -0.045)),
@@ -243,7 +269,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         ),
         (
             "sg_w",
-            symmetric(
+            same_grip(
                 held_weapon_right
                     .clone()
                     .with_offset(vec3(-0.21, 0.0, -0.045)),
@@ -259,7 +285,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         ("al_w", held_weapon.clone()),
         // The wrench's handle runs along the weapon axis, so it takes the
         // held-weapon rotation (handle through the fist, head forward)
-        ("wrench_w", symmetric(wrench_right.clone())),
+        ("wrench_w", same_grip(wrench_right.clone())),
         // World items
         ("battery", held_item.clone()),
         ("batteryb", held_item.clone()),
@@ -499,6 +525,43 @@ mod tests {
     /// Every VR-wieldable 25AE gun must have a grip entry, or it would anchor
     /// at the model origin with no rotation. The melee `_h` are the deliberate
     /// exception - see `melee_view_models_have_no_static_grip`.
+    /// The gun mirror keeps the barrel (-X) and the sights (+Y) and swaps the
+    /// side the baked hand is on, so a left-hand wield still aims where the
+    /// controller points. The right hand is the authored model, untouched.
+    #[test]
+    fn the_gun_mirror_reflects_across_the_gun_only() {
+        use cgmath::{Matrix4, SquareMatrix, Transform};
+
+        let left = Handedness::Left.gun_mirror();
+        assert_eq!(
+            left.transform_vector(vec3(-1.0, 0.0, 0.0)),
+            vec3(-1.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            left.transform_vector(vec3(0.0, 1.0, 0.0)),
+            vec3(0.0, 1.0, 0.0)
+        );
+        assert_eq!(
+            left.transform_vector(vec3(0.0, 0.0, 1.0)),
+            vec3(0.0, 0.0, -1.0)
+        );
+        assert!(
+            left.determinant() < 0.0,
+            "a reflection, so the winding must flip"
+        );
+        assert_eq!(Handedness::Right.gun_mirror(), Matrix4::identity());
+    }
+
+    /// The left grip is the right grip with its thumb-side component
+    /// reflected, matching the reflected geometry it seats.
+    #[test]
+    fn the_left_grip_mirrors_the_thumb_side_offset() {
+        let right = VRHandModelPerHandAdjustments::new().with_offset(vec3(0.05, 0.12, 0.10));
+        let left = right.clone().flip_x();
+        assert_eq!(left.offset, vec3(-0.05, 0.12, 0.10));
+        assert_eq!(left.rotation, right.rotation);
+    }
+
     #[test]
     fn every_vr_view_model_has_a_grip_entry() {
         for name in VR_25AE_VIEW_MODELS {

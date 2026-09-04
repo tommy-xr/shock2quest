@@ -2,6 +2,7 @@ import type { GameServer } from "../../src/index.js";
 import type { UiPanelPose, Vec3 } from "../../src/types.js";
 
 export type Quat = [number, number, number, number];
+export type Hand = "left" | "right";
 
 export const add = (a: Vec3, b: Vec3): Vec3 => [
   a[0] + b[0],
@@ -118,6 +119,7 @@ export async function aimVrHandAt(
   standOff = 0.45,
   squeeze = 0,
   trigger = 0,
+  { hand = "right" }: { hand?: Hand } = {},
 ): Promise<{ start: Vec3; target: Vec3 }> {
   const snapshot = await game.info();
   const pawn = snapshot.player.position;
@@ -138,10 +140,10 @@ export async function aimVrHandAt(
   await game.input.lookAtWorldPoint(target, {
     eyeHeight: snapshot.player.camera_offset[1],
   });
-  await game.input.set("right_hand.position", localHand);
-  await game.input.set("right_hand.rotation", localHandRotation);
-  await game.input.set("right_hand.trigger", trigger);
-  await game.input.set("right_hand.squeeze", squeeze);
+  await game.input.set(`${hand}_hand.position`, localHand);
+  await game.input.set(`${hand}_hand.rotation`, localHandRotation);
+  await game.input.set(`${hand}_hand.trigger`, trigger);
+  await game.input.set(`${hand}_hand.squeeze`, squeeze);
   await game.step({ frames: 3 });
   return { start: worldHand, target };
 }
