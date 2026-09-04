@@ -8,7 +8,7 @@
 
 use dark::{
     properties::{Link, ReceptronOptions, StimPropagator},
-    ss2_entity_info::{self, SystemShock2EntityInfo},
+    ss2_entity_info::SystemShock2EntityInfo,
 };
 use shipyard::{EntityId, Unique, UniqueView, UniqueViewMut, World};
 
@@ -22,11 +22,11 @@ use super::Effect;
 /// second, which reads the authored intensity 5 as 5 damage per second at the
 /// player (linear falloff to 0 at the 4-unit edge) and burns a 12-HP pipe
 /// hybrid down in a few seconds of contact.
-pub const IMMOLATE_PULSE_INTERVAL_SECS: f32 = 1.0;
+const IMMOLATE_PULSE_INTERVAL_SECS: f32 = 1.0;
 
 /// The Immolate aura's authored data, hydrated once at level load: the
 /// `StimSource` it emits and the receptrons it grants its caster.
-#[derive(Unique, Clone, Default)]
+#[derive(Unique, Default)]
 pub struct ImmolateAura {
     /// `(stim archetype, intensity, radius)` of the power's radius StimSource.
     stim: Option<(i32, f32, f32)>,
@@ -37,38 +37,35 @@ pub struct ImmolateAura {
 
 impl ImmolateAura {
     pub fn from_entity_info(entity_info: &SystemShock2EntityInfo) -> Self {
-        let hierarchy = ss2_entity_info::get_hierarchy(entity_info);
-        let mut ancestors = ss2_entity_info::get_ancestors(hierarchy, &IMMOLATE_TEMPLATE_ID);
-        ancestors.push(IMMOLATE_TEMPLATE_ID);
+        // The power's own links only: `Immolate`'s ancestors (`Level 2`,
+        // `Psi Powers`, `MetaProperty`) author none.
+        let Some(links) = entity_info.template_to_links.get(&IMMOLATE_TEMPLATE_ID) else {
+            return Self::default();
+        };
 
         let mut aura = Self::default();
-        for ancestor in ancestors {
-            let Some(links) = entity_info.template_to_links.get(&ancestor) else {
-                continue;
-            };
-            for link in &links.to_links {
-                match &link.link {
-                    Link::StimSource(options) => {
-                        if let StimPropagator::Radius { radius } = options.propagator {
-                            aura.stim = Some((link.to_template_id, options.intensity, radius));
-                        }
+        for link in &links.to_links {
+            match &link.link {
+                Link::StimSource(options) => {
+                    if let StimPropagator::Radius { radius } = options.propagator {
+                        aura.stim = Some((link.to_template_id, options.intensity, radius));
                     }
-                    Link::Receptron(options) => {
-                        aura.receptrons.push((link.to_template_id, options.clone()))
-                    }
-                    _ => {}
                 }
+                Link::Receptron(options) => {
+                    aura.receptrons.push((link.to_template_id, options.clone()))
+                }
+                _ => {}
             }
         }
         aura
     }
 }
 
-/// The receptrons an active sustained power grants `target`. Today only
-/// Immolate has any (its `Amplify 0.0` on Incendiary, which is exactly what
-/// makes the burning caster fireproof); the other defensive powers
-/// (PsiShield, AntiPsi, ...) author theirs the same way and can be added here.
-pub fn active_power_receptrons(world: &World, target: EntityId) -> Vec<(i32, ReceptronOptions)> {
+/// Immolate's own receptrons, applied to `target` while the caster is burning:
+/// its `Amplify 0.0` on Incendiary is what makes them fireproof. Retail
+/// attaches the power as a metaproperty on the player; this is that, for the
+/// one power that authors receptrons today.
+pub fn immolate_caster_receptrons(world: &World, target: EntityId) -> Vec<(i32, ReceptronOptions)> {
     let is_player = world
         .borrow::<UniqueView<PlayerInfo>>()
         .is_ok_and(|player| player.entity_id == target);
@@ -101,14 +98,22 @@ pub fn tick_immolate_aura(world: &World, elapsed_secs: f32) -> Option<Effect> {
         aura.secs_since_pulse = IMMOLATE_PULSE_INTERVAL_SECS;
         return None;
     }
-    aura.secs_since_pulse += elapsed_secs;
+    // Never bank more than one pulse: a long frame (a level load, a debugger
+    // pause) must not fire a burst of them once stepping resumes.
+    aura.secs_since_pulse =
+        (aura.secs_since_pulse + elapsed_secs).min(2.0 * IMMOLATE_PULSE_INTERVAL_SECS);
     if aura.secs_since_pulse < IMMOLATE_PULSE_INTERVAL_SECS {
         return None;
     }
-    aura.secs_since_pulse -= IMMOLATE_PULSE_INTERVAL_SECS;
     drop(aura);
 
+    // Read the player before consuming the interval, so a missing PlayerInfo
+    // cannot swallow a pulse.
     let center = world.borrow::<UniqueView<PlayerInfo>>().ok()?.pos;
+    world
+        .borrow::<UniqueViewMut<ImmolateAura>>()
+        .ok()?
+        .secs_since_pulse -= IMMOLATE_PULSE_INTERVAL_SECS;
     Some(Effect::RadiusStim {
         center,
         radius,
@@ -259,7 +264,7 @@ mod tests {
 
         let world = world_with(authored_aura(), true);
         let mut receptrons = vec![burns.clone()];
-        receptrons.extend(active_power_receptrons(&world, player_of(&world)));
+        receptrons.extend(immolate_caster_receptrons(&world, player_of(&world)));
         assert_eq!(
             resolve_stim_damage(&receptrons, INCENDIARY, 10.0),
             Some(0.0),
@@ -267,6 +272,6 @@ mod tests {
         );
 
         let expired = world_with(authored_aura(), false);
-        assert!(active_power_receptrons(&expired, player_of(&expired)).is_empty());
+        assert!(immolate_caster_receptrons(&expired, player_of(&expired)).is_empty());
     }
 }
