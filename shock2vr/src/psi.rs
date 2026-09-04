@@ -63,6 +63,10 @@ pub const PSI_HEAL_TEMPLATE_ID: i32 = -1017;
 /// `data` shape, bigger numbers.
 pub const MAJOR_HEAL_TEMPLATE_ID: i32 = -1139;
 
+/// `SomaDrain` - Soma Transference (tier 5 instant power): drains health from
+/// the creature under the amp's aim and transfers it to the caster.
+pub const SOMA_DRAIN_TEMPLATE_ID: i32 = -3160;
+
 /// The powers that support hold-to-overload (per the published gameplay
 /// tables), by template id. Comments give the gamesys name and the
 /// discipline name players know it by.
