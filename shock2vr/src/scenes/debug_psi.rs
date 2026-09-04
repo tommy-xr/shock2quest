@@ -104,18 +104,19 @@ pub fn create_debug_psi_scene(
         ),
         // hazard patch: a floor marker for the (invisible) radiation source.
         // The field is a 6-unit sphere; the marker is the square inscribed in
-        // it, so every point on the marker is inside the field. Sunk into the
-        // floor slab so a walking tester does not step onto a lip.
+        // it, so every point on the marker is inside the field. It sits 2 cm
+        // proud of the floor slab rather than flush with it - coplanar faces
+        // z-fight into stripes, and 2 cm is not a lip anyone walks into.
         (
             vec3(0.15, 0.45, 0.15),
             vec3(
                 RADIATION_SOURCE_POSITION.0,
-                -0.02,
+                0.01,
                 RADIATION_SOURCE_POSITION.1,
             ),
             vec3(
                 RADIATION_SOURCE_RADIUS * std::f32::consts::SQRT_2,
-                0.04,
+                0.02,
                 RADIATION_SOURCE_RADIUS * std::f32::consts::SQRT_2,
             ),
         ),
