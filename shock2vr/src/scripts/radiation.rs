@@ -171,7 +171,7 @@ impl ActiveRadiation {
         let shielded = decontamination_per_sec.is_finite() && decontamination_per_sec > 0.0;
         if shielded {
             self.ambient_level = 0.0;
-            self.level = (self.level - decontamination_per_sec * elapsed_secs).max(0.0);
+            self.clear(decontamination_per_sec * elapsed_secs);
         }
 
         self.seconds_until_check -= elapsed_secs;

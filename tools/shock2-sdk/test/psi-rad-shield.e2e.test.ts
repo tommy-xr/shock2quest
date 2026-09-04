@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { pullTrigger } from "./helpers/weapon.js";
 
 // End-to-end test for Neural Decontamination (`Rad Shield`, issue #1300).
 // `debug_psi` carries a hazard patch (a `Rad Burst` radius radiation source)
@@ -24,14 +25,6 @@ async function selectPower(game: GameServer, name: string): Promise<void> {
     await game.step({ frames: 2 });
   }
   throw new Error(`never reached psi power "${name}"`);
-}
-
-/** One edge-triggered trigger pull: the psi amp casts on the rising edge. */
-async function castOnce(game: GameServer): Promise<void> {
-  await game.input.set("right_hand.trigger", 1.0);
-  await game.step({ frames: 1 });
-  await game.input.set("right_hand.trigger", 0.0);
-  await game.step({ frames: 30 });
 }
 
 test(
@@ -57,7 +50,9 @@ test(
     const beforePsi = (await game.info()).player.psi_points;
     const beforeHp = (await game.info()).player.hit_points;
 
-    await castOnce(game);
+    // The psi amp casts on the trigger's rising edge; settle for half a second.
+    await pullTrigger(game);
+    await game.step({ frames: 30 });
     let player = (await game.info()).player;
     assert.deepEqual(
       player.active_psi_powers,
