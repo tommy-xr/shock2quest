@@ -4441,11 +4441,19 @@ impl MissionCore {
         }
 
         for (entity_id, felt_intensity) in in_range {
-            let receptrons =
+            let mut receptrons =
                 get_all_links_with_template(&self.world, entity_id, |link| match link {
                     Link::Receptron(options) => Some(options.clone()),
                     _ => None,
                 });
+            // An active Toxin Shield resists the toxin stim, so it has to be
+            // in the chain before either damage or status resolution reads it.
+            receptrons.extend(
+                crate::scripts::toxin_shield::toxin_shield_caster_receptrons(
+                    &self.world,
+                    entity_id,
+                ),
+            );
             let maybe_damage = crate::mission::stim_response::resolve_stim_damage(
                 &receptrons,
                 stim_template_id,

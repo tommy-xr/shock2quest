@@ -87,20 +87,21 @@ pub fn contact_stim_damage(world: &World, emitter_template: i32, victim: EntityI
 }
 
 fn victim_receptrons(world: &World, victim: EntityId) -> Vec<(i32, ReceptronOptions)> {
+    // An active Toxin Shield shields its caster against contact toxin stims
+    // (the arachnid claws, WormGoo) as well as radius ones.
+    let mut receptrons =
+        crate::scripts::toxin_shield::toxin_shield_caster_receptrons(world, victim);
     let Ok(v_links) = world.borrow::<View<Links>>() else {
-        return Vec::new();
+        return receptrons;
     };
     let Ok(links) = v_links.get(victim) else {
-        return Vec::new();
+        return receptrons;
     };
-    links
-        .to_links
-        .iter()
-        .filter_map(|link| match &link.link {
-            Link::Receptron(options) => Some((link.to_template_id, options.clone())),
-            _ => None,
-        })
-        .collect()
+    receptrons.extend(links.to_links.iter().filter_map(|link| match &link.link {
+        Link::Receptron(options) => Some((link.to_template_id, options.clone())),
+        _ => None,
+    }));
+    receptrons
 }
 
 /// Resolve what damage a stim deals to a receiver, given the receiver's
