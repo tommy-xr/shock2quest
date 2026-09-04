@@ -336,6 +336,17 @@ pub struct DebugRayHit {
     pub is_sensor: bool,
 }
 
+/// A climbing hold reported by `GET /v1/physics/grip`. `kind` is "ladder"
+/// (an authored climbable face) or "ledge" (a walkable top above the feet).
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugClimbGrip {
+    pub kind: &'static str,
+    pub entity_id: Option<i32>,
+    pub entity_name: Option<String>,
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+}
+
 /// Raycast mask for collision group filtering
 #[derive(Debug, Clone)]
 pub struct RaycastMask {
@@ -781,6 +792,19 @@ pub trait DebuggableScene {
     /// # Returns
     /// Raycast hit result with entity and collision information
     fn raycast(&self, start: Point3<f32>, end: Point3<f32>, mask: RaycastMask) -> DebugRayHit;
+
+    /// What a hand at `point` could grab (see
+    /// [`crate::physics::PhysicsWorld::climbable_grip_at`]). `feet_y` defaults
+    /// to the player's own feet when None. Scenes without a player or physics
+    /// report nothing.
+    fn climb_grip(
+        &self,
+        _point: Vector3<f32>,
+        _radius: Option<f32>,
+        _feet_y: Option<f32>,
+    ) -> Option<DebugClimbGrip> {
+        None
+    }
 
     /// Teleport the player to a specific position
     ///

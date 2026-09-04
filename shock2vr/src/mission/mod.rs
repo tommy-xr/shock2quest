@@ -353,6 +353,15 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.raycast(start, end, mask)
     }
 
+    fn climb_grip(
+        &self,
+        point: Vector3<f32>,
+        radius: Option<f32>,
+        feet_y: Option<f32>,
+    ) -> Option<crate::game_scene::DebugClimbGrip> {
+        self.mission_core.climb_grip(point, radius, feet_y)
+    }
+
     fn teleport_player(&mut self, position: Vector3<f32>) -> Result<(), String> {
         self.mission_core.teleport_player(position)
     }

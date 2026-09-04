@@ -10524,6 +10524,40 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         )
     }
 
+    fn climb_grip(
+        &self,
+        point: Vector3<f32>,
+        radius: Option<f32>,
+        feet_y: Option<f32>,
+    ) -> Option<crate::game_scene::DebugClimbGrip> {
+        let feet_y = feet_y.unwrap_or_else(|| {
+            let center = self.physics.get_player_translation(&self.player_handle);
+            center.y - crate::physics::player_center_above_floor(self.player_handle.is_crouched())
+        });
+        let grip = self.physics.climbable_grip_at(
+            point,
+            radius.unwrap_or(crate::physics::CLIMB_GRIP_RADIUS),
+            feet_y,
+        )?;
+        let entity_name = grip.entity_id.and_then(|id| {
+            self.world.run(
+                |v_sym_name: shipyard::View<dark::properties::PropSymName>| {
+                    v_sym_name.get(id).ok().map(|s| s.0.clone())
+                },
+            )
+        });
+        Some(crate::game_scene::DebugClimbGrip {
+            kind: match grip.kind {
+                crate::physics::ClimbGripKind::Ladder => "ladder",
+                crate::physics::ClimbGripKind::Ledge => "ledge",
+            },
+            entity_id: grip.entity_id.map(|id| id.inner() as i32),
+            entity_name,
+            point: [grip.point.x, grip.point.y, grip.point.z],
+            normal: [grip.normal.x, grip.normal.y, grip.normal.z],
+        })
+    }
+
     fn raycast(
         &self,
         start: cgmath::Point3<f32>,
