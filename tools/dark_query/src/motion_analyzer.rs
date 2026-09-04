@@ -216,7 +216,9 @@ impl MotionAnalyzer {
                     .fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(*y), b.max(*y)));
                 println!("                min {:.3}  max {:.3}", min, max);
             }
-            // SCRATCH: net pose yaw per joint (frame0 -> last)
+            // Net pose yaw per joint, first frame to last. A turn clip does
+            // its pivot in the pose - the hip joint carries the whole turn,
+            // and its net yaw is the clip's `end_dir` read as a signed angle.
             {
                 let mut rows: Vec<(usize, f32)> = Vec::new();
                 for (j, frames) in clip.animation.iter().enumerate() {
