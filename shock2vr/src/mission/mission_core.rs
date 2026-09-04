@@ -9706,6 +9706,13 @@ impl MissionCore {
                     crate::mission::reload::CLIP_INSERT_EXIT_RADIUS,
                     vec3(0.35, 0.35, 0.2),
                 ));
+                if let Some(origin) = self.entity_world_position(weapon) {
+                    scene.push(dark::hit_box::draw_debug_wire_sphere(
+                        origin,
+                        0.04,
+                        vec3(0.2, 0.4, 1.0),
+                    ));
+                }
             }
         }
 

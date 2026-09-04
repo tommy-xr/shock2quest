@@ -198,9 +198,10 @@ dev_params! {
     /// hit, and for how much, without reading hit points before and after.
     DAMAGE_NUMBERS = bool("damage_numbers", "Damage numbers", false),
     /// Draw every held gun's clip-insert zone as world-space wire spheres:
-    /// the enter radius (green, red while a clip is inside) and the larger
-    /// exit radius (dim). Answers "where do I have to bring the clip?" in a
-    /// headset, and shows the per-model magazine anchor the zone sits on.
+    /// the enter radius (green, red while a clip is inside), the larger exit
+    /// radius (dim), and a small blue marker on the model origin the anchor
+    /// is measured from. Answers "where do I have to bring the clip?" in a
+    /// headset, and is how the per-model magazine anchors are placed.
     CLIP_ZONE = bool("clip_zone", "Show clip-insert zone", false),
     /// Uniform scale applied to a wielded melee `_h` view model, about the
     /// baked fist so the grip stays on the controller.
