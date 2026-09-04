@@ -1320,26 +1320,38 @@ impl Script for AnimatedMonsterAI {
             }
         }
 
-        // Temporary steering behavior
-        let (steering_output, steering_effects) = self
-            .current_behavior
-            .borrow_mut()
-            .steer(self.current_heading, world, physics, entity_id, time)
-            .unwrap_or((
+        // A pivot already in flight is a commitment: the behavior is not
+        // steered at all while it plays. Steering a body that is deliberately
+        // standing still would read as a stall - the path follower would
+        // blacklist the cell it is turning on, and a patrol route would give
+        // up on the point it is turning toward.
+        let pivoting = self.turn_clip.is_some();
+        let (steering_output, steering_effects) = if pivoting {
+            (
                 Steering::from_current(self.current_heading),
                 Effect::NoEffect,
-            ));
+            )
+        } else {
+            self.current_behavior
+                .borrow_mut()
+                .steer(self.current_heading, world, physics, entity_id, time)
+                .unwrap_or((
+                    Steering::from_current(self.current_heading),
+                    Effect::NoEffect,
+                ))
+        };
 
         // Keep looking at a player this creature can actually see, so the
         // sighting survives long enough to escalate (see
         // `should_orient_on_target`). The behavior's own steering effects
         // still apply - only the heading is overridden.
-        let steering_output = if should_orient_on_target(
-            self.config.is_some(),
-            self.alertness.current_level,
-            is_visible,
-            self.current_behavior.borrow().scripted_state(),
-        ) {
+        let steering_output = if !pivoting
+            && should_orient_on_target(
+                self.config.is_some(),
+                self.alertness.current_level,
+                is_visible,
+                self.current_behavior.borrow().scripted_state(),
+            ) {
             orient_toward_player(world, entity_id).unwrap_or(steering_output)
         } else {
             steering_output
