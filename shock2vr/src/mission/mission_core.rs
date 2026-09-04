@@ -1545,7 +1545,8 @@ pub struct MissionCore {
     flat_melee_anim: Option<(EntityId, AnimationPlayer)>,
 
     /// "Use" (metagame) mode, toggled by `Effect::ToggleUseMode` (Tab on
-    /// flat; left-controller X in VR). One mode, two presentations: flat
+    /// flat; a free hand's lower face button in VR). One mode, two
+    /// presentations: flat
     /// shows the cursor + top-docked inventory strip on screen
     /// (`projects/flat-ui.md`); VR presents the same strip canvas on a
     /// head-anchored world panel - the "cyber interface" - with the world
@@ -1557,17 +1558,17 @@ pub struct MissionCore {
     weapon_settings_gun: Option<EntityId>,
 
     /// Whether this use-mode session was opened by the VR log-reader shortcut
-    /// (Quest Y / `Effect::ReadLastUnreadLog`) rather than a deliberate
+    /// (an upper face button / `Effect::ReadLastUnreadLog`) rather than a deliberate
     /// `ToggleUseMode`. It makes Y a true inverse of itself: the press that
-    /// dismisses the reader closes the whole interface when Y is what opened
-    /// it, and only puts the reader away - back to the inventory strip - when
+    /// dismisses the reader closes the whole interface when that button is
+    /// what opened it, and only puts the reader away - back to the strip - when
     /// the player was already in the interface. Transient like `use_mode`
     /// itself (not serialized: a load leaves the mode closed).
     ///
-    /// Only Y consults it. Dismissing the reader with the canvas's own close
-    /// button is the host's generic "put this panel away" and leaves the
-    /// interface up on the inventory strip however it was opened; X or Y
-    /// still exits from there.
+    /// Only the reader shortcut consults it. Dismissing the reader with the
+    /// canvas's own close button is the host's generic "put this panel away"
+    /// and leaves the interface up on the inventory strip however it was
+    /// opened; either face button still exits from there.
     use_mode_from_log_reader: bool,
 
     /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the rim
@@ -5767,6 +5768,34 @@ impl MissionCore {
                     }
                 }
 
+                Effect::HandButton { hand, button } => {
+                    // A face button means whatever the hand that pressed it is
+                    // holding says it means - except while the cyber interface
+                    // is up, which takes both buttons back on both hands so
+                    // the press that opened it can always close it.
+                    let mode = if self.use_mode {
+                        crate::hand_buttons::HandButtonMode::Interface
+                    } else {
+                        crate::hand_buttons::HandButtonMode::World
+                    };
+                    let held = crate::hand_buttons::held_kind_in_hand(&self.world, hand);
+                    let resolved =
+                        crate::hand_buttons::resolve_hand_button(mode, hand, held, button);
+                    match resolved {
+                        Some(crate::input::InputAction::ToggleUseMode) => {
+                            effects.push_front(Effect::ToggleUseMode)
+                        }
+                        Some(crate::input::InputAction::ReadLastUnreadLog) => {
+                            effects.push_front(Effect::ReadLastUnreadLog)
+                        }
+                        // A weapon hand resolves to nothing yet - the gun and
+                        // psi-amp handling actions add their arms here when
+                        // they land.
+                        None => {}
+                        Some(action) => warn!("unroutable hand button action: {action}"),
+                    }
+                }
+
                 Effect::ToggleUseMode => {
                     match game_options.presentation_mode {
                         crate::PresentationMode::Flat => {
@@ -5965,13 +5994,14 @@ impl MissionCore {
 
                     let is_vr = game_options.presentation_mode == crate::PresentationMode::Vr;
 
-                    // Y is also the production dismiss affordance in VR. The
-                    // next press re-enters this path, re-resolves and replays
-                    // the latest collected log even when it is already read.
-                    // Y is a true inverse of itself: it puts back exactly what
-                    // it brought up - the whole interface when Y opened it,
-                    // just the reader (leaving the inventory strip) when the
-                    // player was already inside.
+                    // A free hand's UPPER face button is also the production
+                    // dismiss affordance in VR. The next press re-enters this
+                    // path, re-resolves and replays the latest collected log
+                    // even when it is already read. It is a true inverse of
+                    // itself: it puts back exactly what it brought up - the
+                    // whole interface when it opened it, just the reader
+                    // (leaving the inventory strip) when the player was
+                    // already inside.
                     if is_vr && self.flat_ui.active_panel() == Some(panel_entity) {
                         if self.use_mode_from_log_reader {
                             effects.push_front(self.leave_use_mode());
@@ -10124,9 +10154,15 @@ pub fn is_vr_melee_weapon(world: &World, entity_id: EntityId) -> bool {
     world
         .borrow::<UniqueView<GlobalPresentationMode>>()
         .is_ok_and(|mode| mode.0 == crate::PresentationMode::Vr)
-        && world
-            .borrow::<View<PropLimbModel>>()
-            .is_ok_and(|limb_models| limb_models.get(entity_id).is_ok())
+        && is_melee_weapon(world, entity_id)
+}
+
+/// The marker itself, without the VR gate: what the player swings rather than
+/// fires. Callers that care about the presentation use `is_vr_melee_weapon`.
+pub fn is_melee_weapon(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<PropLimbModel>>()
+        .is_ok_and(|limb_models| limb_models.get(entity_id).is_ok())
 }
 
 /// Physics for an item restored into a hand by save/load or a level change.

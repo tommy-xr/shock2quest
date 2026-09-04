@@ -222,7 +222,11 @@ Oculus:   OpenXR action states            → InputActionState → ActionDispatc
 Quest button/chord paths live beside their actions in
 `InputAction::quest_touch_click_path` / `quest_touch_chord_paths`, so the
 mapping is host-testable even though `oculus_runtime` only builds for Android.
-The current key and controller bindings are listed in
+The four Touch **face buttons** are bound there RAW, by hand and position
+(`LeftHandLowerButton` .. `RightHandUpperButton`); what a press means is
+resolved per hand against what that hand holds, by the pure table in
+`shock2vr/src/hand_buttons.rs` (`resolve_hand_button`), which the mission
+applies. The current key and controller bindings are listed in
 [DEVELOPMENT.md](DEVELOPMENT.md#debug--developer-keys).
 
 - **`InputAction`** (`input/actions.rs`) - serde-enabled enum of all discrete actions

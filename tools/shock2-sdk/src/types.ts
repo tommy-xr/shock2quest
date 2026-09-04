@@ -25,6 +25,13 @@ export type InputAction =
   | "CyclePsiPower"
   | "ToggleUseMode"
   | "TogglePauseMenu"
+  // Raw Touch face buttons: lower is left X / right A, upper is left Y /
+  // right B. What a press does is resolved per hand against what that hand
+  // holds (shock2vr/src/hand_buttons.rs).
+  | "LeftHandLowerButton"
+  | "LeftHandUpperButton"
+  | "RightHandLowerButton"
+  | "RightHandUpperButton"
   // Escape hatch so newly-added actions are usable before the SDK is updated.
   | (string & {});
 
