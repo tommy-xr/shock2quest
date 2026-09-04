@@ -263,6 +263,7 @@ impl DebugSceneHooks for ArsenalHooks {
             },
             psi_tier: Some(PSI_TIER_CAP),
             cyber_modules: None,
+            os_traits: None,
         };
         if let Err(err) = core.set_player_stats(&request) {
             tracing::warn!("[debug_weapons] failed to max player stats: {err}");

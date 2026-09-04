@@ -721,6 +721,10 @@ pub struct PlayerStateSnapshot {
     /// Empty when the scene has no `QuestInfo` or no automap. Persisted per
     /// mission in `QuestInfo`. See `projects/flat-ui-panels.md` §5.
     pub explored_map_locations: Vec<i32>,
+    /// How many automap locations the current mission defines (locations run
+    /// `0..count`), so a caller can tell a partly-explored map from a fully
+    /// revealed one. 0 when the scene has no automap.
+    pub map_location_count: usize,
 }
 
 /// Live player pose attached to a save refusal so automation can diagnose and
@@ -880,6 +884,10 @@ impl Game {
                 .ok()
                 .map(|q| q.explored_map_locations(self.scene_name()))
                 .unwrap_or_default(),
+            map_location_count: world
+                .borrow::<UniqueView<crate::mission::MapLocationCount>>()
+                .map(|count| count.0)
+                .unwrap_or(0),
         })
     }
 

@@ -8,7 +8,6 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{
     gui::{ButtonHoverBehavior, Gui, GuiComponent, GuiConfig, GuiCursor},
     mission::GlobalEntityMetadata,
-    quest_info::QuestInfo,
     util::{get_position_from_transform, get_rotation_from_transform},
 };
 
@@ -441,11 +440,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
 /// this from the persistent character sheet for both rendering and purchase
 /// handling so the quoted and charged prices cannot diverge.
 fn effective_replicator_cost(world: &World, authored_cost: i32) -> i32 {
-    let has_expert = world
-        .borrow::<UniqueView<QuestInfo>>()
-        .map(|quests| quests.player_stats().has_os_trait(TRAIT_REPLICATOR_EXPERT))
-        .unwrap_or(false);
-    if has_expert {
+    if super::player_has_os_trait(world, TRAIT_REPLICATOR_EXPERT) {
         ((i64::from(authored_cost) * 8) / 10) as i32
     } else {
         authored_cost
@@ -461,6 +456,7 @@ mod tests {
     use crate::gui::GuiScript;
     use crate::mission::{EntityMetadata, PlayerInfo};
     use crate::physics::PhysicsWorld;
+    use crate::quest_info::QuestInfo;
     use crate::runtime_props::RuntimePropTransform;
     use crate::scripts::{MessagePayload, Script};
     use cgmath::{Matrix4, Quaternion};

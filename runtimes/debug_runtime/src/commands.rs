@@ -904,6 +904,10 @@ pub struct PlayerInfo {
     /// Climb state: whether the player is on a ladder/hand hold at all, and
     /// (VR) which hands hold what. See `shock2vr::vr_climb`.
     pub climb: shock2vr::game_scene::DebugClimbState,
+    /// How many automap locations the current mission defines (locations run
+    /// `0..count`), so a caller can tell a partly-explored map from a fully
+    /// revealed one. 0 when the mission has no automap.
+    pub map_location_count: usize,
 }
 
 /// Input state snapshot

@@ -2,10 +2,12 @@ use dark::properties::{PropRadiationAbsorb, PropRadiationRecovery, ReceptronOpti
 use serde::{Deserialize, Serialize};
 use shipyard::{Get, Unique, UniqueView, View, World};
 
-use crate::{mission::PlayerInfo, physics::PhysicsWorld, quest_info::QuestInfo};
+use crate::{mission::PlayerInfo, physics::PhysicsWorld};
 
 use super::{Effect, MessagePayload, Script};
-use crate::scripts::gui::TRAIT_PHARMO_FRIENDLY;
+use crate::scripts::gui::{
+    TRAIT_PHARMO_FRIENDLY, TRAIT_STRONG_METABOLISM, player_has_os_trait, strong_metabolism_damage,
+};
 
 /// Amount removed by retail `RadPatch`, recovered from the shipped
 /// `allobjs` module. Pharmo-Friendly applies the same 20% item bonus as the
@@ -26,14 +28,6 @@ const DEFAULT_RADIATION_RECOVERY: f32 = 3.0;
 /// consume one patch only when radiation is actually present.
 pub struct RadPatchScript;
 
-impl RadPatchScript {
-    fn pharmo_friendly(world: &World) -> bool {
-        world
-            .borrow::<UniqueView<QuestInfo>>()
-            .is_ok_and(|quests| quests.player_stats().has_os_trait(TRAIT_PHARMO_FRIENDLY))
-    }
-}
-
 impl Script for RadPatchScript {
     fn handle_message(
         &mut self,
@@ -46,7 +40,7 @@ impl Script for RadPatchScript {
             return Effect::NoEffect;
         }
 
-        let amount = if Self::pharmo_friendly(world) {
+        let amount = if player_has_os_trait(world, TRAIT_PHARMO_FRIENDLY) {
             RAD_PATCH_PHARMO_CLEAR_AMOUNT
         } else {
             RAD_PATCH_CLEAR_AMOUNT
@@ -76,6 +70,12 @@ pub struct ActiveRadiation {
     seconds_until_check: f32,
     #[serde(default = "default_damage_timer")]
     seconds_until_damage: f32,
+    /// Damage a resistance has taken off, below the whole point that could be
+    /// subtracted. Carried between pulses so resistance is worth its stated
+    /// fraction of the damage dealt: without it, a 25% cut of a 1-point pulse
+    /// truncates to either nothing at all or total immunity.
+    #[serde(default)]
+    resisted_fraction: f32,
 }
 
 impl Default for ActiveRadiation {
@@ -85,6 +85,7 @@ impl Default for ActiveRadiation {
             ambient_level: 0.0,
             seconds_until_check: RADIATION_CHECK_INTERVAL_SECS,
             seconds_until_damage: RADIATION_DAMAGE_INTERVAL_SECS,
+            resisted_fraction: 0.0,
         }
     }
 }
@@ -119,11 +120,16 @@ impl ActiveRadiation {
 
     /// Advance the retail 6-second damage/recovery clock and return ordinary
     /// hit-point damage for MissionCore's central HP effect handler.
+    /// `damage_scale` is the player's resistance to the damage a pulse deals
+    /// (1.0 = none), read from the character sheet by the caller like the
+    /// absorb/recovery rates it sits beside. Accumulation and recovery are
+    /// untouched.
     pub fn advance(
         &mut self,
         elapsed_secs: f32,
         absorb_per_check: f32,
         recovery_per_tick: f32,
+        damage_scale: f32,
     ) -> i32 {
         if !elapsed_secs.is_finite() || elapsed_secs <= 0.0 {
             return 0;
@@ -170,7 +176,7 @@ impl ActiveRadiation {
                 let pulse = (self.level * RADIATION_DAMAGE_PER_LEVEL)
                     .trunc()
                     .clamp(0.0, i32::MAX as f32) as i32;
-                damage = damage.saturating_add(pulse);
+                damage = damage.saturating_add(self.resist(pulse, damage_scale));
             }
             if self.ambient_level <= 0.0 {
                 self.level = (self.level - recovery).max(0.0);
@@ -181,6 +187,23 @@ impl ActiveRadiation {
         // lets the following frame faithfully represent leaving the source.
         self.ambient_level = 0.0;
         damage
+    }
+
+    /// Take `1 - damage_scale` off one pulse, banking the sub-point remainder
+    /// for later pulses. A quarter off a 1-point pulse is a whole point saved
+    /// every fourth pulse, not a quarter of a hit point that rounds away.
+    fn resist(&mut self, pulse: i32, damage_scale: f32) -> i32 {
+        if !damage_scale.is_finite() || damage_scale >= 1.0 || pulse <= 0 {
+            return pulse;
+        }
+        let scale = damage_scale.max(0.0);
+        if !self.resisted_fraction.is_finite() || self.resisted_fraction < 0.0 {
+            self.resisted_fraction = 0.0;
+        }
+        self.resisted_fraction += pulse as f32 * (1.0 - scale);
+        let saved = self.resisted_fraction.floor().min(pulse as f32);
+        self.resisted_fraction -= saved;
+        pulse - saved as i32
     }
 }
 
@@ -224,10 +247,14 @@ pub fn tick_player_radiation(world: &World, elapsed_secs: f32) -> Option<Effect>
         .ok()
         .and_then(|values| values.get(player).ok().map(|value| value.0))
         .unwrap_or(DEFAULT_RADIATION_ABSORB);
+    // Strong Metabolism resists the damage exposure deals (the retail trait
+    // resists toxins too; this port has no toxin system to scale).
+    let damage_scale =
+        strong_metabolism_damage(1.0, player_has_os_trait(world, TRAIT_STRONG_METABOLISM));
     let damage = world
         .borrow::<shipyard::UniqueViewMut<ActiveRadiation>>()
         .ok()
-        .map(|mut radiation| radiation.advance(elapsed_secs, absorb, recovery))
+        .map(|mut radiation| radiation.advance(elapsed_secs, absorb, recovery, damage_scale))
         .unwrap_or(0);
     (damage > 0).then_some(Effect::AdjustHitPoints {
         entity_id: player,
@@ -300,12 +327,12 @@ mod tests {
     fn patch_clears_level_without_granting_future_protection() {
         let mut radiation = ActiveRadiation::default();
         assert!(radiation.observe_ambient(8.0));
-        assert_eq!(radiation.advance(0.1, 8.0, 3.0), 0);
+        assert_eq!(radiation.advance(0.1, 8.0, 3.0, 1.0), 0);
         assert!(radiation.clear(6.0));
         assert_eq!(radiation.level(), 2.0);
 
         assert!(radiation.observe_ambient(6.0));
-        assert_eq!(radiation.advance(0.1, 4.0, 3.0), 0);
+        assert_eq!(radiation.advance(0.1, 4.0, 3.0, 1.0), 0);
         assert_eq!(radiation.level(), 6.0);
     }
 
@@ -313,14 +340,33 @@ mod tests {
     fn damage_and_recovery_follow_the_retail_six_second_clock() {
         let mut radiation = ActiveRadiation::default();
         assert!(radiation.observe_ambient(8.0));
-        assert_eq!(radiation.advance(0.1, 8.0, 3.0), 0);
+        assert_eq!(radiation.advance(0.1, 8.0, 3.0, 1.0), 0);
         assert!(radiation.observe_ambient(8.0));
-        assert_eq!(radiation.advance(5.89, 0.05, 3.0), 0);
+        assert_eq!(radiation.advance(5.89, 0.05, 3.0, 1.0), 0);
         assert!(radiation.observe_ambient(8.0));
-        assert_eq!(radiation.advance(0.02, 0.05, 3.0), 2);
+        assert_eq!(radiation.advance(0.02, 0.05, 3.0, 1.0), 2);
         assert_eq!(radiation.level(), 8.0, "active exposure delays recovery");
-        assert_eq!(radiation.advance(6.0, 0.05, 3.0), 2);
+        assert_eq!(radiation.advance(6.0, 0.05, 3.0, 1.0), 2);
         assert_eq!(radiation.level(), 5.0);
+    }
+
+    #[test]
+    fn strong_metabolism_cuts_a_quarter_off_the_damage_actually_dealt() {
+        // The shipped sources plateau where a pulse bills 1, so a quarter has
+        // to accumulate: four resisted 1-point pulses cost 3, not 4 (and never
+        // 0, which a per-pulse multiply would truncate them to).
+        let scale = crate::scripts::gui::strong_metabolism_damage(1.0, true);
+        let soak = |damage_scale: f32| {
+            let mut radiation = ActiveRadiation::default();
+            let mut total = 0;
+            for _ in 0..4 {
+                assert!(radiation.observe_ambient(6.5));
+                total += radiation.advance(6.0, 6.5, 3.0, damage_scale);
+            }
+            total
+        };
+        assert_eq!(soak(1.0), 4);
+        assert_eq!(soak(scale), 3);
     }
 
     #[test]
@@ -332,7 +378,7 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(radiation.advance(1.0 / 60.0, 0.05, 3.0), 0);
+        assert_eq!(radiation.advance(1.0 / 60.0, 0.05, 3.0, 1.0), 0);
         assert_eq!(radiation.level(), 8.0);
     }
 
@@ -378,7 +424,7 @@ mod tests {
             world
                 .borrow::<shipyard::UniqueViewMut<ActiveRadiation>>()
                 .unwrap()
-                .advance(0.1, 0.05, 3.0),
+                .advance(0.1, 0.05, 3.0, 1.0),
             0
         );
         assert_eq!(

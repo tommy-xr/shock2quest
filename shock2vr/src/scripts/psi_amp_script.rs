@@ -18,6 +18,8 @@
 use engine::{audio::AudioHandle, game_log};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
+use crate::scripts::gui::{TRAIT_POWER_PSI, player_has_os_trait, power_psi_burnout_damage};
+
 use crate::{
     mission::PlayerInfo,
     physics::PhysicsWorld,
@@ -254,7 +256,9 @@ fn player_psi_points(world: &World) -> i32 {
 
 /// Resolve a psi burnout: the power fails, its points are spent, and the
 /// player takes damage (3 per tier - PSI/Endurance mitigation comes later
-/// with player stats). The meter flashes red.
+/// with player stats). The Power Psi O/S upgrade removes the damage entirely.
+/// The meter flashes red either way: the cast still fails and the points are
+/// still spent.
 fn burnout(world: &World, amp_entity: EntityId) -> Effect {
     let Some(power) = selected_power(world) else {
         return Effect::ClearPsiCharge {
@@ -262,14 +266,21 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
         };
     };
     let player_entity = world.borrow::<UniqueView<PlayerInfo>>().unwrap().entity_id;
-    let damage = psi::BURNOUT_DAMAGE_PER_TIER * power.power.psi_cost;
+    let damage = power_psi_burnout_damage(
+        psi::BURNOUT_DAMAGE_PER_TIER * power.power.psi_cost,
+        player_has_os_trait(world, TRAIT_POWER_PSI),
+    );
     game_log!(
         WARN,
-        "Psi burnout! {} failed ({} damage)",
+        "Psi burnout! {} failed ({})",
         power.name,
-        damage
+        if damage > 0 {
+            format!("{} damage", damage)
+        } else {
+            "no damage - Power Psi".to_string()
+        }
     );
-    Effect::Multiple(vec![
+    let mut effects = vec![
         Effect::SetPsiCharge {
             entity_id: amp_entity,
             fraction: 1.0,
@@ -278,14 +289,17 @@ fn burnout(world: &World, amp_entity: EntityId) -> Effect {
         Effect::SpendPsiPoints {
             amount: power.power.psi_cost,
         },
+    ];
+    if damage > 0 {
         // Direct HP adjustment: the player entity has no scripts, so a
         // Damage message would be dropped - AdjustHitPoints edits the
         // (template-seeded) PropHitPoints component directly.
-        Effect::AdjustHitPoints {
+        effects.push(Effect::AdjustHitPoints {
             entity_id: player_entity,
             delta: -damage,
-        },
-    ])
+        });
+    }
+    Effect::Multiple(effects)
 }
 
 /// Whether the player has been trained in the power. Selection gating

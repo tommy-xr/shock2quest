@@ -11,8 +11,8 @@
 //! flag is a quest bit keyed by the machine's stable mission object id (also
 //! `QuestInfo`, so it survives save/load and deck re-entry), and
 //! `Effect::AcquireOsTrait` applies the pick atomically. Live effects are
-//! implemented for the subset with existing consumers (Tank, Naturally Able,
-//! Pack-Rat, Pharmo-Friendly, Replicator Expert - see [`live_effect_note`]); everything else stays visible
+//! implemented for the subset with existing consumers (see
+//! [`live_effect_note`] for the current list); everything else stays visible
 //! but cannot consume a one-shot machine or trait slot until its effect exists.
 
 use cgmath::{Vector2, Vector3, vec2};
@@ -48,11 +48,16 @@ pub const OS_TRAITS: [(u8, &str); 16] = [
 ];
 
 /// Retail trait ids with live gameplay effects here (see the effect handler).
-pub const TRAIT_NATURALLY_ABLE: u8 = 6;
-pub const TRAIT_PACK_RAT: u8 = 3;
+pub const TRAIT_STRONG_METABOLISM: u8 = 1;
 pub const TRAIT_PHARMO_FRIENDLY: u8 = 2;
+pub const TRAIT_PACK_RAT: u8 = 3;
+pub const TRAIT_SPEEDY: u8 = 4;
+pub const TRAIT_NATURALLY_ABLE: u8 = 6;
 pub const TRAIT_TANK: u8 = 8;
+pub const TRAIT_LETHAL_WEAPON: u8 = 9;
 pub const TRAIT_REPLICATOR_EXPERT: u8 = 13;
+pub const TRAIT_POWER_PSI: u8 = 14;
+pub const TRAIT_SPATIALLY_AWARE: u8 = 16;
 
 /// Tank: "+5 maximum hit points" (TRAITS.STR Trait8). The original raises the
 /// ceiling AND current HP by the bonus on purchase (buying at 25/30 yields
@@ -62,6 +67,83 @@ pub const TANK_HP_BONUS: i32 = 5;
 
 /// Naturally Able: "One-time bonus of 8 Cyber Enhancement Units" (Trait6).
 pub const NATURALLY_ABLE_MODULES: i32 = 8;
+
+/// Speedy: the player moves 15% faster (Trait4). Only smooth locomotion is
+/// scaled - room-scale walking in VR is the player's own legs, which no
+/// character upgrade can touch.
+pub const SPEEDY_MOVE_SCALE: f32 = 1.15;
+
+/// Lethal Weapon: hand-to-hand blows land 35% harder (Trait9). The player's
+/// melee only - AI melee resolves through its own attack path.
+pub const LETHAL_WEAPON_DAMAGE_SCALE: f32 = 1.35;
+
+/// Strong Metabolism: radiation damage is cut by a quarter (Trait1). The
+/// retail trait also resists toxins; this port has no toxin system yet, so
+/// only the radiation half has anything to scale.
+pub const STRONG_METABOLISM_DAMAGE_SCALE: f32 = 0.75;
+
+/// Speedy-adjusted locomotion speed.
+pub fn speedy_move_speed(base: f32, has_trait: bool) -> f32 {
+    if has_trait {
+        base * SPEEDY_MOVE_SCALE
+    } else {
+        base
+    }
+}
+
+/// Lethal Weapon-adjusted player melee damage.
+pub fn lethal_weapon_damage(base: f32, has_trait: bool) -> f32 {
+    if has_trait {
+        base * LETHAL_WEAPON_DAMAGE_SCALE
+    } else {
+        base
+    }
+}
+
+/// Strong Metabolism-adjusted radiation exposure damage.
+pub fn strong_metabolism_damage(base: f32, has_trait: bool) -> f32 {
+    if has_trait {
+        base * STRONG_METABOLISM_DAMAGE_SCALE
+    } else {
+        base
+    }
+}
+
+/// Pharmo-Friendly-adjusted item strength: the original multiplies a medical
+/// or psi item's amount by 1.2 and converts back to an integer, so integer
+/// arithmetic reproduces the truncation exactly (a 10-point patch heals 12,
+/// a 20-point psi hypo restores 24).
+pub fn pharmo_friendly_amount(base: i32, has_trait: bool) -> i32 {
+    if has_trait {
+        base.saturating_mul(6) / 5
+    } else {
+        base
+    }
+}
+
+/// Power Psi-adjusted burnout damage: over-holding the amp past the player's
+/// psi points costs them nothing (Trait14).
+pub fn power_psi_burnout_damage(base: i32, has_trait: bool) -> i32 {
+    if has_trait { 0 } else { base }
+}
+
+/// Whether the player's character sheet carries `trait_id`. Reads the same
+/// `QuestInfo` sheet every trait consumer does; a world without one (a bare
+/// debug scene) reads as "no traits".
+pub fn player_has_os_trait(world: &World, trait_id: u8) -> bool {
+    world
+        .borrow::<UniqueView<QuestInfo>>()
+        .is_ok_and(|quests| quests.player_stats().has_os_trait(trait_id))
+}
+
+/// The character-sheet half of acquiring a trait (the part that lives in
+/// `PlayerStats` itself). World-facing grants - Tank's hit points, Spatially
+/// Aware's map reveal - are applied by the mission's effect handler.
+pub fn apply_os_trait_stats_grants(stats: &mut crate::player_stats::PlayerStats, trait_id: u8) {
+    if trait_id == TRAIT_NATURALLY_ABLE {
+        stats.award_cyber_modules(NATURALLY_ABLE_MODULES);
+    }
+}
 
 /// Display name of a trait id, or "?" for an out-of-range id.
 pub fn trait_name(trait_id: u8) -> &'static str {
@@ -398,11 +480,16 @@ fn hovered_trait(cursor: cgmath::Point2<f32>) -> Option<u8> {
 /// One-line note of a trait's live effect, if implemented (for logs).
 pub fn live_effect_note(trait_id: u8) -> Option<&'static str> {
     match trait_id {
-        TRAIT_TANK => Some("+5 max hit points"),
-        TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
+        TRAIT_STRONG_METABOLISM => Some("25% less radiation damage"),
+        TRAIT_PHARMO_FRIENDLY => Some("20% med and psi hypo bonus"),
         TRAIT_PACK_RAT => Some("+3 backpack slots"),
-        TRAIT_PHARMO_FRIENDLY => Some("20% healing-item bonus"),
+        TRAIT_SPEEDY => Some("15% faster movement"),
+        TRAIT_NATURALLY_ABLE => Some("+8 cyber modules"),
+        TRAIT_TANK => Some("+5 max hit points"),
+        TRAIT_LETHAL_WEAPON => Some("35% more melee damage"),
         TRAIT_REPLICATOR_EXPERT => Some("20% replicator discount"),
+        TRAIT_POWER_PSI => Some("no psi burnout damage"),
+        TRAIT_SPATIALLY_AWARE => Some("automap fully revealed"),
         _ => None,
     }
 }
@@ -475,7 +562,7 @@ mod tests {
             machine,
             &world,
             &TraitGuiState::default(),
-            &TraitGuiMsg::Pick(4), // Speedy has no locomotion consumer yet.
+            &TraitGuiMsg::Pick(5), // Sharpshooter has no aiming consumer yet.
         );
 
         assert!(matches!(effect, Effect::NoEffect));
@@ -511,5 +598,73 @@ mod tests {
             } if selected_machine == machine
         ));
         assert_eq!(state.message.as_deref(), Some("Pack-Rat installed."));
+    }
+
+    #[test]
+    fn the_round_one_traits_are_selectable_now_that_they_have_consumers() {
+        for trait_id in [
+            TRAIT_STRONG_METABOLISM,
+            TRAIT_SPEEDY,
+            TRAIT_LETHAL_WEAPON,
+            TRAIT_POWER_PSI,
+            TRAIT_SPATIALLY_AWARE,
+        ] {
+            let mut world = World::new();
+            world.add_unique(QuestInfo::new());
+            let machine =
+                world.add_entity((dark::properties::PropTemplateId { template_id: 133 },));
+
+            let (_, effect) = TraitGui.handle_msg(
+                machine,
+                &world,
+                &TraitGuiState::default(),
+                &TraitGuiMsg::Pick(trait_id),
+            );
+            assert!(
+                matches!(effect, Effect::AcquireOsTrait { trait_id: picked, .. } if picked == trait_id),
+                "trait {} should be purchasable",
+                trait_id
+            );
+        }
+    }
+
+    #[test]
+    fn traits_without_an_effect_are_still_refused() {
+        // 5 Sharpshooter, 7 Cybernetically Enhanced, 10 Security Expert,
+        // 11 Smasher, 12 Cyber-Assimilation, 15 Tinker.
+        for trait_id in [5, 7, 10, 11, 12, 15] {
+            let mut world = World::new();
+            world.add_unique(QuestInfo::new());
+            let machine =
+                world.add_entity((dark::properties::PropTemplateId { template_id: 133 },));
+
+            let (state, effect) = TraitGui.handle_msg(
+                machine,
+                &world,
+                &TraitGuiState::default(),
+                &TraitGuiMsg::Pick(trait_id),
+            );
+            assert!(
+                matches!(effect, Effect::NoEffect),
+                "trait {} has no effect and must not vend",
+                trait_id
+            );
+            assert_eq!(state.message.as_deref(), Some(UNAVAILABLE_LABEL));
+        }
+    }
+
+    #[test]
+    fn trait_multipliers_are_identity_without_the_trait() {
+        assert_eq!(speedy_move_speed(25.0, false), 25.0);
+        assert_eq!(speedy_move_speed(25.0, true), 28.75);
+
+        assert_eq!(lethal_weapon_damage(6.0, false), 6.0);
+        assert!((lethal_weapon_damage(6.0, true) - 8.1).abs() < 1e-5);
+
+        assert_eq!(strong_metabolism_damage(4.0, false), 4.0);
+        assert_eq!(strong_metabolism_damage(4.0, true), 3.0);
+
+        assert_eq!(power_psi_burnout_damage(9, false), 9);
+        assert_eq!(power_psi_burnout_damage(9, true), 0);
     }
 }

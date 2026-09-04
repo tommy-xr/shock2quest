@@ -446,6 +446,12 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
 /// distance along the current crosshair ray and damage the hit entity (hitbox
 /// proxies resolve to their parent).
 fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World) -> Effect {
+    // Flat melee is only ever the player's own swing, so Lethal Weapon
+    // applies unconditionally here.
+    let amount = crate::scripts::gui::lethal_weapon_damage(
+        MELEE_DAMAGE,
+        crate::scripts::gui::player_has_os_trait(world, crate::scripts::gui::TRAIT_LETHAL_WEAPON),
+    );
     let hit = physics.ray_cast(
         aim.origin,
         aim.forward.normalize() * MELEE_RANGE,
@@ -466,7 +472,7 @@ fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World
                 payload: MessagePayload::Damage {
                     // Adrenaline Overproduction scales the player's melee
                     // damage while it is active (1.0 otherwise).
-                    amount: MELEE_DAMAGE * crate::scripts::berserk::melee_damage_multiplier(world),
+                    amount: amount * crate::scripts::berserk::melee_damage_multiplier(world),
                     // Swing direction + contact point seed the victim's
                     // death-ragdoll reaction. No bone: melee resolves a hitbox
                     // proxy to its parent BEFORE sending (so HitBoxScript

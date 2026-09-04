@@ -565,6 +565,9 @@ pub struct DebugPlayerStatsRequest {
     pub psi_tier: Option<i32>,
     /// Target cyber-module balance (the upgrade currency).
     pub cyber_modules: Option<i32>,
+    /// O/S upgrade trait ids to grant (1..=16), as if picked at a machine.
+    /// Already-owned ids are ignored; the slot cap still applies.
+    pub os_traits: Option<Vec<u8>>,
 }
 
 /// Target skill levels, mirroring `player.stats.skills`. Named fields (rather

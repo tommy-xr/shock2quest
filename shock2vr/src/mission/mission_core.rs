@@ -1411,6 +1411,21 @@ pub struct PsiPowersPanelEntity(pub EntityId);
 #[derive(Unique, Clone, Copy, Default)]
 pub struct PlayerMapLocation(pub Option<i32>);
 
+/// Reveal every automap location of `mission` (Spatially Aware). Shared by the
+/// mission-load re-derive and the live grant, so the two cannot drift.
+fn reveal_whole_map(quests: &mut QuestInfo, mission: &str, location_count: usize) {
+    for location in 0..location_count as i32 {
+        quests.reveal_map_location(mission, location);
+    }
+}
+
+/// How many automap locations this mission's page art defines (locations are
+/// `0..count`). Resolved in both presentations - the flat panel needs the art
+/// itself, and the Spatially Aware O/S upgrade needs the count to reveal
+/// every location whether or not a map panel exists.
+#[derive(Unique, Clone, Copy, Default)]
+pub struct MapLocationCount(pub usize);
+
 /// Global template inheritance hierarchy (template id -> MetaProp parents),
 /// so scripts can answer class questions about entities at runtime - e.g.
 /// picking a projectile's hit spang by whether the victim descends from the
@@ -1771,7 +1786,7 @@ impl MissionCore {
         audio_context: &mut AudioContext<EntityId, String>,
         global_context: &GlobalContext,
         spawn_loc: SpawnLocation,
-        quest_info: QuestInfo,
+        mut quest_info: QuestInfo,
         entity_populator: Box<dyn EntityPopulator>,
         held_item_save_data: HeldItemSaveData,
         game_options: &GameOptions,
@@ -2041,12 +2056,25 @@ impl MissionCore {
         // per-frame SetUI would otherwise materialize an undismissable world
         // quad at the origin.
         world.add_unique(PlayerMapLocation::default());
+        let level_stem = mission.split('.').next().unwrap_or(&mission).to_uppercase();
+        let (map_location_count, revealed_rects, explored_rects) =
+            dark::map::MapChunkData::load_from_mission(asset_cache, &level_stem)
+                .map(|data| (data.chunk_count(), data.revealed_rects, data.explored_rects))
+                .unwrap_or_default();
+        world.add_unique(MapLocationCount(map_location_count));
+        // Spatially Aware (Trait16) re-derives like the other trait bonuses:
+        // every location of the mission being loaded is already explored.
+        if quest_info
+            .player_stats()
+            .has_os_trait(crate::scripts::gui::TRAIT_SPATIALLY_AWARE)
+        {
+            reveal_whole_map(&mut quest_info, &mission, map_location_count);
+            info!(
+                "Applied Spatially Aware O/S trait: revealed {} automap locations",
+                map_location_count
+            );
+        }
         if game_options.presentation_mode == crate::PresentationMode::Flat {
-            let level_stem = mission.split('.').next().unwrap_or(&mission).to_uppercase();
-            let (revealed_rects, explored_rects) =
-                dark::map::MapChunkData::load_from_mission(asset_cache, &level_stem)
-                    .map(|data| (data.revealed_rects, data.explored_rects))
-                    .unwrap_or_default();
             let entity = world.add_entity((
                 Links::empty(),
                 PropScripts {
@@ -3061,10 +3089,19 @@ impl MissionCore {
         let dir = new_rotation * input_context.head.rotation;
         let facing = dir.rotate_vector(cgmath::vec3(0.0, 0.0, -1.0));
         let move_thumbstick_value = input_context.right_hand.thumbstick;
+        // Speedy (Trait4) scales stick locomotion only; VR room-scale walking
+        // is the player's own legs and no upgrade reaches it.
+        let move_speed = crate::scripts::gui::speedy_move_speed(
+            PLAYER_MOVE_SPEED,
+            crate::scripts::gui::player_has_os_trait(
+                &self.world,
+                crate::scripts::gui::TRAIT_SPEEDY,
+            ),
+        );
         let forward = dir.rotate_vector(cgmath::vec3(
-            -delta_time * move_thumbstick_value.x * PLAYER_MOVE_SPEED / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.x * move_speed / dark::SCALE_FACTOR,
             0.0,
-            -delta_time * move_thumbstick_value.y * PLAYER_MOVE_SPEED / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.y * move_speed / dark::SCALE_FACTOR,
         ));
 
         let up_value = input_context.left_hand.thumbstick.y / dark::SCALE_FACTOR;
@@ -4751,6 +4788,51 @@ impl MissionCore {
             self.make_un_physical(dropped_entity_id);
         }
         moved
+    }
+
+    /// The world-facing half of acquiring an O/S trait - the grants that touch
+    /// components or quest state rather than `PlayerStats`. Every one of these
+    /// is also re-derived at mission load, so it cannot double-apply.
+    fn apply_os_trait_world_grants(&mut self, trait_id: u8) {
+        use crate::scripts::gui::{TANK_HP_BONUS, TRAIT_SPATIALLY_AWARE, TRAIT_TANK};
+        if trait_id == TRAIT_TANK {
+            // Tank (Trait8): the original raises the ceiling AND current HP by
+            // the bonus.
+            let player_entity = self
+                .world
+                .borrow::<UniqueView<PlayerInfo>>()
+                .unwrap()
+                .entity_id;
+            self.world.run(
+                |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
+                 mut v_max: ViewMut<dark::properties::PropMaxHitPoints>| {
+                    let new_max = (&mut v_max)
+                        .get(player_entity)
+                        .map(|max| {
+                            max.hit_points += TANK_HP_BONUS as u32;
+                            max.hit_points
+                        })
+                        .ok();
+                    if let Ok(hp) = (&mut v_hp).get(player_entity) {
+                        hp.hit_points += TANK_HP_BONUS;
+                        if let Some(new_max) = new_max {
+                            hp.hit_points = hp.hit_points.min(new_max as i32);
+                        }
+                    }
+                },
+            );
+        }
+        if trait_id == TRAIT_SPATIALLY_AWARE {
+            let mission = self.level_name.to_ascii_lowercase();
+            let count = self
+                .world
+                .borrow::<UniqueView<MapLocationCount>>()
+                .map(|count| count.0)
+                .unwrap_or(0);
+            if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
+                reveal_whole_map(&mut quests, &mission, count);
+            }
+        }
     }
 
     /// Re-encode the backpack's stored cells after effective Strength changes.
@@ -7981,10 +8063,7 @@ impl MissionCore {
                 }
 
                 Effect::AcquireOsTrait { trait_id, machine } => {
-                    use crate::scripts::gui::{
-                        NATURALLY_ABLE_MODULES, TANK_HP_BONUS, TRAIT_NATURALLY_ABLE, TRAIT_TANK,
-                        live_effect_note, trait_name, used_bit_name,
-                    };
+                    use crate::scripts::gui::{live_effect_note, trait_name, used_bit_name};
                     // The machine's stable mission object id keys its used bit.
                     let machine_template_id = self
                         .world
@@ -8015,11 +8094,10 @@ impl MissionCore {
                                 &used_bit_name(machine_id),
                                 dark::properties::QuestBitValue::COMPLETE,
                             );
-                            if trait_id == TRAIT_NATURALLY_ABLE {
-                                quests
-                                    .player_stats_mut()
-                                    .award_cyber_modules(NATURALLY_ABLE_MODULES);
-                            }
+                            crate::scripts::gui::apply_os_trait_stats_grants(
+                                quests.player_stats_mut(),
+                                trait_id,
+                            );
                             let new_width = crate::inventory::backpack_width(quests.player_stats());
                             (true, old_width, new_width)
                         }
@@ -8027,35 +8105,7 @@ impl MissionCore {
 
                     if acquired {
                         self.resize_player_backpack(old_width, new_width);
-                        if trait_id == TRAIT_TANK {
-                            // Tank (Trait8): the original raises the ceiling
-                            // AND current HP by the bonus. Loads first re-derive
-                            // the trait-adjusted default, so this live grant
-                            // cannot double-apply.
-                            let player_entity = self
-                                .world
-                                .borrow::<UniqueView<PlayerInfo>>()
-                                .unwrap()
-                                .entity_id;
-                            self.world.run(
-                                |mut v_hp: ViewMut<dark::properties::PropHitPoints>,
-                                 mut v_max: ViewMut<dark::properties::PropMaxHitPoints>| {
-                                    let new_max = (&mut v_max)
-                                        .get(player_entity)
-                                        .map(|max| {
-                                            max.hit_points += TANK_HP_BONUS as u32;
-                                            max.hit_points
-                                        })
-                                        .ok();
-                                    if let Ok(hp) = (&mut v_hp).get(player_entity) {
-                                        hp.hit_points += TANK_HP_BONUS;
-                                        if let Some(new_max) = new_max {
-                                            hp.hit_points = hp.hit_points.min(new_max as i32);
-                                        }
-                                    }
-                                },
-                            );
-                        }
+                        self.apply_os_trait_world_grants(trait_id);
                         info!(
                             "O/S trait acquired: {} ({}){}",
                             trait_id,
@@ -11935,7 +11985,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         &mut self,
         request: &crate::game_scene::DebugPlayerStatsRequest,
     ) -> Result<crate::player_stats::PlayerStats, String> {
-        use crate::player_stats::{Skill, Stat};
+        use crate::player_stats::{OS_TRAIT_SLOTS, Skill, Stat};
         use crate::scripts::gui::{
             PSI_TIER_CAP, SKILL_CAP, STAT_CAP, TrainerTarget, apply_purchase,
         };
@@ -12033,6 +12083,24 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 ));
             }
         }
+        if let Some(traits) = request.os_traits.as_ref() {
+            let mut requested = stats.os_traits.clone();
+            for trait_id in traits.iter().copied() {
+                if !(1..=16).contains(&trait_id) {
+                    return Err(format!("no such O/S trait: {} (ids are 1..=16)", trait_id));
+                }
+                if !requested.contains(&trait_id) {
+                    requested.push(trait_id);
+                }
+            }
+            if requested.len() > OS_TRAIT_SLOTS {
+                return Err(format!(
+                    "{} O/S traits requested but the character sheet has {} slots",
+                    requested.len(),
+                    OS_TRAIT_SLOTS
+                ));
+            }
+        }
 
         // Apply through the same `PlayerStats` mutations a trainer purchase
         // performs, one level at a time - just without the module cost.
@@ -12056,6 +12124,17 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 apply_purchase(stats, TrainerTarget::PsiTier(tier));
             }
         }
+        // Traits are granted the way the machine grants them, minus the
+        // machine: the sheet half here, the world half below. Ahead of the
+        // module target so Naturally Able's one-time award cannot push the
+        // balance past the level the caller asked to establish.
+        let mut granted_traits = Vec::new();
+        for trait_id in request.os_traits.iter().flatten().copied() {
+            if stats.add_os_trait(trait_id) {
+                crate::scripts::gui::apply_os_trait_stats_grants(stats, trait_id);
+                granted_traits.push(trait_id);
+            }
+        }
         if let Some(target) = request.cyber_modules {
             stats.award_cyber_modules(target.saturating_sub(stats.cyber_modules));
         }
@@ -12063,6 +12142,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         let new_backpack_width = crate::inventory::backpack_width(stats);
         let result = stats.clone();
         drop(quests);
+        for trait_id in granted_traits {
+            self.apply_os_trait_world_grants(trait_id);
+        }
         self.resize_player_backpack(old_backpack_width, new_backpack_width);
         info!("Debug provisioning set player stats: {:?}", result);
         Ok(result)
@@ -13426,7 +13508,7 @@ mod radiation_patch_use_tests {
             .borrow::<shipyard::UniqueViewMut<ActiveRadiation>>()
             .unwrap();
         assert!(radiation.observe_ambient(level));
-        assert_eq!(radiation.advance(0.1, level, 3.0), 0);
+        assert_eq!(radiation.advance(0.1, level, 3.0, 1.0), 0);
     }
 
     #[test]
