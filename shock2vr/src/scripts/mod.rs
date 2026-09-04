@@ -48,6 +48,7 @@ mod picture_swap;
 pub mod player_script;
 mod psi_amp_script;
 mod psi_kit;
+mod psi_mine;
 mod put_bomb_in_replicator;
 pub mod radiation;
 mod reduce_psi;
@@ -131,6 +132,7 @@ use self::internal_switch_held_model::InternalSwitchHeldModelScript;
 use self::picture_swap::PictureSwap;
 use self::psi_amp_script::PsiAmpScript;
 use self::psi_kit::PsiKitScript;
+use self::psi_mine::PsiMine;
 use self::put_bomb_in_replicator::PutBombInReplicator;
 use self::radiation::RadPatchScript;
 use self::reduce_psi::ReducePsi;
@@ -1105,6 +1107,7 @@ impl ScriptWorld {
             "ectoplasm" => Box::new(UnimplementedScript::new(&script_name)),
             "medpatchscript" => Box::new(HealingItemScript::new(HealingItemKind::MedPatch)),
             "psikitscript" => Box::new(PsiKitScript::new()),
+            "psimine" => Box::new(PsiMine::new()),
             "computer" => gui_script(Box::new(ComputerGui)),
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => gui_script(Box::new(HackableCrateGui::new())),
