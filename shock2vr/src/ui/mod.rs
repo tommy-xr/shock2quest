@@ -96,6 +96,14 @@ impl Rect {
         p.x >= self.x && p.y >= self.y && p.x <= self.x + self.w && p.y <= self.y + self.h
     }
 
+    /// Half-open containment: a point on the far edge belongs to the *next*
+    /// rect, not to both. [`Rect::contains`] is inclusive on all four edges,
+    /// which makes abutting rects - a row of tabs, a grid of cells - overlap by
+    /// a pixel and pick two winners.
+    pub fn contains_half_open(&self, p: Vector2<f32>) -> bool {
+        p.x >= self.x && p.x < self.x + self.w && p.y >= self.y && p.y < self.y + self.h
+    }
+
     pub fn center(&self) -> Vector2<f32> {
         vec2(self.x + self.w / 2.0, self.y + self.h / 2.0)
     }

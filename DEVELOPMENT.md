@@ -120,7 +120,8 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | `P` | `PathfindingTestCycle` | set start → set goal → show path |
 | `B` | `DebugCycleWeapon` | spawns and wields the next weapon (unlike the number row) |
 | `Alt+X` | `EjectClip` | magazine back to the backpack reserve; Quest: the gun hand's *lower* face button |
-| `T` / `Y` | `CycleAmmo` / `CyclePsiPower` | no Quest binding - in VR ammo is swapped by inserting a clip of the other type |
+| `T` / `Y` | `CycleAmmo` / `CyclePsiPower` | ammo has no Quest binding (a clip is inserted by hand); on Quest the amp hand's *upper* face button quick-cycles the power |
+| - | `SelectPsiPower` | opens the psi power selection MFD; flat clicks the readout's power badge instead, Quest: the amp hand's *lower* face button |
 | `F` | `CycleGunSetting` | switch the wielded gun's fire mode (e.g. NORM / BURST); Quest: the gun hand's *upper* face button |
 | `U` | `ReadLastUnreadLog` | on Quest an *upper* face button resolves to this - see below |
 | `M` | `ToggleMap` | flat only |
@@ -146,13 +147,32 @@ that hand holds (`shock2vr/src/hand_buttons.rs`):
 | --- | --- | --- |
 | nothing, a melee weapon, or any other item | `ToggleUseMode` (cyber interface) | `ReadLastUnreadLog` |
 | a gun | `EjectClip` - that hand's gun, so dual wielding ejects the one pressed | `CycleGunSetting` - likewise that hand's gun; a gun with one mode is a no-op |
-| the psi amp | reserved for power selection - inert for now | reserved for power selection - inert for now |
+| the psi amp | `SelectPsiPower` - the power selection MFD, in the cyber interface | `CyclePsiPower` - step to the next trained power, no panel |
 
 Mode first: while the cyber interface is up both buttons keep their interface
 meaning on both hands whatever is held, so it can always be closed. With a gun
 in each hand neither panel is reachable until a hand is free. While the **Free
 camera** developer option is on, the right hand's two buttons are the chord and
 nothing else - they resolve to nothing at all.
+
+#### The psi selection MFD captures a thumbstick
+
+While the psi power selection MFD is docked - opened from the flat readout's
+power badge, or from the amp hand's lower face button in VR - **one** thumbstick
+is captured: up/down step the tier, left/right step the power inside it, and
+that stick stops driving the player until the panel closes.
+
+Which stick is the one the player is not already using to hold or aim the
+weapon, so it differs by presentation:
+
+| | captured | still drives |
+| --- | --- | --- |
+| flat | the **left** stick (arrow-key turn) | `WASD` still walks |
+| VR | the stick of the hand **not** holding the amp | the amp hand keeps aiming |
+
+Steps are edge-triggered, so a held stick moves one place, and they are the same
+`StepPsiSelection` the readout's four arrows emit - the selection applies live,
+and the panel pages to whatever tier it lands on.
 
 ### Developer options
 

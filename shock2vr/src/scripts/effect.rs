@@ -372,6 +372,26 @@ pub enum Effect {
         forward: bool,
     },
 
+    /// Select the psi power with this **power id** outright, rather than
+    /// stepping to it - a click on the selection MFD's grid. Ignored unless
+    /// the player is trained in that power, so the guard holds for every way
+    /// in (a click, HTTP) exactly as it does for a step.
+    SelectPsiPower {
+        power_id: i32,
+    },
+
+    /// Page the psi selection MFD to a tier (`crate::psi::PsiPanelTier`).
+    /// Browsing only: the power the amp will cast is untouched.
+    SetPsiBrowsedTier {
+        tier: i32,
+    },
+
+    /// Open the psi power selection MFD in the presentation's panel slot.
+    /// No-op unless the psi amp is wielded. In VR it also brings up the cyber
+    /// interface around the panel (the slot is only presented there), and a
+    /// second press is its own inverse - see `Effect::ReadLastUnreadLog`.
+    OpenPsiPowers,
+
     /// Train the player in a psi power (insert its template id into
     /// `PlayerPsiKnownPowers`), making it selectable and castable - for
     /// trainers and debug tooling. No-op if already trained.

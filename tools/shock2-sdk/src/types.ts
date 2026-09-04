@@ -842,9 +842,10 @@ export interface UiState {
   /**
    * Every AMMOFULL readout control shown this frame, labeled by meaning:
    * `gun_setting` (its `text` is the current fire-mode header), `reload`,
-   * `cycle_ammo`, and the psi selector's `psi_tier_prev`/`psi_tier_next`/
-   * `psi_power_prev`/`psi_power_next`. Empty outside use mode. Click a
-   * control's `screen_rect` center to invoke it.
+   * `cycle_ammo`, the psi selector's `psi_tier_prev`/`psi_tier_next`/
+   * `psi_power_prev`/`psi_power_next`, and `psi_select` (the badge and
+   * discipline name themselves, which open the power selection MFD). Empty
+   * outside use mode. Click a control's `screen_rect` center to invoke it.
    */
   readout: UiElement[];
   /**

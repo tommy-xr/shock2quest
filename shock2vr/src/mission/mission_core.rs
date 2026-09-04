@@ -1386,6 +1386,22 @@ pub struct MediaPanelEntity(pub EntityId);
 #[derive(Unique, Clone, Copy)]
 pub struct WeaponSettingsPanelEntity(pub EntityId);
 
+/// Which shortcut opened the current use-mode session, when one did.
+/// See [`MissionCore::use_mode_shortcut`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UseModeShortcut {
+    /// The VR audio-log reader (`Effect::ReadLastUnreadLog`).
+    LogReader,
+    /// The psi-amp hand's lower face button (`Effect::OpenPsiPowers`).
+    PsiPowers,
+}
+
+/// Nonserialized player-owned host for the psi power selection MFD. Like the
+/// weapon settings host it presents player state (the psi registry and the
+/// selection) rather than a world object, so one host serves every amp.
+#[derive(Unique, Clone, Copy)]
+pub struct PsiPowersPanelEntity(pub EntityId);
+
 /// The automap location (`PropMapLoc`) of the mapped room the player most
 /// recently entered - the player's *current* map location. The automap uses it
 /// to draw that location bright (R-art) while other explored locations draw
@@ -1557,19 +1573,26 @@ pub struct MissionCore {
     /// dismissed as soon as that gun stops being wielded.
     weapon_settings_gun: Option<EntityId>,
 
-    /// Whether this use-mode session was opened by the VR log-reader shortcut
-    /// (an upper face button / `Effect::ReadLastUnreadLog`) rather than a deliberate
-    /// `ToggleUseMode`. It makes Y a true inverse of itself: the press that
-    /// dismisses the reader closes the whole interface when that button is
-    /// what opened it, and only puts the reader away - back to the strip - when
-    /// the player was already in the interface. Transient like `use_mode`
-    /// itself (not serialized: a load leaves the mode closed).
-    ///
-    /// Only the reader shortcut consults it. Dismissing the reader with the
-    /// canvas's own close button is the host's generic "put this panel away"
-    /// and leaves the interface up on the inventory strip however it was
-    /// opened; either face button still exits from there.
-    use_mode_from_log_reader: bool,
+    /// Which shortcut - if any - brought up the current use-mode session,
+    /// rather than a deliberate `ToggleUseMode`. It makes a shortcut a true
+    /// inverse of itself: the press that dismisses its panel closes the whole
+    /// interface when that shortcut opened it, and only puts the panel away -
+    /// back to the inventory strip - when the player was already inside. One
+    /// field rather than one flag per shortcut, so a second shortcut taking the
+    /// slot cannot leave the first one's flag standing. Transient like
+    /// `use_mode` itself (not serialized: a load leaves the mode closed).
+    use_mode_shortcut: Option<UseModeShortcut>,
+
+    /// Whether the psi power selection MFD is the panel this mission docked.
+    /// Like `weapon_settings_gun` it means "our panel is docked", so it is also
+    /// dropped when the slot goes elsewhere - and it is what arms the stick
+    /// capture, so a stale flag would silently eat locomotion.
+    psi_powers_open: bool,
+
+    /// Whether the psi MFD's captured thumbstick is currently pushed past the
+    /// step threshold. Edge state for [`crate::scripts::gui::stick_nav`], so a
+    /// held stick steps once rather than every frame.
+    psi_nav_latched: bool,
 
     /// Entry/exit feel for `use_mode`: one eased 0..1 ramp driving the rim
     /// vignette (both presentations), the VR comfort dim's strength, and the
@@ -1856,11 +1879,17 @@ impl MissionCore {
         let (mut psi_powers, psi_selection) = crate::psi::build_psi_power_registry(&entity_info_rc);
         // Player-facing discipline names come from the psihelp string table;
         // a data install without it just keeps the gamesys symbolic names.
-        if let Some(psi_strings) =
-            asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "psihelp.str")
-        {
-            crate::psi::apply_display_names(&mut psi_powers, &psi_strings);
-        }
+        // The whole table is kept: the selection MFD reads icon basenames
+        // (`psiicon<id>`) and per-discipline help out of it at draw time, where
+        // there is no asset cache.
+        let psi_strings = crate::psi::normalize_help_strings(
+            &asset_cache
+                .get_opt(&dark::importers::STRINGS_IMPORTER, "psihelp.str")
+                .map(|strings| (*strings).clone())
+                .unwrap_or_default(),
+        );
+        crate::psi::apply_display_names(&mut psi_powers, &psi_strings);
+        world.add_unique(crate::scripts::gui::GlobalPsiStrings(psi_strings));
         let mut gun_setting_string_table = |file| {
             asset_cache
                 .get_opt(&dark::importers::STRINGS_IMPORTER, file)
@@ -1939,8 +1968,14 @@ impl MissionCore {
             info!("Applied Tank O/S trait: +{} max hit points", TANK_HP_BONUS);
         }
 
+        let default_browsed_tier = psi_powers
+            .0
+            .get(psi_selection.index)
+            .map(|power| power.tier())
+            .unwrap_or(1);
         world.add_unique(psi_powers);
         world.add_unique(psi_selection);
+        world.add_unique(crate::psi::PsiPanelTier(default_browsed_tier));
         world.add_unique(known_powers);
         world.add_unique(crate::psi::ActivePsiPowers::default());
         world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
@@ -2080,6 +2115,26 @@ impl MissionCore {
             RuntimePropDoNotSerialize,
         ));
         world.add_unique(WeaponSettingsPanelEntity(weapon_settings_panel));
+
+        // The psi power selection MFD's host, on the same terms: player state,
+        // no world object, rebuilt per mission and never serialized.
+        let psi_powers_panel = world.add_entity((
+            Links::empty(),
+            PropScripts {
+                scripts: vec!["internal_psi_powers".to_owned()],
+                inherits: false,
+            },
+            dark::properties::PropTemplateId { template_id: -1 },
+            PropSymName("Psi Powers".to_owned()),
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                cell: 0,
+            },
+            RuntimePropTransform(Matrix4::identity()),
+            RuntimePropDoNotSerialize,
+        ));
+        world.add_unique(PsiPowersPanelEntity(psi_powers_panel));
 
         world.add_unique(GlobalTemplateIdMap(template_to_entity_id.clone()));
 
@@ -2492,7 +2547,9 @@ impl MissionCore {
             flat_melee_anim: None,
             use_mode: false,
             weapon_settings_gun: None,
-            use_mode_from_log_reader: false,
+            psi_powers_open: false,
+            psi_nav_latched: false,
+            use_mode_shortcut: None,
             use_mode_ramp: crate::ui::entry_ramp::EntryExitRamp::new(),
             vr_use_mode_anchor: crate::ui::FrontendPanelAnchor::new(),
             vr_use_mode_head: crate::ui::world_dim::UNTRACKED_HEAD,
@@ -2960,6 +3017,40 @@ impl MissionCore {
                     .update(input_context, player.pos, player.rotation, delta_time);
             effects.extend(teleport_effects);
         }
+        // While the psi MFD is docked it captures ONE thumbstick (which one is
+        // `psi_navigation_hand`'s call) and withholds that stick's locomotion,
+        // so browsing powers cannot walk the player off. The other stick still
+        // drives normally. Edge-triggered (`stick_nav`), so a held stick steps
+        // once, and live: each step is the same `StepPsiSelection` the readout's
+        // arrows emit, so the panel and the amp always agree.
+        let captured_context;
+        let input_context = if self.psi_powers_open {
+            let hand = self.psi_navigation_hand(game_options.presentation_mode);
+            let stick = match hand {
+                crate::vr_config::Handedness::Left => input_context.left_hand.thumbstick,
+                crate::vr_config::Handedness::Right => input_context.right_hand.thumbstick,
+            };
+            let (step, latched) = crate::scripts::gui::stick_nav(stick, self.psi_nav_latched);
+            self.psi_nav_latched = latched;
+            if let Some(step) = step {
+                effects.push(step.effect());
+            }
+            let mut withheld = input_context.clone();
+            match hand {
+                crate::vr_config::Handedness::Left => {
+                    withheld.left_hand.thumbstick = cgmath::Vector2::new(0.0, 0.0)
+                }
+                crate::vr_config::Handedness::Right => {
+                    withheld.right_hand.thumbstick = cgmath::Vector2::new(0.0, 0.0)
+                }
+            }
+            captured_context = withheld;
+            &captured_context
+        } else {
+            self.psi_nav_latched = false;
+            input_context
+        };
+
         let additional_rotation = cgmath::Quaternion::from_axis_angle(
             cgmath::vec3(0.0, 1.0, 0.0),
             cgmath::Rad(input_context.left_hand.thumbstick.x * delta_time * PLAYER_TURN_RATE),
@@ -3579,6 +3670,25 @@ impl MissionCore {
                 self.weapon_settings_gun = None;
             } else if !ours_is_docked {
                 self.weapon_settings_gun = None;
+            }
+        }
+
+        // The psi MFD belongs to the wielded amp, so putting the amp away
+        // dismisses it - the same contract the settings MFD has with its gun.
+        // It is also dropped when the slot went elsewhere (close button, Tab,
+        // another panel opening), which is what disarms the stick capture.
+        if self.psi_powers_open {
+            let panel = self
+                .world
+                .borrow::<UniqueView<PsiPowersPanelEntity>>()
+                .map(|panel| panel.0)
+                .ok();
+            let ours_is_docked = panel.is_some() && self.flat_ui.active_panel() == panel;
+            if !ours_is_docked {
+                self.psi_powers_open = false;
+            } else if !self.wielding_psi_amp() {
+                self.flat_ui.close();
+                self.psi_powers_open = false;
             }
         }
 
@@ -4870,6 +4980,10 @@ impl MissionCore {
                     ReadoutButton::PsiTierNext => step(PsiSelectionAxis::Tier, true),
                     ReadoutButton::PsiPowerPrev => step(PsiSelectionAxis::Power, false),
                     ReadoutButton::PsiPowerNext => step(PsiSelectionAxis::Power, true),
+                    // The badge/name area opens the selection MFD, the way
+                    // SETTING opens the weapon settings one: the arrows step,
+                    // the readout itself offers the described grid.
+                    ReadoutButton::PsiSelect => vec![Effect::OpenPsiPowers],
                 }
             }
             // Double-click = equip/use, acting on the still-contained item -
@@ -5467,7 +5581,8 @@ impl MissionCore {
         // branch dismisses an open panel first and never reaches here with one
         // bound) and already what `CloseUseMode` does explicitly.
         self.flat_ui.close();
-        self.use_mode_from_log_reader = false;
+        self.use_mode_shortcut = None;
+        self.psi_powers_open = false;
         // VR weapon-safe exit: a trigger still held from inside the mode must
         // be released before the hands see it again, or leaving the cyber
         // interface would fire the wielded weapon on a stale press. Inert in
@@ -5495,6 +5610,63 @@ impl MissionCore {
     /// untracked (zero-quaternion) head rather than locking in a garbage
     /// placement (rules 3 and 7 of the vr-ui-design skill). Shared by every
     /// way into the mode so no entry can forget it; inert in flat.
+    /// Whether the player is holding the psi amp - what the selection MFD
+    /// presents, and what keeps it up.
+    fn wielding_psi_amp(&self) -> bool {
+        crate::wielded_weapon::wielded_psi_amp(&self.world).is_some()
+    }
+
+    /// The hand whose thumbstick the psi MFD captures while it is docked.
+    ///
+    /// The rule is "the stick the player is not already using to hold or aim
+    /// the weapon", which lands on a different hand per presentation - the one
+    /// place this panel's input differs between the two, because the two put
+    /// locomotion on different sticks:
+    ///
+    /// - **VR**: the hand NOT holding the amp, so the amp hand keeps aiming.
+    /// - **Flat**: always the LEFT stick, which is the arrow-key turn axis. The
+    ///   right stick is `WASD`, and taking that would stop the player walking
+    ///   while a panel they drive with the mouse is open. (The amp is wielded
+    ///   in the left hand *slot* in flat, so the VR rule would pick exactly the
+    ///   wrong stick here.)
+    fn psi_navigation_hand(
+        &self,
+        presentation: crate::PresentationMode,
+    ) -> crate::vr_config::Handedness {
+        use crate::vr_config::Handedness;
+        if presentation == crate::PresentationMode::Flat {
+            return Handedness::Left;
+        }
+        let holds_amp = |hand| {
+            crate::hand_buttons::held_kind_in_hand(&self.world, hand)
+                == crate::hand_buttons::HeldKind::PsiAmp
+        };
+        if holds_amp(Handedness::Right) {
+            Handedness::Left
+        } else {
+            Handedness::Right
+        }
+    }
+
+    /// Page the selection MFD to the tier of the power at `index`. The browsed
+    /// tier follows the selection wherever the selection moves - a stick flick,
+    /// a click, `CyclePsiPower` - so the panel never shows a tier the amp is
+    /// not on.
+    fn snap_psi_panel_tier(&mut self, index: usize) {
+        let tier = self
+            .world
+            .borrow::<UniqueView<GlobalPsiPowers>>()
+            .ok()
+            .and_then(|powers| powers.0.get(index).map(|power| power.tier()));
+        if let (Some(tier), Ok(mut browsed)) = (
+            tier,
+            self.world
+                .borrow::<UniqueViewMut<crate::psi::PsiPanelTier>>(),
+        ) {
+            browsed.0 = tier;
+        }
+    }
+
     fn reset_vr_use_mode_placement(&mut self) {
         self.vr_use_mode_anchor = crate::ui::FrontendPanelAnchor::new();
         self.vr_use_mode_head = crate::ui::world_dim::UNTRACKED_HEAD;
@@ -5812,8 +5984,18 @@ impl MissionCore {
                         Some(crate::input::InputAction::CycleGunSetting) => {
                             effects.push_front(Effect::CycleGunSetting { hand: Some(hand) })
                         }
-                        // The psi amp's buttons resolve to nothing yet - their
-                        // arms land with the power-selection action itself.
+                        // The amp's buttons: lower opens the selection MFD,
+                        // upper quick-cycles. Neither names a hand - there is
+                        // one psi selection however many amps are held.
+                        Some(crate::input::InputAction::SelectPsiPower) => {
+                            effects.push_front(Effect::OpenPsiPowers)
+                        }
+                        Some(crate::input::InputAction::CyclePsiPower) => {
+                            effects.push_front(Effect::StepPsiSelection {
+                                axis: crate::psi::PsiSelectionAxis::Any,
+                                forward: true,
+                            })
+                        }
                         None => {}
                         Some(action) => warn!("unroutable hand button action: {action}"),
                     }
@@ -6026,7 +6208,7 @@ impl MissionCore {
                     // (leaving the inventory strip) when the player was
                     // already inside.
                     if is_vr && self.flat_ui.active_panel() == Some(panel_entity) {
-                        if self.use_mode_from_log_reader {
+                        if self.use_mode_shortcut == Some(UseModeShortcut::LogReader) {
                             effects.push_front(self.leave_use_mode());
                         } else {
                             self.flat_ui.close();
@@ -6123,7 +6305,7 @@ impl MissionCore {
                                 self.enter_use_mode(crate::ui::entry_ramp::LOG_READER_ENTRY_EXIT),
                             );
                             self.reset_vr_use_mode_placement();
-                            self.use_mode_from_log_reader = true;
+                            self.use_mode_shortcut = Some(UseModeShortcut::LogReader);
                         }
                     }
                     self.flat_ui.open_unbound(panel_entity);
@@ -6189,14 +6371,124 @@ impl MissionCore {
                         axis,
                         forward,
                     );
-                    if let Some(power) = powers.0.get(selection.index) {
+                    let selected = selection.index;
+                    if let Some(power) = powers.0.get(selected) {
                         game_log!(
                             INFO,
                             "Selected psi power: {} (tier {})",
                             power.name,
-                            power.power.psi_cost
+                            power.tier()
                         );
                     }
+                    drop(selection);
+                    drop(known);
+                    drop(powers);
+                    self.snap_psi_panel_tier(selected);
+                }
+
+                Effect::SelectPsiPower { power_id } => {
+                    // Trained-only, exactly as a step is: an untrained
+                    // discipline is drawn on the grid but cannot be picked.
+                    let selected = {
+                        let powers = self.world.borrow::<UniqueView<GlobalPsiPowers>>().unwrap();
+                        let known = self
+                            .world
+                            .borrow::<UniqueView<PlayerPsiKnownPowers>>()
+                            .unwrap();
+                        crate::scripts::gui::power_index(&powers.0, power_id)
+                            .filter(|index| known.0.contains(&powers.0[*index].template_id))
+                    };
+                    if let Some(index) = selected {
+                        self.world
+                            .borrow::<UniqueViewMut<PsiPowerSelection>>()
+                            .unwrap()
+                            .index = index;
+                        self.snap_psi_panel_tier(index);
+                    }
+                }
+
+                Effect::SetPsiBrowsedTier { tier } => {
+                    let clamped = tier.clamp(1, crate::scripts::gui::TIERS);
+                    if let Ok(mut browsed) = self
+                        .world
+                        .borrow::<UniqueViewMut<crate::psi::PsiPanelTier>>()
+                    {
+                        browsed.0 = clamped;
+                    }
+                }
+
+                Effect::OpenPsiPowers => {
+                    let panel = self
+                        .world
+                        .borrow::<UniqueView<PsiPowersPanelEntity>>()
+                        .map(|panel| panel.0);
+                    let Ok(panel) = panel else {
+                        continue;
+                    };
+                    let is_vr = game_options.presentation_mode == crate::PresentationMode::Vr;
+
+                    // In VR the amp hand's lower button is also the dismiss
+                    // affordance, so it is a true inverse of itself: it puts
+                    // back exactly what it brought up - the whole interface
+                    // when it opened it, just the panel (leaving the inventory
+                    // strip) when the player was already inside.
+                    if is_vr && self.flat_ui.active_panel() == Some(panel) {
+                        if self.use_mode_shortcut == Some(UseModeShortcut::PsiPowers) {
+                            effects.push_front(self.leave_use_mode());
+                        } else {
+                            self.flat_ui.close();
+                        }
+                        self.psi_powers_open = false;
+                        continue;
+                    }
+
+                    // Edge policy: nothing new over the death sequence, the
+                    // rule `ToggleUseMode` and the log reader both apply. After
+                    // the dismiss branch, so a player who died with the panel
+                    // up can still put it away.
+                    if is_vr && !self.player_is_alive() {
+                        continue;
+                    }
+
+                    // The panel presents the wielded amp's selection, and the
+                    // slot has to actually be presented - flat always presents
+                    // it, VR only inside the cyber interface.
+                    if !self.wielding_psi_amp() {
+                        continue;
+                    }
+
+                    // Open on the tier the selection is already in, so the
+                    // player lands looking at their own power.
+                    let selected = self
+                        .world
+                        .borrow::<UniqueView<PsiPowerSelection>>()
+                        .map(|selection| selection.index)
+                        .unwrap_or(0);
+                    self.snap_psi_panel_tier(selected);
+
+                    if is_vr {
+                        // One UI at a time: the panel replaces whatever world
+                        // quad was up rather than hanging in front of it.
+                        self.gui.close_panel(
+                            &mut self.world,
+                            &mut self.physics,
+                            &mut self.script_world,
+                            &mut self.id_to_physics,
+                        );
+                        if !self.use_mode {
+                            effects.push_front(
+                                self.enter_use_mode(crate::ui::entry_ramp::LOG_READER_ENTRY_EXIT),
+                            );
+                            self.reset_vr_use_mode_placement();
+                            self.use_mode_shortcut = Some(UseModeShortcut::PsiPowers);
+                        }
+                    }
+                    self.script_world.dispatch(Message {
+                        to: panel,
+                        payload: MessagePayload::PanelOpened,
+                    });
+                    self.flat_ui.open_unbound(panel);
+                    self.psi_powers_open = true;
                 }
 
                 Effect::GrantPsiPower { template_id } => {
