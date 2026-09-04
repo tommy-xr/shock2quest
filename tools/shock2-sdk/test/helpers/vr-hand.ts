@@ -118,6 +118,7 @@ export async function aimVrHandAt(
   standOff = 0.45,
   squeeze = 0,
   trigger = 0,
+  hand: "left" | "right" = "right",
 ): Promise<{ start: Vec3; target: Vec3 }> {
   const snapshot = await game.info();
   const pawn = snapshot.player.position;
@@ -138,10 +139,10 @@ export async function aimVrHandAt(
   await game.input.lookAtWorldPoint(target, {
     eyeHeight: snapshot.player.camera_offset[1],
   });
-  await game.input.set("right_hand.position", localHand);
-  await game.input.set("right_hand.rotation", localHandRotation);
-  await game.input.set("right_hand.trigger", trigger);
-  await game.input.set("right_hand.squeeze", squeeze);
+  await game.input.set(`${hand}_hand.position`, localHand);
+  await game.input.set(`${hand}_hand.rotation`, localHandRotation);
+  await game.input.set(`${hand}_hand.trigger`, trigger);
+  await game.input.set(`${hand}_hand.squeeze`, squeeze);
   await game.step({ frames: 3 });
   return { start: worldHand, target };
 }

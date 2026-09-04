@@ -225,6 +225,15 @@ fn trigger_safe_mask(use_mode: bool, on_panel: [bool; 2], holds_weapon: [bool; 2
     mask
 }
 
+/// Whether `entity_id` wields as a melee `_h` arm rig (the skinned meshes
+/// carrying `PropLimbModel`) rather than a gun view model.
+fn is_melee_model(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<PropLimbModel>>()
+        .ok()
+        .is_some_and(|v| v.get(entity_id).is_ok())
+}
+
 /// Freeze each hand's trigger mask for the length of one pull.
 ///
 /// [`trigger_safe_mask`] is a per-frame decision, but a trigger pull is a
@@ -7161,7 +7170,24 @@ impl MissionCore {
                             continue;
                         };
 
-                        let vhots = new_model.vhots();
+                        let mut vhots = new_model.vhots();
+                        // A gun wielded in the LEFT hand draws the mirror
+                        // image of its right-handed model, muzzle vhots
+                        // included, so the baked hand is a left hand and the
+                        // shot still leaves the reflected barrel. Melee rigs
+                        // mirror in their own frame below; a model applied
+                        // while nothing holds it takes the authored right.
+                        if vr_held && !is_melee_model(&self.world, entity_id) {
+                            let hand = self
+                                .interaction
+                                .holding_hand(entity_id)
+                                .unwrap_or(crate::vr_config::Handedness::Right);
+                            let mirror = crate::vr_config::gun_mirror(hand);
+                            new_model.apply_local_transform(mirror);
+                            for vhot in vhots.iter_mut() {
+                                vhot.point = mirror.transform_point(vhot.point);
+                            }
+                        }
                         // An articulated VR-wielded first-person model (hand +
                         // arm + gun as skeleton sub-objects) renders unposed
                         // without a player, so give it the empty bind pose (it
@@ -7189,12 +7215,7 @@ impl MissionCore {
                             // cancelled for the same reason as flat: the
                             // entity transform is re-anchored (there to the
                             // camera, here to the tracked hand) every frame.
-                            let is_melee = self
-                                .world
-                                .borrow::<View<PropLimbModel>>()
-                                .ok()
-                                .is_some_and(|v| v.get(entity_id).is_ok());
-                            if is_melee {
+                            if is_melee_model(&self.world, entity_id) {
                                 let player = asset_cache
                                     .get_opt(
                                         &ANIMATION_CLIP_IMPORTER,
