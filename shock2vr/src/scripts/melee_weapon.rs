@@ -164,13 +164,13 @@ impl Script for HeldMeleeWeapon {
                 };
                 let damage = self
                     .may_damage(entity_id, owner, physics, *contact, player_velocity)
-                    .then(|| authored_contact_damage(world, entity_id, owner))
+                    .then(|| authored_contact_damage(world, entity_id, owner, is_held))
                     .flatten()
                     // Adrenaline Overproduction scales the *player's* swing,
                     // so only a weapon in their hand gets the bonus (a wrench
                     // knocked into a creature is nobody's swing).
                     .map(|amount| {
-                        if self.is_held(world, entity_id) {
+                        if is_held {
                             amount * crate::scripts::berserk::melee_damage_multiplier(world)
                         } else {
                             amount
@@ -382,9 +382,25 @@ fn closing_speed(
 /// `None` means "this contact does no authored damage" (a wall, a victim with
 /// no receptron for the stim): the caller emits nothing at all, so a swing at
 /// scenery is silent rather than a free 1-point tap.
-fn authored_contact_damage(world: &World, weapon: EntityId, victim: EntityId) -> Option<f32> {
+///
+/// Lethal Weapon scales a *held* weapon's blow - that is the player's own
+/// swing. A loose weapon something else blunders into is not.
+fn authored_contact_damage(
+    world: &World,
+    weapon: EntityId,
+    victim: EntityId,
+    is_held: bool,
+) -> Option<f32> {
     let template_id = entity_class_template_id(world, weapon)?;
     let damage = contact_stim_damage(world, template_id, victim);
+    let damage = crate::scripts::gui::lethal_weapon_damage(
+        damage,
+        is_held
+            && crate::scripts::gui::player_has_os_trait(
+                world,
+                crate::scripts::gui::TRAIT_LETHAL_WEAPON,
+            ),
+    );
     (damage > 0.0).then_some(damage)
 }
 
@@ -855,6 +871,54 @@ mod tests {
         assert!(
             (amount - WEAPON_BASH_INTENSITY).abs() < f32::EPSILON,
             "got {amount}"
+        );
+    }
+
+    /// Lethal Weapon scales the player's own swing - a held weapon - and
+    /// leaves a loose one alone.
+    #[test]
+    fn lethal_weapon_scales_a_held_swing_only() {
+        let landed_damage = |held: bool, traited: bool| {
+            let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+            if held {
+                world.add_component(
+                    weapon,
+                    crate::runtime_props::RuntimePropVrGripOffset(vec3(0.0, 0.0, 0.0)),
+                );
+            }
+            let mut quests = crate::quest_info::QuestInfo::new();
+            if traited {
+                quests
+                    .player_stats_mut()
+                    .add_os_trait(crate::scripts::gui::TRAIT_LETHAL_WEAPON);
+            }
+            world.add_unique(quests);
+
+            let mut script = HeldMeleeWeapon::new();
+            let Effect::Multiple(effects) = collide(&mut script, &world, weapon, target) else {
+                panic!("expected melee impact effects");
+            };
+            effects
+                .iter()
+                .find_map(|effect| match effect {
+                    Effect::Send { msg } => match msg.payload {
+                        MessagePayload::Damage { amount, .. } => Some(amount),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .expect("a landed swing should send Damage")
+        };
+
+        assert_eq!(landed_damage(true, false), WEAPON_BASH_INTENSITY);
+        assert!(
+            (landed_damage(true, true) - WEAPON_BASH_INTENSITY * 1.35).abs() < 1e-4,
+            "a held swing bills 1.35x with the trait"
+        );
+        assert_eq!(
+            landed_damage(false, true),
+            WEAPON_BASH_INTENSITY,
+            "a loose weapon is not the player's swing"
         );
     }
 

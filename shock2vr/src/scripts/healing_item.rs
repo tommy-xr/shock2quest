@@ -2,10 +2,10 @@ use dark::properties::{PropHitPoints, PropMaxHitPoints};
 use serde::{Deserialize, Serialize};
 use shipyard::{Get, Unique, UniqueView, View, World};
 
-use crate::{mission::PlayerInfo, physics::PhysicsWorld, quest_info::QuestInfo};
+use crate::{mission::PlayerInfo, physics::PhysicsWorld};
 
 use super::{Effect, MessagePayload, Script};
-use crate::scripts::gui::TRAIT_PHARMO_FRIENDLY;
+use crate::scripts::gui::{TRAIT_PHARMO_FRIENDLY, pharmo_friendly_amount, player_has_os_trait};
 
 /// Retail `MedPatchScript` / `MedKitScript` cadence recovered from the shipped
 /// `allobjs.osm`: `DoHeal` first runs after 0.1s, then reschedules every 1.5s
@@ -45,22 +45,6 @@ impl HealingItemScript {
     pub fn new(kind: HealingItemKind) -> Self {
         Self { kind }
     }
-
-    fn pharmo_friendly(world: &World) -> bool {
-        world
-            .borrow::<UniqueView<QuestInfo>>()
-            .is_ok_and(|quests| quests.player_stats().has_os_trait(TRAIT_PHARMO_FRIENDLY))
-    }
-
-    /// The original multiplies both values by 1.2 and converts back to an
-    /// integer. Integer arithmetic preserves that truncation exactly.
-    fn retail_amount(base: i32, pharmo_friendly: bool) -> i32 {
-        if pharmo_friendly {
-            base.saturating_mul(6) / 5
-        } else {
-            base
-        }
-    }
 }
 
 impl Script for HealingItemScript {
@@ -75,11 +59,11 @@ impl Script for HealingItemScript {
             return Effect::NoEffect;
         }
 
-        let pharmo_friendly = Self::pharmo_friendly(world);
+        let pharmo_friendly = player_has_os_trait(world, TRAIT_PHARMO_FRIENDLY);
         Effect::UseHealingItem {
             entity_id,
-            total: Self::retail_amount(self.kind.base_total(), pharmo_friendly),
-            pulse: Self::retail_amount(self.kind.base_pulse(), pharmo_friendly),
+            total: pharmo_friendly_amount(self.kind.base_total(), pharmo_friendly),
+            pulse: pharmo_friendly_amount(self.kind.base_pulse(), pharmo_friendly),
             first_pulse_secs: HEALING_FIRST_PULSE_SECS,
             pulse_interval_secs: HEALING_PULSE_INTERVAL_SECS,
         }

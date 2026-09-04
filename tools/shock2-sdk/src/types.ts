@@ -566,6 +566,9 @@ export interface PlayerSnapshot {
   /** The automap locations explored in the current mission (ascending).
    * Persisted per mission in QuestInfo; survives save/load. */
   explored_map_locations: number[];
+  /** How many automap locations the current mission defines (locations run
+   * 0..count). 0 when the mission has no automap. */
+  map_location_count: number;
   /** Climb state: ladder/hand climbing, and (VR) the hands holding on. */
   climb: ClimbState;
 }
@@ -772,6 +775,9 @@ export interface PlayerStatsRequest {
   psi_tier?: number;
   /** Target cyber-module balance (the upgrade currency). */
   cyber_modules?: number;
+  /** O/S upgrade trait ids to grant (1..=16), as if picked at a machine.
+   * Already-owned ids are ignored; the four-slot cap still applies. */
+  os_traits?: number[];
 }
 
 /**

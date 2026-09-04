@@ -3,6 +3,7 @@ use shipyard::{EntityId, World};
 use crate::physics::PhysicsWorld;
 
 use super::{Effect, MessagePayload, Script};
+use crate::scripts::gui::{TRAIT_PHARMO_FRIENDLY, pharmo_friendly_amount, player_has_os_trait};
 
 /// The retail psi hypo (`PsiKitScript`): inventory use restores 20 psi and
 /// consumes one unit from its stack.
@@ -26,7 +27,7 @@ impl Script for PsiKitScript {
     fn handle_message(
         &mut self,
         entity_id: EntityId,
-        _world: &World,
+        world: &World,
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
@@ -36,7 +37,10 @@ impl Script for PsiKitScript {
 
         Effect::UsePsiKit {
             entity_id,
-            amount: Self::RESTORE_AMOUNT,
+            amount: pharmo_friendly_amount(
+                Self::RESTORE_AMOUNT,
+                player_has_os_trait(world, TRAIT_PHARMO_FRIENDLY),
+            ),
         }
     }
 }
@@ -74,6 +78,30 @@ mod tests {
                 amount: 20
             } if entity_id == booster
         ));
+    }
+
+    #[test]
+    fn pharmo_friendly_boosts_the_hypo_by_a_fifth() {
+        use crate::quest_info::QuestInfo;
+        use crate::scripts::gui::TRAIT_PHARMO_FRIENDLY;
+
+        let (world, booster) = world_with_booster();
+        let mut quests = QuestInfo::new();
+        quests
+            .player_stats_mut()
+            .add_os_trait(TRAIT_PHARMO_FRIENDLY);
+        world.add_unique(quests);
+
+        let effect = PsiKitScript::new().handle_message(
+            booster,
+            &world,
+            &PhysicsWorld::new(),
+            &MessagePayload::Frob,
+        );
+        assert!(
+            matches!(effect, Effect::UsePsiKit { amount: 24, .. }),
+            "Pharmo-Friendly turns the 20-point hypo into 24"
+        );
     }
 
     #[test]

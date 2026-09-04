@@ -2424,6 +2424,10 @@ fn capture_frame_snapshot(
                     .debug_scene()
                     .and_then(|scene| scene.player_climb())
                     .unwrap_or_default(),
+                map_location_count: state
+                    .as_ref()
+                    .map(|s| s.map_location_count)
+                    .unwrap_or_default(),
             }
         },
         entity_count,
