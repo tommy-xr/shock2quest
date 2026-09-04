@@ -20,9 +20,6 @@ pub const RADIATION_DAMAGE_INTERVAL_SECS: f32 = 6.0;
 pub const RADIATION_CHECK_INTERVAL_SECS: f32 = 0.1;
 const RADIATION_DAMAGE_PER_LEVEL: f32 = 0.25;
 const DEFAULT_RADIATION_ABSORB: f32 = 0.05;
-/// Fallback decontamination rate if `Rad Shield`'s authored `data[0]` is
-/// missing, matching the shipped value.
-const DEFAULT_DECONTAMINATION_PER_SEC: f32 = 5.0;
 const DEFAULT_RADIATION_RECOVERY: f32 = 3.0;
 
 /// Retail `RadPatch`: clear part of the player's accumulated radiation and
@@ -252,8 +249,7 @@ fn active_decontamination_rate(world: &World) -> f32 {
                 .find(|p| p.template_id == crate::psi::RAD_SHIELD_TEMPLATE_ID)
                 .map(|p| p.power.data[0])
         })
-        .filter(|rate| rate.is_finite() && *rate > 0.0)
-        .unwrap_or(DEFAULT_DECONTAMINATION_PER_SEC)
+        .unwrap_or(0.0)
 }
 
 pub fn tick_player_radiation(world: &World, elapsed_secs: f32) -> Option<Effect> {
@@ -397,10 +393,13 @@ mod tests {
         let mut radiation = ActiveRadiation::default();
         assert!(radiation.observe_ambient(8.0));
         assert_eq!(radiation.advance(0.1, 8.0, 3.0, 0.0), 0);
+        assert_eq!(radiation.advance(5.89, 0.05, 3.0, 0.0), 0);
 
-        // Unshielded this tick deals 2 damage (see the retail-clock test).
-        assert!(radiation.observe_ambient(8.0));
-        assert_eq!(radiation.advance(6.0, 0.05, 3.0, 5.0), 0);
+        // Cross the 6 s boundary shielded, in a step short enough that the
+        // purge leaves the level well above the 1.0 damage threshold: it is
+        // the shield, not an already-zeroed level, that suppresses the pulse.
+        assert_eq!(radiation.advance(0.02, 0.05, 3.0, 5.0), 0);
+        assert!(radiation.level() > 1.0);
     }
 
     #[test]

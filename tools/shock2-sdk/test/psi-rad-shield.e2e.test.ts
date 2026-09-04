@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
+import { selectPsiPower } from "./helpers/psi.js";
 import { pullTrigger } from "./helpers/weapon.js";
 
 // End-to-end test for Neural Decontamination (`Rad Shield`, issue #1300).
@@ -16,16 +17,6 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 /** The hazard patch's centre in `debug_psi` (RADIATION_SOURCE_POSITION). */
 const HAZARD = { x: 0.0, y: 1.0, z: 9.0 };
-
-/** Select a psi power by name, cycling with `CyclePsiPower`. */
-async function selectPower(game: GameServer, name: string): Promise<void> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    if ((await game.info()).player.selected_psi_power === name) return;
-    await game.input.trigger("CyclePsiPower");
-    await game.step({ frames: 2 });
-  }
-  throw new Error(`never reached psi power "${name}"`);
-}
 
 test(
   "Rad Shield purges accumulated radiation and blocks new exposure until it expires",
@@ -46,7 +37,7 @@ test(
     const irradiated = (await game.info()).player.radiation_level;
     assert.ok(irradiated > 0, `hazard patch should irradiate the player (got ${irradiated})`);
 
-    await selectPower(game, "Rad Shield");
+    await selectPsiPower(game, "Rad Shield");
     const beforePsi = (await game.info()).player.psi_points;
     const beforeHp = (await game.info()).player.hit_points;
 

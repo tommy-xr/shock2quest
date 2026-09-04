@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { EntityDetailResult } from "../src/index.js";
+import { selectPsiPower } from "./helpers/psi.js";
 import { fireOnce } from "./helpers/weapon.js";
 
 // End-to-end tests for sustained (timed) psi powers. Photonic Redirection
@@ -21,17 +22,6 @@ const INVISO_DURATION_FRAMES = 30 * 60;
 
 function aiProp(detail: EntityDetailResult, name: string): string | undefined {
   return detail.properties.find((p) => p.name === name)?.value;
-}
-
-/** Cycle the psi power selection until Inviso is selected (bounded). */
-async function selectInviso(game: GameServer): Promise<void> {
-  for (let i = 0; i < 40; i++) {
-    const selected = (await game.info()).player.selected_psi_power;
-    if (selected === "Inviso") return;
-    await game.input.trigger("CyclePsiPower");
-    await game.step({ frames: 1 });
-  }
-  assert.fail("could not cycle the psi power selection to Inviso");
 }
 
 /** Step `frames` in chunks so a single /v1/step call stays small. */
@@ -59,7 +49,7 @@ test(
     assert.ok(startPsi !== null && startPsi >= 2 * INVISO_COST);
 
     // Cast Photonic Redirection (tier 4 sustained power).
-    await selectInviso(game);
+    await selectPsiPower(game, "Inviso");
     await fireOnce(game);
     player = (await game.info()).player;
     assert.equal(player.psi_points, startPsi! - INVISO_COST, "Inviso cast costs 4 psi points");
@@ -126,7 +116,7 @@ test(
       assert.ok(camera, "debug_camera should contain a Security Camera");
 
       // Cast Inviso immediately (~0.5 s in, long before the camera reacts).
-      await selectInviso(game);
+      await selectPsiPower(game, "Inviso");
       await fireOnce(game);
       const player = (await game.info()).player;
       assert.deepEqual(player.active_psi_powers, ["Inviso"], "Inviso active in debug_camera");
