@@ -175,6 +175,17 @@ pub(crate) fn should_gesture_frustration(
 /// resolves to nothing and never reports.
 const TURN_CLIP_REPORT_TIMEOUT: f32 = 0.5;
 
+/// The longest a creature may stand still to perform a pivot. The stock turn
+/// clips run 2.4-5.6 s; one long enough to read as a wedge (the reachability
+/// harness calls holding one spot for 6 s stuck, and it is right to) is worse
+/// than steering the turn, so it is simply not picked.
+const TURN_CLIP_MAX_SECONDS: f32 = 4.0;
+
+/// Two pivots back to back would hold the creature still for longer than
+/// either of them, so a pivot has to walk (or at least steer) it off before
+/// the next one.
+const TURN_CLIP_COOLDOWN: f32 = 3.0;
+
 /// The stock authored blend length. The turn clip's pose swings back to
 /// neutral over this window as the next clip fades in, so the entity takes the
 /// authored facing change over exactly the same window and the creature's
@@ -284,6 +295,8 @@ pub struct AnimatedMonsterAI {
     /// Cleared when a pivot request resolves to no clip, so a creature whose
     /// schema has none stops asking
     has_turn_clips: bool,
+    /// Seconds left before this AI may perform another pivot
+    turn_cooldown: f32,
 }
 
 impl AnimatedMonsterAI {
@@ -311,6 +324,7 @@ impl AnimatedMonsterAI {
             frustration_cooldown: 0.0,
             turn_clip: None,
             has_turn_clips: true,
+            turn_cooldown: 0.0,
         }
     }
 
@@ -339,6 +353,7 @@ impl AnimatedMonsterAI {
             frustration_cooldown: 0.0,
             turn_clip: None,
             has_turn_clips: true,
+            turn_cooldown: 0.0,
         }
     }
 
@@ -827,18 +842,26 @@ impl AnimatedMonsterAI {
 
         match &mut self.turn_clip {
             None => {
+                self.turn_cooldown = (self.turn_cooldown - elapsed).max(0.0);
                 // Only once the heading error has already stopped the body: a
                 // pivot the creature can walk through needs no clip, and the
                 // shortest stock turn clip is a quarter-circle anyway.
                 let stopped = locomotion_scale_for_heading_error(delta) <= 0.0;
-                if !(may_start && stopped && self.has_turn_clips) {
+                if !(may_start && stopped && self.has_turn_clips && self.turn_cooldown <= 0.0) {
                     return (Effect::NoEffect, false);
                 }
                 tracing::debug!("ai {:?} pivots {:?}", entity_id, delta);
                 self.turn_clip = Some(TurnClip::Requested {
                     remaining: TURN_CLIP_REPORT_TIMEOUT,
                 });
-                (Effect::PlayTurnClip { entity_id, delta }, true)
+                (
+                    Effect::PlayTurnClip {
+                        entity_id,
+                        delta,
+                        max_seconds: TURN_CLIP_MAX_SECONDS,
+                    },
+                    true,
+                )
             }
             Some(TurnClip::Requested { remaining }) => {
                 *remaining -= elapsed;
@@ -849,6 +872,7 @@ impl AnimatedMonsterAI {
                 // none at all. Steer it, and stop asking.
                 tracing::debug!("ai {:?} has no clip for its pivot", entity_id);
                 self.turn_clip = None;
+                self.turn_cooldown = TURN_CLIP_COOLDOWN;
                 self.has_turn_clips = false;
                 (Effect::NoEffect, false)
             }
@@ -860,6 +884,7 @@ impl AnimatedMonsterAI {
                 // The completion never came - something preempted the clip.
                 tracing::debug!("ai {:?} lost its turn clip", entity_id);
                 self.turn_clip = None;
+                self.turn_cooldown = TURN_CLIP_COOLDOWN;
                 (Effect::NoEffect, false)
             }
             Some(TurnClip::Settling { turn, remaining }) => {
@@ -878,6 +903,7 @@ impl AnimatedMonsterAI {
                         self.current_heading
                     );
                     self.turn_clip = None;
+                    self.turn_cooldown = TURN_CLIP_COOLDOWN;
                 }
                 (Effect::NoEffect, true)
             }
@@ -2156,6 +2182,48 @@ mod tests {
         assert!(
             monster.turn_clip.is_none(),
             "the pivot is over once the turn has landed"
+        );
+    }
+
+    /// A pivot has a budget: it must be over, blend included, before a held
+    /// spot reads as a wedge.
+    #[test]
+    fn a_pivot_cannot_hold_long_enough_to_look_stuck() {
+        // The reachability harness treats holding one spot for 6s as wedged.
+        assert!(TURN_CLIP_MAX_SECONDS + TURN_CLIP_SETTLE_SECONDS + TURN_CLIP_REPORT_TIMEOUT < 6.0);
+    }
+
+    /// Two pivots back to back hold the creature still for longer than either
+    /// of them - which is exactly what a wedge looks like.
+    #[test]
+    fn a_second_pivot_waits_for_the_cooldown() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        let physics = PhysicsWorld::new();
+        turn_frame(&mut monster, entity_id, Deg(90.0));
+        monster.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::TurnClipStarted {
+                turn: Deg(-100.0),
+                duration: 2.4,
+            },
+        );
+        monster.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::AnimationCompleted,
+        );
+        for _ in 0..6 {
+            turn_frame(&mut monster, entity_id, Deg(90.0));
+        }
+        assert!(monster.turn_clip.is_none(), "the first pivot must be over");
+        // Still facing a long way from where it wants to be, but it has to
+        // steer out of the pivot before performing another.
+        assert_eq!(
+            turn_frame(&mut monster, entity_id, Deg(90.0)),
+            (None, false)
         );
     }
 

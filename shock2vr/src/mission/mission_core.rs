@@ -3971,9 +3971,10 @@ impl MissionCore {
         selection_strategy: MotionQuerySelectionStrategy,
         apply: fn(&AnimationPlayer, Rc<AnimationClip>) -> AnimationPlayer,
         // Pivot in place: pick the stand-schema clip whose authored facing
-        // change is nearest this heading change, and report it back (see
+        // change is nearest this heading change and that fits in the seconds
+        // the creature can afford to stand still, then report it back (see
         // `Effect::PlayTurnClip`).
-        turn: Option<cgmath::Deg<f32>>,
+        turn: Option<(cgmath::Deg<f32>, f32)>,
     ) {
         let is_death_query = motion_queries
             .iter()
@@ -4016,10 +4017,16 @@ impl MissionCore {
                             .get_motion_stuff(name.clone())
                             .end_direction
                     };
-                    let result = if let Some(delta) = turn {
+                    let result = if let Some((delta, max_seconds)) = turn {
                         let options = global_context.motiondb.query_all(query.clone());
-                        let ends = options.iter().map(end_direction).collect::<Vec<_>>();
-                        dark::motion::nearest_turn_clip(delta, &ends)
+                        let clips = options
+                            .iter()
+                            .map(|name| {
+                                let stuff = global_context.motiondb.get_motion_stuff(name.clone());
+                                (stuff.end_direction, stuff.duration)
+                            })
+                            .collect::<Vec<_>>();
+                        dark::motion::nearest_turn_clip(delta, &clips, max_seconds)
                             .map(|index| options[index].clone())
                     } else if is_stand_query {
                         // Standing still must not play a turn: the schema's
@@ -6989,7 +6996,11 @@ impl MissionCore {
                     );
                 }
 
-                Effect::PlayTurnClip { entity_id, delta } => {
+                Effect::PlayTurnClip {
+                    entity_id,
+                    delta,
+                    max_seconds,
+                } => {
                     self.apply_animation_by_schema(
                         global_context,
                         asset_cache,
@@ -6997,7 +7008,7 @@ impl MissionCore {
                         vec![vec![MotionQueryItem::new("stand")]],
                         MotionQuerySelectionStrategy::Random,
                         AnimationPlayer::play_animation,
-                        Some(delta),
+                        Some((delta, max_seconds)),
                     );
                 }
 

@@ -646,6 +646,8 @@ pub enum Effect {
     PlayTurnClip {
         entity_id: EntityId,
         delta: cgmath::Deg<f32>,
+        /// The longest turn the creature can afford to stand still for.
+        max_seconds: f32,
     },
 
     ReplaceEntity {
