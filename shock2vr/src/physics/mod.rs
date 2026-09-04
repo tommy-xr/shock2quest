@@ -96,6 +96,27 @@ pub fn player_crouch_center_shift() -> f32 {
     (PLAYER_STANDING_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR
 }
 
+/// What holds a crouching player up, and therefore what stays put as the
+/// capsule changes size (see [`PhysicsWorld::set_player_crouch`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CrouchAnchor {
+    /// Standing on something: the feet stay planted and the center moves.
+    Feet,
+    /// Hanging from their hands: nothing is under the feet, and the tracked
+    /// hands and eye ride the body center, so the center stays put and the
+    /// capsule shrinks toward the hands instead.
+    Center,
+}
+
+impl CrouchAnchor {
+    fn center_shift(self) -> f32 {
+        match self {
+            CrouchAnchor::Feet => player_crouch_center_shift(),
+            CrouchAnchor::Center => 0.0,
+        }
+    }
+}
+
 /// Clearance (SS2 ft) kept between a capped eye and the capsule crown, so the
 /// camera stays strictly inside the collider rather than sitting exactly on
 /// its surface where a coplanar ceiling could still catch it.
@@ -250,6 +271,13 @@ const PLAYER_JUMP_MANTLE_MAX_DROP: f32 = 40.0;
 /// imported float normals from landing just beyond Rapier's exact pi/4
 /// climb/slide boundary.
 const PLAYER_MIN_WALKABLE_NORMAL: f32 = 0.7;
+
+/// Whether a surface with this upward normal component can be stood on - and
+/// so whether a hand touching it is lying ON the surface rather than hooked on
+/// a face of it (see [`crate::vr_climb::vault_ready`]).
+pub fn is_walkable_normal(normal_y: f32) -> bool {
+    normal_y >= PLAYER_MIN_WALKABLE_NORMAL
+}
 
 /// How far below the player's feet (world units) a surface still counts as the
 /// thing they are *standing on* for support-motion transfer (see
@@ -1527,6 +1555,50 @@ fn plan_jump_mantle(
 /// exception. A newly-blocked route returns to its last valid standing pose
 /// before the capsule is expanded, and final standing fit is checked against
 /// every collider.
+/// Give the player the collider their top-out state calls for: the scripted
+/// mantle's compressed ball while it runs, their own capsule again once it
+/// ends. One place, because a top-out is entered both from the movement pass
+/// (flat, pushing into a ladder top) and outright (a VR hand vault - see
+/// [`PhysicsWorld::plan_hand_top_out`]).
+fn sync_top_out_collider(
+    collider_set: &mut ColliderSet,
+    rigid_body_set: &mut RigidBodySet,
+    was_top_out: bool,
+    player_handle: &PlayerHandle,
+) {
+    let is_top_out = player_handle.top_out.is_some();
+    let collider_handle = rigid_body_set[player_handle.character_handle].colliders()[0];
+    if !was_top_out && is_top_out {
+        let compressed_radius = if player_handle
+            .top_out
+            .is_some_and(|top_out| top_out.is_crouched)
+        {
+            PLAYER_CROUCH_RADIUS / SCALE_FACTOR
+        } else {
+            CLIMB_TOP_OUT_RADIUS
+        };
+        collider_set[collider_handle].set_shape(SharedShape::ball(compressed_radius));
+    } else if was_top_out && !is_top_out {
+        let restored = if player_handle.is_crouched {
+            crouched_player_shared_shape()
+        } else {
+            standing_player_shared_shape()
+        };
+        collider_set[collider_handle].set_shape(restored);
+    }
+    rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
+}
+
+/// Whether a collider is NOT an authored climbable surface. Membership is
+/// checked rather than filtered by group because a ladder is also an `ENTITY`,
+/// so masking the CLIMBABLE bit out of a group filter would not exclude it.
+fn collider_is_not_climbable(collider: &Collider) -> bool {
+    !collider
+        .collision_groups()
+        .memberships
+        .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
+}
+
 fn advance_climb_top_out(
     controller: &KinematicCharacterController,
     validation_queries: &QueryPipeline,
@@ -2400,6 +2472,10 @@ pub struct PlayerHandle {
     // `PhysicsWorld::set_player_crouch`, which keeps the shape and this flag
     // in sync.
     is_crouched: bool,
+    // Whether that crouch was made by `set_player_crouch_hanging` (anchored on
+    // the body center rather than the feet). It has to be undone the same way,
+    // or the body ends up a crouch shift above where it hung.
+    is_hanging_crouched: bool,
     // Live-validated waypoints for an in-progress ladder top-out. This is
     // transient locomotion state: direct relocation and crouching cancel it,
     // while save/load uses the last valid standing pose stored with it.
@@ -2484,6 +2560,19 @@ impl PlayerHandle {
     /// the requested input.
     pub fn is_crouched(&self) -> bool {
         self.is_crouched
+    }
+
+    /// Whether the current crouch is a hanging ball-up (see
+    /// [`PhysicsWorld::set_player_crouch_hanging`]), which must be undone the
+    /// same way it was made.
+    pub fn is_hanging_crouched(&self) -> bool {
+        self.is_hanging_crouched
+    }
+
+    /// Whether a scripted mantle/top-out currently owns the body. Nothing else
+    /// may move it, resize it, or take a climb hold while it does.
+    pub fn is_topping_out(&self) -> bool {
+        self.top_out.is_some()
     }
 
     /// Ground contact reported by the last movement frame. Unlike a support
@@ -3128,6 +3217,9 @@ impl PhysicsWorld {
             nvec_to_cgmath(*self.rigid_body_set[player_handle.character_handle].translation());
         self.translate_held_melee_for_player_relocation(position - previous);
         player_handle.top_out = None;
+        // Relocated, so they are no longer hanging off anything: the stance
+        // they are in is now an ordinary crouch, undone feet-planted.
+        player_handle.is_hanging_crouched = false;
         player_handle.slope_displacement = Vector::zeros();
         player_handle.is_grounded = false;
         player_handle.jump_velocity = None;
@@ -4400,6 +4492,7 @@ impl PhysicsWorld {
             controller,
             character_handle,
             is_crouched: false,
+            is_hanging_crouched: false,
             top_out: None,
             support: None,
             slope_displacement: Vector::zeros(),
@@ -4422,6 +4515,34 @@ impl PhysicsWorld {
         want_crouch: bool,
         player_handle: &mut PlayerHandle,
     ) -> bool {
+        self.set_player_crouch_anchored(want_crouch, CrouchAnchor::Feet, player_handle)
+    }
+
+    /// Set the crouch state of a player whose weight hangs from their hands
+    /// (a VR climb hold - see [`crate::vr_climb`]), balling them up so their
+    /// knees clear the lip they are pulling over.
+    ///
+    /// Same capsules, anchored on the BODY CENTER instead of the feet: a
+    /// hanging body has no feet on anything, and the tracked hands and eye
+    /// ride that center, so planting the feet instead would drag the gripping
+    /// hand off its hold (the shift is larger than the grip's whole stretch
+    /// tolerance). Holding the center still makes the swap invisible to the
+    /// grip: the capsule shrinks toward the hands, which is what balling up
+    /// physically is.
+    pub fn set_player_crouch_hanging(
+        &mut self,
+        want_crouch: bool,
+        player_handle: &mut PlayerHandle,
+    ) -> bool {
+        self.set_player_crouch_anchored(want_crouch, CrouchAnchor::Center, player_handle)
+    }
+
+    fn set_player_crouch_anchored(
+        &mut self,
+        want_crouch: bool,
+        anchor: CrouchAnchor,
+        player_handle: &mut PlayerHandle,
+    ) -> bool {
         // Dark disables ordinary player motion while its mantle sequence is
         // active. In particular, do not resize the temporary head sphere in
         // response to a crouch edge part-way across a lip.
@@ -4429,13 +4550,20 @@ impl PhysicsWorld {
             return player_handle.is_crouched;
         }
         if want_crouch == player_handle.is_crouched {
+            // Already in the wanted stance, so nothing moves - but the request
+            // still says how the body is being held up NOW, and the undo has to
+            // match that, not how the crouch happened to be made. A player who
+            // crouch-walked a duct and then took a ledge hold is hanging from
+            // it, however they got low.
+            if want_crouch {
+                player_handle.is_hanging_crouched = anchor == CrouchAnchor::Center;
+            }
             return player_handle.is_crouched;
         }
 
         let character_handle = player_handle.character_handle;
         let collider_handle = self.rigid_body_set[character_handle].colliders()[0];
-        // Feet-planted center shift between the two capsule sizes.
-        let center_shift = (PLAYER_STANDING_HEIGHT - PLAYER_CROUCH_HEIGHT) / 2.0 / SCALE_FACTOR;
+        let center_shift = anchor.center_shift();
 
         if want_crouch {
             self.collider_set[collider_handle].set_shape(crouched_player_shared_shape());
@@ -4444,6 +4572,7 @@ impl PhysicsWorld {
             translation.y -= center_shift;
             body.set_translation(translation, true);
             player_handle.is_crouched = true;
+            player_handle.is_hanging_crouched = anchor == CrouchAnchor::Center;
         } else {
             // Headroom check: intersect a test capsule at the feet-planted
             // standing pose against the same groups the movement casts use.
@@ -4528,6 +4657,7 @@ impl PhysicsWorld {
                 translation.y += center_shift;
                 body.set_translation(translation, true);
                 player_handle.is_crouched = false;
+                player_handle.is_hanging_crouched = false;
             }
         }
 
@@ -4839,6 +4969,86 @@ impl PhysicsWorld {
         player_handle.support = None;
     }
 
+    /// Start the scripted top-out (Dark's crouched up-and-forward mantle
+    /// waypoints, the same sequence flat runs at a ladder top) from wherever
+    /// the player currently hangs, heading `direction`.
+    ///
+    /// This is how a VR hand vault finishes: once the eye clears the lip
+    /// ([`crate::vr_climb::vault_ready`]) the hands have done all they can,
+    /// and the body is thrown over by the planner rather than hauled. Returns
+    /// whether a route was found - if not, nothing changes and the player
+    /// keeps climbing.
+    pub fn plan_hand_top_out(
+        &mut self,
+        direction: Vector3<f32>,
+        player_handle: &mut PlayerHandle,
+    ) -> bool {
+        if player_handle.top_out.is_some() {
+            return false;
+        }
+        let character_handle = player_handle.character_handle;
+        let character_pos = *self.rigid_body_set[character_handle].position();
+        let movement_filter = player_movement_filter(character_handle);
+        // The same three pipelines the flat ladder top-out plans against: the
+        // probes ignore the climbable the player is hanging off, and the
+        // scripted route may cross parentless terrain (see `ClimbPass`).
+        let not_climbable =
+            |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
+        let parented_non_climbable = |_handle: ColliderHandle, collider: &Collider| {
+            collider.parent().is_some() && collider_is_not_climbable(collider)
+        };
+        // The route is planned for, and ends by expanding, the STANDING
+        // capsule, so a balled-up body has to fit one where it hangs. Test that
+        // first - it is one query, against the planner's hundreds - and refuse
+        // the vault if it does not; the player keeps pulling instead.
+        let stand_anchor = if player_handle.is_hanging_crouched {
+            CrouchAnchor::Center
+        } else {
+            CrouchAnchor::Feet
+        };
+        let standing_center = nvec_to_cgmath(character_pos.translation.vector)
+            + vec3(0.0, stand_anchor.center_shift(), 0.0);
+        if player_handle.is_crouched
+            && !self.standing_player_pose_is_clear(standing_center, player_handle)
+        {
+            return false;
+        }
+        // Plan before committing to anything: a refused route must leave the
+        // player exactly as they were, still holding on.
+        let planned = {
+            let dispatcher = self.narrow_phase.query_dispatcher();
+            let queries = self.player_movement_queries(dispatcher, movement_filter);
+            plan_climb_top_out(
+                &player_handle.controller,
+                &queries,
+                &queries.with_filter(movement_filter.predicate(&not_climbable)),
+                &queries.with_filter(movement_filter.predicate(&parented_non_climbable)),
+                &character_pos,
+                vec_to_nvec(direction),
+                0.0,
+                self.integration_parameters.dt,
+            )
+        };
+        let Some(planned) = planned else {
+            return false;
+        };
+        // Un-ball on the anchor the crouch was made with, so the body ends up
+        // where the pre-check said the standing capsule fits.
+        if player_handle.is_crouched
+            && self.set_player_crouch_anchored(false, stand_anchor, player_handle)
+        {
+            return false;
+        }
+        player_handle.top_out = planned.top_out;
+        sync_top_out_collider(
+            &mut self.collider_set,
+            &mut self.rigid_body_set,
+            false,
+            player_handle,
+        );
+        true
+    }
+
     /// The fixed timestep one movement frame integrates with. A velocity
     /// handed to [`launch_player`](Self::launch_player) has to be expressed in
     /// it - see [`crate::vr_climb::release_velocity`].
@@ -5046,7 +5256,7 @@ impl PhysicsWorld {
                 ClimbGripKind::Ladder
             } else {
                 let world_point = contact.point2;
-                if outward.y < PLAYER_MIN_WALKABLE_NORMAL || world_point.y <= min_ledge_height {
+                if !is_walkable_normal(outward.y) || world_point.y <= min_ledge_height {
                     continue;
                 }
                 ClimbGripKind::Ledge
@@ -5245,14 +5455,10 @@ impl PhysicsWorld {
         // by predicate rather than by group filter because a ladder is also an
         // `ENTITY`, so masking the CLIMBABLE bit out of the group filter would
         // not exclude it.
-        let not_climbable = |_handle: ColliderHandle, collider: &Collider| {
-            !collider
-                .collision_groups()
-                .memberships
-                .intersects(InternalCollisionGroups::CLIMBABLE.bits.into())
-        };
-        let parented_non_climbable = |handle: ColliderHandle, collider: &Collider| {
-            collider.parent().is_some() && not_climbable(handle, collider)
+        let not_climbable =
+            |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
+        let parented_non_climbable = |_handle: ColliderHandle, collider: &Collider| {
+            collider.parent().is_some() && collider_is_not_climbable(collider)
         };
         let climb_pass_filter = movement_filter.predicate(&not_climbable);
         // Dark's scripted jump-through may cross immutable world terrain.
@@ -5373,26 +5579,12 @@ impl PhysicsWorld {
         player_handle.top_out = player_movement.top_out;
         player_handle.slope_displacement = player_movement.slope_displacement;
         let is_top_out = player_handle.top_out.is_some();
-        let collider_handle = self.rigid_body_set[player_handle.character_handle].colliders()[0];
-        if !was_top_out && is_top_out {
-            let compressed_radius = if player_handle
-                .top_out
-                .is_some_and(|top_out| top_out.is_crouched)
-            {
-                PLAYER_CROUCH_RADIUS / SCALE_FACTOR
-            } else {
-                CLIMB_TOP_OUT_RADIUS
-            };
-            self.collider_set[collider_handle].set_shape(SharedShape::ball(compressed_radius));
-        } else if was_top_out && !is_top_out {
-            let restored = if player_handle.is_crouched {
-                crouched_player_shared_shape()
-            } else {
-                standing_player_shared_shape()
-            };
-            self.collider_set[collider_handle].set_shape(restored);
-        }
-        self.rigid_body_set[player_handle.character_handle].enable_ccd(!is_top_out);
+        sync_top_out_collider(
+            &mut self.collider_set,
+            &mut self.rigid_body_set,
+            was_top_out,
+            player_handle,
+        );
         let scripted_top_out_frame = was_top_out || is_top_out;
         let mvt = player_movement.movement;
         let actor_collisions = player_movement.actor_collisions;
@@ -7613,6 +7805,34 @@ mod tests {
             world.get_player_save_translation(&player),
             Err(PlayerSavePoseError::UnsupportedPose),
             "a falling player with no walkable support must not brick a save slot"
+        );
+    }
+
+    /// A hanging ball-up must be invisible to the hand holding the player up:
+    /// the tracked hands ride the body center, and moving it by the ordinary
+    /// feet-planted crouch shift (0.64 wu) would exceed the grip's whole
+    /// stretch tolerance (0.6 wu) and drop them off the hold.
+    #[test]
+    fn a_hanging_crouch_shrinks_the_capsule_without_moving_the_body() {
+        let mut world = PhysicsWorld::new();
+        let mut player =
+            world.create_player(vec3(0.0, 3.0, 0.0), EntityId::from_inner(2104).unwrap());
+        // Standing up consults the broad phase, which only exists after a step.
+        step(&mut world, &mut player, 1);
+        let hanging = world.get_player_translation(&player);
+
+        assert!(world.set_player_crouch_hanging(true, &mut player));
+        assert_eq!(world.get_player_translation(&player), hanging);
+        assert!(!world.set_player_crouch_hanging(false, &mut player));
+        assert_eq!(world.get_player_translation(&player), hanging);
+
+        // The feet-planted crouch the flat runtime uses moves it, which is
+        // exactly what the hanging variant exists to avoid.
+        assert!(world.set_player_crouch(true, &mut player));
+        assert!(
+            (world.get_player_translation(&player).y - hanging.y + player_crouch_center_shift())
+                .abs()
+                < 1.0e-5,
         );
     }
 

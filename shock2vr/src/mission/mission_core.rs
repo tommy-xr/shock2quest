@@ -2962,7 +2962,9 @@ impl MissionCore {
         // `PlayerInfo` carries: the movement is cast from the queued kinematic
         // target, and composing against the superseded pose would apply each
         // correction on top of a body that has already absorbed the last one.
-        let hand_climb = (!time.elapsed.is_zero())
+        // A scripted top-out owns the body outright, so the hands do nothing
+        // while one runs and cannot take a fresh hold part-way over the lip.
+        let hand_climb = (!time.elapsed.is_zero() && !self.player_handle.is_topping_out())
             .then(|| {
                 let pawn_pos = self
                     .physics
@@ -2974,9 +2976,15 @@ impl MissionCore {
                         input: input_context,
                         pawn_pos,
                         pawn_rotation: new_rotation,
+                        // Measured from the STANDING capsule while balling up
+                        // on a hold: that swap raises the collider's feet
+                        // without the body moving, and a ledge must not stop
+                        // being a ledge just because the player tucked their
+                        // knees under it.
                         feet_y: pawn_pos.y
                             - crate::physics::player_center_above_floor(
-                                self.player_handle.is_crouched(),
+                                self.player_handle.is_crouched()
+                                    && !self.player_handle.is_hanging_crouched(),
                             ),
                         step_dt: self.physics.player_step_dt(),
                     })
@@ -3000,15 +3008,53 @@ impl MissionCore {
         } else {
             // Apply the crouch request before moving: swaps the capsule size
             // feet-planted; standing up is refused without headroom (the
-            // actual state is read back via `player_is_crouched`). Not while a
-            // hand grips: the swap shifts the capsule centre further than the
-            // grip's stretch tolerance, so a VR player who ducks on a ladder
-            // would be dropped by it. The VR runtime also freezes its physical
-            // crouch detector while gripping (`vr_crouch`); this covers the
-            // crouch *button*, which no detector sees.
-            if hand_climb.translation.is_none() {
+            // actual state is read back via `player_is_crouched`).
+            //
+            // A hand on a ledge balls the body up regardless of the crouch
+            // input, so the knees clear the lip being pulled over - and it
+            // swaps the capsule around the body CENTER, since a hanging body's
+            // feet rest on nothing and the gripping hand rides that center.
+            //
+            // Only while they are actually hanging, though. A player still
+            // standing on the deck holding a waist-high ledge has their weight
+            // on their feet, and a center-anchored swap there would lift them
+            // off the floor going down and drive the standing capsule through
+            // it coming back up.
+            let hangs_from_a_ledge = !self.player_handle.is_grounded()
+                && self
+                    .interaction
+                    .hand_climb()
+                    .is_some_and(|climb| climb.holds_a_ledge());
+            let still_hanging =
+                self.player_handle.is_hanging_crouched() && !self.player_handle.is_grounded();
+            if hangs_from_a_ledge || still_hanging {
+                // Undone the same way it was made, so a body that is still in
+                // the air ends up back where it hung rather than 0.64 wu above
+                // it. Once their feet are on something the ordinary
+                // feet-planted path below is the correct one - and the only one
+                // that can stand them up at all, since a center-anchored
+                // expansion would put their feet through that floor.
+                self.physics.set_player_crouch_hanging(
+                    hangs_from_a_ledge || input_context.crouch,
+                    &mut self.player_handle,
+                );
+            } else if hand_climb.translation.is_none() {
                 self.physics
                     .set_player_crouch(input_context.crouch, &mut self.player_handle);
+            }
+            // Head over the lip: the hands have done all they can, so hand the
+            // body to the scripted top-out and let go of everything. A route
+            // the planner cannot find is simply not taken - the holds stay and
+            // the player keeps pulling.
+            let mut hand_climb = hand_climb;
+            if let Some(direction) = self.hand_vault_direction() {
+                if self
+                    .physics
+                    .plan_hand_top_out(direction, &mut self.player_handle)
+                {
+                    self.interaction.release_climb_grips();
+                    hand_climb.translation = None;
+                }
             }
             // Letting go of the last hold throws the body with the momentum of
             // the pull, so a hard haul-and-release sails on past the hold.
@@ -9187,6 +9233,37 @@ impl MissionCore {
         self.player_handle.is_crouched()
     }
 
+    /// Where to throw the body if the player has pulled their head over the
+    /// ledge their anchor hand is lying on, or `None` if they have not (see
+    /// [`crate::vr_climb::vault_ready`]).
+    ///
+    /// The eye is taken at the STANDING line above the body center, whatever
+    /// stance the collider is in: a VR player's real head does not shrink when
+    /// their capsule balls up, and it is the center the tracked head rides.
+    fn hand_vault_direction(&self) -> Option<Vector3<f32>> {
+        let anchor = self.interaction.hand_climb()?.anchor_grip()?;
+        // The pose the coming step will land on, as the grip itself is resolved
+        // against - judging the eye against the superseded one lags the pull.
+        let center = self
+            .physics
+            .get_player_next_translation(&self.player_handle);
+        let eye_above_center = crate::PLAYER_EYE_HEIGHT / dark::SCALE_FACTOR;
+        if !crate::vr_climb::vault_ready(
+            center.y + eye_above_center,
+            anchor.pawn_at_grab.y + eye_above_center,
+            anchor.grip.point.y,
+            anchor.grip.kind,
+            crate::physics::is_walkable_normal(anchor.grip.normal.y),
+        ) {
+            return None;
+        }
+        // Over the lip, toward the hand: the landing is whatever the planner
+        // finds that way.
+        let toward = anchor.grip.point - center;
+        let direction = cgmath::vec3(toward.x, 0.0, toward.z);
+        (direction.magnitude() > 1.0e-4).then_some(direction)
+    }
+
     /// Whether either VR hand currently holds a climb hold.
     pub fn player_is_gripping(&self) -> bool {
         self.interaction
@@ -10622,6 +10699,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         let climb = self.interaction.hand_climb();
         Some(crate::game_scene::DebugClimbState {
             is_climbing: self.player_handle.is_climbing(),
+            vaulting: self.player_handle.is_topping_out(),
             anchor_hand: climb.and_then(|climb| climb.anchor()).map(hand_name),
             grips: climb
                 .into_iter()

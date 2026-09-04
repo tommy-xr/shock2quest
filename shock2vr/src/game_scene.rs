@@ -368,6 +368,9 @@ pub struct DebugClimbHold {
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct DebugClimbState {
     pub is_climbing: bool,
+    /// A scripted top-out is carrying the body over a lip - the hand vault's
+    /// second half, and flat's ladder mantle.
+    pub vaulting: bool,
     /// The hand currently moving the body ("left"/"right"), if any.
     pub anchor_hand: Option<&'static str>,
     pub grips: Vec<DebugClimbHold>,
