@@ -483,12 +483,16 @@ fn print_sub_objects(filename: &str) -> i32 {
         return 1;
     }
     let mesh = dark::ss2_bin_obj_loader::read(&mut *reader, &common_header);
+    // The pose the game renders an unanimated model in: the same palette
+    // `to_animated_scene_objects` skins with, not the raw sub-object tree.
+    let skeleton = dark::ss2_bin_obj_loader::obj_skeleton(&mesh);
+    let palette = dark::motion::AnimationPlayer::empty().get_transforms(&skeleton);
     let bb = mesh.bounding_box;
     println!(
         "{filename}: bbox min ({:.3}, {:.3}, {:.3}) max ({:.3}, {:.3}, {:.3})",
         bb.min.x, bb.min.y, bb.min.z, bb.max.x, bb.max.y, bb.max.z
     );
-    for (name, bounds) in dark::ss2_bin_obj_loader::sub_object_bounds(&mesh) {
+    for (name, bounds) in dark::ss2_bin_obj_loader::sub_object_bounds(&mesh, &palette) {
         match bounds {
             Some(aabb) => println!(
                 "  {name:<16} min ({:>7.3}, {:>7.3}, {:>7.3}) max ({:>7.3}, {:>7.3}, {:>7.3})",
