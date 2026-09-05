@@ -542,9 +542,19 @@ export class PhysicsApi {
     return this.client.get<PhysicsBodyListResult>(`/v1/physics/bodies${query}`);
   }
 
-  /** One body in full, including how many contacts are currently holding it. */
+  /**
+   * One body in full, including how many contacts it currently has. The
+   * endpoint answers `null` for an unknown body id, which this reports as an
+   * error rather than handing back a null that only fails later.
+   */
   async body(bodyId: number): Promise<PhysicsBodyDetail> {
-    return this.client.get<PhysicsBodyDetail>(`/v1/physics/bodies/${bodyId}`);
+    const detail = await this.client.get<PhysicsBodyDetail | null>(
+      `/v1/physics/bodies/${bodyId}`,
+    );
+    if (detail === null) {
+      throw new Error(`no physics body with id ${bodyId}`);
+    }
+    return detail;
   }
 
   /** Per-ragdoll settle/quality metrics (empty list when no ragdolls exist). */

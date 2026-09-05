@@ -367,10 +367,12 @@ export interface PhysicsBodySummary {
 
 /**
  * One body in full (GET /v1/physics/bodies/:id). Adds the fields the list
- * omits, notably `contact_count` - zero means nothing is holding the body up,
- * which is what tells an unsupported hover apart from a body at rest.
+ * omits, notably `contact_count` - zero means the body touches nothing at all,
+ * which is what tells a body hanging in the air apart from one at rest. Note
+ * the detail response names the linear velocity `linear_velocity`, where the
+ * list calls the same thing `velocity`.
  */
-export interface PhysicsBodyDetail extends PhysicsBodySummary {
+export interface PhysicsBodyDetail extends Omit<PhysicsBodySummary, "velocity"> {
   center_of_mass: Vec3;
   gravity_scale: number;
   linear_damping: number;

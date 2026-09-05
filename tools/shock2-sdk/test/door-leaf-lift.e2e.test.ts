@@ -50,7 +50,9 @@ test(
     await game.input.set("head.look", [-90.0, 0.0]);
     await game.step({ frames: 4 });
     const before = new Set(
-      (await game.entities.list({ limit: 4000 })).entities.map((entity) => entity.id),
+      (await game.entities.list({ filter: "OG-Pipe", limit: 100 })).entities.map(
+        (entity) => entity.id,
+      ),
     );
     await game.input.trigger("SpawnDebugMonster");
     await game.step({ frames: 2 });
@@ -80,14 +82,20 @@ test(
     await game.input.trigger("DebugForceChase");
     let peakWhileTravelling = resting;
     let leafTravelFrames = 0;
+    let touchedTheTravellingLeaf = false;
     let crossed = false;
-    for (let frame = 0; frame < 400; frame += 1) {
+    // AI path queries run on a worker thread, so the frame the grunt reaches
+    // the door jitters. Run until it is through rather than for a fixed count.
+    for (let frame = 0; frame < 900 && !crossed; frame += 1) {
       await game.step({ frames: 1 });
       const leaf = body((await game.physics.bodies({ entityId: door.id })).bodies, "door");
       const actor = body((await game.physics.bodies({ entityId: grunt.id })).bodies, "grunt");
       if (Math.abs(leaf.velocity[1]) > 0.1) {
         leafTravelFrames += 1;
         peakWhileTravelling = Math.max(peakWhileTravelling, actor.position[1]);
+        // Without this the lift assertion is vacuous: a grunt that never
+        // reaches the leaf while it travels cannot be lifted by it either.
+        touchedTheTravellingLeaf ||= Math.abs(actor.position[2] - DOOR.z) < 1.5;
       }
       // The grunt starts at z < -5 and the player is at z = -1.2.
       crossed ||= actor.position[2] > DOOR.z + 0.5;
@@ -95,11 +103,19 @@ test(
 
     assert.ok(leafTravelFrames > 30, `the leaf should travel; saw ${leafTravelFrames} frames`);
     assert.ok(
+      touchedTheTravellingLeaf,
+      "the grunt must reach the leaf while it is travelling, or the lift assertion proves nothing",
+    );
+    assert.ok(
       peakWhileTravelling - resting < LIFT_TOLERANCE,
       `the rising leaf must not lift the grunt: rest y=${resting}, peak y=${peakWhileTravelling}`,
     );
     assert.ok(crossed, "the grunt should walk through the doorway rather than ride the leaf");
 
+    // Let it come to a stop: a body mid-stride loses and regains its floor
+    // contact frame to frame, so "is it supported" is only a question worth
+    // asking once it has settled.
+    await game.step({ frames: 120 });
     const settled = body((await game.physics.bodies({ entityId: grunt.id })).bodies, "grunt");
     assert.ok(
       Math.abs(settled.position[1] - resting) < LIFT_TOLERANCE,
@@ -108,7 +124,7 @@ test(
     const settledDetail = await game.physics.body(settled.body_id);
     assert.ok(
       settledDetail.contact_count > 0,
-      "the grunt must end supported, not hanging in the air",
+      "the grunt must end touching the world, not hanging in the air",
     );
   },
 );

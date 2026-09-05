@@ -31,7 +31,7 @@ use self::debug_render_pipeline::DebugRenderer;
 /// Original standing player collision profile (SS2 ft): six feet tall and
 /// 2.4 feet wide. Dark represents it as a vertical stack of spheres; a capsule
 /// is the continuous equivalent and preserves the rounded traversal behavior.
-/// Horizontal speed (world units/s) a kinematic body must carry before it
+/// Speed (world units/s) a kinematic body must carry along an axis before it
 /// counts as moving terrain sweeping a creature. A kinematic body's velocity
 /// is derived from its pose deltas, so a prop that never moves still reports
 /// ~1e-3 of float jitter - and the old 1e-3 gate let a STATIONARY railing
@@ -41,8 +41,15 @@ use self::debug_render_pipeline::DebugRenderer;
 const MOVING_TERRAIN_SPEED: f32 = 0.1;
 
 /// Largest contact-normal Y that still counts as a *side* contact rather than
-/// support. Above it the surface is under (or over) the actor and carries it
-/// through the contact normal, which is how a lift or a platform is ridden.
+/// one the actor is resting on. Above it the surface is under (or over) the
+/// actor and carries it through the contact *normal*, which is how a lift or a
+/// platform is ridden.
+///
+/// This is deliberately not the walkable threshold ([`is_walkable_normal`],
+/// 0.7): the question here is "can this contact push the actor along the
+/// surface" rather than "can the actor stand on it", and erring low leaves
+/// borderline contacts carrying rather than sliding. It is the same 0.5 the
+/// moving-terrain sweep recovery already uses to call a contact a side one.
 const SIDE_CONTACT_MAX_NORMAL_Y: f32 = 0.5;
 
 /// Which Rapier contact hooks a collider needs, given what it collides as.
@@ -78,11 +85,17 @@ fn active_hooks_for(group: CollisionGroup) -> ActiveHooks {
 ///
 /// The leaf still pushes along the contact normal, which is what shoves an
 /// actor standing in the doorway out of the leaf's way.
-struct MovingTerrainContactHooks;
+struct MovingTerrainContactHooks {
+    /// This frame's timestep, to turn a kinematic body's pending move into a
+    /// speed. Rapier derives kinematic velocities *after* contact
+    /// modification runs, so `linvel()` in here is last frame's - and the
+    /// frame a leaf starts moving is exactly the frame that matters.
+    dt: Real,
+}
 
 impl PhysicsHooks for MovingTerrainContactHooks {
     fn modify_solver_contacts(&self, context: &mut ContactModificationContext) {
-        if context.normal.y.abs() >= SIDE_CONTACT_MAX_NORMAL_Y {
+        if self.dt <= 0.0 || context.normal.y.abs() >= SIDE_CONTACT_MAX_NORMAL_Y {
             return;
         }
         let lifts_vertically = [context.rigid_body1, context.rigid_body2]
@@ -90,11 +103,14 @@ impl PhysicsHooks for MovingTerrainContactHooks {
             .flatten()
             .filter_map(|handle| context.bodies.get(handle))
             .any(|body| {
-                let velocity = body.linvel();
-                let horizontal = (velocity.x * velocity.x + velocity.z * velocity.z).sqrt();
-                body.body_type() == RigidBodyType::KinematicPositionBased
-                    && velocity.y.abs() > MOVING_TERRAIN_SPEED
-                    && velocity.y.abs() > horizontal
+                if body.body_type() != RigidBodyType::KinematicPositionBased {
+                    return false;
+                }
+                let step = (body.next_position().translation.vector
+                    - body.position().translation.vector)
+                    / self.dt;
+                let horizontal = (step.x * step.x + step.z * step.z).sqrt();
+                step.y.abs() > MOVING_TERRAIN_SPEED && step.y.abs() > horizontal
             });
         if !lifts_vertically {
             return;
@@ -4203,6 +4219,7 @@ impl PhysicsWorld {
         collider.user_data = entity_id.inner() as u128;
         collider.set_collision_groups(collision_groups.collision);
         collider.set_solver_groups(collision_groups.solver);
+        collider.set_active_hooks(active_hooks_for(collision_groups));
 
         self.collider_set
             .insert_with_parent(collider, handle, &mut self.rigid_body_set);
@@ -5289,7 +5306,9 @@ impl PhysicsWorld {
                 &mut self.impulse_joint_set,
                 &mut self.multibody_joint_set,
                 &mut self.ccd_solver,
-                &MovingTerrainContactHooks,
+                &MovingTerrainContactHooks {
+                    dt: self.integration_parameters.dt,
+                },
                 &self.events,
             )
         });
@@ -6832,7 +6851,10 @@ impl PhysicsWorld {
         self.rigid_body_set
             .iter()
             .find(|(handle, _)| handle.into_raw_parts().0 == body_id)
-            .map(|(handle, body)| self.debug_body_info(handle, body))
+            .map(|(handle, body)| DebugBodyInfo {
+                active_contacts: self.active_contact_count(body),
+                ..self.debug_body_info(handle, body)
+            })
     }
 
     /// Enumerate every impulse joint with its anchor separation and applied
@@ -6967,17 +6989,22 @@ impl PhysicsWorld {
             is_sensor,
             is_enabled: body.is_enabled(),
             is_sleeping: body.is_sleeping(),
-            active_contacts: body
-                .colliders()
-                .iter()
-                .map(|collider| {
-                    self.narrow_phase
-                        .contact_pairs_with(*collider)
-                        .filter(|pair| pair.has_any_active_contact)
-                        .count()
-                })
-                .sum(),
+            active_contacts: 0,
         }
+    }
+
+    /// Contact pairs currently touching this body. Walks the narrow phase, so
+    /// only the single-body detail path pays for it.
+    fn active_contact_count(&self, body: &RigidBody) -> usize {
+        body.colliders()
+            .iter()
+            .map(|collider| {
+                self.narrow_phase
+                    .contact_pairs_with(*collider)
+                    .filter(|pair| pair.has_any_active_contact)
+                    .count()
+            })
+            .sum()
     }
 }
 
@@ -7071,8 +7098,9 @@ pub struct DebugBodyInfo {
     pub is_enabled: bool,
     pub is_sleeping: bool,
     /// Contact pairs currently touching (not merely broad-phase neighbours).
-    /// Zero means nothing is holding the body up, which is what tells an
-    /// unsupported hover apart from a body resting on something.
+    /// Zero means the body touches nothing at all - which is what tells a body
+    /// hanging in the air apart from one resting on something. Only the
+    /// single-body detail path fills this in; the list path reports 0.
     pub active_contacts: usize,
 }
 
@@ -8561,6 +8589,69 @@ mod tests {
         assert!(
             end.z - start.z > 1.0,
             "a stationary railing must not hold a walking creature in place: {start:?} -> {end:?}"
+        );
+    }
+
+    /// A door leaf rising past a creature pressed against its face must leave
+    /// the creature on the floor. The contact normal is horizontal, so the
+    /// leaf's whole velocity lies in the contact's tangent plane and Rapier's
+    /// friction drags the capsule up with it (#1255).
+    #[test]
+    fn a_rising_kinematic_leaf_does_not_lift_a_creature_against_its_face() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2150, 40.0);
+        let leaf = add_sweeping_wall(&mut world, 2153);
+        // Up against the creature's side, the pose an AI takes at a threshold
+        world.set_translation(leaf, vec3(-1.15, 1.0, 0.0));
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let start = world.get_position(creature).unwrap();
+        let mut peak = start.y;
+        // 2.4 units/s, the speed medsci1's security door leaf travels at
+        for frame in 1..=60 {
+            world.set_translation(leaf, vec3(-1.15, 1.0 + frame as f32 * 0.04, 0.0));
+            // Walking into the leaf, which is what presses the capsule to its
+            // face - the whole precondition for friction to drag it upward.
+            let y_velocity = world.get_velocity(creature_id).unwrap().y;
+            world.set_velocity(creature_id, vec3(-0.5, y_velocity, 0.0));
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+            peak = peak.max(world.get_position(creature).unwrap().y);
+        }
+
+        assert!(
+            peak - start.y < 0.05,
+            "a rising leaf must not carry the creature beside it: rest {}, peak {peak}",
+            start.y
+        );
+    }
+
+    /// The other half of the same contact: a platform rising *under* a
+    /// creature carries it, through the contact normal rather than friction.
+    #[test]
+    fn a_rising_kinematic_platform_still_carries_the_creature_on_it() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2160, 40.0);
+        let platform = world.add_kinematic(
+            EntityId::from_inner(2163).unwrap(),
+            vec3(0.0, 0.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 1.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let start = world.get_position(creature).unwrap();
+        for frame in 1..=60 {
+            world.set_translation(platform, vec3(0.0, frame as f32 * 0.04, 0.0));
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+        }
+
+        let end = world.get_position(creature).unwrap();
+        assert!(
+            end.y - start.y > 2.0,
+            "a rising platform must carry its rider: {} -> {}",
+            start.y,
+            end.y
         );
     }
 
