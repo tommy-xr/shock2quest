@@ -9647,7 +9647,11 @@ impl MissionCore {
         // + forearm HUD panels; flat draws nothing here (its weapon viewmodel is
         // drawn on top in `render_per_eye`). They are labelled `PLAYER_HANDS_SOURCE`
         // so `Game` can drop them while the pause menu is up (issue #1018).
-        scene.append(&mut self.interaction.render(asset_cache, &self.world));
+        scene.append(
+            &mut self
+                .interaction
+                .render(asset_cache, &self.world, self.use_mode),
+        );
 
         // The old synthetic blue inventory cube remains a desktop diagnostic.
         // VR presents the authored INVBACK canvas through GuiManager instead.

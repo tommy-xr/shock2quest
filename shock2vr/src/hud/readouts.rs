@@ -75,10 +75,21 @@ pub(crate) fn emit_bio(
     size: Vector2<f32>,
     readout: &BioReadout,
 ) {
+    // Backdrop first; the bars and numbers render on top of it.
+    canvas.image(Rect::new(origin.x, origin.y, size.x, size.y), art);
+    emit_bio_overlays(canvas, origin, readout);
+}
+
+/// The bio monitor's bars and numbers alone, with the panel's upper-left corner
+/// at `origin` - everything [`emit_bio`] draws except the backdrop art.
+///
+/// Split out for the VR forearm, which wears the BIOFULL art as its own lit
+/// panel quad and composites only the live overlays onto it, exactly as the
+/// right forearm does with [`ammo_panel::emit`]. One layout, two presentations
+/// (AGENTS.md section 3).
+fn emit_bio_overlays(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &BioReadout) {
     let at = |rect| ammo_panel::at(origin, rect);
     canvas
-        // Backdrop first; the bars and numbers render on top of it.
-        .image(Rect::new(origin.x, origin.y, size.x, size.y), art)
         .bar(at(HEALTH_BAR), "HPBAR.PCX", readout.health_fraction)
         .bar(at(PSI_BAR), "PSIBAR.PCX", readout.psi_fraction);
     let pct = |f: f32| (f.clamp(0.0, 1.0) * 100.0).round() as i32;
@@ -97,6 +108,15 @@ pub(crate) fn emit_bio(
             HAlign::Left,
             VAlign::Middle,
         );
+}
+
+/// The bio overlays on a panel-sized canvas at panel origin (0,0), for a
+/// presentation that supplies its own BIOFULL backdrop - the VR left forearm.
+/// The counterpart of [`ammo_panel::build_readout_canvas`].
+pub(crate) fn build_bio_readout_canvas(readout: &BioReadout) -> UiCanvas {
+    let mut canvas = UiCanvas::new(BIO_FULL_SIZE);
+    emit_bio_overlays(&mut canvas, vec2(0.0, 0.0), readout);
+    canvas
 }
 
 /// Both use-mode readouts, as the interface canvas carries them.
@@ -232,6 +252,40 @@ mod tests {
             let placed = ammo_panel::at(AMMO_ORIGIN, rect);
             assert!(AMMO_ORIGIN.x <= placed.x, "{placed:?}");
             assert!(placed.x + placed.w <= AMMO_ORIGIN.x + ammo_panel::PANEL_W);
+        }
+    }
+
+    /// The VR left forearm and the interface canvas draw ONE bio layout: the
+    /// forearm's panel-local canvas carries exactly the elements `emit_bio`
+    /// places (minus the backdrop art the forearm wears as its own quad), at
+    /// the same rects relative to the panel origin. A forearm that re-derived
+    /// its bars would drift from the interface silently (issue #1268).
+    #[test]
+    fn the_forearm_canvas_is_the_interface_bio_layout_at_panel_origin() {
+        let bio = BioReadout {
+            health_fraction: 0.4,
+            psi_fraction: 0.9,
+        };
+
+        let mut interface = UiCanvas::new(vec2(640.0, 480.0));
+        emit_bio(
+            &mut interface,
+            BIO_ORIGIN,
+            "BIOFULL.PCX",
+            BIO_FULL_SIZE,
+            &bio,
+        );
+
+        let forearm = build_bio_readout_canvas(&bio);
+        assert_eq!(forearm.size(), BIO_FULL_SIZE);
+        // The backdrop is the interface's first element and the forearm's quad.
+        assert_eq!(forearm.element_count(), interface.element_count() - 1);
+
+        for (on_arm, on_panel) in forearm.elements().iter().zip(&interface.elements()[1..]) {
+            let (arm, panel) = (on_arm.rect(), on_panel.rect());
+            assert_eq!(arm.x + BIO_ORIGIN.x, panel.x, "{arm:?} vs {panel:?}");
+            assert_eq!(arm.y + BIO_ORIGIN.y, panel.y, "{arm:?} vs {panel:?}");
+            assert_eq!((arm.w, arm.h), (panel.w, panel.h));
         }
     }
 

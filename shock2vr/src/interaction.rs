@@ -100,7 +100,15 @@ pub trait PlayerInteraction {
     /// 3D visuals owned by the controller (VR: hand models + forearm HUD
     /// panels). Flat draws nothing here; its weapon is drawn from
     /// `viewmodel_entity`.
-    fn render(&self, _asset_cache: &mut AssetCache, _world: &World) -> Vec<SceneObject> {
+    ///
+    /// `use_mode` is the cyber interface's state: the forearm readouts go quiet
+    /// while the interface carries them (issue #1268).
+    fn render(
+        &self,
+        _asset_cache: &mut AssetCache,
+        _world: &World,
+        _use_mode: bool,
+    ) -> Vec<SceneObject> {
         Vec::new()
     }
 
@@ -279,7 +287,12 @@ impl PlayerInteraction for VrInteraction {
         }
     }
 
-    fn render(&self, asset_cache: &mut AssetCache, world: &World) -> Vec<SceneObject> {
+    fn render(
+        &self,
+        asset_cache: &mut AssetCache,
+        world: &World,
+        use_mode: bool,
+    ) -> Vec<SceneObject> {
         let mut glove_slot = self.glove_renderer.borrow_mut();
         let glove_renderer = glove_slot
             .get_or_insert_with(|| GloveRenderer::new(asset_cache))
@@ -304,6 +317,7 @@ impl PlayerInteraction for VrInteraction {
         objs.append(&mut create_arm_hud_panels(
             asset_cache,
             world,
+            use_mode,
             self.left_hand.get_position(),
             self.left_hand.get_rotation(),
             self.right_hand.get_position(),
