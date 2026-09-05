@@ -4136,7 +4136,7 @@ impl MissionCore {
                                 Some(dark::motion::signed_end_direction(clip.end_rotation));
                         }
                         *player = apply(player, clip);
-                        applied_blend = Some(player.active_blend_seconds());
+                        applied_blend = Some(player.blend_remaining_seconds());
 
                         // The motion query is random, so its resolved clip name
                         // is the only durable identity of the corpse pose.
@@ -4212,8 +4212,16 @@ impl MissionCore {
         // be dropped. The first clip applied after it completed is the
         // transition its pose swings back to neutral across, so the pivot
         // takes its facing change over exactly that fade.
+        // A `PlayTurnClip` that resolved to nothing still displaces whatever
+        // was tracked, so the entry is taken either way; only a report needs a
+        // clip to have actually started.
+        let previous = if applied_blend.is_some() || turn.is_some() {
+            self.turn_clip_playback.remove(&entity_id)
+        } else {
+            None
+        };
         if let Some(blend) = applied_blend {
-            match self.turn_clip_playback.remove(&entity_id) {
+            match previous {
                 Some(playback) if playback.completed => {
                     self.script_world.dispatch(Message {
                         to: entity_id,
@@ -4234,6 +4242,8 @@ impl MissionCore {
                 }
                 None => {}
             }
+        } else if let Some(playback) = previous {
+            Self::report_turn_clip_abandoned(&mut self.script_world, entity_id, playback);
         }
 
         if let Some((token, _, _)) = turn {
@@ -4258,6 +4268,31 @@ impl MissionCore {
                 to: entity_id,
                 payload,
             });
+        }
+    }
+
+    /// Tell a pivot's requester that its clip is gone. Every path that can end
+    /// a turn clip's playback goes through here, so a `TurnClip` in the script
+    /// is always answered and can hold the creature's heading no longer than
+    /// its clip really plays.
+    fn report_turn_clip_abandoned(
+        script_world: &mut ScriptWorld,
+        entity_id: EntityId,
+        playback: TurnClipPlayback,
+    ) {
+        script_world.dispatch(Message {
+            to: entity_id,
+            payload: MessagePayload::TurnClipCancelled {
+                token: playback.token,
+            },
+        });
+    }
+
+    /// The entity's animation player is being replaced or taken away, so no
+    /// completion can ever arrive for a turn clip it was playing.
+    fn abandon_turn_clip(&mut self, entity_id: EntityId) {
+        if let Some(playback) = self.turn_clip_playback.remove(&entity_id) {
+            Self::report_turn_clip_abandoned(&mut self.script_world, entity_id, playback);
         }
     }
 
@@ -7257,6 +7292,9 @@ impl MissionCore {
                     entity_id,
                     model_name,
                 } => {
+                    // The model swap rebuilds the animation player, so any
+                    // turn clip it was playing is gone with it.
+                    self.abandon_turn_clip(entity_id);
                     // A VR-wielded first-person model loads as authored,
                     // baked hands included (see `VrHeldModel`); the
                     // separate importer is the seam where per-wield mesh
@@ -7506,6 +7544,7 @@ impl MissionCore {
                     }
                 }
                 Effect::ClearModel { entity_id } => {
+                    self.abandon_turn_clip(entity_id);
                     self.id_to_model.remove(&entity_id);
                     self.id_to_animation_player.remove(&entity_id);
                     self.world
@@ -11153,8 +11192,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 from_frame: blend.from_frame,
                 duration: blend.duration,
                 elapsed: blend.elapsed,
+                // The pose's actual cross-fade weight, not the linear
+                // progress through the fade - they differ by up to 0.2.
                 alpha: if blend.duration > f32::EPSILON {
-                    (blend.elapsed / blend.duration).clamp(0.0, 1.0)
+                    dark::motion::blend_alpha(blend.elapsed / blend.duration)
                 } else {
                     1.0
                 },
