@@ -35,7 +35,9 @@ impl PropGunState {
     pub fn read<T: io::Read + io::Seek>(reader: &mut T, len: u32) -> PropGunState {
         let start = reader.stream_position().unwrap();
         let ammo = read_i32(reader);
-        let condition = if len >= 8 { read_single(reader) } else { 1.0 };
+        // Condition is a 0..100 percentage; a record too short to carry one
+        // describes an unworn gun.
+        let condition = if len >= 8 { read_single(reader) } else { 100.0 };
         let setting = if len >= 12 { read_i32(reader) } else { 0 };
         let modification = if len >= 16 { read_i32(reader) } else { 0 };
         let silence_value = if len >= 20 { read_single(reader) } else { 0.0 };

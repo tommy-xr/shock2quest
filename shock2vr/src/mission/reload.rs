@@ -523,7 +523,7 @@ mod tests {
                 },
                 PropGunState {
                     ammo,
-                    condition: 1.0,
+                    condition: 100.0,
                     setting: 0,
                     modification: 0,
                     silence_value: 0.0,

@@ -143,6 +143,17 @@ fn loaded_ammo(world: &World, entity_id: EntityId) -> Option<i32> {
         .and_then(|v| v.get(entity_id).ok().map(|g| g.ammo))
 }
 
+/// The condition points this weapon loses per shot, or `None` for one that
+/// authors no reliability (melee weapons, the debug weapons) and so never
+/// wears.
+fn degrade_per_shot(world: &World, entity_id: EntityId) -> Option<f32> {
+    let rate = world
+        .borrow::<View<dark::properties::PropGunReliability>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|r| r.degrade_rate))?;
+    (rate > 0.0).then_some(rate)
+}
+
 /// What one shot came to.
 enum ShotOutcome {
     /// The gun fired: these effects are the shot.
@@ -410,6 +421,14 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
             entity_id,
             delta: -rounds,
         });
+    }
+    // Firing wears the gun: each real gunshot costs the authored per-shot
+    // condition points. Guns with no reliability authored (and debug weapons)
+    // never wear, and neither does a projectile-less pull.
+    if is_gunshot {
+        if let Some(amount) = degrade_per_shot(world, entity_id) {
+            effects.push(Effect::DegradeWeaponCondition { entity_id, amount });
+        }
     }
     // Start the setting's between-shots wait. Only a real shot
     // starts one - a melee weapon that reached here has nothing to

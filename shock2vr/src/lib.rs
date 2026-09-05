@@ -689,6 +689,10 @@ pub struct PlayerStateSnapshot {
     /// setting imposes - 0 when it is ready to fire, `None` when nothing is
     /// wielded. A trigger pull while this is above zero does nothing.
     pub wielded_gun_cooldown_ms: Option<i32>,
+    /// The wielded gun's condition as a 0..100 percentage (100 = pristine),
+    /// or `None` when nothing with a gun state is wielded. Falls as the gun is
+    /// fired, by the per-shot amount its reliability authors.
+    pub wielded_gun_condition: Option<f32>,
     /// The player's hit points (current, max), or `None` when the player has
     /// no health pool. Seeded from `The Player` template and consumed by every
     /// damage path, with zero entering the player death lifecycle.
@@ -815,6 +819,15 @@ impl Game {
                             .map(|c| (c.remaining * 1000.0).ceil() as i32)
                     })
                     .unwrap_or(0)
+            }),
+            wielded_gun_condition: wielded.and_then(|weapon| {
+                world
+                    .borrow::<shipyard::View<dark::properties::PropGunState>>()
+                    .ok()
+                    .and_then(|v| {
+                        use shipyard::Get;
+                        v.get(weapon).ok().map(|state| state.condition)
+                    })
             }),
             hit_points: (|| {
                 use dark::properties::{PropHitPoints, PropMaxHitPoints};

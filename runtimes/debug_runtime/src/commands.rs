@@ -868,6 +868,9 @@ pub struct PlayerInfo {
     /// Milliseconds left of the wielded gun's between-shots wait (0 = ready to
     /// fire, `null` = nothing wielded). Pulls during the wait are ignored.
     pub wielded_gun_cooldown_ms: Option<i32>,
+    /// The wielded gun's condition, 0..100 (100 = pristine), or `null` when
+    /// nothing with a gun state is wielded. Falls with every shot fired.
+    pub wielded_gun_condition: Option<f32>,
     /// The player's current / maximum hit points, or `null` when the player
     /// has no health pool. See `shock2vr::PlayerStateSnapshot`.
     pub hit_points: Option<i32>,

@@ -2389,6 +2389,7 @@ fn capture_frame_snapshot(
                     .as_ref()
                     .and_then(|s| s.wielded_gun_setting_header.clone()),
                 wielded_gun_cooldown_ms: state.as_ref().and_then(|s| s.wielded_gun_cooldown_ms),
+                wielded_gun_condition: state.as_ref().and_then(|s| s.wielded_gun_condition),
                 hit_points: state
                     .as_ref()
                     .and_then(|s| s.hit_points.map(|(cur, _)| cur)),

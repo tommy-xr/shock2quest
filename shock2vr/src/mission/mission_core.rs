@@ -5828,6 +5828,17 @@ impl MissionCore {
                     }
                 }
 
+                Effect::DegradeWeaponCondition { entity_id, amount } => {
+                    let mut v_gun_state = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropGunState>>()
+                        .unwrap();
+
+                    if let Ok(gun_state) = (&mut v_gun_state).get(entity_id) {
+                        crate::scripts::effect::degrade_condition(gun_state, amount);
+                    }
+                }
+
                 Effect::BeginShotCooldown { entity_id, seconds } => {
                     self.world
                         .add_component(entity_id, RuntimePropShotCooldown { remaining: seconds });
@@ -11204,11 +11215,15 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     });
                 }
 
-                // Add weapon ammo (current clip) when present
+                // Add weapon ammo (current clip) and wear when present
                 if let Ok(gun_state) = v_gun_state.get(id) {
                     properties.push(DebugPropertyInfo {
                         name: "Ammo".to_string(),
                         value: gun_state.ammo.to_string(),
+                    });
+                    properties.push(DebugPropertyInfo {
+                        name: "Condition".to_string(),
+                        value: format!("{:.2}", gun_state.condition),
                     });
                 }
 
