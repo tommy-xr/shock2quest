@@ -365,6 +365,20 @@ export interface PhysicsBodySummary {
   is_sleeping: boolean;
 }
 
+/**
+ * One body in full (GET /v1/physics/bodies/:id). Adds the fields the list
+ * omits, notably `contact_count` - zero means nothing is holding the body up,
+ * which is what tells an unsupported hover apart from a body at rest.
+ */
+export interface PhysicsBodyDetail extends PhysicsBodySummary {
+  center_of_mass: Vec3;
+  gravity_scale: number;
+  linear_damping: number;
+  angular_damping: number;
+  linear_velocity: Vec3;
+  contact_count: number;
+}
+
 export interface PhysicsBodyListResult {
   bodies: PhysicsBodySummary[];
   total_count: number;

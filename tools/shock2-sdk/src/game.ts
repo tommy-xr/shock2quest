@@ -14,6 +14,7 @@ import type {
   InputAction,
   PathfindingStats,
   PathfindingTestStatus,
+  PhysicsBodyDetail,
   PhysicsBodyListResult,
   SceneListResult,
   SceneObjectSummary,
@@ -539,6 +540,11 @@ export class PhysicsApi {
     if (options?.limit !== undefined) params.set("limit", String(options.limit));
     const query = params.size > 0 ? `?${params}` : "";
     return this.client.get<PhysicsBodyListResult>(`/v1/physics/bodies${query}`);
+  }
+
+  /** One body in full, including how many contacts are currently holding it. */
+  async body(bodyId: number): Promise<PhysicsBodyDetail> {
+    return this.client.get<PhysicsBodyDetail>(`/v1/physics/bodies/${bodyId}`);
   }
 
   /** Per-ragdoll settle/quality metrics (empty list when no ragdolls exist). */
