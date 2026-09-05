@@ -237,7 +237,12 @@ impl Gui<WeaponModifyState, WeaponModifyMsg> for WeaponModifyGui {
         let Some(subject) = subject(world) else {
             return Vec::new();
         };
-        let mut components = draw_hack_board(&state.hack, subject.terms, WeaponModifyMsg::Board);
+        let mut components = draw_hack_board(
+            &state.hack,
+            subject.terms,
+            HrmMode::Modify,
+            WeaponModifyMsg::Board,
+        );
 
         // What this modification will do, which is the gun's own
         // `P$Modify1`/`P$Modify2` text - the only place the game ever shows it.

@@ -157,7 +157,7 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
         } else {
             state.hack.clone()
         };
-        draw_hack_board(&hack, diff, HackableCrateMsg::Hack)
+        draw_hack_board(&hack, diff, HrmMode::Hack, HackableCrateMsg::Hack)
     }
 
     fn get_config(&self) -> GuiConfig {

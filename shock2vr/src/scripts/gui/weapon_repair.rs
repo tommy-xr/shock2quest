@@ -165,7 +165,7 @@ impl Gui<WeaponRepairState, WeaponRepairMsg> for WeaponRepairGui {
         let Some((_, diff)) = subject(world) else {
             return Vec::new();
         };
-        draw_hack_board(&state.hack, diff, WeaponRepairMsg::Board)
+        draw_hack_board(&state.hack, diff, HrmMode::Repair, WeaponRepairMsg::Board)
     }
 
     /// One host serves every gun, so its board must not outlive the opening it
