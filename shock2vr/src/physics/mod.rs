@@ -6851,9 +6851,13 @@ impl PhysicsWorld {
         self.rigid_body_set
             .iter()
             .find(|(handle, _)| handle.into_raw_parts().0 == body_id)
-            .map(|(handle, body)| DebugBodyInfo {
-                active_contacts: self.active_contact_count(body),
-                ..self.debug_body_info(handle, body)
+            .map(|(handle, body)| {
+                let (active_contacts, contact_body_ids) = self.active_contacts(body);
+                DebugBodyInfo {
+                    active_contacts,
+                    contact_body_ids,
+                    ..self.debug_body_info(handle, body)
+                }
             })
     }
 
@@ -6990,21 +6994,41 @@ impl PhysicsWorld {
             is_enabled: body.is_enabled(),
             is_sleeping: body.is_sleeping(),
             active_contacts: 0,
+            contact_body_ids: Vec::new(),
         }
     }
 
-    /// Contact pairs currently touching this body. Walks the narrow phase, so
-    /// only the single-body detail path pays for it.
-    fn active_contact_count(&self, body: &RigidBody) -> usize {
-        body.colliders()
-            .iter()
-            .map(|collider| {
-                self.narrow_phase
-                    .contact_pairs_with(*collider)
-                    .filter(|pair| pair.has_any_active_contact)
-                    .count()
-            })
-            .sum()
+    /// Contact pairs currently touching this body, and the `body_id` of the
+    /// body on the other side of each. Walks the narrow phase, so only the
+    /// single-body detail path pays for it.
+    fn active_contacts(&self, body: &RigidBody) -> (usize, Vec<u32>) {
+        let mut count = 0;
+        let mut others = Vec::new();
+        for own in body.colliders() {
+            for pair in self
+                .narrow_phase
+                .contact_pairs_with(*own)
+                .filter(|pair| pair.has_any_active_contact)
+            {
+                count += 1;
+                let other = if pair.collider1 == *own {
+                    pair.collider2
+                } else {
+                    pair.collider1
+                };
+                if let Some(parent) = self
+                    .collider_set
+                    .get(other)
+                    .and_then(|collider| collider.parent())
+                {
+                    let id = parent.into_raw_parts().0;
+                    if !others.contains(&id) {
+                        others.push(id);
+                    }
+                }
+            }
+        }
+        (count, others)
     }
 }
 
@@ -7102,6 +7126,11 @@ pub struct DebugBodyInfo {
     /// hanging in the air apart from one resting on something. Only the
     /// single-body detail path fills this in; the list path reports 0.
     pub active_contacts: usize,
+    /// `body_id` of every body this one is actually touching, deduplicated.
+    /// Turns "it touches *something*" into "it touches *that*" - which is how
+    /// a creature pressed against a door leaf is told apart from one merely
+    /// standing near it. Filled in on the single-body detail path only.
+    pub contact_body_ids: Vec<u32>,
 }
 
 /// Decode an `InteractionGroups` membership bitmask into human-readable names.
@@ -8621,6 +8650,77 @@ mod tests {
             peak - start.y < 0.05,
             "a rising leaf must not carry the creature beside it: rest {}, peak {peak}",
             start.y
+        );
+    }
+
+    /// The other direction of travel: a leaf coming *down* on a creature that
+    /// walked in under it while it was parked open. The leaf's underside meets
+    /// the capsule's head, so the contact normal is vertical - the hook leaves
+    /// it alone (it only ever touches side contacts) and the solver resolves it
+    /// the ordinary way. What must never happen is the creature being driven
+    /// through the floor or launched off it; what must happen is that it ends
+    /// up out of the doorway, standing.
+    ///
+    /// The port's door script has no obstruction/reopen path, so a closing leaf
+    /// really does come all the way down on whoever is under it - the pushout
+    /// below is the only thing keeping them out of the floor.
+    ///
+    /// Negative-first: without the hook, the capsule squeezed out sideways is
+    /// then pressed against the leaf's *face*, and friction against the still-
+    /// descending leaf flings it to y = 1.61 and leaves it hanging at 1.47 -
+    /// half a unit off the floor - after the leaf has shut.
+    #[test]
+    fn a_closing_kinematic_leaf_pushes_a_creature_clear_instead_of_through_the_floor() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2170, 40.0);
+        let leaf = add_sweeping_wall(&mut world, 2173);
+        // Parked open, directly over the creature: the leaf's underside (y +
+        // 1.5) clears the capsule's head at y = 2.0, so it walks in freely.
+        world.set_translation(leaf, vec3(0.0, 4.0, 0.0));
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let start = world.get_position(creature).unwrap();
+        assert!(
+            (start.y - 1.0).abs() < 0.05,
+            "the creature should stand under the parked leaf, not be moved by it: {start:?}"
+        );
+
+        let mut lowest = start.y;
+        let mut highest = start.y;
+        // Closing at the same 2.4 units/s the leaf opens at, down to shut.
+        for frame in 1..=75 {
+            world.set_translation(leaf, vec3(0.0, 4.0 - frame as f32 * 0.04, 0.0));
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+            let y = world.get_position(creature).unwrap().y;
+            lowest = lowest.min(y);
+            highest = highest.max(y);
+        }
+        step_creature_test(&mut world, &mut player, &[creature_id], 60);
+
+        let end = world.get_position(creature).unwrap();
+        // The squeeze between leaf and floor bottoms out ~0.58 into the 1.0-
+        // thick floor slab before the capsule squirts sideways; it must stay
+        // inside that slab (recoverable penetration) rather than pass through.
+        assert!(
+            lowest > start.y - 0.75,
+            "a closing leaf must not push the creature through the floor: rest {}, lowest {lowest}",
+            start.y
+        );
+        assert!(
+            highest < start.y + 1.0,
+            "a closing leaf must not launch the creature: rest {}, highest {highest}",
+            start.y
+        );
+        assert!(
+            (end.y - start.y).abs() < 0.1,
+            "the creature must end standing on the floor: rest {}, end {}",
+            start.y,
+            end.y
+        );
+        // Leaf half-thickness 0.4 + capsule radius 0.5, less Rapier's contact
+        // tolerance: it ends resting against the shut leaf's face, beside it.
+        assert!(
+            end.x.abs() > 0.85,
+            "the creature must end pushed clear of the leaf, not inside it: {end:?}"
         );
     }
 

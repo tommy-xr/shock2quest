@@ -379,6 +379,13 @@ export interface PhysicsBodyDetail extends Omit<PhysicsBodySummary, "velocity"> 
   angular_damping: number;
   linear_velocity: Vec3;
   contact_count: number;
+  /**
+   * `body_id` of every body this one is actually touching. Turns "it touches
+   * something" into "it touches *that*" - e.g. that a creature is pressed
+   * against a particular door leaf rather than merely standing near it.
+   * Optional when connected to runtimes predating this field.
+   */
+  contacts?: number[];
 }
 
 export interface PhysicsBodyListResult {

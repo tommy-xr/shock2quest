@@ -12,6 +12,10 @@ import type { PhysicsBodySummary } from "../src/types.js";
 // relative tangential velocity between the two surfaces - which for a rising
 // leaf is entirely vertical. The capsule is dragged up with the leaf.
 //
+// The lift is only evidence if the grunt actually met the leaf, so the run
+// asserts a narrow-phase contact between the two bodies while the leaf travels
+// (GET /v1/physics/bodies/:id reports which bodies a body touches).
+//
 // Negative-first: on the parent commit this run lifts the grunt from its
 // resting y = 0.099 to y = 1.719 while the leaf travels, leaves it hanging
 // there for ~0.75 s, and only then drops it. The assertions below are on the
@@ -95,7 +99,12 @@ test(
         peakWhileTravelling = Math.max(peakWhileTravelling, actor.position[1]);
         // Without this the lift assertion is vacuous: a grunt that never
         // reaches the leaf while it travels cannot be lifted by it either.
-        touchedTheTravellingLeaf ||= Math.abs(actor.position[2] - DOOR.z) < 1.5;
+        // Proximity alone does not prove it - the AI keeps a stand-off from a
+        // door - so ask the narrow phase whether the two bodies actually touch.
+        if (!touchedTheTravellingLeaf && Math.abs(actor.position[2] - DOOR.z) < 2.5) {
+          const detail = await game.physics.body(actor.body_id);
+          touchedTheTravellingLeaf = (detail.contacts ?? []).includes(leaf.body_id);
+        }
       }
       // The grunt starts at z < -5 and the player is at z = -1.2.
       crossed ||= actor.position[2] > DOOR.z + 0.5;
@@ -104,7 +113,7 @@ test(
     assert.ok(leafTravelFrames > 30, `the leaf should travel; saw ${leafTravelFrames} frames`);
     assert.ok(
       touchedTheTravellingLeaf,
-      "the grunt must reach the leaf while it is travelling, or the lift assertion proves nothing",
+      "the grunt must be in contact with the leaf while it travels, or the lift assertion proves nothing",
     );
     assert.ok(
       peakWhileTravelling - resting < LIFT_TOLERANCE,
@@ -125,6 +134,19 @@ test(
     assert.ok(
       settledDetail.contact_count > 0,
       "the grunt must end touching the world, not hanging in the air",
+    );
+    // Contacts alone say "touching something", not "standing on something".
+    // The floor directly under the capsule is the support: probe for it, and
+    // require it right below the body rather than somewhere further down.
+    const support = await game.physics.raycast({
+      start: [settled.position[0], settled.position[1] + 0.5, settled.position[2]],
+      end: [settled.position[0], settled.position[1] - 3.0, settled.position[2]],
+      collision_groups: ["world", "entity"],
+    });
+    assert.ok(support.hit, "no floor under the settled grunt - it is unsupported");
+    assert.ok(
+      support.hit_point !== null && settled.position[1] - support.hit_point[1] < 0.5,
+      `the grunt must be standing on the floor, not hovering above it: body y=${settled.position[1]}, floor y=${support.hit_point?.[1]}`,
     );
   },
 );

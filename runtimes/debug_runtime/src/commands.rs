@@ -463,6 +463,8 @@ pub struct PhysicsBodyDetailResult {
     pub is_enabled: bool,
     pub is_sleeping: bool,
     pub contact_count: usize,
+    /// `body_id` of every body this one is actually touching.
+    pub contacts: Vec<u32>,
 }
 
 /// Input channel modifications

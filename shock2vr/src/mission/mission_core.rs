@@ -11725,6 +11725,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             is_enabled: info.is_enabled,
             is_sleeping: info.is_sleeping,
             contact_count: info.active_contacts,
+            contacts: info.contact_body_ids,
         })
     }
 
