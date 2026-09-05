@@ -1143,6 +1143,15 @@ pub enum DebugEntityMessage {
     TurnOn,
     /// Switch-link deactivate.
     TurnOff,
+    /// Set a gun's condition (`P$GunState`, 0..100). Not a script message:
+    /// it writes the property directly, so a test can put a gun at the wear
+    /// it wants without firing hundreds of rounds into it.
+    SetGunCondition { condition: f32 },
+    /// Set an object's `P$ObjState` (Normal, Broken, ...) directly - e.g. to
+    /// break a gun outright rather than waiting on its break roll.
+    SetObjectState {
+        state: dark::properties::ObjectState,
+    },
 }
 
 /// Status of the interactive pathfinding test system

@@ -112,7 +112,23 @@ export type DebugEntityMessage =
   | { type: "SetAlertness"; level: "Lowest" | "Low" | "Moderate" | "High" }
   // Switch-link activate/deactivate - what a tripwire/button sends to its targets.
   | { type: "TurnOn" }
-  | { type: "TurnOff" };
+  | { type: "TurnOff" }
+  /**
+   * Set a gun's condition (0..100) directly, so a test can put a gun at the
+   * wear it wants without firing hundreds of rounds into it.
+   */
+  | { type: "SetGunCondition"; condition: number }
+  /** Set an object's state directly - e.g. break a gun outright. */
+  | {
+      type: "SetObjectState";
+      state:
+        | "Normal"
+        | "Broken"
+        | "Destroyed"
+        | "Unresearched"
+        | "Locked"
+        | "Hacked";
+    };
 
 export interface EntitySummary {
   id: number;

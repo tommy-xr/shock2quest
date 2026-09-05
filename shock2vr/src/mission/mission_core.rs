@@ -11081,6 +11081,21 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .or(v_ecology.get(id).ok().map(|_| 0))
             },
         );
+        // Working order (Broken guns refuse to fire; hacked / unresearched
+        // objects report here too). A gun that authors no state of its own is
+        // in working order, which is what the engine assumes of it - report
+        // that rather than nothing, so "is it broken?" always has an answer.
+        // Read outside the big `run` below, whose borrow list is already full.
+        let object_state = self.world.run(
+            |v_state: View<PropObjState>, v_gun: View<dark::properties::PropGunState>| {
+                v_state.get(id).ok().map(|state| state.0).or_else(|| {
+                    v_gun
+                        .get(id)
+                        .ok()
+                        .map(|_| dark::properties::ObjectState::Normal)
+                })
+            },
+        );
         let animated_light = self.world.run(|v: View<PropAnimLight>| {
             v.get(id)
                 .ok()
@@ -11216,6 +11231,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "Condition".to_string(),
                         value: format!("{:.2}", gun_state.condition),
+                    });
+                }
+
+                if let Some(state) = object_state {
+                    properties.push(DebugPropertyInfo {
+                        name: "ObjectState".to_string(),
+                        value: format!("{state:?}"),
                     });
                 }
 
@@ -12204,6 +12226,29 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             return false;
         }
 
+        // Two of these are not script messages at all: they write a property
+        // the way the effect appliers do, so a test can put an object into a
+        // state that normally takes a long detour to reach.
+        match message {
+            DebugEntityMessage::SetGunCondition { condition } => {
+                let mut v_gun_state = self
+                    .world
+                    .borrow::<ViewMut<dark::properties::PropGunState>>()
+                    .unwrap();
+                let Ok(gun_state) = (&mut v_gun_state).get(id) else {
+                    tracing::warn!("send_entity_message: entity {:?} has no gun state", id);
+                    return false;
+                };
+                gun_state.condition = condition.clamp(0.0, 100.0);
+                return true;
+            }
+            DebugEntityMessage::SetObjectState { state } => {
+                self.world.add_component(id, PropObjState(state));
+                return true;
+            }
+            _ => {}
+        }
+
         let payload = match message {
             DebugEntityMessage::Damage {
                 amount,
@@ -12245,6 +12290,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             // Debug injections have no real sender; use the target itself.
             DebugEntityMessage::TurnOn => MessagePayload::TurnOn { from: id },
             DebugEntityMessage::TurnOff => MessagePayload::TurnOff { from: id },
+            // Handled above: these write state instead of dispatching.
+            DebugEntityMessage::SetGunCondition { .. }
+            | DebugEntityMessage::SetObjectState { .. } => {
+                tracing::error!("send_entity_message: {:?} reached the dispatch path", id);
+                return false;
+            }
         };
 
         self.script_world.dispatch(Message { to: id, payload });
