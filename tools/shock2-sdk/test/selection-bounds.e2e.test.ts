@@ -87,7 +87,7 @@ test(
 );
 
 test(
-  "an arachnid is framed by its single Body hitbox, at collider scale",
+  "an arachnid is framed by its legs, not just its body",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({ mission: "hydro3.mis" });
@@ -98,23 +98,26 @@ test(
     );
     assert.ok(arachnid, "expected a Baby Arachnid in hydro3");
     const detail = await game.entities.detail(arachnid.id);
+    const points = detail.aim_points ?? [];
     assert.equal(
-      (detail.aim_points ?? []).length,
-      1,
-      "the arachnid definition maps exactly one Body hitbox",
+      points.length,
+      21,
+      "the arachnid definition maps every skinned joint: body, mandibles, eight legs",
     );
+    const parts = new Set(points.map((point) => point.classification));
+    for (const part of ["torso", "head", "limb", "extremity"]) {
+      assert.ok(parts.has(part), `expected a ${part} hitbox on the arachnid`);
+    }
 
-    // A single Body hitbox frames the body without the legs. Coarser than a
-    // humanoid's frame, but still the scale of the creature (its collider
-    // measures 0.40 across) rather than collapsing to a point - which is the
-    // regression a future change here would introduce.
+    // With only the Body joint mapped the frame measured 0.33-0.58 across -
+    // the body blob, legs excluded. The legs roughly double that.
     const bounds = detail.selection_bounds;
-    assert.ok(bounds, "the arachnid should still report bounds");
+    assert.ok(bounds, "the arachnid should report bounds");
     const width = Math.max(bounds[1][0] - bounds[0][0], bounds[1][2] - bounds[0][2]);
     const height = bounds[1][1] - bounds[0][1];
     assert.ok(
-      width > 0.25 && width < 1.0,
-      `expected a body-scale frame, got ${width.toFixed(2)} across`,
+      width > 0.8 && width < 2.0,
+      `expected a leg-span frame, got ${width.toFixed(2)} across`,
     );
     assert.ok(height > 0.25, `expected a body-scale frame, got ${height.toFixed(2)} tall`);
   },

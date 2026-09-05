@@ -143,8 +143,25 @@ pub const HUMANOID_JOINT_LIMITS: Lazy<Arc<HashMap<u32, JointLimit>>> = Lazy::new
 pub const EMPTY_JOINT_LIMITS: Lazy<Arc<HashMap<u32, JointLimit>>> =
     Lazy::new(|| Arc::new(HashMap::new()));
 
-pub const SPIDER_HIT_BOXES: Lazy<Arc<HashMap<u32, HitBoxType>>> =
-    Lazy::new(|| Arc::new(HashMap::from_iter(vec![(0, HitBoxType::Body)])));
+/// The arachnid skeleton: joint 0 is the body, 1-4 the two mandibles (root,
+/// elbow), then eight legs of three joints each - shoulder, elbow, wrist -
+/// four per side. The mapping is written whole so it does not depend on
+/// which joints the mesh happens to skin: in practice the mandible roots and
+/// six of the eight shoulders carry no vertices (nor do the claws and
+/// mandible tips, 29-38), so 21 of these 29 joints get a proxy.
+pub const SPIDER_HIT_BOXES: Lazy<Arc<HashMap<u32, HitBoxType>>> = Lazy::new(|| {
+    let mut hit_boxes = HashMap::from([(0, HitBoxType::Body)]);
+    // The mandibles are the bite: the spider's face.
+    for joint in 1..=4 {
+        hit_boxes.insert(joint, HitBoxType::Head);
+    }
+    for shoulder in (5..=26).step_by(3) {
+        hit_boxes.insert(shoulder, HitBoxType::Limb);
+        hit_boxes.insert(shoulder + 1, HitBoxType::Limb);
+        hit_boxes.insert(shoulder + 2, HitBoxType::Extremity);
+    }
+    Arc::new(hit_boxes)
+});
 
 pub const OVERLORD_HIT_BOXES: Lazy<Arc<HashMap<u32, HitBoxType>>> =
     Lazy::new(|| Arc::new(HashMap::from_iter(vec![(0, HitBoxType::Body)])));
@@ -342,5 +359,27 @@ mod tests {
         for (joint, part) in [(14, "left hand"), (15, "right hand")] {
             assert_eq!(worth(joint), Some(0.5), "{part}");
         }
+    }
+
+    /// The spider map covers the whole skeleton: body, both mandibles, and
+    /// every joint of all eight legs - the shoulder and elbow as near limb,
+    /// the wrist as far. The claws are not mapped.
+    #[test]
+    fn spider_joints_are_mapped_leg_by_leg() {
+        let map = SPIDER_HIT_BOXES.clone();
+        let worth = |joint: u32| map.get(&joint).copied().map(HitBoxType::damage_multiplier);
+
+        assert_eq!(map.len(), 29);
+        assert_eq!(worth(0), Some(1.0), "body");
+        for joint in 1..=4 {
+            assert_eq!(worth(joint), Some(1.25), "mandible {joint}");
+        }
+        for leg in 0..8 {
+            let shoulder = 5 + leg * 3;
+            assert_eq!(worth(shoulder), Some(0.75), "leg {leg} shoulder");
+            assert_eq!(worth(shoulder + 1), Some(0.75), "leg {leg} elbow");
+            assert_eq!(worth(shoulder + 2), Some(0.5), "leg {leg} wrist");
+        }
+        assert_eq!(worth(29), None, "claw");
     }
 }

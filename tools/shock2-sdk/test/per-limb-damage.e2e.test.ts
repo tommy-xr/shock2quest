@@ -27,12 +27,14 @@ test(
     await using game = await GameServer.launch({ mission: "debug_melee" });
     await game.step({ frames: 30 });
 
+    // The joint table below is the humanoid one, so pick the hybrids by name:
+    // the scene's arachnids have per-joint hitboxes of their own now.
     const creatures = [];
-    for (const entity of (await game.entities.list()).entities) {
+    for (const entity of (await game.entities.list({ filter: "OG-Pipe" })).entities) {
       const detail = await game.entities.detail(entity.id);
       if ((detail.aim_points ?? []).length > 1) creatures.push(detail);
     }
-    assert.ok(creatures.length >= 3, "expected three creatures in debug_melee");
+    assert.ok(creatures.length >= 3, "expected three hybrids in debug_melee");
 
     // joint -> the factor the hitbox table gives it.
     const cases: Array<[number, string, number]> = [
@@ -80,7 +82,7 @@ test(
     // carries is a separate object with no hitbox at all - so a blow there is
     // a blow on a hand, worth what the far half of a limb is worth.
     let creature;
-    for (const entity of (await game.entities.list()).entities) {
+    for (const entity of (await game.entities.list({ filter: "OG-Pipe" })).entities) {
       const detail = await game.entities.detail(entity.id);
       if ((detail.aim_points ?? []).some((point) => point.joint_id === 14 || point.joint_id === 15)) {
         creature = detail;
