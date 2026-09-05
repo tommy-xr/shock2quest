@@ -968,10 +968,15 @@ impl AnimatedMonsterAI {
     /// creature that takes a hit, waits at a door or changes behavior is NOT
     /// thereby done pivoting - if nothing displaced the clip, its pose is
     /// still turning the body and the turn is still owed. A pivot already
-    /// settling is dropped where it stands: the fade it was riding has been
-    /// replaced, so the rest of the turn has no pose behind it either.
+    /// settling is not dropped at all - its pose has already given the turn up
+    /// (see the `TurnClipCancelled` handler), so it finishes instead.
     fn cancel_turn_clip(&mut self, entity_id: EntityId, reason: &str) {
-        if self.turn_clip.is_some() {
+        if matches!(
+            self.turn_clip,
+            Some(TurnClip::Requested { .. })
+                | Some(TurnClip::Playing { .. })
+                | Some(TurnClip::HandingOver { .. })
+        ) {
             tracing::debug!("ai {:?} drops its pivot: {}", entity_id, reason);
             self.turn_clip = None;
             self.turn_cooldown = TURN_CLIP_COOLDOWN;
@@ -1803,7 +1808,19 @@ impl Script for AnimatedMonsterAI {
             }
             MessagePayload::TurnClipCancelled { token } => {
                 if self.turn_clip_token() == Some(*token) {
-                    self.cancel_turn_clip(entity_id, "no clip is performing it");
+                    if let Some(TurnClip::Settling { turn, base, .. }) = self.turn_clip {
+                        // The clip that displaced the fade takes the turn
+                        // clip's pose with it: the player cross-fades from the
+                        // FOLLOW-UP clip's own pose, not the blended one on
+                        // screen, so the `turn * (1 - alpha)` the pose was
+                        // still holding is gone this frame. Taking the rest of
+                        // the turn now is what keeps the visible facing
+                        // continuous - dropping it would snap the creature
+                        // back by the remainder.
+                        self.finish_pivot(entity_id, Deg(base.0 + turn.0));
+                    } else {
+                        self.cancel_turn_clip(entity_id, "no clip is performing it");
+                    }
                 }
                 Effect::NoEffect
             }
@@ -2918,11 +2935,14 @@ mod tests {
     }
 
     /// A wound reaction (or any other clip) landing mid-settle replaces the
-    /// fade the yaw was riding: from that frame nothing is giving the turn up,
-    /// so the rest of it must not be taken. The applier keeps ownership of the
-    /// pivot through the settle precisely so it can say so.
+    /// fade the yaw was riding - and takes the turn clip's pose with it, since
+    /// the player fades from the follow-up clip's own pose rather than the
+    /// blended one. The remaining turn has nothing holding it any more, so it
+    /// lands in that frame instead of easing on across a curve nobody is
+    /// drawing. The applier keeps ownership of the pivot through the settle
+    /// precisely so it can say when that happened.
     #[test]
-    fn a_clip_displacing_the_settle_cancels_the_rest_of_the_turn() {
+    fn a_clip_displacing_the_settle_takes_the_rest_of_the_turn_at_once() {
         let mut harness = PivotHarness::new(Deg(-90.0));
         harness.start_pivot(Deg(-168.0), 3);
         harness.play_clip_out();
@@ -2931,10 +2951,14 @@ mod tests {
         for _ in 0..10 {
             harness.frame();
         }
-        let taken = harness.monster.current_heading;
+        let partway = harness.monster.current_heading;
         assert!(
             matches!(harness.monster.turn_clip, Some(TurnClip::Settling { .. })),
             "the settle must be running to be displaced"
+        );
+        assert!(
+            (partway.0 - (-90.0 - 168.0)).abs() > 10.0,
+            "and must be nowhere near finished, at {partway:?}"
         );
 
         // The wound clip: it is what the player fades now, not the pivot's.
@@ -2942,15 +2966,21 @@ mod tests {
         harness.frame();
         assert!(
             harness.monster.turn_clip.is_none(),
-            "a displaced settle is dropped, not carried on"
+            "a displaced settle ends there and then"
+        );
+        assert!(
+            (harness.monster.current_heading.0 - (-90.0 - 168.0)).abs() < 1e-3,
+            "the whole turn lands with the pose that was holding it, heading is {:?}",
+            harness.monster.current_heading
         );
 
+        let landed = harness.monster.current_heading;
         for _ in 0..40 {
             harness.frame();
         }
         assert_eq!(
-            harness.monster.current_heading, taken,
-            "and the rest of the turn never lands"
+            harness.monster.current_heading, landed,
+            "and nothing moves it afterwards"
         );
     }
 

@@ -7107,6 +7107,21 @@ impl MissionCore {
                         for entity_id in creature_ids {
                             if let Some(player) = self.id_to_animation_player.get_mut(&entity_id) {
                                 *player = AnimationPlayer::queue_animation(player, clip.clone());
+                                // This replaces whatever fade a pivot may have
+                                // been handing its yaw over across, so the
+                                // pivot has to hear about it like any other
+                                // displacing clip.
+                                let fades = player.blend_alpha_now() < 1.0;
+                                if let Some(payload) = self.turn_clips.on_animation_applied(
+                                    entity_id,
+                                    Some(fades),
+                                    false,
+                                ) {
+                                    self.script_world.dispatch(Message {
+                                        to: entity_id,
+                                        payload,
+                                    });
+                                }
                             }
                         }
                         self.debug_pose_index = self.debug_pose_index.wrapping_add(1);

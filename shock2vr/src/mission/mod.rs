@@ -10,7 +10,7 @@ pub(crate) mod reload;
 pub mod spatial_query;
 mod spawn_location;
 pub mod stim_response;
-pub mod turn_clip;
+pub(crate) mod turn_clip;
 pub mod visibility_engine;
 
 pub use mission_core::*;
