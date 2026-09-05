@@ -4110,13 +4110,9 @@ impl MissionCore {
                         self.failed_animation_queries.remove(&entity_id);
                         if turn.is_some() {
                             turn_started = Some((
-                                dark::motion::signed_end_direction(
-                                    global_context
-                                        .motiondb
-                                        .get_motion_stuff(next_animation.clone())
-                                        .end_direction,
-                                ),
+                                dark::motion::signed_end_direction(clip.end_rotation),
                                 clip.duration.as_secs_f32(),
+                                clip.blend_length.as_secs_f32(),
                             ));
                         }
                         *player = apply(player, clip);
@@ -4155,6 +4151,11 @@ impl MissionCore {
                             );
                         }
                     }
+                } else if turn.is_some() {
+                    // A pivot with no clip the creature can afford is an
+                    // ordinary outcome, not a failed animation: the AI steers
+                    // the turn instead, and nothing waits on a completion.
+                    tracing::debug!("no turn clip for {:?}: {:?}", entity_id, tried_queries);
                 } else {
                     // Key on the query items only - the selection strategy
                     // carries a per-request counter that would defeat the
@@ -4183,10 +4184,14 @@ impl MissionCore {
             self.world.add_component(entity_id, death_pose);
         }
 
-        if let Some((turn, duration)) = turn_started {
+        if let Some((turn, duration, blend)) = turn_started {
             self.script_world.dispatch(Message {
                 to: entity_id,
-                payload: MessagePayload::TurnClipStarted { turn, duration },
+                payload: MessagePayload::TurnClipStarted {
+                    turn,
+                    duration,
+                    blend,
+                },
             });
         }
     }

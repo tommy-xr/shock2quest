@@ -260,6 +260,9 @@ pub enum MessagePayload {
     TurnClipStarted {
         turn: cgmath::Deg<f32>,
         duration: f32,
+        /// The clip's authored blend length: the window its pose takes to
+        /// swing back to neutral once it ends.
+        blend: f32,
     },
 
     // Gameplay events

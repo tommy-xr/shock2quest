@@ -45,7 +45,17 @@ pub fn nearest_turn_clip(
         .iter()
         .enumerate()
         .filter(|(_, (end, duration))| is_turn_clip(*end) && *duration <= max_duration)
-        .map(|(index, (end, _))| (index, (signed_end_direction(*end).0 - delta.0).abs()))
+        // Both the residual and the baseline are minimal angles: an
+        // about-face authored at -177 covers a wanted +175 (8 degrees short),
+        // and reading that as 352 would reject it.
+        .map(|(index, (end, _))| {
+            (
+                index,
+                signed_end_direction(Deg(signed_end_direction(*end).0 - delta.0))
+                    .0
+                    .abs(),
+            )
+        })
         .filter(|(_, residual)| *residual < delta.0.abs())
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(index, _)| index)
@@ -117,6 +127,22 @@ mod tests {
             None
         );
         assert_eq!(nearest_turn_clip(Deg(150.0), &[], NO_BUDGET_LIMIT), None);
+    }
+
+    /// An about-face authored just the other side of 180 still covers an
+    /// about-face wanted just this side of it.
+    #[test]
+    fn an_about_face_covers_a_pivot_across_the_half_turn() {
+        // 182.97 reads as -177.03; a +175 pivot is 8 degrees away, not 352.
+        let clips = [(Deg(182.97), 2.53), (Deg(112.39), 2.0)];
+        assert_eq!(
+            nearest_turn_clip(Deg(175.0), &clips, NO_BUDGET_LIMIT),
+            Some(0)
+        );
+        assert_eq!(
+            nearest_turn_clip(Deg(-175.0), &clips, NO_BUDGET_LIMIT),
+            Some(0)
+        );
     }
 
     /// A creature can only stand still for so long: an about-face it cannot
