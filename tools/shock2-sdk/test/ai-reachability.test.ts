@@ -250,7 +250,7 @@ test("a Partial published during a hold after the halt does not rewrite it", () 
   );
   assert.equal(result.verdict, "wedged");
   assert.equal(result.halts?.[0].outcome, "Full");
-  assert.ok((result.halts?.[0].held_seconds ?? 0) > 0);
+  assert.ok((result.halts?.[0].window_held_seconds ?? 0) > 0);
 });
 
 test("halt evidence survives a non-wedge verdict", () => {
@@ -267,6 +267,27 @@ test("halt evidence survives a non-wedge verdict", () => {
   );
   assert.equal(result.verdict, "arrived");
   assert.equal(result.halts?.length, 1);
+});
+
+test("a Partial during a halt the AI walked out of does not make it 'no_route'", () => {
+  // It left, so it plainly had somewhere to go: the halt it escaped does not
+  // get to decide the verdict, and pass-end is what answers "no route".
+  const result = classifyTrack(
+    track([
+      ...stationary(16, { behavior: "Patrol", outcome: "Partial" }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: (i % 6) * 0.5,
+      })),
+      ...Array.from({ length: 12 }, (_, i) => ({
+        position: [49 + (i + 1) * 5, 0.1, -98.5] as [number, number, number],
+        behavior: "Patrol",
+        outcome: "Full",
+      })),
+    ]),
+    { pass: "idle" },
+  );
+  assert.equal(result.verdict, "wedged_then_freed");
+  assert.equal(result.halts?.[0].outcome, "Partial");
 });
 
 test("a halt that happens while the route is Partial is still 'no_route'", () => {
@@ -298,7 +319,7 @@ test("a classified halt carries its raw evidence", () => {
   const halts = result.halts ?? [];
   assert.equal(halts.length, 1);
   assert.equal(halts[0].outcome, "Full");
-  assert.equal(halts[0].held_seconds, 0);
+  assert.equal(halts[0].window_held_seconds, 0);
   assert.deepEqual(halts[0].at, [49, 0.1, -98.5]);
   assert.ok(halts[0].start_t >= 0.5);
   assert.ok(halts[0].seconds >= 6);

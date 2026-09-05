@@ -87,8 +87,12 @@ export interface HaltEvidence {
   at: Vec3;
   /** Farthest the AI later got from `at`, world units. */
   escape_distance: number;
-  /** Seconds of the halt spent under a published movement hold. */
-  held_seconds: number;
+  /**
+   * Seconds of the surrounding stationary window spent under a published
+   * movement hold. The halt itself is by construction entirely unheld, so this
+   * says how much waiting sat on either side of it.
+   */
+  window_held_seconds: number;
   /** Path outcome in effect during the halt, if the AI had ever pathed. */
   outcome?: string;
 }
@@ -130,7 +134,7 @@ export function distance3(a: Vec3, b: Vec3): number {
  * judged against the outcome that was live during the halt.
  */
 function outcomeThrough(samples: AiSample[], through: number): string | undefined {
-  for (let i = Math.min(through, samples.length - 1); i >= 0; i--) {
+  for (let i = through; i >= 0; i--) {
     if (samples[i].outcome) return samples[i].outcome;
   }
   return undefined;
@@ -151,7 +155,7 @@ interface StationarySpan {
   at: Vec3;
   seconds: number;
   /** Seconds of the stationary window spent under a movement hold. */
-  heldSeconds: number;
+  windowHeldSeconds: number;
 }
 
 /** Is this sample reporting a deliberate hold (door wait, pivot)? */
@@ -217,9 +221,9 @@ function findWedges(
     const stalls = new Set(window.map((s) => s.live_stall_seconds ?? 0));
     const blocked = stalls.size > 1 && Math.max(...stalls) > 0;
     if (traveling && blocked) {
-      let heldSeconds = 0;
+      let windowHeldSeconds = 0;
       for (let k = i; k < j; k++) {
-        if (isHeld(samples[k])) heldSeconds += samples[k + 1].t - samples[k].t;
+        if (isHeld(samples[k])) windowHeldSeconds += samples[k + 1].t - samples[k].t;
       }
       spans.push({
         start: i + unheld.from,
@@ -227,7 +231,7 @@ function findWedges(
         windowEnd: j,
         at: window[unheld.from].position,
         seconds: unheld.seconds,
-        heldSeconds,
+        windowHeldSeconds,
       });
       // Spans starting inside this one are the same halt seen later.
       i = j;
@@ -297,7 +301,7 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
     seconds: span.seconds,
     at: span.at,
     escape_distance: escapes[i],
-    held_seconds: span.heldSeconds,
+    window_held_seconds: span.windowHeldSeconds,
     outcome: outcomeThrough(samples, span.end),
   }));
   const evidence = halts.length > 0 ? { halts } : {};
@@ -353,20 +357,18 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
     };
   }
 
-  // The halt this AI is judged on: the first one it does NOT get clear of,
-  // else the first halt at all, else the pass as a whole.
+  // The halt this AI is judged on: the first one it does NOT get clear of.
+  // A halt it walked out of proves it had somewhere to go, so it is judged on
+  // the pass as a whole instead.
   const stuckIndex = escapes.findIndex((escape) => escape <= freedTravelUnits);
-  const judgedIndex = stuckIndex >= 0 ? stuckIndex : spans.length > 0 ? 0 : -1;
 
   // No route means no wedge - but only if the route was missing WHILE the AI
   // stood there. Outcomes are sticky, so an early Partial used to outrank a
   // genuine wedge that happened later with a full route in hand.
   const outcome =
-    judgedIndex >= 0
-      ? outcomeThrough(samples, spans[judgedIndex].end)
-      : outcomeThrough(samples, samples.length - 1);
+    stuckIndex >= 0 ? halts[stuckIndex].outcome : outcomeThrough(samples, samples.length - 1);
   if (outcome === "Partial" || outcome === "Failed") {
-    const when = judgedIndex >= 0 ? "during the halt" : "at pass end";
+    const when = stuckIndex >= 0 ? "during the halt" : "at pass end";
     return { verdict: "no_route", reason: `path outcome ${outcome} ${when}`, ...base };
   }
 
