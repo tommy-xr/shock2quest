@@ -107,7 +107,7 @@ pub fn create_debug_melee_scene(
     dev_params::set(dev_params::MELEE_GLOVE_OVERLAY, 1.0);
     dev_params::set(dev_params::MELEE_VOLUMES, 1.0);
 
-    let boxes: &[DebugBox] = &[
+    let mut boxes: Vec<DebugBox> = vec![
         // floor
         (
             vec3(0.18, 0.18, 0.22),
@@ -146,7 +146,7 @@ pub fn create_debug_melee_scene(
         }
     }
 
-    let (scene_objects, collider) = boxes_to_geometry(boxes);
+    let (scene_objects, collider) = boxes_to_geometry(&boxes);
 
     // Laid out along -X, the default view forward with an identity spawn yaw
     // in both presentations (same convention as `debug_weapons`). Verified by
