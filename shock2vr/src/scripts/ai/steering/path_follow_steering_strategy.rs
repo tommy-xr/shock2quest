@@ -1,4 +1,4 @@
-use cgmath::{Deg, EuclideanSpace, Vector3, vec3, vec4};
+use cgmath::{Deg, EuclideanSpace, InnerSpace, Vector3, vec3, vec4};
 use dark::SCALE_FACTOR;
 use dark::mission::path_database::MovementBits;
 use rand::Rng;
@@ -81,15 +81,26 @@ const DISPLACEMENT_STALL_SECONDS: f32 = 4.0;
 /// break the equilibrium. A rare small pop beats a monster frozen forever
 /// (issue #481's terminal pocket).
 const UNSTICK_NUDGE_DISTANCE: f32 = 2.0 / SCALE_FACTOR;
-/// Room a nudge landing must have, and how far past it the traverse probe
-/// looks (2 Dark feet, about one body radius)
-const NUDGE_CLEARANCE: f32 = 2.0 / SCALE_FACTOR;
+/// Room a nudge landing must have to either side, and how far past it the
+/// traverse probe looks: a hybrid's own body radius (half of HUMAN_WIDTH,
+/// 3.5 Dark feet). Demanding more would refuse the doorways and jambs an
+/// unstick is most often needed in.
+const NUDGE_CLEARANCE: f32 = 1.75 / SCALE_FACTOR;
 /// How far below a nudge landing to look for a floor (8 Dark feet - more
 /// than a body's origin sits above its own floor)
 const NUDGE_FLOOR_PROBE: f32 = 8.0 / SCALE_FACTOR;
 /// ...and how far that floor may sit from the one the body is standing on
 /// (2 Dark feet, a step). A landing over a ledge or a stairwell is refused.
 const NUDGE_MAX_STEP: f32 = 2.0 / SCALE_FACTOR;
+/// Height of the second (knee) probe ray, as a fraction of how far the body's
+/// origin sits above its own floor - the same discrimination the whiskers
+/// make, without depending on a creature's authored dimensions.
+const NUDGE_KNEE_FRACTION: f32 = 0.35;
+/// A probe hit closer than this to its own origin means the ray STARTED
+/// inside a collider (the queries are solid), which a body embedded in
+/// geometry always does - and that body is exactly what the unstick is for,
+/// so such a reading blocks nothing.
+const NUDGE_EMBEDDED_DISTANCE: f32 = 0.1 / SCALE_FACTOR;
 /// How far past the stalled waypoint (XZ) to probe for the cell on the far
 /// side of the crossing when reporting a blocked link - just enough to step
 /// off the shared edge without skipping a narrow destination cell (0.5
@@ -700,9 +711,9 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     // are probed (see `probe_nudge`): an unchecked one aimed
                     // through a wall drops the body out of the level entirely.
                     // Candidates, best first - a step toward the retreat
-                    // point, then a step toward the middle of the cell the
-                    // body is in. Both are route ground, away from whatever
-                    // the body is pressed against.
+                    // point (the previous waypoint, or simply backwards when
+                    // there is none), then a step toward the middle of the
+                    // cell the body is in.
                     let cell = service.cell_from_position(position);
                     let step_toward = |target: Vector3<f32>| {
                         let len = xz_distance(target, position);
@@ -722,17 +733,25 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         .into_iter()
                         .flatten()
                         .filter_map(step_toward)
-                        .find(|candidate| {
+                        .find_map(|candidate| {
                             // A body ALREADY off the mesh is the case the
                             // unstick exists for - there is no cell to keep it
                             // in - but it still has to reach the landing and
                             // stand there, so only THIS check is waived.
                             let navigable =
-                                cell.is_none() || on_mesh(&service, *candidate).is_some();
-                            nudge_is_safe(
-                                &probe_nudge(physics, entity_id, position, *candidate, navigable),
-                                NUDGE_MAX_STEP,
-                            )
+                                cell.is_none() || on_mesh(&service, candidate).is_some();
+                            let probe =
+                                probe_nudge(physics, entity_id, position, candidate, navigable);
+                            // The candidate kept the body's own height, so a
+                            // landing whose floor is a step up would bury the
+                            // capsule in it: ride the floor difference.
+                            nudge_is_safe(&probe).then(|| {
+                                Vector3::new(
+                                    candidate.x,
+                                    candidate.y + probe.floor_step.unwrap_or(0.0),
+                                    candidate.z,
+                                )
+                            })
                         });
                     match landing {
                         Some(landing) => {
@@ -934,17 +953,20 @@ struct NudgeProbe {
 
 /// A nudge candidate is only taken when every probe passes and its floor is
 /// within a step of the body's own.
-fn nudge_is_safe(probe: &NudgeProbe, max_step: f32) -> bool {
+fn nudge_is_safe(probe: &NudgeProbe) -> bool {
     probe.navigable
         && probe.path_clear
         && probe.clearance
-        && probe.floor_step.is_some_and(|step| step.abs() <= max_step)
+        && probe
+            .floor_step
+            .is_some_and(|step| step.abs() <= NUDGE_MAX_STEP)
 }
 
 /// Probe a nudge candidate: can the body get there, is there room, and is
-/// there a floor within a step? Rays at body-origin height, the way the
-/// whiskers probe - a nudge is only two feet, so a wall across that span
-/// crosses the body's own center.
+/// there a floor within a step? Rays go at the body's origin AND at knee
+/// height - a low slab (a railing, a kerb) passes under a single center ray,
+/// the same reason the whiskers probe two heights. Knee height is derived
+/// from the floor each end actually has, so it is never underground.
 fn probe_nudge(
     physics: &PhysicsWorld,
     entity_id: EntityId,
@@ -959,31 +981,56 @@ fn probe_nudge(
         - InternalCollisionGroups::PLAYER
         - InternalCollisionGroups::ACTOR;
     let cast = |origin: Vector3<f32>, direction: Vector3<f32>, distance: f32| {
-        physics.ray_cast2_as_actor(
-            vec3_to_point3(origin),
-            direction,
-            distance,
-            groups,
-            Some(entity_id),
-            true,
-        )
+        physics
+            .ray_cast2_as_actor(
+                vec3_to_point3(origin),
+                direction,
+                distance,
+                groups,
+                Some(entity_id),
+                true,
+            )
+            .filter(|hit| {
+                (hit.hit_point - vec3_to_point3(origin)).magnitude() > NUDGE_EMBEDDED_DISTANCE
+            })
     };
-    let distance = xz_distance(to, from);
-    let direction = vec3((to.x - from.x) / distance, 0.0, (to.z - from.z) / distance);
-    let side = vec3(-direction.z, 0.0, direction.x);
     let floor = |at: Vector3<f32>| {
         cast(at, vec3(0.0, -1.0, 0.0), NUDGE_FLOOR_PROBE).map(|hit| hit.hit_point.y)
     };
+    let standing_floor = floor(from);
+    let landing_floor = floor(to);
+    let heights = |at: Vector3<f32>, floor_y: Option<f32>| {
+        let knee = floor_y
+            .map(|floor_y| floor_y + (at.y - floor_y) * NUDGE_KNEE_FRACTION)
+            .unwrap_or(at.y);
+        [at, Vector3::new(at.x, knee, at.z)]
+    };
+    let distance = xz_distance(to, from);
+    if distance <= NUDGE_EMBEDDED_DISTANCE {
+        // Nowhere to go: refuse rather than normalize a zero vector
+        return NudgeProbe {
+            navigable,
+            path_clear: false,
+            clearance: false,
+            floor_step: None,
+        };
+    }
+    let direction = vec3((to.x - from.x) / distance, 0.0, (to.z - from.z) / distance);
+    let side = vec3(-direction.z, 0.0, direction.x);
     NudgeProbe {
         navigable,
         // Out PAST the landing by the body's own room, so a wall just beyond
         // it refuses the nudge as well
-        path_clear: cast(from, direction, distance + NUDGE_CLEARANCE).is_none(),
-        clearance: [side, -side]
+        path_clear: heights(from, standing_floor)
             .into_iter()
-            .all(|direction| cast(to, direction, NUDGE_CLEARANCE).is_none()),
-        floor_step: floor(to)
-            .zip(floor(from))
+            .all(|origin| cast(origin, direction, distance + NUDGE_CLEARANCE).is_none()),
+        clearance: heights(to, landing_floor).into_iter().all(|origin| {
+            [side, -side]
+                .into_iter()
+                .all(|direction| cast(origin, direction, NUDGE_CLEARANCE).is_none())
+        }),
+        floor_step: landing_floor
+            .zip(standing_floor)
             .map(|(landing, standing)| landing - standing),
     }
 }
@@ -1437,57 +1484,46 @@ mod tests {
 
     #[test]
     fn a_clear_supported_landing_is_taken() {
-        assert!(nudge_is_safe(&safe_probe(), NUDGE_MAX_STEP));
-    }
-
-    #[test]
-    fn a_landing_behind_a_wall_is_refused() {
-        let probe = NudgeProbe {
-            path_clear: false,
-            ..safe_probe()
-        };
-        assert!(!nudge_is_safe(&probe, NUDGE_MAX_STEP));
-    }
-
-    #[test]
-    fn a_landing_without_room_is_refused() {
-        let probe = NudgeProbe {
-            clearance: false,
-            ..safe_probe()
-        };
-        assert!(!nudge_is_safe(&probe, NUDGE_MAX_STEP));
-    }
-
-    #[test]
-    fn a_landing_over_a_ledge_is_refused() {
-        // No floor within reach at all, and a floor a whole storey down
-        for floor_step in [None, Some(-10.0 / SCALE_FACTOR)] {
-            let probe = NudgeProbe {
-                floor_step,
-                ..safe_probe()
-            };
-            assert!(!nudge_is_safe(&probe, NUDGE_MAX_STEP));
-        }
-    }
-
-    #[test]
-    fn a_landing_a_step_up_or_down_is_still_taken() {
+        assert!(nudge_is_safe(&safe_probe()));
+        // ...including one a step up or down, which the nudge rides
         for floor_step in [NUDGE_MAX_STEP, -NUDGE_MAX_STEP] {
-            let probe = NudgeProbe {
+            assert!(nudge_is_safe(&NudgeProbe {
                 floor_step: Some(floor_step),
                 ..safe_probe()
-            };
-            assert!(nudge_is_safe(&probe, NUDGE_MAX_STEP));
+            }));
         }
     }
 
     #[test]
-    fn a_landing_off_the_mesh_is_refused() {
-        let probe = NudgeProbe {
-            navigable: false,
-            ..safe_probe()
-        };
-        assert!(!nudge_is_safe(&probe, NUDGE_MAX_STEP));
+    fn every_failed_probe_refuses_the_nudge() {
+        // A nudge is a teleport: off the mesh, through a wall, into a body's
+        // width of geometry, over a ledge, or into thin air are all refusals,
+        // and the body grinds on until the re-path frees it instead.
+        let refusals = [
+            NudgeProbe {
+                navigable: false,
+                ..safe_probe()
+            },
+            NudgeProbe {
+                path_clear: false,
+                ..safe_probe()
+            },
+            NudgeProbe {
+                clearance: false,
+                ..safe_probe()
+            },
+            NudgeProbe {
+                floor_step: Some(-10.0 / SCALE_FACTOR),
+                ..safe_probe()
+            },
+            NudgeProbe {
+                floor_step: None,
+                ..safe_probe()
+            },
+        ];
+        for probe in &refusals {
+            assert!(!nudge_is_safe(probe));
+        }
     }
 
     #[test]
