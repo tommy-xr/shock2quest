@@ -3,7 +3,8 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
-import { aimVrHandAt } from "./helpers/vr-hand.js";
+import type { UiElement, UiPanel } from "../src/types.js";
+import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 import { clickUiElement } from "./helpers/ui.js";
 import { ammoOf, cycleToWeapon, fireOnce } from "./helpers/weapon.js";
 
@@ -412,6 +413,287 @@ test(
         m.includes("already in good condition"),
       ),
       `the refusal should say why (got ${JSON.stringify(messages.messages)})`,
+    );
+  },
+);
+
+// --- Slice 5: repairing a broken gun on the HRM board ---
+//
+// A broken gun cannot be fired and cannot be maintained; it is repaired on the
+// same node-connecting board a crate or a keypad is hacked on, played against
+// the Repair skill and the gun's own `P$RepairDif` terms. Using a broken gun
+// from the inventory opens that board instead of wielding it - in flat and in
+// the VR cyber interface, which present one canvas. Winning returns the gun to
+// working order plus ten condition points.
+//
+// Negative-first: on the parent `P$RepairDif` is not parsed and no repair mode
+// exists, so using a broken pistol just wields it and no panel ever opens.
+
+/** A big nanite pile: the board charges the pistol's authored cost per deal. */
+const BIG_NANITE_PILE = -1591;
+/** The pistol's authored `P$RepairDif` nanite cost. */
+const REPAIR_COST = "3";
+/** A second bench gun, for the "one panel, many guns" case. */
+const SHOTGUN = -19;
+/** Points a won repair gives back on top of restoring working order. */
+const REPAIR_BONUS = 10;
+
+function hasTexture(panel: UiPanel, texture: string): boolean {
+  return panel.elements.some(
+    (element) => element.texture?.toLowerCase() === texture,
+  );
+}
+
+function boardButton(panel: UiPanel, label: string): UiElement {
+  const found = panel.elements.find(
+    (element) => element.kind === "button" && element.label === label,
+  );
+  assert.ok(
+    found,
+    `the board should expose ${label} (got ${JSON.stringify(
+      panel.elements.map((e) => e.label ?? e.texture),
+    )})`,
+  );
+  return found;
+}
+
+async function repairPanel(game: GameServer): Promise<UiPanel> {
+  const panel = (await game.ui.state()).active_panel;
+  assert.ok(panel, "using a broken gun should keep the repair board open");
+  return panel;
+}
+
+function conditionOf(detail: {
+  properties: { name: string; value: string }[];
+}): number {
+  const condition = detail.properties.find((p) => p.name === "Condition");
+  assert.ok(condition, "a gun should expose a Condition property");
+  return Number(condition.value);
+}
+
+/**
+ * Take one bench gun into the backpack and break it. It is worn to 20 first,
+ * so the ten points a win gives back are visible against a value that is not
+ * already full.
+ */
+async function brokenGunInBackpack(
+  game: GameServer,
+  template: number,
+): Promise<{ id: number }> {
+  const [gun] = await game.entities.byTemplate(template);
+  assert.ok(gun, `debug_weapons should bench template ${template}`);
+  await game.player.give(gun.id);
+  await game.step({ frames: 5 });
+
+  await game.entities.sendMessage(gun.id, {
+    type: "SetGunCondition",
+    condition: 20,
+  });
+  await breakGun(game, gun.id);
+  await game.step({ frames: 5 });
+  return gun;
+}
+
+/** A broken pistol plus the wallet the board's per-deal cost comes out of. */
+async function brokenPistolInBackpack(
+  game: GameServer,
+): Promise<{ id: number }> {
+  const pistol = await brokenGunInBackpack(game, PISTOL);
+  await game.player.spawnItem(BIG_NANITE_PILE);
+  await game.step({ frames: 5 });
+  return pistol;
+}
+
+/** The strip's use gesture on one carried item: lift it, then use it. */
+async function useFromStrip(
+  game: GameServer,
+  entityId: number,
+  click: (element: UiElement) => Promise<void>,
+): Promise<void> {
+  const slot = (await game.ui.state()).strip?.elements.find(
+    (e) => e.kind === "button" && e.entity_id === entityId,
+  );
+  assert.ok(
+    slot,
+    `the strip should list the carried item (got ${JSON.stringify(
+      (await game.ui.state()).strip?.elements.map((e) => e.label),
+    )})`,
+  );
+  await click(slot);
+  await click(slot);
+  await game.step({ frames: 5 });
+}
+
+/**
+ * Genuinely play the board until the repair lands. debug_weapons maxes Repair
+ * and Cyber Affinity, so the deal carries no mines; a board that burns itself
+ * out is re-dealt, exactly as retail does, at the authored cost again.
+ */
+async function playRepairBoardToWin(
+  game: GameServer,
+  click: (element: UiElement) => Promise<void>,
+): Promise<void> {
+  const routes = [
+    ["node-2-0", "node-3-0", "node-4-0"],
+    ["node-2-1", "node-2-2", "node-2-3"],
+    ["node-0-1", "node-0-2", "node-0-3"],
+    ["node-4-0", "node-4-1", "node-4-2"],
+    ["node-0-3", "node-1-3", "node-2-3"],
+  ];
+  for (let attempt = 0; attempt < 15; attempt += 1) {
+    let panel = await repairPanel(game);
+    if (hasTexture(panel, "winh.pcx")) return;
+    assert.ok(
+      !hasTexture(panel, "loseh.pcx"),
+      "a critical failure destroyed the gun; max Repair should leave no mines",
+    );
+    assert.ok(
+      !hasTexture(panel, "payh.pcx"),
+      "the test wallet should always cover the authored repair cost",
+    );
+
+    const inPlay = panel.elements.some((el) => el.label === "reset-hack");
+    if (!inPlay || hasTexture(panel, "failh.pcx")) {
+      const deal = panel.elements.find(
+        (el) => el.label === "start-hack" || el.label === "reset-hack",
+      );
+      assert.ok(deal, "an unwon board should offer START/RESET");
+      await click(deal);
+    }
+
+    for (const label of routes[attempt % routes.length]) {
+      panel = await repairPanel(game);
+      if (hasTexture(panel, "winh.pcx")) return;
+      if (hasTexture(panel, "failh.pcx") || hasTexture(panel, "loseh.pcx")) {
+        break;
+      }
+      await click(boardButton(panel, label));
+    }
+  }
+  assert.fail("the repair board should win within the attempt budget");
+}
+
+test(
+  "using a broken gun from the flat inventory opens the repair board, and winning it repairs the gun",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_weapons" });
+    await game.step({ frames: 30 });
+
+    const pistol = await brokenPistolInBackpack(game);
+
+    // KEY: the strip's use gesture on a BROKEN gun opens the board rather than
+    // wielding it.
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    const click = (element: UiElement) => clickUiElement(game, element);
+    await useFromStrip(game, pistol.id, click);
+
+    const board = await repairPanel(game);
+    assert.ok(
+      hasTexture(board, "hack.pcx"),
+      `a broken gun should present the HRM board (got ${JSON.stringify(
+        board.elements.map((e) => e.texture ?? e.label),
+      )})`,
+    );
+    assert.equal(
+      board.elements
+        .filter((e) => e.kind === "text")
+        .map((e) => e.text ?? "")
+        .find((text) => /^\d+$/.test(text)),
+      REPAIR_COST,
+      "the board should show the pistol's authored RepairDiff cost",
+    );
+    assert.equal(
+      (await game.info()).player.wielded_entity_id ?? null,
+      null,
+      "a broken gun opens the board instead of being wielded",
+    );
+    await game.screenshot("repair-board.png");
+
+    // KEY: three connected nodes put the gun back into working order, ten
+    // condition points better off than it broke.
+    await playRepairBoardToWin(game, click);
+
+    const detail = await game.entities.detail(pistol.id);
+    assert.equal(
+      objectStateOf(detail),
+      "Normal",
+      "a won repair should return the gun to working order",
+    );
+    assert.equal(
+      conditionOf(detail),
+      20 + REPAIR_BONUS,
+      "a won repair should give condition points back",
+    );
+
+    // KEY: one synthetic panel host serves every gun, so a finished board must
+    // not be left standing on it. A second broken gun in the same session gets
+    // its own fresh board and repairs just as well.
+    const shotgun = await brokenGunInBackpack(game, SHOTGUN);
+    await useFromStrip(game, shotgun.id, click);
+    assert.ok(
+      hasTexture(await repairPanel(game), "hack.pcx"),
+      "a second broken gun should get a board of its own",
+    );
+    await playRepairBoardToWin(game, click);
+    assert.equal(
+      objectStateOf(await game.entities.detail(shotgun.id)),
+      "Normal",
+      "the second gun should repair as well as the first",
+    );
+  },
+);
+
+test(
+  "the VR cyber interface presents the same repair board",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "debug_weapons",
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 30 });
+
+    const pistol = await brokenPistolInBackpack(game);
+
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    const ui = await game.ui.state();
+    assert.equal(ui.mode, "use", "the cyber interface should be up");
+    const panelPose = ui.panel_pose;
+    assert.ok(panelPose, "the VR cyber interface must report its panel pose");
+
+    /** Release, then pull: a clean rising edge on the controller trigger. */
+    const clickAt = async (canvas: [number, number]) => {
+      for (const trigger of [0, 1, 0]) {
+        await aimVrHandAtCanvas(game, panelPose, canvas, { trigger });
+        await game.step({ frames: 2 });
+      }
+    };
+    const clickElement = (element: UiElement) =>
+      clickAt([
+        element.rect[0] + element.rect[2] / 2,
+        element.rect[1] + element.rect[3] / 2,
+      ]);
+
+    // KEY: the same use gesture on the same canvas, driven by a controller ray.
+    await useFromStrip(game, pistol.id, clickElement);
+
+    const board = await repairPanel(game);
+    assert.ok(
+      hasTexture(board, "hack.pcx"),
+      `the cyber interface should present the HRM board (got ${JSON.stringify(
+        board.elements.map((e) => e.texture ?? e.label),
+      )})`,
+    );
+    await game.screenshot("repair-board-vr.png");
+
+    await playRepairBoardToWin(game, clickElement);
+    assert.equal(
+      objectStateOf(await game.entities.detail(pistol.id)),
+      "Normal",
+      "a won repair works the same way in VR",
     );
   },
 );

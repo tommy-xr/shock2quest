@@ -18,7 +18,7 @@ use crate::scripts::{Effect, script_util::*};
 
 use super::{
     keypad::{
-        HackOutcomeEffects, HackPhase, HackState, KeyPadMsg, draw_hack_board, hack_diff,
+        HackOutcomeEffects, HackPhase, HackState, HrmMode, KeyPadMsg, draw_hack_board, hack_diff,
         handle_hack_msg, object_state,
     },
     traits::TRAIT_REPLICATOR_EXPERT,
@@ -420,6 +420,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
                     &state.hack,
                     hack_msg,
                     diff,
+                    HrmMode::Hack,
                     HackOutcomeEffects {
                         success: replicator_hack_success,
                         critical_failure: replicator_hack_critical_failure,

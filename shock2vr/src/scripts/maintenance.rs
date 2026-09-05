@@ -16,7 +16,7 @@
 //! the receiving weapon (`WeaponScript`), keyed off the tool's authored script
 //! the way the security crate recognizes an ICE Pick.
 
-use dark::properties::{ObjectState, PropGunState, PropRequiredTechDesc, PropStackCount};
+use dark::properties::{ObjectState, PropGunState, PropStackCount};
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, Get, View, World};
 
@@ -67,11 +67,7 @@ pub enum MaintenanceOutcome {
 /// tool restores ten points a level, so a level-zero player working a weapon
 /// that authors no requirement would spend it on nothing at all.
 fn required_maintain_level(world: &World, weapon: EntityId) -> i32 {
-    world
-        .borrow::<View<PropRequiredTechDesc>>()
-        .ok()
-        .and_then(|v| v.get(weapon).ok().map(|req| req.0.maintenance()))
-        .unwrap_or(0)
+    crate::scripts::script_util::required_tech_level(world, weapon, |tech| tech.maintenance())
         .max(1)
 }
 
@@ -186,8 +182,9 @@ pub fn offers_to(world: &World, tool: EntityId, target: EntityId) -> bool {
         )
 }
 
-/// What using one carried item does: wield a weapon, apply a maintenance tool
-/// to the weapon already wielded, or Frob anything else where it stands.
+/// What using one carried item does: open the repair board on a broken gun,
+/// wield a working weapon, apply a maintenance tool to the weapon already
+/// wielded, or Frob anything else where it stands.
 ///
 /// This is the whole of the flat inventory's use gesture - the strip's
 /// double-click and the backpack panel's click, which are the same action and
@@ -196,6 +193,11 @@ pub fn offers_to(world: &World, tool: EntityId, target: EntityId) -> bool {
 /// here rather than offered over the message channel, so a target that runs no
 /// weapon script still gets its refusal instead of silence.
 pub fn use_carried_item(world: &World, item: EntityId) -> Effect {
+    // A broken gun is not wielded: it opens the repair board instead, which is
+    // the only thing that can put it back into working order.
+    if let Some(effect) = crate::scripts::gui::use_broken_weapon(world, item) {
+        return effect;
+    }
     if crate::virtual_hand::is_wieldable_weapon(world, item) {
         return Effect::GrabEntity {
             entity_id: item,
@@ -231,7 +233,9 @@ mod tests {
                 modification: 0,
                 silence_value: 0.0,
             },
-            PropRequiredTechDesc(dark::properties::TechSkillValues([0, 1, 1, 1, 0])),
+            dark::properties::PropRequiredTechDesc(dark::properties::TechSkillValues([
+                0, 1, 1, 1, 0,
+            ])),
         ));
         let tool = world.add_entity((PropScripts {
             scripts: vec!["Wrench".to_owned()],

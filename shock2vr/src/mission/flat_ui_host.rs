@@ -1308,10 +1308,7 @@ fn close_button_canvas_rect(panel: Rect) -> Rect {
 /// Resolve a lifted item's cursor art (`objicon`) and label (`SymName`) for
 /// the cursor-is-the-item drag.
 fn make_cursor_item(world: &World, entity: EntityId) -> CursorItem {
-    let icon = world
-        .borrow::<View<dark::properties::PropObjIcon>>()
-        .ok()
-        .and_then(|v| v.get(entity).ok().map(|i| format!("{}.pcx", i.0)));
+    let icon = crate::scripts::gui::inventory_icon(world, entity).map(|icon| format!("{icon}.pcx"));
     CursorItem {
         entity,
         icon,

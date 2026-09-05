@@ -48,6 +48,10 @@ const FALLBACK_WRENCH_ON_BROKEN: &str = "Use repair skill on weapon first.";
 const FALLBACK_WRENCH_SKILL_REQ: &str = "Maintaining this weapon requires a skill of %d.";
 const FALLBACK_WRENCH_UNUSED: &str = "Weapon already in good condition.";
 
+/// The English fallback for the board's repair skill gate, verbatim from the
+/// shipped HRM.STR (`%d` is the minimum Repair level the object authors).
+const FALLBACK_REPAIR_SKILL_REQ: &str = "Repair skill %d required.";
+
 /// HUD label strings preloaded from MISC.STR, stored as a world `Unique`
 /// because the readout layout has no `AssetCache` at draw time (the
 /// `ElevatorContext` pattern).
@@ -72,6 +76,10 @@ pub struct HudStrings {
     pub wrench_skill_req: String,
     /// MISC.STR `WrenchUnused`: the weapon is already at full condition.
     pub wrench_unused: String,
+    /// HRM.STR `techminskill1` ("Repair skill %d required."): the player's
+    /// Repair level is below the minimum the object authors, so the board
+    /// never opens in repair mode.
+    pub repair_skill_req: String,
 }
 
 impl Default for HudStrings {
@@ -84,6 +92,7 @@ impl Default for HudStrings {
             wrench_on_broken: FALLBACK_WRENCH_ON_BROKEN.to_owned(),
             wrench_skill_req: FALLBACK_WRENCH_SKILL_REQ.to_owned(),
             wrench_unused: FALLBACK_WRENCH_UNUSED.to_owned(),
+            repair_skill_req: FALLBACK_REPAIR_SKILL_REQ.to_owned(),
         }
     }
 }
@@ -91,7 +100,15 @@ impl Default for HudStrings {
 impl HudStrings {
     pub fn load(asset_cache: &mut AssetCache) -> HudStrings {
         let strings = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "misc.str");
+        // The board's own table: everything the HRM's three modes say lives in
+        // HRM.STR, not in the general HUD one.
+        let hrm_strings = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "hrm.str");
         HudStrings {
+            repair_skill_req: crate::ui::resolve_menu_label(
+                hrm_strings.as_deref(),
+                "techminskill1",
+                FALLBACK_REPAIR_SKILL_REQ,
+            ),
             reload_label: crate::ui::resolve_menu_label(
                 strings.as_deref(),
                 "reload",

@@ -352,6 +352,21 @@ pub(crate) fn player_skill_level(world: &World, skill: crate::player_stats::Skil
         .unwrap_or(0)
 }
 
+/// The minimum tech level an object authors for one operation, in its
+/// `P$RequiredTechDesc` - `of` picks the operation's field. Zero for an object
+/// that authors no requirement at all.
+pub(crate) fn required_tech_level(
+    world: &World,
+    entity_id: EntityId,
+    of: impl Fn(dark::properties::TechSkillValues) -> i32,
+) -> i32 {
+    world
+        .borrow::<View<dark::properties::PropRequiredTechDesc>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|req| of(req.0)))
+        .unwrap_or(0)
+}
+
 /// A gun's condition (`PropGunState`, 0..100), or `None` for a weapon that
 /// tracks none - a melee weapon, the psi amp.
 pub(crate) fn gun_condition(world: &World, entity_id: EntityId) -> Option<f32> {

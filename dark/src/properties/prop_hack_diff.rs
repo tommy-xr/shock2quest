@@ -18,7 +18,10 @@ pub struct PropHackDiff {
 
 impl PropHackDiff {
     pub fn read<T: io::Read + io::Seek>(reader: &mut T, len: u32) -> Self {
-        assert_eq!(len, 12, "P$HackDiff must be a 12-byte sTechInfo record");
+        assert_eq!(
+            len, 12,
+            "a tech difficulty must be a 12-byte sTechInfo record"
+        );
         Self {
             success_chance: read_i32(reader),
             critical_chance: read_i32(reader),
@@ -27,11 +30,24 @@ impl PropHackDiff {
     }
 }
 
+/// Dark's `P$RepairDif` - the terms a broken object is repaired on. The same
+/// 12-byte `sTechInfo` record as `P$HackDiff`, read against the Repair skill
+/// rather than the Hack one, so the board can charge and roll for a repair the
+/// way it does for a hack.
+#[derive(Debug, Component, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PropRepairDiff(pub PropHackDiff);
+
+impl PropRepairDiff {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, len: u32) -> Self {
+        Self(PropHackDiff::read(reader, len))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
-    use super::PropHackDiff;
+    use super::{PropHackDiff, PropRepairDiff};
 
     #[test]
     fn parses_little_endian_tech_info_layout() {
@@ -48,6 +64,26 @@ mod tests {
                 critical_chance: 2,
                 cost: 15.5,
             }
+        );
+    }
+
+    /// The shipped pistol's `P$RepairDif` bytes (gamesys template -17): a 20%
+    /// base success chance, four criticals, three nanites an attempt.
+    #[test]
+    fn parses_the_shipped_pistol_repair_difficulty() {
+        let bytes = [
+            0x14, 0x00, 0x00, 0x00, // success chance 20
+            0x04, 0x00, 0x00, 0x00, // critical chance 4
+            0x00, 0x00, 0x40, 0x40, // cost 3.0
+        ];
+
+        assert_eq!(
+            PropRepairDiff::read(&mut Cursor::new(bytes), 12),
+            PropRepairDiff(PropHackDiff {
+                success_chance: 20,
+                critical_chance: 4,
+                cost: 3.0,
+            })
         );
     }
 }
