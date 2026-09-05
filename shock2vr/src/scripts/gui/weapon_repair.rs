@@ -21,7 +21,7 @@ use crate::gui::{Gui, GuiComponent, GuiConfig, GuiCursor};
 use crate::scripts::Effect;
 
 use super::keypad::{
-    HackOutcomeEffects, HackState, HrmMode, KeyPadMsg, draw_hack_board, handle_hack_msg,
+    HackOutcomeEffects, HackPhase, HackState, HrmMode, KeyPadMsg, draw_hack_board, handle_hack_msg,
     object_state,
 };
 
@@ -29,11 +29,34 @@ use super::keypad::{
 /// gun to working order.
 const REPAIR_CONDITION_BONUS: f32 = 10.0;
 
-/// The gun the repair panel is presenting. The panel itself is synthetic and
+/// What the repair panel is presenting. The panel itself is synthetic and
 /// shared, so the subject rides beside it rather than being the panel's own
 /// entity.
+///
+/// The terms are pinned here at the moment the board is dealt rather than
+/// re-read from the gun every frame, because a critical failure destroys that
+/// gun: a board that re-derived itself from the subject would lose everything
+/// it needs to draw in the same instant it lost, and the player would never
+/// see the result it lost with.
 #[derive(Unique, Clone, Copy, Debug)]
-pub struct WeaponRepairSubject(pub EntityId);
+pub struct WeaponRepairSubject {
+    pub gun: EntityId,
+    /// The terms the repair is played on.
+    pub terms: PropHackDiff,
+}
+
+/// The subject a board opened on `gun` right now would be dealt for, or `None`
+/// when a board is not what asking to repair it comes to. Decided by
+/// [`repair_entry`], the one place that judgement lives.
+pub fn repair_subject(world: &World, gun: EntityId) -> Option<WeaponRepairSubject> {
+    if repair_entry(world, gun) != RepairEntry::Board {
+        return None;
+    }
+    Some(WeaponRepairSubject {
+        gun,
+        terms: repair_diff(world, gun)?,
+    })
+}
 
 pub struct WeaponRepairGui;
 
@@ -53,6 +76,14 @@ pub(crate) fn repair_diff(world: &World, entity_id: EntityId) -> Option<PropHack
         .borrow::<View<PropRepairDiff>>()
         .ok()
         .and_then(|diffs| diffs.get(entity_id).ok().map(|diff| diff.0))
+}
+
+/// Whether the world still holds `entity_id`.
+fn is_alive(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<shipyard::EntitiesView>()
+        .map(|entities| entities.is_alive(entity_id))
+        .unwrap_or(false)
 }
 
 /// Whether `entity_id` has given out - the working order repair mode applies
@@ -137,21 +168,21 @@ fn repair_success(entity_id: EntityId, _world: &World) -> Effect {
     ])
 }
 
-/// A critical failure destroys what was being repaired. Destroying the entity
-/// also takes it out of whatever hand or backpack held it, so a gun cannot be
-/// left wielded after it ceases to exist.
+/// A critical failure destroys what was being repaired, at the moment it
+/// fails. Destroying the entity also takes it out of whatever hand or backpack
+/// held it, so a gun cannot be left wielded after it ceases to exist. The
+/// board stands over the wreck showing the loss because it holds everything it
+/// draws in [`WeaponRepairSubject`] rather than reading it back off the gun.
 fn repair_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
     Effect::DestroyEntity { entity_id }
 }
 
-/// The gun the panel is presenting, and the terms it is repaired on - both, or
-/// neither: a panel with no live subject draws nothing and accepts nothing.
-fn subject(world: &World) -> Option<(EntityId, PropHackDiff)> {
-    let gun = world
+/// What the panel is presenting, as it was pinned when the board was dealt.
+fn subject(world: &World) -> Option<WeaponRepairSubject> {
+    world
         .borrow::<UniqueView<WeaponRepairSubject>>()
         .ok()
-        .map(|subject| subject.0)?;
-    Some((gun, repair_diff(world, gun)?))
+        .map(|subject| *subject)
 }
 
 impl Gui<WeaponRepairState, WeaponRepairMsg> for WeaponRepairGui {
@@ -162,10 +193,29 @@ impl Gui<WeaponRepairState, WeaponRepairMsg> for WeaponRepairGui {
         world: &World,
         state: &WeaponRepairState,
     ) -> Vec<GuiComponent<WeaponRepairMsg>> {
-        let Some((_, diff)) = subject(world) else {
+        let Some(subject) = subject(world) else {
             return Vec::new();
         };
-        draw_hack_board(&state.hack, diff, HrmMode::Repair, WeaponRepairMsg::Board)
+        // A gun that no longer exists was destroyed by a critical failure -
+        // the one thing that destroys one - so the board wears the terminal
+        // loss face and offers no deal, driven by the world rather than the
+        // in-memory phase (the crate's ruined face works the same way). That
+        // covers a subject taken away by anything else too: a board that can
+        // never act again must not look live.
+        let hack = if is_alive(world, subject.gun) {
+            state.hack.clone()
+        } else {
+            HackState {
+                phase: HackPhase::Lost,
+                ..state.hack.clone()
+            }
+        };
+        draw_hack_board(
+            &hack,
+            subject.terms,
+            HrmMode::Repair,
+            WeaponRepairMsg::Board,
+        )
     }
 
     /// One host serves every gun, so its board must not outlive the opening it
@@ -194,23 +244,24 @@ impl Gui<WeaponRepairState, WeaponRepairMsg> for WeaponRepairGui {
         msg: &WeaponRepairMsg,
     ) -> (WeaponRepairState, Effect) {
         let WeaponRepairMsg::Board(board_msg) = msg;
-        let Some((gun, diff)) = subject(world) else {
+        let Some(subject) = subject(world) else {
             return (state.clone(), Effect::NoEffect);
         };
-        // A gun that is no longer broken has nothing left to repair; ignore
-        // stale board input rather than charging for another attempt.
-        if !is_broken_gun(world, gun) {
+        // A gun that is no longer broken - repaired, or destroyed by the
+        // failure this board is still showing - has nothing left to repair;
+        // ignore stale board input rather than charging for another attempt.
+        if !is_broken_gun(world, subject.gun) {
             return (state.clone(), Effect::NoEffect);
         }
         // The board is played against the *gun*, not the panel presenting it:
         // that is what keys the deal off the gun's own stable id and sources
         // the board's sounds at the object being worked on.
         let (hack, effect) = handle_hack_msg(
-            gun,
+            subject.gun,
             world,
             &state.hack,
             board_msg,
-            diff,
+            subject.terms,
             HrmMode::Repair,
             HackOutcomeEffects {
                 success: repair_success,
@@ -367,13 +418,112 @@ mod tests {
         ));
     }
 
+    /// Every image a board in `state` would draw, in draw order.
+    fn drawn(world: &World, panel: EntityId, state: &WeaponRepairState) -> Vec<String> {
+        WeaponRepairGui
+            .get_components(&None, panel, world, state)
+            .into_iter()
+            .filter_map(|component| match component {
+                crate::ui::UiElement::Image { texture, .. } => Some(texture),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The whole point: playing a mine destroys the gun *and* leaves a board
+    /// that still draws the loss art over the wreck. The board draws from what
+    /// it pinned when it was dealt, so losing its subject does not blank it -
+    /// re-reading the gun would, and then the player would never see the one
+    /// result that matters.
+    #[test]
+    fn a_lost_board_still_draws_its_loss_art_once_the_gun_is_gone() {
+        let (mut world, gun) = fixture(1);
+        break_gun(&mut world, gun);
+        // No node can survive, so the mine below is played for certain.
+        world.add_component(
+            gun,
+            (PropRepairDiff(PropHackDiff {
+                success_chance: 0,
+                critical_chance: 4,
+                cost: 3.0,
+            }),),
+        );
+        world.add_unique(repair_subject(&world, gun).expect("a broken gun is a repair job"));
+        let panel = world.add_entity((PropObjState(ObjectState::Normal),));
+
+        let mut dealt = WeaponRepairState::default();
+        dealt.hack.phase = super::super::keypad::HackPhase::Playing;
+        dealt.hack.nodes[super::super::keypad::board_index(0, 0)] =
+            super::super::keypad::HackNode::Mine;
+
+        let (after, effect) = WeaponRepairGui.handle_msg(
+            panel,
+            &world,
+            &dealt,
+            &WeaponRepairMsg::Board(KeyPadMsg::PlayNode { x: 0, y: 0 }),
+        );
+
+        assert_eq!(after.hack.phase, super::super::keypad::HackPhase::Lost);
+        assert!(
+            effects(effect)
+                .iter()
+                .any(|e| matches!(e, Effect::DestroyEntity { entity_id } if *entity_id == gun)),
+            "a lost repair should destroy the gun"
+        );
+
+        // The effect is applied by the mission loop after the script returns;
+        // do here what it does, then ask the panel what it draws.
+        world.delete_entity(gun);
+        let drawn = drawn(&world, panel, &after);
+        assert!(
+            !WeaponRepairGui
+                .get_components(&None, panel, &world, &after)
+                .iter()
+                .any(|component| matches!(
+                    component,
+                    crate::ui::UiElement::Button { label, .. } if label.as_deref() == Some("start-hack")
+                )),
+            "a board that can never act again must offer no deal"
+        );
+        assert!(
+            drawn.contains(&HrmMode::Repair.art().lost.to_owned()),
+            "the lost board should still draw the repair loss art (got {drawn:?})"
+        );
+        assert!(
+            drawn.contains(&HrmMode::Repair.art().backdrop.to_owned()),
+            "and its backdrop with it (got {drawn:?})"
+        );
+    }
+
+    /// The board over a destroyed gun accepts nothing: it is a picture of a
+    /// result, not a live board that could charge for another attempt.
+    #[test]
+    fn a_lost_board_accepts_no_further_input() {
+        let (mut world, gun) = fixture(1);
+        break_gun(&mut world, gun);
+        world.add_unique(repair_subject(&world, gun).expect("a broken gun is a repair job"));
+        let panel = world.add_entity((PropObjState(ObjectState::Normal),));
+        world.delete_entity(gun);
+
+        let (_, effect) = WeaponRepairGui.handle_msg(
+            panel,
+            &world,
+            &WeaponRepairState::default(),
+            &WeaponRepairMsg::Board(KeyPadMsg::StartHack),
+        );
+        assert!(matches!(effect, Effect::NoEffect));
+    }
+
     /// Board input against a gun that is no longer broken is ignored, so a
     /// repaired gun cannot be charged for another attempt.
     #[test]
     fn the_board_ignores_input_once_the_gun_works_again() {
         let (mut world, gun) = fixture(1);
-        world.add_unique(WeaponRepairSubject(gun));
+        break_gun(&mut world, gun);
+        world.add_unique(repair_subject(&world, gun).expect("a broken gun is a repair job"));
         let panel = world.add_entity((PropObjState(ObjectState::Normal),));
+        // Repaired between the board being dealt and this input landing.
+        world.add_component(gun, (PropObjState(ObjectState::Normal),));
 
         let (_, effect) = WeaponRepairGui.handle_msg(
             panel,

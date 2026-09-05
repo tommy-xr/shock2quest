@@ -233,6 +233,16 @@ dev_params! {
     /// something. Inert while the camera is attached (the two poses are the
     /// same pose).
     FREE_CAMERA_CULL_FROM_CAMERA = bool("free_camera_cull", "Cull from cam", false),
+    /// Forces every HRM board dealt from now on to be all mines with no chance
+    /// of a successful node, so the very next node played is a critical
+    /// failure - which, in repair mode, DESTROYS the gun. A test hook: the
+    /// loss branch is otherwise a coin flip nothing headless can drive, and it
+    /// is the branch with the destructive consequence.
+    ///
+    /// Read where the board's odds are: once when a board is dealt (the mine
+    /// count) and again on every node played (the success chance), so turning
+    /// it on mid-board burns the rest of that board too.
+    HRM_FORCE_CRITICAL = bool("hrm_force_critical", "HRM force fail", false),
     /// How fast the free camera flies, in the player's own speed units - the
     /// default IS [`PLAYER_MOVE_SPEED`], so "walking pace" cannot drift from
     /// what walking actually is. These are pre-scale SS2 units, not world

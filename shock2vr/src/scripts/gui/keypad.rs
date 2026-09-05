@@ -299,6 +299,11 @@ fn result_message(world: &World, mode: HrmMode, result: HrmResult) -> Effect {
 }
 
 fn effective_hack_values(world: &World, diff: PropHackDiff, mode: HrmMode) -> (i32, i32) {
+    // Test hook: a board of nothing but mines that no node can survive, so the
+    // critical-failure branch is reachable headlessly.
+    if crate::dev_params::get_bool(crate::dev_params::HRM_FORCE_CRITICAL) {
+        return (0, (BOARD_WIDTH * BOARD_HEIGHT) as i32);
+    }
     let skill = mode.player_level(world);
     let stat = world
         .borrow::<UniqueView<QuestInfo>>()
