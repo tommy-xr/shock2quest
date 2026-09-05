@@ -3,6 +3,11 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { UiElement, UiPanelPose, UiState } from "../src/index.js";
+import {
+  canvasCenter as center,
+  clickCanvasWithRay,
+  requirePanelPose as requirePanel,
+} from "./helpers/ui.js";
 import { aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 
 // The VR cyber interface's pointer bridge (slice 3): a controller ray meets
@@ -15,11 +20,6 @@ import { aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 // nothing and every assertion below fails there.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
-const center = (el: UiElement): [number, number] => [
-  el.rect[0] + el.rect[2] / 2,
-  el.rect[1] + el.rect[3] / 2,
-];
-
 async function openInterface(game: GameServer): Promise<UiState> {
   await game.input.trigger("ToggleUseMode");
   await game.step({ frames: 5 });
@@ -29,25 +29,6 @@ async function openInterface(game: GameServer): Promise<UiState> {
 /** The strip element bound to `entityId`, or undefined once it has left the grid. */
 function slotFor(ui: UiState, entityId: number): UiElement | undefined {
   return ui.strip?.elements.find((el) => el.entity_id === entityId);
-}
-
-function requirePanel(ui: UiState): UiPanelPose {
-  assert.ok(ui.panel_pose, "the VR cyber interface must report its panel pose");
-  return ui.panel_pose;
-}
-
-/** Release, then pull: a clean rising edge on the trigger. */
-async function clickAt(
-  game: GameServer,
-  panel: UiPanelPose,
-  canvas: [number, number],
-): Promise<void> {
-  await aimVrHandAtCanvas(game, panel, canvas, { trigger: 0 });
-  await game.step({ frames: 2 });
-  await aimVrHandAtCanvas(game, panel, canvas, { trigger: 1 });
-  await game.step({ frames: 2 });
-  await aimVrHandAtCanvas(game, panel, canvas, { trigger: 0 });
-  await game.step({ frames: 2 });
 }
 
 test(
@@ -101,7 +82,7 @@ test(
     );
 
     // Click: the trigger is the LMB analog - it lifts the item onto the cursor.
-    await clickAt(game, panel, slotCenter);
+    await clickCanvasWithRay(game, panel, slotCenter);
     ui = await game.ui.state();
     assert.equal(
       ui.cursor?.entity_id,
@@ -117,7 +98,7 @@ test(
     // Drag + place: a click on an empty slot puts it down again, and the item
     // reappears in the grid.
     const emptySlot: [number, number] = [slotCenter[0] + 105, slotCenter[1]];
-    await clickAt(game, panel, emptySlot);
+    await clickCanvasWithRay(game, panel, emptySlot);
     ui = await game.ui.state();
     assert.equal(ui.cursor, null, "clicking an empty slot must place the item");
     assert.ok(
@@ -127,16 +108,16 @@ test(
 
     // Empty panel space is still the interface, not the 3D view: a click there
     // must not throw the item into the world.
-    await clickAt(game, panel, slotCenter);
+    await clickCanvasWithRay(game, panel, slotCenter);
     assert.equal((await game.ui.state()).cursor?.entity_id, wrench.entity_id);
-    await clickAt(game, panel, [400, 400]);
+    await clickCanvasWithRay(game, panel, [400, 400]);
     assert.equal(
       (await game.ui.state()).cursor?.entity_id,
       wrench.entity_id,
       "a click on empty panel space must keep the held item",
     );
     // Put it back so the grab below has a slot to take from.
-    await clickAt(game, panel, slotCenter);
+    await clickCanvasWithRay(game, panel, slotCenter);
     ui = await game.ui.state();
     assert.equal(ui.cursor, null);
   },

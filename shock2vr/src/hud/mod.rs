@@ -11,6 +11,7 @@ pub(crate) mod virtual_arms;
 pub use virtual_arms::*;
 
 pub(crate) mod ammo_panel;
+pub(crate) mod readouts;
 
 pub(crate) mod message_line;
 pub use message_line::HudMessages;

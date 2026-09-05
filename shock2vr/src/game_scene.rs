@@ -611,6 +611,10 @@ pub struct DebugUiState {
     /// RELOAD, the ammo-cycle arrow, the psi selector arrows), labeled by
     /// meaning. Empty outside use mode.
     pub readout: Vec<DebugUiElement>,
+    /// Everything the expanded use-mode readouts drew along the bottom of the
+    /// shared interface canvas - the BIOFULL/AMMOFULL backdrops, the health/psi
+    /// bars and numbers, the ammo count and labels. Empty outside use mode.
+    pub readout_elements: Vec<DebugUiElement>,
     /// Where the pointer last landed on the shared canvas (flat: the mouse;
     /// VR: the controller ray on the cyber-interface panel).
     pub pointer: Option<DebugUiPointer>,
@@ -963,6 +967,7 @@ pub trait DebuggableScene {
             name_strip: None,
             cursor: None,
             readout: Vec::new(),
+            readout_elements: Vec::new(),
             pointer: None,
             panel_pose: None,
             messages: Vec::new(),
