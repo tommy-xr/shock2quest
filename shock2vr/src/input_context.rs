@@ -28,6 +28,9 @@ pub struct InputContext {
     // button; the physics controller edge-detects it so holding the button
     // cannot repeatedly add upward velocity.
     pub jump: bool,
+
+    /// Conversion used by a tracked runtime; lets a stance change rebase all poses together.
+    pub tracking: Option<crate::vr_tracking::TrackingTransform>,
 }
 
 impl InputContext {
@@ -40,6 +43,7 @@ impl InputContext {
             pointer: None,
             crouch: false,
             jump: false,
+            tracking: None,
         }
     }
 }

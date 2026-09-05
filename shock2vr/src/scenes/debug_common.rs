@@ -331,6 +331,10 @@ impl GameScene for DebugScene {
         self.core.player_is_crouched()
     }
 
+    fn player_tracking_is_crouched(&self) -> bool {
+        self.core.player_tracking_is_crouched()
+    }
+
     fn player_is_gripping(&self) -> bool {
         self.core.player_is_gripping()
     }
@@ -565,6 +569,10 @@ impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
 
     fn player_is_crouched(&self) -> bool {
         self.core.player_is_crouched()
+    }
+
+    fn player_tracking_is_crouched(&self) -> bool {
+        self.core.player_tracking_is_crouched()
     }
 
     fn player_is_gripping(&self) -> bool {
