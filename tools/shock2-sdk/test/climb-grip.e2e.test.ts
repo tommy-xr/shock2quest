@@ -9,8 +9,8 @@ import { teleportVerified } from "./helpers/teleport.js";
 // `GET /v1/physics/grip` answers "could a hand hold on here?" against the
 // debug_ladder stations (see shock2vr/src/scenes/debug_ladder.rs). The two
 // classes must be told apart on the SHIPPED geometry: an authored ladder face
-// is a Ladder, a block top above the feet is a Ledge, and a ladder's top cap,
-// a plain wall and the floor are nothing at all.
+// is a Ladder, a block top above the feet is a Ledge, and a plain wall and
+// the floor are nothing. A hand above a thin ladder cap can hook its side.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 type Probe = {
@@ -26,9 +26,9 @@ const PROBES: Probe[] = [
   {
     // The scene's ladders inherit the Ladders template's mask 27 - the four
     // vertical sides, no caps.
-    name: "ledge ladder top cap (mask 27 excludes it)",
+    name: "hook an authored side from above the ladder cap",
     point: [-6.9, 6.45, 0],
-    expected: null,
+    expected: "ladder",
   },
   // The block the ladder leans on: near face x = -7, top y = 6.
   { name: "ledge block lip", point: [-7.2, 6.05, 0], expected: "ledge" },

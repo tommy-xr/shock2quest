@@ -316,6 +316,25 @@ impl PlayerInteraction for VrInteraction {
                 objs.append(&mut self.right_hand.render(world, None));
             }
         }
+        // Feedback comes from the resolved holds, never a second proximity
+        // query: a blocked pull still shows a catch; release/break removes it.
+        // Float just above the fist so the glove cannot hide the marker.
+        for (handedness, _) in self.hand_climb.grips() {
+            let hand = match handedness {
+                Handedness::Left => &self.left_hand,
+                Handedness::Right => &self.right_hand,
+            };
+            let mut marker = SceneObject::new(
+                engine::scene::color_material::create(cgmath::vec3(0.0, 1.0, 1.0)),
+                Box::new(engine::scene::cube::create()),
+            );
+            marker.set_transform(
+                cgmath::Matrix4::from_translation(
+                    hand.get_position() + cgmath::vec3(0.0, 0.18, 0.0),
+                ) * cgmath::Matrix4::from_scale(0.03),
+            );
+            objs.push(marker);
+        }
         // Labelled as the player's hands: that is what `Game` drops while the
         // pause menu is up (issue #1018), and what `/v1/scene` reports. The
         // forearm panels carry their own label from `create_arm_hud_panels`,
