@@ -1386,6 +1386,13 @@ pub struct MediaPanelEntity(pub EntityId);
 #[derive(Unique, Clone, Copy)]
 pub struct WeaponSettingsPanelEntity(pub EntityId);
 
+/// Nonserialized player-owned host for the HRM board in repair mode. Like the
+/// settings MFD it presents a gun rather than a world object;
+/// `Effect::OpenWeaponRepair` names that gun and binds this host to the panel
+/// slot.
+#[derive(Unique, Clone, Copy)]
+pub struct WeaponRepairPanelEntity(pub EntityId);
+
 /// Which shortcut opened the current use-mode session, when one did.
 /// See [`MissionCore::use_mode_shortcut`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1572,6 +1579,10 @@ pub struct MissionCore {
     /// The gun an open weapon settings panel was opened for; the panel is
     /// dismissed as soon as that gun stops being wielded.
     weapon_settings_gun: Option<EntityId>,
+    /// The gun an open repair board was opened for; the panel is dismissed
+    /// once a critical failure destroys that gun, and a won repair leaves it
+    /// up showing its result.
+    weapon_repair_gun: Option<EntityId>,
 
     /// Which shortcut - if any - brought up the current use-mode session,
     /// rather than a deliberate `ToggleUseMode`. It makes a shortcut a true
@@ -2116,6 +2127,26 @@ impl MissionCore {
         ));
         world.add_unique(WeaponSettingsPanelEntity(weapon_settings_panel));
 
+        // The repair board's host, on the same terms: it presents whichever
+        // broken gun the player used, so it belongs to no world object.
+        let weapon_repair_panel = world.add_entity((
+            Links::empty(),
+            PropScripts {
+                scripts: vec!["internal_weapon_repair".to_owned()],
+                inherits: false,
+            },
+            dark::properties::PropTemplateId { template_id: -1 },
+            PropSymName("Weapon Repair".to_owned()),
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                cell: 0,
+            },
+            RuntimePropTransform(Matrix4::identity()),
+            RuntimePropDoNotSerialize,
+        ));
+        world.add_unique(WeaponRepairPanelEntity(weapon_repair_panel));
+
         // The psi power selection MFD's host, on the same terms: player state,
         // no world object, rebuilt per mission and never serialized.
         let psi_powers_panel = world.add_entity((
@@ -2547,6 +2578,7 @@ impl MissionCore {
             flat_melee_anim: None,
             use_mode: false,
             weapon_settings_gun: None,
+            weapon_repair_gun: None,
             psi_powers_open: false,
             psi_nav_latched: false,
             use_mode_shortcut: None,
@@ -3670,6 +3702,35 @@ impl MissionCore {
                 self.weapon_settings_gun = None;
             } else if !ours_is_docked {
                 self.weapon_settings_gun = None;
+            }
+        }
+
+        // The repair board belongs to one gun. A critical failure destroys
+        // that gun, so the board has nothing left to present and is dismissed;
+        // a won repair leaves it up showing the result, as the other HRM
+        // panels do. As above, the flag means "our panel is docked".
+        if let Some(opened_for) = self.weapon_repair_gun {
+            let panel = self
+                .world
+                .borrow::<UniqueView<WeaponRepairPanelEntity>>()
+                .map(|panel| panel.0)
+                .ok();
+            let ours_is_docked = panel.is_some() && self.flat_ui.active_panel() == panel;
+            let destroyed = !self
+                .world
+                .borrow::<shipyard::EntitiesView>()
+                .map(|entities| entities.is_alive(opened_for))
+                .unwrap_or(false);
+            if destroyed && ours_is_docked {
+                self.flat_ui.close();
+            }
+            if destroyed || !ours_is_docked {
+                // Drop the subject with the panel: an unowned one would leave
+                // the board addressing a gun nothing is presenting.
+                let _ = self
+                    .world
+                    .remove_unique::<crate::scripts::gui::WeaponRepairSubject>();
+                self.weapon_repair_gun = None;
             }
         }
 
@@ -5948,6 +6009,36 @@ impl MissionCore {
                             self.flat_ui.open_unbound(panel);
                             self.weapon_settings_gun = Some(weapon);
                         }
+                    }
+                }
+
+                Effect::OpenWeaponRepair { entity_id } => {
+                    // Same slot contract as the settings MFD: flat always
+                    // presents it, VR only inside the cyber interface - which
+                    // is also the only place a VR player can use a carried
+                    // item in the first place.
+                    let slot_is_presented = game_options.presentation_mode
+                        == crate::PresentationMode::Flat
+                        || self.use_mode;
+                    let panel = self
+                        .world
+                        .borrow::<UniqueView<WeaponRepairPanelEntity>>()
+                        .map(|panel| panel.0);
+                    if let (true, Ok(panel)) = (slot_is_presented, panel) {
+                        // Removed first: the subject is rebound on every open,
+                        // and a unique that is only ever added would keep the
+                        // gun the panel was opened on the *last* time.
+                        let _ = self
+                            .world
+                            .remove_unique::<crate::scripts::gui::WeaponRepairSubject>();
+                        self.world
+                            .add_unique(crate::scripts::gui::WeaponRepairSubject(entity_id));
+                        self.script_world.dispatch(Message {
+                            to: panel,
+                            payload: MessagePayload::PanelOpened,
+                        });
+                        self.flat_ui.open_unbound(panel);
+                        self.weapon_repair_gun = Some(entity_id);
                     }
                 }
 

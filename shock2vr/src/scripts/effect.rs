@@ -266,6 +266,12 @@ pub enum Effect {
     /// panel slot. No-op when nothing is wielded.
     OpenWeaponSettings,
 
+    /// Open the HRM board in repair mode on `entity_id`, a broken gun, in the
+    /// presentation's panel slot. No-op where that slot is not presented.
+    OpenWeaponRepair {
+        entity_id: EntityId,
+    },
+
     /// Eject `entity_id`'s magazine back to the backpack, as clips of the ammo
     /// type the rounds already are. No-op for an empty gun, or one whose
     /// projectile has no clip archetype to return to.

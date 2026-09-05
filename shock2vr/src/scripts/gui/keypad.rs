@@ -175,15 +175,43 @@ fn roll_succeeds(roll: i32, chance: i32) -> bool {
     roll < chance
 }
 
-fn effective_hack_values(world: &World, diff: PropHackDiff) -> (i32, i32) {
-    let (skill, stat) = world
+/// Which operation the board is running. One board, one set of odds; the mode
+/// only picks the tech skill those odds are computed against and what a win or
+/// a critical failure does to the object.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum HrmMode {
+    Hack,
+    Repair,
+}
+
+impl HrmMode {
+    /// The tech level this mode is played at. Repair counts the installed
+    /// repair software on top of the trained skill; the hack mode does not
+    /// consult its own software yet. This is the single definition of "how
+    /// good is the player at this", so a mode's entry requirement and its
+    /// odds can never be judged against different numbers.
+    pub(crate) fn player_level(self, world: &World) -> i32 {
+        world
+            .borrow::<UniqueView<QuestInfo>>()
+            .ok()
+            .map(|quest| {
+                let stats = quest.player_stats();
+                match self {
+                    HrmMode::Hack => stats.skill_level(Skill::Hack),
+                    HrmMode::Repair => stats.skill_level(Skill::Repair) + stats.software.repair,
+                }
+            })
+            .unwrap_or(0)
+    }
+}
+
+fn effective_hack_values(world: &World, diff: PropHackDiff, mode: HrmMode) -> (i32, i32) {
+    let skill = mode.player_level(world);
+    let stat = world
         .borrow::<UniqueView<QuestInfo>>()
         .ok()
-        .map(|quest| {
-            let stats = quest.player_stats();
-            (stats.skill_level(Skill::Hack), stats.cyber_affinity)
-        })
-        .unwrap_or((0, 0));
+        .map(|quest| quest.player_stats().cyber_affinity)
+        .unwrap_or(0);
     world
         .borrow::<UniqueView<GlobalHrmParams>>()
         .ok()
@@ -394,6 +422,7 @@ pub(crate) fn handle_hack_msg(
     state: &HackState,
     msg: &KeyPadMsg,
     diff: PropHackDiff,
+    mode: HrmMode,
     outcomes: HackOutcomeEffects,
 ) -> (HackState, Effect) {
     let mut new_state = state.clone();
@@ -412,7 +441,7 @@ pub(crate) fn handle_hack_msg(
                     },
                 );
             };
-            let (_, mine_count) = effective_hack_values(world, diff);
+            let (_, mine_count) = effective_hack_values(world, diff, mode);
             let mut rng_state = hack_seed(world, entity_id);
             tracing::debug!(entity = entity_id.inner(), rng_state, "HRM rng seed");
             let nodes = board_with_mines(mine_count, &mut rng_state);
@@ -464,7 +493,7 @@ pub(crate) fn handle_hack_msg(
                 rng_state = new_state.rng_state,
                 "HRM rng outcome"
             );
-            let (chance, _) = effective_hack_values(world, diff);
+            let (chance, _) = effective_hack_values(world, diff, mode);
             if roll_succeeds(roll, chance) {
                 new_state.nodes[index] = HackNode::Lit;
                 if has_connected_three(&new_state.nodes) {
@@ -670,6 +699,7 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
                 &state.hack,
                 msg,
                 hack_diff,
+                HrmMode::Hack,
                 HackOutcomeEffects {
                     success: keypad_hack_success,
                     critical_failure: keypad_hack_critical_failure,
@@ -877,6 +907,7 @@ mod tests {
             &state,
             &KeyPadMsg::StartHack,
             diff,
+            HrmMode::Hack,
             HackOutcomeEffects {
                 success: keypad_hack_success,
                 critical_failure: keypad_hack_critical_failure,

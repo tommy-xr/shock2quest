@@ -1,7 +1,5 @@
 use cgmath::{Vector2, Vector3, vec2};
-use dark::properties::{
-    FrobFlag, Link, PropFrobInfo, PropInventoryDimensions, PropObjIcon, ReceptronEffect,
-};
+use dark::properties::{FrobFlag, Link, PropFrobInfo, PropInventoryDimensions, ReceptronEffect};
 
 use shipyard::{EntityId, Get, View, World};
 
@@ -202,20 +200,15 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
         let initial_offset_y = self.inv_offset_y;
         let initial_offset_x = self.inv_offset_x;
 
-        let v_obj_icon = world.borrow::<View<PropObjIcon>>().unwrap();
         for contained_entity_info in inventory.all_items() {
             let ent = contained_entity_info.entity;
-            let maybe_obj_icon = v_obj_icon.get(ent);
-
-            if maybe_obj_icon.is_err() {
+            let Some(obj_icon) = super::inventory_icon(world, ent) else {
                 continue;
-            }
+            };
 
             let inv_dims = (contained_entity_info.width, contained_entity_info.height);
             let position_x = slot_pixel_width * contained_entity_info.x as f32;
             let position_y = slot_pixel_height * contained_entity_info.y as f32;
-
-            let obj_icon = &maybe_obj_icon.unwrap().0;
 
             // TODO: Fix this issue:
             // thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: Custom { kind: InvalidInput, error: "pcx::Reader::next_row_paletted called on non-paletted image" }', engine/src/texture_format.rs:81:45
@@ -250,15 +243,13 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
 
         if let Some(cursor) = maybe_cursor {
             if let Some(ent) = cursor.held_entity_id {
-                let maybe_obj_icon = v_obj_icon.get(ent);
-
-                if let Ok(obj_icon) = maybe_obj_icon {
+                if let Some(obj_icon) = super::inventory_icon(world, ent) {
                     let inv_dims = v_inv_dims
                         .get(ent)
                         .map(|dims| (dims.width, dims.height))
                         .unwrap_or((1, 1));
                     components.push(
-                        gui::image(&format!("{}.pcx", obj_icon.0))
+                        gui::image(&format!("{obj_icon}.pcx"))
                             .with_object_icon()
                             .with_position(vec2(cursor.position.x, cursor.position.y))
                             .with_size(vec2(
@@ -445,7 +436,8 @@ mod tests {
     use crate::mission::PlayerInfo;
     use cgmath::{Quaternion, point2, vec3};
     use dark::properties::{
-        FrobFlag, KeyCard, Links, PropFrobInfo, PropHitPoints, PropKeySrc, ToLink, WrappedEntityId,
+        FrobFlag, KeyCard, Links, PropFrobInfo, PropHitPoints, PropKeySrc, PropObjIcon, ToLink,
+        WrappedEntityId,
     };
 
     /// The load-bearing invariant `backpack_cell_at`'s doc comment claims: it

@@ -125,7 +125,7 @@ pub use self::gui::ElevatorContext;
 use self::gui::{
     ComputerGui, ContainerGui, ElevatorGui, GamePigGui, HackableCrateGui, KeyPadGui, MapGui,
     MediaGui, PsiPowersGui, ReplicatorGui, ResearchGui, TrainerGui, TrainerMode, TraitGui,
-    WeaponSettingsGui,
+    WeaponRepairGui, WeaponSettingsGui,
 };
 use self::healing_item::{HealingItemKind, HealingItemScript};
 use self::internal_frob_move::InternalFrobMove;
@@ -965,6 +965,7 @@ impl ScriptWorld {
             "internal_map" => gui_script(Box::new(MapGui)),
             "internal_media" => gui_script(Box::new(MediaGui)),
             "internal_weapon_settings" => gui_script(Box::new(WeaponSettingsGui)),
+            "internal_weapon_repair" => gui_script(Box::new(WeaponRepairGui)),
             "internal_psi_powers" => gui_script(Box::new(PsiPowersGui)),
             // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
             "internal_explosion" => Box::new(InternalExplosion::new()),
