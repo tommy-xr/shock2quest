@@ -214,6 +214,39 @@ mod tests {
         assert_eq!(selected.get(new_entity).unwrap().0, 2);
     }
 
+    /// A gun worn down by firing must load back worn: condition rides the
+    /// generic property save, so this covers the whole `P$GunState` chunk.
+    #[test]
+    fn a_degraded_weapon_condition_survives_a_save_and_load() {
+        let mut source_world = World::new();
+        let gun = source_world.add_entity((dark::properties::PropGunState {
+            ammo: 7,
+            condition: 93.0,
+            setting: 1,
+            modification: 0,
+            silence_value: 0.0,
+        },));
+
+        // The same generic property serialization `to_save_data` performs.
+        let (all_properties, _, _) = dark::properties::get::<File>();
+        let mut save = EntitySaveData::empty();
+        save.all_entities.push(gun.inner());
+        for prop in all_properties {
+            save.properties
+                .insert(prop.name(), prop.serialize(&source_world));
+        }
+
+        let mut loaded_world = World::new();
+        let (_, old_to_new) = save.instantiate(&mut loaded_world);
+
+        let states = loaded_world
+            .borrow::<View<dark::properties::PropGunState>>()
+            .unwrap();
+        let loaded = states.get(old_to_new[&gun]).unwrap();
+        assert_eq!(loaded.condition, 93.0);
+        assert_eq!(loaded.ammo, 7);
+    }
+
     #[test]
     fn selected_ammo_defaults_empty_for_older_saves() {
         let data: EntitySaveData = serde_json::from_value(serde_json::json!({

@@ -77,7 +77,7 @@ mod tests {
     fn gun_state(ammo: i32) -> PropGunState {
         PropGunState {
             ammo,
-            condition: 0.75,
+            condition: 75.0,
             setting: 1,
             modification: 2,
             silence_value: 0.25,
@@ -112,7 +112,7 @@ mod tests {
         let states = world.borrow::<View<PropGunState>>().unwrap();
         let state = states.get(weapon).unwrap();
         assert_eq!(state.ammo, 37, "the effect pipeline owns ammo mutation");
-        assert_eq!(state.condition, 0.75);
+        assert_eq!(state.condition, 75.0);
         assert_eq!(state.setting, 1);
         assert_eq!(state.modification, 2);
         assert_eq!(state.silence_value, 0.25);

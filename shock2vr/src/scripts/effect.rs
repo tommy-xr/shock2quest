@@ -212,6 +212,14 @@ pub enum Effect {
         delta: i32,
     },
 
+    /// Wear a gun down by `amount` condition points (`PropGunState.condition`,
+    /// a 0..100 percentage), floored at 0. No-op for entities without a gun
+    /// state.
+    DegradeWeaponCondition {
+        entity_id: EntityId,
+        amount: f32,
+    },
+
     /// Start the wait a gun's fire setting imposes between shots
     /// (`RuntimePropShotCooldown`), in seconds. Pulls during it do nothing.
     BeginShotCooldown {
@@ -940,16 +948,23 @@ pub(crate) fn recharge_ammo_to_capacity(gun_state: &mut PropGunState, capacity: 
     gun_state.ammo = gun_state.ammo.max(capacity.max(0));
 }
 
+/// Wear a gun down by `amount` condition points. Condition is a 0..100
+/// percentage and never goes below 0 - a worn-out gun stays worn out rather
+/// than accumulating negative condition over the shots it keeps firing.
+pub(crate) fn degrade_condition(gun_state: &mut PropGunState, amount: f32) {
+    gun_state.condition = (gun_state.condition - amount).max(0.0);
+}
+
 #[cfg(test)]
 mod tests {
     use dark::properties::PropGunState;
 
-    use super::recharge_ammo_to_capacity;
+    use super::{degrade_condition, recharge_ammo_to_capacity};
 
     fn gun_state(ammo: i32) -> PropGunState {
         PropGunState {
             ammo,
-            condition: 0.75,
+            condition: 75.0,
             setting: 1,
             modification: 2,
             silence_value: 0.25,
@@ -964,10 +979,34 @@ mod tests {
         recharge_ammo_to_capacity(&mut state, 100);
 
         assert_eq!(state.ammo, 100);
-        assert_eq!(state.condition, 0.75);
+        assert_eq!(state.condition, 75.0);
         assert_eq!(state.setting, 1);
         assert_eq!(state.modification, 2);
         assert_eq!(state.silence_value, 0.25);
+    }
+
+    #[test]
+    fn each_shot_costs_the_authored_condition_points() {
+        let mut state = gun_state(12);
+        state.condition = 100.0;
+
+        degrade_condition(&mut state, 1.0);
+        degrade_condition(&mut state, 1.0);
+        degrade_condition(&mut state, 1.0);
+
+        assert_eq!(state.condition, 97.0);
+        assert_eq!(state.ammo, 12);
+    }
+
+    #[test]
+    fn a_worn_out_gun_never_goes_below_zero_condition() {
+        let mut state = gun_state(12);
+        state.condition = 0.5;
+
+        degrade_condition(&mut state, 1.0);
+        degrade_condition(&mut state, 1.0);
+
+        assert_eq!(state.condition, 0.0);
     }
 
     #[test]

@@ -536,6 +536,10 @@ export interface PlayerSnapshot {
   /** Milliseconds left of the wielded gun's between-shots wait (0 = ready to
    * fire, null = nothing wielded). A pull during the wait is ignored. */
   wielded_gun_cooldown_ms: number | null;
+  /** The wielded gun's condition, 0..100 (100 = pristine), or null when
+   * nothing with a gun state is wielded. Every shot wears it down by the
+   * amount the gun's reliability authors. */
+  wielded_gun_condition: number | null;
   /** The player's current / maximum hit points, or null when the player has
    * no health pool. Drained by psi burnout. */
   hit_points: number | null;

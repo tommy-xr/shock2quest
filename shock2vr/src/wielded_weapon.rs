@@ -126,7 +126,7 @@ mod tests {
         let mut gun = |world: &mut World| {
             world.add_entity((PropGunState {
                 ammo: 12,
-                condition: 1.0,
+                condition: 100.0,
                 setting: 0,
                 modification: 0,
                 silence_value: 0.0,
