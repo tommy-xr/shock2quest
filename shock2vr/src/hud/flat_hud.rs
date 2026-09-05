@@ -386,6 +386,7 @@ mod tests {
             ammo_panel::COUNT,
             ammo_panel::ICON,
             ammo_panel::TYPE_LABEL,
+            ammo_panel::CONDITION,
             ammo_panel::PSI_TIER_BADGE,
             ammo_panel::PSI_POWER_NAME,
         ] {

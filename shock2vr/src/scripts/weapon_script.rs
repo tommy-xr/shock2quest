@@ -68,7 +68,7 @@ use super::{
     Effect, Message, MessagePayload, Script,
     burst_fire::{BurstState, BurstStep},
     script_util::{
-        active_gun_setting, get_all_links_with_template, ordered_projectile_links,
+        active_gun_setting, get_all_links_with_template, gun_condition, ordered_projectile_links,
         play_environmental_sound,
     },
 };
@@ -159,15 +159,6 @@ fn degrade_per_shot(world: &World, entity_id: EntityId) -> Option<f32> {
         .ok()
         .and_then(|v| v.get(entity_id).ok().map(|r| r.degrade_rate))?;
     (rate > 0.0).then_some(rate)
-}
-
-/// The gun's condition (`PropGunState`, 0..100), or `None` for a weapon that
-/// tracks none.
-fn gun_condition(world: &World, entity_id: EntityId) -> Option<f32> {
-    world
-        .borrow::<View<dark::properties::PropGunState>>()
-        .ok()
-        .and_then(|v| v.get(entity_id).ok().map(|g| g.condition))
 }
 
 /// Whether the Anti-entropic Field is running: while it is, a gun neither
@@ -265,8 +256,20 @@ fn roll_for_breakage(world: &World, entity_id: EntityId) -> Option<Effect> {
                 state: ObjectState::Broken,
             },
             play_environmental_sound(world, entity_id, "break", vec![], AudioHandle::new()),
+            Effect::ShowMessage {
+                text: weapon_breaks_message(world, entity_id),
+            },
         ])
     })
+}
+
+/// The status line a gun posts as it gives out: MISC.STR's `WeaponBreaks`
+/// ("%s has broken!") with the gun's short name in it.
+fn weapon_breaks_message(world: &World, entity_id: EntityId) -> String {
+    let name = crate::scripts::script_util::object_short_name(world, entity_id).unwrap_or_default();
+    crate::hud::hud_strings(world)
+        .weapon_breaks_message
+        .replace("%s", &name)
 }
 
 /// What one shot came to.
@@ -1113,6 +1116,16 @@ mod tests {
         }
         world.add_unique(GlobalTemplateClassTags(Default::default()));
         (world, gun)
+    }
+
+    /// A gun that gives out says which gun it was, in the shipped wording.
+    #[test]
+    fn the_break_message_names_the_gun() {
+        let (mut world, gun) = gun_world(None);
+        world.add_component(gun, dark::properties::PropSymName("Pistol".to_owned()));
+        // No strings table loaded, so this exercises the English fallback the
+        // format itself carries - the substitution is what is under test.
+        assert_eq!(weapon_breaks_message(&world, gun), "Pistol has broken!");
     }
 
     /// A broken gun is out of the fight until it is repaired: the trigger
