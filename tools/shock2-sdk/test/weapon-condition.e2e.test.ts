@@ -546,18 +546,18 @@ async function playRepairBoardToWin(
   ];
   for (let attempt = 0; attempt < 15; attempt += 1) {
     let panel = await repairPanel(game);
-    if (hasTexture(panel, "winh.pcx")) return;
+    if (hasTexture(panel, "winr.pcx")) return;
     assert.ok(
-      !hasTexture(panel, "loseh.pcx"),
+      !hasTexture(panel, "loser.pcx"),
       "a critical failure destroyed the gun; max Repair should leave no mines",
     );
     assert.ok(
-      !hasTexture(panel, "payh.pcx"),
+      !hasTexture(panel, "payr.pcx"),
       "the test wallet should always cover the authored repair cost",
     );
 
     const inPlay = panel.elements.some((el) => el.label === "reset-hack");
-    if (!inPlay || hasTexture(panel, "failh.pcx")) {
+    if (!inPlay || hasTexture(panel, "failr.pcx")) {
       const deal = panel.elements.find(
         (el) => el.label === "start-hack" || el.label === "reset-hack",
       );
@@ -567,8 +567,8 @@ async function playRepairBoardToWin(
 
     for (const label of routes[attempt % routes.length]) {
       panel = await repairPanel(game);
-      if (hasTexture(panel, "winh.pcx")) return;
-      if (hasTexture(panel, "failh.pcx") || hasTexture(panel, "loseh.pcx")) {
+      if (hasTexture(panel, "winr.pcx")) return;
+      if (hasTexture(panel, "failr.pcx") || hasTexture(panel, "loser.pcx")) {
         break;
       }
       await click(boardButton(panel, label));
@@ -595,8 +595,8 @@ test(
 
     const board = await repairPanel(game);
     assert.ok(
-      hasTexture(board, "hack.pcx"),
-      `a broken gun should present the HRM board (got ${JSON.stringify(
+      hasTexture(board, "iface/repair.pcx"),
+      `a broken gun should present the repair board (got ${JSON.stringify(
         board.elements.map((e) => e.texture ?? e.label),
       )})`,
     );
@@ -637,7 +637,7 @@ test(
     const shotgun = await brokenGunInBackpack(game, SHOTGUN);
     await useFromStrip(game, shotgun.id, click);
     assert.ok(
-      hasTexture(await repairPanel(game), "hack.pcx"),
+      hasTexture(await repairPanel(game), "iface/repair.pcx"),
       "a second broken gun should get a board of its own",
     );
     await playRepairBoardToWin(game, click);
@@ -686,8 +686,8 @@ test(
 
     const board = await repairPanel(game);
     assert.ok(
-      hasTexture(board, "hack.pcx"),
-      `the cyber interface should present the HRM board (got ${JSON.stringify(
+      hasTexture(board, "iface/repair.pcx"),
+      `the cyber interface should present the repair board (got ${JSON.stringify(
         board.elements.map((e) => e.texture ?? e.label),
       )})`,
     );
@@ -755,18 +755,18 @@ async function playModifyBoardToWin(
   ];
   for (let attempt = 0; attempt < 15; attempt += 1) {
     let panel = await modifyPanel(game);
-    if (hasTexture(panel, "winh.pcx")) return;
+    if (hasTexture(panel, "winm.pcx")) return;
     assert.ok(
-      !hasTexture(panel, "loseh.pcx"),
+      !hasTexture(panel, "losem.pcx"),
       "a critical failure broke the gun; max Modify should leave no mines",
     );
     assert.ok(
-      !hasTexture(panel, "payh.pcx"),
+      !hasTexture(panel, "paym.pcx"),
       "the test wallet should always cover the authored modify cost",
     );
 
     const inPlay = panel.elements.some((el) => el.label === "reset-hack");
-    if (!inPlay || hasTexture(panel, "failh.pcx")) {
+    if (!inPlay || hasTexture(panel, "failm.pcx")) {
       const deal = panel.elements.find(
         (el) => el.label === "start-hack" || el.label === "reset-hack",
       );
@@ -781,8 +781,8 @@ async function playModifyBoardToWin(
 
     for (const label of routes[attempt % routes.length]) {
       panel = await modifyPanel(game);
-      if (hasTexture(panel, "winh.pcx")) return;
-      if (hasTexture(panel, "failh.pcx") || hasTexture(panel, "loseh.pcx")) {
+      if (hasTexture(panel, "winm.pcx")) return;
+      if (hasTexture(panel, "failm.pcx") || hasTexture(panel, "losem.pcx")) {
         break;
       }
       await click(boardButton(panel, label));
@@ -875,8 +875,8 @@ test(
     await openModifyBoard(game, click);
     const board = await modifyPanel(game);
     assert.ok(
-      hasTexture(board, "hack.pcx"),
-      `MODIFY should present the HRM board (got ${JSON.stringify(
+      hasTexture(board, "modify.pcx"),
+      `MODIFY should present the modify board (got ${JSON.stringify(
         board.elements.map((e) => e.texture ?? e.label),
       )})`,
     );
@@ -939,7 +939,7 @@ test(
     await click(modify);
     await game.step({ frames: 3 });
     assert.ok(
-      !hasTexture(await modifyPanel(game), "hack.pcx"),
+      !hasTexture(await modifyPanel(game), "modify.pcx"),
       "a third modification should be refused, not dealt",
     );
     assert.equal(
@@ -1023,8 +1023,8 @@ test(
     await clickElement(modify);
     await game.step({ frames: 3 });
     assert.ok(
-      hasTexture(await modifyPanel(game), "hack.pcx"),
-      "the cyber interface should present the HRM board",
+      hasTexture(await modifyPanel(game), "modify.pcx"),
+      "the cyber interface should present the modify board",
     );
     await game.screenshot("modify-board-vr.png");
 
