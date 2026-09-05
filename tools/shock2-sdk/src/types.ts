@@ -380,10 +380,12 @@ export interface PhysicsBodyDetail extends Omit<PhysicsBodySummary, "velocity"> 
   linear_velocity: Vec3;
   contact_count: number;
   /**
-   * `body_id` of every body this one is actually touching. Turns "it touches
-   * something" into "it touches *that*" - e.g. that a creature is pressed
-   * against a particular door leaf rather than merely standing near it.
-   * Optional when connected to runtimes predating this field.
+   * `body_id` of every body this one is touching. Turns "it touches something"
+   * into "it touches *that*" - e.g. that a creature is pressed against a
+   * particular door leaf rather than merely standing near it. A mission's level
+   * geometry has no rigid body behind it, so it raises `contact_count` without
+   * appearing here: an empty list beside a non-zero count means every contact
+   * is with the level. Optional when connected to runtimes predating this field.
    */
   contacts?: number[];
 }

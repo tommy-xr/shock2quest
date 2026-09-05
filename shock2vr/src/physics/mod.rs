@@ -6999,7 +6999,8 @@ impl PhysicsWorld {
     }
 
     /// Contact pairs currently touching this body, and the `body_id` of the
-    /// body on the other side of each. Walks the narrow phase, so only the
+    /// body on the other side of each - level colliders have no body and so
+    /// contribute to the count only. Walks the narrow phase, so only the
     /// single-body detail path pays for it.
     fn active_contacts(&self, body: &RigidBody) -> (usize, Vec<u32>) {
         let mut count = 0;
@@ -7126,10 +7127,15 @@ pub struct DebugBodyInfo {
     /// hanging in the air apart from one resting on something. Only the
     /// single-body detail path fills this in; the list path reports 0.
     pub active_contacts: usize,
-    /// `body_id` of every body this one is actually touching, deduplicated.
+    /// `body_id` of every *body* this one is actually touching, deduplicated.
     /// Turns "it touches *something*" into "it touches *that*" - which is how
     /// a creature pressed against a door leaf is told apart from one merely
     /// standing near it. Filled in on the single-body detail path only.
+    ///
+    /// Level geometry is inserted as colliders with no rigid body behind them,
+    /// so standing on the floor of a mission contributes to `active_contacts`
+    /// and nothing here: an empty list next to a non-zero count means every
+    /// contact is with the level itself.
     pub contact_body_ids: Vec<u32>,
 }
 
@@ -8653,8 +8659,42 @@ mod tests {
         );
     }
 
-    /// The other direction of travel: a leaf coming *down* on a creature that
-    /// walked in under it while it was parked open. The leaf's underside meets
+    /// The detail endpoint's contact report must name *which* body it touches,
+    /// not just how many: that is what separates a creature pressed against a
+    /// door leaf from one standing beside it. Bodies only - a mission's level
+    /// geometry has no rigid body, so it raises the count and nothing else.
+    #[test]
+    fn a_body_at_rest_reports_the_body_it_is_resting_on() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2180, 40.0);
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let floor = world.entity_id_to_body[&EntityId::from_inner(2180).unwrap()]
+            .into_raw_parts()
+            .0;
+        let creature_body = creature.into_raw_parts().0;
+        let detail = world.debug_body_detail(creature_body).unwrap();
+
+        assert!(
+            detail.active_contacts > 0,
+            "a creature standing on the floor must report a contact"
+        );
+        assert_eq!(
+            detail.contact_body_ids,
+            vec![floor],
+            "the contact must name the floor body it rests on"
+        );
+        assert!(
+            world
+                .debug_body_detail(floor)
+                .unwrap()
+                .contact_body_ids
+                .contains(&creature_body),
+            "and the pair must read the same way round"
+        );
+    }
+
+    /// The other direction of travel: a leaf coming *down* on a creature
+    /// standing under it, where it settled while the leaf was parked open. The leaf's underside meets
     /// the capsule's head, so the contact normal is vertical - the hook leaves
     /// it alone (it only ever touches side contacts) and the solver resolves it
     /// the ordinary way. What must never happen is the creature being driven
@@ -8673,9 +8713,11 @@ mod tests {
     fn a_closing_kinematic_leaf_pushes_a_creature_clear_instead_of_through_the_floor() {
         let (mut world, mut player, creature_id, creature) = live_creature_test_world(2170, 40.0);
         let leaf = add_sweeping_wall(&mut world, 2173);
-        // Parked open, directly over the creature: the leaf's underside (y +
-        // 1.5) clears the capsule's head at y = 2.0, so it walks in freely.
-        world.set_translation(leaf, vec3(0.0, 4.0, 0.0));
+        // Parked open, over the creature but 0.2 to its +x, so the direction it
+        // is pushed follows from the geometry rather than from solver
+        // tie-breaking. The leaf's underside (y - 1.5) clears the capsule's
+        // head at y = 2.0, so the creature stands under it undisturbed.
+        world.set_translation(leaf, vec3(0.2, 4.0, 0.0));
         step_creature_test(&mut world, &mut player, &[creature_id], 30);
 
         let start = world.get_position(creature).unwrap();
@@ -8688,7 +8730,7 @@ mod tests {
         let mut highest = start.y;
         // Closing at the same 2.4 units/s the leaf opens at, down to shut.
         for frame in 1..=75 {
-            world.set_translation(leaf, vec3(0.0, 4.0 - frame as f32 * 0.04, 0.0));
+            world.set_translation(leaf, vec3(0.2, 4.0 - frame as f32 * 0.04, 0.0));
             step_creature_test(&mut world, &mut player, &[creature_id], 1);
             let y = world.get_position(creature).unwrap().y;
             lowest = lowest.min(y);
@@ -8725,10 +8767,11 @@ mod tests {
             start.y,
             end.y
         );
-        // Leaf half-thickness 0.4 + capsule radius 0.5, less Rapier's contact
-        // tolerance: it ends resting against the shut leaf's face, beside it.
+        // Pushed out the -x side (leaf centre 0.2, half-thickness 0.4, capsule
+        // radius 0.5), resting against the shut leaf's face less Rapier's
+        // contact tolerance.
         assert!(
-            end.x.abs() > 0.85,
+            end.x < -0.65,
             "the creature must end pushed clear of the leaf, not inside it: {end:?}"
         );
     }
