@@ -32,6 +32,19 @@ const DOOR = { x: -18.4047, y: 0.5, z: -4.0081162 };
 const SPAWN_STAND = -7.62;
 /** Contact tolerance: settling on the floor moves the body by ~0.005. */
 const LIFT_TOLERANCE = 0.05;
+/**
+ * How far above its resting y a grunt that is *not* being carried can get: its
+ * own gait lifts it by up to ~0.3 over a stride and a step-up. A ride is an
+ * order of magnitude more (1.62 on the parent), so this separates them without
+ * turning a bob into a failure. The sharper discriminator is the speed below.
+ */
+const CARRY_TOLERANCE = 0.6;
+/**
+ * The leaf travels at 2.4 units/s. Friction through a side contact drags the
+ * capsule to the leaf's own speed (+2.2 to +2.28 measured on the parent), so a
+ * creature merely walking beside a travelling leaf stays far under this.
+ */
+const CARRY_SPEED = 1.0;
 
 function body(bodies: PhysicsBodySummary[], label: string): PhysicsBodySummary {
   assert.equal(bodies.length, 1, `expected one ${label} body, got ${bodies.length}`);
@@ -125,16 +138,52 @@ test(
       }
     }
 
+    // Now the leaf goes back up with the grunt still pressed against its face -
+    // the #1255 geometry exactly, and this time the contact is established
+    // rather than hoped for.
+    await game.entities.sendMessage(door.id, { type: "TurnOn" });
+    let riseFrames = 0;
+    let contactWhileRising = 0;
+    let peakWhileRising = resting;
+    let riseSpeedInContact = 0;
+    for (let frame = 0; frame < 150; frame += 1) {
+      await game.step({ frames: 1 });
+      const leaf = body((await game.physics.bodies({ entityId: door.id })).bodies, "door");
+      const actor = body((await game.physics.bodies({ entityId: grunt.id })).bodies, "grunt");
+      if (leaf.velocity[1] > 0.1) {
+        riseFrames += 1;
+        peakWhileRising = Math.max(peakWhileRising, actor.position[1]);
+        const detail = await game.physics.body(actor.body_id);
+        if ((detail.contacts ?? []).includes(leaf.body_id)) {
+          contactWhileRising += 1;
+          riseSpeedInContact = Math.max(riseSpeedInContact, actor.velocity[1]);
+        }
+      }
+    }
+
     assert.ok(leafTravelFrames > 30, `the leaf should travel; saw ${leafTravelFrames} frames`);
     assert.ok(
       touchedTheTravellingLeaf,
       "the grunt must be in contact with the leaf while it travels, or the lift assertion proves nothing",
     );
     assert.ok(
-      peakWhileTravelling - resting < LIFT_TOLERANCE,
+      peakWhileTravelling - resting < CARRY_TOLERANCE,
       `the travelling leaf must not carry the grunt: rest y=${resting}, peak y=${peakWhileTravelling}`,
     );
     assert.ok(crossed, "the grunt should walk through the doorway rather than ride the leaf");
+    assert.ok(riseFrames > 20, `the leaf should rise again; saw ${riseFrames} frames`);
+    assert.ok(
+      contactWhileRising > 0,
+      "the grunt must still be touching the leaf as it rises, or the lift assertion proves nothing",
+    );
+    assert.ok(
+      peakWhileRising - resting < CARRY_TOLERANCE,
+      `the rising leaf must not carry the grunt: rest y=${resting}, peak y=${peakWhileRising}`,
+    );
+    assert.ok(
+      riseSpeedInContact < CARRY_SPEED,
+      `the grunt must not be dragged upward at the leaf's own speed: ${riseSpeedInContact} u/s`,
+    );
 
     // Let it come to a stop: a body mid-stride loses and regains its floor
     // contact frame to frame, so "is it supported" is only a question worth
@@ -145,14 +194,10 @@ test(
       Math.abs(settled.position[1] - resting) < LIFT_TOLERANCE,
       `the grunt must end back on the floor, rest y=${resting}, ended y=${settled.position[1]}`,
     );
-    const settledDetail = await game.physics.body(settled.body_id);
-    assert.ok(
-      settledDetail.contact_count > 0,
-      "the grunt must end touching the world, not hanging in the air",
-    );
-    // Contacts alone say "touching something", not "standing on something".
-    // The floor directly under the capsule is the support: probe for it, and
-    // require it right below the body rather than somewhere further down.
+    // A contact count says "touching something", not "standing on something" -
+    // and a settled body's contacts go inactive once it sleeps, so it does not
+    // even say that reliably. The floor directly under the capsule is the
+    // support: probe for it, and require it right below the body.
     const support = await game.raycast({
       start: [settled.position[0], settled.position[1] + 0.5, settled.position[2]],
       end: [settled.position[0], settled.position[1] - 3.0, settled.position[2]],
