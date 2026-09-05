@@ -458,7 +458,7 @@ attaches them** to the right entities:
 | Script name(s) | Gui | Notes |
 | --- | --- | --- |
 | `keypad`, `keypadunhackable` (`scripts/mod.rs:574-575`) | `KeyPadGui` (`scripts/gui/keypad.rs`) | full digit grid (`key<d>0/1.pcx`), value display, **code check against `PropKeypadCode` + `TurnOn` to all SwitchLinks** (`:216-238`), `bkeypad`/`hacksucc` sounds. This is the logic #435 needs — it only lacks a flat way in. |
-| `containerscript` (`:437`) | `ContainerGui::loot_container()` (`scripts/gui/container.rs:27`) | `contain.pcx` 188×296, 4×4 grid; enumerates the entity's `Contains` links (`:76-93`), renders `PropObjIcon` icons sized by `PropInventoryDimensions`, grab-to-hand + frob msgs (`:170-205`) |
+| `containerscript` (`:437`) | `ContainerGui::loot_container()` (`scripts/gui/container.rs:27`) | hologram grid (`fam/SHODAN/s45.pcx`) 188×152, 4×4 grid; enumerates the entity's `Contains` links (`:76-93`), renders `PropObjIcon` icons sized by `PropInventoryDimensions`, grab-to-hand + frob msgs (`:170-205`) |
 | `internal_inventory` (`:491`) | `ContainerGui::inv_container()` (`container.rs:39`) | `invback.pcx` 635×120, **15×3 grid — the player backpack UI already exists**; attached to the synthetic player-inventory entity (`inventory/player_inventory_entity.rs:20`) |
 | `elevatorbutton` (`:681`) | `ElevatorGui` | floor select |
 | `replicatorscript` (`:718`) | `ReplicatorGui` | purchase panel |

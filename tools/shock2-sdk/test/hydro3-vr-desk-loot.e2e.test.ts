@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
-import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
+import { LOOT_PANEL_SIZE_PX as PANEL_SIZE_PX, add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
 
 // Production-VR regression for #1100. Hydro3 mission Desk #2 (2116) has an
 // authored desk_sd OBB and Contains the deck-3/log-16 Audio Log (200) in its
@@ -25,7 +25,6 @@ const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 const HYDRO3_DESK_2 = 2116;
 const HYDRO3_AUDIO_LOG = 200;
-const PANEL_SIZE_PX: Vec3 = [188, 296, 0];
 const GUI_PIXEL_TO_WORLD_SIZE = 1 / 250;
 
 test(

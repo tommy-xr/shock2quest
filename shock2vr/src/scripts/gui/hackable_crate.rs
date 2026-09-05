@@ -26,6 +26,7 @@
 //! held item is released onto a target - via [`Gui::on_provide_for_consumption`],
 //! so the pick opens the crate instead of being deposited into it.
 
+use cgmath::Vector2;
 use dark::properties::ObjectState;
 use engine::audio::AudioHandle;
 use shipyard::{EntityId, World};
@@ -52,6 +53,18 @@ impl HackableCrateGui {
     pub fn new() -> HackableCrateGui {
         HackableCrateGui {
             loot: ContainerGui::loot_container(),
+        }
+    }
+}
+
+impl HackableCrateGui {
+    /// The HRM board's own canvas: the retail 188x296 MFD art `draw_hack_board`
+    /// lays out, at the loot panel's world placement so the crate's two faces
+    /// appear in the same spot.
+    fn board_config(loot: &ContainerGui) -> GuiConfig {
+        GuiConfig {
+            screen_size_in_pixels: Vector2::new(188.0, 296.0),
+            ..loot.get_config()
         }
     }
 }
@@ -161,10 +174,25 @@ impl Gui<HackableCrateState, HackableCrateMsg> for HackableCrateGui {
     }
 
     fn get_config(&self) -> GuiConfig {
-        // The HRM board and the loot panel share the retail 188x296 MFD
-        // canvas, so the loot panel's own config covers both faces of the
-        // crate - and stays in step with it if that panel ever changes.
-        self.loot.get_config()
+        // A crate starts sealed, so the board is the default face.
+        Self::board_config(&self.loot)
+    }
+
+    /// The crate's two faces have two canvases: the HRM board is the retail
+    /// 188x296 MFD art, while the hacked face is the loot panel, which is only
+    /// as tall as its grid. Sizing the board with the loot panel's config
+    /// would squash the board art and move every one of its buttons.
+    fn get_config_for(
+        &self,
+        entity_id: EntityId,
+        world: &World,
+        _state: &HackableCrateState,
+    ) -> GuiConfig {
+        if is_open(world, entity_id) {
+            self.loot.get_config()
+        } else {
+            Self::board_config(&self.loot)
+        }
     }
 
     /// A crate ruined by a critical failure is finished: frobbing it does
@@ -357,6 +385,38 @@ mod tests {
 
     /// Once hacked, the crate is an ordinary loot container: the contained
     /// clip gets its own clickable slot.
+    /// The crate's two faces have two canvases: sealed, it is the retail
+    /// 188x296 HRM board; hacked, it is the loot panel, which is only as tall
+    /// as its grid. Sizing the board from the loot panel squashes the board
+    /// art and moves every one of its buttons (START included).
+    #[test]
+    fn the_board_keeps_its_own_canvas_when_the_loot_panel_shrinks() {
+        let (mut world, security_crate, _clip) = crate_world();
+        let gui = HackableCrateGui::new();
+        let state = HackableCrateState::default();
+
+        let sealed = gui.get_config_for(security_crate, &world, &state);
+        assert_eq!(sealed.screen_size_in_pixels, Vector2::new(188.0, 296.0));
+        assert_eq!(
+            gui.get_config().screen_size_in_pixels,
+            Vector2::new(188.0, 296.0)
+        );
+
+        world.add_component(security_crate, PropObjState(ObjectState::Hacked));
+        let hacked = gui.get_config_for(security_crate, &world, &state);
+        assert_eq!(
+            hacked.screen_size_in_pixels,
+            ContainerGui::loot_container()
+                .get_config()
+                .screen_size_in_pixels,
+            "a hacked crate is an ordinary loot panel"
+        );
+        assert_eq!(
+            sealed.world_offset, hacked.world_offset,
+            "both faces appear in the same place"
+        );
+    }
+
     #[test]
     fn hacked_crate_shows_its_contents_as_a_loot_panel() {
         let (mut world, security_crate, clip) = crate_world();
@@ -371,8 +431,8 @@ mod tests {
         );
 
         assert!(
-            has_texture(&components, "contain.pcx"),
-            "a hacked crate should draw the loot panel backdrop"
+            has_texture(&components, crate::ui::HOLOGRAM_TILE_TEXTURE),
+            "a hacked crate should draw the loot panel's hologram grid"
         );
         assert!(
             button_for(&components, clip),

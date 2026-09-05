@@ -58,6 +58,45 @@ fn apply_color_key(pixels: &mut [u8], width: u32, height: u32) {
     }
 }
 
+/// Re-key opaque line art as a translucent tinted overlay: every texel's alpha
+/// becomes its luminance and its colour becomes `tint`. Black drops out
+/// completely and a bright line stays solid, so a grid bitmap drawn over the
+/// world reads as a hologram rather than as a black panel.
+pub fn tint_alpha_from_luminance(data: RawTextureData, tint: [u8; 3]) -> RawTextureData {
+    let (stride, has_alpha) = match data.format {
+        PixelFormat::RGB => (3usize, false),
+        PixelFormat::RGBA => (4usize, true),
+    };
+    let count = (data.width * data.height) as usize;
+    let mut out = vec![0u8; count * 4];
+    for i in 0..count {
+        let src = i * stride;
+        let r = data.bytes[src] as u32;
+        let g = data.bytes[src + 1] as u32;
+        let b = data.bytes[src + 2] as u32;
+        // Rec. 601 luma, the usual perceptual weighting.
+        let luma = ((r * 299 + g * 587 + b * 114) / 1000) as u8;
+        // A source alpha (a colour key, say) still wins: a keyed-out texel
+        // must not come back as a lit line.
+        let alpha = if has_alpha {
+            ((luma as u32 * data.bytes[src + 3] as u32) / 255) as u8
+        } else {
+            luma
+        };
+        let dst = i * 4;
+        out[dst] = tint[0];
+        out[dst + 1] = tint[1];
+        out[dst + 2] = tint[2];
+        out[dst + 3] = alpha;
+    }
+    RawTextureData {
+        bytes: out,
+        width: data.width,
+        height: data.height,
+        format: PixelFormat::RGBA,
+    }
+}
+
 /// GL-free PCX dimension read. Reuses the same `pcx::Reader` header parse as the full
 /// decode in `PcxFormat::load`, so `(width, height)` are guaranteed to match
 /// `Texture::width()/height()` — but WITHOUT decoding pixels or touching the GPU. This
@@ -216,6 +255,33 @@ mod tests {
             writer.finish().unwrap();
         }
         assert_eq!(read_pcx_dimensions(&buf), Some((w as u32, h as u32)));
+    }
+
+    #[test]
+    fn luminance_alpha_tint_drops_black_and_keeps_bright_lines() {
+        // One black texel, one near-white line texel.
+        let data = RawTextureData {
+            bytes: vec![0, 0, 0, 255, 246, 247, 255, 255],
+            width: 2,
+            height: 1,
+            format: PixelFormat::RGBA,
+        };
+        let out = tint_alpha_from_luminance(data, [80, 220, 255]);
+        assert_eq!(out.bytes[3], 0, "black must drop out entirely");
+        assert!(out.bytes[7] > 240, "a bright line stays solid");
+        assert_eq!(&out.bytes[4..7], &[80, 220, 255], "lines take the tint");
+    }
+
+    #[test]
+    fn luminance_alpha_tint_respects_a_keyed_out_texel() {
+        let data = RawTextureData {
+            bytes: vec![255, 255, 255, 0],
+            width: 1,
+            height: 1,
+            format: PixelFormat::RGBA,
+        };
+        let out = tint_alpha_from_luminance(data, [80, 220, 255]);
+        assert_eq!(out.bytes[3], 0);
     }
 
     #[test]
