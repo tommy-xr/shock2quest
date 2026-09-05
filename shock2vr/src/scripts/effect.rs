@@ -272,6 +272,21 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// Open the HRM board in modify mode on `entity_id`, a gun that can still
+    /// be modified, in the presentation's panel slot. No-op where that slot is
+    /// not presented.
+    OpenWeaponModify {
+        entity_id: EntityId,
+    },
+
+    /// Raise a gun's `PropGunState.modification` by one, up to the last
+    /// modification a gun can carry. How that level changes the way the gun
+    /// fires is derived from it on every read, so this is the whole of the
+    /// change. No-op for entities without a gun state.
+    ModifyWeapon {
+        entity_id: EntityId,
+    },
+
     /// Eject `entity_id`'s magazine back to the backpack, as clips of the ammo
     /// type the rounds already are. No-op for an empty gun, or one whose
     /// projectile has no clip archetype to return to.

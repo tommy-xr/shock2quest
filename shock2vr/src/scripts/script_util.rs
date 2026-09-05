@@ -278,6 +278,10 @@ pub fn current_gun_setting(world: &World, weapon: EntityId) -> i32 {
 /// `None` when it is not a gun. The setting comes from the weapon's live
 /// `PropGunState` (0 when it has none), and an index the archetype does not
 /// author falls back to setting 0.
+///
+/// The gun's modification level is applied on the way out, so every reader -
+/// firing, reloading, the energy draw - sees the gun as the player has had it
+/// modified without any of them knowing modification exists.
 pub fn active_gun_setting(world: &World, weapon: EntityId) -> Option<GunSettingDesc> {
     let setting = current_gun_setting(world, weapon);
     world
@@ -289,6 +293,7 @@ pub fn active_gun_setting(world: &World, weapon: EntityId) -> Option<GunSettingD
                 .ok()
                 .map(|desc| desc.setting(setting).clone())
         })
+        .map(|desc| crate::scripts::gun_modifications::modified_setting(world, weapon, &desc))
 }
 
 /// A weapon's selectable `Projectile` links (its ammo types), filtered to the
@@ -457,6 +462,28 @@ pub fn gun_setting_description(world: &World, weapon: EntityId, setting: i32) ->
         .borrow::<UniqueView<crate::mission::mission_core::GlobalGunSettingTexts>>()
         .ok()?;
     resolve_setting_string(world, weapon, raw, tables.0.get(setting as usize)?)
+}
+
+/// What `weapon`'s modification number `level` (1 or 2) does, as the gun's own
+/// `P$Modify1`/`P$Modify2` text resolved against the MODIFY1/MODIFY2 string
+/// tables - exactly as the fire-setting text is resolved. `None` for a level
+/// the gun names no text for.
+pub fn modification_description(world: &World, weapon: EntityId, level: i32) -> Option<String> {
+    let raw = match level {
+        1 => world
+            .borrow::<View<dark::properties::PropModification1Text>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|text| text.0.clone())),
+        2 => world
+            .borrow::<View<dark::properties::PropModification2Text>>()
+            .ok()
+            .and_then(|v| v.get(weapon).ok().map(|text| text.0.clone())),
+        _ => return None,
+    };
+    let tables = world
+        .borrow::<UniqueView<crate::mission::mission_core::GlobalModificationTexts>>()
+        .ok()?;
+    resolve_setting_string(world, weapon, raw, tables.0.get(level as usize - 1)?)
 }
 
 /// The ammo index to select after a fire-mode switch. `order` is the ammo

@@ -182,11 +182,12 @@ fn roll_succeeds(roll: i32, chance: i32) -> bool {
 pub(crate) enum HrmMode {
     Hack,
     Repair,
+    Modify,
 }
 
 impl HrmMode {
-    /// The tech level this mode is played at. Repair counts the installed
-    /// repair software on top of the trained skill; the hack mode does not
+    /// The tech level this mode is played at. Repair and modify count their
+    /// installed software on top of the trained skill; the hack mode does not
     /// consult its own software yet. This is the single definition of "how
     /// good is the player at this", so a mode's entry requirement and its
     /// odds can never be judged against different numbers.
@@ -199,6 +200,7 @@ impl HrmMode {
                 match self {
                     HrmMode::Hack => stats.skill_level(Skill::Hack),
                     HrmMode::Repair => stats.skill_level(Skill::Repair) + stats.software.repair,
+                    HrmMode::Modify => stats.skill_level(Skill::Modify) + stats.software.modify,
                 }
             })
             .unwrap_or(0)
