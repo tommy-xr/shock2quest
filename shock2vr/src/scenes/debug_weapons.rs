@@ -68,6 +68,11 @@ const BENCH_AMMO: &[(i32, &str)] = &[
     (-1264, "Large Worm Beaker"),
 ];
 
+/// The maintenance tool, in its own slot down the middle of the bench: worn
+/// guns are restored by releasing it onto them (VR) or using it from the
+/// inventory (flat).
+const BENCH_TOOL: i32 = -2949;
+
 /// The bench sits beside the firing lane on the player's left (+Z with the -X
 /// forward), long axis along X: guns on the outer row, ammo on the inner row.
 const BENCH_HEIGHT: f32 = 1.1;
@@ -237,6 +242,11 @@ impl DebugSceneHooks for ArsenalHooks {
                 Point3::new(x, BENCH_HEIGHT + 0.4, BENCH_Z + 0.5),
             ));
         }
+        // The middle strip of the bench is clear between the two rows.
+        effects.push(spawn_at(
+            BENCH_TOOL,
+            Point3::new(BENCH_NEAR_X, BENCH_HEIGHT + 0.15, BENCH_Z),
+        ));
         for (index, (template_id, _)) in BENCH_AMMO.iter().enumerate() {
             let x = BENCH_NEAR_X - index as f32 * AMMO_SPACING;
             // Zigzag so a bouncing neighbor can't billiard the whole row.

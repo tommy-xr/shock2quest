@@ -343,6 +343,15 @@ pub fn can_cycle_gun_setting(world: &World, weapon: EntityId) -> bool {
     has_second_fire_mode(second_header.as_deref(), &links)
 }
 
+/// The player's level in one skill, or 0 in a world with no character sheet
+/// (the unit-test worlds). Every skill gate reads it the same way.
+pub(crate) fn player_skill_level(world: &World, skill: crate::player_stats::Skill) -> i32 {
+    world
+        .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
+        .map(|quests| quests.player_stats().skill_level(skill))
+        .unwrap_or(0)
+}
+
 /// A gun's condition (`PropGunState`, 0..100), or `None` for a weapon that
 /// tracks none - a melee weapon, the psi amp.
 pub(crate) fn gun_condition(world: &World, entity_id: EntityId) -> Option<f32> {

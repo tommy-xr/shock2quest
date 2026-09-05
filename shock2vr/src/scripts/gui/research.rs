@@ -71,10 +71,7 @@ impl Gui<ResearchGuiState, ResearchGuiMsg> for ResearchGui {
             .get(entity_id)
             .map(|required| required.0.research().max(1))
             .unwrap_or(1);
-        let player_skill = world
-            .borrow::<UniqueView<QuestInfo>>()
-            .map(|quests| quests.player_stats().skill_level(Skill::Research))
-            .unwrap_or(0);
+        let player_skill = crate::scripts::script_util::player_skill_level(world, Skill::Research);
         let status = world
             .borrow::<UniqueView<QuestInfo>>()
             .map(|quests| quests.research().status(template_id, chemicals))

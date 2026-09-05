@@ -40,6 +40,14 @@ const FALLBACK_MOD_LEVEL_LABEL: &str = "Modification Level %d";
 /// verbatim from the shipped MISC.STR (`%s` is the gun's short name).
 const FALLBACK_WEAPON_BREAKS: &str = "%s has broken!";
 
+/// The English fallbacks for the maintenance tool's four refusals, verbatim
+/// from the shipped MISC.STR. `%d` in the skill line is the minimum Maintain
+/// level the weapon authors.
+const FALLBACK_WRENCH_ON_NON_GUN: &str = "Drag tool to ranged weapon to use.";
+const FALLBACK_WRENCH_ON_BROKEN: &str = "Use repair skill on weapon first.";
+const FALLBACK_WRENCH_SKILL_REQ: &str = "Maintaining this weapon requires a skill of %d.";
+const FALLBACK_WRENCH_UNUSED: &str = "Weapon already in good condition.";
+
 /// HUD label strings preloaded from MISC.STR, stored as a world `Unique`
 /// because the readout layout has no `AssetCache` at draw time (the
 /// `ElevatorContext` pattern).
@@ -53,6 +61,17 @@ pub struct HudStrings {
     /// MISC.STR `WeaponBreaks` ("%s has broken!"), the status line a gun posts
     /// when it gives out. The `%s` is the gun's short name.
     pub weapon_breaks_message: String,
+    /// MISC.STR `WrenchOnNonGun`: the maintenance tool was used on something
+    /// that is not a ranged weapon.
+    pub wrench_on_non_gun: String,
+    /// MISC.STR `WrenchOnBroken`: a broken weapon needs repairing, not
+    /// maintaining.
+    pub wrench_on_broken: String,
+    /// MISC.STR `WrenchSkillReq` ("... a skill of %d"): the player's Maintain
+    /// level is below the minimum this weapon authors.
+    pub wrench_skill_req: String,
+    /// MISC.STR `WrenchUnused`: the weapon is already at full condition.
+    pub wrench_unused: String,
 }
 
 impl Default for HudStrings {
@@ -61,6 +80,10 @@ impl Default for HudStrings {
             reload_label: FALLBACK_RELOAD_LABEL.to_owned(),
             mod_level_label: FALLBACK_MOD_LEVEL_LABEL.to_owned(),
             weapon_breaks_message: FALLBACK_WEAPON_BREAKS.to_owned(),
+            wrench_on_non_gun: FALLBACK_WRENCH_ON_NON_GUN.to_owned(),
+            wrench_on_broken: FALLBACK_WRENCH_ON_BROKEN.to_owned(),
+            wrench_skill_req: FALLBACK_WRENCH_SKILL_REQ.to_owned(),
+            wrench_unused: FALLBACK_WRENCH_UNUSED.to_owned(),
         }
     }
 }
@@ -83,6 +106,26 @@ impl HudStrings {
                 strings.as_deref(),
                 "weaponbreaks",
                 FALLBACK_WEAPON_BREAKS,
+            ),
+            wrench_on_non_gun: crate::ui::resolve_menu_label(
+                strings.as_deref(),
+                "wrenchonnongun",
+                FALLBACK_WRENCH_ON_NON_GUN,
+            ),
+            wrench_on_broken: crate::ui::resolve_menu_label(
+                strings.as_deref(),
+                "wrenchonbroken",
+                FALLBACK_WRENCH_ON_BROKEN,
+            ),
+            wrench_skill_req: crate::ui::resolve_menu_label(
+                strings.as_deref(),
+                "wrenchskillreq",
+                FALLBACK_WRENCH_SKILL_REQ,
+            ),
+            wrench_unused: crate::ui::resolve_menu_label(
+                strings.as_deref(),
+                "wrenchunused",
+                FALLBACK_WRENCH_UNUSED,
             ),
         }
     }

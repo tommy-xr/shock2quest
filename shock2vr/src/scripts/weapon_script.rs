@@ -190,11 +190,7 @@ fn weapon_skill_level(world: &World, entity_id: EntityId) -> i32 {
         _ => Skill::StandardWeapons,
     };
 
-    world
-        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-        .ok()
-        .map(|quests| quests.player_stats().skill_level(skill))
-        .unwrap_or(0)
+    crate::scripts::script_util::player_skill_level(world, skill)
 }
 
 /// The chance, 0..1, that the shot about to be fired breaks the gun. Zero at
@@ -413,6 +409,18 @@ impl Script for WeaponScript {
                 };
                 flat_melee_hit(physics, aim, world)
             }
+            // The maintenance tool, offered to this weapon on the port's tool
+            // channel: a VR hand releasing it onto the gun, or the flat
+            // use-mode click on a carried one. The decision lives here, on the
+            // receiving weapon, because everything it turns on - the gun's
+            // condition, its broken state, the Maintain level it authors - is
+            // the weapon's own, and because a gun runs no GuiScript that could
+            // claim the offer the way the security crate claims an ICE Pick.
+            MessagePayload::ProvideForConsumption { entity }
+                if crate::scripts::maintenance::is_maintenance_tool(world, *entity) =>
+            {
+                crate::scripts::maintenance::apply(world, *entity, Some(entity_id))
+            }
             MessagePayload::TriggerRelease => {
                 // An unlimited burst ends with the trigger. A finite one plays
                 // out regardless - letting go of the pistol's BURST one frame
@@ -504,7 +512,10 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
     let wear = (is_gunshot && !is_weapon_stability_active(world))
         .then(|| degrade_per_shot(world, entity_id))
         .flatten()
-        .map(|amount| Effect::DegradeWeaponCondition { entity_id, amount });
+        .map(|amount| Effect::AdjustWeaponCondition {
+            entity_id,
+            delta: -amount,
+        });
 
     // A worn gun can break as the trigger comes back, spending the shot
     // without firing it. The shot still wears the gun down.
@@ -1208,7 +1219,7 @@ mod tests {
         assert!(
             effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::DegradeWeaponCondition { .. })),
+                .any(|effect| matches!(effect, Effect::AdjustWeaponCondition { .. })),
             "the breaking shot still wears the gun"
         );
         assert!(

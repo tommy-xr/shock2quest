@@ -3726,7 +3726,10 @@ impl MissionCore {
             self.script_world.dispatch(msg);
         }
         for action in ui_drag_actions {
-            let drag_effects = self.apply_flat_drag_action(action);
+            // Flattened: an action can answer with a composite (using a
+            // maintenance tool is a restore plus a consume plus a sound), and
+            // this list is applied one variant at a time.
+            let drag_effects = Effect::flatten(self.apply_flat_drag_action(action));
             effects.extend(drag_effects);
         }
 
@@ -4987,25 +4990,16 @@ impl MissionCore {
                 }
             }
             // Double-click = equip/use, acting on the still-contained item -
-            // identical to the ContainerGui backpack click (shared weapon test,
-            // shared effects): a weapon (gun or melee) wields via `GrabEntity`
-            // (which also clears its Contains link and holsters any displaced
-            // weapon back to the grid), anything else gets a `Frob` (use).
+            // literally the ContainerGui backpack click, through the one
+            // routine both share: a weapon (gun or melee) wields via
+            // `GrabEntity` (which also clears its Contains link and holsters
+            // any displaced weapon back to the grid), anything else is used
+            // where it stands.
             FlatUiDragAction::Wield(entity_id) => {
-                if crate::virtual_hand::is_wieldable_weapon(&self.world, entity_id) {
-                    vec![Effect::GrabEntity {
-                        entity_id,
-                        hand: crate::vr_config::Handedness::Right,
-                        current_parent_id: None,
-                    }]
-                } else {
-                    vec![Effect::Send {
-                        msg: Message {
-                            payload: MessagePayload::Frob,
-                            to: entity_id,
-                        },
-                    }]
-                }
+                vec![crate::scripts::maintenance::use_carried_item(
+                    &self.world,
+                    entity_id,
+                )]
             }
         }
     }
@@ -5828,14 +5822,14 @@ impl MissionCore {
                     }
                 }
 
-                Effect::DegradeWeaponCondition { entity_id, amount } => {
+                Effect::AdjustWeaponCondition { entity_id, delta } => {
                     let mut v_gun_state = self
                         .world
                         .borrow::<ViewMut<dark::properties::PropGunState>>()
                         .unwrap();
 
                     if let Ok(gun_state) = (&mut v_gun_state).get(entity_id) {
-                        crate::scripts::effect::degrade_condition(gun_state, amount);
+                        crate::scripts::effect::adjust_condition(gun_state, delta);
                     }
                 }
 

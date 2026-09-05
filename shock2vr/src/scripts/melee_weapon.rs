@@ -16,15 +16,6 @@ use super::{
     script_util::{entity_class_template_id, play_impact_sound},
 };
 
-// Script to handle collision type
-pub struct MeleeWeapon {}
-
-impl MeleeWeapon {
-    pub fn new() -> MeleeWeapon {
-        MeleeWeapon {}
-    }
-}
-
 /// Contact damage for the player's authored melee weapons (`PropLimbModel`).
 ///
 /// The rule is physical: a swing damages because the weapon was closing on
@@ -423,44 +414,6 @@ fn impact_sound_effect(entity_id: EntityId, with: EntityId, world: &World) -> Ef
     }
     let position = get_position_from_transform(world, entity_id, vec3(0.0, 0.0, 0.0));
     play_impact_sound(world, entity_id, with, position.to_vec())
-}
-
-fn melee_impact(
-    entity_id: EntityId,
-    with: EntityId,
-    world: &World,
-    amount: f32,
-    contact: Option<crate::physics::CollisionContact>,
-) -> Effect {
-    Effect::Multiple(vec![
-        contact_damage_effect(with, amount, contact),
-        impact_sound_effect(entity_id, with, world),
-    ])
-}
-
-impl Script for MeleeWeapon {
-    fn handle_message(
-        &mut self,
-        entity_id: EntityId,
-        world: &World,
-        _physics: &PhysicsWorld,
-        msg: &MessagePayload,
-    ) -> Effect {
-        // The legacy literal `wrench` script can still back a VR physical
-        // weapon, but contact is never a flat damage source. Flat player melee
-        // resolves once from WeaponScript at the authored swing event.
-        if !is_vr(world) {
-            return Effect::NoEffect;
-        }
-
-        match msg {
-            // Legacy literal `wrench` script (Maintenance Tool -2949).
-            MessagePayload::Collided { with, contact } => {
-                melee_impact(entity_id, *with, world, 1.0, *contact)
-            }
-            _ => Effect::NoEffect,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1182,26 +1135,5 @@ mod tests {
             collide(&mut script, &world, weapon, target),
             Effect::NoEffect
         ));
-    }
-
-    #[test]
-    fn legacy_melee_collision_is_inert_outside_vr() {
-        let (world, weapon, target) = test_world(PresentationMode::Flat);
-
-        let effect = MeleeWeapon::new().handle_message(
-            weapon,
-            &world,
-            &PhysicsWorld::new(),
-            &MessagePayload::Collided {
-                with: target,
-                contact: Some(crate::physics::CollisionContact {
-                    point: vec3(2.0, 3.0, 4.0),
-                    normal: vec3(1.0, 0.0, 0.0),
-                    closing_speed: None,
-                }),
-            },
-        );
-
-        assert!(matches!(effect, Effect::NoEffect));
     }
 }

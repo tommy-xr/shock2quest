@@ -39,6 +39,7 @@ pub(crate) mod internal_radiation_source;
 mod internal_simple_health;
 mod internal_switch_held_model;
 mod level_change_button;
+pub mod maintenance;
 mod many_ride;
 mod melee_weapon;
 mod obj_consume_button;
@@ -168,7 +169,7 @@ use self::{
     internal_simple_health::InternalSimpleHealth,
     level_change_button::LevelChangeButton,
     many_ride::{ParalyzePlayers, SitDownRightNow, StandUpAgain, WhiteOut},
-    melee_weapon::{HeldMeleeWeapon, MeleeWeapon},
+    melee_weapon::HeldMeleeWeapon,
     obj_consume_button::ObjConsumeButton,
     once_room::OnceRoom,
     once_router::OnceRouter,
@@ -1075,10 +1076,11 @@ impl ScriptWorld {
             "energyweapon" => Box::new(EnergyWeapon::new()),
             "grenademodify" => Box::new(NoopScript::new()),
             "weapontrainer" => gui_script(Box::new(TrainerGui::new(TrainerMode::Weapons))),
-            "wrench" => Box::new(CompositeScript::new(vec![
-                Box::new(MeleeWeapon::new()),
-                Box::new(InternalSwitchHeldModelScript::new()),
-            ])),
+            // The maintenance tool (gamesys -2949 - not the melee wrench,
+            // which is an ordinary `WeaponScript`). It carries no behavior of
+            // its own: the weapon it is applied to claims it off the tool
+            // channel (see `scripts::maintenance`).
+            "wrench" => Box::new(NoopScript::new()),
             "psiampscript" => Box::new(CompositeScript::new(vec![
                 Box::new(PsiAmpScript::new()),
                 Box::new(InternalSwitchHeldModelScript::new()),

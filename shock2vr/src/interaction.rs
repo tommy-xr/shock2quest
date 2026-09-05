@@ -25,7 +25,7 @@ use crate::{
     hud::create_arm_hud_panels,
     input_context::InputContext,
     physics::PhysicsWorld,
-    virtual_hand::{VirtualHand, VirtualHandEffect},
+    virtual_hand::{VirtualHand, VirtualHandEffect, hand_world_position},
     vr_config::Handedness,
 };
 
@@ -226,6 +226,14 @@ impl PlayerInteraction for VrInteraction {
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
         let left_held_entity = self.left_hand.get_held_entity();
+        // Both hands' positions come from this frame's input, before either
+        // update: the two-hand gesture must read the same distance whichever
+        // hand releases.
+        let hand_position = |hand: &crate::input_context::Hand| {
+            hand_world_position(ctx.player_pos, ctx.player_rotation, hand.position)
+        };
+        let left_position = hand_position(&ctx.input.left_hand);
+        let right_position = hand_position(&ctx.input.right_hand);
         let (right_hand, mut right_msgs) = VirtualHand::update(
             &self.right_hand,
             ctx.physics,
@@ -234,6 +242,7 @@ impl PlayerInteraction for VrInteraction {
             ctx.player_rotation,
             &ctx.input.right_hand,
             left_held_entity,
+            left_position,
         );
         self.right_hand = right_hand;
 
@@ -248,6 +257,7 @@ impl PlayerInteraction for VrInteraction {
             ctx.player_rotation,
             &ctx.input.left_hand,
             right_held_entity,
+            right_position,
         );
         self.left_hand = left_hand;
 
