@@ -641,10 +641,15 @@ pub enum Effect {
     /// Pivot in place with the creature's own authored turn clip: the applier
     /// picks the stand-schema clip whose authored facing change is nearest
     /// `delta` and plays it, reporting back with `TurnClipStarted`. No clip
-    /// covers a small pivot, and a creature without turn clips gets none - in
-    /// both cases nothing plays and no report comes back.
+    /// covers a small pivot, and a creature without turn clips gets none -
+    /// then nothing plays and the applier answers `TurnClipCancelled`.
+    ///
+    /// Every answer echoes `token`, so a report belonging to a pivot the
+    /// requester has already abandoned is recognisable and ignorable.
     PlayTurnClip {
         entity_id: EntityId,
+        /// This request's identity, echoed by every report about it.
+        token: u64,
         delta: cgmath::Deg<f32>,
         /// The longest turn the creature can afford to stand still for.
         max_seconds: f32,

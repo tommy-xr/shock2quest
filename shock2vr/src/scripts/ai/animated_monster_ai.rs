@@ -171,20 +171,12 @@ pub(crate) fn frustration_gesture_allowed(
         && !matches!(target_distance, Some(d) if d <= MELEE_ATTACK_RANGE)
 }
 
-/// How long to wait for the applier to report which clip it picked. The report
-/// comes back on the next frame, so this only bounds a pivot that resolves to
-/// no clip at all and never reports one.
-const TURN_CLIP_REPORT_TIMEOUT: f32 = 0.25;
-
-/// How long past its authored length a turn clip may run before the pivot
-/// gives up on ever seeing it complete.
-const TURN_CLIP_OVERRUN_MARGIN: f32 = 0.25;
-
-/// How early a completion may arrive and still be the turn clip's own. Any
-/// other clip that preempted it completes far sooner than this (a run cycle is
-/// a third of a second), and settling on one of those would swing the AI
-/// through the authored turn with a neutral pose.
-const TURN_CLIP_COMPLETION_SLACK: f32 = 0.25;
+/// How long the pivot waits, after its clip has ended, for the applier to name
+/// the fade the following clip starts on. The report arrives as soon as the AI
+/// queues anything at all - normally the very next frame - so this only bounds
+/// a creature that queues nothing (its behavior ended with the pivot), which
+/// would otherwise hold its heading forever.
+const TURN_CLIP_HANDOFF_TIMEOUT: f32 = 0.5;
 
 /// The longest a creature may stand still to perform a pivot. The stock turn
 /// clips run 2.4-5.6 s; one long enough to read as a wedge (the reachability
@@ -198,32 +190,34 @@ const TURN_CLIP_MAX_SECONDS: f32 = 4.0;
 /// window, which has to outlast the path follower's own recovery.
 const TURN_CLIP_COOLDOWN: f32 = 3.0;
 
-/// Fallback for a clip that authors no blend length. The turn clip's pose
-/// swings back to neutral over the blend as the next clip fades in, so the
-/// entity takes the authored facing change over exactly the same window and
-/// the creature's visible facing never jumps.
-const TURN_CLIP_SETTLE_SECONDS: f32 = 0.5;
-
 /// A pivot being played as the creature's own authored turn clip. The clip's
 /// POSE does the visible turning, so the script holds its heading while the
 /// clip runs and only then takes the authored facing change.
+/// Every state carries the request token the applier echoes, so a report about
+/// a pivot this AI has already abandoned is recognised and dropped instead of
+/// committing a turn nothing is performing.
 enum TurnClip {
     /// Asked for; waiting for the applier to say which clip it picked.
-    Requested { remaining: f32 },
+    Requested { token: u64 },
     /// Playing: the pose is doing the turning, so the entity holds still.
-    Playing {
+    Playing { token: u64, turn: Deg<f32> },
+    /// The clip has ended; waiting for the applier to report the fade the
+    /// clip that follows it starts on.
+    HandingOver {
+        token: u64,
         turn: Deg<f32>,
         remaining: f32,
-        /// The clip's authored blend length - the window the pose takes to
-        /// swing back to neutral once it ends.
-        blend: f32,
     },
-    /// Done: the entity takes the clip's authored facing change across the
-    /// blend that swings the pose back to neutral.
+    /// Handing over: the entity takes the clip's authored facing change across
+    /// the very fade the animation player is running, on the same curve, so
+    /// the facing the pose gives up and the facing the entity takes cancel out
+    /// frame for frame.
     Settling {
         turn: Deg<f32>,
-        remaining: f32,
-        /// The blend window this is spread over.
+        /// The heading the clip ended on - the anchor the eased fraction of
+        /// `turn` is added to, so rounding cannot accumulate across the fade.
+        base: Deg<f32>,
+        elapsed: f32,
         window: f32,
     },
 }
@@ -330,6 +324,8 @@ pub struct AnimatedMonsterAI {
     turn_clip: Option<TurnClip>,
     /// Seconds left before this AI may perform another pivot
     turn_cooldown: f32,
+    /// Monotonic identity for pivot requests - see `TurnClip`
+    turn_token: u64,
 }
 
 impl AnimatedMonsterAI {
@@ -357,6 +353,7 @@ impl AnimatedMonsterAI {
             frustration_cooldown: 0.0,
             turn_clip: None,
             turn_cooldown: 0.0,
+            turn_token: 0,
         }
     }
 
@@ -385,6 +382,7 @@ impl AnimatedMonsterAI {
             frustration_cooldown: 0.0,
             turn_clip: None,
             turn_cooldown: 0.0,
+            turn_token: 0,
         }
     }
 
@@ -699,6 +697,9 @@ impl AnimatedMonsterAI {
         self.alertness.visible_time = 0.0;
         self.alertness.hidden_time = 0.0;
 
+        // The new behavior wants a different heading, and the clip performing
+        // the old pivot is about to be replaced.
+        self.cancel_turn_clip(entity_id, "its behavior changed");
         self.current_behavior = self.behavior_for_alertness(world, Some(physics), entity_id);
         alertness::sync_alertness_effect(entity_id, &self.alertness)
     }
@@ -739,6 +740,7 @@ impl AnimatedMonsterAI {
     /// re-dispatch queued when no crumple motion is found), so the crumple
     /// and death sound play only once.
     fn enter_death(&mut self, world: &World, entity_id: EntityId) -> Effect {
+        self.cancel_turn_clip(entity_id, "it died mid-turn");
         self.current_behavior = Box::new(RefCell::new(DeadBehavior {}));
         self.is_dead = true;
         // Anchor the ragdoll-handoff timer to the crumple's actual start
@@ -897,67 +899,99 @@ impl AnimatedMonsterAI {
                 if !(may_start && stopped && self.turn_cooldown <= 0.0) {
                     return (Effect::NoEffect, false);
                 }
-                tracing::debug!("ai {:?} pivots {:?}", entity_id, delta);
-                self.turn_clip = Some(TurnClip::Requested {
-                    remaining: TURN_CLIP_REPORT_TIMEOUT,
-                });
+                self.turn_token += 1;
+                let token = self.turn_token;
+                tracing::debug!("ai {:?} pivots {:?} (turn {})", entity_id, delta, token);
+                self.turn_clip = Some(TurnClip::Requested { token });
                 (
                     Effect::PlayTurnClip {
                         entity_id,
+                        token,
                         delta,
                         max_seconds: TURN_CLIP_MAX_SECONDS,
                     },
                     true,
                 )
             }
-            Some(TurnClip::Requested { remaining }) => {
-                *remaining -= elapsed;
-                if *remaining > 0.0 {
-                    return (Effect::NoEffect, true);
-                }
-                // No clip covers this pivot - it is bigger than the ones the
-                // creature can afford, or its schema has none. Steer the turn,
-                // and let the cooldown space out the asking.
-                tracing::debug!("ai {:?} has no clip for its pivot", entity_id);
-                self.turn_clip = None;
-                self.turn_cooldown = TURN_CLIP_COOLDOWN;
-                (Effect::NoEffect, false)
+            // Both wait on the applier, which answers every request (with the
+            // clip it started, or a cancellation) and reports the clip's own
+            // completion - so neither needs a clock of its own.
+            Some(TurnClip::Requested { .. }) | Some(TurnClip::Playing { .. }) => {
+                (Effect::NoEffect, true)
             }
-            Some(TurnClip::Playing { remaining, .. }) => {
+            Some(TurnClip::HandingOver {
+                turn, remaining, ..
+            }) => {
                 *remaining -= elapsed;
                 if *remaining > 0.0 {
                     return (Effect::NoEffect, true);
                 }
-                // The completion never came - something preempted the clip.
-                tracing::debug!("ai {:?} lost its turn clip", entity_id);
-                self.turn_clip = None;
-                self.turn_cooldown = TURN_CLIP_COOLDOWN;
-                (Effect::NoEffect, false)
+                // Nothing followed the clip, so there is no fade to spread the
+                // facing change over: take it whole, exactly as a zero-length
+                // fade would.
+                let turn = *turn;
+                self.finish_pivot(entity_id, Deg(self.current_heading.0 + turn.0));
+                (Effect::NoEffect, true)
             }
             Some(TurnClip::Settling {
                 turn,
-                remaining,
+                base,
+                elapsed: settled,
                 window,
             }) => {
-                let step = elapsed.min(*remaining);
-                let turn = *turn;
-                let window = *window;
-                *remaining -= step;
-                // Rounding leaves a sliver of the last frame behind; anything
-                // this short is the end of the blend, not another frame of it.
-                let finished = *remaining <= 1e-4;
-                self.current_heading = Deg(self.current_heading.0 + turn.0 * step / window);
-                if finished {
-                    tracing::debug!(
-                        "ai {:?} finished its pivot facing {:?}",
-                        entity_id,
-                        self.current_heading
-                    );
-                    self.turn_clip = None;
-                    self.turn_cooldown = TURN_CLIP_COOLDOWN;
+                *settled += elapsed;
+                let t = (*settled / *window).clamp(0.0, 1.0);
+                // The animation player's own cross-fade weight: the pose gives
+                // up `alpha` of the turn it was holding this frame, so the
+                // entity takes exactly `alpha` of it back.
+                let heading = Deg(base.0 + turn.0 * dark::motion::blend_alpha(t));
+                if t >= 1.0 {
+                    self.finish_pivot(entity_id, heading);
+                } else {
+                    self.current_heading = heading;
                 }
                 (Effect::NoEffect, true)
             }
+        }
+    }
+
+    /// End the pivot on `heading`, and space the next one out.
+    fn finish_pivot(&mut self, entity_id: EntityId, heading: Deg<f32>) {
+        self.current_heading = heading;
+        tracing::debug!("ai {:?} finished its pivot facing {:?}", entity_id, heading);
+        self.turn_clip = None;
+        self.turn_cooldown = TURN_CLIP_COOLDOWN;
+    }
+
+    /// Drop a pivot in flight without taking its authored facing change.
+    ///
+    /// Whatever preempted the turn clip - a wound reaction, a behavior swap, a
+    /// door to wait at, death - took the pose that was turning the body with
+    /// it, so committing the turn now would swing the creature through it with
+    /// nothing to show for it. A pivot already `Settling` is past that: its
+    /// facing change is being taken against a fade that is really running, so
+    /// it is left to finish.
+    fn cancel_turn_clip(&mut self, entity_id: EntityId, reason: &str) {
+        if matches!(
+            self.turn_clip,
+            Some(TurnClip::Requested { .. })
+                | Some(TurnClip::Playing { .. })
+                | Some(TurnClip::HandingOver { .. })
+        ) {
+            tracing::debug!("ai {:?} drops its pivot: {}", entity_id, reason);
+            self.turn_clip = None;
+            self.turn_cooldown = TURN_CLIP_COOLDOWN;
+        }
+    }
+
+    /// The token of the pivot in flight, if any - a report echoing anything
+    /// else belongs to a pivot already abandoned.
+    fn turn_clip_token(&self) -> Option<u64> {
+        match &self.turn_clip {
+            Some(TurnClip::Requested { token })
+            | Some(TurnClip::Playing { token, .. })
+            | Some(TurnClip::HandingOver { token, .. }) => Some(*token),
+            Some(TurnClip::Settling { .. }) | None => None,
         }
     }
 
@@ -1438,6 +1472,11 @@ impl Script for AnimatedMonsterAI {
         // through it, so heading, whiskers, crowd repel and the route itself
         // stay live while the creature stands.
         let door_wait_seconds = self.update_door_wait(world, entity_id, time);
+        // A door to stand off from outranks a pivot: the AI is no longer
+        // turning toward anything, it is waiting.
+        if door_wait_seconds.is_some() {
+            self.cancel_turn_clip(entity_id, "it is waiting on a door");
+        }
         // The pivot in flight, as of last frame: one started this frame is
         // published on the next, and one ending is held a frame longer. Both
         // edges cost a single 16 ms frame either way.
@@ -1595,6 +1634,9 @@ impl Script for AnimatedMonsterAI {
                 }
                 // TODO: Let behavior handle this?
                 self.took_damage = true;
+                // The wound reaction takes the turn clip's place, so the turn
+                // it was performing must not be taken.
+                self.cancel_turn_clip(entity_id, "it was hit mid-turn");
                 let hit_points_effect = Effect::AdjustHitPoints {
                     entity_id,
                     delta: -(amount.round() as i32),
@@ -1742,59 +1784,70 @@ impl Script for AnimatedMonsterAI {
                 // cancels scripted sequences
                 self.force_alertness(*level, world, physics, entity_id)
             }
-            MessagePayload::TurnClipStarted {
-                turn,
-                duration,
-                blend,
-            } => {
-                if matches!(self.turn_clip, Some(TurnClip::Requested { .. })) {
-                    // Hold the heading for as long as the clip actually runs,
-                    // plus a margin: the completion is what normally ends the
-                    // pivot, this only bounds a clip that is preempted.
-                    self.turn_clip = Some(TurnClip::Playing {
-                        turn: *turn,
-                        remaining: duration + TURN_CLIP_OVERRUN_MARGIN,
-                        blend: if *blend > 0.0 {
-                            *blend
+            MessagePayload::TurnClipStarted { token, turn } => {
+                if let Some(TurnClip::Requested { token: pending }) = self.turn_clip {
+                    if pending == *token {
+                        self.turn_clip = Some(TurnClip::Playing {
+                            token: *token,
+                            turn: *turn,
+                        });
+                    }
+                }
+                Effect::NoEffect
+            }
+            MessagePayload::TurnClipCompleted { token } => {
+                if let Some(TurnClip::Playing {
+                    token: pending,
+                    turn,
+                }) = self.turn_clip
+                {
+                    if pending == *token {
+                        // The clip's pose still holds the full turn; the fade
+                        // into whatever comes next is what gives it up, and
+                        // the applier reports that fade as `TurnClipHandoff`.
+                        self.turn_clip = Some(TurnClip::HandingOver {
+                            token: *token,
+                            turn,
+                            remaining: TURN_CLIP_HANDOFF_TIMEOUT,
+                        });
+                    }
+                }
+                Effect::NoEffect
+            }
+            MessagePayload::TurnClipCancelled { token } => {
+                if self.turn_clip_token() == Some(*token) {
+                    self.cancel_turn_clip(entity_id, "no clip is performing it");
+                }
+                Effect::NoEffect
+            }
+            MessagePayload::TurnClipHandoff { token, blend } => {
+                if let Some(TurnClip::HandingOver {
+                    token: pending,
+                    turn,
+                    ..
+                }) = self.turn_clip
+                {
+                    if pending == *token {
+                        if *blend > 0.0 {
+                            self.turn_clip = Some(TurnClip::Settling {
+                                turn,
+                                base: self.current_heading,
+                                elapsed: 0.0,
+                                window: *blend,
+                            });
                         } else {
-                            TURN_CLIP_SETTLE_SECONDS
-                        },
-                    });
+                            // Nothing to spread it over: the pose drops the
+                            // turn in one frame, so the entity takes it in the
+                            // same one and the visible facing still matches.
+                            self.finish_pivot(entity_id, Deg(self.current_heading.0 + turn.0));
+                        }
+                    }
                 }
                 Effect::NoEffect
             }
             MessagePayload::AnimationCompleted => {
-                // The turn clip is done: take its authored facing change as
-                // the pose blends back to neutral.
-                //
-                // Only the turn clip's OWN completion may do that. The
-                // behavior's clip is re-queued the moment the pivot ends and
-                // completes a fraction of a second later, and anything that
-                // preempts the turn clip (a wound reaction, an alertness
-                // change) completes long before it would have - settling on
-                // one of those swings the AI through the authored turn with a
-                // neutral pose. `remaining` counts down the clip's own
-                // runtime, so only a completion arriving near the end of it is
-                // the clip's own; anything earlier means the pivot's clip is
-                // gone.
-                if let Some(TurnClip::Playing {
-                    turn,
-                    remaining,
-                    blend,
-                }) = self.turn_clip
-                {
-                    if remaining <= TURN_CLIP_OVERRUN_MARGIN + TURN_CLIP_COMPLETION_SLACK {
-                        self.turn_clip = Some(TurnClip::Settling {
-                            turn,
-                            remaining: blend,
-                            window: blend,
-                        });
-                    } else {
-                        tracing::debug!("ai {:?} lost its turn clip to another", entity_id);
-                        self.turn_clip = None;
-                        self.turn_cooldown = TURN_CLIP_COOLDOWN;
-                    }
-                }
+                // A pivot's own completion arrives as `TurnClipCompleted`
+                // instead - only the applier can tell whose clip finished.
                 if self.is_dead {
                     // The crumple->ragdoll handoff is timed from update()
                     // (CRUMPLE_HANDOFF_SECONDS), not completion-driven - a
@@ -2197,34 +2250,63 @@ mod tests {
         (requested, held)
     }
 
+    fn tell(
+        monster: &mut AnimatedMonsterAI,
+        world: &World,
+        entity_id: EntityId,
+        msg: MessagePayload,
+    ) {
+        monster.handle_message(entity_id, world, &PhysicsWorld::new(), &msg);
+    }
+
+    /// The token of the pivot in flight - what the applier echoes back.
+    fn pending_token(monster: &AnimatedMonsterAI) -> u64 {
+        monster
+            .turn_clip_token()
+            .expect("a pivot must be in flight to be reported on")
+    }
+
     /// Report the clip the applier picked for a pivot in flight.
     fn report_clip(
         monster: &mut AnimatedMonsterAI,
         world: &World,
         entity_id: EntityId,
         turn: Deg<f32>,
-        duration: f32,
     ) {
-        monster.handle_message(
-            entity_id,
+        let token = pending_token(monster);
+        tell(
+            monster,
             world,
-            &PhysicsWorld::new(),
-            &MessagePayload::TurnClipStarted {
-                turn,
-                duration,
-                blend: TURN_CLIP_SETTLE_SECONDS,
-            },
+            entity_id,
+            MessagePayload::TurnClipStarted { token, turn },
         );
     }
 
     fn complete_clip(monster: &mut AnimatedMonsterAI, world: &World, entity_id: EntityId) {
-        monster.handle_message(
-            entity_id,
+        let token = pending_token(monster);
+        tell(
+            monster,
             world,
-            &PhysicsWorld::new(),
-            &MessagePayload::AnimationCompleted,
+            entity_id,
+            MessagePayload::TurnClipCompleted { token },
         );
     }
+
+    /// The applier reporting the fade the clip that follows the pivot starts
+    /// on - the window the yaw hands over across.
+    fn hand_off(monster: &mut AnimatedMonsterAI, world: &World, entity_id: EntityId, blend: f32) {
+        let token = pending_token(monster);
+        tell(
+            monster,
+            world,
+            entity_id,
+            MessagePayload::TurnClipHandoff { token, blend },
+        );
+    }
+
+    /// The blend the stock turn clips author, and the window every settling
+    /// test below hands over across.
+    const TEST_BLEND: f32 = 0.5;
 
     /// Hold the pivot for `seconds` of 100ms frames, as the clip plays.
     fn play_out(monster: &mut AnimatedMonsterAI, entity_id: EntityId, seconds: f32) {
@@ -2329,7 +2411,7 @@ mod tests {
     fn the_body_holds_its_heading_and_stride_while_the_clip_plays() {
         let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
         turn_frame(&mut monster, entity_id, Deg(90.0));
-        report_clip(&mut monster, &world, entity_id, Deg(-168.0), 4.8);
+        report_clip(&mut monster, &world, entity_id, Deg(-168.0));
 
         for _ in 0..10 {
             let (requested, held) = turn_frame(&mut monster, entity_id, Deg(90.0));
@@ -2358,11 +2440,12 @@ mod tests {
     fn the_authored_turn_lands_on_the_entity_once_the_clip_ends() {
         let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
         turn_frame(&mut monster, entity_id, Deg(90.0));
-        report_clip(&mut monster, &world, entity_id, Deg(-168.0), 4.8);
+        report_clip(&mut monster, &world, entity_id, Deg(-168.0));
         play_out(&mut monster, entity_id, 4.8);
         complete_clip(&mut monster, &world, entity_id);
+        hand_off(&mut monster, &world, entity_id, TEST_BLEND);
 
-        // The settle is the clip's blend length, in 100ms frames.
+        // The settle is the reported fade, in 100ms frames.
         for _ in 0..5 {
             assert!(turn_frame(&mut monster, entity_id, Deg(90.0)).1);
         }
@@ -2382,13 +2465,10 @@ mod tests {
     #[test]
     fn a_pivot_cannot_hold_long_enough_to_look_stuck() {
         // The reachability harness treats holding one spot for 6s as wedged.
-        assert!(
-            TURN_CLIP_REPORT_TIMEOUT
-                + TURN_CLIP_MAX_SECONDS
-                + TURN_CLIP_OVERRUN_MARGIN
-                + TURN_CLIP_SETTLE_SECONDS
-                < 6.0
-        );
+        // The stock clips author blends of at most half a second, which is
+        // the longest fade a handover can be spread over.
+        const LONGEST_STOCK_BLEND: f32 = 0.5;
+        assert!(TURN_CLIP_MAX_SECONDS + TURN_CLIP_HANDOFF_TIMEOUT + LONGEST_STOCK_BLEND < 6.0);
     }
 
     /// Two pivots back to back hold the creature still for longer than either
@@ -2397,9 +2477,10 @@ mod tests {
     fn a_second_pivot_waits_for_the_cooldown() {
         let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
         turn_frame(&mut monster, entity_id, Deg(90.0));
-        report_clip(&mut monster, &world, entity_id, Deg(-100.0), 2.4);
+        report_clip(&mut monster, &world, entity_id, Deg(-100.0));
         play_out(&mut monster, entity_id, 2.4);
         complete_clip(&mut monster, &world, entity_id);
+        hand_off(&mut monster, &world, entity_id, TEST_BLEND);
         for _ in 0..6 {
             turn_frame(&mut monster, entity_id, Deg(90.0));
         }
@@ -2420,10 +2501,35 @@ mod tests {
     fn a_later_clip_completing_does_not_restart_the_blend() {
         let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
         turn_frame(&mut monster, entity_id, Deg(90.0));
-        report_clip(&mut monster, &world, entity_id, Deg(-168.0), 4.8);
+        report_clip(&mut monster, &world, entity_id, Deg(-168.0));
+        let token = pending_token(&monster);
         play_out(&mut monster, entity_id, 4.8);
+        complete_clip(&mut monster, &world, entity_id);
+        hand_off(&mut monster, &world, entity_id, TEST_BLEND);
         for _ in 0..2 {
-            complete_clip(&mut monster, &world, entity_id);
+            // Everything the behavior's own re-queued clip reports next:
+            // its plain completion, and the pivot's reports replayed.
+            tell(
+                &mut monster,
+                &world,
+                entity_id,
+                MessagePayload::AnimationCompleted,
+            );
+            tell(
+                &mut monster,
+                &world,
+                entity_id,
+                MessagePayload::TurnClipCompleted { token },
+            );
+            tell(
+                &mut monster,
+                &world,
+                entity_id,
+                MessagePayload::TurnClipHandoff {
+                    token,
+                    blend: TEST_BLEND,
+                },
+            );
             for _ in 0..3 {
                 turn_frame(&mut monster, entity_id, Deg(90.0));
             }
@@ -2438,38 +2544,174 @@ mod tests {
         );
     }
 
-    /// Anything that preempts the turn clip - a wound reaction, an alertness
-    /// change - completes long before the clip would have. Taking the authored
-    /// turn then would swing the AI through it with a neutral pose.
+    /// The applier reports on the pivot it was asked for by token. A report
+    /// from an EARLIER pivot - one this AI has already abandoned and asked
+    /// again after - must not settle the one in flight.
     #[test]
-    fn a_completion_that_arrives_early_is_not_the_turn_clip() {
+    fn a_completion_carrying_a_stale_token_is_ignored() {
         let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
         turn_frame(&mut monster, entity_id, Deg(90.0));
-        report_clip(&mut monster, &world, entity_id, Deg(-168.0), 4.8);
-        play_out(&mut monster, entity_id, 0.5);
-        complete_clip(&mut monster, &world, entity_id);
+        report_clip(&mut monster, &world, entity_id, Deg(-168.0));
+        let stale = pending_token(&monster) - 1;
 
-        assert!(monster.turn_clip.is_none(), "the pivot is abandoned");
-        assert_eq!(
-            monster.current_heading,
-            Deg(-90.0),
-            "a turn whose pose never played must not land on the entity"
+        tell(
+            &mut monster,
+            &world,
+            entity_id,
+            MessagePayload::TurnClipCompleted { token: stale },
         );
-    }
-
-    /// A creature whose schema has no turn clip for the pivot never gets a
-    /// report back; it must fall back to steering instead of standing there.
-    #[test]
-    fn an_unanswered_pivot_falls_back_to_steering() {
-        let (_world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
-        assert!(turn_frame(&mut monster, entity_id, Deg(90.0)).0.is_some());
-        for _ in 0..10 {
+        assert!(
+            matches!(monster.turn_clip, Some(TurnClip::Playing { .. })),
+            "a completion from another pivot must not end this one"
+        );
+        tell(
+            &mut monster,
+            &world,
+            entity_id,
+            MessagePayload::TurnClipHandoff {
+                token: stale,
+                blend: TEST_BLEND,
+            },
+        );
+        for _ in 0..8 {
             turn_frame(&mut monster, entity_id, Deg(90.0));
         }
         assert_eq!(
+            monster.current_heading,
+            Deg(-90.0),
+            "and must not hand the turn over either"
+        );
+    }
+
+    /// Anything that preempts the clip takes the pose that was turning the
+    /// body with it, so the pending turn is dropped rather than committed.
+    #[test]
+    fn a_preempting_clip_drops_the_pending_turn() {
+        for preempt in [
+            MessagePayload::TurnClipCancelled { token: 1 },
+            MessagePayload::Damage {
+                amount: 1.0,
+                impact: None,
+            },
+        ] {
+            let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+            turn_frame(&mut monster, entity_id, Deg(90.0));
+            report_clip(&mut monster, &world, entity_id, Deg(-168.0));
+            play_out(&mut monster, entity_id, 2.0);
+
+            tell(&mut monster, &world, entity_id, preempt);
+            assert!(monster.turn_clip.is_none(), "the pivot is abandoned");
+
+            // Nothing may resurrect it afterwards - not the preempting clip's
+            // own completion, nor a handover report still in flight.
+            tell(
+                &mut monster,
+                &world,
+                entity_id,
+                MessagePayload::AnimationCompleted,
+            );
+            tell(
+                &mut monster,
+                &world,
+                entity_id,
+                MessagePayload::TurnClipHandoff {
+                    token: 1,
+                    blend: TEST_BLEND,
+                },
+            );
+            for _ in 0..8 {
+                turn_frame(&mut monster, entity_id, Deg(90.0));
+            }
+            assert_eq!(
+                monster.current_heading,
+                Deg(-90.0),
+                "a turn whose pose stopped playing must not land on the entity"
+            );
+        }
+    }
+
+    /// The yaw hands over on the fade the animation player is REALLY running -
+    /// which `queue_animation` takes from the INCOMING clip, and a locomotion
+    /// clip authors no blend at all. Over a zero fade the pose drops the turn
+    /// in one frame, so the entity must take it in the same one.
+    #[test]
+    fn a_zero_blend_follow_up_hands_the_turn_over_at_once() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        turn_frame(&mut monster, entity_id, Deg(90.0));
+        report_clip(&mut monster, &world, entity_id, Deg(-168.0));
+        play_out(&mut monster, entity_id, 2.4);
+        complete_clip(&mut monster, &world, entity_id);
+        hand_off(&mut monster, &world, entity_id, 0.0);
+
+        assert!(monster.turn_clip.is_none(), "there is no fade to wait for");
+        assert!(
+            (monster.current_heading.0 - (-90.0 - 168.0)).abs() < 1e-3,
+            "the whole turn lands with the pose that gave it up, heading is {:?}",
+            monster.current_heading
+        );
+    }
+
+    /// ...and over a fade that does run, the yaw tracks the player's own
+    /// cross-fade weight frame for frame - not a linear ramp, which would
+    /// lead the pose by up to a fifth of the turn mid-fade.
+    #[test]
+    fn the_yaw_follows_the_players_blend_curve() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        turn_frame(&mut monster, entity_id, Deg(90.0));
+        report_clip(&mut monster, &world, entity_id, Deg(-168.0));
+        play_out(&mut monster, entity_id, 2.4);
+        complete_clip(&mut monster, &world, entity_id);
+        // A 400ms fade, walked in the 100ms frames `turn_frame` uses.
+        hand_off(&mut monster, &world, entity_id, 0.4);
+
+        for step in 1..=4 {
+            turn_frame(&mut monster, entity_id, Deg(90.0));
+            let t = step as f32 / 4.0;
+            let expected = -90.0 - 168.0 * dark::motion::blend_alpha(t);
+            assert!(
+                (monster.current_heading.0 - expected).abs() < 1e-3,
+                "at t={t} expected {expected}, got {:?}",
+                monster.current_heading
+            );
+        }
+        assert!(monster.turn_clip.is_none(), "the handover is complete");
+    }
+
+    /// A creature whose schema has no turn clip for the pivot is told so; it
+    /// must fall back to steering instead of standing there.
+    #[test]
+    fn a_pivot_with_no_clip_falls_back_to_steering() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        assert!(turn_frame(&mut monster, entity_id, Deg(90.0)).0.is_some());
+        let token = pending_token(&monster);
+        tell(
+            &mut monster,
+            &world,
+            entity_id,
+            MessagePayload::TurnClipCancelled { token },
+        );
+        assert_eq!(
             turn_frame(&mut monster, entity_id, Deg(90.0)),
             (None, false),
-            "an unanswered pivot must give the heading back to steering, and stop asking"
+            "an unplayed pivot must give the heading back to steering, and stop asking"
+        );
+    }
+
+    /// A pivot that is never followed by another clip has no fade to hand
+    /// over across - it must not hold its heading for ever.
+    #[test]
+    fn a_pivot_nothing_follows_still_ends() {
+        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
+        turn_frame(&mut monster, entity_id, Deg(90.0));
+        report_clip(&mut monster, &world, entity_id, Deg(-168.0));
+        play_out(&mut monster, entity_id, 2.4);
+        complete_clip(&mut monster, &world, entity_id);
+
+        play_out(&mut monster, entity_id, TURN_CLIP_HANDOFF_TIMEOUT + 0.1);
+        assert!(monster.turn_clip.is_none(), "the pivot must not hang");
+        assert!(
+            (monster.current_heading.0 - (-90.0 - 168.0)).abs() < 1e-3,
+            "and takes its turn whole, as a zero-length fade would"
         );
     }
 
@@ -2495,9 +2737,8 @@ mod tests {
         step(&mut monster, &world, entity_id);
 
         monster.turn_clip = Some(TurnClip::Playing {
+            token: 1,
             turn: Deg(90.0),
-            remaining: 10.0,
-            blend: TURN_CLIP_SETTLE_SECONDS,
         });
         let effects = step(&mut monster, &world, entity_id);
         assert!(

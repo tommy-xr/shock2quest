@@ -1469,6 +1469,21 @@ impl EffectQueue {
 }
 
 /// See `MissionCore::failed_animation_queries`.
+/// A turn clip the applier started for an entity, tracked so the requesting
+/// script can tell its own clip's completion from any other.
+///
+/// The applier owns the animation player, so it - not a timer in the script -
+/// is what knows whether the pivot's clip is still the one playing: any other
+/// animation applied to the entity while `completed` is false has preempted
+/// it, and the first one applied after it completed is the transition the
+/// pivot's yaw hands over on.
+struct TurnClipPlayback {
+    /// The `Effect::PlayTurnClip` request this playback answers.
+    token: u64,
+    /// Whether the clip has run to its end (as opposed to still playing).
+    completed: bool,
+}
+
 struct FailedAnimationGuard {
     key: String,
     frames_left: u32,
@@ -1499,6 +1514,10 @@ pub struct MissionCore {
     pub scene_objects: Vec<SceneObject>,
     pub animated_lightmaps: Option<dark::mission::AnimatedLightmapController>,
     pub id_to_animation_player: HashMap<EntityId, AnimationPlayer>,
+    /// The turn clip in flight per entity (see `Effect::PlayTurnClip`). This
+    /// is what identifies a pivot's playback: the requester never has to guess
+    /// from elapsed time which completion is its own.
+    turn_clip_playback: HashMap<EntityId, TurnClipPlayback>,
     /// Failed-animation suppression state per entity: the failing key, a
     /// countdown (frames), and whether a suppressed request is owed a
     /// completion when the window expires. A failed query reports
@@ -2516,6 +2535,7 @@ impl MissionCore {
             script_world,
             id_to_model,
             id_to_animation_player,
+            turn_clip_playback: HashMap::new(),
             failed_animation_queries: HashMap::new(),
             id_to_bitmap,
             id_to_particle_system: HashMap::new(),
@@ -3970,11 +3990,10 @@ impl MissionCore {
         motion_queries: Vec<Vec<MotionQueryItem>>,
         selection_strategy: MotionQuerySelectionStrategy,
         apply: fn(&AnimationPlayer, Rc<AnimationClip>) -> AnimationPlayer,
-        // Pivot in place: pick the stand-schema clip whose authored facing
-        // change is nearest this heading change and that fits in the seconds
-        // the creature can afford to stand still, then report it back (see
-        // `Effect::PlayTurnClip`).
-        turn: Option<(cgmath::Deg<f32>, f32)>,
+        // Pivot in place: the request's token, the heading change to pick the
+        // nearest stand-schema clip for, and the seconds the creature can
+        // afford to stand still (see `Effect::PlayTurnClip`).
+        turn: Option<(u64, cgmath::Deg<f32>, f32)>,
     ) {
         let is_death_query = motion_queries
             .iter()
@@ -3982,6 +4001,10 @@ impl MissionCore {
             .any(|item| item.tag_name() == "crumple");
         let mut resolved_death_pose = None;
         let mut turn_started = None;
+        // The blend the player ACTUALLY started for this clip, when one was
+        // applied. Read from the player rather than re-derived, so the pivot's
+        // yaw hands over on the transition that is really running.
+        let mut applied_blend = None;
         let maybe_player = self.id_to_animation_player.get_mut(&entity_id);
         if let Some(player) = maybe_player {
             let v_creature_type = self.world.borrow::<View<PropCreature>>().unwrap();
@@ -4017,7 +4040,7 @@ impl MissionCore {
                             .get_motion_stuff(name.clone())
                             .end_direction
                     };
-                    let result = if let Some((delta, max_seconds)) = turn {
+                    let result = if let Some((_, delta, max_seconds)) = turn {
                         let options = global_context.motiondb.query_all(query.clone());
                         let clips = options
                             .iter()
@@ -4109,13 +4132,11 @@ impl MissionCore {
                         };
                         self.failed_animation_queries.remove(&entity_id);
                         if turn.is_some() {
-                            turn_started = Some((
-                                dark::motion::signed_end_direction(clip.end_rotation),
-                                clip.duration.as_secs_f32(),
-                                clip.blend_length.as_secs_f32(),
-                            ));
+                            turn_started =
+                                Some(dark::motion::signed_end_direction(clip.end_rotation));
                         }
                         *player = apply(player, clip);
+                        applied_blend = Some(player.active_blend_seconds());
 
                         // The motion query is random, so its resolved clip name
                         // is the only durable identity of the corpse pose.
@@ -4184,14 +4205,58 @@ impl MissionCore {
             self.world.add_component(entity_id, death_pose);
         }
 
-        if let Some((turn, duration, blend)) = turn_started {
+        // Report on the pivot whose clip this apply just displaced or
+        // followed, before recording the one it may have started. A clip
+        // applied while the pivot's own was still playing has preempted it -
+        // nothing turns the body any more, so the authored facing change must
+        // be dropped. The first clip applied after it completed is the
+        // transition its pose swings back to neutral across, so the pivot
+        // takes its facing change over exactly that fade.
+        if let Some(blend) = applied_blend {
+            match self.turn_clip_playback.remove(&entity_id) {
+                Some(playback) if playback.completed => {
+                    self.script_world.dispatch(Message {
+                        to: entity_id,
+                        payload: MessagePayload::TurnClipHandoff {
+                            token: playback.token,
+                            blend,
+                        },
+                    });
+                }
+                Some(playback) => {
+                    tracing::debug!("turn clip for {:?} preempted by another", entity_id);
+                    self.script_world.dispatch(Message {
+                        to: entity_id,
+                        payload: MessagePayload::TurnClipCancelled {
+                            token: playback.token,
+                        },
+                    });
+                }
+                None => {}
+            }
+        }
+
+        if let Some((token, _, _)) = turn {
+            let payload = match turn_started {
+                Some(turn) => {
+                    self.turn_clip_playback.insert(
+                        entity_id,
+                        TurnClipPlayback {
+                            token,
+                            completed: false,
+                        },
+                    );
+                    MessagePayload::TurnClipStarted { token, turn }
+                }
+                // No affordable clip covered the pivot, the creature has no
+                // turn clips, or it has no animation player at all. The
+                // requester is answered either way, so it never waits on a
+                // clip that will not come.
+                None => MessagePayload::TurnClipCancelled { token },
+            };
             self.script_world.dispatch(Message {
                 to: entity_id,
-                payload: MessagePayload::TurnClipStarted {
-                    turn,
-                    duration,
-                    blend,
-                },
+                payload,
             });
         }
     }
@@ -4336,10 +4401,24 @@ impl MissionCore {
 
             for event in events {
                 match event {
-                    AnimationEvent::Completed => self.script_world.dispatch(Message {
-                        to: *id,
-                        payload: MessagePayload::AnimationCompleted,
-                    }),
+                    AnimationEvent::Completed => {
+                        // A pivot's clip reaching its end: from here the next
+                        // clip applied to this entity is its handoff, not a
+                        // preemption.
+                        if let Some(playback) = self.turn_clip_playback.get_mut(id) {
+                            playback.completed = true;
+                            self.script_world.dispatch(Message {
+                                to: *id,
+                                payload: MessagePayload::TurnClipCompleted {
+                                    token: playback.token,
+                                },
+                            });
+                        }
+                        self.script_world.dispatch(Message {
+                            to: *id,
+                            payload: MessagePayload::AnimationCompleted,
+                        })
+                    }
                     AnimationEvent::DirectionChanged(ang) => {
                         game_log!(DEBUG, "Animation direction changed: {:?}", ang);
                         // The events now arrive as small per-tick increments
@@ -5488,6 +5567,7 @@ impl MissionCore {
         // Shipyard recycles entity ids, so stale per-entity animation state
         // must not outlive the entity (a recycled id would inherit it).
         self.id_to_animation_player.remove(&entity_id);
+        self.turn_clip_playback.remove(&entity_id);
         self.failed_animation_queries.remove(&entity_id);
         self.gui.on_entity_destroyed(
             entity_id,
@@ -7003,6 +7083,7 @@ impl MissionCore {
 
                 Effect::PlayTurnClip {
                     entity_id,
+                    token,
                     delta,
                     max_seconds,
                 } => {
@@ -7013,7 +7094,7 @@ impl MissionCore {
                         vec![vec![MotionQueryItem::new("stand")]],
                         MotionQuerySelectionStrategy::Random,
                         AnimationPlayer::play_animation,
-                        Some((delta, max_seconds)),
+                        Some((token, delta, max_seconds)),
                     );
                 }
 

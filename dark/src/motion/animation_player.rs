@@ -12,6 +12,16 @@ pub enum AnimationFlags {
     PlayOnce,
 }
 
+/// The cross-fade weight of the incoming pose at normalized blend progress
+/// `t`. Raised-cosine ease-in/ease-out rather than linear - a linear ramp
+/// starts and stops the correction abruptly, which reads as two small hitches
+/// bracketing the fade. Public so anything that has to move IN STEP with a
+/// blend (the AI's turn-clip yaw handoff) rides the same curve.
+pub fn blend_alpha(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    (1.0 - (std::f32::consts::PI * t).cos()) / 2.0
+}
+
 pub enum AnimationEvent {
     DirectionChanged(Deg<f32>),
     VelocityChanged(Vector3<f32>),
@@ -246,6 +256,18 @@ impl AnimationPlayer {
         let mut new_player = player.clone();
         new_player.cancel_root_motion = true;
         new_player
+    }
+
+    /// How long the cross-fade currently running still has to go, in seconds
+    /// (0 when nothing is fading). This is the blend the player ACTUALLY
+    /// applies - `queue_animation` takes the incoming clip's authored length
+    /// (often zero), `play_animation` floors it - so a caller that must move
+    /// in step with the fade reads it here rather than re-deriving it.
+    pub fn active_blend_seconds(&self) -> f32 {
+        self.blend_state
+            .as_ref()
+            .map(|blend| (blend.duration - blend.elapsed).max(0.0))
+            .unwrap_or(0.0)
     }
 
     pub fn set_additional_joint_transform(
@@ -560,7 +582,7 @@ impl AnimationPlayer {
                 // ramp starts and stops the correction abruptly, which reads
                 // as two small hitches bracketing the fade.
                 let t = (blend.elapsed / blend.duration).clamp(0.0, 1.0);
-                let alpha = (1.0 - (std::f32::consts::PI * t).cos()) / 2.0;
+                let alpha = blend_alpha(t);
                 // update() keeps from_frame in range (loops wrap, one-shots
                 // clamp), and the fractional position advances smoothly
                 // during the fade.
@@ -973,6 +995,46 @@ mod tests {
             assert!(next.snapshot().queue.is_empty());
             assert_eq!(next.snapshot().last_clip.as_deref(), Some("death_pose"));
         }
+    }
+
+    /// What the turn-clip yaw handoff reads: the fade the player is really
+    /// running. `queue_animation` takes it from the INCOMING clip - and a
+    /// stride clip authors none - so a caller that assumed the outgoing
+    /// clip's blend would settle over a window nothing is fading across.
+    #[test]
+    fn active_blend_seconds_reports_the_fade_actually_running() {
+        let mut outgoing = (*clip_with_root_motion()).clone();
+        outgoing.blend_length = Duration::from_millis(500);
+        let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), Rc::new(outgoing));
+        assert_eq!(player.active_blend_seconds(), 0.0, "nothing to fade from");
+
+        // A stride clip queued after it: no fade at all, however long the
+        // clip it interrupts authored.
+        let stride = AnimationPlayer::queue_animation(&player, clip_with_root_motion());
+        assert_eq!(stride.active_blend_seconds(), 0.0);
+
+        // ...and one that does author a blend fades for exactly that long,
+        // counting down as it runs.
+        let mut incoming = (*clip_with_root_motion()).clone();
+        incoming.blend_length = Duration::from_millis(200);
+        let fading = AnimationPlayer::queue_animation(&player, Rc::new(incoming));
+        assert!((fading.active_blend_seconds() - 0.2).abs() < 1e-6);
+        let (fading, _, _, _) = AnimationPlayer::update(&fading, Duration::from_millis(50));
+        assert!((fading.active_blend_seconds() - 0.15).abs() < 1e-6);
+    }
+
+    /// The pose's cross-fade weight, which the AI's yaw handoff rides so the
+    /// facing the pose gives up and the facing the entity takes cancel out.
+    #[test]
+    fn blend_alpha_is_a_clamped_raised_cosine() {
+        assert_eq!(blend_alpha(0.0), 0.0);
+        assert!((blend_alpha(0.5) - 0.5).abs() < 1e-6);
+        assert!((blend_alpha(1.0) - 1.0).abs() < 1e-6);
+        assert_eq!(blend_alpha(-1.0), 0.0);
+        assert!((blend_alpha(2.0) - 1.0).abs() < 1e-6);
+        // Eased, not linear: a quarter of the way in it has moved much less.
+        assert!(blend_alpha(0.25) < 0.25);
+        assert!(blend_alpha(0.75) > 0.75);
     }
 
     #[test]
