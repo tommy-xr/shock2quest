@@ -86,6 +86,11 @@ export interface AiPathEntry {
   live_target?: [number, number, number] | null;
   /** Seconds without progress toward the current waypoint. */
   live_stall_seconds?: number | null;
+  /**
+   * Why the AI is deliberately standing still ("DoorWait" | "Pivot"), null
+   * when it is moving freely. Absent on runtimes that predate the field.
+   */
+  movement_hold?: string | null;
 }
 
 /** One-off walk-graph query between two positions (GET /v1/pathfinding/route). */

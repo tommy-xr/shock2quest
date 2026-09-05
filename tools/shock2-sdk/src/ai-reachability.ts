@@ -26,6 +26,11 @@ export interface AiSample {
   live_path_len?: number | null;
   live_target?: Vec3 | null;
   live_stall_seconds?: number | null;
+  /**
+   * Why the AI is deliberately standing still ("DoorWait" | "Pivot"), null
+   * when it is not. Absent on runtimes older than the field.
+   */
+  movement_hold?: string | null;
   /** Distance to the player at this sample. */
   distance: number;
 }
@@ -48,6 +53,7 @@ export type Verdict =
   | "arrived"
   | "progressing"
   | "wedged"
+  | "wedged_then_freed"
   | "no_route"
   | "expected_unreachable"
   | "idle_by_design";
@@ -56,10 +62,12 @@ export interface Classification {
   verdict: Verdict;
   /** One line saying which rule fired, with the numbers behind it. */
   reason: string;
-  /** Where the AI was stuck (wedged only) - a reproducible seed position. */
+  /** Where the AI was stuck - a reproducible seed position. */
   wedge_at?: Vec3;
-  /** How long it was stuck there, seconds (wedged only). */
+  /** How long it was stuck there, seconds. */
   wedge_seconds?: number;
+  /** Units traveled after the stuck span ended (wedged_then_freed only). */
+  freed_travel?: number;
   closest_distance: number;
   final_distance: number;
 }
@@ -75,6 +83,11 @@ export interface ClassifyOptions {
   wedgeWindowSeconds?: number;
   /** Displacement below which the AI counts as not moving, world units. */
   wedgeDisplacement?: number;
+  /**
+   * Travel after a stationary span that means the AI walked out of it, world
+   * units. Such a span is reported as `wedged_then_freed`, not `wedged`.
+   */
+  freedTravelUnits?: number;
 }
 
 /** Behaviors that mean the AI is trying to travel somewhere. */
@@ -95,8 +108,22 @@ function lastOutcome(samples: AiSample[]): string | undefined {
   return undefined;
 }
 
+/** A stationary span: sample indices, where, and how long it lasted. */
+interface StationarySpan {
+  start: number;
+  end: number;
+  at: Vec3;
+  seconds: number;
+  heldSeconds: number;
+}
+
+/** Is this sample reporting a deliberate hold (door wait, pivot)? */
+function isHeld(sample: AiSample): boolean {
+  return Boolean(sample.movement_hold);
+}
+
 /**
- * The first span in which the AI stayed put while it was actively trying to
+ * Every span in which the AI stayed put while it was actively trying to
  * move: stationary for long enough, with stall time that CHANGES across the
  * window.
  *
@@ -105,19 +132,29 @@ function lastOutcome(samples: AiSample[]): string | undefined {
  * (reached its patrol end, switched to attacking) keeps its last snapshot
  * forever. A frozen snapshot is not evidence of a wedge; a stall clock that
  * ticks (or resets on a backout) is.
+ *
+ * Time the AI spends under a published movement hold (waiting on a door,
+ * turning in place) does not count toward the window - those are intentional
+ * pauses, and a long one used to cross the window on its own.
  */
-function findWedge(
+function findWedges(
   samples: AiSample[],
   windowSeconds: number,
   displacement: number,
-): { at: Vec3; seconds: number } | undefined {
+): StationarySpan[] {
+  const spans: StationarySpan[] = [];
   for (let i = 0; i < samples.length; i++) {
     let j = i;
     while (j + 1 < samples.length && distance3(samples[i].position, samples[j + 1].position) < displacement) {
       j++;
     }
     const seconds = samples[j].t - samples[i].t;
-    if (seconds < windowSeconds) continue;
+    // The hold reported at a sample describes the interval that follows it.
+    let heldSeconds = 0;
+    for (let k = i; k < j; k++) {
+      if (isHeld(samples[k])) heldSeconds += samples[k + 1].t - samples[k].t;
+    }
+    if (seconds - heldSeconds < windowSeconds) continue;
 
     const window = samples.slice(i, j + 1);
     const behaviors = window.map((s) => s.behavior).filter((b): b is string => Boolean(b));
@@ -127,24 +164,37 @@ function findWedge(
     const stalls = new Set(window.map((s) => s.live_stall_seconds ?? 0));
     const blocked = stalls.size > 1 && Math.max(...stalls) > 0;
     if (traveling && blocked) {
-      return { at: samples[i].position, seconds };
+      spans.push({ start: i, end: j, at: samples[i].position, seconds, heldSeconds });
+      // Spans starting inside this one are the same halt seen later.
+      i = j;
     }
   }
-  return undefined;
+  return spans;
+}
+
+/** Path length walked after the span ended. */
+function travelAfter(samples: AiSample[], span: StationarySpan): number {
+  let sum = 0;
+  for (let k = span.end; k + 1 < samples.length; k++) {
+    sum += distance3(samples[k].position, samples[k + 1].position);
+  }
+  return sum;
 }
 
 /**
  * Classify one AI's pass.
  *
- * Order matters: a wedge is reported even for an AI that could never have
- * reached the player anyway (being physically stuck is a defect on its own),
- * and "expected unreachable" outranks the routing verdicts so a sealed-off
- * or alert-capped AI is not counted as a pathfinding failure.
+ * Order matters: an AI that was never going anywhere ("expected
+ * unreachable") or has no route to the player ("no route") is judged as such
+ * BEFORE the wedge check - standing still without a route is not a wedge, and
+ * letting `wedged` outrank them made the headline wedge count absorb whole
+ * buckets of non-defects.
  */
 export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classification {
   const arriveRadius = options.arriveRadius ?? 3.2;
   const windowSeconds = options.wedgeWindowSeconds ?? 6.0;
   const wedgeDisplacement = options.wedgeDisplacement ?? 1.0;
+  const freedTravelUnits = options.freedTravelUnits ?? 5.0;
   const samples = track.samples;
 
   if (samples.length === 0) {
@@ -167,17 +217,6 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
     return {
       verdict: "arrived",
       reason: `closed from ${start.toFixed(1)} to ${closest.toFixed(1)} (<= ${arriveRadius})`,
-      ...base,
-    };
-  }
-
-  const wedge = findWedge(samples, windowSeconds, wedgeDisplacement);
-  if (wedge) {
-    return {
-      verdict: "wedged",
-      reason: `stationary ${wedge.seconds.toFixed(1)}s at (${wedge.at.map((c) => c.toFixed(2)).join(", ")}) with a route or stall active`,
-      wedge_at: wedge.at,
-      wedge_seconds: wedge.seconds,
       ...base,
     };
   }
@@ -223,6 +262,39 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
     return { verdict: "no_route", reason: `last path outcome ${outcome}`, ...base };
   }
 
+  // A halt the AI walks out of is not a wedge: report the first span it does
+  // NOT walk out of, and only if every span was walked out of does the AI
+  // land in the separate `wedged_then_freed` bucket (still visible, but not
+  // counted against the headline wedge number).
+  const spans = findWedges(samples, windowSeconds, wedgeDisplacement);
+  const stuck = spans.find((span) => travelAfter(samples, span) <= freedTravelUnits);
+  if (stuck) {
+    const held = stuck.heldSeconds > 0 ? `, ${stuck.heldSeconds.toFixed(1)}s of it held` : "";
+    return {
+      verdict: "wedged",
+      reason: `stationary ${stuck.seconds.toFixed(1)}s at (${stuck.at
+        .map((c) => c.toFixed(2))
+        .join(", ")}) with a route or stall active${held}`,
+      wedge_at: stuck.at,
+      wedge_seconds: stuck.seconds,
+      ...base,
+    };
+  }
+  if (spans.length > 0) {
+    const span = spans[0];
+    const freed = travelAfter(samples, span);
+    return {
+      verdict: "wedged_then_freed",
+      reason: `stationary ${span.seconds.toFixed(1)}s at (${span.at
+        .map((c) => c.toFixed(2))
+        .join(", ")}), then traveled ${freed.toFixed(1)}`,
+      wedge_at: span.at,
+      wedge_seconds: span.seconds,
+      freed_travel: freed,
+      ...base,
+    };
+  }
+
   // Path length, not start-to-end displacement: a loop patrol returns to where
   // it started and would otherwise read as "never moved".
   const traveled = samples
@@ -247,6 +319,7 @@ export const VERDICTS: Verdict[] = [
   "arrived",
   "progressing",
   "wedged",
+  "wedged_then_freed",
   "no_route",
   "expected_unreachable",
   "idle_by_design",

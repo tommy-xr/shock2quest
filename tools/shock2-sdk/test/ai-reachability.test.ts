@@ -191,6 +191,98 @@ test("a loop patrol that returns to its start is not 'never moved'", () => {
   assert.equal(result.verdict, "progressing");
 });
 
+test("an AI with no route to the player is not a wedge, even while it stalls", () => {
+  // A stall clock that ticks under a Failed path is a routing failure, not a
+  // physical wedge - `no_route` outranks `wedged`.
+  const result = classifyTrack(
+    track(
+      stationary(20, { behavior: "Chase", alertness: "High", outcome: "Failed" }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: i % 6,
+      })),
+    ),
+    { pass: "chase" },
+  );
+  assert.equal(result.verdict, "no_route");
+});
+
+test("an AI that was never coming is expected-unreachable, not a wedge", () => {
+  const result = classifyTrack(
+    track(
+      stationary(20, { behavior: "Chase", alertness: "High", outcome: "Full" }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: i % 6,
+      })),
+      { reachable: false },
+    ),
+    { pass: "chase" },
+  );
+  assert.equal(result.verdict, "expected_unreachable");
+});
+
+test("a halt the AI walks out of is 'wedged_then_freed', not 'wedged'", () => {
+  const result = classifyTrack(
+    track([
+      ...stationary(20, { behavior: "Patrol", outcome: "Full" }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: i % 6,
+      })),
+      // Walks 30 units away over the next 3 samples.
+      { position: [59, 0.1, -98.5], behavior: "Patrol", outcome: "Full" },
+      { position: [69, 0.1, -98.5], behavior: "Patrol", outcome: "Full" },
+      { position: [79, 0.1, -98.5], behavior: "Patrol", outcome: "Full" },
+    ]),
+    { pass: "idle" },
+  );
+  assert.equal(result.verdict, "wedged_then_freed");
+  assert.ok((result.freed_travel ?? 0) > 5);
+});
+
+test("an AI that walks out of one halt and into a real one is 'wedged'", () => {
+  const held = (i: number) => ({ live_stall_seconds: i % 6, behavior: "Patrol", outcome: "Full" });
+  const result = classifyTrack(
+    track([
+      ...Array.from({ length: 16 }, (_, i) => ({ position: [0, 0, 0] as [number, number, number], ...held(i) })),
+      { position: [10, 0, 0], ...held(1) },
+      { position: [20, 0, 0], ...held(2) },
+      ...Array.from({ length: 16 }, (_, i) => ({ position: [30, 0, 0] as [number, number, number], ...held(i) })),
+    ]),
+    { pass: "idle" },
+  );
+  assert.equal(result.verdict, "wedged");
+  assert.deepEqual(result.wedge_at, [30, 0, 0]);
+});
+
+test("time spent under a movement hold does not count toward the wedge window", () => {
+  // 10s parked, 8s of it waiting on a door: only 2s of unheld stall, so the
+  // 6s window is never met.
+  const result = classifyTrack(
+    track(
+      stationary(20, { behavior: "Chase", outcome: "Full" }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: i % 6,
+        movement_hold: i < 16 ? "DoorWait" : null,
+      })),
+    ),
+    { pass: "idle" },
+  );
+  assert.notEqual(result.verdict, "wedged");
+});
+
+test("a hold that ends well before the window closes still leaves a wedge", () => {
+  const result = classifyTrack(
+    track(
+      stationary(30, { behavior: "Chase", outcome: "Full" }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: i % 6,
+        movement_hold: i < 4 ? "Pivot" : null,
+      })),
+    ),
+    { pass: "idle" },
+  );
+  assert.equal(result.verdict, "wedged");
+});
+
 test("tally counts every verdict bucket", () => {
   const counts = tally([
     { verdict: "arrived", reason: "", closest_distance: 1, final_distance: 1 },

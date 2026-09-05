@@ -19,7 +19,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { findRepoRoot, GameServer, HttpError } from "../src/index.js";
@@ -56,6 +56,8 @@ interface Args {
   sampleEvery: number;
   experimental: string[];
   pass: PassSelector;
+  /** Re-classify the stored JSON in this directory instead of running the game. */
+  reclassify?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -98,6 +100,9 @@ function parseArgs(argv: string[]): Args {
       case "--experimental":
         args.experimental.push(...value().split(","));
         break;
+      case "--reclassify":
+        args.reclassify = value();
+        break;
       case "--pass": {
         const v = value();
         if (v !== "idle" && v !== "chase" && v !== "both") {
@@ -111,6 +116,8 @@ function parseArgs(argv: string[]): Args {
     }
   }
   if (all) args.missions = missionsInData();
+  // Re-classification reads stored runs; it needs no mission list.
+  if (args.reclassify) return args;
   if (args.missions.length === 0) throw new Error("pass --mission <name> or --all");
   // A pass shorter than one sample would report every AI as "no samples".
   for (const [name, frames] of [
@@ -250,6 +257,7 @@ async function runPass(
         live_path_len: route?.live_path_len ?? null,
         live_target: route?.live_target ?? null,
         live_stall_seconds: route?.live_stall_seconds ?? null,
+        movement_hold: route?.movement_hold ?? null,
         distance: distance3(detail.position, playerNow),
       };
       track.samples.push(sample);
@@ -309,8 +317,75 @@ function wedgeLines(pass: PassResult): string[] {
     );
 }
 
+/** A stored pass, as written by a previous run. */
+interface StoredReport {
+  mission: string;
+  passes: {
+    pass: string;
+    tracks: (AiTrack & { classification: Classification })[];
+  }[];
+}
+
+function countsRow(label: string, counts: Record<string, number>): string {
+  return `| ${label} | ${VERDICTS.map((v) => counts[v] ?? 0).join(" | ")} |`;
+}
+
+/**
+ * Re-run the classifier over a stored run's JSON - no game, no runtime. The
+ * stored samples carry whatever fields the runtime published when they were
+ * taken, so a re-classification of an older run simply sees no movement_hold.
+ */
+async function reclassify(dir: string): Promise<void> {
+  const files = (await readdir(dir))
+    .filter((f) => f.endsWith(".mis.json"))
+    .sort();
+  const header = `| mission/pass | ${VERDICTS.join(" | ")} |`;
+  const divider = `|${"---|".repeat(VERDICTS.length + 1)}`;
+  const rows: string[] = [];
+  const oldTotals: Record<string, number> = {};
+  const newTotals: Record<string, number> = {};
+
+  for (const file of files) {
+    const report = JSON.parse(await readFile(path.join(dir, file), "utf8")) as StoredReport;
+    for (const pass of report.passes) {
+      const passName = pass.pass.startsWith("chase") ? "chase" : "idle";
+      const before = tally(pass.tracks.map((t) => t.classification));
+      const after = tally(
+        pass.tracks.map((t) => classifyTrack(t, { pass: passName as "idle" | "chase" })),
+      );
+      for (const v of VERDICTS) {
+        oldTotals[v] = (oldTotals[v] ?? 0) + (before[v] ?? 0);
+        newTotals[v] = (newTotals[v] ?? 0) + (after[v] ?? 0);
+      }
+      const cells = VERDICTS.map((v) => {
+        const a = before[v] ?? 0;
+        const b = after[v] ?? 0;
+        return a === b ? `${a}` : `${a}→${b}`;
+      }).join(" | ");
+      rows.push(`| ${report.mission} ${pass.pass} | ${cells} |`);
+    }
+  }
+
+  console.log(
+    [
+      `# Re-classified ${dir}`,
+      "",
+      header,
+      divider,
+      ...rows,
+      countsRow("**stored total**", oldTotals),
+      countsRow("**re-classified total**", newTotals),
+      "",
+    ].join("\n"),
+  );
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.reclassify) {
+    await reclassify(args.reclassify);
+    return;
+  }
   await mkdir(args.out, { recursive: true });
 
   const header = `| mission | pass | AIs | ${VERDICTS.join(" | ")} |`;
