@@ -211,9 +211,16 @@ impl PlayerInteraction for VrInteraction {
                 hand_input(&self.left_hand, &ctx.input.left_hand),
                 hand_input(&self.right_hand, &ctx.input.right_hand),
             ],
-            |point| {
-                ctx.physics
-                    .climbable_grip_at(point, crate::physics::CLIMB_GRIP_RADIUS, ctx.feet_y)
+            |point, from_ladder| {
+                if from_ladder {
+                    ctx.physics.climbable_grip_from_ladder_at(point, ctx.feet_y)
+                } else {
+                    ctx.physics.climbable_grip_at(
+                        point,
+                        crate::physics::CLIMB_GRIP_RADIUS,
+                        ctx.feet_y,
+                    )
+                }
             },
             // "Cannot check" is not "gone" - a failed borrow keeps the hold.
             |entity_id| {

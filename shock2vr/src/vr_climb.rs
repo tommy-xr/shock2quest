@@ -42,31 +42,19 @@ pub(crate) const CLIMB_RELEASE_MIN_SPEED: f32 = 0.5;
 /// climber commits, and waiting longer just makes the pull feel sticky.
 pub const VAULT_EYE_MARGIN: f32 = 0.1;
 
-/// Whether the player has pulled far enough up a ledge to be thrown onto it.
-///
-/// The head-over-the-lip convention (Boneworks, Blade & Sorcery): once the eye
-/// clears the surface the anchor hand is lying ON, the climb is over and the
-/// scripted top-out takes the body the rest of the way. A ladder rail offers no
-/// vault - a hand reaching over a ladder's top onto the deck behind it takes a
-/// `Ledge` grip on that deck, and vaults from there.
-///
-/// `anchor_on_top_surface` is the hand's contact normal being walkable: a hand
-/// hooked on a lip's vertical face is not yet on top of anything.
-///
-/// The vault has to be EARNED, hence `eye_y_at_grab`: the eye must have risen
-/// past the lip while the hand held it. Without that, every crate, console and
-/// railing a standing player can already see over would throw them on top of
-/// it the instant they squeezed - leaning on a chest-high box is not a mantle.
+/// A deliberate pull commits a ledge hold once the tracked eye clears it.
+/// A grab by itself never vaults, but grabbing after looking over the deck is
+/// valid: what matters is pulling on this hold, not the eye height at acquisition.
 pub fn vault_ready(
     eye_y: f32,
-    eye_y_at_grab: f32,
+    pull_progress: f32,
     lip_y: f32,
     anchor_kind: ClimbGripKind,
     anchor_on_top_surface: bool,
 ) -> bool {
     anchor_kind == ClimbGripKind::Ledge
         && anchor_on_top_surface
-        && eye_y_at_grab <= lip_y
+        && pull_progress >= 0.15
         && eye_y > lip_y + VAULT_EYE_MARGIN
 }
 
@@ -174,7 +162,8 @@ impl HandClimb {
     /// Advance one frame and return the body translation the anchor hand
     /// demands, or `None` when no hand holds anything.
     ///
-    /// `probe` answers "what could a hand at this world point grab?" (see
+    /// `probe` answers "what could a hand at this world point grab?"; its bool
+    /// enables a nearby deck transfer from the other valid ladder hand (see
     /// [`crate::physics::PhysicsWorld::climbable_grip_at`]) and `is_alive`
     /// whether a gripped entity still exists.
     pub fn update(
@@ -183,7 +172,7 @@ impl HandClimb {
         pawn_rotation: Quaternion<f32>,
         step_dt: f32,
         hands: [ClimbHandInput; 2],
-        probe: impl Fn(Vector3<f32>) -> Option<ClimbGrip>,
+        probe: impl Fn(Vector3<f32>, bool) -> Option<ClimbGrip>,
         is_alive: impl Fn(shipyard::EntityId) -> bool,
     ) -> ClimbFrame {
         let previous_anchor = self.anchor;
@@ -236,19 +225,27 @@ impl HandClimb {
                         let_go_cleanly[index] = !squeezing && !over_stretched && !gone;
                     }
                 }
-                None if self.grab_grace[index] > 0.0 => {
-                    if let Some(grip) = probe(hand_world[index]) {
-                        self.grab_grace[index] = 0.0;
-                        self.grips[index] = Some(GripAnchor {
-                            grip,
-                            hand_world_at_grab: hand_world[index],
-                            pawn_at_grab: pawn_pos,
-                        });
-                        // Last hand to grab drives the body.
-                        self.anchor = Some(HANDS[index]);
-                    }
-                }
                 None => {}
+            }
+        }
+        // Invalidate BOTH old holds before granting a contextual deck grab:
+        // a broken, deleted, released or newly occupied ladder hand cannot
+        // authorize the free hand's transfer, regardless of hand iteration order.
+        for index in 0..HANDS.len() {
+            if self.grips[index].is_none() && self.grab_grace[index] > 0.0 {
+                let from_ladder = self.grips[1 - index].is_some_and(|other| {
+                    other.grip.kind == ClimbGripKind::Ladder
+                        && (hand_world[index] - other.grip.point).magnitude() <= 1.5
+                });
+                if let Some(grip) = probe(hand_world[index], from_ladder) {
+                    self.grab_grace[index] = 0.0;
+                    self.grips[index] = Some(GripAnchor {
+                        grip,
+                        hand_world_at_grab: hand_world[index],
+                        pawn_at_grab: pawn_pos,
+                    });
+                    self.anchor = Some(HANDS[index]);
+                }
             }
             self.grab_grace[index] = (self.grab_grace[index] - step_dt.max(0.0)).max(0.0);
         }
@@ -264,6 +261,7 @@ impl HandClimb {
             for index in 0..HANDS.len() {
                 if let Some(anchor) = self.grips[index].as_mut() {
                     anchor.hand_world_at_grab = hand_world[index];
+                    anchor.pawn_at_grab = pawn_pos;
                     self.anchor = Some(HANDS[index]);
                 }
             }
@@ -422,7 +420,7 @@ mod tests {
             identity,
             DT,
             [no_hand(), hand(reach, 1.0)],
-            |point| Some(ladder_grip(point)),
+            |point, _| Some(ladder_grip(point)),
             |_| true,
         );
         assert_translation(first, Vector3::zero());
@@ -434,7 +432,7 @@ mod tests {
             identity,
             DT,
             [no_hand(), hand(reach - vec3(0.0, 0.4, 0.0), 1.0)],
-            |_| None,
+            |_, _| None,
             |_| true,
         );
         assert_translation(pull, vec3(0.0, 0.4, 0.0));
@@ -445,12 +443,55 @@ mod tests {
             identity,
             DT,
             [no_hand(), hand(reach, 0.0)],
-            |_| None,
+            |_, _| None,
             |_| true,
         );
         assert_eq!(released.translation, None);
         assert_eq!(climb.anchor(), None);
         assert_eq!(climb.grips().count(), 0);
+    }
+
+    #[test]
+    fn deck_transfer_grace_requires_the_other_ladder_hold_to_remain_valid() {
+        for break_hold in [false, true] {
+            let mut climb = HandClimb::default();
+            let pawn = Vector3::zero();
+            let rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+            let reach = vec3(0.0, 1.0, -1.0);
+            climb.update(
+                pawn,
+                rotation,
+                DT,
+                [hand(reach, 1.0), no_hand()],
+                |p, _| Some(ladder_grip(p)),
+                |_| true,
+            );
+            // Squeeze free hand before contact, starting the grace window.
+            climb.update(
+                pawn,
+                rotation,
+                DT,
+                [hand(reach, 1.0), hand(reach, 1.0)],
+                |_, _| None,
+                |_| true,
+            );
+            let moved = reach + vec3(0.0, if break_hold { 1.0 } else { 0.0 }, 0.0);
+            climb.update(
+                pawn,
+                rotation,
+                DT,
+                [hand(moved, 1.0), hand(reach, 1.0)],
+                |p, from_ladder| {
+                    from_ladder.then_some(ClimbGrip {
+                        kind: ClimbGripKind::Ledge,
+                        normal: vec3(0.0, 1.0, 0.0),
+                        ..ladder_grip(p)
+                    })
+                },
+                |_| true,
+            );
+            assert_eq!(climb.holds_a_ledge(), !break_hold);
+        }
     }
 
     #[test]
@@ -465,7 +506,7 @@ mod tests {
                 identity,
                 DT,
                 [no_hand(), hand(reach, 1.0)],
-                |_| None,
+                |_, _| None,
                 |_| true,
             );
         }
@@ -474,7 +515,7 @@ mod tests {
             identity,
             DT,
             [no_hand(), hand(reach, 1.0)],
-            |p| Some(ladder_grip(p)),
+            |p, _| Some(ladder_grip(p)),
             |_| true,
         );
         assert!(climb.anchor().is_some());
@@ -485,7 +526,7 @@ mod tests {
                 identity,
                 DT,
                 [no_hand(), hand(broken, 1.0)],
-                |p| Some(ladder_grip(p)),
+                |p, _| Some(ladder_grip(p)),
                 |_| true,
             );
             assert!(climb.anchor().is_none());
@@ -495,7 +536,7 @@ mod tests {
             identity,
             DT,
             [no_hand(), hand(reach, 0.0)],
-            |_| None,
+            |_, _| None,
             |_| true,
         );
         for _ in 0..12 {
@@ -504,7 +545,7 @@ mod tests {
                 identity,
                 DT,
                 [no_hand(), hand(reach, 1.0)],
-                |_| None,
+                |_, _| None,
                 |_| true,
             );
         }
@@ -513,7 +554,7 @@ mod tests {
             identity,
             DT,
             [no_hand(), hand(reach, 1.0)],
-            |p| Some(ladder_grip(p)),
+            |p, _| Some(ladder_grip(p)),
             |_| true,
         );
         assert!(
@@ -538,7 +579,7 @@ mod tests {
                     identity,
                     DT,
                     [no_hand(), full],
-                    |p| Some(ladder_grip(p)),
+                    |p, _| Some(ladder_grip(p)),
                     |_| true
                 )
                 .translation,
@@ -554,7 +595,7 @@ mod tests {
                     identity,
                     DT,
                     [no_hand(), hand(reach, 1.0)],
-                    |p| Some(ladder_grip(p)),
+                    |p, _| Some(ladder_grip(p)),
                     |_| true
                 )
                 .translation,
@@ -573,7 +614,7 @@ mod tests {
             identity,
             DT,
             [no_hand(), hand(reach, 1.0)],
-            |p| Some(ladder_grip(p)),
+            |p, _| Some(ladder_grip(p)),
             |_| true,
         );
 
@@ -587,7 +628,7 @@ mod tests {
                 no_hand(),
                 hand(reach - vec3(0.0, CLIMB_STRETCH_BREAK - 0.05, 0.0), 1.0),
             ],
-            |_| None,
+            |_, _| None,
             |_| true,
         );
         assert!(held.translation.is_some());
@@ -603,7 +644,7 @@ mod tests {
                         no_hand(),
                         hand(reach - vec3(0.0, CLIMB_STRETCH_BREAK + 0.05, 0.0), 1.0)
                     ],
-                    |_| None,
+                    |_, _| None,
                     |_| true
                 )
                 .translation,
@@ -624,7 +665,7 @@ mod tests {
             identity,
             DT,
             [no_hand(), hand(right, 1.0)],
-            |p| Some(ladder_grip(p)),
+            |p, _| Some(ladder_grip(p)),
             |_| true,
         );
         climb.update(
@@ -632,7 +673,7 @@ mod tests {
             identity,
             DT,
             [hand(left, 1.0), hand(right, 1.0)],
-            |p| Some(ladder_grip(p)),
+            |p, _| Some(ladder_grip(p)),
             |_| true,
         );
         assert_eq!(climb.anchor(), Some(Handedness::Left), "last grab wins");
@@ -645,33 +686,38 @@ mod tests {
             identity,
             DT,
             [hand(left + travel, 1.0), hand(right + travel, 1.0)],
-            |_| None,
+            |_, _| None,
             |_| true,
         );
 
         // Letting the left go must not yank the body back to the right hand's
         // stale grab point: the handoff frame asks for no motion at all.
         let handoff = climb.update(
-            pawn,
+            pawn - travel,
             identity,
             DT,
             [hand(left + travel, 0.0), hand(right + travel, 1.0)],
-            |_| None,
+            |_, _| None,
             |_| true,
         );
         assert_eq!(climb.anchor(), Some(Handedness::Right));
+        assert_eq!(
+            climb.anchor_grip().unwrap().pawn_at_grab,
+            pawn - travel,
+            "handoff starts a fresh deliberate pull, not the passive hold's old progress"
+        );
         assert_translation(handoff, Vector3::zero());
 
         // ... and the right hand then drives from where it actually is.
         let after = climb.update(
-            pawn,
+            pawn - travel,
             identity,
             DT,
             [
                 hand(left + travel, 0.0),
                 hand(right + travel - vec3(0.0, 0.2, 0.0), 1.0),
             ],
-            |_| None,
+            |_, _| None,
             |_| true,
         );
         assert_translation(after, vec3(0.0, 0.2, 0.0));
@@ -744,7 +790,7 @@ mod tests {
             identity,
             DT,
             [no_hand(), hand(reach, 1.0)],
-            |p| Some(ladder_grip(p)),
+            |p, _| Some(ladder_grip(p)),
             |_| true,
         );
         let mut at = reach;
@@ -755,7 +801,7 @@ mod tests {
                 identity,
                 DT,
                 [no_hand(), hand(at, 1.0)],
-                |_| None,
+                |_, _| None,
                 |_| true,
             );
         }
@@ -768,7 +814,7 @@ mod tests {
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             DT,
             [no_hand(), hand(at, 0.0)],
-            |_| None,
+            |_, _| None,
             |_| true,
         )
     }
@@ -805,7 +851,7 @@ mod tests {
                     Quaternion::new(1.0, 0.0, 0.0, 0.0),
                     DT,
                     [no_hand(), hand(at, 1.0)],
-                    |_| None,
+                    |_, _| None,
                     |_| true,
                 );
                 broke
@@ -828,7 +874,7 @@ mod tests {
                 identity,
                 DT,
                 hands,
-                |p| probe.then(|| ladder_grip(p)),
+                |p, _| probe.then(|| ladder_grip(p)),
                 |_| true,
             )
         };
@@ -847,24 +893,24 @@ mod tests {
 
     #[test]
     fn the_eye_must_clear_the_lip_of_a_ledge_the_hand_is_lying_on() {
-        // Grabbed from below the lip, pulled until the eye cleared it: vault.
-        assert!(vault_ready(6.2, 5.0, 6.0, ClimbGripKind::Ledge, true));
+        // A deliberate pull with the eye over the lip: vault, including late grabs.
+        assert!(vault_ready(6.2, 0.2, 6.0, ClimbGripKind::Ledge, true));
         // Still below it, or only just level with it: keep pulling.
-        assert!(!vault_ready(5.9, 5.0, 6.0, ClimbGripKind::Ledge, true));
+        assert!(!vault_ready(5.9, 0.2, 6.0, ClimbGripKind::Ledge, true));
         assert!(!vault_ready(
             6.0 + VAULT_EYE_MARGIN,
-            5.0,
+            0.2,
             6.0,
             ClimbGripKind::Ledge,
             true
         ));
         // Never pulled at all: a standing player who grabs a chest-high crate
         // was already looking over it, and leaning on it is not a mantle.
-        assert!(!vault_ready(6.2, 6.2, 6.0, ClimbGripKind::Ledge, true));
+        assert!(!vault_ready(6.2, 0.0, 6.0, ClimbGripKind::Ledge, true));
         // Hooked on the lip's vertical face, not lying on the top.
-        assert!(!vault_ready(6.2, 5.0, 6.0, ClimbGripKind::Ledge, false));
+        assert!(!vault_ready(6.2, 0.2, 6.0, ClimbGripKind::Ledge, false));
         // A ladder rail is never a vault, however high the eye gets.
-        assert!(!vault_ready(9.0, 5.0, 6.0, ClimbGripKind::Ladder, true));
+        assert!(!vault_ready(9.0, 0.2, 6.0, ClimbGripKind::Ladder, true));
     }
 
     #[test]
@@ -885,7 +931,7 @@ mod tests {
             identity,
             DT,
             [no_hand(), hand(reach, 1.0)],
-            |p| Some(ladder_grip(p)),
+            |p, _| Some(ladder_grip(p)),
             |_| true,
         );
         assert!(!climb.holds_a_ledge());
@@ -897,7 +943,7 @@ mod tests {
             identity,
             DT,
             [hand(reach, 1.0), hand(reach, 1.0)],
-            |p| Some(ledge(p)),
+            |p, _| Some(ledge(p)),
             |_| true,
         );
         assert!(climb.holds_a_ledge());
@@ -912,7 +958,7 @@ mod tests {
             identity,
             DT,
             [hand(reach, 1.0), hand(reach, 1.0)],
-            |_| None,
+            |_, _| None,
             |_| true,
         );
         assert_eq!(climb.anchor_grip().unwrap().pawn_at_grab, pawn);
@@ -930,7 +976,7 @@ mod tests {
                 identity,
                 DT,
                 [no_hand(), hand(at, 1.0)],
-                |p| probe.then(|| ladder_grip(p)),
+                |p, _| probe.then(|| ladder_grip(p)),
                 |_| true,
             )
         };
@@ -965,7 +1011,7 @@ mod tests {
             identity,
             DT,
             [no_hand(), hand(reach, 1.0)],
-            |point| {
+            |point, _| {
                 ClimbGrip {
                     entity_id: Some(entity),
                     ..ladder_grip(point)
@@ -983,7 +1029,7 @@ mod tests {
                     identity,
                     DT,
                     [no_hand(), hand(reach, 1.0)],
-                    |_| None,
+                    |_, _| None,
                     |_| false
                 )
                 .translation,

@@ -689,6 +689,10 @@ struct ClimbPass<'a> {
 
 #[derive(Clone, Copy)]
 struct ClimbTopOut {
+    /// Hand vaults follow a real clear route; flat retains Dark jump-through semantics.
+    collide_terrain: bool,
+    /// Expand at the validated final center, without a feet-planted camera jump.
+    stand_on_completion: bool,
     waypoints: [Vector<Real>; 7],
     next_waypoint: usize,
     save_pose: Vector<Real>,
@@ -966,6 +970,19 @@ fn shape_sweep_is_clear(
             },
         )
         .is_none()
+}
+
+/// Static overlap alone can miss the underside of one-sided ceiling triangles.
+/// Sweeping the capsule's generating sphere upward covers that same volume
+/// from the blocking side. Shared by ordinary stand-up and hand-vault landing.
+fn capsule_pose_is_clear(queries: &QueryPipeline, center: Vector<Real>, capsule: &Capsule) -> bool {
+    !shape_intersects(queries, center, capsule)
+        && shape_sweep_is_clear(
+            queries,
+            center + capsule.segment.a.coords,
+            center + capsule.segment.b.coords,
+            &Ball::new(capsule.radius),
+        )
 }
 
 fn ray_segment_is_clear(queries: &QueryPipeline, from: Vector<Real>, to: Vector<Real>) -> bool {
@@ -1269,6 +1286,8 @@ fn plan_climb_top_out(
         self_translation: first_step,
         is_climbing: true,
         top_out: Some(ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints,
             next_waypoint: 0,
             save_pose: pos.translation.vector,
@@ -1538,6 +1557,8 @@ fn plan_jump_mantle(
         self_translation: first_movement,
         is_climbing: true,
         top_out: Some(ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints,
             next_waypoint: 0,
             save_pose: pos.translation.vector,
@@ -1607,7 +1628,8 @@ fn advance_climb_top_out(
     mut top_out: ClimbTopOut,
     dt: Real,
 ) -> (EffectiveCharacterMovement, Option<ClimbTopOut>) {
-    let final_shape = if top_out.is_crouched {
+    let final_shape = if top_out.is_crouched && (!top_out.stand_on_completion || top_out.reversing)
+    {
         crouched_player_capsule()
     } else {
         standing_player_capsule()
@@ -1620,7 +1642,11 @@ fn advance_climb_top_out(
             }
         } else if let Some(target) = top_out.waypoints.get(top_out.next_waypoint) {
             *target
-        } else if shape_intersects(validation_queries, pos.translation.vector, &final_shape) {
+        } else if if top_out.collide_terrain {
+            !capsule_pose_is_clear(validation_queries, pos.translation.vector, &final_shape)
+        } else {
+            shape_intersects(validation_queries, pos.translation.vector, &final_shape)
+        } {
             top_out.reversing = true;
             continue;
         } else {
@@ -1632,7 +1658,17 @@ fn advance_climb_top_out(
         }
         if top_out.reversing {
             if top_out.next_waypoint == 0 {
-                if shape_intersects(validation_queries, top_out.save_pose, &final_shape) {
+                let recovery_queries = if top_out.collide_terrain {
+                    scripted_queries
+                } else {
+                    validation_queries
+                };
+                let recovery_shape = if top_out.is_crouched {
+                    crouched_player_capsule()
+                } else {
+                    standing_player_capsule()
+                };
+                if shape_intersects(recovery_queries, top_out.save_pose, &recovery_shape) {
                     return (scripted_character_movement(Vector::zeros()), Some(top_out));
                 }
                 return (scripted_character_movement(Vector::zeros()), None);
@@ -4739,36 +4775,8 @@ impl PhysicsWorld {
                 &self.collider_set,
                 filter,
             );
-            let overlaps_final_pose = queries
-                .intersect_shape(standing_pos, &test_shape)
-                .next()
-                .is_some();
-            // Level ceilings are authored as one-sided triangles facing down.
-            // A static overlap against their underside can miss them, even
-            // though an upward movement cast correctly blocks. Sweep a sphere
-            // from the standing capsule's bottom axis endpoint to its top
-            // endpoint: the swept sphere is exactly the capsule volume and
-            // approaches those ceiling faces from below. Keep the final-pose
-            // overlap above as well, because a cast configured to leave an
-            // initial penetration may not report a prop already intersecting
-            // the bottom sphere.
-            let bottom_sphere_pos =
-                Translation::from(Vector::y() * test_shape.segment.a.y) * standing_pos;
-            let axis_length = (test_shape.segment.b - test_shape.segment.a).norm();
-            let crown_sweep = Ball::new(test_shape.radius);
-            let blocked_by_crown_sweep = queries
-                .cast_shape(
-                    &bottom_sphere_pos,
-                    &Vector::y(),
-                    &crown_sweep,
-                    rapier3d::parry::query::ShapeCastOptions {
-                        max_time_of_impact: axis_length,
-                        target_distance: 0.0,
-                        stop_at_penetration: false,
-                        compute_impact_geometry_on_penetration: true,
-                    },
-                )
-                .is_some();
+            let pose_is_clear =
+                capsule_pose_is_clear(&queries, standing_pos.translation.vector, &test_shape);
             // Both probes above are spatial queries, and Rapier only builds the
             // broad-phase BVH inside `PhysicsPipeline::step`. On a world that
             // has never been stepped they therefore match nothing and report
@@ -4783,7 +4791,7 @@ impl PhysicsWorld {
             // Room" ledge, issue #773). A standing capsule embedded in level
             // geometry is unrecoverable: the character controller resolves zero
             // movement in every direction for the rest of the session.
-            let blocked = !self.has_stepped || overlaps_final_pose || blocked_by_crown_sweep;
+            let blocked = !self.has_stepped || !pose_is_clear;
 
             if !blocked {
                 self.collider_set[collider_handle].set_shape(standing_player_shared_shape());
@@ -5109,82 +5117,100 @@ impl PhysicsWorld {
         player_handle.support = None;
     }
 
-    /// Start the scripted top-out (Dark's crouched up-and-forward mantle
-    /// waypoints, the same sequence flat runs at a ladder top) from wherever
-    /// the player currently hangs, heading `direction`.
-    ///
-    /// This is how a VR hand vault finishes: once the eye clears the lip
-    /// ([`crate::vr_climb::vault_ready`]) the hands have done all they can,
-    /// and the body is thrown over by the planner rather than hauled. Returns
-    /// whether a route was found - if not, nothing changes and the player
-    /// keeps climbing.
-    pub fn plan_hand_top_out(
-        &mut self,
-        direction: Vector3<f32>,
-        player_handle: &mut PlayerHandle,
-    ) -> bool {
-        if player_handle.top_out.is_some() {
+    /// Plan a short, collision-checked route onto the surface actually held.
+    /// Stay compressed along the route, expanding only at the validated landing.
+    /// This reuses the scripted mover/reversal without requiring a standing
+    /// capsule to fit at the hanging start or choosing a different floor ahead.
+    pub fn plan_hand_top_out(&mut self, grip: ClimbGrip, player: &mut PlayerHandle) -> bool {
+        if player.top_out.is_some() || grip.kind != ClimbGripKind::Ledge {
             return false;
         }
-        let character_handle = player_handle.character_handle;
-        let character_pos = *self.rigid_body_set[character_handle].position();
-        let movement_filter = player_movement_filter(character_handle);
-        // The same three pipelines the flat ladder top-out plans against: the
-        // probes ignore the climbable the player is hanging off, and the
-        // scripted route may cross parentless terrain (see `ClimbPass`).
+        let start = *self.rigid_body_set[player.character_handle].translation();
+        let toward = vec_to_nvec(grip.point) - start;
+        let horizontal = vector![toward.x, 0.0, toward.z];
+        if horizontal.norm() < 1e-4 {
+            return false;
+        }
+        let direction = horizontal.normalize();
+        let filter = player_movement_filter(player.character_handle);
         let not_climbable =
             |_handle: ColliderHandle, collider: &Collider| collider_is_not_climbable(collider);
-        let parented_non_climbable = |_handle: ColliderHandle, collider: &Collider| {
-            collider.parent().is_some() && collider_is_not_climbable(collider)
-        };
-        // The route is planned for, and ends by expanding, the STANDING
-        // capsule, so a balled-up body has to fit one where it hangs. Test that
-        // first - it is one query, against the planner's hundreds - and refuse
-        // the vault if it does not; the player keeps pulling instead.
-        let stand_anchor = if player_handle.is_hanging_crouched {
-            CrouchAnchor::Center
-        } else {
-            CrouchAnchor::Feet
-        };
-        let standing_center = nvec_to_cgmath(character_pos.translation.vector)
-            + vec3(0.0, stand_anchor.center_shift(), 0.0);
-        if player_handle.is_crouched
-            && !self.standing_player_pose_is_clear(standing_center, player_handle)
-        {
-            return false;
-        }
-        // Plan before committing to anything: a refused route must leave the
-        // player exactly as they were, still holding on.
         let planned = {
-            let dispatcher = self.narrow_phase.query_dispatcher();
-            let queries = self.player_movement_queries(dispatcher, movement_filter);
-            plan_climb_top_out(
-                &player_handle.controller,
-                &queries,
-                &queries.with_filter(movement_filter.predicate(&not_climbable)),
-                &queries.with_filter(movement_filter.predicate(&parented_non_climbable)),
-                &character_pos,
-                vec_to_nvec(direction),
-                0.0,
-                self.integration_parameters.dt,
-            )
+            let queries =
+                self.player_movement_queries(self.narrow_phase.query_dispatcher(), filter);
+            let route_queries = queries.with_filter(filter.predicate(&not_climbable));
+            let crouched = crouched_player_capsule();
+            let stand_on_completion = !player.tracking_is_crouched();
+            let final_shape = if stand_on_completion {
+                standing_player_capsule()
+            } else {
+                crouched_player_capsule()
+            };
+            let compressed = Ball::new(PLAYER_CROUCH_RADIUS / SCALE_FACTOR);
+            if shape_intersects(&route_queries, start, &crouched) {
+                return false;
+            }
+            let mut route = None;
+            // Bounded inset search: a fist can hold an edge that cannot support
+            // the body, so prove the landing capsule fits and stays supported.
+            for inset in [0.4, 0.8] {
+                let above = vec_to_nvec(grip.point) + direction * inset + Vector::y() * 0.3;
+                let ray = Ray::new(Point::from(above), -Vector::y());
+                let Some((handle, hit)) = route_queries.cast_ray_and_get_normal(&ray, 0.6, true)
+                else {
+                    continue;
+                };
+                let floor = ray.point_at(hit.time_of_impact).coords;
+                if !is_walkable_normal(hit.normal.y)
+                    || (floor.y - grip.point.y).abs() > 0.1
+                    || EntityId::from_inner(self.collider_set[handle].user_data as u64)
+                        != grip.entity_id
+                {
+                    continue;
+                }
+                let landing = floor + Vector::y() * player_center_above_floor(!stand_on_completion);
+                if !capsule_pose_is_clear(&queries, landing, &final_shape)
+                    || !shape_has_stable_support(
+                        &player.controller,
+                        &queries,
+                        &final_shape,
+                        landing,
+                        self.integration_parameters.dt,
+                    )
+                {
+                    continue;
+                }
+                let raised = vector![start.x, start.y.max(landing.y), start.z];
+                let crossed = vector![landing.x, raised.y, landing.z];
+                if !shape_sweep_is_clear(&route_queries, start, raised, &compressed)
+                    || !shape_sweep_is_clear(&route_queries, raised, crossed, &compressed)
+                    || !shape_sweep_is_clear(&route_queries, crossed, landing, &compressed)
+                {
+                    continue;
+                }
+                route = Some(ClimbTopOut {
+                    collide_terrain: true,
+                    stand_on_completion,
+                    waypoints: [start, raised, crossed, landing, landing, landing, landing],
+                    next_waypoint: 0,
+                    save_pose: start,
+                    reversing: false,
+                    is_crouched: true,
+                });
+                break;
+            }
+            route
         };
-        let Some(planned) = planned else {
+        let Some(route) = planned else {
             return false;
         };
-        // Un-ball on the anchor the crouch was made with, so the body ends up
-        // where the pre-check said the standing capsule fits.
-        if player_handle.is_crouched
-            && self.set_player_crouch_anchored(false, stand_anchor, player_handle)
-        {
-            return false;
-        }
-        player_handle.top_out = planned.top_out;
+        self.set_player_crouch_hanging(true, player);
+        player.top_out = Some(route);
         sync_top_out_collider(
             &mut self.collider_set,
             &mut self.rigid_body_set,
             false,
-            player_handle,
+            player,
         );
         true
     }
@@ -5337,6 +5363,25 @@ impl PhysicsWorld {
         radius: f32,
         feet_y: f32,
     ) -> Option<ClimbGrip> {
+        self.climbable_grip_above(point, radius, feet_y + PLAYER_STEP_HEIGHT / SCALE_FACTOR)
+    }
+
+    /// Near a held ladder, the deck can be less than a step above the feet.
+    /// It must still be above them, so ordinary floor support is never a grip.
+    pub fn climbable_grip_from_ladder_at(
+        &self,
+        point: Vector3<f32>,
+        feet_y: f32,
+    ) -> Option<ClimbGrip> {
+        self.climbable_grip_above(point, CLIMB_GRIP_RADIUS, feet_y + 0.1)
+    }
+
+    fn climbable_grip_above(
+        &self,
+        point: Vector3<f32>,
+        radius: f32,
+        min_ledge_height: f32,
+    ) -> Option<ClimbGrip> {
         let ball = Ball::new(radius.max(1.0e-3));
         let ball_pos = Isometry::translation(point.x, point.y, point.z);
         // Probe AS the player, so only geometry that blocks the player can be
@@ -5361,7 +5406,6 @@ impl PhysicsWorld {
             filter,
         );
 
-        let min_ledge_height = feet_y + PLAYER_STEP_HEIGHT / SCALE_FACTOR;
         let mut nearest: Option<(f32, ClimbGrip)> = None;
         for (_handle, collider) in queries.intersect_shape(ball_pos, &ball) {
             let Ok(Some(contact)) = rapier3d::parry::query::contact(
@@ -5684,7 +5728,7 @@ impl PhysicsWorld {
                 let (movement, top_out) = advance_climb_top_out(
                     &player_handle.controller,
                     &queries,
-                    &queries.with_filter(scripted_top_out_filter),
+                    &queries.with_filter(if top_out.collide_terrain { climb_pass_filter } else { scripted_top_out_filter }),
                     &character_pos,
                     top_out,
                     self.integration_parameters.dt,
@@ -5774,6 +5818,17 @@ impl PhysicsWorld {
         let self_translation = player_movement.self_translation;
         player_handle.self_translation = nvec_to_cgmath(self_translation);
         player_handle.is_climbing = player_movement.is_climbing;
+        if player_movement.top_out.is_none()
+            && player_handle
+                .top_out
+                .is_some_and(|route| route.stand_on_completion && !route.reversing)
+        {
+            // The route already moved to a full-height supported center.
+            // Expand there; a feet-planted crouch toggle would add another 0.64.
+            player_handle.is_crouched = false;
+            player_handle.is_hanging_crouched = false;
+            player_handle.tracking_crouched = false;
+        }
         player_handle.top_out = player_movement.top_out;
         player_handle.slope_displacement = player_movement.slope_displacement;
         let is_top_out = player_handle.top_out.is_some();
@@ -9054,6 +9109,8 @@ mod tests {
         let controller = KinematicCharacterController::default();
         let mut pos = Isometry::translation(0.0, 0.0, 0.0);
         let top_out = ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints: test_waypoints(),
             next_waypoint: 2,
             save_pose: vector![-1.0, 0.0, 0.0],
@@ -9107,6 +9164,8 @@ mod tests {
         let controller = KinematicCharacterController::default();
         let mut pos = Isometry::translation(0.0, 0.0, 0.0);
         let mut active = ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints: test_waypoints(),
             next_waypoint: 2,
             save_pose: vector![-1.0, 0.0, 0.0],
@@ -9160,6 +9219,8 @@ mod tests {
         let controller = KinematicCharacterController::default();
         let pos = Isometry::identity();
         let completed = ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints: test_waypoints(),
             next_waypoint: test_waypoints().len(),
             save_pose: Vector::zeros(),
@@ -9198,6 +9259,8 @@ mod tests {
         world.collider_set[collider_handle].set_shape(SharedShape::ball(CLIMB_TOP_OUT_RADIUS));
         world.rigid_body_set[player.character_handle].enable_ccd(false);
         player.top_out = Some(ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints: [compressed_pose; 7],
             next_waypoint: 3,
             save_pose,
@@ -9374,6 +9437,188 @@ mod tests {
     }
 
     #[test]
+    fn hand_top_out_tucks_past_the_wall_and_expands_only_at_the_landing() {
+        for physically_crouched in [false, true] {
+            let (mut world, mut player) = grip_world();
+            let block = EntityId::from_inner(2020).unwrap();
+            world.add_kinematic(
+                block,
+                vec3(0.0, 1.5, 0.0),
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                vec3(4.0, 3.0, 4.0),
+                CollisionGroup::entity(),
+                false,
+            );
+            step(&mut world, &mut player, 1);
+            world.set_player_crouch(physically_crouched, &mut player);
+            world.set_player_translation(vec3(2.4, 2.4, 0.0), &mut player);
+            let grip = ClimbGrip {
+                kind: ClimbGripKind::Ledge,
+                entity_id: Some(block),
+                point: vec3(2.0, 3.0, 0.0),
+                normal: vec3(0.0, 1.0, 0.0),
+            };
+            assert!(!world.standing_player_pose_is_clear(vec3(2.4, 2.4, 0.0), &player));
+            assert!(world.plan_hand_top_out(grip, &mut player));
+            assert!(player.is_crouched());
+            let mut previous = world.get_player_translation(&player);
+            for _ in 0..180 {
+                step(&mut world, &mut player, 1);
+                let position = world.get_player_translation(&player);
+                assert!(
+                    (position - previous).magnitude() < 0.1,
+                    "landing must not add a stance jump"
+                );
+                previous = position;
+                if !player.is_topping_out() {
+                    break;
+                }
+            }
+            assert!(!player.is_topping_out());
+            assert_eq!(player.is_crouched(), physically_crouched);
+            assert!(
+                (previous.y - (3.0 + player_center_above_floor(physically_crouched))).abs() < 0.05
+            );
+            assert!(previous.x <= 2.01, "landing {previous:?}");
+        }
+    }
+
+    #[test]
+    fn hand_vault_does_not_expand_through_a_one_sided_ceiling() {
+        let (mut world, mut player) = grip_world();
+        let block = EntityId::from_inner(2025).unwrap();
+        world.add_kinematic(
+            block,
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        world.set_player_translation(vec3(2.4, 2.4, 0.0), &mut player);
+        let grip = ClimbGrip {
+            kind: ClimbGripKind::Ledge,
+            entity_id: Some(block),
+            point: vec3(2.0, 3.0, 0.0),
+            normal: vec3(0.0, 1.0, 0.0),
+        };
+        // The sphere can pass underneath y=5, but the standing crown cannot.
+        world.add_collider(
+            EntityId::from_inner(2026).unwrap(),
+            ColliderBuilder::trimesh(
+                vec![
+                    point![-2.0, 5.0, -2.0],
+                    point![2.0, 5.0, -2.0],
+                    point![2.0, 5.0, 2.0],
+                    point![-2.0, 5.0, 2.0],
+                ],
+                vec![[0, 1, 2], [0, 2, 3]],
+            )
+            .unwrap()
+            .build(),
+        );
+        step(&mut world, &mut player, 1);
+        assert!(!world.plan_hand_top_out(grip, &mut player));
+        assert!(!player.is_crouched());
+        assert!(!player.is_topping_out());
+    }
+
+    #[test]
+    fn a_new_blocker_reverses_a_hand_vault_to_its_crouched_source() {
+        let (mut world, mut player) = grip_world();
+        let block = EntityId::from_inner(2023).unwrap();
+        world.add_kinematic(
+            block,
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        let start = vec3(2.4, 2.4, 0.0);
+        world.set_player_translation(start, &mut player);
+        assert!(world.plan_hand_top_out(
+            ClimbGrip {
+                kind: ClimbGripKind::Ledge,
+                entity_id: Some(block),
+                point: vec3(2.0, 3.0, 0.0),
+                normal: vec3(0.0, 1.0, 0.0),
+            },
+            &mut player
+        ));
+        step(&mut world, &mut player, 10);
+        world.add_kinematic(
+            EntityId::from_inner(2024).unwrap(),
+            vec3(1.5, 3.6, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 1.0, 3.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        for _ in 0..180 {
+            step(&mut world, &mut player, 1);
+            if !player.is_topping_out() {
+                break;
+            }
+        }
+        assert!(!player.is_topping_out(), "blocked route must recover");
+        assert!(
+            player.is_crouched(),
+            "reversal must not expand into the source wall"
+        );
+        assert!((world.get_player_translation(&player) - start).magnitude() < 0.05);
+    }
+
+    #[test]
+    fn hand_top_out_rejects_a_blocked_or_different_height_landing_without_resizing() {
+        let (mut world, mut player) = grip_world();
+        let block = EntityId::from_inner(2021).unwrap();
+        world.add_kinematic(
+            block,
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        world.set_player_translation(vec3(2.6, 2.4, 0.0), &mut player);
+        let mut grip = ClimbGrip {
+            kind: ClimbGripKind::Ledge,
+            entity_id: Some(block),
+            point: vec3(2.0, 3.8, 0.0),
+            normal: vec3(0.0, 1.0, 0.0),
+        };
+        assert!(
+            !world.plan_hand_top_out(grip, &mut player),
+            "must not choose another floor"
+        );
+        grip.point.y = 3.0;
+        world.add_kinematic(
+            EntityId::from_inner(2022).unwrap(),
+            vec3(0.0, 4.6, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 0.2, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        let before = world.get_player_translation(&player);
+        assert!(!world.plan_hand_top_out(grip, &mut player));
+        assert_eq!(world.get_player_translation(&player), before);
+        assert!(!player.is_crouched());
+        assert!(!player.is_topping_out());
+    }
+
+    #[test]
     fn a_ceiling_blocks_the_approach_around_a_lip() {
         let (mut world, mut player) = grip_world();
         world.add_kinematic(
@@ -9453,6 +9698,23 @@ mod tests {
         let lip = world
             .climbable_grip_at(vec3(0.0, 3.05, 0.0), CLIMB_GRIP_RADIUS, 0.0)
             .expect("a block top above the feet is grippable");
+        assert!(
+            world
+                .climbable_grip_at(vec3(0.0, 3.05, 0.0), CLIMB_GRIP_RADIUS, 2.5)
+                .is_none()
+        );
+        assert!(
+            world
+                .climbable_grip_from_ladder_at(vec3(0.0, 3.05, 0.0), 2.5)
+                .is_some(),
+            "a nearby deck within a step is available during ladder transfer"
+        );
+        assert!(
+            world
+                .climbable_grip_from_ladder_at(vec3(0.0, 3.05, 0.0), 3.0)
+                .is_none(),
+            "even a transfer must not grip the floor under the feet"
+        );
         assert_eq!(lip.kind, ClimbGripKind::Ledge);
         assert!(
             lip.normal.y > 0.9,
@@ -11175,6 +11437,8 @@ mod tests {
         world.collider_set[collider_handle].set_shape(SharedShape::ball(CLIMB_TOP_OUT_RADIUS));
         world.rigid_body_set[player.character_handle].enable_ccd(false);
         player.top_out = Some(ClimbTopOut {
+            collide_terrain: false,
+            stand_on_completion: false,
             waypoints: [compressed_pose; 7],
             next_waypoint: 3,
             save_pose,

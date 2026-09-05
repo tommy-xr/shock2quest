@@ -78,7 +78,7 @@ test(
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await launchVr();
-    await standAt(game, [-5.5, 1.5, MANTLE_Z]);
+    await standAt(game, [-6.35, 1.5, MANTLE_Z]);
 
     const atGrab = await grab(game, "right", [-7.2, 3.05, MANTLE_Z]);
     const grabbed = (await game.info()).player.climb;
@@ -131,12 +131,13 @@ test(
   },
 );
 
+for (const transferHeight of [4.5, 5.1]) {
 test(
-  "debug_ladder (VR): a hand on the ledge top vaults off the ladder",
+  `debug_ladder (VR): a deck grab at body height ${transferHeight} vaults off the ladder`,
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await launchVr();
-    await standAt(game, [-5.5, 1.5, LEDGE_Z]);
+    await standAt(game, [-6.35, 1.5, LEDGE_Z]);
 
     // Hand over hand up the near-face ladder. Hands are tracked in PAWN space,
     // so one reach height serves every cycle - the same reach lands on a
@@ -154,7 +155,7 @@ test(
     let pulling: "left" | "right" = "right";
     await grab(game, pulling, [-6.8, 2.6, LEDGE_Z]);
     for (let half = 0; half < 8; half += 1) {
-      if ((await game.info()).player.position[1] > 4.5) break;
+      if ((await game.info()).player.position[1] > transferHeight) break;
       for (let frame = 1; frame <= FRAMES; frame += 1) {
         await game.input.set(`${pulling}_hand.position`, [
           reach[0] + (down[0] * frame) / FRAMES,
@@ -163,6 +164,7 @@ test(
         ]);
         await game.step({ frames: 1 });
       }
+      if ((await game.info()).player.position[1] > transferHeight) break;
       const other: "left" | "right" = pulling === "right" ? "left" : "right";
       await game.input.set(`${other}_hand.position`, reach);
       await game.input.set(`${other}_hand.squeeze`, 0);
@@ -176,18 +178,19 @@ test(
     }
     const climbed = (await game.info()).player;
     assert.ok(
-      climbed.position[1] > 4.7,
+      climbed.position[1] > transferHeight,
       `hand over hand only reached ${climbed.position[1]}`,
     );
     assert.equal(climbed.climb.grips[0].kind, "ladder");
     assert.equal(climbed.climb.vaulting, false, "a ladder rail never vaults");
 
-    // Reach over the ladder's top onto the block's top surface: that is a
-    // ledge, and the eye is still under it, so the vault waits for the pull.
+    // Reach onto the deck AFTER the head clears it: this used to permanently
+    // fail the historical eye-at-grab gate. The new grip still waits for a pull.
     const other: "left" | "right" = pulling === "right" ? "left" : "right";
-    const onTop = await grab(game, other, [-7.6, 6.05, LEDGE_Z]);
+    const onTop = await grab(game, other, [-7.1, 6.05, LEDGE_Z]);
     const held = (await game.info()).player.climb;
     assert.equal(held.anchor_hand, other);
+    assert.equal(held.vaulting, false, "resting the hand on the deck is not a vault");
     assert.equal(
       held.grips.find((grip) => grip.hand === other)?.kind,
       "ledge",
@@ -224,6 +227,8 @@ test(
   },
 );
 
+}
+
 test(
   "debug_ladder (VR): a plain wall and a low eye never vault",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -231,7 +236,7 @@ test(
     await using game = await launchVr();
 
     // The plain wall offers no hold at all, so there is nothing to vault from.
-    await standAt(game, [-5.5, 1.5, WALL_Z]);
+    await standAt(game, [-6.35, 1.5, WALL_Z]);
     await grab(game, "right", [-6.9, 2.6, WALL_Z]);
     let climb = (await game.info()).player.climb;
     assert.equal(climb.grips.length, 0);
@@ -241,7 +246,7 @@ test(
 
     // On the ledge ladder with the eye far below the block top, pulling climbs
     // and nothing else.
-    await standAt(game, [-5.5, 1.5, LEDGE_Z]);
+    await standAt(game, [-6.35, 1.5, LEDGE_Z]);
     const atGrab = await grab(game, "right", [-6.8, 2.6, LEDGE_Z]);
     const down = await vrHandLocalDelta(game, [0, -1.0, 0]);
     for (let frame = 1; frame <= 30; frame += 1) {
@@ -268,7 +273,7 @@ test(
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await launchVr();
-    await standAt(game, [-5.5, 1.5, MANTLE_Z]);
+    await standAt(game, [-6.35, 1.5, MANTLE_Z]);
     const floorY = (await game.info()).player.position[1];
 
     const atGrab = await grab(game, "right", [-7.2, 3.05, MANTLE_Z]);
