@@ -43,11 +43,33 @@ impl PropRepairDiff {
     }
 }
 
+/// Dark's `P$ModifyDif` and `P$Modify2Di` - the terms a gun is modified on,
+/// for the first and the second modification. Both are the same 12-byte
+/// `sTechInfo` record `P$HackDiff` is, read against the Modify skill; a gun
+/// that authors no second record cannot be taken past modification one.
+#[derive(Debug, Component, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PropModifyDiff(pub PropHackDiff);
+
+impl PropModifyDiff {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, len: u32) -> Self {
+        Self(PropHackDiff::read(reader, len))
+    }
+}
+
+#[derive(Debug, Component, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PropModify2Diff(pub PropHackDiff);
+
+impl PropModify2Diff {
+    pub fn read<T: io::Read + io::Seek>(reader: &mut T, len: u32) -> Self {
+        Self(PropHackDiff::read(reader, len))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
-    use super::{PropHackDiff, PropRepairDiff};
+    use super::{PropHackDiff, PropModify2Diff, PropModifyDiff, PropRepairDiff};
 
     #[test]
     fn parses_little_endian_tech_info_layout() {
@@ -83,6 +105,41 @@ mod tests {
                 success_chance: 20,
                 critical_chance: 4,
                 cost: 3.0,
+            })
+        );
+    }
+
+    /// The shipped pistol's `P$ModifyDif` and `P$Modify2Di` bytes (gamesys
+    /// template -17): the first modification is a 40% base success chance
+    /// against two mines, the second a harder 30% against four, both twenty
+    /// nanites an attempt.
+    #[test]
+    fn parses_the_shipped_pistol_modify_difficulties() {
+        let first = [
+            0x28, 0x00, 0x00, 0x00, // success chance 40
+            0x02, 0x00, 0x00, 0x00, // critical chance 2
+            0x00, 0x00, 0xa0, 0x41, // cost 20.0
+        ];
+        let second = [
+            0x1e, 0x00, 0x00, 0x00, // success chance 30
+            0x04, 0x00, 0x00, 0x00, // critical chance 4
+            0x00, 0x00, 0xa0, 0x41, // cost 20.0
+        ];
+
+        assert_eq!(
+            PropModifyDiff::read(&mut Cursor::new(first), 12),
+            PropModifyDiff(PropHackDiff {
+                success_chance: 40,
+                critical_chance: 2,
+                cost: 20.0,
+            })
+        );
+        assert_eq!(
+            PropModify2Diff::read(&mut Cursor::new(second), 12),
+            PropModify2Diff(PropHackDiff {
+                success_chance: 30,
+                critical_chance: 4,
+                cost: 20.0,
             })
         );
     }
