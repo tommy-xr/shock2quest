@@ -150,14 +150,10 @@ pub(crate) fn door_is_passable(fraction: f32, rise: f32, actor_height: f32) -> b
 /// the rate limit has expired, never inside melee reach of the believed
 /// target (an AI in a position to swing is fighting, not thwarted), and
 /// never over a performance the level authored.
-pub(crate) fn should_gesture_frustration(
-    door_wait_seconds: Option<f32>,
-    cooldown_remaining: f32,
-    target_distance: Option<f32>,
-    scripted: ScriptedState,
-) -> bool {
-    door_wait_seconds.is_some_and(|s| s >= FRUSTRATION_DOOR_WAIT_SECONDS)
-        && frustration_gesture_allowed(cooldown_remaining, target_distance, scripted)
+/// Whether a door has kept the AI waiting long enough to read as impatience
+/// rather than as a door simply opening for it.
+pub(crate) fn door_wait_is_thwarting(door_wait_seconds: Option<f32>) -> bool {
+    door_wait_seconds.is_some_and(|seconds| seconds >= FRUSTRATION_DOOR_WAIT_SECONDS)
 }
 
 /// The limits every gesture path shares, whatever it is frustrated at: the
@@ -246,20 +242,6 @@ fn frustration_gesture(entity_id: EntityId) -> Effect {
     }
 }
 
-/// Tell the path follower this AI is standing still on purpose, so the hold
-/// suspends its no-progress accounting instead of reading as a wedge. Written
-/// on the same channel the follower publishes its own state on, and BEFORE the
-/// steer that reads it.
-fn publish_movement_hold(world: &World, entity_id: EntityId, hold: MovementHold) {
-    if let Some(service) = world
-        .borrow::<UniqueView<GlobalPathfinding>>()
-        .ok()
-        .and_then(|g| g.0.clone())
-    {
-        service.record_movement_hold(entity_id.inner(), hold);
-    }
-}
-
 /// How long path-following has been making no progress, as published by the
 /// steering strategy - and already frozen for the frames this AI published a
 /// hold for. Zero for an AI that isn't following a route.
@@ -275,7 +257,7 @@ fn path_stall_seconds(world: &World, entity_id: EntityId) -> f32 {
 
 /// Why this AI is standing still this frame, if it is. A door wait outranks a
 /// pivot: the AI can be doing both, and the door is what it is waiting on.
-fn movement_hold(door_wait_seconds: Option<f32>, pivoting: bool) -> MovementHold {
+fn hold_reason(door_wait_seconds: Option<f32>, pivoting: bool) -> MovementHold {
     if door_wait_seconds.is_some() {
         MovementHold::DoorWait
     } else if pivoting {
@@ -1002,30 +984,30 @@ impl AnimatedMonsterAI {
         // suppressed frame doesn't stretch it.
         self.frustration_cooldown =
             (self.frustration_cooldown - time.elapsed.as_secs_f32()).max(0.0);
-        if started_a_clip {
+        if started_a_clip || !door_wait_is_thwarting(door_wait_seconds) {
             return Effect::NoEffect;
         }
-        if !should_gesture_frustration(
-            door_wait_seconds,
-            self.frustration_cooldown,
-            chase_target_distance(world, entity_id),
-            self.current_behavior.borrow().scripted_state(),
-        ) {
-            return Effect::NoEffect;
+        let gesture = self.try_frustration_gesture(world, entity_id);
+        if !matches!(gesture, Effect::NoEffect) {
+            tracing::debug!(
+                "ai {:?} shows impatience at a door (waited {:?}s)",
+                entity_id,
+                door_wait_seconds
+            );
         }
-        self.frustration_cooldown = self.next_frustration_cooldown();
-        tracing::debug!(
-            "ai {:?} shows frustration (door wait: {:?}s)",
-            entity_id,
-            door_wait_seconds
-        );
-        frustration_gesture(entity_id)
+        gesture
     }
 
     /// The thwarted performance, if the shared limits allow it right now -
     /// arming the rate limit when it does. Every gesture path goes through
-    /// this or `update_frustration`, which applies the same limits.
+    /// here; `update_frustration` adds the suppression for a clip started
+    /// earlier in the same frame.
     fn try_frustration_gesture(&mut self, world: &World, entity_id: EntityId) -> Effect {
+        // The gesture PLAYS (it does not queue), so it would drop a pivot
+        // mid-turn and leave the AI held on a clip that is no longer running.
+        if self.turn_clip.is_some() {
+            return Effect::NoEffect;
+        }
         if !frustration_gesture_allowed(
             self.frustration_cooldown,
             chase_target_distance(world, entity_id),
@@ -1456,8 +1438,15 @@ impl Script for AnimatedMonsterAI {
         // through it, so heading, whiskers, crowd repel and the route itself
         // stay live while the creature stands.
         let door_wait_seconds = self.update_door_wait(world, entity_id, time);
+        // The pivot in flight, as of last frame: one started this frame is
+        // published on the next, and one ending is held a frame longer. Both
+        // edges cost a single 16 ms frame either way.
         let pivoting = self.turn_clip.is_some();
-        publish_movement_hold(world, entity_id, movement_hold(door_wait_seconds, pivoting));
+        super::ai_util::publish_movement_hold(
+            world,
+            entity_id,
+            hold_reason(door_wait_seconds, pivoting),
+        );
         let (steering_output, steering_effects) = self
             .current_behavior
             .borrow_mut()
@@ -1484,8 +1473,8 @@ impl Script for AnimatedMonsterAI {
         };
 
         // A pivot big enough to stop the body is played as an authored turn
-        // clip. Same gate as the frustration gesture: never over a scripted
-        // performance, and never while standing off from a door.
+        // clip - never over a scripted performance, and never while standing
+        // off from a door.
         let may_turn = self.current_behavior.borrow().is_locomotion()
             && self.current_behavior.borrow().scripted_state() != ScriptedState::Running
             && door_wait_seconds.is_none();
@@ -2521,10 +2510,10 @@ mod tests {
 
     #[test]
     fn a_door_wait_outranks_a_pivot_as_the_hold_reason() {
-        assert_eq!(movement_hold(None, false), MovementHold::None);
-        assert_eq!(movement_hold(None, true), MovementHold::Pivot);
+        assert_eq!(hold_reason(None, false), MovementHold::None);
+        assert_eq!(hold_reason(None, true), MovementHold::Pivot);
         // Both at once: the door is what the AI is actually waiting on.
-        assert_eq!(movement_hold(Some(0.2), true), MovementHold::DoorWait);
+        assert_eq!(hold_reason(Some(0.2), true), MovementHold::DoorWait);
     }
 
     #[test]
@@ -2887,30 +2876,15 @@ mod tests {
 
     #[test]
     fn frustration_needs_a_block() {
-        assert!(!should_gesture_frustration(
-            None,
-            0.0,
-            None,
-            ScriptedState::NotScripted
-        ));
-        assert!(should_gesture_frustration(
-            LONG_WAIT,
-            0.0,
-            None,
-            ScriptedState::NotScripted
-        ));
+        assert!(!door_wait_is_thwarting(None));
+        assert!(door_wait_is_thwarting(LONG_WAIT));
     }
 
     #[test]
     fn a_door_that_opens_promptly_draws_no_gesture() {
         // Every shipped sliding leaf clears in about half a second; an AI
         // that gestured at each one would dam the doorway behind it.
-        assert!(!should_gesture_frustration(
-            Some(0.5),
-            0.0,
-            None,
-            ScriptedState::NotScripted
-        ));
+        assert!(!door_wait_is_thwarting(Some(0.5)));
     }
 
     /// USER DECISION (2026-09-05): impatience is a door gesture only. On a
@@ -2918,22 +2892,29 @@ mod tests {
     /// root motion only makes the standstill longer.
     #[test]
     fn a_sustained_stall_draws_no_gesture() {
-        let mut monster = AnimatedMonsterAI::new();
         let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
         // Nothing is holding this AI at a door, however long its route has
         // been going nowhere.
+        let mut stalled = AnimatedMonsterAI::new();
         assert!(matches!(
-            monster.update_frustration(&world, entity_id, None, false, &tick()),
+            stalled.update_frustration(&world, entity_id, None, false, &tick()),
             Effect::NoEffect
+        ));
+        // The same AI, kept waiting at a door instead: this is the one block
+        // that still draws the performance, so the case above is a decision,
+        // not a gesture path that has stopped working.
+        let mut waiting = AnimatedMonsterAI::new();
+        assert!(matches!(
+            waiting.update_frustration(&world, entity_id, LONG_WAIT, false, &tick()),
+            Effect::PlayAnimationBySchema { .. }
         ));
     }
 
     #[test]
     fn the_door_wait_can_never_outlast_the_path_follower_patience() {
-        // A held body makes no progress toward its waypoint. If the hold
-        // could outlast the stall window, the stall system would blacklist
-        // the very crossing this AI just opened and route it back away from
-        // the door.
+        // Belt and braces beside the hold: a wait that could outlast the
+        // stall window would be relying on the hold alone to keep the
+        // crossing the AI just opened off the blocked list.
         assert!(DOOR_WAIT_TIMEOUT < crate::scripts::ai::steering::STALL_SECONDS);
     }
 
@@ -2945,8 +2926,7 @@ mod tests {
 
     #[test]
     fn frustration_is_rate_limited() {
-        assert!(!should_gesture_frustration(
-            LONG_WAIT,
+        assert!(!frustration_gesture_allowed(
             3.0,
             None,
             ScriptedState::NotScripted
@@ -2957,22 +2937,27 @@ mod tests {
     fn frustration_is_silent_within_reach_of_the_target() {
         let inside = Some(MELEE_ATTACK_RANGE * 0.5);
         let outside = Some(MELEE_ATTACK_RANGE * 2.0);
-        assert!(!should_gesture_frustration(
-            LONG_WAIT,
+        assert!(!frustration_gesture_allowed(
             0.0,
             inside,
             ScriptedState::NotScripted
         ));
-        assert!(should_gesture_frustration(
-            LONG_WAIT,
+        assert!(frustration_gesture_allowed(
             0.0,
             outside,
             ScriptedState::NotScripted
         ));
     }
 
-    /// The locked-door give-up plays the same one performance as the door
-    /// wait, and used to play it whatever either path had already spent.
+    #[test]
+    fn frustration_never_interrupts_an_authored_performance() {
+        assert!(!frustration_gesture_allowed(
+            0.0,
+            None,
+            ScriptedState::Running
+        ));
+    }
+
     #[test]
     fn the_locked_door_give_up_respects_the_shared_limit() {
         let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
@@ -2985,16 +2970,6 @@ mod tests {
         assert!(matches!(
             monster.try_frustration_gesture(&world, entity_id),
             Effect::NoEffect
-        ));
-    }
-
-    #[test]
-    fn frustration_never_interrupts_an_authored_performance() {
-        assert!(!should_gesture_frustration(
-            LONG_WAIT,
-            0.0,
-            None,
-            ScriptedState::Running
         ));
     }
 

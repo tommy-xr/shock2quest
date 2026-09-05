@@ -14,7 +14,8 @@ use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
 use crate::{
     creature,
-    mission::{PlayerInfo, entity_creator::CreateEntityOptions},
+    mission::{GlobalPathfinding, PlayerInfo, entity_creator::CreateEntityOptions},
+    pathfinding::MovementHold,
     physics::{InternalCollisionGroups, PhysicsWorld},
     runtime_props::{RuntimePropJointTransforms, RuntimePropProxyEntity, RuntimePropTransform},
     scripts::{
@@ -29,6 +30,29 @@ use crate::{
 /// random_binomial
 ///
 /// Returns a random number between -1 and 1, where values around 0 are more likely
+/// Tell every watchdog that this AI is standing still on purpose (or is free
+/// to move again). Published by the AI script BEFORE it steers - see
+/// `MovementHold`.
+pub fn publish_movement_hold(world: &World, entity_id: EntityId, hold: MovementHold) {
+    if let Some(service) = world
+        .borrow::<UniqueView<GlobalPathfinding>>()
+        .ok()
+        .and_then(|g| g.0.clone())
+    {
+        service.record_movement_hold(entity_id.inner(), hold);
+    }
+}
+
+/// Why this AI is standing still this frame, if it is.
+pub fn movement_hold(world: &World, entity_id: EntityId) -> MovementHold {
+    world
+        .borrow::<UniqueView<GlobalPathfinding>>()
+        .ok()
+        .and_then(|g| g.0.clone())
+        .map(|service| service.movement_hold(entity_id.inner()))
+        .unwrap_or_default()
+}
+
 pub fn random_binomial() -> f32 {
     let mut rng = thread_rng();
     let a = rng.gen_range(0.0..1.0);

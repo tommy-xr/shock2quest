@@ -225,9 +225,9 @@ impl PathFollowSteeringStrategy {
         elapsed: f32,
     ) -> bool {
         if hold.is_holding() {
-            // Both clocks freeze where they are; a body that has never been
-            // anchored is anchored now, so the watchdog starts measuring from
-            // where the hold ends rather than from the origin.
+            // Both clocks freeze where they are. A body with no anchor yet
+            // takes one here, so the displacement watchdog resumes from where
+            // it stood rather than from wherever it is first seen moving.
             self.displacement_anchor.get_or_insert((position, 0.0));
             return false;
         }
