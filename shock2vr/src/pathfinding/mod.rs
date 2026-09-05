@@ -911,8 +911,10 @@ impl PathfindingService {
         // center, and the cells nearest an unreachable goal are often the
         // pinch it is unreachable through - the wedge at the bottom of a
         // converging corner, where an AI parks itself against the geometry
-        // and grinds. Cells too tight to stand in are only considered when
-        // nothing roomier is reachable.
+        // and grinds. A cell the body cannot stand in is never a stopping
+        // place: when the only progress on offer is into one, we report no
+        // route (the caller's supported "nowhere better to go" answer)
+        // instead of walking the AI into the pinch it is stuck on.
         let roomy = |cell: u32| -> bool {
             movement_bits.contains(MovementBits::SMALL_CREATURE)
                 || self
@@ -927,15 +929,6 @@ impl PathfindingService {
             if d < best_distance && roomy(cell) {
                 best_distance = d;
                 best = cell;
-            }
-        }
-        if best == start_cell {
-            for &cell in reachable.keys() {
-                let d = distance_to_goal(cell);
-                if d < best_distance {
-                    best_distance = d;
-                    best = cell;
-                }
             }
         }
         if best == start_cell {
