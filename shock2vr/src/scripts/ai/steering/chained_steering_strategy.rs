@@ -15,6 +15,12 @@ impl SteeringStrategy for ChainedSteeringStrategy {
         self.strategies.iter().any(|s| s.goal_unreachable())
     }
 
+    fn goal_unreachable_until(&self) -> Option<f32> {
+        self.strategies
+            .iter()
+            .find_map(|s| s.goal_unreachable_until())
+    }
+
     fn steer(
         &mut self,
         _current_heading: Deg<f32>,

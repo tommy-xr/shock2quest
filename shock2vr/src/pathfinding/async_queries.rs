@@ -44,6 +44,10 @@ pub struct PathQueryResponse {
     pub outcome: AiPathOutcome,
     /// Route waypoints; empty when `outcome` is `Failed`
     pub waypoints: Vec<Vector3<f32>>,
+    /// When the query ran against live steering-reported exclusions, the
+    /// mission time the last of them expires at. A failure under one may be
+    /// temporary - the consumer can retry rather than write the goal off.
+    pub exclusion_expires_at: Option<f32>,
 }
 
 struct SharedState {
@@ -80,6 +84,7 @@ impl AsyncPathfinding {
                     // including fresh arrivals' - route around the obstacle
                     // instead of piling into it
                     let avoid = service.avoidance(request.now_seconds);
+                    let exclusion_expires_at = avoid.expires_at;
                     let path = service
                         .find_path_avoiding(
                             request.start,
@@ -118,6 +123,7 @@ impl AsyncPathfinding {
                                 goal: request.goal,
                                 outcome,
                                 waypoints,
+                                exclusion_expires_at,
                             },
                         );
                     }
