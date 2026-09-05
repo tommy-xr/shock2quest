@@ -7,7 +7,8 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{
     mission::{GlobalAsyncPathfinding, GlobalPathfinding},
     pathfinding::{
-        AiPathOutcome, PathfindingFrameBudget, PathfindingService, async_queries::PathQueryRequest,
+        AiPathOutcome, MovementHold, PathfindingFrameBudget, PathfindingService,
+        async_queries::PathQueryRequest,
     },
     physics::PhysicsWorld,
     scripts::{Effect, ai::ai_util},
@@ -206,6 +207,61 @@ impl PathFollowSteeringStrategy {
         self.next_waypoint = 0;
         self.path_goal = None;
         self.reset_stall();
+    }
+
+    /// Advance - or freeze - the two no-progress clocks for this frame, and
+    /// answer whether the displacement watchdog has fired.
+    ///
+    /// A hold is a standstill the AI CHOSE (a door leaf still crossing the
+    /// doorway, an authored pivot): it ends by itself, so neither clock moves
+    /// through it and the held seconds cannot spend the patience kept for a
+    /// real wedge. Only the accounting pauses - the caller keeps steering, so
+    /// heading, whiskers and crowd repel stay live through the hold.
+    fn advance_stall_clocks(
+        &mut self,
+        hold: MovementHold,
+        position: Vector3<f32>,
+        distance: f32,
+        elapsed: f32,
+    ) -> bool {
+        if hold.is_holding() {
+            // Both clocks freeze where they are; a body that has never been
+            // anchored is anchored now, so the watchdog starts measuring from
+            // where the hold ends rather than from the origin.
+            self.displacement_anchor.get_or_insert((position, 0.0));
+            return false;
+        }
+        if self.next_waypoint != self.stall_waypoint
+            || distance < self.stall_best - STALL_PROGRESS_EPSILON
+        {
+            self.stall_waypoint = self.next_waypoint;
+            self.stall_best = distance;
+            self.stall_seconds = 0.0;
+        } else {
+            self.stall_seconds += elapsed;
+        }
+        // Displacement watchdog: micro-sliding around a blocking capsule can
+        // reset the waypoint-progress check above forever while the body
+        // stays put - fall back to net displacement
+        match self.displacement_anchor {
+            Some((anchor, _)) if xz_distance(position, anchor) >= DISPLACEMENT_STALL_DISTANCE => {
+                self.displacement_anchor = Some((position, 0.0));
+                // Real movement: the next stall (if any) is a fresh incident,
+                // not a continuation of a pinned body
+                self.last_stall_position = None;
+                self.stall_escalations = 0;
+                false
+            }
+            Some((anchor, age)) => {
+                let age = age + elapsed;
+                self.displacement_anchor = Some((anchor, age));
+                age >= DISPLACEMENT_STALL_SECONDS
+            }
+            None => {
+                self.displacement_anchor = Some((position, 0.0));
+                false
+            }
+        }
     }
 
     fn reset_stall(&mut self) {
@@ -511,37 +567,12 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // the path so the next re-path - or wander goal - starts fresh
         // instead of pushing into the obstacle forever.
         let distance = xz_distance(position, waypoint);
-        if self.next_waypoint != self.stall_waypoint
-            || distance < self.stall_best - STALL_PROGRESS_EPSILON
-        {
-            self.stall_waypoint = self.next_waypoint;
-            self.stall_best = distance;
-            self.stall_seconds = 0.0;
-        } else {
-            self.stall_seconds += time.elapsed.as_secs_f32();
-        }
-        // Displacement watchdog: micro-sliding around a blocking capsule can
-        // reset the waypoint-progress check above forever while the body
-        // stays put - fall back to net displacement
-        let displaced_stall = match self.displacement_anchor {
-            Some((anchor, _)) if xz_distance(position, anchor) >= DISPLACEMENT_STALL_DISTANCE => {
-                self.displacement_anchor = Some((position, 0.0));
-                // Real movement: the next stall (if any) is a fresh incident,
-                // not a continuation of a pinned body
-                self.last_stall_position = None;
-                self.stall_escalations = 0;
-                false
-            }
-            Some((anchor, age)) => {
-                let age = age + time.elapsed.as_secs_f32();
-                self.displacement_anchor = Some((anchor, age));
-                age >= DISPLACEMENT_STALL_SECONDS
-            }
-            None => {
-                self.displacement_anchor = Some((position, 0.0));
-                false
-            }
-        };
+        let displaced_stall = self.advance_stall_clocks(
+            service.movement_hold(entity_id.inner()),
+            position,
+            distance,
+            time.elapsed.as_secs_f32(),
+        );
         {
             if self.stall_seconds >= STALL_SECONDS || displaced_stall {
                 // Remember the crossing we could not traverse (TTL'd, per
@@ -1020,6 +1051,77 @@ fn pick_wander_goal(
 mod tests {
     use super::*;
     use cgmath::vec3;
+
+    /// Stand `seconds` in one spot, `distance` from the waypoint, under
+    /// `hold`. Answers whether the displacement watchdog fired.
+    fn stand_still(
+        follower: &mut PathFollowSteeringStrategy,
+        hold: MovementHold,
+        seconds: f32,
+    ) -> bool {
+        let mut displaced = false;
+        for _ in 0..(seconds / 0.1).round() as u32 {
+            displaced |= follower.advance_stall_clocks(hold, vec3(0.0, 0.0, 0.0), 5.0, 0.1);
+        }
+        displaced
+    }
+
+    /// The whole point of a hold: a door leaf the AI is standing off from is
+    /// not a wedge, so the seconds it costs must not spend the patience the
+    /// follower keeps for one. Waiting is bounded well under the stall window,
+    /// but the clock the wait would land in already contains time.
+    #[test]
+    fn a_door_wait_never_advances_the_stall_clock() {
+        // Unheld, standing still IS the stall the follower is looking for.
+        let mut follower = PathFollowSteeringStrategy::to_point(vec3(5.0, 0.0, 0.0));
+        let displaced = stand_still(
+            &mut follower,
+            MovementHold::None,
+            DISPLACEMENT_STALL_SECONDS + 1.0,
+        );
+        assert!(follower.stall_seconds >= STALL_SECONDS, "control");
+        assert!(displaced, "control: the displacement watchdog fires too");
+
+        let mut follower = PathFollowSteeringStrategy::to_point(vec3(5.0, 0.0, 0.0));
+        let displaced = stand_still(
+            &mut follower,
+            MovementHold::DoorWait,
+            DISPLACEMENT_STALL_SECONDS + 1.0,
+        );
+        assert_eq!(
+            follower.stall_seconds, 0.0,
+            "a door wait is not no-progress"
+        );
+        assert!(!displaced, "nor is it displacement");
+    }
+
+    /// A pivot is the other deliberate stop. It used to freeze the whole
+    /// behavior to keep out of the stall clock; now it only pauses the
+    /// accounting, and steering runs through it.
+    #[test]
+    fn a_pivot_never_advances_the_stall_clock() {
+        let mut follower = PathFollowSteeringStrategy::to_point(vec3(5.0, 0.0, 0.0));
+        let displaced = stand_still(
+            &mut follower,
+            MovementHold::Pivot,
+            DISPLACEMENT_STALL_SECONDS + 1.0,
+        );
+        assert_eq!(follower.stall_seconds, 0.0);
+        assert!(!displaced);
+    }
+
+    /// A hold pauses the clock, it does not reset it: seconds a real wedge
+    /// already banked are still there when the hold lifts.
+    #[test]
+    fn a_hold_leaves_the_stall_it_paused_where_it_found_it() {
+        let mut follower = PathFollowSteeringStrategy::to_point(vec3(5.0, 0.0, 0.0));
+        stand_still(&mut follower, MovementHold::None, 1.0);
+        let banked = follower.stall_seconds;
+        stand_still(&mut follower, MovementHold::DoorWait, 1.0);
+        assert!((follower.stall_seconds - banked).abs() < 1e-4);
+        stand_still(&mut follower, MovementHold::None, 1.0);
+        assert!(follower.stall_seconds > banked);
+    }
 
     #[test]
     fn advance_skips_reached_waypoints() {
