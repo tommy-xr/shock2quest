@@ -68,8 +68,29 @@ export interface Classification {
   wedge_seconds?: number;
   /** How far it got from the halt afterwards (wedged_then_freed only). */
   freed_travel?: number;
+  /**
+   * Every halt found in the pass, in order - the raw evidence behind the
+   * verdict, kept in the stored JSON so a reviewer can audit a bucket without
+   * re-running the pass.
+   */
+  halts?: HaltEvidence[];
   closest_distance: number;
   final_distance: number;
+}
+
+/** One halt, as observed - the audit trail behind a wedge verdict. */
+export interface HaltEvidence {
+  /** Seconds into the pass at which the unheld stationary stretch started. */
+  start_t: number;
+  /** Length of that stretch, seconds. */
+  seconds: number;
+  at: Vec3;
+  /** Farthest the AI later got from `at`, world units. */
+  escape_distance: number;
+  /** Seconds of the halt spent under a published movement hold. */
+  held_seconds: number;
+  /** Path outcome in effect during the halt, if the AI had ever pathed. */
+  outcome?: string;
 }
 
 export interface ClassifyOptions {
@@ -101,9 +122,15 @@ export function distance3(a: Vec3, b: Vec3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
-/** Latest non-null path outcome in the pass, if the AI ever pathed. */
-function lastOutcome(samples: AiSample[]): string | undefined {
-  for (let i = samples.length - 1; i >= 0; i--) {
+/**
+ * The path outcome in effect at sample `through` - the latest non-null outcome
+ * at or before it. Outcomes are sticky (the runtime republishes the last query
+ * result), so reading the LAST one in the pass answers "did this AI ever end up
+ * without a route", not "did it have a route while it was halted". A wedge is
+ * judged against the outcome that was live during the halt.
+ */
+function outcomeThrough(samples: AiSample[], through: number): string | undefined {
+  for (let i = Math.min(through, samples.length - 1); i >= 0; i--) {
     if (samples[i].outcome) return samples[i].outcome;
   }
   return undefined;
@@ -111,10 +138,14 @@ function lastOutcome(samples: AiSample[]): string | undefined {
 
 /** A halt: where it happened, how long, and where the AI stood still until. */
 interface StationarySpan {
+  /** First sample of the unheld stationary stretch. */
+  start: number;
   /** Last sample of the stationary span - escape is measured from here. */
   end: number;
   at: Vec3;
   seconds: number;
+  /** Seconds of the span spent under a movement hold. */
+  heldSeconds: number;
 }
 
 /** Is this sample reporting a deliberate hold (door wait, pivot)? */
@@ -180,7 +211,17 @@ function findWedges(
     const stalls = new Set(window.map((s) => s.live_stall_seconds ?? 0));
     const blocked = stalls.size > 1 && Math.max(...stalls) > 0;
     if (traveling && blocked) {
-      spans.push({ end: j, at: window[unheld.from].position, seconds: unheld.seconds });
+      let heldSeconds = 0;
+      for (let k = i; k < j; k++) {
+        if (isHeld(samples[k])) heldSeconds += samples[k + 1].t - samples[k].t;
+      }
+      spans.push({
+        start: i + unheld.from,
+        end: j,
+        at: window[unheld.from].position,
+        seconds: unheld.seconds,
+        heldSeconds,
+      });
       // Spans starting inside this one are the same halt seen later.
       i = j;
     }
@@ -220,7 +261,8 @@ function escapedBy(samples: AiSample[], span: StationarySpan): number {
  * unreachable") or has no route to the player ("no route") is judged as such
  * BEFORE the wedge check - standing still without a route is not a wedge, and
  * letting `wedged` outrank them made the headline wedge count absorb whole
- * buckets of non-defects.
+ * buckets of non-defects. The no-route test reads the outcome that was live
+ * during the halt being judged, not the last one of the pass.
  */
 export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classification {
   const arriveRadius = options.arriveRadius ?? 3.2;
@@ -289,9 +331,35 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
     };
   }
 
-  const outcome = lastOutcome(samples);
+  // Halts first, so the no-route check can be asked about the moment being
+  // judged rather than about the end of the pass.
+  const spans = findWedges(samples, windowSeconds, wedgeDisplacement);
+  const escapes = spans.map((span) => escapedBy(samples, span));
+  const halts: HaltEvidence[] = spans.map((span, i) => ({
+    start_t: samples[span.start].t,
+    seconds: span.seconds,
+    at: span.at,
+    escape_distance: escapes[i],
+    held_seconds: span.heldSeconds,
+    outcome: outcomeThrough(samples, span.end),
+  }));
+  const evidence = halts.length > 0 ? { halts } : {};
+
+  // The halt this AI is judged on: the first one it does NOT get clear of,
+  // else the first halt at all, else the pass as a whole.
+  const stuckIndex = escapes.findIndex((escape) => escape <= freedTravelUnits);
+  const judgedIndex = stuckIndex >= 0 ? stuckIndex : spans.length > 0 ? 0 : -1;
+
+  // No route means no wedge - but only if the route was missing WHILE the AI
+  // stood there. Outcomes are sticky, so an early Partial used to outrank a
+  // genuine wedge that happened later with a full route in hand.
+  const outcome =
+    judgedIndex >= 0
+      ? outcomeThrough(samples, spans[judgedIndex].end)
+      : outcomeThrough(samples, samples.length - 1);
   if (outcome === "Partial" || outcome === "Failed") {
-    return { verdict: "no_route", reason: `last path outcome ${outcome}`, ...base };
+    const when = judgedIndex >= 0 ? "during the halt" : "at pass end";
+    return { verdict: "no_route", reason: `path outcome ${outcome} ${when}`, ...base, ...evidence };
   }
 
   // A halt the AI walks out of is not a wedge: report the first span it does
@@ -299,9 +367,8 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
   // land in the separate `wedged_then_freed` bucket (still visible, but not
   // counted against the headline wedge number). "Walked out" means it got
   // clear of the spot, not that it covered distance near it.
-  const spans = findWedges(samples, windowSeconds, wedgeDisplacement);
-  const stuck = spans.find((span) => escapedBy(samples, span) <= freedTravelUnits);
-  if (stuck) {
+  if (stuckIndex >= 0) {
+    const stuck = spans[stuckIndex];
     return {
       verdict: "wedged",
       reason: `stationary ${stuck.seconds.toFixed(1)}s at (${stuck.at
@@ -310,11 +377,12 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
       wedge_at: stuck.at,
       wedge_seconds: stuck.seconds,
       ...base,
+      ...evidence,
     };
   }
   if (spans.length > 0) {
     const span = spans[0];
-    const freed = escapedBy(samples, span);
+    const freed = escapes[0];
     return {
       verdict: "wedged_then_freed",
       reason: `stationary ${span.seconds.toFixed(1)}s at (${span.at
@@ -324,6 +392,7 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
       wedge_seconds: span.seconds,
       freed_travel: freed,
       ...base,
+      ...evidence,
     };
   }
 
