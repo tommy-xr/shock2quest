@@ -1,4 +1,4 @@
-use cgmath::{Deg, EuclideanSpace, Vector3, vec3, vec4};
+use cgmath::{Deg, EuclideanSpace, Vector3, vec4};
 use dark::SCALE_FACTOR;
 use dark::mission::path_database::MovementBits;
 use rand::Rng;
@@ -497,12 +497,13 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // open side when the whiskers have found a wall. Faded with the
         // melee approach exactly like the repel it mostly comes from: an AI
         // in reach of its target must not be stepped off the blow.
-        let yielded = ai_util::yield_sideways(crowd, waypoint - position, whiskers);
+        let heading = waypoint - position;
+        let yielded = ai_util::yield_sideways(crowd, heading, whiskers);
         let crowd = crowd + (yielded - crowd) * strength;
         let aim = aim_with_bias(
             position,
             waypoint,
-            blend_biases(crowd, whiskers, waypoint - position, SEPARATION_MAX_OFFSET),
+            blend_biases(crowd, whiskers, heading, SEPARATION_MAX_OFFSET),
         );
 
         // Stall escape: if we stop making progress toward the current
@@ -808,11 +809,12 @@ fn target_awareness_distance(
 /// the open side can never bid an AI back toward the wall the whiskers are
 /// steering it off. (Two vectors of similar size pointing opposite ways
 /// otherwise cancel to nothing, which is the worst of both - no avoidance
-/// and no yielding.) The same priority is then applied again across the
-/// direction of travel, which is the only space the aim point keeps, so a
-/// crowd term perpendicular to the whiskers cannot cancel their sidestep
-/// either. The blend is shortened once at the end, so two biases pointing
-/// the same way still cannot bend the line further than one may.
+/// and no yielding.) That rule works along the whiskers' own direction; the
+/// same priority is then applied a second time along the LATERAL axis,
+/// which is the only one the aim point keeps, so a crowd term perpendicular
+/// to the whiskers cannot cancel their sidestep either. The blend is
+/// shortened once at the end, so two biases pointing the same way still
+/// cannot bend the line further than one may.
 fn blend_biases(
     crowd: Vector3<f32>,
     whiskers: Vector3<f32>,
@@ -820,25 +822,17 @@ fn blend_biases(
     max: f32,
 ) -> Vector3<f32> {
     let crowd = capped(ai_util::drop_opposing(crowd, whiskers), max);
-    // Only the part of a bias ACROSS the direction of travel survives the
-    // aim point's forward projection (`aim_with_bias`), so the priority has
-    // to be applied there too, not just between the raw vectors: a diagonal
-    // wall hit and a neighbour off to one side can be perpendicular (so
-    // neither opposes the other) while their sideways parts still cancel,
-    // leaving a sum that is purely backward and is erased whole.
-    let crowd = match ai_util::normalized_horizontal(heading) {
-        Some(heading) => {
-            let side = vec3(heading.z, 0.0, -heading.x);
-            let crowd_side = crowd.x * side.x + crowd.z * side.z;
-            let wall_side = whiskers.x * side.x + whiskers.z * side.z;
-            if crowd_side * wall_side < 0.0 {
-                crowd - side * crowd_side
-            } else {
-                crowd
-            }
-        }
-        None => crowd,
+    // ...and once more along the lateral axis, because that is the only part
+    // the aim point's forward projection (`aim_with_bias`) keeps: a diagonal
+    // wall hit and a neighbour off to one side can be perpendicular - so
+    // neither opposes the other and the rule above passes them both - while
+    // their sideways parts still cancel, leaving a sum that is purely
+    // backward and is erased whole.
+    let wall_side = {
+        let side = ai_util::lateral_axis(heading);
+        side * (whiskers.x * side.x + whiskers.z * side.z)
     };
+    let crowd = ai_util::drop_opposing(crowd, wall_side);
     capped(crowd + whiskers, max)
 }
 

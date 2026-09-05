@@ -747,6 +747,15 @@ pub(crate) fn drop_opposing(v: Vector3<f32>, direction: Vector3<f32>) -> Vector3
     }
 }
 
+/// The AI's own side of the direction of travel: the perpendicular that
+/// `yield_sideways` yields onto and that `blend_biases` applies the
+/// geometry-over-crowd priority along. Both must read the same handedness -
+/// the opposite one would zero exactly the sidesteps it has to preserve -
+/// so they share this. Length follows `heading`'s; only its direction is used.
+pub(crate) fn lateral_axis(heading: Vector3<f32>) -> Vector3<f32> {
+    vec3(heading.z, 0.0, -heading.x)
+}
+
 /// Turn a head-on crowd push into a sidestep of the same strength.
 ///
 /// A neighbour squarely ahead pushes straight back down the route, and a
@@ -801,7 +810,7 @@ pub(crate) fn yield_sideways(
     if head_on <= 0.0 {
         return push;
     }
-    let side = vec3(heading.z, 0.0, -heading.x);
+    let side = lateral_axis(heading);
     let side = if side.x * avoid.x + side.z * avoid.z < 0.0 {
         -side
     } else {
