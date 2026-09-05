@@ -543,7 +543,8 @@ export class PhysicsApi {
   }
 
   /**
-   * One body in full, including how many contacts it currently has. The
+   * One body in full, including how many contacts it currently has and which
+   * bodies those contacts are with (`contacts`). The
    * endpoint answers `null` for an unknown body id, which this reports as an
    * error rather than handing back a null that only fails later.
    */

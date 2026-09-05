@@ -4,22 +4,26 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { PhysicsBodySummary } from "../src/types.js";
 
-// A creature under a rising door leaf must stay on the floor (#1255).
+// A creature beside a travelling door leaf must stay on the floor (#1255).
 //
 // medsci1's Security Door (template 254) is a leaf that rises out of the
 // doorway. A grunt pressed against its face makes a contact whose normal is
 // horizontal, and Rapier's friction constraint then works to erase the
-// relative tangential velocity between the two surfaces - which for a rising
-// leaf is entirely vertical. The capsule is dragged up with the leaf.
+// relative tangential velocity between the two surfaces - which for a leaf on
+// the move is entirely vertical. The capsule is dragged along with the leaf.
 //
 // The lift is only evidence if the grunt actually met the leaf, so the run
 // asserts a narrow-phase contact between the two bodies while the leaf travels
-// (GET /v1/physics/bodies/:id reports which bodies a body touches).
+// (GET /v1/physics/bodies/:id reports which bodies a body touches). Proximity
+// would not do: the AI holds a stand-off from a door and can satisfy a
+// distance check without ever touching the leaf. The travel window the grunt
+// is reliably inside of is the leaf shutting on it while it stands in the
+// doorway; the friction is the same one either way, and the physics unit test
+// `a_rising_kinematic_leaf_does_not_lift_a_creature_against_its_face` covers
+// the rising direction with contact guaranteed by construction.
 //
-// Negative-first: on the parent commit this run lifts the grunt from its
-// resting y = 0.099 to y = 1.719 while the leaf travels, leaves it hanging
-// there for ~0.75 s, and only then drops it. The assertions below are on the
-// lift, so they fail on the parent and pass with the contact hook.
+// Negative-first: with the contact hook disabled this run reports the grunt in
+// contact with the travelling leaf and carried well off its resting y.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 /** The rising Security Door: corridor along Z, leaf closed plane z = -4.008. */
@@ -35,7 +39,7 @@ function body(bodies: PhysicsBodySummary[], label: string): PhysicsBodySummary {
 }
 
 test(
-  "medsci1.mis: a rising door leaf does not carry the creature under it",
+  "medsci1.mis: a travelling door leaf does not carry the creature against it",
   { skip: !e2eEnabled, timeout: 900_000 },
   async () => {
     await using game = await GameServer.launch({ mission: "medsci1.mis" });
@@ -89,25 +93,36 @@ test(
     let touchedTheTravellingLeaf = false;
     let crossed = false;
     // AI path queries run on a worker thread, so the frame the grunt reaches
-    // the door jitters. Run until it is through rather than for a fixed count.
-    for (let frame = 0; frame < 900 && !crossed; frame += 1) {
+    // the door jitters. Run until it is through and has met the leaf, rather
+    // than for a fixed count. The leaf travels twice over this window: up as
+    // the grunt approaches, and down again when the door closes itself behind
+    // it - the grunt is standing in the doorway for the second one.
+    for (let frame = 0; frame < 900 && !(crossed && touchedTheTravellingLeaf); frame += 1) {
       await game.step({ frames: 1 });
       const leaf = body((await game.physics.bodies({ entityId: door.id })).bodies, "door");
       const actor = body((await game.physics.bodies({ entityId: grunt.id })).bodies, "grunt");
       if (Math.abs(leaf.velocity[1]) > 0.1) {
         leafTravelFrames += 1;
         peakWhileTravelling = Math.max(peakWhileTravelling, actor.position[1]);
-        // Without this the lift assertion is vacuous: a grunt that never
-        // reaches the leaf while it travels cannot be lifted by it either.
-        // Proximity alone does not prove it - the AI keeps a stand-off from a
-        // door - so ask the narrow phase whether the two bodies actually touch.
+        // Without this the lift assertion is vacuous: a grunt that never meets
+        // the leaf while it travels cannot be carried by it either. Proximity
+        // is not enough - the AI holds a stand-off from a door - so ask the
+        // narrow phase whether the two bodies are actually touching.
         if (!touchedTheTravellingLeaf && Math.abs(actor.position[2] - DOOR.z) < 2.5) {
           const detail = await game.physics.body(actor.body_id);
           touchedTheTravellingLeaf = (detail.contacts ?? []).includes(leaf.body_id);
         }
       }
       // The grunt starts at z < -5 and the player is at z = -1.2.
-      crossed ||= actor.position[2] > DOOR.z + 0.5;
+      if (!crossed && actor.position[2] > DOOR.z + 0.5) {
+        crossed = true;
+        // It is standing in the doorway now. Pull the player back to the far
+        // side and shut the door on it: that is the second travel window, the
+        // one the grunt is guaranteed to be inside of - and it keeps the grunt
+        // off the player, which would otherwise end the mission mid-run.
+        await game.player.teleport({ x: DOOR.x, y: -1.0, z: SPAWN_STAND });
+        await game.entities.sendMessage(door.id, { type: "TurnOff" });
+      }
     }
 
     assert.ok(leafTravelFrames > 30, `the leaf should travel; saw ${leafTravelFrames} frames`);
@@ -117,7 +132,7 @@ test(
     );
     assert.ok(
       peakWhileTravelling - resting < LIFT_TOLERANCE,
-      `the rising leaf must not lift the grunt: rest y=${resting}, peak y=${peakWhileTravelling}`,
+      `the travelling leaf must not carry the grunt: rest y=${resting}, peak y=${peakWhileTravelling}`,
     );
     assert.ok(crossed, "the grunt should walk through the doorway rather than ride the leaf");
 
@@ -138,7 +153,7 @@ test(
     // Contacts alone say "touching something", not "standing on something".
     // The floor directly under the capsule is the support: probe for it, and
     // require it right below the body rather than somewhere further down.
-    const support = await game.physics.raycast({
+    const support = await game.raycast({
       start: [settled.position[0], settled.position[1] + 0.5, settled.position[2]],
       end: [settled.position[0], settled.position[1] - 3.0, settled.position[2]],
       collision_groups: ["world", "entity"],
