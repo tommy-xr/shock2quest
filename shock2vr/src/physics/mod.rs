@@ -39,6 +39,72 @@ use self::debug_render_pipeline::DebugRenderer;
 /// (the medsci2 balcony patroller, frozen to the last decimal for a minute).
 /// A door leaf in motion runs an order of magnitude above this.
 const MOVING_TERRAIN_SPEED: f32 = 0.1;
+
+/// Largest contact-normal Y that still counts as a *side* contact rather than
+/// support. Above it the surface is under (or over) the actor and carries it
+/// through the contact normal, which is how a lift or a platform is ridden.
+const SIDE_CONTACT_MAX_NORMAL_Y: f32 = 0.5;
+
+/// Which Rapier contact hooks a collider needs, given what it collides as.
+/// Only actor capsules ask for contact modification, so
+/// [`MovingTerrainContactHooks`] runs on creature contacts and nothing else.
+fn active_hooks_for(group: CollisionGroup) -> ActiveHooks {
+    if group.collision.memberships.bits() & InternalCollisionGroups::ACTOR.bits != 0 {
+        ActiveHooks::MODIFY_SOLVER_CONTACTS
+    } else {
+        ActiveHooks::empty()
+    }
+}
+
+/// Keeps a vertically travelling door leaf from dragging an actor with it.
+///
+/// A leaf is a kinematic body, and an actor pressed against its *face* makes a
+/// contact whose normal is horizontal. Rapier's friction constraint then works
+/// to erase the relative tangential velocity between the two surfaces - and for
+/// a rising leaf that relative velocity is entirely vertical, so the capsule is
+/// pulled up to the leaf's own speed (#1255: a grunt at a medsci1 security door
+/// rode it up 1.1 units at exactly the leaf's 2.4 u/s). Nothing about the
+/// contact is wrong; only the friction the solver is allowed to apply is.
+///
+/// So drop friction, and only where it can do that:
+/// * on *side* contacts alone (see [`SIDE_CONTACT_MAX_NORMAL_Y`]) - a rider
+///   stands ON a lift or platform and is carried by the contact normal, which
+///   this never touches, so lifts keep working;
+/// * only when the mover travels mostly vertically - a sideways-sliding leaf
+///   transfers horizontal motion, which is a different mechanism with its own
+///   handling ([`PhysicsWorld::recover_live_creatures_swept_off_support`]);
+/// * and only on actor colliders, the only ones that ask for the hook (see
+///   [`active_hooks_for`]).
+///
+/// The leaf still pushes along the contact normal, which is what shoves an
+/// actor standing in the doorway out of the leaf's way.
+struct MovingTerrainContactHooks;
+
+impl PhysicsHooks for MovingTerrainContactHooks {
+    fn modify_solver_contacts(&self, context: &mut ContactModificationContext) {
+        if context.normal.y.abs() >= SIDE_CONTACT_MAX_NORMAL_Y {
+            return;
+        }
+        let lifts_vertically = [context.rigid_body1, context.rigid_body2]
+            .into_iter()
+            .flatten()
+            .filter_map(|handle| context.bodies.get(handle))
+            .any(|body| {
+                let velocity = body.linvel();
+                let horizontal = (velocity.x * velocity.x + velocity.z * velocity.z).sqrt();
+                body.body_type() == RigidBodyType::KinematicPositionBased
+                    && velocity.y.abs() > MOVING_TERRAIN_SPEED
+                    && velocity.y.abs() > horizontal
+            });
+        if !lifts_vertically {
+            return;
+        }
+        for contact in context.solver_contacts.iter_mut() {
+            contact.friction = 0.0;
+        }
+    }
+}
+
 const PLAYER_STANDING_HEIGHT: f32 = 6.0;
 const PLAYER_STANDING_RADIUS: f32 = 1.2;
 
@@ -2716,7 +2782,6 @@ pub struct PhysicsWorld {
     last_player_translation: Option<Vector3<f32>>,
 
     // TODO:
-    // physics_hooks: Box<dyn PhysicsHooks>,
     // event_handler: Box<dyn EventHandler>,
 
     // Debug
@@ -3037,6 +3102,7 @@ impl PhysicsWorld {
             if let Some(collider) = self.collider_set.get_mut(collider_handle) {
                 collider.set_collision_groups(group.collision);
                 collider.set_solver_groups(group.solver);
+                collider.set_active_hooks(active_hooks_for(group));
             }
         }
     }
@@ -4042,6 +4108,7 @@ impl PhysicsWorld {
         collider.set_sensor(is_sensor);
         collider.set_collision_groups(collision_group.collision);
         collider.set_solver_groups(collision_group.solver);
+        collider.set_active_hooks(active_hooks_for(collision_group));
         collider
             .set_active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS);
         collider.user_data = entity_id.inner() as u128;
@@ -5209,6 +5276,15 @@ impl PhysicsWorld {
         // parry panics, the culprit is already named in the log.
         self.report_nonfinite_rigid_body_state();
 
+        let p6_pre: Vec<(RigidBodyHandle, f32, f32)> = if std::env::var("P6_TRACE").is_ok() {
+            self.rigid_body_set
+                .iter()
+                .filter(|(_, b)| b.is_dynamic() && b.mass() > 0.25)
+                .map(|(h, b)| (h, b.translation().y, b.linvel().y))
+                .collect()
+        } else {
+            Vec::new()
+        };
         /* Run the game loop, stepping the simulation once per frame. */
         profile!(scope: "physics", level: TRACE, "physics.step", {
             self.physics_pipeline.step(
@@ -5222,11 +5298,63 @@ impl PhysicsWorld {
                 &mut self.impulse_joint_set,
                 &mut self.multibody_joint_set,
                 &mut self.ccd_solver,
-                &(),
+                &MovingTerrainContactHooks,
                 &self.events,
             )
         });
         self.has_stepped = true;
+        if std::env::var("P6_TRACE").is_ok() {
+            for (handle, body) in self.rigid_body_set.iter() {
+                if !(body.is_dynamic() && body.mass() > 0.25) {
+                    continue;
+                }
+                let pre = p6_pre.iter().find(|(h, ..)| *h == handle);
+                eprintln!(
+                    "P6 step pre=(y={:.4} vy={:.4}) post=(y={:.4} vy={:.4})",
+                    pre.map(|p| p.1).unwrap_or(f32::NAN),
+                    pre.map(|p| p.2).unwrap_or(f32::NAN),
+                    body.translation().y,
+                    body.linvel().y
+                );
+                for c in body.colliders() {
+                    for pair in self.narrow_phase.contact_pairs_with(*c) {
+                        if !pair.has_any_active_contact {
+                            continue;
+                        }
+                        let other = if pair.collider1 == *c {
+                            pair.collider2
+                        } else {
+                            pair.collider1
+                        };
+                        let oc = &self.collider_set[other];
+                        let ob = oc.parent().and_then(|h| self.rigid_body_set.get(h));
+                        for m in pair.manifolds.iter() {
+                            if m.data.solver_contacts.is_empty() {
+                                continue;
+                            }
+                            eprintln!(
+                                "P6   man other={:?} kin={:?} ovy={:.2} n=({:.2},{:.2},{:.2}) tv={:?} imp={:?}",
+                                EntityId::from_inner(oc.user_data as u64),
+                                ob.map(|b| b.body_type()),
+                                ob.map(|b| b.linvel().y).unwrap_or(f32::NAN),
+                                m.data.normal.x,
+                                m.data.normal.y,
+                                m.data.normal.z,
+                                m.data
+                                    .solver_contacts
+                                    .iter()
+                                    .map(|sc| sc.tangent_velocity)
+                                    .collect::<Vec<_>>(),
+                                m.points
+                                    .iter()
+                                    .map(|pt| pt.data.impulse)
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         // Update character controller
         let (mut collision_events, character_body) = { self.move_player(request, player_handle) };
@@ -6166,7 +6294,7 @@ impl PhysicsWorld {
                             && horizontal_motion > MOVING_TERRAIN_SPEED * MOVING_TERRAIN_SPEED
                             && pair.manifolds.iter().any(|manifold| {
                                 !manifold.data.solver_contacts.is_empty()
-                                    && manifold.data.normal.y.abs() < 0.5
+                                    && manifold.data.normal.y.abs() < SIDE_CONTACT_MAX_NORMAL_Y
                             });
                         is_horizontal_kinematic_side_contact.then(|| {
                             (
@@ -6900,6 +7028,16 @@ impl PhysicsWorld {
             is_sensor,
             is_enabled: body.is_enabled(),
             is_sleeping: body.is_sleeping(),
+            active_contacts: body
+                .colliders()
+                .iter()
+                .map(|collider| {
+                    self.narrow_phase
+                        .contact_pairs_with(*collider)
+                        .filter(|pair| pair.has_any_active_contact)
+                        .count()
+                })
+                .sum(),
         }
     }
 }
@@ -6993,6 +7131,10 @@ pub struct DebugBodyInfo {
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,
+    /// Contact pairs currently touching (not merely broad-phase neighbours).
+    /// Zero means nothing is holding the body up, which is what tells an
+    /// unsupported hover apart from a body resting on something.
+    pub active_contacts: usize,
 }
 
 /// Decode an `InteractionGroups` membership bitmask into human-readable names.
