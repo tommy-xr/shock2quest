@@ -11,6 +11,7 @@ mod replicator;
 mod research;
 mod trainer;
 mod traits;
+mod weapon_modify;
 mod weapon_repair;
 mod weapon_settings;
 
@@ -27,5 +28,6 @@ pub use replicator::*;
 pub use research::*;
 pub use trainer::*;
 pub use traits::*;
+pub use weapon_modify::*;
 pub use weapon_repair::*;
 pub use weapon_settings::*;

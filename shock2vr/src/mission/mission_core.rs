@@ -1368,6 +1368,11 @@ pub struct GlobalGunSettingHeaders(pub [HashMap<String, String>; 2]);
 #[derive(Unique, Clone, Default)]
 pub struct GlobalGunSettingTexts(pub [HashMap<String, String>; 2]);
 
+/// MODIFY1.STR / MODIFY2.STR - what a gun's first and second modification do,
+/// keyed the way the fire-setting text tables are.
+#[derive(Unique, Clone)]
+pub struct GlobalModificationTexts(pub [HashMap<String, String>; 2]);
+
 /// The synthetic player-owned entity hosting the automap panel (`MapGui`).
 /// Created at mission init; `Effect::ToggleMap` opens/closes its panel in the
 /// flat host. See `projects/flat-ui-panels.md` §5.
@@ -1385,6 +1390,11 @@ pub struct MediaPanelEntity(pub EntityId);
 /// every weapon and `Effect::OpenWeaponSettings` binds it to the panel slot.
 #[derive(Unique, Clone, Copy)]
 pub struct WeaponSettingsPanelEntity(pub EntityId);
+
+/// Nonserialized player-owned host for the HRM board in modify mode, on the
+/// same terms as the repair one.
+#[derive(Unique, Clone, Copy)]
+pub struct WeaponModifyPanelEntity(pub EntityId);
 
 /// Nonserialized player-owned host for the HRM board in repair mode. Like the
 /// settings MFD it presents a gun rather than a world object;
@@ -1583,6 +1593,9 @@ pub struct MissionCore {
     /// once a critical failure destroys that gun, and a won repair leaves it
     /// up showing its result.
     weapon_repair_gun: Option<EntityId>,
+    /// The gun an open modify board was opened for; the panel is dropped when
+    /// the slot goes elsewhere, and a won board stays up showing its result.
+    weapon_modify_gun: Option<EntityId>,
 
     /// Which shortcut - if any - brought up the current use-mode session,
     /// rather than a deliberate `ToggleUseMode`. It makes a shortcut a true
@@ -1915,6 +1928,10 @@ impl MissionCore {
             gun_setting_string_table("sett1.str"),
             gun_setting_string_table("sett2.str"),
         ]));
+        world.add_unique(GlobalModificationTexts([
+            gun_setting_string_table("modify1.str"),
+            gun_setting_string_table("modify2.str"),
+        ]));
         // Debug scenes unlock every power (debug_psi exercises the whole
         // registry); real missions start with the player template's learned
         // bits plus the default OSA loadout (Cryokinesis).
@@ -2146,6 +2163,25 @@ impl MissionCore {
             RuntimePropDoNotSerialize,
         ));
         world.add_unique(WeaponRepairPanelEntity(weapon_repair_panel));
+
+        // The modify board's host, on the same terms as the repair board's.
+        let weapon_modify_panel = world.add_entity((
+            Links::empty(),
+            PropScripts {
+                scripts: vec!["internal_weapon_modify".to_owned()],
+                inherits: false,
+            },
+            dark::properties::PropTemplateId { template_id: -1 },
+            PropSymName("Weapon Modify".to_owned()),
+            PropPosition {
+                position: vec3(0.0, 0.0, 0.0),
+                rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                cell: 0,
+            },
+            RuntimePropTransform(Matrix4::identity()),
+            RuntimePropDoNotSerialize,
+        ));
+        world.add_unique(WeaponModifyPanelEntity(weapon_modify_panel));
 
         // The psi power selection MFD's host, on the same terms: player state,
         // no world object, rebuilt per mission and never serialized.
@@ -2579,6 +2615,7 @@ impl MissionCore {
             use_mode: false,
             weapon_settings_gun: None,
             weapon_repair_gun: None,
+            weapon_modify_gun: None,
             psi_powers_open: false,
             psi_nav_latched: false,
             use_mode_shortcut: None,
@@ -3731,6 +3768,36 @@ impl MissionCore {
                     .world
                     .remove_unique::<crate::scripts::gui::WeaponRepairSubject>();
                 self.weapon_repair_gun = None;
+            }
+        }
+
+        // The modify board belongs to one gun, on the same terms the repair
+        // board does. A lost board only breaks the gun, which the board can
+        // still stand over - but the gun can go away underneath it (dropped
+        // into a level transition, destroyed by something else), and a board
+        // addressing an entity that no longer exists is dismissed.
+        if let Some(opened_for) = self.weapon_modify_gun {
+            let panel = self
+                .world
+                .borrow::<UniqueView<WeaponModifyPanelEntity>>()
+                .map(|panel| panel.0)
+                .ok();
+            let ours_is_docked = panel.is_some() && self.flat_ui.active_panel() == panel;
+            let gone = !self
+                .world
+                .borrow::<shipyard::EntitiesView>()
+                .map(|entities| entities.is_alive(opened_for))
+                .unwrap_or(false);
+            if gone && ours_is_docked {
+                self.flat_ui.close();
+            }
+            if gone || !ours_is_docked {
+                // Drop the subject with the panel: an unowned one would leave
+                // the board addressing a gun nothing is presenting.
+                let _ = self
+                    .world
+                    .remove_unique::<crate::scripts::gui::WeaponModifySubject>();
+                self.weapon_modify_gun = None;
             }
         }
 
@@ -6039,6 +6106,46 @@ impl MissionCore {
                         });
                         self.flat_ui.open_unbound(panel);
                         self.weapon_repair_gun = Some(entity_id);
+                    }
+                }
+
+                Effect::OpenWeaponModify { entity_id } => {
+                    // Same slot contract as the repair board.
+                    let slot_is_presented = game_options.presentation_mode
+                        == crate::PresentationMode::Flat
+                        || self.use_mode;
+                    let panel = self
+                        .world
+                        .borrow::<UniqueView<WeaponModifyPanelEntity>>()
+                        .map(|panel| panel.0);
+                    if let (true, Ok(panel)) = (slot_is_presented, panel) {
+                        // Removed first: a unique that is only ever added
+                        // would keep the gun the panel was opened on last.
+                        let subject = crate::scripts::gui::modify_subject(&self.world, entity_id);
+                        let _ = self
+                            .world
+                            .remove_unique::<crate::scripts::gui::WeaponModifySubject>();
+                        if let Some(subject) = subject {
+                            self.world.add_unique(subject);
+                            self.script_world.dispatch(Message {
+                                to: panel,
+                                payload: MessagePayload::PanelOpened,
+                            });
+                            self.flat_ui.open_unbound(panel);
+                            self.weapon_modify_gun = Some(entity_id);
+                        }
+                    }
+                }
+
+                Effect::ModifyWeapon { entity_id } => {
+                    let mut v_gun_state = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropGunState>>()
+                        .unwrap();
+
+                    if let Ok(gun_state) = (&mut v_gun_state).get(entity_id) {
+                        gun_state.modification = (gun_state.modification + 1)
+                            .min(crate::scripts::gun_modifications::MAX_MODIFICATION);
                     }
                 }
 
@@ -11325,6 +11432,25 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         name: "Condition".to_string(),
                         value: format!("{:.2}", gun_state.condition),
                     });
+                    properties.push(DebugPropertyInfo {
+                        name: "Modification".to_string(),
+                        value: gun_state.modification.to_string(),
+                    });
+                    // The *derived* magazine: the authored clip as the gun's
+                    // modification level has it, which is what makes a
+                    // modification observable without firing the gun dry.
+                    if let Some(setting) =
+                        crate::scripts::script_util::active_gun_setting(&self.world, id)
+                    {
+                        properties.push(DebugPropertyInfo {
+                            name: "ClipSize".to_string(),
+                            value: setting.clip.to_string(),
+                        });
+                        properties.push(DebugPropertyInfo {
+                            name: "ReloadTimeMs".to_string(),
+                            value: setting.reload_time_ms.to_string(),
+                        });
+                    }
                 }
 
                 if let Some(state) = object_state {

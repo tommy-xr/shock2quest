@@ -22,6 +22,10 @@ impl TechSkillValues {
         self.0[1]
     }
 
+    pub fn modify(self) -> i32 {
+        self.0[2]
+    }
+
     pub fn maintenance(self) -> i32 {
         self.0[3]
     }

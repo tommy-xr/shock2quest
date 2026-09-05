@@ -54,6 +54,12 @@ pub enum InputAction {
     /// Switch the wielded gun between its two fire modes (e.g. the pistol's
     /// single shot and its 3-round burst).
     CycleGunSetting,
+    /// Bring up the wielded weapon's settings panel (fire modes, UNLOAD,
+    /// MODIFY). A tooling affordance: it is bound to no key and no controller
+    /// button, and exists so tests and the debug runtime can open the panel
+    /// directly. Players reach it through the ammo readout's SETTING button in
+    /// flat; VR has no entry of its own yet (see issue #1344).
+    OpenWeaponSettings,
     /// Reload the wielded weapon from compatible backpack reserve.
     Reload,
     /// Eject the loaded magazine back to the backpack reserve, as clips of the
@@ -155,6 +161,7 @@ impl InputAction {
             InputAction::EquipPsiAmp,
             InputAction::CycleAmmo,
             InputAction::CycleGunSetting,
+            InputAction::OpenWeaponSettings,
             InputAction::Reload,
             InputAction::EjectClip,
             InputAction::CyclePsiPower,
@@ -200,6 +207,7 @@ impl InputAction {
             InputAction::EquipPsiAmp => "EquipPsiAmp",
             InputAction::CycleAmmo => "CycleAmmo",
             InputAction::CycleGunSetting => "CycleGunSetting",
+            InputAction::OpenWeaponSettings => "OpenWeaponSettings",
             InputAction::Reload => "Reload",
             InputAction::EjectClip => "EjectClip",
             InputAction::CyclePsiPower => "CyclePsiPower",

@@ -73,6 +73,17 @@ const LINE_H: f32 = 11.0;
 /// control actually drawn there.
 const UNLOAD_RECT: Rect = Rect::new(23.0, 278.0, 142.0, 22.0);
 
+/// The MODIFY control, one line below the modification level it acts on, in
+/// the art's otherwise-empty top box.
+///
+/// Retail had no such control: opening this MFD on a modifiable gun put the
+/// HRM board up beside it as a second overlay. Neither presentation here has a
+/// second panel slot, so the board is asked for instead - and there is no
+/// shipped button art to ask with, so the control is its own label over a
+/// hit target, the way the fire-setting rows are hit targets over the
+/// backdrop's painted boxes.
+const MODIFY_RECT: Rect = Rect::new(NAME_POS.0, MOD_LEVEL_Y + LINE_H + 2.0, 64.0, LINE_H);
+
 /// Approximate characters per line at the row text width. `mainfont` is
 /// variable-width; this is the same conservative greedy-wrap budget the log
 /// reader uses (26 chars at 136 px), scaled to this rect.
@@ -87,6 +98,10 @@ const UNLOAD_ART_HOVER: &str = "iface/unload1.pcx";
 /// `/v1/ui` labels, so a client clicks a row by meaning rather than by pixel.
 const ROW_LABELS: [&str; 2] = ["setting_0", "setting_1"];
 const UNLOAD_LABEL: &str = "unload";
+const MODIFY_LABEL: &str = "modify";
+/// The control's own text. MISC.STR names no such control, because retail had
+/// none to name.
+const MODIFY_TEXT: &str = "MODIFY";
 
 pub struct WeaponSettingsGui;
 
@@ -99,6 +114,8 @@ pub enum WeaponSettingsGuiMsg {
     SelectSetting(i32),
     /// Eject the magazine back to the backpack.
     Unload,
+    /// Ask for the HRM board in modify mode on this gun.
+    Modify,
 }
 
 /// Whether an open settings panel must now close. The panel is opened for the
@@ -239,6 +256,24 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             }
         }
 
+        if super::offers_modify_control(world, weapon) {
+            components.push(
+                gui::text(MODIFY_TEXT)
+                    .with_position(origin_of(MODIFY_RECT))
+                    .with_size(extent_of(MODIFY_RECT)),
+            );
+            // A zero-alpha button over the label: the same "hit target over
+            // drawn art" convention the rows use.
+            components.push(
+                gui::button(WeaponSettingsGuiMsg::Modify)
+                    .with_image(HIGHLIGHT)
+                    .with_alpha(0.0)
+                    .with_label(MODIFY_LABEL)
+                    .with_position(origin_of(MODIFY_RECT))
+                    .with_size(extent_of(MODIFY_RECT)),
+            );
+        }
+
         if shows_unload(world, weapon) {
             components.push(
                 gui::button(WeaponSettingsGuiMsg::Unload)
@@ -278,6 +313,11 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 setting: *setting,
             },
             WeaponSettingsGuiMsg::Unload => Effect::UnloadWeapon { entity_id: weapon },
+            // The control is only drawn for a gun modification means something
+            // to, so this always has something to say.
+            WeaponSettingsGuiMsg::Modify => {
+                super::use_modify_control(world, weapon).unwrap_or(Effect::NoEffect)
+            }
         };
         (state.clone(), effect)
     }
@@ -377,6 +417,81 @@ mod tests {
     /// The pistol as the bench hands it out: loaded.
     fn pistol_world(setting: i32) -> (World, EntityId) {
         pistol_world_with_ammo(setting, 6)
+    }
+
+    /// The pistol at `modification`, carrying the modify script and the two
+    /// modify difficulties the shipped template does, for a player trained in
+    /// Modify.
+    fn modifiable_pistol(modification: i32) -> (World, EntityId) {
+        use dark::properties::{PropHackDiff, PropModify2Diff, PropModifyDiff};
+
+        let (mut world, weapon) = pistol_world(0);
+        let terms = PropHackDiff {
+            success_chance: 40,
+            critical_chance: 2,
+            cost: 20.0,
+        };
+        world.add_component(weapon, gun_state(0, modification));
+        world.add_component(
+            weapon,
+            PropScripts {
+                scripts: vec!["PistolModify".to_owned()],
+                inherits: true,
+            },
+        );
+        world.add_component(weapon, PropModifyDiff(terms));
+        world.add_component(weapon, PropModify2Diff(terms));
+        let mut quests = crate::quest_info::QuestInfo::new();
+        for _ in 0..5 {
+            quests
+                .player_stats_mut()
+                .raise_skill(crate::player_stats::Skill::Modify);
+        }
+        world.add_unique(quests);
+        (world, weapon)
+    }
+
+    /// A gun modification means something to offers the control; the plain
+    /// bench pistol, which authors no modify script, does not.
+    #[test]
+    fn only_a_modifiable_gun_offers_the_modify_control() {
+        let (world, _) = modifiable_pistol(0);
+        assert!(labels(&components(&world)).contains(&MODIFY_LABEL.to_owned()));
+
+        let (world, _) = pistol_world(0);
+        assert!(!labels(&components(&world)).contains(&MODIFY_LABEL.to_owned()));
+    }
+
+    /// Pressing it asks for the board on the gun the panel is showing.
+    #[test]
+    fn the_modify_control_opens_the_board_on_the_wielded_gun() {
+        let (world, weapon) = modifiable_pistol(0);
+        let (_, effect) = WeaponSettingsGui.handle_msg(
+            weapon,
+            &world,
+            &WeaponSettingsGuiState,
+            &WeaponSettingsGuiMsg::Modify,
+        );
+        assert!(matches!(
+            effect,
+            Effect::OpenWeaponModify { entity_id } if entity_id == weapon
+        ));
+    }
+
+    /// A gun that has had both modifications still offers the control - that
+    /// is where the player is told there is nothing more to do.
+    #[test]
+    fn a_fully_modified_gun_still_offers_the_control_and_says_so() {
+        let (world, weapon) = modifiable_pistol(2);
+        assert!(labels(&components(&world)).contains(&MODIFY_LABEL.to_owned()));
+
+        let (_, effect) = WeaponSettingsGui.handle_msg(
+            weapon,
+            &world,
+            &WeaponSettingsGuiState,
+            &WeaponSettingsGuiMsg::Modify,
+        );
+        assert!(matches!(effect, Effect::ShowMessage { .. }));
     }
 
     fn components(world: &World) -> Vec<GuiComponent<WeaponSettingsGuiMsg>> {

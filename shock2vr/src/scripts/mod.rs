@@ -28,6 +28,7 @@ mod energy_weapon;
 mod exp_cookie;
 mod frob_qb;
 pub mod gui;
+pub mod gun_modifications;
 pub mod healing_item;
 mod internal_collision_type;
 mod internal_explosion;
@@ -125,7 +126,7 @@ pub use self::gui::ElevatorContext;
 use self::gui::{
     ComputerGui, ContainerGui, ElevatorGui, GamePigGui, HackableCrateGui, KeyPadGui, MapGui,
     MediaGui, PsiPowersGui, ReplicatorGui, ResearchGui, TrainerGui, TrainerMode, TraitGui,
-    WeaponRepairGui, WeaponSettingsGui,
+    WeaponModifyGui, WeaponRepairGui, WeaponSettingsGui,
 };
 use self::healing_item::{HealingItemKind, HealingItemScript};
 use self::internal_frob_move::InternalFrobMove;
@@ -966,6 +967,7 @@ impl ScriptWorld {
             "internal_media" => gui_script(Box::new(MediaGui)),
             "internal_weapon_settings" => gui_script(Box::new(WeaponSettingsGui)),
             "internal_weapon_repair" => gui_script(Box::new(WeaponRepairGui)),
+            "internal_weapon_modify" => gui_script(Box::new(WeaponModifyGui)),
             "internal_psi_powers" => gui_script(Box::new(PsiPowersGui)),
             // "internal_inventory" => Box::new(PanicOnLoadScript::new("internal_inventory")),
             "internal_explosion" => Box::new(InternalExplosion::new()),
@@ -1067,7 +1069,7 @@ impl ScriptWorld {
 
             // weapons:
             "delaygrenade" => Box::new(UnimplementedScript::new(&script_name)),
-            "annelidmodify" => Box::new(UnimplementedScript::new(&script_name)),
+            "annelidmodify" => Box::new(NoopScript::new()),
             "empmodify" => Box::new(NoopScript::new()),
             "lasermodify" => Box::new(NoopScript::new()),
             "fusionmodify" => Box::new(NoopScript::new()),
@@ -1086,7 +1088,7 @@ impl ScriptWorld {
                 Box::new(PsiAmpScript::new()),
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
-            "viralmodify" => Box::new(UnimplementedScript::new(&script_name)),
+            "viralmodify" => Box::new(NoopScript::new()),
 
             //goodies:
             "expcookie" => Box::new(ExpCookie::new()), // cyber modules

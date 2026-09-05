@@ -516,7 +516,11 @@ async function useFromStrip(
   assert.ok(
     slot,
     `the strip should list the carried item (got ${JSON.stringify(
-      (await game.ui.state()).strip?.elements.map((e) => e.label),
+      (await game.ui.state()).strip?.elements.map((e) => [
+        e.kind,
+        e.entity_id,
+        e.label,
+      ]),
     )})`,
   );
   await click(slot);
@@ -694,6 +698,341 @@ test(
       objectStateOf(await game.entities.detail(pistol.id)),
       "Normal",
       "a won repair works the same way in VR",
+    );
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Slice 6: modify.
+//
+// A working gun can be improved twice on the same board, entered from the
+// weapon settings panel's MODIFY control - flat and in the VR cyber interface,
+// which present one canvas. Each win raises the gun's modification level, and
+// the level is what the gun's firing description is derived from, so the
+// magazine and the reload change with it. There is no third modification.
+//
+// Negative-first: on the parent no modify mode exists, the settings panel has
+// no MODIFY control, and the pistol's clip never leaves 12.
+
+/** The pistol's authored `P$ModifyDif` nanite cost, per deal. */
+const MODIFY_COST = "20";
+/** Piles of 50: the board charges 20 a deal and may be re-dealt. */
+const NANITE_PILES = 10;
+/** The pistol's authored magazine, and what each modification makes of it. */
+const PISTOL_CLIP = [12, 24, 24];
+/** The pistol's authored reload, and what each modification makes of it. */
+const PISTOL_RELOAD_MS = [500, 500, 167];
+
+function gunNumber(
+  detail: { properties: { name: string; value: string }[] },
+  name: string,
+): number {
+  const found = detail.properties.find((p) => p.name === name);
+  assert.ok(found, `a gun should expose a ${name} property`);
+  return Number(found.value);
+}
+
+async function modifyPanel(game: GameServer): Promise<UiPanel> {
+  const ui = await game.ui.state();
+  assert.ok(
+    ui.active_panel,
+    `the modify board should be open (mode=${ui.mode})`,
+  );
+  return ui.active_panel;
+}
+
+/** Play the board until the modification lands, exactly as repair does. */
+async function playModifyBoardToWin(
+  game: GameServer,
+  click: (element: UiElement) => Promise<void>,
+): Promise<void> {
+  const routes = [
+    ["node-2-0", "node-3-0", "node-4-0"],
+    ["node-2-1", "node-2-2", "node-2-3"],
+    ["node-0-1", "node-0-2", "node-0-3"],
+    ["node-4-0", "node-4-1", "node-4-2"],
+    ["node-0-3", "node-1-3", "node-2-3"],
+  ];
+  for (let attempt = 0; attempt < 15; attempt += 1) {
+    let panel = await modifyPanel(game);
+    if (hasTexture(panel, "winh.pcx")) return;
+    assert.ok(
+      !hasTexture(panel, "loseh.pcx"),
+      "a critical failure broke the gun; max Modify should leave no mines",
+    );
+    assert.ok(
+      !hasTexture(panel, "payh.pcx"),
+      "the test wallet should always cover the authored modify cost",
+    );
+
+    const inPlay = panel.elements.some((el) => el.label === "reset-hack");
+    if (!inPlay || hasTexture(panel, "failh.pcx")) {
+      const deal = panel.elements.find(
+        (el) => el.label === "start-hack" || el.label === "reset-hack",
+      );
+      assert.ok(
+        deal,
+        `an unwon board should offer START/RESET (got ${JSON.stringify(
+          panel.elements.map((e) => e.label ?? e.texture),
+        )})`,
+      );
+      await click(deal);
+    }
+
+    for (const label of routes[attempt % routes.length]) {
+      panel = await modifyPanel(game);
+      if (hasTexture(panel, "winh.pcx")) return;
+      if (hasTexture(panel, "failh.pcx") || hasTexture(panel, "loseh.pcx")) {
+        break;
+      }
+      await click(boardButton(panel, label));
+    }
+  }
+  assert.fail("the modify board should win within the attempt budget");
+}
+
+/** The wielded pistol, plus a wallet the board's per-deal cost comes out of. */
+async function wieldedPistolWithNanites(
+  game: GameServer,
+): Promise<{ id: number }> {
+  await game.input.trigger("DebugCycleWeapon");
+  await game.step({ frames: 5 });
+  const wielded = (await game.info()).player.wielded_entity_id;
+  assert.ok(wielded, "DebugCycleWeapon should wield the bench pistol");
+  for (let i = 0; i < NANITE_PILES; i += 1) {
+    await game.player.spawnItem(BIG_NANITE_PILE);
+  }
+  await game.step({ frames: 5 });
+  return { id: wielded };
+}
+
+/** Open the settings MFD the way a player does: the readout's SETTING button. */
+async function openSettings(
+  game: GameServer,
+  click: (element: UiElement) => Promise<void>,
+): Promise<void> {
+  const setting = ((await game.ui.state()).readout ?? []).find(
+    (e) => e.label === "gun_setting",
+  );
+  assert.ok(setting, "the readout should carry a SETTING button");
+  await click(setting);
+  await game.step({ frames: 3 });
+}
+
+/** SETTING, then MODIFY: the whole way in to the board. */
+async function openModifyBoard(
+  game: GameServer,
+  click: (element: UiElement) => Promise<void>,
+): Promise<void> {
+  await openSettings(game, click);
+  const panel = (await game.ui.state()).active_panel;
+  assert.ok(panel, "SETTING should dock the settings panel");
+  const modify = panel.elements.find(
+    (e) => e.kind === "button" && e.label === "modify",
+  );
+  assert.ok(
+    modify,
+    `the settings panel should offer MODIFY (got ${JSON.stringify(
+      panel.elements.map((e) => e.label ?? e.texture),
+    )})`,
+  );
+  await click(modify);
+  await game.step({ frames: 3 });
+}
+
+/** Dismiss whatever is docked, so the next SETTING press opens afresh. */
+async function closePanel(
+  game: GameServer,
+  click: (element: UiElement) => Promise<void>,
+): Promise<void> {
+  const panel = (await game.ui.state()).active_panel;
+  if (!panel) return;
+  const close = panel.elements.find((e) => e.label === "close");
+  assert.ok(close, "a docked panel should carry a close button");
+  await click(close);
+  await game.step({ frames: 3 });
+}
+
+test(
+  "the settings panel's MODIFY control opens the board, and winning it modifies the gun",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 900_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_weapons" });
+    await game.step({ frames: 30 });
+
+    const pistol = await wieldedPistolWithNanites(game);
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    const click = (element: UiElement) => clickUiElement(game, element);
+
+    const unmodified = await game.entities.detail(pistol.id);
+    assert.equal(gunNumber(unmodified, "Modification"), 0);
+    assert.equal(gunNumber(unmodified, "ClipSize"), PISTOL_CLIP[0]);
+    assert.equal(gunNumber(unmodified, "ReloadTimeMs"), PISTOL_RELOAD_MS[0]);
+
+    // KEY: the settings panel is the way in, and the board it opens is the HRM
+    // board played on the pistol's authored ModifyDiff terms.
+    await openModifyBoard(game, click);
+    const board = await modifyPanel(game);
+    assert.ok(
+      hasTexture(board, "hack.pcx"),
+      `MODIFY should present the HRM board (got ${JSON.stringify(
+        board.elements.map((e) => e.texture ?? e.label),
+      )})`,
+    );
+    assert.equal(
+      board.elements
+        .filter((e) => e.kind === "text")
+        .map((e) => e.text ?? "")
+        .find((text) => /^\d+$/.test(text)),
+      MODIFY_COST,
+      "the board should show the pistol's authored ModifyDiff cost",
+    );
+    // KEY: the board says what this modification will do, which is the only
+    // place the gun's `P$Modify1` text is ever shown.
+    assert.match(
+      board.elements
+        .filter((e) => e.kind === "text")
+        .map((e) => e.text ?? "")
+        .join(" "),
+      /clip size/i,
+      "the board should show the pistol's first modification text",
+    );
+    await game.screenshot("modify-board.png");
+
+    // KEY: a win is one modification, and the gun's magazine follows it.
+    await playModifyBoardToWin(game, click);
+    const once = await game.entities.detail(pistol.id);
+    assert.equal(gunNumber(once, "Modification"), 1);
+    assert.equal(
+      gunNumber(once, "ClipSize"),
+      PISTOL_CLIP[1],
+      "the first modification doubles the pistol's clip",
+    );
+
+    // KEY: a second modification is played on the harder `P$Modify2Di` terms
+    // and changes something else again.
+    await closePanel(game, click);
+    await openModifyBoard(game, click);
+    await playModifyBoardToWin(game, click);
+    const twice = await game.entities.detail(pistol.id);
+    assert.equal(gunNumber(twice, "Modification"), 2);
+    assert.equal(
+      gunNumber(twice, "ClipSize"),
+      PISTOL_CLIP[2],
+      "the clip stays doubled at the second modification",
+    );
+    assert.equal(
+      gunNumber(twice, "ReloadTimeMs"),
+      PISTOL_RELOAD_MS[2],
+      "the second modification cuts the pistol's reload",
+    );
+
+    // KEY: there is no third. The control is still there - it is where the
+    // player is told so - but it refuses rather than dealing a board.
+    await closePanel(game, click);
+    await openSettings(game, click);
+    const settings = (await game.ui.state()).active_panel;
+    assert.ok(settings);
+    const modify = settings.elements.find((e) => e.label === "modify");
+    assert.ok(modify, "a fully modified gun still carries the control");
+    await click(modify);
+    await game.step({ frames: 3 });
+    assert.ok(
+      !hasTexture(await modifyPanel(game), "hack.pcx"),
+      "a third modification should be refused, not dealt",
+    );
+    assert.equal(
+      gunNumber(await game.entities.detail(pistol.id), "Modification"),
+      2,
+      "and the gun is unchanged",
+    );
+  },
+);
+
+test(
+  "the VR cyber interface presents the same modify board",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 900_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "debug_weapons",
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 30 });
+
+    // The VR hand takes the pistol off the bench, the way a player does.
+    const bench = await cycleToWeapon(game, (e) => e.template_id === PISTOL);
+    await aimVrHandAt(game, bench.position as Vec3, 0.3);
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 8 });
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      bench.id,
+      "the VR right hand must hold the pistol",
+    );
+    for (let i = 0; i < NANITE_PILES; i += 1) {
+      await game.player.spawnItem(BIG_NANITE_PILE);
+    }
+    await game.step({ frames: 5 });
+
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+    assert.equal(
+      (await game.ui.state()).mode,
+      "use",
+      "the cyber interface should be up",
+    );
+
+    /**
+     * Release, then pull: a clean rising edge on the controller trigger. The
+     * panel pose is re-read per click, because the canvas it reports is the
+     * canvas of whatever is currently docked - and the settings panel and the
+     * board are not the same size.
+     */
+    const clickElement = async (element: UiElement) => {
+      const pose = (await game.ui.state()).panel_pose;
+      assert.ok(pose, "the VR cyber interface must report its panel pose");
+      const canvas: [number, number] = [
+        element.rect[0] + element.rect[2] / 2,
+        element.rect[1] + element.rect[3] / 2,
+      ];
+      for (const trigger of [0, 1, 0]) {
+        // Squeeze held throughout: releasing it would drop the pistol, and a
+        // gun that is no longer in hand takes its settings panel with it.
+        await aimVrHandAtCanvas(game, pose, canvas, { trigger, squeeze: 1 });
+        await game.step({ frames: 2 });
+      }
+    };
+
+    // In VR the forearm readout draws no buttons, so the settings panel is
+    // asked for by the action instead - the same panel flat's SETTING button
+    // docks, presented on the cyber interface's canvas.
+    await game.input.trigger("OpenWeaponSettings");
+    await game.step({ frames: 5 });
+    const settings = (await game.ui.state()).active_panel;
+    assert.ok(settings, "the action should dock the gun's settings panel");
+    const modify = settings.elements.find(
+      (e) => e.kind === "button" && e.label === "modify",
+    );
+    assert.ok(
+      modify,
+      `the settings panel should offer MODIFY (got ${JSON.stringify(
+        settings.elements.map((e) => e.label ?? e.texture),
+      )})`,
+    );
+    await clickElement(modify);
+    await game.step({ frames: 3 });
+    assert.ok(
+      hasTexture(await modifyPanel(game), "hack.pcx"),
+      "the cyber interface should present the HRM board",
+    );
+    await game.screenshot("modify-board-vr.png");
+
+    await playModifyBoardToWin(game, clickElement);
+    assert.equal(
+      gunNumber(await game.entities.detail(bench.id), "Modification"),
+      1,
+      "a won modification works the same way in VR",
     );
   },
 );

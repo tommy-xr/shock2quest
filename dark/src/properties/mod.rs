@@ -380,6 +380,17 @@ pub struct PropObjIcon(pub String);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropObjBrokenIcon(pub String);
 
+/// `P$Modify1` / `P$Modify2` - what a gun's first / second modification does
+/// ("Increase clip size from 12 to 24."), shown on the modify board before the
+/// attempt. Each holds an object string (`key: "fallback"`) resolved against
+/// the matching `MODIFY1`/`MODIFY2` string table, exactly as the fire-setting
+/// text below is.
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropModification1Text(pub String);
+
+#[derive(Debug, Component, Clone, Serialize, Deserialize)]
+pub struct PropModification2Text(pub String);
+
 /// `P$Sett1` / `P$Sett2` - the description text for a gun's first / second fire
 /// setting, and `P$SHead1` / `P$SHead2` - the short header shown beside it
 /// (e.g. "NORM" / "BURST"). Each holds an object string (`key: "fallback"`)
@@ -1592,6 +1603,30 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             accumulator::latest,
         ),
         define_prop(
+            "P$ModifyDif",
+            PropModifyDiff::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Modify2Di",
+            PropModify2Diff::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Modify1",
+            read_variable_length_string,
+            PropModification1Text,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$Modify2",
+            read_variable_length_string,
+            PropModification2Text,
+            accumulator::latest,
+        ),
+        define_prop(
             "P$HackText",
             read_variable_length_string,
             PropHackText,
@@ -2578,6 +2613,36 @@ pub fn define_link_with_versioned_data<TData: 'static + fmt::Debug + Send + Sync
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shipped pistol's `P$Modify1` and `P$Modify2` bytes (gamesys
+    /// template -17). Both are the count-prefixed variable-length string the
+    /// fire-setting text uses, so they carry the same `key: "fallback"` object
+    /// string the MODIFY1/MODIFY2 tables are keyed on.
+    #[test]
+    fn parses_the_shipped_pistol_modification_text() {
+        let first = [
+            0x2c, 0x00, 0x00, 0x00, // 44 bytes of string follow
+            0x50, 0x69, 0x73, 0x74, 0x6f, 0x6c, 0x3a, 0x20, 0x22, 0x49, 0x6e, 0x63, 0x72, 0x65,
+            0x61, 0x73, 0x65, 0x20, 0x63, 0x6c, 0x69, 0x70, 0x20, 0x73, 0x69, 0x7a, 0x65, 0x20,
+            0x66, 0x72, 0x6f, 0x6d, 0x20, 0x31, 0x32, 0x20, 0x74, 0x6f, 0x20, 0x32, 0x34, 0x2e,
+            0x22, 0x00,
+        ];
+        let second = [
+            0x20, 0x00, 0x00, 0x00, // 32 bytes of string follow
+            0x50, 0x69, 0x73, 0x74, 0x6f, 0x6c, 0x3a, 0x20, 0x22, 0x44, 0x65, 0x63, 0x72, 0x65,
+            0x61, 0x73, 0x65, 0x20, 0x72, 0x65, 0x6c, 0x6f, 0x61, 0x64, 0x20, 0x74, 0x69, 0x6d,
+            0x65, 0x2e, 0x22, 0x00,
+        ];
+
+        assert_eq!(
+            read_variable_length_string(&mut Cursor::new(first), 48),
+            r#"Pistol: "Increase clip size from 12 to 24.""#
+        );
+        assert_eq!(
+            read_variable_length_string(&mut Cursor::new(second), 36),
+            r#"Pistol: "Decrease reload time.""#
+        );
+    }
 
     #[test]
     fn object_name_type_reads_retail_variants_and_preserves_unknown_values() {

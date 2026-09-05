@@ -48,6 +48,11 @@ const FALLBACK_WRENCH_ON_BROKEN: &str = "Use repair skill on weapon first.";
 const FALLBACK_WRENCH_SKILL_REQ: &str = "Maintaining this weapon requires a skill of %d.";
 const FALLBACK_WRENCH_UNUSED: &str = "Weapon already in good condition.";
 
+/// The English fallbacks for the board's modify mode, verbatim from the
+/// shipped HRM.STR.
+const FALLBACK_MODIFY_SKILL_REQ: &str = "Modify skill %d required.";
+const FALLBACK_MODIFY_MAXED: &str = "This weapon cannot be modified any further.";
+
 /// The English fallback for the board's repair skill gate, verbatim from the
 /// shipped HRM.STR (`%d` is the minimum Repair level the object authors).
 const FALLBACK_REPAIR_SKILL_REQ: &str = "Repair skill %d required.";
@@ -80,6 +85,11 @@ pub struct HudStrings {
     /// Repair level is below the minimum the object authors, so the board
     /// never opens in repair mode.
     pub repair_skill_req: String,
+    /// HRM.STR `techminskill2` ("Modify skill %d required."): the player's
+    /// Modify level is below what the gun's next modification demands.
+    pub modify_skill_req: String,
+    /// HRM.STR `ModifyResult3`: the gun has had every modification it can take.
+    pub modify_maxed: String,
 }
 
 impl Default for HudStrings {
@@ -93,6 +103,8 @@ impl Default for HudStrings {
             wrench_skill_req: FALLBACK_WRENCH_SKILL_REQ.to_owned(),
             wrench_unused: FALLBACK_WRENCH_UNUSED.to_owned(),
             repair_skill_req: FALLBACK_REPAIR_SKILL_REQ.to_owned(),
+            modify_skill_req: FALLBACK_MODIFY_SKILL_REQ.to_owned(),
+            modify_maxed: FALLBACK_MODIFY_MAXED.to_owned(),
         }
     }
 }
@@ -108,6 +120,16 @@ impl HudStrings {
                 hrm_strings.as_deref(),
                 "techminskill1",
                 FALLBACK_REPAIR_SKILL_REQ,
+            ),
+            modify_skill_req: crate::ui::resolve_menu_label(
+                hrm_strings.as_deref(),
+                "techminskill2",
+                FALLBACK_MODIFY_SKILL_REQ,
+            ),
+            modify_maxed: crate::ui::resolve_menu_label(
+                hrm_strings.as_deref(),
+                "ModifyResult3",
+                FALLBACK_MODIFY_MAXED,
             ),
             reload_label: crate::ui::resolve_menu_label(
                 strings.as_deref(),
