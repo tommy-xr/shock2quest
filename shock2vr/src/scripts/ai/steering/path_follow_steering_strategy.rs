@@ -484,7 +484,16 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             none: REPEL_RADIUS,
             strength,
         });
-        let crowd = ai_util::crowd_bias(world, entity_id, position, SEPARATION_RADIUS, repel);
+        // The heading lets a push from a neighbour squarely ahead become a
+        // sidestep rather than a backwards shove the aim point discards.
+        let crowd = ai_util::crowd_bias(
+            world,
+            entity_id,
+            position,
+            Some(waypoint - position),
+            SEPARATION_RADIUS,
+            repel,
+        );
         // ...and the same treatment for static geometry the navigation mesh
         // doesn't model (a railing, a crate left on the route): whiskers bend
         // the line around it before the body wedges, without ever taking the
@@ -794,10 +803,23 @@ fn target_awareness_distance(
 /// own, so it is shortened to the offset budget BEFORE the sum: otherwise
 /// a dense crowd - or simply a stronger repel term - buys magnitude out of
 /// the whiskers' share and bends the line into the very geometry the
-/// whiskers are there to avoid. The blend is then shortened once, so two
-/// biases pointing the same way still cannot bend the line further than
-/// one of them may.
+/// whiskers are there to avoid.
+///
+/// Geometry then outranks the crowd outright: whatever part of the crowd
+/// push opposes the whiskers is dropped before the sum, so a neighbour on
+/// the open side can never bid an AI back toward the wall the whiskers are
+/// steering it off. (Two vectors of similar size pointing opposite ways
+/// otherwise cancel to nothing, which is the worst of both - no avoidance
+/// and no yielding.) The blend is shortened once at the end, so two biases
+/// pointing the same way still cannot bend the line further than one may.
 fn blend_biases(crowd: Vector3<f32>, whiskers: Vector3<f32>, max: f32) -> Vector3<f32> {
+    let crowd = match ai_util::normalized_horizontal(whiskers) {
+        Some(wall) => {
+            let opposing = (crowd.x * wall.x + crowd.z * wall.z).min(0.0);
+            crowd - wall * opposing
+        }
+        None => crowd,
+    };
     capped(capped(crowd, max) + whiskers, max)
 }
 
@@ -1147,6 +1169,24 @@ mod tests {
         // A crowd on its own is capped like any other bias
         let alone = blend_biases(vec3(100.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), 2.5);
         assert!((alone.x - 2.5).abs() < 1e-4, "got {alone:?}");
+    }
+
+    /// A neighbour on the open side pushes an AI back at the wall the
+    /// whiskers just found. Summed, two opposite pushes of similar size
+    /// cancel to nothing - no avoidance AND no yielding - so the crowd's
+    /// opposing part is dropped and the wall wins outright.
+    #[test]
+    fn a_wall_outranks_a_crowd_push_into_it() {
+        let wall_push = vec3(2.0, 0.0, 0.0);
+        let crowd_into_wall = vec3(-2.2, 0.0, 0.0);
+        let blended = blend_biases(crowd_into_wall, wall_push, 2.5);
+        assert!(
+            blended.x > 1.0,
+            "the whiskers must still steer away from the wall: {blended:?}"
+        );
+        // A crowd push that does NOT oppose the wall is untouched
+        let alongside = blend_biases(vec3(0.0, 0.0, 1.0), wall_push, 2.5);
+        assert!((alongside.z - 1.0).abs() < 1e-4, "got {alongside:?}");
     }
 
     #[test]

@@ -722,6 +722,54 @@ pub fn repel_ramp(distance: f32, full: f32, none: f32) -> f32 {
     }
 }
 
+/// A push counts as head-on when it points back down the travel direction
+/// within this cone of exactly anti-parallel. Wider and an ordinary
+/// glancing push gets turned sideways; narrower and two bodies converging
+/// a few degrees off dead-centre still cancel each other out.
+const HEAD_ON_CONE: Deg<f32> = Deg(30.0);
+
+/// The XZ direction of `v`, or None when it has no horizontal extent.
+pub(crate) fn normalized_horizontal(v: Vector3<f32>) -> Option<Vector3<f32>> {
+    let length = (v.x * v.x + v.z * v.z).sqrt();
+    (length > 1e-6).then(|| vec3(v.x / length, 0.0, v.z / length))
+}
+
+/// Turn a head-on push into a sidestep of the same strength.
+///
+/// A neighbour squarely ahead pushes straight back down the route, and a
+/// bias pointing backwards is worth nothing: the aim point keeps only its
+/// sideways part (`aim_with_bias`), so the whole push is discarded and two
+/// AIs meeting head-on walk into each other. Yielding around is what the
+/// original engine's regulator does, so inside `HEAD_ON_CONE` the push is
+/// rotated onto the perpendicular instead of being thrown away.
+///
+/// The side is the one the push already leans toward, which for two bodies
+/// approaching each other is mirrored - each sees the other off its own
+/// opposite shoulder, so they pass on opposite sides without talking. For a
+/// dead-centre approach with no lean at all, both fall back to the same
+/// BODY-RELATIVE side, which is again opposite in world space because they
+/// face opposite ways.
+pub fn yield_sideways(push: Vector3<f32>, heading: Vector3<f32>) -> Vector3<f32> {
+    let magnitude = (push.x * push.x + push.z * push.z).sqrt();
+    if magnitude < 1e-6 {
+        return push;
+    }
+    let along = push.x * heading.x + push.z * heading.z;
+    if along >= 0.0 {
+        return push; // not pointing back at all
+    }
+    let lateral = push - heading * along;
+    let lateral_length = (lateral.x * lateral.x + lateral.z * lateral.z).sqrt();
+    // sin of the angle off exactly anti-parallel
+    if lateral_length / magnitude > Rad::from(HEAD_ON_CONE).0.sin() {
+        return push;
+    }
+    let side = normalized_horizontal(lateral)
+        // Dead centre: one consistent perpendicular of the heading.
+        .unwrap_or_else(|| vec3(heading.z, 0.0, -heading.x));
+    side * magnitude
+}
+
 /// Horizontal crowd bias: the sum of repulsions from other LIVING
 /// creatures near `position` (same floor). Returns a direction-and-
 /// magnitude vector in the XZ plane; empty crowd = zero. Callers blend a
@@ -743,9 +791,11 @@ pub fn crowd_bias(
     world: &World,
     entity_id: EntityId,
     position: Vector3<f32>,
+    heading: Option<Vector3<f32>>,
     separation_radius: f32,
     repel: Option<CrowdRepel>,
 ) -> Vector3<f32> {
+    let heading = heading.and_then(normalized_horizontal);
     let v_creature = world.borrow::<View<PropCreature>>().unwrap();
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let v_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
@@ -785,7 +835,11 @@ pub fn crowd_bias(
         if weight <= 0.0 {
             continue;
         }
-        bias += vec3(dx / distance, 0.0, dz / distance) * weight;
+        let push = vec3(dx / distance, 0.0, dz / distance) * weight;
+        bias += match heading {
+            Some(heading) => yield_sideways(push, heading),
+            None => push,
+        };
     }
     bias
 }
@@ -1236,7 +1290,7 @@ mod separation_tests {
         let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
         spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 10);
 
-        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4, None);
+        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), None, 2.4, None);
         assert!(
             bias.x < -0.1,
             "neighbor at +x must push toward -x: {bias:?}"
@@ -1253,7 +1307,7 @@ mod separation_tests {
         spawn_creature(&mut world, vec3(10.0, 0.0, 0.0), 10); // out of radius
         spawn_creature(&mut world, vec3(1.0, 5.0, 0.0), 10); // floor above
 
-        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4, None);
+        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), None, 2.4, None);
         assert!(
             bias.magnitude() < 1e-6,
             "corpses, far and stacked-floor creatures must not repel: {bias:?}"
@@ -1278,11 +1332,12 @@ mod separation_tests {
         let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
         spawn_creature(&mut world, vec3(1.5, 0.0, 0.0), 10);
 
-        let separation_only = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 6.0, None);
+        let separation_only = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), None, 6.0, None);
         let with_repel = crowd_bias(
             &world,
             me,
             vec3(0.0, 0.0, 0.0),
+            None,
             6.0,
             Some(CrowdRepel {
                 full: 1.5,
@@ -1301,6 +1356,7 @@ mod separation_tests {
             &world,
             me,
             vec3(0.0, 0.0, 0.0),
+            None,
             6.0,
             Some(CrowdRepel {
                 full: 1.5,
@@ -1321,11 +1377,91 @@ mod separation_tests {
         spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 10);
         spawn_creature(&mut world, vec3(-1.0, 0.0, 0.0), 10);
 
-        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4, None);
+        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), None, 2.4, None);
         assert!(
             bias.x.abs() < 1e-6,
             "symmetric neighbors cancel on x: {bias:?}"
         );
+    }
+
+    /// A neighbour squarely ahead pushes straight backwards, and a
+    /// backwards bias is discarded by the aim point - so head-on the crowd
+    /// term used to be worth exactly nothing and the two bodies met.
+    #[test]
+    fn a_neighbour_squarely_ahead_is_stepped_around() {
+        let mut world = World::new();
+        let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
+        spawn_creature(&mut world, vec3(0.0, 0.0, 1.5), 10);
+
+        let heading = Some(vec3(0.0, 0.0, 1.0));
+        let bias = crowd_bias(
+            &world,
+            me,
+            vec3(0.0, 0.0, 0.0),
+            heading,
+            6.0,
+            Some(CrowdRepel {
+                full: 1.5,
+                none: 4.5,
+                strength: 1.0,
+            }),
+        );
+        assert!(
+            bias.x.abs() > 0.5,
+            "a neighbour dead ahead must be stepped around, not pushed back \
+             through: {bias:?}"
+        );
+        assert!(
+            bias.z.abs() < 1e-6,
+            "and the sidestep keeps nothing pointing back down the route: {bias:?}"
+        );
+    }
+
+    /// Two AIs walking into each other each see the other dead ahead, and
+    /// each yields to its own side - which is opposite in world space,
+    /// because they face opposite ways. Without that they would both step
+    /// the same way and stay nose to nose.
+    #[test]
+    fn two_ai_meeting_head_on_yield_to_opposite_sides() {
+        let north = yield_sideways(vec3(0.0, 0.0, -1.0), vec3(0.0, 0.0, 1.0));
+        let south = yield_sideways(vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0));
+        assert!(
+            north.x * south.x < 0.0,
+            "opposed AIs must pass on opposite sides: {north:?} vs {south:?}"
+        );
+    }
+
+    /// ...and a push that already leans to one side keeps that side, so the
+    /// AI slides the short way around rather than crossing the neighbour.
+    #[test]
+    fn a_leaning_head_on_push_keeps_its_own_side() {
+        let heading = vec3(0.0, 0.0, 1.0);
+        let leaning = yield_sideways(vec3(0.2, 0.0, -1.0), heading);
+        assert!(leaning.x > 0.0, "{leaning:?}");
+        let magnitude = (leaning.x * leaning.x + leaning.z * leaning.z).sqrt();
+        let before = (0.2f32 * 0.2 + 1.0).sqrt();
+        assert!(
+            (magnitude - before).abs() < 1e-5,
+            "yielding must not change how hard the push is: {magnitude} vs {before}"
+        );
+    }
+
+    /// A push that is not head-on is left exactly as it was - sideways and
+    /// forward pushes already survive the aim point.
+    #[test]
+    fn a_push_off_the_head_on_cone_is_untouched() {
+        let heading = vec3(0.0, 0.0, 1.0);
+        assert_eq!(
+            yield_sideways(vec3(1.0, 0.0, 0.0), heading),
+            vec3(1.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            yield_sideways(vec3(0.0, 0.0, 1.0), heading),
+            vec3(0.0, 0.0, 1.0)
+        );
+        // 45 degrees off anti-parallel is outside the 30 degree cone
+        let oblique = yield_sideways(vec3(1.0, 0.0, -1.0), heading);
+        assert_eq!(oblique, vec3(1.0, 0.0, -1.0));
     }
 }
 
