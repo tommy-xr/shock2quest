@@ -8694,7 +8694,14 @@ mod tests {
             lowest = lowest.min(y);
             highest = highest.max(y);
         }
-        step_creature_test(&mut world, &mut player, &[creature_id], 60);
+        // Keep sampling through the settle: a creature launched by the closing
+        // leaf reaches its peak after the leaf has stopped.
+        for _ in 0..60 {
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+            let y = world.get_position(creature).unwrap().y;
+            lowest = lowest.min(y);
+            highest = highest.max(y);
+        }
 
         let end = world.get_position(creature).unwrap();
         // The squeeze between leaf and floor bottoms out ~0.58 into the 1.0-
@@ -8705,8 +8712,10 @@ mod tests {
             "a closing leaf must not push the creature through the floor: rest {}, lowest {lowest}",
             start.y
         );
+        // Without the hook this peaks at 1.61, a full unit above rest; with it
+        // the capsule never rises above its resting height at all.
         assert!(
-            highest < start.y + 1.0,
+            highest < start.y + 0.25,
             "a closing leaf must not launch the creature: rest {}, highest {highest}",
             start.y
         );
