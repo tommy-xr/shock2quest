@@ -47,7 +47,7 @@ pub fn creature_height(world: &World, entity_id: EntityId) -> f32 {
         .ok()
         .and_then(|v_creature| v_creature.get(entity_id).ok().map(|creature| creature.0))
         .and_then(crate::creature::get_creature_definition)
-        .map(|definition| definition.bounding_size.y / SCALE_FACTOR)
+        .map(|definition| definition.bounding_size.y)
         .unwrap_or(CREATURE_DEFAULT_HEIGHT)
 }
 
@@ -1478,6 +1478,29 @@ mod line_of_fire_tests {
             &physics,
             vec3(0.0, 0.0, 5.0),
         ));
+    }
+}
+
+#[cfg(test)]
+mod creature_height_tests {
+    use super::*;
+
+    /// A creature's authored bounding box is already in world units - the same
+    /// units the no-definition fallback is written in, and the units the
+    /// physics capsule is built from. Measuring a hybrid at a third of its
+    /// height let it walk under a door leaf that had barely left the floor.
+    #[test]
+    fn a_creature_is_measured_in_the_same_units_as_the_fallback() {
+        let mut world = World::new();
+        // 0 is the human schema, whose bounding box is the 6.5 feet the
+        // fallback also uses.
+        let human = world.add_entity((PropCreature(0),));
+        assert!(
+            (creature_height(&world, human) - CREATURE_DEFAULT_HEIGHT).abs() < 1e-3,
+            "human measured {} against a {} fallback",
+            creature_height(&world, human),
+            CREATURE_DEFAULT_HEIGHT
+        );
     }
 }
 
