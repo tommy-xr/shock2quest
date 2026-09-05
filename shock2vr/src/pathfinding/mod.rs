@@ -2985,4 +2985,24 @@ pub(crate) mod tests {
         service.report_blocked_link(BYSTANDER, 0, 1, 0.0);
         assert_eq!(service.stats().blocked_links, 2);
     }
+
+    #[test]
+    fn no_partial_route_when_the_only_progress_is_into_a_pinch() {
+        let mut db = pinch_and_detour_db();
+        // Leave only the wide room (0) and the 0.2-wide pinch (1) reachable.
+        // The pinch is the one cell closer to the goal, and the body does not
+        // fit in it - so there is nowhere better to stand than right here.
+        db.links
+            .retain(|link| ![2, 3].contains(&link.from_cell) && ![2, 3].contains(&link.to_cell));
+        let service = service(db);
+        assert_eq!(
+            service.find_path_toward(
+                vec3(2.0, 0.0, 2.5),
+                vec3(12.0, 0.0, 1.0),
+                MovementBits::WALK,
+            ),
+            None,
+            "a partial route must not end in a cell the body cannot stand in"
+        );
+    }
 }
