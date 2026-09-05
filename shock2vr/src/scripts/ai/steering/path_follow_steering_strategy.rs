@@ -97,10 +97,12 @@ const NUDGE_KNEE_FRACTION: f32 = 0.35;
 /// geometry always does - and that body is exactly what the unstick is for,
 /// so the probe steps this far past such a reading and looks again.
 const NUDGE_EMBEDDED_DISTANCE: f32 = 0.1 / SCALE_FACTOR;
-/// How many such steps a probe takes before it gives up: 1.6 Dark feet of
-/// continuous embedding, past which the ray is reported embedded and the
-/// nudge refused rather than guessed at.
-const NUDGE_EMBEDDED_STEPS: usize = 16;
+/// How many such steps a probe takes before it gives up: 6.4 Dark feet of
+/// continuous embedding - longer than any probe segment - past which the ray
+/// is reported embedded and the nudge refused rather than guessed at. The
+/// steps only happen while a ray is inside geometry, which only a pinned
+/// body's are, and a nudge is attempted about once a minute.
+const NUDGE_EMBEDDED_STEPS: usize = 64;
 /// How far past the stalled waypoint (XZ) to probe for the cell on the far
 /// side of the crossing when reporting a blocked link - just enough to step
 /// off the shared edge without skipping a narrow destination cell (0.5
@@ -1649,8 +1651,9 @@ mod tests {
         add_floor(&mut physics, 0.0);
         let from = vec3(0.0, ft(3.0), 0.0);
         let to = vec3(ft(2.0), ft(3.0), 0.0);
-        // The prop the body is embedded in, centred on its origin
-        add_box(&mut physics, from, vec3(ft(0.5), ft(0.5), ft(0.5)));
+        // The prop the body is embedded in, centred on its origin and deep
+        // enough that BOTH probe heights start inside it
+        add_box(&mut physics, from, vec3(ft(0.5), ft(2.5), ft(0.5)));
         // ...and a wall a foot beyond the landing
         add_box(
             &mut physics,
@@ -1699,6 +1702,39 @@ mod tests {
         assert!(
             !probe.headroom,
             "a landing the body does not fit under must be refused"
+        );
+        assert!(!nudge_is_safe(&probe));
+    }
+
+    /// Clearance belongs to the landing the body would stand at, not to the
+    /// height it currently occupies: a step up puts its shoulders alongside
+    /// geometry that its old height cleared.
+    #[test]
+    fn a_step_up_alongside_geometry_refuses_the_nudge() {
+        let (world, creature, mut physics) = probe_world();
+        add_floor(&mut physics, 0.0);
+        // The same half-foot step up
+        add_box(
+            &mut physics,
+            vec3(ft(6.0), ft(0.25), 0.0),
+            vec3(ft(5.0), ft(0.25), ft(10.0)),
+        );
+        // ...beside a slab that starts just above the body's current origin
+        add_box(
+            &mut physics,
+            vec3(ft(2.0), ft(4.6), ft(1.5)),
+            vec3(ft(2.0), ft(1.4), ft(0.5)),
+        );
+        let from = vec3(0.0, ft(3.0), 0.0);
+        let to = vec3(ft(2.0), ft(3.0), 0.0);
+
+        settle(&mut physics);
+        let probe = probe_nudge(&world, &physics, creature, from, to, true);
+
+        assert!(probe.path_clear && probe.headroom);
+        assert!(
+            !probe.clearance,
+            "the slab beside the RAISED landing must refuse it"
         );
         assert!(!nudge_is_safe(&probe));
     }
