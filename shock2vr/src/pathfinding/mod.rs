@@ -878,8 +878,9 @@ impl PathfindingService {
     /// goals with no full route (different island, off-mesh, behind missing
     /// nav data). Explores everything reachable from `start` and routes to
     /// the reachable cell nearest the goal - the counterpart of the original
-    /// engine's pathfind-near facility. Returns None when we're already in
-    /// the closest reachable cell (no progress possible).
+    /// engine's pathfind-near facility. Returns None when there is nowhere
+    /// better to stand: no reachable cell is closer to the goal, or the only
+    /// closer ones are too tight for the body.
     pub fn find_path_toward(
         &self,
         start: Vector3<f32>,
@@ -2997,5 +2998,24 @@ pub(crate) mod tests {
             None,
             "a partial route must not end in a cell the body cannot stand in"
         );
+    }
+
+    #[test]
+    fn a_small_creature_still_gets_a_partial_route_into_a_pinch() {
+        let mut db = pinch_and_detour_db();
+        db.links
+            .retain(|link| ![2, 3].contains(&link.from_cell) && ![2, 3].contains(&link.to_cell));
+        for link in &mut db.links {
+            link.ok_bits |= MovementBits::SMALL_CREATURE;
+        }
+        let service = service(db);
+        let path = service
+            .find_path_toward(
+                vec3(2.0, 0.0, 2.5),
+                vec3(12.0, 0.0, 1.0),
+                MovementBits::SMALL_CREATURE,
+            )
+            .expect("a spider fits in the pinch");
+        assert_eq!(*path.last().expect("waypoints"), vec3(5.0, 0.0, 1.0));
     }
 }
