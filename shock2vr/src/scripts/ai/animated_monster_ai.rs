@@ -196,6 +196,14 @@ const TURN_CLIP_MAX_SECONDS: f32 = 4.0;
 /// the next one.
 const TURN_CLIP_COOLDOWN: f32 = 3.0;
 
+/// How long a stall bars pivoting. A pivot costs seconds of standing still,
+/// so it is only for a creature that is getting somewhere: one that has just
+/// failed to make progress is scrambling out of a wedge, and standing still
+/// through a turn clip only makes the wedge longer. The bar has to outlast the
+/// path follower's own recovery, whose re-path - and the sidestep heading that
+/// would ask for a pivot - lands after the stall clock has been reset.
+const TURN_CLIP_STALL_BLOCK_SECONDS: f32 = 3.0;
+
 /// Fallback for a clip that authors no blend length. The turn clip's pose
 /// swings back to neutral over the blend as the next clip fades in, so the
 /// entity takes the authored facing change over exactly the same window and
@@ -315,6 +323,9 @@ pub struct AnimatedMonsterAI {
     turn_clip: Option<TurnClip>,
     /// Seconds left before this AI may perform another pivot
     turn_cooldown: f32,
+    /// Seconds left of the bar a stall puts on pivoting (see
+    /// `TURN_CLIP_STALL_BLOCK_SECONDS`)
+    turn_stall_block: f32,
 }
 
 impl AnimatedMonsterAI {
@@ -342,6 +353,7 @@ impl AnimatedMonsterAI {
             frustration_cooldown: 0.0,
             turn_clip: None,
             turn_cooldown: 0.0,
+            turn_stall_block: 0.0,
         }
     }
 
@@ -370,6 +382,7 @@ impl AnimatedMonsterAI {
             frustration_cooldown: 0.0,
             turn_clip: None,
             turn_cooldown: 0.0,
+            turn_stall_block: 0.0,
         }
     }
 
@@ -837,6 +850,19 @@ impl AnimatedMonsterAI {
         }
         self.door_wait = Some((door_ent, waited));
         Some(waited)
+    }
+
+    /// Whether a pivot is affordable this frame, given how long the route has
+    /// been failing to make progress. A stall re-arms the bar every frame it
+    /// is over the mark, so the creature has to be moving again - for the
+    /// whole bar - before it may stand still for a turn clip.
+    fn may_pivot_after_stall(&mut self, stall_seconds: f32, elapsed: f32) -> bool {
+        if stall_seconds >= FRUSTRATION_STALL_SECONDS {
+            self.turn_stall_block = TURN_CLIP_STALL_BLOCK_SECONDS;
+        } else {
+            self.turn_stall_block = (self.turn_stall_block - elapsed).max(0.0);
+        }
+        self.turn_stall_block <= 0.0
     }
 
     /// Pivot with the creature's own authored turn clip rather than sliding
@@ -1420,10 +1446,16 @@ impl Script for AnimatedMonsterAI {
         let door_wait_seconds = self.update_door_wait(world, entity_id, time);
         // A pivot big enough to stop the body is played as an authored turn
         // clip. Same gate as the frustration gesture: never over a scripted
-        // performance, and never while standing off from a door.
+        // performance, and never while standing off from a door - plus one of
+        // its own, since a stalled creature cannot afford to stand still.
+        let may_pivot_after_stall = self.may_pivot_after_stall(
+            path_stall_seconds(world, entity_id),
+            time.elapsed.as_secs_f32(),
+        );
         let may_turn = self.current_behavior.borrow().is_locomotion()
             && self.current_behavior.borrow().scripted_state() != ScriptedState::Running
-            && door_wait_seconds.is_none();
+            && door_wait_seconds.is_none()
+            && may_pivot_after_stall;
         let (turn_clip_effect, heading_held) =
             self.update_turn_clip(entity_id, steering_output.desired_heading, time, may_turn);
         let rotation_effect = self.apply_steering_output(
@@ -2176,6 +2208,31 @@ mod tests {
 
     /// The pivot the AI asks for is the heading change it actually needs; the
     /// applier is what turns that into one of the creature's authored clips.
+    #[test]
+    fn a_stalled_creature_steers_its_turn_instead_of_performing_it() {
+        let mut monster = AnimatedMonsterAI::new();
+        // Getting somewhere: a pivot is affordable.
+        assert!(monster.may_pivot_after_stall(0.0, 0.1));
+
+        // The route stops making progress. Standing still for a turn clip
+        // while wedged only lengthens the wedge.
+        assert!(!monster.may_pivot_after_stall(FRUSTRATION_STALL_SECONDS, 0.1));
+
+        // The stall clock resets the moment the follower recovers, but the
+        // sidestep heading its re-path produces arrives a beat later - the bar
+        // has to still be up then.
+        assert!(
+            !monster.may_pivot_after_stall(0.0, 1.0),
+            "a pivot one second past the stall is still the wedge's own"
+        );
+
+        // Moving again for the whole bar restores pivoting.
+        for _ in 0..TURN_CLIP_STALL_BLOCK_SECONDS.ceil() as u32 {
+            monster.may_pivot_after_stall(0.0, 1.0);
+        }
+        assert!(monster.may_pivot_after_stall(0.0, 1.0));
+    }
+
     #[test]
     fn a_reversal_asks_for_an_authored_turn_clip() {
         let (_world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
