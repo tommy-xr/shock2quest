@@ -1,6 +1,8 @@
 use engine::assets::asset_cache::AssetCache;
 use shipyard::{Unique, UniqueView, World};
 
+use crate::scripts::gui::{HrmMode, HrmResult};
+
 mod damage_flash;
 pub use damage_flash::*;
 
@@ -53,6 +55,27 @@ const FALLBACK_WRENCH_UNUSED: &str = "Weapon already in good condition.";
 const FALLBACK_MODIFY_SKILL_REQ: &str = "Modify skill %d required.";
 const FALLBACK_MODIFY_MAXED: &str = "This weapon cannot be modified any further.";
 
+/// The English fallbacks for the board's result lines, verbatim from the
+/// shipped HRM.STR. Indexed `[mode][result]` in `HrmMode`/`HrmResult` order:
+/// hack, repair, modify x played-out, won, lost.
+const FALLBACK_HRM_RESULTS: [[&str; 3]; 3] = [
+    [
+        "You could not break the security on this attempt.",
+        "Hacking successful!",
+        "Hacking failed!",
+    ],
+    [
+        "You were unable to repair the item on this attempt.",
+        "The item has been successfully repaired, and can be used normally.",
+        "You have destroyed the item!",
+    ],
+    [
+        "You did not successfully modify the weapon on this attempt.",
+        "Modification completed!",
+        "Modification Failed!",
+    ],
+];
+
 /// The English fallback for the board's repair skill gate, verbatim from the
 /// shipped HRM.STR (`%d` is the minimum Repair level the object authors).
 const FALLBACK_REPAIR_SKILL_REQ: &str = "Repair skill %d required.";
@@ -90,6 +113,9 @@ pub struct HudStrings {
     pub modify_skill_req: String,
     /// HRM.STR `ModifyResult3`: the gun has had every modification it can take.
     pub modify_maxed: String,
+    /// HRM.STR `<mode>Result<n>`: what a finished board says, per mode. Read
+    /// through [`HudStrings::hrm_result`] rather than indexed by hand.
+    hrm_results: [[String; 3]; 3],
 }
 
 impl Default for HudStrings {
@@ -105,6 +131,7 @@ impl Default for HudStrings {
             repair_skill_req: FALLBACK_REPAIR_SKILL_REQ.to_owned(),
             modify_skill_req: FALLBACK_MODIFY_SKILL_REQ.to_owned(),
             modify_maxed: FALLBACK_MODIFY_MAXED.to_owned(),
+            hrm_results: FALLBACK_HRM_RESULTS.map(|mode| mode.map(str::to_owned)),
         }
     }
 }
@@ -128,9 +155,19 @@ impl HudStrings {
             ),
             modify_maxed: crate::ui::resolve_menu_label(
                 hrm_strings.as_deref(),
-                "ModifyResult3",
+                "modifyresult3",
                 FALLBACK_MODIFY_MAXED,
             ),
+            hrm_results: [HrmMode::Hack, HrmMode::Repair, HrmMode::Modify].map(|mode| {
+                let fallbacks = FALLBACK_HRM_RESULTS[mode.index()];
+                [0usize, 1, 2].map(|result| {
+                    crate::ui::resolve_menu_label(
+                        hrm_strings.as_deref(),
+                        &format!("{}result{result}", mode.string_prefix()),
+                        fallbacks[result],
+                    )
+                })
+            }),
             reload_label: crate::ui::resolve_menu_label(
                 strings.as_deref(),
                 "reload",
@@ -167,6 +204,14 @@ impl HudStrings {
                 FALLBACK_WRENCH_UNUSED,
             ),
         }
+    }
+}
+
+impl HudStrings {
+    /// What the board says when it finishes, in the words of the mode it was
+    /// played in.
+    pub(crate) fn hrm_result(&self, mode: HrmMode, result: HrmResult) -> &str {
+        &self.hrm_results[mode.index()][result.index()]
     }
 }
 

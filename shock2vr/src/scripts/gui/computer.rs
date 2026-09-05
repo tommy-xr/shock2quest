@@ -219,7 +219,7 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
         let Some(diff) = hack_diff(world, entity_id) else {
             return Vec::new();
         };
-        let mut components = draw_hack_board(&state.hack, diff, ComputerMsg::Hack);
+        let mut components = draw_hack_board(&state.hack, diff, HrmMode::Hack, ComputerMsg::Hack);
         for (line, text) in wrap_hack_text(&authored_hack_text(world, entity_id))
             .into_iter()
             .take(3)

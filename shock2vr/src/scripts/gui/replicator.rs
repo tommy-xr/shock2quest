@@ -132,7 +132,7 @@ impl Gui<ReplicatorState, ReplicatorMsg> for ReplicatorGui {
     ) -> Vec<GuiComponent<ReplicatorMsg>> {
         if state.panel == ReplicatorPanel::Hacking {
             if let Some(diff) = hack_diff(world, entity_id) {
-                return draw_hack_board(&state.hack, diff, ReplicatorMsg::Hack);
+                return draw_hack_board(&state.hack, diff, HrmMode::Hack, ReplicatorMsg::Hack);
             }
         }
 

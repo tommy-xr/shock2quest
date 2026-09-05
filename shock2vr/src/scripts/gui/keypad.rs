@@ -205,6 +205,97 @@ impl HrmMode {
             })
             .unwrap_or(0)
     }
+
+    /// The art this mode's board wears. Retail keeps one board and swaps the
+    /// pictures: the backdrop is named after the mode, and the result overlays
+    /// share a base name with a per-mode suffix.
+    pub(crate) const fn art(self) -> HrmArt {
+        match self {
+            HrmMode::Hack => HrmArt {
+                backdrop: "hack.pcx",
+                won: "winh.pcx",
+                lost: "loseh.pcx",
+                unwinnable: "failh.pcx",
+                unpaid: "payh.pcx",
+            },
+            HrmMode::Repair => HrmArt {
+                // Archive-qualified: `repair.pcx` is one of the seven basenames
+                // the interface art shares with a model texture, and the model
+                // mounts first, so the plain key resolves to the wrong picture.
+                backdrop: "iface/repair.pcx",
+                won: "winr.pcx",
+                lost: "loser.pcx",
+                unwinnable: "failr.pcx",
+                unpaid: "payr.pcx",
+            },
+            HrmMode::Modify => HrmArt {
+                backdrop: "modify.pcx",
+                won: "winm.pcx",
+                lost: "losem.pcx",
+                unwinnable: "failm.pcx",
+                unpaid: "paym.pcx",
+            },
+        }
+    }
+
+    /// Position in the mode-indexed tables, which is also the order the modes
+    /// are numbered in the shipped data.
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            HrmMode::Hack => 0,
+            HrmMode::Repair => 1,
+            HrmMode::Modify => 2,
+        }
+    }
+
+    /// The HRM.STR key prefix; result keys are `<prefix>result<n>`.
+    pub(crate) const fn string_prefix(self) -> &'static str {
+        match self {
+            HrmMode::Hack => "hack",
+            HrmMode::Repair => "repair",
+            HrmMode::Modify => "modify",
+        }
+    }
+}
+
+/// The five pictures a board draws: its backdrop, plus the overlay that covers
+/// the matrix once the board has stopped being playable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HrmArt {
+    pub(crate) backdrop: &'static str,
+    pub(crate) won: &'static str,
+    pub(crate) lost: &'static str,
+    pub(crate) unwinnable: &'static str,
+    pub(crate) unpaid: &'static str,
+}
+
+/// A finished board's outcome, in the numbering the HRM.STR result keys use.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HrmResult {
+    /// The board ran out of playable squares: the attempt is over, nothing
+    /// happened to the object.
+    PlayedOut,
+    Won,
+    Lost,
+}
+
+impl HrmResult {
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            HrmResult::PlayedOut => 0,
+            HrmResult::Won => 1,
+            HrmResult::Lost => 2,
+        }
+    }
+}
+
+/// The status line a finished board posts, in the mode's own words.
+fn result_message(world: &World, mode: HrmMode, result: HrmResult) -> Effect {
+    Effect::ShowMessage {
+        text: crate::hud::hud_strings(world)
+            .hrm_result(mode, result)
+            .to_owned(),
+    }
 }
 
 fn effective_hack_values(world: &World, diff: PropHackDiff, mode: HrmMode) -> (i32, i32) {
@@ -300,14 +391,16 @@ fn draw_number(num: u32) -> Vec<GuiComponent<KeyPadMsg>> {
 pub(crate) fn draw_hack_board<TMsg, F>(
     state: &HackState,
     diff: PropHackDiff,
+    mode: HrmMode,
     wrap: F,
 ) -> Vec<GuiComponent<TMsg>>
 where
     TMsg: Clone,
     F: Fn(KeyPadMsg) -> TMsg + Copy,
 {
+    let art = mode.art();
     let mut components = vec![
-        gui::image("hack.pcx")
+        gui::image(art.backdrop)
             .with_position(vec2(0.0, 0.0))
             .with_size(vec2(188.0, 296.0)),
     ];
@@ -356,7 +449,7 @@ where
                         .with_size(vec2(16.0, 16.0)),
                 );
             }
-            // The unlit node outline is already part of HACK.PCX. This
+            // The unlit node outline is already part of the backdrop. This
             // zero-alpha button supplies a normal 16x16 hit target without
             // painting a placeholder over that authored art.
             components.push(
@@ -371,10 +464,10 @@ where
     }
 
     let result_texture = match state.phase {
-        HackPhase::Won => Some("winh.pcx"),
-        HackPhase::Lost => Some("loseh.pcx"),
-        HackPhase::Unwinnable => Some("failh.pcx"),
-        HackPhase::InsufficientNanites => Some("payh.pcx"),
+        HackPhase::Won => Some(art.won),
+        HackPhase::Lost => Some(art.lost),
+        HackPhase::Unwinnable => Some(art.unwinnable),
+        HackPhase::InsufficientNanites => Some(art.unpaid),
         HackPhase::Unpaid | HackPhase::Playing => None,
     };
     if let Some(texture) = result_texture {
@@ -385,9 +478,9 @@ where
         );
     }
 
-    // HACK.PCX already supplies the cyan `COST:` label. Retail draws only the
-    // dynamic numeric value in the 48px slot beginning at x=128, after the
-    // result overlay so WINH/LOSEH/PAYH cannot obscure it.
+    // The backdrop already supplies the cyan `COST:` label. Retail draws only
+    // the dynamic numeric value in the 48px slot beginning at x=128, after the
+    // result overlay so the win/lose/pay art cannot obscure it.
     components.push(
         gui::text(&hack_cost(diff).to_string())
             .with_position(vec2(147.0, 158.0))
@@ -488,6 +581,7 @@ pub(crate) fn handle_hack_msg(
             }
 
             let was_mine = node == HackNode::Mine;
+            let mut played_out = false;
             let roll = outcome_roll(&mut new_state.rng_state);
             tracing::debug!(
                 entity = entity_id.inner(),
@@ -510,6 +604,7 @@ pub(crate) fn handle_hack_msg(
                                 name: "hack_success".to_owned(),
                                 spatial: false,
                             },
+                            result_message(world, mode, HrmResult::Won),
                         ]),
                     );
                 }
@@ -525,24 +620,27 @@ pub(crate) fn handle_hack_msg(
                             name: "hack_critical".to_owned(),
                             spatial: false,
                         },
+                        result_message(world, mode, HrmResult::Lost),
                     ]),
                 );
             } else {
                 new_state.nodes[index] = HackNode::Burned;
                 if !board_has_potential_path(&new_state.nodes) {
                     new_state.phase = HackPhase::Unwinnable;
+                    played_out = true;
                 }
             }
 
-            (
-                new_state,
-                Effect::PlaySound {
-                    handle: AudioHandle::new(),
-                    source: Some(entity_id),
-                    name: "hacking".to_owned(),
-                    spatial: false,
-                },
-            )
+            let mut effects = vec![Effect::PlaySound {
+                handle: AudioHandle::new(),
+                source: Some(entity_id),
+                name: "hacking".to_owned(),
+                spatial: false,
+            }];
+            if played_out {
+                effects.push(result_message(world, mode, HrmResult::PlayedOut));
+            }
+            (new_state, Effect::combine(effects))
         }
         _ => (new_state, Effect::NoEffect),
     }
@@ -566,7 +664,7 @@ impl Gui<KeyPadState, KeyPadMsg> for KeyPadGui {
     ) -> Vec<GuiComponent<KeyPadMsg>> {
         let hack_diff = hack_diff_for_entity(_world, _entity_id);
         if let Some(hack_diff) = hack_diff {
-            return draw_hack_board(&_state.hack, hack_diff, |msg| msg);
+            return draw_hack_board(&_state.hack, hack_diff, HrmMode::Hack, |msg| msg);
         }
 
         let button_width = 45.0;
@@ -886,6 +984,164 @@ mod tests {
         assert!(
             hack_diff_for_entity(&world, numeric_with_inherited_hack_diff).is_none(),
             "an authored numeric code must take precedence over inherited HackDiff"
+        );
+    }
+
+    /// Every image the board would draw, in draw order.
+    fn board_images(state: &HackState, mode: HrmMode) -> Vec<String> {
+        let diff = PropHackDiff {
+            success_chance: 50,
+            critical_chance: 1,
+            cost: 3.0,
+        };
+        draw_hack_board::<KeyPadMsg, _>(state, diff, mode, |msg| msg)
+            .into_iter()
+            .filter_map(|component| match component {
+                crate::ui::UiElement::Image { texture, .. } => Some(texture),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn finished_board(phase: HackPhase) -> HackState {
+        HackState {
+            phase,
+            ..HackState::default()
+        }
+    }
+
+    #[test]
+    fn each_mode_wears_its_own_backdrop_and_result_art() {
+        for (mode, backdrop, won, lost, unwinnable, unpaid) in [
+            (
+                HrmMode::Repair,
+                "iface/repair.pcx",
+                "winr.pcx",
+                "loser.pcx",
+                "failr.pcx",
+                "payr.pcx",
+            ),
+            (
+                HrmMode::Modify,
+                "modify.pcx",
+                "winm.pcx",
+                "losem.pcx",
+                "failm.pcx",
+                "paym.pcx",
+            ),
+        ] {
+            let images = board_images(&HackState::default(), mode);
+            assert_eq!(images.first().map(String::as_str), Some(backdrop));
+            for (phase, expected) in [
+                (HackPhase::Won, won),
+                (HackPhase::Lost, lost),
+                (HackPhase::Unwinnable, unwinnable),
+                (HackPhase::InsufficientNanites, unpaid),
+            ] {
+                let images = board_images(&finished_board(phase), mode);
+                assert!(
+                    images.iter().any(|texture| texture == expected),
+                    "{mode:?} in {phase:?} should draw {expected}, drew {images:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hack_mode_art_is_unchanged() {
+        assert_eq!(
+            board_images(&HackState::default(), HrmMode::Hack)
+                .first()
+                .map(String::as_str),
+            Some("hack.pcx")
+        );
+        for (phase, expected) in [
+            (HackPhase::Won, "winh.pcx"),
+            (HackPhase::Lost, "loseh.pcx"),
+            (HackPhase::Unwinnable, "failh.pcx"),
+            (HackPhase::InsufficientNanites, "payh.pcx"),
+        ] {
+            let images = board_images(&finished_board(phase), HrmMode::Hack);
+            assert!(
+                images.iter().any(|texture| texture == expected),
+                "hack in {phase:?} should still draw {expected}, drew {images:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_finished_board_speaks_in_its_own_modes_words() {
+        let strings = crate::hud::HudStrings::default();
+        assert_eq!(
+            strings.hrm_result(HrmMode::Hack, HrmResult::Won),
+            "Hacking successful!"
+        );
+        assert_eq!(
+            strings.hrm_result(HrmMode::Repair, HrmResult::Lost),
+            "You have destroyed the item!"
+        );
+        assert_eq!(
+            strings.hrm_result(HrmMode::Modify, HrmResult::PlayedOut),
+            "You did not successfully modify the weapon on this attempt."
+        );
+        // The nine keys must stay distinct: an index slip would silently make
+        // one mode speak in another's voice.
+        let mut all: Vec<&str> = [HrmMode::Hack, HrmMode::Repair, HrmMode::Modify]
+            .iter()
+            .flat_map(|mode| {
+                [HrmResult::PlayedOut, HrmResult::Won, HrmResult::Lost]
+                    .iter()
+                    .map(|result| strings.hrm_result(*mode, *result))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len(), 9);
+    }
+
+    #[test]
+    fn a_won_board_posts_its_modes_result_line() {
+        let mut world = World::new();
+        let entity = world.add_entity(());
+        // A board one lit node short of a run of three, so the next successful
+        // node wins it.
+        let mut nodes = base_hack_board();
+        nodes[board_index(2, 0)] = HackNode::Lit;
+        nodes[board_index(3, 0)] = HackNode::Lit;
+        let state = HackState {
+            phase: HackPhase::Playing,
+            nodes,
+            rng_state: 1,
+        };
+        let (after, effect) = handle_hack_msg(
+            entity,
+            &world,
+            &state,
+            &KeyPadMsg::PlayNode { x: 4, y: 0 },
+            // Certain success, so the win is not a coin flip.
+            PropHackDiff {
+                success_chance: 100,
+                critical_chance: 0,
+                cost: 0.0,
+            },
+            HrmMode::Repair,
+            HackOutcomeEffects {
+                success: keypad_hack_success,
+                critical_failure: keypad_hack_critical_failure,
+            },
+        );
+        assert_eq!(after.phase, HackPhase::Won);
+        let messages: Vec<String> = Effect::flatten(vec![effect])
+            .into_iter()
+            .filter_map(|effect| match effect {
+                Effect::ShowMessage { text } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            messages,
+            vec!["The item has been successfully repaired, and can be used normally."]
         );
     }
 
