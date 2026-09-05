@@ -2887,22 +2887,49 @@ mod tests {
         assert!(!door_wait_is_thwarting(Some(0.5)));
     }
 
+    /// Publish `seconds` of no-progress stall for `entity_id` on the channel
+    /// the path follower writes and `path_stall_seconds` reads. Without this
+    /// the world has no pathfinding service at all, so a "stalled" AI reads
+    /// zero seconds and every stall assertion is vacuous.
+    fn publish_stall(world: &mut World, entity_id: EntityId, seconds: f32) {
+        let service = std::sync::Arc::new(crate::pathfinding::PathfindingService::new(
+            std::sync::Arc::new(crate::pathfinding::tests::three_cell_db(
+                dark::mission::path_database::PathCellFlags::empty(),
+            )),
+        ));
+        service.record_ai_steering(
+            entity_id.inner(),
+            crate::pathfinding::AiSteeringDebug {
+                next_waypoint: 1,
+                path_len: 3,
+                target: Some(vec3(0.0, 0.0, 5.0)),
+                stall_seconds: seconds,
+            },
+        );
+        world.add_unique(GlobalPathfinding(Some(service)));
+    }
+
     /// USER DECISION (2026-09-05): impatience is a door gesture only. On a
     /// stall the creature is trying to get out of a wedge, and a clip with no
     /// root motion only makes the standstill longer.
     #[test]
     fn a_sustained_stall_draws_no_gesture() {
-        let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
-        // Nothing is holding this AI at a door, however long its route has
-        // been going nowhere.
+        let (mut world, entity_id) = world_with_monster_and_player(Deg(0.0));
+        // A real wedge, banked well past any threshold a stall gesture ever
+        // used - and no door holding this AI.
+        publish_stall(&mut world, entity_id, 10.0);
+        assert!(
+            path_stall_seconds(&world, entity_id) >= 10.0,
+            "the stall the gesture would have read is actually on the wire",
+        );
         let mut stalled = AnimatedMonsterAI::new();
         assert!(matches!(
             stalled.update_frustration(&world, entity_id, None, false, &tick()),
             Effect::NoEffect
         ));
-        // The same AI, kept waiting at a door instead: this is the one block
-        // that still draws the performance, so the case above is a decision,
-        // not a gesture path that has stopped working.
+        // The same stalled AI, kept waiting at a door as well: this is the one
+        // block that still draws the performance, so the case above is a
+        // decision, not a gesture path that has stopped working.
         let mut waiting = AnimatedMonsterAI::new();
         assert!(matches!(
             waiting.update_frustration(&world, entity_id, LONG_WAIT, false, &tick()),
@@ -2958,6 +2985,11 @@ mod tests {
         ));
     }
 
+    /// The gate the locked-door give-up now goes through (it used to emit the
+    /// performance whatever either path had already spent): the rate limit it
+    /// arms refuses the next gesture, and a pivot in flight refuses it too -
+    /// the gesture PLAYS, so firing it over a turn clip would leave the AI
+    /// held on a clip nothing is running.
     #[test]
     fn the_locked_door_give_up_respects_the_shared_limit() {
         let (world, entity_id) = world_with_monster_and_player(Deg(0.0));
@@ -2971,6 +3003,24 @@ mod tests {
             monster.try_frustration_gesture(&world, entity_id),
             Effect::NoEffect
         ));
+
+        let mut pivoting = AnimatedMonsterAI::new();
+        pivoting.turn_clip = Some(TurnClip::Playing {
+            turn: Deg(90.0),
+            remaining: 1.0,
+            blend: TURN_CLIP_SETTLE_SECONDS,
+        });
+        assert!(
+            matches!(
+                pivoting.try_frustration_gesture(&world, entity_id),
+                Effect::NoEffect
+            ),
+            "an unspent limit still yields to a turn in flight",
+        );
+        assert_eq!(
+            pivoting.frustration_cooldown, 0.0,
+            "a gesture that never played must not arm the limit",
+        );
     }
 
     #[test]
