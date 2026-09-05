@@ -281,4 +281,26 @@ mod tests {
         assert!(boxed_in.magnitude() <= WHISKER_MAX_OFFSET + 1e-5);
         assert!(boxed_in.magnitude() > 0.0);
     }
+
+    /// A bias needs BOTH rays blocked, so the two must straddle a real
+    /// obstacle: roughly a hybrid's knee and its chest, which is where the
+    /// fixed offsets these fractions replaced put them. Measuring the creature
+    /// at a third of its height once bunched both of them at chest level.
+    #[test]
+    fn the_probes_straddle_knee_and_chest() {
+        let mut world = World::new();
+        // 0 is the human schema a hybrid animates on.
+        let creature = world.add_entity((dark::properties::PropCreature(0),));
+        let hybrid = ai_util::creature_height(&world, creature);
+        let knee = hybrid * WHISKER_KNEE_FRACTION;
+        let chest = hybrid * WHISKER_CHEST_FRACTION;
+        assert!(
+            (0.8..1.1).contains(&knee),
+            "knee ray {knee} is not about 3 feet below the body origin"
+        );
+        assert!(
+            (0.3..0.5).contains(&chest),
+            "chest ray {chest} is not about 1 foot below the body origin"
+        );
+    }
 }
