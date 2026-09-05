@@ -112,10 +112,33 @@ pub struct HudStrings {
     /// Modify level is below what the gun's next modification demands.
     pub modify_skill_req: String,
     /// HRM.STR `ModifyResult3`: the gun has had every modification it can take.
+    /// Not part of `hrm_results` despite the shared key family - it is a refusal
+    /// at the panel's door, not the outcome of a board that was played.
     pub modify_maxed: String,
     /// HRM.STR `<mode>Result<n>`: what a finished board says, per mode. Read
     /// through [`HudStrings::hrm_result`] rather than indexed by hand.
     hrm_results: [[String; 3]; 3],
+}
+
+/// Resolve the nine `<mode>result<n>` lines out of HRM.STR, or the English
+/// fallbacks when it has none.
+///
+/// Every slot is addressed by `HrmMode::index`/`HrmResult::index` - the same
+/// pair [`HudStrings::hrm_result`] reads it back with - so a mode can never end
+/// up speaking in another mode's voice through a reordered literal.
+fn hrm_results(strings: Option<&std::collections::HashMap<String, String>>) -> [[String; 3]; 3] {
+    let mut resolved: [[String; 3]; 3] = Default::default();
+    for mode in [HrmMode::Hack, HrmMode::Repair, HrmMode::Modify] {
+        for result in [HrmResult::PlayedOut, HrmResult::Won, HrmResult::Lost] {
+            let fallback = FALLBACK_HRM_RESULTS[mode.index()][result.index()];
+            resolved[mode.index()][result.index()] = crate::ui::resolve_menu_label(
+                strings,
+                &format!("{}result{}", mode.string_prefix(), result.index()),
+                fallback,
+            );
+        }
+    }
+    resolved
 }
 
 impl Default for HudStrings {
@@ -131,12 +154,18 @@ impl Default for HudStrings {
             repair_skill_req: FALLBACK_REPAIR_SKILL_REQ.to_owned(),
             modify_skill_req: FALLBACK_MODIFY_SKILL_REQ.to_owned(),
             modify_maxed: FALLBACK_MODIFY_MAXED.to_owned(),
-            hrm_results: FALLBACK_HRM_RESULTS.map(|mode| mode.map(str::to_owned)),
+            hrm_results: hrm_results(None),
         }
     }
 }
 
 impl HudStrings {
+    /// What the board says when it finishes, in the words of the mode it was
+    /// played in.
+    pub(crate) fn hrm_result(&self, mode: HrmMode, result: HrmResult) -> &str {
+        &self.hrm_results[mode.index()][result.index()]
+    }
+
     pub fn load(asset_cache: &mut AssetCache) -> HudStrings {
         let strings = asset_cache.get_opt(&dark::importers::STRINGS_IMPORTER, "misc.str");
         // The board's own table: everything the HRM's three modes say lives in
@@ -158,16 +187,7 @@ impl HudStrings {
                 "modifyresult3",
                 FALLBACK_MODIFY_MAXED,
             ),
-            hrm_results: [HrmMode::Hack, HrmMode::Repair, HrmMode::Modify].map(|mode| {
-                let fallbacks = FALLBACK_HRM_RESULTS[mode.index()];
-                [0usize, 1, 2].map(|result| {
-                    crate::ui::resolve_menu_label(
-                        hrm_strings.as_deref(),
-                        &format!("{}result{result}", mode.string_prefix()),
-                        fallbacks[result],
-                    )
-                })
-            }),
+            hrm_results: hrm_results(hrm_strings.as_deref()),
             reload_label: crate::ui::resolve_menu_label(
                 strings.as_deref(),
                 "reload",
@@ -207,14 +227,6 @@ impl HudStrings {
     }
 }
 
-impl HudStrings {
-    /// What the board says when it finishes, in the words of the mode it was
-    /// played in.
-    pub(crate) fn hrm_result(&self, mode: HrmMode, result: HrmResult) -> &str {
-        &self.hrm_results[mode.index()][result.index()]
-    }
-}
-
 /// The preloaded HUD strings, or the English defaults in a world that has none
 /// (the unit-test worlds, and any scene loaded without a strings table).
 pub(crate) fn hud_strings(world: &World) -> HudStrings {
@@ -222,4 +234,49 @@ pub(crate) fn hud_strings(world: &World) -> HudStrings {
         .borrow::<UniqueView<HudStrings>>()
         .map(|s| s.clone())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// A localized HRM.STR would silently swap two modes' voices if the table
+    /// were filled positionally, so resolve a stub whose nine values name the
+    /// slot they belong in and check each lands where it is read back from.
+    #[test]
+    fn each_mode_result_resolves_into_its_own_slot() {
+        let table: HashMap<String, String> = [
+            ("hackresult0", "h0"),
+            ("hackresult1", "h1"),
+            ("hackresult2", "h2"),
+            ("repairresult0", "r0"),
+            ("repairresult1", "r1"),
+            ("repairresult2", "r2"),
+            ("modifyresult0", "m0"),
+            ("modifyresult1", "m1"),
+            ("modifyresult2", "m2"),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect();
+
+        let strings = HudStrings {
+            hrm_results: hrm_results(Some(&table)),
+            ..HudStrings::default()
+        };
+        for (mode, prefix) in [
+            (HrmMode::Hack, 'h'),
+            (HrmMode::Repair, 'r'),
+            (HrmMode::Modify, 'm'),
+        ] {
+            for (result, index) in [
+                (HrmResult::PlayedOut, 0),
+                (HrmResult::Won, 1),
+                (HrmResult::Lost, 2),
+            ] {
+                assert_eq!(strings.hrm_result(mode, result), format!("{prefix}{index}"));
+            }
+        }
+    }
 }
