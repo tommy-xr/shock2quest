@@ -2259,6 +2259,9 @@ impl CollisionGroup {
 /// surface a tracked hand is resting on, small enough that it only finds the
 /// one face the hand is actually against.
 pub const CLIMB_GRIP_RADIUS: f32 = 0.15;
+/// Extra reach around a lip (about 23 cm), separate from direct ladder contact.
+/// The raised approach must be clear, so this cannot reach through a wall.
+pub const CLIMB_LIP_REACH: f32 = 0.3;
 
 /// What a hand found to hold onto.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5411,7 +5414,64 @@ impl PhysicsWorld {
                 ));
             }
         }
-        nearest.map(|(_, grip)| grip)
+        if let Some((_, grip)) = nearest {
+            return Some(grip);
+        }
+
+        // A fist against the front of a lip has a side/diagonal separation
+        // normal, even when its fingers could hook over the top. Find the
+        // actual walkable surface by approaching above the hand, then down.
+        // Both approach segments must be clear: no grabbing through a wall or
+        // ceiling. Authored ladder masks still decide ladder contacts alone.
+        let hand = point![point.x, point.y, point.z];
+        let raised = hand + Vector::y() * CLIMB_LIP_REACH;
+        if queries
+            .cast_ray(&Ray::new(hand, Vector::y()), CLIMB_LIP_REACH, true)
+            .is_some()
+        {
+            return None;
+        }
+        let mut lip: Option<(f32, ClimbGrip)> = None;
+        for x in [-1.0, 0.0, 1.0] {
+            for z in [-1.0, 0.0, 1.0] {
+                let offset = vector![x * CLIMB_LIP_REACH / 2.0, 0.0, z * CLIMB_LIP_REACH / 2.0];
+                let distance = offset.norm();
+                if distance > 0.0
+                    && queries
+                        .cast_ray(&Ray::new(raised, offset / distance), distance, true)
+                        .is_some()
+                {
+                    continue;
+                }
+                let ray = Ray::new(raised + offset, -Vector::y());
+                let Some((handle, hit)) =
+                    queries.cast_ray_and_get_normal(&ray, 2.0 * CLIMB_LIP_REACH, true)
+                else {
+                    continue;
+                };
+                let collider = &self.collider_set[handle];
+                if !collider_is_not_climbable(collider) || !is_walkable_normal(hit.normal.y) {
+                    continue;
+                }
+                let top = ray.point_at(hit.time_of_impact);
+                let distance = (top - hand).norm();
+                if top.y <= min_ledge_height || distance > CLIMB_LIP_REACH {
+                    continue;
+                }
+                if lip.as_ref().is_none_or(|(nearest, _)| distance < *nearest) {
+                    lip = Some((
+                        distance,
+                        ClimbGrip {
+                            kind: ClimbGripKind::Ledge,
+                            entity_id: EntityId::from_inner(collider.user_data as u64),
+                            point: nvec_to_cgmath(top.coords),
+                            normal: nvec_to_cgmath(hit.normal),
+                        },
+                    ));
+                }
+            }
+        }
+        lip.map(|(_, grip)| grip)
     }
 
     fn move_player(
@@ -9313,6 +9373,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_ceiling_blocks_the_approach_around_a_lip() {
+        let (mut world, mut player) = grip_world();
+        world.add_kinematic(
+            EntityId::from_inner(2012).unwrap(),
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        let hand = vec3(2.05, 2.99, 0.0);
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 0.0)
+                .is_some()
+        );
+        world.add_kinematic(
+            EntityId::from_inner(2013).unwrap(),
+            vec3(2.1, 3.15, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.4, 0.1, 0.4),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 0.0)
+                .is_none(),
+            "a ceiling prevents curling fingers over the lip"
+        );
+    }
+
     /// Mantle emulation: the walkable top of a solid block above the player's
     /// feet is a Ledge; the floor they are standing on is not (it is not more
     /// than a step above their feet).
@@ -9329,6 +9426,29 @@ mod tests {
             false,
         );
         step(&mut world, &mut player, 1);
+
+        for hand in [
+            vec3(2.05, 2.99, 0.0),
+            vec3(-2.05, 2.99, 0.0),
+            vec3(0.0, 2.99, 2.05),
+            vec3(0.0, 2.99, -2.05),
+        ] {
+            let lip = world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 0.0)
+                .expect("fingers can hook around a nearby lip");
+            assert_eq!(lip.kind, ClimbGripKind::Ledge);
+            assert!(lip.normal.y > 0.99);
+            assert!((lip.point.y - 3.0).abs() < 1e-4);
+            assert!((lip.point - hand).magnitude() <= CLIMB_LIP_REACH);
+        }
+        for hand in [vec3(2.05, 2.5, 0.0), vec3(2.5, 2.99, 0.0)] {
+            assert!(
+                world
+                    .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 0.0)
+                    .is_none(),
+                "a remote top cannot turn a wall into a hold"
+            );
+        }
 
         let lip = world
             .climbable_grip_at(vec3(0.0, 3.05, 0.0), CLIMB_GRIP_RADIUS, 0.0)
