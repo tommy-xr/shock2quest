@@ -3553,9 +3553,8 @@ mod tests {
 
         let mut pivoting = AnimatedMonsterAI::new();
         pivoting.turn_clip = Some(TurnClip::Playing {
+            token: 1,
             turn: Deg(90.0),
-            remaining: 1.0,
-            blend: TURN_CLIP_SETTLE_SECONDS,
         });
         assert!(
             matches!(
