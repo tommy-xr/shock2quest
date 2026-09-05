@@ -1,4 +1,4 @@
-use cgmath::{Deg, EuclideanSpace, Vector3, vec4};
+use cgmath::{Deg, EuclideanSpace, Vector3, vec3, vec4};
 use dark::SCALE_FACTOR;
 use dark::mission::path_database::MovementBits;
 use rand::Rng;
@@ -10,7 +10,7 @@ use crate::{
         AiPathOutcome, MovementHold, PathfindingFrameBudget, PathfindingService,
         async_queries::PathQueryRequest,
     },
-    physics::PhysicsWorld,
+    physics::{InternalCollisionGroups, PhysicsWorld},
     scripts::{Effect, ai::ai_util},
     time::Time,
     util::vec3_to_point3,
@@ -81,6 +81,15 @@ const DISPLACEMENT_STALL_SECONDS: f32 = 4.0;
 /// break the equilibrium. A rare small pop beats a monster frozen forever
 /// (issue #481's terminal pocket).
 const UNSTICK_NUDGE_DISTANCE: f32 = 2.0 / SCALE_FACTOR;
+/// Room a nudge landing must have, and how far past it the traverse probe
+/// looks (2 Dark feet, about one body radius)
+const NUDGE_CLEARANCE: f32 = 2.0 / SCALE_FACTOR;
+/// How far below a nudge landing to look for a floor (8 Dark feet - more
+/// than a body's origin sits above its own floor)
+const NUDGE_FLOOR_PROBE: f32 = 8.0 / SCALE_FACTOR;
+/// ...and how far that floor may sit from the one the body is standing on
+/// (2 Dark feet, a step). A landing over a ledge or a stairwell is refused.
+const NUDGE_MAX_STEP: f32 = 2.0 / SCALE_FACTOR;
 /// How far past the stalled waypoint (XZ) to probe for the cell on the far
 /// side of the crossing when reporting a blocked link - just enough to step
 /// off the shared edge without skipping a narrow destination cell (0.5
@@ -687,80 +696,68 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     pinned
                 );
                 let unstick_effect = if pinned {
-                    let dir = retreat - position;
-                    let len = xz_distance(retreat, position);
-                    if len > 1e-3 {
-                        let step = UNSTICK_NUDGE_DISTANCE.min(len);
-                        let nudged = Vector3::new(
-                            position.x + dir.x / len * step,
-                            position.y,
-                            position.z + dir.z / len * step,
-                        );
-                        // Only onto navigable floor. A nudge is a teleport,
-                        // and one aimed through a wall drops the body out of
-                        // the level entirely (a creature a thousand units
-                        // from everything, once stalls became easier to
-                        // detect). When the retreat direction leaves the
-                        // mesh, step toward the current cell's middle
-                        // instead - still away from whatever the body is
-                        // pressed against, and known-navigable.
-                        let landing = on_mesh(&service, nudged)
-                            .or_else(|| {
-                                let cell = service.cell_from_position(position)?;
-                                let center = service.path_database.cells.get(cell as usize)?.center;
-                                let len = xz_distance(center, position);
-                                if len <= 1e-3 {
-                                    return None;
-                                }
-                                let step = UNSTICK_NUDGE_DISTANCE.min(len);
-                                on_mesh(
-                                    &service,
-                                    Vector3::new(
-                                        position.x + (center.x - position.x) / len * step,
-                                        position.y,
-                                        position.z + (center.z - position.z) / len * step,
-                                    ),
-                                )
-                            })
+                    // A nudge is a teleport, so both the trip and the landing
+                    // are probed (see `probe_nudge`): an unchecked one aimed
+                    // through a wall drops the body out of the level entirely.
+                    // Candidates, best first - a step toward the retreat
+                    // point, then a step toward the middle of the cell the
+                    // body is in. Both are route ground, away from whatever
+                    // the body is pressed against.
+                    let cell = service.cell_from_position(position);
+                    let step_toward = |target: Vector3<f32>| {
+                        let len = xz_distance(target, position);
+                        (len > 1e-3).then(|| {
+                            let step = UNSTICK_NUDGE_DISTANCE.min(len);
+                            Vector3::new(
+                                position.x + (target.x - position.x) / len * step,
+                                position.y,
+                                position.z + (target.z - position.z) / len * step,
+                            )
+                        })
+                    };
+                    let cell_center = cell
+                        .and_then(|cell| service.path_database.cells.get(cell as usize))
+                        .map(|cell| cell.center);
+                    let landing = [Some(retreat), cell_center]
+                        .into_iter()
+                        .flatten()
+                        .filter_map(step_toward)
+                        .find(|candidate| {
                             // A body ALREADY off the mesh is the case the
-                            // unstick exists for; refusing to move it is the
-                            // permanent freeze, not a safeguard. It cannot be
-                            // made worse by a step toward route ground.
-                            .or_else(|| {
-                                service
-                                    .cell_from_position(position)
-                                    .is_none()
-                                    .then_some(nudged)
-                            });
-                        match landing {
-                            Some(landing) => {
-                                tracing::debug!(
-                                    "ai {:?}: nudge {:.2},{:.2} -> {:.2},{:.2}",
-                                    entity_id,
-                                    position.x,
-                                    position.z,
-                                    landing.x,
-                                    landing.z
-                                );
-                                Effect::SetPositionRotation {
-                                    entity_id,
-                                    position: landing,
-                                    rotation: crate::util::get_rotation_from_transform(
-                                        world, entity_id,
-                                    ),
-                                }
-                            }
-                            None => {
-                                tracing::debug!(
-                                    "ai {:?}: nudge refused, no navigable landing",
-                                    entity_id
-                                );
-                                Effect::NoEffect
+                            // unstick exists for - there is no cell to keep it
+                            // in - but it still has to reach the landing and
+                            // stand there, so only THIS check is waived.
+                            let navigable =
+                                cell.is_none() || on_mesh(&service, *candidate).is_some();
+                            nudge_is_safe(
+                                &probe_nudge(physics, entity_id, position, *candidate, navigable),
+                                NUDGE_MAX_STEP,
+                            )
+                        });
+                    match landing {
+                        Some(landing) => {
+                            tracing::debug!(
+                                "ai {:?}: nudge {:.2},{:.2} -> {:.2},{:.2}",
+                                entity_id,
+                                position.x,
+                                position.z,
+                                landing.x,
+                                landing.z
+                            );
+                            Effect::SetPositionRotation {
+                                entity_id,
+                                position: landing,
+                                rotation: crate::util::get_rotation_from_transform(
+                                    world, entity_id,
+                                ),
                             }
                         }
-                    } else {
-                        tracing::debug!("ai {:?}: nudge refused, retreat is here", entity_id);
-                        Effect::NoEffect
+                        None => {
+                            // Re-path is the only recovery left; grinding in
+                            // place beats a body shoved through a wall.
+                            tracing::debug!("ai {:?}: nudge refused, no safe landing", entity_id);
+                            Effect::NoEffect
+                        }
                     }
                 } else {
                     Effect::NoEffect
@@ -918,6 +915,76 @@ fn answers_goal(
         (PathTarget::Point(point), None) => response_goal == *point,
         // Wander picks its goal inside this strategy, so any answer is its own
         (_, None) => true,
+    }
+}
+
+/// What one nudge candidate's probes found (see `probe_nudge`).
+struct NudgeProbe {
+    /// The landing is on a navigable cell (or the body is already off the
+    /// mesh, where no cell can be demanded of it)
+    navigable: bool,
+    /// Nothing solid stands between the body and the landing
+    path_clear: bool,
+    /// The body has room to either side at the landing
+    clearance: bool,
+    /// How far the landing's floor sits from the one the body stands on;
+    /// None when either has no floor beneath it
+    floor_step: Option<f32>,
+}
+
+/// A nudge candidate is only taken when every probe passes and its floor is
+/// within a step of the body's own.
+fn nudge_is_safe(probe: &NudgeProbe, max_step: f32) -> bool {
+    probe.navigable
+        && probe.path_clear
+        && probe.clearance
+        && probe.floor_step.is_some_and(|step| step.abs() <= max_step)
+}
+
+/// Probe a nudge candidate: can the body get there, is there room, and is
+/// there a floor within a step? Rays at body-origin height, the way the
+/// whiskers probe - a nudge is only two feet, so a wall across that span
+/// crosses the body's own center.
+fn probe_nudge(
+    physics: &PhysicsWorld,
+    entity_id: EntityId,
+    from: Vector3<f32>,
+    to: Vector3<f32>,
+    navigable: bool,
+) -> NudgeProbe {
+    // Static geometry and props, not living bodies: being pressed against a
+    // neighbour is exactly what the unstick exists for, and its capsule is
+    // not a wall.
+    let groups = InternalCollisionGroups::ALL_COLLIDABLE
+        - InternalCollisionGroups::PLAYER
+        - InternalCollisionGroups::ACTOR;
+    let cast = |origin: Vector3<f32>, direction: Vector3<f32>, distance: f32| {
+        physics.ray_cast2_as_actor(
+            vec3_to_point3(origin),
+            direction,
+            distance,
+            groups,
+            Some(entity_id),
+            true,
+        )
+    };
+    let distance = xz_distance(to, from);
+    let direction = vec3((to.x - from.x) / distance, 0.0, (to.z - from.z) / distance);
+    let side = vec3(-direction.z, 0.0, direction.x);
+    let floor = |at: Vector3<f32>| {
+        cast(at, vec3(0.0, -1.0, 0.0), NUDGE_FLOOR_PROBE).map(|hit| hit.hit_point.y)
+    };
+    NudgeProbe {
+        navigable,
+        // Out PAST the landing by the body's own room, so a wall just beyond
+        // it refuses the nudge as well
+        path_clear: cast(from, direction, distance + NUDGE_CLEARANCE).is_none(),
+        clearance: [side, -side]
+            .into_iter()
+            .all(|direction| cast(to, direction, NUDGE_CLEARANCE).is_none()),
+        floor_step: floor(to)
+            .zip(floor(from))
+            .map(|(landing, standing)| landing - standing),
     }
 }
 
@@ -1356,6 +1423,71 @@ mod tests {
         // reached by standing beneath it
         let path = vec![vec3(0.0, 5.0, 0.0), vec3(10.0, 5.0, 0.0)];
         assert_eq!(advance_waypoint(vec3(0.0, 0.0, 0.0), &path, 0), 0);
+    }
+
+    /// A safe landing: on the mesh, reachable, roomy, level floor.
+    fn safe_probe() -> NudgeProbe {
+        NudgeProbe {
+            navigable: true,
+            path_clear: true,
+            clearance: true,
+            floor_step: Some(0.0),
+        }
+    }
+
+    #[test]
+    fn a_clear_supported_landing_is_taken() {
+        assert!(nudge_is_safe(&safe_probe(), NUDGE_MAX_STEP));
+    }
+
+    #[test]
+    fn a_landing_behind_a_wall_is_refused() {
+        let probe = NudgeProbe {
+            path_clear: false,
+            ..safe_probe()
+        };
+        assert!(!nudge_is_safe(&probe, NUDGE_MAX_STEP));
+    }
+
+    #[test]
+    fn a_landing_without_room_is_refused() {
+        let probe = NudgeProbe {
+            clearance: false,
+            ..safe_probe()
+        };
+        assert!(!nudge_is_safe(&probe, NUDGE_MAX_STEP));
+    }
+
+    #[test]
+    fn a_landing_over_a_ledge_is_refused() {
+        // No floor within reach at all, and a floor a whole storey down
+        for floor_step in [None, Some(-10.0 / SCALE_FACTOR)] {
+            let probe = NudgeProbe {
+                floor_step,
+                ..safe_probe()
+            };
+            assert!(!nudge_is_safe(&probe, NUDGE_MAX_STEP));
+        }
+    }
+
+    #[test]
+    fn a_landing_a_step_up_or_down_is_still_taken() {
+        for floor_step in [NUDGE_MAX_STEP, -NUDGE_MAX_STEP] {
+            let probe = NudgeProbe {
+                floor_step: Some(floor_step),
+                ..safe_probe()
+            };
+            assert!(nudge_is_safe(&probe, NUDGE_MAX_STEP));
+        }
+    }
+
+    #[test]
+    fn a_landing_off_the_mesh_is_refused() {
+        let probe = NudgeProbe {
+            navigable: false,
+            ..safe_probe()
+        };
+        assert!(!nudge_is_safe(&probe, NUDGE_MAX_STEP));
     }
 
     #[test]
