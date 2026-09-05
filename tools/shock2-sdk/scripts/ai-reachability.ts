@@ -32,6 +32,7 @@ import {
   type AiSample,
   type AiTrack,
   type Classification,
+  type Verdict,
 } from "../src/ai-reachability.js";
 import type { EntityDetailResult, Vec3 } from "../src/types.js";
 
@@ -117,7 +118,12 @@ function parseArgs(argv: string[]): Args {
   }
   if (all) args.missions = missionsInData();
   // Re-classification reads stored runs; it needs no mission list.
-  if (args.reclassify) return args;
+  if (args.reclassify) {
+    if (all || args.missions.length > 0) {
+      throw new Error("--reclassify reads stored runs; it takes no --mission/--all");
+    }
+    return args;
+  }
   if (args.missions.length === 0) throw new Error("pass --mission <name> or --all");
   // A pass shorter than one sample would report every AI as "no samples".
   for (const [name, frames] of [
@@ -308,26 +314,19 @@ function passTable(mission: string, pass: PassResult): string {
 
 function wedgeLines(pass: PassResult): string[] {
   return pass.tracks
-    .filter((t) => t.classification.verdict === "wedged")
+    .filter((t) => t.classification.verdict === "wedged" || t.classification.verdict === "wedged_then_freed")
     .map(
       (t) =>
-        `  - ${t.name} (template ${t.template_id}) wedged ${t.classification.wedge_seconds?.toFixed(1)}s at (${t.classification
+        `  - ${t.name} (template ${t.template_id}) ${t.classification.verdict} ${t.classification.wedge_seconds?.toFixed(1)}s at (${t.classification
           .wedge_at!.map((c) => c.toFixed(2))
           .join(", ")}) [${pass.pass}]`,
     );
 }
 
-/** A stored pass, as written by a previous run. */
+/** A stored run, as written by a previous pass over the missions. */
 interface StoredReport {
   mission: string;
-  passes: {
-    pass: string;
-    tracks: (AiTrack & { classification: Classification })[];
-  }[];
-}
-
-function countsRow(label: string, counts: Record<string, number>): string {
-  return `| ${label} | ${VERDICTS.map((v) => counts[v] ?? 0).join(" | ")} |`;
+  passes: PassResult[];
 }
 
 /**
@@ -335,34 +334,42 @@ function countsRow(label: string, counts: Record<string, number>): string {
  * stored samples carry whatever fields the runtime published when they were
  * taken, so a re-classification of an older run simply sees no movement_hold.
  */
+function row(label: string, cells: string[]): string {
+  return `| ${label} | ${cells.join(" | ")} |`;
+}
+
+function totalRow(label: string, counts: Record<Verdict, number>): string {
+  return row(label, VERDICTS.map((v) => `${counts[v]}`));
+}
+
 async function reclassify(dir: string): Promise<void> {
-  const files = (await readdir(dir))
-    .filter((f) => f.endsWith(".mis.json"))
-    .sort();
+  // `<mission>.json` is the report; the sibling `-cells`/`-pass` dumps are not.
+  const files = (await readdir(dir)).filter((f) => f.endsWith(".mis.json")).sort();
+  if (files.length === 0) throw new Error(`no stored mission reports in ${dir}`);
   const header = `| mission/pass | ${VERDICTS.join(" | ")} |`;
   const divider = `|${"---|".repeat(VERDICTS.length + 1)}`;
   const rows: string[] = [];
-  const oldTotals: Record<string, number> = {};
-  const newTotals: Record<string, number> = {};
+  const stored: Classification[] = [];
+  const redone: Classification[] = [];
 
   for (const file of files) {
-    const report = JSON.parse(await readFile(path.join(dir, file), "utf8")) as StoredReport;
+    let report: StoredReport;
+    try {
+      report = JSON.parse(await readFile(path.join(dir, file), "utf8")) as StoredReport;
+    } catch (error) {
+      console.warn(`  skipping ${file}: ${error instanceof Error ? error.message : error}`);
+      continue;
+    }
     for (const pass of report.passes) {
-      const passName = pass.pass.startsWith("chase") ? "chase" : "idle";
-      const before = tally(pass.tracks.map((t) => t.classification));
-      const after = tally(
-        pass.tracks.map((t) => classifyTrack(t, { pass: passName as "idle" | "chase" })),
-      );
-      for (const v of VERDICTS) {
-        oldTotals[v] = (oldTotals[v] ?? 0) + (before[v] ?? 0);
-        newTotals[v] = (newTotals[v] ?? 0) + (after[v] ?? 0);
-      }
-      const cells = VERDICTS.map((v) => {
-        const a = before[v] ?? 0;
-        const b = after[v] ?? 0;
-        return a === b ? `${a}` : `${a}→${b}`;
-      }).join(" | ");
-      rows.push(`| ${report.mission} ${pass.pass} | ${cells} |`);
+      const passName: "idle" | "chase" = pass.pass.startsWith("chase") ? "chase" : "idle";
+      const passStored = pass.tracks.map((t) => t.classification);
+      const passRedone = pass.tracks.map((t) => classifyTrack(t, { pass: passName }));
+      stored.push(...passStored);
+      redone.push(...passRedone);
+      const before = tally(passStored);
+      const after = tally(passRedone);
+      const cells = VERDICTS.map((v) => (before[v] === after[v] ? `${before[v]}` : `${before[v]}→${after[v]}`));
+      rows.push(row(`${report.mission} ${pass.pass}`, cells));
     }
   }
 
@@ -373,8 +380,8 @@ async function reclassify(dir: string): Promise<void> {
       header,
       divider,
       ...rows,
-      countsRow("**stored total**", oldTotals),
-      countsRow("**re-classified total**", newTotals),
+      totalRow("**stored total**", tally(stored)),
+      totalRow("**re-classified total**", tally(redone)),
       "",
     ].join("\n"),
   );

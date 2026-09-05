@@ -238,6 +238,25 @@ test("a halt the AI walks out of is 'wedged_then_freed', not 'wedged'", () => {
   assert.ok((result.freed_travel ?? 0) > 5);
 });
 
+test("oscillating in place after a halt is still 'wedged', not freed", () => {
+  // Path length racks up, but the AI never gets clear of the pocket.
+  const result = classifyTrack(
+    track([
+      ...stationary(16, { behavior: "Patrol", outcome: "Full" }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: i % 6,
+      })),
+      ...Array.from({ length: 20 }, (_, i) => ({
+        position: [49 + (i % 2) * 1.1, 0.1, -98.5] as [number, number, number],
+        behavior: "Patrol",
+        outcome: "Full",
+      })),
+    ]),
+    { pass: "idle" },
+  );
+  assert.equal(result.verdict, "wedged");
+});
+
 test("an AI that walks out of one halt and into a real one is 'wedged'", () => {
   const held = (i: number) => ({ live_stall_seconds: i % 6, behavior: "Patrol", outcome: "Full" });
   const result = classifyTrack(
@@ -262,6 +281,22 @@ test("time spent under a movement hold does not count toward the wedge window", 
         ...s,
         live_stall_seconds: i % 6,
         movement_hold: i < 16 ? "DoorWait" : null,
+      })),
+    ),
+    { pass: "idle" },
+  );
+  assert.notEqual(result.verdict, "wedged");
+});
+
+test("short unheld pauses on either side of a long hold do not add up to a wedge", () => {
+  // 3.5s stalled, a 30s door wait, 3.5s stalled: 7s unheld in total, but no
+  // 6s stretch of it - and the whole thing is one stationary span.
+  const result = classifyTrack(
+    track(
+      stationary(80, { behavior: "Chase", outcome: "Full" }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: i % 6,
+        movement_hold: i >= 8 && i < 68 ? "DoorWait" : null,
       })),
     ),
     { pass: "idle" },

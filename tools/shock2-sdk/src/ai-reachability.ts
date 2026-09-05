@@ -66,7 +66,7 @@ export interface Classification {
   wedge_at?: Vec3;
   /** How long it was stuck there, seconds. */
   wedge_seconds?: number;
-  /** Units traveled after the stuck span ended (wedged_then_freed only). */
+  /** How far it got from the halt afterwards (wedged_then_freed only). */
   freed_travel?: number;
   closest_distance: number;
   final_distance: number;
@@ -84,8 +84,9 @@ export interface ClassifyOptions {
   /** Displacement below which the AI counts as not moving, world units. */
   wedgeDisplacement?: number;
   /**
-   * Travel after a stationary span that means the AI walked out of it, world
-   * units. Such a span is reported as `wedged_then_freed`, not `wedged`.
+   * How far from the halt the AI must get for it to count as having walked
+   * out, world units. Such a span is reported as `wedged_then_freed`, not
+   * `wedged`.
    */
   freedTravelUnits?: number;
 }
@@ -108,13 +109,12 @@ function lastOutcome(samples: AiSample[]): string | undefined {
   return undefined;
 }
 
-/** A stationary span: sample indices, where, and how long it lasted. */
+/** A halt: where it happened, how long, and where the AI stood still until. */
 interface StationarySpan {
-  start: number;
+  /** Last sample of the stationary span - escape is measured from here. */
   end: number;
   at: Vec3;
   seconds: number;
-  heldSeconds: number;
 }
 
 /** Is this sample reporting a deliberate hold (door wait, pivot)? */
@@ -123,19 +123,38 @@ function isHeld(sample: AiSample): boolean {
 }
 
 /**
- * Every span in which the AI stayed put while it was actively trying to
- * move: stationary for long enough, with stall time that CHANGES across the
- * window.
+ * The longest unbroken stretch of the window in which the AI was NOT under a
+ * published movement hold, as [firstSample, seconds]. Time waiting on a door
+ * or turning in place is an intentional pause, and a long one used to cross
+ * the wedge window on its own.
+ *
+ * The hold reported at a sample describes the interval that follows it, so a
+ * held sample ends the stretch it starts.
+ */
+function longestUnheldRun(window: AiSample[]): { from: number; seconds: number } {
+  let best = { from: 0, seconds: 0 };
+  let runStart = 0;
+  for (let k = 0; k < window.length; k++) {
+    if (isHeld(window[k])) {
+      runStart = k + 1;
+      continue;
+    }
+    const seconds = window[k].t - window[runStart].t;
+    if (seconds > best.seconds) best = { from: runStart, seconds };
+  }
+  return best;
+}
+
+/**
+ * Every halt in which the AI stayed put while it was actively trying to
+ * move: stationary for long enough with no hold to explain it, and with
+ * stall time that CHANGES across the window.
  *
  * The change requirement matters - the steering's live record is only
  * refreshed while path-following runs, so an AI that stopped following a path
  * (reached its patrol end, switched to attacking) keeps its last snapshot
  * forever. A frozen snapshot is not evidence of a wedge; a stall clock that
  * ticks (or resets on a backout) is.
- *
- * Time the AI spends under a published movement hold (waiting on a door,
- * turning in place) does not count toward the window - those are intentional
- * pauses, and a long one used to cross the window on its own.
  */
 function findWedges(
   samples: AiSample[],
@@ -148,15 +167,12 @@ function findWedges(
     while (j + 1 < samples.length && distance3(samples[i].position, samples[j + 1].position) < displacement) {
       j++;
     }
-    const seconds = samples[j].t - samples[i].t;
-    // The hold reported at a sample describes the interval that follows it.
-    let heldSeconds = 0;
-    for (let k = i; k < j; k++) {
-      if (isHeld(samples[k])) heldSeconds += samples[k + 1].t - samples[k].t;
-    }
-    if (seconds - heldSeconds < windowSeconds) continue;
+    if (samples[j].t - samples[i].t < windowSeconds) continue;
 
     const window = samples.slice(i, j + 1);
+    const unheld = longestUnheldRun(window);
+    if (unheld.seconds < windowSeconds) continue;
+
     const behaviors = window.map((s) => s.behavior).filter((b): b is string => Boolean(b));
     // No behavior data at all is not evidence of standing by design - the
     // runtime sometimes omits AIBehavior - so fall back to the path evidence.
@@ -164,7 +180,7 @@ function findWedges(
     const stalls = new Set(window.map((s) => s.live_stall_seconds ?? 0));
     const blocked = stalls.size > 1 && Math.max(...stalls) > 0;
     if (traveling && blocked) {
-      spans.push({ start: i, end: j, at: samples[i].position, seconds, heldSeconds });
+      spans.push({ end: j, at: window[unheld.from].position, seconds: unheld.seconds });
       // Spans starting inside this one are the same halt seen later.
       i = j;
     }
@@ -172,13 +188,29 @@ function findWedges(
   return spans;
 }
 
-/** Path length walked after the span ended. */
-function travelAfter(samples: AiSample[], span: StationarySpan): number {
+/**
+ * Path length walked from `from` onwards - not start-to-end displacement, so
+ * a loop patrol that returns to where it started still reads as travel.
+ */
+export function pathLength(samples: AiSample[], from = 0): number {
   let sum = 0;
-  for (let k = span.end; k + 1 < samples.length; k++) {
+  for (let k = from; k + 1 < samples.length; k++) {
     sum += distance3(samples[k].position, samples[k + 1].position);
   }
   return sum;
+}
+
+/**
+ * How far the AI got from a halt after it ended. Distance from the halt, not
+ * path length: an AI oscillating inside its pocket racks up path length
+ * without ever leaving.
+ */
+function escapedBy(samples: AiSample[], span: StationarySpan): number {
+  let farthest = 0;
+  for (let k = span.end; k < samples.length; k++) {
+    farthest = Math.max(farthest, distance3(span.at, samples[k].position));
+  }
+  return farthest;
 }
 
 /**
@@ -265,16 +297,16 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
   // A halt the AI walks out of is not a wedge: report the first span it does
   // NOT walk out of, and only if every span was walked out of does the AI
   // land in the separate `wedged_then_freed` bucket (still visible, but not
-  // counted against the headline wedge number).
+  // counted against the headline wedge number). "Walked out" means it got
+  // clear of the spot, not that it covered distance near it.
   const spans = findWedges(samples, windowSeconds, wedgeDisplacement);
-  const stuck = spans.find((span) => travelAfter(samples, span) <= freedTravelUnits);
+  const stuck = spans.find((span) => escapedBy(samples, span) <= freedTravelUnits);
   if (stuck) {
-    const held = stuck.heldSeconds > 0 ? `, ${stuck.heldSeconds.toFixed(1)}s of it held` : "";
     return {
       verdict: "wedged",
       reason: `stationary ${stuck.seconds.toFixed(1)}s at (${stuck.at
         .map((c) => c.toFixed(2))
-        .join(", ")}) with a route or stall active${held}`,
+        .join(", ")}) with a route or stall active`,
       wedge_at: stuck.at,
       wedge_seconds: stuck.seconds,
       ...base,
@@ -282,12 +314,12 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
   }
   if (spans.length > 0) {
     const span = spans[0];
-    const freed = travelAfter(samples, span);
+    const freed = escapedBy(samples, span);
     return {
       verdict: "wedged_then_freed",
       reason: `stationary ${span.seconds.toFixed(1)}s at (${span.at
         .map((c) => c.toFixed(2))
-        .join(", ")}), then traveled ${freed.toFixed(1)}`,
+        .join(", ")}), then moved ${freed.toFixed(1)} away`,
       wedge_at: span.at,
       wedge_seconds: span.seconds,
       freed_travel: freed,
@@ -295,11 +327,7 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
     };
   }
 
-  // Path length, not start-to-end displacement: a loop patrol returns to where
-  // it started and would otherwise read as "never moved".
-  const traveled = samples
-    .slice(1)
-    .reduce((sum, s, i) => sum + distance3(samples[i].position, s.position), 0);
+  const traveled = pathLength(samples);
   const everPathed = samples.some(
     (s) => Boolean(s.outcome) || (s.live_path_len ?? 0) > 0 || (s.live_stall_seconds ?? 0) > 0,
   );
