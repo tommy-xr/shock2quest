@@ -9674,8 +9674,10 @@ impl MissionCore {
         }
 
         // Clip-insert zones of held guns, in the same shared world pass. The
-        // zone belongs to the gun; it is engaged by the clip in the OTHER
-        // hand, so its engaged state lives in that hand's slot.
+        // zone belongs to the gun; it is engaged by whatever the OTHER hand
+        // holds, so its engaged state lives in that hand's slot. Rebuilding
+        // the line meshes every frame is the same cost the hurtbox overlay
+        // pays - a debug view, off by default.
         if options.presentation_mode == crate::PresentationMode::Vr
             && crate::dev_params::get_bool(crate::dev_params::CLIP_ZONE)
         {
