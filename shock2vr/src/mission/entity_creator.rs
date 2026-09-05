@@ -2001,6 +2001,30 @@ mod tests {
         }
     }
 
+    /// An arachnid's capsule bottom meets its leg tips - 0.2 (baby) / 0.38
+    /// (adult) below the origin - whether the capsule comes from the creature
+    /// bounds or from the shipped sphere model. Both must agree, since the
+    /// same offset serves debug spawns and missions.
+    #[test]
+    fn arachnid_capsules_stand_on_the_leg_tips() {
+        for (creature_type, imported, leg_tips) in [(6, [0.16, 0.2], -0.38), (8, [0.08, 0.1], -0.2)]
+        {
+            let creature = get_creature_definition(creature_type).unwrap();
+            let dimensions = sphere_dimensions(imported[0], imported[1]);
+            for shape in [
+                live_creature_shape(&creature, None, None),
+                live_creature_shape(&creature, Some(&sphere_type(2)), Some(&dimensions)),
+            ] {
+                let (radius, segment_height) = capsule(shape);
+                let bottom = -creature.physics_offset_height - (segment_height / 2.0 + radius);
+                assert!(
+                    (bottom - leg_tips).abs() < 0.01,
+                    "creature {creature_type}: capsule bottom {bottom} vs leg tips {leg_tips}"
+                );
+            }
+        }
+    }
+
     /// A wall fixture the player can frob but never pick up or move - a
     /// console, a card slot, the Resurrection Station casing. `phys_type` is
     /// `None` for the shipped case that has no `P$PhysType` in its chain.

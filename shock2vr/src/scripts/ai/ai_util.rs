@@ -607,7 +607,10 @@ pub fn melee_contact_attack(world: &World, entity_id: EntityId, physics: &Physic
         v_current_pos
             .get(entity_id)
             .ok()
-            .map(|pos| (pos.position - player_pos).magnitude() < MELEE_ATTACK_RANGE)
+            .map(|pos| {
+                (pos.position + creature::sense_offset(world, entity_id) - player_pos).magnitude()
+                    < MELEE_ATTACK_RANGE
+            })
             .unwrap_or(false)
     };
     if !in_range {
@@ -936,7 +939,8 @@ pub fn is_player_visible(from_entity: EntityId, world: &World, physics: &Physics
     let v_current_pos = world.borrow::<View<PropPosition>>().unwrap();
 
     if let Ok(ent_pos) = v_current_pos.get(from_entity) {
-        let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
+        let start_point =
+            point3(0.0, 0.0, 0.0) + ent_pos.position + creature::sense_offset(world, from_entity);
         let end_point = point3(0.0, 0.0, 0.0) + u_player.pos;
         return has_clear_sight_between(
             from_entity,
@@ -976,7 +980,8 @@ pub fn has_line_of_fire(
     let Ok(ent_pos) = v_current_pos.get(from_entity) else {
         return false;
     };
-    let start_point = point3(0.0, 0.0, 0.0) + ent_pos.position;
+    let start_point =
+        point3(0.0, 0.0, 0.0) + ent_pos.position + creature::sense_offset(world, from_entity);
     let Some(target_entity) = world
         .borrow::<UniqueView<PlayerInfo>>()
         .ok()
@@ -1138,7 +1143,8 @@ pub fn is_player_visible_in_fov(
         }
 
         // Player is in FOV, now check line-of-sight
-        let start_point = point3(0.0, 0.0, 0.0) + entity_pos;
+        let start_point =
+            point3(0.0, 0.0, 0.0) + entity_pos + creature::sense_offset(world, from_entity);
         let end_point = point3(0.0, 0.0, 0.0) + player_pos;
         return has_clear_sight_between(
             from_entity,
