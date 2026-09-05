@@ -81,26 +81,26 @@ const DISPLACEMENT_STALL_SECONDS: f32 = 4.0;
 /// break the equilibrium. A rare small pop beats a monster frozen forever
 /// (issue #481's terminal pocket).
 const UNSTICK_NUDGE_DISTANCE: f32 = 2.0 / SCALE_FACTOR;
-/// Room a nudge landing must have to either side, and how far past it the
-/// traverse probe looks: a hybrid's own body radius (half of HUMAN_WIDTH,
-/// 3.5 Dark feet). Demanding more would refuse the doorways and jambs an
-/// unstick is most often needed in.
-const NUDGE_CLEARANCE: f32 = 1.75 / SCALE_FACTOR;
 /// How far below a nudge landing to look for a floor (8 Dark feet - more
 /// than a body's origin sits above its own floor)
 const NUDGE_FLOOR_PROBE: f32 = 8.0 / SCALE_FACTOR;
 /// ...and how far that floor may sit from the one the body is standing on
 /// (2 Dark feet, a step). A landing over a ledge or a stairwell is refused.
 const NUDGE_MAX_STEP: f32 = 2.0 / SCALE_FACTOR;
-/// Height of the second (knee) probe ray, as a fraction of how far the body's
-/// origin sits above its own floor - the same discrimination the whiskers
-/// make, without depending on a creature's authored dimensions.
+/// Height of the second (knee) probe ray, below the body's origin, as a
+/// fraction of the creature's own height - the same fraction (and the same
+/// discrimination) the whiskers use, so a monkey's second ray is not put
+/// underground by a hybrid's offset.
 const NUDGE_KNEE_FRACTION: f32 = 0.35;
 /// A probe hit closer than this to its own origin means the ray STARTED
 /// inside a collider (the queries are solid), which a body embedded in
 /// geometry always does - and that body is exactly what the unstick is for,
-/// so such a reading blocks nothing.
+/// so the probe steps this far past such a reading and looks again.
 const NUDGE_EMBEDDED_DISTANCE: f32 = 0.1 / SCALE_FACTOR;
+/// How many such steps a probe takes before it gives up: 1.6 Dark feet of
+/// continuous embedding, past which the ray is reported embedded and the
+/// nudge refused rather than guessed at.
+const NUDGE_EMBEDDED_STEPS: usize = 16;
 /// How far past the stalled waypoint (XZ) to probe for the cell on the far
 /// side of the crossing when reporting a blocked link - just enough to step
 /// off the shared edge without skipping a narrow destination cell (0.5
@@ -740,18 +740,13 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                             // stand there, so only THIS check is waived.
                             let navigable =
                                 cell.is_none() || on_mesh(&service, candidate).is_some();
-                            let probe =
-                                probe_nudge(physics, entity_id, position, candidate, navigable);
-                            // The candidate kept the body's own height, so a
-                            // landing whose floor is a step up would bury the
-                            // capsule in it: ride the floor difference.
-                            nudge_is_safe(&probe).then(|| {
-                                Vector3::new(
-                                    candidate.x,
-                                    candidate.y + probe.floor_step.unwrap_or(0.0),
-                                    candidate.z,
-                                )
-                            })
+                            let probe = probe_nudge(
+                                world, physics, entity_id, position, candidate, navigable,
+                            );
+                            // The landing the probes were taken at - the
+                            // candidate riding the floor it lands on, so a
+                            // step up does not bury the capsule in it.
+                            nudge_is_safe(&probe).then_some(probe.landing)
                         });
                     match landing {
                         Some(landing) => {
@@ -946,9 +941,14 @@ struct NudgeProbe {
     path_clear: bool,
     /// The body has room to either side at the landing
     clearance: bool,
+    /// The landing has a creature's height of open space above its floor
+    headroom: bool,
     /// How far the landing's floor sits from the one the body stands on;
     /// None when either has no floor beneath it
     floor_step: Option<f32>,
+    /// The landing the probes were actually taken at: the candidate riding
+    /// the floor it lands on, which is where the body would stand.
+    landing: Vector3<f32>,
 }
 
 /// A nudge candidate is only taken when every probe passes and its floor is
@@ -957,17 +957,32 @@ fn nudge_is_safe(probe: &NudgeProbe) -> bool {
     probe.navigable
         && probe.path_clear
         && probe.clearance
+        && probe.headroom
         && probe
             .floor_step
             .is_some_and(|step| step.abs() <= NUDGE_MAX_STEP)
 }
 
+/// One probe ray's verdict.
+enum ProbeRay {
+    /// Nothing solid on the segment
+    Clear,
+    /// Something solid, at this reading
+    Blocked(crate::physics::RayCastResult),
+    /// The ray never got clear of whatever the body is embedded in
+    Embedded,
+}
+
 /// Probe a nudge candidate: can the body get there, is there room, and is
-/// there a floor within a step? Rays go at the body's origin AND at knee
-/// height - a low slab (a railing, a kerb) passes under a single center ray,
-/// the same reason the whiskers probe two heights. Knee height is derived
-/// from the floor each end actually has, so it is never underground.
+/// there a floor within a step? The probe is a set of rays, not a sweep of
+/// the body's capsule - the physics view a script holds offers no shape cast
+/// - so it is an approximation of clearance: two heights (origin and knee,
+/// as fractions of the creature's OWN height, so a monkey is not probed like
+/// a hybrid) each way at the creature's own body radius, plus a creature's
+/// height of headroom above the landing's floor. Geometry that fits between
+/// those rays is not seen.
 fn probe_nudge(
+    world: &World,
     physics: &PhysicsWorld,
     entity_id: EntityId,
     from: Vector3<f32>,
@@ -980,30 +995,65 @@ fn probe_nudge(
     let groups = InternalCollisionGroups::ALL_COLLIDABLE
         - InternalCollisionGroups::PLAYER
         - InternalCollisionGroups::ACTOR;
+    // The queries are solid, so a ray whose origin lies inside a collider -
+    // which a pinned body's does - reads a hit at zero range. Such a reading
+    // is not evidence of a clear segment and not evidence of an obstacle
+    // either: step past it and judge the REST of the segment, so a wall
+    // behind the prop the body is embedded in is still seen. Bounded, so a
+    // body buried deeper than NUDGE_EMBEDDED_STEPS of tolerance is reported
+    // embedded (and refuses the nudge) rather than looping.
     let cast = |origin: Vector3<f32>, direction: Vector3<f32>, distance: f32| {
-        physics
-            .ray_cast2_as_actor(
+        let mut origin = origin;
+        let mut remaining = distance;
+        for _ in 0..NUDGE_EMBEDDED_STEPS {
+            if remaining <= 0.0 {
+                return ProbeRay::Clear;
+            }
+            let Some(hit) = physics.ray_cast2_as_actor(
                 vec3_to_point3(origin),
                 direction,
-                distance,
+                remaining,
                 groups,
                 Some(entity_id),
                 true,
-            )
-            .filter(|hit| {
-                (hit.hit_point - vec3_to_point3(origin)).magnitude() > NUDGE_EMBEDDED_DISTANCE
-            })
+            ) else {
+                return ProbeRay::Clear;
+            };
+            let range = (hit.hit_point - vec3_to_point3(origin)).magnitude();
+            if range > NUDGE_EMBEDDED_DISTANCE {
+                return ProbeRay::Blocked(hit);
+            }
+            let advance = range + NUDGE_EMBEDDED_DISTANCE;
+            origin += direction * advance;
+            remaining -= advance;
+        }
+        ProbeRay::Embedded
     };
-    let floor = |at: Vector3<f32>| {
-        cast(at, vec3(0.0, -1.0, 0.0), NUDGE_FLOOR_PROBE).map(|hit| hit.hit_point.y)
+    let clear = |origin: Vector3<f32>, direction: Vector3<f32>, distance: f32| {
+        matches!(cast(origin, direction, distance), ProbeRay::Clear)
     };
+    let floor = |at: Vector3<f32>| match cast(at, vec3(0.0, -1.0, 0.0), NUDGE_FLOOR_PROBE) {
+        ProbeRay::Blocked(hit) => Some(hit.hit_point.y),
+        _ => None,
+    };
+    let height = ai_util::creature_height(world, entity_id);
+    let radius = ai_util::creature_radius(world, entity_id);
+    // The floors come FIRST: an accepted landing rides its own floor, so
+    // that - not the body's current height - is where clearance and headroom
+    // have to be measured.
     let standing_floor = floor(from);
     let landing_floor = floor(to);
-    let heights = |at: Vector3<f32>, floor_y: Option<f32>| {
-        let knee = floor_y
-            .map(|floor_y| floor_y + (at.y - floor_y) * NUDGE_KNEE_FRACTION)
-            .unwrap_or(at.y);
-        [at, Vector3::new(at.x, knee, at.z)]
+    let floor_step = landing_floor
+        .zip(standing_floor)
+        .map(|(landing, standing)| landing - standing);
+    let landing = Vector3::new(to.x, to.y + floor_step.unwrap_or(0.0), to.z);
+    // Origin and knee - a low slab (a railing, a kerb) passes under a single
+    // centre ray, the same reason the whiskers probe two heights.
+    let heights = |at: Vector3<f32>| {
+        [
+            at,
+            Vector3::new(at.x, at.y - height * NUDGE_KNEE_FRACTION, at.z),
+        ]
     };
     let distance = xz_distance(to, from);
     if distance <= NUDGE_EMBEDDED_DISTANCE {
@@ -1012,7 +1062,9 @@ fn probe_nudge(
             navigable,
             path_clear: false,
             clearance: false,
+            headroom: false,
             floor_step: None,
+            landing,
         };
     }
     let direction = vec3((to.x - from.x) / distance, 0.0, (to.z - from.z) / distance);
@@ -1021,17 +1073,23 @@ fn probe_nudge(
         navigable,
         // Out PAST the landing by the body's own room, so a wall just beyond
         // it refuses the nudge as well
-        path_clear: heights(from, standing_floor)
+        path_clear: heights(from)
             .into_iter()
-            .all(|origin| cast(origin, direction, distance + NUDGE_CLEARANCE).is_none()),
-        clearance: heights(to, landing_floor).into_iter().all(|origin| {
+            .all(|origin| clear(origin, direction, distance + radius)),
+        clearance: heights(landing).into_iter().all(|origin| {
             [side, -side]
                 .into_iter()
-                .all(|direction| cast(origin, direction, NUDGE_CLEARANCE).is_none())
+                .all(|direction| clear(origin, direction, radius))
         }),
-        floor_step: landing_floor
-            .zip(standing_floor)
-            .map(|(landing, standing)| landing - standing),
+        headroom: landing_floor.is_some_and(|floor_y| {
+            clear(
+                Vector3::new(landing.x, floor_y + NUDGE_EMBEDDED_DISTANCE, landing.z),
+                vec3(0.0, 1.0, 0.0),
+                height,
+            )
+        }),
+        floor_step,
+        landing,
     }
 }
 
@@ -1478,7 +1536,9 @@ mod tests {
             navigable: true,
             path_clear: true,
             clearance: true,
+            headroom: true,
             floor_step: Some(0.0),
+            landing: vec3(0.0, 0.0, 0.0),
         }
     }
 
@@ -1513,6 +1573,10 @@ mod tests {
                 ..safe_probe()
             },
             NudgeProbe {
+                headroom: false,
+                ..safe_probe()
+            },
+            NudgeProbe {
                 floor_step: Some(-10.0 / SCALE_FACTOR),
                 ..safe_probe()
             },
@@ -1524,6 +1588,149 @@ mod tests {
         for probe in &refusals {
             assert!(!nudge_is_safe(probe));
         }
+    }
+
+    /// Dark feet -> world units, so the synthetic probe worlds below read in
+    /// the same units the constants are written in.
+    fn ft(feet: f32) -> f32 {
+        feet / SCALE_FACTOR
+    }
+
+    /// A creature (the human schema a hybrid animates on) and an empty
+    /// physics world to build probe geometry in.
+    fn probe_world() -> (World, EntityId, PhysicsWorld) {
+        let mut world = World::new();
+        let creature = world.add_entity((dark::properties::PropCreature(0),));
+        (world, creature, PhysicsWorld::new())
+    }
+
+    /// Colliders only enter the broad phase on a step, and every query reads
+    /// the broad phase - so geometry added to a fresh world is invisible to
+    /// rays until this runs.
+    fn settle(physics: &mut PhysicsWorld) {
+        let mut player = physics.create_player(
+            vec3(ft(1000.0), ft(1000.0), ft(1000.0)),
+            EntityId::from_inner(1001).unwrap(),
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+    }
+
+    /// A static box, centre and half-extents in world units.
+    fn add_box(physics: &mut PhysicsWorld, center: Vector3<f32>, half: Vector3<f32>) {
+        use rapier3d::prelude::*;
+        let body = physics.create_static_body(
+            rapier3d::na::Isometry3::translation(center.x, center.y, center.z),
+            None,
+        );
+        physics.attach_collider(
+            body,
+            SharedShape::cuboid(half.x, half.y, half.z),
+            1.0,
+            crate::physics::CollisionGroup::entity(),
+        );
+    }
+
+    /// Floor slab with its top surface at `top_y`, over the whole test area.
+    fn add_floor(physics: &mut PhysicsWorld, top_y: f32) {
+        add_box(
+            physics,
+            vec3(0.0, top_y - ft(1.0), 0.0),
+            vec3(ft(50.0), ft(1.0), ft(50.0)),
+        );
+    }
+
+    /// The body's origin sits inside a prop (which is what being pinned
+    /// means), and a wall stands just past the landing. The solid queries
+    /// report the prop at zero range; discarding that reading as "embedded"
+    /// without looking past it hid the wall and called the trip clear.
+    #[test]
+    fn a_wall_behind_the_prop_the_body_is_embedded_in_refuses_the_nudge() {
+        let (world, creature, mut physics) = probe_world();
+        add_floor(&mut physics, 0.0);
+        let from = vec3(0.0, ft(3.0), 0.0);
+        let to = vec3(ft(2.0), ft(3.0), 0.0);
+        // The prop the body is embedded in, centred on its origin
+        add_box(&mut physics, from, vec3(ft(0.5), ft(0.5), ft(0.5)));
+        // ...and a wall a foot beyond the landing
+        add_box(
+            &mut physics,
+            vec3(ft(3.25), ft(5.0), 0.0),
+            vec3(ft(0.25), ft(5.0), ft(10.0)),
+        );
+
+        settle(&mut physics);
+        let probe = probe_nudge(&world, &physics, creature, from, to, true);
+        assert!(
+            !probe.path_clear,
+            "the wall past the landing must be seen through the prop the body is embedded in"
+        );
+        assert!(!nudge_is_safe(&probe));
+    }
+
+    /// A landing a step up rides that floor - so the room it needs is the
+    /// room ABOVE the raised floor. Probing at the body's old height cleared
+    /// a landing whose ceiling the body would not fit under.
+    #[test]
+    fn a_step_up_under_an_overhang_refuses_the_nudge() {
+        let (world, creature, mut physics) = probe_world();
+        add_floor(&mut physics, 0.0);
+        // A half-foot step up, low enough that it does not block the trip
+        add_box(
+            &mut physics,
+            vec3(ft(6.0), ft(0.25), 0.0),
+            vec3(ft(5.0), ft(0.25), ft(10.0)),
+        );
+        // ...with an overhang four feet above it - short of a hybrid
+        add_box(
+            &mut physics,
+            vec3(ft(6.0), ft(5.5), 0.0),
+            vec3(ft(5.0), ft(1.0), ft(10.0)),
+        );
+        let from = vec3(0.0, ft(3.0), 0.0);
+        let to = vec3(ft(2.0), ft(3.0), 0.0);
+
+        settle(&mut physics);
+        let probe = probe_nudge(&world, &physics, creature, from, to, true);
+
+        assert!(
+            probe.path_clear,
+            "the trip itself is clear - the refusal must come from the landing"
+        );
+        assert!(
+            !probe.headroom,
+            "a landing the body does not fit under must be refused"
+        );
+        assert!(!nudge_is_safe(&probe));
+    }
+
+    /// The positive control, and the landing the call site takes: open floor,
+    /// nothing in the way, and a landing that rides its own floor.
+    #[test]
+    fn an_open_landing_is_probed_safe_and_rides_its_floor() {
+        let (world, creature, mut physics) = probe_world();
+        add_floor(&mut physics, 0.0);
+        let from = vec3(0.0, ft(3.0), 0.0);
+        let to = vec3(ft(2.0), ft(3.0), 0.0);
+
+        settle(&mut physics);
+        let probe = probe_nudge(&world, &physics, creature, from, to, true);
+        assert!(nudge_is_safe(&probe));
+        assert!((probe.landing.y - from.y).abs() < 1.0e-3);
+
+        // ...and half a foot up, the landing rises with the floor
+        add_box(
+            &mut physics,
+            vec3(ft(6.0), ft(0.25), 0.0),
+            vec3(ft(5.0), ft(0.25), ft(10.0)),
+        );
+        settle(&mut physics);
+        let probe = probe_nudge(&world, &physics, creature, from, to, true);
+        assert!(nudge_is_safe(&probe));
+        assert!(
+            (probe.landing.y - (from.y + ft(0.5))).abs() < 1.0e-2,
+            "landing y {} did not ride the half-foot step",
+            probe.landing.y
+        );
     }
 
     #[test]

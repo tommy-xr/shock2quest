@@ -63,6 +63,9 @@ pub fn random_binomial() -> f32 {
 /// Height to fall back on when the creature has no definition (world units)
 const CREATURE_DEFAULT_HEIGHT: f32 = 6.5 / SCALE_FACTOR;
 
+/// ...and the body radius to fall back on (half a human's 3.5-foot width)
+const CREATURE_DEFAULT_RADIUS: f32 = 1.75 / SCALE_FACTOR;
+
 /// The creature's height in world units. Fractions of it (rather than fixed
 /// feet) are what let the same reasoning work on a monkey and on a hybrid.
 pub fn creature_height(world: &World, entity_id: EntityId) -> f32 {
@@ -73,6 +76,19 @@ pub fn creature_height(world: &World, entity_id: EntityId) -> f32 {
         .and_then(crate::creature::get_creature_definition)
         .map(|definition| definition.bounding_size.y)
         .unwrap_or(CREATURE_DEFAULT_HEIGHT)
+}
+
+/// The creature's body radius in world units - the half-width its capsule is
+/// built from (`live_creature_shape`'s fallback radius), so a probe asks for
+/// the room this creature actually occupies.
+pub fn creature_radius(world: &World, entity_id: EntityId) -> f32 {
+    world
+        .borrow::<View<PropCreature>>()
+        .ok()
+        .and_then(|v_creature| v_creature.get(entity_id).ok().map(|creature| creature.0))
+        .and_then(crate::creature::get_creature_definition)
+        .map(|definition| definition.bounding_size.x.max(definition.bounding_size.z) / 2.0)
+        .unwrap_or(CREATURE_DEFAULT_RADIUS)
 }
 
 pub fn get_position_and_forward(
