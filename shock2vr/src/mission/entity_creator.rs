@@ -1555,7 +1555,9 @@ fn create_physics_representation_with_options(
     }
 }
 
-fn live_creature_shape(
+/// The collision shape a live creature is given: its authored sphere
+/// submodel radii where they exist, and the animation bounding box otherwise.
+pub fn live_creature_shape(
     creature_def: &crate::creature::CreatureDefinition,
     phys_type: Option<&PropPhysType>,
     dimensions: Option<&PropPhysDimensions>,
