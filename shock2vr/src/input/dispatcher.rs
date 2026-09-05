@@ -130,6 +130,9 @@ impl ActionDispatcher {
             // A per-hand press arrives as `Effect::HandButton` instead.
             effects.push(Effect::CycleGunSetting { hand: None });
         }
+        if state.just_triggered(InputAction::OpenWeaponSettings) {
+            effects.push(Effect::OpenWeaponSettings);
+        }
         if state.just_triggered(InputAction::Reload) {
             effects.push(Effect::ReloadWeapon);
         }

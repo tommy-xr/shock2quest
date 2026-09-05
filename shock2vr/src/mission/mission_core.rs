@@ -6121,17 +6121,19 @@ impl MissionCore {
                     if let (true, Ok(panel)) = (slot_is_presented, panel) {
                         // Removed first: a unique that is only ever added
                         // would keep the gun the panel was opened on last.
+                        let subject = crate::scripts::gui::modify_subject(&self.world, entity_id);
                         let _ = self
                             .world
                             .remove_unique::<crate::scripts::gui::WeaponModifySubject>();
-                        self.world
-                            .add_unique(crate::scripts::gui::WeaponModifySubject(entity_id));
-                        self.script_world.dispatch(Message {
-                            to: panel,
-                            payload: MessagePayload::PanelOpened,
-                        });
-                        self.flat_ui.open_unbound(panel);
-                        self.weapon_modify_gun = Some(entity_id);
+                        if let Some(subject) = subject {
+                            self.world.add_unique(subject);
+                            self.script_world.dispatch(Message {
+                                to: panel,
+                                payload: MessagePayload::PanelOpened,
+                            });
+                            self.flat_ui.open_unbound(panel);
+                            self.weapon_modify_gun = Some(entity_id);
+                        }
                     }
                 }
 
@@ -11430,6 +11432,25 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         name: "Condition".to_string(),
                         value: format!("{:.2}", gun_state.condition),
                     });
+                    properties.push(DebugPropertyInfo {
+                        name: "Modification".to_string(),
+                        value: gun_state.modification.to_string(),
+                    });
+                    // The *derived* magazine: the authored clip as the gun's
+                    // modification level has it, which is what makes a
+                    // modification observable without firing the gun dry.
+                    if let Some(setting) =
+                        crate::scripts::script_util::active_gun_setting(&self.world, id)
+                    {
+                        properties.push(DebugPropertyInfo {
+                            name: "ClipSize".to_string(),
+                            value: setting.clip.to_string(),
+                        });
+                        properties.push(DebugPropertyInfo {
+                            name: "ReloadTimeMs".to_string(),
+                            value: setting.reload_time_ms.to_string(),
+                        });
+                    }
                 }
 
                 if let Some(state) = object_state {

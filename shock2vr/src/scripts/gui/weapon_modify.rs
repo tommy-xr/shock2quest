@@ -49,10 +49,40 @@ const EFFECT_WRAP: usize = 29;
 /// adds two levels to whatever minimum the gun authors.
 const SECOND_MODIFICATION_SKILL_PREMIUM: i32 = 2;
 
-/// The gun the modify panel is presenting. The panel is synthetic and shared,
-/// so the subject rides beside it rather than being the panel's own entity.
+/// What the modify panel is presenting. The panel is synthetic and shared, so
+/// the subject rides beside it rather than being the panel's own entity.
+///
+/// The modification being played for is pinned here at the moment the board is
+/// dealt, rather than re-read from the gun every frame: a win raises the gun's
+/// level, and a board that re-derived itself would blank (or re-price) the
+/// instant it was won instead of standing there showing the result.
 #[derive(Unique, Clone, Copy, Debug)]
-pub struct WeaponModifySubject(pub EntityId);
+pub struct WeaponModifySubject {
+    pub gun: EntityId,
+    /// The modification level the gun was at when the board was dealt, so the
+    /// board is played for level `level + 1`.
+    pub level: i32,
+    /// The terms that modification is played on.
+    pub terms: PropHackDiff,
+}
+
+/// The subject a board opened on `weapon` right now would be dealt for, or
+/// `None` when a board is not what asking to modify that gun comes to.
+///
+/// Decided by [`modify_entry`], the one place that judgement lives, so a board
+/// can never be dealt on terms the MODIFY control would have refused - a
+/// broken gun, one already fully modified, or one the player's Modify skill
+/// does not reach.
+pub fn modify_subject(world: &World, weapon: EntityId) -> Option<WeaponModifySubject> {
+    if modify_entry(world, weapon) != ModifyEntry::Board {
+        return None;
+    }
+    Some(WeaponModifySubject {
+        gun: weapon,
+        level: modification_level(world, weapon),
+        terms: next_modify_diff(world, weapon)?,
+    })
+}
 
 pub struct WeaponModifyGui;
 
@@ -188,14 +218,12 @@ fn modify_critical_failure(entity_id: EntityId, _world: &World) -> Effect {
     }
 }
 
-/// The gun the panel is presenting and the terms its next modification is
-/// played on - both, or neither.
-fn subject(world: &World) -> Option<(EntityId, PropHackDiff)> {
-    let gun = world
+/// What the panel is presenting, as it was pinned when the board was dealt.
+fn subject(world: &World) -> Option<WeaponModifySubject> {
+    world
         .borrow::<UniqueView<WeaponModifySubject>>()
         .ok()
-        .map(|subject| subject.0)?;
-    Some((gun, next_modify_diff(world, gun)?))
+        .map(|subject| *subject)
 }
 
 impl Gui<WeaponModifyState, WeaponModifyMsg> for WeaponModifyGui {
@@ -206,17 +234,19 @@ impl Gui<WeaponModifyState, WeaponModifyMsg> for WeaponModifyGui {
         world: &World,
         state: &WeaponModifyState,
     ) -> Vec<GuiComponent<WeaponModifyMsg>> {
-        let Some((gun, diff)) = subject(world) else {
+        let Some(subject) = subject(world) else {
             return Vec::new();
         };
-        let mut components = draw_hack_board(&state.hack, diff, WeaponModifyMsg::Board);
+        let mut components = draw_hack_board(&state.hack, subject.terms, WeaponModifyMsg::Board);
 
         // What this modification will do, which is the gun's own
         // `P$Modify1`/`P$Modify2` text - the only place the game ever shows it.
+        // Read off the pinned level, so a won board still names what it did
+        // rather than jumping to the next modification.
         if let Some(effect) = crate::scripts::script_util::modification_description(
             world,
-            gun,
-            modification_level(world, gun) + 1,
+            subject.gun,
+            subject.level + 1,
         ) {
             for (index, line) in super::media::wrap_text(&effect, EFFECT_WRAP)
                 .iter()
@@ -257,21 +287,24 @@ impl Gui<WeaponModifyState, WeaponModifyMsg> for WeaponModifyGui {
         msg: &WeaponModifyMsg,
     ) -> (WeaponModifyState, Effect) {
         let WeaponModifyMsg::Board(board_msg) = msg;
-        let Some((gun, diff)) = subject(world) else {
+        let Some(subject) = subject(world) else {
             return (state.clone(), Effect::NoEffect);
         };
-        // A gun that has since been modified to the last level, or broken by a
-        // failed attempt, has nothing left to play for; ignore stale board
-        // input rather than charging for another attempt.
-        if modify_entry(world, gun) != ModifyEntry::Board {
+        // The board is played for exactly the modification it was dealt for. A
+        // gun that has since been modified - or broken by a failed attempt -
+        // is no longer that gun, so stale input is ignored rather than
+        // charging for another attempt.
+        if modify_entry(world, subject.gun) != ModifyEntry::Board
+            || modification_level(world, subject.gun) != subject.level
+        {
             return (state.clone(), Effect::NoEffect);
         }
         let (hack, effect) = handle_hack_msg(
-            gun,
+            subject.gun,
             world,
             &state.hack,
             board_msg,
-            diff,
+            subject.terms,
             HrmMode::Modify,
             HackOutcomeEffects {
                 success: modify_success,
@@ -325,6 +358,19 @@ mod tests {
         }
         world.add_unique(quests);
         (world, gun)
+    }
+
+    /// A subject pinned to `gun` at `level`, as opening the board does.
+    fn modify_subject_at(gun: EntityId, level: i32) -> WeaponModifySubject {
+        WeaponModifySubject {
+            gun,
+            level,
+            terms: PropHackDiff {
+                success_chance: 40,
+                critical_chance: 2,
+                cost: 20.0,
+            },
+        }
     }
 
     /// The first modification is played on `P$ModifyDif` and the second on the
@@ -387,6 +433,31 @@ mod tests {
             .player_stats_mut()
             .install_software(crate::player_stats::Software::Modify, 1);
         assert_eq!(modify_entry(&world, gun), ModifyEntry::Board);
+    }
+
+    /// Dealing a board and offering the MODIFY control are the same
+    /// judgement, so a gun the control would refuse cannot have a board dealt
+    /// on it either - however the effect that opens one was reached.
+    #[test]
+    fn no_board_is_dealt_on_a_gun_the_control_would_refuse() {
+        // Skill too low for the second modification.
+        let (world, gun) = fixture(1, 1);
+        assert_eq!(
+            modify_entry(&world, gun),
+            ModifyEntry::SkillRequired { level: 3 }
+        );
+        assert!(modify_subject(&world, gun).is_none());
+
+        // Broken, which is repair's problem.
+        let (mut world, gun) = fixture(9, 0);
+        world.add_component(gun, (PropObjState(ObjectState::Broken),));
+        assert!(modify_subject(&world, gun).is_none());
+
+        // And a gun the control does open a board on.
+        let (world, gun) = fixture(9, 0);
+        let subject = modify_subject(&world, gun).expect("a board");
+        assert_eq!((subject.gun, subject.level), (gun, 0));
+        assert_eq!(subject.terms.success_chance, 40);
     }
 
     /// A gun that has given out is repair's problem: modification offers
@@ -462,7 +533,7 @@ mod tests {
     #[test]
     fn the_board_ignores_input_once_the_gun_is_fully_modified() {
         let (mut world, gun) = fixture(9, 2);
-        world.add_unique(WeaponModifySubject(gun));
+        world.add_unique(modify_subject_at(gun, 2));
         let panel = world.add_entity((PropObjState(ObjectState::Normal),));
 
         let (_, effect) = WeaponModifyGui.handle_msg(
