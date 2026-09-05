@@ -86,6 +86,11 @@ pub enum ReadoutButton {
     PsiPowerNext,
     /// Open the psi power selection MFD.
     PsiSelect,
+    /// Open the pause / system menu. Not part of the ammo gauge - it belongs
+    /// to the interface canvas as a whole (see [`super::readouts`]) - but it
+    /// is a control on that canvas, so it travels with the rest through the
+    /// one list the host draws and hit-tests.
+    SystemMenu,
 }
 
 impl ReadoutButton {
@@ -100,6 +105,7 @@ impl ReadoutButton {
             ReadoutButton::PsiPowerPrev => "psi_power_prev",
             ReadoutButton::PsiPowerNext => "psi_power_next",
             ReadoutButton::PsiSelect => "psi_select",
+            ReadoutButton::SystemMenu => "system_menu",
         }
     }
 }
@@ -114,6 +120,23 @@ pub struct ReadoutButtonSpec {
     pub rect: Rect,
     pub texture: Option<&'static str>,
     pub text: Option<String>,
+}
+
+/// Draw one control at `rect`: its art, then its label centred on it.
+///
+/// The single drawing routine for every [`ReadoutButtonSpec`] the interface
+/// canvas carries - the gauge's own controls here and the system button in
+/// [`super::readouts`] - so a control cannot be drawn one way in one place and
+/// hit-tested from another.
+pub(crate) fn draw_button(canvas: &mut UiCanvas, button: &ReadoutButtonSpec, rect: Rect) {
+    if let Some(texture) = button.texture {
+        canvas.image(rect, texture);
+    }
+    if let Some(text) = &button.text {
+        // Ellipsized: labels are data (a localized MISC.STR string, an authored
+        // `P$SHead` header), and an over-wide one would spill onto the gauge.
+        canvas.text_native_fit(rect, text, FONT, HAlign::Center, VAlign::Middle);
+    }
 }
 
 /// Place a panel-local rect into a canvas whose panel origin is `origin`.
@@ -307,16 +330,7 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
     }
 
     for button in buttons(readout) {
-        let rect = at(origin, button.rect);
-        if let Some(texture) = button.texture {
-            canvas.image(rect, texture);
-        }
-        if let Some(text) = &button.text {
-            // Ellipsized like the ammo-type label: both labels are data (a
-            // localized MISC.STR string, an authored `P$SHead` header), and an
-            // over-wide one would spill onto the gauge.
-            canvas.text_native_fit(rect, text, FONT, HAlign::Center, VAlign::Middle);
-        }
+        draw_button(canvas, &button, at(origin, button.rect));
     }
 }
 

@@ -1517,13 +1517,26 @@ fn process_command(
                 tracing::warn!("Failed to send pathfinding test result - receiver dropped");
             }
         }
-        RuntimeCommand::TriggerAction(action, reply) => {
-            action_state.trigger(action);
-            // Single-shot semantics: don't leave the action held
-            action_state.release(action);
+        RuntimeCommand::TriggerAction(action, hold, reply) => {
+            let message = match hold {
+                // Single-shot semantics: don't leave the action held.
+                None => {
+                    action_state.trigger(action);
+                    action_state.release(action);
+                    format!("Triggered action '{}' - applies on next update", action)
+                }
+                Some(true) => {
+                    action_state.trigger(action);
+                    format!("Holding action '{}' until it is released", action)
+                }
+                Some(false) => {
+                    action_state.release(action);
+                    format!("Released action '{}'", action)
+                }
+            };
             let result = CommandResult {
                 success: true,
-                message: format!("Triggered action '{}' - applies on next update", action),
+                message,
                 data: None,
             };
             if let Err(_) = reply.send(result) {
@@ -4089,6 +4102,10 @@ async fn ai_paths(
 #[derive(Deserialize)]
 struct TriggerActionRequest {
     action: String,
+    /// Hold the button rather than tapping it: `true` presses and keeps it
+    /// down, `false` releases it. Omitted = a single-shot press.
+    #[serde(default)]
+    hold: Option<bool>,
 }
 
 /// HTTP endpoint handler: Trigger a discrete input action
@@ -4115,7 +4132,11 @@ async fn trigger_input_action(
     let (reply_tx, reply_rx) = oneshot::channel();
 
     if command_tx
-        .send(RuntimeCommand::TriggerAction(action, reply_tx))
+        .send(RuntimeCommand::TriggerAction(
+            action,
+            request.hold,
+            reply_tx,
+        ))
         .is_err()
     {
         tracing::error!("Failed to send TriggerAction command - game loop receiver dropped");

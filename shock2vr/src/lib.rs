@@ -144,7 +144,7 @@ use std::{
     thread,
 };
 
-use cgmath::{Matrix4, Quaternion, Vector2, Vector3, vec3};
+use cgmath::{Matrix4, Quaternion, Rotation, Vector2, Vector3, vec3};
 use dark::{
     gamesys,
     importers::{AUDIO_IMPORTER, FONT_IMPORTER, STRINGS_IMPORTER},
@@ -605,6 +605,13 @@ pub struct Game {
     /// so the paused scene keeps rendering while its update is skipped.
     pause_menu: pause_menu::PauseMenu,
 
+    /// The Menu button's short/long split (jack in vs. pause) and the hold
+    /// readout that promises the long one. Here beside the pause menu for the
+    /// same reason: it decides `Game`'s own overlay, and must keep running on
+    /// a frame the scene is not updated at all.
+    menu_hold: input::MenuHold,
+    menu_hold_ring: scenes::cutscene_skip::RingArt,
+
     /// Wall-clock time spent with the simulation suspended, subtracted from the
     /// clock the scene sees. See [`Game::scene_time`].
     time_suspended: std::time::Duration,
@@ -752,6 +759,14 @@ impl std::fmt::Display for SaveGameError {
 }
 
 impl std::error::Error for SaveGameError {}
+
+/// Where the Menu button's hold ring hangs: straight ahead of the eye, a
+/// little below the gaze so it never sits on what the player is looking at,
+/// and sized as a fraction of that distance so it subtends the same angle
+/// whatever the presentation.
+const MENU_HOLD_RING_DISTANCE: f32 = 1.5;
+const MENU_HOLD_RING_SIZE: f32 = 0.09;
+const MENU_HOLD_RING_DROP: f32 = 0.12;
 
 impl Game {
     /// True while a deferred level transition is in flight.
@@ -1358,6 +1373,8 @@ impl Game {
             should_quit: false,
             campaign_completed: false,
             pause_menu: pause_menu::PauseMenu::new(),
+            menu_hold: input::MenuHold::default(),
+            menu_hold_ring: scenes::cutscene_skip::RingArt::default(),
             time_suspended: std::time::Duration::ZERO,
             hit_feedback: hit_feedback::HitFeedback::new(),
             head_pose: (
@@ -1435,6 +1452,10 @@ impl Game {
                 scene.set_progress(progress);
             }
         }
+
+        // Split the raw Menu button into the actions it can mean, before
+        // either is looked at below.
+        self.resolve_menu_button(time.elapsed, actions);
 
         // The pause menu is a Game-level overlay, so its toggle is consumed
         // here instead of being dispatched into the scene: while paused the
@@ -1598,6 +1619,73 @@ impl Game {
             .borrow::<UniqueView<PlayerLifeState>>()
             .map(|state| state.is_alive())
             .unwrap_or(true)
+    }
+
+    /// Turn the raw left Menu button into what its press meant: a short press
+    /// jacks in or out of the cyber interface (what the left face button used
+    /// to do), a hold of [`input::MENU_LONG_PRESS`] opens the pause menu.
+    ///
+    /// Both arrive as ordinary triggered actions, so every path below - the
+    /// pause toggle here, the dispatcher's `ToggleUseMode` - stays unaware
+    /// that one button fed it. Run before the pause menu is updated, and
+    /// before the suspended-scene early return, so a button released inside
+    /// the pause menu is still accounted for.
+    fn resolve_menu_button(
+        &mut self,
+        elapsed: std::time::Duration,
+        actions: &mut input::InputActionState,
+    ) {
+        // Where the pause menu cannot open - a frontend screen, a transition in
+        // flight, a dead player - the hold means nothing, so it is not run at
+        // all: no ring promising a menu that will not come, and no long press
+        // minted for `update_pause_menu` to drop. (The cutscene player is one
+        // of these, and draws this very ring for its own hold-to-skip.)
+        if !self.pause_is_allowed() {
+            self.menu_hold.cancel();
+            return;
+        }
+        if actions.just_triggered(InputAction::MenuButton) {
+            self.menu_hold.press();
+        }
+        // A single-shot injection (`/v1/input/action`) triggers and releases in
+        // one frame, so it lands here as a short press - the button's ordinary
+        // meaning.
+        let press = if actions.is_held(InputAction::MenuButton) {
+            self.menu_hold.tick(elapsed)
+        } else {
+            self.menu_hold.release()
+        };
+        let resolved = match press {
+            // The pause menu swallows the scene's actions while it is up, so
+            // its own button must close it rather than emit an interface
+            // toggle nothing would ever see.
+            input::MenuPress::Short if self.pause_menu.is_open() => {
+                Some(InputAction::TogglePauseMenu)
+            }
+            input::MenuPress::Short => Some(InputAction::ToggleUseMode),
+            input::MenuPress::Long => Some(InputAction::TogglePauseMenu),
+            input::MenuPress::None => None,
+        };
+        if let Some(action) = resolved {
+            actions.trigger(action);
+            // Released straight away: what the Menu button synthesizes is an
+            // EDGE, and neither of these has a Quest binding to deliver the
+            // release that would otherwise clear the latch - it would sit in
+            // the held set for the rest of the session.
+            actions.release(action);
+        }
+    }
+
+    /// Forget any Menu button press in flight, deciding neither a short press
+    /// nor a long one.
+    ///
+    /// For a runtime whose session restarted (a doff/don): OpenXR stops
+    /// reporting edges for an inactive action, so the release of a button that
+    /// is still physically down never arrives - and an accumulating hold would
+    /// then pause the game on its own the moment focus came back. Releasing it
+    /// instead would mint the short press nobody made.
+    pub fn cancel_menu_hold(&mut self) {
+        self.menu_hold.cancel();
     }
 
     /// Apply the pause toggle and, while open, drive the overlay.
@@ -1862,6 +1950,11 @@ impl Game {
                     entities_to_trigger,
                     vitals_transition,
                 );
+            }
+            GlobalEffect::OpenPauseMenu => {
+                if self.pause_is_allowed() && !self.pause_menu.is_open() {
+                    self.open_pause_menu();
+                }
             }
             GlobalEffect::TestReload => {
                 let (position, rotation) = match self.player_standing_transform() {
@@ -2221,6 +2314,42 @@ impl Game {
             scene.push(layer);
         }
 
+        // The Menu button's hold readout: the same ring the cutscene skip
+        // draws, head-locked at the centre of the picture and a little low, so
+        // a button held anywhere in the room shows its progress toward the
+        // pause menu. Transient and small - unlike a panel, which is placed
+        // and left world-locked - so it rides the eye directly.
+        if let Some(progress) = self.menu_hold.progress() {
+            let size = MENU_HOLD_RING_SIZE * MENU_HOLD_RING_DISTANCE;
+            let mut ring = self.menu_hold_ring.quad(progress, 1.0);
+            // Down in VIEW space: a pawn-space drop collapses onto the gaze
+            // axis as the head pitches, putting the ring back on exactly what
+            // the player is looking at. An untracked head has no usable
+            // rotation, so it falls back to the world down `eye_pose` implies.
+            let down = util::tracked_gaze(rendered_eye.head_offset, rendered_eye.head_rotation)
+                .map(|_| {
+                    rendered_eye
+                        .head_rotation
+                        .rotate_vector(vec3(0.0, -1.0, 0.0))
+                })
+                .unwrap_or_else(|| vec3(0.0, -1.0, 0.0));
+            let centre = eye_position
+                + eye_forward * MENU_HOLD_RING_DISTANCE
+                + down * (MENU_HOLD_RING_DROP * MENU_HOLD_RING_DISTANCE);
+            ring.set_transform(
+                pawn_to_world
+                    * Matrix4::from_translation(centre)
+                    * Matrix4::from(util::get_rotation_from_forward_vector(-eye_forward))
+                    * Matrix4::from_nonuniform_scale(size, size, 1.0),
+            );
+            ring.set_depth_write(false);
+            ring.set_render_layer(RenderLayer::SystemOverlay);
+            ring.set_debug_tag(Some(util::render_source_tag(
+                util::render_source::MENU_HOLD_RING,
+            )));
+            scene.push(ring);
+        }
+
         let mut pause_objects =
             self.pause_menu
                 .render(&mut self.asset_cache, &self.options, pawn_to_world);
@@ -2569,6 +2698,12 @@ impl App {
         match self {
             App::Ready(game) => game.should_quit(),
             App::MissingAssets(_) => false,
+        }
+    }
+
+    pub fn cancel_menu_hold(&mut self) {
+        if let App::Ready(game) = self {
+            game.cancel_menu_hold();
         }
     }
 

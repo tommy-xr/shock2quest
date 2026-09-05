@@ -63,6 +63,11 @@ pub enum GlobalEffect {
     /// Return to the main menu, replacing whatever scene is active.
     ShowMainMenu,
 
+    /// Open the pause menu over the active scene. The scene cannot open it
+    /// itself - the overlay is `Game`'s, and a paused scene is not updated at
+    /// all - so the cyber interface's system button asks for it this way.
+    OpenPauseMenu,
+
     /// Open the Developer screen (live-tunable runtime parameters), replacing
     /// whatever scene is active. Reached from the main menu; the pause menu
     /// hosts the same panel as an overlay page instead, so a mission is never
@@ -399,6 +404,13 @@ pub enum Effect {
     /// interface around the panel (the slot is only presented there), and a
     /// second press is its own inverse - see `Effect::ReadLastUnreadLog`.
     OpenPsiPowers,
+
+    /// Jump once, as [`crate::input::InputAction::Jump`] means it: a Quest
+    /// hand's lower face button, or an injected `Jump` action. The ordinary
+    /// jump is the held `InputContext::jump` channel every runtime provides;
+    /// this latches one frame of it, so the physics controller sees exactly
+    /// one rising edge whichever way the request arrived.
+    Jump,
 
     /// Train the player in a psi power (insert its template id into
     /// `PlayerPsiKnownPowers`), making it selectable and castable - for

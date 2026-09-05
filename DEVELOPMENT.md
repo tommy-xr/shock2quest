@@ -119,14 +119,15 @@ Debug bindings take `Alt` (`Option` on macOS) to keep them clear of gameplay key
 | --- | ------ | ----- |
 | `P` | `PathfindingTestCycle` | set start → set goal → show path |
 | `B` | `DebugCycleWeapon` | spawns and wields the next weapon (unlike the number row) |
-| `Alt+X` | `EjectClip` | magazine back to the backpack reserve; Quest: the gun hand's *lower* face button |
-| `T` / `Y` | `CycleAmmo` / `CyclePsiPower` | ammo has no Quest binding (a clip is inserted by hand); on Quest the amp hand's *upper* face button quick-cycles the power |
-| - | `SelectPsiPower` | opens the psi power selection MFD; flat clicks the readout's power badge instead, Quest: the amp hand's *lower* face button |
+| `Alt+X` | `EjectClip` | magazine back to the backpack reserve; no Quest button - in VR it is the settings MFD's UNLOAD |
+| `T` / `Y` | `CycleAmmo` / `CyclePsiPower` | no Quest binding: a clip is inserted by hand, and the psi MFD's stick navigation steps the power |
+| - | `SelectPsiPower` | opens the psi power selection MFD; flat clicks the readout's power badge instead, Quest: the amp hand's *upper* face button |
 | `F` | `CycleGunSetting` | switch the wielded gun's fire mode (e.g. NORM / BURST); Quest: the gun hand's *upper* face button |
-| `U` | `ReadLastUnreadLog` | on Quest an *upper* face button resolves to this - see below |
+| `U` | `ReadLastUnreadLog` | on Quest a free hand's *upper* face button resolves to this - see below |
 | `M` | `ToggleMap` | flat only |
-| `Tab` / `I` | `ToggleUseMode` | the cyber interface; on Quest a *lower* face button resolves to this |
-| `Esc` | `TogglePauseMenu` | Quest: left `Menu` |
+| `Tab` / `I` | `ToggleUseMode` | the cyber interface; Quest: a **short** press of left `Menu` |
+| `Space` | `Jump` | the flat key is the held jump channel, not this action; Quest: either *lower* face button |
+| `Esc` | `TogglePauseMenu` | Quest: left `Menu` held ~0.5 s, or the interface's MENU button |
 | `Alt+S` / `Alt+L` | `QuickSave` / `QuickLoad` | |
 | `Alt+G` | `DebugForceChase` | every monster hunts the player, pinned |
 | `Alt+C` | `DebugCalmAll` | clears the pin |
@@ -162,22 +163,49 @@ right `A`, upper is left `Y` / right `B` (`LeftHandLowerButton` ..
 `RightHandUpperButton`). What a press does is resolved per hand against what
 that hand holds (`shock2vr/src/hand_buttons.rs`):
 
-| that hand holds | lower | upper |
+| that hand holds | lower (`X`/`A`) | upper (`Y`/`B`) |
 | --- | --- | --- |
-| nothing, a melee weapon, or any other item | `ToggleUseMode` (cyber interface) | `ReadLastUnreadLog` |
-| a gun | `EjectClip` - that hand's gun, so dual wielding ejects the one pressed | `CycleGunSetting` - likewise that hand's gun; a gun with one mode is a no-op |
-| the psi amp | `SelectPsiPower` - the power selection MFD, in the cyber interface | `CyclePsiPower` - step to the next trained power, no panel |
+| nothing, a melee weapon, or any other item | `Jump` | `ReadLastUnreadLog` |
+| a gun | `Jump` | `CycleGunSetting` - that hand's gun, so dual wielding switches the one pressed; a gun with one mode is a no-op |
+| the psi amp | `Jump` | `SelectPsiPower` - the power selection MFD, in the cyber interface |
 
-Mode first: while the cyber interface is up both buttons keep their interface
-meaning on both hands whatever is held, so it can always be closed. With a gun
-in each hand neither panel is reachable until a hand is free. While the **Free
-camera** developer option is on, the right hand's two buttons are the chord and
-nothing else - they resolve to nothing at all.
+The lower button is jump unconditionally: it is the one control a player reaches
+for with both hands full, so a held weapon must not take it away. Only the upper
+button is contextual. `EjectClip` and `CyclePsiPower` therefore have no button
+any more - the settings MFD's UNLOAD and the psi MFD's stick navigation cover
+them - though both actions keep their flat keys and HTTP/SDK paths.
+
+Mode first: while the cyber interface is up the lower button keeps its close
+(rather than jumping) and the upper one the log reader, on both hands whatever
+is held, so the interface can always be shut. While the **Free camera**
+developer option is on, the right hand's two buttons are the chord and nothing
+else - they resolve to nothing at all.
+
+#### The left Menu button: short press jacks in, long press pauses
+
+The Touch has one Menu button to give (the right one is the Quest system UI's),
+so it is bound raw (`MenuButton`) and split by how long it is held
+(`shock2vr/src/input/menu_hold.rs`):
+
+- **short press** (released under 0.5 s) - toggle the cyber interface, which is
+  what the left `X` button used to do. It fires on *release*, so a long press
+  never also jacks in on its way past the threshold.
+- **long press** (held 0.5 s) - open the pause menu, fired the moment the
+  threshold is crossed. The release that follows is swallowed.
+
+While the button is held, the same circular hold readout the cutscene skip uses
+fills up head-locked in front of the player, so the pause menu is a visible
+promise rather than a surprise. Because the hold is not discoverable on its own,
+the cyber interface canvas also carries a **MENU** button (rect `(288, 372,
+64x36)`, in the free column between the inventory strip, the MFD slot and the
+bottom readouts) that opens the pause menu directly - drawn and hit-tested
+through the same readout-control list, so it is there in both presentations
+(flat's `Esc` still works too).
 
 #### The psi selection MFD captures a thumbstick
 
 While the psi power selection MFD is docked - opened from the flat readout's
-power badge, or from the amp hand's lower face button in VR - **one** thumbstick
+power badge, or from the amp hand's upper face button in VR - **one** thumbstick
 is captured: up/down step the tier, left/right step the power inside it, and
 that stick stops driving the player until the panel closes.
 

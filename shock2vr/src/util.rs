@@ -366,6 +366,8 @@ pub mod render_source {
     /// entry/exit ramp - layered alongside (not merged with) [`HIT_FEEDBACK`],
     /// so a hit still reads while the interface is open.
     pub const USE_MODE_VIGNETTE: &str = "use_mode_vignette";
+    /// The Menu button's hold-progress ring, promising the pause menu.
+    pub const MENU_HOLD_RING: &str = "menu_hold_ring";
 }
 
 /// A tag that records only which render path produced an object.

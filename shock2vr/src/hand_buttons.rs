@@ -2,10 +2,10 @@
 //!
 //! The Touch controllers offer two face buttons per hand (left X/Y, right
 //! A/B), which this module treats as one symmetric pair per hand: a **lower**
-//! button (left X, right A) and an **upper** one (left Y, right B). What the
-//! pair does depends on what that hand is holding, so a gun can carry its own
-//! handling controls on the controller wielding it while the other hand keeps
-//! the player-owned panels.
+//! button (left X, right A) and an **upper** one (left Y, right B). The lower
+//! button is jump on both hands whatever they hold; the upper one depends on
+//! what that hand is holding, so a gun carries its own handling control on the
+//! controller wielding it while a free hand keeps the log reader.
 //!
 //! Only the Quest binds these (`InputAction::quest_touch_click_path`); flat
 //! has no face buttons and binds no key to them. That matters because in flat
@@ -62,24 +62,25 @@ pub enum HandButtonMode {
 
 /// The action a face button means for the hand that pressed it.
 ///
-/// | hand holds | lower | upper |
+/// | hand holds | lower (X/A) | upper (Y/B) |
 /// |---|---|---|
-/// | nothing, melee, or any other item | `ToggleUseMode` | `ReadLastUnreadLog` |
-/// | a gun | `EjectClip` (that hand's gun) | `CycleGunSetting` (that hand's gun) |
-/// | the psi amp | `SelectPsiPower` (the selection MFD) | `CyclePsiPower` |
+/// | nothing, melee, or any other item | `Jump` | `ReadLastUnreadLog` |
+/// | a gun | `Jump` | `CycleGunSetting` (that hand's gun) |
+/// | the psi amp | `Jump` | `SelectPsiPower` (the selection MFD) |
 ///
-/// **Mode first.** While the interface is up both buttons keep their interface
-/// meaning on both hands whatever is held, so grabbing a gun off the inventory
-/// strip cannot strand the player inside the interface.
+/// **Lower is jump, on both hands, whatever they hold.** Jumping is the one
+/// control a player reaches for mid-fight with both hands full, so it cannot
+/// be something a held weapon takes away; the upper button carries the
+/// context-dependent half of the pair alone.
 ///
-/// Consequence: with a gun in each hand neither the interface nor the log
-/// reader is reachable until a hand is free. That is the point of a per-hand
-/// mapping - free a hand, or use the one that is already free.
+/// **Mode first.** While the interface is up, lower keeps the close it always
+/// had - the press that opened the interface can always shut it, and jumping
+/// out of a menu means nothing anyway - and upper keeps the log reader.
 ///
 /// `hand` does not change which action is returned (the mapping is symmetric);
-/// it is taken because a gun/psi row resolves to an action *about that hand's
-/// weapon* - `EjectClip` and `CycleGunSetting` act on the gun in the hand that
-/// pressed, so the caller must carry the hand through.
+/// it is taken because the gun row resolves to an action *about that hand's
+/// weapon* - `CycleGunSetting` acts on the gun in the hand that pressed, so
+/// the caller must carry the hand through.
 pub fn resolve_hand_button(
     mode: HandButtonMode,
     hand: Handedness,
@@ -88,31 +89,25 @@ pub fn resolve_hand_button(
 ) -> Option<InputAction> {
     let _ = hand;
 
-    let interface_action = match button {
-        HandButton::Lower => InputAction::ToggleUseMode,
-        HandButton::Upper => InputAction::ReadLastUnreadLog,
-    };
-
     if mode == HandButtonMode::Interface {
-        return Some(interface_action);
+        return Some(match button {
+            HandButton::Lower => InputAction::ToggleUseMode,
+            HandButton::Upper => InputAction::ReadLastUnreadLog,
+        });
     }
 
-    match held {
-        HeldKind::Empty | HeldKind::Melee | HeldKind::Other => Some(interface_action),
-        // The gun hand's own handling controls: lower ejects that gun's
-        // magazine, upper toggles its fire mode.
-        HeldKind::Gun => match button {
-            HandButton::Lower => Some(InputAction::EjectClip),
-            HandButton::Upper => Some(InputAction::CycleGunSetting),
-        },
-        // The amp hand's own power controls: lower opens the selection MFD
-        // (where a power is *chosen* from a described grid), upper quick-cycles
-        // to the next trained power without a panel. Neither names a hand -
-        // there is one psi selection, not one per amp.
-        HeldKind::PsiAmp => match button {
-            HandButton::Lower => Some(InputAction::SelectPsiPower),
-            HandButton::Upper => Some(InputAction::CyclePsiPower),
-        },
+    match button {
+        // Unconditional: a hand with a gun in it still has to be able to jump.
+        HandButton::Lower => Some(InputAction::Jump),
+        HandButton::Upper => Some(match held {
+            HeldKind::Empty | HeldKind::Melee | HeldKind::Other => InputAction::ReadLastUnreadLog,
+            // The gun hand's own handling control: its fire mode.
+            HeldKind::Gun => InputAction::CycleGunSetting,
+            // The amp hand's own control: the power selection MFD, where a
+            // power is *chosen* from a described grid. It names no hand -
+            // there is one psi selection, not one per amp.
+            HeldKind::PsiAmp => InputAction::SelectPsiPower,
+        }),
     }
 }
 
@@ -147,23 +142,39 @@ mod tests {
     use super::*;
 
     const HANDS: [Handedness; 2] = [Handedness::Left, Handedness::Right];
-    const BUTTONS: [HandButton; 2] = [HandButton::Lower, HandButton::Upper];
+    const HELD: [HeldKind; 5] = [
+        HeldKind::Empty,
+        HeldKind::Melee,
+        HeldKind::Gun,
+        HeldKind::PsiAmp,
+        HeldKind::Other,
+    ];
 
     fn resolve(held: HeldKind, hand: Handedness, button: HandButton) -> Option<InputAction> {
         resolve_hand_button(HandButtonMode::World, hand, held, button)
     }
 
-    /// Row 1, on both hands: an empty hand (or one holding anything that is
-    /// not a weapon of its own) reaches the player-owned panels.
+    /// The whole lower column: jump, on either hand, holding anything. A gun
+    /// in each hand is the case that motivates it - the player must still be
+    /// able to jump without stowing a weapon first.
     #[test]
-    fn a_hand_without_a_weapon_owns_the_panels() {
+    fn the_lower_button_jumps_whatever_the_hand_holds() {
         for hand in HANDS {
-            for held in [HeldKind::Empty, HeldKind::Melee, HeldKind::Other] {
+            for held in HELD {
                 assert_eq!(
                     resolve(held, hand, HandButton::Lower),
-                    Some(InputAction::ToggleUseMode),
+                    Some(InputAction::Jump),
                     "{held:?} in {hand:?}"
                 );
+            }
+        }
+    }
+
+    /// Upper, row 1: a hand holding nothing of its own reaches the log reader.
+    #[test]
+    fn a_hand_without_a_weapon_reads_the_log_on_its_upper_button() {
+        for hand in HANDS {
+            for held in [HeldKind::Empty, HeldKind::Melee, HeldKind::Other] {
                 assert_eq!(
                     resolve(held, hand, HandButton::Upper),
                     Some(InputAction::ReadLastUnreadLog),
@@ -173,58 +184,7 @@ mod tests {
         }
     }
 
-    /// Row 3: the psi amp hand's buttons are the amp's - lower opens the
-    /// power selection MFD, upper quick-cycles the selection. Symmetric, since
-    /// there is one psi selection however many hands hold an amp.
-    #[test]
-    fn a_psi_amp_hands_buttons_select_its_power() {
-        for hand in HANDS {
-            assert_eq!(
-                resolve(HeldKind::PsiAmp, hand, HandButton::Lower),
-                Some(InputAction::SelectPsiPower),
-                "{hand:?}"
-            );
-            assert_eq!(
-                resolve(HeldKind::PsiAmp, hand, HandButton::Upper),
-                Some(InputAction::CyclePsiPower),
-                "{hand:?}"
-            );
-        }
-    }
-
-    /// Rows 2 and 3: a weapon hand's buttons are its weapon's, so neither
-    /// reaches a panel - whether or not the weapon's own action is bound yet.
-    #[test]
-    fn a_weapon_hand_reaches_neither_panel() {
-        for hand in HANDS {
-            for held in [HeldKind::Gun, HeldKind::PsiAmp] {
-                for button in BUTTONS {
-                    let resolved = resolve(held, hand, button);
-                    assert!(
-                        resolved != Some(InputAction::ToggleUseMode)
-                            && resolved != Some(InputAction::ReadLastUnreadLog),
-                        "{held:?} in {hand:?} reached a panel: {resolved:?}"
-                    );
-                }
-            }
-        }
-    }
-
-    /// Row 2, lower: the gun hand's lower button ejects the magazine - on
-    /// either hand, since the action is resolved against the hand that pressed
-    /// it.
-    #[test]
-    fn a_gun_hands_lower_button_ejects_its_clip() {
-        for hand in HANDS {
-            assert_eq!(
-                resolve(HeldKind::Gun, hand, HandButton::Lower),
-                Some(InputAction::EjectClip),
-                "{hand:?}"
-            );
-        }
-    }
-
-    /// Row 2, upper: the gun hand's upper button toggles that gun's fire mode
+    /// Upper, row 2: the gun hand's upper button toggles that gun's fire mode
     /// - on either hand, resolved against the hand that pressed it.
     #[test]
     fn a_gun_hands_upper_button_toggles_its_fire_mode() {
@@ -237,19 +197,63 @@ mod tests {
         }
     }
 
+    /// Upper, row 3: the amp hand's upper button opens the power selection
+    /// MFD - the selector moved up from the lower button, which is now jump.
+    #[test]
+    fn a_psi_amp_hands_upper_button_opens_the_selector() {
+        for hand in HANDS {
+            assert_eq!(
+                resolve(HeldKind::PsiAmp, hand, HandButton::Upper),
+                Some(InputAction::SelectPsiPower),
+                "{hand:?}"
+            );
+        }
+    }
+
+    /// A weapon hand's upper button is its weapon's, so it reaches neither
+    /// player-owned panel.
+    #[test]
+    fn a_weapon_hands_upper_button_reaches_neither_panel() {
+        for hand in HANDS {
+            for held in [HeldKind::Gun, HeldKind::PsiAmp] {
+                let resolved = resolve(held, hand, HandButton::Upper);
+                assert!(
+                    resolved != Some(InputAction::ToggleUseMode)
+                        && resolved != Some(InputAction::ReadLastUnreadLog),
+                    "{held:?} in {hand:?} reached a panel: {resolved:?}"
+                );
+            }
+        }
+    }
+
+    /// The eject and quick-cycle controls lost their buttons: the settings
+    /// MFD's UNLOAD and the psi MFD's stick navigation cover them, and a
+    /// button that unloads a gun on a mis-press is worse than no button.
+    #[test]
+    fn no_button_ejects_a_clip_or_quick_cycles_a_power() {
+        for mode in [HandButtonMode::World, HandButtonMode::Interface] {
+            for hand in HANDS {
+                for held in HELD {
+                    for button in [HandButton::Lower, HandButton::Upper] {
+                        let resolved = resolve_hand_button(mode, hand, held, button);
+                        assert!(
+                            resolved != Some(InputAction::EjectClip)
+                                && resolved != Some(InputAction::CyclePsiPower),
+                            "{mode:?}/{held:?}/{hand:?}/{button:?} resolved to {resolved:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// Mode first: the interface takes both buttons back on both hands, so the
-    /// press that opened it always closes it - even if a gun was grabbed off
-    /// the inventory strip in between.
+    /// press that opened it always closes it - even if a gun was taken off the
+    /// inventory strip in between, and even though lower is otherwise jump.
     #[test]
     fn the_open_interface_outranks_whatever_is_held() {
         for hand in HANDS {
-            for held in [
-                HeldKind::Empty,
-                HeldKind::Melee,
-                HeldKind::Gun,
-                HeldKind::PsiAmp,
-                HeldKind::Other,
-            ] {
+            for held in HELD {
                 assert_eq!(
                     resolve_hand_button(HandButtonMode::Interface, hand, held, HandButton::Lower),
                     Some(InputAction::ToggleUseMode),

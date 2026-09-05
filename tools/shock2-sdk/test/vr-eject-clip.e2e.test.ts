@@ -6,13 +6,13 @@ import type { EntitySummary, Vec3 } from "../src/index.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
 import { cycleToWeapon } from "./helpers/weapon.js";
 
-// The gun hand's LOWER face button (right A / left X) ejects that gun's
-// magazine: the rounds go back to the backpack reserve as clips of the ammo
-// type they already are, and nothing is dropped on the floor.
+// Ejecting a magazine puts its rounds back in the backpack reserve as clips of
+// the ammo type they already are, and drops nothing on the floor.
 //
-// Negative-first: on the parent a gun hand's buttons resolve to nothing at all
-// (`vr-contextual-buttons` asserts exactly that), so every assertion below
-// fails - the magazine stays full and no clip reaches the backpack.
+// It has NO controller button: the lower face buttons are jump now, and in VR
+// the eject is reached through the weapon settings MFD's UNLOAD. The action
+// itself is unchanged and still reachable from the flat key, HTTP and the SDK,
+// which is what these tests drive.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8676);
 
@@ -82,13 +82,13 @@ async function grabWeapon(
   return weapon;
 }
 
-async function pressRightLower(game: GameServer): Promise<void> {
-  await game.input.trigger("RightHandLowerButton");
+async function eject(game: GameServer): Promise<void> {
+  await game.input.trigger("EjectClip");
   await game.step({ frames: 5 });
 }
 
 test(
-  "the gun hand's lower button ejects that gun's magazine into the backpack",
+  "ejecting a gun's magazine puts its rounds in the backpack",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" },
   async () => {
     await using game = await GameServer.launch({
@@ -108,7 +108,17 @@ test(
       "and carries no reserve of its own",
     );
 
-    await pressRightLower(game);
+    // No face button ejects any more - the gun hand's lower button jumps -
+    // so a press must leave the magazine exactly where it is.
+    await game.input.trigger("RightHandLowerButton");
+    await game.step({ frames: 5 });
+    assert.equal(
+      await ammoOf(game, pistol),
+      loaded,
+      "the gun hand's lower button must not eject anything",
+    );
+
+    await eject(game);
     assert.equal(await ammoOf(game, pistol), 0, "the magazine is emptied");
     assert.equal(
       await reserveRounds(game),
@@ -126,8 +136,8 @@ test(
       "the eject leaves no clip lying in the world",
     );
 
-    // Pressing an empty gun's button again is a no-op, not a second free clip.
-    await pressRightLower(game);
+    // Ejecting an empty gun again is a no-op, not a second free clip.
+    await eject(game);
     assert.equal(await ammoOf(game, pistol), 0);
     assert.equal(
       await reserveRounds(game),
@@ -144,25 +154,11 @@ test(
     const refilled = await ammoOf(game, pistol);
     assert.ok(refilled > 0, "the pistol refills from its own ejected rounds");
 
-    // The button belongs to the hand that PRESSED it: the empty left hand's
-    // lower button reaches the interface, and leaves the right gun loaded.
-    await game.input.trigger("LeftHandLowerButton");
-    await game.step({ frames: 5 });
-    assert.equal((await game.ui.state()).mode, "use");
-    assert.equal(
-      await ammoOf(game, pistol),
-      refilled,
-      "the free hand's button must not eject the other hand's gun",
-    );
-    await game.input.trigger("LeftHandLowerButton");
-    await game.step({ frames: 5 });
-    assert.equal((await game.ui.state()).mode, "shooter");
-
     // The merge path: with a stack already carried the rounds join it instead
     // of minting a second clip.
     const stacksBefore = (await carriedClips(game)).length;
     const reserveBefore = await reserveRounds(game);
-    await pressRightLower(game);
+    await eject(game);
     assert.equal(await ammoOf(game, pistol), 0);
     assert.equal(
       await reserveRounds(game),
@@ -192,7 +188,7 @@ test(
     const before = await ammoOf(game, laser);
     const carriedBefore = (await game.player.inventory()).items.length;
 
-    await pressRightLower(game);
+    await eject(game);
     assert.equal(
       await ammoOf(game, laser),
       before,

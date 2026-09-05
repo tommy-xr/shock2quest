@@ -2382,12 +2382,19 @@ mod tests {
                 .iter()
                 .map(|e| e.label.as_deref().unwrap())
                 .collect::<Vec<_>>(),
-            vec!["gun_setting", "cycle_ammo"]
+            vec!["gun_setting", "cycle_ammo", "system_menu"]
         );
         assert_eq!(elements[0].text.as_deref(), Some("NORM"));
         assert!(elements.iter().all(|e| e.kind == "button"));
         let el = host.ammo_cycle_debug().expect("the arrow is exposed");
         assert_eq!(el.label.as_deref(), Some("cycle_ammo"));
+        // ...and one on the system button (centre 320, 390) asks for the
+        // pause menu - the interface's only visible way out of the game.
+        let actions = press_edge(&mut host, &world, (320.0, 390.0));
+        assert_eq!(
+            actions,
+            vec![FlatUiDragAction::Readout(ReadoutButton::SystemMenu)]
+        );
         // A click elsewhere in the bare view does not cycle.
         let actions = press_edge(&mut host, &world, (300.0, 300.0));
         assert!(actions.is_empty());

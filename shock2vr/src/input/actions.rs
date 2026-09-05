@@ -125,6 +125,20 @@ pub enum InputAction {
     LeftHandUpperButton,
     RightHandLowerButton,
     RightHandUpperButton,
+
+    /// Jump once. The ordinary jump is a *held* runtime channel
+    /// (`InputContext::jump`, edge-detected by the physics controller); this is
+    /// the discrete form a button resolution can produce, which is what a
+    /// Quest hand's LOWER face button means whatever that hand holds (see
+    /// [`crate::hand_buttons`]). It is bound raw there, so it carries no Quest
+    /// click path of its own.
+    Jump,
+
+    /// The left controller's Menu button, bound RAW like the face buttons:
+    /// a short press jacks into the cyber interface and a long one opens the
+    /// pause menu, which is a *hold* and so cannot be one action's edge. The
+    /// split lives in [`crate::input::MenuHold`].
+    MenuButton,
 }
 
 impl InputAction {
@@ -172,6 +186,8 @@ impl InputAction {
             InputAction::LeftHandUpperButton,
             InputAction::RightHandLowerButton,
             InputAction::RightHandUpperButton,
+            InputAction::Jump,
+            InputAction::MenuButton,
         ]
     }
 
@@ -217,6 +233,8 @@ impl InputAction {
             InputAction::LeftHandUpperButton => "LeftHandUpperButton",
             InputAction::RightHandLowerButton => "RightHandLowerButton",
             InputAction::RightHandUpperButton => "RightHandUpperButton",
+            InputAction::Jump => "Jump",
+            InputAction::MenuButton => "MenuButton",
         }
     }
 
@@ -235,17 +253,22 @@ impl InputAction {
             InputAction::LeftHandUpperButton => Some("/user/hand/left/input/y/click"),
             InputAction::RightHandLowerButton => Some("/user/hand/right/input/a/click"),
             InputAction::RightHandUpperButton => Some("/user/hand/right/input/b/click"),
-            // The right controller's menu button is reserved by the Quest
-            // system UI; the left one is the app's.
-            InputAction::TogglePauseMenu => Some("/user/hand/left/input/menu/click"),
+            // The left controller's Menu button, also raw: its press and its
+            // release mean different things, so the semantic actions it can
+            // resolve to (`ToggleUseMode`, `TogglePauseMenu`) own no Quest
+            // binding either. (The right controller's Menu is reserved by the
+            // Quest system UI, so it can never be the app's.)
+            InputAction::MenuButton => Some("/user/hand/left/input/menu/click"),
             // `Reload`, `CycleAmmo`, `EjectClip`, `CycleGunSetting`,
-            // `CyclePsiPower` and `SelectPsiPower` deliberately have NO Quest
-            // binding of their own: in VR reloading is the physical
-            // clip-insert gesture, and the rest are reached through the face
-            // button of the hand actually holding the weapon - which names a
-            // hand, where a hand-agnostic binding could not say which weapon
-            // it meant. All remain reachable everywhere else (flat keys, HTTP,
-            // the SDK).
+            // `CyclePsiPower`, `SelectPsiPower` and `Jump` deliberately have
+            // NO Quest binding of their own: in VR reloading is the physical
+            // clip-insert gesture, and the rest are reached through the raw
+            // face button of the hand actually holding the weapon - which
+            // names a hand, where a hand-agnostic binding could not say which
+            // weapon it meant. `EjectClip` and `CyclePsiPower` are reached in
+            // VR through the settings MFD's UNLOAD and the psi MFD's stick
+            // navigation instead of a button. All remain reachable everywhere
+            // else (flat keys, HTTP, the SDK).
             _ => None,
         }
     }
@@ -254,9 +277,9 @@ impl InputAction {
     /// **chord** rather than a button of their own.
     ///
     /// The Touch has few buttons to give: every face button is a per-hand
-    /// contextual button, the left `Menu` is the pause menu, both thumbstick
-    /// clicks are jump and crouch, and the right `Menu` belongs to the Quest
-    /// system UI. A debug toggle takes a *pair* rather than a scarce single
+    /// contextual button, the left `Menu` is the interface/pause pair, the
+    /// left thumbstick click is crouch, and the right `Menu` belongs to the
+    /// Quest system UI. A debug toggle takes a *pair* rather than a scarce single
     /// button - here right `A`+`B`. The pair's edge is resolved by
     /// [`InputActionState::sync_chord`].
     ///
@@ -352,7 +375,7 @@ mod tests {
             Some("/user/hand/right/input/b/click")
         );
         assert_eq!(
-            InputAction::TogglePauseMenu.quest_touch_click_path(),
+            InputAction::MenuButton.quest_touch_click_path(),
             Some("/user/hand/left/input/menu/click")
         );
     }
@@ -367,6 +390,10 @@ mod tests {
             InputAction::ReadLastUnreadLog.quest_touch_click_path(),
             None
         );
+        // The pause menu is the Menu button's LONG press, not its edge.
+        assert_eq!(InputAction::TogglePauseMenu.quest_touch_click_path(), None);
+        // Jump is what a lower face button resolves to, not a binding.
+        assert_eq!(InputAction::Jump.quest_touch_click_path(), None);
     }
 
     /// The free camera is a chord, not a button, and must never quietly

@@ -246,7 +246,7 @@ test(
 );
 
 test(
-  "in VR the amp hand's lower button opens the cyber interface onto the panel",
+  "in VR the amp hand's upper button opens the cyber interface onto the panel",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -271,7 +271,7 @@ test(
     );
 
     assert.equal((await game.ui.state()).mode, "shooter");
-    await game.input.trigger("RightHandLowerButton");
+    await game.input.trigger("RightHandUpperButton");
     await game.step({ frames: 8 });
 
     const ui = await game.ui.state();
@@ -289,12 +289,13 @@ test(
     await flick(game, "left", [0, 1]);
     assert.equal(await browsedTier(game), 2, "up steps the tier");
 
-    // The button is a true inverse of itself: it opened the interface, so it
-    // closes the whole thing rather than leaving the inventory strip up.
+    // The interface takes both buttons back while it is up, so the LOWER
+    // button closes the whole thing rather than jumping - the upper one is the
+    // log reader in there, not a second way out.
     await game.input.trigger("RightHandLowerButton");
     await game.step({ frames: 8 });
     const closed = await game.ui.state();
-    assert.equal(closed.mode, "shooter", "a second press closes the interface");
+    assert.equal(closed.mode, "shooter", "the lower button closes the interface");
     assert.equal(closed.active_panel, null);
   },
 );
