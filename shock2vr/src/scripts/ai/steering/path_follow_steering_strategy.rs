@@ -484,16 +484,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             none: REPEL_RADIUS,
             strength,
         });
-        // The heading lets a push from a neighbour squarely ahead become a
-        // sidestep rather than a backwards shove the aim point discards.
-        let crowd = ai_util::crowd_bias(
-            world,
-            entity_id,
-            position,
-            Some(waypoint - position),
-            SEPARATION_RADIUS,
-            repel,
-        );
+        let crowd = ai_util::crowd_bias(world, entity_id, position, SEPARATION_RADIUS, repel);
         // ...and the same treatment for static geometry the navigation mesh
         // doesn't model (a railing, a crate left on the route): whiskers bend
         // the line around it before the body wedges, without ever taking the
@@ -501,6 +492,13 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // biases pointing the same way still cannot bend the line further
         // than one of them may.
         let whiskers = self.whiskers.update(world, physics, entity_id, time);
+        // A crowd squarely ahead pushes straight back down the route, which
+        // the aim point discards - so it becomes a sidestep instead, on the
+        // open side when the whiskers have found a wall. Faded with the
+        // melee approach exactly like the repel it mostly comes from: an AI
+        // in reach of its target must not be stepped off the blow.
+        let yielded = ai_util::yield_sideways(crowd, waypoint - position, whiskers);
+        let crowd = crowd + (yielded - crowd) * strength;
         let aim = aim_with_bias(
             position,
             waypoint,
@@ -813,14 +811,10 @@ fn target_awareness_distance(
 /// and no yielding.) The blend is shortened once at the end, so two biases
 /// pointing the same way still cannot bend the line further than one may.
 fn blend_biases(crowd: Vector3<f32>, whiskers: Vector3<f32>, max: f32) -> Vector3<f32> {
-    let crowd = match ai_util::normalized_horizontal(whiskers) {
-        Some(wall) => {
-            let opposing = (crowd.x * wall.x + crowd.z * wall.z).min(0.0);
-            crowd - wall * opposing
-        }
-        None => crowd,
-    };
-    capped(capped(crowd, max) + whiskers, max)
+    capped(
+        capped(ai_util::drop_opposing(crowd, whiskers), max) + whiskers,
+        max,
+    )
 }
 
 /// Shorten a horizontal bias to at most `max`.
@@ -845,19 +839,7 @@ fn aim_with_bias(
     // obstacle square across the path answers with its own normal, and
     // pulling the aim point backwards would only stop the AI in front of it
     // instead of taking it around (what is left is the sideways part).
-    let toward = waypoint - position;
-    let length = (toward.x * toward.x + toward.z * toward.z).sqrt();
-    let bias = if length > 1e-3 {
-        let toward = Vector3::new(toward.x / length, 0.0, toward.z / length);
-        let along = bias.x * toward.x + bias.z * toward.z;
-        if along < 0.0 {
-            bias - toward * along
-        } else {
-            bias
-        }
-    } else {
-        bias
-    };
+    let bias = ai_util::drop_opposing(bias, waypoint - position);
     let aim = waypoint + bias;
     if xz_distance(position, aim) < WAYPOINT_ADVANCE_DISTANCE {
         waypoint
