@@ -18,7 +18,11 @@ impl SteeringStrategy for ChainedSteeringStrategy {
     fn goal_unreachable_until(&self) -> Option<f32> {
         self.strategies
             .iter()
-            .find_map(|s| s.goal_unreachable_until())
+            .filter(|s| s.goal_unreachable())
+            .filter_map(|s| s.goal_unreachable_until())
+            .fold(None, |latest, until| {
+                Some(latest.map_or(until, |l: f32| l.max(until)))
+            })
     }
 
     fn steer(

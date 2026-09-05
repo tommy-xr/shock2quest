@@ -145,11 +145,6 @@ pub struct NavAvoidance {
     pub links: std::collections::HashSet<(u32, u32)>,
     /// Cells some AI is (or recently was) stalled in
     pub cells: std::collections::HashSet<u32>,
-    /// Mission time the last of these entries expires at, when any is live.
-    /// A query that failed while this was set may well succeed after it: the
-    /// failure is temporary (something is in the way right now), not a fact
-    /// about the map's topology.
-    pub expires_at: Option<f32>,
 }
 
 /// Monotonic query counters, for load measurement and budget verification.
@@ -447,26 +442,21 @@ impl PathfindingService {
         NavAvoidance {
             links: self.blocked_links(now_seconds),
             cells: self.blocked_cells(now_seconds),
-            expires_at: self.exclusion_expiry(now_seconds),
         }
     }
 
-    /// The latest expiry among the live steering-reported exclusions - when
-    /// everything currently being avoided is back in play.
-    fn exclusion_expiry(&self, now_seconds: f32) -> Option<f32> {
-        let mut latest: Option<f32> = None;
-        let mut consider = |expiry: f32| {
-            if expiry > now_seconds {
-                latest = Some(latest.map_or(expiry, |l: f32| l.max(expiry)));
-            }
+    /// When the last of the currently excluded crossings comes back into
+    /// play. A query that failed while one was live may well succeed after
+    /// it: the failure is something in the way right now, not a fact about
+    /// the map. Stalled *cells* are deliberately not counted - they are only
+    /// a cost penalty (see `report_blocked_cell`), so they can never be why
+    /// a goal came back unreachable.
+    pub fn blocked_link_expiry(&self, now_seconds: f32) -> Option<f32> {
+        let Ok(mut blocked) = self.blocked_links.lock() else {
+            return None;
         };
-        if let Ok(blocked) = self.blocked_links.lock() {
-            blocked.values().copied().for_each(&mut consider);
-        }
-        if let Ok(blocked) = self.blocked_cells.lock() {
-            blocked.values().copied().for_each(&mut consider);
-        }
-        latest
+        blocked.retain(|_, &mut expiry| expiry > now_seconds);
+        blocked.values().copied().reduce(f32::max)
     }
 
     /// Record the latest path an AI computed (key: EntityId::inner())
@@ -2401,22 +2391,26 @@ pub(crate) mod tests {
         );
     }
 
-    /// A query run against a live exclusion can fail for a reason that
-    /// lapses. `avoidance` says when, so the caller can retry rather than
+    /// A query run against an excluded crossing can fail for a reason that
+    /// lapses. The service says when, so the caller can retry rather than
     /// write the goal off (a patrol otherwise retires for good).
     #[test]
-    fn avoidance_reports_when_its_exclusions_lapse() {
+    fn blocked_link_expiry_reports_when_the_exclusions_lapse() {
         let service = service(detour_db());
-        assert_eq!(service.avoidance(0.0).expires_at, None);
+        assert_eq!(service.blocked_link_expiry(0.0), None);
+        // A stalled cell is only a cost penalty - it can never be why a goal
+        // is unreachable, so it is not something to wait out.
         service.report_blocked_cell(1, 0.0);
+        assert_eq!(service.blocked_link_expiry(0.0), None);
         service.report_blocked_link(0, 1, 0.0);
+        service.report_blocked_link(1, 2, 5.0);
         assert_eq!(
-            service.avoidance(0.0).expires_at,
-            Some(BLOCKED_LINK_TTL_SECONDS),
+            service.blocked_link_expiry(0.0),
+            Some(5.0 + BLOCKED_LINK_TTL_SECONDS),
             "the LAST exclusion to lapse is what a retry has to wait for"
         );
         assert_eq!(
-            service.avoidance(BLOCKED_LINK_TTL_SECONDS + 1.0).expires_at,
+            service.blocked_link_expiry(5.0 + BLOCKED_LINK_TTL_SECONDS + 1.0),
             None,
             "and nothing is left to wait for once they have all expired"
         );
