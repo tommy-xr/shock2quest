@@ -220,6 +220,13 @@ pub struct PropDestLoc(pub i32);
 #[derive(Debug, Component, Clone, Serialize, Deserialize)]
 pub struct PropExp(pub i32);
 
+/// Which weapon skill a gun is used with (`P$ShockWeap`): 0 conventional,
+/// 1 energy, 2 heavy, 3 annelid, 4 psi amp. Authored on the weapon-class
+/// archetypes (Conventional, Energy, ...) and inherited by every gun under
+/// them; a gun without it counts as conventional.
+#[derive(Debug, Component, Clone, Copy, Serialize, Deserialize)]
+pub struct PropWeaponType(pub i32);
+
 /// The count of a stackable object (e.g. how many cyber modules an EXP-cookie
 /// pile is worth - the retail engine stores an EXP cookie's module value as its
 /// stack count, `P$StackCoun`). A 4-byte signed int.
@@ -1466,6 +1473,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
             "P$ExP",
             |reader, _len| read_i32(reader),
             PropExp,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$ShockWeap",
+            |reader, _len| read_i32(reader),
+            PropWeaponType,
             accumulator::latest,
         ),
         define_prop(

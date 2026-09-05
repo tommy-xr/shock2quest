@@ -3,13 +3,20 @@ use cgmath::{
 };
 use dark::{
     SCALE_FACTOR,
-    properties::{GunFlashOptions, GunSettingDesc, Link, ProjectileOptions},
+    properties::{
+        GunFlashOptions, GunSettingDesc, Link, ObjectState, ProjectileOptions, PropGunReliability,
+        PropWeaponType,
+    },
 };
 use engine::audio::AudioHandle;
+use rand::Rng;
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
-    mission::{entity_creator::CreateEntityOptions, mission_core::GlobalTemplateClassTags},
+    mission::{
+        entity_creator::CreateEntityOptions,
+        mission_core::{GlobalSkillParams, GlobalTemplateClassTags},
+    },
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::{
         RuntimePropFlatAim, RuntimePropReloading, RuntimePropSelectedAmmo, RuntimePropShotCooldown,
@@ -154,12 +161,125 @@ fn degrade_per_shot(world: &World, entity_id: EntityId) -> Option<f32> {
     (rate > 0.0).then_some(rate)
 }
 
+/// The gun's condition (`PropGunState`, 0..100), or `None` for a weapon that
+/// tracks none.
+fn gun_condition(world: &World, entity_id: EntityId) -> Option<f32> {
+    world
+        .borrow::<View<dark::properties::PropGunState>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|g| g.condition))
+}
+
+/// Whether the Anti-entropic Field is running: while it is, a gun neither
+/// breaks nor wears. The power's own casting behaviour is still being sorted
+/// out (#1304) - this only asks whether it is active.
+fn is_weapon_stability_active(world: &World) -> bool {
+    world
+        .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
+        .is_ok_and(|active| active.is_active(crate::psi::STABILITY_TEMPLATE_ID))
+}
+
+/// The player's skill level for the class of weapon `entity_id` belongs to.
+/// The class is authored on the weapon archetypes and inherited by every gun
+/// under them (0 conventional, 1 energy, 2 heavy, 3 annelid); a gun that
+/// authors none counts as conventional, as the retail engine does.
+fn weapon_skill_level(world: &World, entity_id: EntityId) -> i32 {
+    use crate::player_stats::Skill;
+
+    let skill = match world
+        .borrow::<View<PropWeaponType>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|t| t.0))
+        .unwrap_or(0)
+    {
+        1 => Skill::EnergyWeapons,
+        2 => Skill::HeavyWeapons,
+        3 => Skill::ExoticWeapons,
+        // 4 is the psi amp, which has no gun skill and never wears.
+        _ => Skill::StandardWeapons,
+    };
+
+    world
+        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+        .ok()
+        .map(|quests| quests.player_stats().skill_level(skill))
+        .unwrap_or(0)
+}
+
+/// The chance, 0..1, that the shot about to be fired breaks the gun. Zero at
+/// or above the reliability's break threshold: a gun in good condition cannot
+/// break at all. Below the threshold the authored min/max percentages are
+/// interpolated over the remaining condition, and the player's skill with that
+/// class of weapon scales the result down by the gamesys break factor.
+///
+/// The interpolation is the engine's own, and it is blunter than the two
+/// authored numbers suggest: the span is a *hundred* condition points while
+/// the threshold sits at ten, so a gun that has just crossed the threshold is
+/// already at its authored maximum (the pistol: 5% a shot) and only creeps
+/// past it as the last points go. `min_break` is effectively the value the
+/// curve would reach a hundred points below the threshold - i.e. never.
+fn break_chance(
+    reliability: &PropGunReliability,
+    condition: f32,
+    break_factor: f32,
+    weapon_skill: i32,
+) -> f32 {
+    if condition >= reliability.thresh_break {
+        return 0.0;
+    }
+    let min = reliability.min_break / 100.0;
+    let max = reliability.max_break / 100.0;
+    let wear = 1.0 - (condition - reliability.thresh_break) / 100.0;
+    let skill_relief = 1.0 - break_factor * weapon_skill as f32;
+    ((min + wear * (max - min)) * skill_relief).clamp(0.0, 1.0)
+}
+
+/// Roll this shot against the gun's break chance. `Some` = the gun just broke:
+/// it goes to `Broken` (which stops it firing until it is repaired) and plays
+/// its authored break event.
+fn roll_for_breakage(world: &World, entity_id: EntityId) -> Option<Effect> {
+    if is_weapon_stability_active(world) {
+        return None;
+    }
+    let reliability = world
+        .borrow::<View<PropGunReliability>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().copied())?;
+    let condition = gun_condition(world, entity_id)?;
+    let break_factor = world
+        .borrow::<UniqueView<GlobalSkillParams>>()
+        .ok()
+        .and_then(|params| params.0.as_ref().map(|params| params.weapon_break_factor))
+        .unwrap_or(0.0);
+    let chance = break_chance(
+        &reliability,
+        condition,
+        break_factor,
+        weapon_skill_level(world, entity_id),
+    );
+
+    (rand::thread_rng().r#gen::<f32>() < chance).then(|| {
+        Effect::Multiple(vec![
+            Effect::SetObjectState {
+                entity_id,
+                state: ObjectState::Broken,
+            },
+            play_environmental_sound(world, entity_id, "break", vec![], AudioHandle::new()),
+        ])
+    })
+}
+
 /// What one shot came to.
 enum ShotOutcome {
     /// The gun fired: these effects are the shot.
     Fired(Effect),
     /// The magazine cannot pay for the shot.
     Empty,
+    /// The gun is not in working order (broken by wear, or by a botched
+    /// repair): it cannot fire at all until it is repaired.
+    NotWorking,
+    /// This shot broke the gun instead of firing it.
+    Broke(Effect),
     /// Not a gun at all - a flat-aimed melee weapon, whose trigger starts a
     /// swing instead of firing.
     FlatMeleeSwing,
@@ -220,9 +340,14 @@ impl Script for WeaponScript {
                 // Unreachable in practice - `can_fire` covers the magazine and
                 // a melee weapon authors no burst - but a burst that cannot
                 // fire is over either way.
-                ShotOutcome::Empty | ShotOutcome::FlatMeleeSwing => {
+                ShotOutcome::Empty | ShotOutcome::FlatMeleeSwing | ShotOutcome::NotWorking => {
                     self.burst = None;
                     Effect::NoEffect
+                }
+                // The burst broke the gun: it owes no more rounds.
+                ShotOutcome::Broke(effect) => {
+                    self.burst = None;
+                    effect
                 }
             },
         }
@@ -259,7 +384,9 @@ impl Script for WeaponScript {
 
                 match fire_one_shot(world, entity_id, &setting) {
                     ShotOutcome::FlatMeleeSwing => Effect::FlatMeleeSwing { entity_id },
-                    ShotOutcome::Empty => dry_fire(world, entity_id),
+                    // A broken gun clicks like an empty one: nothing leaves it.
+                    ShotOutcome::Empty | ShotOutcome::NotWorking => dry_fire(world, entity_id),
+                    ShotOutcome::Broke(effect) => effect,
                     ShotOutcome::Fired(effect) => {
                         // A burst setting owes more rounds than the one just
                         // fired; `update` pays them out.
@@ -339,6 +466,25 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
         }
     }
 
+    // Only a real gunshot (a fired projectile) wears the gun, raises
+    // noise or can break it - a projectile-less weapon that falls
+    // through the melee gate must not emit a phantom gunshot.
+    let is_gunshot = maybe_projectile.is_some();
+
+    // A gun that is not in working order refuses to fire, ahead of the
+    // magazine: an empty broken gun is broken, not empty. The engine refuses
+    // on any state but Normal; the gate is narrower here because the annelid
+    // weapons ship Unresearched and the port cannot research them yet, so the
+    // wider gate would leave them permanently unusable.
+    if is_gunshot
+        && matches!(
+            crate::scripts::gui::object_state(world, entity_id),
+            ObjectState::Broken | ObjectState::Destroyed
+        )
+    {
+        return ShotOutcome::NotWorking;
+    }
+
     // Ammo gating: weapons that carry a `PropGunState` are limited by
     // their clip. A magazine that cannot pay the setting's per-shot
     // cost dry-fires (no shot/flash). Weapons without a gun state
@@ -347,6 +493,24 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
     let rounds = rounds_per_shot(setting);
     if !can_pay_for_shot(maybe_ammo, rounds) {
         return ShotOutcome::Empty;
+    }
+
+    // Firing wears the gun: each gunshot costs the authored per-shot
+    // condition points. Guns with no reliability authored (and debug
+    // weapons) never wear, and neither does a projectile-less pull.
+    let wear = (is_gunshot && !is_weapon_stability_active(world))
+        .then(|| degrade_per_shot(world, entity_id))
+        .flatten()
+        .map(|amount| Effect::DegradeWeaponCondition { entity_id, amount });
+
+    // A worn gun can break as the trigger comes back, spending the shot
+    // without firing it. The shot still wears the gun down.
+    if is_gunshot {
+        if let Some(broke) = roll_for_breakage(world, entity_id) {
+            return ShotOutcome::Broke(Effect::Multiple(
+                std::iter::once(broke).chain(wear).collect(),
+            ));
+        }
     }
 
     // Include projectile class tags (ie, ammotype) and weaponmode for sound lookup
@@ -378,10 +542,6 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
         AudioHandle::new(),
     );
 
-    // Only a real gunshot (a fired projectile) raises noise - a
-    // projectile-less weapon that falls through the melee gate
-    // must not emit a phantom gunshot.
-    let is_gunshot = maybe_projectile.is_some();
     let projectile_effect = Effect::Multiple(
         maybe_projectile
             .into_iter()
@@ -422,14 +582,7 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
             delta: -rounds,
         });
     }
-    // Firing wears the gun: each real gunshot costs the authored per-shot
-    // condition points. Guns with no reliability authored (and debug weapons)
-    // never wear, and neither does a projectile-less pull.
-    if is_gunshot {
-        if let Some(amount) = degrade_per_shot(world, entity_id) {
-            effects.push(Effect::DegradeWeaponCondition { entity_id, amount });
-        }
-    }
+    effects.extend(wear);
     // Start the setting's between-shots wait. Only a real shot
     // starts one - a melee weapon that reached here has nothing to
     // pace.
@@ -877,6 +1030,185 @@ mod tests {
         assert!(
             includes_damage_to(effect, target),
             "leftswing's MF_TRIGGER1 frame must resolve the aimed melee hit"
+        );
+    }
+
+    /// The pistol's shipped reliability: it cannot break above 10 condition,
+    /// and below that it breaks on roughly 5% of shots.
+    fn pistol_reliability() -> PropGunReliability {
+        PropGunReliability {
+            min_break: 0.5,
+            max_break: 5.0,
+            degrade_rate: 1.0,
+            thresh_break: 10.0,
+        }
+    }
+
+    /// The break chance across the condition range, for a player with no skill
+    /// in the weapon: nothing at all while the gun is in good condition, and
+    /// the authored maximum once it wears past the threshold.
+    #[test]
+    fn break_chance_over_the_condition_range() {
+        let r = pistol_reliability();
+        for (condition, expected) in [
+            // Well above the threshold a gun cannot break.
+            (100.0, 0.0),
+            (10.5, 0.0),
+            // The threshold itself is still safe: the roll wants condition
+            // strictly below it.
+            (10.0, 0.0),
+            // Just past it the chance is already the authored maximum...
+            (9.9, 0.050045),
+            // ...and creeps a little higher as the last condition goes.
+            (0.0, 0.0545),
+        ] {
+            let chance = break_chance(&r, condition, 0.0, 0);
+            assert!(
+                (chance - expected).abs() < 1.0e-5,
+                "condition {condition}: expected {expected}, got {chance}",
+            );
+        }
+    }
+
+    /// Skill with the weapon holds it together: the gamesys break factor scales
+    /// the chance down per level of skill, and can only ever remove it.
+    #[test]
+    fn weapon_skill_reduces_the_break_chance() {
+        let r = pistol_reliability();
+        let unskilled = break_chance(&r, 0.0, 0.1, 0);
+        let skilled = break_chance(&r, 0.0, 0.1, 3);
+
+        assert!(skilled < unskilled, "skill must make breakage less likely");
+        assert!((skilled - unskilled * 0.7).abs() < 1.0e-6);
+        assert_eq!(break_chance(&r, 0.0, 0.1, 20), 0.0);
+    }
+
+    /// A loaded gun with one standard ammo link, in the object state given.
+    fn gun_world(state: Option<ObjectState>) -> (World, EntityId) {
+        use dark::properties::{Links, PropGunState, PropObjState, ToLink};
+
+        let mut world = World::new();
+        let gun = world.add_entity((
+            PropGunState {
+                ammo: 12,
+                condition: 100.0,
+                setting: 0,
+                modification: 0,
+                silence_value: 0.0,
+            },
+            Links {
+                to_links: vec![ToLink {
+                    link: Link::Projectile(ProjectileOptions {
+                        order: 0,
+                        setting: -1,
+                    }),
+                    to_entity_id: None,
+                    to_template_id: -1,
+                }],
+            },
+            RuntimePropTransform(Matrix4::from_scale(1.0)),
+        ));
+        if let Some(state) = state {
+            world.add_component(gun, PropObjState(state));
+        }
+        world.add_unique(GlobalTemplateClassTags(Default::default()));
+        (world, gun)
+    }
+
+    /// A broken gun is out of the fight until it is repaired: the trigger
+    /// clicks and nothing leaves the barrel.
+    #[test]
+    fn a_broken_gun_does_not_fire() {
+        let (world, gun) = gun_world(Some(ObjectState::Broken));
+
+        assert!(
+            matches!(
+                fire_one_shot(&world, gun, &GunSettingDesc::default()),
+                ShotOutcome::NotWorking
+            ),
+            "a broken gun must refuse the shot"
+        );
+
+        // The same gun in working order fires, so the refusal is the object
+        // state and not the fixture.
+        let (world, gun) = gun_world(Some(ObjectState::Normal));
+        assert!(matches!(
+            fire_one_shot(&world, gun, &GunSettingDesc::default()),
+            ShotOutcome::Fired(_)
+        ));
+    }
+
+    /// A gun that authors no object state at all is in working order.
+    #[test]
+    fn a_gun_without_an_object_state_fires() {
+        let (world, gun) = gun_world(None);
+
+        assert!(matches!(
+            fire_one_shot(&world, gun, &GunSettingDesc::default()),
+            ShotOutcome::Fired(_)
+        ));
+    }
+
+    /// A shot that breaks the gun: it does not fire - no projectile, no ammo
+    /// spent - but it still wears the gun down, as the engine does.
+    #[test]
+    fn a_breaking_shot_marks_the_gun_broken_and_does_not_fire() {
+        let (mut world, gun) = gun_world(Some(ObjectState::Normal));
+        // A worn gun whose reliability always breaks it: it is below the
+        // threshold and the chance saturates at 1.
+        world.add_component(
+            gun,
+            dark::properties::PropGunState {
+                ammo: 12,
+                condition: 50.0,
+                setting: 0,
+                modification: 0,
+                silence_value: 0.0,
+            },
+        );
+        world.add_component(
+            gun,
+            PropGunReliability {
+                min_break: 100.0,
+                max_break: 100.0,
+                degrade_rate: 1.0,
+                thresh_break: 100.0,
+            },
+        );
+
+        let ShotOutcome::Broke(effect) = fire_one_shot(&world, gun, &GunSettingDesc::default())
+        else {
+            panic!("a gun that always breaks must break on the shot");
+        };
+
+        let effects = Effect::flatten(vec![effect]);
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::SetObjectState {
+                    state: ObjectState::Broken,
+                    ..
+                }
+            )),
+            "the gun must go to Broken"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::DegradeWeaponCondition { .. })),
+            "the breaking shot still wears the gun"
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::CreateEntity { .. })),
+            "nothing leaves the barrel"
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::AdjustAmmo { .. })),
+            "and the round is not spent"
         );
     }
 }
