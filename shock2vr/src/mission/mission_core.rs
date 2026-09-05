@@ -1589,10 +1589,12 @@ pub struct MissionCore {
     /// The gun an open weapon settings panel was opened for; the panel is
     /// dismissed as soon as that gun stops being wielded.
     weapon_settings_gun: Option<EntityId>,
-    /// The gun an open repair board was opened for; the panel is dismissed
-    /// once a critical failure destroys that gun, and a won repair leaves it
-    /// up showing its result.
-    weapon_repair_gun: Option<EntityId>,
+    /// Whether the repair board is the panel we docked; a finished board - won
+    /// or lost - stays up showing its result, and this is dropped when the
+    /// slot goes elsewhere. Unlike the settings and modify latches this holds
+    /// no gun, because nothing about dismissing it depends on which gun it
+    /// was: a lost board has already destroyed its own subject.
+    repair_panel_docked: bool,
     /// The gun an open modify board was opened for; the panel is dropped when
     /// the slot goes elsewhere, and a won board stays up showing its result.
     weapon_modify_gun: Option<EntityId>,
@@ -2614,7 +2616,7 @@ impl MissionCore {
             flat_melee_anim: None,
             use_mode: false,
             weapon_settings_gun: None,
-            weapon_repair_gun: None,
+            repair_panel_docked: false,
             weapon_modify_gun: None,
             psi_powers_open: false,
             psi_nav_latched: false,
@@ -3742,40 +3744,36 @@ impl MissionCore {
             }
         }
 
-        // The repair board belongs to one gun. A critical failure destroys
-        // that gun, so the board has nothing left to present and is dismissed;
-        // a won repair leaves it up showing the result, as the other HRM
-        // panels do. As above, the flag means "our panel is docked".
-        if let Some(opened_for) = self.weapon_repair_gun {
+        // The repair board belongs to one gun, and a finished board stays up
+        // showing its result, as the other HRM panels do - including a lost
+        // one, whose result is that the gun it was played on no longer exists.
+        // That is why the board is NOT dismissed when its gun dies: it draws
+        // from what it pinned when it was dealt, and the loss is the one
+        // result the player would otherwise never see. So the only thing that
+        // drops it is the slot going elsewhere (close button, Tab, another
+        // panel opening); as above, the flag means "our panel is docked".
+        if self.repair_panel_docked {
             let panel = self
                 .world
                 .borrow::<UniqueView<WeaponRepairPanelEntity>>()
                 .map(|panel| panel.0)
                 .ok();
-            let ours_is_docked = panel.is_some() && self.flat_ui.active_panel() == panel;
-            let destroyed = !self
-                .world
-                .borrow::<shipyard::EntitiesView>()
-                .map(|entities| entities.is_alive(opened_for))
-                .unwrap_or(false);
-            if destroyed && ours_is_docked {
-                self.flat_ui.close();
-            }
-            if destroyed || !ours_is_docked {
+            if panel.is_none() || self.flat_ui.active_panel() != panel {
                 // Drop the subject with the panel: an unowned one would leave
                 // the board addressing a gun nothing is presenting.
                 let _ = self
                     .world
                     .remove_unique::<crate::scripts::gui::WeaponRepairSubject>();
-                self.weapon_repair_gun = None;
+                self.repair_panel_docked = false;
             }
         }
 
-        // The modify board belongs to one gun, on the same terms the repair
-        // board does. A lost board only breaks the gun, which the board can
-        // still stand over - but the gun can go away underneath it (dropped
-        // into a level transition, destroyed by something else), and a board
-        // addressing an entity that no longer exists is dismissed.
+        // The modify board belongs to one gun. A lost board only breaks the
+        // gun, which the board can still stand over - but the gun can go away
+        // underneath it (dropped into a level transition, destroyed by
+        // something else), and a board addressing an entity that no longer
+        // exists is dismissed. Repair, just above, deliberately does NOT do
+        // that: its loss *is* the gun's destruction.
         if let Some(opened_for) = self.weapon_modify_gun {
             let panel = self
                 .world
@@ -6092,20 +6090,21 @@ impl MissionCore {
                         .borrow::<UniqueView<WeaponRepairPanelEntity>>()
                         .map(|panel| panel.0);
                     if let (true, Ok(panel)) = (slot_is_presented, panel) {
-                        // Removed first: the subject is rebound on every open,
-                        // and a unique that is only ever added would keep the
-                        // gun the panel was opened on the *last* time.
+                        // Removed first: a unique that is only ever added
+                        // would keep the gun the panel was opened on last.
+                        let subject = crate::scripts::gui::repair_subject(&self.world, entity_id);
                         let _ = self
                             .world
                             .remove_unique::<crate::scripts::gui::WeaponRepairSubject>();
-                        self.world
-                            .add_unique(crate::scripts::gui::WeaponRepairSubject(entity_id));
-                        self.script_world.dispatch(Message {
-                            to: panel,
-                            payload: MessagePayload::PanelOpened,
-                        });
-                        self.flat_ui.open_unbound(panel);
-                        self.weapon_repair_gun = Some(entity_id);
+                        if let Some(subject) = subject {
+                            self.world.add_unique(subject);
+                            self.script_world.dispatch(Message {
+                                to: panel,
+                                payload: MessagePayload::PanelOpened,
+                            });
+                            self.flat_ui.open_unbound(panel);
+                            self.repair_panel_docked = true;
+                        }
                     }
                 }
 

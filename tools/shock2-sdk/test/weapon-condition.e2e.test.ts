@@ -577,6 +577,23 @@ async function playRepairBoardToWin(
   assert.fail("the repair board should win within the attempt budget");
 }
 
+/**
+ * The whole way in, as a player takes it: enter use mode, then use the broken
+ * gun from the strip - which opens the board rather than wielding it.
+ */
+async function openRepairBoard(
+  game: GameServer,
+  gun: number,
+  click: (element: UiElement) => Promise<void>,
+): Promise<UiPanel> {
+  if ((await game.ui.state()).mode !== "use") {
+    await game.input.trigger("ToggleUseMode");
+    await game.step({ frames: 5 });
+  }
+  await useFromStrip(game, gun, click);
+  return repairPanel(game);
+}
+
 test(
   "using a broken gun from the flat inventory opens the repair board, and winning it repairs the gun",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
@@ -588,12 +605,8 @@ test(
 
     // KEY: the strip's use gesture on a BROKEN gun opens the board rather than
     // wielding it.
-    await game.input.trigger("ToggleUseMode");
-    await game.step({ frames: 5 });
     const click = (element: UiElement) => clickUiElement(game, element);
-    await useFromStrip(game, pistol.id, click);
-
-    const board = await repairPanel(game);
+    const board = await openRepairBoard(game, pistol.id, click);
     assert.ok(
       hasTexture(board, "iface/repair.pcx"),
       `a broken gun should present the repair board (got ${JSON.stringify(
@@ -713,6 +726,100 @@ test(
 //
 // Negative-first: on the parent no modify mode exists, the settings panel has
 // no MODIFY control, and the pistol's clip never leaves 12.
+
+/** Whether the runtime still knows about `id` at all. */
+async function stillExists(game: GameServer, id: number): Promise<boolean> {
+  const all = await game.entities.list({ limit: 5_000 });
+  return all.entities.some((entity) => entity.id === id);
+}
+
+test(
+  "a lost repair destroys the gun and leaves the board's loss art standing over it",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({ mission: "debug_weapons" });
+    await game.step({ frames: 30 });
+
+    const pistol = await brokenPistolInBackpack(game);
+    const click = (element: UiElement) => clickUiElement(game, element);
+    assert.ok(
+      hasTexture(
+        await openRepairBoard(game, pistol.id, click),
+        "iface/repair.pcx",
+      ),
+      "a broken gun should present the repair board",
+    );
+
+    // debug_weapons maxes Repair, so an honest deal carries no mines at all.
+    // This deals a board that is nothing but mines, which is the only way to
+    // reach the critical-failure branch deterministically.
+    await game.devParams.set("hrm_force_critical", 1);
+    await click(boardButton(await repairPanel(game), "start-hack"));
+    await click(boardButton(await repairPanel(game), "node-2-0"));
+
+    // KEY: the gun is destroyed at the moment it fails, as it always was -
+    // and the board is STILL there, drawing its loss art over the wreck.
+    // Before this change the board read its terms back off the gun, so losing
+    // the gun blanked the panel and the result was never seen.
+    assert.equal(
+      await stillExists(game, pistol.id),
+      false,
+      "a critical failure destroys the gun",
+    );
+    assert.equal(
+      (await game.info()).player.wielded_entity_id ?? null,
+      null,
+      "a destroyed gun cannot be left wielded",
+    );
+    const lost = await repairPanel(game);
+    assert.ok(
+      hasTexture(lost, "loser.pcx"),
+      `a critical failure should draw the repair loss art (got ${JSON.stringify(
+        lost.elements.map((e) => e.texture ?? e.label),
+      )})`,
+    );
+    assert.ok(
+      hasTexture(lost, "iface/repair.pcx"),
+      "and keep the board it lost on underneath it",
+    );
+    await game.screenshot("repair-loss.png");
+
+    // KEY: the board over a wreck is a picture of a result, not a live board -
+    // it offers no deal at all, so nothing can charge for a second attempt.
+    assert.equal(
+      lost.elements.find(
+        (e) => e.label === "start-hack" || e.label === "reset-hack",
+      ),
+      undefined,
+      "a board whose gun is gone should offer no START/RESET",
+    );
+    await click(boardButton(await repairPanel(game), "node-2-1"));
+    assert.ok(
+      hasTexture(await repairPanel(game), "loser.pcx"),
+      "and stay lost when its nodes are clicked",
+    );
+
+    // Dismissing it leaves nothing behind: a second broken gun gets a board
+    // of its own.
+    await closePanel(game, click);
+    await game.devParams.reset("hrm_force_critical");
+
+    const shotgun = await brokenGunInBackpack(game, SHOTGUN);
+    assert.ok(
+      hasTexture(
+        await openRepairBoard(game, shotgun.id, click),
+        "iface/repair.pcx",
+      ),
+      "a later gun should get a fresh board after a loss",
+    );
+    await playRepairBoardToWin(game, click);
+    assert.equal(
+      objectStateOf(await game.entities.detail(shotgun.id)),
+      "Normal",
+      "and repair normally",
+    );
+  },
+);
 
 /** The pistol's authored `P$ModifyDif` nanite cost, per deal. */
 const MODIFY_COST = "20";
