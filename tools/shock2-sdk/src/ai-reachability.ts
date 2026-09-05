@@ -140,11 +140,17 @@ function outcomeThrough(samples: AiSample[], through: number): string | undefine
 interface StationarySpan {
   /** First sample of the unheld stationary stretch. */
   start: number;
-  /** Last sample of the stationary span - escape is measured from here. */
+  /**
+   * Last sample of the unheld stretch - the halt being judged ends here, so
+   * the route it was judged under is the one live at this sample and not one
+   * published during a hold that merely followed it.
+   */
   end: number;
+  /** Last sample of the whole stationary window - escape is measured from here. */
+  windowEnd: number;
   at: Vec3;
   seconds: number;
-  /** Seconds of the span spent under a movement hold. */
+  /** Seconds of the stationary window spent under a movement hold. */
   heldSeconds: number;
 }
 
@@ -162,8 +168,8 @@ function isHeld(sample: AiSample): boolean {
  * The hold reported at a sample describes the interval that follows it, so a
  * held sample ends the stretch it starts.
  */
-function longestUnheldRun(window: AiSample[]): { from: number; seconds: number } {
-  let best = { from: 0, seconds: 0 };
+function longestUnheldRun(window: AiSample[]): { from: number; to: number; seconds: number } {
+  let best = { from: 0, to: 0, seconds: 0 };
   let runStart = 0;
   for (let k = 0; k < window.length; k++) {
     if (isHeld(window[k])) {
@@ -171,7 +177,7 @@ function longestUnheldRun(window: AiSample[]): { from: number; seconds: number }
       continue;
     }
     const seconds = window[k].t - window[runStart].t;
-    if (seconds > best.seconds) best = { from: runStart, seconds };
+    if (seconds > best.seconds) best = { from: runStart, to: k, seconds };
   }
   return best;
 }
@@ -217,7 +223,8 @@ function findWedges(
       }
       spans.push({
         start: i + unheld.from,
-        end: j,
+        end: i + unheld.to,
+        windowEnd: j,
         at: window[unheld.from].position,
         seconds: unheld.seconds,
         heldSeconds,
@@ -248,7 +255,7 @@ export function pathLength(samples: AiSample[], from = 0): number {
  */
 function escapedBy(samples: AiSample[], span: StationarySpan): number {
   let farthest = 0;
-  for (let k = span.end; k < samples.length; k++) {
+  for (let k = span.windowEnd; k < samples.length; k++) {
     farthest = Math.max(farthest, distance3(span.at, samples[k].position));
   }
   return farthest;
@@ -280,9 +287,24 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
     };
   }
 
+  // Halts are found up front so that every verdict - not only a wedge - can
+  // carry the evidence, and so the no-route check can be asked about the
+  // moment being judged rather than about the end of the pass.
+  const spans = findWedges(samples, windowSeconds, wedgeDisplacement);
+  const escapes = spans.map((span) => escapedBy(samples, span));
+  const halts: HaltEvidence[] = spans.map((span, i) => ({
+    start_t: samples[span.start].t,
+    seconds: span.seconds,
+    at: span.at,
+    escape_distance: escapes[i],
+    held_seconds: span.heldSeconds,
+    outcome: outcomeThrough(samples, span.end),
+  }));
+  const evidence = halts.length > 0 ? { halts } : {};
+
   const closest = Math.min(...samples.map((s) => s.distance));
   const final = samples[samples.length - 1].distance;
-  const base = { closest_distance: closest, final_distance: final };
+  const base = { closest_distance: closest, final_distance: final, ...evidence };
 
   // Arrival means the AI CLOSED on the player: one that started inside melee
   // reach and never moved must still be able to come out as wedged.
@@ -331,20 +353,6 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
     };
   }
 
-  // Halts first, so the no-route check can be asked about the moment being
-  // judged rather than about the end of the pass.
-  const spans = findWedges(samples, windowSeconds, wedgeDisplacement);
-  const escapes = spans.map((span) => escapedBy(samples, span));
-  const halts: HaltEvidence[] = spans.map((span, i) => ({
-    start_t: samples[span.start].t,
-    seconds: span.seconds,
-    at: span.at,
-    escape_distance: escapes[i],
-    held_seconds: span.heldSeconds,
-    outcome: outcomeThrough(samples, span.end),
-  }));
-  const evidence = halts.length > 0 ? { halts } : {};
-
   // The halt this AI is judged on: the first one it does NOT get clear of,
   // else the first halt at all, else the pass as a whole.
   const stuckIndex = escapes.findIndex((escape) => escape <= freedTravelUnits);
@@ -359,7 +367,7 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
       : outcomeThrough(samples, samples.length - 1);
   if (outcome === "Partial" || outcome === "Failed") {
     const when = judgedIndex >= 0 ? "during the halt" : "at pass end";
-    return { verdict: "no_route", reason: `path outcome ${outcome} ${when}`, ...base, ...evidence };
+    return { verdict: "no_route", reason: `path outcome ${outcome} ${when}`, ...base };
   }
 
   // A halt the AI walks out of is not a wedge: report the first span it does
@@ -377,7 +385,6 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
       wedge_at: stuck.at,
       wedge_seconds: stuck.seconds,
       ...base,
-      ...evidence,
     };
   }
   if (spans.length > 0) {
@@ -392,7 +399,6 @@ export function classifyTrack(track: AiTrack, options: ClassifyOptions): Classif
       wedge_seconds: span.seconds,
       freed_travel: freed,
       ...base,
-      ...evidence,
     };
   }
 

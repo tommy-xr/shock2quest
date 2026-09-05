@@ -229,6 +229,46 @@ test("a Partial outside the halt does not outrank a wedge that happened with a r
   assert.equal(result.halts?.[0].outcome, "Full");
 });
 
+test("a Partial published during a hold after the halt does not rewrite it", () => {
+  // The halt being judged is the unheld stretch; a route re-query while the
+  // AI waits on a door afterwards belongs to the wait, not to the halt.
+  const result = classifyTrack(
+    track([
+      { position: [0, 0, 0], distance: 50, behavior: "Patrol", outcome: "Full" },
+      ...stationary(18, { behavior: "Patrol", outcome: "Full" }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: (i % 6) * 0.5,
+      })),
+      ...stationary(6, {
+        behavior: "Patrol",
+        outcome: "Partial",
+        movement_hold: "DoorWait",
+        live_stall_seconds: 1,
+      }),
+    ]),
+    { pass: "idle" },
+  );
+  assert.equal(result.verdict, "wedged");
+  assert.equal(result.halts?.[0].outcome, "Full");
+  assert.ok((result.halts?.[0].held_seconds ?? 0) > 0);
+});
+
+test("halt evidence survives a non-wedge verdict", () => {
+  const result = classifyTrack(
+    track([
+      { position: [0, 0, 0], distance: 50, behavior: "Chase" },
+      ...stationary(16, { behavior: "Chase", outcome: "Full", distance: 50 }).map((s, i) => ({
+        ...s,
+        live_stall_seconds: (i % 6) * 0.5,
+      })),
+      { position: [1, 0, 0], distance: 1, behavior: "Chase", outcome: "Full" },
+    ]),
+    { pass: "chase" },
+  );
+  assert.equal(result.verdict, "arrived");
+  assert.equal(result.halts?.length, 1);
+});
+
 test("a halt that happens while the route is Partial is still 'no_route'", () => {
   const result = classifyTrack(
     track([
