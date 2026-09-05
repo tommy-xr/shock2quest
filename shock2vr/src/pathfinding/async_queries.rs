@@ -118,6 +118,7 @@ impl AsyncPathfinding {
                                 request.start,
                                 request.goal,
                                 request.movement_bits,
+                                &avoid,
                                 request.now_seconds,
                             )
                         })
@@ -306,8 +307,8 @@ mod tests {
         let service = Arc::new(PathfindingService::new(Arc::new(
             crate::pathfinding::tests::island_db(),
         )));
-        service.report_blocked_link(0, 1, 0.0);
         service.report_blocked_link(1, 2, 0.0);
+        service.report_blocked_link(0, 1, 2.0);
         service.report_blocked_link(3, 2, 5.0);
         let async_pf = AsyncPathfinding::spawn(service.clone());
 
@@ -336,9 +337,9 @@ mod tests {
         assert_ne!(response.outcome, AiPathOutcome::Full);
         assert_eq!(
             response.exclusion_expires_at,
-            Some(crate::pathfinding::BLOCKED_LINK_TTL_SECONDS),
-            "wait for the crossings on the route it becomes reachable by, not \
-             for the level's latest blockage (5 s later, on the detour)"
+            Some(2.0 + crate::pathfinding::BLOCKED_LINK_TTL_SECONDS),
+            "wait for the LAST crossing on the route it becomes reachable by, \
+             neither the level's earliest nor its latest (the detour's)"
         );
     }
 

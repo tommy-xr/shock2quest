@@ -399,11 +399,9 @@ impl PathfindingService {
     /// queries (unexpired steering-reported blockages). Expired entries are
     /// dropped.
     pub fn blocked_links(&self, now_seconds: f32) -> std::collections::HashSet<(u32, u32)> {
-        let Ok(mut blocked) = self.blocked_links.lock() else {
-            return std::collections::HashSet::new();
-        };
-        blocked.retain(|_, &mut expiry| expiry > now_seconds);
-        blocked.keys().copied().collect()
+        self.blocked_link_expiries(now_seconds)
+            .into_keys()
+            .collect()
     }
 
     /// Remember that an AI stalled inside `cell`. The cell stays expensive
@@ -452,6 +450,9 @@ impl PathfindingService {
     /// wait it out. `None` when the goal is unreachable with the exclusions
     /// lifted too: a fact about the map, which waiting cannot change.
     ///
+    /// The route measured is the cheapest one the raw mesh offers, so the
+    /// deadline is an upper bound - a pricier route may reopen sooner.
+    ///
     /// Stalled *cells* are deliberately not part of this - they are only a
     /// cost penalty (see `report_blocked_cell`), so they can never be why a
     /// goal came back unreachable.
@@ -460,10 +461,10 @@ impl PathfindingService {
         start: Vector3<f32>,
         goal: Vector3<f32>,
         movement_bits: MovementBits,
+        avoid: &NavAvoidance,
         now_seconds: f32,
     ) -> Option<f32> {
-        let expiries = self.blocked_link_expiries(now_seconds);
-        if expiries.is_empty() {
+        if avoid.links.is_empty() {
             return None;
         }
         // Re-run the same search on the raw mesh. If it still cannot reach
@@ -471,29 +472,22 @@ impl PathfindingService {
         // dropped too: this is a question about reachability, and the route it
         // answers with is the one the AI will take once the crossings lapse.
         let unexcluded = NavAvoidance::default();
-        let cell_path = self
-            .cell_path_with_bits(start, goal, movement_bits, &unexcluded)
-            .or_else(|| {
-                // Mirror `find_path_avoiding`'s stressed second pass, so the
-                // two searches agree on what "reachable" means
-                if movement_bits.contains(MovementBits::SMALL_CREATURE)
-                    || movement_bits.contains(MovementBits::STRESSED)
-                {
-                    return None;
-                }
-                self.cell_path_with_bits(
-                    start,
-                    goal,
-                    movement_bits | MovementBits::STRESSED,
-                    &unexcluded,
-                )
-            })?;
-        // The route the goal is reachable by crosses at least one excluded
-        // crossing (otherwise the excluded search would have found it); wait
-        // for the last of those, not for the whole level's blacklist.
+        let cell_path = self.cell_path_avoiding(start, goal, movement_bits, &unexcluded)?;
+        // The route the goal is reachable by crosses at least one of THIS
+        // query's excluded crossings (otherwise the excluded search would have
+        // found it); wait for the last of those, not for the whole level's
+        // blacklist. A crossing another thread has since pruned already lapsed,
+        // so it contributes `now`.
+        let expiries = self.blocked_link_expiries(now_seconds);
         cell_path
             .windows(2)
-            .filter_map(|pair| expiries.get(&(pair[0], pair[1])).copied())
+            .filter(|pair| avoid.links.contains(&(pair[0], pair[1])))
+            .map(|pair| {
+                expiries
+                    .get(&(pair[0], pair[1]))
+                    .copied()
+                    .unwrap_or(now_seconds)
+            })
             .reduce(f32::max)
     }
 
@@ -646,9 +640,25 @@ impl PathfindingService {
         movement_bits: MovementBits,
         avoid: &NavAvoidance,
     ) -> Option<Vec<Vector3<f32>>> {
+        let cell_path = self.cell_path_avoiding(start, goal, movement_bits, avoid)?;
+        Some(self.waypoints_for_cell_path(&cell_path, start, goal, movement_bits))
+    }
+
+    /// The cell path `find_path_avoiding` follows: A* under `avoid`, then the
+    /// stressed second pass. One place, so a caller asking whether a goal is
+    /// reachable at all cannot drift from the caller asking for the route.
+    /// Every pass through here counts in `PathfindingStats`, including a
+    /// reachability re-run - it is a real search on the worker either way.
+    fn cell_path_avoiding(
+        &self,
+        start: Vector3<f32>,
+        goal: Vector3<f32>,
+        movement_bits: MovementBits,
+        avoid: &NavAvoidance,
+    ) -> Option<Vec<u32>> {
         self.queries.fetch_add(1, Ordering::Relaxed);
-        if let Some(path) = self.find_path_with_bits(start, goal, movement_bits, avoid) {
-            return Some(path);
+        if let Some(cells) = self.cell_path_with_bits(start, goal, movement_bits, avoid) {
+            return Some(cells);
         }
         // Second pass: a failed pathfind is retried with the stressed
         // condition added (small creatures excepted), so a calm AI still
@@ -657,10 +667,10 @@ impl PathfindingService {
             && !movement_bits.contains(MovementBits::STRESSED)
         {
             self.stressed_retries.fetch_add(1, Ordering::Relaxed);
-            if let Some(path) =
-                self.find_path_with_bits(start, goal, movement_bits | MovementBits::STRESSED, avoid)
+            if let Some(cells) =
+                self.cell_path_with_bits(start, goal, movement_bits | MovementBits::STRESSED, avoid)
             {
-                return Some(path);
+                return Some(cells);
             }
         }
         self.no_route.fetch_add(1, Ordering::Relaxed);
@@ -746,17 +756,6 @@ impl PathfindingService {
 
         let end = self.path_database.cells[best as usize].center;
         Some(self.waypoints_for_cell_path(&cell_path, start, end, movement_bits))
-    }
-
-    fn find_path_with_bits(
-        &self,
-        start: Vector3<f32>,
-        goal: Vector3<f32>,
-        movement_bits: MovementBits,
-        avoid: &NavAvoidance,
-    ) -> Option<Vec<Vector3<f32>>> {
-        let cell_path = self.cell_path_with_bits(start, goal, movement_bits, avoid)?;
-        Some(self.waypoints_for_cell_path(&cell_path, start, goal, movement_bits))
     }
 
     /// The A* cell path itself, before it is turned into waypoints.
@@ -2487,7 +2486,13 @@ pub(crate) mod tests {
             "the island goal must be unreachable to begin with"
         );
         assert_eq!(
-            service.exclusion_expiry_for_unreached_goal(start, island, MovementBits::WALK, 0.0,),
+            service.exclusion_expiry_for_unreached_goal(
+                start,
+                island,
+                MovementBits::WALK,
+                &service.avoidance(0.0),
+                0.0
+            ),
             None,
             "a goal off the graph is not waiting for anyone's blockage to lapse"
         );
@@ -2502,6 +2507,7 @@ pub(crate) mod tests {
         // and a stalled cell contributes nothing either way
         service.report_blocked_cell(1, 0.0);
         service.report_blocked_link(1, 2, 0.0);
+        service.report_blocked_link(0, 1, 2.0);
         service.report_blocked_link(3, 2, 5.0);
         let avoid = service.avoidance(0.0);
         assert!(
@@ -2511,10 +2517,17 @@ pub(crate) mod tests {
             "the goal must be cut off while both crossings are excluded"
         );
         assert_eq!(
-            service.exclusion_expiry_for_unreached_goal(start, goal, MovementBits::WALK, 0.0,),
-            Some(BLOCKED_LINK_TTL_SECONDS),
-            "wait for the exclusion on the route the goal is reachable by - \
-             not for the level's latest blockage (5 s later, on the detour)"
+            service.exclusion_expiry_for_unreached_goal(
+                start,
+                goal,
+                MovementBits::WALK,
+                &avoid,
+                0.0
+            ),
+            Some(2.0 + BLOCKED_LINK_TTL_SECONDS),
+            "wait for the LAST exclusion on the route the goal is reachable by \
+             (0 -> 1 -> 2), neither the level's earliest (1 -> 2) nor its \
+             latest (3 -> 2, on the detour the AI will not take)"
         );
     }
 
@@ -2527,6 +2540,7 @@ pub(crate) mod tests {
                 vec3(1.0, 0.0, 1.0),
                 vec3(5.0, 0.0, 1.0),
                 MovementBits::WALK,
+                &service.avoidance(0.0),
                 0.0,
             ),
             None,
