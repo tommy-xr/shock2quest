@@ -3991,7 +3991,7 @@ impl MissionCore {
         // The blend the player ACTUALLY started for this clip, when one was
         // applied. Read from the player rather than re-derived, so the pivot's
         // yaw hands over on the transition that is really running.
-        let mut applied_blend = None;
+        let mut applied_fade = None;
         let maybe_player = self.id_to_animation_player.get_mut(&entity_id);
         if let Some(player) = maybe_player {
             let v_creature_type = self.world.borrow::<View<PropCreature>>().unwrap();
@@ -4123,7 +4123,8 @@ impl MissionCore {
                                 Some(dark::motion::signed_end_direction(clip.end_rotation));
                         }
                         *player = apply(player, clip);
-                        applied_blend = Some(player.blend_remaining_seconds());
+                        // 1.0 straight after the apply means no fade at all.
+                        applied_fade = Some(player.blend_alpha_now() < 1.0);
 
                         // The motion query is random, so its resolved clip name
                         // is the only durable identity of the corpse pose.
@@ -4196,7 +4197,7 @@ impl MissionCore {
         // followed, before recording the one it may have started.
         if let Some(payload) =
             self.turn_clips
-                .on_animation_applied(entity_id, applied_blend, turn.is_some())
+                .on_animation_applied(entity_id, applied_fade, turn.is_some())
         {
             self.script_world.dispatch(Message {
                 to: entity_id,
@@ -11054,7 +11055,9 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         };
         use shipyard::*;
 
-        let snapshot = self.id_to_animation_player.get(&id)?.snapshot();
+        let player = self.id_to_animation_player.get(&id)?;
+        let blend_alpha = player.blend_alpha_now();
+        let snapshot = player.snapshot();
 
         let (transform, joint_transforms) = self.world.run(
             |v_transform: View<crate::runtime_props::RuntimePropTransform>,
@@ -11126,11 +11129,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 elapsed: blend.elapsed,
                 // The pose's actual cross-fade weight, not the linear
                 // progress through the fade - they differ by up to 0.2.
-                alpha: if blend.duration > f32::EPSILON {
-                    dark::motion::blend_alpha(blend.elapsed / blend.duration)
-                } else {
-                    1.0
-                },
+                alpha: blend_alpha,
             }),
             position,
             rotation,

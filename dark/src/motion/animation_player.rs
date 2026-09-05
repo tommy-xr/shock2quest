@@ -258,24 +258,13 @@ impl AnimationPlayer {
         new_player
     }
 
-    /// How long the cross-fade currently running still has to go, in seconds
-    /// (0 when nothing is fading) - read immediately after queueing a clip,
-    /// that is the whole window the fade will take. This is the blend the
-    /// player ACTUALLY applies - `queue_animation` takes the incoming clip's
-    /// authored length (often zero), `play_animation` floors it - so a caller
-    /// that must move in step with the fade reads it here rather than
-    /// re-deriving it.
-    pub fn blend_remaining_seconds(&self) -> f32 {
-        self.blend_state
-            .as_ref()
-            .map(|blend| (blend.duration - blend.elapsed).max(0.0))
-            .unwrap_or(0.0)
-    }
-
     /// How much of the pose the INCOMING clip owns right now: the very weight
     /// `get_transforms` blends with, so anything that has to move in step with
     /// the fade (the AI's turn-clip yaw handoff) reads the pose's own number
-    /// rather than integrating a clock of its own. 1.0 when nothing is fading.
+    /// rather than integrating a clock of its own. 1.0 when nothing is fading -
+    /// which, read straight after queueing, is also how a caller learns that
+    /// the clip it just started hard-cuts (`queue_animation` takes the INCOMING
+    /// clip's authored blend length, and a stride clip authors none).
     pub fn blend_alpha_now(&self) -> f32 {
         match &self.blend_state {
             Some(blend) if blend.duration > f32::EPSILON && blend.elapsed < blend.duration => {
@@ -1008,45 +997,24 @@ mod tests {
         }
     }
 
-    /// What the turn-clip yaw handoff reads: the fade the player is really
-    /// running. `queue_animation` takes it from the INCOMING clip - and a
-    /// stride clip authors none - so a caller that assumed the outgoing
-    /// clip's blend would settle over a window nothing is fading across.
+    /// What the turn-clip yaw handoff reads every frame: the weight
+    /// `get_transforms` blends with, so the facing the entity takes and the
+    /// facing the pose gives up are the same number. Read straight after
+    /// queueing, it is also what tells a caller whether there is a fade at all -
+    /// `queue_animation` takes the INCOMING clip's authored length, and a
+    /// stride clip authors none however long the clip it interrupts did.
     #[test]
-    fn blend_remaining_seconds_reports_the_fade_actually_running() {
+    fn blend_alpha_now_is_the_weight_the_fade_has_reached() {
         let mut outgoing = (*clip_with_root_motion()).clone();
         outgoing.blend_length = Duration::from_millis(500);
         let player = AnimationPlayer::queue_animation(&AnimationPlayer::empty(), Rc::new(outgoing));
-        assert_eq!(
-            player.blend_remaining_seconds(),
-            0.0,
-            "nothing to fade from"
-        );
-
-        // A stride clip queued after it: no fade at all, however long the
-        // clip it interrupts authored.
-        let stride = AnimationPlayer::queue_animation(&player, clip_with_root_motion());
-        assert_eq!(stride.blend_remaining_seconds(), 0.0);
-
-        // ...and one that does author a blend fades for exactly that long,
-        // counting down as it runs.
-        let mut incoming = (*clip_with_root_motion()).clone();
-        incoming.blend_length = Duration::from_millis(200);
-        let fading = AnimationPlayer::queue_animation(&player, Rc::new(incoming));
-        assert!((fading.blend_remaining_seconds() - 0.2).abs() < 1e-6);
-        let (fading, _, _, _) = AnimationPlayer::update(&fading, Duration::from_millis(50));
-        assert!((fading.blend_remaining_seconds() - 0.15).abs() < 1e-6);
-    }
-
-    /// The same fade as a pose weight: what `get_transforms` blends with, and
-    /// what the AI's yaw handoff is told every frame so the facing it takes
-    /// and the facing the pose gives up are the same number.
-    #[test]
-    fn blend_alpha_now_is_the_weight_the_fade_has_reached() {
-        let player =
-            AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip_with_root_motion());
         let (player, _, _, _) = AnimationPlayer::update(&player, Duration::from_millis(100));
         assert_eq!(player.blend_alpha_now(), 1.0, "nothing is fading");
+
+        // A stride clip queued after it: a hard cut, however long the clip it
+        // interrupts authored.
+        let stride = AnimationPlayer::queue_animation(&player, clip_with_root_motion());
+        assert_eq!(stride.blend_alpha_now(), 1.0, "no fade to ride");
 
         let mut incoming = (*clip_with_root_motion()).clone();
         incoming.blend_length = Duration::from_millis(200);

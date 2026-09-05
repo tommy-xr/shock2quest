@@ -1807,7 +1807,7 @@ impl Script for AnimatedMonsterAI {
                 }
                 Effect::NoEffect
             }
-            MessagePayload::TurnClipHandoff { token, blend } => {
+            MessagePayload::TurnClipHandoff { token, fades } => {
                 if let Some(TurnClip::HandingOver {
                     token: pending,
                     turn,
@@ -1815,7 +1815,7 @@ impl Script for AnimatedMonsterAI {
                 }) = self.turn_clip
                 {
                     if pending == *token {
-                        if *blend > 0.0 {
+                        if *fades {
                             // The applier reports the fade's weight from here
                             // on; the heading starts on the one the clip ended
                             // on and rides those reports.
@@ -2295,21 +2295,17 @@ mod tests {
         );
     }
 
-    /// The applier reporting the fade the clip that follows the pivot starts
-    /// on - the window the yaw hands over across.
-    fn hand_off(monster: &mut AnimatedMonsterAI, world: &World, entity_id: EntityId, blend: f32) {
+    /// The applier reporting the clip that follows the pivot, and whether it
+    /// cross-fades in (so the yaw rides the reported weights) or hard-cuts.
+    fn hand_off(monster: &mut AnimatedMonsterAI, world: &World, entity_id: EntityId, fades: bool) {
         let token = pending_token(monster);
         tell(
             monster,
             world,
             entity_id,
-            MessagePayload::TurnClipHandoff { token, blend },
+            MessagePayload::TurnClipHandoff { token, fades },
         );
     }
-
-    /// The blend the stock turn clips author, and the window every settling
-    /// test below hands over across.
-    const TEST_BLEND: f32 = 0.5;
 
     /// Ask for a pivot, have the applier answer with a clip authored to end on
     /// `turn`, and play `seconds` of it. Returns the pivot's token.
@@ -2413,10 +2409,10 @@ mod tests {
             pivot: Option<(u64, Deg<f32>)>,
         ) {
             self.player = dark::motion::AnimationPlayer::queue_animation(&self.player, clip);
-            let blend = self.player.blend_remaining_seconds();
+            let fades = self.player.blend_alpha_now() < 1.0;
             if let Some(payload) =
                 self.tracker
-                    .on_animation_applied(self.entity_id, Some(blend), pivot.is_some())
+                    .on_animation_applied(self.entity_id, Some(fades), pivot.is_some())
             {
                 self.pending.push(payload);
             }
@@ -2616,7 +2612,7 @@ mod tests {
         let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
         start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 4.8);
         complete_clip(&mut monster, &world, entity_id);
-        hand_off(&mut monster, &world, entity_id, TEST_BLEND);
+        hand_off(&mut monster, &world, entity_id, true);
 
         // The settle rides the fade the applier reports, half of it and then
         // all of it.
@@ -2659,7 +2655,7 @@ mod tests {
         let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
         start_pivot(&mut monster, &world, entity_id, Deg(-100.0), 2.4);
         complete_clip(&mut monster, &world, entity_id);
-        hand_off(&mut monster, &world, entity_id, TEST_BLEND);
+        hand_off(&mut monster, &world, entity_id, true);
         settle_frame(&mut monster, &world, entity_id, 1.0);
         assert!(monster.turn_clip.is_none(), "the first pivot must be over");
         // Still facing a long way from where it wants to be, but it has to
@@ -2679,7 +2675,7 @@ mod tests {
         let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
         let token = start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 4.8);
         complete_clip(&mut monster, &world, entity_id);
-        hand_off(&mut monster, &world, entity_id, TEST_BLEND);
+        hand_off(&mut monster, &world, entity_id, true);
         settle_frame(&mut monster, &world, entity_id, 1.0);
         // Everything the behavior's own re-queued clip reports next: its plain
         // completion, and the pivot's reports replayed.
@@ -2700,10 +2696,7 @@ mod tests {
                 &mut monster,
                 &world,
                 entity_id,
-                MessagePayload::TurnClipHandoff {
-                    token,
-                    blend: TEST_BLEND,
-                },
+                MessagePayload::TurnClipHandoff { token, fades: true },
             );
             for _ in 0..3 {
                 turn_frame(&mut monster, entity_id, Deg(90.0));
@@ -2745,7 +2738,7 @@ mod tests {
             entity_id,
             MessagePayload::TurnClipHandoff {
                 token: stale,
-                blend: TEST_BLEND,
+                fades: true,
             },
         );
         for _ in 0..8 {
@@ -2785,10 +2778,7 @@ mod tests {
             &mut monster,
             &world,
             entity_id,
-            MessagePayload::TurnClipHandoff {
-                token,
-                blend: TEST_BLEND,
-            },
+            MessagePayload::TurnClipHandoff { token, fades: true },
         );
         for _ in 0..8 {
             turn_frame(&mut monster, entity_id, Deg(90.0));
@@ -2821,7 +2811,7 @@ mod tests {
             "the clip is still the one playing"
         );
         complete_clip(&mut monster, &world, entity_id);
-        hand_off(&mut monster, &world, entity_id, 0.0);
+        hand_off(&mut monster, &world, entity_id, false);
         assert!(
             (monster.current_heading.0 - (-90.0 - 168.0)).abs() < 1e-3,
             "and the turn its pose performed still lands"
@@ -2837,7 +2827,7 @@ mod tests {
         let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
         start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 2.4);
         complete_clip(&mut monster, &world, entity_id);
-        hand_off(&mut monster, &world, entity_id, 0.0);
+        hand_off(&mut monster, &world, entity_id, false);
 
         assert!(monster.turn_clip.is_none(), "there is no fade to wait for");
         assert!(
@@ -2855,7 +2845,7 @@ mod tests {
         let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
         start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 2.4);
         complete_clip(&mut monster, &world, entity_id);
-        hand_off(&mut monster, &world, entity_id, 0.4);
+        hand_off(&mut monster, &world, entity_id, true);
 
         for step in 1..=4 {
             let alpha = dark::motion::blend_alpha(step as f32 / 4.0);

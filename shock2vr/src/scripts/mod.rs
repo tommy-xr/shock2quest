@@ -278,13 +278,13 @@ pub enum MessagePayload {
     },
 
     /// The turn clip finished and the animation player has started the clip
-    /// that follows it, cross-fading over `blend` seconds. The turn clip's
-    /// pose swings back to neutral across exactly that fade, so the entity
-    /// takes its authored facing change over it. A `blend` of zero is a hard
-    /// cut: the pose gives the whole turn up in one frame.
+    /// that follows it. The turn clip's pose swings back to neutral across
+    /// that transition, so the entity takes its authored facing change over
+    /// it: across the fade (reported frame by frame as `TurnClipBlend`) when
+    /// `fades`, or in this one frame when the follow-up hard-cuts.
     TurnClipHandoff {
         token: u64,
-        blend: f32,
+        fades: bool,
     },
 
     /// How much of the pose the clip following the pivot owns this frame,

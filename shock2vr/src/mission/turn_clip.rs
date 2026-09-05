@@ -48,26 +48,27 @@ impl TurnClipTracker {
         }
     }
 
-    /// An animation was applied to `entity_id`. `applied_blend` is the fade
-    /// the player is now running (`None` if the request resolved to no clip),
-    /// and `answers_pivot` says whether the apply came from a `PlayTurnClip` -
+    /// An animation was applied to `entity_id`: `applied` says whether the
+    /// clip that started cross-fades in (`Some(true)`) or hard-cuts
+    /// (`Some(false)`), and is `None` when the request resolved to no clip at
+    /// all. `answers_pivot` says whether the apply came from a `PlayTurnClip` -
     /// one that resolved to nothing still displaces whatever was tracked, so
     /// the entry is taken either way.
     pub fn on_animation_applied(
         &mut self,
         entity_id: EntityId,
-        applied_blend: Option<f32>,
+        applied: Option<bool>,
         answers_pivot: bool,
     ) -> Option<MessagePayload> {
-        let previous = if applied_blend.is_some() || answers_pivot {
+        let previous = if applied.is_some() || answers_pivot {
             self.playbacks.remove(&entity_id)?
         } else {
             return None;
         };
         let token = previous.token;
-        match (applied_blend, previous.phase) {
-            (Some(blend), TurnClipPhase::Completed) => {
-                if blend > 0.0 {
+        match (applied, previous.phase) {
+            (Some(fades), TurnClipPhase::Completed) => {
+                if fades {
                     self.playbacks.insert(
                         entity_id,
                         TurnClipPlayback {
@@ -76,7 +77,7 @@ impl TurnClipTracker {
                         },
                     );
                 }
-                Some(MessagePayload::TurnClipHandoff { token, blend })
+                Some(MessagePayload::TurnClipHandoff { token, fades })
             }
             // Preempted while playing, displaced mid-fade, or orphaned by an
             // apply that started nothing: no pose is performing the turn any
