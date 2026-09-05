@@ -63,7 +63,7 @@ fn active_hooks_for(group: CollisionGroup) -> ActiveHooks {
 /// to erase the relative tangential velocity between the two surfaces - and for
 /// a rising leaf that relative velocity is entirely vertical, so the capsule is
 /// pulled up to the leaf's own speed (#1255: a grunt at a medsci1 security door
-/// rode it up 1.1 units at exactly the leaf's 2.4 u/s). Nothing about the
+/// rode it up 1.6 units at close to the leaf's own 2.4 u/s). Nothing about the
 /// contact is wrong; only the friction the solver is allowed to apply is.
 ///
 /// So drop friction, and only where it can do that:
@@ -5276,15 +5276,6 @@ impl PhysicsWorld {
         // parry panics, the culprit is already named in the log.
         self.report_nonfinite_rigid_body_state();
 
-        let p6_pre: Vec<(RigidBodyHandle, f32, f32)> = if std::env::var("P6_TRACE").is_ok() {
-            self.rigid_body_set
-                .iter()
-                .filter(|(_, b)| b.is_dynamic() && b.mass() > 0.25)
-                .map(|(h, b)| (h, b.translation().y, b.linvel().y))
-                .collect()
-        } else {
-            Vec::new()
-        };
         /* Run the game loop, stepping the simulation once per frame. */
         profile!(scope: "physics", level: TRACE, "physics.step", {
             self.physics_pipeline.step(
@@ -5303,58 +5294,6 @@ impl PhysicsWorld {
             )
         });
         self.has_stepped = true;
-        if std::env::var("P6_TRACE").is_ok() {
-            for (handle, body) in self.rigid_body_set.iter() {
-                if !(body.is_dynamic() && body.mass() > 0.25) {
-                    continue;
-                }
-                let pre = p6_pre.iter().find(|(h, ..)| *h == handle);
-                eprintln!(
-                    "P6 step pre=(y={:.4} vy={:.4}) post=(y={:.4} vy={:.4})",
-                    pre.map(|p| p.1).unwrap_or(f32::NAN),
-                    pre.map(|p| p.2).unwrap_or(f32::NAN),
-                    body.translation().y,
-                    body.linvel().y
-                );
-                for c in body.colliders() {
-                    for pair in self.narrow_phase.contact_pairs_with(*c) {
-                        if !pair.has_any_active_contact {
-                            continue;
-                        }
-                        let other = if pair.collider1 == *c {
-                            pair.collider2
-                        } else {
-                            pair.collider1
-                        };
-                        let oc = &self.collider_set[other];
-                        let ob = oc.parent().and_then(|h| self.rigid_body_set.get(h));
-                        for m in pair.manifolds.iter() {
-                            if m.data.solver_contacts.is_empty() {
-                                continue;
-                            }
-                            eprintln!(
-                                "P6   man other={:?} kin={:?} ovy={:.2} n=({:.2},{:.2},{:.2}) tv={:?} imp={:?}",
-                                EntityId::from_inner(oc.user_data as u64),
-                                ob.map(|b| b.body_type()),
-                                ob.map(|b| b.linvel().y).unwrap_or(f32::NAN),
-                                m.data.normal.x,
-                                m.data.normal.y,
-                                m.data.normal.z,
-                                m.data
-                                    .solver_contacts
-                                    .iter()
-                                    .map(|sc| sc.tangent_velocity)
-                                    .collect::<Vec<_>>(),
-                                m.points
-                                    .iter()
-                                    .map(|pt| pt.data.impulse)
-                                    .collect::<Vec<_>>()
-                            );
-                        }
-                    }
-                }
-            }
-        }
 
         // Update character controller
         let (mut collision_events, character_body) = { self.move_player(request, player_handle) };
