@@ -111,9 +111,9 @@ const BLOCKED_PROBE_DISTANCE: f32 = 0.5 / SCALE_FACTOR;
 /// How many leading cells of the pre-stall route are remembered to check
 /// whether the re-path actually produced a different route
 const STALL_ROUTE_PREFIX: usize = 3;
-/// How many times one stall incident may escalate (blacklist more of the
-/// reproduced route) before falling through to the physical nudge. Bounded
-/// so a genuinely one-way corridor can't be sealed link by link.
+/// How many times one stall incident may re-ask after the route came back
+/// unchanged (pricing more of it each time) before falling through to the
+/// physical nudge. Bounded so a wedged AI can't spin the path worker.
 const MAX_STALL_ESCALATIONS: u32 = 3;
 /// Crowd separation: repel from living creatures within this radius (6 Dark
 /// feet - about two body widths)
@@ -404,8 +404,8 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         // A stall's re-path has to actually change the
                         // route. When it comes back starting exactly the
                         // way the stalled one did, walking it again just
-                        // grinds on the same obstacle - blacklist more of
-                        // it and ask once more (bounded, so a genuinely
+                        // grinds on the same obstacle - price more of it
+                        // and ask once more (bounded, so a genuinely
                         // one-way corridor still gets walked and the
                         // existing nudge remains the last resort).
                         if let Some(stalled) = self.stall_route_cells.take() {
@@ -425,18 +425,19 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                                     entity_id,
                                     self.stall_escalations + 1
                                 );
-                                // The cell penalty alone was outbid. Cut the
-                                // crossing this route opens with out of THIS
-                                // AI's queries, so its next one cannot answer
-                                // with it again - one per escalation, bounded
-                                // so a genuinely one-way corridor still gets
-                                // walked.
+                                // The penalties were outbid. Price the
+                                // crossing this route opens with, so the next
+                                // query weighs it too - but this is the same
+                                // failed attempt answered twice, not a second
+                                // one, so it never counts toward cutting the
+                                // crossing.
                                 self.stall_escalations += 1;
                                 report_stall(
                                     &service,
                                     entity_id.inner(),
                                     &fresh,
                                     time.total.as_secs_f32(),
+                                    StallReport::ReproducedRoute,
                                 );
                                 self.clear_path();
                                 self.repath_cooldown = REPATH_COOLDOWN_SECONDS
@@ -525,7 +526,15 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             }
         }
 
+        let was_heading_for = self.next_waypoint;
         self.next_waypoint = advance_waypoint(position, &self.path, self.next_waypoint);
+        if self.next_waypoint > was_heading_for {
+            // A whole leg of the route walked: whatever this AI stalled on
+            // before, its body is moving through the world now, so the next
+            // stall is a fresh first failure rather than the second one that
+            // cuts a crossing. The costs it remembers stay.
+            service.clear_link_stall_history(entity_id.inner());
+        }
 
         service.record_ai_steering(
             entity_id.inner(),
@@ -673,7 +682,13 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     _ => route,
                 };
                 tracing::debug!("ai {:?}: blocked report cells={:?}", entity_id, route);
-                report_stall(&service, entity_id.inner(), &route, now_seconds);
+                report_stall(
+                    &service,
+                    entity_id.inner(),
+                    &route,
+                    now_seconds,
+                    StallReport::Physical,
+                );
                 // Remember how the route that failed began, so the re-path
                 // can be checked against it when it lands
                 self.stall_route_cells = Some(route);
@@ -1177,6 +1192,7 @@ fn report_stall(
     entity: u64,
     route: &[u32],
     now_seconds: f32,
+    kind: StallReport,
 ) {
     let Some(&from) = route.first() else {
         return;
@@ -1187,8 +1203,25 @@ fn report_stall(
         .map(|pair| (pair[0], pair[1]))
         .find(|&(from, to)| service.has_link(from, to))
     {
-        service.report_blocked_link(entity, from, to, now_seconds);
+        match kind {
+            StallReport::Physical => service.report_blocked_link(entity, from, to, now_seconds),
+            StallReport::ReproducedRoute => {
+                service.refresh_link_penalty(entity, from, to, now_seconds)
+            }
+        }
     }
+}
+
+/// What a stall report is evidence of. Only a body that tried and failed
+/// counts toward cutting a crossing; a re-query answering with the route
+/// that already stalled is the same evidence a second time, so it refreshes
+/// the penalty and nothing more.
+#[derive(Debug, Clone, Copy)]
+enum StallReport {
+    /// A stall fired: the body could not get through
+    Physical,
+    /// The re-path came back with the route that stalled
+    ReproducedRoute,
 }
 
 /// Whether a route actually arrives at the goal it was computed for. An
@@ -1897,20 +1930,47 @@ mod tests {
         let service = PathfindingService::new(Arc::new(crate::pathfinding::tests::three_cell_db(
             dark::mission::path_database::PathCellFlags::empty(),
         )));
-        report_stall(&service, 7, &[0, 2, 1], 0.0);
+        report_stall(&service, 7, &[0, 2, 1], 0.0, StallReport::Physical);
         let avoidance = service.avoidance(7, 1.0);
         assert!(avoidance.cells.contains(&0), "the stalled cell is reported");
         assert_eq!(
-            avoidance.links.into_iter().collect::<Vec<_>>(),
+            avoidance.costly_links.into_iter().collect::<Vec<_>>(),
             Vec::new(),
             "0 -> 2 is not a link, and 2 -> 1 is not a crossing this route makes first"
         );
 
-        report_stall(&service, 7, &[0, 1], 0.0);
-        assert!(service.avoidance(7, 1.0).links.contains(&(0, 1)));
+        report_stall(&service, 7, &[0, 1], 0.0, StallReport::Physical);
+        assert!(service.avoidance(7, 1.0).costly_links.contains(&(0, 1)));
         assert!(
-            service.avoidance(8, 1.0).links.is_empty(),
-            "the crossing is excluded for the AI that stalled on it, not the level"
+            service.avoidance(8, 1.0).costly_links.is_empty(),
+            "the crossing is priced for the AI that stalled on it, not the level"
+        );
+    }
+
+    /// The body failing twice is what cuts a crossing. A re-path answering
+    /// with the route that already stalled is the same failure reported
+    /// again - it must leave the crossing walkable, or the AI cuts its way
+    /// out of a pocket without ever trying it a second time.
+    #[test]
+    fn only_a_second_physical_stall_cuts_a_crossing() {
+        use crate::pathfinding::PathfindingService;
+        use std::sync::Arc;
+
+        let service = PathfindingService::new(Arc::new(crate::pathfinding::tests::three_cell_db(
+            dark::mission::path_database::PathCellFlags::empty(),
+        )));
+        report_stall(&service, 7, &[0, 1], 0.0, StallReport::Physical);
+        report_stall(&service, 7, &[0, 1], 1.0, StallReport::ReproducedRoute);
+        report_stall(&service, 7, &[0, 1], 2.0, StallReport::ReproducedRoute);
+        assert!(
+            service.avoidance(7, 3.0).links.is_empty(),
+            "a re-query is not a physical attempt"
+        );
+
+        report_stall(&service, 7, &[0, 1], 3.0, StallReport::Physical);
+        assert!(
+            service.avoidance(7, 3.0).links.contains(&(0, 1)),
+            "a second stall by the body cuts it"
         );
     }
 }
