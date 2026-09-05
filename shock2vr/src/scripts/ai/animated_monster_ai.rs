@@ -206,22 +206,25 @@ enum TurnClip {
     HandingOver {
         token: u64,
         turn: Deg<f32>,
-        /// How long this has been waiting. The fade starts when the following
-        /// clip is applied, a frame before its report is handled, so the
-        /// settle picks up where the player's own blend already is.
+        /// How long this has been waiting, purely to bound it: a creature can
+        /// legitimately queue nothing after its pivot.
         waited: f32,
     },
     /// Handing over: the entity takes the clip's authored facing change across
-    /// the very fade the animation player is running, on the same curve, so
-    /// the facing the pose gives up and the facing the entity takes cancel out
-    /// frame for frame.
+    /// the very fade the animation player is running, so the facing the pose
+    /// gives up and the facing the entity takes cancel out frame for frame.
+    /// The fraction is not integrated here - it is the pose's own cross-fade
+    /// weight, reported every frame by the applier (`TurnClipBlend`), because
+    /// the script and the animation player tick at different points in the
+    /// frame and a clock of its own would run a frame ahead of the pose.
     Settling {
+        token: u64,
         turn: Deg<f32>,
-        /// The heading the clip ended on - the anchor the eased fraction of
+        /// The heading the clip ended on - the anchor the reported fraction of
         /// `turn` is added to, so rounding cannot accumulate across the fade.
         base: Deg<f32>,
-        elapsed: f32,
-        window: f32,
+        /// How much of the pose the following clip owns, as last reported.
+        alpha: f32,
     },
 }
 
@@ -931,18 +934,12 @@ impl AnimatedMonsterAI {
                 (Effect::NoEffect, true)
             }
             Some(TurnClip::Settling {
-                turn,
-                base,
-                elapsed: settled,
-                window,
+                turn, base, alpha, ..
             }) => {
-                *settled += elapsed;
-                let t = (*settled / *window).clamp(0.0, 1.0);
-                // The animation player's own cross-fade weight: the pose gives
-                // up `alpha` of the turn it was holding this frame, so the
+                // The pose gave up `alpha` of the turn it was holding, so the
                 // entity takes exactly `alpha` of it back.
-                let heading = Deg(base.0 + turn.0 * dark::motion::blend_alpha(t));
-                if t >= 1.0 {
+                let heading = Deg(base.0 + turn.0 * *alpha);
+                if *alpha >= 1.0 {
                     self.finish_pivot(entity_id, heading);
                 } else {
                     self.current_heading = heading;
@@ -971,15 +968,10 @@ impl AnimatedMonsterAI {
     /// creature that takes a hit, waits at a door or changes behavior is NOT
     /// thereby done pivoting - if nothing displaced the clip, its pose is
     /// still turning the body and the turn is still owed. A pivot already
-    /// `Settling` is past all of this: its facing change is being taken
-    /// against a fade that is really running, so it is left to finish.
+    /// settling is dropped where it stands: the fade it was riding has been
+    /// replaced, so the rest of the turn has no pose behind it either.
     fn cancel_turn_clip(&mut self, entity_id: EntityId, reason: &str) {
-        if matches!(
-            self.turn_clip,
-            Some(TurnClip::Requested { .. })
-                | Some(TurnClip::Playing { .. })
-                | Some(TurnClip::HandingOver { .. })
-        ) {
+        if self.turn_clip.is_some() {
             tracing::debug!("ai {:?} drops its pivot: {}", entity_id, reason);
             self.turn_clip = None;
             self.turn_cooldown = TURN_CLIP_COOLDOWN;
@@ -992,8 +984,9 @@ impl AnimatedMonsterAI {
         match &self.turn_clip {
             Some(TurnClip::Requested { token })
             | Some(TurnClip::Playing { token, .. })
-            | Some(TurnClip::HandingOver { token, .. }) => Some(*token),
-            Some(TurnClip::Settling { .. }) | None => None,
+            | Some(TurnClip::HandingOver { token, .. })
+            | Some(TurnClip::Settling { token, .. }) => Some(*token),
+            None => None,
         }
     }
 
@@ -1818,19 +1811,19 @@ impl Script for AnimatedMonsterAI {
                 if let Some(TurnClip::HandingOver {
                     token: pending,
                     turn,
-                    waited,
+                    ..
                 }) = self.turn_clip
                 {
                     if pending == *token {
-                        if *blend > waited {
+                        if *blend > 0.0 {
+                            // The applier reports the fade's weight from here
+                            // on; the heading starts on the one the clip ended
+                            // on and rides those reports.
                             self.turn_clip = Some(TurnClip::Settling {
+                                token: *token,
                                 turn,
                                 base: self.current_heading,
-                                // The player started this fade when it applied
-                                // the clip, a frame before this report; pick it
-                                // up where its blend already is.
-                                elapsed: waited,
-                                window: *blend,
+                                alpha: 0.0,
                             });
                         } else {
                             // Nothing to spread it over: the pose drops the
@@ -1838,6 +1831,19 @@ impl Script for AnimatedMonsterAI {
                             // same one and the visible facing still matches.
                             self.finish_pivot(entity_id, Deg(self.current_heading.0 + turn.0));
                         }
+                    }
+                }
+                Effect::NoEffect
+            }
+            MessagePayload::TurnClipBlend { token, alpha } => {
+                if let Some(TurnClip::Settling {
+                    token: pending,
+                    alpha: current,
+                    ..
+                }) = &mut self.turn_clip
+                {
+                    if *pending == *token {
+                        *current = *alpha;
                     }
                 }
                 Effect::NoEffect
@@ -2328,6 +2334,162 @@ mod tests {
         }
     }
 
+    /// One frame of the fade the pivot hands over across, as the applier
+    /// reports it: the pose's own weight, then the script's update.
+    fn settle_frame(
+        monster: &mut AnimatedMonsterAI,
+        world: &World,
+        entity_id: EntityId,
+        alpha: f32,
+    ) {
+        let token = pending_token(monster);
+        tell(
+            monster,
+            world,
+            entity_id,
+            MessagePayload::TurnClipBlend { token, alpha },
+        );
+        turn_frame(monster, entity_id, Deg(90.0));
+    }
+
+    /// A clip that runs for `frames` 100ms frames and fades in over
+    /// `blend_ms`.
+    fn test_clip(frames: u32, blend_ms: u64) -> std::rc::Rc<dark::motion::AnimationClip> {
+        let time_per_frame = std::time::Duration::from_millis(100);
+        std::rc::Rc::new(dark::motion::AnimationClip {
+            num_frames: frames,
+            time_per_frame,
+            duration: time_per_frame * frames,
+            blend_length: std::time::Duration::from_millis(blend_ms),
+            end_rotation: Deg(0.0),
+            sliding_velocity: vec3(0.0, 0.0, 0.0),
+            translation: vec3(0.0, 0.0, 0.0),
+            joint_to_frame: std::collections::HashMap::new(),
+            root_transforms: Vec::new(),
+            root_positions: Vec::new(),
+            motion_flags: Vec::new(),
+            name: None,
+        })
+    }
+
+    /// `mission_core`'s frame in miniature, driving the REAL animation player,
+    /// the REAL applier-side tracker and the REAL script in the order the
+    /// mission loop runs them: animations advance first, then the reports they
+    /// produced are delivered, then the script updates, then its effects are
+    /// applied. That order is the whole point - the script's own clock ticks
+    /// after the player's, so anything the script integrates itself runs a
+    /// frame ahead of the pose it is supposed to match.
+    struct PivotHarness {
+        world: World,
+        entity_id: EntityId,
+        monster: AnimatedMonsterAI,
+        player: dark::motion::AnimationPlayer,
+        tracker: crate::mission::turn_clip::TurnClipTracker,
+        /// Reports produced since the script last read its messages.
+        pending: Vec<MessagePayload>,
+    }
+
+    /// The mission loop's fixed timestep.
+    const HARNESS_DT: f32 = 1.0 / 60.0;
+
+    impl PivotHarness {
+        fn new(heading: Deg<f32>) -> PivotHarness {
+            let (world, entity_id, monster) = pivoting_monster(heading);
+            PivotHarness {
+                world,
+                entity_id,
+                monster,
+                player: dark::motion::AnimationPlayer::empty(),
+                tracker: crate::mission::turn_clip::TurnClipTracker::new(),
+                pending: Vec::new(),
+            }
+        }
+
+        /// The applier starting a clip on this entity: what `PlayAnimation`
+        /// and `PlayTurnClip` both come down to.
+        fn apply_clip(
+            &mut self,
+            clip: std::rc::Rc<dark::motion::AnimationClip>,
+            pivot: Option<(u64, Deg<f32>)>,
+        ) {
+            self.player = dark::motion::AnimationPlayer::queue_animation(&self.player, clip);
+            let blend = self.player.blend_remaining_seconds();
+            if let Some(payload) =
+                self.tracker
+                    .on_animation_applied(self.entity_id, Some(blend), pivot.is_some())
+            {
+                self.pending.push(payload);
+            }
+            if let Some((token, turn)) = pivot {
+                self.pending.push(
+                    self.tracker
+                        .on_turn_resolved(self.entity_id, token, Some(turn)),
+                );
+            }
+        }
+
+        /// One mission frame. Returns the pose weight the renderer would use
+        /// for the clip that follows the pivot.
+        fn frame(&mut self) -> f32 {
+            let dt = std::time::Duration::from_secs_f32(HARNESS_DT);
+            let (next, _, events, _) = dark::motion::AnimationPlayer::update(&self.player, dt);
+            self.player = next;
+            if let Some(payload) = self.tracker.on_blend_tick(self.entity_id, &self.player) {
+                self.pending.push(payload);
+            }
+            for event in events {
+                if matches!(event, dark::motion::AnimationEvent::Completed) {
+                    if let Some(payload) = self.tracker.on_clip_completed(self.entity_id) {
+                        self.pending.push(payload);
+                    }
+                }
+            }
+
+            for payload in std::mem::take(&mut self.pending) {
+                tell(&mut self.monster, &self.world, self.entity_id, payload);
+            }
+            let time = Time {
+                elapsed: dt,
+                total: dt,
+            };
+            self.monster
+                .update_turn_clip(self.entity_id, Deg(90.0), &time, true);
+
+            self.player.blend_alpha_now()
+        }
+
+        /// Ask for a pivot and let the applier answer it with a clip authored
+        /// to end on `turn`.
+        fn start_pivot(&mut self, turn: Deg<f32>, clip_frames: u32) {
+            let (effect, _) = self.monster.update_turn_clip(
+                self.entity_id,
+                Deg(90.0),
+                &Time {
+                    elapsed: std::time::Duration::from_secs_f32(HARNESS_DT),
+                    total: std::time::Duration::from_secs_f32(HARNESS_DT),
+                },
+                true,
+            );
+            let token = match effect {
+                Effect::PlayTurnClip { token, .. } => token,
+                other => panic!("expected a pivot request, got {other:?}"),
+            };
+            self.apply_clip(test_clip(clip_frames, 0), Some((token, turn)));
+        }
+
+        /// Run frames until the pivot's clip has ended and the script is
+        /// waiting for whatever follows it.
+        fn play_clip_out(&mut self) {
+            for _ in 0..600 {
+                self.frame();
+                if matches!(self.monster.turn_clip, Some(TurnClip::HandingOver { .. })) {
+                    return;
+                }
+            }
+            panic!("the turn clip never ended");
+        }
+    }
+
     fn locomotion_scale(effects: &[Effect]) -> Option<f32> {
         effects.iter().find_map(|effect| match effect {
             Effect::SetAIProperty {
@@ -2456,10 +2618,15 @@ mod tests {
         complete_clip(&mut monster, &world, entity_id);
         hand_off(&mut monster, &world, entity_id, TEST_BLEND);
 
-        // The settle is the reported fade, in 100ms frames.
-        for _ in 0..5 {
-            assert!(turn_frame(&mut monster, entity_id, Deg(90.0)).1);
-        }
+        // The settle rides the fade the applier reports, half of it and then
+        // all of it.
+        settle_frame(&mut monster, &world, entity_id, 0.5);
+        assert!(
+            (monster.current_heading.0 - (-90.0 - 168.0 * 0.5)).abs() < 1e-3,
+            "half the fade is half the turn, heading is {:?}",
+            monster.current_heading
+        );
+        settle_frame(&mut monster, &world, entity_id, 1.0);
         assert!(
             (monster.current_heading.0 - (-90.0 - 168.0)).abs() < 1e-3,
             "expected the authored turn to land, heading is {:?}",
@@ -2493,9 +2660,7 @@ mod tests {
         start_pivot(&mut monster, &world, entity_id, Deg(-100.0), 2.4);
         complete_clip(&mut monster, &world, entity_id);
         hand_off(&mut monster, &world, entity_id, TEST_BLEND);
-        for _ in 0..6 {
-            turn_frame(&mut monster, entity_id, Deg(90.0));
-        }
+        settle_frame(&mut monster, &world, entity_id, 1.0);
         assert!(monster.turn_clip.is_none(), "the first pivot must be over");
         // Still facing a long way from where it wants to be, but it has to
         // steer out of the pivot before performing another.
@@ -2515,9 +2680,10 @@ mod tests {
         let token = start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 4.8);
         complete_clip(&mut monster, &world, entity_id);
         hand_off(&mut monster, &world, entity_id, TEST_BLEND);
+        settle_frame(&mut monster, &world, entity_id, 1.0);
+        // Everything the behavior's own re-queued clip reports next: its plain
+        // completion, and the pivot's reports replayed.
         for _ in 0..2 {
-            // Everything the behavior's own re-queued clip reports next:
-            // its plain completion, and the pivot's reports replayed.
             tell(
                 &mut monster,
                 &world,
@@ -2689,40 +2855,112 @@ mod tests {
         let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
         start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 2.4);
         complete_clip(&mut monster, &world, entity_id);
-        // A 400ms fade, walked in the 100ms frames `turn_frame` uses.
         hand_off(&mut monster, &world, entity_id, 0.4);
 
         for step in 1..=4 {
-            turn_frame(&mut monster, entity_id, Deg(90.0));
-            let t = step as f32 / 4.0;
-            let expected = -90.0 - 168.0 * dark::motion::blend_alpha(t);
+            let alpha = dark::motion::blend_alpha(step as f32 / 4.0);
+            settle_frame(&mut monster, &world, entity_id, alpha);
+            let expected = -90.0 - 168.0 * alpha;
             assert!(
                 (monster.current_heading.0 - expected).abs() < 1e-3,
-                "at t={t} expected {expected}, got {:?}",
+                "expected {expected}, got {:?}",
                 monster.current_heading
             );
         }
         assert!(monster.turn_clip.is_none(), "the handover is complete");
     }
 
-    /// The player starts the fade when it applies the following clip, a frame
-    /// before its report reaches the script - so the settle picks the curve up
-    /// where the pose already is, rather than restarting it a frame behind.
+    /// The load-bearing one: a REAL animation player, the REAL applier-side
+    /// tracker and the REAL script, run in the mission loop's own order over a
+    /// follow-up clip that actually fades.
+    ///
+    /// The script's update runs AFTER the animation player's, so a script that
+    /// integrates the fade itself takes one dt on the frame the clip completes
+    /// and another on the frame the handover report arrives - two dt of yaw
+    /// against one dt of pose, and the gap never closes for the rest of the
+    /// fade. The yaw is read off the player instead, so it cannot lead it by
+    /// even one frame.
     #[test]
-    fn the_settle_picks_up_a_fade_already_running() {
-        let (world, entity_id, mut monster) = pivoting_monster(Deg(-90.0));
-        start_pivot(&mut monster, &world, entity_id, Deg(-168.0), 2.4);
-        complete_clip(&mut monster, &world, entity_id);
-        // One 100ms frame passes between the clip ending and the report.
-        turn_frame(&mut monster, entity_id, Deg(90.0));
-        hand_off(&mut monster, &world, entity_id, 0.4);
+    fn the_yaw_never_leads_the_pose_across_a_real_fade() {
+        const TURN: f32 = -168.0;
+        const BLEND_MS: u64 = 500;
+        let mut harness = PivotHarness::new(Deg(-90.0));
+        harness.start_pivot(Deg(TURN), 3);
+        harness.play_clip_out();
 
-        turn_frame(&mut monster, entity_id, Deg(90.0));
-        let expected = -90.0 - 168.0 * dark::motion::blend_alpha(0.2 / 0.4);
+        // The behavior queues its next clip on the frame the pivot's ended,
+        // exactly as the AI's completion handler does.
+        harness.apply_clip(test_clip(30, BLEND_MS), None);
+
+        let mut fade_frames = 0;
+        for _ in 0..120 {
+            let pose = harness.frame();
+            fade_frames += 1;
+            let taken = (harness.monster.current_heading.0 - -90.0) / TURN;
+            assert!(
+                (taken - pose).abs() < 1e-4,
+                "frame {fade_frames}: the pose is {pose} through the fade but the entity has taken {taken} of the turn",
+            );
+            // ...and that shared number is the fade the player is really
+            // running: `blend_alpha` of the elapsed fraction, no lead.
+            let elapsed = fade_frames as f32 * HARNESS_DT;
+            let expected = dark::motion::blend_alpha(elapsed / (BLEND_MS as f32 / 1000.0));
+            assert!(
+                (taken - expected).abs() < 1e-4,
+                "frame {fade_frames}: expected {expected} of the turn, entity has taken {taken}",
+            );
+            if harness.monster.turn_clip.is_none() {
+                break;
+            }
+        }
+
         assert!(
-            (monster.current_heading.0 - expected).abs() < 1e-3,
-            "expected {expected}, got {:?}",
-            monster.current_heading
+            harness.monster.turn_clip.is_none(),
+            "the handover must finish with the fade"
+        );
+        assert!(
+            (harness.monster.current_heading.0 - (-90.0 + TURN)).abs() < 1e-3,
+            "and land the whole authored turn, heading is {:?}",
+            harness.monster.current_heading
+        );
+        // A 500ms fade at 60Hz: the settle lasts the fade, not a frame more.
+        assert_eq!(fade_frames, 30);
+    }
+
+    /// A wound reaction (or any other clip) landing mid-settle replaces the
+    /// fade the yaw was riding: from that frame nothing is giving the turn up,
+    /// so the rest of it must not be taken. The applier keeps ownership of the
+    /// pivot through the settle precisely so it can say so.
+    #[test]
+    fn a_clip_displacing_the_settle_cancels_the_rest_of_the_turn() {
+        let mut harness = PivotHarness::new(Deg(-90.0));
+        harness.start_pivot(Deg(-168.0), 3);
+        harness.play_clip_out();
+        harness.apply_clip(test_clip(30, 500), None);
+
+        for _ in 0..10 {
+            harness.frame();
+        }
+        let taken = harness.monster.current_heading;
+        assert!(
+            matches!(harness.monster.turn_clip, Some(TurnClip::Settling { .. })),
+            "the settle must be running to be displaced"
+        );
+
+        // The wound clip: it is what the player fades now, not the pivot's.
+        harness.apply_clip(test_clip(10, 300), None);
+        harness.frame();
+        assert!(
+            harness.monster.turn_clip.is_none(),
+            "a displaced settle is dropped, not carried on"
+        );
+
+        for _ in 0..40 {
+            harness.frame();
+        }
+        assert_eq!(
+            harness.monster.current_heading, taken,
+            "and the rest of the turn never lands"
         );
     }
 

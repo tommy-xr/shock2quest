@@ -16,6 +16,7 @@ use cgmath::{
 
 use collision::Aabb3;
 
+use super::turn_clip::TurnClipTracker;
 use crate::SpawnLocation;
 use crate::game_scene::DebuggableScene;
 use crate::mission::CullingInfo;
@@ -1469,21 +1470,6 @@ impl EffectQueue {
 }
 
 /// See `MissionCore::failed_animation_queries`.
-/// A turn clip the applier started for an entity, tracked so the requesting
-/// script can tell its own clip's completion from any other.
-///
-/// The applier owns the animation player, so it - not a timer in the script -
-/// is what knows whether the pivot's clip is still the one playing: any other
-/// animation applied to the entity while `completed` is false has preempted
-/// it, and the first one applied after it completed is the transition the
-/// pivot's yaw hands over on.
-struct TurnClipPlayback {
-    /// The `Effect::PlayTurnClip` request this playback answers.
-    token: u64,
-    /// Whether the clip has run to its end (as opposed to still playing).
-    completed: bool,
-}
-
 struct FailedAnimationGuard {
     key: String,
     frames_left: u32,
@@ -1516,8 +1502,9 @@ pub struct MissionCore {
     pub id_to_animation_player: HashMap<EntityId, AnimationPlayer>,
     /// The turn clip in flight per entity (see `Effect::PlayTurnClip`). This
     /// is what identifies a pivot's playback: the requester never has to guess
-    /// from elapsed time which completion is its own.
-    turn_clip_playback: HashMap<EntityId, TurnClipPlayback>,
+    /// from elapsed time which completion is its own, nor how far the fade it
+    /// hands its yaw over across has got.
+    turn_clips: TurnClipTracker,
     /// Failed-animation suppression state per entity: the failing key, a
     /// countdown (frames), and whether a suppressed request is owed a
     /// completion when the window expires. A failed query reports
@@ -2535,7 +2522,7 @@ impl MissionCore {
             script_world,
             id_to_model,
             id_to_animation_player,
-            turn_clip_playback: HashMap::new(),
+            turn_clips: TurnClipTracker::new(),
             failed_animation_queries: HashMap::new(),
             id_to_bitmap,
             id_to_particle_system: HashMap::new(),
@@ -4206,64 +4193,21 @@ impl MissionCore {
         }
 
         // Report on the pivot whose clip this apply just displaced or
-        // followed, before recording the one it may have started. A clip
-        // applied while the pivot's own was still playing has preempted it -
-        // nothing turns the body any more, so the authored facing change must
-        // be dropped. The first clip applied after it completed is the
-        // transition its pose swings back to neutral across, so the pivot
-        // takes its facing change over exactly that fade.
-        // A `PlayTurnClip` that resolved to nothing still displaces whatever
-        // was tracked, so the entry is taken either way; only a report needs a
-        // clip to have actually started.
-        let previous = if applied_blend.is_some() || turn.is_some() {
-            self.turn_clip_playback.remove(&entity_id)
-        } else {
-            None
-        };
-        if let Some(blend) = applied_blend {
-            match previous {
-                Some(playback) if playback.completed => {
-                    self.script_world.dispatch(Message {
-                        to: entity_id,
-                        payload: MessagePayload::TurnClipHandoff {
-                            token: playback.token,
-                            blend,
-                        },
-                    });
-                }
-                Some(playback) => {
-                    tracing::debug!("turn clip for {:?} preempted by another", entity_id);
-                    self.script_world.dispatch(Message {
-                        to: entity_id,
-                        payload: MessagePayload::TurnClipCancelled {
-                            token: playback.token,
-                        },
-                    });
-                }
-                None => {}
-            }
-        } else if let Some(playback) = previous {
-            Self::report_turn_clip_abandoned(&mut self.script_world, entity_id, playback);
+        // followed, before recording the one it may have started.
+        if let Some(payload) =
+            self.turn_clips
+                .on_animation_applied(entity_id, applied_blend, turn.is_some())
+        {
+            self.script_world.dispatch(Message {
+                to: entity_id,
+                payload,
+            });
         }
 
         if let Some((token, _, _)) = turn {
-            let payload = match turn_started {
-                Some(turn) => {
-                    self.turn_clip_playback.insert(
-                        entity_id,
-                        TurnClipPlayback {
-                            token,
-                            completed: false,
-                        },
-                    );
-                    MessagePayload::TurnClipStarted { token, turn }
-                }
-                // No affordable clip covered the pivot, the creature has no
-                // turn clips, or it has no animation player at all. The
-                // requester is answered either way, so it never waits on a
-                // clip that will not come.
-                None => MessagePayload::TurnClipCancelled { token },
-            };
+            let payload = self
+                .turn_clips
+                .on_turn_resolved(entity_id, token, turn_started);
             self.script_world.dispatch(Message {
                 to: entity_id,
                 payload,
@@ -4271,28 +4215,14 @@ impl MissionCore {
         }
     }
 
-    /// Tell a pivot's requester that its clip is gone. Every path that can end
-    /// a turn clip's playback goes through here, so a `TurnClip` in the script
-    /// is always answered and can hold the creature's heading no longer than
-    /// its clip really plays.
-    fn report_turn_clip_abandoned(
-        script_world: &mut ScriptWorld,
-        entity_id: EntityId,
-        playback: TurnClipPlayback,
-    ) {
-        script_world.dispatch(Message {
-            to: entity_id,
-            payload: MessagePayload::TurnClipCancelled {
-                token: playback.token,
-            },
-        });
-    }
-
     /// The entity's animation player is being replaced or taken away, so no
     /// completion can ever arrive for a turn clip it was playing.
     fn abandon_turn_clip(&mut self, entity_id: EntityId) {
-        if let Some(playback) = self.turn_clip_playback.remove(&entity_id) {
-            Self::report_turn_clip_abandoned(&mut self.script_world, entity_id, playback);
+        if let Some(payload) = self.turn_clips.abandon(entity_id) {
+            self.script_world.dispatch(Message {
+                to: entity_id,
+                payload,
+            });
         }
     }
 
@@ -4364,6 +4294,14 @@ impl MissionCore {
             let (new_player, flags, events, velocity) =
                 AnimationPlayer::update(player, time.elapsed);
             *player = new_player;
+
+            // A pivot handing its yaw over rides the fade this player is
+            // running, so it is told the pose's own cross-fade weight every
+            // frame - read here, right after the player advanced, so the
+            // facing and the pose it belongs to are never a frame apart.
+            if let Some(payload) = self.turn_clips.on_blend_tick(*id, player) {
+                self.script_world.dispatch(Message { to: *id, payload });
+            }
 
             if let Some(model) = self.id_to_model.get(id) {
                 let joint_transforms = model.get_joint_transforms(player);
@@ -4440,14 +4378,8 @@ impl MissionCore {
                         // A pivot's clip reaching its end: from here the next
                         // clip applied to this entity is its handoff, not a
                         // preemption.
-                        if let Some(playback) = self.turn_clip_playback.get_mut(id) {
-                            playback.completed = true;
-                            self.script_world.dispatch(Message {
-                                to: *id,
-                                payload: MessagePayload::TurnClipCompleted {
-                                    token: playback.token,
-                                },
-                            });
+                        if let Some(payload) = self.turn_clips.on_clip_completed(*id) {
+                            self.script_world.dispatch(Message { to: *id, payload });
                         }
                         self.script_world.dispatch(Message {
                             to: *id,
@@ -5602,7 +5534,7 @@ impl MissionCore {
         // Shipyard recycles entity ids, so stale per-entity animation state
         // must not outlive the entity (a recycled id would inherit it).
         self.id_to_animation_player.remove(&entity_id);
-        self.turn_clip_playback.remove(&entity_id);
+        self.turn_clips.forget(entity_id);
         self.failed_animation_queries.remove(&entity_id);
         self.gui.on_entity_destroyed(
             entity_id,

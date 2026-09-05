@@ -272,6 +272,19 @@ impl AnimationPlayer {
             .unwrap_or(0.0)
     }
 
+    /// How much of the pose the INCOMING clip owns right now: the very weight
+    /// `get_transforms` blends with, so anything that has to move in step with
+    /// the fade (the AI's turn-clip yaw handoff) reads the pose's own number
+    /// rather than integrating a clock of its own. 1.0 when nothing is fading.
+    pub fn blend_alpha_now(&self) -> f32 {
+        match &self.blend_state {
+            Some(blend) if blend.duration > f32::EPSILON && blend.elapsed < blend.duration => {
+                blend_alpha(blend.elapsed / blend.duration)
+            }
+            _ => 1.0,
+        }
+    }
+
     pub fn set_additional_joint_transform(
         player: &AnimationPlayer,
         joint_idx: u32,
@@ -580,8 +593,7 @@ impl AnimationPlayer {
 
         if let Some(blend) = &self.blend_state {
             if blend.duration > f32::EPSILON && blend.elapsed < blend.duration {
-                let t = (blend.elapsed / blend.duration).clamp(0.0, 1.0);
-                let alpha = blend_alpha(t);
+                let alpha = self.blend_alpha_now();
                 // update() keeps from_frame in range (loops wrap, one-shots
                 // clamp), and the fractional position advances smoothly
                 // during the fade.
@@ -1024,6 +1036,30 @@ mod tests {
         assert!((fading.blend_remaining_seconds() - 0.2).abs() < 1e-6);
         let (fading, _, _, _) = AnimationPlayer::update(&fading, Duration::from_millis(50));
         assert!((fading.blend_remaining_seconds() - 0.15).abs() < 1e-6);
+    }
+
+    /// The same fade as a pose weight: what `get_transforms` blends with, and
+    /// what the AI's yaw handoff is told every frame so the facing it takes
+    /// and the facing the pose gives up are the same number.
+    #[test]
+    fn blend_alpha_now_is_the_weight_the_fade_has_reached() {
+        let player =
+            AnimationPlayer::queue_animation(&AnimationPlayer::empty(), clip_with_root_motion());
+        let (player, _, _, _) = AnimationPlayer::update(&player, Duration::from_millis(100));
+        assert_eq!(player.blend_alpha_now(), 1.0, "nothing is fading");
+
+        let mut incoming = (*clip_with_root_motion()).clone();
+        incoming.blend_length = Duration::from_millis(200);
+        let fading = AnimationPlayer::queue_animation(&player, Rc::new(incoming));
+        assert_eq!(fading.blend_alpha_now(), 0.0, "the fade has not started");
+
+        let (fading, _, _, _) = AnimationPlayer::update(&fading, Duration::from_millis(50));
+        assert!((fading.blend_alpha_now() - blend_alpha(0.25)).abs() < 1e-6);
+
+        // Run past the end: the fade is gone and the incoming clip owns the
+        // whole pose, which is the 1.0 the handover finishes on.
+        let (fading, _, _, _) = AnimationPlayer::update(&fading, Duration::from_millis(200));
+        assert_eq!(fading.blend_alpha_now(), 1.0);
     }
 
     /// The pose's cross-fade weight, which the AI's yaw handoff rides so the

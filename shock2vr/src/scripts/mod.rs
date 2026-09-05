@@ -280,11 +280,23 @@ pub enum MessagePayload {
     /// The turn clip finished and the animation player has started the clip
     /// that follows it, cross-fading over `blend` seconds. The turn clip's
     /// pose swings back to neutral across exactly that fade, so the entity
-    /// takes its authored facing change over the same window and curve
-    /// (`dark::motion::blend_alpha`) and the visible facing never jumps.
+    /// takes its authored facing change over it. A `blend` of zero is a hard
+    /// cut: the pose gives the whole turn up in one frame.
     TurnClipHandoff {
         token: u64,
         blend: f32,
+    },
+
+    /// How much of the pose the clip following the pivot owns this frame,
+    /// straight from the animation player (`blend_alpha_now`). The entity's
+    /// facing takes exactly this fraction of the authored turn, so the facing
+    /// the pose gives up and the facing the entity takes cancel out frame for
+    /// frame. Reported every frame of the fade, ending on 1.0 - the script
+    /// keeps no clock of its own, because the script's clock and the player's
+    /// tick at different points in the frame.
+    TurnClipBlend {
+        token: u64,
+        alpha: f32,
     },
 
     // Gameplay events
