@@ -361,24 +361,44 @@ fn rewrite_strip_release(
     *effects = rewritten;
 }
 
-/// Whether the player's backpack can actually take a deposit right now.
+/// UI feedback for a backpack deposit the capacity check refused: retail's
+/// MISC.STR `InvFull` ("No room in inventory.") message. The port has no
+/// player-facing text facility yet (see the `SoftUseless`/`SoftUpgrade`
+/// handling above, which hits the same gap), so the text goes to the game
+/// log; the audible half is the same `repfail` UI chime other refused player
+/// actions already reuse (a replicator purchase without enough nanites).
+fn backpack_full_feedback(entity_id: EntityId) -> Effect {
+    game_log!(
+        INFO,
+        "{:?} refused: no room in inventory (MISC.STR InvFull)",
+        entity_id
+    );
+    Effect::PlaySound {
+        handle: AudioHandle::new(),
+        source: None,
+        name: "repfail".to_owned(),
+        spatial: false,
+    }
+}
+
+/// Whether the player's backpack can actually take `dropped_entity_id` right
+/// now.
 ///
 /// This is exactly [`move_live_entity_into_container`]'s success condition for
 /// a live item: a container without `Links` has nowhere to record the new
-/// `Contains`, and the transfer silently does nothing. Claiming a release the
-/// backpack cannot accept would suppress the world drop for an item that then
-/// lands nowhere at all, so the claim is gated on it and an unusable backpack
-/// simply leaves the ordinary world drop alone.
-fn backpack_accepts_deposit(world: &World) -> bool {
+/// `Contains`, and a full grid with nothing to merge into leaves the item
+/// unplaced. Claiming a release the backpack cannot accept would suppress the
+/// world drop for an item that then lands nowhere at all, so the claim is
+/// gated on it and an unusable/full backpack simply leaves the ordinary world
+/// drop alone (the VR "held item can't stay mid-air" fallback).
+fn backpack_accepts_deposit(world: &World, dropped_entity_id: EntityId) -> bool {
     let Ok(inventory_entity) = world
         .borrow::<UniqueView<PlayerInfo>>()
         .map(|player| player.inventory_entity_id)
     else {
         return false;
     };
-    world
-        .borrow::<View<Links>>()
-        .is_ok_and(|links| links.get(inventory_entity).is_ok())
+    container_can_accept_item(world, inventory_entity, dropped_entity_id)
 }
 
 /// Head-relative authored-space placement for the wide VR backpack canvas.
@@ -689,7 +709,11 @@ fn move_live_entity_into_container_at_cell(
     target_cell: (usize, usize),
 ) -> bool {
     let grid = crate::inventory::grid_for(world, container_entity_id);
-    let occupied = crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    let mut occupied =
+        crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    // See `move_live_entity_into_container_at_slot`: a re-grab can still show
+    // the dropped entity occupying its own old cell here.
+    occupied.remove_entity(dropped_entity_id);
     let dims = world
         .borrow::<View<dark::properties::PropInventoryDimensions>>()
         .ok()
@@ -740,6 +764,72 @@ fn matching_stack_at_cell(
         .map(|_| occupant)
 }
 
+/// Any occupant of `container_entity_id`'s grid sharing `dropped_entity_id`'s
+/// template and both carrying a `PropStackCount` - the merge target a deposit
+/// falls back to when the container has no free cell for a new item at all,
+/// mirroring [`matching_stack_at_cell`] but searching the whole grid instead
+/// of one specific cell.
+fn find_mergeable_stack_anywhere(
+    world: &World,
+    container_entity_id: EntityId,
+    dropped_entity_id: EntityId,
+) -> Option<EntityId> {
+    let grid = crate::inventory::grid_for(world, container_entity_id);
+    let occupied = crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    let v_template = world
+        .borrow::<View<dark::properties::PropTemplateId>>()
+        .ok()?;
+    let v_stacks = world
+        .borrow::<View<dark::properties::PropStackCount>>()
+        .ok()?;
+    v_stacks.get(dropped_entity_id).ok()?;
+    let dropped_template = v_template.get(dropped_entity_id).ok()?.template_id;
+    occupied.all_items().find_map(|item| {
+        (item.entity != dropped_entity_id
+            && v_template.get(item.entity).ok().map(|t| t.template_id) == Some(dropped_template)
+            && v_stacks.get(item.entity).is_ok())
+        .then_some(item.entity)
+    })
+}
+
+/// Whether `container_entity_id` can accept a deposit of `dropped_entity_id`
+/// right now, without mutating anything: the container exists (has `Links` to
+/// record the transfer) and either has a free cell for the item's authored
+/// footprint or holds a stack it can merge into instead. Mirrors
+/// [`move_live_entity_into_container`]/[`MissionCore::drop_entity_into_container`]'s
+/// success condition for a live item, so a release can be pre-checked before
+/// it is claimed as a store (see [`backpack_accepts_deposit`]).
+fn container_can_accept_item(
+    world: &World,
+    container_entity_id: EntityId,
+    dropped_entity_id: EntityId,
+) -> bool {
+    if !world
+        .borrow::<View<Links>>()
+        .is_ok_and(|links| links.get(container_entity_id).is_ok())
+    {
+        return false;
+    }
+    let grid = crate::inventory::grid_for(world, container_entity_id);
+    let mut occupied =
+        crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+    // See `move_live_entity_into_container_at_slot`: a re-grab can still show
+    // the dropped entity occupying its own old cell here.
+    occupied.remove_entity(dropped_entity_id);
+    let dims = world
+        .borrow::<View<dark::properties::PropInventoryDimensions>>()
+        .ok()
+        .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
+        .unwrap_or((1, 1));
+    if occupied
+        .first_free_slot(dims.0 as usize, dims.1 as usize)
+        .is_some()
+    {
+        return true;
+    }
+    find_mergeable_stack_anywhere(world, container_entity_id, dropped_entity_id).is_some()
+}
+
 /// Shared placement body for [`move_live_entity_into_container`] and
 /// [`move_live_entity_into_container_at_cell`]: `requested_slot` names the
 /// exact ordinal to claim, or `None` for the first free cell.
@@ -757,25 +847,33 @@ fn move_live_entity_into_container_at_slot(
     }
 
     // Give the item a cell in the container's grid, so it stays where it
-    // was put instead of being repacked on every draw. Computed before
-    // the borrow below, and *after* the item's own links are irrelevant -
-    // it is not in the container yet, so it cannot occupy a cell here.
+    // was put instead of being repacked on every draw.
     let slot = match requested_slot {
         Some(slot) => slot,
         None => {
             let grid = crate::inventory::grid_for(world, container_entity_id);
-            let occupied =
+            let mut occupied =
                 crate::inventory::Inventory::from_container(world, container_entity_id, grid);
+            // A re-grab (e.g. a flat wield-swap's double-click pull from the
+            // backpack) can still show the dropped entity's own OLD cell as
+            // occupied here - its `Contains` link is not removed until below.
+            // Uncount it so the capacity check reflects the cell it is about
+            // to vacate, not phantom occupancy by itself.
+            occupied.remove_entity(dropped_entity_id);
             let dims = world
                 .borrow::<View<dark::properties::PropInventoryDimensions>>()
                 .ok()
                 .and_then(|v| v.get(dropped_entity_id).ok().map(|d| (d.width, d.height)))
                 .unwrap_or((1, 1));
-            // A full container still takes the item (the drop is already
-            // permitted by the caller); it just has no cell to remember.
-            occupied
-                .first_free_slot(dims.0 as usize, dims.1 as usize)
-                .unwrap_or(0)
+            // No free cell: retail rejects the transfer rather than stacking
+            // items invisibly on top of each other (#backpack-capacity). The
+            // caller is responsible for trying a merge into an existing stack
+            // first (see `find_mergeable_stack_anywhere`) - this is the true
+            // "nowhere left to put it" case.
+            match occupied.first_free_slot(dims.0 as usize, dims.1 as usize) {
+                Some(slot) => slot,
+                None => return false,
+            }
         }
     };
 
@@ -1183,6 +1281,145 @@ mod cell_deposit_tests {
             0,
             "falls back to the first free cell, (0,0)"
         );
+    }
+}
+
+#[cfg(test)]
+mod capacity_enforcement_tests {
+    use dark::properties::{PropStackCount, PropTemplateId};
+
+    use super::*;
+
+    /// A container whose entire `CONTAINER_GRID` is occupied by distinct
+    /// (non-stackable) items - no free cell anywhere, and nothing a deposit
+    /// could merge into.
+    fn full_container() -> (World, EntityId) {
+        let mut world = World::new();
+        let (width, height) = crate::inventory::CONTAINER_GRID;
+        let to_links = (0..width * height)
+            .map(|slot| {
+                let occupant = world.add_entity((PropHasRefs(false),));
+                ToLink {
+                    link: Link::Contains(slot as u32),
+                    to_entity_id: Some(WrappedEntityId(occupant)),
+                    to_template_id: 0,
+                }
+            })
+            .collect();
+        let container = world.add_entity(Links { to_links });
+        (world, container)
+    }
+
+    /// The reported bug: a full backpack must refuse a first-free deposit
+    /// (retail's "no room in inventory") instead of silently absorbing it
+    /// with no cell to remember. Fails on main, where the fallback forces
+    /// slot 0 regardless of capacity.
+    #[test]
+    fn a_full_container_refuses_a_first_free_deposit() {
+        let (mut world, container) = full_container();
+        let item = world.add_entity(PropHasRefs(false));
+
+        assert!(
+            !move_live_entity_into_container(&mut world, container, item),
+            "a full container must refuse the deposit"
+        );
+        assert!(
+            world
+                .borrow::<View<Links>>()
+                .unwrap()
+                .get(container)
+                .unwrap()
+                .to_links
+                .iter()
+                .all(|link| link.to_entity_id.map(|w| w.0) != Some(item)),
+            "the refused item must not be linked into the container"
+        );
+    }
+
+    /// A full container still has nowhere for a stackable deposit to merge
+    /// into if nothing already inside shares its template - the "OR can
+    /// merge" half of the capacity check isn't a blanket pass.
+    #[test]
+    fn find_mergeable_stack_anywhere_is_none_without_a_matching_stack() {
+        let (mut world, container) = full_container();
+        let dropped = world.add_entity((
+            PropHasRefs(false),
+            PropTemplateId { template_id: 99 },
+            PropStackCount(1),
+        ));
+
+        assert_eq!(
+            find_mergeable_stack_anywhere(&world, container, dropped),
+            None
+        );
+    }
+
+    /// A full container that DOES hold a matching stack (template + both
+    /// stackable) offers it as a merge target anywhere in the grid, not just
+    /// at one specific cell - `matching_stack_at_cell`'s general-purpose
+    /// sibling, used by the ordinary (non-cell-targeted) deposit path.
+    #[test]
+    fn find_mergeable_stack_anywhere_finds_a_matching_stack() {
+        let (mut world, container) = full_container();
+        // Retarget one of the sixteen filler occupants to share the dropped
+        // item's template and carry a stack count, so it becomes the merge
+        // candidate.
+        let occupant = world
+            .borrow::<View<Links>>()
+            .unwrap()
+            .get(container)
+            .unwrap()
+            .to_links[3]
+            .to_entity_id
+            .unwrap()
+            .0;
+        world.add_component(occupant, PropTemplateId { template_id: 42 });
+        world.add_component(occupant, PropStackCount(3));
+        let dropped = world.add_entity((
+            PropHasRefs(false),
+            PropTemplateId { template_id: 42 },
+            PropStackCount(2),
+        ));
+
+        assert_eq!(
+            find_mergeable_stack_anywhere(&world, container, dropped),
+            Some(occupant)
+        );
+    }
+
+    /// The composed capacity check a release is gated on: a full container
+    /// with no mergeable stack cannot accept the deposit.
+    #[test]
+    fn container_can_accept_item_is_false_when_full_and_unmergeable() {
+        let (mut world, container) = full_container();
+        let dropped = world.add_entity((PropHasRefs(false),));
+
+        assert!(!container_can_accept_item(&world, container, dropped));
+    }
+
+    /// ...but a full container that holds a matching stack still accepts it,
+    /// via the merge fallback rather than a free cell.
+    #[test]
+    fn container_can_accept_item_is_true_when_full_but_mergeable() {
+        let (mut world, container) = full_container();
+        let occupant = world
+            .borrow::<View<Links>>()
+            .unwrap()
+            .get(container)
+            .unwrap()
+            .to_links[0]
+            .to_entity_id
+            .unwrap()
+            .0;
+        world.add_component(occupant, PropTemplateId { template_id: 7 });
+        world.add_component(occupant, PropStackCount(1));
+        let dropped = world.add_entity((
+            PropHasRefs(false),
+            PropTemplateId { template_id: 7 },
+            PropStackCount(1),
+        ));
+
+        assert!(container_can_accept_item(&world, container, dropped));
     }
 }
 
@@ -2581,7 +2818,9 @@ impl MissionCore {
         for (index, entity_id) in backpack_load_remap.overflow.into_iter().enumerate() {
             mission_core.spill_backpack_overflow(entity_id, index);
         }
-        mission_core.process_virtual_hand_effects(asset_cache, held_restore_effects);
+        // Restoring held items on load only emits `HoldItem`, never a store
+        // that could be refused - nothing to forward here.
+        let _ = mission_core.process_virtual_hand_effects(asset_cache, held_restore_effects);
         // Re-run each restored held item's Hold script. Only a fresh world
         // grab dispatches Hold (see `restore_held_item_physics` for the same
         // restore gap), so without this a save/load or level transition loses
@@ -3635,18 +3874,17 @@ impl MissionCore {
             })
         };
         // A stored item needs backpack room, so nothing is claimed unless the
-        // backpack can actually take it - a release is never suppressed into an
-        // item that lands nowhere. A collected one never enters the pack (its
-        // Frob awards and destroys it), so it is claimed either way.
-        let store: Vec<(EntityId, Option<(usize, usize)>)> =
-            if backpack_accepts_deposit(&self.world) {
-                store
-                    .into_iter()
-                    .map(|entity_id| (*entity_id, cell_for(*entity_id)))
-                    .collect()
-            } else {
-                Vec::new()
-            };
+        // backpack can actually take *that* item - a release is never
+        // suppressed into an item that lands nowhere. Checked per item (a
+        // full pack can still take a stackable that merges), so a two-hand
+        // release can claim one item and leave the other to its ordinary
+        // world drop. A collected one never enters the pack (its Frob awards
+        // and destroys it), so it is claimed either way.
+        let store: Vec<(EntityId, Option<(usize, usize)>)> = store
+            .into_iter()
+            .filter(|entity_id| backpack_accepts_deposit(&self.world, **entity_id))
+            .map(|entity_id| (*entity_id, cell_for(*entity_id)))
+            .collect();
 
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
@@ -3660,7 +3898,7 @@ impl MissionCore {
             eye_height: crate::player_eye_height_for(self.player_handle.is_crouched()),
         });
         rewrite_strip_release(&mut interaction_msgs, &store, &collect);
-        self.process_virtual_hand_effects(asset_cache, interaction_msgs);
+        effects.extend(self.process_virtual_hand_effects(asset_cache, interaction_msgs));
 
         // The physical VR reload: a clip carried into the other hand's weapon
         // loads it. Runs after the hands have been updated so the held pair is
@@ -4830,11 +5068,40 @@ impl MissionCore {
         self.id_to_physics.remove(&entity_id);
     }
 
+    /// Increment `occupant`'s stack by `dropped_entity_id`'s count and destroy
+    /// the now-redundant dropped entity - the shared merge tail for both the
+    /// cell-targeted deposit and the ordinary first-free deposit's
+    /// full-container fallback.
+    fn merge_dropped_stack(&mut self, occupant: EntityId, dropped_entity_id: EntityId) {
+        let dropped_count = self
+            .world
+            .borrow::<View<dark::properties::PropStackCount>>()
+            .unwrap()
+            .get(dropped_entity_id)
+            .unwrap()
+            .0;
+        if let Ok(mut stacks) = self
+            .world
+            .borrow::<ViewMut<dark::properties::PropStackCount>>()
+        {
+            if let Ok(occupant_stack) = (&mut stacks).get(occupant) {
+                occupant_stack.0 += dropped_count;
+            }
+        }
+        self.destroy_entity(dropped_entity_id);
+    }
+
     /// Move `dropped_entity_id` into `container_entity_id` (e.g. the player's
     /// inventory): drop any prior `Contains` links to it, add a fresh one from
     /// the container, mark it referenced, and remove it from the physical world.
-    /// Returns false if the container entity has no `Links` (so nothing was
-    /// added). Shared by the `DropEntityInfo` effect and the debug give lever.
+    ///
+    /// Returns false, leaving the item's prior links untouched, if the
+    /// container has no `Links` (nowhere to record the transfer) or has no
+    /// free cell for it and nothing to merge it into - a full backpack
+    /// refuses the deposit, retail-style, rather than absorbing it invisibly.
+    /// A full container that still holds a matching stack merges into it
+    /// instead of refusing (see [`find_mergeable_stack_anywhere`]). Shared by
+    /// the `DropEntityInfo` effect and the debug give lever.
     pub fn drop_entity_into_container(
         &mut self,
         container_entity_id: EntityId,
@@ -4847,8 +5114,15 @@ impl MissionCore {
         );
         if moved {
             self.make_un_physical(dropped_entity_id);
+            return true;
         }
-        moved
+        if let Some(occupant) =
+            find_mergeable_stack_anywhere(&self.world, container_entity_id, dropped_entity_id)
+        {
+            self.merge_dropped_stack(occupant, dropped_entity_id);
+            return true;
+        }
+        false
     }
 
     /// Like [`Self::drop_entity_into_container`], but targets `target_cell`
@@ -4859,7 +5133,9 @@ impl MissionCore {
     /// entity is consumed rather than claiming a cell of its own - matching
     /// the retail "drop onto a like stack" behavior. Any other occupied cell,
     /// or a cell off the grid, falls back to the ordinary first-free
-    /// placement (no swap semantics for a VR release).
+    /// placement (no swap semantics for a VR release); a full grid with no
+    /// free cell anywhere still merges into a matching stack wherever it sits,
+    /// and only refuses (returning false, untouched) when neither exists.
     pub fn drop_entity_into_container_at_cell(
         &mut self,
         container_entity_id: EntityId,
@@ -4872,22 +5148,7 @@ impl MissionCore {
             dropped_entity_id,
             target_cell,
         ) {
-            let dropped_count = self
-                .world
-                .borrow::<View<dark::properties::PropStackCount>>()
-                .unwrap()
-                .get(dropped_entity_id)
-                .unwrap()
-                .0;
-            if let Ok(mut stacks) = self
-                .world
-                .borrow::<ViewMut<dark::properties::PropStackCount>>()
-            {
-                if let Ok(occupant_stack) = (&mut stacks).get(occupant) {
-                    occupant_stack.0 += dropped_count;
-                }
-            }
-            self.destroy_entity(dropped_entity_id);
+            self.merge_dropped_stack(occupant, dropped_entity_id);
             return true;
         }
 
@@ -4899,8 +5160,15 @@ impl MissionCore {
         );
         if moved {
             self.make_un_physical(dropped_entity_id);
+            return true;
         }
-        moved
+        if let Some(occupant) =
+            find_mergeable_stack_anywhere(&self.world, container_entity_id, dropped_entity_id)
+        {
+            self.merge_dropped_stack(occupant, dropped_entity_id);
+            return true;
+        }
+        false
     }
 
     /// Re-encode the backpack's stored cells after effective Strength changes.
@@ -7002,7 +7270,9 @@ impl MissionCore {
                     parent_entity_id,
                     dropped_entity_id,
                 } => {
-                    self.drop_entity_into_container(parent_entity_id, dropped_entity_id);
+                    if !self.drop_entity_into_container(parent_entity_id, dropped_entity_id) {
+                        effects.push_front(backpack_full_feedback(dropped_entity_id));
+                    }
                 }
 
                 Effect::EquipCarriedWeapon { class_template_id } => {
@@ -7036,7 +7306,7 @@ impl MissionCore {
                     // grabs into an occupied hand no-op, so nothing is
                     // displaced there.
                     let grab_effects = self.interaction.grab(&self.world, entity_id, hand);
-                    self.process_virtual_hand_effects(asset_cache, grab_effects);
+                    effects.extend(self.process_virtual_hand_effects(asset_cache, grab_effects));
 
                     if self.interaction.is_holding(entity_id) {
                         // A grab routed through this effect (equip a carried
@@ -8517,7 +8787,7 @@ impl MissionCore {
                         && !self.interaction.is_wielding()
                     {
                         let msgs = self.interaction.wield(info.entity_id);
-                        self.process_virtual_hand_effects(asset_cache, msgs);
+                        effects.extend(self.process_virtual_hand_effects(asset_cache, msgs));
                     }
                 }
                 Effect::DebugCycleWeapon { head_rotation } => {
@@ -8565,7 +8835,7 @@ impl MissionCore {
                     // previously held weapon into the backpack, so each cycle
                     // swaps the viewmodel. No-op in VR (wield returns nothing).
                     let msgs = self.interaction.wield(info.entity_id);
-                    self.process_virtual_hand_effects(asset_cache, msgs);
+                    effects.extend(self.process_virtual_hand_effects(asset_cache, msgs));
                 }
                 Effect::TurnOffTweqs { entity_id } => {
                     self.world.run_with_data(turn_off_tweqs, entity_id);
@@ -10214,11 +10484,18 @@ impl MissionCore {
     /// Apply the effects produced by an interaction controller (the VR hands or
     /// the flat first-person controller). Shared so both presentations go
     /// through one path.
+    /// Returns any follow-up `Effect`s the batch produced (currently just UI
+    /// feedback for a refused backpack deposit) - the caller either has an
+    /// in-flight `effects` deque to extend (inside `handle_effects`) or its
+    /// own returned `Vec<Effect>` for the frame (`update`), and either way
+    /// they still reach `handle_effects`'s `Effect::PlaySound` handler this
+    /// frame.
     fn process_virtual_hand_effects(
         &mut self,
         asset_cache: &mut AssetCache,
         msgs: Vec<VirtualHandEffect>,
-    ) {
+    ) -> Vec<Effect> {
+        let mut deferred = Vec::new();
         for msg in msgs {
             match msg {
                 VirtualHandEffect::OutMessage { message } => self.script_world.dispatch(message),
@@ -10276,8 +10553,12 @@ impl MissionCore {
                         .borrow::<UniqueView<PlayerInfo>>()
                         .map(|player| player.inventory_entity_id)
                         .ok();
-                    if let Some(inventory_entity) = inventory_entity {
-                        self.drop_entity_into_container(inventory_entity, entity_id);
+                    let stored = inventory_entity.is_some_and(|inventory_entity| {
+                        self.drop_entity_into_container(inventory_entity, entity_id)
+                    });
+                    if !stored {
+                        deferred.push(backpack_full_feedback(entity_id));
+                        self.restore_refused_store_to_world(entity_id);
                     }
                 }
                 VirtualHandEffect::StoreItemAtCell { entity_id, cell } => {
@@ -10286,33 +10567,64 @@ impl MissionCore {
                         .borrow::<UniqueView<PlayerInfo>>()
                         .map(|player| player.inventory_entity_id)
                         .ok();
-                    if let Some(inventory_entity) = inventory_entity {
-                        self.drop_entity_into_container_at_cell(inventory_entity, entity_id, cell);
+                    let stored = inventory_entity.is_some_and(|inventory_entity| {
+                        self.drop_entity_into_container_at_cell(inventory_entity, entity_id, cell)
+                    });
+                    if !stored {
+                        deferred.push(backpack_full_feedback(entity_id));
+                        self.restore_refused_store_to_world(entity_id);
                     }
                 }
                 VirtualHandEffect::DropItem { entity_id } => {
-                    if !restore_live_entity_world_refs(&mut self.world, entity_id) {
-                        continue;
-                    }
-                    if self.is_vr_melee_weapon(entity_id) {
-                        // Recreate from authored physics so the released item
-                        // is an ordinary dynamic, harmless loose prop again.
-                        self.make_un_physical(entity_id);
-                    }
-                    // After the body is gone (so this writes the entity's
-                    // transform rather than pushing the outgoing kinematic
-                    // body around) and before the loose prop is rebuilt from
-                    // it.
-                    self.return_held_entity_to_the_hand(entity_id);
-                    self.make_physical(entity_id);
-
-                    self.script_world.dispatch(Message {
-                        payload: MessagePayload::Drop,
-                        to: entity_id,
-                    });
+                    self.drop_held_item_into_world(entity_id);
                 }
             }
         }
+        deferred
+    }
+
+    /// Restore a HELD item's ordinary world presence (refs, physics body, and
+    /// the `Drop` script signal) - the shared tail for an explicit VR release
+    /// (`DropItem`) and a `StoreItem`/`StoreItemAtCell` deposit refused for
+    /// lack of backpack room. A held item (a wield swap's displaced weapon, a
+    /// grabbed item) has already had its world refs stripped and its physics
+    /// removed by the time it reaches a store attempt, so a plain refusal
+    /// would otherwise leave it with no container link, no physics, and no
+    /// hand - gone. A no-op if the entity was destroyed in between.
+    fn drop_held_item_into_world(&mut self, entity_id: EntityId) {
+        if !restore_live_entity_world_refs(&mut self.world, entity_id) {
+            return;
+        }
+        if self.is_vr_melee_weapon(entity_id) {
+            // Recreate from authored physics so the released item is an
+            // ordinary dynamic, harmless loose prop again.
+            self.make_un_physical(entity_id);
+        }
+        // After the body is gone (so this writes the entity's transform
+        // rather than pushing the outgoing kinematic body around) and before
+        // the loose prop is rebuilt from it.
+        self.return_held_entity_to_the_hand(entity_id);
+        self.make_physical(entity_id);
+
+        self.script_world.dispatch(Message {
+            payload: MessagePayload::Drop,
+            to: entity_id,
+        });
+    }
+
+    /// A `StoreItem`/`StoreItemAtCell` deposit was refused (no room): if the
+    /// item still has an ordinary physics body it was never picked up out of
+    /// the world (the flat "loot goes straight to the backpack" path), and
+    /// `drop_entity_into_container`'s failure already left it untouched -
+    /// nothing to do. Otherwise it left the world when it was grabbed/held
+    /// (a wield-swap's displaced weapon, a VR hand's held item whose strip
+    /// release was claimed but then lost the room race), and must be
+    /// restored rather than vanish.
+    fn restore_refused_store_to_world(&mut self, entity_id: EntityId) {
+        if self.id_to_physics.contains_key(&entity_id) {
+            return;
+        }
+        self.drop_held_item_into_world(entity_id);
     }
 
     fn is_vr_melee_weapon(&self, entity_id: EntityId) -> bool {
@@ -13310,12 +13622,12 @@ mod strip_deposit_tests {
             inventory_entity_id,
         });
         assert!(
-            !backpack_accepts_deposit(&world),
+            !backpack_accepts_deposit(&world, entity_id),
             "a backpack with no Links cannot take a deposit"
         );
 
         world.add_component(inventory_entity_id, Links::empty());
-        assert!(backpack_accepts_deposit(&world));
+        assert!(backpack_accepts_deposit(&world, entity_id));
     }
 }
 
