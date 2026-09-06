@@ -17,4 +17,5 @@ export {
 } from "./game.js";
 export { findRepoRoot, GameServer, type LaunchOptions } from "./server.js";
 export * from "./anim-metrics.js";
+export * from "./ai-reachability.js";
 export type * from "./types.js";

@@ -420,6 +420,7 @@ async fn start_http_server(
         )
         .route("/v1/pathfinding/stats", get(pathfinding_stats))
         .route("/v1/ai/paths", get(ai_paths))
+        .route("/v1/pathfinding/route", get(pathfinding_route))
         .route(
             "/v1/input/action",
             axum::routing::post(trigger_input_action),
@@ -1575,6 +1576,14 @@ fn process_command(
                 .unwrap_or_default();
             if reply.send(paths).is_err() {
                 tracing::warn!("Failed to send AI paths - receiver dropped");
+            }
+        }
+        RuntimeCommand::GetPathfindingRoute { from, to, reply } => {
+            let route = game
+                .debug_scene()
+                .and_then(|debug_scene| debug_scene.pathfinding_route(from, to));
+            if reply.send(route).is_err() {
+                tracing::warn!("Failed to send pathfinding route - receiver dropped");
             }
         }
         RuntimeCommand::ListEntities {
@@ -4072,6 +4081,63 @@ async fn pathfinding_stats(
         Ok(result) => Ok(Json(result)),
         Err(_) => {
             tracing::error!("Failed to receive pathfinding stats - sender dropped");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct RouteQueryParams {
+    /// Start position as "x,y,z"
+    from: String,
+    /// Goal position as "x,y,z"
+    to: String,
+}
+
+fn parse_vec3_param(s: &str) -> Option<[f32; 3]> {
+    // Every component must parse and be finite: dropping a bad one would
+    // answer a reachability question about a point nobody asked for.
+    let parts: Vec<f32> = s
+        .split(',')
+        .map(|p| p.trim().parse::<f32>().ok().filter(|v| v.is_finite()))
+        .collect::<Option<Vec<f32>>>()?;
+    match parts.len() {
+        3 => Some([parts[0], parts[1], parts[2]]),
+        _ => None,
+    }
+}
+
+/// HTTP endpoint handler: does a walk route exist between two world
+/// positions? Answers "unreachable by design" vs "the AI failed to route".
+async fn pathfinding_route(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    Query(params): Query<RouteQueryParams>,
+) -> Result<Json<shock2vr::game_scene::DebugPathRoute>, StatusCode> {
+    let (Some(from), Some(to)) = (parse_vec3_param(&params.from), parse_vec3_param(&params.to))
+    else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+    if command_tx
+        .send(RuntimeCommand::GetPathfindingRoute {
+            from,
+            to,
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        tracing::error!("Failed to send GetPathfindingRoute - game loop receiver dropped");
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    match reply_rx.await {
+        // No pathfinding data in this scene (e.g. a debug scene): not found,
+        // rather than a route answer the caller would read as "unreachable".
+        Ok(Some(route)) => Ok(Json(route)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(_) => {
+            tracing::error!("Failed to receive pathfinding route - sender dropped");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }

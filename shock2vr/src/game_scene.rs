@@ -1084,6 +1084,28 @@ pub trait DebuggableScene {
     fn ai_paths(&self) -> Vec<DebugAiPathEntry> {
         Vec::new()
     }
+
+    /// Static walk-graph reachability between two world positions (None when
+    /// the scene has no pathfinding data). Lets remote clients tell "this AI
+    /// is failing to route" apart from "nothing walkable connects it to the
+    /// player at all".
+    fn pathfinding_route(&self, _from: [f32; 3], _to: [f32; 3]) -> Option<DebugPathRoute> {
+        None
+    }
+}
+
+/// A one-off walk-graph query between two positions, for debug introspection
+/// (GET /v1/pathfinding/route in the debug runtime)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebugPathRoute {
+    /// AIPATH cell containing `from` (None when the position is off-mesh)
+    pub from_cell: Option<u32>,
+    /// AIPATH cell containing `to` (None when the position is off-mesh)
+    pub to_cell: Option<u32>,
+    /// Whether a walk route exists between the two cells
+    pub reachable: bool,
+    /// Waypoint count of that route (0 when unreachable)
+    pub waypoints: usize,
 }
 
 /// One AI's most recent path query, for debug introspection

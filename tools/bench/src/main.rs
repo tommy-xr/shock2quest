@@ -89,6 +89,12 @@ enum PathCommand {
         #[arg(long)]
         at: String,
     },
+    /// Dump every nav cell as JSON (polygon, center, flags, walk component)
+    /// - the geometry a map visualization draws over
+    Dump { mission: String },
+    /// List the missions in the game data, one per line (they can live inside
+    /// an archive, so a directory listing is not enough)
+    Missions,
     /// Show the walk component containing a position and its frontier links
     /// (how the component connects - or fails to connect - to neighbors)
     Component {
@@ -163,6 +169,15 @@ fn run_path_command(command: PathCommand) -> Result<()> {
         PathCommand::Cell { mission, at } => {
             let db = load_path_database(&mission)?;
             dump_cells_at(db, parse_vec3(&at)?);
+        }
+        PathCommand::Missions => {
+            for mission in data_files::mission_names(paths::data_root()) {
+                println!("{mission}");
+            }
+        }
+        PathCommand::Dump { mission } => {
+            let db = load_path_database(&mission)?;
+            println!("{}", serde_json::to_string(&dump_cells(&mission, &db))?);
         }
         PathCommand::Component { mission, at } => {
             let db = load_path_database(&mission)?;
@@ -430,6 +445,54 @@ fn print_stats(mission: &str, db: PathDatabase) {
 
 /// Connected components of pathable cells over walk links (undirected),
 /// sorted largest-first.
+#[derive(Serialize)]
+struct CellDump {
+    mission: String,
+    cells: Vec<CellDumpEntry>,
+}
+
+#[derive(Serialize)]
+struct CellDumpEntry {
+    id: u32,
+    center: [f32; 3],
+    /// Cell polygon, in vertex order (XZ is the map plane)
+    polygon: Vec<[f32; 3]>,
+    flags: String,
+    /// Index into the walk components (largest first); None for cells no
+    /// plain WALK query can stand in
+    component: Option<usize>,
+}
+
+/// Every cell as JSON, for a map renderer to draw.
+fn dump_cells(mission: &str, db: &PathDatabase) -> CellDump {
+    let components = walk_components(db);
+    let mut component_of: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for (index, cells) in components.iter().enumerate() {
+        for &cell in cells {
+            component_of.insert(cell, index);
+        }
+    }
+    CellDump {
+        mission: mission.to_string(),
+        cells: db
+            .cells
+            .iter()
+            .map(|cell| CellDumpEntry {
+                id: cell.id,
+                center: cell.center.into(),
+                polygon: cell
+                    .vertex_indices
+                    .iter()
+                    .filter_map(|&i| db.vertices.get(i as usize))
+                    .map(|v| (*v).into())
+                    .collect(),
+                flags: format!("{:?}", cell.flags),
+                component: component_of.get(&cell.id).copied(),
+            })
+            .collect(),
+    }
+}
+
 fn walk_components(db: &PathDatabase) -> Vec<Vec<u32>> {
     fn find(parent: &mut [u32], mut x: u32) -> u32 {
         while parent[x as usize] != x {

@@ -141,6 +141,13 @@ pub enum RuntimeCommand {
     /// Get the latest path each AI computed (goal, waypoints, outcome)
     GetAiPaths(oneshot::Sender<Vec<shock2vr::game_scene::DebugAiPathEntry>>),
 
+    /// One-off walk-graph reachability query between two world positions
+    GetPathfindingRoute {
+        from: [f32; 3],
+        to: [f32; 3],
+        reply: oneshot::Sender<Option<shock2vr::game_scene::DebugPathRoute>>,
+    },
+
     /// List entities near the player
     ListEntities {
         limit: Option<usize>,
