@@ -319,6 +319,8 @@ pub struct SceneObjectSummary {
     /// geometry (world, HUD, debug overlays).
     pub source: Option<String>,
     pub position: [f32; 3],
+    /// Magnitudes of the rendered world-transform axes (mesh-local transform excluded).
+    pub scale: [f32; 3],
     /// Transparency in effect for this draw (0.0 = opaque, 1.0 = invisible).
     pub transparency: Option<f32>,
     pub depth_write: bool,

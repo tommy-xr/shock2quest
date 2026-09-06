@@ -418,6 +418,8 @@ export interface SceneObjectSummary {
    */
   source: string | null;
   position: Vec3;
+  /** Rendered world-transform axis magnitudes, excluding mesh-local transforms. */
+  scale: Vec3;
   /** Transparency in effect for this draw (0 = opaque, 1 = invisible). */
   transparency: number | null;
   depth_write: boolean;
@@ -1100,6 +1102,7 @@ export interface HandGrip {
 }
 
 export interface ResolvedGrip {
+  item_scale: number;
   pose_family: string;
   offset: {x:number;y:number;z:number};
   rotation: {s:number;v:{x:number;y:number;z:number}};

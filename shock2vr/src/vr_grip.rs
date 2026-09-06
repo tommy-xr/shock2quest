@@ -24,6 +24,9 @@ pub struct GripKinematics {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedGrip {
+    /// Uniform held-item scale; the glove calibration is unchanged.
+    #[serde(default = "default_item_scale")]
+    pub item_scale: f32,
     pub pose_family: String,
     /// Item origin and rotation in tracked-hand space (world units).
     pub offset: Vector3<f32>,
@@ -33,6 +36,10 @@ pub struct ResolvedGrip {
     pub contacts: [Option<[f32; 3]>; 5],
     pub anchor: [f32; 3],
     pub score: f32,
+}
+
+fn default_item_scale() -> f32 {
+    1.0
 }
 
 impl ResolvedGrip {
@@ -49,6 +56,9 @@ impl ResolvedGrip {
         ]
         .into_iter()
         .all(f32::is_finite)
+            && self.item_scale.is_finite()
+            && self.item_scale > 0.0
+            && self.item_scale <= 10.0
             && (self.rotation.magnitude2() - 1.0).abs() < 0.001
             && self
                 .curls
@@ -409,6 +419,7 @@ impl GripSurface {
             score = f32::NEG_INFINITY;
         }
         ResolvedGrip {
+            item_scale: 1.0,
             pose_family: "broad".to_owned(),
             offset,
             rotation,
@@ -833,5 +844,24 @@ mod tests {
             }
             .is_valid()
         );
+    }
+    #[test]
+    fn uniform_item_scale_defaults_to_one_and_rejects_invalid_values() {
+        let mut grip =
+            plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
+        let mut json = serde_json::to_value(&grip).unwrap();
+        json.as_object_mut().unwrap().remove("item_scale");
+        assert_eq!(
+            serde_json::from_value::<ResolvedGrip>(json)
+                .unwrap()
+                .item_scale,
+            1.0
+        );
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, 11.0] {
+            grip.item_scale = scale;
+            assert!(!grip.is_valid());
+        }
+        grip.item_scale = 0.8;
+        assert!(grip.is_valid());
     }
 }

@@ -397,7 +397,7 @@ impl PlayerInteraction for VrInteraction {
                     entity_id: entity,
                     position: hand.get_position() + hand.get_rotation().rotate_vector(grip.offset),
                     rotation: hand.get_rotation() * grip.rotation,
-                    scale: cgmath::vec3(1.0, 1.0, 1.0),
+                    scale: cgmath::vec3(grip.item_scale, grip.item_scale, grip.item_scale),
                 });
             }
         }

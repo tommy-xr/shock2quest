@@ -10280,14 +10280,12 @@ impl MissionCore {
     fn return_held_entity_to_the_hand(&mut self, entity_id: EntityId) {
         use cgmath::Rotation;
 
-        let Some(grip) = self
+        let grip = self
             .world
             .borrow::<View<RuntimePropVrGripOffset>>()
             .ok()
             .and_then(|view| view.get(entity_id).ok().map(|grip| grip.0))
-        else {
-            return;
-        };
+            .unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
 
         let Some((position, rotation)) =
             self.world
@@ -10301,6 +10299,8 @@ impl MissionCore {
         else {
             return;
         };
+        // Pickups without a melee grip keep their position and restore unit
+        // held-item scale before rebuilding their loose-object physics.
         // The grip is hand-local and the entity carries the hand's rotation
         // (a computed grip contributes none of its own).
         let hand = position - rotation.rotate_vector(grip);
