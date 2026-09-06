@@ -20,7 +20,7 @@ const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const output = resolve(values.output);
 const manifestPath = join(output, 'data.json');
 const viewNames = ['front', 'back', 'top', 'oblique', 'palm'];
-const weaponTemplates = new Set([-928, -17, -19, -26, -27, -247]);
+const weaponTemplates = new Set([-928, -17, -19, -26, -27]);
 const credentialTemplates = new Set([-2998, -2594]);
 const reviewStatuses = new Set(['reviewed', 'adjust', 'uncertain']);
 const reviews = values.reviews ? JSON.parse(await readFile(resolve(values.reviews), 'utf8')) : {};
@@ -49,6 +49,7 @@ function reviewFor(fixture) {
     assert.ok(reviewStatuses.has(supplied.status) && typeof supplied.note === 'string', `Invalid review for ${fixture.label}`);
     return supplied;
   }
+  if (fixture.template === -247) return { status: 'uncertain', note: 'Authored psi-amp forearm reference. This intentionally retains its integrated forearm and does not use an automatic glove grip.' };
   if (fixture.label.toLowerCase().includes('hypo') || fixture.model === 'techt') {
     return { status: 'adjust', note: 'Existing review requests a better grasp. Inspect palm, thumb, and finger contact in the enlarged views.' };
   }
@@ -85,7 +86,7 @@ for name in sys.argv[2:]:
         images[hand][view] = { ...shot, image: `data:image/webp;base64,${(await readFile(join(output, portableFile))).toString('base64')}` };
       }
     }
-    const unavailable = item.error || Object.entries(item.hands).some(([hand, capture]) => hand !== 'station' && capture.diagnostic.grip?.source !== 'prepared');
+    const unavailable = item.error || Object.entries(item.hands).some(([hand, capture]) => hand !== 'station' && item.template !== -247 && capture.diagnostic.grip?.source !== 'prepared');
     const review = unavailable
       ? { status: 'uncertain', note: item.error ? 'Capture failed; inspect the error before evaluating this item.' : 'Prepared fit unavailable; these images show fallback behavior, not an approved fit.' }
       : reviews[String(item.template)] ?? item.review;
@@ -174,7 +175,7 @@ if (values['render-only']) {
           const radius = Math.hypot(...max.map((v, i) => (v - min[i]) / 2));
           const distance = Math.max(0.42, radius * 2.4);
           capture.diagnostic = { entity: item.id, model: fixture.model, grip, selection_bounds: bounds, pawn, handPosition: [0, 1, 0] };
-          if (!grip?.grip || grip.source !== 'prepared') {
+          if (fixture.template !== -247 && (!grip?.grip || grip.source !== 'prepared')) {
             record.review = { status: 'uncertain', note: `Prepared fit unavailable for ${hand}; captured fallback for diagnosis.` };
           }
           const directions = { front: [0, 0, 1], back: [0, 0, -1], top: [0, 1, 0.01], oblique: [0.8, 0.5, -0.8], palm: [0.5, 0.5, hand === 'right' ? 1 : -1] };
@@ -188,9 +189,9 @@ if (values['render-only']) {
             await game.step({ frames: 1 });
             const file = `${Math.abs(fixture.template)}-${hand}-${view}.png`;
             await game.screenshot(join(output, file), 1600);
-            capture.views[view] = { file, position, lookAt, framing: close ? 'Calibrated hand-contact close-up; the rest of a large object can extend outside the frame.' : bounds ? 'Full hand/object bounds.' : 'Calibrated framing; no object bounds available.' };
+            capture.views[view] = { file, position, lookAt, framing: fixture.template === -247 ? 'Authored psi-amp hand and forearm reference; the outer forearm may extend beyond the frame.' : close ? 'Calibrated hand-contact close-up; the rest of a large object can extend outside the frame.' : bounds ? 'Full hand/object bounds.' : 'Calibrated framing; no object bounds available.' };
           }
-          console.log(`${fixture.label} ${hand}: ${grip?.source ?? 'missing'}; ${grip?.solve_ms?.toFixed(3) ?? '?'}ms`);
+          console.log(`${fixture.label} ${hand}: ${fixture.template === -247 ? 'authored forearm' : grip?.source ?? 'missing'}; ${grip?.solve_ms?.toFixed(3) ?? '?'}ms`);
           await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
         }
       } catch (error) {

@@ -63,4 +63,5 @@ HTML file can be downloaded or shared without a companion image directory.
 loads image-review notes keyed by negative template ID, with `status` (`reviewed`,
 `adjust`, or `uncertain`) and `note`. `--render-only` rebuilds the page from the
 existing capture manifest after updating those notes, without launching a game.
-The default gallery omits authored weapon grips, which remain a separate pass.
+The default gallery includes the psi amp as an authored-forearm reference. Other
+authored weapon grips remain a separate pass.

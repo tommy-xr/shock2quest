@@ -218,6 +218,11 @@ impl GripSurface {
                             {
                                 continue;
                             }
+                            if hints.upright_axis.is_some_and(|[x, y, z]| {
+                                rotation.rotate_vector(vec3(x, y, z).normalize()).y < 0.8
+                            }) {
+                                continue;
+                            }
                             for clearance in [1.0, 2.0, 3.0, 5.0, 8.0] {
                                 let offset = hand.palm - rotation.rotate_vector(anchor)
                                     + hand.normal * FINGER_RADIUS * clearance;
@@ -429,6 +434,9 @@ pub fn glove_to_hand(hand: Handedness) -> Matrix4<f32> {
 pub struct GripHints {
     pub pose_family: Option<u8>,
     pub keep_upright: bool,
+    /// Item-local direction that should point up in the calibrated hand pose.
+    /// Unlike keep_upright, this does not restrict the anchor height.
+    pub upright_axis: Option<[f32; 3]>,
     /// Optional inclusive item-local bounds for candidate palm contact points.
     pub anchor_region: Option<[[f32; 3]; 2]>,
     /// Optional item-local palm contact anchor and item-to-hand rotation [w,x,y,z].
@@ -545,6 +553,17 @@ impl GripHints {
                 self.curls
                     .iter()
                     .flat_map(|v| [v.is_some() as u8 as f32, v.unwrap_or(0.0)]),
+            )
+            // An absent axis leaves the previous search and its fingerprint
+            // unchanged. Opting in adds three values and invalidates that bake.
+            .chain(
+                self.upright_axis
+                    .map(|[x, y, z]| {
+                        let axis = vec3(x, y, z).normalize();
+                        [axis.x, axis.y, axis.z]
+                    })
+                    .into_iter()
+                    .flatten(),
             ),
         )
     }
@@ -552,6 +571,11 @@ impl GripHints {
     pub fn is_valid(&self) -> bool {
         self.anchor_region.is_none_or(|[min, max]| {
             (0..3).all(|i| min[i].is_finite() && max[i].is_finite() && min[i] <= max[i])
+        }) && self.upright_axis.is_none_or(|axis| {
+            let length_squared = axis.iter().map(|v| v * v).sum::<f32>();
+            axis.iter().all(|v| v.is_finite())
+                && length_squared.is_finite()
+                && length_squared > 1e-8
         }) && self.pose_family.is_none_or(|p| p <= 3)
             && self
                 .anchor
@@ -772,6 +796,35 @@ mod tests {
         assert!(
             !GripHints {
                 anchor_region: Some([[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+                ..Default::default()
+            }
+            .is_valid()
+        );
+    }
+    #[test]
+    fn upright_axis_selects_direction_and_invalidates_only_opted_in_bakes() {
+        let hints = GripHints {
+            upright_axis: Some([1.0, 0.0, 0.0]),
+            ..Default::default()
+        };
+        let result = plane(0.05).resolve(&straight_fingers(), &hints).unwrap();
+        assert!(result.rotation.rotate_vector(Vector3::unit_x()).y >= 0.8);
+        assert_ne!(hints.fingerprint(), GripHints::default().fingerprint());
+        assert_eq!(GripHints::default().fingerprint(), "3e42e05263705d8b");
+        let small_x = GripHints {
+            upright_axis: Some([0.00011, 0.0, 0.0]),
+            ..Default::default()
+        };
+        let small_tilt = GripHints {
+            upright_axis: Some([0.00011, 0.000049, 0.0]),
+            ..Default::default()
+        };
+        assert!(small_x.is_valid() && small_tilt.is_valid());
+        assert_ne!(small_x.fingerprint(), small_tilt.fingerprint());
+        assert_eq!(small_x.fingerprint(), hints.fingerprint());
+        assert!(
+            !GripHints {
+                upright_axis: Some([0.0; 3]),
                 ..Default::default()
             }
             .is_valid()

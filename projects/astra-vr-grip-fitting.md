@@ -87,6 +87,19 @@ placement during the bake. `keep_upright` keeps the item's Y axis near the hand'
 Y axis and restricts candidates to the middle of its height, avoiding rim/base
 grips on vessels. These hints are authoring inputs; rebake after editing them.
 
+`upright_axis` optionally names an item-local direction, for example `[0, 0, 1]`
+for the ICE-Pick cable. During automatic orientation selection, that direction
+must point near the calibrated hand's +Y axis. It does not restrict anchor height
+or lock the object to world gravity: the baked pose still follows the controller.
+An explicit `rotation` overrides automatic orientation selection. Omitting this
+axis preserves the existing solver policy and fingerprints; opting in changes
+that model's hint fingerprint and requires rebaking.
+
+Pronged implants constrain contact to the housing; GamePig constrains it to the
+middle of a side. These are model-space region hints rather than changes to glove
+calibration or asset scale. The current gallery remains a review tool. A usable
+override editor is the next prerequisite before moving to `_h` weapon fitting.
+
 The output resource has a versioned schema and one entry per model and hand.
 Mesh, glove-kinematics, and hints fingerprints plus a solver revision prevent a
 bake from being applied after its inputs change. Fingerprints quantize coordinates to 0.0001 world units to
