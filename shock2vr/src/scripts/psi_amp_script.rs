@@ -12,18 +12,21 @@
 //! full bar is a psi burnout - the cast fails, the points are spent, and the
 //! player takes damage. Non-overloadable powers cast immediately on pull.
 //!
-//! Projectile ("shot"), sustained, and instant self-targeted powers cast so
-//! far - the remaining kinds are logged and skipped without spending points.
+//! Projectile ("shot"), sustained, and instant powers - self-targeted (the
+//! heals) and aimed (Soma Transference) - cast so far; the remaining kinds are
+//! logged and skipped without spending points.
 
+use cgmath::{EuclideanSpace, InnerSpace, Point3, Transform, Vector3, point3, vec3};
 use engine::{audio::AudioHandle, game_log};
 use shipyard::{EntityId, Get, UniqueView, View, World};
 
 use crate::{
     mission::PlayerInfo,
-    physics::PhysicsWorld,
+    physics::{InternalCollisionGroups, PhysicsWorld},
     psi::{self, GlobalPsiPowers, PsiPowerInfo, PsiPowerSelection, charge_duration_secs},
     runtime_props::PsiChargePhase,
     time::Time,
+    util::resolve_proxy_entity,
 };
 
 use super::{
@@ -86,7 +89,7 @@ impl Script for PsiAmpScript {
         &mut self,
         entity_id: EntityId,
         world: &World,
-        _physics: &PhysicsWorld,
+        physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
         match msg {
@@ -125,10 +128,18 @@ impl Script for PsiAmpScript {
                         );
                         return Effect::NoEffect;
                     }
-                    // Nor charge a cast that would resolve to nothing (a heal
-                    // at full health): over-holding it would burn out for a
-                    // cast the release refuses anyway.
-                    if instant_cast_is_futile(world, &power, player_psi_stat(world)) {
+                    // Nor charge a cast that resolves to nothing right now (a
+                    // heal at full health, a drain with nothing in its sights):
+                    // over-holding it would burn out for a cast worth nothing.
+                    // Aim-dependent powers can still lose their target during
+                    // the hold - the release refuses, as an over-hold does.
+                    if instant_cast_is_futile(
+                        world,
+                        physics,
+                        entity_id,
+                        &power,
+                        player_psi_stat(world),
+                    ) {
                         game_log!(INFO, "{} would do nothing right now", power.name);
                         return Effect::NoEffect;
                     }
@@ -145,7 +156,7 @@ impl Script for PsiAmpScript {
                         phase: PsiChargePhase::Charging,
                     }
                 } else {
-                    cast_selected_power(world, entity_id, player_psi_stat(world))
+                    cast_selected_power(world, physics, entity_id, player_psi_stat(world))
                 }
             }
             MessagePayload::TriggerRelease => {
@@ -170,7 +181,7 @@ impl Script for PsiAmpScript {
                 let fraction = elapsed / duration;
                 let overload = fraction >= psi::OVERLOAD_ZONE_START;
                 let effective_psi = psi::effective_psi_for_cast(player_psi_stat(world), overload);
-                let cast = cast_selected_power(world, entity_id, effective_psi);
+                let cast = cast_selected_power(world, physics, entity_id, effective_psi);
                 // A successful overload flashes the success art briefly; a
                 // normal cast - or a fizzle (no psi / power not implemented)
                 // - just drops the meter.
@@ -320,7 +331,12 @@ fn power_is_known(world: &World, template_id: i32) -> bool {
         .unwrap_or(false)
 }
 
-fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) -> Effect {
+fn cast_selected_power(
+    world: &World,
+    physics: &PhysicsWorld,
+    amp_entity: EntityId,
+    effective_psi: i32,
+) -> Effect {
     let Some(power) = selected_power(world) else {
         return Effect::NoEffect;
     };
@@ -351,10 +367,10 @@ fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) 
         return cast_sustained_power(world, amp_entity, &power, effective_psi);
     }
 
-    // Instant (self-targeted) powers resolve immediately - no duration, no
-    // projectile.
+    // Instant powers resolve immediately - no duration, no projectile. Some
+    // target the caster (the heals), some the creature under the aim.
     if power.power.activation_type == psi::ACTIVATION_TYPE_INSTANT {
-        return cast_instant_power(world, amp_entity, &power, effective_psi);
+        return cast_instant_power(world, physics, amp_entity, &power, effective_psi);
     }
 
     let Some(projectile_template) = power.projectile_for_psi_stat(effective_psi) else {
@@ -446,10 +462,11 @@ fn cast_sustained_power(
 
 /// Cast an instant (activation type 2) power: it resolves on the spot, with
 /// no duration and no projectile. Dispatch is by template id so the remaining
-/// instant powers (SomaDrain, ForceWall, CyberHack) slot in beside the
-/// heals.
+/// instant powers (ForceWall, CyberHack) slot in beside the heals and the
+/// aimed drain.
 fn cast_instant_power(
     world: &World,
+    physics: &PhysicsWorld,
     amp_entity: EntityId,
     power: &PsiPowerInfo,
     effective_psi: i32,
@@ -458,6 +475,8 @@ fn cast_instant_power(
         // Cerebro-stimulated Regeneration and its Advanced (tier 5) version:
         // both restore the caster's health from the same authored data.
         id if is_self_heal_power(id) => cast_self_heal(world, amp_entity, power, effective_psi),
+        // Soma Transference: drain the creature under the amp's aim.
+        psi::SOMA_DRAIN_TEMPLATE_ID => cast_soma_drain(world, physics, amp_entity, power),
         _ => {
             game_log!(
                 INFO,
@@ -525,6 +544,219 @@ fn cast_self_heal(
     Effect::Multiple(effects)
 }
 
+/// Soma Transference: drain the creature under the amp's aim, healing the
+/// caster by the transferred health. With nothing live in range the cast is
+/// refused and spends nothing, matching the empty-pool guard - a whiff is not
+/// punished.
+fn cast_soma_drain(
+    world: &World,
+    physics: &PhysicsWorld,
+    amp_entity: EntityId,
+    power: &PsiPowerInfo,
+) -> Effect {
+    let Some(drain) = drain_target(world, physics, amp_entity, power) else {
+        game_log!(
+            INFO,
+            "{} found no living target within {} units of the aim",
+            power.name,
+            drain_range(&power.power.data)
+        );
+        return Effect::NoEffect;
+    };
+    let Some((player_entity, current_hp, max_hp)) = super::script_util::player_hit_points(world)
+    else {
+        game_log!(WARN, "No player hit points for {}", power.name);
+        return Effect::NoEffect;
+    };
+
+    let damage = drain_damage(&power.power.data);
+    // The applier does not clamp to the maximum, so clamp the transfer to the
+    // caster's missing health (a drain at full health still damages).
+    let heal = drain_heal(&power.power.data).min((max_hp - current_hp).max(0));
+
+    let mut effects = vec![
+        play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
+        Effect::SpendPsiPoints {
+            amount: power.power.psi_cost,
+        },
+        Effect::Send {
+            msg: super::Message {
+                to: drain.target,
+                payload: MessagePayload::Damage {
+                    amount: damage,
+                    // Contact point + aim direction seed the victim's
+                    // death-ragdoll reaction, as a melee hit does. No bone:
+                    // hitbox proxies resolve to their parent before the send.
+                    impact: Some(super::DamageImpact {
+                        direction: drain.direction,
+                        point: drain.hit_point.to_vec(),
+                        bone: None,
+                    }),
+                },
+            },
+        },
+    ];
+    if heal > 0 {
+        // PlayerScript handles only Damage - there is no heal message - so
+        // adjust HP directly.
+        effects.push(Effect::AdjustHitPoints {
+            entity_id: player_entity,
+            delta: heal,
+        });
+    }
+    effects.extend(amp_cast_flashes(world, amp_entity));
+
+    game_log!(
+        INFO,
+        "Cast psi power: {} (tier {}, drained {} HP, transferred {})",
+        power.name,
+        power.power.psi_cost,
+        damage,
+        heal
+    );
+    Effect::Multiple(effects)
+}
+
+/// The creature an aimed instant cast resolves against.
+struct DrainTarget {
+    target: EntityId,
+    hit_point: Point3<f32>,
+    direction: Vector3<f32>,
+}
+
+/// The live creature under the amp's aim within the power's range.
+fn drain_target(
+    world: &World,
+    physics: &PhysicsWorld,
+    amp_entity: EntityId,
+    power: &PsiPowerInfo,
+) -> Option<DrainTarget> {
+    let range = drain_range(&power.power.data);
+    if range <= 0.0 {
+        return None;
+    }
+    let (origin, direction) = amp_aim_ray(world, amp_entity)?;
+    // ray_cast2, not ray_cast: the latter normalizes the direction and casts a
+    // fixed 100 units, which would silently ignore the authored range. WORLD is
+    // in the mask so a wall between caster and creature stops the drain - the
+    // nearest hit then carries no entity and the cast is refused.
+    let hit = physics.ray_cast2(
+        origin,
+        direction,
+        range,
+        InternalCollisionGroups::ENTITIES
+            | InternalCollisionGroups::HITBOX
+            | InternalCollisionGroups::SELECTABLE
+            | InternalCollisionGroups::WORLD,
+        Some(amp_entity),
+        true,
+    )?;
+    let target = resolve_proxy_entity(world, hit.maybe_entity_id?);
+    if !is_live_creature(world, target) {
+        return None;
+    }
+    Some(DrainTarget {
+        target,
+        hit_point: hit.hit_point,
+        direction,
+    })
+}
+
+/// Whether an entity is a living creature: `P$AI` **and** hit points left.
+///
+/// Both halves matter. The authored corpse props scattered through the levels
+/// carry creature data but no AI, and draining the scenery is not a cast;
+/// `ai_util::is_killed` is the wrong test here because it answers "false" for
+/// an entity with no hit-point component at all - there is no health to
+/// transfer out of one.
+fn is_live_creature(world: &World, entity_id: EntityId) -> bool {
+    let has_ai = world
+        .borrow::<View<dark::properties::PropAI>>()
+        .map(|v_ai| v_ai.get(entity_id).is_ok())
+        .unwrap_or(false);
+    has_ai
+        && world
+            .borrow::<View<dark::properties::PropHitPoints>>()
+            .map(|v_hp| v_hp.get(entity_id).is_ok_and(|hp| hp.hit_points > 0))
+            .unwrap_or(false)
+}
+
+/// The world-space ray an aimed instant cast travels (origin, unit direction):
+/// the flat crosshair ray when the amp carries one, otherwise the amp's own
+/// muzzle and barrel axis (VR, where the amp is a physical object in the
+/// hand). The same two sources `create_projectile` uses, so an aimed cast goes
+/// where a psi bolt would.
+fn amp_aim_ray(world: &World, amp_entity: EntityId) -> Option<(Point3<f32>, Vector3<f32>)> {
+    if let Ok(v_flat_aim) = world.borrow::<View<crate::runtime_props::RuntimePropFlatAim>>()
+        && let Ok(aim) = v_flat_aim.get(amp_entity)
+    {
+        return Some((aim.origin, aim.forward.normalize()));
+    }
+
+    let v_transform = world
+        .borrow::<View<crate::runtime_props::RuntimePropTransform>>()
+        .ok()?;
+    let transform = v_transform.get(amp_entity).ok()?.0;
+    let muzzle = world
+        .borrow::<View<crate::runtime_props::RuntimePropVhots>>()
+        .ok()
+        .and_then(|v_vhots| {
+            v_vhots
+                .get(amp_entity)
+                .ok()
+                .and_then(|v| v.0.first().map(|vhot| vhot.point))
+        })
+        .unwrap_or_else(|| point3(0.0, 0.0, 0.0));
+    // The barrel runs down the model's -X (the vhot sits at the -X tip), which
+    // is the axis `create_projectile` sends the bolt along.
+    Some((
+        transform.transform_point(muzzle),
+        transform.transform_vector(vec3(-1.0, 0.0, 0.0)).normalize(),
+    ))
+}
+
+/// The three authored `data` floats of Soma Transference (`[10, 5, 5]`).
+///
+/// Assumption: damage / transferred health / range in world units - the
+/// reading the retail behavior suggests (the target loses more than the caster
+/// gains, over a short reach). Unlike the heals, no term scales with PSI:
+/// three floats leave no base/per-PSI pair once one of them is the range. So
+/// an overload's +2 effective PSI buys this power nothing, which is what its
+/// data authors.
+fn drain_damage(data: &[f32; 4]) -> f32 {
+    positive_or_zero(data[0])
+}
+
+/// Health transferred to the caster, in whole hit points (the caller clamps it
+/// to the caster's missing health).
+fn drain_heal(data: &[f32; 4]) -> i32 {
+    whole_hit_points(data[1])
+}
+
+/// How far the aimed drain reaches, in world units.
+fn drain_range(data: &[f32; 4]) -> f32 {
+    positive_or_zero(data[2])
+}
+
+/// A `data` float as a usable positive quantity; 0 for anything unusable
+/// (NaN, infinite, zero or negative).
+fn positive_or_zero(value: f32) -> f32 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        0.0
+    }
+}
+
+/// A `data` float as a whole number of hit points; 0 for anything unusable.
+fn whole_hit_points(value: f32) -> i32 {
+    let value = positive_or_zero(value);
+    if value == 0.0 {
+        return 0;
+    }
+    value.floor().min(i32::MAX as f32) as i32
+}
+
 /// The instant powers that heal the caster: Cerebro-stimulated Regeneration
 /// and its Advanced version, which share a script and a `data` shape.
 fn is_self_heal_power(template_id: i32) -> bool {
@@ -539,17 +771,23 @@ fn is_self_heal_power(template_id: i32) -> bool {
 /// powers' `P$PsiShield` duration data does. PsiHeal's `[0, 2]` therefore
 /// reads as 2 HP per point of PSI (Major Heal's `[5, 5]` as 5 + 5 x PSI).
 fn self_heal_amount(data: &[f32; 4], effective_psi: i32) -> i32 {
-    let amount = data[0] + data[1] * effective_psi as f32;
-    if !amount.is_finite() || amount <= 0.0 {
-        return 0;
-    }
-    amount.floor().min(i32::MAX as f32) as i32
+    whole_hit_points(data[0] + data[1] * effective_psi as f32)
 }
 
-/// Whether an instant cast would resolve to nothing right now (a heal with
-/// no health missing). Checked before a charge starts so a pointless cast
-/// cannot be over-held into a burnout, which spends points and deals damage.
-fn instant_cast_is_futile(world: &World, power: &PsiPowerInfo, effective_psi: i32) -> bool {
+/// Whether an instant cast would resolve to nothing right now (a heal with no
+/// health missing, a drain with no living target in range). Checked before a
+/// charge starts so a pointless cast cannot be over-held into a burnout, which
+/// spends points and deals damage.
+fn instant_cast_is_futile(
+    world: &World,
+    physics: &PhysicsWorld,
+    amp_entity: EntityId,
+    power: &PsiPowerInfo,
+    effective_psi: i32,
+) -> bool {
+    if power.template_id == psi::SOMA_DRAIN_TEMPLATE_ID {
+        return drain_target(world, physics, amp_entity, power).is_none();
+    }
     if !is_self_heal_power(power.template_id) {
         return false;
     }
@@ -614,6 +852,69 @@ mod tests {
         assert!(is_self_heal_power(psi::PSI_HEAL_TEMPLATE_ID));
         assert!(is_self_heal_power(psi::MAJOR_HEAL_TEMPLATE_ID));
         assert!(!is_self_heal_power(psi::INVISO_TEMPLATE_ID));
+    }
+
+    /// SomaDrain's authored data, read as damage / transferred health / range.
+    #[test]
+    fn soma_drain_reads_its_authored_data() {
+        let data = [10.0, 5.0, 5.0, 0.0];
+        assert_eq!(drain_damage(&data), 10.0);
+        assert_eq!(drain_heal(&data), 5);
+        assert_eq!(drain_range(&data), 5.0);
+    }
+
+    #[test]
+    fn soma_drain_ignores_unusable_data() {
+        let data = [f32::NAN, -3.0, 0.0, 0.0];
+        assert_eq!(drain_damage(&data), 0.0);
+        assert_eq!(drain_heal(&data), 0);
+        // A power with no authored range reaches nothing at all.
+        assert_eq!(drain_range(&data), 0.0);
+    }
+
+    /// The drain takes only living creatures: an authored corpse prop carries
+    /// creature data with no hit points left, and is not a target.
+    #[test]
+    fn only_live_creatures_can_be_drained() {
+        let mut world = World::new();
+        let alive = world.add_entity((
+            dark::properties::PropAI("Grunt".to_owned()),
+            dark::properties::PropHitPoints { hit_points: 12 },
+        ));
+        let dead = world.add_entity((
+            dark::properties::PropAI("Grunt".to_owned()),
+            dark::properties::PropHitPoints { hit_points: 0 },
+        ));
+        let prop = world.add_entity((dark::properties::PropHitPoints { hit_points: 5 },));
+
+        assert!(is_live_creature(&world, alive));
+        assert!(!is_live_creature(&world, dead));
+        assert!(!is_live_creature(&world, prop));
+    }
+
+    /// An amp with neither a flat crosshair ray nor a transform has no aim, so
+    /// the cast finds nothing rather than casting from the origin.
+    #[test]
+    fn an_amp_with_no_aim_has_no_ray() {
+        let mut world = World::new();
+        let amp = world.add_entity((dark::properties::PropHitPoints { hit_points: 1 },));
+
+        assert!(amp_aim_ray(&world, amp).is_none());
+    }
+
+    #[test]
+    fn the_flat_crosshair_ray_is_the_aim() {
+        let mut world = World::new();
+        let amp = world.add_entity((crate::runtime_props::RuntimePropFlatAim {
+            origin: point3(1.0, 2.0, 3.0),
+            // Deliberately un-normalized: the ray must come back as a unit
+            // direction so the range is measured in world units.
+            forward: vec3(0.0, 0.0, 4.0),
+        },));
+
+        let (origin, direction) = amp_aim_ray(&world, amp).unwrap();
+        assert_eq!(origin, point3(1.0, 2.0, 3.0));
+        assert_eq!(direction, vec3(0.0, 0.0, 1.0));
     }
 
     #[test]
