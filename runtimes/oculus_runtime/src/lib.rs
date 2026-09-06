@@ -555,7 +555,7 @@ fn main() {
     let mut last_view_rotation: Option<cgmath::Quaternion<f32>> = None;
     // Where that same view was, already converted to pawn space (the space the
     // hands and the world-anchored frontend panel live in).
-    let mut last_view_position: Option<cgmath::Vector3<f32>> = None;
+    let mut last_head_stage: Option<cgmath::Vector3<f32>> = None;
     println!(
         "SHOCK2QUEST_STARTUP mission={} init_ms={:.3}",
         mission,
@@ -935,13 +935,9 @@ fn main() {
             .or(head_pose_rotation)
             .unwrap_or(aim_rotation);
 
-        // Feed the detector before the poses are transformed so this frame's
-        // physical stance is available to the crouch request below. Tracked
-        // poses are NEVER artificially displaced for a button crouch: the eye
-        // cap in `render_swapchain` alone keeps the view inside the crouched
-        // collider, and it does so continuously (a rigid pose drop keyed on
-        // detector state produced below-floor eyes/hands and frame-size view
-        // pops at the hysteresis thresholds).
+        // Keep calibration warm, but freeze physical stance while gripping.
+        // The shared rig transform applies any crouch correction to head and
+        // hands together; the mission rebases it if stance changes this frame.
         let tracked_head_position = head_location.location_flags.contains(
             xr::SpaceLocationFlags::POSITION_VALID | xr::SpaceLocationFlags::POSITION_TRACKED,
         );
@@ -949,24 +945,42 @@ fn main() {
             tracked_head_position.then_some(head_location.pose.position.y),
             game.player_is_gripping(),
         );
-        let center_above_floor = game.player_center_above_floor();
-        let right_hand_position = stage_to_pawn(
+        let head_stage = if tracked_head_position {
             vec3(
-                right_aim_location.pose.position.x,
-                right_aim_location.pose.position.y,
-                right_aim_location.pose.position.z,
-            ),
-            center_above_floor,
+                head_location.pose.position.x,
+                head_location.pose.position.y,
+                head_location.pose.position.z,
+            )
+        } else {
+            last_head_stage.unwrap_or(vec3(
+                0.0,
+                (shock2vr::input_context::DEFAULT_HEAD_HEIGHT + game.player_center_above_floor())
+                    * shock2vr::METERS_PER_WORLD_UNIT,
+                0.0,
+            ))
+        };
+        if tracked_head_position {
+            last_head_stage = Some(head_stage);
+        }
+        // A single rig correction for input and both rendered eyes. Hanging
+        // capsule compression does not change the physical tracking stance.
+        let tracking = shock2vr::vr_tracking::TrackingTransform::new(
+            game.player_center_above_floor(),
+            game.player_eye_cap_above_center(),
+            head_stage.y,
+            stage_offset_meters(),
         );
+        let right_hand_position = tracking.stage_to_pawn(vec3(
+            right_aim_location.pose.position.x,
+            right_aim_location.pose.position.y,
+            right_aim_location.pose.position.z,
+        ));
 
-        let left_hand_position = stage_to_pawn(
-            vec3(
-                left_aim_location.pose.position.x,
-                left_aim_location.pose.position.y,
-                left_aim_location.pose.position.z,
-            ),
-            center_above_floor,
-        );
+        let left_hand_position = tracking.stage_to_pawn(vec3(
+            left_aim_location.pose.position.x,
+            left_aim_location.pose.position.y,
+            left_aim_location.pose.position.z,
+        ));
         let left_hand_rotation = cgmath::Quaternion::new(
             left_aim_location.pose.orientation.w,
             left_aim_location.pose.orientation.x,
@@ -976,23 +990,8 @@ fn main() {
 
         let mut input_context = InputContext::default();
         input_context.head.rotation = head_rotation;
-        // The tracked eye, in pawn space. The located head space covers frame
-        // 0, before any view has been located; when the head is untracked
-        // entirely this keeps `Head::default`'s fixed eye height, which is
-        // where the camera renders from anyway.
-        let head_pose_position = tracked_head_position.then(|| {
-            stage_to_pawn(
-                vec3(
-                    head_location.pose.position.x,
-                    head_location.pose.position.y,
-                    head_location.pose.position.z,
-                ),
-                center_above_floor,
-            )
-        });
-        if let Some(position) = last_view_position.or(head_pose_position) {
-            input_context.head.position = position;
-        }
+        input_context.head.position = tracking.stage_to_pawn(head_stage);
+        input_context.tracking = Some(tracking);
         input_context.right_hand.rotation = aim_rotation;
         input_context.right_hand.position = right_hand_position;
         input_context.right_hand.trigger_value = right_trigger_value;
@@ -1212,13 +1211,10 @@ fn main() {
 
         // Remember where the head actually is, for next frame's input context.
         if let Some(view) = views.first() {
-            last_view_position = Some(stage_to_pawn(
-                vec3(
-                    view.pose.position.x,
-                    view.pose.position.y,
-                    view.pose.position.z,
-                ),
-                game.player_center_above_floor(),
+            last_head_stage = Some(vec3(
+                (views[0].pose.position.x + views[1].pose.position.x) / 2.0,
+                (views[0].pose.position.y + views[1].pose.position.y) / 2.0,
+                (views[0].pose.position.z + views[1].pose.position.z) / 2.0,
             ));
             last_view_rotation = Some(cgmath::Quaternion::new(
                 view.pose.orientation.w,
@@ -1240,6 +1236,10 @@ fn main() {
         let (scene, camera_pos, camera_rot) = game.render();
         let scene_elapsed = scene_started.elapsed();
 
+        let tracking = tracking.with_stance(
+            game.player_center_above_floor(),
+            game.player_eye_cap_above_center(),
+        );
         // Render to each eye
         let time = now.elapsed().as_secs_f32();
         // The midpoint of the two eyes: what the death camera resolves from, so
@@ -1258,6 +1258,7 @@ fn main() {
             time,
             &views[0],
             head_centre_stage,
+            tracking,
             true,
             &scene,
             false,
@@ -1271,6 +1272,7 @@ fn main() {
             time,
             &views[1],
             head_centre_stage,
+            tracking,
             true,
             &scene,
             true,
@@ -1620,46 +1622,9 @@ fn android_pump_events() -> bool {
     false
 }
 
-/// Convert a floor-origin STAGE-space position (meters) into the game's pawn
-/// space (world units, origin at the player collider's center): scale meters
-/// to world units, then move the anchor from the physical floor up to the
-/// collider center, so a tracked eye or hand N meters above the real floor
-/// lands the equivalent height above the in-game floor. Without this the raw
-/// meters were added to the collider CENTER unscaled, placing the standing
-/// eye ~1.8 SS2 ft above the original game's eye line (and world scale ~31%
-/// large).
-fn stage_to_pawn(position_meters: Vector3<f32>, center_above_floor: f32) -> Vector3<f32> {
-    // The dev-params eye-height offset raises or lowers the whole tracked
-    // stage: every tracked position - head input, both hands, and the per-eye
-    // view - routes through this one mapping, so they move together and the
-    // hands never detach from the raised eye line. See
-    // `stage_offset_above_center` for how the per-eye cap keeps out of its way.
-    (position_meters + vec3(0.0, stage_offset_meters(), 0.0)) / shock2vr::METERS_PER_WORLD_UNIT
-        - vec3(0.0, center_above_floor, 0.0)
-}
-
 /// The dev-params eye-height offset, in meters of STAGE space.
 fn stage_offset_meters() -> f32 {
     shock2vr::dev_params::get(shock2vr::dev_params::EYE_HEIGHT_OFFSET)
-}
-
-/// The same offset expressed in world units, for raising the eye cap by
-/// exactly what [`stage_to_pawn`] already added.
-///
-/// The cap bounds the *tracked body*: a real head is not the game capsule's,
-/// so it is held inside the collider crown. The dev offset is not a tracked
-/// body - it is an explicit authored displacement of the whole stage - so the
-/// cap has to move with it, or it would silently eat the raise: standing
-/// headroom is only ~1.12 wu (0.85 m) above the collider center and an adult's
-/// tracked eye already sits within a few centimeters of it, so an uncapped-cap
-/// `eye_offset` would saturate the VIEW after a couple of centimeters while
-/// the hands kept rising the full half-meter - the head/hand desync this
-/// wiring exists to avoid. Raising the cap by the offset keeps the tracked
-/// portion bounded exactly as before (at the default offset of 0 this is
-/// bit-identical to the pre-existing cap) while letting a deliberate dev
-/// offset through.
-fn stage_offset_above_center() -> f32 {
-    stage_offset_meters() / shock2vr::METERS_PER_WORLD_UNIT
 }
 
 fn render_swapchain(
@@ -1673,6 +1638,7 @@ fn render_swapchain(
     // Midpoint of the two eyes in STAGE space. The death camera resolves from
     // the head centre, never per eye - see the comment on `camera` below.
     head_centre_stage: Vector3<f32>,
+    tracking: shock2vr::vr_tracking::TrackingTransform,
     _log: bool,
     scene: &Vec<SceneObject>,
     is_last: bool,
@@ -1689,28 +1655,11 @@ fn render_swapchain(
     let width = swapchain.width;
     let height = swapchain.height;
 
-    let mut head_offset = stage_to_pawn(
-        cgmath::Vector3::new(
-            view.pose.position.x,
-            view.pose.position.y,
-            view.pose.position.z,
-        ),
-        game.player_center_above_floor(),
-    );
-    // The tracked eye belongs to a real body, not to the game capsule, so it
-    // must be held inside the collider crown: a physically crouched adult's
-    // eye sits well above the short crouched capsule, and uncapped the player
-    // sees over and through the very geometry the capsule clears (looking out
-    // of the world from inside a duct). Only the view is capped - hand poses
-    // have no such clipping concern and clamping them would break reaching up.
-    // The cap binds essentially only while crouched (or button-latched);
-    // standing it sits above any realistic head, so tracking stays 1:1.
-    // The cap rides the dev eye-height offset (see `stage_offset_above_center`)
-    // so the knob moves the view by exactly what it moves the hands by; at the
-    // default offset of 0 this is the plain crown cap it has always been.
-    head_offset.y = head_offset
-        .y
-        .min(game.player_eye_cap_above_center() + stage_offset_above_center());
+    let head_offset = tracking.stage_to_pawn(vec3(
+        view.pose.position.x,
+        view.pose.position.y,
+        view.pose.position.z,
+    ));
     let head_rotation = cgmath::Quaternion::new(
         view.pose.orientation.w,
         view.pose.orientation.x,
@@ -1731,7 +1680,7 @@ fn render_swapchain(
     // monoscopic while the horizon rolls. Instead the eye's own displacement is
     // re-applied afterwards, carried into the fallen camera's frame so the eyes
     // roll with the new horizon rather than staying level with the room.
-    let head_centre_pawn = stage_to_pawn(head_centre_stage, game.player_center_above_floor());
+    let head_centre_pawn = tracking.stage_to_pawn(head_centre_stage);
     let camera = shock2vr::death_camera::reapply_eye_offset(
         game.resolve_camera(camera_pos, camera_rot, head_centre_pawn, head_rotation),
         head_offset - head_centre_pawn,

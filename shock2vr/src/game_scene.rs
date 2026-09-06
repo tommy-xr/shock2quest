@@ -158,6 +158,11 @@ pub trait GameScene {
         false
     }
 
+    /// Physical stance for VR tracking; a hanging capsule can shrink independently.
+    fn player_tracking_is_crouched(&self) -> bool {
+        self.player_is_crouched()
+    }
+
     /// Whether a VR hand is holding a climb hold (see `crate::vr_climb`).
     /// VR runtimes freeze their physical-crouch detector while it is true.
     fn player_is_gripping(&self) -> bool {

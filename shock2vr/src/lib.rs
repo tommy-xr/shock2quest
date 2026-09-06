@@ -56,6 +56,7 @@ mod vr_config;
 pub use vr_config::{MeleePosedArm, melee_contact_offset};
 pub mod vr_climb;
 pub mod vr_crouch;
+pub mod vr_tracking;
 mod wielded_weapon;
 pub mod zip_asset_path;
 
@@ -2171,7 +2172,7 @@ impl Game {
     /// the pawn position returned by [`Game::render`] to anchor floor-relative
     /// tracked poses at the player's feet instead of the collider center.
     pub fn player_center_above_floor(&self) -> f32 {
-        physics::player_center_above_floor(self.active_game_scene.player_is_crouched())
+        physics::player_center_above_floor(self.active_game_scene.player_tracking_is_crouched())
     }
 
     /// Whether a VR hand is holding a climb hold. VR runtimes freeze their
@@ -2186,7 +2187,7 @@ impl Game {
     /// this so the camera cannot leave the collider crown; see
     /// [`physics::player_eye_cap_above_center`].
     pub fn player_eye_cap_above_center(&self) -> f32 {
-        physics::player_eye_cap_above_center(self.active_game_scene.player_is_crouched())
+        physics::player_eye_cap_above_center(self.active_game_scene.player_tracking_is_crouched())
     }
 
     /// Fold the death camera into the camera a runtime is about to render

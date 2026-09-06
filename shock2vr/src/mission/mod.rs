@@ -267,6 +267,10 @@ impl crate::game_scene::GameScene for Mission {
         self.mission_core.player_is_crouched()
     }
 
+    fn player_tracking_is_crouched(&self) -> bool {
+        self.mission_core.player_tracking_is_crouched()
+    }
+
     fn player_is_gripping(&self) -> bool {
         self.mission_core.player_is_gripping()
     }

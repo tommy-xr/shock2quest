@@ -2607,6 +2607,8 @@ pub struct PlayerHandle {
     // the body center rather than the feet). It has to be undone the same way,
     // or the body ends up a crouch shift above where it hung.
     is_hanging_crouched: bool,
+    // Physical stance used by the tracked rig; hanging capsule changes leave it alone.
+    tracking_crouched: bool,
     // Live-validated waypoints for an in-progress ladder top-out. This is
     // transient locomotion state: direct relocation and crouching cancel it,
     // while save/load uses the last valid standing pose stored with it.
@@ -2698,6 +2700,11 @@ impl PlayerHandle {
     /// same way it was made.
     pub fn is_hanging_crouched(&self) -> bool {
         self.is_hanging_crouched
+    }
+
+    /// Stance anchoring floor-relative VR tracking, independent of a hanging capsule.
+    pub fn tracking_is_crouched(&self) -> bool {
+        self.tracking_crouched
     }
 
     /// Whether a scripted mantle/top-out currently owns the body. Nothing else
@@ -3363,6 +3370,7 @@ impl PhysicsWorld {
         // Relocated, so they are no longer hanging off anything: the stance
         // they are in is now an ordinary crouch, undone feet-planted.
         player_handle.is_hanging_crouched = false;
+        player_handle.tracking_crouched = player_handle.is_crouched;
         player_handle.slope_displacement = Vector::zeros();
         player_handle.is_grounded = false;
         player_handle.jump_velocity = None;
@@ -4705,6 +4713,7 @@ impl PhysicsWorld {
             character_handle,
             is_crouched: false,
             is_hanging_crouched: false,
+            tracking_crouched: false,
             top_out: None,
             support: None,
             slope_displacement: Vector::zeros(),
@@ -4760,6 +4769,9 @@ impl PhysicsWorld {
         // response to a crouch edge part-way across a lip.
         if player_handle.top_out.is_some() {
             return player_handle.is_crouched;
+        }
+        if anchor == CrouchAnchor::Feet {
+            player_handle.tracking_crouched = player_handle.is_crouched;
         }
         if want_crouch == player_handle.is_crouched {
             // Already in the wanted stance, so nothing moves - but the request
@@ -4873,6 +4885,9 @@ impl PhysicsWorld {
             }
         }
 
+        if anchor == CrouchAnchor::Feet {
+            player_handle.tracking_crouched = player_handle.is_crouched;
+        }
         player_handle.is_crouched
     }
 
@@ -8087,6 +8102,39 @@ mod tests {
     /// the tracked hands ride the body center, and moving it by the ordinary
     /// feet-planted crouch shift (0.64 wu) would exceed the grip's whole
     /// stretch tolerance (0.6 wu) and drop them off the hold.
+    #[test]
+    fn hanging_capsule_keeps_stationary_stage_hands_and_head_in_place() {
+        use crate::vr_tracking::TrackingTransform;
+        for start_crouched in [false, true] {
+            let mut world = PhysicsWorld::new();
+            let mut player =
+                world.create_player(vec3(0.0, 5.0, 0.0), EntityId::from_inner(2107).unwrap());
+            step(&mut world, &mut player, 1);
+            world.set_player_crouch(start_crouched, &mut player);
+            let rig = |player: &PlayerHandle| {
+                TrackingTransform::new(
+                    player_center_above_floor(player.tracking_is_crouched()),
+                    player_eye_cap_above_center(player.tracking_is_crouched()),
+                    1.65,
+                    0.0,
+                )
+            };
+            let before = rig(&player);
+            let center = world.get_player_translation(&player);
+            world.set_player_crouch_hanging(true, &mut player);
+            let after = rig(&player);
+            for tracked in [vec3(0.0, 1.65, 0.0), vec3(0.25, 1.4, -0.4)] {
+                assert_eq!(
+                    before.stage_to_pawn(tracked) + center,
+                    after.stage_to_pawn(tracked) + world.get_player_translation(&player)
+                );
+            }
+            world.set_player_crouch_hanging(false, &mut player);
+            assert_eq!(player.tracking_is_crouched(), start_crouched);
+            assert_eq!(world.get_player_translation(&player), center);
+        }
+    }
+
     #[test]
     fn a_hanging_crouch_shrinks_the_capsule_without_moving_the_body() {
         let mut world = PhysicsWorld::new();

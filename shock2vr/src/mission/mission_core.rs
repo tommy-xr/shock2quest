@@ -3067,6 +3067,27 @@ impl MissionCore {
             input_context
         };
 
+        // Resolve ordinary tracked crouch before interpreting a grab. A pose
+        // converted against last frame's stance otherwise jumps on the next
+        // frame. Hanging compression deliberately leaves tracking unchanged.
+        let mut tracked_input = input_context.clone();
+        if tracked_input.tracking.is_some() {
+            if !time.elapsed.is_zero()
+                && !self.player_is_gripping()
+                && !self.player_handle.is_hanging_crouched()
+            {
+                self.physics
+                    .set_player_crouch(tracked_input.crouch, &mut self.player_handle);
+            }
+            let stance = self.player_handle.tracking_is_crouched();
+            crate::vr_tracking::TrackingTransform::rebase_input(
+                &mut tracked_input,
+                crate::physics::player_center_above_floor(stance),
+                crate::physics::player_eye_cap_above_center(stance),
+            );
+        }
+        let input_context = &tracked_input;
+
         let additional_rotation = cgmath::Quaternion::from_axis_angle(
             cgmath::vec3(0.0, 1.0, 0.0),
             cgmath::Rad(input_context.left_hand.thumbstick.x * delta_time * PLAYER_TURN_RATE),
@@ -3416,6 +3437,18 @@ impl MissionCore {
         // after the panel has already been put away (see `render`'s
         // `is_settled_closed()` gate).
         self.use_mode_ramp.update(time.elapsed.as_secs_f32());
+
+        // Landing can change the physical stance too. Use that same rig for
+        // rendered hands/UI and the runtime's post-update eyes this frame.
+        let mut rendered_input = input_context.clone();
+        let stance = self.player_handle.tracking_is_crouched();
+        crate::vr_tracking::TrackingTransform::rebase_input(
+            &mut rendered_input,
+            crate::physics::player_center_above_floor(stance),
+            crate::physics::player_eye_cap_above_center(stance),
+        );
+        let input_context = &rendered_input;
+        self.last_head_position = input_context.head.position;
 
         // VR cyber interface (use mode): follow the head for the anchor's
         // lazy recenter and the comfort dim, resolve this frame's pointer, and
@@ -10043,6 +10076,10 @@ impl MissionCore {
 
     /// Actual crouch state of the player collider (stand-up can be refused
     /// for lack of headroom, so this can lag the crouch input).
+    pub fn player_tracking_is_crouched(&self) -> bool {
+        self.player_handle.tracking_is_crouched()
+    }
+
     pub fn player_is_crouched(&self) -> bool {
         self.player_handle.is_crouched()
     }
