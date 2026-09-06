@@ -27,21 +27,47 @@ const GUNS: &[&str] = &[
     "viro_h", "amp_h",
 ];
 
-/// The longest axis of the geometry a mesh's polygons actually reference, in
-/// world units - the one number that says how big a model is drawn.
-fn longest_span(mesh: &ss2_bin_obj_loader::SystemShock2ObjectMesh) -> f32 {
+/// Bounds and centroid of the geometry a mesh's polygons actually reference -
+/// the one pass every readout below is derived from. `None` for a mesh whose
+/// polygons reference nothing.
+struct MeshBounds {
+    lo: [f32; 3],
+    hi: [f32; 3],
+    centroid: [f32; 3],
+}
+
+fn mesh_bounds(mesh: &ss2_bin_obj_loader::SystemShock2ObjectMesh) -> Option<MeshBounds> {
     let mut lo = [f32::INFINITY; 3];
     let mut hi = [f32::NEG_INFINITY; 3];
+    let mut sum = [0.0f32; 3];
+    let mut count = 0.0f32;
     for polygon in &mesh.polygons {
         for index in &polygon.vertex_indices {
             let vertex = mesh.vertices[*index as usize];
             for (axis, value) in [vertex.x, vertex.y, vertex.z].into_iter().enumerate() {
                 lo[axis] = lo[axis].min(value);
                 hi[axis] = hi[axis].max(value);
+                sum[axis] += value;
             }
+            count += 1.0;
         }
     }
-    (0..3).map(|axis| hi[axis] - lo[axis]).fold(0.0, f32::max)
+    (count > 0.0).then(|| MeshBounds {
+        lo,
+        hi,
+        centroid: [sum[0] / count, sum[1] / count, sum[2] / count],
+    })
+}
+
+/// The longest axis of a mesh, in world units - the one number that says how
+/// big a model is drawn.
+fn longest_span(mesh: &ss2_bin_obj_loader::SystemShock2ObjectMesh) -> f32 {
+    let Some(bounds) = mesh_bounds(mesh) else {
+        return 0.0;
+    };
+    (0..3)
+        .map(|axis| bounds.hi[axis] - bounds.lo[axis])
+        .fold(0.0, f32::max)
 }
 
 /// The mesh's XY silhouette (barrel along -X, +Y up) on a coarse grid, with the
@@ -53,8 +79,9 @@ fn print_silhouette(mesh: &ss2_bin_obj_loader::SystemShock2ObjectMesh) {
     const COLS: usize = 78;
     const ROWS: usize = 24;
 
-    let mut lo = [f32::INFINITY; 2];
-    let mut hi = [f32::NEG_INFINITY; 2];
+    let Some(MeshBounds { lo, hi, .. }) = mesh_bounds(mesh) else {
+        return;
+    };
     let mut edges = Vec::new();
     for polygon in &mesh.polygons {
         let corners = polygon
@@ -63,15 +90,8 @@ fn print_silhouette(mesh: &ss2_bin_obj_loader::SystemShock2ObjectMesh) {
             .map(|index| mesh.vertices[*index as usize])
             .collect::<Vec<_>>();
         for (index, corner) in corners.iter().enumerate() {
-            lo[0] = lo[0].min(corner.x);
-            hi[0] = hi[0].max(corner.x);
-            lo[1] = lo[1].min(corner.y);
-            hi[1] = hi[1].max(corner.y);
             edges.push((*corner, corners[(index + 1) % corners.len()]));
         }
-    }
-    if edges.is_empty() {
-        return;
     }
     // Square cells, so the picture is not stretched: one span drives both axes.
     let span = (hi[0] - lo[0]).max((hi[1] - lo[1]) * COLS as f32 / ROWS as f32);
@@ -115,35 +135,12 @@ fn print_silhouette(mesh: &ss2_bin_obj_loader::SystemShock2ObjectMesh) {
 
 /// A mesh's centroid and bounds - for an arm island, where the baked hand is.
 fn print_bounds(label: &str, mesh: &ss2_bin_obj_loader::SystemShock2ObjectMesh) {
-    let mut lo = [f32::INFINITY; 3];
-    let mut hi = [f32::NEG_INFINITY; 3];
-    let mut sum = [0.0f32; 3];
-    let mut count = 0.0f32;
-    for polygon in &mesh.polygons {
-        for index in &polygon.vertex_indices {
-            let vertex = mesh.vertices[*index as usize];
-            for (axis, value) in [vertex.x, vertex.y, vertex.z].into_iter().enumerate() {
-                lo[axis] = lo[axis].min(value);
-                hi[axis] = hi[axis].max(value);
-                sum[axis] += value;
-            }
-            count += 1.0;
-        }
-    }
-    if count == 0.0 {
+    let Some(MeshBounds { lo, hi, centroid }) = mesh_bounds(mesh) else {
         return;
-    }
+    };
     println!(
         "   {label}: centroid ({:+.3},{:+.3},{:+.3}) bounds x[{:+.3},{:+.3}] y[{:+.3},{:+.3}] z[{:+.3},{:+.3}]",
-        sum[0] / count,
-        sum[1] / count,
-        sum[2] / count,
-        lo[0],
-        hi[0],
-        lo[1],
-        hi[1],
-        lo[2],
-        hi[2],
+        centroid[0], centroid[1], centroid[2], lo[0], hi[0], lo[1], hi[1], lo[2], hi[2],
     );
 }
 
