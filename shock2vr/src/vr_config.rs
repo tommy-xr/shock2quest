@@ -367,7 +367,6 @@ impl MeleePosedArm {
 
 /// Rotation that takes the posed arm out of model space and into the hand's
 /// own frame: the forearm runs back along the hand frame's **+Z** - the axis
-/// [`crate::hand_forearm`] hangs the empty hand's sleeve along, and the
 /// opposite of the -Z the fingers/aim point down - and the weapon is rolled
 /// into the hand's vertical plane so it stands up out of the fist.
 ///
@@ -642,9 +641,8 @@ mod tests {
         ]
     }
 
-    /// The seated arm must run back along the hand frame's +Z - the axis the
-    /// empty hand's sleeve (`hand_forearm`) uses - with the weapon standing up
-    /// out of the fist in the hand's vertical plane. The shipped single yaw
+    /// The seated arm must run back along the hand frame's +Z, with the weapon
+    /// standing up out of the fist in the hand's vertical plane. The shipped single yaw
     /// left the forearm 71-80 degrees off this, poking out sideways past the
     /// wrist.
     #[test]

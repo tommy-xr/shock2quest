@@ -21,7 +21,9 @@ template IDs and pickup model names for future Explorer grip previews. The
 magazine archetype has no default model, so this instance uses the shipped
 `magci` cover. Runtime IDs still change on each launch; discover by template.
 
-Current baseline: the rigged glove has its original glove texture again.
+Current baseline: the rigged glove has its original glove texture again, without
+the procedural sleeve. Headset feedback confirmed the empty glove size and
+wrist/palm alignment; preserve that calibration while fitting items.
 Miscellaneous objects still use the existing generic held pose, and wielded
 weapons still replace the glove with their baked hands. Automatic fitting,
 Explorer grip editing, watch/lights, support grips, and body slots are subsequent

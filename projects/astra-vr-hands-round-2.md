@@ -110,6 +110,10 @@ not a prerequisite for this contact solver.
 
 ## Calibration and the VR Grips editor
 
+Headset feedback on the first workbench confirmed the empty glove size and
+wrist/palm alignment. Keep those transforms fixed while improving item fitting.
+Remove the procedural sleeves at the user's request; retain the glove cuff.
+
 Separate controller-to-palm calibration from object-to-grip alignment. A
 controller correction should fix every item; an item correction should affect
 only that item. Keep units and coordinate conventions explicit at the boundary.
