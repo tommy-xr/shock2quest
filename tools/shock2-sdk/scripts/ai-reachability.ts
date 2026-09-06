@@ -19,7 +19,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { findRepoRoot, GameServer, HttpError } from "../src/index.js";
@@ -32,6 +32,7 @@ import {
   type AiSample,
   type AiTrack,
   type Classification,
+  type Verdict,
 } from "../src/ai-reachability.js";
 import type { EntityDetailResult, Vec3 } from "../src/types.js";
 
@@ -56,6 +57,8 @@ interface Args {
   sampleEvery: number;
   experimental: string[];
   pass: PassSelector;
+  /** Re-classify the stored JSON in this directory instead of running the game. */
+  reclassify?: string;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -98,6 +101,9 @@ function parseArgs(argv: string[]): Args {
       case "--experimental":
         args.experimental.push(...value().split(","));
         break;
+      case "--reclassify":
+        args.reclassify = value();
+        break;
       case "--pass": {
         const v = value();
         if (v !== "idle" && v !== "chase" && v !== "both") {
@@ -111,6 +117,13 @@ function parseArgs(argv: string[]): Args {
     }
   }
   if (all) args.missions = missionsInData();
+  // Re-classification reads stored runs; it needs no mission list.
+  if (args.reclassify) {
+    if (all || args.missions.length > 0) {
+      throw new Error("--reclassify reads stored runs; it takes no --mission/--all");
+    }
+    return args;
+  }
   if (args.missions.length === 0) throw new Error("pass --mission <name> or --all");
   // A pass shorter than one sample would report every AI as "no samples".
   for (const [name, frames] of [
@@ -250,6 +263,7 @@ async function runPass(
         live_path_len: route?.live_path_len ?? null,
         live_target: route?.live_target ?? null,
         live_stall_seconds: route?.live_stall_seconds ?? null,
+        movement_hold: route?.movement_hold ?? null,
         distance: distance3(detail.position, playerNow),
       };
       track.samples.push(sample);
@@ -300,17 +314,85 @@ function passTable(mission: string, pass: PassResult): string {
 
 function wedgeLines(pass: PassResult): string[] {
   return pass.tracks
-    .filter((t) => t.classification.verdict === "wedged")
+    .filter((t) => t.classification.verdict === "wedged" || t.classification.verdict === "wedged_then_freed")
     .map(
       (t) =>
-        `  - ${t.name} (template ${t.template_id}) wedged ${t.classification.wedge_seconds?.toFixed(1)}s at (${t.classification
+        `  - ${t.name} (template ${t.template_id}) ${t.classification.verdict} ${t.classification.wedge_seconds?.toFixed(1)}s at (${t.classification
           .wedge_at!.map((c) => c.toFixed(2))
           .join(", ")}) [${pass.pass}]`,
     );
 }
 
+/** A stored run, as written by a previous pass over the missions. */
+interface StoredReport {
+  mission: string;
+  passes: PassResult[];
+}
+
+/**
+ * Re-run the classifier over a stored run's JSON - no game, no runtime. The
+ * stored samples carry whatever fields the runtime published when they were
+ * taken, so a re-classification of an older run simply sees no movement_hold.
+ */
+function row(label: string, cells: string[]): string {
+  return `| ${label} | ${cells.join(" | ")} |`;
+}
+
+function totalRow(label: string, counts: Record<Verdict, number>): string {
+  return row(label, VERDICTS.map((v) => `${counts[v]}`));
+}
+
+async function reclassify(dir: string): Promise<void> {
+  // `<mission>.json` is the report; the sibling `-cells`/`-pass` dumps are not.
+  const files = (await readdir(dir)).filter((f) => f.endsWith(".mis.json")).sort();
+  if (files.length === 0) throw new Error(`no stored mission reports in ${dir}`);
+  const header = `| mission/pass | ${VERDICTS.join(" | ")} |`;
+  const divider = `|${"---|".repeat(VERDICTS.length + 1)}`;
+  const rows: string[] = [];
+  const stored: Classification[] = [];
+  const redone: Classification[] = [];
+
+  for (const file of files) {
+    let report: StoredReport;
+    try {
+      report = JSON.parse(await readFile(path.join(dir, file), "utf8")) as StoredReport;
+    } catch (error) {
+      console.warn(`  skipping ${file}: ${error instanceof Error ? error.message : error}`);
+      continue;
+    }
+    for (const pass of report.passes) {
+      const passName: "idle" | "chase" = pass.pass.startsWith("chase") ? "chase" : "idle";
+      const passStored = pass.tracks.map((t) => t.classification);
+      const passRedone = pass.tracks.map((t) => classifyTrack(t, { pass: passName }));
+      stored.push(...passStored);
+      redone.push(...passRedone);
+      const before = tally(passStored);
+      const after = tally(passRedone);
+      const cells = VERDICTS.map((v) => (before[v] === after[v] ? `${before[v]}` : `${before[v]}→${after[v]}`));
+      rows.push(row(`${report.mission} ${pass.pass}`, cells));
+    }
+  }
+
+  console.log(
+    [
+      `# Re-classified ${dir}`,
+      "",
+      header,
+      divider,
+      ...rows,
+      totalRow("**stored total**", tally(stored)),
+      totalRow("**re-classified total**", tally(redone)),
+      "",
+    ].join("\n"),
+  );
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  if (args.reclassify) {
+    await reclassify(args.reclassify);
+    return;
+  }
   await mkdir(args.out, { recursive: true });
 
   const header = `| mission | pass | AIs | ${VERDICTS.join(" | ")} |`;
