@@ -300,3 +300,63 @@ test(
     );
   },
 );
+
+
+test("debug_ladder (VR): crouch on the deck, hook the ladder cap and descend", {
+  skip: !e2eEnabled, timeout: 600_000,
+}, async () => {
+  await using game = await launchVr();
+  await standAt(game, [-7.65, 7.3, LEDGE_Z]);
+  await game.input.set("crouch", 1);
+  await game.step({ frames: 5 });
+  const before = (await game.info()).player.position;
+  const start = await grab(game, "right", [-6.9, 6.45, LEDGE_Z]);
+  const caught = (await game.info()).player;
+  assert.equal(caught.climb.grips.length, 1, "catch from above the cap");
+  assert.equal(caught.climb.grips[0].kind, "ladder");
+  assert.ok(Math.abs(caught.position[0] - before[0]) < 0.05, "catch must not snap the body");
+  const hook = (await game.physics.grip([-6.9, 6.45, LEDGE_Z])).grip!;
+  assert.ok(Math.abs(hook.normal[0]) > 0.9 && Math.abs(hook.normal[1]) < 0.01,
+    `catch an actual side, not the masked cap: ${hook.normal}`);
+
+  // Raising the hand while feet are still on the deck cannot pass through
+  // that deck. The persistent grip (and its marker) distinguishes this from
+  // a failed acquisition.
+  const raised = await vrHandLocalDelta(game, [0, 0.2, 0]);
+  for (let i = 1; i <= 12; i++) {
+    await game.input.set("right_hand.position", start.map((v, j) => v + raised[j] * i / 12) as Vec3);
+    await game.step({ frames: 1 });
+  }
+  const blocked = (await game.info()).player;
+  assert.equal(blocked.climb.grips.length, 1);
+  assert.ok(Math.abs(blocked.position[1] - before[1]) < 0.05, "deck still supports the feet");
+  await game.input.set("right_hand.position", start);
+  await game.step({ frames: 1 });
+
+  // Pull toward the chest first, moving the body beyond the deck edge; then
+  // raise the held hand to lower the body. Every frame must retain the hold.
+  const outward = await vrHandLocalDelta(game, [-1.3, 0, 0]);
+  const lower = await vrHandLocalDelta(game, [0, 0.6, 0]);
+  const heights: number[] = [];
+  for (let phase = 0; phase < 2; phase++) {
+    for (let i = 1; i <= 60; i++) {
+      const t = i / 60;
+      await game.input.set("right_hand.position", start.map((v, j) =>
+        v + outward[j] * (phase === 0 ? t : 1) + lower[j] * (phase === 1 ? t : 0),
+      ) as Vec3);
+      await game.step({ frames: 1 });
+      const player = (await game.info()).player;
+      assert.equal(player.climb.grips.length, 1, `hold survives phase ${phase} frame ${i}`);
+      assert.equal(player.climb.vaulting, false, "descent stays hand-directed");
+      heights.push(player.position[1]);
+    }
+  }
+  const descended = (await game.info()).player.position;
+  assert.ok(descended[0] > -6.5, "body moved outside the deck edge");
+  assert.ok(descended[1] < before[1] - 0.5, "body lowered onto the ladder");
+  assertNoJumps(heights, "deck-to-ladder descent");
+  await game.step({ frames: 10 });
+  await game.input.set("right_hand.squeeze", 0);
+  await game.step({ frames: 1 });
+  assert.equal((await game.info()).player.climb.grips.length, 0, "opening the hand releases the catch");
+});

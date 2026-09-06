@@ -5442,6 +5442,9 @@ impl PhysicsWorld {
     /// solid, player-blocking surface whose face is walkable and sits more
     /// than a step above `feet_y` - the mantle-emulation hold. A wall face,
     /// and the floor the player is standing on, offer neither.
+    /// If direct contact fails, a bounded clear approach can hook a nearby
+    /// ledge lip or an authored ladder side around its top cap. The returned
+    /// point/normal belong to that actual surface, never the refused cap.
     ///
     /// The nearest *qualifying* contact wins: a nearer ungrippable face does
     /// not occlude a grippable one behind it. A hand reaching past a ladder's
@@ -5556,12 +5559,108 @@ impl PhysicsWorld {
             return Some(grip);
         }
 
+        // Descending starts with a hand ABOVE the cap. Hook around it onto
+        // an authored side: the cap itself remains ungrippable. Every segment
+        // of the approach must be clear, and the final hit must be this same
+        // ladder, so an adjacent deck/wall cannot be reached through.
+        let hand = point![point.x, point.y, point.z];
+        let directions = [
+            (1.0, 0.0),
+            (-1.0, 0.0),
+            (0.0, 1.0),
+            (0.0, -1.0),
+            (1.0, 1.0),
+            (1.0, -1.0),
+            (-1.0, 1.0),
+            (-1.0, -1.0),
+        ]
+        .map(|(x, z)| vector![x, 0.0, z].normalize());
+        // A hand can be slightly outside the cap's footprint. Probe nearby
+        // points too; the hook route below still starts at the actual hand.
+        let cap_origins =
+            std::iter::once(hand).chain([0.05, 0.15, 0.25].into_iter().flat_map(|reach| {
+                directions
+                    .into_iter()
+                    .map(move |direction| hand + direction * reach)
+            }));
+        let top = cap_origins.filter_map(|origin| {
+            let ray = Ray::new(origin, -Vector::y());
+            let (handle, hit) = queries.cast_ray_and_get_normal(&ray, CLIMB_LIP_REACH, true)?;
+            let cap = ray.point_at(hit.time_of_impact);
+            (!collider_is_not_climbable(&self.collider_set[handle])
+                && is_walkable_normal(hit.normal.y)
+                && (cap - hand).norm() <= CLIMB_LIP_REACH)
+                .then_some((handle, cap.y))
+        });
+        let mut tried_caps = HashSet::new();
+        for (top_handle, top_y) in top {
+            if !tried_caps.insert(top_handle) {
+                continue;
+            }
+            let collider = &self.collider_set[top_handle];
+            let entity_id = EntityId::from_inner(collider.user_data as u64);
+            let sides = entity_id
+                .and_then(|id| self.climbable_sides.get(&id).copied())
+                .unwrap_or(u32::MAX);
+            let drop = hand.y - top_y + 0.05;
+            let mut hook: Option<(f32, ClimbGrip)> = None;
+            // Try short approaches before the full reach, so a clear
+            // narrow gap beside a ladder is usable too.
+            for (direction, reach) in directions.into_iter().flat_map(|direction| {
+                [0.075, 0.15, CLIMB_LIP_REACH]
+                    .into_iter()
+                    .map(move |reach| (direction, reach))
+            }) {
+                let outside = hand + direction * reach;
+                if queries
+                    .cast_ray(&Ray::new(hand, direction), reach, true)
+                    .is_some()
+                    || queries
+                        .cast_ray(&Ray::new(outside, -Vector::y()), drop, true)
+                        .is_some()
+                {
+                    continue;
+                }
+                let inward = Ray::new(outside - Vector::y() * drop, -direction);
+                // The hand may be outside the footprint too: continue past
+                // its XZ position, keeping the final contact reach-bounded.
+                let Some((handle, hit)) =
+                    queries.cast_ray_and_get_normal(&inward, 2.0 * CLIMB_LIP_REACH, true)
+                else {
+                    continue;
+                };
+                let local = collider.rotation().inverse_transform_vector(&hit.normal);
+                let contact = inward.point_at(hit.time_of_impact);
+                let distance = (contact - hand).norm();
+                if handle != top_handle
+                    || hit.normal.y.abs() > 0.3
+                    || sides & climbable_face_bits(local) == 0
+                    || distance > CLIMB_LIP_REACH
+                {
+                    continue;
+                }
+                if hook.as_ref().is_none_or(|(nearest, _)| distance < *nearest) {
+                    hook = Some((
+                        distance,
+                        ClimbGrip {
+                            kind: ClimbGripKind::Ladder,
+                            entity_id,
+                            point: nvec_to_cgmath(contact.coords),
+                            normal: nvec_to_cgmath(hit.normal),
+                        },
+                    ));
+                }
+            }
+            if let Some((_, grip)) = hook {
+                return Some(grip);
+            }
+        }
+
         // A fist against the front of a lip has a side/diagonal separation
         // normal, even when its fingers could hook over the top. Find the
         // actual walkable surface by approaching above the hand, then down.
         // Both approach segments must be clear: no grabbing through a wall or
         // ceiling. Authored ladder masks still decide ladder contacts alone.
-        let hand = point![point.x, point.y, point.z];
         let raised = hand + Vector::y() * CLIMB_LIP_REACH;
         if queries
             .cast_ray(&Ray::new(hand, Vector::y()), CLIMB_LIP_REACH, true)
@@ -9712,13 +9811,14 @@ mod tests {
             "expected a +X face, got {:?}",
             side.normal
         );
-        // ... and its top cap is not.
-        assert!(
-            world
-                .climbable_grip_at(vec3(-5.0, 6.45, 0.0), CLIMB_GRIP_RADIUS, 0.0)
-                .is_none(),
-            "mask 27 excludes the top cap"
-        );
+        // From above the thin cap, fingers can now hook an authored SIDE.
+        let hook = world
+            .climbable_grip_at(vec3(-5.0, 6.45, 0.0), CLIMB_GRIP_RADIUS, 0.0)
+            .expect("hook around the cap onto a side");
+        assert_eq!(hook.kind, ClimbGripKind::Ladder);
+        assert!(hook.normal.x.abs() > 0.9);
+        assert!(hook.normal.y.abs() < 0.01);
+        assert!(hook.point.y < 6.4);
 
         // The top EDGE, where a hand lands when topping out: its contact
         // normal is diagonal, so a single-dominant-axis pick would call it
@@ -9785,6 +9885,76 @@ mod tests {
                 .climbable_grip_at(vec3(-5.0, 3.0, -0.5), CLIMB_GRIP_RADIUS, 0.0)
                 .is_none(),
             "the opposite edge has no bit"
+        );
+    }
+
+    #[test]
+    fn ladder_cap_hook_respects_reach_masks_and_blocked_approaches() {
+        let (mut world, mut player) = grip_world();
+        let ladder = add_yawed_ladder(&mut world, &mut player, Some(2));
+        let hand = vec3(-5.0, 6.45, 0.0);
+        let hook = world
+            .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 6.0)
+            .unwrap();
+        assert_eq!(hook.entity_id, Some(ladder));
+        assert!(hook.normal.x > 0.9, "only +X is authored after yaw");
+        assert!((hook.point - hand).magnitude() <= CLIMB_LIP_REACH);
+        assert!(
+            world
+                .climbable_grip_at(vec3(-5.0, 6.75, 0.0), CLIMB_GRIP_RADIUS, 6.0)
+                .is_none()
+        );
+
+        let outside_cap = world
+            .climbable_grip_at(vec3(-4.93, 6.56, 0.0), CLIMB_GRIP_RADIUS, 6.0)
+            .expect("a hand just outside the cap footprint can hook the side");
+        assert!(outside_cap.normal.x > 0.9);
+
+        world.set_climbable_sides(ladder, 1); // only a narrow edge, out of reach
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 6.0)
+                .is_none()
+        );
+        world.set_climbable_sides(ladder, 0);
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 6.0)
+                .is_none()
+        );
+        world.set_climbable_sides(ladder, 2);
+
+        // A narrow clear gap still admits a short hook.
+        world.add_kinematic(
+            EntityId::from_inner(2030).unwrap(),
+            vec3(-4.75, 6.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.2, 0.8, 2.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 6.0)
+                .is_some()
+        );
+        // Seal that gap. The unobstructed opposite side is not authored.
+        world.add_kinematic(
+            EntityId::from_inner(2031).unwrap(),
+            vec3(-4.9, 6.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.1, 0.8, 2.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        assert!(
+            world
+                .climbable_grip_at(hand, CLIMB_GRIP_RADIUS, 6.0)
+                .is_none()
         );
     }
 
