@@ -63,16 +63,53 @@ pub fn random_binomial() -> f32 {
 /// Height to fall back on when the creature has no definition (world units)
 const CREATURE_DEFAULT_HEIGHT: f32 = 6.5 / SCALE_FACTOR;
 
-/// The creature's height in world units. Fractions of it (rather than fixed
-/// feet) are what let the same reasoning work on a monkey and on a hybrid.
-pub fn creature_height(world: &World, entity_id: EntityId) -> f32 {
+/// ...and the body radius to fall back on (half a human's 3.5-foot width)
+const CREATURE_DEFAULT_RADIUS: f32 = 1.75 / SCALE_FACTOR;
+
+/// The creature's own definition, or None when it has no `PropCreature`.
+fn creature_definition(
+    world: &World,
+    entity_id: EntityId,
+) -> Option<std::sync::Arc<crate::creature::CreatureDefinition>> {
     world
         .borrow::<View<PropCreature>>()
         .ok()
         .and_then(|v_creature| v_creature.get(entity_id).ok().map(|creature| creature.0))
         .and_then(crate::creature::get_creature_definition)
+}
+
+/// The creature's height in world units. Fractions of it (rather than fixed
+/// feet) are what let the same reasoning work on a monkey and on a hybrid.
+pub fn creature_height(world: &World, entity_id: EntityId) -> f32 {
+    creature_definition(world, entity_id)
         .map(|definition| definition.bounding_size.y)
         .unwrap_or(CREATURE_DEFAULT_HEIGHT)
+}
+
+/// The radius of the capsule this creature actually collides with - the same
+/// resolution its body is built from, authored sphere dimensions included, so
+/// a probe asks for the room the creature really occupies rather than for a
+/// bounding box it may be much narrower than.
+pub fn creature_radius(world: &World, entity_id: EntityId) -> f32 {
+    let Some(definition) = creature_definition(world, entity_id) else {
+        return CREATURE_DEFAULT_RADIUS;
+    };
+    let v_phys_type = world.borrow::<View<PropPhysType>>().ok();
+    let v_dimensions = world.borrow::<View<PropPhysDimensions>>().ok();
+    let shape = crate::mission::entity_creator::live_creature_shape(
+        &definition,
+        v_phys_type
+            .as_ref()
+            .and_then(|view| view.get(entity_id).ok()),
+        v_dimensions
+            .as_ref()
+            .and_then(|view| view.get(entity_id).ok()),
+    );
+    match shape {
+        crate::physics::PhysicsShape::Capsule { radius, .. } => radius,
+        crate::physics::PhysicsShape::Sphere(radius) => radius,
+        crate::physics::PhysicsShape::Cuboid(half_extents) => half_extents.x.max(half_extents.z),
+    }
 }
 
 pub fn get_position_and_forward(

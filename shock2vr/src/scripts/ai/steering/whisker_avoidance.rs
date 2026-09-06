@@ -23,7 +23,7 @@ const WHISKER_SPREAD: Deg<f32> = Deg(30.0);
 /// blocked, so climbable steps don't push AIs sideways off staircases the
 /// route chose. Fractions rather than fixed feet, because a monkey is half
 /// a hybrid's height and fixed offsets would put both its probes underground.
-const WHISKER_KNEE_FRACTION: f32 = 0.35;
+pub const WHISKER_KNEE_FRACTION: f32 = 0.35;
 const WHISKER_CHEST_FRACTION: f32 = 0.15;
 /// Seconds between probes. Static geometry doesn't move and every
 /// path-following AI runs this, so the rays are cast a few times a second
