@@ -42,11 +42,28 @@ const SCALE_FACTOR = 2.5;
  * The muzzle vhot of each model, in world units (the model's vhot 0, read from
  * the 25AE `obj/*.bin` and divided by SCALE_FACTOR). Both sit at the model's
  * -X extreme, which is the authored barrel direction for these models.
+ *
+ * A VR wield draws the rigid gun set shrunk to life size and shrinks its vhots
+ * with it (`vr_config::gun_wield_scale`), so the laser's live muzzle is
+ * `gun_scale` times the authored point. The psi amp is NOT in that set - it
+ * keeps its own baked arm and its authored size - which is why it is compared
+ * unscaled here, and why this test would notice if the partition moved.
  */
 const MUZZLE_VHOT: Record<string, Vec3> = {
   lasehand: [-1.913 / SCALE_FACTOR, -0.0688 / SCALE_FACTOR, 0.16 / SCALE_FACTOR],
   amp_h: [-1.1072 / SCALE_FACTOR, 0.2719 / SCALE_FACTOR, -0.1199 / SCALE_FACTOR],
 };
+
+/** The models the wield shrinks - `vr_config::VR_25AE_GUN_MODELS`. */
+const SCALED_GUN_MODELS = new Set(["lasehand"]);
+
+/** The live `gun_scale` dev param, so the test is not pinned to its default. */
+async function gunWieldScale(game: GameServer): Promise<number> {
+  const params = await game.devParams.list();
+  const scale = params.params.find((p) => p.key === "gun_scale")?.value;
+  assert.ok(typeof scale === "number", "the runtime must expose the gun_scale dev param");
+  return scale;
+}
 
 const len = (v: Vec3): number => Math.sqrt(dot(v, v));
 
@@ -87,10 +104,12 @@ async function grabWith(game: GameServer, hand: Hand, target: Vec3): Promise<voi
 /** The model's muzzle vhot as the wielding hand renders it: the left hand
  * draws the right-handed model reflected across the gun (its Z), muzzle
  * included, so a left-hand shot must leave the reflected point. */
-function muzzleVhotFor(model: string, hand: Hand): Vec3 | undefined {
+function muzzleVhotFor(model: string, hand: Hand, gunScale: number): Vec3 | undefined {
   const authored = MUZZLE_VHOT[model];
   if (!authored) return undefined;
-  return hand === "left" ? [authored[0], authored[1], -authored[2]] : authored;
+  const mirrored: Vec3 =
+    hand === "left" ? [authored[0], authored[1], -authored[2]] : authored;
+  return SCALED_GUN_MODELS.has(model) ? scale(mirrored, gunScale) : mirrored;
 }
 
 /**
@@ -124,7 +143,7 @@ async function fireAndTrack(
   await game.step({ frames: 5 });
 
   const weapon = await entityTransform(game, weaponId);
-  const vhot = muzzleVhotFor(weapon.model, hand);
+  const vhot = muzzleVhotFor(weapon.model, hand, await gunWieldScale(game));
   assert.ok(vhot, `VR should wield a view model with a known muzzle vhot, got "${weapon.model}"`);
   const muzzle = add(weapon.position, quatRotate(weapon.rotation, vhot));
   // The 25AE view models are authored with the barrel along the model's -X.
@@ -225,9 +244,9 @@ test(
 
 // A gun wielded in the LEFT hand draws the mirror image of its right-handed
 // model (the baked hand becomes a left hand), and the muzzle reflects with it.
-// Negative-first: unmirrored, the laser's muzzle sits 0.064 units the other
-// side of the barrel plane, so the shot misses the reflected point by 0.128 -
-// past the 0.05 tolerance below.
+// Negative-first: unmirrored, the laser's muzzle sits off the barrel plane, so
+// the shot misses the reflected point by twice that - past the 0.05 tolerance
+// below.
 test(
   "a laser pistol wielded in the LEFT hand fires from its mirrored muzzle",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" },
