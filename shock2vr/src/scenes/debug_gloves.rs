@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3, point3, vec3};
@@ -21,7 +22,7 @@ use crate::{
     },
 };
 
-const GLOVE_POSITION: Point3<f32> = point3(0.0, 3.3, 1.0);
+const GLOVE_POSITION: Point3<f32> = point3(0.0, 2.73, 1.0);
 const GLOVE_SPACING: f32 = 0.28;
 const ROW_SPACING: f32 = 0.45;
 
@@ -142,7 +143,11 @@ fn build_posed_glove(
     let mut objects = posed_model.to_scene_objects_with_skinning();
     for object in objects.iter_mut() {
         if let Some(color) = &skin.color {
-            *object.material.borrow_mut() = match &skin.emissive {
+            // A fresh cell, not `*object.material.borrow_mut() = ...`: the
+            // model's own material is shared by every copy of it in the scene,
+            // so writing through it would give all the gloves whichever light
+            // was built last.
+            object.material = Rc::new(RefCell::new(match &skin.emissive {
                 Some(emissive) => SkinnedMaterial::create_with_light(
                     color.clone(),
                     1.0,
@@ -151,7 +156,7 @@ fn build_posed_glove(
                     light.tint(),
                 ),
                 None => SkinnedMaterial::create(color.clone(), 1.0, 0.0),
-            };
+            }));
         }
         object.set_transform(Matrix4::identity());
     }
@@ -210,7 +215,7 @@ impl DebugGlovesScene {
     ) -> Box<dyn GameScene> {
         let builder = DebugSceneBuilder::new("debug_gloves")
             .with_default_floor()
-            // Far enough back that the whole two-row line-up fits the FOV
+            // Far enough back that the whole three-row line-up fits the FOV
             .with_spawn_location(SpawnLocation::PositionRotation(
                 vec3(0.0, 2.5, -0.8),
                 Quaternion::from_angle_y(Deg(90.0)),
