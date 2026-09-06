@@ -105,7 +105,7 @@ test(
       "the arachnid definition maps every skinned joint: body, mandibles, eight legs",
     );
     const parts = new Set(points.map((point) => point.classification));
-    for (const part of ["torso", "head", "limb", "extremity"]) {
+    for (const part of ["torso", "head", "limb", "extremity"] as const) {
       assert.ok(parts.has(part), `expected a ${part} hitbox on the arachnid`);
     }
 
