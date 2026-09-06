@@ -4,7 +4,6 @@ pub mod hand_affordance;
 pub mod hand_buttons;
 pub mod hand_pose;
 pub mod hand_pose_library;
-mod held_gun_glove;
 pub mod hit_feedback;
 pub mod input;
 pub mod input_context;

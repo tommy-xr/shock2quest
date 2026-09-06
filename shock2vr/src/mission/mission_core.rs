@@ -94,7 +94,7 @@ use crate::{
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
         RuntimePropLaunchedProjectile, RuntimePropReloading, RuntimePropSelectedAmmo,
         RuntimePropShotCooldown, RuntimePropShotModifiers, RuntimePropTransform, RuntimePropVhots,
-        RuntimePropVrGloveSeat, RuntimePropVrGripOffset,
+        RuntimePropVrGripOffset, RuntimePropVrGunGlove,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -7317,16 +7317,12 @@ impl MissionCore {
                     // preparation lives.
                     let is_vr = game_options.presentation_mode == crate::PresentationMode::Vr;
                     let vr_held = is_vr && crate::vr_config::is_vr_view_model(&model_name);
-                    // A static gun `_h`: VR strips its baked hand/forearm and
-                    // draws the tracked glove on the grip instead. The psi amp
-                    // is excluded because the amp *is* the forearm - its arm is
-                    // modelled into `ND-amp_h.psd`, so there is nothing to
-                    // strip and nothing for a glove to replace - and the melee
-                    // rigs are skinned and seated from their own posed
-                    // skeleton below.
-                    let vr_held_gun = vr_held
-                        && !is_melee_weapon(&self.world, entity_id)
-                        && !crate::wielded_weapon::is_psi_amp(&self.world, entity_id);
+                    // A rigid gun `_h`: VR strips its baked hand/forearm and
+                    // draws the tracked glove instead. Selected by model name
+                    // (`vr_config::VR_25AE_GUN_MODELS`), the same key the strip
+                    // itself is keyed on, so the two cannot disagree about
+                    // which models they apply to.
+                    let vr_held_gun = is_vr && crate::vr_config::is_vr_gun_view_model(&model_name);
                     // The PsiSword authors no world model at all (PropLimbModel
                     // only), so it has no id_to_model entry to take a transform
                     // from - a VR wield materializes its first model from the
@@ -7352,10 +7348,6 @@ impl MissionCore {
                         // a drop would leave the restored world model wearing
                         // the wield's contact offset.
                         self.world.remove::<RuntimePropVrGripOffset>(entity_id);
-                        // Likewise the glove placement: only the gun branch
-                        // below re-derives one, so a drop must not leave the
-                        // restored world model wearing a glove.
-                        self.world.remove::<RuntimePropVrGloveSeat>(entity_id);
                         // Was the *outgoing* model a VR-wielded first-person
                         // model? (Read before PropModelName is overwritten
                         // below - identifies the drop-restore swap.)
@@ -7436,18 +7428,17 @@ impl MissionCore {
                                 vhot.point = mirror.transform_point(vhot.point);
                             }
                         }
-                        // Where the glove goes now that the baked hand is
-                        // gone: on the grip that hand was posed onto, in the
-                        // hand that is holding the gun. Resolved here because
-                        // this is where the model, its grip entry and the
-                        // holding hand are all known.
+                        // Whether there is a glove to draw over the weapon at
+                        // all - only the arm-stripped gun set has one -
+                        // and, if so, where. Decided here, after the model has
+                        // actually loaded: a failed load keeps the outgoing
+                        // model, whose glove has to survive with it, and a
+                        // drop must not leave the restored world model wearing
+                        // one.
                         if vr_held_gun {
-                            self.world.add_component(
-                                entity_id,
-                                RuntimePropVrGloveSeat(
-                                    crate::held_gun_glove::glove_seat_for_wield(&model_name, hand),
-                                ),
-                            );
+                            self.world.add_component(entity_id, RuntimePropVrGunGlove);
+                        } else {
+                            self.world.remove::<RuntimePropVrGunGlove>(entity_id);
                         }
                         // An articulated VR-wielded first-person model (hand +
                         // arm + gun as skeleton sub-objects) renders unposed
@@ -7604,7 +7595,11 @@ impl MissionCore {
                     self.id_to_animation_player.remove(&entity_id);
                     self.world
                         .remove::<(PropModelName, RuntimePropVhots)>(entity_id);
-                    self.world.remove::<RuntimePropVrGripOffset>(entity_id);
+                    // The wield's own state goes with the model it was derived
+                    // from - an entity with no model has neither a grip nor a
+                    // glove.
+                    self.world
+                        .remove::<(RuntimePropVrGripOffset, RuntimePropVrGunGlove)>(entity_id);
                 }
                 Effect::SetVhotsFromModel {
                     entity_id,

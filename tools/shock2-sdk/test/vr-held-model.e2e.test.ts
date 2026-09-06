@@ -77,13 +77,24 @@ test(
       "wielded atek_h should draw its weapon materials only, arm stripped",
     );
 
-    // ...and the glove takes the baked hand's place. The glove is not an
-    // entity, so it is counted through its render source: wielding used to
-    // *hide* the holding hand's glove, which shows up here as fewer glove
-    // draws than an empty pair of hands.
+    // ...and the glove takes the baked hand's place, ON the gun. The glove is
+    // not an entity, so it is found through its render source and checked
+    // positionally: wielding used to *hide* the holding hand's glove (fewer
+    // draws than an empty pair of hands, and none of them near the weapon).
+    const gloves = await game.scene.fromSource("player_hands");
+    assert.ok(gloves.length >= emptyHanded, "a wield must not hide its glove");
+    const weapon = (await game.entities.detail(pistol.id)).position;
+    const near = gloves.filter(
+      (g) =>
+        Math.hypot(
+          g.position[0] - weapon[0],
+          g.position[1] - weapon[1],
+          g.position[2] - weapon[2],
+        ) < 0.5,
+    );
     assert.ok(
-      (await gloveDraws()) >= emptyHanded,
-      "a wielded gun must keep its hand's glove drawn",
+      near.length > 0,
+      `the glove should be drawn on the wielded gun, not left at the controller: ${JSON.stringify(gloves.map((g) => g.position))} vs weapon ${JSON.stringify(weapon)}`,
     );
 
     await game.input.set("right_hand.squeeze", 0.0);

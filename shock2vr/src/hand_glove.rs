@@ -219,12 +219,17 @@ impl GloveRenderer {
         })
     }
 
-    /// Build the posed glove scene objects for one hand at its world transform.
+    /// Build the posed glove scene objects for one hand.
+    ///
+    /// `hand_to_world` places the glove's own hand space - wrist at the origin,
+    /// fingers down -Z. For a free or item-holding hand that is
+    /// [`hand_to_world`] of the tracked pose; a hand wielding a gun composes
+    /// `vr_config::held_gun_glove_seat` onto it, which seats the glove on the
+    /// weapon in place of the baked hand the wield stripped off (and carries
+    /// its own reflection, so pass [`Handedness::Right`] there).
     pub fn render_hand(
         &mut self,
-        position: Vector3<f32>,
-        rotation: Quaternion<f32>,
-        handedness: Handedness,
+        hand_to_world: Matrix4<f32>,
         trigger_value: f32,
         squeeze_value: f32,
         holding: bool,
@@ -252,35 +257,6 @@ impl GloveRenderer {
         } else {
             prompted_pose(pose, &self.fist, &self.point, preshape)
         };
-        Self::render_posed(
-            &mut self.model,
-            &self.retarget,
-            &self.materials[light.index()],
-            &pose,
-            hand_to_world(position, rotation, handedness),
-        )
-    }
-
-    /// Build the glove for a hand wielding a gun, seated by `hand_to_world`.
-    ///
-    /// The gun view models bake a hand onto the weapon, which VR strips and
-    /// replaces with this one. `hand_to_world` is `held_gun_glove::glove_seat`
-    /// composed onto the tracked hand pose, and carries the left hand's
-    /// reflection and the view model's size correction with it - so this takes
-    /// no handedness and applies no mirror of its own.
-    ///
-    /// The pose is a grip with the index on the trigger, the same one
-    /// [`Self::render_hand`] uses for a full hand, so a held gun and a held
-    /// mug close the hand the same way.
-    pub fn render_held_gun_hand(
-        &mut self,
-        hand_to_world: Matrix4<f32>,
-        trigger_value: f32,
-        light: HandLight,
-    ) -> Vec<SceneObject> {
-        let pose = self
-            .open
-            .blend_per_finger(&self.fist, &grip_amounts(trigger_value));
         Self::render_posed(
             &mut self.model,
             &self.retarget,
@@ -359,7 +335,7 @@ impl GloveRenderer {
 /// - `Handedness::mirror`, the one definition of "the other hand", shared with
 /// the melee wield so the glove and the arm rig cannot disagree about which way
 /// round the left hand is.
-fn hand_to_world(
+pub fn hand_to_world(
     position: Vector3<f32>,
     rotation: Quaternion<f32>,
     handedness: Handedness,

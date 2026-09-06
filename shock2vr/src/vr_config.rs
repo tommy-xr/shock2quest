@@ -328,6 +328,23 @@ const VR_25AE_VIEW_MODELS: &[&str] = &[
     "viro_h", "amp_h", "wrench_h", "rapier_h", "shard_h", "psword_h",
 ];
 
+/// The subset of [`VR_25AE_VIEW_MODELS`] VR wields as a rigid gun: the static
+/// LGMD meshes whose baked hand is stripped so the player's own glove can hold
+/// them ([`dark::importers::VrHeldGunModel`], [`held_gun_glove_scale`]).
+///
+/// Keyed on the model name, like every other per-model table here, rather than
+/// on gamesys metadata: the strip and the glove have to agree about which
+/// models they apply to, and a name cannot disagree with itself. It excludes
+/// the melee rigs (skinned, seated from their own posed skeleton) and the psi
+/// amp, whose forearm is modelled into the amp's own `ND-amp_h.psd` - nothing
+/// isolates it, so there is nothing to strip and nothing for a glove to
+/// replace. `the_view_models_split_into_guns_and_melee_and_the_amp` pins the
+/// partition.
+const VR_25AE_GUN_MODELS: &[&str] = &[
+    "atek_h", "ar15_h", "sg_h", "lasehand", "empgun_h", "gren_h", "sfg_h", "fsn_h", "al_h",
+    "viro_h",
+];
+
 // --- Magazine anchors ---------------------------------------------------------
 //
 // Where a held clip has to reach to load a wielded gun, in the *weapon's own
@@ -395,6 +412,14 @@ fn model_name_lower(world: &World, entity_id: EntityId) -> Option<String> {
 pub fn is_vr_view_model(model_name: &str) -> bool {
     let name = model_name.to_ascii_lowercase();
     VR_25AE_VIEW_MODELS.contains(&name.as_str())
+}
+
+/// Whether `model_name` is one of the rigid gun view models VR draws without
+/// its baked hand, with the player's glove on it instead
+/// ([`VR_25AE_GUN_MODELS`]).
+pub fn is_vr_gun_view_model(model_name: &str) -> bool {
+    let name = model_name.to_ascii_lowercase();
+    VR_25AE_GUN_MODELS.contains(&name.as_str())
 }
 
 /// Skeleton joints of the melee `_h` rigs: root, shoulder, **elbow**, **fist**,
@@ -522,6 +547,53 @@ fn melee_wield_pose_correction_scaled(
         * Matrix4::from_translation(-arm.fist)
 }
 
+/// How much larger than life a 25AE first-person view model is drawn, and
+/// therefore how much larger than life the glove holding one has to be.
+///
+/// The set is authored for a fixed flat camera, where an exaggerated weapon
+/// reads better, and VR draws it at true world scale: `atek_h`'s weapon
+/// geometry spans 0.66 world units - 0.51 m against a real pistol's 0.20 - and
+/// its baked hand is exaggerated to match, which is why the wield read
+/// coherently while that hand was the one drawn. A life-size glove on the same
+/// gun reads as a doll's hand next to it, so the glove joins the weapon at the
+/// weapon's own scale. Measured off `debug_weapons` captures against the baked
+/// hand it replaces; it is not [`dark::SCALE_FACTOR`], which happens to have
+/// the same value for unrelated reasons.
+///
+/// This is a presentation correction for the glove only. Drawing the view
+/// models at life size is the real fix and a change of its own: it moves every
+/// grip offset, muzzle vhot and magazine anchor with it.
+const VIEW_MODEL_GLOVE_SCALE: f32 = 2.5;
+
+/// The glove's placement on a VR-wielded gun, in the tracked hand's own frame.
+///
+/// VR strips the baked hand off a gun view model
+/// ([`dark::importers::VrHeldGunModel`]) and draws the tracked glove in its
+/// place - so the hand the player sees is the hand they are moving. The
+/// placement is the tracked hand's own pose, unaltered but for the size
+/// correction above: [`HAND_MODEL_POSITIONING`] already carries a hand-fitted
+/// grip per model, tuned in PR #1023 with the baked hand drawn, which is
+/// exactly the alignment the glove wants. A gun that needs a nudge records it
+/// there, in its own grip entry, rather than in a second per-model table.
+///
+/// Inheriting the placement from the *art* instead - each baked hand carries a
+/// geometric frame ([`dark::ss2_bin_obj_loader::HandFrame`]), so the glove's
+/// wrist could go on the baked wrist with no authoring at all - was measured
+/// and rejected. `ar15_h` bakes exactly one hand, a rest hand laid over the
+/// receiver; `sg_h`'s rides the pump; only `atek_h` bakes one on the grip, and
+/// it bakes three islands (a sleeve, the firing hand, and a spare parked 0.6 m
+/// behind the gun for the reload animation). The meshes are not life size
+/// either, and `HandFrame`'s wrist is only estimated - stepped back a hand's
+/// length from the far end of the point cloud. See `cargo run -p shock2vr
+/// --example gun_hand_islands` for the measurements.
+///
+/// Deliberately hand-agnostic: it is composed onto the tracked pose *inside*
+/// [`Handedness::mirror`], so the left hand's glove reflects exactly as an
+/// empty left hand's does and no second definition of "the other hand" exists.
+pub fn held_gun_glove_scale() -> cgmath::Matrix4<f32> {
+    cgmath::Matrix4::from_scale(VIEW_MODEL_GLOVE_SCALE)
+}
+
 pub fn get_vr_hand_model_adjustments_from_entity(
     entity_id: EntityId,
     world: &World,
@@ -568,9 +640,62 @@ pub fn get_vr_hand_model_adjustments_from_model(
 
 #[cfg(test)]
 mod tests {
-    use cgmath::InnerSpace;
+    use cgmath::{InnerSpace, SquareMatrix, assert_relative_eq};
 
     use super::*;
+
+    /// Every wielded view model is either a gun (glove on it, arm stripped), a
+    /// melee rig (posed skeleton, arm kept) or the amp (arm kept) - exactly
+    /// one of the three. A model that fell out of all three would wield with
+    /// neither a glove nor a hand of its own.
+    #[test]
+    fn the_view_models_split_into_guns_and_melee_and_the_amp() {
+        let mut covered = VR_25AE_GUN_MODELS.to_vec();
+        covered.extend_from_slice(MELEE_VIEW_MODELS);
+        covered.push("amp_h");
+
+        for name in VR_25AE_VIEW_MODELS {
+            assert!(
+                covered.contains(name),
+                "{name} is in none of the three sets"
+            );
+        }
+        for name in &covered {
+            assert!(
+                VR_25AE_VIEW_MODELS.contains(name),
+                "{name} is not a view model"
+            );
+        }
+        assert_eq!(
+            covered.len(),
+            VR_25AE_VIEW_MODELS.len(),
+            "a model is in two sets"
+        );
+        assert!(!is_vr_gun_view_model("amp_h"));
+        assert!(!is_vr_gun_view_model("wrench_h"));
+        assert!(is_vr_gun_view_model("ATEK_H"));
+    }
+
+    /// The gun glove's placement is a pure scale, so it puts the glove's wrist
+    /// on the tracked hand and leaves the direction its fingers point alone -
+    /// which is what lets it compose inside `Handedness::mirror` and reuse the
+    /// one definition of "the other hand".
+    #[test]
+    fn the_gun_glove_sits_on_the_tracked_hand_facing_the_same_way() {
+        use cgmath::{Transform, point3};
+
+        let scale = held_gun_glove_scale();
+
+        assert!(scale.determinant() > 0.0, "the scale must not reflect");
+        assert_relative_eq!(
+            scale.transform_point(point3(0.0, 0.0, 0.0)),
+            point3(0.0, 0.0, 0.0)
+        );
+        assert_relative_eq!(
+            scale.transform_vector(vec3(0.0, 0.0, -1.0)).normalize(),
+            vec3(0.0, 0.0, -1.0)
+        );
+    }
 
     /// The melee subset of [`VR_25AE_VIEW_MODELS`]: skinned arm rigs, seated
     /// from the posed skeleton rather than from a static grip entry.

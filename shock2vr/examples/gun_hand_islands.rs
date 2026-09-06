@@ -21,6 +21,23 @@ const GUNS: &[&str] = &[
     "viro_h", "amp_h",
 ];
 
+/// The longest axis of the geometry a mesh's polygons actually reference, in
+/// world units - the one number that says how big a model is drawn.
+fn longest_span(mesh: &ss2_bin_obj_loader::SystemShock2ObjectMesh) -> f32 {
+    let mut lo = [f32::INFINITY; 3];
+    let mut hi = [f32::NEG_INFINITY; 3];
+    for polygon in &mesh.polygons {
+        for index in &polygon.vertex_indices {
+            let vertex = mesh.vertices[*index as usize];
+            for (axis, value) in [vertex.x, vertex.y, vertex.z].into_iter().enumerate() {
+                lo[axis] = lo[axis].min(value);
+                hi[axis] = hi[axis].max(value);
+            }
+        }
+    }
+    (0..3).map(|axis| hi[axis] - lo[axis]).fold(0.0, f32::max)
+}
+
 fn main() {
     let data_root = shock2vr::paths::data_root();
     let mut mounts = vec![shock2vr::resource_family_paths("obj")];
@@ -69,33 +86,17 @@ fn main() {
         // world model's - the view models are authored for a flat camera and
         // may be exaggerated.
         {
-            let span = |m: &ss2_bin_obj_loader::SystemShock2ObjectMesh| {
-                let mut lo = [f32::INFINITY; 3];
-                let mut hi = [f32::NEG_INFINITY; 3];
-                for polygon in &m.polygons {
-                    for index in &polygon.vertex_indices {
-                        let p = m.vertices[*index as usize];
-                        for (axis, value) in [p.x, p.y, p.z].into_iter().enumerate() {
-                            lo[axis] = lo[axis].min(value);
-                            hi[axis] = hi[axis].max(value);
-                        }
-                    }
-                }
-                (0..3)
-                    .map(|axis| hi[axis] - lo[axis])
-                    .fold(0.0_f32, f32::max)
-            };
             let weapon = ss2_bin_obj_loader::retain_materials(mesh.clone(), |name| {
                 !dark::importers::is_first_person_arm_material(name)
             });
-            let view = span(&weapon);
+            let view = longest_span(&weapon);
             let world = name
                 .strip_suffix("_h")
                 .and_then(|stem| cache.get_raw_reader(&format!("{stem}_w.bin")))
                 .map(|reader| {
                     let mut reader = reader.borrow_mut();
                     let header = dark::ss2_bin_header::read(&mut *reader);
-                    span(&ss2_bin_obj_loader::read(&mut *reader, &header))
+                    longest_span(&ss2_bin_obj_loader::read(&mut *reader, &header))
                 });
             match world {
                 Some(world) => println!(
@@ -124,31 +125,15 @@ fn main() {
                 .map(|material| material.name.clone())
                 .collect::<Vec<_>>()
                 .join(",");
-            // Extent of the island's own geometry, to check the baked hand
-            // against a real hand (`HAND_LENGTH_WORLD`, 0.2493 units ~ 19 cm).
-            let mut lo = [f32::INFINITY; 3];
-            let mut hi = [f32::NEG_INFINITY; 3];
-            for polygon in &island.polygons {
-                for index in &polygon.vertex_indices {
-                    let p = island.vertices[*index as usize];
-                    for (axis, value) in [p.x, p.y, p.z].into_iter().enumerate() {
-                        lo[axis] = lo[axis].min(value);
-                        hi[axis] = hi[axis].max(value);
-                    }
-                }
-            }
-            println!(
-                "   island {index}: extent ({:.3},{:.3},{:.3})",
-                hi[0] - lo[0],
-                hi[1] - lo[1],
-                hi[2] - lo[2]
-            );
+            // The island's own longest axis, to size the baked hand against a
+            // real one (`HAND_LENGTH_WORLD`, 0.2493 units ~ 19 cm).
+            println!("   island {index}: span {:.3} units", longest_span(island));
             match ss2_bin_obj_loader::hand_frame(
                 island,
                 dark::importers::is_first_person_arm_material,
             ) {
                 Some(frame) => println!(
-                    "   island {index}: polys {:4} [{materials}] wrist ({:7.3},{:7.3},{:7.3}) forward ({:6.3},{:6.3},{:6.3}) len {:.3}",
+                    "   island {index}: polys {:4} [{materials}] far end ({:7.3},{:7.3},{:7.3}) forward ({:6.3},{:6.3},{:6.3}) len {:.3}",
                     island.polygons.len(),
                     frame.origin.x,
                     frame.origin.y,

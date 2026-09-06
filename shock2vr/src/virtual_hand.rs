@@ -1,6 +1,8 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, Zero, point3, vec3};
+use cgmath::{
+    InnerSpace, Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, Zero, point3, vec3,
+};
 use dark::{
     SCALE_FACTOR,
     properties::{FrobFlag, PropFrobInfo, PropModelName},
@@ -17,7 +19,7 @@ use crate::{
     hand_affordance::{self, AffordanceTracker, HandAffordance},
     input_context::Hand,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
-    runtime_props::RuntimePropVrGloveSeat,
+    runtime_props::RuntimePropVrGunGlove,
     scripts::{Message, MessagePayload},
     util::{self, point3_to_vec3},
     vr_config::{self, Handedness},
@@ -402,27 +404,26 @@ impl VirtualHand {
             return Vec::new();
         };
 
-        // A wielded gun draws its own glove, in place of the baked hand the
-        // wield stripped off the weapon. The seat is resolved once by the
-        // wield (`RuntimePropVrGloveSeat`), and its presence is what marks a
-        // hold as one of those.
-        if let Some(seat) = held_glove_seat(world, self.get_held_entity()) {
-            return renderer.render_held_gun_hand(
-                Matrix4::from_translation(self.position) * Matrix4::from(self.rotation) * seat,
-                self.trigger_value,
-                self.affordance.state().light(),
-            );
-        }
-
-        // The hand itself: the skinned hand model, posed from the analog
-        // inputs - unless a wielded weapon's model stands in for it.
-        if !shows_hand_visual(world, self.get_held_entity()) {
+        // A wielded gun draws the glove in place of the baked hand the wield
+        // stripped off it, at the weapon's own scale; everything else draws it
+        // at the tracked hand, or not at all when the held model draws a hand
+        // of its own. The `MELEE_GLOVE_OVERLAY` calibration override wants the
+        // unscaled tracked pose - that is the whole point of it - so it takes
+        // the ordinary path even for a gun.
+        let holds_gun_glove = holds_gun_glove(world, self.get_held_entity())
+            && crate::dev_params::get(crate::dev_params::MELEE_GLOVE_OVERLAY) <= 0.5;
+        if !holds_gun_glove && !shows_hand_visual(world, self.get_held_entity()) {
             return Vec::new();
         }
+        let hand = crate::hand_glove::hand_to_world(self.position, self.rotation, self.handedness);
+        let seat = if holds_gun_glove {
+            crate::vr_config::held_gun_glove_scale()
+        } else {
+            Matrix4::identity()
+        };
+
         renderer.render_hand(
-            self.position,
-            self.rotation,
-            self.handedness,
+            hand * seat,
             self.trigger_value,
             self.squeeze_value,
             self.get_held_entity().is_some(),
@@ -433,15 +434,17 @@ impl VirtualHand {
     }
 }
 
-/// The glove placement a held entity's wield resolved, if it is one that draws
-/// a glove over the weapon (the static gun `_h` set - see
-/// [`crate::held_gun_glove`]).
-fn held_glove_seat(world: &World, held_entity: Option<EntityId>) -> Option<Matrix4<f32>> {
-    let entity_id = held_entity?;
+/// Whether the held entity is a wield that draws the glove over the weapon -
+/// the arm-stripped gun `_h` set, marked by the wield itself (see
+/// [`crate::runtime_props::RuntimePropVrGunGlove`]).
+fn holds_gun_glove(world: &World, held_entity: Option<EntityId>) -> bool {
+    let Some(entity_id) = held_entity else {
+        return false;
+    };
     world
-        .borrow::<View<RuntimePropVrGloveSeat>>()
-        .ok()
-        .and_then(|seats| seats.get(entity_id).ok().map(|seat| seat.0))
+        .borrow::<View<RuntimePropVrGunGlove>>()
+        .map(|marked| marked.get(entity_id).is_ok())
+        .unwrap_or(false)
 }
 
 fn handle_empty_hand_state(

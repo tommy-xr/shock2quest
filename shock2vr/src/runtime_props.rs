@@ -373,22 +373,22 @@ pub struct RuntimePropLogData {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropVrGripOffset(pub Vector3<f32>);
 
-// RuntimePropVrGloveSeat - where the tracked glove is drawn on a VR-wielded
-// gun, as a transform from the glove's own hand space into the tracked hand's
-// local space.
+// RuntimePropVrGunGlove - marks a VR-wielded gun as one the player's own glove
+// is drawn holding.
 //
-// VR strips the baked hand off a gun view model and draws the player's glove
-// instead, on the grip the artist posed that hand onto
-// (`held_gun_glove::glove_seat`). The placement depends on the model, the grip
-// entry and which hand is holding it, all of which are known exactly once -
-// when `Effect::ChangeModel` applies the wield - so it is resolved there and
-// read per frame from here.
+// VR strips the baked hand off the rigid gun view models
+// (`dark::importers::VrHeldGunModel`) and draws the tracked glove in its place;
+// the melee rigs and the psi amp keep the hand their model draws. Which of
+// those a wield is depends on the model, and is settled once - when
+// `Effect::ChangeModel` applies the wield - so it is recorded here rather than
+// re-derived from the model name every frame in the render path.
 //
-// Its presence is also what tells the renderer to draw a glove over a held
-// weapon at all: only the static gun `_h` set gets one (the psi amp's arm is
-// part of the amp, and melee rigs are seated from their own posed skeleton).
+// A marker, not a transform: the placement itself
+// (`vr_config::held_gun_glove_scale`) is hand-agnostic and composes onto the
+// tracked pose the renderer already has, so there is nothing per-entity to
+// store and no way for a stored handedness to go stale.
 //
-// Not serialized: the wield's `Effect::ChangeModel` recomputes it whenever the
+// Not serialized: the wield's `Effect::ChangeModel` re-applies it whenever the
 // first-person model is (re)applied, including on load.
 #[derive(Component, Clone, Copy, Debug)]
-pub struct RuntimePropVrGloveSeat(pub Matrix4<f32>);
+pub struct RuntimePropVrGunGlove;
