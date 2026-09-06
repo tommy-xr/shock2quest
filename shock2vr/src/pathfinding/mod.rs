@@ -67,12 +67,22 @@ const BRIDGE_BUCKET: f32 = 12.0 / SCALE_FACTOR;
 /// prefer clear floor, but allow squeezing past baked furniture
 const BLOCKING_CELL_COST_PENALTY: u32 = 4;
 
-/// How long a steering-reported blocked crossing stays excluded from the
-/// reporting AI's path queries. Long enough that the re-path (and several
-/// after it) route around the obstacle instead of reproducing the blocked
-/// route; short enough that a transient blocker (a shoved crate) is
-/// retried within a minute.
+/// How long a crossing an AI stalled on stays remembered by that AI. Long
+/// enough that the re-path (and several after it) prefer another way round
+/// instead of reproducing the blocked route; short enough that a transient
+/// blocker (a shoved crate) is retried within a minute.
 const BLOCKED_LINK_TTL_SECONDS: f32 = 30.0;
+/// Physical stalls on one directed crossing before the AI stops paying to
+/// try it and cuts it outright. The first stall is one ambiguous failure -
+/// a neighbour passing through, a door still swinging - and a cut on that
+/// evidence severs crossings that are an AI's only way through (measured on
+/// hydro2: about 20 of ~36 search shortfalls were an AI's own single cut).
+/// The second says the obstacle is still there and the cost was outbid.
+const STALLS_BEFORE_CUT: u32 = 2;
+/// How long an escalated crossing stays CUT from the AI's queries. Far
+/// shorter than the memory above: a cut can make a goal unreachable, so it
+/// buys one detour's worth of time and then lets the AI look again.
+const BLOCKED_LINK_CUT_SECONDS: f32 = 5.0;
 
 /// How long a cell an AI stalled in stays expensive to enter. Shorter than
 /// the crossing TTL: a whole cell is a much blunter instrument, and the
@@ -88,6 +98,11 @@ const MAX_BLOCKED_CELLS: usize = 64;
 /// through the only cell it has, and a corridor everyone must cross stays
 /// usable. Worth about a 200-foot detour, so any real alternative wins.
 const STALLED_CELL_COST_PENALTY: u32 = 200;
+/// Extra cost for the AI that stalled to TRY a crossing again - the same
+/// weight as the cell penalty, so a stalled crossing and a stalled cell
+/// bias a route by the same amount. Any real alternative wins; a crossing
+/// that is the AI's only way through stays walkable.
+const STALLED_LINK_COST_PENALTY: u32 = STALLED_CELL_COST_PENALTY;
 
 /// Per-frame cap on AI-initiated pathfind queries. A slot now covers the
 /// full fallback chain (A* + stressed retry + partial-route Dijkstra when
@@ -135,12 +150,18 @@ impl Default for PathfindingFrameBudget {
 }
 
 /// Steering-reported obstacles the navigation mesh doesn't model, applied to
-/// one path query. Links are impassable; cells are merely expensive (see
-/// `STALLED_CELL_COST_PENALTY`).
+/// one path query. Cells and most crossings are merely expensive (see
+/// `STALLED_CELL_COST_PENALTY`, `STALLED_LINK_COST_PENALTY`); only a
+/// crossing the querying AI stalled on twice is impassable.
 #[derive(Debug, Clone, Default)]
 pub struct NavAvoidance {
-    /// Directed cell crossings the QUERYING AI failed to traverse
+    /// Directed cell crossings CUT from this query: the querying AI stalled
+    /// on each of them twice without getting through (see
+    /// `STALLS_BEFORE_CUT`)
     pub links: std::collections::HashSet<(u32, u32)>,
+    /// Directed cell crossings the querying AI stalled on once - expensive
+    /// to try again, never impassable
+    pub costly_links: std::collections::HashSet<(u32, u32)>,
     /// Cells some AI is (or recently was) stalled in
     pub cells: std::collections::HashSet<u32>,
 }
@@ -155,8 +176,8 @@ pub struct PathfindingStats {
     pub stressed_retries: u64,
     /// Queries that found no route at all (the most expensive outcome)
     pub no_route: u64,
-    /// Crossings currently excluded by steering reports, counted once per
-    /// AI holding one - two AIs excluding the same crossing are two
+    /// Crossings currently penalized or cut by steering reports, counted
+    /// once per AI holding one - two AIs avoiding the same crossing are two
     /// entries (see `report_blocked_link`). Pruned as their owners query,
     /// so this is the count as of the last query rather than as of this
     /// instant.
@@ -224,6 +245,28 @@ impl MovementHold {
     }
 }
 
+/// One AI's memory of a directed crossing its body could not get through.
+#[derive(Debug, Clone, Copy)]
+struct LinkStall {
+    /// Mission seconds this memory lapses at (the whole entry goes)
+    expiry: f32,
+    /// Mission seconds the hard cut lapses at, once escalated. While this
+    /// is in the future the crossing is impassable to this AI; before and
+    /// after, it is merely expensive.
+    cut_until: Option<f32>,
+    /// Physical stalls on this crossing since the AI last covered ground
+    /// (see `clear_link_stall_history`). Re-queries don't count: only a
+    /// body that tried and failed again.
+    stalls: u32,
+}
+
+impl LinkStall {
+    /// Impassable right now, rather than merely expensive
+    fn is_cut(&self, now_seconds: f32) -> bool {
+        self.cut_until.is_some_and(|until| until > now_seconds)
+    }
+}
+
 /// Pathfinding service for AI navigation
 ///
 /// Uses AIPATH cells for navigation mesh queries and A* pathfinding.
@@ -271,20 +314,26 @@ pub struct PathfindingService {
     /// Cell crossings an AI's steering failed to traverse (a stall fired
     /// mid-route): obstacles the mesh doesn't model, e.g. a physical prop
     /// or a scripted stationary NPC sitting on a walkable link. Entries map
-    /// `reporting AI -> (from_cell, to_cell) -> expiry in mission seconds`.
-    /// Scoped to the AI THAT STALLED, because this is a hard cut in A* and
-    /// nothing else the steering reports is: level-wide, one wedged
-    /// creature removed a crossing for every other AI, the set only grew
-    /// over a pass (the TTL is as long as an engagement), and where
-    /// crossings are few - a narrow bridge between nav islands - that left
-    /// the rest of the level with no route at all. What warns the OTHERS
-    /// off is the shared cell penalty (`blocked_cells`), refreshed for as
-    /// long as the blocked AI keeps stalling there: a cost that can never
-    /// make a goal unreachable. Directed-link granularity (not whole cells)
-    /// so one blocked doorway can't seal every other entrance into a large
+    /// `reporting AI -> (from_cell, to_cell) -> LinkStall`.
+    ///
+    /// Scoped to the AI THAT STALLED: level-wide, one wedged creature
+    /// removed a crossing for every other AI, the set only grew over a pass
+    /// (the memory is as long as an engagement), and where crossings are
+    /// few - a narrow bridge between nav islands - that left the rest of
+    /// the level with no route at all. What warns the OTHERS off is the
+    /// shared cell penalty (`blocked_cells`), refreshed for as long as the
+    /// blocked AI keeps stalling there.
+    ///
+    /// The first stall makes the crossing EXPENSIVE for that AI, not
+    /// impassable: one failure is ambiguous, and a cut on that evidence
+    /// severs crossings that are the AI's only way through. A second
+    /// physical stall on the same crossing says the obstacle is still there
+    /// and the cost was outbid, and escalates to a short cut (see
+    /// `STALLS_BEFORE_CUT`). Directed-link granularity (not whole cells) so
+    /// one blocked doorway can't seal every other entrance into a large
     /// cell. An AI's entries expire on their TTL and go with it when it
     /// despawns, so nothing accumulates across a mission.
-    blocked_links: std::sync::Mutex<HashMap<u64, HashMap<(u32, u32), f32>>>,
+    blocked_links: std::sync::Mutex<HashMap<u64, HashMap<(u32, u32), LinkStall>>>,
     /// Cells an AI's steering stalled in, mapped to their expiry in mission
     /// seconds. Two jobs, one input: a stall that happens INSIDE a single
     /// cell has no crossing to blacklist (the AI never reached the edge),
@@ -417,38 +466,103 @@ impl PathfindingService {
         }
     }
 
-    /// Remember that `entity`'s steering could not physically traverse the
-    /// crossing `from_cell -> to_cell` (it stalled mid-route): the crossing
-    /// is excluded from THAT AI's path queries until the entry expires, so
-    /// its re-path routes around the obstacle instead of reproducing the
-    /// route it could not walk (issue #481's grind loop). Other AIs keep
-    /// the crossing and are steered off it by the cell penalty instead -
-    /// see the `blocked_links` field.
+    /// Remember that `entity`'s body could not physically traverse the
+    /// crossing `from_cell -> to_cell` (a stall fired mid-route). The first
+    /// such stall makes the crossing expensive for THAT AI, so its re-path
+    /// prefers any other way round instead of reproducing the route it
+    /// could not walk (issue #481's grind loop); a second physical stall on
+    /// the same crossing, with no route progress since, cuts it for
+    /// `BLOCKED_LINK_CUT_SECONDS`. Other AIs keep the crossing at full
+    /// price and are steered off it by the cell penalty instead - see the
+    /// `blocked_links` field.
+    ///
+    /// Only a body's failed attempt belongs here. A re-query that answers
+    /// with the same route has not tried anything, and reports its route
+    /// through `refresh_link_penalty`.
     pub fn report_blocked_link(&self, entity: u64, from_cell: u32, to_cell: u32, now_seconds: f32) {
+        self.record_link_stall(entity, from_cell, to_cell, now_seconds, true);
+    }
+
+    /// Refresh the cost penalty on a crossing without counting a physical
+    /// attempt: the AI's re-path came back with the route that already
+    /// stalled, which says the penalty was outbid, not that the body tried
+    /// again.
+    pub fn refresh_link_penalty(
+        &self,
+        entity: u64,
+        from_cell: u32,
+        to_cell: u32,
+        now_seconds: f32,
+    ) {
+        self.record_link_stall(entity, from_cell, to_cell, now_seconds, false);
+    }
+
+    fn record_link_stall(
+        &self,
+        entity: u64,
+        from_cell: u32,
+        to_cell: u32,
+        now_seconds: f32,
+        physical: bool,
+    ) {
         let Ok(mut blocked) = self.blocked_links.lock() else {
             return;
         };
         let mine = blocked.entry(entity).or_default();
-        mine.retain(|_, &mut expiry| expiry > now_seconds);
-        mine.insert((from_cell, to_cell), now_seconds + BLOCKED_LINK_TTL_SECONDS);
+        mine.retain(|_, entry| entry.expiry > now_seconds);
+        let entry = mine
+            .entry((from_cell, to_cell))
+            .or_insert_with(|| LinkStall {
+                expiry: now_seconds + BLOCKED_LINK_TTL_SECONDS,
+                cut_until: None,
+                stalls: 0,
+            });
+        // Re-reporting extends the memory, never shortens it
+        entry.expiry = now_seconds + BLOCKED_LINK_TTL_SECONDS;
+        if physical {
+            entry.stalls += 1;
+            // A count that has already earned a cut re-arms one on every
+            // further stall while the AI stays stuck there: after the second
+            // failure the evidence stands until the body covers ground
+            // (which resets the count) or the memory lapses.
+            if entry.stalls >= STALLS_BEFORE_CUT {
+                entry.cut_until = Some(now_seconds + BLOCKED_LINK_CUT_SECONDS);
+            }
+        }
     }
 
-    /// `entity`'s own unexpired exclusions, as `(crossing, expiry)`. Its
-    /// expired entries are dropped (another AI's are dropped when it next
-    /// reports or queries).
-    fn live_links_for(&self, entity: u64, now_seconds: f32) -> Vec<((u32, u32), f32)> {
+    /// Forget how many times `entity` has stalled on each crossing: its
+    /// body has covered ground, so the next stall is a fresh incident
+    /// rather than the second failure of a pinned body. The cost memories
+    /// stay (the obstacle may well still be there) and a cut already
+    /// escalated lives out its short TTL.
+    pub fn clear_link_stall_history(&self, entity: u64) {
+        let Ok(mut blocked) = self.blocked_links.lock() else {
+            return;
+        };
+        if let Some(mine) = blocked.get_mut(&entity) {
+            for entry in mine.values_mut() {
+                entry.stalls = 0;
+            }
+        }
+    }
+
+    /// `entity`'s own unexpired stall memories. Its expired entries are
+    /// dropped (another AI's are dropped when it next reports or queries).
+    fn live_links_for(&self, entity: u64, now_seconds: f32) -> Vec<((u32, u32), LinkStall)> {
         let Ok(mut blocked) = self.blocked_links.lock() else {
             return Vec::new();
         };
         let Some(mine) = blocked.get_mut(&entity) else {
             return Vec::new();
         };
-        mine.retain(|_, &mut expiry| expiry > now_seconds);
-        mine.iter().map(|(link, expiry)| (*link, *expiry)).collect()
+        mine.retain(|_, entry| entry.expiry > now_seconds);
+        mine.iter().map(|(link, entry)| (*link, *entry)).collect()
     }
 
-    /// The `(from_cell, to_cell)` crossings currently excluded from
-    /// `entity`'s path queries (its own unexpired steering reports).
+    /// The `(from_cell, to_cell)` crossings currently CUT from `entity`'s
+    /// path queries - the ones it stalled on twice, until their short cut
+    /// lapses.
     pub fn blocked_links(
         &self,
         entity: u64,
@@ -456,6 +570,7 @@ impl PathfindingService {
     ) -> std::collections::HashSet<(u32, u32)> {
         self.live_links_for(entity, now_seconds)
             .into_iter()
+            .filter(|(_, entry)| entry.is_cut(now_seconds))
             .map(|(link, _)| link)
             .collect()
     }
@@ -463,8 +578,9 @@ impl PathfindingService {
     /// Remember that an AI stalled inside `cell`. The cell stays expensive
     /// to ENTER for ~10 seconds, so other AIs' routes prefer
     /// another way round and the stalled AI's own re-path does not turn
-    /// back into it. Unlike a blocked crossing this is a cost penalty, not
-    /// an exclusion - a wholly blocked-in AI must still be able to leave.
+    /// back into it. Like a first stall on a crossing this is a cost
+    /// penalty, never a cut - a wholly blocked-in AI must still be able to
+    /// leave.
     pub fn report_blocked_cell(&self, cell: u32, now_seconds: f32) {
         let Ok(mut blocked) = self.blocked_cells.lock() else {
             return;
@@ -491,12 +607,18 @@ impl PathfindingService {
     }
 
     /// Everything steering has reported as physically impassable or
-    /// expensive right now, for one path query by `entity`. The impassable
-    /// crossings are `entity`'s own reports; the expensive cells are every
-    /// AI's (occupancy is shared - see `report_blocked_cell`).
+    /// expensive right now, for one path query by `entity`. The crossings
+    /// are `entity`'s own reports (cut where it stalled twice, expensive
+    /// where once); the expensive cells are every AI's (occupancy is shared
+    /// - see `report_blocked_cell`).
     pub fn avoidance(&self, entity: u64, now_seconds: f32) -> NavAvoidance {
+        let (cut, costly) = self
+            .live_links_for(entity, now_seconds)
+            .into_iter()
+            .partition::<Vec<_>, _>(|(_, entry)| entry.is_cut(now_seconds));
         NavAvoidance {
-            links: self.blocked_links(entity, now_seconds),
+            links: cut.into_iter().map(|(link, _)| link).collect(),
+            costly_links: costly.into_iter().map(|(link, _)| link).collect(),
             cells: self.blocked_cells(now_seconds),
         }
     }
@@ -540,6 +662,7 @@ impl PathfindingService {
         let expiries: HashMap<(u32, u32), f32> = self
             .live_links_for(entity, now_seconds)
             .into_iter()
+            .filter_map(|(link, entry)| Some((link, entry.cut_until?)))
             .collect();
         cell_path
             .windows(2)
@@ -1088,6 +1211,12 @@ impl PathfindingService {
                 // still passable if it is the only way
                 if avoid.cells.contains(&link.to_cell) {
                     cost = cost.saturating_add(STALLED_CELL_COST_PENALTY);
+                }
+                // ...and the querying AI's body failed to get through this
+                // crossing once. Same bargain: prefer anything else, but
+                // walk it again rather than declare the goal unreachable.
+                if avoid.costly_links.contains(&(cell_id, link.to_cell)) {
+                    cost = cost.saturating_add(STALLED_LINK_COST_PENALTY);
                 }
                 (link.to_cell, cost)
             })
@@ -1876,6 +2005,14 @@ pub(crate) mod tests {
     /// Any other AI querying the same mesh
     const BYSTANDER: u64 = 22;
 
+    /// Two physical stalls on one crossing - what it takes to cut it
+    /// (`STALLS_BEFORE_CUT`).
+    fn stall_twice(service: &PathfindingService, entity: u64, from: u32, to: u32, at: f32) {
+        for _ in 0..STALLS_BEFORE_CUT {
+            service.report_blocked_link(entity, from, to, at);
+        }
+    }
+
     fn service(db: PathDatabase) -> PathfindingService {
         PathfindingService::new(Arc::new(db))
     }
@@ -2281,21 +2418,73 @@ pub(crate) mod tests {
         assert!(budget.try_acquire(), "reset must refill the budget");
     }
 
+    /// The first stall is one ambiguous failure - a neighbour passing
+    /// through, a door still swinging - so it makes the crossing expensive
+    /// for the AI that stalled and nothing more. Cutting on that evidence
+    /// severed crossings that were an AI's only way through.
     #[test]
-    fn reported_blocked_link_excludes_that_crossing_from_queries() {
+    fn a_first_stall_prices_a_crossing_without_cutting_it() {
+        let service = service(detour_db());
+        let start = vec3(1.0, 0.0, 1.0);
+        let goal = vec3(5.0, 0.0, 1.0);
+        let direct = service.find_path(start, goal, MovementBits::WALK).unwrap();
+        assert!(
+            !took_the_detour(&direct),
+            "baseline route must go straight through: {direct:?}"
+        );
+
+        service.report_blocked_link(STALLER, 0, 1, 0.0);
+        let avoid = service.avoidance(STALLER, 1.0);
+        assert!(avoid.links.is_empty(), "one stall is not a cut: {avoid:?}");
+        assert!(avoid.costly_links.contains(&(0, 1)));
+        let rerouted = service
+            .find_path_avoiding(start, goal, MovementBits::WALK, &avoid)
+            .unwrap();
+        assert!(
+            took_the_detour(&rerouted),
+            "a stalled crossing must be worth a detour: {rerouted:?}"
+        );
+    }
+
+    /// ...and where there is no detour, the priced crossing is still walked.
+    /// A cost can never make a goal unreachable; that is the whole point of
+    /// paying it first.
+    #[test]
+    fn a_priced_crossing_stays_walkable_when_it_is_the_only_way() {
+        let service = service(three_cell_db(PathCellFlags::empty()));
+        service.report_blocked_link(STALLER, 0, 1, 0.0);
+        let avoid = service.avoidance(STALLER, 1.0);
+        assert!(
+            service
+                .find_path_avoiding(
+                    vec3(1.0, 0.0, 1.0),
+                    vec3(5.0, 0.0, 1.0),
+                    MovementBits::WALK,
+                    &avoid
+                )
+                .is_some(),
+            "the first stall is a cost, not a cut"
+        );
+    }
+
+    /// A second physical stall on the same crossing says the obstacle is
+    /// still there and the price was outbid. Now it goes out of that AI's
+    /// queries, so its re-path routes around instead of grinding on it
+    /// (issue #481) - and the partial fallback parks it rather than pushing
+    /// into the obstacle.
+    #[test]
+    fn a_second_physical_stall_cuts_the_crossing() {
         let service = service(three_cell_db(PathCellFlags::empty()));
         let start = vec3(1.0, 0.0, 1.0);
         let goal = vec3(5.0, 0.0, 1.0);
-        // Without a report the route crosses 0 -> 1 -> 2 normally
-        assert!(service.find_path(start, goal, MovementBits::WALK).is_some());
+        stall_twice(&service, STALLER, 0, 1, 0.0);
 
-        // A stall reported against the 0 -> 1 crossing severs the only
-        // route FOR THE AI THAT STALLED: the full search fails and the
-        // partial fallback reports no progress possible (it parks instead
-        // of grinding into the obstacle - issue #481).
-        service.report_blocked_link(STALLER, 0, 1, 0.0);
         let avoid = service.avoidance(STALLER, 1.0);
         assert!(avoid.links.contains(&(0, 1)));
+        assert!(
+            avoid.costly_links.is_empty(),
+            "a cut crossing is not also priced: {avoid:?}"
+        );
         assert!(
             service
                 .find_path_avoiding(start, goal, MovementBits::WALK, &avoid)
@@ -2307,7 +2496,7 @@ pub(crate) mod tests {
                 .is_none()
         );
 
-        // Only that DIRECTED crossing is excluded - a route already past it
+        // Only that DIRECTED crossing is cut - a route already past it
         // (start in cell 1) still enters cell 2
         assert!(
             service
@@ -2316,8 +2505,79 @@ pub(crate) mod tests {
         );
     }
 
-    /// One AI's stall must not disconnect the level for everybody else. The
-    /// exclusion is a hard cut in A*, so shared it fed back on itself: the
+    /// A re-query is not another attempt. When the search answers with the
+    /// route that already stalled, that is the same failure reported twice -
+    /// it refreshes the price and never escalates, or a cut would need no
+    /// second physical stall at all.
+    #[test]
+    fn a_reproduced_route_never_escalates_to_a_cut() {
+        let service = service(three_cell_db(PathCellFlags::empty()));
+        service.report_blocked_link(STALLER, 0, 1, 0.0);
+        for repeat in 1..5 {
+            service.refresh_link_penalty(STALLER, 0, 1, repeat as f32);
+        }
+        let avoid = service.avoidance(STALLER, 5.0);
+        assert!(
+            avoid.links.is_empty(),
+            "re-querying is not a physical attempt: {avoid:?}"
+        );
+        assert!(avoid.costly_links.contains(&(0, 1)));
+    }
+
+    /// Walking a leg of the route makes the next stall a fresh first
+    /// failure: two stalls only escalate when the body got nowhere between
+    /// them.
+    #[test]
+    fn route_progress_resets_the_stall_count() {
+        let service = service(three_cell_db(PathCellFlags::empty()));
+        service.report_blocked_link(STALLER, 0, 1, 0.0);
+        service.clear_link_stall_history(STALLER);
+        service.report_blocked_link(STALLER, 0, 1, 1.0);
+
+        let avoid = service.avoidance(STALLER, 2.0);
+        assert!(
+            avoid.links.is_empty(),
+            "the AI made progress between the two stalls: {avoid:?}"
+        );
+        assert!(
+            avoid.costly_links.contains(&(0, 1)),
+            "...but it still remembers what it cost: {avoid:?}"
+        );
+    }
+
+    /// The cut is short - one detour's worth of time - and lapses back into
+    /// a price the AI can pay long before it forgets it stalled there.
+    #[test]
+    fn a_cut_lapses_into_a_price_and_then_out_of_memory() {
+        let service = service(three_cell_db(PathCellFlags::empty()));
+        let start = vec3(1.0, 0.0, 1.0);
+        let goal = vec3(5.0, 0.0, 1.0);
+        stall_twice(&service, STALLER, 0, 1, 100.0);
+        assert!(
+            service
+                .blocked_links(STALLER, 100.0 + BLOCKED_LINK_CUT_SECONDS - 1.0)
+                .contains(&(0, 1))
+        );
+
+        let lapsed = service.avoidance(STALLER, 100.0 + BLOCKED_LINK_CUT_SECONDS + 1.0);
+        assert!(lapsed.links.is_empty(), "the cut must lapse: {lapsed:?}");
+        assert!(lapsed.costly_links.contains(&(0, 1)));
+        assert!(
+            service
+                .find_path_avoiding(start, goal, MovementBits::WALK, &lapsed)
+                .is_some(),
+            "the route is walkable again once the cut lapses"
+        );
+
+        let forgotten = service.avoidance(STALLER, 100.0 + BLOCKED_LINK_TTL_SECONDS + 1.0);
+        assert!(
+            forgotten.links.is_empty() && forgotten.costly_links.is_empty(),
+            "entries must expire: {forgotten:?}"
+        );
+    }
+
+    /// One AI's stalls must not disconnect the level for everybody else.
+    /// A cut is a hard cut in A*, so shared it fed back on itself: the
     /// blacklist only grew over an engagement, and where a crossing is the
     /// only way through, every other AI lost the route as well.
     #[test]
@@ -2325,12 +2585,12 @@ pub(crate) mod tests {
         let service = service(three_cell_db(PathCellFlags::empty()));
         let start = vec3(1.0, 0.0, 1.0);
         let goal = vec3(5.0, 0.0, 1.0);
-        service.report_blocked_link(STALLER, 0, 1, 0.0);
+        stall_twice(&service, STALLER, 0, 1, 0.0);
 
         let bystander = service.avoidance(BYSTANDER, 1.0);
         assert!(
-            bystander.links.is_empty(),
-            "another AI's stall is not this AI's exclusion: {bystander:?}"
+            bystander.links.is_empty() && bystander.costly_links.is_empty(),
+            "another AI's stalls are not this AI's memory: {bystander:?}"
         );
         assert!(
             service
@@ -2342,30 +2602,6 @@ pub(crate) mod tests {
         // that is what warns the bystander off without cutting it off.
         service.report_blocked_cell(0, 0.0);
         assert!(service.avoidance(BYSTANDER, 1.0).cells.contains(&0));
-    }
-
-    #[test]
-    fn blocked_links_expire_after_their_ttl() {
-        let service = service(three_cell_db(PathCellFlags::empty()));
-        service.report_blocked_link(STALLER, 0, 1, 100.0);
-        assert!(
-            service
-                .blocked_links(STALLER, 100.0 + BLOCKED_LINK_TTL_SECONDS - 1.0)
-                .contains(&(0, 1))
-        );
-        let expired = service.avoidance(STALLER, 100.0 + BLOCKED_LINK_TTL_SECONDS + 1.0);
-        assert!(expired.links.is_empty(), "entries must expire: {expired:?}");
-        // The route is usable again once the entry expired
-        assert!(
-            service
-                .find_path_avoiding(
-                    vec3(1.0, 0.0, 1.0),
-                    vec3(5.0, 0.0, 1.0),
-                    MovementBits::WALK,
-                    &expired
-                )
-                .is_some()
-        );
     }
 
     #[test]
@@ -2388,11 +2624,12 @@ pub(crate) mod tests {
                 stall_seconds: 0.0,
             },
         );
-        service.report_blocked_link(7, 0, 1, 0.0);
+        stall_twice(&service, 7, 0, 1, 0.0);
 
-        // Entity 7 died (or despawned): its records go with it, exclusions
-        // included - they were its memory of a route it could not walk
-        service.report_blocked_link(BYSTANDER, 1, 2, 0.0);
+        // Entity 7 died (or despawned): its records go with it, stall
+        // memories included - they were its memory of a route it could not
+        // walk
+        stall_twice(&service, BYSTANDER, 1, 2, 0.0);
         service.prune_ai_paths(|entity| entity != 7);
         assert!(service.ai_paths().is_empty());
         assert!(service.ai_steering(7).is_none());
@@ -2587,9 +2824,9 @@ pub(crate) mod tests {
         let service = service(island_db());
         let start = vec3(1.0, 0.0, 1.0);
         let island = vec3(21.0, 0.0, 1.0);
-        // The AI stalled on the other side of the level - nothing to do
-        // with this query's goal, which is on an island of its own
-        service.report_blocked_link(STALLER, 0, 1, 0.0);
+        // The AI stalled twice on the other side of the level - nothing to
+        // do with this query's goal, which is on an island of its own
+        stall_twice(&service, STALLER, 0, 1, 0.0);
         assert!(
             service
                 .find_path(start, island, MovementBits::WALK)
@@ -2618,9 +2855,9 @@ pub(crate) mod tests {
         // Both ways into the goal cell are blocked, the second one later -
         // and a stalled cell contributes nothing either way
         service.report_blocked_cell(1, 0.0);
-        service.report_blocked_link(STALLER, 1, 2, 0.0);
-        service.report_blocked_link(STALLER, 0, 1, 2.0);
-        service.report_blocked_link(STALLER, 3, 2, 5.0);
+        stall_twice(&service, STALLER, 1, 2, 0.0);
+        stall_twice(&service, STALLER, 0, 1, 2.0);
+        stall_twice(&service, STALLER, 3, 2, 5.0);
         let avoid = service.avoidance(STALLER, 0.0);
         assert!(
             service
@@ -2637,8 +2874,8 @@ pub(crate) mod tests {
                 &avoid,
                 0.0
             ),
-            Some(2.0 + BLOCKED_LINK_TTL_SECONDS),
-            "wait for the LAST exclusion on the route the goal is reachable by \
+            Some(2.0 + BLOCKED_LINK_CUT_SECONDS),
+            "wait for the LAST cut on the route the goal is reachable by \
              (0 -> 1 -> 2), neither the level's earliest (1 -> 2) nor its \
              latest (3 -> 2, on the detour the AI will not take)"
         );
@@ -2656,6 +2893,40 @@ pub(crate) mod tests {
                 0.0
             ),
             None
+        );
+    }
+
+    /// A price is not a reason to wait. However expensive a crossing has
+    /// become, the AI can still walk it, so a goal behind one is never
+    /// reported temporarily unreachable (#1353's deadline belongs to cuts).
+    #[test]
+    fn a_goal_behind_a_priced_crossing_is_never_something_to_wait_for() {
+        let service = service(detour_db());
+        let start = vec3(1.0, 0.0, 1.0);
+        let goal = vec3(5.0, 0.0, 1.0);
+        // One stall on each way into the goal cell: both expensive, neither
+        // cut
+        service.report_blocked_link(STALLER, 1, 2, 0.0);
+        service.report_blocked_link(STALLER, 3, 2, 0.0);
+        let avoid = service.avoidance(STALLER, 1.0);
+        assert_eq!(avoid.costly_links.len(), 2);
+        assert!(
+            service
+                .find_path_avoiding(start, goal, MovementBits::WALK, &avoid)
+                .is_some(),
+            "priced crossings must still get the AI there"
+        );
+        assert_eq!(
+            service.exclusion_expiry_for_unreached_goal(
+                STALLER,
+                start,
+                goal,
+                MovementBits::WALK,
+                &avoid,
+                1.0,
+            ),
+            None,
+            "a cost can never be why a goal is unreachable"
         );
     }
 
@@ -2683,10 +2954,10 @@ pub(crate) mod tests {
     #[test]
     fn an_ais_exclusions_outlive_only_their_ttl() {
         let service = service(three_cell_db(PathCellFlags::empty()));
-        service.report_blocked_link(STALLER, 0, 1, 0.0);
-        service.report_blocked_link(BYSTANDER, 0, 1, 0.0);
+        stall_twice(&service, STALLER, 0, 1, 0.0);
+        stall_twice(&service, BYSTANDER, 0, 1, 0.0);
         let later = BLOCKED_LINK_TTL_SECONDS + 1.0;
-        service.report_blocked_link(STALLER, 1, 2, later);
+        stall_twice(&service, STALLER, 1, 2, later);
 
         assert_eq!(
             service.blocked_links(STALLER, later),
@@ -2709,8 +2980,8 @@ pub(crate) mod tests {
         service.report_blocked_link(STALLER, 0, 1, 0.0);
         assert_eq!(service.stats().blocked_cells, 1);
         assert_eq!(service.stats().blocked_links, 1);
-        // The count is level-wide even though each exclusion applies to one
-        // AI: two AIs excluding the same crossing are two live entries.
+        // The count is level-wide even though each memory belongs to one
+        // AI: two AIs avoiding the same crossing are two live entries.
         service.report_blocked_link(BYSTANDER, 0, 1, 0.0);
         assert_eq!(service.stats().blocked_links, 2);
     }

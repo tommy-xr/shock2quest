@@ -44,9 +44,11 @@ pub struct PathQueryResponse {
     pub outcome: AiPathOutcome,
     /// Route waypoints; empty when `outcome` is `Failed`
     pub waypoints: Vec<Vector3<f32>>,
-    /// For a query that did not reach its goal *only because* steering
-    /// reported crossings on its route blocked, the mission time the last of
-    /// those comes back into play at. `None` when the goal is unreachable on
+    /// For a query that did not reach its goal *only because* crossings on
+    /// its route were CUT (this AI stalled on each of them twice), the
+    /// mission time the last of those comes back into play at. A crossing
+    /// that is merely expensive can never be why a goal was unreachable, so
+    /// it is never a deadline. `None` when the goal is unreachable on
     /// the raw mesh too - waiting cannot help. See
     /// `PathfindingService::exclusion_expiry_for_unreached_goal`.
     pub exclusion_expires_at: Option<f32>,
@@ -81,11 +83,12 @@ impl AsyncPathfinding {
                 while let Ok(request) = rx.recv() {
                     let mut outcome = AiPathOutcome::Full;
                     // Crossings THIS AI's steering reported as physically
-                    // blocked (stall mid-route) are excluded from its own
-                    // search, and cells any AI is stalled in are made
-                    // expensive, so the re-path routes around the obstacle
-                    // instead of grinding on it - without cutting the
-                    // crossing out from under every other AI
+                    // blocked (stall mid-route) are expensive in its own
+                    // search - impassable where it stalled twice - and cells
+                    // any AI is stalled in are expensive for everyone, so the
+                    // re-path prefers a way round the obstacle instead of
+                    // grinding on it, without cutting the crossing out from
+                    // under every other AI
                     let avoid = service.avoidance(request.entity, request.now_seconds);
                     let path = service
                         .find_path_avoiding(
@@ -272,7 +275,9 @@ mod tests {
                 dark::mission::path_database::PathCellFlags::empty(),
             ),
         )));
+        // Twice: one stall only prices a crossing, two cut it
         service.report_blocked_link(11, 1, 2, 0.0);
+        service.report_blocked_link(11, 1, 2, 0.5);
         let async_pf = AsyncPathfinding::spawn(service.clone());
         assert!(async_pf.submit(PathQueryRequest {
             entity: 11,
@@ -291,7 +296,7 @@ mod tests {
 
         assert_eq!(
             response.exclusion_expires_at,
-            Some(super::super::BLOCKED_LINK_TTL_SECONDS),
+            Some(0.5 + super::super::BLOCKED_LINK_CUT_SECONDS),
             "the shortfall is the reporter's own exclusion, so it can wait it out"
         );
 
@@ -324,9 +329,11 @@ mod tests {
         // Exclusions are per-AI, so both queriers must carry the same set
         // for the two shortfalls to be comparable
         for entity in [31, 32] {
-            service.report_blocked_link(entity, 1, 2, 0.0);
-            service.report_blocked_link(entity, 0, 1, 2.0);
-            service.report_blocked_link(entity, 3, 2, 5.0);
+            for _ in 0..super::super::STALLS_BEFORE_CUT {
+                service.report_blocked_link(entity, 1, 2, 0.0);
+                service.report_blocked_link(entity, 0, 1, 2.0);
+                service.report_blocked_link(entity, 3, 2, 5.0);
+            }
         }
         let async_pf = AsyncPathfinding::spawn(service.clone());
 
@@ -355,7 +362,7 @@ mod tests {
         assert_ne!(response.outcome, AiPathOutcome::Full);
         assert_eq!(
             response.exclusion_expires_at,
-            Some(2.0 + crate::pathfinding::BLOCKED_LINK_TTL_SECONDS),
+            Some(2.0 + crate::pathfinding::BLOCKED_LINK_CUT_SECONDS),
             "wait for the LAST crossing on the route it becomes reachable by, \
              neither the level's earliest nor its latest (the detour's)"
         );
