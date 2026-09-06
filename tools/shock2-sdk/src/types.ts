@@ -369,6 +369,31 @@ export interface PhysicsBodySummary {
   is_sleeping: boolean;
 }
 
+/**
+ * One body in full (GET /v1/physics/bodies/:id). Adds the fields the list
+ * omits, notably `contact_count` - zero means the body touches nothing at all,
+ * which is what tells a body hanging in the air apart from one at rest. Note
+ * the detail response names the linear velocity `linear_velocity`, where the
+ * list calls the same thing `velocity`.
+ */
+export interface PhysicsBodyDetail extends Omit<PhysicsBodySummary, "velocity"> {
+  center_of_mass: Vec3;
+  gravity_scale: number;
+  linear_damping: number;
+  angular_damping: number;
+  linear_velocity: Vec3;
+  contact_count: number;
+  /**
+   * `body_id` of every body this one is touching. Turns "it touches something"
+   * into "it touches *that*" - e.g. that a creature is pressed against a
+   * particular door leaf rather than merely standing near it. A mission's level
+   * geometry has no rigid body behind it, so it raises `contact_count` without
+   * appearing here: an empty list beside a non-zero count means every contact
+   * is with the level. Optional when connected to runtimes predating this field.
+   */
+  contacts?: number[];
+}
+
 export interface PhysicsBodyListResult {
   bodies: PhysicsBodySummary[];
   total_count: number;

@@ -1853,6 +1853,7 @@ fn process_command(
                         is_enabled: detail.is_enabled,
                         is_sleeping: detail.is_sleeping,
                         contact_count: detail.contact_count,
+                        contacts: detail.contacts,
                     })
             } else {
                 None

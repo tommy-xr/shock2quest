@@ -31,7 +31,7 @@ use self::debug_render_pipeline::DebugRenderer;
 /// Original standing player collision profile (SS2 ft): six feet tall and
 /// 2.4 feet wide. Dark represents it as a vertical stack of spheres; a capsule
 /// is the continuous equivalent and preserves the rounded traversal behavior.
-/// Horizontal speed (world units/s) a kinematic body must carry before it
+/// Speed (world units/s) a kinematic body must carry along an axis before it
 /// counts as moving terrain sweeping a creature. A kinematic body's velocity
 /// is derived from its pose deltas, so a prop that never moves still reports
 /// ~1e-3 of float jitter - and the old 1e-3 gate let a STATIONARY railing
@@ -39,6 +39,88 @@ use self::debug_render_pipeline::DebugRenderer;
 /// (the medsci2 balcony patroller, frozen to the last decimal for a minute).
 /// A door leaf in motion runs an order of magnitude above this.
 const MOVING_TERRAIN_SPEED: f32 = 0.1;
+
+/// Largest contact-normal Y that still counts as a *side* contact rather than
+/// one the actor is resting on. Above it the surface is under (or over) the
+/// actor and carries it through the contact *normal*, which is how a lift or a
+/// platform is ridden.
+///
+/// This is deliberately not the walkable threshold ([`is_walkable_normal`],
+/// 0.7): the question here is "can this contact push the actor along the
+/// surface" rather than "can the actor stand on it", and erring low leaves
+/// borderline contacts carrying rather than sliding. It is the same 0.5 the
+/// moving-terrain sweep recovery already uses to call a contact a side one.
+const SIDE_CONTACT_MAX_NORMAL_Y: f32 = 0.5;
+
+/// Which Rapier contact hooks a collider needs, given what it collides as.
+/// Only actor capsules ask for contact modification, so
+/// [`MovingTerrainContactHooks`] runs on creature contacts and nothing else.
+fn active_hooks_for(group: CollisionGroup) -> ActiveHooks {
+    if group.collision.memberships.bits() & InternalCollisionGroups::ACTOR.bits != 0 {
+        ActiveHooks::MODIFY_SOLVER_CONTACTS
+    } else {
+        ActiveHooks::empty()
+    }
+}
+
+/// Keeps a vertically travelling door leaf from dragging an actor with it.
+///
+/// A leaf is a kinematic body, and an actor pressed against its *face* makes a
+/// contact whose normal is horizontal. Rapier's friction constraint then works
+/// to erase the relative tangential velocity between the two surfaces - and for
+/// a rising leaf that relative velocity is entirely vertical, so the capsule is
+/// pulled up to the leaf's own speed (#1255: a grunt at a medsci1 security door
+/// rode it up 1.6 units at close to the leaf's own 2.4 u/s). Nothing about the
+/// contact is wrong; only the friction the solver is allowed to apply is.
+///
+/// So drop friction, and only where it can do that:
+/// * on *side* contacts alone (see [`SIDE_CONTACT_MAX_NORMAL_Y`]) - a rider
+///   stands ON a lift or platform and is carried by the contact normal, which
+///   this never touches, so lifts keep working;
+/// * only when the mover travels mostly vertically - a sideways-sliding leaf
+///   transfers horizontal motion, which is a different mechanism with its own
+///   handling ([`PhysicsWorld::recover_live_creatures_swept_off_support`]);
+/// * and only on actor colliders, the only ones that ask for the hook (see
+///   [`active_hooks_for`]).
+///
+/// The leaf still pushes along the contact normal, which is what shoves an
+/// actor standing in the doorway out of the leaf's way.
+struct MovingTerrainContactHooks {
+    /// This frame's timestep, to turn a kinematic body's pending move into a
+    /// speed. Rapier derives kinematic velocities *after* contact
+    /// modification runs, so `linvel()` in here is last frame's - and the
+    /// frame a leaf starts moving is exactly the frame that matters.
+    dt: Real,
+}
+
+impl PhysicsHooks for MovingTerrainContactHooks {
+    fn modify_solver_contacts(&self, context: &mut ContactModificationContext) {
+        if self.dt <= 0.0 || context.normal.y.abs() >= SIDE_CONTACT_MAX_NORMAL_Y {
+            return;
+        }
+        let lifts_vertically = [context.rigid_body1, context.rigid_body2]
+            .into_iter()
+            .flatten()
+            .filter_map(|handle| context.bodies.get(handle))
+            .any(|body| {
+                if body.body_type() != RigidBodyType::KinematicPositionBased {
+                    return false;
+                }
+                let step = (body.next_position().translation.vector
+                    - body.position().translation.vector)
+                    / self.dt;
+                let horizontal = (step.x * step.x + step.z * step.z).sqrt();
+                step.y.abs() > MOVING_TERRAIN_SPEED && step.y.abs() > horizontal
+            });
+        if !lifts_vertically {
+            return;
+        }
+        for contact in context.solver_contacts.iter_mut() {
+            contact.friction = 0.0;
+        }
+    }
+}
+
 const PLAYER_STANDING_HEIGHT: f32 = 6.0;
 const PLAYER_STANDING_RADIUS: f32 = 1.2;
 
@@ -2716,7 +2798,6 @@ pub struct PhysicsWorld {
     last_player_translation: Option<Vector3<f32>>,
 
     // TODO:
-    // physics_hooks: Box<dyn PhysicsHooks>,
     // event_handler: Box<dyn EventHandler>,
 
     // Debug
@@ -3037,6 +3118,7 @@ impl PhysicsWorld {
             if let Some(collider) = self.collider_set.get_mut(collider_handle) {
                 collider.set_collision_groups(group.collision);
                 collider.set_solver_groups(group.solver);
+                collider.set_active_hooks(active_hooks_for(group));
             }
         }
     }
@@ -4042,6 +4124,7 @@ impl PhysicsWorld {
         collider.set_sensor(is_sensor);
         collider.set_collision_groups(collision_group.collision);
         collider.set_solver_groups(collision_group.solver);
+        collider.set_active_hooks(active_hooks_for(collision_group));
         collider
             .set_active_events(ActiveEvents::COLLISION_EVENTS | ActiveEvents::CONTACT_FORCE_EVENTS);
         collider.user_data = entity_id.inner() as u128;
@@ -4136,6 +4219,7 @@ impl PhysicsWorld {
         collider.user_data = entity_id.inner() as u128;
         collider.set_collision_groups(collision_groups.collision);
         collider.set_solver_groups(collision_groups.solver);
+        collider.set_active_hooks(active_hooks_for(collision_groups));
 
         self.collider_set
             .insert_with_parent(collider, handle, &mut self.rigid_body_set);
@@ -5222,7 +5306,9 @@ impl PhysicsWorld {
                 &mut self.impulse_joint_set,
                 &mut self.multibody_joint_set,
                 &mut self.ccd_solver,
-                &(),
+                &MovingTerrainContactHooks {
+                    dt: self.integration_parameters.dt,
+                },
                 &self.events,
             )
         });
@@ -6166,7 +6252,7 @@ impl PhysicsWorld {
                             && horizontal_motion > MOVING_TERRAIN_SPEED * MOVING_TERRAIN_SPEED
                             && pair.manifolds.iter().any(|manifold| {
                                 !manifold.data.solver_contacts.is_empty()
-                                    && manifold.data.normal.y.abs() < 0.5
+                                    && manifold.data.normal.y.abs() < SIDE_CONTACT_MAX_NORMAL_Y
                             });
                         is_horizontal_kinematic_side_contact.then(|| {
                             (
@@ -6765,7 +6851,14 @@ impl PhysicsWorld {
         self.rigid_body_set
             .iter()
             .find(|(handle, _)| handle.into_raw_parts().0 == body_id)
-            .map(|(handle, body)| self.debug_body_info(handle, body))
+            .map(|(handle, body)| {
+                let (active_contacts, contact_body_ids) = self.active_contacts(body);
+                DebugBodyInfo {
+                    active_contacts,
+                    contact_body_ids,
+                    ..self.debug_body_info(handle, body)
+                }
+            })
     }
 
     /// Enumerate every impulse joint with its anchor separation and applied
@@ -6900,7 +6993,43 @@ impl PhysicsWorld {
             is_sensor,
             is_enabled: body.is_enabled(),
             is_sleeping: body.is_sleeping(),
+            active_contacts: 0,
+            contact_body_ids: Vec::new(),
         }
+    }
+
+    /// Contact pairs currently touching this body, and the `body_id` of the
+    /// body on the other side of each - level colliders have no body and so
+    /// contribute to the count only. Walks the narrow phase, so only the
+    /// single-body detail path pays for it.
+    fn active_contacts(&self, body: &RigidBody) -> (usize, Vec<u32>) {
+        let mut count = 0;
+        let mut others = Vec::new();
+        for own in body.colliders() {
+            for pair in self
+                .narrow_phase
+                .contact_pairs_with(*own)
+                .filter(|pair| pair.has_any_active_contact)
+            {
+                count += 1;
+                let other = if pair.collider1 == *own {
+                    pair.collider2
+                } else {
+                    pair.collider1
+                };
+                if let Some(parent) = self
+                    .collider_set
+                    .get(other)
+                    .and_then(|collider| collider.parent())
+                {
+                    let id = parent.into_raw_parts().0;
+                    if !others.contains(&id) {
+                        others.push(id);
+                    }
+                }
+            }
+        }
+        (count, others)
     }
 }
 
@@ -6993,6 +7122,21 @@ pub struct DebugBodyInfo {
     pub is_sensor: bool,
     pub is_enabled: bool,
     pub is_sleeping: bool,
+    /// Contact pairs currently touching (not merely broad-phase neighbours).
+    /// Zero means the body touches nothing at all - which is what tells a body
+    /// hanging in the air apart from one resting on something. Only the
+    /// single-body detail path fills this in; the list path reports 0.
+    pub active_contacts: usize,
+    /// `body_id` of every *body* this one is actually touching, deduplicated.
+    /// Turns "it touches *something*" into "it touches *that*" - which is how
+    /// a creature pressed against a door leaf is told apart from one merely
+    /// standing near it. Filled in on the single-body detail path only.
+    ///
+    /// Level geometry is inserted as colliders with no rigid body behind them,
+    /// so standing on the floor of a mission contributes to `active_contacts`
+    /// and nothing here: an empty list next to a non-zero count means every
+    /// contact is with the level itself.
+    pub contact_body_ids: Vec<u32>,
 }
 
 /// Decode an `InteractionGroups` membership bitmask into human-readable names.
@@ -8480,6 +8624,186 @@ mod tests {
         assert!(
             end.z - start.z > 1.0,
             "a stationary railing must not hold a walking creature in place: {start:?} -> {end:?}"
+        );
+    }
+
+    /// A door leaf rising past a creature pressed against its face must leave
+    /// the creature on the floor. The contact normal is horizontal, so the
+    /// leaf's whole velocity lies in the contact's tangent plane and Rapier's
+    /// friction drags the capsule up with it (#1255).
+    #[test]
+    fn a_rising_kinematic_leaf_does_not_lift_a_creature_against_its_face() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2150, 40.0);
+        let leaf = add_sweeping_wall(&mut world, 2153);
+        // Up against the creature's side, the pose an AI takes at a threshold
+        world.set_translation(leaf, vec3(-1.15, 1.0, 0.0));
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let start = world.get_position(creature).unwrap();
+        let mut peak = start.y;
+        // 2.4 units/s, the speed medsci1's security door leaf travels at
+        for frame in 1..=60 {
+            world.set_translation(leaf, vec3(-1.15, 1.0 + frame as f32 * 0.04, 0.0));
+            // Walking into the leaf, which is what presses the capsule to its
+            // face - the whole precondition for friction to drag it upward.
+            let y_velocity = world.get_velocity(creature_id).unwrap().y;
+            world.set_velocity(creature_id, vec3(-0.5, y_velocity, 0.0));
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+            peak = peak.max(world.get_position(creature).unwrap().y);
+        }
+
+        assert!(
+            peak - start.y < 0.05,
+            "a rising leaf must not carry the creature beside it: rest {}, peak {peak}",
+            start.y
+        );
+    }
+
+    /// The detail endpoint's contact report must name *which* body it touches,
+    /// not just how many: that is what separates a creature pressed against a
+    /// door leaf from one standing beside it. Bodies only - a mission's level
+    /// geometry has no rigid body, so it raises the count and nothing else.
+    #[test]
+    fn a_body_at_rest_reports_the_body_it_is_resting_on() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2180, 40.0);
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let floor = world.entity_id_to_body[&EntityId::from_inner(2180).unwrap()]
+            .into_raw_parts()
+            .0;
+        let creature_body = creature.into_raw_parts().0;
+        let detail = world.debug_body_detail(creature_body).unwrap();
+
+        assert!(
+            detail.active_contacts > 0,
+            "a creature standing on the floor must report a contact"
+        );
+        assert_eq!(
+            detail.contact_body_ids,
+            vec![floor],
+            "the contact must name the floor body it rests on"
+        );
+        assert!(
+            world
+                .debug_body_detail(floor)
+                .unwrap()
+                .contact_body_ids
+                .contains(&creature_body),
+            "and the pair must read the same way round"
+        );
+    }
+
+    /// The other direction of travel: a leaf coming *down* on a creature
+    /// standing under it, where it settled while the leaf was parked open. The leaf's underside meets
+    /// the capsule's head, so the contact normal is vertical - the hook leaves
+    /// it alone (it only ever touches side contacts) and the solver resolves it
+    /// the ordinary way. What must never happen is the creature being driven
+    /// through the floor or launched off it; what must happen is that it ends
+    /// up out of the doorway, standing.
+    ///
+    /// The port's door script has no obstruction/reopen path, so a closing leaf
+    /// really does come all the way down on whoever is under it - the pushout
+    /// below is the only thing keeping them out of the floor.
+    ///
+    /// Negative-first: without the hook, the capsule squeezed out sideways is
+    /// then pressed against the leaf's *face*, and friction against the still-
+    /// descending leaf flings it to y = 1.61 and leaves it hanging at 1.47 -
+    /// half a unit off the floor - after the leaf has shut.
+    #[test]
+    fn a_closing_kinematic_leaf_pushes_a_creature_clear_instead_of_through_the_floor() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2170, 40.0);
+        let leaf = add_sweeping_wall(&mut world, 2173);
+        // Parked open, over the creature but 0.2 to its +x, so the direction it
+        // is pushed follows from the geometry rather than from solver
+        // tie-breaking. The leaf's underside (y - 1.5) clears the capsule's
+        // head at y = 2.0, so the creature stands under it undisturbed.
+        world.set_translation(leaf, vec3(0.2, 4.0, 0.0));
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let start = world.get_position(creature).unwrap();
+        assert!(
+            (start.y - 1.0).abs() < 0.05,
+            "the creature should stand under the parked leaf, not be moved by it: {start:?}"
+        );
+
+        let mut lowest = start.y;
+        let mut highest = start.y;
+        // Closing at the same 2.4 units/s the leaf opens at, down to shut.
+        for frame in 1..=75 {
+            world.set_translation(leaf, vec3(0.2, 4.0 - frame as f32 * 0.04, 0.0));
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+            let y = world.get_position(creature).unwrap().y;
+            lowest = lowest.min(y);
+            highest = highest.max(y);
+        }
+        // Keep sampling through the settle: a creature launched by the closing
+        // leaf reaches its peak after the leaf has stopped.
+        for _ in 0..60 {
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+            let y = world.get_position(creature).unwrap().y;
+            lowest = lowest.min(y);
+            highest = highest.max(y);
+        }
+
+        let end = world.get_position(creature).unwrap();
+        // The squeeze between leaf and floor bottoms out ~0.58 into the 1.0-
+        // thick floor slab before the capsule squirts sideways; it must stay
+        // inside that slab (recoverable penetration) rather than pass through.
+        assert!(
+            lowest > start.y - 0.75,
+            "a closing leaf must not push the creature through the floor: rest {}, lowest {lowest}",
+            start.y
+        );
+        // Without the hook this peaks at 1.61, a full unit above rest; with it
+        // the capsule never rises above its resting height at all.
+        assert!(
+            highest < start.y + 0.25,
+            "a closing leaf must not launch the creature: rest {}, highest {highest}",
+            start.y
+        );
+        assert!(
+            (end.y - start.y).abs() < 0.1,
+            "the creature must end standing on the floor: rest {}, end {}",
+            start.y,
+            end.y
+        );
+        // Pushed out the -x side (leaf centre 0.2, half-thickness 0.4, capsule
+        // radius 0.5), resting against the shut leaf's face less Rapier's
+        // contact tolerance.
+        assert!(
+            end.x < -0.65,
+            "the creature must end pushed clear of the leaf, not inside it: {end:?}"
+        );
+    }
+
+    /// The other half of the same contact: a platform rising *under* a
+    /// creature carries it, through the contact normal rather than friction.
+    #[test]
+    fn a_rising_kinematic_platform_still_carries_the_creature_on_it() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2160, 40.0);
+        let platform = world.add_kinematic(
+            EntityId::from_inner(2163).unwrap(),
+            vec3(0.0, 0.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 1.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let start = world.get_position(creature).unwrap();
+        for frame in 1..=60 {
+            world.set_translation(platform, vec3(0.0, frame as f32 * 0.04, 0.0));
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+        }
+
+        let end = world.get_position(creature).unwrap();
+        assert!(
+            end.y - start.y > 2.0,
+            "a rising platform must carry its rider: {} -> {}",
+            start.y,
+            end.y
         );
     }
 
