@@ -3200,10 +3200,10 @@ impl MissionCore {
             // the planner cannot find is simply not taken - the holds stay and
             // the player keeps pulling.
             let mut hand_climb = hand_climb;
-            if let Some(direction) = self.hand_vault_direction() {
+            if let Some(grip) = self.hand_vault_target(input_context.head.position) {
                 if self
                     .physics
-                    .plan_hand_top_out(direction, &mut self.player_handle)
+                    .plan_hand_top_out(grip, &mut self.player_handle)
                 {
                     self.interaction.release_climb_grips();
                     hand_climb.translation = None;
@@ -10084,35 +10084,31 @@ impl MissionCore {
         self.player_handle.is_crouched()
     }
 
-    /// Where to throw the body if the player has pulled their head over the
-    /// ledge their anchor hand is lying on, or `None` if they have not (see
-    /// [`crate::vr_climb::vault_ready`]).
-    ///
-    /// The eye is taken at the STANDING line above the body center, whatever
-    /// stance the collider is in: a VR player's real head does not shrink when
-    /// their capsule balls up, and it is the center the tracked head rides.
-    fn hand_vault_direction(&self) -> Option<Vector3<f32>> {
+    /// The actual held surface, after a deliberate upward or inward pull.
+    /// Preserve this target across ladder-to-deck transfer; head height at the
+    /// moment of grabbing does not disqualify the new hold.
+    fn hand_vault_target(&self, head_local: Vector3<f32>) -> Option<crate::physics::ClimbGrip> {
         let anchor = self.interaction.hand_climb()?.anchor_grip()?;
-        // The pose the coming step will land on, as the grip itself is resolved
-        // against - judging the eye against the superseded one lags the pull.
         let center = self
             .physics
             .get_player_next_translation(&self.player_handle);
-        let eye_above_center = crate::PLAYER_EYE_HEIGHT / dark::SCALE_FACTOR;
-        if !crate::vr_climb::vault_ready(
-            center.y + eye_above_center,
-            anchor.pawn_at_grab.y + eye_above_center,
+        let toward = anchor.grip.point - anchor.pawn_at_grab;
+        let horizontal = cgmath::vec3(toward.x, 0.0, toward.z);
+        let distance = horizontal.magnitude();
+        let traveled = center - anchor.pawn_at_grab;
+        let inward = if distance > 1e-4 {
+            traveled.dot(horizontal / distance)
+        } else {
+            0.0
+        };
+        crate::vr_climb::vault_ready(
+            center.y + head_local.y,
+            traveled.y.max(inward),
             anchor.grip.point.y,
             anchor.grip.kind,
             crate::physics::is_walkable_normal(anchor.grip.normal.y),
-        ) {
-            return None;
-        }
-        // Over the lip, toward the hand: the landing is whatever the planner
-        // finds that way.
-        let toward = anchor.grip.point - center;
-        let direction = cgmath::vec3(toward.x, 0.0, toward.z);
-        (direction.magnitude() > 1.0e-4).then_some(direction)
+        )
+        .then_some(anchor.grip)
     }
 
     /// Whether either VR hand currently holds a climb hold.
