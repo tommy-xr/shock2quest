@@ -196,6 +196,59 @@ pub fn draw_debug_hit_box_shapes(
     )]
 }
 
+/// A world-space wire sphere - three orthogonal great circles - as one
+/// `SceneObject` of colored lines. For overlays that mark a spherical volume
+/// (a gesture zone, a trigger radius) rather than a fitted body part.
+pub fn draw_debug_wire_sphere(
+    center: Vector3<f32>,
+    radius: f32,
+    color: Vector3<f32>,
+) -> SceneObject {
+    SceneObject::new(
+        color_material::create(color),
+        Box::new(lines_mesh::create(wire_sphere_segments(center, radius))),
+    )
+}
+
+/// The line segments of [`draw_debug_wire_sphere`], two vertices each: three
+/// closed rings of `WIRE_SEGMENTS` around X, Y and Z.
+fn wire_sphere_segments(center: Vector3<f32>, radius: f32) -> Vec<VertexPosition> {
+    let identity = Matrix4::identity();
+    let mut verts: Vec<VertexPosition> = Vec::new();
+    let axes = [
+        (Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0)),
+        (Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
+        (Vector3::new(0.0, 0.0, 1.0), Vector3::new(1.0, 0.0, 0.0)),
+    ];
+    for (u, v) in axes {
+        push_ring(&mut verts, &identity, &ring_points(center, u, v, radius));
+    }
+    verts
+}
+
+/// `WIRE_SEGMENTS` points around a circle of `radius` at `center`, in the
+/// plane spanned by the unit vectors `u` and `v`.
+fn ring_points(
+    center: Vector3<f32>,
+    u: Vector3<f32>,
+    v: Vector3<f32>,
+    radius: f32,
+) -> Vec<Vector3<f32>> {
+    (0..WIRE_SEGMENTS)
+        .map(|k| {
+            let t = (k as f32) / (WIRE_SEGMENTS as f32) * std::f32::consts::TAU;
+            center + (u * t.cos() + v * t.sin()) * radius
+        })
+        .collect()
+}
+
+/// The closed loop of segments through `ring`'s points, transformed by `xform`.
+fn push_ring(verts: &mut Vec<VertexPosition>, xform: &Matrix4<f32>, ring: &[Vector3<f32>]) {
+    for k in 0..ring.len() {
+        push_segment(verts, xform, ring[k], ring[(k + 1) % ring.len()]);
+    }
+}
+
 /// Transform a joint-local point to world space (homogeneous, w=1).
 fn xform_point(xform: &Matrix4<f32>, p: Vector3<f32>) -> Vector3<f32> {
     let c = xform * Vector4::new(p.x, p.y, p.z, 1.0);
@@ -277,24 +330,12 @@ fn append_capsule_lines(
     let u = axis.cross(helper).normalize();
     let v = axis.cross(u).normalize();
 
-    let ring = |center: Vector3<f32>| -> Vec<Vector3<f32>> {
-        (0..WIRE_SEGMENTS)
-            .map(|k| {
-                let t = (k as f32) / (WIRE_SEGMENTS as f32) * std::f32::consts::TAU;
-                center + (u * t.cos() + v * t.sin()) * radius
-            })
-            .collect()
-    };
-
-    let ring_a = ring(a);
-    let ring_b = ring(b);
+    let ring_a = ring_points(a, u, v, radius);
+    let ring_b = ring_points(b, u, v, radius);
 
     // End rings.
-    for r in [&ring_a, &ring_b] {
-        for k in 0..WIRE_SEGMENTS {
-            push_segment(verts, xform, r[k], r[(k + 1) % WIRE_SEGMENTS]);
-        }
-    }
+    push_ring(verts, xform, &ring_a);
+    push_ring(verts, xform, &ring_b);
     // Longitudinal lines at 4 evenly spaced angles.
     for k in (0..WIRE_SEGMENTS).step_by(WIRE_SEGMENTS / 4) {
         push_segment(verts, xform, ring_a[k], ring_b[k]);
@@ -315,6 +356,25 @@ fn append_capsule_lines(
             for k in 0..WIRE_SEGMENTS {
                 push_segment(verts, xform, pts[k], pts[k + 1]);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Three great circles, each a closed loop of `WIRE_SEGMENTS` segments -
+    /// two vertices per segment, every vertex on the sphere - so the zone
+    /// reads as a sphere from any angle rather than as a single ring.
+    #[test]
+    fn a_wire_sphere_is_three_closed_rings_on_the_sphere() {
+        let center = Vector3::new(1.0, 2.0, 3.0);
+        let verts = wire_sphere_segments(center, 0.25);
+        assert_eq!(verts.len(), 3 * WIRE_SEGMENTS * 2);
+        for vertex in &verts {
+            let r = (vertex.position - center).magnitude();
+            assert!((r - 0.25).abs() < 1e-5, "vertex off the sphere: r = {r}");
         }
     }
 }
