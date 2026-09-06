@@ -97,11 +97,11 @@ pub trait PlayerInteraction {
         None
     }
 
-    /// 3D visuals owned by the controller (VR: hand models + forearm HUD
+    /// 3D visuals owned by the controller (VR: hand models + wrist HUD
     /// panels). Flat draws nothing here; its weapon is drawn from
     /// `viewmodel_entity`.
     ///
-    /// `use_mode` is the cyber interface's state: the forearm readouts go quiet
+    /// `use_mode` is the cyber interface's state: the wrist readouts go quiet
     /// while the interface carries them (issue #1268).
     fn render(
         &self,

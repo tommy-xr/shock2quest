@@ -31,7 +31,7 @@ const HEALTH_ANIMATION_SPEED: f32 = 0.25; // Cycles per second
 const MIN_HEALTH_PERCENTAGE: f32 = 0.1; // 10% minimum
 const MAX_HEALTH_PERCENTAGE: f32 = 1.0; // 100% maximum
 
-/// Debug scene focused on testing the virtual arms HUD system
+/// Debug scene focused on testing the VR wrist HUD canvases
 /// Positions hands closer to camera for easy inspection
 pub struct DebugHudScene {
     world: World,
@@ -123,7 +123,8 @@ impl DebugHudScene {
 
         // Set hand rotations to face the camera for optimal HUD viewing
         // The hands should be rotated so the HUD panels face toward the camera
-        // Use the head rotation as the base, then add additional rotations for proper forearm orientation
+        // Use the head rotation as the base, then add additional rotations so the
+        // hands sit where a player's would
         let base_rotation = self.head_rotation;
 
         // For debug viewing, we want the panels to face more directly toward the camera
@@ -199,11 +200,11 @@ impl GameScene for DebugHudScene {
         asset_cache: &mut AssetCache,
         _options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        // Only render the virtual arms HUD panels
+        // Only render the wrist HUD canvases
         let hud_panels = create_wrist_hud_panels(
             asset_cache,
             &self.world,
-            // The debug scene has no cyber interface, so the arms are never
+            // The debug scene has no cyber interface, so the wrists are never
             // duplicating it.
             false,
             self.left_hand_position,

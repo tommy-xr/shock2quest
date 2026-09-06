@@ -449,7 +449,7 @@ pub fn save_file_path(name: &str) -> std::path::PathBuf {
 
 /// How the game is presented and controlled.
 ///
-/// `Vr` is the existing head/hands interaction model (forearm HUD panels,
+/// `Vr` is the existing head/hands interaction model (wrist HUD canvases,
 /// `VirtualHand` grab-and-hold). `Flat` is the classic flatscreen presentation:
 /// a screen-space 2D HUD, 2D menus, and first-person interaction. The flag is
 /// threaded only to the presentation/interaction edges - the simulation is

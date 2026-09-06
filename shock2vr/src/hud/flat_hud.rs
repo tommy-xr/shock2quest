@@ -1,6 +1,6 @@
 //! Flatscreen (non-VR) screen-space HUD.
 //!
-//! Where `virtual_arms` renders the HUD as world-space panels on the VR hands,
+//! Where `wrist` renders the HUD as world-space canvases on the VR gloves,
 //! this draws a classic 2D overlay: a centered crosshair plus health/psi bars,
 //! described on the shared [`UiCanvas`] at the original game's 640x480 virtual
 //! resolution and rendered to a screen-space overlay. Built only in
@@ -123,7 +123,7 @@ pub(crate) fn build_flat_hud_canvas(
 
     // Compact ammo gauge (a weapon with a clip, or the psi amp's selected
     // discipline in its place), over the AMMOBACK crop. Everything drawn inside
-    // the panel is placed by the shared `ammo_panel` layout the VR forearm and
+    // the panel is placed by the shared `ammo_panel` layout the VR wrist and
     // the expanded use-mode readout use.
     if !use_mode && !ammo_readout.is_empty() {
         canvas.image(AMMO_GAUGE, "AMMOBACK.PCX");

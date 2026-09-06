@@ -342,7 +342,7 @@ pub fn resolve_proxy_entity(world: &World, maybe_entity_id: EntityId) -> EntityI
 /// [`PLAYER_HANDS_SOURCE`] objects while the pause menu is up (issue #1018).
 pub mod render_source {
     /// The player's own hand visuals: the VR gloves, their raycast markers and
-    /// the forearm HUD panels. Emitted by both the mission interaction
+    /// the wrist HUD canvases. Emitted by both the mission interaction
     /// controller and the `debug_hud` scene.
     pub const PLAYER_HANDS: &str = "player_hands";
     /// A frontend panel's pointer: a hand per tracked controller, its aim beam
