@@ -1543,7 +1543,7 @@ const BLAST_OCCLUSION_GROUPS: physics::InternalCollisionGroups =
 /// while the target collider should terminate neither a center nor corner ray.
 fn blast_exposure(
     physics: &PhysicsWorld,
-    source_entity: EntityId,
+    source_entity: Option<EntityId>,
     victim_entity: EntityId,
     center: Vector3<f32>,
     victim_position: Vector3<f32>,
@@ -1570,7 +1570,8 @@ fn blast_exposure(
     }
 
     let start = Point3::from_vec(center);
-    let ray_can_hit_entity = |entity_id| entity_id != source_entity && entity_id != victim_entity;
+    let ray_can_hit_entity =
+        |entity_id| Some(entity_id) != source_entity && entity_id != victim_entity;
     let visible_samples = sample_points
         .iter()
         .filter(|sample| {
@@ -1584,7 +1585,7 @@ fn blast_exposure(
                         ray / distance_squared.sqrt(),
                         distance_squared.sqrt(),
                         BLAST_OCCLUSION_GROUPS,
-                        Some(source_entity),
+                        source_entity,
                         true,
                         &ray_can_hit_entity,
                     )
@@ -1652,7 +1653,7 @@ mod blast_occlusion_tests {
 
         blast_exposure(
             &physics,
-            source,
+            Some(source),
             victim,
             vec3(0.0, 0.0, 0.0),
             vec3(0.0, 0.0, 4.0),
@@ -4932,7 +4933,13 @@ impl MissionCore {
         intensity: f32,
         stim_template_id: i32,
     ) {
-        self.apply_radius_stimulus(center, radius, intensity, stim_template_id);
+        self.apply_radius_stimulus(
+            Some(source_entity_id),
+            center,
+            radius,
+            intensity,
+            stim_template_id,
+        );
         self.physics.apply_radial_impulse(
             center,
             radius,
@@ -4943,9 +4950,10 @@ impl MissionCore {
     /// Apply a radius stimulus: every entity with hit points in range receives
     /// linear-falloff intensity, and authored receptrons decide damage or
     /// radiation status. Persistent environmental sources call this without
-    /// the explosion-only physical impulse.
+    /// the explosion-only physical impulse and without a source to exclude.
     fn apply_radius_stimulus(
         &mut self,
+        source_entity_id: Option<EntityId>,
         center: Vector3<f32>,
         radius: f32,
         intensity: f32,
@@ -4961,7 +4969,7 @@ impl MissionCore {
             for (entity_id, (_hit_points, transform)) in
                 (&v_hit_points, &v_transform).iter().with_id()
             {
-                if entity_id == source_entity_id {
+                if Some(entity_id) == source_entity_id {
                     continue;
                 }
                 let position = transform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
@@ -6502,7 +6510,7 @@ impl MissionCore {
                     intensity,
                     stim_template_id,
                 } => {
-                    self.apply_radius_stimulus(center, radius, intensity, stim_template_id);
+                    self.apply_radius_stimulus(None, center, radius, intensity, stim_template_id);
                 }
 
                 Effect::RaiseNoise { origin, radius } => {
