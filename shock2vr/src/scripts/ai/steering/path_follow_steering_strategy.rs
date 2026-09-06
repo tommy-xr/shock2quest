@@ -518,10 +518,12 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     self.goal_unreachable_until = None;
                     // The worker computes a full route, or - when the goal
                     // is unreachable (another island, off-mesh) - a partial
-                    // route to the closest reachable point, so the AI
-                    // approaches instead of freezing against the nearest
-                    // wall. The result is adopted (above) on a later frame;
-                    // until then the current path keeps steering.
+                    // route to the closest reachable point the body fits in,
+                    // so the AI approaches instead of freezing against the
+                    // nearest wall. When even that has nowhere to offer it
+                    // answers Failed and the next strategy in the chain
+                    // steers. The result is adopted (above) on a later
+                    // frame; until then the current path keeps steering.
                     async_pathfinding.submit(PathQueryRequest {
                         entity: entity_id.inner(),
                         start: position,

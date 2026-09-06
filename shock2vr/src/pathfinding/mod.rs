@@ -878,8 +878,9 @@ impl PathfindingService {
     /// goals with no full route (different island, off-mesh, behind missing
     /// nav data). Explores everything reachable from `start` and routes to
     /// the reachable cell nearest the goal - the counterpart of the original
-    /// engine's pathfind-near facility. Returns None when we're already in
-    /// the closest reachable cell (no progress possible).
+    /// engine's pathfind-near facility. Returns None when there is nowhere
+    /// better to stand: no reachable cell is closer to the goal, or the only
+    /// closer ones are too tight for the body.
     pub fn find_path_toward(
         &self,
         start: Vector3<f32>,
@@ -911,8 +912,10 @@ impl PathfindingService {
         // center, and the cells nearest an unreachable goal are often the
         // pinch it is unreachable through - the wedge at the bottom of a
         // converging corner, where an AI parks itself against the geometry
-        // and grinds. Cells too tight to stand in are only considered when
-        // nothing roomier is reachable.
+        // and grinds. A cell the body cannot stand in is never a stopping
+        // place: when the only progress on offer is into one, we report no
+        // route (the caller's supported "nowhere better to go" answer)
+        // instead of walking the AI into the pinch it is stuck on.
         let roomy = |cell: u32| -> bool {
             movement_bits.contains(MovementBits::SMALL_CREATURE)
                 || self
@@ -927,15 +930,6 @@ impl PathfindingService {
             if d < best_distance && roomy(cell) {
                 best_distance = d;
                 best = cell;
-            }
-        }
-        if best == start_cell {
-            for &cell in reachable.keys() {
-                let d = distance_to_goal(cell);
-                if d < best_distance {
-                    best_distance = d;
-                    best = cell;
-                }
             }
         }
         if best == start_cell {
@@ -2984,5 +2978,44 @@ pub(crate) mod tests {
         // AI: two AIs avoiding the same crossing are two live entries.
         service.report_blocked_link(BYSTANDER, 0, 1, 0.0);
         assert_eq!(service.stats().blocked_links, 2);
+    }
+
+    #[test]
+    fn no_partial_route_when_the_only_progress_is_into_a_pinch() {
+        let mut db = pinch_and_detour_db();
+        // Leave only the wide room (0) and the 0.2-wide pinch (1) reachable.
+        // The pinch is the one cell closer to the goal, and the body does not
+        // fit in it - so there is nowhere better to stand than right here.
+        db.links
+            .retain(|link| ![2, 3].contains(&link.from_cell) && ![2, 3].contains(&link.to_cell));
+        let service = service(db);
+        assert_eq!(
+            service.find_path_toward(
+                vec3(2.0, 0.0, 2.5),
+                vec3(12.0, 0.0, 1.0),
+                MovementBits::WALK,
+            ),
+            None,
+            "a partial route must not end in a cell the body cannot stand in"
+        );
+    }
+
+    #[test]
+    fn a_small_creature_still_gets_a_partial_route_into_a_pinch() {
+        let mut db = pinch_and_detour_db();
+        db.links
+            .retain(|link| ![2, 3].contains(&link.from_cell) && ![2, 3].contains(&link.to_cell));
+        for link in &mut db.links {
+            link.ok_bits |= MovementBits::SMALL_CREATURE;
+        }
+        let service = service(db);
+        let path = service
+            .find_path_toward(
+                vec3(2.0, 0.0, 2.5),
+                vec3(12.0, 0.0, 1.0),
+                MovementBits::SMALL_CREATURE,
+            )
+            .expect("a spider fits in the pinch");
+        assert_eq!(*path.last().expect("waypoints"), vec3(5.0, 0.0, 1.0));
     }
 }
