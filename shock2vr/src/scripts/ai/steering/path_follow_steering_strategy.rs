@@ -58,7 +58,7 @@ pub(crate) const STALL_SECONDS: f32 = 3.0;
 /// pressed against a door frame - or two AIs pressed against each other -
 /// repeated the wedge forever (issue #481). Jittered per stall so mutually
 /// blocking AIs unstick on different frames.
-const STALL_RECOVERY_SECONDS: f32 = 0.8;
+pub(crate) const STALL_RECOVERY_SECONDS: f32 = 0.8;
 /// Progress smaller than this doesn't count toward un-stalling (jitter)
 const STALL_PROGRESS_EPSILON: f32 = 0.25 / SCALE_FACTOR;
 /// Displacement watchdog: with an active waypoint, failing to move this far

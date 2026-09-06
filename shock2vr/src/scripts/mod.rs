@@ -253,6 +253,18 @@ pub enum MessagePayload {
     },
     AnimationCompleted,
 
+    /// A turn clip requested by `Effect::PlayTurnClip` started playing, with
+    /// the facing change it is authored to end on and how long it runs. The
+    /// clip is chosen from the creature's own schema, so only the applier
+    /// knows these until it has resolved one.
+    TurnClipStarted {
+        turn: cgmath::Deg<f32>,
+        duration: f32,
+        /// The clip's authored blend length: the window its pose takes to
+        /// swing back to neutral once it ends.
+        blend: f32,
+    },
+
     // Gameplay events
     Recharge,
     ProvideForConsumption {

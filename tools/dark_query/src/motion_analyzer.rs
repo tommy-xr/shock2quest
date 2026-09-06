@@ -216,6 +216,28 @@ impl MotionAnalyzer {
                     .fold((f32::MAX, f32::MIN), |(a, b), y| (a.min(*y), b.max(*y)));
                 println!("                min {:.3}  max {:.3}", min, max);
             }
+            // Net pose yaw per joint, first frame to last. A turn clip does
+            // its pivot in the pose - the hip joint carries the whole turn,
+            // and its net yaw is the clip's `end_dir` read as a signed angle.
+            {
+                let mut rows: Vec<(usize, f32)> = Vec::new();
+                for (j, frames) in clip.animation.iter().enumerate() {
+                    if frames.len() < 2 {
+                        continue;
+                    }
+                    let a = frames[0];
+                    let b = frames[frames.len() - 1];
+                    let d = b.x.z.atan2(b.x.x).to_degrees() - a.x.z.atan2(a.x.x).to_degrees();
+                    let d = ((d + 180.0).rem_euclid(360.0)) - 180.0;
+                    if d.abs() > 5.0 {
+                        rows.push((j, d));
+                    }
+                }
+                rows.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap());
+                for (j, d) in rows.iter().take(5) {
+                    println!("  joint {:>3} net yaw: {:.1}", j, d);
+                }
+            }
             // Horizontal root motion: net displacement, and how long the
             // root is still (per-frame delta < 1cm) at the clip's tail
             let ps = &clip.root_positions;
