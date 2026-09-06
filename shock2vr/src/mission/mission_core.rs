@@ -7442,14 +7442,12 @@ impl MissionCore {
                         // this is where the model, its grip entry and the
                         // holding hand are all known.
                         if vr_held_gun {
-                            if let Some(seat) = crate::held_gun_glove::glove_seat_for_wield(
-                                asset_cache,
-                                &model_name,
-                                hand,
-                            ) {
-                                self.world
-                                    .add_component(entity_id, RuntimePropVrGloveSeat(seat));
-                            }
+                            self.world.add_component(
+                                entity_id,
+                                RuntimePropVrGloveSeat(
+                                    crate::held_gun_glove::glove_seat_for_wield(&model_name, hand),
+                                ),
+                            );
                         }
                         // An articulated VR-wielded first-person model (hand +
                         // arm + gun as skeleton sub-objects) renders unposed

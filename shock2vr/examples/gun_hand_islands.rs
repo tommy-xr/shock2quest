@@ -65,6 +65,47 @@ fn main() {
             );
         }
 
+        // Weapon-only extent (arm materials excluded), against the true-scale
+        // world model's - the view models are authored for a flat camera and
+        // may be exaggerated.
+        {
+            let span = |m: &ss2_bin_obj_loader::SystemShock2ObjectMesh| {
+                let mut lo = [f32::INFINITY; 3];
+                let mut hi = [f32::NEG_INFINITY; 3];
+                for polygon in &m.polygons {
+                    for index in &polygon.vertex_indices {
+                        let p = m.vertices[*index as usize];
+                        for (axis, value) in [p.x, p.y, p.z].into_iter().enumerate() {
+                            lo[axis] = lo[axis].min(value);
+                            hi[axis] = hi[axis].max(value);
+                        }
+                    }
+                }
+                (0..3)
+                    .map(|axis| hi[axis] - lo[axis])
+                    .fold(0.0_f32, f32::max)
+            };
+            let weapon = ss2_bin_obj_loader::retain_materials(mesh.clone(), |name| {
+                !dark::importers::is_first_person_arm_material(name)
+            });
+            let view = span(&weapon);
+            let world = name
+                .strip_suffix("_h")
+                .and_then(|stem| cache.get_raw_reader(&format!("{stem}_w.bin")))
+                .map(|reader| {
+                    let mut reader = reader.borrow_mut();
+                    let header = dark::ss2_bin_header::read(&mut *reader);
+                    span(&ss2_bin_obj_loader::read(&mut *reader, &header))
+                });
+            match world {
+                Some(world) => println!(
+                    "   weapon span {view:.3} units vs world model {world:.3} ({:.2}x)",
+                    view / world
+                ),
+                None => println!("   weapon span {view:.3} units (no _w world model)"),
+            }
+        }
+
         let islands = ss2_bin_obj_loader::split_connected(
             &mesh,
             dark::importers::is_first_person_arm_material,
@@ -83,6 +124,25 @@ fn main() {
                 .map(|material| material.name.clone())
                 .collect::<Vec<_>>()
                 .join(",");
+            // Extent of the island's own geometry, to check the baked hand
+            // against a real hand (`HAND_LENGTH_WORLD`, 0.2493 units ~ 19 cm).
+            let mut lo = [f32::INFINITY; 3];
+            let mut hi = [f32::NEG_INFINITY; 3];
+            for polygon in &island.polygons {
+                for index in &polygon.vertex_indices {
+                    let p = island.vertices[*index as usize];
+                    for (axis, value) in [p.x, p.y, p.z].into_iter().enumerate() {
+                        lo[axis] = lo[axis].min(value);
+                        hi[axis] = hi[axis].max(value);
+                    }
+                }
+            }
+            println!(
+                "   island {index}: extent ({:.3},{:.3},{:.3})",
+                hi[0] - lo[0],
+                hi[1] - lo[1],
+                hi[2] - lo[2]
+            );
             match ss2_bin_obj_loader::hand_frame(
                 island,
                 dark::importers::is_first_person_arm_material,

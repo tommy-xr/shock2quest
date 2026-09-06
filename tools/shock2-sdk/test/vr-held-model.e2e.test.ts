@@ -40,6 +40,13 @@ test(
     });
     assert.equal(modelOf(await game.entities.detail(pistol.id)), "atek_w");
 
+    // How many draws the gloves account for with both hands empty, to compare
+    // against the wield below.
+    const gloveDraws = async () =>
+      (await game.scene.fromSource("player_hands")).length;
+    const emptyHanded = await gloveDraws();
+    assert.ok(emptyHanded > 0, "empty hands should draw gloves");
+
     // Grab it: park the right hand on the pistol's forward raycast axis
     // (debug_weapons spawns the pawn at the origin with identity rotation, so
     // pawn-local == world minus the pawn position) and squeeze.
@@ -56,17 +63,27 @@ test(
     // install); dropping it restores the world model.
     assert.equal(modelOf(await game.entities.detail(pistol.id)), "atek_h");
 
-    // The wield renders the mesh complete, exactly as authored: atek_h draws
-    // 7 scene objects (its material slots, split across sub-objects). The old
-    // spare-hand island strip deleted every `ND-arm_atek.psd` polygon - the
-    // baked *firing* hand - which showed up here as a missing draw (6) and in
-    // the headset as a handless grip. Keeping all hand islands is deliberate:
-    // the real hand outranks hiding a floating spare (PR #1023).
+    // The wield draws the weapon WITHOUT its baked hand and forearm: VR puts
+    // the player's own tracked glove on the grip instead, so the authored arm
+    // would be a second hand inside it. atek_h has five material slots - two
+    // arm (a `ND-arm.psd` sleeve and the `ND-arm_atek.psd` firing hand) and
+    // three weapon - and the strip selects on the material, which is what
+    // matters: the largest-arm-island rule tried in #1023 kept the sleeve and
+    // deleted the gripping hand. 7 draws as authored, 5 with the arm gone.
     const draws = (await game.scene.objects({ entityId: pistol.id })).objects;
     assert.equal(
       draws.length,
-      7,
-      "wielded atek_h should draw its full authored mesh, firing hand included",
+      5,
+      "wielded atek_h should draw its weapon materials only, arm stripped",
+    );
+
+    // ...and the glove takes the baked hand's place. The glove is not an
+    // entity, so it is counted through its render source: wielding used to
+    // *hide* the holding hand's glove, which shows up here as fewer glove
+    // draws than an empty pair of hands.
+    assert.ok(
+      (await gloveDraws()) >= emptyHanded,
+      "a wielded gun must keep its hand's glove drawn",
     );
 
     await game.input.set("right_hand.squeeze", 0.0);

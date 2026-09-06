@@ -402,10 +402,10 @@ impl VirtualHand {
             return Vec::new();
         };
 
-        // A wielded gun draws its own glove, on the grip the stripped baked
-        // hand was posed onto rather than at the controller. The seat is
-        // resolved by the wield (`RuntimePropVrGloveSeat`), and its presence is
-        // what marks a hold as one of those.
+        // A wielded gun draws its own glove, in place of the baked hand the
+        // wield stripped off the weapon. The seat is resolved once by the
+        // wield (`RuntimePropVrGloveSeat`), and its presence is what marks a
+        // hold as one of those.
         if let Some(seat) = held_glove_seat(world, self.get_held_entity()) {
             return renderer.render_held_gun_hand(
                 Matrix4::from_translation(self.position) * Matrix4::from(self.rotation) * seat,
@@ -683,14 +683,16 @@ pub(crate) fn is_wieldable_weapon(world: &World, entity_id: EntityId) -> bool {
             .unwrap_or(false)
 }
 
-/// Whether the hand visual (skin + forearm) is drawn for a hand holding
-/// `held_entity`.
+/// Whether the hand visual is drawn for a hand holding `held_entity`, at the
+/// tracked hand's own pose.
 ///
-/// A wielded weapon's model is drawn at the hand's transform and *replaces*
-/// the hand - drawing both puts a hand inside the gun. On a 25AE install VR
-/// wields the remastered first-person model (baked hand and forearm included);
-/// otherwise the weapon's world model is drawn. Anything else - an empty hand,
-/// or a held object that is not a wieldable weapon - keeps the hand.
+/// A wielded weapon's model is drawn at the hand's transform, so a weapon
+/// whose model draws a hand of its own *replaces* the glove - drawing both
+/// puts a hand inside the gun. That is the melee `_h` rigs and the psi amp,
+/// whose arm is part of the amp. A wielded **gun** keeps its glove instead,
+/// seated on the weapon rather than at the tracked pose, and is answered by
+/// [`held_glove_seat`] before this is consulted. Anything else - an empty
+/// hand, or a held object that is not a wieldable weapon - keeps the hand.
 pub(crate) fn shows_hand_visual(world: &World, held_entity: Option<EntityId>) -> bool {
     // Calibration override: draw the glove *as well as* the weapon model, so
     // the `_h` rig's baked fist can be compared against where the controller

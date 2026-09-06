@@ -144,10 +144,7 @@ fn load_pose(asset_cache: &mut AssetCache, pose: HandPose) -> Option<LoadedPose>
 /// `VirtualHand`'s forward is -Z (the aim/raycast direction), so the fingers are
 /// pointed down -Z here and the whole hand is rolled about that axis by the
 /// pose's authored roll.
-pub(crate) fn anchor_of(
-    frame: &dark::ss2_bin_obj_loader::HandFrame,
-    roll: Deg<f32>,
-) -> Matrix4<f32> {
+fn anchor_of(frame: &dark::ss2_bin_obj_loader::HandFrame, roll: Deg<f32>) -> Matrix4<f32> {
     let forward = frame.forward;
     let reference = if forward.y.abs() > 0.9 {
         vec3(1.0, 0.0, 0.0)
@@ -182,7 +179,7 @@ pub(crate) fn anchor_of(
 /// `HandFrame::origin` is the far end of the geometry, which on the models whose
 /// hand includes a forearm is the *elbow* - anchoring there would hang the hand
 /// off the controller by an arm's length.
-pub(crate) fn wrist_vector(frame: &dark::ss2_bin_obj_loader::HandFrame) -> Vector3<f32> {
+fn wrist_vector(frame: &dark::ss2_bin_obj_loader::HandFrame) -> Vector3<f32> {
     let fingertip = frame.origin + frame.forward * frame.length;
     let wrist = fingertip - frame.forward * HAND_LENGTH_WORLD;
     vec3(wrist.x, wrist.y, wrist.z)

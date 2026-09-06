@@ -263,12 +263,15 @@ impl GloveRenderer {
 
     /// Build the glove for a hand wielding a gun, seated by `hand_to_world`.
     ///
-    /// The gun view models bake a hand onto the grip, which VR strips and
-    /// replaces with this one; `hand_to_world` is where that baked hand was
-    /// (`held_gun_glove::glove_seat` composed onto the tracked hand pose), so
-    /// the glove lands on the grip rather than at the controller. It carries
-    /// the left hand's reflection itself - the seat is built from the gun's own
-    /// mirror - so no handedness is taken and none is applied.
+    /// The gun view models bake a hand onto the weapon, which VR strips and
+    /// replaces with this one. `hand_to_world` is `held_gun_glove::glove_seat`
+    /// composed onto the tracked hand pose, and carries the left hand's
+    /// reflection and the view model's size correction with it - so this takes
+    /// no handedness and applies no mirror of its own.
+    ///
+    /// The pose is a grip with the index on the trigger, the same one
+    /// [`Self::render_hand`] uses for a full hand, so a held gun and a held
+    /// mug close the hand the same way.
     pub fn render_held_gun_hand(
         &mut self,
         hand_to_world: Matrix4<f32>,
