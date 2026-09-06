@@ -1096,6 +1096,10 @@ pub struct DebugAiPathEntry {
     pub live_target: Option<[f32; 3]>,
     /// Seconds without progress toward the current waypoint
     pub live_stall_seconds: Option<f32>,
+    /// Why the AI is deliberately standing still, if it is ("DoorWait",
+    /// "Pivot") - a held AI stands on purpose and is not a wedged one, and
+    /// its stall clock is frozen for as long as this is set
+    pub movement_hold: Option<String>,
 }
 
 /// Snapshot of the pathfinding service's monotonic query counters.

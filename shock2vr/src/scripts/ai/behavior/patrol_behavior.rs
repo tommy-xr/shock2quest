@@ -227,7 +227,15 @@ impl PatrolBehavior {
 
     /// Whether the AI has failed to cover ground for PATROL_STALL_SECONDS.
     /// Re-anchors (and reports false) as soon as it moves.
-    fn stalled(&mut self, position: Vector3<f32>, time: &Time) -> bool {
+    ///
+    /// A `held` frame is a standstill the AI chose (a door leaf still crossing
+    /// the doorway, an authored pivot) and freezes this clock exactly as it
+    /// freezes the path follower's: the route is not to blame for seconds the
+    /// AI spent standing on purpose, and a pivot may last most of this window.
+    fn stalled(&mut self, position: Vector3<f32>, held: bool, time: &Time) -> bool {
+        if held {
+            return false;
+        }
         let moved = self
             .stall_anchor
             .map(|anchor| {
@@ -304,7 +312,11 @@ impl Behavior for PatrolBehavior {
                 );
                 let temporary_until = self.steering_strategy.goal_unreachable_until();
                 patrol_effects.push(self.give_up_on_point(world, entity_id, temporary_until));
-            } else if self.stalled(position, time) {
+            } else if self.stalled(
+                position,
+                ai_util::movement_hold(world, entity_id).is_holding(),
+                time,
+            ) {
                 // Going nowhere: give up on this point and try the next one.
                 // A wedge is a fact about the body's current spot, not about
                 // the route, so the next leg usually walks straight out of it.
@@ -370,6 +382,7 @@ impl Behavior for PatrolBehavior {
 mod tests {
     use super::*;
     use crate::runtime_props::RuntimePropTransform;
+    use crate::time::Time;
     use cgmath::{Matrix4, vec3};
     use dark::properties::{Link, Links, ToLink, WrappedEntityId};
     use shipyard::{Get, ViewMut};
@@ -910,5 +923,39 @@ mod tests {
                 target: None,
             } if *entity_id == creature
         )));
+    }
+}
+
+#[cfg(test)]
+mod stall_tests {
+    use super::*;
+    use cgmath::vec3;
+
+    fn frame() -> Time {
+        Time {
+            elapsed: std::time::Duration::from_millis(100),
+            total: std::time::Duration::from_millis(100),
+        }
+    }
+
+    /// A pivot holds the body still for most of this window (a turn clip may
+    /// run 4 s), and the AI is steered right through it - so without the hold
+    /// the patrol would retire the very point it is turning toward.
+    #[test]
+    fn a_held_patroller_never_stalls() {
+        let here = vec3(0.0, 0.0, 0.0);
+        let frames = (PATROL_STALL_SECONDS / 0.1).ceil() as u32 + 2;
+
+        let mut control = PatrolBehavior::new(EntityId::dead(), here);
+        let mut stalled = false;
+        for _ in 0..frames {
+            stalled |= control.stalled(here, false, &frame());
+        }
+        assert!(stalled, "control: standing still IS a patrol stall");
+
+        let mut held = PatrolBehavior::new(EntityId::dead(), here);
+        for _ in 0..frames {
+            assert!(!held.stalled(here, true, &frame()));
+        }
     }
 }

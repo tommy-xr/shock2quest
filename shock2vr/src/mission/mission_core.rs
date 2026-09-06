@@ -12327,6 +12327,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     live_path_len: live.map(|l| l.path_len),
                     live_target: live.and_then(|l| l.target).map(Into::into),
                     live_stall_seconds: live.map(|l| l.stall_seconds),
+                    movement_hold: match service.movement_hold(entity) {
+                        crate::pathfinding::MovementHold::None => None,
+                        hold => Some(format!("{hold:?}")),
+                    },
                 }
             })
             .collect()

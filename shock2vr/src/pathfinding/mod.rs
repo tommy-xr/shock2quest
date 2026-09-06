@@ -201,6 +201,29 @@ pub struct AiSteeringDebug {
     pub stall_seconds: f32,
 }
 
+/// Why an AI is deliberately standing still this frame. A hold is a decision,
+/// not a failure: the script publishes it BEFORE it steers, and the path
+/// follower answers by suspending its no-progress accounting, so seconds spent
+/// standing on purpose never spend the patience it keeps for a real wedge.
+/// Steering itself keeps running through a hold - heading, whiskers and crowd
+/// repel stay live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MovementHold {
+    /// Free to move
+    #[default]
+    None,
+    /// Standing off while a door leaf this AI opened travels clear
+    DoorWait,
+    /// Performing an authored turn clip - the pose does the turning
+    Pivot,
+}
+
+impl MovementHold {
+    pub fn is_holding(self) -> bool {
+        self != MovementHold::None
+    }
+}
+
 /// Pathfinding service for AI navigation
 ///
 /// Uses AIPATH cells for navigation mesh queries and A* pathfinding.
@@ -242,6 +265,9 @@ pub struct PathfindingService {
     ai_paths: std::sync::Mutex<HashMap<u64, AiPathRecord>>,
     /// Live steering state per AI (what it is actually following right now)
     ai_steering: std::sync::Mutex<HashMap<u64, AiSteeringDebug>>,
+    /// Whether each AI is deliberately holding position, published by its
+    /// script each frame before it steers (see `MovementHold`)
+    movement_holds: std::sync::Mutex<HashMap<u64, MovementHold>>,
     /// Cell crossings some AI's steering failed to traverse (a stall fired
     /// mid-route): obstacles the mesh doesn't model, e.g. a physical prop
     /// or a scripted stationary NPC sitting on a walkable link. Entries map
@@ -343,6 +369,7 @@ impl PathfindingService {
             relaxed: bridge_islands,
             ai_paths: std::sync::Mutex::new(HashMap::new()),
             ai_steering: std::sync::Mutex::new(HashMap::new()),
+            movement_holds: std::sync::Mutex::new(HashMap::new()),
             blocked_links: std::sync::Mutex::new(HashMap::new()),
             blocked_cells: std::sync::Mutex::new(HashMap::new()),
             blocked_doors: std::sync::RwLock::new(std::collections::HashSet::new()),
@@ -376,6 +403,9 @@ impl PathfindingService {
         }
         if let Ok(mut steering) = self.ai_steering.lock() {
             steering.retain(|&entity, _| keep(entity));
+        }
+        if let Ok(mut holds) = self.movement_holds.lock() {
+            holds.retain(|&entity, _| keep(entity));
         }
     }
 
@@ -514,6 +544,24 @@ impl PathfindingService {
         if let Ok(mut steering) = self.ai_steering.lock() {
             steering.insert(entity, debug);
         }
+    }
+
+    /// Publish whether an AI is deliberately standing still. Written by the
+    /// AI script before it steers, read by the path follower's stall
+    /// accounting (see `MovementHold`).
+    pub fn record_movement_hold(&self, entity: u64, hold: MovementHold) {
+        if let Ok(mut holds) = self.movement_holds.lock() {
+            holds.insert(entity, hold);
+        }
+    }
+
+    /// Whether an AI is deliberately standing still, and why
+    pub fn movement_hold(&self, entity: u64) -> MovementHold {
+        self.movement_holds
+            .lock()
+            .ok()
+            .and_then(|holds| holds.get(&entity).copied())
+            .unwrap_or_default()
     }
 
     /// The live steering state for an entity, if it has published any
