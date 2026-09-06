@@ -1116,7 +1116,9 @@ pub struct DebugPathfindingStats {
     pub stressed_retries: u64,
     pub no_route: u64,
     /// Cell crossings currently excluded because an AI's steering stalled
-    /// on them (see `PathfindingService::report_blocked_link`)
+    /// on them, summed over every AI holding one - each exclusion applies
+    /// only to the AI that reported it (see
+    /// `PathfindingService::report_blocked_link`)
     pub blocked_links: usize,
     /// Cells currently penalized because an AI stalled inside them
     pub blocked_cells: usize,

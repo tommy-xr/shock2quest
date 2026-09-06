@@ -426,12 +426,18 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                                     self.stall_escalations + 1
                                 );
                                 // The cell penalty alone was outbid. Cut the
-                                // crossing this route opens with, so the next
-                                // query cannot answer with it again - one per
-                                // escalation, or a single creature's bad
-                                // minute would seal a corridor for everyone.
+                                // crossing this route opens with out of THIS
+                                // AI's queries, so its next one cannot answer
+                                // with it again - one per escalation, bounded
+                                // so a genuinely one-way corridor still gets
+                                // walked.
                                 self.stall_escalations += 1;
-                                report_stall(&service, &fresh, time.total.as_secs_f32());
+                                report_stall(
+                                    &service,
+                                    entity_id.inner(),
+                                    &fresh,
+                                    time.total.as_secs_f32(),
+                                );
                                 self.clear_path();
                                 self.repath_cooldown = REPATH_COOLDOWN_SECONDS
                                     * rand::thread_rng().gen_range(0.8..1.2);
@@ -667,7 +673,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     _ => route,
                 };
                 tracing::debug!("ai {:?}: blocked report cells={:?}", entity_id, route);
-                report_stall(&service, &route, now_seconds);
+                report_stall(&service, entity_id.inner(), &route, now_seconds);
                 // Remember how the route that failed began, so the re-path
                 // can be checked against it when it lands
                 self.stall_route_cells = Some(route);
@@ -1166,7 +1172,12 @@ fn repeats_route(stalled: &[u32], fresh: &[u32]) -> bool {
 /// the first crossing along the route that is a real mesh link. Only real
 /// links: a pair named from waypoints need not be one, and an inert entry
 /// would hold one of the bounded blacklist slots while excluding nothing.
-fn report_stall(service: &crate::pathfinding::PathfindingService, route: &[u32], now_seconds: f32) {
+fn report_stall(
+    service: &crate::pathfinding::PathfindingService,
+    entity: u64,
+    route: &[u32],
+    now_seconds: f32,
+) {
     let Some(&from) = route.first() else {
         return;
     };
@@ -1176,7 +1187,7 @@ fn report_stall(service: &crate::pathfinding::PathfindingService, route: &[u32],
         .map(|pair| (pair[0], pair[1]))
         .find(|&(from, to)| service.has_link(from, to))
     {
-        service.report_blocked_link(from, to, now_seconds);
+        service.report_blocked_link(entity, from, to, now_seconds);
     }
 }
 
@@ -1886,8 +1897,8 @@ mod tests {
         let service = PathfindingService::new(Arc::new(crate::pathfinding::tests::three_cell_db(
             dark::mission::path_database::PathCellFlags::empty(),
         )));
-        report_stall(&service, &[0, 2, 1], 0.0);
-        let avoidance = service.avoidance(1.0);
+        report_stall(&service, 7, &[0, 2, 1], 0.0);
+        let avoidance = service.avoidance(7, 1.0);
         assert!(avoidance.cells.contains(&0), "the stalled cell is reported");
         assert_eq!(
             avoidance.links.into_iter().collect::<Vec<_>>(),
@@ -1895,7 +1906,11 @@ mod tests {
             "0 -> 2 is not a link, and 2 -> 1 is not a crossing this route makes first"
         );
 
-        report_stall(&service, &[0, 1], 0.0);
-        assert!(service.avoidance(1.0).links.contains(&(0, 1)));
+        report_stall(&service, 7, &[0, 1], 0.0);
+        assert!(service.avoidance(7, 1.0).links.contains(&(0, 1)));
+        assert!(
+            service.avoidance(8, 1.0).links.is_empty(),
+            "the crossing is excluded for the AI that stalled on it, not the level"
+        );
     }
 }
