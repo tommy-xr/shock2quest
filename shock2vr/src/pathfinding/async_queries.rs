@@ -75,9 +75,11 @@ impl AsyncPathfinding {
                 while let Ok(request) = rx.recv() {
                     let mut outcome = AiPathOutcome::Full;
                     // Crossings ANY AI's steering reported as physically
-                    // blocked (stall mid-route) are excluded, so re-paths -
+                    // blocked (stall mid-route) are excluded, and cells an
+                    // AI is stalled in are made expensive, so re-paths -
                     // including fresh arrivals' - route around the obstacle
-                    let avoid = service.blocked_links(request.now_seconds);
+                    // instead of piling into it
+                    let avoid = service.avoidance(request.now_seconds);
                     let path = service
                         .find_path_avoiding(
                             request.start,
@@ -274,5 +276,31 @@ mod tests {
         }));
         let response = wait_for_result(&async_pf, 12).expect("worker must respond");
         assert_eq!(response.outcome, AiPathOutcome::Partial);
+    }
+
+    #[test]
+    fn worker_routes_a_second_ai_around_a_cell_somebody_is_stalled_in() {
+        // One AI is wedged in the middle cell. The next AI to ask for the
+        // same trip must be sent the long way round instead of inheriting
+        // the route into the pile-up.
+        let service = Arc::new(PathfindingService::new(Arc::new(
+            crate::pathfinding::tests::detour_db(),
+        )));
+        service.report_blocked_cell(1, 0.0);
+        let async_pf = AsyncPathfinding::spawn(service.clone());
+        assert!(async_pf.submit(PathQueryRequest {
+            entity: 21,
+            start: cgmath::vec3(1.0, 0.0, 1.0),
+            goal: cgmath::vec3(5.0, 0.0, 1.0),
+            movement_bits: MovementBits::WALK,
+            now_seconds: 1.0,
+        }));
+        let response = wait_for_result(&async_pf, 21).expect("worker must respond");
+        assert_eq!(response.outcome, AiPathOutcome::Full);
+        assert!(
+            crate::pathfinding::tests::took_the_detour(&response.waypoints),
+            "the second AI must take the detour: {:?}",
+            response.waypoints
+        );
     }
 }

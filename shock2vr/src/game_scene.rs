@@ -1108,6 +1108,11 @@ pub struct DebugPathfindingStats {
     pub queries: u64,
     pub stressed_retries: u64,
     pub no_route: u64,
+    /// Cell crossings currently excluded because an AI's steering stalled
+    /// on them (see `PathfindingService::report_blocked_link`)
+    pub blocked_links: usize,
+    /// Cells currently penalized because an AI stalled inside them
+    pub blocked_cells: usize,
 }
 
 /// A script message a debug client can inject into a specific entity.

@@ -84,6 +84,10 @@ export interface PathfindingStats {
   queries: number;
   stressed_retries: number;
   no_route: number;
+  /** Cell crossings currently excluded because an AI stalled on them. */
+  blocked_links: number;
+  /** Cells currently penalized because an AI stalled inside them. */
+  blocked_cells: number;
 }
 
 export interface PathfindingTestStatus {

@@ -12225,6 +12225,8 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 queries: stats.queries,
                 stressed_retries: stats.stressed_retries,
                 no_route: stats.no_route,
+                blocked_links: stats.blocked_links,
+                blocked_cells: stats.blocked_cells,
             }
         })
     }

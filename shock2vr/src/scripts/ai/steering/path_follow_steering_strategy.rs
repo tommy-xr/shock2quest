@@ -85,6 +85,13 @@ const UNSTICK_NUDGE_DISTANCE: f32 = 2.0 / SCALE_FACTOR;
 /// off the shared edge without skipping a narrow destination cell (0.5
 /// Dark feet)
 const BLOCKED_PROBE_DISTANCE: f32 = 0.5 / SCALE_FACTOR;
+/// How many leading cells of the pre-stall route are remembered to check
+/// whether the re-path actually produced a different route
+const STALL_ROUTE_PREFIX: usize = 3;
+/// How many times one stall incident may escalate (blacklist more of the
+/// reproduced route) before falling through to the physical nudge. Bounded
+/// so a genuinely one-way corridor can't be sealed link by link.
+const MAX_STALL_ESCALATIONS: u32 = 3;
 /// Crowd separation: repel from living creatures within this radius (6 Dark
 /// feet - about two body widths)
 const SEPARATION_RADIUS: f32 = 6.0 / SCALE_FACTOR;
@@ -131,6 +138,17 @@ pub struct PathFollowSteeringStrategy {
     goal_unreachable: bool,
     /// Static-geometry whiskers, biasing the aim point (see `aim_with_bias`)
     whiskers: WhiskerAvoidance,
+    /// The leading CELLS of the route that was in force when the last stall
+    /// fired, kept until the next route is adopted. Cells, not waypoints:
+    /// waypoints are pulled taut backwards from the goal, so a chase whose
+    /// goal moved a foot renames every one of them while the route is the
+    /// same route. If the fresh route walks the same cells, the re-path
+    /// reproduced the doomed route and walking it again just grinds -
+    /// escalate instead (see `MAX_STALL_ESCALATIONS`).
+    stall_route_cells: Option<Vec<u32>>,
+    /// Escalations spent on the current stall incident; reset once the body
+    /// actually moves
+    stall_escalations: u32,
 }
 
 impl PathFollowSteeringStrategy {
@@ -161,6 +179,8 @@ impl PathFollowSteeringStrategy {
             last_stall_position: None,
             goal_unreachable: false,
             whiskers: WhiskerAvoidance::new(),
+            stall_route_cells: None,
+            stall_escalations: 0,
         }
     }
 
@@ -257,6 +277,8 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     AiPathOutcome::Failed if goal_current => {
                         self.goal_unreachable = true;
                         self.clear_path();
+                        // Nothing to compare a stalled route against
+                        self.stall_route_cells = None;
                         // No route (even partially) - back off before asking
                         // again; the fallback chain is the worker's most
                         // expensive outcome
@@ -273,8 +295,47 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         // waypoint 0 is the position the query started from
                         self.next_waypoint = 1;
                         self.reset_stall();
+                        // A stall's re-path has to actually change the
+                        // route. When it comes back starting exactly the
+                        // way the stalled one did, walking it again just
+                        // grinds on the same obstacle - blacklist more of
+                        // it and ask once more (bounded, so a genuinely
+                        // one-way corridor still gets walked and the
+                        // existing nudge remains the last resort).
+                        if let Some(stalled) = self.stall_route_cells.take() {
+                            let fresh =
+                                route_cells(&service, position, &self.path[self.next_waypoint..]);
+                            let repeats = repeats_route(&stalled, &fresh);
+                            tracing::debug!(
+                                "ai {:?}: repath adopted, cells {:?} -> {:?}, repeats={}",
+                                entity_id,
+                                stalled,
+                                fresh,
+                                repeats
+                            );
+                            if self.stall_escalations < MAX_STALL_ESCALATIONS && repeats {
+                                tracing::debug!(
+                                    "ai {:?}: escalate #{} on the reproduced route",
+                                    entity_id,
+                                    self.stall_escalations + 1
+                                );
+                                // The cell penalty alone was outbid. Cut the
+                                // crossing this route opens with, so the next
+                                // query cannot answer with it again - one per
+                                // escalation, or a single creature's bad
+                                // minute would seal a corridor for everyone.
+                                self.stall_escalations += 1;
+                                report_stall(&service, &fresh, time.total.as_secs_f32());
+                                self.clear_path();
+                                self.repath_cooldown = REPATH_COOLDOWN_SECONDS
+                                    * rand::thread_rng().gen_range(0.8..1.2);
+                            }
+                        }
                     }
-                    _ => {}
+                    _ => {
+                        // A discarded result is no comparison either
+                        self.stall_route_cells = None;
+                    }
                 }
             }
         }
@@ -408,6 +469,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 // Real movement: the next stall (if any) is a fresh incident,
                 // not a continuation of a pinned body
                 self.last_stall_position = None;
+                self.stall_escalations = 0;
                 false
             }
             Some((anchor, age)) => {
@@ -440,25 +502,62 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 // the WAYPOINT's height (an edge-inset waypoint then
                 // resolves to the cell beyond the crossing; keeping Y fixed
                 // avoids blacklisting a stacked floor's cell).
+                let now_seconds = time.total.as_secs_f32();
+                tracing::debug!(
+                    "ai {:?}: stall ({}) at {:.2},{:.2},{:.2} cell={:?} wp[{}]={:.2},{:.2},{:.2} d={:.2}",
+                    entity_id,
+                    if displaced_stall {
+                        "displacement"
+                    } else {
+                        "no-progress"
+                    },
+                    position.x,
+                    position.y,
+                    position.z,
+                    service.cell_from_position(position),
+                    self.next_waypoint,
+                    waypoint.x,
+                    waypoint.y,
+                    waypoint.z,
+                    distance
+                );
                 let toward = waypoint - position;
                 let toward_len = (toward.x * toward.x + toward.z * toward.z).sqrt();
-                if toward_len > 1e-3 {
+                let crossing_into = if toward_len > 1e-3 {
                     let step = BLOCKED_PROBE_DISTANCE / toward_len;
                     let probe = Vector3::new(
                         waypoint.x + toward.x * step,
                         waypoint.y,
                         waypoint.z + toward.z * step,
                     );
-                    let from = service.cell_from_position(position);
-                    let to = service
+                    service
                         .cell_from_position(probe)
-                        .or_else(|| service.cell_from_position(waypoint));
-                    if let (Some(from), Some(to)) = (from, to) {
-                        if from != to {
-                            service.report_blocked_link(from, to, time.total.as_secs_f32());
-                        }
+                        .or_else(|| service.cell_from_position(waypoint))
+                } else {
+                    None
+                };
+                // The route ahead, as cells: what a stall can name, and
+                // what the re-path is later checked against.
+                let route = route_cells(&service, position, &self.path[self.next_waypoint..]);
+                // The probe cell is the better blame when the body reached
+                // the edge; a stall short of any edge (the medsci2 Science
+                // door jamb - the body presses into the jamb feet before the
+                // boundary) has only the route to go on.
+                let route = match crossing_into.filter(|to| Some(*to) != route.first().copied()) {
+                    Some(to)
+                        if route
+                            .first()
+                            .is_some_and(|from| service.has_link(*from, to)) =>
+                    {
+                        vec![route[0], to]
                     }
-                }
+                    _ => route,
+                };
+                tracing::debug!("ai {:?}: blocked report cells={:?}", entity_id, route);
+                report_stall(&service, &route, now_seconds);
+                // Remember how the route that failed began, so the re-path
+                // can be checked against it when it lands
+                self.stall_route_cells = Some(route);
                 // ALWAYS back out toward the previous waypoint before
                 // re-pathing, reported or not: the retreat both disengages
                 // the body from whatever it wedged on (an AI boxed among
@@ -486,9 +585,19 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     .map(|prev| xz_distance(position, prev) < DISPLACEMENT_STALL_DISTANCE)
                     .unwrap_or(false);
                 self.last_stall_position = Some(position);
+                tracing::debug!(
+                    "ai {:?}: backout to {:.2},{:.2},{:.2} (heading {:.2},{:.2}) pinned={}",
+                    entity_id,
+                    retreat.x,
+                    retreat.y,
+                    retreat.z,
+                    retreat.x - position.x,
+                    retreat.z - position.z,
+                    pinned
+                );
                 let unstick_effect = if pinned {
                     let dir = retreat - position;
-                    let len = (dir.x * dir.x + dir.z * dir.z).sqrt();
+                    let len = xz_distance(retreat, position);
                     if len > 1e-3 {
                         let step = UNSTICK_NUDGE_DISTANCE.min(len);
                         let nudged = Vector3::new(
@@ -496,12 +605,70 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                             position.y,
                             position.z + dir.z / len * step,
                         );
-                        Effect::SetPositionRotation {
-                            entity_id,
-                            position: nudged,
-                            rotation: crate::util::get_rotation_from_transform(world, entity_id),
+                        // Only onto navigable floor. A nudge is a teleport,
+                        // and one aimed through a wall drops the body out of
+                        // the level entirely (a creature a thousand units
+                        // from everything, once stalls became easier to
+                        // detect). When the retreat direction leaves the
+                        // mesh, step toward the current cell's middle
+                        // instead - still away from whatever the body is
+                        // pressed against, and known-navigable.
+                        let landing = on_mesh(&service, nudged)
+                            .or_else(|| {
+                                let cell = service.cell_from_position(position)?;
+                                let center = service.path_database.cells.get(cell as usize)?.center;
+                                let len = xz_distance(center, position);
+                                if len <= 1e-3 {
+                                    return None;
+                                }
+                                let step = UNSTICK_NUDGE_DISTANCE.min(len);
+                                on_mesh(
+                                    &service,
+                                    Vector3::new(
+                                        position.x + (center.x - position.x) / len * step,
+                                        position.y,
+                                        position.z + (center.z - position.z) / len * step,
+                                    ),
+                                )
+                            })
+                            // A body ALREADY off the mesh is the case the
+                            // unstick exists for; refusing to move it is the
+                            // permanent freeze, not a safeguard. It cannot be
+                            // made worse by a step toward route ground.
+                            .or_else(|| {
+                                service
+                                    .cell_from_position(position)
+                                    .is_none()
+                                    .then_some(nudged)
+                            });
+                        match landing {
+                            Some(landing) => {
+                                tracing::debug!(
+                                    "ai {:?}: nudge {:.2},{:.2} -> {:.2},{:.2}",
+                                    entity_id,
+                                    position.x,
+                                    position.z,
+                                    landing.x,
+                                    landing.z
+                                );
+                                Effect::SetPositionRotation {
+                                    entity_id,
+                                    position: landing,
+                                    rotation: crate::util::get_rotation_from_transform(
+                                        world, entity_id,
+                                    ),
+                                }
+                            }
+                            None => {
+                                tracing::debug!(
+                                    "ai {:?}: nudge refused, no navigable landing",
+                                    entity_id
+                                );
+                                Effect::NoEffect
+                            }
                         }
                     } else {
+                        tracing::debug!("ai {:?}: nudge refused, retreat is here", entity_id);
                         Effect::NoEffect
                     }
                 } else {
@@ -601,6 +768,66 @@ fn answers_goal(
         (PathTarget::Point(point), None) => response_goal == *point,
         // Wander picks its goal inside this strategy, so any answer is its own
         (_, None) => true,
+    }
+}
+
+/// `point` if it sits on a navigable cell, else None - a teleport target
+/// off the mesh is a body dropped out of the level.
+fn on_mesh(
+    service: &crate::pathfinding::PathfindingService,
+    point: Vector3<f32>,
+) -> Option<Vector3<f32>> {
+    service.cell_from_position(point).map(|_| point)
+}
+
+/// The leading cells a route walks, starting with the one `position` is in.
+/// Consecutive waypoints inside one cell collapse to a single entry, so this
+/// is the route's shape on the mesh rather than its geometry - two queries a
+/// second apart at a moving goal name different waypoints for the same cells.
+fn route_cells(
+    service: &crate::pathfinding::PathfindingService,
+    position: Vector3<f32>,
+    waypoints: &[Vector3<f32>],
+) -> Vec<u32> {
+    let mut cells = Vec::new();
+    for point in std::iter::once(&position).chain(waypoints) {
+        let Some(cell) = service.cell_from_position(*point) else {
+            continue;
+        };
+        if cells.last() != Some(&cell) {
+            cells.push(cell);
+        }
+        if cells.len() > STALL_ROUTE_PREFIX {
+            break;
+        }
+    }
+    cells
+}
+
+/// Whether a fresh route walks the cells the stalled one did. A contiguous
+/// match anywhere, not just at the head: backing out of the wedge can leave
+/// the body a cell short of where it stalled, which shifts the sequence
+/// without changing the route.
+fn repeats_route(stalled: &[u32], fresh: &[u32]) -> bool {
+    !stalled.is_empty() && fresh.windows(stalled.len()).any(|window| window == stalled)
+}
+
+/// Blacklist what a route the AI could not walk can be blamed on: the cell
+/// it is standing in (a stall inside one cell has nothing else to name), and
+/// the first crossing along the route that is a real mesh link. Only real
+/// links: a pair named from waypoints need not be one, and an inert entry
+/// would hold one of the bounded blacklist slots while excluding nothing.
+fn report_stall(service: &crate::pathfinding::PathfindingService, route: &[u32], now_seconds: f32) {
+    let Some(&from) = route.first() else {
+        return;
+    };
+    service.report_blocked_cell(from, now_seconds);
+    if let Some((from, to)) = route
+        .windows(2)
+        .map(|pair| (pair[0], pair[1]))
+        .find(|&(from, to)| service.has_link(from, to))
+    {
+        service.report_blocked_link(from, to, now_seconds);
     }
 }
 
@@ -811,5 +1038,48 @@ mod tests {
         // reached by standing beneath it
         let path = vec![vec3(0.0, 5.0, 0.0), vec3(10.0, 5.0, 0.0)];
         assert_eq!(advance_waypoint(vec3(0.0, 0.0, 0.0), &path, 0), 0);
+    }
+
+    #[test]
+    fn a_repath_that_repeats_the_stalled_route_is_recognized() {
+        let stalled = vec![7, 8];
+        // The same cells, plus more of the route: still the same opening
+        assert!(repeats_route(&stalled, &[7, 8, 9]));
+        // ...and still the same route when the retreat left the body one
+        // cell further back than it stalled in
+        assert!(repeats_route(&stalled, &[6, 7, 8]));
+    }
+
+    #[test]
+    fn a_repath_that_turns_away_is_a_different_route() {
+        let stalled = vec![7, 8];
+        assert!(!repeats_route(&stalled, &[7, 12]));
+        // A route that stops short is different too
+        assert!(!repeats_route(&stalled, &[7]));
+        // Nothing to compare against is not a repeat
+        assert!(!repeats_route(&[], &[7, 8]));
+    }
+
+    #[test]
+    fn a_stall_reports_only_crossings_the_mesh_actually_has() {
+        use crate::pathfinding::PathfindingService;
+        use std::sync::Arc;
+
+        // 0 -> 1 -> 2 is a real chain; the route below also names 0 -> 2,
+        // which is not a link and must not eat a blacklist slot.
+        let service = PathfindingService::new(Arc::new(crate::pathfinding::tests::three_cell_db(
+            dark::mission::path_database::PathCellFlags::empty(),
+        )));
+        report_stall(&service, &[0, 2, 1], 0.0);
+        let avoidance = service.avoidance(1.0);
+        assert!(avoidance.cells.contains(&0), "the stalled cell is reported");
+        assert_eq!(
+            avoidance.links.into_iter().collect::<Vec<_>>(),
+            Vec::new(),
+            "0 -> 2 is not a link, and 2 -> 1 is not a crossing this route makes first"
+        );
+
+        report_stall(&service, &[0, 1], 0.0);
+        assert!(service.avoidance(1.0).links.contains(&(0, 1)));
     }
 }

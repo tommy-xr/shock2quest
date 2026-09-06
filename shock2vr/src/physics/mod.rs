@@ -31,6 +31,14 @@ use self::debug_render_pipeline::DebugRenderer;
 /// Original standing player collision profile (SS2 ft): six feet tall and
 /// 2.4 feet wide. Dark represents it as a vertical stack of spheres; a capsule
 /// is the continuous equivalent and preserves the rounded traversal behavior.
+/// Horizontal speed (world units/s) a kinematic body must carry before it
+/// counts as moving terrain sweeping a creature. A kinematic body's velocity
+/// is derived from its pose deltas, so a prop that never moves still reports
+/// ~1e-3 of float jitter - and the old 1e-3 gate let a STATIONARY railing
+/// pin a hybrid touching it at its current translation, every frame, forever
+/// (the medsci2 balcony patroller, frozen to the last decimal for a minute).
+/// A door leaf in motion runs an order of magnitude above this.
+const MOVING_TERRAIN_SPEED: f32 = 0.1;
 const PLAYER_STANDING_HEIGHT: f32 = 6.0;
 const PLAYER_STANDING_RADIUS: f32 = 1.2;
 
@@ -6155,7 +6163,7 @@ impl PhysicsWorld {
                             + other_body.linvel().z * other_body.linvel().z;
                         let is_horizontal_kinematic_side_contact = other_body.body_type()
                             == RigidBodyType::KinematicPositionBased
-                            && horizontal_motion > 1.0e-6
+                            && horizontal_motion > MOVING_TERRAIN_SPEED * MOVING_TERRAIN_SPEED
                             && pair.manifolds.iter().any(|manifold| {
                                 !manifold.data.solver_contacts.is_empty()
                                     && manifold.data.normal.y.abs() < 0.5
@@ -8439,6 +8447,39 @@ mod tests {
         assert!(
             end.y > 0.5 && end.x < 2.5,
             "moving terrain swept the live creature off its supported deck: {end:?}"
+        );
+    }
+
+    /// A kinematic prop that never actually goes anywhere still reports a
+    /// whisper of velocity, because a kinematic body's velocity is derived
+    /// from its pose deltas. Reading that as moving terrain pinned a creature
+    /// brushing against it at its exact translation, every frame, for as long
+    /// as it stood there - the medsci2 balcony railing, which froze the
+    /// patroller to the last decimal.
+    #[test]
+    fn a_stationary_kinematic_with_jitter_does_not_pin_a_creature() {
+        let (mut world, mut player, creature_id, creature) = live_creature_test_world(2130, 40.0);
+        let wall = add_sweeping_wall(&mut world, 2133);
+        // Up against the creature's side, and staying there
+        world.set_translation(wall, vec3(-1.15, 1.0, 0.0));
+        step_creature_test(&mut world, &mut player, &[creature_id], 30);
+
+        let start = world.get_position(creature).unwrap();
+        for frame in 0..120 {
+            // ~3e-3 units/s of jitter: nothing, but ten times the old gate
+            let jitter = if frame % 2 == 0 { 5.0e-5 } else { -5.0e-5 };
+            world.set_translation(wall, vec3(-1.15 + jitter, 1.0, 0.0));
+            let y_velocity = world.get_velocity(creature_id).unwrap().y;
+            // Leaning on the wall while walking along it, so the side
+            // contact holds - the pose an AI takes rounding a railing
+            world.set_velocity(creature_id, vec3(-0.5, y_velocity, 1.0));
+            step_creature_test(&mut world, &mut player, &[creature_id], 1);
+        }
+
+        let end = world.get_position(creature).unwrap();
+        assert!(
+            end.z - start.z > 1.0,
+            "a stationary railing must not hold a walking creature in place: {start:?} -> {end:?}"
         );
     }
 
