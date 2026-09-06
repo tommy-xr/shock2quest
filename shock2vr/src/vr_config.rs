@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use cgmath::{Deg, Quaternion, Rotation3, Vector3, vec3};
 use dark::properties::PropModelName;
 
-use crate::runtime_props::RuntimePropVrGripOffset;
+use crate::runtime_props::{RuntimePropVrGripOffset, RuntimePropVrGunWield};
 use once_cell::sync::Lazy;
 use shipyard::{EntityId, Get, View, World};
 
@@ -330,7 +330,7 @@ const VR_25AE_VIEW_MODELS: &[&str] = &[
 
 /// The subset of [`VR_25AE_VIEW_MODELS`] VR wields as a rigid gun: the static
 /// LGMD meshes whose baked hand is stripped so the player's own glove can hold
-/// them ([`dark::importers::VrHeldGunModel`], [`held_gun_glove_scale`]).
+/// them ([`dark::importers::VrHeldGunModel`], [`gun_wield_scale`]).
 ///
 /// Keyed on the model name, like every other per-model table here, rather than
 /// on gamesys metadata: the strip and the glove have to agree about which
@@ -379,8 +379,12 @@ static MAGAZINE_ANCHORS: Lazy<HashMap<&str, Vector3<f32>>> = Lazy::new(|| {
 /// Where `entity_id`'s magazine is, in its model's local frame - the origin
 /// for a model with no entry.
 pub fn magazine_anchor_from_entity(world: &World, entity_id: EntityId) -> Vector3<f32> {
+    // The anchor is authored against the model as shipped, and a VR wield draws
+    // the gun shrunk to life size - so the anchor rides the same scale, or the
+    // clip zone would sit off in space beside a 40%-size gun.
+    let scale = gun_wield_scale_of_entity(world, entity_id);
     model_name_lower(world, entity_id)
-        .map(|name| magazine_anchor_from_model(&name))
+        .map(|name| scale * magazine_anchor_from_model(&name))
         .unwrap_or(vec3(0.0, 0.0, 0.0))
 }
 
@@ -547,51 +551,52 @@ fn melee_wield_pose_correction_scaled(
         * Matrix4::from_translation(-arm.fist)
 }
 
-/// How much larger than life a 25AE first-person view model is drawn, and
-/// therefore how much larger than life the glove holding one has to be.
+/// Live tuning for how large a wielded rigid gun `_h` view model is drawn -
+/// see [`crate::dev_params::GUN_WIELD_SCALE`]. Every half of the placement is
+/// scaled by the value the wield recorded on
+/// [`crate::runtime_props::RuntimePropVrGunWield`] - the geometry and its
+/// muzzle vhots when the model is applied, the hand-local grip offset and the
+/// magazine anchor when they are read - so the gun shrinks about the grip
+/// point and stays seated, aimed and reloadable at any scale.
 ///
-/// The set is authored for a fixed flat camera, where an exaggerated weapon
-/// reads better, and VR draws it at true world scale: `atek_h`'s weapon
-/// geometry spans 0.66 world units - 0.51 m against a real pistol's 0.20 - and
-/// its baked hand is exaggerated to match, which is why the wield read
-/// coherently while that hand was the one drawn. A life-size glove on the same
-/// gun reads as a doll's hand next to it, so the glove joins the weapon at the
-/// weapon's own scale. Measured off `debug_weapons` captures against the baked
-/// hand it replaces; it is not [`dark::SCALE_FACTOR`], which happens to have
-/// the same value for unrelated reasons.
-///
-/// This is a presentation correction for the glove only. Drawing the view
-/// models at life size is the real fix and a change of its own: it moves every
-/// grip offset, muzzle vhot and magazine anchor with it.
-const VIEW_MODEL_GLOVE_SCALE: f32 = 2.5;
+/// The player's glove is drawn on it at life size, unscaled: that is the whole
+/// point of shrinking the gun.
+pub fn gun_wield_scale() -> f32 {
+    crate::dev_params::get(crate::dev_params::GUN_WIELD_SCALE)
+}
 
-/// The glove's placement on a VR-wielded gun, in the tracked hand's own frame.
-///
-/// VR strips the baked hand off a gun view model
-/// ([`dark::importers::VrHeldGunModel`]) and draws the tracked glove in its
-/// place - so the hand the player sees is the hand they are moving. The
-/// placement is the tracked hand's own pose, unaltered but for the size
-/// correction above: [`HAND_MODEL_POSITIONING`] already carries a hand-fitted
-/// grip per model, tuned in PR #1023 with the baked hand drawn, which is
-/// exactly the alignment the glove wants. A gun that needs a nudge records it
-/// there, in its own grip entry, rather than in a second per-model table.
-///
-/// Inheriting the placement from the *art* instead - each baked hand carries a
-/// geometric frame ([`dark::ss2_bin_obj_loader::HandFrame`]), so the glove's
-/// wrist could go on the baked wrist with no authoring at all - was measured
-/// and rejected. `ar15_h` bakes exactly one hand, a rest hand laid over the
-/// receiver; `sg_h`'s rides the pump; only `atek_h` bakes one on the grip, and
-/// it bakes three islands (a sleeve, the firing hand, and a spare parked 0.6 m
-/// behind the gun for the reload animation). The meshes are not life size
-/// either, and `HandFrame`'s wrist is only estimated - stepped back a hand's
-/// length from the far end of the point cloud. See `cargo run -p shock2vr
-/// --example gun_hand_islands` for the measurements.
-///
-/// Deliberately hand-agnostic: it is composed onto the tracked pose *inside*
-/// [`Handedness::mirror`], so the left hand's glove reflects exactly as an
-/// empty left hand's does and no second definition of "the other hand" exists.
-pub fn held_gun_glove_scale() -> cgmath::Matrix4<f32> {
-    cgmath::Matrix4::from_scale(VIEW_MODEL_GLOVE_SCALE)
+/// The local transform a VR wield bakes into a first-person gun model: the
+/// left hand's reflection, and the life-size shrink. One of the two halves of
+/// a uniform scale about the grip point; [`gun_wield_adjustments`] is the
+/// other. Applied to the geometry AND its muzzle vhots, so the shot still
+/// leaves the drawn barrel.
+pub fn gun_wield_model_transform(handedness: Handedness, scale: f32) -> cgmath::Matrix4<f32> {
+    cgmath::Matrix4::from_scale(scale) * handedness.gun_mirror()
+}
+
+/// The hand-local seat of a gun wielded at `scale`: the model's authored grip
+/// entry, its offset scaled with the geometry so the grip point itself does
+/// not move off the hand.
+fn gun_wield_adjustments(
+    model_name: &str,
+    handedness: Handedness,
+    scale: f32,
+) -> VRHandModelPerHandAdjustments {
+    let adjustments = get_vr_hand_model_adjustments_from_model(model_name, handedness);
+    VRHandModelPerHandAdjustments {
+        offset: scale * adjustments.offset,
+        ..adjustments
+    }
+}
+
+/// The scale `entity_id`'s wield baked into its gun model, or 1.0 for anything
+/// that is not a scaled gun wield (world models, melee rigs, the psi amp).
+fn gun_wield_scale_of_entity(world: &World, entity_id: EntityId) -> f32 {
+    world
+        .borrow::<View<RuntimePropVrGunWield>>()
+        .ok()
+        .and_then(|wields| wields.get(entity_id).ok().map(|wield| wield.0))
+        .unwrap_or(1.0)
 }
 
 pub fn get_vr_hand_model_adjustments_from_entity(
@@ -613,8 +618,13 @@ pub fn get_vr_hand_model_adjustments_from_entity(
         return VRHandModelPerHandAdjustments::new().with_offset(grip);
     }
 
+    // A scaled gun wield seats the same authored grip on a shrunk model, so the
+    // hand-local offset shrinks with the geometry: together they are one
+    // uniform scale about the grip point, which is what keeps the gun in the
+    // fist at any [`gun_wield_scale`].
+    let scale = gun_wield_scale_of_entity(world, entity_id);
     match model_name_lower(world, entity_id) {
-        Some(model_name) => get_vr_hand_model_adjustments_from_model(&model_name, handedness),
+        Some(model_name) => gun_wield_adjustments(&model_name, handedness, scale),
         None => VRHandModelPerHandAdjustments::new(),
     }
 }
@@ -640,7 +650,7 @@ pub fn get_vr_hand_model_adjustments_from_model(
 
 #[cfg(test)]
 mod tests {
-    use cgmath::{InnerSpace, SquareMatrix, assert_relative_eq};
+    use cgmath::InnerSpace;
 
     use super::*;
 
@@ -676,25 +686,61 @@ mod tests {
         assert!(is_vr_gun_view_model("ATEK_H"));
     }
 
-    /// The gun glove's placement is a pure scale, so it puts the glove's wrist
-    /// on the tracked hand and leaves the direction its fingers point alone -
-    /// which is what lets it compose inside `Handedness::mirror` and reuse the
-    /// one definition of "the other hand".
+    /// The gun wield's two halves are one uniform scale about the grip point:
+    /// the model (and its muzzle vhots) shrink about the model origin, and the
+    /// hand-local grip offset shrinks with them. So at any scale the authored
+    /// grip point stays exactly on the tracked hand, and the muzzle stays down
+    /// the barrel it was authored on - the shot still leaves the drawn gun.
+    ///
+    /// Exercised through the scale-explicit composition rather than the
+    /// dev-param registry, so it neither mutates process-global state nor
+    /// depends on the default staying 0.4 - the same shape as
+    /// `melee_wield_scale_keeps_the_fist_and_the_collider_honest`.
     #[test]
-    fn the_gun_glove_sits_on_the_tracked_hand_facing_the_same_way() {
-        use cgmath::{Transform, point3};
+    fn the_gun_wield_scale_keeps_the_grip_in_the_hand_and_the_muzzle_on_the_barrel() {
+        use cgmath::{EuclideanSpace, Matrix4, Point3, Rotation, Transform, point3};
 
-        let scale = held_gun_glove_scale();
+        for name in VR_25AE_GUN_MODELS {
+            for handedness in [Handedness::Right, Handedness::Left] {
+                // Two points in the model's own authored frame - the space
+                // vhots live in, and the space the wield transform consumes.
+                // The grip: the authored seat says where the model origin goes
+                // relative to the hand, so read back through the rotation (and
+                // the mirror, which is part of the seat) for the point that
+                // lands ON the hand.
+                let authored = gun_wield_adjustments(name, handedness, 1.0);
+                let grip_model = handedness
+                    .gun_mirror()
+                    .transform_vector(authored.rotation.invert().rotate_vector(-authored.offset));
+                // The muzzle: somewhere down the authored barrel (-X).
+                let muzzle_model = point3(-0.6, 0.0, 0.0);
+                let unscaled = |scale: f32| {
+                    let seat = gun_wield_adjustments(name, handedness, scale);
+                    Matrix4::from_translation(seat.offset)
+                        * Matrix4::from(seat.rotation)
+                        * gun_wield_model_transform(handedness, scale)
+                };
+                let unscaled_muzzle = unscaled(1.0).transform_point(muzzle_model);
 
-        assert!(scale.determinant() > 0.0, "the scale must not reflect");
-        assert_relative_eq!(
-            scale.transform_point(point3(0.0, 0.0, 0.0)),
-            point3(0.0, 0.0, 0.0)
-        );
-        assert_relative_eq!(
-            scale.transform_vector(vec3(0.0, 0.0, -1.0)).normalize(),
-            vec3(0.0, 0.0, -1.0)
-        );
+                for scale in [0.4f32, 1.0, 1.25] {
+                    // Exactly what the wield composes: the seat this scale
+                    // resolves to, carrying the model transform it bakes.
+                    let seated = unscaled(scale);
+
+                    let grip = seated.transform_point(Point3::from_vec(grip_model));
+                    assert!(
+                        grip.to_vec().magnitude() < 1e-4,
+                        "{name} ({handedness:?}) at {scale}: grip {grip:?} left the tracked hand"
+                    );
+
+                    let muzzle = seated.transform_point(muzzle_model);
+                    assert!(
+                        (muzzle.to_vec() - scale * unscaled_muzzle.to_vec()).magnitude() < 1e-4,
+                        "{name} ({handedness:?}) at {scale}: muzzle {muzzle:?} is not {scale}x the authored {unscaled_muzzle:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// The melee subset of [`VR_25AE_VIEW_MODELS`]: skinned arm rigs, seated

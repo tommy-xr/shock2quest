@@ -1,8 +1,6 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-use cgmath::{
-    InnerSpace, Matrix4, Quaternion, Rotation, SquareMatrix, Vector3, Zero, point3, vec3,
-};
+use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, Zero, point3, vec3};
 use dark::{
     SCALE_FACTOR,
     properties::{FrobFlag, PropFrobInfo, PropModelName},
@@ -19,7 +17,7 @@ use crate::{
     hand_affordance::{self, AffordanceTracker, HandAffordance},
     input_context::Hand,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
-    runtime_props::RuntimePropVrGunGlove,
+    runtime_props::RuntimePropVrGunWield,
     scripts::{Message, MessagePayload},
     util::{self, point3_to_vec3},
     vr_config::{self, Handedness},
@@ -405,25 +403,19 @@ impl VirtualHand {
         };
 
         // A wielded gun draws the glove in place of the baked hand the wield
-        // stripped off it, at the weapon's own scale; everything else draws it
-        // at the tracked hand, or not at all when the held model draws a hand
-        // of its own. The `MELEE_GLOVE_OVERLAY` calibration override wants the
-        // unscaled tracked pose - that is the whole point of it - so it takes
-        // the ordinary path even for a gun.
-        let holds_gun_glove = holds_gun_glove(world, self.get_held_entity())
-            && crate::dev_params::get(crate::dev_params::MELEE_GLOVE_OVERLAY) <= 0.5;
-        if !holds_gun_glove && !shows_hand_visual(world, self.get_held_entity()) {
+        // stripped off it; everything else draws it at the tracked hand, or not
+        // at all when the held model draws a hand of its own. Either way the
+        // glove is the tracked pose at life size - the gun is the thing scaled
+        // to meet it (`vr_config::gun_wield_scale`).
+        if !holds_gun_glove(world, self.get_held_entity())
+            && !shows_hand_visual(world, self.get_held_entity())
+        {
             return Vec::new();
         }
         let hand = crate::hand_glove::hand_to_world(self.position, self.rotation, self.handedness);
-        let seat = if holds_gun_glove {
-            crate::vr_config::held_gun_glove_scale()
-        } else {
-            Matrix4::identity()
-        };
 
         renderer.render_hand(
-            hand * seat,
+            hand,
             self.trigger_value,
             self.squeeze_value,
             self.get_held_entity().is_some(),
@@ -436,13 +428,13 @@ impl VirtualHand {
 
 /// Whether the held entity is a wield that draws the glove over the weapon -
 /// the arm-stripped gun `_h` set, marked by the wield itself (see
-/// [`crate::runtime_props::RuntimePropVrGunGlove`]).
+/// [`crate::runtime_props::RuntimePropVrGunWield`]).
 fn holds_gun_glove(world: &World, held_entity: Option<EntityId>) -> bool {
     let Some(entity_id) = held_entity else {
         return false;
     };
     world
-        .borrow::<View<RuntimePropVrGunGlove>>()
+        .borrow::<View<RuntimePropVrGunWield>>()
         .map(|marked| marked.get(entity_id).is_ok())
         .unwrap_or(false)
 }

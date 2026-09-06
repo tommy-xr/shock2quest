@@ -94,7 +94,7 @@ use crate::{
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
         RuntimePropLaunchedProjectile, RuntimePropReloading, RuntimePropSelectedAmmo,
         RuntimePropShotCooldown, RuntimePropShotModifiers, RuntimePropTransform, RuntimePropVhots,
-        RuntimePropVrGripOffset, RuntimePropVrGunGlove,
+        RuntimePropVrGripOffset, RuntimePropVrGunWield,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -7421,11 +7421,24 @@ impl MissionCore {
                         // Melee rigs mirror in their own frame below. The
                         // model's authored bounding box is left as-is: a held
                         // gun is unphysical, and nothing frames it by that box.
+                        // The gun set is authored several times life size for
+                        // a fixed flat camera; VR draws it at true world scale
+                        // beside a life-size glove, so it is shrunk here, once,
+                        // with the muzzle vhots. The grip offset and magazine
+                        // anchor are scaled to match where they are read
+                        // (`vr_config`), which together makes it a uniform
+                        // scale about the grip. The amp keeps its own baked arm
+                        // and therefore its authored size.
+                        let gun_scale = if vr_held_gun {
+                            crate::vr_config::gun_wield_scale()
+                        } else {
+                            1.0
+                        };
                         if vr_held && !is_melee_weapon(&self.world, entity_id) {
-                            let mirror = hand.gun_mirror();
-                            new_model.apply_local_transform(mirror);
+                            let seat = crate::vr_config::gun_wield_model_transform(hand, gun_scale);
+                            new_model.apply_local_transform(seat);
                             for vhot in vhots.iter_mut() {
-                                vhot.point = mirror.transform_point(vhot.point);
+                                vhot.point = seat.transform_point(vhot.point);
                             }
                         }
                         // Whether there is a glove to draw over the weapon at
@@ -7436,9 +7449,10 @@ impl MissionCore {
                         // drop must not leave the restored world model wearing
                         // one.
                         if vr_held_gun {
-                            self.world.add_component(entity_id, RuntimePropVrGunGlove);
+                            self.world
+                                .add_component(entity_id, RuntimePropVrGunWield(gun_scale));
                         } else {
-                            self.world.remove::<RuntimePropVrGunGlove>(entity_id);
+                            self.world.remove::<RuntimePropVrGunWield>(entity_id);
                         }
                         // An articulated VR-wielded first-person model (hand +
                         // arm + gun as skeleton sub-objects) renders unposed
@@ -7599,7 +7613,7 @@ impl MissionCore {
                     // from - an entity with no model has neither a grip nor a
                     // glove.
                     self.world
-                        .remove::<(RuntimePropVrGripOffset, RuntimePropVrGunGlove)>(entity_id);
+                        .remove::<(RuntimePropVrGripOffset, RuntimePropVrGunWield)>(entity_id);
                 }
                 Effect::SetVhotsFromModel {
                     entity_id,

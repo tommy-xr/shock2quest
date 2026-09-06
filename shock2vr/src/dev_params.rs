@@ -227,6 +227,22 @@ dev_params! {
     /// making the arm exactly life-size (0.79) would leave the Wrench at 52,
     /// and making the Wrench right (~0.5) would leave a child's arm.
     MELEE_WIELD_SCALE = float("melee_scale", "Melee scale", 0.7, 0.25, 1.5, 0.05),
+    /// Uniform scale applied to a wielded rigid gun `_h` view model, about
+    /// the grip so the weapon stays seated in the hand as the value moves.
+    ///
+    /// Same problem as [`MELEE_WIELD_SCALE`] and the same knob, but the guns
+    /// admit an exact answer where the melee rigs do not: only the weapon is
+    /// drawn (the baked arm is stripped for the glove), so there is no second
+    /// exaggerated thing to compromise with. `atek_h`'s weapon geometry spans
+    /// 0.663 world units - 0.51 m against a real pistol's 0.20 - and the rest
+    /// of the set is exaggerated by about the same factor, so one scale serves
+    /// all of them: at 0.4 the pistol is 20 cm, the assault rifle 72 cm and
+    /// the shotgun 74 cm.
+    ///
+    /// Read at *wield* time, like the melee scale: the correction is baked
+    /// into the model (and its muzzle vhots) once, so a change takes effect on
+    /// the next grab.
+    GUN_WIELD_SCALE = float("gun_scale", "Gun scale", 0.4, 0.1, 1.5, 0.05),
     /// Enables the detached debug ("free") camera. This is the *gate*, not
     /// the camera's own on/off: while it is false the toggle input is not
     /// even read, so a stray `Alt+V` (or controller chord) during normal play

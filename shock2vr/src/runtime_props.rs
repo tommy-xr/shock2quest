@@ -373,22 +373,24 @@ pub struct RuntimePropLogData {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropVrGripOffset(pub Vector3<f32>);
 
-// RuntimePropVrGunGlove - marks a VR-wielded gun as one the player's own glove
-// is drawn holding.
+// RuntimePropVrGunWield - marks a VR-wielded rigid gun `_h` model, and carries
+// the uniform scale its geometry was baked at.
 //
 // VR strips the baked hand off the rigid gun view models
-// (`dark::importers::VrHeldGunModel`) and draws the tracked glove in its place;
-// the melee rigs and the psi amp keep the hand their model draws. Which of
-// those a wield is depends on the model, and is settled once - when
-// `Effect::ChangeModel` applies the wield - so it is recorded here rather than
-// re-derived from the model name every frame in the render path.
+// (`dark::importers::VrHeldGunModel`) and draws the tracked glove in its place,
+// at life size - which means the gun itself has to be drawn at life size, and
+// the `_h` set is authored several times that (see
+// `dev_params::GUN_WIELD_SCALE`). Both facts are settled once, when
+// `Effect::ChangeModel` applies the wield: it bakes the scale into the model
+// and its muzzle vhots, and records it here.
 //
-// A marker, not a transform: the placement itself
-// (`vr_config::held_gun_glove_scale`) is hand-agnostic and composes onto the
-// tracked pose the renderer already has, so there is nothing per-entity to
-// store and no way for a stored handedness to go stale.
+// The scale is stored rather than re-read per frame because the placement has
+// two halves that must agree - the baked geometry, and the hand-local grip
+// offset (`vr_config::get_vr_hand_model_adjustments_from_entity`) and magazine
+// anchor that are scaled to match. Re-reading a live dev param on only one of
+// them would slide the gun out of the hand as the knob moved.
 //
 // Not serialized: the wield's `Effect::ChangeModel` re-applies it whenever the
 // first-person model is (re)applied, including on load.
 #[derive(Component, Clone, Copy, Debug)]
-pub struct RuntimePropVrGunGlove;
+pub struct RuntimePropVrGunWield(pub f32);
