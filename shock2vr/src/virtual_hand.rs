@@ -1303,6 +1303,40 @@ mod tests {
         assert_eq!(hover(4.0, FrobFlag::MOVE), HandAffordance::None);
     }
 
+    /// A locked target is recognised but refused: amber, not green, and a frob
+    /// against it reads as a failed attempt.
+    #[test]
+    fn a_locked_target_reads_as_blocked_then_failed() {
+        let (mut world, physics, target) = frob_fixture_with(2.5, FrobFlag::SCRIPT);
+        world.add_component(target, dark::properties::PropLocked(true));
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+
+        let (hovering, _) = VirtualHand::update(
+            &VirtualHand::new(Handedness::Right),
+            &physics,
+            &world,
+            vec3(0.0, 0.0, 0.0),
+            identity,
+            &Hand::default(),
+            None,
+        );
+        assert_eq!(hovering.affordance(), HandAffordance::Blocked);
+
+        let (frobbing, _) = VirtualHand::update(
+            &hovering,
+            &physics,
+            &world,
+            vec3(0.0, 0.0, 0.0),
+            identity,
+            &Hand {
+                trigger_value: 1.0,
+                ..Hand::default()
+            },
+            None,
+        );
+        assert_eq!(frobbing.affordance(), HandAffordance::Failed);
+    }
+
     /// A squeeze on something the hand cannot take is a refused attempt, and
     /// reads red rather than staying green on a grab that never happens.
     #[test]
