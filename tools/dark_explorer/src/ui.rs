@@ -1731,6 +1731,10 @@ impl ExplorerApp {
                     self.initial_overlays,
                     self.screenshot.is_some(),
                 );
+                if ui.button("Edit VR Grip").clicked() {
+                    self.grip_editor.open_model(&key);
+                    self.tab = Tab::Grips;
+                }
                 host.show(ui, frame, &key, &PreviewScene::Model);
             }
             PreviewKind::Motion { clip } => {
@@ -1831,6 +1835,10 @@ impl ExplorerApp {
         let Some(path) = self.screenshot.clone() else {
             return;
         };
+        if self.tab == Tab::Grips && self.grip_editor.is_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            return;
+        }
         self.frames_rendered += 1;
         ctx.request_repaint();
         // The scene exists after the first frame's show; step it before the

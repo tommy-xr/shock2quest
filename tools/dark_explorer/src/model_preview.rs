@@ -21,7 +21,7 @@ use engine::Engine;
 use engine::assets::asset_cache::AssetCache;
 use shock2vr::{
     GloveRenderer, Handedness,
-    vr_grip::{GripHints, GripKinematics, GripSurface, ResolvedGrip, surface_fingerprint},
+    vr_grip::{GripKinematics, GripSurface, ResolvedGrip, surface_fingerprint},
 };
 
 use crate::ui::quiet_catch;
@@ -258,7 +258,9 @@ impl ModelPreview {
             PreviewScene::Grip(hand, grip) => quiet_catch(|| {
                 let mut objects = Model::transform(
                     &model,
-                    Matrix4::from_translation(grip.offset) * Matrix4::from(grip.rotation),
+                    Matrix4::from_translation(grip.offset)
+                        * Matrix4::from(grip.rotation)
+                        * Matrix4::from_scale(grip.item_scale),
                 )
                 .clone_scene_objects();
                 if self.glove.is_none() {
@@ -277,8 +279,9 @@ impl ModelPreview {
                 let triangles = self
                     .asset_cache
                     .get(&dark::importers::GRIP_SURFACE_IMPORTER, key);
-                let transform =
-                    Matrix4::from_translation(grip.offset) * Matrix4::from(grip.rotation);
+                let transform = Matrix4::from_translation(grip.offset)
+                    * Matrix4::from(grip.rotation)
+                    * Matrix4::from_scale(grip.item_scale);
                 // Include the actual sampled glove arcs as well as the item, so
                 // a small prop cannot crop the wrist or a large one its far end.
                 let kinematics = glove.grip_kinematics(*hand);
@@ -402,18 +405,6 @@ impl ModelPreview {
             Ok((surface, rig, surface_fingerprint(&triangles)))
         })
         .and_then(|r: Result<_, &str>| r.map_err(str::to_string))
-    }
-
-    pub fn fit_grip(
-        &mut self,
-        key: &str,
-        hand: Handedness,
-        hints: &GripHints,
-    ) -> Result<ResolvedGrip, String> {
-        let (surface, rig, _) = self.grip_inputs(key, hand)?;
-        surface
-            .resolve(&rig, hints)
-            .ok_or_else(|| "No valid automatic fit; existing draft kept".to_string())
     }
 
     /// Camera presets share the gallery's hand-local axes. Orbit remains free.
