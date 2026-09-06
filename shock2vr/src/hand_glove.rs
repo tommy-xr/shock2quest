@@ -98,22 +98,30 @@ pub enum HandPreshape {
     Point(f32),
 }
 
-impl HandPreshape {
-    /// Lean the analog curl toward this shape. Never overrides: a finger the
-    /// player is already curling further stays where they put it.
-    fn apply(self, amounts: &mut FingerAmounts) {
-        let (weight, index_too) = match self {
-            HandPreshape::None => return,
-            HandPreshape::Grip(weight) => (weight, true),
-            HandPreshape::Point(weight) => (weight, false),
-        };
-        let weight = weight.clamp(0.0, 1.0);
-        amounts.thumb = amounts.thumb.max(weight);
-        amounts.middle = amounts.middle.max(weight);
-        amounts.ring = amounts.ring.max(weight);
-        amounts.pinky = amounts.pinky.max(weight);
-        if index_too {
-            amounts.index = amounts.index.max(weight);
+/// Lean an analog-posed hand toward the prompt's authored shape - the same
+/// `fist` and `point` poses the rest of the glove uses, so there is one
+/// vocabulary of hand shapes rather than a second, synthetic one.
+///
+/// Trigger authority: `fist` is the maximal curl the analog blend already runs
+/// toward, so leaning into it only ever adds curl; `point` is applied to every
+/// finger *but* the index, which is what makes it a point and what leaves the
+/// trigger's own finger exactly where the player put it.
+fn prompted_pose(posed: Pose, fist: &Pose, point: &Pose, preshape: HandPreshape) -> Pose {
+    match preshape {
+        HandPreshape::None => posed,
+        HandPreshape::Grip(weight) => posed.blend(fist, weight.clamp(0.0, 1.0)),
+        HandPreshape::Point(weight) => {
+            let weight = weight.clamp(0.0, 1.0);
+            posed.blend_per_finger(
+                point,
+                &FingerAmounts {
+                    thumb: weight,
+                    index: 0.0,
+                    middle: weight,
+                    ring: weight,
+                    pinky: weight,
+                },
+            )
         }
     }
 }
@@ -223,7 +231,7 @@ impl GloveRenderer {
         light: HandLight,
         preshape: HandPreshape,
     ) -> Vec<SceneObject> {
-        let mut amounts = if holding {
+        let amounts = if holding {
             // Gripping a held item: fingers wrapped on the handle, thumb
             // locked, index resting on the trigger and curling with the pull
             // (the squeeze is what holds the item, so it doesn't drive the
@@ -247,12 +255,13 @@ impl GloveRenderer {
                 pinky: squeeze_value,
             }
         };
-        // The prompt is a floor under the analog curl, so a real pull always
-        // shows through it. A full hand has nothing to reach for.
-        if !holding {
-            preshape.apply(&mut amounts);
-        }
         let pose = self.open.blend_per_finger(&self.fist, &amounts);
+        // A full hand has nothing to reach for, so it is never prompted.
+        let pose = if holding {
+            pose
+        } else {
+            prompted_pose(pose, &self.fist, &self.point, preshape)
+        };
         Self::render_posed(
             &mut self.model,
             &self.retarget,
@@ -437,30 +446,63 @@ mod tests {
         }
     }
 
-    /// The prompt only ever adds curl, and the player's own pull outranks it:
-    /// a full trigger stays full whatever the hand is hovering.
+    /// Slerping a pose onto itself is exact only up to float round-off.
+    fn same_rotation(a: cgmath::Quaternion<f32>, b: cgmath::Quaternion<f32>) -> bool {
+        use cgmath::InnerSpace;
+        (a - b).magnitude() < 1e-4
+    }
+
+    /// A trigger pull owns the index finger: the point prompt curls the other
+    /// four toward the authored pointing pose and leaves the index exactly
+    /// where the player put it, and no prompt at all changes nothing.
     #[test]
-    fn preshape_floors_the_curl_without_overriding_a_real_pull() {
-        let pulled = FingerAmounts {
-            index: 1.0,
-            ..FingerAmounts::default()
-        };
+    fn the_point_prompt_leaves_the_pulled_index_alone() {
+        let open = hand_pose::open_right_hand();
+        let fist = hand_pose::fist_right_hand();
+        let point = hand_pose::point_right_hand();
+        let pulled = open.blend_per_finger(
+            &fist,
+            &FingerAmounts {
+                index: 1.0,
+                ..FingerAmounts::default()
+            },
+        );
 
-        let mut grip = pulled;
-        HandPreshape::Grip(0.3).apply(&mut grip);
-        assert_eq!(grip.index, 1.0, "a real trigger pull must win");
-        assert_eq!(grip.thumb, 0.3);
-        assert_eq!(grip.pinky, 0.3);
+        let prompted = prompted_pose(pulled.clone(), &fist, &point, HandPreshape::Point(0.4));
+        // SteamVR bones 6..=10 are the index chain.
+        for bone in 6..=10 {
+            assert!(
+                same_rotation(prompted.bone_rotations[bone], pulled.bone_rotations[bone]),
+                "the point prompt must not move index bone {bone}"
+            );
+        }
+        let moved = (11..=15)
+            .any(|bone| !same_rotation(prompted.bone_rotations[bone], pulled.bone_rotations[bone]));
+        assert!(moved, "the point prompt should curl the middle finger");
 
-        // Point leaves the index extended - that is what makes it a point.
-        let mut point = FingerAmounts::default();
-        HandPreshape::Point(0.3).apply(&mut point);
-        assert_eq!(point.index, 0.0);
-        assert_eq!(point.middle, 0.3);
+        let unprompted = prompted_pose(pulled.clone(), &fist, &point, HandPreshape::None);
+        assert_eq!(unprompted.bone_rotations, pulled.bone_rotations);
+    }
 
-        let mut none = pulled;
-        HandPreshape::None.apply(&mut none);
-        assert_eq!(none.thumb, 0.0);
+    /// The grip prompt only ever adds curl - it leans toward the same fist the
+    /// analog blend already runs toward, so a fully squeezed hand is unmoved.
+    #[test]
+    fn the_grip_prompt_never_uncurls_a_closed_hand() {
+        let fist = hand_pose::fist_right_hand();
+        let point = hand_pose::point_right_hand();
+
+        let prompted = prompted_pose(fist.clone(), &fist, &point, HandPreshape::Grip(0.4));
+        for (bone, (prompted, closed)) in prompted
+            .bone_rotations
+            .iter()
+            .zip(&fist.bone_rotations)
+            .enumerate()
+        {
+            assert!(
+                same_rotation(*prompted, *closed),
+                "the grip prompt moved bone {bone} of an already closed hand"
+            );
+        }
     }
 
     /// The uncorrected glove is undersized, not oversized - a scale below 1.0

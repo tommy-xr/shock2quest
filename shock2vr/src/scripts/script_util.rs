@@ -144,28 +144,31 @@ pub fn is_message_turnon_or_turnoff(msg: &MessagePayload) -> bool {
 /// Whether an entity is currently locked against the player: it carries
 /// `PropLocked(true)` and either has no key destination or a key/quest gate
 /// the player hasn't satisfied. Shared by buttons and (door-opening) AIs.
+/// Borrows are tolerated rather than unwrapped: a hand raycasts in scenes and
+/// fixtures that carry no `QuestInfo`, and "locked with no credential state to
+/// consult" is still locked.
 pub fn is_entity_locked(world: &World, entity_id: EntityId) -> bool {
-    let v_locked = world
-        .borrow::<View<dark::properties::PropLocked>>()
-        .unwrap();
+    let Ok(v_locked) = world.borrow::<View<dark::properties::PropLocked>>() else {
+        return false;
+    };
     let Ok(locked) = v_locked.get(entity_id) else {
         return false;
     };
     if !locked.0 {
         return false;
     }
-    let v_key_dst = world
-        .borrow::<View<dark::properties::PropKeyDst>>()
-        .unwrap();
-    let quest = world
+    // Locked with no key destination - nothing can unlock it.
+    let Ok(v_key_dst) = world.borrow::<View<dark::properties::PropKeyDst>>() else {
+        return true;
+    };
+    let Ok(key_dst) = v_key_dst.get(entity_id) else {
+        return true;
+    };
+    // Locked behind a credential: open only if the player has collected it.
+    world
         .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
-        .unwrap();
-    match v_key_dst.get(entity_id) {
-        // Locked, and the player lacks the key/quest state to open it
-        Ok(key_dst) => !quest.can_unlock(&key_dst.0),
-        // Locked with no key destination - nothing can unlock it
-        Err(_) => true,
-    }
+        .map(|quest| !quest.can_unlock(&key_dst.0))
+        .unwrap_or(true)
 }
 
 /// Set the lock state of one live entity, writing Dark's own `P$Locked`

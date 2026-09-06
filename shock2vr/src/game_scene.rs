@@ -387,10 +387,22 @@ pub struct DebugClimbState {
 /// What each VR hand could do with whatever it is pointing at, by
 /// [`crate::hand_affordance::HandAffordance`] name ("None" / "Grabbable" /
 /// "Frobbable" / "Blocked" / "Failed").
-#[derive(Debug, Serialize, Clone, Default)]
+#[derive(Debug, Serialize, Clone)]
 pub struct DebugHandAffordances {
-    pub left: String,
-    pub right: String,
+    pub left: &'static str,
+    pub right: &'static str,
+}
+
+/// A scene with no hands reports the same name an idle hand does, so the field
+/// is always a valid state name rather than an empty string.
+impl Default for DebugHandAffordances {
+    fn default() -> Self {
+        let idle = crate::hand_affordance::HandAffordance::None.as_str();
+        Self {
+            left: idle,
+            right: idle,
+        }
+    }
 }
 
 /// Raycast mask for collision group filtering

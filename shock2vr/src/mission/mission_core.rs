@@ -11665,16 +11665,8 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     fn player_hand_affordances(&self) -> Option<crate::game_scene::DebugHandAffordances> {
         use crate::vr_config::Handedness;
         Some(crate::game_scene::DebugHandAffordances {
-            left: self
-                .interaction
-                .hand_affordance(Handedness::Left)
-                .as_str()
-                .to_string(),
-            right: self
-                .interaction
-                .hand_affordance(Handedness::Right)
-                .as_str()
-                .to_string(),
+            left: self.interaction.hand_affordance(Handedness::Left).as_str(),
+            right: self.interaction.hand_affordance(Handedness::Right).as_str(),
         })
     }
 

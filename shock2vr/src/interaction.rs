@@ -146,13 +146,13 @@ pub trait PlayerInteraction {
         self.holding_hand(entity_id).is_some()
     }
 
-    /// Wield `entity_id` as the first-person weapon (flat); no-op for VR.
     /// What this hand could do with whatever it is pointing at. Flatscreen has
     /// no per-hand affordance to report.
     fn hand_affordance(&self, _hand: Handedness) -> crate::hand_affordance::HandAffordance {
         crate::hand_affordance::HandAffordance::None
     }
 
+    /// Wield `entity_id` as the first-person weapon (flat); no-op for VR.
     fn wield(&mut self, _entity_id: EntityId) -> Vec<VirtualHandEffect> {
         Vec::new()
     }

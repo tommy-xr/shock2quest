@@ -68,9 +68,9 @@ impl HandAffordance {
     }
 
     /// Action: which shape the hand leans into to prompt it. Only the states
-    /// the hand can actually act on prompt - a blocked or failed target has no
-    /// action to offer.
-    pub fn preshape(self, weight: f32) -> HandPreshape {
+    /// the hand can actually act on prompt - a blocked target has no action to
+    /// offer.
+    fn preshape(self, weight: f32) -> HandPreshape {
         match self {
             HandAffordance::Grabbable => HandPreshape::Grip(weight),
             HandAffordance::Frobbable => HandPreshape::Point(weight),
@@ -123,9 +123,11 @@ impl AffordanceTracker {
         }
     }
 
-    /// How hard to pre-shape toward the hover's action.
+    /// How hard to pre-shape toward the hover's action. Read off the hover, not
+    /// [`Self::state`]: the two channels are independent, so a failure pulse
+    /// recolours the light without dropping the hand out of its shape.
     pub fn preshape(&self) -> HandPreshape {
-        self.state().preshape(self.hover_weight)
+        self.hover.preshape(self.hover_weight)
     }
 }
 
@@ -139,16 +141,16 @@ pub fn preshape_weight(distance: f32) -> f32 {
 /// Classify what a hand's ray hit, using the same predicates the hand's own
 /// trigger/squeeze consult - never a second opinion about the target.
 ///
-/// Order matters: a locked target is blocked whatever else it is, and a pickup
-/// the squeeze would take reads as a grab even though the trigger would also
-/// frob it.
+/// Order matters, and follows the input: the squeeze does not consult locks, so
+/// a pickup it would take reads as a grab even if the object is somehow locked;
+/// only a frob target's lock blocks it.
 pub fn classify(world: &World, entity_id: EntityId) -> HandAffordance {
-    if is_blocked(world, entity_id) {
-        return HandAffordance::Blocked;
-    }
     let scripted = crate::virtual_hand::uses_scripted_world_frob(world, entity_id);
     if !scripted && crate::virtual_hand::can_grab_item(world, entity_id) {
         return HandAffordance::Grabbable;
+    }
+    if is_blocked(world, entity_id) {
+        return HandAffordance::Blocked;
     }
     if scripted || is_frob_responsive(world, entity_id) {
         return HandAffordance::Frobbable;
@@ -156,31 +158,29 @@ pub fn classify(world: &World, entity_id: EntityId) -> HandAffordance {
     HandAffordance::None
 }
 
-/// Whether the entity is locked against the player. Guarded rather than
-/// delegating outright because a hand can raycast in a scene with no
-/// `QuestInfo` (unit fixtures): an unlocked prop is the honest answer there,
-/// and a locked one with no credential state to consult stays blocked.
+/// Whether the entity is locked against the player - the one lock predicate,
+/// shared with buttons and door-opening AIs.
 fn is_blocked(world: &World, entity_id: EntityId) -> bool {
-    let locked = world
-        .borrow::<View<dark::properties::PropLocked>>()
-        .map(|v| v.get(entity_id).is_ok_and(|locked| locked.0))
-        .unwrap_or(false);
-    if !locked {
-        return false;
-    }
-    if world
-        .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
-        .is_err()
-    {
-        return true;
-    }
     crate::scripts::script_util::is_entity_locked(world, entity_id)
 }
 
-/// Whether frobbing this entity does anything: it authors a world frob action,
-/// or it is a door (whose script opens on Frob without authoring one).
+/// Whether frobbing this entity plausibly does something: it hosts a world
+/// panel's widget, authors a world frob action, or is a door (whose script
+/// opens on Frob without authoring one).
+///
+/// A heuristic, deliberately: the trigger itself Frobs *whatever* the ray hit,
+/// so the light cannot promise less than the input will attempt without
+/// narrowing somewhere. This narrows it to what a frob can plausibly move, which
+/// is stricter than flatscreen's highlight filter
+/// (`flat_player_controller::is_frobbable`, any `PropFrobInfo` at all) - a wall
+/// with an `IGNORE` action should not glow.
 fn is_frob_responsive(world: &World, entity_id: EntityId) -> bool {
     use dark::properties::{FrobFlag, PropFrobInfo, PropTranslatingDoor};
+
+    let is_panel_widget = world
+        .borrow::<View<crate::gui::GuiPropProxyEntity>>()
+        .map(|v| v.get(entity_id).is_ok())
+        .unwrap_or(false);
 
     let authored = world
         .borrow::<View<PropFrobInfo>>()
@@ -192,7 +192,8 @@ fn is_frob_responsive(world: &World, entity_id: EntityId) -> bool {
         })
         .unwrap_or(false);
 
-    authored
+    is_panel_widget
+        || authored
         || world
             .borrow::<View<PropTranslatingDoor>>()
             .map(|v| v.get(entity_id).is_ok())
@@ -239,6 +240,17 @@ mod tests {
 
         tracker.update(HandAffordance::Frobbable, 0.3, false);
         assert_eq!(tracker.state(), HandAffordance::Frobbable);
+    }
+
+    /// The failure pulse recolours the light without dropping the hand out of
+    /// its shape - the two channels are independent.
+    #[test]
+    fn a_failure_pulse_keeps_the_hand_prompting() {
+        let mut tracker = AffordanceTracker::default();
+        tracker.update(HandAffordance::Grabbable, 0.3, true);
+
+        assert_eq!(tracker.state(), HandAffordance::Failed);
+        assert!(matches!(tracker.preshape(), HandPreshape::Grip(_)));
     }
 
     /// The two channels stay independent: eligibility colours the light, the

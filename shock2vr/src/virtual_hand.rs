@@ -255,9 +255,10 @@ impl VirtualHand {
                 // See what we're hitting
                 let mut msgs = Vec::new();
 
-                // A full hand has nothing to reach for, so its light decays.
-                let mut affordance = prev.affordance;
-                affordance.update(HandAffordance::None, 0.0, false);
+                // A full hand has nothing to reach for. Clear rather than decay:
+                // closing on an item is a hard transition, so the light must not
+                // keep advertising the grab for the hysteresis window.
+                let affordance = AffordanceTracker::default();
 
                 // If we're holding onto something, but not grabbing, we can drop it
                 if input_hand.squeeze_value < 0.5 {
@@ -349,6 +350,7 @@ impl VirtualHand {
                 hand_rotation,
                 prev.last_frobbed_entity,
                 prev.affordance,
+                prev.squeeze_value,
                 world,
                 physics,
                 input_hand,
@@ -422,6 +424,7 @@ fn handle_empty_hand_state(
     hand_rotation: Quaternion<f32>,
     frobbed_entity: Option<EntityId>,
     mut affordance: AffordanceTracker,
+    prev_squeeze: f32,
     world: &World,
     physics: &PhysicsWorld,
     input_hand: &Hand,
@@ -446,6 +449,8 @@ fn handle_empty_hand_state(
         None => (HandAffordance::None, 0.0),
     };
     let mut attempt_failed = false;
+    // A refusal is one press, not one per frame the player keeps holding.
+    let squeeze_pressed = prev_squeeze <= 0.5 && input_hand.squeeze_value > 0.5;
 
     let mut msgs = Vec::new();
     let mut last_frobbed_entity = frobbed_entity;
@@ -523,9 +528,10 @@ fn handle_empty_hand_state(
                     },
                 });
                 last_frobbed_entity = Some(entity_id);
-            } else {
-                // Squeezing something the hand cannot take: the other hand's
-                // item, or scenery with no `MOVE`.
+            } else if squeeze_pressed && !needs_scripted_frob {
+                // Squeezing scenery with no `MOVE` and no script to take it.
+                // A scripted target already Frobbed by this same press is not a
+                // refusal - it is the press still being held.
                 attempt_failed = true;
             }
         }
@@ -1108,6 +1114,7 @@ mod tests {
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             None,
             AffordanceTracker::default(),
+            0.0,
             &world,
             &physics,
             &input,
@@ -1121,6 +1128,7 @@ mod tests {
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             hand.last_frobbed_entity,
             AffordanceTracker::default(),
+            0.0,
             &world,
             &physics,
             &input,
@@ -1153,6 +1161,7 @@ mod tests {
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             None,
             AffordanceTracker::default(),
+            0.0,
             &world,
             &physics,
             &input,
@@ -1173,6 +1182,7 @@ mod tests {
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             hand.last_frobbed_entity,
             AffordanceTracker::default(),
+            0.0,
             &world,
             &physics,
             &input,
@@ -1335,6 +1345,38 @@ mod tests {
             None,
         );
         assert_eq!(frobbing.affordance(), HandAffordance::Failed);
+    }
+
+    /// A squeeze the world *accepted* must never read as a refusal, however
+    /// long it is held: a scripted pickup is Frobbed once and the latch then
+    /// suppresses further frobs, which is the same press, not a rejection.
+    #[test]
+    fn holding_a_squeeze_on_a_scripted_pickup_never_reads_as_failed() {
+        let (world, physics, _) = frob_fixture_with(2.5, FrobFlag::SCRIPT);
+        let squeeze = Hand {
+            squeeze_value: 1.0,
+            ..Hand::default()
+        };
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+
+        let mut hand = VirtualHand::new(Handedness::Right);
+        for frame in 0..5 {
+            hand = VirtualHand::update(
+                &hand,
+                &physics,
+                &world,
+                vec3(0.0, 0.0, 0.0),
+                identity,
+                &squeeze,
+                None,
+            )
+            .0;
+            assert_eq!(
+                hand.affordance(),
+                HandAffordance::Frobbable,
+                "frame {frame} of an accepted squeeze must not flash a refusal"
+            );
+        }
     }
 
     /// A squeeze on something the hand cannot take is a refused attempt, and
