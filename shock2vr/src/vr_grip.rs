@@ -12,7 +12,7 @@ use crate::{hand_pose::FingerAmounts, vr_config::Handedness};
 
 pub const CURL_STEPS: usize = 24;
 /// Bump when solver policy changes require existing results to be rebaked.
-pub const SOLVER_REVISION: u32 = 1;
+pub const SOLVER_REVISION: u32 = 2;
 const FINGER_RADIUS: f32 = 0.007 / crate::METERS_PER_WORLD_UNIT;
 
 /// Sampled from the very same glove skeleton and pose endpoints used to draw it.
@@ -200,6 +200,11 @@ impl GripSurface {
                             continue;
                         };
                         let anchor = origin - outward * hit.time_of_impact;
+                        if hints.anchor_region.is_some_and(|[min, max]| {
+                            (0..3).any(|axis| anchor[axis] < min[axis] || anchor[axis] > max[axis])
+                        }) {
+                            continue;
+                        }
                         let outward = vec3(hit.normal.x, hit.normal.y, hit.normal.z).normalize();
                         if hints.keep_upright && (anchor.y - center.y).abs() > extent.y * 0.25 {
                             continue;
@@ -424,6 +429,8 @@ pub fn glove_to_hand(hand: Handedness) -> Matrix4<f32> {
 pub struct GripHints {
     pub pose_family: Option<u8>,
     pub keep_upright: bool,
+    /// Optional inclusive item-local bounds for candidate palm contact points.
+    pub anchor_region: Option<[[f32; 3]; 2]>,
     /// Optional item-local palm contact anchor and item-to-hand rotation [w,x,y,z].
     pub anchor: Option<[f32; 3]>,
     pub rotation: Option<[f32; 4]>,
@@ -521,10 +528,17 @@ impl GripHints {
             [
                 self.pose_family.unwrap_or(255) as f32,
                 self.keep_upright as u8 as f32,
+                self.anchor_region.is_some() as u8 as f32,
                 self.anchor.is_some() as u8 as f32,
                 self.rotation.is_some() as u8 as f32,
             ]
             .into_iter()
+            .chain(
+                self.anchor_region
+                    .unwrap_or([[0.0; 3]; 2])
+                    .into_iter()
+                    .flatten(),
+            )
             .chain(self.anchor.unwrap_or([0.0; 3]))
             .chain(self.rotation.unwrap_or([0.0; 4]))
             .chain(
@@ -536,7 +550,9 @@ impl GripHints {
     }
 
     pub fn is_valid(&self) -> bool {
-        self.pose_family.is_none_or(|p| p <= 3)
+        self.anchor_region.is_none_or(|[min, max]| {
+            (0..3).all(|i| min[i].is_finite() && max[i].is_finite() && min[i] <= max[i])
+        }) && self.pose_family.is_none_or(|p| p <= 3)
             && self
                 .anchor
                 .iter()
@@ -743,5 +759,22 @@ mod tests {
             Quaternion::one(),
             &[0.0; 5]
         ));
+    }
+    #[test]
+    fn anchor_region_excludes_corner_candidates_and_changes_bake_fingerprint() {
+        let hints = GripHints {
+            anchor_region: Some([[-0.01, -0.01, 0.049], [0.01, 0.01, 0.051]]),
+            ..Default::default()
+        };
+        let result = plane(0.05).resolve(&straight_fingers(), &hints).unwrap();
+        assert!(result.anchor[0].abs() <= 0.01 && result.anchor[1].abs() <= 0.01);
+        assert_ne!(hints.fingerprint(), GripHints::default().fingerprint());
+        assert!(
+            !GripHints {
+                anchor_region: Some([[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+                ..Default::default()
+            }
+            .is_valid()
+        );
     }
 }

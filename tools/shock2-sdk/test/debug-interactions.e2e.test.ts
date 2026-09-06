@@ -6,10 +6,10 @@ import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
 const enabled = process.env.SHOCK2_E2E === "1";
 // Owner-approved rack contract; extend alongside INTERACTION_FIXTURES in
 // shock2vr/src/scenes/debug_interactions.rs when adding another fixture.
-const templates = [-1221, -1255, -4286, -928, -17, -19, -26, -27, -1358, -247];
+const templates = [-1221, -1255, -4286, -928, -17, -19, -26, -27, -1358, -247, -52, -57, -54, -53, -2949, -1488, -74, -157, -2998, -2594];
 
 test(
-  "interaction rack: every fixture renders and can be held by either VR hand",
+  "interaction rack: every fixture renders and either hand can hold samples or collect credentials",
   { skip: !enabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
@@ -41,11 +41,18 @@ test(
         await game.input.set(`${hand}_hand.squeeze`, 1);
         await game.step({ frames: 3 });
         const heldSlot = hand === "left" ? "wielded_entity_id" : "right_hand_entity_id";
+        if ([-2998, -2594].includes(template)) {
+          assert.equal((await game.info()).player[heldSlot], null, "credentials are collected, not held");
+          assert.ok(!(await game.entities.list()).entities.some(e => e.id === item.id), "collecting consumes the card pickup");
+          await game.input.set(`${hand}_hand.squeeze`, 0);
+          await game.step({ frames: 3 });
+          continue;
+        }
         assert.equal(
           (await game.info()).player[heldSlot], item.id,
           `${hand} grabs ${item.name}`,
         );
-        if ([-1221, -1255, -4286].includes(template)) {
+        if ([-1221, -1255, -4286, -52, -57, -54, -53, -2949, -1488, -74, -157].includes(template)) {
           const before = (await game.info()).player.hand_grips.find(g => g.hand === hand)!;
           assert.equal(before.source, "prepared", "gameplay reads a bake instead of running the search");
           assert.ok(before.grip);
