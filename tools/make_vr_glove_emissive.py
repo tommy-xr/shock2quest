@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
-"""Generate `assets/vr_glove_emissive.png`, the glove's light mask.
+"""Bootstrap `assets/vr_glove_emissive.png`, the glove's light mask.
 
 White texels are the parts of the glove that glow when a hand light is on
-(`hand_glove::HandLight`); black texels stay unlit. The mask is derived from
-the glove *model* rather than hand-painted, so it lands on the mesh wherever
-the atlas happens to pack it: a band around the wrist cuff and a pad on each
-fingertip, both picked in model space and rasterized through the mesh's own
-UVs.
+(`hand_glove::HandLight`); black texels stay unlit.
+
+**The PNG is the authored source, not this script's output.** This only paints a
+first draft so the feature had something to render; the asset is hand-painted
+from here on and hand edits win. Do NOT rerun this over an edited file - it
+overwrites it. If the draft ever needs regenerating, do it to a scratch path and
+merge by hand.
+
+What the draft contains, in the glove's own UV atlas:
+
+- Front: a band around the wrist cuff and a pad on each fingertip, picked in
+  model space (depth along the fingers; a radius around the five `finger_*_aux`
+  fingertip markers) and rasterized through the mesh's own UVs.
+- Back: the light stripes running down the back-of-hand panel. Those are an
+  albedo detail, not a shape, so model space can't separate them from the panel
+  around them - they are picked off the colour map instead, as texels standing
+  well above a dark neighbourhood inside the back-of-hand box.
 
     python3 tools/make_vr_glove_emissive.py      # from the repo root
 
@@ -19,12 +31,13 @@ import struct
 import numpy as np
 from PIL import Image, ImageFilter
 
-SRC, DST = "assets/vr_glove_model.glb", "assets/vr_glove_emissive.png"
+SRC = "assets/vr_glove_model.glb"
+COLOR = "assets/vr_glove_color.jpg"
+DST = "assets/vr_glove_emissive.png"
 
-# A quarter of the colour map's resolution. The mask is feathered soft, with no
-# detail above a few texels, and the loader expands it to RGBA on upload - a
-# 1024 mask would cost 4 MiB of Quest VRAM to say the same thing as 256 KiB.
-SIZE = 256
+# The colour map's resolution, so the two line up texel for texel and the mask
+# stays paintable by hand.
+SIZE = 1024
 
 # The cuff band, in fractions of the model's wrist-to-fingertip span: solid to
 # CUFF_SOLID, faded out by CUFF_FADE. Wide enough to read as a band from any
@@ -35,9 +48,24 @@ CUFF_SOLID, CUFF_FADE = 0.05, 0.11
 # fingertip markers), in the same span units - about one fingertip segment.
 TIP_SOLID, TIP_FADE = 0.05, 0.09
 
+# The back-of-hand panel, in atlas texels: the box the light stripes live in.
+BACK_BOX = (90, 385, 345, 915)  # left, top, right, bottom
+
+# How a stripe is told from the panel it sits on: brighter than its own
+# neighbourhood by BACK_CONTRAST, on a neighbourhood at most BACK_PANEL_MAX
+# bright. The darkness test is what keeps the pale hex mesh either side of the
+# panel out - it is bright, but so is everything around it.
+BACK_BLUR = 12.0
+BACK_CONTRAST, BACK_PANEL_MAX = 1.55, 0.35
+
+# The panel is also perforated and stitched, and those specks clear the contrast
+# test too. An opening (erode, then dilate back) drops anything thinner than a
+# stripe while leaving the stripes their own width.
+BACK_ERODE = 5
+
 # Closes the hairline seams left where a UV island's edge falls between texel
 # centres, then softens the mask's own edges.
-DILATE, FEATHER = 3, 0.5
+DILATE, FEATHER = 5, 2.0
 
 
 def read_glb(path):
@@ -79,6 +107,34 @@ def vertex_weights(positions, tips, span):
         distance = np.linalg.norm(positions - tip, axis=1) / span
         weight = np.maximum(weight, smooth_falloff(distance, TIP_SOLID, TIP_FADE))
     return weight
+
+
+def back_of_hand_stripes():
+    """The light stripes down the back-of-hand panel, read off the colour map.
+
+    A hand seen from behind shows none of the cuff and only the far edge of the
+    fingertip pads, so without these the light is invisible from the side the
+    player looks at most.
+    """
+    color = Image.open(COLOR).convert("L").resize((SIZE, SIZE), Image.LANCZOS)
+    luminance = np.asarray(color).astype(np.float32) / 255.0
+    neighbourhood = np.asarray(
+        color.filter(ImageFilter.GaussianBlur(BACK_BLUR * SIZE / 1024.0))
+    ).astype(np.float32) / 255.0
+
+    stripes = (luminance > neighbourhood * BACK_CONTRAST) & (
+        neighbourhood < BACK_PANEL_MAX
+    )
+
+    box = np.zeros_like(stripes)
+    left, top, right, bottom = (round(v * SIZE / 1024.0) for v in BACK_BOX)
+    box[top:bottom, left:right] = True
+
+    opened = Image.fromarray(((stripes & box) * 255).astype(np.uint8))
+    opened = opened.filter(ImageFilter.MinFilter(BACK_ERODE)).filter(
+        ImageFilter.MaxFilter(BACK_ERODE)
+    )
+    return np.asarray(opened).astype(np.float32) / 255.0
 
 
 def rasterize(uvs, indices, weights):
@@ -132,7 +188,10 @@ def main():
     assert len(tips) == 5, f"expected 5 fingertip markers, found {len(tips)}"
 
     span = positions[:, 2].max() - positions[:, 2].min()
-    mask = rasterize(uvs, indices, vertex_weights(positions, tips, span))
+    mask = np.maximum(
+        rasterize(uvs, indices, vertex_weights(positions, tips, span)),
+        back_of_hand_stripes(),
+    )
 
     image = Image.fromarray((np.clip(mask, 0.0, 1.0) * 255).astype(np.uint8))
     image = image.filter(ImageFilter.MaxFilter(DILATE)).filter(

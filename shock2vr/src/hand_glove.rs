@@ -32,10 +32,12 @@ const GLOVE_MODEL: &str = "vr_glove_model.glb";
 const GLOVE_COLOR_TEXTURE: &str = "vr_glove_color.jpg";
 
 /// Where the glove's light sits, in that same UV atlas: white texels glow,
-/// black ones don't. Generated from the model by
-/// `tools/make_vr_glove_emissive.py` - a band round the wrist cuff and a pad on
-/// each fingertip, so the light reads from whichever side of the hand happens
-/// to face the player.
+/// black ones don't. A band round the wrist cuff and a pad on each fingertip
+/// carry the front; the stripes down the back-of-hand panel carry the back, so
+/// the light reads from whichever side of the hand faces the player.
+///
+/// The PNG is hand-authored; `tools/make_vr_glove_emissive.py` only painted its
+/// first draft.
 const GLOVE_EMISSIVE_TEXTURE: &str = "vr_glove_emissive.png";
 
 /// The affordance light on a hand's glove: what the hand in front of you could
