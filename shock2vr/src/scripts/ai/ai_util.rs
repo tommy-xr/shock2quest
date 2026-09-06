@@ -725,6 +725,103 @@ pub fn repel_ramp(distance: f32, full: f32, none: f32) -> f32 {
     }
 }
 
+/// A push counts as head-on when it points back down the travel direction
+/// within this cone of exactly anti-parallel. Wider and an ordinary
+/// glancing push gets turned sideways; narrower and two bodies converging
+/// a few degrees off dead-centre still cancel each other out.
+const HEAD_ON_CONE: Deg<f32> = Deg(30.0);
+
+/// The XZ direction of `v`, or None when it has no horizontal extent.
+pub(crate) fn normalized_horizontal(v: Vector3<f32>) -> Option<Vector3<f32>> {
+    let length = (v.x * v.x + v.z * v.z).sqrt();
+    (length > 1e-6).then(|| vec3(v.x / length, 0.0, v.z / length))
+}
+
+/// Drop whatever part of `v` points against `direction`, keeping the rest.
+/// Used both to keep a bias from pulling a body backwards down its route
+/// and to stop a crowd push from bidding against the whiskers.
+pub(crate) fn drop_opposing(v: Vector3<f32>, direction: Vector3<f32>) -> Vector3<f32> {
+    match normalized_horizontal(direction) {
+        Some(direction) => {
+            let opposing = (v.x * direction.x + v.z * direction.z).min(0.0);
+            v - direction * opposing
+        }
+        None => v,
+    }
+}
+
+/// The AI's own side of the direction of travel: the perpendicular that
+/// `yield_sideways` yields onto and that `blend_biases` applies the
+/// geometry-over-crowd priority along. Both must read the same handedness -
+/// the opposite one would zero exactly the sidesteps it has to preserve -
+/// so they share this. Length follows `heading`'s; only its direction is used.
+pub(crate) fn lateral_axis(heading: Vector3<f32>) -> Vector3<f32> {
+    vec3(heading.z, 0.0, -heading.x)
+}
+
+/// Turn a head-on crowd push into a sidestep of the same strength.
+///
+/// A neighbour squarely ahead pushes straight back down the route, and a
+/// bias pointing backwards is worth nothing: the aim point keeps only its
+/// sideways part (`aim_with_bias`), so the whole push is discarded and two
+/// AIs meeting head-on walk into each other. Yielding around is what the
+/// original engine's regulator does, so inside `HEAD_ON_CONE` the push is
+/// rotated onto the perpendicular instead of being thrown away.
+///
+/// Apply this to the WHOLE crowd bias, not to one neighbour's share: a
+/// neighbour dead ahead and another abreast would otherwise yield onto the
+/// same axis and cancel, leaving an AI with two neighbours worse off than
+/// with one. Summed first, a push that still has somewhere sideways to go
+/// falls outside the cone and is left exactly as it was.
+///
+/// The side is always the same one relative to the direction of travel,
+/// which is what lets two AIs pass without coordinating: facing opposite
+/// ways, their own sides are opposite sides of the corridor. Leaning toward
+/// whichever side the push already favours reads as more natural and is
+/// wrong - two bodies converging a few degrees off dead-centre lean the
+/// same way in world space and stay nose to nose.
+///
+/// `avoid` is the static-geometry bias (the whiskers), which outranks the
+/// choice of side: if the AI's own side is a wall, the other one is open by
+/// construction, and both AIs of a pair read the same wall the same way.
+pub(crate) fn yield_sideways(
+    push: Vector3<f32>,
+    heading: Vector3<f32>,
+    avoid: Vector3<f32>,
+) -> Vector3<f32> {
+    let magnitude = (push.x * push.x + push.z * push.z).sqrt();
+    if magnitude < 1e-6 {
+        return push;
+    }
+    let Some(heading) = normalized_horizontal(heading) else {
+        return push;
+    };
+    let along = push.x * heading.x + push.z * heading.z;
+    if along >= 0.0 {
+        return push; // not pointing back at all
+    }
+    // sin of the angle off exactly anti-parallel, ramped so the conversion
+    // eases in rather than stepping the aim point by the whole offset
+    // budget as a neighbour drifts across the edge of the cone.
+    let lateral = push - heading * along;
+    let lateral_length = (lateral.x * lateral.x + lateral.z * lateral.z).sqrt();
+    let head_on = repel_ramp(
+        lateral_length / magnitude,
+        0.0,
+        Rad::from(HEAD_ON_CONE).0.sin(),
+    );
+    if head_on <= 0.0 {
+        return push;
+    }
+    let side = lateral_axis(heading);
+    let side = if side.x * avoid.x + side.z * avoid.z < 0.0 {
+        -side
+    } else {
+        side
+    };
+    push + (side * magnitude - push) * head_on
+}
+
 /// Horizontal crowd bias: the sum of repulsions from other LIVING
 /// creatures near `position` (same floor). Returns a direction-and-
 /// magnitude vector in the XZ plane; empty crowd = zero. Callers blend a
@@ -1228,6 +1325,9 @@ mod separation_tests {
     use cgmath::Matrix4;
     use shipyard::World;
 
+    /// No static geometry nearby, so the whiskers express no preference
+    const NO_WALL: Vector3<f32> = vec3(0.0, 0.0, 0.0);
+
     fn spawn_creature(world: &mut World, at: Vector3<f32>, hit_points: i32) -> EntityId {
         world.add_entity((
             PropCreature(0),
@@ -1331,6 +1431,110 @@ mod separation_tests {
         assert!(
             bias.x.abs() < 1e-6,
             "symmetric neighbors cancel on x: {bias:?}"
+        );
+    }
+
+    /// A neighbour squarely ahead pushes straight backwards, and a
+    /// backwards bias is discarded by the aim point - so head-on the crowd
+    /// term used to be worth exactly nothing and the two bodies met.
+    #[test]
+    fn a_head_on_push_becomes_a_sidestep() {
+        let stepped = yield_sideways(vec3(0.0, 0.0, -2.0), vec3(0.0, 0.0, 1.0), NO_WALL);
+        assert!(
+            stepped.x.abs() > 1.9,
+            "a neighbour dead ahead must be stepped around, not pushed back \
+             through: {stepped:?}"
+        );
+        assert!(
+            stepped.z.abs() < 1e-6,
+            "and the sidestep keeps nothing pointing back down the route: {stepped:?}"
+        );
+    }
+
+    /// Two AIs walking into each other each yield to their own side, which
+    /// is the opposite side of the corridor because they face opposite
+    /// ways. This must hold when they are NOT exactly anti-parallel too:
+    /// picking the side the push happens to lean toward looks natural but
+    /// sends both of them the same way in world space (here both headings
+    /// lean +x, e.g. two AIs aiming at the same off-centre doorway), which
+    /// is the very nose-to-nose case this exists to break.
+    #[test]
+    fn two_ai_meeting_head_on_yield_to_opposite_sides() {
+        // A stands at -z looking north, B stands at +z looking south, so
+        // A's push (away from B) is -z and B's is its exact opposite.
+        let push_a = vec3(0.0, 0.0, -1.0);
+        let opposite = |heading_a: Vector3<f32>, heading_b: Vector3<f32>| {
+            let a = yield_sideways(push_a, heading_a, NO_WALL);
+            let b = yield_sideways(-push_a, heading_b, NO_WALL);
+            assert!(
+                a.x * b.x < 0.0,
+                "opposed AIs must pass on opposite sides: {a:?} vs {b:?}"
+            );
+        };
+        opposite(vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0));
+        // ...and five degrees off, both leaning the same way in world x
+        let lean = Rad::from(Deg(5.0_f32)).0;
+        opposite(
+            vec3(lean.sin(), 0.0, lean.cos()),
+            vec3(lean.sin(), 0.0, -lean.cos()),
+        );
+    }
+
+    /// The whiskers outrank the AI's own side: yielding into the wall they
+    /// just found would be undone by `blend_biases` and the head-on fix
+    /// would do nothing in a doorway, which is where it is needed most.
+    #[test]
+    fn a_wall_flips_the_side_the_ai_yields_to() {
+        let push = vec3(0.0, 0.0, -1.0);
+        let heading = vec3(0.0, 0.0, 1.0);
+        let open = yield_sideways(push, heading, NO_WALL);
+        let wall_on_that_side = yield_sideways(push, heading, -open);
+        assert!(
+            open.x * wall_on_that_side.x < 0.0,
+            "a wall on the AI's own side must send it the other way: \
+             {open:?} vs {wall_on_that_side:?}"
+        );
+    }
+
+    /// A push that is not head-on is left exactly as it was - sideways and
+    /// forward pushes already survive the aim point. This is also what
+    /// keeps a crowd from cancelling itself: applied to the SUM, a
+    /// neighbour dead ahead plus one abreast still has somewhere sideways
+    /// to go and is not rotated onto that neighbour's axis.
+    #[test]
+    fn a_push_off_the_head_on_cone_is_untouched() {
+        let heading = vec3(0.0, 0.0, 1.0);
+        assert_eq!(
+            yield_sideways(vec3(1.0, 0.0, 0.0), heading, NO_WALL),
+            vec3(1.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            yield_sideways(vec3(0.0, 0.0, 1.0), heading, NO_WALL),
+            vec3(0.0, 0.0, 1.0)
+        );
+        // one neighbour dead ahead (-z) plus one abreast (-x): 45 degrees
+        // off anti-parallel, outside the cone, lateral escape preserved
+        let crowd = yield_sideways(vec3(-1.0, 0.0, -1.0), heading, NO_WALL);
+        assert_eq!(crowd, vec3(-1.0, 0.0, -1.0));
+    }
+
+    /// The conversion eases in across the cone rather than switching: at
+    /// the edge the push is untouched, just inside it is barely changed.
+    #[test]
+    fn yielding_eases_in_across_the_cone() {
+        let heading = vec3(0.0, 0.0, 1.0);
+        let at_edge = Deg(30.0_f32);
+        let just_inside = Deg(29.0_f32);
+        let push = |off: Deg<f32>| {
+            let off = Rad::from(off).0;
+            vec3(off.sin(), 0.0, -off.cos())
+        };
+        let edge = yield_sideways(push(at_edge), heading, NO_WALL);
+        let inside = yield_sideways(push(just_inside), heading, NO_WALL);
+        assert_eq!(edge, push(at_edge), "untouched at the edge");
+        assert!(
+            (inside - push(just_inside)).magnitude() < 0.1,
+            "and barely changed just inside it: {inside:?}"
         );
     }
 }

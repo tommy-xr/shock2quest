@@ -492,10 +492,18 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // biases pointing the same way still cannot bend the line further
         // than one of them may.
         let whiskers = self.whiskers.update(world, physics, entity_id, time);
+        // A crowd squarely ahead pushes straight back down the route, which
+        // the aim point discards - so it becomes a sidestep instead, on the
+        // open side when the whiskers have found a wall. Faded with the
+        // melee approach exactly like the repel it mostly comes from: an AI
+        // in reach of its target must not be stepped off the blow.
+        let heading = waypoint - position;
+        let yielded = ai_util::yield_sideways(crowd, heading, whiskers);
+        let crowd = crowd + (yielded - crowd) * strength;
         let aim = aim_with_bias(
             position,
             waypoint,
-            blend_biases(crowd, whiskers, SEPARATION_MAX_OFFSET),
+            blend_biases(crowd, whiskers, heading, SEPARATION_MAX_OFFSET),
         );
 
         // Stall escape: if we stop making progress toward the current
@@ -794,11 +802,38 @@ fn target_awareness_distance(
 /// own, so it is shortened to the offset budget BEFORE the sum: otherwise
 /// a dense crowd - or simply a stronger repel term - buys magnitude out of
 /// the whiskers' share and bends the line into the very geometry the
-/// whiskers are there to avoid. The blend is then shortened once, so two
-/// biases pointing the same way still cannot bend the line further than
-/// one of them may.
-fn blend_biases(crowd: Vector3<f32>, whiskers: Vector3<f32>, max: f32) -> Vector3<f32> {
-    capped(capped(crowd, max) + whiskers, max)
+/// whiskers are there to avoid.
+///
+/// Geometry then outranks the crowd outright: whatever part of the crowd
+/// push opposes the whiskers is dropped before the sum, so a neighbour on
+/// the open side can never bid an AI back toward the wall the whiskers are
+/// steering it off. (Two vectors of similar size pointing opposite ways
+/// otherwise cancel to nothing, which is the worst of both - no avoidance
+/// and no yielding.) That rule works along the whiskers' own direction; the
+/// same priority is then applied a second time along the LATERAL axis,
+/// which is the only one the aim point keeps, so a crowd term perpendicular
+/// to the whiskers cannot cancel their sidestep either. The blend is
+/// shortened once at the end, so two biases pointing the same way still
+/// cannot bend the line further than one may.
+fn blend_biases(
+    crowd: Vector3<f32>,
+    whiskers: Vector3<f32>,
+    heading: Vector3<f32>,
+    max: f32,
+) -> Vector3<f32> {
+    let crowd = capped(ai_util::drop_opposing(crowd, whiskers), max);
+    // ...and once more along the lateral axis, because that is the only part
+    // the aim point's forward projection (`aim_with_bias`) keeps: a diagonal
+    // wall hit and a neighbour off to one side can be perpendicular - so
+    // neither opposes the other and the rule above passes them both - while
+    // their sideways parts still cancel, leaving a sum that is purely
+    // backward and is erased whole.
+    let wall_side = {
+        let side = ai_util::lateral_axis(heading);
+        side * (whiskers.x * side.x + whiskers.z * side.z)
+    };
+    let crowd = ai_util::drop_opposing(crowd, wall_side);
+    capped(crowd + whiskers, max)
 }
 
 /// Shorten a horizontal bias to at most `max`.
@@ -823,19 +858,7 @@ fn aim_with_bias(
     // obstacle square across the path answers with its own normal, and
     // pulling the aim point backwards would only stop the AI in front of it
     // instead of taking it around (what is left is the sideways part).
-    let toward = waypoint - position;
-    let length = (toward.x * toward.x + toward.z * toward.z).sqrt();
-    let bias = if length > 1e-3 {
-        let toward = Vector3::new(toward.x / length, 0.0, toward.z / length);
-        let along = bias.x * toward.x + bias.z * toward.z;
-        if along < 0.0 {
-            bias - toward * along
-        } else {
-            bias
-        }
-    } else {
-        bias
-    };
+    let bias = ai_util::drop_opposing(bias, waypoint - position);
     let aim = waypoint + bias;
     if xz_distance(position, aim) < WAYPOINT_ADVANCE_DISTANCE {
         waypoint
@@ -1132,11 +1155,12 @@ mod tests {
 
     #[test]
     fn a_crowd_cannot_outbid_the_whiskers() {
+        let heading = vec3(0.0, 0.0, 1.0);
         // A huge crowd push (many neighbors, or a saturated repel) plus a
         // whisker push at right angles: the crowd is shortened to the
         // budget first, so the geometry it is steering around keeps half
         // the blend instead of being rounded away.
-        let blended = blend_biases(vec3(100.0, 0.0, 0.0), vec3(0.0, 0.0, 2.5), 2.5);
+        let blended = blend_biases(vec3(100.0, 0.0, 0.0), vec3(0.0, 0.0, 2.5), heading, 2.5);
         assert!(
             (blended.z - blended.x).abs() < 1e-4,
             "an unbounded crowd must not outweigh the whiskers: {blended:?}"
@@ -1145,8 +1169,74 @@ mod tests {
         let magnitude = (blended.x * blended.x + blended.z * blended.z).sqrt();
         assert!((magnitude - 2.5).abs() < 1e-4, "got {magnitude}");
         // A crowd on its own is capped like any other bias
-        let alone = blend_biases(vec3(100.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), 2.5);
+        let alone = blend_biases(vec3(100.0, 0.0, 0.0), vec3(0.0, 0.0, 0.0), heading, 2.5);
         assert!((alone.x - 2.5).abs() < 1e-4, "got {alone:?}");
+    }
+
+    /// A neighbour on the open side pushes an AI back at the wall the
+    /// whiskers just found. Summed, two opposite pushes of similar size
+    /// cancel to nothing - no avoidance AND no yielding - so the crowd's
+    /// opposing part is dropped and the wall wins outright.
+    #[test]
+    fn a_wall_outranks_a_crowd_push_into_it() {
+        let heading = vec3(0.0, 0.0, 1.0);
+        let wall_push = vec3(2.0, 0.0, 0.0);
+        let crowd_into_wall = vec3(-2.2, 0.0, 0.0);
+        let blended = blend_biases(crowd_into_wall, wall_push, heading, 2.5);
+        assert!(
+            blended.x > 1.0,
+            "the whiskers must still steer away from the wall: {blended:?}"
+        );
+        // A crowd push that does NOT oppose the wall is untouched
+        let alongside = blend_biases(vec3(0.0, 0.0, 1.0), wall_push, heading, 2.5);
+        assert!((alongside.z - 1.0).abs() < 1e-4, "got {alongside:?}");
+    }
+
+    /// The full composition, travelling +z: a diagonal wall hit and a
+    /// neighbour that sits OUTSIDE the head-on cone (so it is not converted
+    /// to a sidestep). Their sideways parts are opposite, so summed as
+    /// whole vectors they cancel and the aim point's forward projection
+    /// erases what is left - losing the wall avoidance exactly when a
+    /// neighbour is also present.
+    #[test]
+    fn a_wall_survives_the_projection_when_a_crowd_is_present() {
+        let position = vec3(0.0, 0.0, 0.0);
+        let waypoint = vec3(0.0, 0.0, 10.0);
+        let heading = waypoint - position;
+        let whiskers = vec3(1.0, 0.0, -1.0);
+        let crowd = vec3(-1.0, 0.0, -1.0);
+        // outside the head-on cone: the sidestep conversion leaves it alone
+        let yielded = ai_util::yield_sideways(crowd, heading, whiskers);
+        assert!(xz_distance(yielded, crowd) < 1e-4, "got {yielded:?}");
+
+        let aim = aim_with_bias(
+            position,
+            waypoint,
+            blend_biases(yielded, whiskers, heading, 2.5),
+        );
+        assert!(
+            aim.x > 0.5,
+            "the wall's sidestep must survive the projection: {aim:?}"
+        );
+    }
+
+    #[test]
+    fn a_crowd_agreeing_with_the_wall_still_adds() {
+        let heading = vec3(0.0, 0.0, 1.0);
+        // both push +x: the priority rule must not touch them, they sum
+        let blended = blend_biases(vec3(0.5, 0.0, 0.0), vec3(1.0, 0.0, 0.0), heading, 2.5);
+        assert!((blended.x - 1.5).abs() < 1e-4, "got {blended:?}");
+        // ...and the sum is still shortened to the budget
+        let capped_sum = blend_biases(vec3(2.0, 0.0, 0.0), vec3(2.0, 0.0, 0.0), heading, 2.5);
+        assert!((capped_sum.x - 2.5).abs() < 1e-4, "got {capped_sum:?}");
+    }
+
+    #[test]
+    fn a_crowd_with_no_whiskers_is_untouched() {
+        let heading = vec3(0.0, 0.0, 1.0);
+        let crowd = vec3(-1.0, 0.0, -1.0);
+        let blended = blend_biases(crowd, vec3(0.0, 0.0, 0.0), heading, 2.5);
+        assert!(xz_distance(blended, crowd) < 1e-4, "got {blended:?}");
     }
 
     #[test]
