@@ -158,8 +158,11 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             // Add emissive contribution
             finalColor += texColor.rgb * emissivity;
 
-            // Add the painted-on light
-            finalColor += texture(emissiveMask, texCoord).r * emissiveTint;
+            // Add the painted-on light. The branch is uniform across the draw,
+            // so a mesh without a light never pays the second fetch.
+            if (any(greaterThan(emissiveTint, vec3(0.0)))) {
+                finalColor += texture(emissiveMask, texCoord).r * emissiveTint;
+            }
 
             // Calculate contribution from all 6 spotlights
             vec3 normal = normalize(worldNormal);
@@ -178,10 +181,8 @@ struct UnifiedUniforms {
     projection_loc: i32,
 
     // Material properties
-    texture1_loc: i32,
     emissivity_loc: i32,
     transparency_loc: i32,
-    emissive_mask_loc: i32,
     emissive_tint_loc: i32,
 
     // Bone matrices for skeletal animation
@@ -252,8 +253,6 @@ impl SkinnedMaterial {
             gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
 
             // Set material properties
-            gl::Uniform1i(uniforms.texture1_loc, 0);
-            gl::Uniform1i(uniforms.emissive_mask_loc, 1);
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
             gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
             gl::Uniform3f(
@@ -372,6 +371,20 @@ impl Material for SkinnedMaterial {
             unsafe {
                 let shader = crate::shader_program::link(&vertex_shader, &fragment_shader);
 
+                // Which texture unit each sampler reads is program state, not
+                // per-material state, so it is set once here rather than on
+                // every draw. (`texture1` would default to unit 0 anyway; the
+                // mask has to be told about unit 1.)
+                gl::UseProgram(shader.gl_id);
+                gl::Uniform1i(
+                    gl::GetUniformLocation(shader.gl_id, c_str!("texture1").as_ptr()),
+                    0,
+                );
+                gl::Uniform1i(
+                    gl::GetUniformLocation(shader.gl_id, c_str!("emissiveMask").as_ptr()),
+                    1,
+                );
+
                 // Get uniform locations for all shader variables
                 let bone_matrices_loc =
                     gl::GetUniformLocation(shader.gl_id, c_str!("bone_matrices[0]").as_ptr());
@@ -386,7 +399,6 @@ impl Material for SkinnedMaterial {
                     ),
 
                     // Material properties
-                    texture1_loc: gl::GetUniformLocation(shader.gl_id, c_str!("texture1").as_ptr()),
                     emissivity_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("emissivity").as_ptr(),
@@ -394,10 +406,6 @@ impl Material for SkinnedMaterial {
                     transparency_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("transparency").as_ptr(),
-                    ),
-                    emissive_mask_loc: gl::GetUniformLocation(
-                        shader.gl_id,
-                        c_str!("emissiveMask").as_ptr(),
                     ),
                     emissive_tint_loc: gl::GetUniformLocation(
                         shader.gl_id,
@@ -587,15 +595,13 @@ impl SkinnedMaterial {
         emissivity: f32,
         transparency: f32,
     ) -> Box<dyn Material> {
-        Box::new(SkinnedMaterial {
+        Self::build(
             diffuse_texture,
-            has_initialized: false,
             emissivity,
             transparency,
-            base_transparency: transparency,
-            emissive_mask: None,
-            emissive_tint: Vector3::new(0.0, 0.0, 0.0),
-        })
+            None,
+            Vector3::new(0.0, 0.0, 0.0),
+        )
     }
 
     /// As [`SkinnedMaterial::create`], plus a light painted onto the parts of
@@ -608,13 +614,29 @@ impl SkinnedMaterial {
         emissive_mask: Rc<dyn TextureTrait>,
         emissive_tint: Vector3<f32>,
     ) -> Box<dyn Material> {
+        Self::build(
+            diffuse_texture,
+            emissivity,
+            transparency,
+            Some(emissive_mask),
+            emissive_tint,
+        )
+    }
+
+    fn build(
+        diffuse_texture: Rc<dyn TextureTrait>,
+        emissivity: f32,
+        transparency: f32,
+        emissive_mask: Option<Rc<dyn TextureTrait>>,
+        emissive_tint: Vector3<f32>,
+    ) -> Box<dyn Material> {
         Box::new(SkinnedMaterial {
             diffuse_texture,
             has_initialized: false,
             emissivity,
             transparency,
             base_transparency: transparency,
-            emissive_mask: Some(emissive_mask),
+            emissive_mask,
             emissive_tint,
         })
     }

@@ -20,7 +20,11 @@ import numpy as np
 from PIL import Image, ImageFilter
 
 SRC, DST = "assets/vr_glove_model.glb", "assets/vr_glove_emissive.png"
-SIZE = 1024
+
+# A quarter of the colour map's resolution. The mask is feathered soft, with no
+# detail above a few texels, and the loader expands it to RGBA on upload - a
+# 1024 mask would cost 4 MiB of Quest VRAM to say the same thing as 256 KiB.
+SIZE = 256
 
 # The cuff band, in fractions of the model's wrist-to-fingertip span: solid to
 # CUFF_SOLID, faded out by CUFF_FADE. Wide enough to read as a band from any
@@ -33,7 +37,7 @@ TIP_SOLID, TIP_FADE = 0.05, 0.09
 
 # Closes the hairline seams left where a UV island's edge falls between texel
 # centres, then softens the mask's own edges.
-DILATE, FEATHER = 5, 2.0
+DILATE, FEATHER = 3, 0.5
 
 
 def read_glb(path):

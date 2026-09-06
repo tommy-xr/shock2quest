@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, SquareMatrix, Vector3, point3, vec3};
@@ -6,7 +5,7 @@ use dark::{glb_model::GlbModel, importers::GLB_MODELS_IMPORTER};
 use engine::{
     assets::asset_cache::AssetCache,
     audio::AudioContext,
-    scene::{SceneObject, SkinnedMaterial, color_material},
+    scene::{SceneObject, color_material},
 };
 use shipyard::EntityId;
 use tracing::info;
@@ -142,21 +141,10 @@ fn build_posed_glove(
 
     let mut objects = posed_model.to_scene_objects_with_skinning();
     for object in objects.iter_mut() {
-        if let Some(color) = &skin.color {
-            // A fresh cell, not `*object.material.borrow_mut() = ...`: the
-            // model's own material is shared by every copy of it in the scene,
-            // so writing through it would give all the gloves whichever light
-            // was built last.
-            object.material = Rc::new(RefCell::new(match &skin.emissive {
-                Some(emissive) => SkinnedMaterial::create_with_light(
-                    color.clone(),
-                    1.0,
-                    0.0,
-                    emissive.clone(),
-                    light.tint(),
-                ),
-                None => SkinnedMaterial::create(color.clone(), 1.0, 0.0),
-            }));
+        if let Some(material) =
+            crate::hand_glove::glove_material(&skin.color, &skin.emissive, light)
+        {
+            object.material = material;
         }
         object.set_transform(Matrix4::identity());
     }

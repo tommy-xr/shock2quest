@@ -76,12 +76,10 @@ impl HandLight {
         }
     }
 
-    /// Its slot in [`HandLight::ALL`].
+    /// Its slot in [`HandLight::ALL`] - the discriminant, which
+    /// `every_hand_light_indexes_its_own_slot` holds to declaration order.
     fn index(self) -> usize {
-        HandLight::ALL
-            .iter()
-            .position(|candidate| *candidate == self)
-            .expect("HandLight::ALL is missing a variant")
+        self as usize
     }
 }
 
@@ -151,31 +149,16 @@ impl GloveRenderer {
         let color = load_glove_color(asset_cache);
         let emissive = load_glove_emissive(asset_cache);
 
-        // One material per mesh per light state. Without the colour map, keep
-        // the materials the importer built (solid-color fallback); without the
-        // light mask, the glove renders unlit rather than not at all.
+        // One material per mesh per light state.
         let authored = model.to_scene_objects();
         let materials = HandLight::ALL
             .iter()
             .map(|light| {
                 authored
                     .iter()
-                    .map(|object| match (&color, &emissive) {
-                        (Some(color), Some(emissive)) => {
-                            Rc::new(RefCell::new(SkinnedMaterial::create_with_light(
-                                color.clone(),
-                                1.0,
-                                0.0,
-                                emissive.clone(),
-                                light.tint(),
-                            )))
-                        }
-                        (Some(color), None) => Rc::new(RefCell::new(SkinnedMaterial::create(
-                            color.clone(),
-                            1.0,
-                            0.0,
-                        ))),
-                        (None, _) => object.material.clone(),
+                    .map(|object| {
+                        glove_material(&color, &emissive, *light)
+                            .unwrap_or_else(|| object.material.clone())
                     })
                     .collect()
             })
@@ -311,6 +294,34 @@ impl GloveRenderer {
 
         objects
     }
+}
+
+/// One glove material, in a cell of its own. Shared with the `debug_gloves`
+/// harness so the two can't assemble the glove differently.
+///
+/// `None` when there is no colour map - the caller then keeps the material the
+/// importer built (solid-colour fallback). Without the light mask the glove
+/// renders unlit rather than not at all.
+///
+/// A fresh cell every call is load-bearing: the model's own material is shared
+/// by every copy of the glove in the scene, so writing a tint through it would
+/// give both hands whichever light was set last.
+pub fn glove_material(
+    color: &Option<Rc<dyn engine::texture::TextureTrait>>,
+    emissive: &Option<Rc<dyn engine::texture::TextureTrait>>,
+    light: HandLight,
+) -> Option<Rc<RefCell<Box<dyn Material>>>> {
+    let color = color.as_ref()?;
+    Some(Rc::new(RefCell::new(match emissive {
+        Some(emissive) => SkinnedMaterial::create_with_light(
+            color.clone(),
+            1.0,
+            0.0,
+            emissive.clone(),
+            light.tint(),
+        ),
+        None => SkinnedMaterial::create(color.clone(), 1.0, 0.0),
+    })))
 }
 
 /// The glove's colour map. One loader, shared with the `debug_gloves` harness,
