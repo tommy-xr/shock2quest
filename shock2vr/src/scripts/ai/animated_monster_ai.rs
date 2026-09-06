@@ -107,18 +107,27 @@ fn should_orient_on_target(
 }
 
 /// Forward-speed multiplier for a given heading error: 1.0 facing the
-/// travel direction, ramping down to a third by 60 degrees of error and
-/// flooring there. The floor is never zero - steering chains (collision
-/// avoidance vs path following) can hold a large transient error, and a
-/// zero scale deadlocks the AI in place.
-fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
+/// travel direction, ramping down to a third by 60 degrees of error, then
+/// to a standstill by 90.
+///
+/// Past a right angle the body turns in PLACE. Walking a reversal at a
+/// third speed is a second-long arc that carries the body sideways into
+/// whatever happens to be beside it - a railing, a door frame, the AI it
+/// is trying to get around - which is exactly where patrol reversals wedge.
+/// Turning is unaffected by the scale, so a stopped body still pivots and
+/// walks off again the moment its error is back under 90.
+pub(crate) fn locomotion_scale_for_heading_error(delta: Deg<f32>) -> f32 {
     const TURN_SLOW_ANGLE: f32 = 60.0;
-    const MIN_MOVING_SCALE: f32 = 0.33;
+    const TURN_IN_PLACE_ANGLE: f32 = 90.0;
+    const TURN_SLOW_SCALE: f32 = 0.33;
     let error = delta.0.abs();
-    if error >= TURN_SLOW_ANGLE {
-        MIN_MOVING_SCALE
+    if error >= TURN_IN_PLACE_ANGLE {
+        0.0
+    } else if error >= TURN_SLOW_ANGLE {
+        let past_slow = (error - TURN_SLOW_ANGLE) / (TURN_IN_PLACE_ANGLE - TURN_SLOW_ANGLE);
+        TURN_SLOW_SCALE * (1.0 - past_slow)
     } else {
-        1.0 - (error / TURN_SLOW_ANGLE) * (1.0 - MIN_MOVING_SCALE)
+        1.0 - (error / TURN_SLOW_ANGLE) * (1.0 - TURN_SLOW_SCALE)
     }
 }
 
@@ -328,7 +337,7 @@ impl AnimatedMonsterAI {
         // Couple forward speed to heading error so the body doesn't arc at
         // full stride while the heading catches up (the cause of orbiting a
         // close target): full speed facing the travel direction, ramping to
-        // a third by 60 degrees of error.
+        // a third by 60 degrees of error and to a standstill by 90.
         let scale = locomotion_scale_for_heading_error(delta);
 
         Effect::Multiple(vec![
@@ -1964,16 +1973,26 @@ mod tests {
         assert_eq!(at_30, locomotion_scale_for_heading_error(Deg(-30.0)));
         // A third of full speed by 60 degrees
         assert_eq!(locomotion_scale_for_heading_error(Deg(60.0)), 0.33);
-        assert_eq!(locomotion_scale_for_heading_error(Deg(89.0)), 0.33);
     }
 
     #[test]
-    fn locomotion_scale_floors_at_a_third_never_zero() {
-        // A zero scale can deadlock an AI whose steering chain holds a large
-        // transient error - the floor must stay positive even at 180 degrees
-        assert_eq!(locomotion_scale_for_heading_error(Deg(90.0)), 0.33);
-        assert_eq!(locomotion_scale_for_heading_error(Deg(180.0)), 0.33);
-        assert_eq!(locomotion_scale_for_heading_error(Deg(-135.0)), 0.33);
+    fn locomotion_scale_stops_the_body_past_a_right_angle() {
+        // A reversal pivots in place instead of arcing sideways into
+        // whatever is beside the body
+        assert_eq!(locomotion_scale_for_heading_error(Deg(90.0)), 0.0);
+        assert_eq!(locomotion_scale_for_heading_error(Deg(180.0)), 0.0);
+        assert_eq!(locomotion_scale_for_heading_error(Deg(-135.0)), 0.0);
+    }
+
+    #[test]
+    fn locomotion_scale_eases_to_the_standstill_between_60_and_90() {
+        // No cliff at 60: the third-speed walk fades out over the next 30
+        // degrees rather than dropping to a stop in one frame
+        let at_75 = locomotion_scale_for_heading_error(Deg(75.0));
+        assert!((at_75 - 0.165).abs() < 1e-4, "got {at_75}");
+        let at_89 = locomotion_scale_for_heading_error(Deg(89.0));
+        assert!(at_89 > 0.0 && at_89 < 0.02, "got {at_89}");
+        assert_eq!(at_75, locomotion_scale_for_heading_error(Deg(-75.0)));
     }
 
     /// Every environmental-sound query in `effect`, as its (tag, value) pairs.
