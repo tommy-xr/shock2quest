@@ -1,7 +1,6 @@
 use cgmath::{Deg, InnerSpace, Quaternion, Rotation, Rotation3, Vector3, vec3};
 use dark::SCALE_FACTOR;
-use dark::properties::PropCreature;
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, World};
 
 use crate::{
     physics::{InternalCollisionGroups, PhysicsWorld},
@@ -26,8 +25,6 @@ const WHISKER_SPREAD: Deg<f32> = Deg(30.0);
 /// a hybrid's height and fixed offsets would put both its probes underground.
 const WHISKER_KNEE_FRACTION: f32 = 0.35;
 const WHISKER_CHEST_FRACTION: f32 = 0.15;
-/// Height to fall back on when the creature has no definition (world units)
-const WHISKER_DEFAULT_HEIGHT: f32 = 6.5 / SCALE_FACTOR;
 /// Seconds between probes. Static geometry doesn't move and every
 /// path-following AI runs this, so the rays are cast a few times a second
 /// and the bias is held in between (the original engine's wall regulator
@@ -97,7 +94,7 @@ impl WhiskerAvoidance {
         entity_id: EntityId,
     ) -> Vec<WhiskerReading> {
         let rotation = get_rotation_from_transform(world, entity_id);
-        let height = creature_height(world, entity_id);
+        let height = ai_util::creature_height(world, entity_id);
         let knee = get_position_from_transform(
             world,
             entity_id,
@@ -158,18 +155,6 @@ impl WhiskerAvoidance {
         }
         readings
     }
-}
-
-/// The creature's height in world units, for placing the probes on a body
-/// that is not a 6.5-foot hybrid.
-fn creature_height(world: &World, entity_id: EntityId) -> f32 {
-    world
-        .borrow::<View<PropCreature>>()
-        .ok()
-        .and_then(|v_creature| v_creature.get(entity_id).ok().map(|creature| creature.0))
-        .and_then(crate::creature::get_creature_definition)
-        .map(|definition| definition.bounding_size.y / SCALE_FACTOR)
-        .unwrap_or(WHISKER_DEFAULT_HEIGHT)
 }
 
 /// Sum the whiskers into a horizontal push away from the geometry ahead:

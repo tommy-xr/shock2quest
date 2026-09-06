@@ -188,27 +188,68 @@ pub fn set_entity_locked(world: &mut World, entity_id: EntityId, locked: bool) {
 /// from its authored state. `None` for entities that aren't translating doors.
 pub fn door_is_closed(world: &World, entity_id: EntityId) -> Option<bool> {
     use cgmath::InnerSpace;
-    let v_door = world
-        .borrow::<View<dark::properties::PropTranslatingDoor>>()
-        .unwrap();
-    let door = v_door.get(entity_id).ok()?;
     // A door with no travel can never leave its authored pose, and both
     // endpoints sit on top of each other - the distance test below is
     // degenerate there (equal distances always read as "closed"). Answer from
     // the authored state instead, so a permanently open doorway isn't
     // reported shut (#602).
-    if !door.has_travel() {
-        return Some(!door.is_permanently_open());
+    let no_travel_state = {
+        let v_door = world
+            .borrow::<View<dark::properties::PropTranslatingDoor>>()
+            .unwrap();
+        let door = v_door.get(entity_id).ok()?;
+        (!door.has_travel()).then(|| !door.is_permanently_open())
+    };
+    if let Some(closed) = no_travel_state {
+        return Some(closed);
     }
-    // StdDoor drives the live transform via SetPosition each frame.
+    let (from_closed, travel) = door_travel(world, entity_id)?;
+    let to_open = (from_closed - travel).magnitude2();
+    Some(from_closed.magnitude2() <= to_open)
+}
+
+/// Where a travelling door's leaf currently sits, as `(from_closed, travel)`:
+/// the offset of the live leaf from its closed pose, and the full closed ->
+/// open vector. `None` for entities that are not translating doors and for a
+/// door with no travel (both endpoints coincide, so neither vector says
+/// anything).
+///
+/// StdDoor drives the live transform via SetPosition each frame, so the
+/// transform - not the property - is where the leaf actually is.
+fn door_travel(world: &World, entity_id: EntityId) -> Option<(Vector3<f32>, Vector3<f32>)> {
+    let v_door = world
+        .borrow::<View<dark::properties::PropTranslatingDoor>>()
+        .unwrap();
+    let door = v_door.get(entity_id).ok()?;
+    if !door.has_travel() {
+        return None;
+    }
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let current = v_transform
         .get(entity_id)
         .ok()
         .map(|t| point3_to_vec3(t.0.transform_point(point3(0.0, 0.0, 0.0))))?;
-    let to_closed = (current - door.base_closed_location).magnitude2();
-    let to_open = (current - door.base_open_location).magnitude2();
-    Some(to_closed <= to_open)
+    Some((
+        current - door.base_closed_location,
+        door.base_open_location - door.base_closed_location,
+    ))
+}
+
+/// How far a translating door's leaf has travelled away from its closed
+/// pose: `(fraction, vertical_rise)`, where the fraction is 0 at closed and
+/// 1 at fully open and the rise is how much height the leaf has gained in
+/// world units. `None` for entities that are not translating doors, and for
+/// a door with no travel (its endpoints coincide, so there is no progress to
+/// measure and nothing to wait for).
+///
+/// The rise is what tells an approaching actor whether the gap under a
+/// raising leaf is tall enough to walk through yet; a leaf that slides
+/// sideways never gains any, so a caller must also accept a full fraction.
+pub fn door_open_progress(world: &World, entity_id: EntityId) -> Option<(f32, f32)> {
+    use cgmath::InnerSpace;
+    let (from_closed, travel) = door_travel(world, entity_id)?;
+    let fraction = (from_closed.dot(travel) / travel.magnitude2()).clamp(0.0, 1.0);
+    Some((fraction, from_closed.y))
 }
 
 /// Whether a cell-gating entity is an obstacle A* must not cross.
@@ -1143,8 +1184,9 @@ pub fn change_to_first_model(world: &World, entity_id: EntityId) -> Effect {
 mod tests {
     use super::{
         active_gun_setting, debit_player_nanites, door_blocks_pathfinding, door_is_closed,
-        has_second_fire_mode, is_always_collected, is_nanite_pickup, plan_stack_payment,
-        player_nanite_total, remap_selected_ammo, spend_player_nanites, stat_nanite_balance,
+        door_open_progress, has_second_fire_mode, is_always_collected, is_nanite_pickup,
+        plan_stack_payment, player_nanite_total, remap_selected_ammo, spend_player_nanites,
+        stat_nanite_balance,
     };
     use crate::mission::PlayerInfo;
     use crate::quest_info::QuestInfo;
@@ -1345,6 +1387,37 @@ mod tests {
 
         assert_eq!(door_is_closed(&closed_world, at_closed), Some(true));
         assert_eq!(door_is_closed(&open_world, at_open), Some(false));
+    }
+
+    #[test]
+    fn a_rising_leaf_reports_its_progress_and_the_gap_beneath_it() {
+        let closed = vec3(39.2, 0.5, -37.6);
+        let open = vec3(39.2, 4.1, -37.6);
+        let half = vec3(39.2, 2.3, -37.6);
+        let (world, door) = door_world(closed, open, 0, half);
+
+        let (fraction, rise) = door_open_progress(&world, door).unwrap();
+        assert!((fraction - 0.5).abs() < 1e-4, "fraction {fraction}");
+        assert!((rise - 1.8).abs() < 1e-4, "rise {rise}");
+    }
+
+    #[test]
+    fn a_sideways_leaf_reports_progress_but_no_gain_in_height() {
+        let closed = vec3(10.3, -0.4, 42.0);
+        let open = vec3(10.3, -0.4, 44.3);
+        let (world, door) = door_world(closed, open, 0, open);
+
+        let (fraction, rise) = door_open_progress(&world, door).unwrap();
+        assert!((fraction - 1.0).abs() < 1e-4, "fraction {fraction}");
+        assert_eq!(rise, 0.0);
+    }
+
+    #[test]
+    fn a_door_with_nowhere_to_go_has_no_progress_to_report() {
+        let at = vec3(18.0, -0.4, 41.8);
+        let (world, door) = door_world(at, at, 1, at);
+
+        assert_eq!(door_open_progress(&world, door), None);
     }
 
     #[test]

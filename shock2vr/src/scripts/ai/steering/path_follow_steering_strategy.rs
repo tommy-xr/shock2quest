@@ -51,7 +51,7 @@ const REPATH_COOLDOWN_SECONDS: f32 = 0.5;
 const REPATH_FAILURE_BACKOFF_SECONDS: f32 = 2.0;
 /// Drop the path when we can't get closer to the current waypoint for this
 /// long (blocked by a prop, another AI, or unreachable geometry)
-const STALL_SECONDS: f32 = 3.0;
+pub(crate) const STALL_SECONDS: f32 = 3.0;
 /// After a stall, back out toward the previous waypoint for about this long
 /// before re-pathing. Without the retreat, the fresh route is identical to
 /// the one that just wedged (same start cell, same taut corners), so an AI
