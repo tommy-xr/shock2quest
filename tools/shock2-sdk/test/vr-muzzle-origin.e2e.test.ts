@@ -54,7 +54,13 @@ const MUZZLE_VHOT: Record<string, Vec3> = {
   amp_h: [-1.1072 / SCALE_FACTOR, 0.2719 / SCALE_FACTOR, -0.1199 / SCALE_FACTOR],
 };
 
-/** The models the wield shrinks - `vr_config::VR_25AE_GUN_MODELS`. */
+/**
+ * The models the wield shrinks. A hand-listed subset of Rust's
+ * `vr_config::VR_25AE_GUN_MODELS` covering only what this file wields, so it
+ * cannot go stale for a model no test here touches - and the psi amp's absence
+ * from it is the assertion that the partition still holds. Add a model here
+ * only alongside adding it to `MUZZLE_VHOT`.
+ */
 const SCALED_GUN_MODELS = new Set(["lasehand"]);
 
 /** The live `gun_scale` dev param, so the test is not pinned to its default. */

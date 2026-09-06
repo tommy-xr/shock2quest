@@ -117,7 +117,8 @@ impl VRHandModelPerHandAdjustments {
         }
     }
 
-    /// Hand-local translation (meters): +X toward the thumb side of the right
+    /// Hand-local translation (world units, 1 unit ~ 0.762 m - the space
+    /// `hand_position` itself is in): +X toward the thumb side of the right
     /// hand, +Y up out of the back of the hand, -Z along the fingers.
     pub fn with_offset(self, offset: Vector3<f32>) -> VRHandModelPerHandAdjustments {
         VRHandModelPerHandAdjustments { offset, ..self }
@@ -190,7 +191,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         // `sg_h` one on the pump - invisible while that hand was the one
         // drawn, wrong the moment the player's own glove replaced it.
         //
-        // Hand-local metres at the wield's own scale: they are multiplied by
+        // Hand-local world units at the wield's own scale: multiplied by
         // `gun_wield_scale` alongside the geometry (see
         // `gun_wield_adjustments`), so the pair is one uniform scale about the
         // grip. The oversized weapons (`sfg_h`, `fsn_h`, `gren_h`, `al_h`,
@@ -629,7 +630,11 @@ fn gun_wield_adjustments(
 
 /// The scale `entity_id`'s wield baked into its gun model, or 1.0 for anything
 /// that is not a scaled gun wield (world models, melee rigs, the psi amp).
-fn gun_wield_scale_of_entity(world: &World, entity_id: EntityId) -> f32 {
+///
+/// Everything measured against the gun's own geometry reads it: the grip offset
+/// and magazine anchor below, and the clip-insert zone's radii
+/// (`crate::mission::reload::clip_insert_radii`).
+pub fn gun_wield_scale_of_entity(world: &World, entity_id: EntityId) -> f32 {
     world
         .borrow::<View<RuntimePropVrGunWield>>()
         .ok()

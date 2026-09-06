@@ -240,23 +240,38 @@ pub(crate) fn load_from_held_clip(
     outcome
 }
 
-/// Enter/exit radii (world units) of a weapon's magazine zone - the volume a
-/// held clip is inserted by entering. One world unit is ~0.76 m, so this is a
-/// generous ~19 cm sphere around the weapon's magazine anchor
-/// (`vr_config::magazine_anchor_from_entity`), entered deliberately but not
-/// requiring the player to thread a needle in mid-air.
+/// Enter/exit radii of a weapon's magazine zone at the view model's authored
+/// size - the volume a held clip is inserted by entering, around the weapon's
+/// magazine anchor (`vr_config::magazine_anchor_from_entity`).
+///
+/// Expressed against the model, not against the room: they scale with the gun
+/// (`clip_insert_radii`). At the authored size one world unit is ~0.76 m, so
+/// the enter radius is a generous ~19 cm; a gun drawn at life size shrinks the
+/// zone with it (~7.6 cm at `gun_scale` 0.4), which is what keeps the zone
+/// meaning "the magwell" rather than "somewhere near the gun" - a life-size
+/// pistol is only ~0.26 units long, so an unscaled zone would swallow the whole
+/// weapon and the per-model anchors with it.
 pub(crate) const CLIP_INSERT_ENTER_RADIUS: f32 = 0.25;
 pub(crate) const CLIP_INSERT_EXIT_RADIUS: f32 = 0.35;
+
+/// The zone's (enter, exit) radii for a weapon drawn at `scale`.
+pub(crate) fn clip_insert_radii(scale: f32) -> (f32, f32) {
+    (
+        scale * CLIP_INSERT_ENTER_RADIUS,
+        scale * CLIP_INSERT_EXIT_RADIUS,
+    )
+}
 
 /// Whether the magazine zone is engaged this frame, given whether it was
 /// engaged last frame. The two radii are deliberately different: a single
 /// threshold flickers on hand jitter right at the boundary, and every flicker
 /// is another insert attempt.
-pub(crate) fn clip_insert_zone_engaged(was_engaged: bool, distance: f32) -> bool {
+pub(crate) fn clip_insert_zone_engaged(was_engaged: bool, distance: f32, scale: f32) -> bool {
+    let (enter, exit) = clip_insert_radii(scale);
     if was_engaged {
-        distance <= CLIP_INSERT_EXIT_RADIUS
+        distance <= exit
     } else {
-        distance <= CLIP_INSERT_ENTER_RADIUS
+        distance <= enter
     }
 }
 
@@ -1172,18 +1187,17 @@ mod tests {
     fn the_magazine_zone_needs_a_closer_approach_than_it_needs_to_hold() {
         // Hysteresis: without it, hand jitter right at the boundary re-enters
         // the zone every few frames, and every entry is another insert.
-        let between = (CLIP_INSERT_ENTER_RADIUS + CLIP_INSERT_EXIT_RADIUS) / 2.0;
+        // At both the authored size and a life-size wield, so the hysteresis
+        // survives the scaling rather than only holding at 1.0.
+        for scale in [1.0f32, 0.4] {
+            let (enter, exit) = clip_insert_radii(scale);
+            let between = (enter + exit) / 2.0;
 
-        assert!(!clip_insert_zone_engaged(false, between));
-        assert!(clip_insert_zone_engaged(true, between));
-        assert!(clip_insert_zone_engaged(
-            false,
-            CLIP_INSERT_ENTER_RADIUS - 0.01
-        ));
-        assert!(!clip_insert_zone_engaged(
-            true,
-            CLIP_INSERT_EXIT_RADIUS + 0.01
-        ));
+            assert!(!clip_insert_zone_engaged(false, between, scale));
+            assert!(clip_insert_zone_engaged(true, between, scale));
+            assert!(clip_insert_zone_engaged(false, enter - 0.01 * scale, scale));
+            assert!(!clip_insert_zone_engaged(true, exit + 0.01 * scale, scale));
+        }
     }
 
     #[test]

@@ -7,7 +7,6 @@ import {
   aimVrHandAt,
   aimVrHandAtCanvas,
   add,
-  normalize,
   quatConjugate,
   quatRotate,
   scale,
@@ -34,9 +33,22 @@ const HE_CLIP = -32;
 /** Shotgun shells: real ammo, but nothing the pistol's projectiles link to. */
 const PELLET_SHOT_BOX = -42;
 
-/** Mirrors `reload::CLIP_INSERT_EXIT_RADIUS` - what the clip must start
- * OUTSIDE of for the insert to be a genuine entry into the magazine zone. */
+/** Mirrors `reload::CLIP_INSERT_EXIT_RADIUS` at the view model's authored size
+ * - what the clip must start OUTSIDE of for the insert to be a genuine entry
+ * into the magazine zone. The live radius rides the gun's wield scale
+ * (`reload::clip_insert_radii`), so it is read through `clipInsertExitRadius`
+ * rather than used raw. */
 const CLIP_INSERT_EXIT_RADIUS = 0.35;
+
+/** The exit radius as a VR-wielded gun actually gets it: the constant above
+ * times the live `gun_scale` dev param, so the test is not pinned to a
+ * particular default. */
+async function clipInsertExitRadius(game: GameServer): Promise<number> {
+  const params = await game.devParams.list();
+  const scale = params.params.find((p) => p.key === "gun_scale")?.value;
+  assert.ok(typeof scale === "number", "the runtime must expose the gun_scale dev param");
+  return scale * CLIP_INSERT_EXIT_RADIUS;
+}
 
 function propOf(
   detail: { properties: { name: string; value: string }[] },
@@ -227,7 +239,7 @@ async function takeClipIntoOffHand(
   assert.ok(clip);
   assert.ok(
     magnitude(sub(clip.position as Vec3, await magazineAnchor(game, weaponId))) >
-      CLIP_INSERT_EXIT_RADIUS,
+      (await clipInsertExitRadius(game)),
     "the clip must start outside the magazine zone, or the insert proves nothing",
   );
   return parked.handPosition;
@@ -284,8 +296,10 @@ test(
       await magazineAnchor(game, pistol.id),
       (await entityById(game, pistol.id))!.position as Vec3,
     );
+    // The zone rides the gun's wield scale, so it stays smaller than the gun:
+    // the anchor is still meaningfully outside it even at life size.
     assert.ok(
-      magnitude(anchorOffset) > 0.05,
+      2 * magnitude(anchorOffset) > (await clipInsertExitRadius(game)),
       `the pistol's magazine anchor must sit off its origin (offset ${JSON.stringify(anchorOffset)})`,
     );
     // The debug pistol spawns with a FULL magazine, so what it holds now is its
@@ -310,31 +324,25 @@ test(
     let parked = await takeClipIntoOffHand(game, clip.id, pistol.id);
     const before = await lastSound(game);
 
-    // The zone belongs to the anchor, not to the gun's origin: a clip brought
-    // just OUTSIDE the exit radius, on the ray running out of the anchor past
-    // the origin, must not load. Approached from well beyond, so the clip never
-    // strays inside the zone on the way.
-    //
-    // Measured in radii rather than in multiples of the anchor offset: a
-    // life-size gun is smaller than the gesture's tolerance (the pistol's whole
-    // magazine offset is ~0.1 units against a 0.35 exit radius), so "the far
-    // side of the origin" is now inside the zone and is no longer a miss.
-    const outward = normalize(anchorOffset);
-    const alongAnchorRay = async (radii: number): Promise<Vec3> =>
-      sub(await magazineAnchor(game, pistol.id), scale(outward, radii * CLIP_INSERT_EXIT_RADIUS));
+    // The zone moved with the anchor: the point mirrored across the model
+    // origin is twice the anchor's offset from it - reaching it must NOT
+    // load. Approached along the ray out of the anchor (from well beyond the
+    // mirror point), so the clip never strays inside the zone on the way.
+    const alongAnchorRay = async (steps: number): Promise<Vec3> =>
+      sub(await magazineAnchor(game, pistol.id), scale(anchorOffset, steps));
     const far = await steerHeldClip(game, "left", parked, clip.id, () =>
-      alongAnchorRay(3),
+      alongAnchorRay(8),
     );
-    const justOutside = await steerHeldClip(game, "left", far.handPosition, clip.id, () =>
-      alongAnchorRay(1.3),
+    const mirrored = await steerHeldClip(game, "left", far.handPosition, clip.id, () =>
+      alongAnchorRay(2),
     );
     await game.step({ frames: 5 });
     assert.equal(
       ammoOf(await game.entities.detail(pistol.id)),
       0,
-      "a clip held just outside the exit radius must miss the magazine",
+      "a clip carried to the far side of the gun's origin must miss the magazine",
     );
-    parked = justOutside.handPosition;
+    parked = mirrored.handPosition;
 
     await insertClip(game, parked, clip.id, pistol.id);
 

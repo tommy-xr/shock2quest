@@ -7429,7 +7429,14 @@ impl MissionCore {
                         // (`vr_config`), which together makes it a uniform
                         // scale about the grip. The amp keeps its own baked arm
                         // and therefore its authored size.
-                        let gun_scale = if vr_held_gun {
+                        //
+                        // ONE condition decides both the bake and the record,
+                        // so a gun that also reports as melee (an authored
+                        // `PropLimbModel` on a gun template) cannot get a
+                        // scaled grip against unscaled geometry.
+                        let rigid_gun_wield =
+                            vr_held_gun && !is_melee_weapon(&self.world, entity_id);
+                        let gun_scale = if rigid_gun_wield {
                             crate::vr_config::gun_wield_scale()
                         } else {
                             1.0
@@ -7448,7 +7455,7 @@ impl MissionCore {
                         // model, whose glove has to survive with it, and a
                         // drop must not leave the restored world model wearing
                         // one.
-                        if vr_held_gun {
+                        if rigid_gun_wield {
                             self.world
                                 .add_component(entity_id, RuntimePropVrGunWield(gun_scale));
                         } else {
@@ -8826,6 +8833,7 @@ impl MissionCore {
                     Some(crate::mission::reload::clip_insert_zone_engaged(
                         self.vr_clip_insert_engaged[slot],
                         (clip_position - magazine).magnitude(),
+                        crate::vr_config::gun_wield_scale_of_entity(&self.world, weapon),
                     ))
                 })
                 .unwrap_or(false);
@@ -9980,14 +9988,17 @@ impl MissionCore {
                 } else {
                     vec3(0.2, 1.0, 0.3)
                 };
+                let (enter, exit) = crate::mission::reload::clip_insert_radii(
+                    crate::vr_config::gun_wield_scale_of_entity(&self.world, weapon),
+                );
                 scene.push(dark::hit_box::draw_debug_wire_sphere(
                     anchor,
-                    crate::mission::reload::CLIP_INSERT_ENTER_RADIUS,
+                    enter,
                     enter_color,
                 ));
                 scene.push(dark::hit_box::draw_debug_wire_sphere(
                     anchor,
-                    crate::mission::reload::CLIP_INSERT_EXIT_RADIUS,
+                    exit,
                     vec3(0.35, 0.35, 0.2),
                 ));
                 if let Some(origin) = self.entity_world_position(weapon) {
