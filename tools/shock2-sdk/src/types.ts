@@ -625,6 +625,8 @@ export interface PlayerSnapshot {
   explored_map_locations: number[];
   /** Climb state: ladder/hand climbing, and (VR) the hands holding on. */
   climb: ClimbState;
+  /** Prepared VR pickup grips; empty for flat presentation or empty hands. */
+  hand_grips: HandGrip[];
 }
 
 /** One hand's hold in the /v1/info climb readout. */
@@ -1077,4 +1079,30 @@ export interface WaitForOptions {
   intervalMs?: number;
   /** Description used in the timeout error message. */
   description?: string;
+}
+
+/** Diagnostics from the same resolved pose used by gameplay and rendering. */
+export interface HandGrip {
+  hand: "left" | "right";
+  entity_id: number;
+  model: string;
+  source: "bake" | "prepared" | "missing_or_stale";
+  solve_ms: number;
+  surface_hash: string;
+  kinematics_hash: string;
+  hints_hash: string;
+  solver_revision: number;
+  palm: {x:number;y:number;z:number};
+  palm_normal: {x:number;y:number;z:number};
+  grip: ResolvedGrip | null;
+}
+
+export interface ResolvedGrip {
+  pose_family: string;
+  offset: {x:number;y:number;z:number};
+  rotation: {s:number;v:{x:number;y:number;z:number}};
+  curls: [number,number,number,number,number];
+  contacts: (Vec3 | null)[];
+  anchor: Vec3;
+  score: number;
 }

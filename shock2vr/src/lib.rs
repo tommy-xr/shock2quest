@@ -49,12 +49,14 @@ pub mod ui;
 mod util;
 mod virtual_hand;
 mod vr_config;
+pub use hand_glove::GloveRenderer;
 /// Re-exported (the module itself stays private) so the `melee_grip` example
 /// can re-measure the melee `_h` contact offsets off the shipped rigs with the
 /// same maths the wield uses.
-pub use vr_config::{MeleePosedArm, melee_contact_offset};
+pub use vr_config::{Handedness, MeleePosedArm, melee_contact_offset};
 pub mod vr_climb;
 pub mod vr_crouch;
+pub mod vr_grip;
 pub mod vr_tracking;
 mod wielded_weapon;
 pub mod zip_asset_path;

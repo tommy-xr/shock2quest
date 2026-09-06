@@ -108,6 +108,12 @@ grip proxies around handles: a whole-object box or convex hull can erase the
 very recess a hand needs to fit. Full physics-driven fingers are a later option,
 not a prerequisite for this contact solver.
 
+The first implementation uses offline preprocessing, approved after the debug
+search took seconds per model/hand. Gameplay loads prepared, fingerprint-checked
+grips; it never searches synchronously on a grab. See the
+[prepared grip workflow](astra-vr-grip-fitting.md) for the current three-item
+coverage, diagnostics, authoring hints, and remaining limitations.
+
 ## Calibration and the VR Grips editor
 
 Headset feedback on the first workbench confirmed the empty glove size and

@@ -8,7 +8,7 @@
 //! Both implementations speak the same `VirtualHandEffect` language, which
 //! `mission_core` already processes in one place.
 
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::HashMap};
 
 use cgmath::{InnerSpace, Point3, Quaternion, Vector3, Vector4};
 use engine::{
@@ -63,6 +63,20 @@ pub struct ClimbContext<'a> {
 pub trait PlayerInteraction {
     /// Per-frame update; returns effects to apply.
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect>;
+
+    /// Resolve presentation-specific item placement before applying hand effects.
+    fn fit_held_items(
+        &mut self,
+        _world: &World,
+        _assets: &mut AssetCache,
+        _effects: &mut Vec<VirtualHandEffect>,
+        _options: &GameOptions,
+    ) {
+    }
+
+    fn grip_diagnostics(&self) -> serde_json::Value {
+        serde_json::json!([])
+    }
 
     /// Resolve this frame's hand-climb intent: the body translation a gripping
     /// hand demands, and the velocity a release throws the body with. Flat
@@ -172,6 +186,29 @@ pub struct VrInteraction {
     glove_renderer: RefCell<Option<Option<GloveRenderer>>>,
     /// Which hands hold a climbing hold, and which one moves the body.
     hand_climb: crate::vr_climb::HandClimb,
+    grip_kinematics: Option<[crate::vr_grip::GripKinematics; 2]>,
+    grip_geometry: HashMap<String, Option<GripGeometry>>,
+    kinematics_hashes: [String; 2],
+    grip_library: Option<crate::vr_grip::GripLibrary>,
+    grip_hints: HashMap<String, crate::vr_grip::GripHints>,
+    grip_overlay: bool,
+    fitted_grips: [Option<HeldGrip>; 2],
+}
+
+struct GripGeometry {
+    triangles: std::rc::Rc<Vec<[Point3<f32>; 3]>>,
+    fingerprint: String,
+}
+
+struct HeldGrip {
+    entity: EntityId,
+    model: String,
+    resolved: Option<crate::vr_grip::ResolvedGrip>,
+    solve_ms: f64,
+    surface_hash: String,
+    kinematics_hash: String,
+    hints_hash: String,
+    source: &'static str,
 }
 
 impl VrInteraction {
@@ -181,6 +218,13 @@ impl VrInteraction {
             right_hand: VirtualHand::new(Handedness::Right),
             glove_renderer: RefCell::new(None),
             hand_climb: crate::vr_climb::HandClimb::default(),
+            grip_kinematics: None,
+            grip_geometry: HashMap::new(),
+            kinematics_hashes: [String::new(), String::new()],
+            grip_library: None,
+            grip_hints: HashMap::new(),
+            grip_overlay: false,
+            fitted_grips: [None, None],
         }
     }
 }
@@ -192,6 +236,172 @@ impl Default for VrInteraction {
 }
 
 impl PlayerInteraction for VrInteraction {
+    fn fit_held_items(
+        &mut self,
+        world: &World,
+        assets: &mut AssetCache,
+        effects: &mut Vec<VirtualHandEffect>,
+        options: &GameOptions,
+    ) {
+        let bake = options
+            .experimental_features
+            .contains("astra-bake-vr-grips");
+        self.grip_overlay = options.experimental_features.contains("astra-grip-overlay");
+        use dark::{importers::GRIP_SURFACE_IMPORTER, properties::PropModelName};
+        use engine::assets::text_importer::TEXT_IMPORTER;
+        use shipyard::{Get, View};
+        if self.grip_library.is_none() {
+            self.grip_library = Some(
+                assets
+                    .get_opt(&TEXT_IMPORTER, "astra-vr-grips.json")
+                    .and_then(|text| {
+                        serde_json::from_str::<crate::vr_grip::GripLibrary>(&text).ok()
+                    })
+                    .filter(|library| library.version == 1)
+                    .unwrap_or_default(),
+            );
+            self.grip_hints = assets
+                .get_opt(&TEXT_IMPORTER, "astra-vr-grip-hints.json")
+                .and_then(|text| serde_json::from_str(&text).ok())
+                .unwrap_or_default();
+        }
+        let mut slot = self.glove_renderer.borrow_mut();
+        let Some(renderer) = slot
+            .get_or_insert_with(|| GloveRenderer::new(assets))
+            .as_mut()
+        else {
+            return;
+        };
+        let kinematics = self.grip_kinematics.get_or_insert_with(|| {
+            [
+                renderer.grip_kinematics(Handedness::Left),
+                renderer.grip_kinematics(Handedness::Right),
+            ]
+        });
+        if self.kinematics_hashes[0].is_empty() {
+            self.kinematics_hashes = std::array::from_fn(|i| kinematics[i].fingerprint());
+        }
+        for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
+            let Some(entity) = hand
+                .get_held_entity()
+                .filter(|_| crate::virtual_hand::shows_hand_visual(world, hand.get_held_entity()))
+            else {
+                self.fitted_grips[index] = None;
+                continue;
+            };
+            let model = world
+                .borrow::<View<PropModelName>>()
+                .ok()
+                .and_then(|v| v.get(entity).ok().map(|p| p.0.to_lowercase()));
+            let Some(model) = model else {
+                self.fitted_grips[index] = None;
+                continue;
+            };
+            if self.fitted_grips[index]
+                .as_ref()
+                .is_none_or(|g| g.entity != entity || g.model != model)
+            {
+                let start = std::time::Instant::now();
+                let hand_name = if index == 0 { "left" } else { "right" };
+                let eligible = bake
+                    || self
+                        .grip_library
+                        .as_ref()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .any(|entry| entry.model == model && entry.hand == hand_name);
+                let geometry = if eligible {
+                    self.grip_geometry
+                        .entry(model.clone())
+                        .or_insert_with(|| {
+                            let triangles = assets
+                                .get_opt(&GRIP_SURFACE_IMPORTER, &format!("{}.bin", model))?;
+                            let fingerprint = crate::vr_grip::surface_fingerprint(&triangles);
+                            Some(GripGeometry {
+                                triangles,
+                                fingerprint,
+                            })
+                        })
+                        .as_ref()
+                } else {
+                    None
+                };
+                let triangles = geometry.map(|g| &g.triangles);
+                let surface_hash = geometry.map(|g| g.fingerprint.clone()).unwrap_or_default();
+                let kinematics_hash = self.kinematics_hashes[index].clone();
+                let hints = self.grip_hints.entry(model.clone()).or_default();
+                let hints_hash = hints.fingerprint();
+                let resolved = if bake {
+                    triangles
+                        .as_ref()
+                        .and_then(|triangles| crate::vr_grip::GripSurface::new(triangles))
+                        .and_then(|surface| surface.resolve(&kinematics[index], hints))
+                } else {
+                    self.grip_library
+                        .as_ref()
+                        .unwrap()
+                        .lookup(
+                            &model,
+                            hand_name,
+                            &surface_hash,
+                            &kinematics_hash,
+                            &hints_hash,
+                        )
+                        .cloned()
+                };
+                let source = if bake {
+                    "bake"
+                } else if resolved.is_some() {
+                    "prepared"
+                } else {
+                    "missing_or_stale"
+                };
+                // The Quest runtime has no tracing subscriber; use its structured
+                // stdout marker convention for on-device verification.
+                let solve_ms = start.elapsed().as_secs_f64() * 1000.0;
+                println!(
+                    "SHOCK2QUEST_VR_GRIP model={model} hand={hand_name} source={source} elapsed_ms={solve_ms:.3}"
+                );
+                self.fitted_grips[index] = Some(HeldGrip {
+                    entity,
+                    model,
+                    resolved,
+                    solve_ms,
+                    surface_hash,
+                    kinematics_hash,
+                    hints_hash,
+                    source,
+                });
+            }
+            if let Some(grip) = self.fitted_grips[index]
+                .as_ref()
+                .and_then(|g| g.resolved.as_ref())
+            {
+                // The acquisition frame may only contain HoldItem. Append its
+                // initial placement too, in the same effect pipeline as movement.
+                effects.retain(|effect| !matches!(effect, VirtualHandEffect::SetPositionRotation {entity_id,..} if *entity_id == entity));
+                use cgmath::Rotation;
+                effects.push(VirtualHandEffect::SetPositionRotation {
+                    entity_id: entity,
+                    position: hand.get_position() + hand.get_rotation().rotate_vector(grip.offset),
+                    rotation: hand.get_rotation() * grip.rotation,
+                    scale: cgmath::vec3(1.0, 1.0, 1.0),
+                });
+            }
+        }
+    }
+
+    fn grip_diagnostics(&self) -> serde_json::Value {
+        serde_json::Value::Array(self.fitted_grips.iter().enumerate().filter_map(|(i, grip)| {
+            let grip=grip.as_ref()?;
+            Some(serde_json::json!({"hand": if i == 0 {"left"} else {"right"}, "entity_id": grip.entity.inner() as i32,
+                "model": grip.model, "solve_ms": grip.solve_ms, "grip": grip.resolved,
+                "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source,
+                "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal)}))
+        }).collect())
+    }
+
     fn update_hand_climb(&mut self, ctx: &ClimbContext) -> crate::vr_climb::ClimbFrame {
         use shipyard::EntitiesView;
 
@@ -308,12 +518,54 @@ impl PlayerInteraction for VrInteraction {
         let mut objs = Vec::new();
         match glove_renderer {
             Some(renderer) => {
-                objs.append(&mut self.left_hand.render(world, Some(renderer)));
-                objs.append(&mut self.right_hand.render(world, Some(renderer)));
+                objs.append(
+                    &mut self.left_hand.render(
+                        world,
+                        Some(renderer),
+                        self.fitted_grips[0]
+                            .as_ref()
+                            .and_then(|g| g.resolved.as_ref()),
+                    ),
+                );
+                objs.append(
+                    &mut self.right_hand.render(
+                        world,
+                        Some(renderer),
+                        self.fitted_grips[1]
+                            .as_ref()
+                            .and_then(|g| g.resolved.as_ref()),
+                    ),
+                );
             }
             None => {
-                objs.append(&mut self.left_hand.render(world, None));
-                objs.append(&mut self.right_hand.render(world, None));
+                objs.append(&mut self.left_hand.render(world, None, None));
+                objs.append(&mut self.right_hand.render(world, None, None));
+            }
+        }
+        if self.grip_overlay {
+            use cgmath::{Matrix4, Rotation, vec3};
+            for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
+                let Some(grip) = self.fitted_grips[index]
+                    .as_ref()
+                    .and_then(|g| g.resolved.as_ref())
+                else {
+                    continue;
+                };
+                for contact in grip.contacts.iter().flatten() {
+                    let local = grip.offset
+                        + grip
+                            .rotation
+                            .rotate_vector(vec3(contact[0], contact[1], contact[2]));
+                    let point = hand.get_position() + hand.get_rotation().rotate_vector(local);
+                    let mut marker = SceneObject::new(
+                        engine::scene::color_material::create(vec3(0.0, 1.0, 1.0)),
+                        Box::new(engine::scene::cube::create()),
+                    );
+                    marker.set_transform(
+                        Matrix4::from_translation(point) * Matrix4::from_scale(0.008),
+                    );
+                    objs.push(marker);
+                }
             }
         }
         // Feedback comes from the resolved holds, never a second proximity

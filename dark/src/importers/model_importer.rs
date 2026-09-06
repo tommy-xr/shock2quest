@@ -89,6 +89,41 @@ fn process_model(
 pub static MODELS_IMPORTER: Lazy<AssetImporter<SystemShockContentModel, Model, ()>> =
     Lazy::new(|| AssetImporter::define(load_model, process_model));
 
+/// Visible, bind-pose triangles of an LGMD pickup, in the same units and
+/// sub-object frames as the renderer. Animated creatures/weapons deliberately
+/// have no surface here: their moving parts need a separate grip policy.
+pub static GRIP_SURFACE_IMPORTER: Lazy<
+    AssetImporter<SystemShockContentModel, Vec<[Point3<f32>; 3]>, ()>,
+> = Lazy::new(|| {
+    AssetImporter::define(load_model, |content, _, _| {
+        let SystemShockContentModel::Obj(mesh) = content else {
+            return Vec::new();
+        };
+        let transforms = ss2_bin_obj_loader::sub_object_transforms(&mesh);
+        let mut buffers = ss2_bin_obj_loader::to_vertices(&mesh)
+            .into_iter()
+            .collect::<Vec<_>>();
+        buffers.sort_by_key(|(slot, _)| *slot);
+        buffers
+            .into_iter()
+            .flat_map(|(_, vertices)| {
+                vertices
+                    .chunks_exact(3)
+                    .map(|triangle| {
+                        std::array::from_fn(|i| {
+                            // LGMD front faces are clockwise; Parry's oriented
+                            // surface queries expect counter-clockwise triangles.
+                            let vertex = &triangle[[0, 2, 1][i]];
+                            let transform = transforms[vertex.bone_indices[0] as usize].1;
+                            Point3::from_homogeneous(transform * vertex.position.extend(1.0))
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    })
+});
+
 /// Whether `name` is a material the 25th Anniversary Edition draws the player's
 /// hand and forearm with on a first-person weapon model (`obj/*_h.bin`).
 ///

@@ -375,6 +375,7 @@ impl VirtualHand {
         &self,
         world: &World,
         glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
+        grip: Option<&crate::vr_grip::ResolvedGrip>,
     ) -> Vec<SceneObject> {
         // The hand itself: the skinned hand model, posed from the analog
         // inputs - unless a wielded weapon's model stands in for it.
@@ -388,6 +389,7 @@ impl VirtualHand {
                     self.trigger_value,
                     self.squeeze_value,
                     self.get_held_entity().is_some(),
+                    grip.map(|grip| grip.finger_amounts()),
                 )
             })
             .unwrap_or_default();
