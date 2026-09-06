@@ -685,22 +685,62 @@ pub fn hit_points(entity_id: EntityId, world: &World) -> Option<i32> {
     v_prop_hit_points.get(entity_id).ok().map(|p| p.hit_points)
 }
 
-/// Horizontal crowd-separation bias: the sum of repulsions from other
-/// LIVING creatures within `radius` of `position` (same floor), each
-/// weighted by proximity. Returns a direction-and-magnitude vector in the
-/// XZ plane; empty crowd = zero. Callers blend a capped amount of this
-/// into their steering target so converging AIs bend around each other
-/// instead of pushing capsule-to-capsule into a gridlock (issue #487) -
-/// it must BIAS the route, never veto it (see collision avoidance history).
-pub fn separation_bias(
+/// AI-to-AI repel, the near-field half of `crowd_bias`: how hard one
+/// neighbour pushes, ramping from nothing at `none` to a full push at
+/// `full`.
+pub struct CrowdRepel {
+    /// At or inside this distance the push is at full strength
+    pub full: f32,
+    /// At or beyond this distance there is no push at all
+    pub none: f32,
+    /// Overall multiplier, so a caller can fade the whole term in and out
+    /// smoothly (see the melee suppression in the path-follow strategy)
+    pub strength: f32,
+}
+
+/// Repel strength for one neighbour: 0 at (or beyond) `none`, 1 at (or
+/// inside) `full`, linear in between.
+pub fn repel_ramp(distance: f32, full: f32, none: f32) -> f32 {
+    if distance >= none {
+        0.0
+    } else if distance <= full {
+        1.0
+    } else {
+        (none - distance) / (none - full)
+    }
+}
+
+/// Horizontal crowd bias: the sum of repulsions from other LIVING
+/// creatures near `position` (same floor). Returns a direction-and-
+/// magnitude vector in the XZ plane; empty crowd = zero. Callers blend a
+/// capped amount of this into their steering target so converging AIs bend
+/// around each other instead of pushing capsule-to-capsule into a gridlock
+/// (issue #487) - it must BIAS the route, never veto it (see collision
+/// avoidance history).
+///
+/// Two terms over one neighbour walk:
+/// - crowd separation, a mild proximity-weighted push over the whole
+///   `separation_radius`, which keeps a group's lines from converging; and
+/// - `repel` (optional), the near-field push modelled on the original
+///   engine's object regulator, which is what actually stops bodies from
+///   stacking up in a doorway.
+///
+/// The player is not a creature body (no `PropCreature`), so nothing here
+/// ever pushes an AI off its chase target.
+pub fn crowd_bias(
     world: &World,
     entity_id: EntityId,
     position: Vector3<f32>,
-    radius: f32,
+    separation_radius: f32,
+    repel: Option<CrowdRepel>,
 ) -> Vector3<f32> {
     let v_creature = world.borrow::<View<PropCreature>>().unwrap();
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
     let v_hit_points = world.borrow::<View<PropHitPoints>>().unwrap();
+    let reach = repel
+        .as_ref()
+        .map(|repel| separation_radius.max(repel.none))
+        .unwrap_or(separation_radius);
     let mut bias = vec3(0.0, 0.0, 0.0);
     for (other_id, (_, xform)) in (&v_creature, &v_transform).iter().with_id() {
         if other_id == entity_id {
@@ -721,10 +761,18 @@ pub fn separation_bias(
         let dx = position.x - other.x;
         let dz = position.z - other.z;
         let distance = (dx * dx + dz * dz).sqrt();
-        if distance >= radius || distance < 1e-3 {
+        if distance >= reach || distance < 1e-3 {
             continue;
         }
-        let weight = (radius - distance) / radius;
+        // Two ramps with different knees: separation fades in gently from
+        // the whole radius, repel bites hard up close.
+        let mut weight = repel_ramp(distance, 0.0, separation_radius);
+        if let Some(repel) = &repel {
+            weight += repel.strength * repel_ramp(distance, repel.full, repel.none);
+        }
+        if weight <= 0.0 {
+            continue;
+        }
         bias += vec3(dx / distance, 0.0, dz / distance) * weight;
     }
     bias
@@ -1179,7 +1227,7 @@ mod separation_tests {
         let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
         spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 10);
 
-        let bias = separation_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4);
+        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4, None);
         assert!(
             bias.x < -0.1,
             "neighbor at +x must push toward -x: {bias:?}"
@@ -1196,10 +1244,64 @@ mod separation_tests {
         spawn_creature(&mut world, vec3(10.0, 0.0, 0.0), 10); // out of radius
         spawn_creature(&mut world, vec3(1.0, 5.0, 0.0), 10); // floor above
 
-        let bias = separation_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4);
+        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4, None);
         assert!(
             bias.magnitude() < 1e-6,
             "corpses, far and stacked-floor creatures must not repel: {bias:?}"
+        );
+    }
+
+    #[test]
+    fn repel_ramps_from_nothing_at_reach_to_full_up_close() {
+        assert_eq!(repel_ramp(4.5, 1.5, 4.5), 0.0, "no push at the reach");
+        assert_eq!(repel_ramp(9.0, 1.5, 4.5), 0.0, "none beyond it either");
+        assert_eq!(repel_ramp(1.5, 1.5, 4.5), 1.0, "full push at the near end");
+        assert_eq!(repel_ramp(0.1, 1.5, 4.5), 1.0, "and no more than full");
+        assert!(
+            (repel_ramp(3.0, 1.5, 4.5) - 0.5).abs() < 1e-6,
+            "linear in between"
+        );
+    }
+
+    #[test]
+    fn repel_outpushes_separation_up_close() {
+        let mut world = World::new();
+        let me = spawn_creature(&mut world, vec3(0.0, 0.0, 0.0), 10);
+        spawn_creature(&mut world, vec3(1.5, 0.0, 0.0), 10);
+
+        let separation_only = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 6.0, None);
+        let with_repel = crowd_bias(
+            &world,
+            me,
+            vec3(0.0, 0.0, 0.0),
+            6.0,
+            Some(CrowdRepel {
+                full: 1.5,
+                none: 4.5,
+                strength: 1.0,
+            }),
+        );
+        assert!(
+            with_repel.x < separation_only.x - 0.5,
+            "a neighbor inside the full-push distance must push much harder \
+             than separation alone: {with_repel:?} vs {separation_only:?}"
+        );
+
+        // ...and a faded-out repel is exactly the separation bias again
+        let faded = crowd_bias(
+            &world,
+            me,
+            vec3(0.0, 0.0, 0.0),
+            6.0,
+            Some(CrowdRepel {
+                full: 1.5,
+                none: 4.5,
+                strength: 0.0,
+            }),
+        );
+        assert!(
+            (faded.x - separation_only.x).abs() < 1e-6,
+            "{faded:?} vs {separation_only:?}"
         );
     }
 
@@ -1210,7 +1312,7 @@ mod separation_tests {
         spawn_creature(&mut world, vec3(1.0, 0.0, 0.0), 10);
         spawn_creature(&mut world, vec3(-1.0, 0.0, 0.0), 10);
 
-        let bias = separation_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4);
+        let bias = crowd_bias(&world, me, vec3(0.0, 0.0, 0.0), 2.4, None);
         assert!(
             bias.x.abs() < 1e-6,
             "symmetric neighbors cancel on x: {bias:?}"
