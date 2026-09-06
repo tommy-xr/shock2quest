@@ -194,6 +194,9 @@ export interface EntityDetailResult {
    * the entity's hitboxes where it has them, otherwise its own collider.
    */
   selection_bounds?: [[number, number, number], [number, number, number]] | null;
+  /** World-space centre of a gun's magazine zone (VR clip insert); null when
+   * the entity takes no magazine. */
+  magazine_anchor?: Vec3 | null;
 }
 
 export interface AimPoint {

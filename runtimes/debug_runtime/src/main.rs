@@ -1671,6 +1671,7 @@ fn process_command(
                             })
                             .collect(),
                         selection_bounds: detail.selection_bounds,
+                        magazine_anchor: detail.magazine_anchor,
                     })
             } else {
                 None

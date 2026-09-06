@@ -328,6 +328,67 @@ const VR_25AE_VIEW_MODELS: &[&str] = &[
     "viro_h", "amp_h", "wrench_h", "rapier_h", "shard_h", "psword_h",
 ];
 
+// --- Magazine anchors ---------------------------------------------------------
+//
+// Where a held clip has to reach to load a wielded gun, in the *weapon's own
+// authored model frame* - NOT the hand-local space the grip offsets above use.
+// The 25AE guns are authored barrel along -X, so +X is back toward the
+// shooter, +Y up out of the gun body, +Z across it. World units (1 unit =
+// 0.762 m), the space `RuntimePropTransform` lives in.
+
+/// Per-model magazine anchors, keyed like [`HAND_MODEL_POSITIONING`]
+/// (lowercased `PropModelName`). Where the art has a clip part (`ar15_h`'s
+/// `@s02_cli`, `fsn_h`'s `@01_core`, found with `cargo dv <model>.bin
+/// --debug-subobjects`) the anchor is its centre; the rest sit on the grip or
+/// loading port. Every value is placed against the rendered wield with the
+/// `clip_zone` dev param (which also marks the model origin), not from the
+/// dump alone - the pistol's origin, for one, renders at the wrist, well
+/// behind where its sub-object bounds suggest.
+///
+/// A model with no entry keeps the zone on its own origin: a classic install's
+/// world models; the energy weapons (`lasehand`, `empgun_h`), which recharge
+/// rather than take a clip; `sfg_h`, whose dump shows a stray part 5 m off the
+/// model and is not trusted yet; and `al_h` / `viro_h`, not measured yet.
+static MAGAZINE_ANCHORS: Lazy<HashMap<&str, Vector3<f32>>> = Lazy::new(|| {
+    HashMap::from([
+        ("atek_h", vec3(-0.20, -0.15, 0.0)),
+        ("ar15_h", vec3(-0.04, -0.20, 0.0)),
+        ("sg_h", vec3(0.08, -0.10, 0.0)),
+        ("gren_h", vec3(0.10, -0.05, 0.0)),
+        ("fsn_h", vec3(-0.65, 0.0, 0.0)),
+    ])
+});
+
+/// Where `entity_id`'s magazine is, in its model's local frame - the origin
+/// for a model with no entry.
+pub fn magazine_anchor_from_entity(world: &World, entity_id: EntityId) -> Vector3<f32> {
+    model_name_lower(world, entity_id)
+        .map(|name| magazine_anchor_from_model(&name))
+        .unwrap_or(vec3(0.0, 0.0, 0.0))
+}
+
+/// [`magazine_anchor_from_entity`] by model name (any case).
+fn magazine_anchor_from_model(model_name: &str) -> Vector3<f32> {
+    MAGAZINE_ANCHORS
+        .get(model_name.to_ascii_lowercase().as_str())
+        .copied()
+        .unwrap_or(vec3(0.0, 0.0, 0.0))
+}
+
+/// `entity_id`'s `PropModelName`, lowercased - the key every per-model table
+/// in this file is looked up by.
+fn model_name_lower(world: &World, entity_id: EntityId) -> Option<String> {
+    world
+        .borrow::<View<PropModelName>>()
+        .ok()
+        .and_then(|names| {
+            names
+                .get(entity_id)
+                .ok()
+                .map(|name| name.0.to_ascii_lowercase())
+        })
+}
+
 /// Whether `model_name` is a first-person view model VR should wield in place
 /// of the world model (only meaningful on a 25AE install, where the remastered
 /// copy is what resolves).
@@ -481,15 +542,9 @@ pub fn get_vr_hand_model_adjustments_from_entity(
         return VRHandModelPerHandAdjustments::new().with_offset(grip);
     }
 
-    let v_model_name = world.borrow::<View<PropModelName>>().unwrap();
-    let maybe_model_name = v_model_name
-        .get(entity_id)
-        .map(|sz| sz.0.to_ascii_lowercase());
-
-    if let Ok(model_name) = maybe_model_name {
-        get_vr_hand_model_adjustments_from_model(&model_name, handedness)
-    } else {
-        VRHandModelPerHandAdjustments::new()
+    match model_name_lower(world, entity_id) {
+        Some(model_name) => get_vr_hand_model_adjustments_from_model(&model_name, handedness),
+        None => VRHandModelPerHandAdjustments::new(),
     }
 }
 
@@ -521,6 +576,30 @@ mod tests {
     /// The melee subset of [`VR_25AE_VIEW_MODELS`]: skinned arm rigs, seated
     /// from the posed skeleton rather than from a static grip entry.
     const MELEE_VIEW_MODELS: &[&str] = &["wrench_h", "rapier_h", "shard_h", "psword_h"];
+
+    /// A typo'd anchor key would silently leave that gun's zone on its
+    /// origin instead of failing.
+    #[test]
+    fn every_magazine_anchor_names_a_known_gun_model() {
+        for name in MAGAZINE_ANCHORS.keys() {
+            assert!(
+                VR_25AE_VIEW_MODELS.contains(name) && !MELEE_VIEW_MODELS.contains(name),
+                "MAGAZINE_ANCHORS key {name} is not a known gun model"
+            );
+        }
+    }
+
+    /// A model without an entry keeps the v1 behaviour: the zone on its origin.
+    #[test]
+    fn an_unknown_model_keeps_its_magazine_on_the_origin() {
+        assert_eq!(magazine_anchor_from_model("atek"), vec3(0.0, 0.0, 0.0));
+        assert_ne!(magazine_anchor_from_model("ar15_h"), vec3(0.0, 0.0, 0.0));
+        // Any case, like the other by-name lookups in this file.
+        assert_eq!(
+            magazine_anchor_from_model("AR15_h"),
+            magazine_anchor_from_model("ar15_h")
+        );
+    }
 
     /// Every VR-wieldable 25AE gun must have a grip entry, or it would anchor
     /// at the model origin with no rotation. The melee `_h` are the deliberate

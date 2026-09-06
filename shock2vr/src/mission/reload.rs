@@ -242,11 +242,9 @@ pub(crate) fn load_from_held_clip(
 
 /// Enter/exit radii (world units) of a weapon's magazine zone - the volume a
 /// held clip is inserted by entering. One world unit is ~0.76 m, so this is a
-/// generous ~19 cm sphere around the weapon's origin, entered deliberately but
-/// not requiring the player to thread a needle in mid-air.
-///
-/// v1 centres the zone on the weapon's own transform; a per-model magazine
-/// anchor is a follow-up.
+/// generous ~19 cm sphere around the weapon's magazine anchor
+/// (`vr_config::magazine_anchor_from_entity`), entered deliberately but not
+/// requiring the player to thread a needle in mid-air.
 pub(crate) const CLIP_INSERT_ENTER_RADIUS: f32 = 0.25;
 pub(crate) const CLIP_INSERT_EXIT_RADIUS: f32 = 0.35;
 

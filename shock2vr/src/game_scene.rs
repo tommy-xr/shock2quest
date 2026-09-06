@@ -298,6 +298,9 @@ pub struct DebugEntityDetail {
     /// this entity lives inside a container.
     pub contained_by: Option<i32>,
     pub aim_points: Vec<DebugAimPoint>,
+    /// World-space centre of a gun's magazine zone - where a held clip must
+    /// reach to load it in VR. Null for anything that takes no magazine.
+    pub magazine_anchor: Option<[f32; 3]>,
     /// World-space bounds the HUD highlight frames: the union of the
     /// creature's hitboxes where it has them, otherwise the entity's own
     /// collider. `[min, max]`, or null for an entity with neither.

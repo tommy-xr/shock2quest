@@ -76,6 +76,11 @@ struct Cli {
     #[arg(long)]
     debug_no_render: bool,
 
+    /// Print every sub-object of a .bin object model with its model-space
+    /// bounding box (for deriving per-model anchors from the art), then exit.
+    #[arg(long)]
+    debug_subobjects: bool,
+
     /// Overlay skeleton joints for supported model files (.bin/.ai).
     #[arg(long)]
     debug_skeletons: bool,
@@ -286,6 +291,12 @@ pub fn main() {
         println!("Debug no-render mode enabled.");
     }
 
+    // A model dump needs the asset mounts and nothing else: no audio device,
+    // no window, no GL - so it runs headless (and exits nonzero on failure).
+    if cli.debug_subobjects {
+        std::process::exit(print_sub_objects(&filename));
+    }
+
     let mut audio_context: AudioContext<(), String> = AudioContext::new();
 
     tracing_subscriber::fmt::init();
@@ -444,4 +455,51 @@ fn process_events(
     }
 
     InputContext::default()
+}
+
+/// `--debug-subobjects`: dump a .bin object model's sub-objects and their
+/// model-space bounds, so an anchor can be read off the art. Returns the
+/// process exit code.
+fn print_sub_objects(filename: &str) -> i32 {
+    let storage =
+        engine::file_system::storage::init(Box::new(engine::file_system::DefaultFileSystem {
+            root_path: Box::new(std::path::Path::new("./assets/")),
+        }));
+    let asset_cache = engine::assets::asset_cache::AssetCache::new(
+        shock2vr::paths::data_root().to_string_lossy().into_owned(),
+        shock2vr::game_asset_mounts(storage),
+    );
+    let Some(reader) = asset_cache.get_raw_reader(filename) else {
+        eprintln!("Could not open {filename}");
+        return 1;
+    };
+    let mut reader = reader.borrow_mut();
+    let common_header = dark::ss2_bin_header::read(&mut *reader);
+    if !matches!(
+        common_header.bin_type,
+        dark::ss2_bin_header::BinFileType::Obj
+    ) {
+        eprintln!("{filename} is not an object (.bin LGMD) model");
+        return 1;
+    }
+    let mesh = dark::ss2_bin_obj_loader::read(&mut *reader, &common_header);
+    // The pose the game renders an unanimated model in: the same palette
+    // `to_animated_scene_objects` skins with, not the raw sub-object tree.
+    let skeleton = dark::ss2_bin_obj_loader::obj_skeleton(&mesh);
+    let palette = dark::motion::AnimationPlayer::empty().get_transforms(&skeleton);
+    let bb = mesh.bounding_box;
+    println!(
+        "{filename}: bbox min ({:.3}, {:.3}, {:.3}) max ({:.3}, {:.3}, {:.3})",
+        bb.min.x, bb.min.y, bb.min.z, bb.max.x, bb.max.y, bb.max.z
+    );
+    for (name, bounds) in dark::ss2_bin_obj_loader::sub_object_bounds(&mesh, &palette) {
+        match bounds {
+            Some(aabb) => println!(
+                "  {name:<16} min ({:>7.3}, {:>7.3}, {:>7.3}) max ({:>7.3}, {:>7.3}, {:>7.3})",
+                aabb.min.x, aabb.min.y, aabb.min.z, aabb.max.x, aabb.max.y, aabb.max.z
+            ),
+            None => println!("  {name:<16} (no vertices)"),
+        }
+    }
+    0
 }

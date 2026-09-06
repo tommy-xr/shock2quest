@@ -619,9 +619,7 @@ fn wrist_and_fingertip(points: &[Point3<f32>]) -> Option<(Point3<f32>, Point3<f3
 /// sub-objects (`@s01_han`, `@s02_han`) are posed onto the weapon by hand, so
 /// their transforms say exactly where a hand belongs on that gun.
 pub fn sub_object_transforms(mesh: &SystemShock2ObjectMesh) -> Vec<(String, Matrix4<f32>)> {
-    let mut bones = Vec::new();
-    build_skeleton_for_obj_mesh(mesh, 0, None, &mut bones);
-    let skeleton = Skeleton::create_from_bones(bones);
+    let skeleton = obj_skeleton(mesh);
 
     mesh.sub_objects
         .iter()
@@ -631,6 +629,52 @@ pub fn sub_object_transforms(mesh: &SystemShock2ObjectMesh) -> Vec<(String, Matr
                 sub_object.name.clone(),
                 skeleton.global_transform(&(index as u32)),
             )
+        })
+        .collect()
+}
+
+/// The sub-object tree as the skeleton the renderer poses it with (joint index
+/// = sub-object index).
+pub fn obj_skeleton(mesh: &SystemShock2ObjectMesh) -> Skeleton {
+    let mut bones = Vec::new();
+    build_skeleton_for_obj_mesh(mesh, 0, None, &mut bones);
+    Skeleton::create_from_bones(bones)
+}
+
+/// The model-space bounding box of every sub-object's own vertices, paired
+/// with its name - where each authored part actually sits under `palette`,
+/// the per-joint transforms the renderer skins with (index = sub-object
+/// index; for the rest pose, `AnimationPlayer::empty().get_transforms`).
+/// Empty parts (pure pivots) report `None`.
+///
+/// This is how a per-model anchor gets derived from the art (a magazine, a
+/// grip, a sight) instead of eyeballed in a debug scene.
+pub fn sub_object_bounds(
+    mesh: &SystemShock2ObjectMesh,
+    palette: &[Matrix4<f32>],
+) -> Vec<(String, Option<Aabb3<f32>>)> {
+    mesh.sub_objects
+        .iter()
+        .enumerate()
+        .map(|(index, sub_object)| {
+            let name = sub_object.name.clone();
+            let transform = palette
+                .get(index)
+                .copied()
+                .unwrap_or_else(Matrix4::identity);
+            use collision::Aabb as _;
+            let mut bounds: Option<Aabb3<f32>> = None;
+            for index in sub_object.point_start..sub_object.point_stop {
+                let Some(vertex) = mesh.vertices.get(index as usize) else {
+                    continue;
+                };
+                let point = transform.transform_point(point3(vertex.x, vertex.y, vertex.z));
+                bounds = Some(match bounds {
+                    None => Aabb3::new(point, point),
+                    Some(aabb) => aabb.grow(point),
+                });
+            }
+            (name, bounds)
         })
         .collect()
 }
