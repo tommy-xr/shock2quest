@@ -44,6 +44,12 @@ pub struct PathQueryResponse {
     pub outcome: AiPathOutcome,
     /// Route waypoints; empty when `outcome` is `Failed`
     pub waypoints: Vec<Vector3<f32>>,
+    /// For a query that did not reach its goal *only because* steering
+    /// reported crossings on its route blocked, the mission time the last of
+    /// those comes back into play at. `None` when the goal is unreachable on
+    /// the raw mesh too - waiting cannot help. See
+    /// `PathfindingService::exclusion_expiry_for_unreached_goal`.
+    pub exclusion_expires_at: Option<f32>,
 }
 
 struct SharedState {
@@ -103,6 +109,20 @@ impl AsyncPathfinding {
                             Vec::new()
                         }
                     };
+                    // Only a query that fell short can be waiting on one, and
+                    // only when the goal IS reachable once the exclusions are
+                    // lifted - otherwise this goal is simply off the graph
+                    let exclusion_expires_at = (outcome != AiPathOutcome::Full)
+                        .then(|| {
+                            service.exclusion_expiry_for_unreached_goal(
+                                request.start,
+                                request.goal,
+                                request.movement_bits,
+                                &avoid,
+                                request.now_seconds,
+                            )
+                        })
+                        .flatten();
                     service.record_ai_path(
                         request.entity,
                         AiPathRecord {
@@ -118,6 +138,7 @@ impl AsyncPathfinding {
                                 goal: request.goal,
                                 outcome,
                                 waypoints,
+                                exclusion_expires_at,
                             },
                         );
                     }
@@ -276,6 +297,50 @@ mod tests {
         }));
         let response = wait_for_result(&async_pf, 12).expect("worker must respond");
         assert_eq!(response.outcome, AiPathOutcome::Partial);
+    }
+
+    #[test]
+    fn worker_reports_a_deadline_only_for_an_exclusion_caused_shortfall() {
+        // One service, two shortfalls: entity 31's goal sits on an island no
+        // route ever reached, entity 32's is cut off purely by the excluded
+        // crossings. Only the second is worth waiting out.
+        let service = Arc::new(PathfindingService::new(Arc::new(
+            crate::pathfinding::tests::island_db(),
+        )));
+        service.report_blocked_link(1, 2, 0.0);
+        service.report_blocked_link(0, 1, 2.0);
+        service.report_blocked_link(3, 2, 5.0);
+        let async_pf = AsyncPathfinding::spawn(service.clone());
+
+        assert!(async_pf.submit(PathQueryRequest {
+            entity: 31,
+            start: cgmath::vec3(1.0, 0.0, 1.0),
+            goal: cgmath::vec3(21.0, 0.0, 1.0),
+            movement_bits: MovementBits::WALK,
+            now_seconds: 0.0,
+        }));
+        let response = wait_for_result(&async_pf, 31).expect("worker must respond");
+        assert_ne!(response.outcome, AiPathOutcome::Full);
+        assert_eq!(
+            response.exclusion_expires_at, None,
+            "an island goal is unreachable with or without the exclusions"
+        );
+
+        assert!(async_pf.submit(PathQueryRequest {
+            entity: 32,
+            start: cgmath::vec3(1.0, 0.0, 1.0),
+            goal: cgmath::vec3(5.0, 0.0, 1.0),
+            movement_bits: MovementBits::WALK,
+            now_seconds: 0.0,
+        }));
+        let response = wait_for_result(&async_pf, 32).expect("worker must respond");
+        assert_ne!(response.outcome, AiPathOutcome::Full);
+        assert_eq!(
+            response.exclusion_expires_at,
+            Some(2.0 + crate::pathfinding::BLOCKED_LINK_TTL_SECONDS),
+            "wait for the LAST crossing on the route it becomes reachable by, \
+             neither the level's earliest nor its latest (the detour's)"
+        );
     }
 
     #[test]

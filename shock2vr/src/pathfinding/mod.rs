@@ -399,11 +399,9 @@ impl PathfindingService {
     /// queries (unexpired steering-reported blockages). Expired entries are
     /// dropped.
     pub fn blocked_links(&self, now_seconds: f32) -> std::collections::HashSet<(u32, u32)> {
-        let Ok(mut blocked) = self.blocked_links.lock() else {
-            return std::collections::HashSet::new();
-        };
-        blocked.retain(|_, &mut expiry| expiry > now_seconds);
-        blocked.keys().copied().collect()
+        self.blocked_link_expiries(now_seconds)
+            .into_keys()
+            .collect()
     }
 
     /// Remember that an AI stalled inside `cell`. The cell stays expensive
@@ -443,6 +441,64 @@ impl PathfindingService {
             links: self.blocked_links(now_seconds),
             cells: self.blocked_cells(now_seconds),
         }
+    }
+
+    /// Why an AI's query fell short: `Some(expiry)` when the goal IS
+    /// reachable on the raw mesh and only the steering-reported exclusions
+    /// (see `report_blocked_link`) cut it off - the mission time the last
+    /// such crossing ON THAT ROUTE comes back into play at, so a caller can
+    /// wait it out. `None` when the goal is unreachable with the exclusions
+    /// lifted too: a fact about the map, which waiting cannot change.
+    ///
+    /// The route measured is the cheapest one the raw mesh offers, so the
+    /// deadline is an upper bound - a pricier route may reopen sooner.
+    ///
+    /// Stalled *cells* are deliberately not part of this - they are only a
+    /// cost penalty (see `report_blocked_cell`), so they can never be why a
+    /// goal came back unreachable.
+    pub fn exclusion_expiry_for_unreached_goal(
+        &self,
+        start: Vector3<f32>,
+        goal: Vector3<f32>,
+        movement_bits: MovementBits,
+        avoid: &NavAvoidance,
+        now_seconds: f32,
+    ) -> Option<f32> {
+        if avoid.links.is_empty() {
+            return None;
+        }
+        // Re-run the same search on the raw mesh. If it still cannot reach
+        // the goal, the exclusions were never the reason. Stall penalties are
+        // dropped too: this is a question about reachability, and the route it
+        // answers with is the one the AI will take once the crossings lapse.
+        let unexcluded = NavAvoidance::default();
+        let cell_path = self.cell_path_avoiding(start, goal, movement_bits, &unexcluded)?;
+        // The route the goal is reachable by crosses at least one of THIS
+        // query's excluded crossings (otherwise the excluded search would have
+        // found it); wait for the last of those, not for the whole level's
+        // blacklist. A crossing another thread has since pruned already lapsed,
+        // so it contributes `now`.
+        let expiries = self.blocked_link_expiries(now_seconds);
+        cell_path
+            .windows(2)
+            .filter(|pair| avoid.links.contains(&(pair[0], pair[1])))
+            .map(|pair| {
+                expiries
+                    .get(&(pair[0], pair[1]))
+                    .copied()
+                    .unwrap_or(now_seconds)
+            })
+            .reduce(f32::max)
+    }
+
+    /// Live (unexpired) blocked crossings and the mission time each lapses
+    /// at. Expired entries are dropped.
+    fn blocked_link_expiries(&self, now_seconds: f32) -> HashMap<(u32, u32), f32> {
+        let Ok(mut blocked) = self.blocked_links.lock() else {
+            return HashMap::new();
+        };
+        blocked.retain(|_, &mut expiry| expiry > now_seconds);
+        blocked.clone()
     }
 
     /// Record the latest path an AI computed (key: EntityId::inner())
@@ -584,9 +640,25 @@ impl PathfindingService {
         movement_bits: MovementBits,
         avoid: &NavAvoidance,
     ) -> Option<Vec<Vector3<f32>>> {
+        let cell_path = self.cell_path_avoiding(start, goal, movement_bits, avoid)?;
+        Some(self.waypoints_for_cell_path(&cell_path, start, goal, movement_bits))
+    }
+
+    /// The cell path `find_path_avoiding` follows: A* under `avoid`, then the
+    /// stressed second pass. One place, so a caller asking whether a goal is
+    /// reachable at all cannot drift from the caller asking for the route.
+    /// Every pass through here counts in `PathfindingStats`, including a
+    /// reachability re-run - it is a real search on the worker either way.
+    fn cell_path_avoiding(
+        &self,
+        start: Vector3<f32>,
+        goal: Vector3<f32>,
+        movement_bits: MovementBits,
+        avoid: &NavAvoidance,
+    ) -> Option<Vec<u32>> {
         self.queries.fetch_add(1, Ordering::Relaxed);
-        if let Some(path) = self.find_path_with_bits(start, goal, movement_bits, avoid) {
-            return Some(path);
+        if let Some(cells) = self.cell_path_with_bits(start, goal, movement_bits, avoid) {
+            return Some(cells);
         }
         // Second pass: a failed pathfind is retried with the stressed
         // condition added (small creatures excepted), so a calm AI still
@@ -595,10 +667,10 @@ impl PathfindingService {
             && !movement_bits.contains(MovementBits::STRESSED)
         {
             self.stressed_retries.fetch_add(1, Ordering::Relaxed);
-            if let Some(path) =
-                self.find_path_with_bits(start, goal, movement_bits | MovementBits::STRESSED, avoid)
+            if let Some(cells) =
+                self.cell_path_with_bits(start, goal, movement_bits | MovementBits::STRESSED, avoid)
             {
-                return Some(path);
+                return Some(cells);
             }
         }
         self.no_route.fetch_add(1, Ordering::Relaxed);
@@ -686,13 +758,14 @@ impl PathfindingService {
         Some(self.waypoints_for_cell_path(&cell_path, start, end, movement_bits))
     }
 
-    fn find_path_with_bits(
+    /// The A* cell path itself, before it is turned into waypoints.
+    fn cell_path_with_bits(
         &self,
         start: Vector3<f32>,
         goal: Vector3<f32>,
         movement_bits: MovementBits,
         avoid: &NavAvoidance,
-    ) -> Option<Vec<Vector3<f32>>> {
+    ) -> Option<Vec<u32>> {
         // Find start and goal cells
         let start_cell_id = self.cell_from_position(start)?;
         let goal_cell_id = self.cell_from_position(goal)?;
@@ -705,7 +778,7 @@ impl PathfindingService {
             |&cell_id| cell_id == goal_cell_id,
         )?;
 
-        Some(self.waypoints_for_cell_path(&result.0, start, goal, movement_bits))
+        Some(result.0)
     }
 
     /// Convert a cell-id path into world-space waypoints.
@@ -2374,6 +2447,104 @@ pub(crate) mod tests {
         assert!(
             !took_the_detour(&restored),
             "the straight route must come back once the entry expired: {restored:?}"
+        );
+    }
+
+    /// A query run against an excluded crossing can fail for a reason that
+    /// lapses. The service says when, so the caller can retry rather than
+    /// write the goal off (a patrol otherwise retires for good).
+    /// `detour_db` plus cell 4, a square with no links at all - a goal on
+    /// its own island, unreachable no matter what is or is not excluded.
+    pub(crate) fn island_db() -> PathDatabase {
+        let mut db = detour_db();
+        let base = db.vertices.len() as u32;
+        db.vertices.push(vec3(20.0, 0.0, 0.0));
+        db.vertices.push(vec3(22.0, 0.0, 0.0));
+        db.vertices.push(vec3(22.0, 0.0, 2.0));
+        db.vertices.push(vec3(20.0, 0.0, 2.0));
+        db.cells.push(PathCell {
+            id: 4,
+            center: vec3(21.0, 0.0, 1.0),
+            vertex_indices: vec![base, base + 1, base + 2, base + 3],
+            flags: PathCellFlags::empty(),
+        });
+        db
+    }
+
+    #[test]
+    fn an_unreachable_goal_is_not_made_temporary_by_an_unrelated_exclusion() {
+        let service = service(island_db());
+        let start = vec3(1.0, 0.0, 1.0);
+        let island = vec3(21.0, 0.0, 1.0);
+        // Somebody stalled on the other side of the level - nothing to do
+        // with this query's goal, which is on an island of its own
+        service.report_blocked_link(0, 1, 0.0);
+        assert!(
+            service
+                .find_path(start, island, MovementBits::WALK)
+                .is_none(),
+            "the island goal must be unreachable to begin with"
+        );
+        assert_eq!(
+            service.exclusion_expiry_for_unreached_goal(
+                start,
+                island,
+                MovementBits::WALK,
+                &service.avoidance(0.0),
+                0.0
+            ),
+            None,
+            "a goal off the graph is not waiting for anyone's blockage to lapse"
+        );
+    }
+
+    #[test]
+    fn a_goal_cut_off_only_by_exclusions_reports_its_own_route_s_deadline() {
+        let service = service(detour_db());
+        let start = vec3(1.0, 0.0, 1.0);
+        let goal = vec3(5.0, 0.0, 1.0);
+        // Both ways into the goal cell are blocked, the second one later -
+        // and a stalled cell contributes nothing either way
+        service.report_blocked_cell(1, 0.0);
+        service.report_blocked_link(1, 2, 0.0);
+        service.report_blocked_link(0, 1, 2.0);
+        service.report_blocked_link(3, 2, 5.0);
+        let avoid = service.avoidance(0.0);
+        assert!(
+            service
+                .find_path_avoiding(start, goal, MovementBits::WALK, &avoid)
+                .is_none(),
+            "the goal must be cut off while both crossings are excluded"
+        );
+        assert_eq!(
+            service.exclusion_expiry_for_unreached_goal(
+                start,
+                goal,
+                MovementBits::WALK,
+                &avoid,
+                0.0
+            ),
+            Some(2.0 + BLOCKED_LINK_TTL_SECONDS),
+            "wait for the LAST exclusion on the route the goal is reachable by \
+             (0 -> 1 -> 2), neither the level's earliest (1 -> 2) nor its \
+             latest (3 -> 2, on the detour the AI will not take)"
+        );
+    }
+
+    #[test]
+    fn a_stalled_cell_alone_is_never_something_to_wait_for() {
+        let service = service(detour_db());
+        service.report_blocked_cell(1, 0.0);
+        assert_eq!(
+            service.exclusion_expiry_for_unreached_goal(
+                vec3(1.0, 0.0, 1.0),
+                vec3(5.0, 0.0, 1.0),
+                MovementBits::WALK,
+                &service.avoidance(0.0),
+                0.0,
+            ),
+            None,
+            "cells are a cost penalty, so they can never be why a goal is unreachable"
         );
     }
 

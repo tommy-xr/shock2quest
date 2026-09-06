@@ -61,6 +61,15 @@ pub trait SteeringStrategy {
         false
     }
 
+    /// When `goal_unreachable` is a *temporary* verdict - the query ran
+    /// against a live exclusion (a crossing or cell steering reported as
+    /// blocked), so the goal may be routable again once it lapses - the
+    /// mission time that exclusion expires at. `None` means the failure is
+    /// about the map itself and retrying buys nothing.
+    fn goal_unreachable_until(&self) -> Option<f32> {
+        None
+    }
+
     fn steer(
         &mut self,
         _current_heading: Deg<f32>,

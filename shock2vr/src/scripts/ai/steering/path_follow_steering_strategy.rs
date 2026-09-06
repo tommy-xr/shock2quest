@@ -149,6 +149,9 @@ pub struct PathFollowSteeringStrategy {
     last_stall_position: Option<Vector3<f32>>,
     /// Last query said the goal has no route (see `goal_unreachable`)
     goal_unreachable: bool,
+    /// ...and, when that query ran against a live exclusion, when that
+    /// exclusion expires (see `goal_unreachable_until`)
+    goal_unreachable_until: Option<f32>,
     /// Static-geometry whiskers, biasing the aim point (see `aim_with_bias`)
     whiskers: WhiskerAvoidance,
     /// The leading CELLS of the route that was in force when the last stall
@@ -191,6 +194,7 @@ impl PathFollowSteeringStrategy {
             displacement_anchor: None,
             last_stall_position: None,
             goal_unreachable: false,
+            goal_unreachable_until: None,
             whiskers: WhiskerAvoidance::new(),
             stall_route_cells: None,
             stall_escalations: 0,
@@ -215,6 +219,10 @@ impl PathFollowSteeringStrategy {
 impl SteeringStrategy for PathFollowSteeringStrategy {
     fn goal_unreachable(&self) -> bool {
         self.goal_unreachable
+    }
+
+    fn goal_unreachable_until(&self) -> Option<f32> {
+        self.goal_unreachable_until
     }
 
     fn steer(
@@ -291,6 +299,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 match response.outcome {
                     AiPathOutcome::Failed if goal_current => {
                         self.goal_unreachable = true;
+                        self.goal_unreachable_until = response.exclusion_expires_at;
                         self.clear_path();
                         // Nothing to compare a stalled route against
                         self.stall_route_cells = None;
@@ -305,6 +314,10 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                         // reachability: it is A*'s "closest I could get".
                         self.goal_unreachable = response.outcome == AiPathOutcome::Partial
                             && !route_reaches_goal(&response.waypoints, response.goal);
+                        self.goal_unreachable_until = self
+                            .goal_unreachable
+                            .then_some(response.exclusion_expires_at)
+                            .flatten();
                         self.path = response.waypoints;
                         self.path_goal = Some(response.goal);
                         // waypoint 0 is the position the query started from
@@ -401,6 +414,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     // reachability no longer stands (goals move, and blocked
                     // crossings expire)
                     self.goal_unreachable = false;
+                    self.goal_unreachable_until = None;
                     // The worker computes a full route, or - when the goal
                     // is unreachable (another island, off-mesh) - a partial
                     // route to the closest reachable point, so the AI

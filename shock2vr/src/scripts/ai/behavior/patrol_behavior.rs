@@ -38,6 +38,11 @@ const PATROL_STALL_SECONDS: f32 = 5.0;
 /// the stall watchdog. A patrolling AI clears this in a fraction of a second,
 /// so only a body that is genuinely going nowhere trips the timer.
 const PATROL_STALL_PROGRESS: f32 = 2.0 / SCALE_FACTOR;
+/// How many times in a row the route may be waited out (see `paused_until`)
+/// with no point reached in between. Bounded so an AI on a deck where
+/// something is always blocked somewhere eventually hands back to idle
+/// instead of waiting for the rest of the mission.
+const PATROL_TEMPORARY_RETRIES: u32 = 3;
 
 /// Walk an authored patrol route: head to the current patrol point, and on
 /// arrival advance to the next one along the `AIPatrol` link chain. Routes are
@@ -65,6 +70,13 @@ pub struct PatrolBehavior {
     /// reaching anything, and the route ends there. A single wedge must not
     /// retire a route the AI walks fine the rest of the way round.
     given_up_points: Vec<EntityId>,
+    /// Set when the route ran out under a live path exclusion: the mission
+    /// time to run it again at, rather than retiring the patrol for good
+    /// over a crossing that is only blocked right now.
+    paused_until: Option<f32>,
+    /// Waits so far with no point reached in between (see
+    /// `PATROL_TEMPORARY_RETRIES`).
+    pauses: u32,
     /// The runtime AICurrentPatrol link must be published once for a fresh
     /// behavior and whenever the target changes.
     target_dirty: bool,
@@ -91,6 +103,8 @@ impl PatrolBehavior {
             stall_anchor: None,
             stall_seconds: 0.0,
             given_up_points: Vec::new(),
+            paused_until: None,
+            pauses: 0,
             target_dirty: true,
             walked_an_edge: false,
         }
@@ -172,8 +186,31 @@ impl PatrolBehavior {
     /// the route, so one bad point (or one wedge the AI walks out of on the
     /// next leg) never retires a patrol, while a route with nothing reachable
     /// left stops instead of cycling (and re-querying A*) forever.
-    fn give_up_on_point(&mut self, world: &World, entity_id: EntityId) -> Effect {
-        if self.given_up_points.contains(&self.target_point) {
+    fn give_up_on_point(
+        &mut self,
+        world: &World,
+        entity_id: EntityId,
+        temporary_until: Option<f32>,
+    ) -> Effect {
+        let lap_exhausted = self.given_up_points.contains(&self.target_point);
+        // A chain that simply runs out leaves the route just as empty as a
+        // lap that comes back around to a point already given up on.
+        let route_exhausted = lap_exhausted
+            || ai_util::next_patrol_point(world, entity_id, self.target_point).is_none();
+        // ...but a route that ran out under a live exclusion is not gone: the
+        // exclusion lapses on its own, so wait it out and run the route again
+        // rather than retiring the patrol for the rest of the mission.
+        if route_exhausted && self.pauses < PATROL_TEMPORARY_RETRIES {
+            if let Some(until) = temporary_until {
+                tracing::debug!(
+                    "patrol {entity_id:?}: whole route blocked, waiting until {until} to retry"
+                );
+                self.pauses += 1;
+                self.paused_until = Some(until);
+                return Effect::NoEffect;
+            }
+        }
+        if lap_exhausted {
             tracing::debug!(
                 "patrol {entity_id:?}: gave up on the whole loop, retiring at {:?}",
                 self.target_point
@@ -228,11 +265,30 @@ impl Behavior for PatrolBehavior {
                 target: Some(self.target_point),
             });
         }
+        let now = time.total.as_secs_f32();
+        if let Some(until) = self.paused_until {
+            if now < until {
+                // Waiting the blockage out - stand rather than steer at a
+                // point nothing can route to yet.
+                return Some((
+                    Steering::from_current(current_heading),
+                    Effect::combine(patrol_effects),
+                ));
+            }
+            // The exclusion has lapsed: give the whole route a fresh try.
+            self.paused_until = None;
+            self.given_up_points.clear();
+            self.steering_strategy = (self.make_steering)(self.goal);
+            self.stall_anchor = None;
+            self.stall_seconds = 0.0;
+            self.target_dirty = true;
+        }
         if !self.finished {
             let (position, _) = ai_util::get_position_and_forward(world, entity_id);
             let position = position.to_vec();
             if self.arrived(position) {
                 self.given_up_points.clear();
+                self.pauses = 0;
                 patrol_effects.push(self.advance(world, entity_id, true));
             } else if self.steering_strategy.goal_unreachable() {
                 // No route to this point (shipped routes include points on a
@@ -246,7 +302,8 @@ impl Behavior for PatrolBehavior {
                     "patrol {entity_id:?}: no route to point {:?}, skipping to the next one",
                     self.target_point
                 );
-                patrol_effects.push(self.give_up_on_point(world, entity_id));
+                let temporary_until = self.steering_strategy.goal_unreachable_until();
+                patrol_effects.push(self.give_up_on_point(world, entity_id, temporary_until));
             } else if self.stalled(position, time) {
                 // Going nowhere: give up on this point and try the next one.
                 // A wedge is a fact about the body's current spot, not about
@@ -255,7 +312,9 @@ impl Behavior for PatrolBehavior {
                     "patrol {entity_id:?}: stalled on point {:?}",
                     self.target_point
                 );
-                patrol_effects.push(self.give_up_on_point(world, entity_id));
+                // Nothing to wait out: a wedge is a fact about the spot the
+                // body is standing in, not about the route.
+                patrol_effects.push(self.give_up_on_point(world, entity_id, None));
             }
         }
 
@@ -288,7 +347,7 @@ impl Behavior for PatrolBehavior {
     }
 
     fn animation(&self) -> Vec<MotionQueryItem> {
-        if self.finished {
+        if self.finished || self.paused_until.is_some() {
             return vec![MotionQueryItem::new("idlegesture").optional()];
         }
         vec![
@@ -298,7 +357,7 @@ impl Behavior for PatrolBehavior {
     }
 
     fn is_locomotion(&self) -> bool {
-        !self.finished
+        !self.finished && self.paused_until.is_none()
     }
 
     #[cfg(test)]
@@ -464,6 +523,23 @@ mod tests {
 
     /// Steering that reports no route to whatever goal it was given.
     struct UnreachableSteering;
+    thread_local! {
+        /// Mission time the test's exclusion lapses at, while it is live.
+        static EXCLUSION_UNTIL: std::cell::Cell<Option<f32>> =
+            const { std::cell::Cell::new(None) };
+    }
+
+    /// Steering blocked only while the test's exclusion is live: exactly what
+    /// a stalled-cell penalty or a blocked crossing does to a real query.
+    struct ExcludedSteering;
+    impl SteeringStrategy for ExcludedSteering {
+        fn goal_unreachable(&self) -> bool {
+            EXCLUSION_UNTIL.with(|until| until.get()).is_some()
+        }
+        fn goal_unreachable_until(&self) -> Option<f32> {
+            EXCLUSION_UNTIL.with(|until| until.get())
+        }
+    }
     /// ...and its counterpart, which has a route.
     struct ReachableSteering;
     impl SteeringStrategy for ReachableSteering {}
@@ -587,6 +663,95 @@ mod tests {
         assert_eq!(skips, 2, "the initial target, then one skip");
     }
 
+    /// Every point unroutable *right now* because something is in the way -
+    /// a stalled-cell penalty or a blocked crossing, which lapse on their own
+    /// - must not retire the route for the rest of the mission. The patrol
+    /// waits the exclusion out and picks its route back up.
+    #[test]
+    fn a_patrol_given_up_under_a_temporary_exclusion_resumes_when_it_expires() {
+        let (world, creature, first, goal) = world_with_unreachable_route();
+        let physics = PhysicsWorld::new();
+        const EXPIRES_AT: f32 = 30.0;
+        EXCLUSION_UNTIL.with(|until| until.set(Some(EXPIRES_AT)));
+        let mut patrol = PatrolBehavior::with_steering(first, goal, |_| Box::new(ExcludedSteering));
+
+        // Well past a whole lap of give-ups, but before the exclusion lapses.
+        for _ in 0..20 {
+            patrol.steer(Deg(0.0), &world, &physics, creature, &at(10.0));
+        }
+        assert!(
+            !patrol.finished,
+            "a temporary blockage must not retire the route"
+        );
+        assert!(
+            matches!(
+                patrol.next_behavior(&world, &physics, creature),
+                NextBehavior::Stay
+            ),
+            "and the AI stays in the patrol behavior while it waits"
+        );
+
+        // Once it lapses the goal routes again, and so must the patrol.
+        EXCLUSION_UNTIL.with(|until| until.set(None));
+        let mut emitted = Vec::new();
+        for _ in 0..5 {
+            if let Some((_, effect)) =
+                patrol.steer(Deg(0.0), &world, &physics, creature, &at(EXPIRES_AT + 0.1))
+            {
+                emitted.extend(Effect::flatten(vec![effect]));
+            }
+        }
+        assert!(!patrol.finished, "the route is still live after the wait");
+        assert!(
+            emitted.iter().any(|effect| matches!(
+                effect,
+                Effect::SetAICurrentPatrol {
+                    target: Some(_),
+                    ..
+                }
+            )),
+            "and the patrol takes a point back up, got {emitted:?}"
+        );
+    }
+
+    /// ...but the wait is bounded: on a deck where something is always
+    /// blocked somewhere the exclusion keeps re-arming, and an AI that waits
+    /// for it every lap would stand there for the rest of the mission.
+    #[test]
+    fn an_always_blocked_route_stops_waiting_and_retires() {
+        let (world, creature, first, goal) = world_with_unreachable_route();
+        let physics = PhysicsWorld::new();
+        let mut patrol = PatrolBehavior::with_steering(first, goal, |_| Box::new(ExcludedSteering));
+
+        // Ten simulated minutes, with a fresh 30-second exclusion live the
+        // whole way.
+        let mut now = 0.0;
+        while now < 600.0 && !patrol.finished {
+            EXCLUSION_UNTIL.with(|until| until.set(Some(now + 30.0)));
+            patrol.steer(Deg(0.0), &world, &physics, creature, &at(now));
+            now += 0.5;
+        }
+        assert!(
+            patrol.finished,
+            "the route must stop waiting, still patrolling after {now}s"
+        );
+    }
+
+    /// A goal with no route *at all* (a point on a disconnected part of the
+    /// navigation graph) is not waited out - nothing about it will change.
+    #[test]
+    fn a_topologically_unreachable_route_still_retires() {
+        let (world, creature, first, goal) = world_with_unreachable_route();
+        let physics = PhysicsWorld::new();
+        let mut patrol =
+            PatrolBehavior::with_steering(first, goal, |_| Box::new(UnreachableSteering));
+
+        for _ in 0..20 {
+            patrol.steer(Deg(0.0), &world, &physics, creature, &at(10.0));
+        }
+        assert!(patrol.finished, "a route with no reachable point ends");
+    }
+
     #[test]
     fn patrol_publishes_its_live_target_relation() {
         let (world, creature, first, goal) = world_with_unreachable_route();
@@ -630,6 +795,15 @@ mod tests {
             },
         ));
         (world, creature, first, final_point)
+    }
+
+    /// A tick at a given mission time (the clock the path exclusions expire
+    /// against).
+    fn at(total_seconds: f32) -> Time {
+        Time {
+            elapsed: std::time::Duration::from_millis(100),
+            total: std::time::Duration::from_secs_f32(total_seconds),
+        }
     }
 
     fn tick() -> Time {
