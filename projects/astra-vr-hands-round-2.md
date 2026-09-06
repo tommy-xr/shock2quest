@@ -1,7 +1,9 @@
 # VR hands / interactions, round 2 — proposal
 
 Status: direction approved by the user, 2026-09-06; tuning and perk selection
-remain open. No gameplay changes implemented.
+remain open. First implementation slice restores the glove appearance and adds
+the [interaction workbench](astra-debug-interactions.md). Automatic fitting,
+Explorer editing, watch/lights, support grips, and body slots remain planned.
 Companion: [SystemReShock one-page reference](astra-systemreshock-interactions-reference.md).
 
 ## Recommendation
