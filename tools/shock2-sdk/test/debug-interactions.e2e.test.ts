@@ -6,7 +6,7 @@ import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
 const enabled = process.env.SHOCK2_E2E === "1";
 // Owner-approved rack contract; extend alongside INTERACTION_FIXTURES in
 // shock2vr/src/scenes/debug_interactions.rs when adding another fixture.
-const templates = [-1221, -1255, -4286, -928, -17, -19, -26, -27, -1358, -247, -52, -57, -54, -53, -2949, -1488, -74, -157, -2998, -2594];
+const templates = [-1221, -1255, -4286, -928, -17, -19, -26, -27, -1358, -247, -52, -57, -54, -53, -2949, -1488, -74, -157, -2998, -2594, -101, -102, -103, -104, -969, -1344, -1661, -106, -762, -1334, -1660, -48, -1264, -3864, -73];
 
 test(
   "interaction rack: every fixture renders and either hand can hold samples or collect credentials",
@@ -52,7 +52,7 @@ test(
           (await game.info()).player[heldSlot], item.id,
           `${hand} grabs ${item.name}`,
         );
-        if ([-1221, -1255, -4286, -52, -57, -54, -53, -2949, -1488, -74, -157].includes(template)) {
+        if ([-1221, -1255, -4286, -52, -57, -54, -53, -2949, -1488, -74, -157, -101, -102, -103, -104, -969, -1344, -1661, -106, -762, -1334, -1660, -48, -1264, -3864, -73].includes(template)) {
           const before = (await game.info()).player.hand_grips.find(g => g.hand === hand)!;
           assert.equal(before.source, "prepared", "gameplay reads a bake instead of running the search");
           assert.ok(before.grip);

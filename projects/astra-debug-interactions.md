@@ -4,11 +4,13 @@ Start the scene with `cargo dbgr --mission debug_interactions --vr`, or select
 `debug_interactions` from the Developer scene launcher on desktop or Quest.
 The scene also loads in flat presentation for inspecting its layout.
 
-Twenty fixtures stand on labeled pedestals along a clear aisle: coffee mug,
+Thirty-five fixtures stand on labeled pedestals along a clear aisle: coffee mug,
 printed magazine, basketball, wrench, pistol, shotgun, fusion cannon, worm
 launcher, standard ammo clip, psi amp, four hypos, maintenance tool,
 French-Epstein device, auto-repair unit, an inert card grip sample, and security
-and bridge access cards. The real cards collect credentials on pickup; the inert
+and bridge access cards, all eleven implant variants, both worm beakers,
+GamePig, and the ICE-Pick hack tool. RunFast and WormBlend are explicitly
+inert grip samples because their gameplay scripts are unimplemented. The real cards collect credentials on pickup; the inert
 sample shares their model but has no credential and can be held.
 Walk along the aisle and squeeze to
 grab with either hand; release squeeze to drop. Character stats are provisioned
@@ -38,3 +40,27 @@ The SDK regression `test/debug-interactions.e2e.test.ts` verifies that every
 fixture renders, can be grabbed/released (or collected for real cards) by each
 VR hand, and returns once after
 a reset. Run with Node 22+ and `SHOCK2_E2E=1` after building the SDK.
+
+## Image review gallery
+
+The gallery workflow captures both hands and multiple close views before headset
+validation. A prepared grip only proves that the resource loaded; it does not
+approve grip placement, orientation, thumb opposition, or intended tool use.
+Keep any awkward or occluded pose marked **Adjust** or **Uncertain** until an
+image review resolves it. In particular, hypo and maintenance-tool placement,
+card height, and magazine tilt remain under review after the initial rack pass.
+
+After building the runtime and SDK, run with Node 22+ and Python 3 + Pillow
+from `tools/shock2-sdk` (Pillow provides lossless WebP compression):
+
+```sh
+node scripts/astra-grip-gallery.mjs --output /tmp/astra-grip-gallery
+```
+
+Open `/tmp/astra-grip-gallery/index.html`. It embeds its images, so the single
+HTML file can be downloaded or shared without a companion image directory.
+`--templates=-52,-2949` narrows a framing iteration. `--reviews reviews.json`
+loads image-review notes keyed by negative template ID, with `status` (`reviewed`,
+`adjust`, or `uncertain`) and `note`. `--render-only` rebuilds the page from the
+existing capture manifest after updating those notes, without launching a game.
+The default gallery omits authored weapon grips, which remain a separate pass.

@@ -2,8 +2,8 @@
 
 Prepared grips cover the coffee mug, printed magazine (`magci`), basketball
 (`hamball`), four hypos, maintenance tool, French-Epstein device, auto-repair
-unit, and an inert access-card sample in `debug_interactions`, for both hands.
-The eleven unique models produce 22 prepared grips. This preserves
+unit, an inert access-card sample, implants, worm beakers, GamePig, and ICE-Pick in `debug_interactions`, for both hands.
+The 23 unique models produce 46 prepared grips. This preserves
 the headset-approved glove scale and wrist/palm calibration. Weapons, including
 their authored hands, continue through the existing weapon path.
 
@@ -25,7 +25,7 @@ npm run build
 node scripts/bake-vr-grips.mjs
 ```
 
-The script launches `debug_interactions --vr`, discovers the eleven fitting fixtures by
+The script launches `debug_interactions --vr`, discovers a representative for each of the 23 fitting models by
 stable template ID, grabs each with each hand, writes
 `assets/astra-vr-grips.json`, and shuts down its runtime. An optional first
 argument selects an output path. It enables `--experimental astra-bake-vr-grips`:

@@ -5,7 +5,7 @@
 use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, vec3};
 use dark::importers::FONT_IMPORTER;
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
-use shipyard::EntityId;
+use shipyard::{EntityId, IntoIter, IntoWithId, View};
 
 use crate::{
     GameOptions,
@@ -130,6 +130,81 @@ pub const INTERACTION_FIXTURES: &[InteractionFixture] = &[
         label: "Bridge access card",
         template_id: -2594,
         model: "scipass",
+    },
+    InteractionFixture {
+        label: "BrawnBoost implant",
+        template_id: -101,
+        model: "softred",
+    },
+    InteractionFixture {
+        label: "EndurBoost implant",
+        template_id: -102,
+        model: "softred",
+    },
+    InteractionFixture {
+        label: "SwiftBoost implant",
+        template_id: -103,
+        model: "softblue",
+    },
+    InteractionFixture {
+        label: "SmartBoost implant",
+        template_id: -104,
+        model: "softpurp",
+    },
+    InteractionFixture {
+        label: "LabAssistant implant",
+        template_id: -969,
+        model: "softgren",
+    },
+    InteractionFixture {
+        label: "RunFast implant (inert)",
+        template_id: -1344,
+        model: "softblue",
+    },
+    InteractionFixture {
+        label: "ExperTech implant",
+        template_id: -1661,
+        model: "softblue",
+    },
+    InteractionFixture {
+        label: "WormBlood implant",
+        template_id: -106,
+        model: "animp01",
+    },
+    InteractionFixture {
+        label: "WormBlend implant (inert)",
+        template_id: -762,
+        model: "animp02",
+    },
+    InteractionFixture {
+        label: "WormHeart implant",
+        template_id: -1334,
+        model: "animp03",
+    },
+    InteractionFixture {
+        label: "WormMind implant",
+        template_id: -1660,
+        model: "animp04",
+    },
+    InteractionFixture {
+        label: "Small worm beaker",
+        template_id: -48,
+        model: "beakew1",
+    },
+    InteractionFixture {
+        label: "Large worm beaker",
+        template_id: -1264,
+        model: "beakew2",
+    },
+    InteractionFixture {
+        label: "GamePig",
+        template_id: -3864,
+        model: "gameboy",
+    },
+    InteractionFixture {
+        label: "ICE-Pick hack tool",
+        template_id: -73,
+        model: "icepick",
     },
 ];
 
@@ -259,5 +334,17 @@ impl DebugSceneHooks for InteractionHooks {
             asset_cache,
             audio_context,
         );
+        // These two gameplay scripts are unimplemented and panic on initialize.
+        // Keep their actual geometry available as explicitly labeled inert grip
+        // samples here; production implant behavior is untouched.
+        let templates = core
+            .world
+            .borrow::<View<dark::properties::PropTemplateId>>()
+            .unwrap();
+        for (entity, template) in (&templates).iter().with_id() {
+            if matches!(template.template_id, -1344 | -762) {
+                core.script_world.remove_entity(entity);
+            }
+        }
     }
 }
