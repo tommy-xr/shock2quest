@@ -3,6 +3,8 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
+import { vrClimbPull } from "./helpers/vr-climb.js";
+import { teleportVerified } from "./helpers/teleport.js";
 
 // `GET /v1/physics/grip` answers "could a hand hold on here?" against the
 // debug_ladder stations (see shock2vr/src/scenes/debug_ladder.rs). The two
@@ -32,6 +34,10 @@ const PROBES: Probe[] = [
   { name: "ledge block lip", point: [-7.2, 6.05, 0], expected: "ledge" },
   // The ladderless mantle block: top y = 3.
   { name: "mantle block lip", point: [-7.2, 3.05, 24], expected: "ledge" },
+  { name: "mantle lip from below", point: [-6.95, 2.99, 24], expected: "ledge" },
+  { name: "mantle corner diagonal", point: [-6.9, 3.05, 24], expected: "ledge" },
+  { name: "mantle lip too far below", point: [-6.95, 2.5, 24], expected: null },
+  { name: "mantle lip too far away", point: [-6.5, 2.99, 24], expected: null },
   { name: "plain wall face", point: [-6.9, 3.0, -16], expected: null },
   { name: "floor at the player's feet", point: [0, 0.05, 0], expected: null },
 ];
@@ -121,3 +127,17 @@ test(
     );
   },
 );
+
+
+test("debug_ladder (VR): a hand below the mantle corner can hold and pull", {
+  skip: !e2eEnabled, timeout: 300_000,
+}, async () => {
+  await using game = await GameServer.launch({ mission: "debug_ladder", debugFlags: ["--vr"] });
+  await game.step({ frames: 5 });
+  await teleportVerified(game, { x: -6.35, y: 1.5, z: 24 });
+  await game.step({ frames: 30 });
+  const pull = await vrClimbPull(game, { grabAt: [-6.95, 2.99, 24], pull: [0, -0.3, 0], frames: 30 });
+  const climb = (await game.info()).player.climb;
+  assert.equal(climb.grips[0]?.kind, "ledge");
+  assert.ok(pull.after[1] - pull.before[1] > 0.2, "corner grip must move the body");
+});

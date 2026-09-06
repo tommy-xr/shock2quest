@@ -160,6 +160,8 @@ pub struct HandClimb {
     /// lost its hold (over-stretched, or the object went away) must not
     /// silently re-grab while the same squeeze is still held.
     was_squeezing: [bool; 2],
+    /// A fresh squeeze may reach contact a few frames late; never retry a broken hold.
+    grab_grace: [f32; 2],
     /// The anchor hand's recent travel relative to the pawn, in world axes,
     /// newest last - the pull, which a release throws the body with. Cleared
     /// when the anchor changes: the history belongs to the hand that made it.
@@ -214,6 +216,11 @@ impl HandClimb {
         for (index, hand) in hands.iter().enumerate() {
             let squeezing = hand.squeeze > crate::ui::VR_TRIGGER_THRESHOLD;
             let was_squeezing = std::mem::replace(&mut self.was_squeezing[index], squeezing);
+            if !squeezing || !hand.is_empty {
+                self.grab_grace[index] = 0.0;
+            } else if !was_squeezing {
+                self.grab_grace[index] = 0.15;
+            }
             match self.grips[index] {
                 Some(anchor) => {
                     let over_stretched = (hand_world[index] - anchor.hand_world_at_grab)
@@ -224,12 +231,14 @@ impl HandClimb {
                     // took a hold can also close on an item; a full hand lets
                     // go of the ladder rather than holding both.
                     if !squeezing || !hand.is_empty || over_stretched || gone {
+                        self.grab_grace[index] = 0.0;
                         self.grips[index] = None;
                         let_go_cleanly[index] = !squeezing && !over_stretched && !gone;
                     }
                 }
-                None if squeezing && !was_squeezing && hand.is_empty => {
+                None if self.grab_grace[index] > 0.0 => {
                     if let Some(grip) = probe(hand_world[index]) {
+                        self.grab_grace[index] = 0.0;
                         self.grips[index] = Some(GripAnchor {
                             grip,
                             hand_world_at_grab: hand_world[index],
@@ -241,6 +250,7 @@ impl HandClimb {
                 }
                 None => {}
             }
+            self.grab_grace[index] = (self.grab_grace[index] - step_dt.max(0.0)).max(0.0);
         }
 
         // The anchor let go. Hand over to the other hand if it is still on -
@@ -313,6 +323,7 @@ impl HandClimb {
     /// the scripted top-out has finished.
     pub fn release_all(&mut self) {
         self.grips = [None, None];
+        self.grab_grace = [0.0, 0.0];
         self.anchor = None;
         self.recent_anchor_travel.clear();
         self.last_anchor_local = None;
@@ -440,6 +451,75 @@ mod tests {
         assert_eq!(released.translation, None);
         assert_eq!(climb.anchor(), None);
         assert_eq!(climb.grips().count(), 0);
+    }
+
+    #[test]
+    fn a_fresh_squeeze_can_reach_contact_late_but_cannot_regrab_after_a_break() {
+        let mut climb = HandClimb::default();
+        let pawn = Vector3::zero();
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let reach = vec3(0.0, 1.0, -1.0);
+        for _ in 0..3 {
+            climb.update(
+                pawn,
+                identity,
+                DT,
+                [no_hand(), hand(reach, 1.0)],
+                |_| None,
+                |_| true,
+            );
+        }
+        climb.update(
+            pawn,
+            identity,
+            DT,
+            [no_hand(), hand(reach, 1.0)],
+            |p| Some(ladder_grip(p)),
+            |_| true,
+        );
+        assert!(climb.anchor().is_some());
+        let broken = reach + vec3(0.0, 1.0, 0.0);
+        for _ in 0..3 {
+            climb.update(
+                pawn,
+                identity,
+                DT,
+                [no_hand(), hand(broken, 1.0)],
+                |p| Some(ladder_grip(p)),
+                |_| true,
+            );
+            assert!(climb.anchor().is_none());
+        }
+        climb.update(
+            pawn,
+            identity,
+            DT,
+            [no_hand(), hand(reach, 0.0)],
+            |_| None,
+            |_| true,
+        );
+        for _ in 0..12 {
+            climb.update(
+                pawn,
+                identity,
+                DT,
+                [no_hand(), hand(reach, 1.0)],
+                |_| None,
+                |_| true,
+            );
+        }
+        climb.update(
+            pawn,
+            identity,
+            DT,
+            [no_hand(), hand(reach, 1.0)],
+            |p| Some(ladder_grip(p)),
+            |_| true,
+        );
+        assert!(
+            climb.anchor().is_none(),
+            "expired grace is not a permanent auto-grab"
+        );
     }
 
     #[test]
