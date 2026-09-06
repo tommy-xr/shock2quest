@@ -3,9 +3,8 @@
 //! the rest). The left hand mirrors the right-hand model (`flip_x`-style
 //! negative scale), like held-weapon models do.
 //!
-//! The model is skinned with a bare-skin texture rather than the glove's own
-//! colour map, and [`crate::hand_forearm`] hangs a sleeved tube off the wrist,
-//! so the hands read as the player's own hands instead of disembodied gloves.
+//! The glove keeps its authored colour map; [`crate::hand_forearm`] hangs a
+//! sleeved tube off the wrist.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -27,16 +26,8 @@ use crate::{
 
 const GLOVE_MODEL: &str = "vr_glove_model.glb";
 
-/// Bare-skin colour map applied to the glove mesh in place of the glove's own
-/// `vr_glove_color.jpg`. It is that same map recoloured: the glove's *skin-scale*
-/// relief (grain, creases, wrinkles) kept and tinted with skin, its albedo
-/// (black leather vs white strap) divided out, and its hardware (straps,
-/// buckles, stitching, panel edges) flattened by a structure mask - see
-/// `tools/make_vr_hand_skin.py`. The hand has to be
-/// textured in the glove's own UV atlas - the game's first-person hand texture
-/// samples that atlas as background, not skin - and a flat tint reads as
-/// plastic. See `projects/vr-gloves.md` for the recipe that generated it.
-const HAND_SKIN_TEXTURE: &str = "vr_hand_skin.png";
+/// Authored glove colour map, shared with the pose inspection scene.
+const GLOVE_TEXTURE: &str = "vr_glove_color.jpg";
 
 /// Wrist-to-fingertip length the glove model is authored at, in world units -
 /// the +Z span of its bind-pose bounding box (fingers point along +Z).
@@ -119,7 +110,7 @@ impl GloveRenderer {
         }
         let model = model.as_ref().clone();
 
-        let texture = load_hand_skin(asset_cache);
+        let texture = load_glove_texture(asset_cache);
 
         // One material per mesh; without the external texture, keep the
         // materials the importer built (solid-color fallback).
@@ -284,14 +275,14 @@ impl GloveRenderer {
     }
 }
 
-/// The hand's skin colour map. One loader, shared with the `debug_gloves`
-/// harness, so the two can't end up on different skins. (The forearm has its
+/// The glove's colour map. One loader, shared with the `debug_gloves`
+/// harness, so the two can't end up on different textures. (The forearm has its
 /// own map - the game's suit sleeve - see [`crate::hand_forearm`].)
-pub fn load_hand_skin(
+pub fn load_glove_texture(
     asset_cache: &mut AssetCache,
 ) -> Option<Rc<dyn engine::texture::TextureTrait>> {
     asset_cache
-        .get_opt::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, HAND_SKIN_TEXTURE)
+        .get_opt::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, GLOVE_TEXTURE)
         .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>)
 }
 
