@@ -29,6 +29,16 @@ pub enum PathTarget {
     Point(Vector3<f32>),
 }
 
+/// What the no-progress clocks saw this frame (see `advance_stall_clocks`).
+#[derive(Debug, Clone, Copy, Default)]
+struct StallClocks {
+    /// The displacement watchdog fired: the body has been effectively still
+    /// for too long with a waypoint to walk to
+    stalled: bool,
+    /// The body covered real ground since the anchor was set
+    moved: bool,
+}
+
 /// A waypoint counts as reached within this XZ distance (2 Dark feet)
 const WAYPOINT_ADVANCE_DISTANCE: f32 = 2.0 / SCALE_FACTOR;
 /// ...and within this height difference (7 Dark feet). Waypoint heights are
@@ -232,7 +242,7 @@ impl PathFollowSteeringStrategy {
     }
 
     /// Advance - or freeze - the two no-progress clocks for this frame, and
-    /// answer whether the displacement watchdog has fired.
+    /// answer what they saw.
     ///
     /// A hold is a standstill the AI CHOSE (a door leaf still crossing the
     /// doorway, an authored pivot): it ends by itself, so neither clock moves
@@ -245,13 +255,13 @@ impl PathFollowSteeringStrategy {
         position: Vector3<f32>,
         distance: f32,
         elapsed: f32,
-    ) -> bool {
+    ) -> StallClocks {
         if hold.is_holding() {
             // Both clocks freeze where they are. A body with no anchor yet
             // takes one here, so the displacement watchdog resumes from where
             // it stood rather than from wherever it is first seen moving.
             self.displacement_anchor.get_or_insert((position, 0.0));
-            return false;
+            return StallClocks::default();
         }
         if self.next_waypoint != self.stall_waypoint
             || distance < self.stall_best - STALL_PROGRESS_EPSILON
@@ -272,16 +282,22 @@ impl PathFollowSteeringStrategy {
                 // not a continuation of a pinned body
                 self.last_stall_position = None;
                 self.stall_escalations = 0;
-                false
+                StallClocks {
+                    stalled: false,
+                    moved: true,
+                }
             }
             Some((anchor, age)) => {
                 let age = age + elapsed;
                 self.displacement_anchor = Some((anchor, age));
-                age >= DISPLACEMENT_STALL_SECONDS
+                StallClocks {
+                    stalled: age >= DISPLACEMENT_STALL_SECONDS,
+                    moved: false,
+                }
             }
             None => {
                 self.displacement_anchor = Some((position, 0.0));
-                false
+                StallClocks::default()
             }
         }
     }
@@ -526,15 +542,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
             }
         }
 
-        let was_heading_for = self.next_waypoint;
         self.next_waypoint = advance_waypoint(position, &self.path, self.next_waypoint);
-        if self.next_waypoint > was_heading_for {
-            // A whole leg of the route walked: whatever this AI stalled on
-            // before, its body is moving through the world now, so the next
-            // stall is a fresh first failure rather than the second one that
-            // cuts a crossing. The costs it remembers stay.
-            service.clear_link_stall_history(entity_id.inner());
-        }
 
         service.record_ai_steering(
             entity_id.inner(),
@@ -604,14 +612,23 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // the path so the next re-path - or wander goal - starts fresh
         // instead of pushing into the obstacle forever.
         let distance = xz_distance(position, waypoint);
-        let displaced_stall = self.advance_stall_clocks(
+        let clocks = self.advance_stall_clocks(
             service.movement_hold(entity_id.inner()),
             position,
             distance,
             time.elapsed.as_secs_f32(),
         );
+        if clocks.moved {
+            // The body covered real ground, so the next stall on a crossing
+            // is a fresh first failure rather than the second one that cuts
+            // it. A body that cannot move keeps its count - which is the
+            // only case escalation is for. Waypoint arrival is NOT this
+            // signal: an adopted route drops waypoints already within reach,
+            // so a pinned body would "advance" one without moving.
+            service.clear_link_stall_history(entity_id.inner());
+        }
         {
-            if self.stall_seconds >= STALL_SECONDS || displaced_stall {
+            if self.stall_seconds >= STALL_SECONDS || clocks.stalled {
                 // Remember the crossing we could not traverse (TTL'd, per
                 // AI): the mesh says the link is walkable but something
                 // physical - a prop on the route, geometry the mesh doesn't
@@ -634,7 +651,7 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                 tracing::debug!(
                     "ai {:?}: stall ({}) at {:.2},{:.2},{:.2} cell={:?} wp[{}]={:.2},{:.2},{:.2} d={:.2}",
                     entity_id,
-                    if displaced_stall {
+                    if clocks.stalled {
                         "displacement"
                     } else {
                         "no-progress"
@@ -1304,9 +1321,39 @@ mod tests {
     ) -> bool {
         let mut displaced = false;
         for _ in 0..(seconds / 0.1).round() as u32 {
-            displaced |= follower.advance_stall_clocks(hold, vec3(0.0, 0.0, 0.0), 5.0, 0.1);
+            displaced |= follower
+                .advance_stall_clocks(hold, vec3(0.0, 0.0, 0.0), 5.0, 0.1)
+                .stalled;
         }
         displaced
+    }
+
+    /// What resets an AI's stall count is ground covered, not a waypoint
+    /// index: an adopted route drops waypoints already within reach, so a
+    /// pinned body in tight geometry can "advance" one without moving - and
+    /// would clear the very count that escalates its second stall into a cut.
+    #[test]
+    fn only_a_body_that_covers_ground_reports_movement() {
+        let mut follower = PathFollowSteeringStrategy::chase_player();
+        for _ in 0..40 {
+            assert!(
+                !follower
+                    .advance_stall_clocks(MovementHold::None, vec3(0.0, 0.0, 0.0), 5.0, 0.1)
+                    .moved,
+                "a body standing in one spot has covered no ground"
+            );
+        }
+        assert!(
+            follower
+                .advance_stall_clocks(
+                    MovementHold::None,
+                    vec3(DISPLACEMENT_STALL_DISTANCE * 2.0, 0.0, 0.0),
+                    5.0,
+                    0.1
+                )
+                .moved,
+            "a body that walks off its anchor has"
+        );
     }
 
     /// The whole point of a hold: a door leaf the AI is standing off from is

@@ -254,10 +254,17 @@ struct LinkStall {
     /// is in the future the crossing is impassable to this AI; before and
     /// after, it is merely expensive.
     cut_until: Option<f32>,
-    /// Physical stalls on this crossing since the AI last made route
-    /// progress (see `clear_link_stall_history`). Re-queries don't count:
-    /// only a body that tried and failed again.
+    /// Physical stalls on this crossing since the AI last covered ground
+    /// (see `clear_link_stall_history`). Re-queries don't count: only a
+    /// body that tried and failed again.
     stalls: u32,
+}
+
+impl LinkStall {
+    /// Impassable right now, rather than merely expensive
+    fn is_cut(&self, now_seconds: f32) -> bool {
+        self.cut_until.is_some_and(|until| until > now_seconds)
+    }
 }
 
 /// Pathfinding service for AI navigation
@@ -506,21 +513,26 @@ impl PathfindingService {
         let entry = mine
             .entry((from_cell, to_cell))
             .or_insert_with(|| LinkStall {
-                expiry: now_seconds,
+                expiry: now_seconds + BLOCKED_LINK_TTL_SECONDS,
                 cut_until: None,
                 stalls: 0,
             });
+        // Re-reporting extends the memory, never shortens it
         entry.expiry = now_seconds + BLOCKED_LINK_TTL_SECONDS;
         if physical {
             entry.stalls += 1;
+            // A count that has already earned a cut re-arms one on every
+            // further stall while the AI stays stuck there: after the second
+            // failure the evidence stands until the body covers ground
+            // (which resets the count) or the memory lapses.
             if entry.stalls >= STALLS_BEFORE_CUT {
                 entry.cut_until = Some(now_seconds + BLOCKED_LINK_CUT_SECONDS);
             }
         }
     }
 
-    /// Forget how many times `entity` has stalled on each crossing: it has
-    /// walked a leg of its route, so the next stall is a fresh incident
+    /// Forget how many times `entity` has stalled on each crossing: its
+    /// body has covered ground, so the next stall is a fresh incident
     /// rather than the second failure of a pinned body. The cost memories
     /// stay (the obstacle may well still be there) and a cut already
     /// escalated lives out its short TTL.
@@ -558,21 +570,7 @@ impl PathfindingService {
     ) -> std::collections::HashSet<(u32, u32)> {
         self.live_links_for(entity, now_seconds)
             .into_iter()
-            .filter(|(_, entry)| entry.cut_until.is_some_and(|until| until > now_seconds))
-            .map(|(link, _)| link)
-            .collect()
-    }
-
-    /// The crossings currently expensive for `entity` (stalled on, but not
-    /// cut): a cost penalty on top of the link's own, never impassable.
-    pub fn costly_links(
-        &self,
-        entity: u64,
-        now_seconds: f32,
-    ) -> std::collections::HashSet<(u32, u32)> {
-        self.live_links_for(entity, now_seconds)
-            .into_iter()
-            .filter(|(_, entry)| !entry.cut_until.is_some_and(|until| until > now_seconds))
+            .filter(|(_, entry)| entry.is_cut(now_seconds))
             .map(|(link, _)| link)
             .collect()
     }
@@ -617,9 +615,7 @@ impl PathfindingService {
         let (cut, costly) = self
             .live_links_for(entity, now_seconds)
             .into_iter()
-            .partition::<Vec<_>, _>(|(_, entry)| {
-                entry.cut_until.is_some_and(|until| until > now_seconds)
-            });
+            .partition::<Vec<_>, _>(|(_, entry)| entry.is_cut(now_seconds));
         NavAvoidance {
             links: cut.into_iter().map(|(link, _)| link).collect(),
             costly_links: costly.into_iter().map(|(link, _)| link).collect(),
