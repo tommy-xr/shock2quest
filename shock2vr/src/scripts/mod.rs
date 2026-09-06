@@ -254,15 +254,49 @@ pub enum MessagePayload {
     AnimationCompleted,
 
     /// A turn clip requested by `Effect::PlayTurnClip` started playing, with
-    /// the facing change it is authored to end on and how long it runs. The
-    /// clip is chosen from the creature's own schema, so only the applier
-    /// knows these until it has resolved one.
+    /// the facing change it is authored to end on. The clip is chosen from
+    /// the creature's own schema, so only the applier knows it until it has
+    /// resolved one.
     TurnClipStarted {
+        token: u64,
         turn: cgmath::Deg<f32>,
-        duration: f32,
-        /// The clip's authored blend length: the window its pose takes to
-        /// swing back to neutral once it ends.
-        blend: f32,
+    },
+
+    /// The turn clip ran to its end. Only the applier knows which clip's
+    /// completion this is, so a completion belonging to anything else can
+    /// never be mistaken for the pivot's own.
+    TurnClipCompleted {
+        token: u64,
+    },
+
+    /// The requested turn clip is not playing (any more): either no affordable
+    /// clip covered the pivot, or something preempted the one that was
+    /// playing. Either way the authored facing change must NOT be taken - the
+    /// pose that would have turned the body is gone.
+    TurnClipCancelled {
+        token: u64,
+    },
+
+    /// The turn clip finished and the animation player has started the clip
+    /// that follows it. The turn clip's pose swings back to neutral across
+    /// that transition, so the entity takes its authored facing change over
+    /// it: across the fade (reported frame by frame as `TurnClipBlend`) when
+    /// `fades`, or in this one frame when the follow-up hard-cuts.
+    TurnClipHandoff {
+        token: u64,
+        fades: bool,
+    },
+
+    /// How much of the pose the clip following the pivot owns this frame,
+    /// straight from the animation player (`blend_alpha_now`). The entity's
+    /// facing takes exactly this fraction of the authored turn, so the facing
+    /// the pose gives up and the facing the entity takes cancel out frame for
+    /// frame. Reported every frame of the fade, ending on 1.0 - the script
+    /// keeps no clock of its own, because the script's clock and the player's
+    /// tick at different points in the frame.
+    TurnClipBlend {
+        token: u64,
+        alpha: f32,
     },
 
     // Gameplay events
