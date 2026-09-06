@@ -1,11 +1,17 @@
-//! Scratch tool: report the material table and the baked-hand islands of the
-//! static first-person gun models (`obj/*_h.bin`).
+//! Scratch tool: report the material table, the baked-hand islands and the
+//! side-on silhouette of the static first-person gun models (`obj/*_h.bin`).
 //!
 //! VR draws the glove on a wielded gun and strips the baked hand/arm, and both
 //! halves are decided by *material*: which slots the arm uses, and which arm
 //! island is the trigger hand. This prints exactly that, so the classifier in
 //! `dark::importers::is_first_person_arm_material` and the trigger-hand pick
 //! are reviewable against the art instead of asserted.
+//!
+//! The silhouette is how `vr_config::HAND_MODEL_POSITIONING`'s grips are
+//! placed: it draws the weapon-only geometry in its own authored frame (barrel
+//! along -X, +Y up) on a labelled grid, so the pistol grip can be read off in
+//! model units instead of guessed from a screenshot. `o` marks the model
+//! origin, which the grip offset is measured from.
 //!
 //! ```bash
 //! cargo run -p shock2vr --example gun_hand_islands
@@ -36,6 +42,109 @@ fn longest_span(mesh: &ss2_bin_obj_loader::SystemShock2ObjectMesh) -> f32 {
         }
     }
     (0..3).map(|axis| hi[axis] - lo[axis]).fold(0.0, f32::max)
+}
+
+/// The mesh's XY silhouette (barrel along -X, +Y up) on a coarse grid, with the
+/// model origin marked - a readable map of where a gun's grip, trigger guard
+/// and magazine actually are in the frame the wield's grip offset is expressed
+/// in. Polygon edges are rasterized, not just their vertices, so a thin part
+/// like a trigger guard still draws.
+fn print_silhouette(mesh: &ss2_bin_obj_loader::SystemShock2ObjectMesh) {
+    const COLS: usize = 78;
+    const ROWS: usize = 24;
+
+    let mut lo = [f32::INFINITY; 2];
+    let mut hi = [f32::NEG_INFINITY; 2];
+    let mut edges = Vec::new();
+    for polygon in &mesh.polygons {
+        let corners = polygon
+            .vertex_indices
+            .iter()
+            .map(|index| mesh.vertices[*index as usize])
+            .collect::<Vec<_>>();
+        for (index, corner) in corners.iter().enumerate() {
+            lo[0] = lo[0].min(corner.x);
+            hi[0] = hi[0].max(corner.x);
+            lo[1] = lo[1].min(corner.y);
+            hi[1] = hi[1].max(corner.y);
+            edges.push((*corner, corners[(index + 1) % corners.len()]));
+        }
+    }
+    if edges.is_empty() {
+        return;
+    }
+    // Square cells, so the picture is not stretched: one span drives both axes.
+    let span = (hi[0] - lo[0]).max((hi[1] - lo[1]) * COLS as f32 / ROWS as f32);
+    let cell = span / COLS as f32;
+    let x0 = (lo[0] + hi[0]) / 2.0 - span / 2.0;
+    let y_top = (lo[1] + hi[1]) / 2.0 + (ROWS as f32 / 2.0) * cell;
+
+    let mut grid = vec![vec![b' '; COLS]; ROWS];
+    let mut plot = |x: f32, y: f32, mark: u8| {
+        let c = ((x - x0) / cell).floor() as isize;
+        let r = ((y_top - y) / cell).floor() as isize;
+        if (0..COLS as isize).contains(&c) && (0..ROWS as isize).contains(&r) {
+            grid[r as usize][c as usize] = mark;
+        }
+    };
+    for (a, b) in &edges {
+        let steps = (((b.x - a.x).abs().max((b.y - a.y).abs())) / cell).ceil() as usize + 1;
+        for step in 0..=steps {
+            let t = step as f32 / steps as f32;
+            plot(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, b'#');
+        }
+    }
+    plot(0.0, 0.0, b'o');
+
+    println!("   silhouette: col 0 = x {x0:+.3}, row 0 = y {y_top:+.3}, cell {cell:.4} units");
+    for (r, row) in grid.iter().enumerate() {
+        let y = y_top - (r as f32 + 0.5) * cell;
+        println!("   {y:+6.3} |{}|", String::from_utf8_lossy(row));
+    }
+    let tens: String = (0..COLS)
+        .map(|c| {
+            if c % 10 == 0 {
+                char::from(b'0' + (c / 10) as u8)
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    println!("           {tens}   (x = {x0:+.3} + col * {cell:.4})");
+}
+
+/// A mesh's centroid and bounds - for an arm island, where the baked hand is.
+fn print_bounds(label: &str, mesh: &ss2_bin_obj_loader::SystemShock2ObjectMesh) {
+    let mut lo = [f32::INFINITY; 3];
+    let mut hi = [f32::NEG_INFINITY; 3];
+    let mut sum = [0.0f32; 3];
+    let mut count = 0.0f32;
+    for polygon in &mesh.polygons {
+        for index in &polygon.vertex_indices {
+            let vertex = mesh.vertices[*index as usize];
+            for (axis, value) in [vertex.x, vertex.y, vertex.z].into_iter().enumerate() {
+                lo[axis] = lo[axis].min(value);
+                hi[axis] = hi[axis].max(value);
+                sum[axis] += value;
+            }
+            count += 1.0;
+        }
+    }
+    if count == 0.0 {
+        return;
+    }
+    println!(
+        "   {label}: centroid ({:+.3},{:+.3},{:+.3}) bounds x[{:+.3},{:+.3}] y[{:+.3},{:+.3}] z[{:+.3},{:+.3}]",
+        sum[0] / count,
+        sum[1] / count,
+        sum[2] / count,
+        lo[0],
+        hi[0],
+        lo[1],
+        hi[1],
+        lo[2],
+        hi[2],
+    );
 }
 
 fn main() {
@@ -107,6 +216,14 @@ fn main() {
             }
         }
 
+        {
+            let weapon = ss2_bin_obj_loader::retain_materials(mesh.clone(), |name| {
+                !dark::importers::is_first_person_arm_material(name)
+            });
+            print_bounds("weapon", &weapon);
+            print_silhouette(&weapon);
+        }
+
         let islands = ss2_bin_obj_loader::split_connected(
             &mesh,
             dark::importers::is_first_person_arm_material,
@@ -128,6 +245,7 @@ fn main() {
             // The island's own longest axis, to size the baked hand against a
             // real one (`HAND_LENGTH_WORLD`, 0.2493 units ~ 19 cm).
             println!("   island {index}: span {:.3} units", longest_span(island));
+            print_bounds(&format!("island {index}"), island);
             match ss2_bin_obj_loader::hand_frame(
                 island,
                 dark::importers::is_first_person_arm_material,

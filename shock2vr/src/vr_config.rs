@@ -180,30 +180,60 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         // Weapons - first-person hand models (_h). Used by flat's wield swap
         // (FLAT_WIELD_SWAP_MODELS) and, on a 25AE install, wielded directly in
         // VR (VR_25AE_VIEW_MODELS). The whole 25AE set is authored barrel
-        // along -X, so one -90 yaw seats every gun; offsets are hand-fitted
-        // per model to land the grip in the palm.
+        // along -X, so one -90 yaw seats every gun.
+        //
+        // The offsets put the model's own PISTOL GRIP in the glove's fist,
+        // read off the side-on silhouette `cargo run -p shock2vr --example
+        // gun_hand_islands` prints and then corrected against `debug_weapons`
+        // captures. They were previously fitted to where each model's *baked*
+        // hand sat, which for `ar15_h` is a rest hand on the receiver and for
+        // `sg_h` one on the pump - invisible while that hand was the one
+        // drawn, wrong the moment the player's own glove replaced it.
+        //
+        // Hand-local metres at the wield's own scale: they are multiplied by
+        // `gun_wield_scale` alongside the geometry (see
+        // `gun_wield_adjustments`), so the pair is one uniform scale about the
+        // grip. The oversized weapons (`sfg_h`, `fsn_h`, `gren_h`, `al_h`,
+        // `viro_h`) have no authored grip to find; their offsets put the fist
+        // on the nearest thing a hand could hold and leave the far end alone.
         (
             "atek_h",
-            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.12, 0.10))),
+            symmetric(
+                held_weapon_right
+                    .clone()
+                    .with_offset(vec3(0.0, 0.073, 0.020)),
+            ),
         ),
         (
             "ar15_h",
-            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.01, 0.17))),
+            symmetric(
+                held_weapon_right
+                    .clone()
+                    .with_offset(vec3(0.0, 0.123, -0.469)),
+            ),
         ),
         (
             "sg_h",
-            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.04, 0.28))),
+            symmetric(
+                held_weapon_right
+                    .clone()
+                    .with_offset(vec3(0.0, -0.025, -0.693)),
+            ),
         ),
         (
             "empgun_h",
-            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.01, 0.29))),
+            symmetric(
+                held_weapon_right
+                    .clone()
+                    .with_offset(vec3(0.0, 0.083, -0.473)),
+            ),
         ),
         (
             "gren_h",
             symmetric(
                 held_weapon_right
                     .clone()
-                    .with_offset(vec3(0.0, 0.11, -0.56)),
+                    .with_offset(vec3(0.0, 0.111, -0.960)),
             ),
         ),
         (
@@ -211,7 +241,7 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
             symmetric(
                 held_weapon_right
                     .clone()
-                    .with_offset(vec3(0.0, 0.27, -0.21)),
+                    .with_offset(vec3(0.0, 0.466, -0.553)),
             ),
         ),
         (
@@ -219,19 +249,23 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
             symmetric(
                 held_weapon_right
                     .clone()
-                    .with_offset(vec3(0.0, 0.27, -0.63)),
+                    .with_offset(vec3(0.0, 0.310, -0.516)),
             ),
         ),
         (
             "al_h",
-            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.09, 0.0))),
+            symmetric(
+                held_weapon_right
+                    .clone()
+                    .with_offset(vec3(0.0, 0.206, -0.442)),
+            ),
         ),
         (
             "viro_h",
             symmetric(
                 held_weapon_right
                     .clone()
-                    .with_offset(vec3(0.0, 0.22, -0.90)),
+                    .with_offset(vec3(0.0, 0.111, -0.710)),
             ),
         ),
         (
@@ -240,7 +274,11 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
         ),
         (
             "lasehand",
-            symmetric(held_weapon_right.clone().with_offset(vec3(0.0, 0.12, 0.27))),
+            symmetric(
+                held_weapon_right
+                    .clone()
+                    .with_offset(vec3(0.0, 0.096, 0.190)),
+            ),
         ),
         // Melee first-person models (_h) deliberately have NO entry: their
         // grip is not a constant. The held body is the melee contact collider
