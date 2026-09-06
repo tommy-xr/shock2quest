@@ -85,6 +85,39 @@ impl HandLight {
     }
 }
 
+/// A prompt the hand leans into before the player acts: the shape says what
+/// the action would be, the weight (0..1) how far to lean. Applied as a *floor*
+/// on the analog curl, so a real trigger or squeeze always outranks it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HandPreshape {
+    /// Nothing to prompt.
+    None,
+    /// Curl toward a grip - something to pick up.
+    Grip(f32),
+    /// Curl the rest, leave the index extended - something to press.
+    Point(f32),
+}
+
+impl HandPreshape {
+    /// Lean the analog curl toward this shape. Never overrides: a finger the
+    /// player is already curling further stays where they put it.
+    fn apply(self, amounts: &mut FingerAmounts) {
+        let (weight, index_too) = match self {
+            HandPreshape::None => return,
+            HandPreshape::Grip(weight) => (weight, true),
+            HandPreshape::Point(weight) => (weight, false),
+        };
+        let weight = weight.clamp(0.0, 1.0);
+        amounts.thumb = amounts.thumb.max(weight);
+        amounts.middle = amounts.middle.max(weight);
+        amounts.ring = amounts.ring.max(weight);
+        amounts.pinky = amounts.pinky.max(weight);
+        if index_too {
+            amounts.index = amounts.index.max(weight);
+        }
+    }
+}
+
 /// Wrist-to-fingertip length the glove model is authored at, in world units -
 /// the +Z span of its bind-pose bounding box (fingers point along +Z).
 pub const AUTHORED_HAND_LENGTH_WORLD: f32 = 0.2049;
@@ -188,8 +221,9 @@ impl GloveRenderer {
         squeeze_value: f32,
         holding: bool,
         light: HandLight,
+        preshape: HandPreshape,
     ) -> Vec<SceneObject> {
-        let amounts = if holding {
+        let mut amounts = if holding {
             // Gripping a held item: fingers wrapped on the handle, thumb
             // locked, index resting on the trigger and curling with the pull
             // (the squeeze is what holds the item, so it doesn't drive the
@@ -213,6 +247,11 @@ impl GloveRenderer {
                 pinky: squeeze_value,
             }
         };
+        // The prompt is a floor under the analog curl, so a real pull always
+        // shows through it. A full hand has nothing to reach for.
+        if !holding {
+            preshape.apply(&mut amounts);
+        }
         let pose = self.open.blend_per_finger(&self.fist, &amounts);
         Self::render_posed(
             &mut self.model,
@@ -396,6 +435,32 @@ mod tests {
         for (expected, light) in HandLight::ALL.iter().enumerate() {
             assert_eq!(light.index(), expected);
         }
+    }
+
+    /// The prompt only ever adds curl, and the player's own pull outranks it:
+    /// a full trigger stays full whatever the hand is hovering.
+    #[test]
+    fn preshape_floors_the_curl_without_overriding_a_real_pull() {
+        let pulled = FingerAmounts {
+            index: 1.0,
+            ..FingerAmounts::default()
+        };
+
+        let mut grip = pulled;
+        HandPreshape::Grip(0.3).apply(&mut grip);
+        assert_eq!(grip.index, 1.0, "a real trigger pull must win");
+        assert_eq!(grip.thumb, 0.3);
+        assert_eq!(grip.pinky, 0.3);
+
+        // Point leaves the index extended - that is what makes it a point.
+        let mut point = FingerAmounts::default();
+        HandPreshape::Point(0.3).apply(&mut point);
+        assert_eq!(point.index, 0.0);
+        assert_eq!(point.middle, 0.3);
+
+        let mut none = pulled;
+        HandPreshape::None.apply(&mut none);
+        assert_eq!(none.thumb, 0.0);
     }
 
     /// The uncorrected glove is undersized, not oversized - a scale below 1.0

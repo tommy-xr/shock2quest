@@ -628,6 +628,24 @@ export interface PlayerSnapshot {
   explored_map_locations: number[];
   /** Climb state: ladder/hand climbing, and (VR) the hands holding on. */
   climb: ClimbState;
+
+  /** What each VR hand could do with whatever it is pointing at - the state
+   * that lights the glove and pre-shapes its fingers. Flat reports "None". */
+  hand_affordance: HandAffordances;
+}
+
+/** Per-hand affordance names in the /v1/info readout. */
+export type HandAffordance =
+  | "None"
+  | "Grabbable"
+  | "Frobbable"
+  | "Blocked"
+  | "Failed";
+
+/** Both hands' affordances (GET /v1/info). */
+export interface HandAffordances {
+  left: HandAffordance;
+  right: HandAffordance;
 }
 
 /** One hand's hold in the /v1/info climb readout. */

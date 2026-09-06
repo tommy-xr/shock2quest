@@ -384,6 +384,15 @@ pub struct DebugClimbState {
     pub grips: Vec<DebugClimbHold>,
 }
 
+/// What each VR hand could do with whatever it is pointing at, by
+/// [`crate::hand_affordance::HandAffordance`] name ("None" / "Grabbable" /
+/// "Frobbable" / "Blocked" / "Failed").
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct DebugHandAffordances {
+    pub left: String,
+    pub right: String,
+}
+
 /// Raycast mask for collision group filtering
 #[derive(Debug, Clone)]
 pub struct RaycastMask {
@@ -853,6 +862,12 @@ pub trait DebuggableScene {
     /// The player's climb state (see [`DebugClimbState`]). Scenes without a
     /// player report nothing.
     fn player_climb(&self) -> Option<DebugClimbState> {
+        None
+    }
+
+    /// Each hand's affordance (see [`DebugHandAffordances`]). Scenes without a
+    /// player report nothing.
+    fn player_hand_affordances(&self) -> Option<DebugHandAffordances> {
         None
     }
 

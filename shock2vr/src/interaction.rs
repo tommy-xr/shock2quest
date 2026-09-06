@@ -147,6 +147,12 @@ pub trait PlayerInteraction {
     }
 
     /// Wield `entity_id` as the first-person weapon (flat); no-op for VR.
+    /// What this hand could do with whatever it is pointing at. Flatscreen has
+    /// no per-hand affordance to report.
+    fn hand_affordance(&self, _hand: Handedness) -> crate::hand_affordance::HandAffordance {
+        crate::hand_affordance::HandAffordance::None
+    }
+
     fn wield(&mut self, _entity_id: EntityId) -> Vec<VirtualHandEffect> {
         Vec::new()
     }
@@ -291,6 +297,13 @@ impl PlayerInteraction for VrInteraction {
         match hand {
             Handedness::Left => self.left_hand.get_raytraced_entity(),
             Handedness::Right => self.right_hand.get_raytraced_entity(),
+        }
+    }
+
+    fn hand_affordance(&self, hand: Handedness) -> crate::hand_affordance::HandAffordance {
+        match hand {
+            Handedness::Left => self.left_hand.affordance(),
+            Handedness::Right => self.right_hand.affordance(),
         }
     }
 

@@ -2442,6 +2442,10 @@ fn capture_frame_snapshot(
                     .debug_scene()
                     .and_then(|scene| scene.player_climb())
                     .unwrap_or_default(),
+                hand_affordance: game
+                    .debug_scene()
+                    .and_then(|scene| scene.player_hand_affordances())
+                    .unwrap_or_default(),
             }
         },
         entity_count,

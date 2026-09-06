@@ -1,6 +1,6 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, Zero, point3, vec3};
+use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, Zero, point3, vec3};
 use dark::{
     SCALE_FACTOR,
     properties::{FrobFlag, PropFrobInfo, PropModelName},
@@ -14,6 +14,7 @@ use tracing::{self, trace};
 
 use crate::{
     gui::GuiPropProxyEntity,
+    hand_affordance::{self, AffordanceTracker, HandAffordance},
     input_context::Hand,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     scripts::{Message, MessagePayload},
@@ -52,6 +53,10 @@ pub struct VirtualHand {
     last_frobbed_entity: Option<EntityId>,
 
     hand_state: HandState,
+
+    /// What this hand could do with whatever it is pointing at - the light on
+    /// the glove and the pre-shape it leans into.
+    affordance: AffordanceTracker,
 
     handedness: Handedness,
 }
@@ -139,6 +144,7 @@ impl VirtualHand {
             raytrace_hit: None,
             last_frobbed_entity: None,
             hand_state: HandState::Empty,
+            affordance: Default::default(),
             handedness,
         }
     }
@@ -249,6 +255,10 @@ impl VirtualHand {
                 // See what we're hitting
                 let mut msgs = Vec::new();
 
+                // A full hand has nothing to reach for, so its light decays.
+                let mut affordance = prev.affordance;
+                affordance.update(HandAffordance::None, 0.0, false);
+
                 // If we're holding onto something, but not grabbing, we can drop it
                 if input_hand.squeeze_value < 0.5 {
                     let mut msgs = vec![VirtualHandEffect::DropItem { entity_id }];
@@ -275,6 +285,7 @@ impl VirtualHand {
                         raytrace_hit: None,
                         last_frobbed_entity: None,
                         hand_state: HandState::Empty,
+                        affordance,
                         handedness,
                     };
                     (updated_hand, msgs)
@@ -326,6 +337,7 @@ impl VirtualHand {
                         raytrace_hit: None,
                         last_frobbed_entity: None,
                         hand_state: next_hand_state,
+                        affordance,
                         handedness,
                     };
                     (updated_hand, msgs)
@@ -336,6 +348,7 @@ impl VirtualHand {
                 hand_position,
                 hand_rotation,
                 prev.last_frobbed_entity,
+                prev.affordance,
                 world,
                 physics,
                 input_hand,
@@ -368,9 +381,15 @@ impl VirtualHand {
         (hand, effs)
     }
 
-    /// Render the glove for this hand, plus the raycast-hit debug cube. The
-    /// hand renderer is owned by the caller (`VrInteraction`) so its cached
-    /// state is shared between both hands.
+    /// What this hand could do with whatever it is pointing at, after
+    /// hysteresis and any failure pulse. Drives the glove's light and its
+    /// pre-shape, and is reported over HTTP for tests.
+    pub fn affordance(&self) -> HandAffordance {
+        self.affordance.state()
+    }
+
+    /// Render the glove for this hand. The hand renderer is owned by the caller
+    /// (`VrInteraction`) so its cached state is shared between both hands.
     pub fn render(
         &self,
         world: &World,
@@ -378,7 +397,7 @@ impl VirtualHand {
     ) -> Vec<SceneObject> {
         // The hand itself: the skinned hand model, posed from the analog
         // inputs - unless a wielded weapon's model stands in for it.
-        let mut scene_objects = glove_renderer
+        glove_renderer
             .filter(|_| shows_hand_visual(world, self.get_held_entity()))
             .map(|renderer| {
                 renderer.render_hand(
@@ -388,40 +407,12 @@ impl VirtualHand {
                     self.trigger_value,
                     self.squeeze_value,
                     self.get_held_entity().is_some(),
-                    // The state machine that lights the glove is a later slice;
-                    // the affordance still reads off the hit cube below.
-                    crate::hand_glove::HandLight::Off,
+                    // Eligibility lights the glove; the action shapes it.
+                    self.affordance.state().light(),
+                    self.affordance.preshape(),
                 )
             })
-            .unwrap_or_default();
-
-        let hit_color = self.color_from_state();
-
-        // Show ray trace hit
-        if let Some(rayhit) = &self.raytrace_hit {
-            let cm = engine::scene::color_material::create(hit_color);
-            let transform = Matrix4::from_translation(vec3(
-                rayhit.hit_point.x,
-                rayhit.hit_point.y,
-                rayhit.hit_point.z,
-            )) * Matrix4::from_scale(0.05);
-            let mut new_obj = SceneObject::new(cm, Box::new(engine::scene::cube::create()));
-            new_obj.set_transform(transform);
-            scene_objects.push(new_obj);
-        }
-
-        scene_objects
-    }
-
-    fn color_from_state(&self) -> Vector3<f32> {
-        if self.trigger_value < 0.1 && self.squeeze_value < 0.1 {
-            vec3(1.0, 1.0, 1.0)
-        } else {
-            let r = self.trigger_value;
-            let b = self.squeeze_value;
-            let g = 0.0;
-            vec3(r, g, b)
-        }
+            .unwrap_or_default()
     }
 }
 
@@ -430,6 +421,7 @@ fn handle_empty_hand_state(
     hand_position: Vector3<f32>,
     hand_rotation: Quaternion<f32>,
     frobbed_entity: Option<EntityId>,
+    mut affordance: AffordanceTracker,
     world: &World,
     physics: &PhysicsWorld,
     input_hand: &Hand,
@@ -439,6 +431,22 @@ fn handle_empty_hand_state(
     let forward = hand_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
     let result = interaction_ray_cast(physics, world, ray_start, forward, held_by_other_hand);
     trace!("ray cast result: {:?}", &result);
+
+    // One resolved target per hand per frame: the glove's light and pre-shape
+    // read the same hit the trigger and squeeze below act on, so the hand can
+    // never advertise an action the input would refuse.
+    let (observed, preshape_weight) = match result.as_ref().and_then(|hit| {
+        hit.maybe_entity_id
+            .map(|entity_id| (entity_id, (hit.hit_point - ray_start).magnitude()))
+    }) {
+        Some((entity_id, distance)) => (
+            hand_affordance::classify(world, entity_id),
+            hand_affordance::preshape_weight(distance),
+        ),
+        None => (HandAffordance::None, 0.0),
+    };
+    let mut attempt_failed = false;
+
     let mut msgs = Vec::new();
     let mut last_frobbed_entity = frobbed_entity;
     let mut next_hand_state = HandState::Empty;
@@ -466,6 +474,9 @@ fn handle_empty_hand_state(
                     },
                 });
                 last_frobbed_entity = Some(entity);
+                // The frob still goes out - the script owns the refusal - but a
+                // locked target is one the hand knew it could not open.
+                attempt_failed = observed == HandAffordance::Blocked;
 
                 // Also, frob any items that may be nearby...
             }
@@ -512,9 +523,15 @@ fn handle_empty_hand_state(
                     },
                 });
                 last_frobbed_entity = Some(entity_id);
+            } else {
+                // Squeezing something the hand cannot take: the other hand's
+                // item, or scenery with no `MOVE`.
+                attempt_failed = true;
             }
         }
     }
+
+    affordance.update(observed, preshape_weight, attempt_failed);
 
     let updated_hand = VirtualHand {
         position: hand_position,
@@ -524,6 +541,7 @@ fn handle_empty_hand_state(
         raytrace_hit: result,
         last_frobbed_entity,
         hand_state: next_hand_state,
+        affordance,
         handedness,
     };
     (updated_hand, msgs)
@@ -1089,6 +1107,7 @@ mod tests {
             Vector3::zero(),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             None,
+            AffordanceTracker::default(),
             &world,
             &physics,
             &input,
@@ -1101,6 +1120,7 @@ mod tests {
             Vector3::zero(),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             hand.last_frobbed_entity,
+            AffordanceTracker::default(),
             &world,
             &physics,
             &input,
@@ -1132,6 +1152,7 @@ mod tests {
             Vector3::zero(),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             None,
+            AffordanceTracker::default(),
             &world,
             &physics,
             &input,
@@ -1151,6 +1172,7 @@ mod tests {
             vec3(1.0, 0.0, 0.0),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             hand.last_frobbed_entity,
+            AffordanceTracker::default(),
             &world,
             &physics,
             &input,
@@ -1174,9 +1196,13 @@ mod tests {
     }
 
     fn frob_fixture(distance: f32) -> (World, PhysicsWorld, EntityId) {
+        frob_fixture_with(distance, FrobFlag::SCRIPT)
+    }
+
+    fn frob_fixture_with(distance: f32, world_action: FrobFlag) -> (World, PhysicsWorld, EntityId) {
         let mut world = World::new();
         let target = world.add_entity(PropFrobInfo {
-            world_action: FrobFlag::SCRIPT,
+            world_action,
             inventory_action: FrobFlag::empty(),
             tool_action: FrobFlag::empty(),
         });
@@ -1248,5 +1274,53 @@ mod tests {
             )),
             "an in-reach VR trigger should preserve frob behavior, got {near_effects:?}"
         );
+    }
+
+    /// The light and the pre-shape must resolve off the same target the input
+    /// acts on: an authored pickup in reach reads as a grab, a scripted-frob
+    /// target as a press, and an empty ray as nothing.
+    #[test]
+    fn hovering_resolves_one_affordance_per_hand() {
+        let idle = Hand::default();
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let hover = |distance: f32, world_action: FrobFlag| {
+            let (world, physics, _) = frob_fixture_with(distance, world_action);
+            VirtualHand::update(
+                &VirtualHand::new(Handedness::Right),
+                &physics,
+                &world,
+                vec3(0.0, 0.0, 0.0),
+                identity,
+                &idle,
+                None,
+            )
+            .0
+            .affordance()
+        };
+
+        assert_eq!(hover(2.5, FrobFlag::MOVE), HandAffordance::Grabbable);
+        assert_eq!(hover(2.5, FrobFlag::SCRIPT), HandAffordance::Frobbable);
+        assert_eq!(hover(4.0, FrobFlag::MOVE), HandAffordance::None);
+    }
+
+    /// A squeeze on something the hand cannot take is a refused attempt, and
+    /// reads red rather than staying green on a grab that never happens.
+    #[test]
+    fn a_refused_grab_reads_as_a_failed_attempt() {
+        let (world, physics, _) = frob_fixture_with(2.5, FrobFlag::empty());
+        let squeeze = Hand {
+            squeeze_value: 1.0,
+            ..Hand::default()
+        };
+        let (hand, _) = VirtualHand::update(
+            &VirtualHand::new(Handedness::Right),
+            &physics,
+            &world,
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            &squeeze,
+            None,
+        );
+        assert_eq!(hand.affordance(), HandAffordance::Failed);
     }
 }
