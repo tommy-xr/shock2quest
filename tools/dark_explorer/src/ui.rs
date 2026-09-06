@@ -28,6 +28,10 @@ const GRID_TILE_CAP: usize = 400;
 const THUMBS_PER_FRAME: usize = 6;
 
 pub struct UiOptions {
+    pub grip: Option<String>,
+    pub grip_hand: String,
+    pub grip_view: String,
+    pub grip_library: Option<PathBuf>,
     pub screenshot: Option<PathBuf>,
     pub select: Option<String>,
     pub search: Option<String>,
@@ -244,12 +248,14 @@ struct Preview {
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
+    Grips,
     Files,
     Archetypes,
     Archives,
 }
 
 pub struct ExplorerApp {
+    grip_editor: crate::grip_editor::GripEditor,
     tab: Tab,
     family_names: Vec<&'static str>,
     families: BTreeMap<String, LoadedFamily>,
@@ -342,8 +348,15 @@ struct MountIndex {
 
 impl ExplorerApp {
     fn new(options: UiOptions) -> ExplorerApp {
+        let grip_tab = options.grip.is_some();
         let mut app = ExplorerApp {
-            tab: Tab::Files,
+            grip_editor: crate::grip_editor::GripEditor::new(
+                options.grip_library,
+                options.grip,
+                options.grip_hand,
+                options.grip_view,
+            ),
+            tab: if grip_tab { Tab::Grips } else { Tab::Files },
             family_names: explorer::family_names(),
             families: BTreeMap::new(),
             search: options.search.unwrap_or_default(),
@@ -1013,6 +1026,7 @@ impl eframe::App for ExplorerApp {
                     ui.selectable_value(&mut self.tab, Tab::Files, "Files");
                     ui.selectable_value(&mut self.tab, Tab::Archetypes, "Archetypes");
                     ui.selectable_value(&mut self.tab, Tab::Archives, "Archives");
+                    ui.selectable_value(&mut self.tab, Tab::Grips, "VR Grips");
                 });
                 // The preview belongs to the tab that selected it; a Files
                 // asset must not keep showing under the Archives tab.
@@ -1021,6 +1035,7 @@ impl eframe::App for ExplorerApp {
                 }
                 ui.separator();
                 match self.tab {
+                    Tab::Grips => self.grip_editor.show_list(ui),
                     Tab::Files => {
                         ui.horizontal(|ui| {
                             ui.selectable_value(&mut self.grid_view, false, "List");
@@ -1051,7 +1066,10 @@ impl eframe::App for ExplorerApp {
             });
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
-            if self.tab == Tab::Archetypes {
+            if self.tab == Tab::Grips {
+                let host = self.model_preview.get_or_insert_with(ModelPreview::new);
+                self.grip_editor.show(ui, frame, host);
+            } else if self.tab == Tab::Archetypes {
                 self.show_archetype_preview(ui, frame);
             } else if self.tab == Tab::Archives {
                 self.show_preview(ui, frame);
@@ -1080,6 +1098,7 @@ impl eframe::App for ExplorerApp {
             self.select_archive_entry(archive, entry);
         }
 
+        self.grip_editor.guard_close(&ctx);
         self.drive_screenshot(&ctx);
     }
 }
@@ -1826,6 +1845,12 @@ impl ExplorerApp {
         let thumbs_ready =
             !self.grid_view || self.thumbs_pending == 0 || self.frames_rendered >= 250;
         if self.frames_rendered >= 3 && thumbs_ready && !self.screenshot_sent {
+            if self.tab == Tab::Grips {
+                if let Some(error) = self.grip_editor.error() {
+                    eprintln!("cannot render grip: {error}");
+                    std::process::exit(2);
+                }
+            }
             // A selection that failed to load would capture only its error
             // label; fail loudly instead so automation can trust exit 0.
             if let Some(error) = self.model_preview.as_ref().and_then(|p| p.error()) {

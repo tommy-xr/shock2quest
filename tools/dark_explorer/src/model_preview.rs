@@ -12,13 +12,17 @@
 
 use std::ffi::CString;
 
-use cgmath::{Quaternion, Rad, Rotation3, vec2, vec3};
+use cgmath::{InnerSpace, Matrix4, One, Quaternion, Rad, Rotation3, vec2, vec3};
 use dark::importers::MODELS_IMPORTER;
 use dark::model::Model;
 use dark_viewer::scenes::{BinAiViewerScene, BinObjViewerScene, SkeletonViewerScene, ToolScene};
 use eframe::{egui, glow};
 use engine::Engine;
 use engine::assets::asset_cache::AssetCache;
+use shock2vr::{
+    GloveRenderer, Handedness,
+    vr_grip::{GripHints, GripKinematics, GripSurface, ResolvedGrip, surface_fingerprint},
+};
 
 use crate::ui::quiet_catch;
 
@@ -41,6 +45,7 @@ pub fn init_raw_gl(cc: &eframe::CreationContext<'_>) {
 pub enum PreviewScene {
     /// The `.bin` model alone.
     Model,
+    Grip(Handedness, ResolvedGrip),
     /// The `.bin` model animated by a motion clip (`<name>_.mc`).
     Clip(String),
     /// Bone lines only: the `.bin`'s skeleton posed by a motion clip.
@@ -50,7 +55,7 @@ pub enum PreviewScene {
 impl PreviewScene {
     fn clip(&self) -> Option<&str> {
         match self {
-            PreviewScene::Model => None,
+            PreviewScene::Model | PreviewScene::Grip(..) => None,
             PreviewScene::Clip(clip) | PreviewScene::Skeleton(clip) => Some(clip),
         }
     }
@@ -69,6 +74,8 @@ struct OffscreenTarget {
 
 pub struct ModelPreview {
     engine: Box<dyn Engine>,
+    glove: Option<GloveRenderer>,
+    grip_bounds: Option<(cgmath::Vector3<f32>, f32)>,
     asset_cache: AssetCache,
     /// What the current scene (or error) was built for: (key, scene, skeletons,
     /// hitboxes, articulation). Guards against rebuilding — or re-panicking —
@@ -111,6 +118,8 @@ impl ModelPreview {
         let asset_cache = AssetCache::new(base_path, mounts);
         ModelPreview {
             engine,
+            glove: None,
+            grip_bounds: None,
             asset_cache,
             built_for: None,
             scene: None,
@@ -155,7 +164,7 @@ impl ModelPreview {
         // itself triggers that repaint). The overlays mean nothing in
         // skeleton-only mode, which draws bones and nothing else.
         ui.horizontal(|ui| {
-            if !matches!(scene, PreviewScene::Skeleton(_)) {
+            if !matches!(scene, PreviewScene::Skeleton(_) | PreviewScene::Grip(..)) {
                 ui.checkbox(&mut self.debug_skeletons, "Skeleton");
                 ui.checkbox(&mut self.debug_hit_boxes, "Hitboxes");
             }
@@ -207,6 +216,10 @@ impl ModelPreview {
         }
     }
 
+    pub fn prepare(&mut self, key: &str, scene: &PreviewScene) {
+        self.ensure_scene(key, scene);
+    }
+
     /// (Re)build the scene when the key, clip, or a debug toggle changed,
     /// framing the camera from the model's bounds where they are known.
     fn ensure_scene(&mut self, key: &str, scene: &PreviewScene) {
@@ -242,6 +255,55 @@ impl ModelPreview {
         // bounding box for `frame_camera` to use.
         let mut pose_bounds = None;
         let built: Result<Box<dyn ToolScene>, String> = match scene {
+            PreviewScene::Grip(hand, grip) => quiet_catch(|| {
+                let mut objects = Model::transform(
+                    &model,
+                    Matrix4::from_translation(grip.offset) * Matrix4::from(grip.rotation),
+                )
+                .clone_scene_objects();
+                if self.glove.is_none() {
+                    self.glove = GloveRenderer::new(&mut self.asset_cache);
+                }
+                let glove = self.glove.as_mut().ok_or("Glove model unavailable")?;
+                objects.extend(glove.render_hand(
+                    vec3(0.0, 0.0, 0.0),
+                    Quaternion::one(),
+                    *hand,
+                    0.0,
+                    0.0,
+                    true,
+                    Some(grip.finger_amounts()),
+                ));
+                let triangles = self
+                    .asset_cache
+                    .get(&dark::importers::GRIP_SURFACE_IMPORTER, key);
+                let transform =
+                    Matrix4::from_translation(grip.offset) * Matrix4::from(grip.rotation);
+                // Include the actual sampled glove arcs as well as the item, so
+                // a small prop cannot crop the wrist or a large one its far end.
+                let kinematics = glove.grip_kinematics(*hand);
+                let points = triangles
+                    .iter()
+                    .flatten()
+                    .map(|p| (transform * p.to_homogeneous()).truncate())
+                    .chain(kinematics.fingers.iter().flatten().flatten().copied());
+                let mut min = vec3(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+                let mut max = -min;
+                for p in points {
+                    for i in 0..3 {
+                        min[i] = min[i].min(p[i]);
+                        max[i] = max[i].max(p[i]);
+                    }
+                }
+                pose_bounds = Some(((min + max) * 0.5, (max - min).magnitude() * 0.5));
+                self.grip_bounds = pose_bounds;
+                Ok(
+                    Box::new(GripPreviewScene(engine::scene::Scene::from_objects(
+                        objects,
+                    ))) as Box<dyn ToolScene>,
+                )
+            })
+            .and_then(|r: Result<_, &str>| r.map_err(str::to_string)),
             PreviewScene::Model => BinObjViewerScene::from_model(
                 key.to_string(),
                 &self.asset_cache,
@@ -301,13 +363,83 @@ impl ModelPreview {
                 self.needs_render = true;
                 if reframe {
                     match pose_bounds {
-                        Some((center, radius)) => self.frame_bounds(center, radius, 1.0),
+                        Some((center, radius)) => self.frame_bounds(
+                            center,
+                            radius,
+                            if matches!(scene, PreviewScene::Grip(..)) {
+                                0.25
+                            } else {
+                                1.0
+                            },
+                        ),
                         None => self.frame_camera(&model),
                     }
                 }
             }
             Err(err) => self.error = Some(err),
         }
+    }
+
+    /// Shared game geometry and rig samples for validation and explicit auto-fit.
+    pub fn grip_inputs(
+        &mut self,
+        key: &str,
+        hand: Handedness,
+    ) -> Result<(GripSurface, GripKinematics, String), String> {
+        quiet_catch(|| {
+            let triangles = self
+                .asset_cache
+                .get(&dark::importers::GRIP_SURFACE_IMPORTER, key);
+            let surface = GripSurface::new(&triangles).ok_or("No usable pickup surface")?;
+            if self.glove.is_none() {
+                self.glove = GloveRenderer::new(&mut self.asset_cache);
+            }
+            let rig = self
+                .glove
+                .as_mut()
+                .ok_or("Glove model unavailable")?
+                .grip_kinematics(hand);
+            Ok((surface, rig, surface_fingerprint(&triangles)))
+        })
+        .and_then(|r: Result<_, &str>| r.map_err(str::to_string))
+    }
+
+    pub fn fit_grip(
+        &mut self,
+        key: &str,
+        hand: Handedness,
+        hints: &GripHints,
+    ) -> Result<ResolvedGrip, String> {
+        let (surface, rig, _) = self.grip_inputs(key, hand)?;
+        surface
+            .resolve(&rig, hints)
+            .ok_or_else(|| "No valid automatic fit; existing draft kept".to_string())
+    }
+
+    /// Camera presets share the gallery's hand-local axes. Orbit remains free.
+    pub fn grip_camera(&mut self, view: &str, hand: Handedness) {
+        if let Some((center, radius)) = self.grip_bounds {
+            self.frame_bounds(center, radius, 0.25);
+        }
+        (self.yaw, self.pitch) = match view {
+            "front" => (90.0, 90.0),
+            "back" => (-90.0, 90.0),
+            "top" => (90.0, 0.1),
+            "palm" => (
+                if hand == Handedness::Right {
+                    63.4
+                } else {
+                    -63.4
+                },
+                65.9,
+            ),
+            _ => (-45.0, 66.2),
+        };
+        if view == "palm" {
+            self.target = vec3(0.0, 0.0, -0.12);
+            self.distance = 0.5;
+        }
+        self.needs_render = true;
     }
 
     /// Step the playing scene forward by `seconds` of simulation time (in
@@ -383,7 +515,16 @@ impl ModelPreview {
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
-                self.distance = (self.distance * (-scroll * 0.003).exp()).clamp(0.5, 300.0);
+                let minimum = if self
+                    .built_for
+                    .as_ref()
+                    .is_some_and(|(_, s, ..)| matches!(s, PreviewScene::Grip(..)))
+                {
+                    0.15
+                } else {
+                    0.5
+                };
+                self.distance = (self.distance * (-scroll * 0.003).exp()).clamp(minimum, 300.0);
                 moved = true;
             }
         }
@@ -522,7 +663,15 @@ impl ModelPreview {
             projection_matrix: cgmath::perspective(
                 cgmath::Deg(45.0),
                 size[0] as f32 / size[1] as f32,
-                0.1,
+                if self
+                    .built_for
+                    .as_ref()
+                    .is_some_and(|(_, s, ..)| matches!(s, PreviewScene::Grip(..)))
+                {
+                    0.01
+                } else {
+                    0.1
+                },
                 1000.0,
             ),
             screen_size: vec2(size[0] as f32, size[1] as f32),
@@ -548,5 +697,13 @@ impl ModelPreview {
                 prev_viewport[3],
             );
         }
+    }
+}
+
+struct GripPreviewScene(engine::scene::Scene);
+impl ToolScene for GripPreviewScene {
+    fn update(&mut self, _delta_time: f32) {}
+    fn render(&self, _asset_cache: &mut AssetCache) -> engine::scene::Scene {
+        self.0.clone()
     }
 }

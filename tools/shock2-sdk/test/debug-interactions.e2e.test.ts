@@ -56,7 +56,7 @@ test(
           const before = (await game.info()).player.hand_grips.find(g => g.hand === hand)!;
           assert.equal(before.source, "prepared", "gameplay reads a bake instead of running the search");
           assert.ok(before.grip);
-          assert.ok(before.grip.contacts.filter(Boolean).length >= 3, "at least three fingers support each fixture");
+          if (!before.authored) assert.ok(before.grip.contacts.filter(Boolean).length >= 3, "at least three fingers support each automatic fixture fit");
           assert.ok(before.grip.curls.every(c => Number.isFinite(c) && c >= 0 && c <= 1));
           await game.input.set(`${hand}_hand.position`, [0, 3, 0]);
           await game.input.set(`${hand}_hand.rotation`, [0, Math.sin(0.3), 0, Math.cos(0.3)]);

@@ -4,6 +4,7 @@ use engine::assets::asset_paths::AssetEntry;
 mod archetypes;
 mod archives;
 mod explorer;
+mod grip_editor;
 mod model_preview;
 mod ui;
 
@@ -44,6 +45,18 @@ enum Commands {
     },
     /// Open a windowed asset browser (tree + search + preview)
     Ui {
+        /// Open VR Grips with this prepared pickup model selected (e.g. mug)
+        #[arg(long)]
+        grip: Option<String>,
+        /// Hand to inspect in VR Grips
+        #[arg(long, default_value = "right", value_parser = ["left", "right"])]
+        grip_hand: String,
+        /// Initial grip camera
+        #[arg(long, default_value = "oblique", value_parser = ["front", "back", "top", "oblique", "palm"])]
+        grip_view: String,
+        /// Prepared grip resource to edit (defaults to this checkout's assets)
+        #[arg(long)]
+        grip_library: Option<std::path::PathBuf>,
         /// Write a PNG of the first rendered frame to this path and exit
         #[arg(long)]
         screenshot: Option<std::path::PathBuf>,
@@ -220,6 +233,10 @@ fn main() {
         } => ls(family, filter, limit),
         Commands::Find { pattern, limit } => find(pattern, limit),
         Commands::Ui {
+            grip,
+            grip_hand,
+            grip_view,
+            grip_library,
             screenshot,
             select,
             search,
@@ -233,6 +250,10 @@ fn main() {
             archives,
             select_entry,
         } => ui::run(ui::UiOptions {
+            grip,
+            grip_hand,
+            grip_view,
+            grip_library,
             screenshot,
             select,
             search,
