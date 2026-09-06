@@ -21,11 +21,18 @@
 //! span a level transition; `sim_time` stays monotonic across one.
 
 use std::collections::VecDeque;
+use std::rc::Rc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use cgmath::Vector3;
+use engine::audio::{
+    AudioChannel, AudioClip, AudioContext, AudioHandle, AudioPlaybackSettings,
+    play_audio_with_settings, play_spatial_audio_with_gain,
+};
 use serde::Serialize;
+use shipyard::EntityId;
 
 const MAX_ENTRIES: usize = 64;
 
@@ -74,8 +81,8 @@ pub struct PlayedSound {
     pub still_playing: bool,
 }
 
-/// Arguments for [`record`], grouped so call sites stay readable.
-pub struct SoundRecord<'a> {
+/// Complete arguments for inserting one entry into the ring buffer.
+struct SoundRecord<'a> {
     pub sample: &'a str,
     pub volume_millibels: Option<i32>,
     pub gain: f32,
@@ -86,6 +93,45 @@ pub struct SoundRecord<'a> {
     pub duration: Option<Duration>,
     pub source_entity: Option<SourceEntity>,
     pub handle: Option<u64>,
+}
+
+/// Metadata mirrored into the audio log by [`play_and_record`]. Playback-owned
+/// fields (gain, position, pan application, clip duration and handle id) are
+/// filled from the same arguments used to start the sink, so they cannot drift
+/// from the real play.
+pub struct PlayRecord<'a> {
+    pub sample: &'a str,
+    pub volume_millibels: Option<i32>,
+    pub pan_millibels: Option<i32>,
+    pub tags: Vec<(String, String)>,
+    pub source_entity: Option<SourceEntity>,
+}
+
+/// The two playback paths supported by [`play_and_record`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PlayOptions {
+    ListenerRelative(AudioPlaybackSettings),
+    Spatial {
+        position: Vector3<f32>,
+        source: Option<EntityId>,
+        gain: f32,
+    },
+}
+
+impl PlayOptions {
+    fn recorded_position(self) -> [f32; 3] {
+        match self {
+            Self::ListenerRelative(_) => [0.0, 0.0, 0.0],
+            Self::Spatial { position, .. } => [position.x, position.y, position.z],
+        }
+    }
+
+    fn recorded_gain(self) -> f32 {
+        match self {
+            Self::ListenerRelative(settings) => settings.gain,
+            Self::Spatial { gain, .. } => gain,
+        }
+    }
 }
 
 static RECENT: Mutex<(u64, VecDeque<PlayedSound>)> = Mutex::new((0, VecDeque::new()));
@@ -104,6 +150,79 @@ fn sim_time() -> f64 {
     f64::from_bits(SIM_TIME_BITS.load(Ordering::Relaxed))
 }
 
+/// Start one listener-relative or spatial sound and mirror that exact play into
+/// the debug audio log. The duration and handle id are captured before their
+/// owners move into the engine, and preempted plays are retired before the new
+/// record is inserted so reusing a handle cannot stop its replacement.
+pub fn play_and_record(
+    audio_context: &mut AudioContext<EntityId, String>,
+    handle: AudioHandle,
+    channel: Option<AudioChannel>,
+    clip: Rc<AudioClip>,
+    options: PlayOptions,
+    record: PlayRecord<'_>,
+) -> Vec<u64> {
+    play_and_record_with(
+        handle,
+        channel,
+        clip,
+        options,
+        record,
+        |handle, channel, clip, options| match options {
+            PlayOptions::ListenerRelative(settings) => {
+                play_audio_with_settings(audio_context, handle, channel, clip, settings)
+            }
+            PlayOptions::Spatial {
+                position,
+                source,
+                gain,
+            } => play_spatial_audio_with_gain(
+                audio_context,
+                position,
+                source,
+                handle,
+                channel,
+                clip,
+                gain,
+            ),
+        },
+    )
+}
+
+fn play_and_record_with<F>(
+    handle: AudioHandle,
+    channel: Option<AudioChannel>,
+    clip: Rc<AudioClip>,
+    options: PlayOptions,
+    record_args: PlayRecord<'_>,
+    play: F,
+) -> Vec<u64>
+where
+    F: FnOnce(AudioHandle, Option<AudioChannel>, Rc<AudioClip>, PlayOptions) -> Vec<u64>,
+{
+    let duration = clip.total_duration();
+    let handle_id = handle.id();
+    let position = options.recorded_position();
+    let gain = options.recorded_gain();
+    let pan_applied =
+        record_args.pan_millibels.is_some() && matches!(options, PlayOptions::ListenerRelative(_));
+    let preempted = play(handle, channel, clip, options);
+    record_stops(&preempted);
+    record(SoundRecord {
+        sample: record_args.sample,
+        volume_millibels: record_args.volume_millibels,
+        gain,
+        pan_millibels: record_args.pan_millibels,
+        pan_applied,
+        tags: record_args.tags,
+        position,
+        duration,
+        source_entity: record_args.source_entity,
+        handle: Some(handle_id),
+    });
+    preempted
+}
+
 /// `sim_time` expressed in fixed 60 Hz frames. Shared with
 /// [`crate::message_trace`], which stamps its entries the same way.
 pub(crate) fn frame_of(sim_time: f64) -> u64 {
@@ -111,7 +230,7 @@ pub(crate) fn frame_of(sim_time: f64) -> u64 {
 }
 
 /// Record a successfully resolved + played sound.
-pub fn record(record: SoundRecord) {
+fn record(record: SoundRecord) {
     let sim_time = sim_time();
     let mut guard = RECENT.lock().unwrap();
     let (next_sequence, entries) = &mut *guard;
@@ -141,7 +260,7 @@ pub fn record(record: SoundRecord) {
 /// Mark several handles stopped at once - used for the plays a new play
 /// preempts (a single-slot channel, or a reused handle), which never reach
 /// `Effect::StopSound`.
-pub fn record_stops(handles: &[u64]) {
+fn record_stops(handles: &[u64]) {
     for handle in handles {
         record_stop(*handle);
     }
@@ -262,5 +381,133 @@ mod tests {
         assert_eq!(mine.len(), 2);
         assert_eq!(mine[0].stopped_at_sim_time, None);
         assert!(mine[1].stopped_at_sim_time.is_some());
+    }
+
+    #[test]
+    fn shared_play_retires_a_reused_handle_before_recording_its_replacement() {
+        let handle = engine::audio::AudioHandle::new();
+        let handle_id = handle.id();
+        let clip = std::rc::Rc::new(engine::audio::AudioClip::from_raw(1, 1, vec![0; 5]));
+
+        set_sim_time(20.0);
+        play_and_record_with(
+            handle.clone(),
+            None,
+            clip.clone(),
+            PlayOptions::ListenerRelative(engine::audio::AudioPlaybackSettings::default()),
+            PlayRecord {
+                sample: "shared-helper-reused-handle",
+                volume_millibels: None,
+                pan_millibels: None,
+                tags: vec![("kind".to_owned(), "first".to_owned())],
+                source_entity: None,
+            },
+            |_, _, _, _| vec![],
+        );
+
+        set_sim_time(21.0);
+        let preempted = play_and_record_with(
+            handle,
+            None,
+            clip,
+            PlayOptions::ListenerRelative(engine::audio::AudioPlaybackSettings::default()),
+            PlayRecord {
+                sample: "shared-helper-reused-handle",
+                volume_millibels: None,
+                pan_millibels: None,
+                tags: vec![("kind".to_owned(), "second".to_owned())],
+                source_entity: None,
+            },
+            |_, _, _, _| vec![handle_id],
+        );
+
+        let mine: Vec<_> = recent()
+            .into_iter()
+            .filter(|entry| entry.sample == "shared-helper-reused-handle")
+            .collect();
+        assert_eq!(preempted, vec![handle_id]);
+        assert_eq!(mine.len(), 2);
+        assert_eq!(mine[0].duration_secs, Some(5.0));
+        assert_eq!(mine[0].stopped_at_sim_time, Some(21.0));
+        assert!(!mine[0].still_playing);
+        assert_eq!(mine[1].stopped_at_sim_time, None);
+        assert!(mine[1].still_playing);
+    }
+
+    #[test]
+    fn shared_play_preserves_listener_relative_and_spatial_options() {
+        let clip = std::rc::Rc::new(engine::audio::AudioClip::from_raw(1, 2, vec![0; 2]));
+        let listener_settings = engine::audio::AudioPlaybackSettings {
+            gain: 0.25,
+            channel_gains: [0.5, 0.75],
+            looping: true,
+        };
+
+        play_and_record_with(
+            engine::audio::AudioHandle::new(),
+            None,
+            clip.clone(),
+            PlayOptions::ListenerRelative(listener_settings),
+            PlayRecord {
+                sample: "shared-helper-listener-relative",
+                volume_millibels: Some(-100),
+                pan_millibels: Some(500),
+                tags: vec![("kind".to_owned(), "listener".to_owned())],
+                source_entity: None,
+            },
+            |_, channel, _, options| {
+                assert!(channel.is_none());
+                assert_eq!(options, PlayOptions::ListenerRelative(listener_settings));
+                vec![]
+            },
+        );
+
+        let position = cgmath::vec3(1.0, 2.0, 3.0);
+        let source = shipyard::EntityId::new_from_index_and_gen(7, 0);
+        play_and_record_with(
+            engine::audio::AudioHandle::new(),
+            None,
+            clip,
+            PlayOptions::Spatial {
+                position,
+                source: Some(source),
+                gain: 0.75,
+            },
+            PlayRecord {
+                sample: "shared-helper-spatial",
+                volume_millibels: Some(-200),
+                pan_millibels: Some(-500),
+                tags: vec![("kind".to_owned(), "spatial".to_owned())],
+                source_entity: None,
+            },
+            |_, channel, _, options| {
+                assert!(channel.is_none());
+                assert_eq!(
+                    options,
+                    PlayOptions::Spatial {
+                        position,
+                        source: Some(source),
+                        gain: 0.75,
+                    }
+                );
+                vec![]
+            },
+        );
+
+        let listener = recent()
+            .into_iter()
+            .find(|entry| entry.sample == "shared-helper-listener-relative")
+            .unwrap();
+        assert_eq!(listener.position, [0.0, 0.0, 0.0]);
+        assert_eq!(listener.gain, 0.25);
+        assert!(listener.pan_applied);
+
+        let spatial = recent()
+            .into_iter()
+            .find(|entry| entry.sample == "shared-helper-spatial")
+            .unwrap();
+        assert_eq!(spatial.position, [1.0, 2.0, 3.0]);
+        assert_eq!(spatial.gain, 0.75);
+        assert!(!spatial.pan_applied);
     }
 }

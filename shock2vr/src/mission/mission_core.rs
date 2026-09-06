@@ -8048,31 +8048,25 @@ impl MissionCore {
                         quests.mark_email_as_played(&email_file);
                         let audio_clip =
                             asset_cache.get(&AUDIO_IMPORTER, &format!("{email_file}.wav"));
-                        let duration = audio_clip.total_duration();
                         let handle = AudioHandle::new();
-                        let preempted = engine::audio::play_audio(
+                        crate::audio_log::play_and_record(
                             audio_context,
                             handle.clone(),
                             Some(AudioChannel::new("email".to_owned())),
                             audio_clip,
+                            crate::audio_log::PlayOptions::ListenerRelative(
+                                AudioPlaybackSettings::default(),
+                            ),
+                            // Observability: record the email so the headless
+                            // e2e can assert it played (and only once).
+                            crate::audio_log::PlayRecord {
+                                sample: &email_file,
+                                volume_millibels: None,
+                                pan_millibels: None,
+                                tags: vec![("kind".to_string(), "email".to_string())],
+                                source_entity: None,
+                            },
                         );
-                        // Observability: record the email so the headless e2e
-                        // can assert it played (and only once). Anything this
-                        // play cut short (the email channel is single-slot) is
-                        // marked stopped first, so `still_playing` stays honest.
-                        crate::audio_log::record_stops(&preempted);
-                        crate::audio_log::record(crate::audio_log::SoundRecord {
-                            sample: &email_file,
-                            volume_millibels: None,
-                            gain: 1.0,
-                            pan_millibels: None,
-                            pan_applied: false,
-                            tags: vec![("kind".to_string(), "email".to_string())],
-                            position: [0.0, 0.0, 0.0],
-                            duration,
-                            source_entity: None,
-                            handle: Some(handle.id()),
-                        });
                     }
                     drop(quests);
                 }
@@ -8089,8 +8083,6 @@ impl MissionCore {
 
                     if let Some(audio_clip) = maybe_audio_clip {
                         info!("Playing clip: {} handle: {:?}", name, &handle);
-                        let duration = audio_clip.total_duration();
-                        let handle_id = handle.id();
                         let gain = resolved.linear_gain();
                         // Spatial emitters (TrapSound narrations anchored at
                         // their authored station) play at the source entity,
@@ -8103,22 +8095,14 @@ impl MissionCore {
                         } else {
                             None
                         };
-                        let preempted = if let Some(position) = maybe_position {
-                            engine::audio::play_spatial_audio_with_gain(
-                                audio_context,
+                        let play_options = if let Some(position) = maybe_position {
+                            crate::audio_log::PlayOptions::Spatial {
                                 position,
                                 source,
-                                handle,
-                                None,
-                                audio_clip,
                                 gain,
-                            )
+                            }
                         } else {
-                            engine::audio::play_audio_with_settings(
-                                audio_context,
-                                handle,
-                                None,
-                                audio_clip,
+                            crate::audio_log::PlayOptions::ListenerRelative(
                                 AudioPlaybackSettings::listener_relative(
                                     gain,
                                     resolved.channel_gains(),
@@ -8128,20 +8112,20 @@ impl MissionCore {
                         // Observability: record scripted one-shot sounds (audio
                         // logs, keypad beeps, ...) so headless tooling can assert
                         // a schema actually resolved and played.
-                        let position = maybe_position.unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
-                        crate::audio_log::record_stops(&preempted);
-                        crate::audio_log::record(crate::audio_log::SoundRecord {
-                            sample: &resolved.sample_name,
-                            volume_millibels: has_schema.then_some(resolved.volume_millibels),
-                            gain,
-                            pan_millibels: has_schema.then_some(resolved.pan_millibels),
-                            pan_applied: has_schema && maybe_position.is_none(),
-                            tags: vec![("kind".to_string(), "sound".to_string())],
-                            position: [position.x, position.y, position.z],
-                            duration,
-                            source_entity: source.map(|id| source_entity(&self.world, id)),
-                            handle: Some(handle_id),
-                        });
+                        crate::audio_log::play_and_record(
+                            audio_context,
+                            handle,
+                            None,
+                            audio_clip,
+                            play_options,
+                            crate::audio_log::PlayRecord {
+                                sample: &resolved.sample_name,
+                                volume_millibels: has_schema.then_some(resolved.volume_millibels),
+                                pan_millibels: has_schema.then_some(resolved.pan_millibels),
+                                tags: vec![("kind".to_string(), "sound".to_string())],
+                                source_entity: source.map(|id| source_entity(&self.world, id)),
+                            },
+                        );
                     } else {
                         warn!("Unable to load clip: {}", name)
                     }
@@ -8162,53 +8146,43 @@ impl MissionCore {
                         if let Some(audio_clip) = asset_cache.get_opt(&AUDIO_IMPORTER, &audio_path)
                         {
                             let handle = AudioHandle::new();
-                            let duration = audio_clip.total_duration();
-                            let handle_id = handle.id();
                             let gain = resolved.linear_gain();
                             let maybe_position = get_entity_position(&self.world, entity_id);
-                            let preempted = if let Some(position) = maybe_position {
-                                engine::audio::play_spatial_audio_with_gain(
-                                    audio_context,
+                            let play_options = if let Some(position) = maybe_position {
+                                crate::audio_log::PlayOptions::Spatial {
                                     position,
-                                    Some(entity_id),
-                                    handle,
-                                    None,
-                                    audio_clip,
+                                    source: Some(entity_id),
                                     gain,
-                                )
+                                }
                             } else {
-                                engine::audio::play_audio_with_settings(
-                                    audio_context,
-                                    handle,
-                                    None,
-                                    audio_clip,
+                                crate::audio_log::PlayOptions::ListenerRelative(
                                     AudioPlaybackSettings::listener_relative(
                                         gain,
                                         resolved.channel_gains(),
                                     ),
                                 )
                             };
-                            crate::audio_log::record_stops(&preempted);
                             // Observability: speech is the loudest source of
                             // overlapping audio, so trace it like the rest.
-                            let position = maybe_position.unwrap_or_else(|| vec3(0.0, 0.0, 0.0));
                             let mut sound_tags = vec![
                                 ("kind".to_string(), "speech".to_string()),
                                 ("concept".to_string(), concept.clone()),
                             ];
                             sound_tags.extend(tags.iter().cloned());
-                            crate::audio_log::record(crate::audio_log::SoundRecord {
-                                sample: &resolved.sample_name,
-                                volume_millibels: Some(resolved.volume_millibels),
-                                gain,
-                                pan_millibels: Some(resolved.pan_millibels),
-                                pan_applied: maybe_position.is_none(),
-                                tags: sound_tags,
-                                position: [position.x, position.y, position.z],
-                                duration,
-                                source_entity: Some(source_entity(&self.world, entity_id)),
-                                handle: Some(handle_id),
-                            });
+                            crate::audio_log::play_and_record(
+                                audio_context,
+                                handle,
+                                None,
+                                audio_clip,
+                                play_options,
+                                crate::audio_log::PlayRecord {
+                                    sample: &resolved.sample_name,
+                                    volume_millibels: Some(resolved.volume_millibels),
+                                    pan_millibels: Some(resolved.pan_millibels),
+                                    tags: sound_tags,
+                                    source_entity: Some(source_entity(&self.world, entity_id)),
+                                },
+                            );
                         } else {
                             warn!(
                                 "Unable to load speech clip '{}' for concept '{}'",
@@ -11450,31 +11424,25 @@ fn play_environmental_sound(
         );
         // Log the resolved play so headless tooling (debug runtime
         // /v1/audio/recent) can assert a schema actually played.
-        let duration = audio_clip.total_duration();
-        let handle_id = audio_handle.id();
         let gain = resolved.linear_gain();
-        let preempted = engine::audio::play_spatial_audio_with_gain(
+        crate::audio_log::play_and_record(
             audio_context,
-            position,
-            None,
             audio_handle,
             None,
             audio_clip,
-            gain,
+            crate::audio_log::PlayOptions::Spatial {
+                position,
+                source: None,
+                gain,
+            },
+            crate::audio_log::PlayRecord {
+                sample: &resolved.sample_name,
+                volume_millibels: Some(resolved.volume_millibels),
+                pan_millibels: Some(resolved.pan_millibels),
+                tags: query.tag_values(),
+                source_entity: None,
+            },
         );
-        crate::audio_log::record_stops(&preempted);
-        crate::audio_log::record(crate::audio_log::SoundRecord {
-            sample: &resolved.sample_name,
-            volume_millibels: Some(resolved.volume_millibels),
-            gain,
-            pan_millibels: Some(resolved.pan_millibels),
-            pan_applied: false,
-            tags: query.tag_values(),
-            position: [position.x, position.y, position.z],
-            duration,
-            source_entity: None,
-            handle: Some(handle_id),
-        });
     }
 }
 
