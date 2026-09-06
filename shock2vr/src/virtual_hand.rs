@@ -1,6 +1,6 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, Zero, point3, vec3};
+use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, Zero, point3, vec3};
 use dark::{
     SCALE_FACTOR,
     properties::{FrobFlag, PropFrobInfo, PropModelName},
@@ -17,6 +17,7 @@ use crate::{
     hand_affordance::{self, AffordanceTracker, HandAffordance},
     input_context::Hand,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
+    runtime_props::RuntimePropVrGloveSeat,
     scripts::{Message, MessagePayload},
     util::{self, point3_to_vec3},
     vr_config::{self, Handedness},
@@ -397,25 +398,50 @@ impl VirtualHand {
         world: &World,
         glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
     ) -> Vec<SceneObject> {
+        let Some(renderer) = glove_renderer else {
+            return Vec::new();
+        };
+
+        // A wielded gun draws its own glove, on the grip the stripped baked
+        // hand was posed onto rather than at the controller. The seat is
+        // resolved by the wield (`RuntimePropVrGloveSeat`), and its presence is
+        // what marks a hold as one of those.
+        if let Some(seat) = held_glove_seat(world, self.get_held_entity()) {
+            return renderer.render_held_gun_hand(
+                Matrix4::from_translation(self.position) * Matrix4::from(self.rotation) * seat,
+                self.trigger_value,
+                self.affordance.state().light(),
+            );
+        }
+
         // The hand itself: the skinned hand model, posed from the analog
         // inputs - unless a wielded weapon's model stands in for it.
-        glove_renderer
-            .filter(|_| shows_hand_visual(world, self.get_held_entity()))
-            .map(|renderer| {
-                renderer.render_hand(
-                    self.position,
-                    self.rotation,
-                    self.handedness,
-                    self.trigger_value,
-                    self.squeeze_value,
-                    self.get_held_entity().is_some(),
-                    // Eligibility lights the glove; the action shapes it.
-                    self.affordance.state().light(),
-                    self.affordance.preshape(),
-                )
-            })
-            .unwrap_or_default()
+        if !shows_hand_visual(world, self.get_held_entity()) {
+            return Vec::new();
+        }
+        renderer.render_hand(
+            self.position,
+            self.rotation,
+            self.handedness,
+            self.trigger_value,
+            self.squeeze_value,
+            self.get_held_entity().is_some(),
+            // Eligibility lights the glove; the action shapes it.
+            self.affordance.state().light(),
+            self.affordance.preshape(),
+        )
     }
+}
+
+/// The glove placement a held entity's wield resolved, if it is one that draws
+/// a glove over the weapon (the static gun `_h` set - see
+/// [`crate::held_gun_glove`]).
+fn held_glove_seat(world: &World, held_entity: Option<EntityId>) -> Option<Matrix4<f32>> {
+    let entity_id = held_entity?;
+    world
+        .borrow::<View<RuntimePropVrGloveSeat>>()
+        .ok()
+        .and_then(|seats| seats.get(entity_id).ok().map(|seat| seat.0))
 }
 
 fn handle_empty_hand_state(

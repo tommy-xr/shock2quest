@@ -94,7 +94,7 @@ use crate::{
         RuntimePropDoNotSerialize, RuntimePropFlatAim, RuntimePropJointTransforms,
         RuntimePropLaunchedProjectile, RuntimePropReloading, RuntimePropSelectedAmmo,
         RuntimePropShotCooldown, RuntimePropShotModifiers, RuntimePropTransform, RuntimePropVhots,
-        RuntimePropVrGripOffset,
+        RuntimePropVrGloveSeat, RuntimePropVrGripOffset,
     },
     save_load::HeldItemSaveData,
     scripts::{
@@ -7317,6 +7317,16 @@ impl MissionCore {
                     // preparation lives.
                     let is_vr = game_options.presentation_mode == crate::PresentationMode::Vr;
                     let vr_held = is_vr && crate::vr_config::is_vr_view_model(&model_name);
+                    // A static gun `_h`: VR strips its baked hand/forearm and
+                    // draws the tracked glove on the grip instead. The psi amp
+                    // is excluded because the amp *is* the forearm - its arm is
+                    // modelled into `ND-amp_h.psd`, so there is nothing to
+                    // strip and nothing for a glove to replace - and the melee
+                    // rigs are skinned and seated from their own posed
+                    // skeleton below.
+                    let vr_held_gun = vr_held
+                        && !is_melee_weapon(&self.world, entity_id)
+                        && !crate::wielded_weapon::is_psi_amp(&self.world, entity_id);
                     // The PsiSword authors no world model at all (PropLimbModel
                     // only), so it has no id_to_model entry to take a transform
                     // from - a VR wield materializes its first model from the
@@ -7342,6 +7352,10 @@ impl MissionCore {
                         // a drop would leave the restored world model wearing
                         // the wield's contact offset.
                         self.world.remove::<RuntimePropVrGripOffset>(entity_id);
+                        // Likewise the glove placement: only the gun branch
+                        // below re-derives one, so a drop must not leave the
+                        // restored world model wearing a glove.
+                        self.world.remove::<RuntimePropVrGloveSeat>(entity_id);
                         // Was the *outgoing* model a VR-wielded first-person
                         // model? (Read before PropModelName is overwritten
                         // below - identifies the drop-restore swap.)
@@ -7359,7 +7373,19 @@ impl MissionCore {
                                 .unwrap_or(false);
                         // A missing model must never take down the frame (or a
                         // load): keep the current model and complain loudly.
-                        let (new_model, vr_held_source) = if vr_held {
+                        let (new_model, vr_held_source) = if vr_held_gun {
+                            // The arm-stripped view of the same mesh; the
+                            // weapon's own sub-objects and vhots are untouched.
+                            (
+                                asset_cache
+                                    .get_opt(
+                                        &dark::importers::VR_HELD_GUN_MODELS_IMPORTER,
+                                        &format!("{model_name}.BIN"),
+                                    )
+                                    .map(|source| Model::transform(&source.as_ref().0, xform)),
+                                None,
+                            )
+                        } else if vr_held {
                             match asset_cache.get_opt(
                                 &dark::importers::VR_HELD_MODELS_IMPORTER,
                                 &format!("{model_name}.BIN"),
@@ -7408,6 +7434,21 @@ impl MissionCore {
                             new_model.apply_local_transform(mirror);
                             for vhot in vhots.iter_mut() {
                                 vhot.point = mirror.transform_point(vhot.point);
+                            }
+                        }
+                        // Where the glove goes now that the baked hand is
+                        // gone: on the grip that hand was posed onto, in the
+                        // hand that is holding the gun. Resolved here because
+                        // this is where the model, its grip entry and the
+                        // holding hand are all known.
+                        if vr_held_gun {
+                            if let Some(seat) = crate::held_gun_glove::glove_seat_for_wield(
+                                asset_cache,
+                                &model_name,
+                                hand,
+                            ) {
+                                self.world
+                                    .add_component(entity_id, RuntimePropVrGloveSeat(seat));
                             }
                         }
                         // An articulated VR-wielded first-person model (hand +

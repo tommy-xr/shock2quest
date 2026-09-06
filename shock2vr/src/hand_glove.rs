@@ -232,17 +232,7 @@ impl GloveRenderer {
         preshape: HandPreshape,
     ) -> Vec<SceneObject> {
         let amounts = if holding {
-            // Gripping a held item: fingers wrapped on the handle, thumb
-            // locked, index resting on the trigger and curling with the pull
-            // (the squeeze is what holds the item, so it doesn't drive the
-            // pose here). Constants tuned visually against the held pistol.
-            FingerAmounts {
-                thumb: 0.85,
-                index: 0.5 + 0.5 * trigger_value,
-                middle: 0.9,
-                ring: 0.9,
-                pinky: 0.9,
-            }
+            grip_amounts(trigger_value)
         } else {
             // Empty hand: index follows the trigger; the other fingers follow
             // the squeeze. A full squeeze also curls the index so a squeezed
@@ -267,9 +257,33 @@ impl GloveRenderer {
             &self.retarget,
             &self.materials[light.index()],
             &pose,
-            position,
-            rotation,
-            handedness,
+            hand_to_world(position, rotation, handedness),
+        )
+    }
+
+    /// Build the glove for a hand wielding a gun, seated by `hand_to_world`.
+    ///
+    /// The gun view models bake a hand onto the grip, which VR strips and
+    /// replaces with this one; `hand_to_world` is where that baked hand was
+    /// (`held_gun_glove::glove_seat` composed onto the tracked hand pose), so
+    /// the glove lands on the grip rather than at the controller. It carries
+    /// the left hand's reflection itself - the seat is built from the gun's own
+    /// mirror - so no handedness is taken and none is applied.
+    pub fn render_held_gun_hand(
+        &mut self,
+        hand_to_world: Matrix4<f32>,
+        trigger_value: f32,
+        light: HandLight,
+    ) -> Vec<SceneObject> {
+        let pose = self
+            .open
+            .blend_per_finger(&self.fist, &grip_amounts(trigger_value));
+        Self::render_posed(
+            &mut self.model,
+            &self.retarget,
+            &self.materials[light.index()],
+            &pose,
+            hand_to_world,
         )
     }
 
@@ -298,43 +312,33 @@ impl GloveRenderer {
             &self.retarget,
             &self.materials[HandLight::Off.index()],
             pose,
-            position,
-            rotation,
-            handedness,
+            hand_to_world(position, rotation, handedness),
         )
     }
 
-    /// Bake `pose` into the shared model and place it at the hand's transform.
-    /// The one place the model-to-hand frame conversion lives, so every caller
-    /// gets the same hand at the same place.
+    /// Bake `pose` into the shared model and place it at `hand_to_world` - the
+    /// transform of the glove's own hand space, wrist at the origin with the
+    /// fingers down -Z.
+    ///
+    /// The one place the glove-model-to-hand-space conversion lives, so every
+    /// caller gets the same hand at the same place.
     fn render_posed(
         model: &mut GlbModel,
         retarget: &HandPoseRetarget,
         skin: &[Rc<RefCell<Box<dyn Material>>>],
         pose: &Pose,
-        position: Vector3<f32>,
-        rotation: Quaternion<f32>,
-        handedness: Handedness,
+        hand_to_world: Matrix4<f32>,
     ) -> Vec<SceneObject> {
         retarget.apply(pose, model);
 
-        // The right-hand model is mirrored across the hand's local X for the
-        // left hand - `Handedness::mirror`, the one definition of "the other
-        // hand", shared with the melee wield so the glove and the arm rig
-        // cannot disagree about which way round the left hand is. The
-        // glove's fingers point along the model's +Z; the hand frame's
+        // The glove's fingers point along the model's +Z; the hand frame's
         // forward is -Z (the raycast/aim direction, see VirtualHand::update),
         // so the grip alignment yaws the model 180 degrees to line the
         // fingers up with where the hand points. Verified against the
         // raycast hit markers in-game; on-headset fine tuning would adjust
         // this rotation.
         let grip = Matrix4::from_angle_y(cgmath::Deg(180.0));
-        let mirror = handedness.mirror();
-        let world = Matrix4::from_translation(position)
-            * Matrix4::from(rotation)
-            * mirror
-            * grip
-            * Matrix4::from_scale(GLOVE_SCALE);
+        let world = hand_to_world * grip * Matrix4::from_scale(GLOVE_SCALE);
 
         let mut objects = model.to_scene_objects_with_skinning();
         for (object, material) in objects.iter_mut().zip(skin) {
@@ -343,6 +347,34 @@ impl GloveRenderer {
         }
 
         objects
+    }
+}
+
+/// Where a tracked hand's own space sits in the world.
+///
+/// The right-hand model is mirrored across the hand's local X for the left hand
+/// - `Handedness::mirror`, the one definition of "the other hand", shared with
+/// the melee wield so the glove and the arm rig cannot disagree about which way
+/// round the left hand is.
+fn hand_to_world(
+    position: Vector3<f32>,
+    rotation: Quaternion<f32>,
+    handedness: Handedness,
+) -> Matrix4<f32> {
+    Matrix4::from_translation(position) * Matrix4::from(rotation) * handedness.mirror()
+}
+
+/// The curl of a hand closed around something it is holding: fingers wrapped on
+/// the handle, thumb locked, index resting on the trigger and curling with the
+/// pull (the squeeze is what holds the item, so it doesn't drive the pose here).
+/// Constants tuned visually against the held pistol.
+fn grip_amounts(trigger_value: f32) -> FingerAmounts {
+    FingerAmounts {
+        thumb: 0.85,
+        index: 0.5 + 0.5 * trigger_value,
+        middle: 0.9,
+        ring: 0.9,
+        pinky: 0.9,
     }
 }
 

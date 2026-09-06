@@ -372,3 +372,23 @@ pub struct RuntimePropLogData {
 // first-person model is (re)applied, including on load.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropVrGripOffset(pub Vector3<f32>);
+
+// RuntimePropVrGloveSeat - where the tracked glove is drawn on a VR-wielded
+// gun, as a transform from the glove's own hand space into the tracked hand's
+// local space.
+//
+// VR strips the baked hand off a gun view model and draws the player's glove
+// instead, on the grip the artist posed that hand onto
+// (`held_gun_glove::glove_seat`). The placement depends on the model, the grip
+// entry and which hand is holding it, all of which are known exactly once -
+// when `Effect::ChangeModel` applies the wield - so it is resolved there and
+// read per frame from here.
+//
+// Its presence is also what tells the renderer to draw a glove over a held
+// weapon at all: only the static gun `_h` set gets one (the psi amp's arm is
+// part of the amp, and melee rigs are seated from their own posed skeleton).
+//
+// Not serialized: the wield's `Effect::ChangeModel` recomputes it whenever the
+// first-person model is (re)applied, including on load.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropVrGloveSeat(pub Matrix4<f32>);

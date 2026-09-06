@@ -1360,6 +1360,35 @@ mod tests {
         assert_eq!(weapon.polygons[0].slot_index, 0);
     }
 
+    /// The VR gun strip, over the pistol's real material table (from
+    /// `cargo run -p shock2vr --example gun_hand_islands`): both arm slots go,
+    /// including the sleeve that a largest-island rule would have kept in
+    /// place of the firing hand, and every weapon slot stays.
+    #[test]
+    fn the_vr_gun_strip_drops_both_of_the_pistols_arm_slots() {
+        let mesh = mesh_with(
+            vec![
+                material_in_slot("ND-arm.psd", 0),
+                material_in_slot("ND-arm_atek.psd", 1),
+                material_in_slot("ND-ammo1.psd", 2),
+                material_in_slot("ND-bulletcasing", 3),
+                material_in_slot("ND-atek.psd", 4),
+            ],
+            (0..5).map(polygon_in_slot).collect(),
+        );
+
+        let gun = retain_materials(mesh, |name| {
+            !crate::importers::is_first_person_arm_material(name)
+        });
+
+        let kept = gun
+            .polygons
+            .iter()
+            .map(|polygon| polygon.slot_index)
+            .collect::<Vec<_>>();
+        assert_eq!(kept, vec![2, 3, 4]);
+    }
+
     fn material(name: &str) -> SystemShock2MeshMaterial {
         SystemShock2MeshMaterial {
             name: name.to_owned(),

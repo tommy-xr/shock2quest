@@ -331,6 +331,46 @@ fn process_vr_held_model(
 pub static VR_HELD_MODELS_IMPORTER: Lazy<AssetImporter<SystemShockContentModel, VrHeldModel, ()>> =
     Lazy::new(|| AssetImporter::define(load_model, process_vr_held_model));
 
+/// A first-person **gun** view model prepared for VR wielding, with the baked
+/// hand and forearm removed - VR draws the player's own tracked glove on the
+/// grip instead, so the authored arm would be a second hand inside it.
+///
+/// Newtype for cache separation: this is a different *view* of a model that
+/// [`MODELS_IMPORTER`] and [`VR_HELD_MODELS_IMPORTER`] also serve, and the
+/// cache keys by importer type (see [`FirstPersonHand`]).
+///
+/// The strip is by **material**, not by island size. An earlier revision kept
+/// the largest arm island and deleted the rest; that is wrong because "one arm
+/// island = one hand" is false - `atek_h` splits its firing arm into a sleeve
+/// (`ND-arm.psd`, 445 polys) and a hand (`ND-arm_atek.psd`, 440 polys), so the
+/// size rule kept the sleeve and deleted the gripping hand (PR #1023). Every
+/// arm the set draws sits on an `ND-arm*` material and nothing else does, which
+/// is what [`is_first_person_arm_material`] selects. Models that bake no hand
+/// at all (`gren_h`, `sfg_h`, `fsn_h`, `al_h`, `viro_h`) carry no such material
+/// and pass through untouched; so does the psi amp, whose arm is modelled into
+/// the amp's own `ND-amp_h.psd`.
+pub struct VrHeldGunModel(pub Model);
+
+fn process_vr_held_gun_model(
+    mesh: SystemShockContentModel,
+    asset_cache: &mut AssetCache,
+    _config: &(),
+) -> VrHeldGunModel {
+    match mesh {
+        SystemShockContentModel::Obj(obj) => VrHeldGunModel(Model::from_obj_bin(
+            ss2_bin_obj_loader::retain_materials(obj, |name| !is_first_person_arm_material(name)),
+            asset_cache,
+        )),
+        // The skinned melee rigs are not guns and never come through here;
+        // serve them as authored rather than inventing a strip for them.
+        other => VrHeldGunModel(process_model(other, asset_cache, &())),
+    }
+}
+
+pub static VR_HELD_GUN_MODELS_IMPORTER: Lazy<
+    AssetImporter<SystemShockContentModel, VrHeldGunModel, ()>,
+> = Lazy::new(|| AssetImporter::define(load_model, process_vr_held_gun_model));
+
 /// Newtype so this importer gets its own [`AssetCache`] bucket.
 ///
 /// The cache keys by `importer.type_id()`, which is the *type* of the importer,
@@ -438,5 +478,49 @@ mod tests {
     fn anniversary_melee_arm_material_is_not_weapon_geometry() {
         assert!(is_melee_arm_material("ND-melee_arm.psd"));
         assert!(!is_melee_arm_material("ND-wrench.psd"));
+    }
+
+    /// Every material the shipped gun `_h` set actually uses, as reported by
+    /// `cargo run -p shock2vr --example gun_hand_islands`. The arm column is
+    /// what the VR strip removes, so a misclassification is either a handless
+    /// grip or a spare hand left inside the glove.
+    #[test]
+    fn the_arm_classifier_splits_the_shipped_gun_materials() {
+        for arm in [
+            "ND-arm.psd",      // ar15_h, empgun_h, lasehand, atek_h sleeve
+            "ND-arm_atek.psd", // atek_h firing hand, sg_h
+            "ND-arm_las.psd",  // lasehand
+        ] {
+            assert!(is_first_person_arm_material(arm), "{arm} is an arm");
+        }
+        for weapon in [
+            "ND-atek.psd",
+            "ND-ammo1.psd",
+            "ND-bulletcasing",
+            "ND-ar15.psd",
+            "ND-ar15_il.psd",
+            "ND-shotgun.psd",
+            "ND-laserp.psd",
+            "ND-laserp_il.psd",
+            "ND-laserp_t.psd",
+            "SCAN_.png",
+            "ND-empgun.psd",
+            "ND-empgun.psd1",
+            "ND-glaunch.psd",
+            "ND-sfg.psd",
+            "ND-FSN.psd",
+            "ND-FSN_il.psd",
+            "ND-al.psd",
+            "ND-viro.psd",
+            // The psi amp's arm is modelled into the amp itself, so no
+            // material isolates it - which is why the amp keeps its baked hand.
+            "ND-amp_h.psd",
+            "ND-amp_il.psd",
+        ] {
+            assert!(
+                !is_first_person_arm_material(weapon),
+                "{weapon} is not an arm"
+            );
+        }
     }
 }
