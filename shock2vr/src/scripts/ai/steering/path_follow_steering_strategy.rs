@@ -15,7 +15,7 @@ use crate::{
     util::vec3_to_point3,
 };
 
-use super::{Steering, SteeringOutput, SteeringStrategy};
+use super::{Steering, SteeringOutput, SteeringStrategy, WhiskerAvoidance};
 
 /// How the strategy picks its destination
 pub enum PathTarget {
@@ -94,6 +94,14 @@ const SEPARATION_RADIUS: f32 = 6.0 / SCALE_FACTOR;
 /// (issue #487).
 const SEPARATION_MAX_OFFSET: f32 = 3.0 / SCALE_FACTOR;
 
+/// A partial route counts as reaching its goal anyway when its last waypoint
+/// lands within this distance (6 Dark feet). A* answers an unreachable goal
+/// with a partial route to the closest reachable CELL CENTER, which lands
+/// near a goal it merely could not resolve to a cell, but a whole room short
+/// of one on another walk component - and following that to its end just
+/// presses the body into whatever geometry sits in between.
+const GOAL_REACHED_DISTANCE: f32 = 6.0 / SCALE_FACTOR;
+
 /// Steers along a route computed by the PathfindingService, the counterpart
 /// of the original engine's cAIPath following (Advance / UpdateTargetEdge in
 /// aipath.cpp). Returns None when no pathfinding data or no route exists so
@@ -119,6 +127,10 @@ pub struct PathFollowSteeringStrategy {
     /// spot means retreat + re-path freed nothing and the body is pinned
     /// (see UNSTICK_NUDGE_DISTANCE)
     last_stall_position: Option<Vector3<f32>>,
+    /// Last query said the goal has no route (see `goal_unreachable`)
+    goal_unreachable: bool,
+    /// Static-geometry whiskers, biasing the aim point (see `aim_with_bias`)
+    whiskers: WhiskerAvoidance,
 }
 
 impl PathFollowSteeringStrategy {
@@ -147,6 +159,8 @@ impl PathFollowSteeringStrategy {
             recovery: None,
             displacement_anchor: None,
             last_stall_position: None,
+            goal_unreachable: false,
+            whiskers: WhiskerAvoidance::new(),
         }
     }
 
@@ -166,11 +180,15 @@ impl PathFollowSteeringStrategy {
 }
 
 impl SteeringStrategy for PathFollowSteeringStrategy {
+    fn goal_unreachable(&self) -> bool {
+        self.goal_unreachable
+    }
+
     fn steer(
         &mut self,
         _current_heading: Deg<f32>,
         world: &World,
-        _physics: &PhysicsWorld,
+        physics: &PhysicsWorld,
         entity_id: EntityId,
         time: &Time,
     ) -> Option<(SteeringOutput, Effect)> {
@@ -234,13 +252,10 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // desire is discarded (the submit below re-queries).
         if advancing {
             if let Some(response) = async_pathfinding.take_result(entity_id.inner()) {
-                let goal_current = match desired_goal {
-                    Some(now) => xz_distance(response.goal, now) <= REPATH_TARGET_DRIFT,
-                    // Wander/Point requested this exact goal
-                    None => true,
-                };
+                let goal_current = answers_goal(&self.target, response.goal, desired_goal);
                 match response.outcome {
-                    AiPathOutcome::Failed => {
+                    AiPathOutcome::Failed if goal_current => {
+                        self.goal_unreachable = true;
                         self.clear_path();
                         // No route (even partially) - back off before asking
                         // again; the fallback chain is the worker's most
@@ -249,6 +264,10 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                             REPATH_FAILURE_BACKOFF_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
                     }
                     _ if goal_current => {
+                        // Only a PARTIAL route says anything about
+                        // reachability: it is A*'s "closest I could get".
+                        self.goal_unreachable = response.outcome == AiPathOutcome::Partial
+                            && !route_reaches_goal(&response.waypoints, response.goal);
                         self.path = response.waypoints;
                         self.path_goal = Some(response.goal);
                         // waypoint 0 is the position the query started from
@@ -302,6 +321,10 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
                     // same frames forever
                     self.repath_cooldown =
                         REPATH_COOLDOWN_SECONDS * rand::thread_rng().gen_range(0.8..1.2);
+                    // A fresh question: the previous answer's verdict on
+                    // reachability no longer stands (goals move, and blocked
+                    // crossings expire)
+                    self.goal_unreachable = false;
                     // The worker computes a full route, or - when the goal
                     // is unreachable (another island, off-mesh) - a partial
                     // route to the closest reachable point, so the AI
@@ -349,15 +372,18 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
         // path) stay authoritative - the bias is capped well below the
         // waypoint spacing.
         let separation = ai_util::separation_bias(world, entity_id, position, SEPARATION_RADIUS);
-        let aim = {
-            let magnitude = (separation.x * separation.x + separation.z * separation.z).sqrt();
-            if magnitude > 1e-3 {
-                let capped = magnitude.min(SEPARATION_MAX_OFFSET);
-                waypoint + separation * (capped / magnitude)
-            } else {
-                waypoint
-            }
-        };
+        // ...and the same treatment for static geometry the navigation mesh
+        // doesn't model (a railing, a crate left on the route): whiskers bend
+        // the line around it before the body wedges, without ever taking the
+        // heading away from the route. Both together are capped ONCE, so two
+        // biases pointing the same way still cannot bend the line further
+        // than one of them may.
+        let whiskers = self.whiskers.update(world, physics, entity_id, time);
+        let aim = aim_with_bias(
+            position,
+            waypoint,
+            capped(separation + whiskers, SEPARATION_MAX_OFFSET),
+        );
 
         // Stall escape: if we stop making progress toward the current
         // waypoint (blocked by a prop, another AI, or bad geometry), drop
@@ -512,6 +538,87 @@ impl SteeringStrategy for PathFollowSteeringStrategy {
     }
 }
 
+/// Shorten a horizontal bias to at most `max`.
+fn capped(bias: Vector3<f32>, max: f32) -> Vector3<f32> {
+    let magnitude = (bias.x * bias.x + bias.z * bias.z).sqrt();
+    if magnitude > max {
+        bias * (max / magnitude)
+    } else {
+        bias
+    }
+}
+
+/// Bend the aim point by a steering bias, keeping the route authoritative:
+/// a bias that would drag the aim point onto (or behind) the body is
+/// dropped, since turning to a point you are standing on is not steering.
+fn aim_with_bias(
+    position: Vector3<f32>,
+    waypoint: Vector3<f32>,
+    bias: Vector3<f32>,
+) -> Vector3<f32> {
+    // Drop whatever part of the bias points back down the route: an
+    // obstacle square across the path answers with its own normal, and
+    // pulling the aim point backwards would only stop the AI in front of it
+    // instead of taking it around (what is left is the sideways part).
+    let toward = waypoint - position;
+    let length = (toward.x * toward.x + toward.z * toward.z).sqrt();
+    let bias = if length > 1e-3 {
+        let toward = Vector3::new(toward.x / length, 0.0, toward.z / length);
+        let along = bias.x * toward.x + bias.z * toward.z;
+        if along < 0.0 {
+            bias - toward * along
+        } else {
+            bias
+        }
+    } else {
+        bias
+    };
+    let aim = waypoint + bias;
+    if xz_distance(position, aim) < WAYPOINT_ADVANCE_DISTANCE {
+        waypoint
+    } else {
+        aim
+    }
+}
+
+/// Whether a completed query answers the goal this strategy wants *now*.
+/// Queries are keyed by entity, so a result can outlive the strategy that
+/// asked for it - a patrol that gives up on a point builds a fresh follower
+/// while the old query is still in flight. Adopting that answer would steer
+/// the body along the abandoned point's route and, worse, carry its
+/// reachability verdict over to a point nothing ever asked about.
+fn answers_goal(
+    target: &PathTarget,
+    response_goal: Vector3<f32>,
+    desired_goal: Option<Vector3<f32>>,
+) -> bool {
+    match (target, desired_goal) {
+        // A moving target (the player): the answer is current if it was
+        // computed near where the target is now
+        (_, Some(now)) => xz_distance(response_goal, now) <= REPATH_TARGET_DRIFT,
+        // A fixed point is requested verbatim and echoed back verbatim, so
+        // any other goal belongs to a request this strategy did not make
+        (PathTarget::Point(point), None) => response_goal == *point,
+        // Wander picks its goal inside this strategy, so any answer is its own
+        (_, None) => true,
+    }
+}
+
+/// Whether a route actually arrives at the goal it was computed for. An
+/// empty route arrives nowhere.
+fn route_reaches_goal(waypoints: &[Vector3<f32>], goal: Vector3<f32>) -> bool {
+    waypoints
+        .last()
+        .map(|last| {
+            // Height matters as much as ground distance here: the case this
+            // exists for is a goal on the floor below, whose XZ distance is
+            // nearly zero.
+            xz_distance(*last, goal) <= GOAL_REACHED_DISTANCE
+                && (last.y - goal.y).abs() <= GOAL_REACHED_DISTANCE
+        })
+        .unwrap_or(false)
+}
+
 /// Skip every waypoint already within reach, returning the new index
 fn advance_waypoint(position: Vector3<f32>, path: &[Vector3<f32>], mut index: usize) -> usize {
     while index < path.len() && waypoint_reached(position, path[index]) {
@@ -599,6 +706,103 @@ mod tests {
         // ran in place through an endless stall/re-path loop).
         let path = vec![vec3(0.0, -1.7, 0.0), vec3(10.0, -1.7, 0.0)];
         assert_eq!(advance_waypoint(vec3(0.0, 0.0, 0.0), &path, 0), 1);
+    }
+
+    #[test]
+    fn a_bias_bends_the_aim_point() {
+        let aim = aim_with_bias(
+            vec3(0.0, 0.0, 0.0),
+            vec3(10.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+        );
+        assert_eq!(aim, vec3(10.0, 0.0, 1.0));
+    }
+
+    /// ...but never onto the body itself: a bias pointing back at an AI
+    /// nearly on top of its waypoint would spin it around.
+    #[test]
+    fn a_bias_never_aims_at_the_body() {
+        let position = vec3(0.0, 0.0, 0.0);
+        let waypoint = vec3(0.3, 0.0, 0.0);
+        assert_eq!(
+            aim_with_bias(position, waypoint, vec3(-0.3, 0.0, 0.0)),
+            waypoint
+        );
+    }
+
+    /// A bias pointing back down the route keeps only its sideways part -
+    /// the AI passes the obstacle instead of stopping in front of it.
+    #[test]
+    fn a_backward_bias_becomes_a_sideways_one() {
+        let aim = aim_with_bias(
+            vec3(0.0, 0.0, 0.0),
+            vec3(10.0, 0.0, 0.0),
+            vec3(-2.0, 0.0, 1.0),
+        );
+        assert_eq!(aim, vec3(10.0, 0.0, 1.0));
+    }
+
+    /// Queries are keyed by entity, so an answer can outlive the strategy
+    /// that asked for it - a patrol that gives up on a point builds a fresh
+    /// follower while the old query is still in flight. That answer says
+    /// nothing about the new point and must not be adopted (its route would
+    /// steer the body back at the abandoned point, and its verdict would
+    /// declare the new point unreachable without anyone asking).
+    #[test]
+    fn an_answer_for_an_abandoned_point_is_not_adopted() {
+        let point = vec3(10.0, 0.0, 10.0);
+        let target = PathTarget::Point(point);
+        assert!(answers_goal(&target, point, None), "its own answer");
+        assert!(
+            !answers_goal(&target, vec3(30.0, 0.0, 30.0), None),
+            "an answer for the point the patrol just gave up on"
+        );
+        // A goal on the floor below is a different point, however close in XZ
+        assert!(
+            !answers_goal(&target, vec3(10.0, -6.0, 10.0), None),
+            "an answer for a goal below this one"
+        );
+    }
+
+    #[test]
+    fn a_route_ending_at_its_goal_reaches_it() {
+        let goal = vec3(10.0, 0.0, 10.0);
+        assert!(route_reaches_goal(
+            &[vec3(0.0, 0.0, 0.0), vec3(10.5, 0.0, 10.0)],
+            goal
+        ));
+    }
+
+    /// A partial route stopping a room short of an unreachable goal is not
+    /// arrival - the patrol layer skips such a point instead of walking the
+    /// route's end and then pressing on toward the goal.
+    #[test]
+    fn a_partial_route_stopping_short_does_not_reach_its_goal() {
+        let goal = vec3(10.0, 0.0, 10.0);
+        assert!(!route_reaches_goal(
+            &[vec3(0.0, 0.0, 0.0), vec3(4.0, 0.0, 10.0)],
+            goal
+        ));
+        assert!(!route_reaches_goal(&[], goal));
+    }
+
+    /// ...and a route that ends directly above (or below) the goal has not
+    /// reached it either - the balcony case.
+    #[test]
+    fn a_route_ending_on_another_floor_does_not_reach_its_goal() {
+        assert!(!route_reaches_goal(
+            &[vec3(10.0, 0.0, 10.0)],
+            vec3(10.0, -4.8, 10.0)
+        ));
+    }
+
+    #[test]
+    fn biases_are_capped_together() {
+        let shortened = capped(vec3(3.0, 0.0, 4.0), 2.5);
+        assert!(
+            ((shortened.x * shortened.x + shortened.z * shortened.z).sqrt() - 2.5).abs() < 1e-5
+        );
+        assert_eq!(capped(vec3(0.3, 0.0, 0.4), 2.5), vec3(0.3, 0.0, 0.4));
     }
 
     #[test]

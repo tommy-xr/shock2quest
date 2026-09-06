@@ -11,6 +11,10 @@ pub struct ChainedSteeringStrategy {
 }
 
 impl SteeringStrategy for ChainedSteeringStrategy {
+    fn goal_unreachable(&self) -> bool {
+        self.strategies.iter().any(|s| s.goal_unreachable())
+    }
+
     fn steer(
         &mut self,
         _current_heading: Deg<f32>,

@@ -38,10 +38,6 @@ const PATROL_STALL_SECONDS: f32 = 5.0;
 /// the stall watchdog. A patrolling AI clears this in a fraction of a second,
 /// so only a body that is genuinely going nowhere trips the timer.
 const PATROL_STALL_PROGRESS: f32 = 2.0 / SCALE_FACTOR;
-/// Points skipped in a row, without reaching one in between, after which the
-/// AI stops patrolling altogether and hands back to idle - rather than
-/// shuffling forever between points it has no route to.
-const PATROL_MAX_SKIPPED_POINTS: u32 = 3;
 
 /// Walk an authored patrol route: head to the current patrol point, and on
 /// arrival advance to the next one along the `AIPatrol` link chain. Routes are
@@ -56,18 +52,25 @@ pub struct PatrolBehavior {
     steering_strategy: Box<dyn SteeringStrategy>,
     /// Set when the route dead-ends (a chain that isn't a loop): the AI has
     /// reached the final point and there is nowhere further to go, so it stops
-    /// patrolling and hands back to idle. Also set once the AI has skipped
-    /// PATROL_MAX_SKIPPED_POINTS unreachable points in a row.
+    /// patrolling and hands back to idle. Also set once every point on the
+    /// route has been given up on with no arrival in between.
     finished: bool,
     /// Stall watchdog: where the AI was when the timer was last re-anchored,
     /// and how long it has been stuck within PATROL_STALL_PROGRESS of it.
     stall_anchor: Option<Vector3<f32>>,
     stall_seconds: f32,
-    /// Points given up on since the last one actually reached.
-    skipped_points: u32,
+    /// Points given up on - no route to them, or stalled against geometry -
+    /// since the last one actually reached. Coming back around to a point
+    /// already on this list means the AI has tried the whole loop without
+    /// reaching anything, and the route ends there. A single wedge must not
+    /// retire a route the AI walks fine the rest of the way round.
+    given_up_points: Vec<EntityId>,
     /// The runtime AICurrentPatrol link must be published once for a fresh
     /// behavior and whenever the target changes.
     target_dirty: bool,
+    /// Builds the steering for a goal - a hook so tests can drive the
+    /// behavior with a stubbed route outcome.
+    make_steering: fn(Vector3<f32>) -> Box<dyn SteeringStrategy>,
     /// Whether the route has actually advanced at least one edge. Dark clears
     /// the authored AI_Patrol flag at a real end of chain, but the start rule
     /// targets the *destination* of the nearest link, which in shipped data
@@ -83,19 +86,35 @@ impl PatrolBehavior {
             target_point,
             goal,
             steering_strategy: Self::steering_to(goal),
+            make_steering: Self::steering_to,
             finished: false,
             stall_anchor: None,
             stall_seconds: 0.0,
-            skipped_points: 0,
+            given_up_points: Vec::new(),
             target_dirty: true,
             walked_an_edge: false,
         }
     }
 
+    #[cfg(test)]
+    fn with_steering(
+        target_point: EntityId,
+        goal: Vector3<f32>,
+        make_steering: fn(Vector3<f32>) -> Box<dyn SteeringStrategy>,
+    ) -> PatrolBehavior {
+        PatrolBehavior {
+            steering_strategy: make_steering(goal),
+            make_steering,
+            ..PatrolBehavior::new(target_point, goal)
+        }
+    }
+
     fn steering_to(goal: Vector3<f32>) -> Box<dyn SteeringStrategy> {
         steering::chained(vec![
-            // Path steering leads; whisker avoidance only covers the no-route
-            // case (see chase_behavior for the deadlock this prevents)
+            // Path steering leads - it carries its own whiskers as a bias on
+            // its aim point; this one is the no-route fallback, where a
+            // heading override is safe (see chase_behavior for the deadlock
+            // that overriding an ACTIVE route causes)
             Box::new(PathFollowSteeringStrategy::to_point(goal)),
             Box::new(CollisionAvoidanceSteeringStrategy::conservative()),
         ])
@@ -116,7 +135,7 @@ impl PatrolBehavior {
             Some((next, goal)) => {
                 self.target_point = next;
                 self.goal = goal;
-                self.steering_strategy = Self::steering_to(goal);
+                self.steering_strategy = (self.make_steering)(goal);
                 self.stall_anchor = None;
                 self.stall_seconds = 0.0;
                 self.walked_an_edge = true;
@@ -146,6 +165,27 @@ impl PatrolBehavior {
                 Effect::combine(effects)
             }
         }
+    }
+
+    /// Give up on the current point and try the next one. Only a whole lap
+    /// of these - every point given up on, with no arrival in between - ends
+    /// the route, so one bad point (or one wedge the AI walks out of on the
+    /// next leg) never retires a patrol, while a route with nothing reachable
+    /// left stops instead of cycling (and re-querying A*) forever.
+    fn give_up_on_point(&mut self, world: &World, entity_id: EntityId) -> Effect {
+        if self.given_up_points.contains(&self.target_point) {
+            tracing::debug!(
+                "patrol {entity_id:?}: gave up on the whole loop, retiring at {:?}",
+                self.target_point
+            );
+            self.finished = true;
+            return Effect::SetAICurrentPatrol {
+                entity_id,
+                target: None,
+            };
+        }
+        self.given_up_points.push(self.target_point);
+        self.advance(world, entity_id, false)
     }
 
     /// Whether the AI has failed to cover ground for PATROL_STALL_SECONDS.
@@ -192,23 +232,30 @@ impl Behavior for PatrolBehavior {
             let (position, _) = ai_util::get_position_and_forward(world, entity_id);
             let position = position.to_vec();
             if self.arrived(position) {
-                self.skipped_points = 0;
+                self.given_up_points.clear();
                 patrol_effects.push(self.advance(world, entity_id, true));
+            } else if self.steering_strategy.goal_unreachable() {
+                // No route to this point (shipped routes include points on a
+                // disconnected part of the navigation graph, e.g. a marker on
+                // the floor below). Move on at once rather than steering at it
+                // on a heading nothing checked, grinding into the geometry in
+                // between until the stall watchdog retires the whole route.
+                // Counted like a stalled skip, so a route with no reachable
+                // point left ends instead of cycling (and re-querying) forever.
+                tracing::debug!(
+                    "patrol {entity_id:?}: no route to point {:?}, skipping to the next one",
+                    self.target_point
+                );
+                patrol_effects.push(self.give_up_on_point(world, entity_id));
             } else if self.stalled(position, time) {
                 // Going nowhere: give up on this point and try the next one.
-                // Enough of those in a row and the whole route is out of
-                // reach, so stop patrolling and hand back to idle via
-                // next_behavior rather than walking in place forever.
-                self.skipped_points += 1;
-                if self.skipped_points >= PATROL_MAX_SKIPPED_POINTS {
-                    self.finished = true;
-                    patrol_effects.push(Effect::SetAICurrentPatrol {
-                        entity_id,
-                        target: None,
-                    });
-                } else {
-                    patrol_effects.push(self.advance(world, entity_id, false));
-                }
+                // A wedge is a fact about the body's current spot, not about
+                // the route, so the next leg usually walks straight out of it.
+                tracing::debug!(
+                    "patrol {entity_id:?}: stalled on point {:?}",
+                    self.target_point
+                );
+                patrol_effects.push(self.give_up_on_point(world, entity_id));
             }
         }
 
@@ -298,6 +345,35 @@ mod tests {
         (world, creature, points[0], vec3(100.0, 0.0, 100.0))
     }
 
+    /// A wedged patroller must get the whole loop's worth of tries. A stall
+    /// is a fact about the spot the body is standing in, not about the route:
+    /// the AI usually walks out of it on the next leg, so giving up on a
+    /// handful of points in a row must not retire a patrol permanently (an
+    /// Idle creature stands in that corner for the rest of the mission).
+    #[test]
+    fn a_wedged_patroller_tries_every_point_before_retiring() {
+        let (world, creature, first, goal) = world_with_six_point_route();
+        let physics = PhysicsWorld::new();
+        let mut patrol = PatrolBehavior::new(first, goal);
+
+        // The body never moves, so every point stalls. Four stall windows in.
+        let mut tried = Vec::new();
+        for _ in 0..300 {
+            patrol.steer(Deg(0.0), &world, &physics, creature, &tick());
+            if !tried.contains(&patrol.target_point) {
+                tried.push(patrol.target_point);
+            }
+            if patrol.finished {
+                break;
+            }
+        }
+
+        assert!(
+            tried.len() >= 6,
+            "every point on the loop gets a try before the route retires, got {tried:?}"
+        );
+    }
+
     /// A patroller that cannot reach its route must not walk into the
     /// geometry forever. The nearest point is chosen geometrically, so it can
     /// sit in a disconnected part of the navigation graph - A* then returns
@@ -309,11 +385,12 @@ mod tests {
         let physics = PhysicsWorld::new();
         let mut patrol = PatrolBehavior::new(first, goal);
 
-        // 20 simulated seconds without the body ever moving - four times the
-        // stall window, so every point on the loop gets its turn.
+        // 30 simulated seconds without the body ever moving - six times the
+        // stall window, so every point on the loop gets its turn and the
+        // route comes back around to the first one it gave up on.
         let mut elapsed = 0.0;
         let mut emitted = Vec::new();
-        for _ in 0..200 {
+        for _ in 0..300 {
             let time = Time {
                 elapsed: std::time::Duration::from_millis(100),
                 total: std::time::Duration::from_millis(0),
@@ -383,6 +460,131 @@ mod tests {
             "a moving patroller must stay on its route"
         );
         assert_eq!(patrol.target_point, first, "and keep the same point");
+    }
+
+    /// Steering that reports no route to whatever goal it was given.
+    struct UnreachableSteering;
+    /// ...and its counterpart, which has a route.
+    struct ReachableSteering;
+    impl SteeringStrategy for ReachableSteering {}
+    impl SteeringStrategy for UnreachableSteering {
+        fn goal_unreachable(&self) -> bool {
+            true
+        }
+    }
+
+    /// The medsci2 shape: a six-point loop, none of it reachable from where
+    /// the creature stands.
+    fn world_with_six_point_route() -> (World, EntityId, EntityId, Vector3<f32>) {
+        let mut world = World::new();
+        let creature = world.add_entity(RuntimePropTransform(Matrix4::from_scale(1.0)));
+        let points: Vec<EntityId> = (0..6)
+            .map(|i| {
+                world.add_entity((
+                    RuntimePropTransform(Matrix4::from_translation(vec3(
+                        100.0 + i as f32,
+                        0.0,
+                        100.0,
+                    ))),
+                    Links::empty(),
+                ))
+            })
+            .collect();
+        {
+            let mut v_links = world.borrow::<ViewMut<Links>>().unwrap();
+            for (index, point) in points.iter().enumerate() {
+                (&mut v_links).get(*point).unwrap().to_links.push(ToLink {
+                    to_template_id: 0,
+                    to_entity_id: Some(WrappedEntityId(points[(index + 1) % points.len()])),
+                    link: Link::AIPatrol,
+                });
+            }
+        }
+        (world, creature, points[0], vec3(100.0, 0.0, 100.0))
+    }
+
+    /// A patrol point with no route to it (shipped routes include points on
+    /// a disconnected part of the navigation graph) is skipped at once - and
+    /// the route keeps going, rather than the AI grinding into the geometry
+    /// between it and the point until the watchdog retires the patrol.
+    #[test]
+    fn a_patroller_skips_a_point_it_has_no_route_to() {
+        let (world, creature, first, goal) = world_with_unreachable_route();
+        let physics = PhysicsWorld::new();
+        let mut patrol =
+            PatrolBehavior::with_steering(first, goal, |_| Box::new(UnreachableSteering));
+
+        let mut emitted = Vec::new();
+        for _ in 0..100 {
+            if let Some((_, effect)) = patrol.steer(Deg(0.0), &world, &physics, creature, &tick()) {
+                emitted.extend(Effect::flatten(vec![effect]));
+            }
+        }
+
+        // The route moves on at once - one tick per point, no waiting out the
+        // stall watchdog - and, since NO point on this loop is reachable, it
+        // ends when it comes back around to one it already gave up on, rather
+        // than cycling (and re-querying) forever.
+        let targets: Vec<Option<EntityId>> = emitted
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::SetAICurrentPatrol { target, .. } => Some(*target),
+                _ => None,
+            })
+            .collect();
+        let tried: Vec<EntityId> = targets.iter().flatten().copied().collect();
+        assert_eq!(
+            tried.iter().collect::<std::collections::HashSet<_>>().len(),
+            3,
+            "every point on the loop gets one try, got {tried:?}"
+        );
+        assert_eq!(
+            targets.last(),
+            Some(&None),
+            "and the route then retires, got {targets:?}"
+        );
+        assert!(patrol.finished, "a route with no reachable point ends");
+    }
+
+    thread_local! {
+        /// How many steering strategies the test below has handed out
+        static STEERINGS_BUILT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// One unreachable point does not end a route: the AI skips it and
+    /// carries on toward the next, which it can route to.
+    #[test]
+    fn one_unreachable_point_does_not_end_the_route() {
+        let (world, creature, first, goal) = world_with_unreachable_route();
+        let physics = PhysicsWorld::new();
+        STEERINGS_BUILT.with(|built| built.set(0));
+        // Only the first point reports no route.
+        let mut patrol = PatrolBehavior::with_steering(first, goal, |_| {
+            let nth = STEERINGS_BUILT.with(|built| {
+                let nth = built.get();
+                built.set(nth + 1);
+                nth
+            });
+            if nth == 0 {
+                Box::new(UnreachableSteering)
+            } else {
+                Box::new(ReachableSteering) as Box<dyn SteeringStrategy>
+            }
+        });
+
+        let mut emitted = Vec::new();
+        for _ in 0..20 {
+            if let Some((_, effect)) = patrol.steer(Deg(0.0), &world, &physics, creature, &tick()) {
+                emitted.extend(Effect::flatten(vec![effect]));
+            }
+        }
+
+        assert!(!patrol.finished, "the route carries on past one bad point");
+        let skips = emitted
+            .iter()
+            .filter(|effect| matches!(effect, Effect::SetAICurrentPatrol { .. }))
+            .count();
+        assert_eq!(skips, 2, "the initial target, then one skip");
     }
 
     #[test]

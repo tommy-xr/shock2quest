@@ -4,12 +4,14 @@ mod chase_player_steering_strategy;
 mod collision_avoidance_steering_strategy;
 mod path_follow_steering_strategy;
 mod wander_steering_strategy;
+mod whisker_avoidance;
 
 pub use chained_steering_strategy::*;
 pub use chase_entity_steering_strategy::*;
 pub use chase_player_steering_strategy::*;
 pub use collision_avoidance_steering_strategy::*;
 pub use path_follow_steering_strategy::*;
+pub use whisker_avoidance::*;
 
 use cgmath::{Deg, EuclideanSpace, Point3};
 use shipyard::{EntityId, World};
@@ -50,6 +52,15 @@ impl Steering {
 }
 
 pub trait SteeringStrategy {
+    /// Whether the destination this strategy was given has no route to it -
+    /// A* reported no route at all, or only a partial one that stops well
+    /// short. The owning behavior decides what to do about it (a patrol
+    /// skips the point); steering itself must never answer an unreachable
+    /// goal by aiming straight at it.
+    fn goal_unreachable(&self) -> bool {
+        false
+    }
+
     fn steer(
         &mut self,
         _current_heading: Deg<f32>,
