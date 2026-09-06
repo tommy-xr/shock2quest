@@ -7,8 +7,8 @@ pub use damage_flash::*;
 mod item_outline;
 pub use item_outline::*;
 
-pub(crate) mod virtual_arms;
-pub use virtual_arms::*;
+pub(crate) mod wrist;
+pub use wrist::*;
 
 pub(crate) mod ammo_panel;
 pub(crate) mod readouts;

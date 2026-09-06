@@ -1,41 +1,47 @@
-use cgmath::{Deg, Euler, Matrix4, Quaternion, Rotation, Vector3, vec3};
-use dark::{
-    importers::TEXTURE_IMPORTER,
-    properties::{PropHitPoints, PropMaxHitPoints, PropPsiState},
-};
-use engine::{assets::asset_cache::AssetCache, scene::SceneObject, texture::TextureOptions};
+//! The readouts the VR player wears on the wrists of the gloves.
+//!
+//! The left glove carries a **watch face** - health, the one stat worth a
+//! glance mid-fight - and the right carries the ammo gauge. Each is a canvas
+//! the shared layout built (`hud::readouts`, `hud::ammo_panel`), cropped to the
+//! row or the well it shows; nothing here decides where a bar or a number goes,
+//! only where the plate hangs on the hand (AGENTS.md section 3).
+
+use cgmath::{Deg, Matrix4, Quaternion, Rotation, Vector2, Vector3, vec3};
+use dark::properties::{PropHitPoints, PropMaxHitPoints, PropPsiState};
+use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 use shipyard::{Get, UniqueView, View, World};
 
 use crate::{
     hud::{ammo_panel, readouts},
     mission::PlayerInfo,
     ui::UiCanvas,
-    vr_config::Handedness,
 };
 
-/// Offset from hand position to forearm HUD panel *centre*. The panel's width
-/// axis runs along the arm (hand-local +Z), so it spans
-/// `FOREARM_OFFSET.z +/- HUD_PANEL_WIDTH / 2` and its near edge - not this
-/// centre - is what the forearm geometry has to stop short of.
-pub(crate) const FOREARM_OFFSET: Vector3<f32> = vec3(0.0, 0.0, 0.25); // world units: 0.25 * 0.762 = 19 cm toward the elbow
+/// Where a wrist canvas hangs, in the hand's own frame. The hand points down
+/// its -Z (the aim/raycast direction the glove's fingers follow), so +Z is
+/// toward the elbow and this sits just past the glove's cuff, clear of the
+/// emissive cuff ring; +Y is out of the back of the hand, so the plate rides on
+/// top of the wrist and faces the player when the wrist is turned up.
+const WRIST_OFFSET: Vector3<f32> = vec3(0.0, 0.02, 0.055);
 
-/// Size of the HUD panels (260x64 aspect ratio) - doubled in size. In world
-/// units, like every other length here; `crate::METERS_PER_WORLD_UNIT` converts.
-pub(crate) const HUD_PANEL_WIDTH: f32 = 0.26; // world units: 0.26 * 0.762 = 20 cm along the arm
-const HUD_PANEL_HEIGHT: f32 = 0.064; // 6.4cm tall (260:64 = 4.0625:1 ratio)
+/// How wide every wrist canvas is, in world units (`crate::METERS_PER_WORLD_UNIT`
+/// converts: ~5.9 cm, a wrist's width). Height follows from each canvas's own
+/// aspect, so the two wrists read as a matched pair whatever art each wears and
+/// neither is stretched.
+const WRIST_CANVAS_WIDTH: f32 = 0.078;
 
 /// Z-offset for overlay layers to ensure proper rendering order
 const OVERLAY_Z_OFFSET: f32 = 0.001;
 
-/// Create the forearm HUD panels: BIOFULL (health/psi) on the left arm,
-/// AMMOFULL (the live ammo readout) on the right.
+/// Create the wrist HUD canvases: the health watch on the left glove, the ammo
+/// gauge on the right.
 ///
 /// `use_mode` silences both: the cyber interface carries the expanded BIOFULL
 /// and AMMOFULL readouts on its canvas while it is up (`hud::readouts`), so
-/// leaving the arms lit would show a VR player the same numbers twice, at two
+/// leaving the wrists lit would show a VR player the same numbers twice, at two
 /// scales and orientations (issue #1268). Flat drops its compact overlay in
 /// use mode for the same reason (`hud::flat_hud`).
-pub fn create_arm_hud_panels(
+pub fn create_wrist_hud_panels(
     asset_cache: &mut AssetCache,
     world: &World,
     use_mode: bool,
@@ -48,21 +54,19 @@ pub fn create_arm_hud_panels(
         return Vec::new();
     }
 
-    // The bio monitor on the left arm, the ammo gauge on the right - each the
+    // The watch on the left wrist, the ammo gauge on the right - each the
     // shared layout's own canvas, hung by the one compositor below.
-    let mut scene_objects = forearm_readout_panel(
+    let mut scene_objects = wrist_canvas(
         asset_cache,
         left_hand_position,
         left_hand_rotation,
-        Handedness::Left,
-        readouts::build_bio_readout_canvas(&readouts::BioReadout::from_world(world)),
+        readouts::build_watch_canvas(&readouts::BioReadout::from_world(world)),
     );
-    scene_objects.append(&mut forearm_readout_panel(
+    scene_objects.append(&mut wrist_canvas(
         asset_cache,
         right_hand_position,
         right_hand_rotation,
-        Handedness::Right,
-        ammo_panel::build_readout_canvas(&ammo_panel::AmmoReadout::from_world(world, false)),
+        ammo_panel::build_wrist_canvas(&ammo_panel::AmmoReadout::from_world(world, false)),
     ));
 
     // Part of the player's hand visuals: labelled here rather than at the call
@@ -212,119 +216,58 @@ pub(crate) fn get_wielded_ammo_icon(world: &World) -> Option<String> {
     icons.0.get(&template_id).cloned()
 }
 
-/// One forearm panel: the backdrop art for `handedness` with `readout` - a
-/// panel-sized canvas drawn at panel origin (0,0) - composited one overlay step
-/// in front of it.
+/// One wrist canvas, hung on the hand. `readout` is whatever the SHARED
+/// presentation-agnostic layout emitted - plate art included - so a wrist
+/// cannot drift from the interface canvas or the flat HUD (AGENTS.md section
+/// 3). Both wrists composite identically here, so a change to how one is hung
+/// cannot miss the other.
 ///
-/// The backdrop stays a plain lit quad rather than a canvas element (the canvas
-/// presenter draws its elements fully emissive, which suits a readout but would
-/// make the panel glow), and `readout` is whatever the SHARED presentation-
-/// agnostic layout emitted, so an arm cannot drift from the interface canvas or
-/// the flat HUD (AGENTS.md section 3). Both arms composite identically here, so
-/// a change to how one is hung cannot miss the other.
-///
-/// No controls on either arm: the VR pointer only hits the cyber-interface
+/// No controls on either wrist: the VR pointer only hits the cyber-interface
 /// panel, never these quads, so drawing a SETTING/RELOAD/cycle button nobody can
 /// press would be a lie. Only the interactive layer differs, and it differs by
 /// whether a pointer can reach it, not by presentation.
-fn forearm_readout_panel(
+fn wrist_canvas(
     asset_cache: &mut AssetCache,
     hand_position: Vector3<f32>,
     hand_rotation: Quaternion<f32>,
-    handedness: Handedness,
     readout: UiCanvas,
 ) -> Vec<SceneObject> {
-    let mut objects = vec![create_forearm_hud_panel(
+    if readout.element_count() == 0 {
+        return Vec::new();
+    }
+    readout.render_world_space(
         asset_cache,
-        hand_position,
-        hand_rotation,
-        handedness,
-    )];
-
-    objects.append(&mut readout.render_world_space(
-        asset_cache,
-        forearm_panel_transform(hand_position, hand_rotation, handedness)
-            * Matrix4::from_translation(vec3(0.0, 0.0, OVERLAY_Z_OFFSET)),
+        wrist_panel_transform(hand_position, hand_rotation, readout.size()),
         None,
         None,
         OVERLAY_Z_OFFSET,
-    ));
-
-    objects
-}
-
-/// Create a single forearm HUD panel
-fn create_forearm_hud_panel(
-    asset_cache: &mut AssetCache,
-    hand_position: Vector3<f32>,
-    hand_rotation: Quaternion<f32>,
-    handedness: Handedness,
-) -> SceneObject {
-    // Load appropriate texture based on handedness
-    let texture_options = TextureOptions {
-        wrap: false,
-        ..Default::default()
-    };
-    let texture = match handedness {
-        Handedness::Left => asset_cache.get_ext(&TEXTURE_IMPORTER, "BIOFULL.PCX", &texture_options),
-        Handedness::Right => {
-            asset_cache.get_ext(&TEXTURE_IMPORTER, "AMMOFULL.PCX", &texture_options)
-        }
-    };
-
-    // Create BasicMaterial with the loaded texture (casting to the expected trait object)
-    let material = engine::scene::basic_material::create(
-        texture.clone() as std::rc::Rc<dyn engine::texture::TextureTrait>,
-        0.0, // No emissivity
-        0.0, // No transparency
-    );
-
-    // Create quad geometry
-    let geometry = Box::new(engine::scene::quad::create());
-
-    // Create scene object, placed by the shared forearm pose
-    let mut scene_object = SceneObject::new(material, geometry);
-    scene_object.set_transform(forearm_panel_transform(
-        hand_position,
-        hand_rotation,
-        handedness,
-    ));
-
-    scene_object
-}
-
-/// Where a forearm panel hangs: offset from the hand toward the elbow, yawed
-/// toward the body and tilted flat against the arm like a wrist computer.
-/// The single source of forearm placement - the panel quad, its overlays and
-/// the ammo readout canvas all derive from this, so they cannot drift apart.
-fn forearm_pose(
-    hand_position: Vector3<f32>,
-    hand_rotation: Quaternion<f32>,
-    handedness: Handedness,
-) -> (Vector3<f32>, Quaternion<f32>) {
-    let forearm_position = hand_position + hand_rotation.rotate_vector(FOREARM_OFFSET);
-    let forearm_yaw_rotation = match handedness {
-        Handedness::Left => Quaternion::from(Euler::new(Deg(0.0), Deg(90.0), Deg(0.0))),
-        Handedness::Right => Quaternion::from(Euler::new(Deg(0.0), Deg(-90.0), Deg(0.0))),
-    };
-    let forearm_tilt_rotation = Quaternion::from(Euler::new(Deg(-90.0), Deg(0.0), Deg(180.0)));
-    (
-        forearm_position,
-        hand_rotation * forearm_yaw_rotation * forearm_tilt_rotation,
     )
 }
 
-/// [`forearm_pose`] as a root transform for a panel-sized canvas, so canvas
-/// elements land exactly on the panel quad.
-fn forearm_panel_transform(
+/// Where a wrist canvas of `canvas_size` pixels hangs: at [`WRIST_OFFSET`] in
+/// the hand's frame, lying on the back of the wrist and facing out of it.
+///
+/// One rotation, no compensation: a -90 degree turn about the hand's X lays the
+/// canvas on the back of the wrist. The basis stays honest (vr-ui-design rule
+/// 4) - panel +Z, the face the viewer sees, is the hand's +Y (out of the back of
+/// the hand); canvas up is panel +Y, which is the hand's -Z, pointing at the
+/// fingers and so away from the player; canvas right follows the hand's +X.
+/// That is the pose a watch is read in on a raised wrist.
+///
+/// The same offset and basis serve both hands: the glove model is mirrored for
+/// the left hand, but the hand *frame* is not, so the back of the wrist is +Y
+/// on both.
+fn wrist_panel_transform(
     hand_position: Vector3<f32>,
     hand_rotation: Quaternion<f32>,
-    handedness: Handedness,
+    canvas_size: Vector2<f32>,
 ) -> Matrix4<f32> {
-    let (position, rotation) = forearm_pose(hand_position, hand_rotation, handedness);
+    let position = hand_position + hand_rotation.rotate_vector(WRIST_OFFSET);
+    let height = WRIST_CANVAS_WIDTH * canvas_size.y / canvas_size.x;
     Matrix4::from_translation(position)
-        * Matrix4::from(rotation)
-        * Matrix4::from_nonuniform_scale(HUD_PANEL_WIDTH, HUD_PANEL_HEIGHT, 1.0)
+        * Matrix4::from(hand_rotation)
+        * Matrix4::from_angle_x(Deg(-90.0))
+        * Matrix4::from_nonuniform_scale(WRIST_CANVAS_WIDTH, height, 1.0)
 }
 
 #[cfg(test)]
@@ -332,7 +275,9 @@ mod tests {
     use super::*;
     use engine::assets::asset_paths::AssetPath;
 
-    /// With the cyber interface up, the forearms emit nothing at all - the
+    use cgmath::{InnerSpace, One, Transform, Vector4, vec2, vec4};
+
+    /// With the cyber interface up, the wrists emit nothing at all - the
     /// interface canvas is the single copy of both readouts (issue #1268).
     ///
     /// The gate short-circuits before the world or the asset cache is touched,
@@ -340,18 +285,81 @@ mod tests {
     /// that resolves nothing a sufficient fixture: an ungated build reaches
     /// both and fails.
     #[test]
-    fn the_forearms_go_quiet_while_use_mode_is_up() {
+    fn the_wrists_go_quiet_while_use_mode_is_up() {
         // No mounts: every lookup misses, so touching the cache is the failure
         // this test is looking for.
         let mut assets = AssetCache::new(String::new(), AssetPath::combine(vec![]));
-        let objects = create_arm_hud_panels(
+        let objects = create_wrist_hud_panels(
             &mut assets,
             &World::new(),
             true,
             vec3(0.0, 0.0, 0.0),
-            Quaternion::from(Euler::new(Deg(0.0), Deg(0.0), Deg(0.0))),
+            Quaternion::one(),
             vec3(0.0, 0.0, 0.0),
-            Quaternion::from(Euler::new(Deg(0.0), Deg(0.0), Deg(0.0))),
+            Quaternion::one(),
+        );
+        assert!(objects.is_empty());
+    }
+
+    fn axis(transform: Matrix4<f32>, local: Vector4<f32>) -> Vector3<f32> {
+        (transform * local).truncate().normalize()
+    }
+
+    /// The plate lies on the back of the wrist, facing out of it, reading
+    /// toward the fingers - the pose a player checks a watch in. An identity
+    /// hand frame makes the hand's axes the world's, so the expected vectors
+    /// are just the frame's own.
+    #[test]
+    fn a_wrist_plate_faces_out_of_the_back_of_the_hand() {
+        let transform = wrist_panel_transform(
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::one(),
+            readouts::WATCH_CROP_SIZE,
+        );
+        // Panel +Z (the face the viewer sees) is the back of the hand; canvas
+        // up (panel +Y) points down the hand's aim direction at the fingers;
+        // canvas right is the hand's own right.
+        assert!(
+            (axis(transform, vec4(0.0, 0.0, 1.0, 0.0)) - vec3(0.0, 1.0, 0.0)).magnitude() < 1e-5
+        );
+        assert!(
+            (axis(transform, vec4(0.0, 1.0, 0.0, 0.0)) - vec3(0.0, 0.0, -1.0)).magnitude() < 1e-5
+        );
+        assert!(
+            (axis(transform, vec4(1.0, 0.0, 0.0, 0.0)) - vec3(1.0, 0.0, 0.0)).magnitude() < 1e-5
+        );
+        // ...at the offset, toward the elbow and above the wrist.
+        let centre = transform.transform_point(cgmath::point3(0.0, 0.0, 0.0));
+        assert!((cgmath::vec3(centre.x, centre.y, centre.z) - WRIST_OFFSET).magnitude() < 1e-5);
+    }
+
+    /// Every wrist canvas is the same width and never stretched, so the two
+    /// read as a matched pair of instruments however tall their art is.
+    #[test]
+    fn wrist_canvases_share_a_width_and_keep_their_aspect() {
+        for size in [readouts::WATCH_CROP_SIZE, ammo_panel::WRIST_CROP_SIZE] {
+            let transform = wrist_panel_transform(vec3(0.0, 0.0, 0.0), Quaternion::one(), size);
+            let width = (transform * vec4(1.0, 0.0, 0.0, 0.0))
+                .truncate()
+                .magnitude();
+            let height = (transform * vec4(0.0, 1.0, 0.0, 0.0))
+                .truncate()
+                .magnitude();
+            assert!((width - WRIST_CANVAS_WIDTH).abs() < 1e-6, "{size:?}");
+            assert!((height / width - size.y / size.x).abs() < 1e-6, "{size:?}");
+        }
+    }
+
+    /// A wrist with nothing to say hangs nothing at all - an empty canvas must
+    /// not become a bare plate strapped to the arm.
+    #[test]
+    fn an_empty_canvas_hangs_nothing() {
+        let mut assets = AssetCache::new(String::new(), AssetPath::combine(vec![]));
+        let objects = wrist_canvas(
+            &mut assets,
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::one(),
+            UiCanvas::new(vec2(90.0, 44.0)),
         );
         assert!(objects.is_empty());
     }

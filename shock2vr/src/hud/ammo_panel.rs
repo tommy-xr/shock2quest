@@ -3,7 +3,7 @@
 //! The original SS2 ammo gauge is authored inside the 260x64 AMMOFULL.PCX
 //! panel. Flatscreen draws that panel into the 640x480 HUD canvas at
 //! [`crate::hud::flat_hud`]'s ammo origin; VR wears the same panel on the
-//! right forearm, where it *is* the whole canvas. Both presentations emit the
+//! right wrist, cropped to its gauge well. Both presentations emit the
 //! readout from [`emit`] below, so the round count, ammo icon and type label
 //! sit in the same place relative to the panel art in the headset as they do
 //! on screen (AGENTS.md section 3).
@@ -145,7 +145,7 @@ pub(crate) const fn at(origin: Vector2<f32>, rect: Rect) -> Rect {
 }
 
 /// What the ammo readout says this frame. Presentation-agnostic: both the flat
-/// HUD and the VR forearm panel build one of these from the world.
+/// HUD and the VR wrist readout build one of these from the world.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct AmmoReadout {
     /// Selected psi power `(discipline, tier)` while the psi amp is wielded.
@@ -168,7 +168,7 @@ pub(crate) struct AmmoReadout {
     pub reload_label: String,
     /// Whether the interactive controls are drawn and hit-tested. Flat sets
     /// this only in use mode, where the pointer can actually click them; VR
-    /// leaves it off (the forearm panel has no pointer affordance - that is an
+    /// leaves it off (the wrist readout has no pointer affordance - that is an
     /// interaction-design decision, not a layout one).
     pub show_buttons: bool,
 }
@@ -334,14 +334,35 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
     }
 }
 
-/// The readout as the VR forearm draws it: a panel-sized canvas holding just
-/// the readout, which the forearm lays over its AMMOFULL backdrop quad. The
-/// panel *is* the canvas here, so the elements are emitted at panel origin
-/// (0,0) - flat emits the same ones at its own panel origin. Pure (no
+/// The gauge well with the bezel around it, cropped out of AMMOFULL.PCX - what
+/// the VR right wrist wears. Outside this box the panel art is palette index 0
+/// (the cyan key colour ordinary UI art does not drop), so a wider crop would
+/// frame the readout in cyan.
+pub(crate) const WRIST_CROP: Rect = Rect::new(168.0, 14.0, 90.0, 44.0);
+
+/// The wrist canvas is exactly its crop.
+pub(crate) const WRIST_CROP_SIZE: Vector2<f32> = vec2(WRIST_CROP.w, WRIST_CROP.h);
+
+/// The readout as the VR right wrist draws it: the cropped gauge well at canvas
+/// origin, with the readout placed over it by the shared [`emit`] off the panel
+/// corner the crop was taken from (hence the negative origin, exactly as the
+/// flat HUD anchors the same contents over the compact AMMOBACK crop).
+///
+/// Empty when nothing gun-like is wielded: flat drops the whole gauge then, and
+/// a bare plate strapped to the wrist would say less than nothing. Pure (no
 /// asset/GL access), so it is unit-testable like `build_flat_hud_canvas`.
-pub(crate) fn build_readout_canvas(readout: &AmmoReadout) -> UiCanvas {
-    let mut canvas = UiCanvas::new(PANEL_SIZE);
-    emit(&mut canvas, vec2(0.0, 0.0), readout);
+pub(crate) fn build_wrist_canvas(readout: &AmmoReadout) -> UiCanvas {
+    let mut canvas = UiCanvas::new(WRIST_CROP_SIZE);
+    if readout.is_empty() {
+        return canvas;
+    }
+    canvas.cropped_image(
+        Rect::new(0.0, 0.0, WRIST_CROP.w, WRIST_CROP.h),
+        "AMMOFULL.PCX",
+        WRIST_CROP,
+        PANEL_SIZE,
+    );
+    emit(&mut canvas, vec2(-WRIST_CROP.x, -WRIST_CROP.y), readout);
     canvas
 }
 
@@ -377,32 +398,36 @@ mod tests {
         buttons(readout).into_iter().map(|b| b.button).collect()
     }
 
+    /// The readout alone, at panel origin - the layout the wrist crop and the
+    /// flat HUD both place, with no backdrop of its own.
+    fn panel_canvas(readout: &AmmoReadout) -> UiCanvas {
+        let mut canvas = UiCanvas::new(PANEL_SIZE);
+        emit(&mut canvas, vec2(0.0, 0.0), readout);
+        canvas
+    }
+
     #[test]
-    fn the_empty_handed_forearm_readout_is_empty() {
-        // Nothing to say: the forearm shows its bare AMMOFULL backdrop quad.
-        let canvas = build_readout_canvas(&AmmoReadout::default());
+    fn the_empty_handed_readout_is_empty() {
+        let canvas = panel_canvas(&AmmoReadout::default());
         assert_eq!(canvas.element_count(), 0);
         assert_eq!(canvas.size(), PANEL_SIZE);
     }
 
     #[test]
-    fn a_wielded_gun_adds_its_count_icon_and_type_to_the_forearm() {
+    fn a_wielded_gun_adds_its_count_icon_and_type() {
+        assert_eq!(panel_canvas(&gun(12, None, None)).element_count(), 1);
         assert_eq!(
-            build_readout_canvas(&gun(12, None, None)).element_count(),
-            1
-        );
-        assert_eq!(
-            build_readout_canvas(&gun(12, Some("STD_I.PCX"), Some("std"))).element_count(),
+            panel_canvas(&gun(12, Some("STD_I.PCX"), Some("std"))).element_count(),
             3
         );
     }
 
     #[test]
-    fn the_forearm_count_tracks_the_clip() {
+    fn the_readout_count_tracks_the_clip() {
         // What the panel actually says, so a consumed round shows up here and
         // not just in a screenshot.
         let text_of = |readout| {
-            build_readout_canvas(&readout)
+            panel_canvas(&readout)
                 .elements()
                 .iter()
                 .find_map(|element| match element {
@@ -420,10 +445,10 @@ mod tests {
     }
 
     #[test]
-    fn the_psi_amp_shows_its_discipline_on_the_forearm_too() {
+    fn the_psi_amp_shows_its_discipline_too() {
         // Tier badge + discipline name = 2, and the amp's meaningless clip is
         // suppressed exactly as in flat.
-        let canvas = build_readout_canvas(&AmmoReadout {
+        let canvas = panel_canvas(&AmmoReadout {
             psi_power: Some(("Projected Cryokinesis".to_string(), 1)),
             ammo: Some(0),
             ..Default::default()
@@ -431,8 +456,8 @@ mod tests {
         assert_eq!(canvas.element_count(), 2);
     }
 
-    /// Every readout element is authored inside the panel, so the VR forearm
-    /// - where the panel IS the whole canvas - shows all of them.
+    /// Every readout element is authored inside the panel, so any presentation
+    /// that places the panel shows all of them.
     #[test]
     fn every_element_sits_inside_the_panel() {
         for rect in [
@@ -462,6 +487,39 @@ mod tests {
                 "{rect:?} overflows the panel height"
             );
         }
+    }
+
+    /// The wrist wears the panel's gauge well and nothing else: the same
+    /// elements the interface draws, shifted by the crop, all of them inside
+    /// the cropped plate.
+    #[test]
+    fn the_wrist_canvas_is_the_gauge_well_crop_of_the_panel_layout() {
+        let readout = gun(12, Some("STD_I.PCX"), Some("std"));
+        let wrist = build_wrist_canvas(&readout);
+        assert_eq!(wrist.size(), WRIST_CROP_SIZE);
+        // The plate crop, then count + icon + type label.
+        assert_eq!(wrist.element_count(), 4);
+
+        for (on_wrist, on_panel) in wrist.elements()[1..]
+            .iter()
+            .zip(panel_canvas(&readout).elements())
+        {
+            let (w, panel) = (on_wrist.rect(), on_panel.rect());
+            assert_eq!(w.x + WRIST_CROP.x, panel.x, "{w:?} vs {panel:?}");
+            assert_eq!(w.y + WRIST_CROP.y, panel.y, "{w:?} vs {panel:?}");
+            assert!(w.x >= 0.0 && w.x + w.w <= WRIST_CROP.w, "{w:?}");
+            assert!(w.y >= 0.0 && w.y + w.h <= WRIST_CROP.h, "{w:?}");
+        }
+    }
+
+    /// Nothing wielded: the wrist shows no plate at all, exactly as flat drops
+    /// the whole gauge rather than drawing an empty one.
+    #[test]
+    fn an_empty_readout_puts_nothing_on_the_wrist() {
+        assert_eq!(
+            build_wrist_canvas(&AmmoReadout::default()).element_count(),
+            0
+        );
     }
 
     /// The readout proper lives in the gauge well - the part of the panel the
@@ -519,7 +577,7 @@ mod tests {
 
     #[test]
     fn buttons_only_appear_where_the_pointer_can_reach_them() {
-        // Shooter mode / the VR forearm: the readout draws, the controls do not.
+        // Shooter mode / the VR wrist: the readout draws, the controls do not.
         assert!(
             kinds(&AmmoReadout {
                 show_buttons: false,
@@ -657,7 +715,7 @@ mod tests {
         // the same rect, so `mission_core` can hit-test that list verbatim.
         let readout = full_gun();
         let specs = buttons(&readout);
-        let canvas = build_readout_canvas(&readout);
+        let canvas = panel_canvas(&readout);
         for spec in &specs {
             assert!(
                 canvas.elements().iter().any(|element| match element {

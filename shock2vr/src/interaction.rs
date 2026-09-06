@@ -22,7 +22,7 @@ use crate::{
     GameOptions,
     flat_player_controller::FlatPlayerController,
     hand_glove::GloveRenderer,
-    hud::create_arm_hud_panels,
+    hud::create_wrist_hud_panels,
     input_context::InputContext,
     physics::PhysicsWorld,
     virtual_hand::{VirtualHand, VirtualHandEffect},
@@ -350,10 +350,10 @@ impl PlayerInteraction for VrInteraction {
         }
         // Labelled as the player's hands: that is what `Game` drops while the
         // pause menu is up (issue #1018), and what `/v1/scene` reports. The
-        // forearm panels carry their own label from `create_arm_hud_panels`,
+        // wrist canvases carry their own label from `create_wrist_hud_panels`,
         // which the `debug_hud` scene emits without going through here.
         crate::util::tag_render_source(&mut objs, crate::util::render_source::PLAYER_HANDS);
-        objs.append(&mut create_arm_hud_panels(
+        objs.append(&mut create_wrist_hud_panels(
             asset_cache,
             world,
             use_mode,

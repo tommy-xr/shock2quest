@@ -106,40 +106,75 @@ pub(crate) fn emit_bio(
 
 /// The bio monitor's bars and numbers alone, with the panel's upper-left corner
 /// at `origin` - everything [`emit_bio`] draws except the backdrop art.
-///
-/// Split out for the VR forearm, which wears the BIOFULL art as its own lit
-/// panel quad and composites only the live overlays onto it, exactly as the
-/// right forearm does with [`ammo_panel::emit`]. One layout, two presentations
-/// (AGENTS.md section 3).
 fn emit_bio_overlays(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &BioReadout) {
+    emit_health(canvas, origin, readout.health_fraction);
     let at = |rect| ammo_panel::at(origin, rect);
     canvas
-        .bar(at(HEALTH_BAR), "HPBAR.PCX", readout.health_fraction)
-        .bar(at(PSI_BAR), "PSIBAR.PCX", readout.psi_fraction);
-    let pct = |f: f32| (f.clamp(0.0, 1.0) * 100.0).round() as i32;
-    canvas
-        .text_native(
-            at(HEALTH_TEXT),
-            &format!("{}", pct(readout.health_fraction)),
-            FONT,
-            HAlign::Left,
-            VAlign::Middle,
-        )
+        .bar(at(PSI_BAR), "PSIBAR.PCX", readout.psi_fraction)
         .text_native(
             at(PSI_TEXT),
-            &format!("{}", pct(readout.psi_fraction)),
+            &percent(readout.psi_fraction),
             FONT,
             HAlign::Left,
             VAlign::Middle,
         );
 }
 
-/// The bio overlays on a panel-sized canvas at panel origin (0,0), for a
-/// presentation that supplies its own BIOFULL backdrop - the VR left forearm.
-/// The counterpart of [`ammo_panel::build_readout_canvas`].
-pub(crate) fn build_bio_readout_canvas(readout: &BioReadout) -> UiCanvas {
-    let mut canvas = UiCanvas::new(BIO_FULL_SIZE);
-    emit_bio_overlays(&mut canvas, vec2(0.0, 0.0), readout);
+/// The health row's bar and number, with the bio panel's upper-left corner at
+/// `origin`.
+///
+/// Split out for the VR wrist watch, which wears only this row (health is the
+/// one stat on the watch; psi lives on the psi amp's own readout) - so the
+/// watch and the interface place the bar and the number by the same rects, off
+/// the same panel corner, and cannot drift (AGENTS.md section 3).
+fn emit_health(canvas: &mut UiCanvas, origin: Vector2<f32>, fraction: f32) {
+    let at = |rect| ammo_panel::at(origin, rect);
+    canvas
+        .bar(at(HEALTH_BAR), "HPBAR.PCX", fraction)
+        .text_native(
+            at(HEALTH_TEXT),
+            &percent(fraction),
+            FONT,
+            HAlign::Left,
+            VAlign::Middle,
+        );
+}
+
+fn percent(fraction: f32) -> String {
+    format!("{}", (fraction.clamp(0.0, 1.0) * 100.0).round() as i32)
+}
+
+/// The wrist watch's face: the compact bio plate's HEALTH row, cropped out of
+/// BIO.PCX (whose psi row sits below it), with the live bar and number on top.
+///
+/// The crop's top and bottom edges are the bands of art between the plate's
+/// bezel and the psi row; its left and right are the plate's own, so the
+/// cross-icon well, the bar recess and the number well all survive. Outside
+/// this box BIO.PCX is palette index 0 - the cyan key colour, which ordinary
+/// UI art does not treat as transparent - so a taller crop would frame the
+/// watch in cyan.
+pub(crate) const WATCH_CROP: Rect = Rect::new(0.0, 15.0, 128.0, 21.0);
+
+/// The watch canvas is exactly its crop.
+pub(crate) const WATCH_CROP_SIZE: Vector2<f32> = vec2(WATCH_CROP.w, WATCH_CROP.h);
+
+/// The watch face as its own canvas: the cropped plate at canvas origin, with
+/// the health row's own elements placed by [`emit_health`] off the panel corner
+/// the crop was taken from (hence the negative origin, exactly as the flat HUD
+/// anchors the ammo panel's contents over the compact AMMOBACK crop).
+pub(crate) fn build_watch_canvas(readout: &BioReadout) -> UiCanvas {
+    let mut canvas = UiCanvas::new(WATCH_CROP_SIZE);
+    canvas.cropped_image(
+        Rect::new(0.0, 0.0, WATCH_CROP.w, WATCH_CROP.h),
+        "BIO.PCX",
+        WATCH_CROP,
+        BIO_SIZE,
+    );
+    emit_health(
+        &mut canvas,
+        vec2(-WATCH_CROP.x, -WATCH_CROP.y),
+        readout.health_fraction,
+    );
     canvas
 }
 
@@ -328,13 +363,12 @@ mod tests {
         }
     }
 
-    /// The VR left forearm and the interface canvas draw ONE bio layout: the
-    /// forearm's panel-local canvas carries exactly the elements `emit_bio`
-    /// places (minus the backdrop art the forearm wears as its own quad), at
-    /// the same rects relative to the panel origin. A forearm that re-derived
-    /// its bars would drift from the interface silently (issue #1268).
+    /// The VR wrist watch and the interface canvas draw ONE health layout: the
+    /// watch's bar and number land at the interface's rects, shifted by the
+    /// crop it wears. A watch that re-derived its own bar would drift from the
+    /// interface silently (issue #1268).
     #[test]
-    fn the_forearm_canvas_is_the_interface_bio_layout_at_panel_origin() {
+    fn the_watch_is_the_interface_health_row_shifted_by_its_crop() {
         let bio = BioReadout {
             health_fraction: 0.4,
             psi_fraction: 0.9,
@@ -349,17 +383,61 @@ mod tests {
             &bio,
         );
 
-        let forearm = build_bio_readout_canvas(&bio);
-        assert_eq!(forearm.size(), BIO_FULL_SIZE);
-        // The backdrop is the interface's first element and the forearm's quad.
-        assert_eq!(forearm.element_count(), interface.element_count() - 1);
+        let watch = build_watch_canvas(&bio);
+        assert_eq!(watch.size(), WATCH_CROP_SIZE);
+        // The plate crop, then the health bar and number - health only.
+        assert_eq!(watch.element_count(), 3);
 
-        for (on_arm, on_panel) in forearm.elements().iter().zip(&interface.elements()[1..]) {
-            let (arm, panel) = (on_arm.rect(), on_panel.rect());
-            assert_eq!(arm.x + BIO_ORIGIN.x, panel.x, "{arm:?} vs {panel:?}");
-            assert_eq!(arm.y + BIO_ORIGIN.y, panel.y, "{arm:?} vs {panel:?}");
-            assert_eq!((arm.w, arm.h), (panel.w, panel.h));
+        // Element 0 of the interface is its backdrop; 1 and 2 are the health
+        // row, which is what the watch shows after its own plate.
+        for (on_watch, on_panel) in watch.elements()[1..]
+            .iter()
+            .zip(&interface.elements()[1..3])
+        {
+            let (w, panel) = (on_watch.rect(), on_panel.rect());
+            assert_eq!(
+                w.x + BIO_ORIGIN.x + WATCH_CROP.x,
+                panel.x,
+                "{w:?} {panel:?}"
+            );
+            assert_eq!(
+                w.y + BIO_ORIGIN.y + WATCH_CROP.y,
+                panel.y,
+                "{w:?} {panel:?}"
+            );
+            assert_eq!((w.w, w.h), (panel.w, panel.h));
         }
+    }
+
+    /// Everything the watch draws lands inside the crop it wears - a bar or a
+    /// number placed off the cropped plate would simply hang in the air on the
+    /// player's wrist.
+    #[test]
+    fn the_watch_face_contains_its_own_readout() {
+        let watch = build_watch_canvas(&BioReadout {
+            health_fraction: 1.0,
+            psi_fraction: 0.0,
+        });
+        for element in &watch.elements()[1..] {
+            let rect = element.rect();
+            assert!(rect.x >= 0.0 && rect.y >= 0.0, "{rect:?}");
+            assert!(rect.y + rect.h <= WATCH_CROP.h, "{rect:?}");
+        }
+        // The health number's widget box runs past the compact plate's right
+        // edge (the original authors it against the wider BIOFULL); it is
+        // left-aligned, so the glyphs sit in the number well regardless.
+        assert!(HEALTH_BAR.x + HEALTH_BAR.w <= WATCH_CROP.w);
+        assert!(HEALTH_TEXT.x < WATCH_CROP.w);
+    }
+
+    /// The crop is the health row: below the plate's cyan-keyed bezel and above
+    /// the psi row the watch deliberately drops.
+    #[test]
+    fn the_watch_crop_holds_the_health_row_and_not_the_psi_row() {
+        assert!(WATCH_CROP.y < HEALTH_BAR.y);
+        assert!(HEALTH_BAR.y + HEALTH_BAR.h <= WATCH_CROP.y + WATCH_CROP.h);
+        assert!(WATCH_CROP.y + WATCH_CROP.h <= PSI_BAR.y);
+        assert!(WATCH_CROP.x + WATCH_CROP.w <= BIO_SIZE.x);
     }
 
     /// A readout with nothing to say offers no controls, even though the

@@ -11,7 +11,7 @@ use shipyard::{UniqueViewMut, World};
 use crate::{
     GameOptions,
     game_scene::GameScene,
-    hud::create_arm_hud_panels,
+    hud::create_wrist_hud_panels,
     input_context::InputContext,
     inventory::PlayerInventoryEntity,
     mission::{GlobalEntityMetadata, GlobalTemplateIdMap, PlayerInfo},
@@ -200,7 +200,7 @@ impl GameScene for DebugHudScene {
         _options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
         // Only render the virtual arms HUD panels
-        let hud_panels = create_arm_hud_panels(
+        let hud_panels = create_wrist_hud_panels(
             asset_cache,
             &self.world,
             // The debug scene has no cyber interface, so the arms are never
