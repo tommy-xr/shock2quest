@@ -3975,10 +3975,16 @@ impl MissionCore {
                 .unwrap();
             let mut v_prop_position = self.world.borrow::<ViewMut<PropPosition>>().unwrap();
             let v_entities = self.world.borrow::<EntitiesView>().unwrap();
+            let v_glove_weapon = self
+                .world
+                .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+                .unwrap();
             for (entity_id, handle) in &self.id_to_physics {
-                let scale = v_scale
+                let scale = v_glove_weapon
                     .get(*entity_id)
-                    .map(|p| p.0)
+                    .ok()
+                    .map(|p| vec3(p.item_scale, p.item_scale, p.item_scale))
+                    .or_else(|| v_scale.get(*entity_id).ok().map(|p| p.0))
                     .unwrap_or(vec3(1.0, 1.0, 1.0));
                 let position = self.physics.get_position(*handle).unwrap();
                 let rotation = self.physics.get_rotation(*handle).unwrap();
@@ -7365,7 +7371,34 @@ impl MissionCore {
                                 .unwrap_or(false);
                         // A missing model must never take down the frame (or a
                         // load): keep the current model and complain loudly.
-                        let (new_model, vr_held_source) = if vr_held {
+                        let glove_source =
+                            if vr_held && crate::vr_weapon_grip::supports_model(&model_name) {
+                                asset_cache
+                                    .get_opt(
+                                        &dark::importers::GLOVE_WEAPON_IMPORTER,
+                                        &format!("{model_name}.bin"),
+                                    )
+                                    .filter(|source| source.as_ref().is_some())
+                            } else {
+                                None
+                            };
+                        let glove_weapon = glove_source.is_some();
+                        let (new_model, vr_held_source) = if let Some(source) = glove_source {
+                            (
+                                Some(Model::transform(
+                                    &source.as_ref().as_ref().unwrap().model,
+                                    xform,
+                                )),
+                                if crate::vr_weapon_grip::is_melee(&model_name) {
+                                    asset_cache.get_opt(
+                                        &dark::importers::VR_HELD_MODELS_IMPORTER,
+                                        &format!("{model_name}.bin"),
+                                    )
+                                } else {
+                                    None
+                                },
+                            )
+                        } else if vr_held {
                             match asset_cache.get_opt(
                                 &dark::importers::VR_HELD_MODELS_IMPORTER,
                                 &format!("{model_name}.BIN"),
@@ -7391,6 +7424,14 @@ impl MissionCore {
                             continue;
                         };
 
+                        self.world
+                            .remove::<crate::runtime_props::RuntimePropGloveWeapon>(entity_id);
+                        if glove_weapon {
+                            self.world.add_component(
+                                entity_id,
+                                crate::runtime_props::RuntimePropGloveWeapon { item_scale: 1.0 },
+                            );
+                        }
                         let mut vhots = new_model.vhots();
                         // Which hand a VR wield renders for. The `_h` models
                         // are all authored right-handed, so a left-hand wield
@@ -7475,15 +7516,21 @@ impl MissionCore {
                                     // the mirror image, and the contact offset
                                     // below is mirrored with it, keeping the
                                     // collider on the rendered head.
-                                    let correction =
-                                        crate::vr_config::melee_wield_pose_correction(arm, hand);
+                                    let correction = if glove_weapon {
+                                        crate::vr_config::melee_wield_pose_correction_scaled(
+                                            arm, 1.0, hand,
+                                        )
+                                    } else {
+                                        crate::vr_config::melee_wield_pose_correction(arm, hand)
+                                    };
+                                    let contact = if glove_weapon {
+                                        crate::vr_config::melee_contact_offset_scaled(arm, 1.0)
+                                    } else {
+                                        crate::vr_config::melee_contact_offset(arm)
+                                    };
                                     new_model.apply_local_transform(correction);
-                                    self.world.add_component(
-                                        entity_id,
-                                        RuntimePropVrGripOffset(
-                                            crate::vr_config::melee_contact_offset(arm),
-                                        ),
-                                    );
+                                    self.world
+                                        .add_component(entity_id, RuntimePropVrGripOffset(contact));
                                     if self.interaction.is_holding(entity_id) {
                                         match vr_held_source.as_ref().and_then(|source| {
                                             source.posed_weapon_bounds(&player, correction)
@@ -7569,8 +7616,11 @@ impl MissionCore {
                     self.abandon_turn_clip(entity_id);
                     self.id_to_model.remove(&entity_id);
                     self.id_to_animation_player.remove(&entity_id);
-                    self.world
-                        .remove::<(PropModelName, RuntimePropVhots)>(entity_id);
+                    self.world.remove::<(
+                        PropModelName,
+                        RuntimePropVhots,
+                        crate::runtime_props::RuntimePropGloveWeapon,
+                    )>(entity_id);
                     self.world.remove::<RuntimePropVrGripOffset>(entity_id);
                 }
                 Effect::SetVhotsFromModel {
@@ -10187,7 +10237,22 @@ impl MissionCore {
                     rotation,
                     scale,
                 } => {
+                    if let Ok(mut weapons) = self
+                        .world
+                        .borrow::<ViewMut<crate::runtime_props::RuntimePropGloveWeapon>>()
+                    {
+                        if let Ok(weapon) = (&mut weapons).get(entity_id) {
+                            weapon.item_scale = scale.x;
+                        }
+                    }
                     self.set_entity_position_rotation(entity_id, position, rotation, scale);
+                }
+                VirtualHandEffect::FitHeldMelee {
+                    entity_id,
+                    size,
+                    center,
+                } => {
+                    self.physics.fit_held_melee_cuboid(entity_id, size, center);
                 }
                 VirtualHandEffect::SpawnEntity {
                     template_id,
@@ -10303,7 +10368,15 @@ impl MissionCore {
         // held-item scale before rebuilding their loose-object physics.
         // The grip is hand-local and the entity carries the hand's rotation
         // (a computed grip contributes none of its own).
-        let hand = position - rotation.rotate_vector(grip);
+        let scale = self
+            .world
+            .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|p| p.item_scale))
+            .unwrap_or(1.0);
+        let hand = position - rotation.rotate_vector(grip * scale);
+        self.world
+            .remove::<crate::runtime_props::RuntimePropGloveWeapon>(entity_id);
         self.set_entity_position_rotation(entity_id, hand, rotation, vec3(1.0, 1.0, 1.0));
     }
 

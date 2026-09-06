@@ -1,6 +1,8 @@
 //! Deterministic pickup fitting against visible triangles. All outputs are
 //! hand-local; tracked motion never re-runs the search or changes item scale.
-use cgmath::{InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3, Vector3, vec3};
+use cgmath::{
+    EuclideanSpace, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Rotation3, Vector3, vec3,
+};
 use rapier3d::{
     na,
     parry::query::{PointQuery, Ray, RayCast},
@@ -69,6 +71,23 @@ impl ResolvedGrip {
                 .iter()
                 .chain(self.contacts.iter().flatten().flatten())
                 .all(|c| c.is_finite())
+    }
+
+    /// Bounds of the visible fitted item in controller-local space, for capture framing.
+    pub fn item_bounds(&self, triangles: &[[Point3<f32>; 3]]) -> Option<[[f32; 3]; 2]> {
+        use collision::{Aabb, Aabb3};
+        let points = triangles.iter().flatten().map(|p| {
+            Point3::from_vec(
+                self.offset + self.rotation.rotate_vector(p.to_vec() * self.item_scale),
+            )
+        });
+        let bounds = points.fold(None, |bounds: Option<Aabb3<f32>>, p| {
+            Some(bounds.map_or_else(|| Aabb3::new(p, p), |b| b.grow(p)))
+        })?;
+        Some([
+            [bounds.min.x, bounds.min.y, bounds.min.z],
+            [bounds.max.x, bounds.max.y, bounds.max.z],
+        ])
     }
 
     pub fn finger_amounts(&self) -> FingerAmounts {
@@ -319,6 +338,51 @@ impl GripSurface {
         (result.is_valid()
             && self.pose_is_clear(hand, result.offset, result.rotation, &result.curls))
         .then_some(result)
+    }
+
+    /// Search only around authored hand surfaces, preserving the gun's aim axis.
+    /// Used offline; the runtime consumes the resulting prepared pose.
+    pub fn resolve_weapon(
+        &self,
+        hand: &GripKinematics,
+        arm: &[Point3<f32>],
+        seed_offset: Vector3<f32>,
+        rotation: Quaternion<f32>,
+    ) -> Option<ResolvedGrip> {
+        let mut best: Option<ResolvedGrip> = None;
+        let stride = (arm.len() / 60).max(1);
+        for point in arm.iter().step_by(stride) {
+            if ![point.x, point.y, point.z].into_iter().all(f32::is_finite) {
+                continue;
+            }
+            let offset = hand.palm - rotation.rotate_vector(point.to_vec());
+            let drift = (offset - seed_offset).magnitude();
+            // Reload hands and forearms far from the known grip are not candidates.
+            if drift > 0.4 {
+                continue;
+            }
+            for clearance in [-0.015, 0.0, 0.015, 0.03] {
+                let offset = offset + hand.normal * clearance;
+                let local_palm = rotation.conjugate().rotate_vector(hand.palm - offset);
+                let palm = na::Point3::new(local_palm.x, local_palm.y, local_palm.z);
+                if (palm - self.mesh.project_local_point_and_get_feature(&palm).0.point).norm()
+                    > 0.065
+                {
+                    continue;
+                }
+                let mut candidate = self.fit_at(hand, offset, rotation);
+                candidate.score -= drift * 3.0;
+                // Prefer wrapping the handle over balancing its butt on nearly open fingers.
+                candidate.score +=
+                    (candidate.curls[2] + candidate.curls[3] + candidate.curls[4]) * 0.7;
+                candidate.pose_family = "trigger".to_owned();
+                candidate.anchor = [point.x, point.y, point.z];
+                if candidate.is_valid() && best.as_ref().is_none_or(|b| candidate.score > b.score) {
+                    best = Some(candidate);
+                }
+            }
+        }
+        best
     }
 
     fn pose_is_clear(

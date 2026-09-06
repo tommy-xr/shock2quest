@@ -58,6 +58,7 @@ pub mod vr_climb;
 pub mod vr_crouch;
 pub mod vr_grip;
 pub mod vr_tracking;
+pub mod vr_weapon_grip;
 mod wielded_weapon;
 pub mod zip_asset_path;
 

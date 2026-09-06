@@ -71,6 +71,51 @@ pub const INTERACTION_FIXTURES: &[InteractionFixture] = &[
         model: "al_w",
     },
     InteractionFixture {
+        label: "Assault rifle",
+        template_id: -18,
+        model: "ar15_w",
+    },
+    InteractionFixture {
+        label: "Laser pistol",
+        template_id: -22,
+        model: "laser",
+    },
+    InteractionFixture {
+        label: "EMP rifle",
+        template_id: -23,
+        model: "empgun",
+    },
+    InteractionFixture {
+        label: "Grenade launcher",
+        template_id: -21,
+        model: "gren_w",
+    },
+    InteractionFixture {
+        label: "Stasis field generator",
+        template_id: -25,
+        model: "sfg_w",
+    },
+    InteractionFixture {
+        label: "Viral proliferator",
+        template_id: -29,
+        model: "viro_w",
+    },
+    InteractionFixture {
+        label: "Electro shock",
+        template_id: -24,
+        model: "rapier_w",
+    },
+    InteractionFixture {
+        label: "Crystal shard",
+        template_id: -28,
+        model: "shard_w",
+    },
+    InteractionFixture {
+        label: "Psi sword (shard stand-in)",
+        template_id: -2291,
+        model: "shard_w",
+    },
+    InteractionFixture {
         label: "Ammo clip",
         template_id: -1358,
         model: "ammoss",
@@ -318,8 +363,11 @@ impl DebugSceneHooks for InteractionHooks {
                 let p = station_position(index);
                 let mut spawn = spawn_at(fixture.template_id, Point3::new(p.x, p.y + 0.15, p.z));
                 // Magazines have no gamesys model: missions choose a cover
-                // per instance. Resolve it before visual/physics creation.
-                if fixture.template_id == MAGAZINE_TEMPLATE {
+                // per instance. The summoned psi sword has no world model;
+                // give its rack sample a labeled shard stand-in. Wielding
+                // still uses the real psword_h limb model.
+                // Resolve both before visual/physics creation.
+                if matches!(fixture.template_id, MAGAZINE_TEMPLATE | -2291) {
                     if let Effect::CreateEntity { options, .. } = &mut spawn {
                         options.model_override = Some(fixture.model.to_owned());
                     }

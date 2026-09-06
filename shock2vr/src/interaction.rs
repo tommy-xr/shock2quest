@@ -198,6 +198,7 @@ pub struct VrInteraction {
 struct GripGeometry {
     triangles: std::rc::Rc<Vec<[Point3<f32>; 3]>>,
     fingerprint: String,
+    weapon_arms: Option<Vec<Point3<f32>>>,
 }
 
 struct HeldGrip {
@@ -210,6 +211,7 @@ struct HeldGrip {
     hints_hash: String,
     source: &'static str,
     authored: bool,
+    item_bounds: Option<[[f32; 3]; 2]>,
 }
 
 impl VrInteraction {
@@ -258,9 +260,25 @@ impl PlayerInteraction for VrInteraction {
                     .and_then(|text| {
                         serde_json::from_str::<crate::vr_grip::GripLibrary>(&text).ok()
                     })
-                    .filter(|library| library.version == 1)
+                    .filter(|library| {
+                        library.version == 1
+                            && library.solver_revision == crate::vr_grip::SOLVER_REVISION
+                    })
                     .unwrap_or_default(),
             );
+            if let Some(weapons) = assets
+                .get_opt(&TEXT_IMPORTER, "astra-vr-weapon-grips.json")
+                .and_then(|text| serde_json::from_str::<crate::vr_grip::GripLibrary>(&text).ok())
+                .filter(|lib| {
+                    lib.version == 1 && lib.solver_revision == crate::vr_grip::SOLVER_REVISION
+                })
+            {
+                // Explicit pickup-library edits take precedence over the shipped weapon defaults.
+                let library = self.grip_library.as_mut().unwrap();
+                // Lookup skips stale entries, so a stale custom override can
+                // fall back to the current shipped default for the same hand.
+                library.entries.extend(weapons.entries);
+            }
             self.grip_hints = assets
                 .get_opt(&TEXT_IMPORTER, "astra-vr-grip-hints.json")
                 .and_then(|text| serde_json::from_str(&text).ok())
@@ -314,14 +332,31 @@ impl PlayerInteraction for VrInteraction {
                         .any(|entry| entry.model == model && entry.hand == hand_name);
                 let geometry = if eligible {
                     self.grip_geometry
-                        .entry(model.clone())
+                        .entry(format!("{model}:{hand_name}"))
                         .or_insert_with(|| {
+                            if crate::vr_weapon_grip::supports_model(&model) {
+                                let (triangles, arms, fingerprint) = crate::vr_weapon_grip::inputs(
+                                    assets,
+                                    &format!("{model}.bin"),
+                                    if index == 0 {
+                                        Handedness::Left
+                                    } else {
+                                        Handedness::Right
+                                    },
+                                )?;
+                                return Some(GripGeometry {
+                                    triangles: std::rc::Rc::new(triangles),
+                                    fingerprint,
+                                    weapon_arms: Some(arms),
+                                });
+                            }
                             let triangles = assets
                                 .get_opt(&GRIP_SURFACE_IMPORTER, &format!("{}.bin", model))?;
                             let fingerprint = crate::vr_grip::surface_fingerprint(&triangles);
                             Some(GripGeometry {
                                 triangles,
                                 fingerprint,
+                                weapon_arms: None,
                             })
                         })
                         .as_ref()
@@ -333,7 +368,20 @@ impl PlayerInteraction for VrInteraction {
                 let kinematics_hash = self.kinematics_hashes[index].clone();
                 let hints = self.grip_hints.entry(model.clone()).or_default();
                 let hints_hash = hints.fingerprint();
-                let resolved = if bake {
+                let resolved = if bake && geometry.is_some_and(|g| g.weapon_arms.is_some()) {
+                    let geometry = geometry.unwrap();
+                    crate::vr_weapon_grip::resolve(
+                        &model,
+                        if index == 0 {
+                            Handedness::Left
+                        } else {
+                            Handedness::Right
+                        },
+                        &geometry.triangles,
+                        geometry.weapon_arms.as_ref().unwrap(),
+                        &kinematics[index],
+                    )
+                } else if bake {
                     triangles
                         .as_ref()
                         .and_then(|triangles| crate::vr_grip::GripSurface::new(triangles))
@@ -366,14 +414,46 @@ impl PlayerInteraction for VrInteraction {
                 );
                 let authored = !bake
                     && resolved.is_some()
-                    && self
-                        .grip_library
-                        .as_ref()
-                        .unwrap()
-                        .entries
-                        .iter()
-                        .any(|e| e.model == model && e.hand == hand_name && e.authored);
+                    && self.grip_library.as_ref().unwrap().entries.iter().any(|e| {
+                        e.model == model
+                            && e.hand == hand_name
+                            && e.authored
+                            && e.surface_hash == surface_hash
+                            && e.kinematics_hash == kinematics_hash
+                            && e.hints_hash == hints_hash
+                            && resolved.as_ref() == Some(&e.grip)
+                    });
+                if crate::vr_weapon_grip::is_melee(&model) {
+                    if let (Some(grip), Some(geometry), Some(contact)) = (
+                        resolved.as_ref(),
+                        geometry,
+                        world
+                            .borrow::<View<crate::runtime_props::RuntimePropVrGripOffset>>()
+                            .ok()
+                            .and_then(|v| v.get(entity).ok().map(|p| p.0)),
+                    ) {
+                        let mut min = cgmath::vec3(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+                        let mut max = -min;
+                        for p in geometry.triangles.iter().flatten() {
+                            let p = (p.to_homogeneous().truncate() - contact) * grip.item_scale;
+                            for axis in 0..3 {
+                                min[axis] = min[axis].min(p[axis]);
+                                max[axis] = max[axis].max(p[axis]);
+                            }
+                        }
+                        effects.push(VirtualHandEffect::FitHeldMelee {
+                            entity_id: entity,
+                            size: max - min,
+                            center: (min + max) * 0.5,
+                        });
+                    }
+                }
+                let item_bounds = resolved
+                    .as_ref()
+                    .zip(geometry)
+                    .and_then(|(grip, geometry)| grip.item_bounds(&geometry.triangles));
                 self.fitted_grips[index] = Some(HeldGrip {
+                    item_bounds,
                     entity,
                     model,
                     resolved,
@@ -393,9 +473,15 @@ impl PlayerInteraction for VrInteraction {
                 // initial placement too, in the same effect pipeline as movement.
                 effects.retain(|effect| !matches!(effect, VirtualHandEffect::SetPositionRotation {entity_id,..} if *entity_id == entity));
                 use cgmath::Rotation;
+                let contact = world
+                    .borrow::<View<crate::runtime_props::RuntimePropVrGripOffset>>()
+                    .ok()
+                    .and_then(|v| v.get(entity).ok().map(|p| p.0))
+                    .unwrap_or(cgmath::vec3(0.0, 0.0, 0.0));
+                let offset = grip.offset + grip.rotation.rotate_vector(contact * grip.item_scale);
                 effects.push(VirtualHandEffect::SetPositionRotation {
                     entity_id: entity,
-                    position: hand.get_position() + hand.get_rotation().rotate_vector(grip.offset),
+                    position: hand.get_position() + hand.get_rotation().rotate_vector(offset),
                     rotation: hand.get_rotation() * grip.rotation,
                     scale: cgmath::vec3(grip.item_scale, grip.item_scale, grip.item_scale),
                 });
@@ -407,7 +493,7 @@ impl PlayerInteraction for VrInteraction {
         serde_json::Value::Array(self.fitted_grips.iter().enumerate().filter_map(|(i, grip)| {
             let grip=grip.as_ref()?;
             Some(serde_json::json!({"hand": if i == 0 {"left"} else {"right"}, "entity_id": grip.entity.inner() as i32,
-                "model": grip.model, "solve_ms": grip.solve_ms, "grip": grip.resolved,
+                "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
                 "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal)}))
         }).collect())

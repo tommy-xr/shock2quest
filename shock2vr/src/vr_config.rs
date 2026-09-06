@@ -408,7 +408,7 @@ pub fn melee_contact_offset(arm: MeleePosedArm) -> Vector3<f32> {
     melee_contact_offset_scaled(arm, melee_wield_scale())
 }
 
-fn melee_contact_offset_scaled(arm: MeleePosedArm, scale: f32) -> Vector3<f32> {
+pub(crate) fn melee_contact_offset_scaled(arm: MeleePosedArm, scale: f32) -> Vector3<f32> {
     use cgmath::Rotation;
 
     scale * melee_wield_alignment(arm).rotate_vector(arm.weapon - arm.fist)
@@ -447,7 +447,7 @@ pub fn melee_wield_pose_correction(
     melee_wield_pose_correction_scaled(arm, melee_wield_scale(), handedness)
 }
 
-fn melee_wield_pose_correction_scaled(
+pub(crate) fn melee_wield_pose_correction_scaled(
     arm: MeleePosedArm,
     scale: f32,
     handedness: Handedness,

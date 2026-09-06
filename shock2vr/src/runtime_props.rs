@@ -12,6 +12,12 @@ use dark::ss2_bin_obj_loader::Vhot;
 use serde::{Deserialize, Deserializer, Serialize};
 use shipyard::Component;
 
+/// The current VR weapon mesh has had its authored hands removed successfully.
+#[derive(Component)]
+pub struct RuntimePropGloveWeapon {
+    pub item_scale: f32,
+}
+
 // RuntimePropGazeAmount - track how much the player is gazing at a prop
 #[derive(Component)]
 #[allow(dead_code)]
