@@ -13,6 +13,7 @@ use tracing::info;
 use crate::{
     GameOptions,
     game_scene::GameScene,
+    hand_glove::HandLight,
     hand_pose::{self, HandPoseRetarget, Pose},
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     scenes::debug_common::{
@@ -32,10 +33,19 @@ struct PosedGlove {
     debug_cubes: Vec<SceneObject>,
 }
 
+/// The glove's two maps, resolved once and handed to every posed copy - the
+/// same loaders the production hands use, so this scene can't show a different
+/// glove from the one the player wears.
+struct GloveSkin {
+    color: Option<Rc<dyn engine::texture::TextureTrait>>,
+    emissive: Option<Rc<dyn engine::texture::TextureTrait>>,
+}
+
 struct GloveHooks {
     /// Rows of gloves, top to bottom. Row 1 (reference poses) reads bind,
     /// open, point, fist left to right; row 2 (blends) reads open->fist at
-    /// 25/50/75%, then an index-only half-pull (trigger).
+    /// 25/50/75%, then an index-only half-pull (trigger); row 3 is one open
+    /// hand per `HandLight` state.
     rows: Vec<Vec<PosedGlove>>,
     /// Everything needed to re-pose the animated glove each frame
     animation: GloveAnimation,
@@ -45,7 +55,7 @@ struct GloveHooks {
 struct GloveAnimation {
     model: Rc<GlbModel>,
     retarget: HandPoseRetarget,
-    texture: Option<Rc<dyn engine::texture::TextureTrait>>,
+    skin: GloveSkin,
     open: Pose,
     fist: Pose,
     total_time: f32,
@@ -62,7 +72,8 @@ impl GloveAnimation {
             &self.model,
             &self.retarget,
             Some(&pose),
-            self.texture.as_ref(),
+            &self.skin,
+            HandLight::Off,
         )
     }
 }
@@ -120,7 +131,8 @@ fn build_posed_glove(
     model: &GlbModel,
     retarget: &HandPoseRetarget,
     pose: Option<&Pose>,
-    texture: Option<&Rc<dyn engine::texture::TextureTrait>>,
+    skin: &GloveSkin,
+    light: HandLight,
 ) -> PosedGlove {
     let mut posed_model = model.clone();
     if let Some(pose) = pose {
@@ -129,8 +141,17 @@ fn build_posed_glove(
 
     let mut objects = posed_model.to_scene_objects_with_skinning();
     for object in objects.iter_mut() {
-        if let Some(texture) = texture {
-            *object.material.borrow_mut() = SkinnedMaterial::create(texture.clone(), 1.0, 0.0);
+        if let Some(color) = &skin.color {
+            *object.material.borrow_mut() = match &skin.emissive {
+                Some(emissive) => SkinnedMaterial::create_with_light(
+                    color.clone(),
+                    1.0,
+                    0.0,
+                    emissive.clone(),
+                    light.tint(),
+                ),
+                None => SkinnedMaterial::create(color.clone(), 1.0, 0.0),
+            };
         }
         object.set_transform(Matrix4::identity());
     }
@@ -205,9 +226,10 @@ impl DebugGlovesScene {
         let core = builder.build_core(build_options);
 
         let glove_model = asset_cache.get(&GLB_MODELS_IMPORTER, "vr_glove_model.glb");
-        // The same skin the production hands use, so this scene can't show a
-        // different hand from the one the player wears.
-        let texture = crate::hand_glove::load_hand_skin(asset_cache);
+        let skin = GloveSkin {
+            color: crate::hand_glove::load_glove_color(asset_cache),
+            emissive: crate::hand_glove::load_glove_emissive(asset_cache),
+        };
         let retarget = HandPoseRetarget::for_right_glove(glove_model.skeleton());
 
         let open = hand_pose::open_right_hand();
@@ -235,25 +257,40 @@ impl DebugGlovesScene {
             )),
         ];
 
-        let rows = [reference_poses, blend_poses]
+        let mut rows = [reference_poses, blend_poses]
             .iter()
             .map(|row| {
                 row.iter()
                     .map(|pose| {
-                        build_posed_glove(&glove_model, &retarget, pose.as_ref(), texture.as_ref())
+                        build_posed_glove(
+                            &glove_model,
+                            &retarget,
+                            pose.as_ref(),
+                            &skin,
+                            HandLight::Off,
+                        )
                     })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
+        // Row 3: the same open hand under every affordance light, so one
+        // screenshot proves each colour renders.
+        rows.push(
+            HandLight::ALL
+                .iter()
+                .map(|light| build_posed_glove(&glove_model, &retarget, Some(&open), &skin, *light))
+                .collect(),
+        );
+
         info!(
-            "Created debug gloves scene: row 1 bind/open/point/fist, row 2 open->fist blends + trigger half-pull + animated blend"
+            "Created debug gloves scene: row 1 bind/open/point/fist, row 2 open->fist blends + trigger half-pull + animated blend, row 3 hand lights off/green/amber/red"
         );
 
         let animation = GloveAnimation {
             model: glove_model,
             retarget,
-            texture,
+            skin,
             open,
             fist,
             total_time: 0.0,

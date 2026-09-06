@@ -3,9 +3,10 @@
 //! the rest). The left hand mirrors the right-hand model (`flip_x`-style
 //! negative scale), like held-weapon models do.
 //!
-//! The model is skinned with a bare-skin texture rather than the glove's own
-//! colour map, and [`crate::hand_forearm`] hangs a sleeved tube off the wrist,
-//! so the hands read as the player's own hands instead of disembodied gloves.
+//! The glove wears its own colour map plus a light: an emissive mask marks the
+//! cuff band and the fingertips, and a per-hand [`HandLight`] tint decides what
+//! colour they glow. The hand ends at the glove's own cuff - there is no
+//! forearm mesh.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -27,29 +28,66 @@ use crate::{
 
 const GLOVE_MODEL: &str = "vr_glove_model.glb";
 
-/// Bare-skin colour map applied to the glove mesh in place of the glove's own
-/// `vr_glove_color.jpg`. It is that same map recoloured: the glove's *skin-scale*
-/// relief (grain, creases, wrinkles) kept and tinted with skin, its albedo
-/// (black leather vs white strap) divided out, and its hardware (straps,
-/// buckles, stitching, panel edges) flattened by a structure mask - see
-/// `tools/make_vr_hand_skin.py`. The hand has to be
-/// textured in the glove's own UV atlas - the game's first-person hand texture
-/// samples that atlas as background, not skin - and a flat tint reads as
-/// plastic. See `projects/vr-gloves.md` for the recipe that generated it.
-const HAND_SKIN_TEXTURE: &str = "vr_hand_skin.png";
+/// The glove's own colour map, as the model ships it.
+const GLOVE_COLOR_TEXTURE: &str = "vr_glove_color.jpg";
+
+/// Where the glove's light sits, in that same UV atlas: white texels glow,
+/// black ones don't. Generated from the model by
+/// `tools/make_vr_glove_emissive.py` - a band round the wrist cuff and a pad on
+/// each fingertip, so the light reads from whichever side of the hand happens
+/// to face the player.
+const GLOVE_EMISSIVE_TEXTURE: &str = "vr_glove_emissive.png";
+
+/// The affordance light on a hand's glove: what the hand in front of you could
+/// do right now, read off the glove itself rather than a marker floating in the
+/// world.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandLight {
+    /// Nothing in reach.
+    Off,
+    /// Something grabbable.
+    Green,
+    /// Something usable, or a gesture that didn't take.
+    Amber,
+    /// Locked, or otherwise refused.
+    Red,
+}
+
+impl HandLight {
+    /// Every state, in declaration order. The renderer indexes its materials by
+    /// position here, and a harness showing them all reads the same list, so
+    /// neither can fall behind a new variant.
+    pub const ALL: [HandLight; 4] = [
+        HandLight::Off,
+        HandLight::Green,
+        HandLight::Amber,
+        HandLight::Red,
+    ];
+
+    /// What the lit texels are added in. The shader *adds* this on top of the
+    /// glove's own shading, so these run bright enough to read against a lit
+    /// cuff without washing out to white.
+    pub fn tint(self) -> Vector3<f32> {
+        match self {
+            HandLight::Off => Vector3::new(0.0, 0.0, 0.0),
+            HandLight::Green => Vector3::new(0.05, 0.85, 0.25),
+            HandLight::Amber => Vector3::new(0.90, 0.55, 0.05),
+            HandLight::Red => Vector3::new(0.90, 0.10, 0.10),
+        }
+    }
+
+    /// Its slot in [`HandLight::ALL`].
+    fn index(self) -> usize {
+        HandLight::ALL
+            .iter()
+            .position(|candidate| *candidate == self)
+            .expect("HandLight::ALL is missing a variant")
+    }
+}
 
 /// Wrist-to-fingertip length the glove model is authored at, in world units -
 /// the +Z span of its bind-pose bounding box (fingers point along +Z).
 pub const AUTHORED_HAND_LENGTH_WORLD: f32 = 0.2049;
-
-/// How far the mesh reaches *behind* its own origin, in world units - the
-/// bind-pose bounding box's `-z` extent (the origin sits at the wrist joint,
-/// but the mesh continues past it as a short wrist stub, ending in the open
-/// hole the sleeve has to cover).
-///
-/// [`crate::hand_forearm`] needs this: the tube has to start at that stub's
-/// end, not at the hand's origin, or it runs up the inside of the hand.
-pub const AUTHORED_WRIST_STUB_WORLD: f32 = 0.0285;
 
 /// Wrist-to-fingertip length of an adult hand. Anthropometric mean is ~19 cm.
 const REAL_HAND_LENGTH_METERS: f32 = 0.19;
@@ -73,28 +111,19 @@ pub const GLOVE_SCALE: f32 =
 
 /// Everything constant about the glove, resolved once: the model (a private
 /// clone whose skeleton is re-posed each frame), the pose retargeting, the
-/// blend endpoints, and one textured material per mesh (fresh cells so the
-/// cached asset's materials are never mutated).
+/// blend endpoints, and one textured material per mesh per [`HandLight`] state
+/// (fresh cells so the cached asset's materials are never mutated).
 pub struct GloveRenderer {
     model: GlbModel,
     retarget: HandPoseRetarget,
     open: Pose,
     fist: Pose,
     point: Pose,
-    materials: Vec<Rc<RefCell<Box<dyn Material>>>>,
-    /// The sleeved forearm, built once at the identity transform and cloned
-    /// per hand per frame. `None` when the sleeve texture is missing, in which
-    /// case the hand renders without a forearm rather than with an untextured
-    /// one.
-    forearm: Option<SceneObject>,
-}
-
-/// The materials one hand is drawn with. Built at each call site rather than
-/// by a `&self` method, so the borrow stays disjoint from the `&mut self.model`
-/// the posing needs.
-struct HandSkin<'a> {
-    meshes: &'a [Rc<RefCell<Box<dyn Material>>>],
-    forearm: Option<&'a SceneObject>,
+    /// Materials per mesh, indexed by [`HandLight::index`]. Both hands render
+    /// in the same frame and can be showing different lights, so one set of
+    /// materials re-tinted per hand would give them both whichever colour was
+    /// written last.
+    materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
 }
 
 /// An authored pose a hand can be shown in when nothing analog is driving it -
@@ -119,26 +148,40 @@ impl GloveRenderer {
         }
         let model = model.as_ref().clone();
 
-        let texture = load_hand_skin(asset_cache);
+        let color = load_glove_color(asset_cache);
+        let emissive = load_glove_emissive(asset_cache);
 
-        // One material per mesh; without the external texture, keep the
-        // materials the importer built (solid-color fallback).
-        let materials = model
-            .to_scene_objects()
+        // One material per mesh per light state. Without the colour map, keep
+        // the materials the importer built (solid-color fallback); without the
+        // light mask, the glove renders unlit rather than not at all.
+        let authored = model.to_scene_objects();
+        let materials = HandLight::ALL
             .iter()
-            .map(|object| match &texture {
-                Some(texture) => Rc::new(RefCell::new(SkinnedMaterial::create(
-                    texture.clone(),
-                    1.0,
-                    0.0,
-                ))),
-                None => object.material.clone(),
+            .map(|light| {
+                authored
+                    .iter()
+                    .map(|object| match (&color, &emissive) {
+                        (Some(color), Some(emissive)) => {
+                            Rc::new(RefCell::new(SkinnedMaterial::create_with_light(
+                                color.clone(),
+                                1.0,
+                                0.0,
+                                emissive.clone(),
+                                light.tint(),
+                            )))
+                        }
+                        (Some(color), None) => Rc::new(RefCell::new(SkinnedMaterial::create(
+                            color.clone(),
+                            1.0,
+                            0.0,
+                        ))),
+                        (None, _) => object.material.clone(),
+                    })
+                    .collect()
             })
             .collect();
 
         let retarget = HandPoseRetarget::for_right_glove(model.skeleton());
-
-        let forearm = crate::hand_forearm::template(asset_cache);
 
         Some(Self {
             model,
@@ -147,7 +190,6 @@ impl GloveRenderer {
             fist: hand_pose::fist_right_hand(),
             point: hand_pose::point_right_hand(),
             materials,
-            forearm,
         })
     }
 
@@ -160,6 +202,7 @@ impl GloveRenderer {
         trigger_value: f32,
         squeeze_value: f32,
         holding: bool,
+        light: HandLight,
     ) -> Vec<SceneObject> {
         let amounts = if holding {
             // Gripping a held item: fingers wrapped on the handle, thumb
@@ -186,14 +229,10 @@ impl GloveRenderer {
             }
         };
         let pose = self.open.blend_per_finger(&self.fist, &amounts);
-        let skin = HandSkin {
-            meshes: &self.materials,
-            forearm: self.forearm.as_ref(),
-        };
         Self::render_posed(
             &mut self.model,
             &self.retarget,
-            skin,
+            &self.materials[light.index()],
             &pose,
             position,
             rotation,
@@ -221,14 +260,10 @@ impl GloveRenderer {
             StaticHandPose::Relaxed => &self.open,
             StaticHandPose::Pointing => &self.point,
         };
-        let skin = HandSkin {
-            meshes: &self.materials,
-            forearm: self.forearm.as_ref(),
-        };
         Self::render_posed(
             &mut self.model,
             &self.retarget,
-            skin,
+            &self.materials[HandLight::Off.index()],
             pose,
             position,
             rotation,
@@ -242,7 +277,7 @@ impl GloveRenderer {
     fn render_posed(
         model: &mut GlbModel,
         retarget: &HandPoseRetarget,
-        skin: HandSkin<'_>,
+        skin: &[Rc<RefCell<Box<dyn Material>>>],
         pose: &Pose,
         position: Vector3<f32>,
         rotation: Quaternion<f32>,
@@ -269,29 +304,36 @@ impl GloveRenderer {
             * Matrix4::from_scale(GLOVE_SCALE);
 
         let mut objects = model.to_scene_objects_with_skinning();
-        for (object, material) in objects.iter_mut().zip(skin.meshes) {
+        for (object, material) in objects.iter_mut().zip(skin) {
             object.material = material.clone();
             object.set_transform(world);
-        }
-
-        if let Some(forearm) = skin.forearm {
-            let mut forearm = forearm.duplicate();
-            forearm.set_transform(crate::hand_forearm::transform(position, rotation));
-            objects.push(forearm);
         }
 
         objects
     }
 }
 
-/// The hand's skin colour map. One loader, shared with the `debug_gloves`
-/// harness, so the two can't end up on different skins. (The forearm has its
-/// own map - the game's suit sleeve - see [`crate::hand_forearm`].)
-pub fn load_hand_skin(
+/// The glove's colour map. One loader, shared with the `debug_gloves` harness,
+/// so the two can't end up on different textures.
+pub fn load_glove_color(
     asset_cache: &mut AssetCache,
 ) -> Option<Rc<dyn engine::texture::TextureTrait>> {
+    load_texture(asset_cache, GLOVE_COLOR_TEXTURE)
+}
+
+/// The glove's light mask, shared with `debug_gloves` for the same reason.
+pub fn load_glove_emissive(
+    asset_cache: &mut AssetCache,
+) -> Option<Rc<dyn engine::texture::TextureTrait>> {
+    load_texture(asset_cache, GLOVE_EMISSIVE_TEXTURE)
+}
+
+fn load_texture(
+    asset_cache: &mut AssetCache,
+    name: &str,
+) -> Option<Rc<dyn engine::texture::TextureTrait>> {
     asset_cache
-        .get_opt::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, HAND_SKIN_TEXTURE)
+        .get_opt::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, name)
         .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>)
 }
 
@@ -311,6 +353,36 @@ mod tests {
             (rendered_meters - REAL_HAND_LENGTH_METERS).abs() < 1e-4,
             "glove renders {rendered_meters} m, expected {REAL_HAND_LENGTH_METERS} m"
         );
+    }
+
+    /// Only `Off` is dark, and no two lit states share a colour - a light the
+    /// player can't tell from another one signals nothing.
+    #[test]
+    fn every_hand_light_has_its_own_visible_colour() {
+        assert_eq!(HandLight::Off.tint(), Vector3::new(0.0, 0.0, 0.0));
+
+        let lit: Vec<Vector3<f32>> = HandLight::ALL
+            .iter()
+            .filter(|light| **light != HandLight::Off)
+            .map(|light| light.tint())
+            .collect();
+
+        for (index, tint) in lit.iter().enumerate() {
+            use cgmath::InnerSpace;
+            assert!(tint.magnitude() > 0.25, "{tint:?} is too dim to read");
+            for other in &lit[index + 1..] {
+                assert!((tint - other).magnitude() > 0.25, "{tint:?} ~ {other:?}");
+            }
+        }
+    }
+
+    /// Every variant must have a materials slot: `render_hand` indexes the
+    /// renderer's per-light materials by this position.
+    #[test]
+    fn every_hand_light_indexes_its_own_slot() {
+        for (expected, light) in HandLight::ALL.iter().enumerate() {
+            assert_eq!(light.index(), expected);
+        }
     }
 
     /// The uncorrected glove is undersized, not oversized - a scale below 1.0

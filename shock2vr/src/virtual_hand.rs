@@ -368,9 +368,9 @@ impl VirtualHand {
         (hand, effs)
     }
 
-    /// Render the hand (skin + forearm) for this hand, plus the raycast-hit
-    /// debug cube. The hand renderer is owned by the caller (`VrInteraction`)
-    /// so its cached state is shared between both hands.
+    /// Render the glove for this hand, plus the raycast-hit debug cube. The
+    /// hand renderer is owned by the caller (`VrInteraction`) so its cached
+    /// state is shared between both hands.
     pub fn render(
         &self,
         world: &World,
@@ -388,6 +388,9 @@ impl VirtualHand {
                     self.trigger_value,
                     self.squeeze_value,
                     self.get_held_entity().is_some(),
+                    // The state machine that lights the glove is a later slice;
+                    // the affordance still reads off the hit cube below.
+                    crate::hand_glove::HandLight::Off,
                 )
             })
             .unwrap_or_default();
