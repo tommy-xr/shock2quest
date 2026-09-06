@@ -1530,6 +1530,160 @@ const MELEE_SWING_CLIP: &str = "leftswing";
 /// Tuned so a barrel blast (intensity 15) gives nearby props a solid toss.
 const BLAST_PUSH_SPEED_PER_INTENSITY: f32 = 0.5;
 
+const BLAST_OCCLUSION_GROUPS: physics::InternalCollisionGroups =
+    physics::InternalCollisionGroups::WORLD
+        .union(physics::InternalCollisionGroups::ENTITIES)
+        .union(physics::InternalCollisionGroups::SELECTABLE);
+
+/// Fraction of a victim's representative bounds points that can see the blast.
+///
+/// Rays use living-actor membership so interaction-only/model-bounds fixtures
+/// do not become blast-proof cover. The source and victim are filtered by ECS
+/// identity: an explosion can leave its own collider around for the fireball,
+/// while the target collider should terminate neither a center nor corner ray.
+fn blast_exposure(
+    physics: &PhysicsWorld,
+    source_entity: EntityId,
+    victim_entity: EntityId,
+    center: Vector3<f32>,
+    victim_position: Vector3<f32>,
+) -> f32 {
+    let mut sample_points = Vec::with_capacity(9);
+    if let Some(bounds) = physics.get_aabb2(victim_entity) {
+        let bounds_center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
+        // Stay just inside the bounds so grazing a wall at exactly the same
+        // plane as a sample is stable across Rapier contact tolerances.
+        let half_extent = (bounds.max - bounds.min) * 0.45;
+        sample_points.push(bounds_center);
+        for x in [-1.0, 1.0] {
+            for y in [-1.0, 1.0] {
+                for z in [-1.0, 1.0] {
+                    sample_points.push(
+                        bounds_center
+                            + vec3(half_extent.x * x, half_extent.y * y, half_extent.z * z),
+                    );
+                }
+            }
+        }
+    } else {
+        sample_points.push(victim_position);
+    }
+
+    let start = Point3::from_vec(center);
+    let ray_can_hit_entity = |entity_id| entity_id != source_entity && entity_id != victim_entity;
+    let visible_samples = sample_points
+        .iter()
+        .filter(|sample| {
+            let end = Point3::from_vec(**sample);
+            let ray = end - start;
+            let distance_squared = ray.magnitude2();
+            distance_squared <= 1.0e-12
+                || physics
+                    .ray_cast2_as_actor_with_entity_filter(
+                        start,
+                        ray / distance_squared.sqrt(),
+                        distance_squared.sqrt(),
+                        BLAST_OCCLUSION_GROUPS,
+                        Some(source_entity),
+                        true,
+                        &ray_can_hit_entity,
+                    )
+                    .is_none()
+        })
+        .count();
+
+    visible_samples as f32 / sample_points.len() as f32
+}
+
+#[cfg(test)]
+mod blast_occlusion_tests {
+    use super::*;
+
+    fn identity_rotation() -> Quaternion<f32> {
+        Quaternion::from_sv(1.0, vec3(0.0, 0.0, 0.0))
+    }
+
+    fn exposure_with_cover(cover_size: Option<Vector3<f32>>, cover_blocks_actors: bool) -> f32 {
+        let mut world = World::new();
+        let source = world.add_entity(());
+        let victim = world.add_entity(());
+        let cover = world.add_entity(());
+        let player = world.add_entity(());
+
+        let mut physics = PhysicsWorld::new();
+        physics.add_kinematic(
+            victim,
+            vec3(0.0, 0.0, 4.0),
+            identity_rotation(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(2.0, 2.0, 2.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        if let Some(size) = cover_size {
+            let group = if cover_blocks_actors {
+                CollisionGroup::entity()
+            } else {
+                CollisionGroup::entity().non_solid_to_characters()
+            };
+            physics.add_kinematic(
+                cover,
+                vec3(0.0, 0.0, 2.0),
+                identity_rotation(),
+                vec3(0.0, 0.0, 0.0),
+                size,
+                group,
+                false,
+            );
+        }
+        // A source-owned collider at the ray origin must not consume every
+        // sample before it leaves the explosion effect.
+        physics.add_kinematic(
+            source,
+            vec3(0.0, 0.0, 0.0),
+            identity_rotation(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.5, 0.5, 0.5),
+            CollisionGroup::entity(),
+            false,
+        );
+        let mut player_handle = physics.create_player(vec3(50.0, 50.0, 50.0), player);
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player_handle);
+
+        blast_exposure(
+            &physics,
+            source,
+            victim,
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 4.0),
+        )
+    }
+
+    #[test]
+    fn uncovered_victim_feels_the_full_blast() {
+        assert_eq!(exposure_with_cover(None, true), 1.0);
+    }
+
+    #[test]
+    fn wall_fully_shields_a_victim_from_the_blast() {
+        assert_eq!(exposure_with_cover(Some(vec3(10.0, 10.0, 0.25)), true), 0.0);
+    }
+
+    #[test]
+    fn narrow_cover_reduces_instead_of_nullifying_the_blast() {
+        let exposure = exposure_with_cover(Some(vec3(0.5, 10.0, 0.25)), true);
+        assert_eq!(exposure, 8.0 / 9.0);
+    }
+
+    #[test]
+    fn interaction_only_geometry_does_not_shield_the_victim() {
+        assert_eq!(
+            exposure_with_cover(Some(vec3(10.0, 10.0, 0.25)), false),
+            1.0
+        );
+    }
+}
+
 /// Debug options accessible from scripts via UniqueView
 #[derive(Unique, Clone, Default)]
 pub struct DebugOptions {
@@ -4772,6 +4926,7 @@ impl MissionCore {
     /// Apply a radius stim blast and its physical impulse.
     fn radius_blast(
         &mut self,
+        source_entity_id: EntityId,
         center: Vector3<f32>,
         radius: f32,
         intensity: f32,
@@ -4806,11 +4961,22 @@ impl MissionCore {
             for (entity_id, (_hit_points, transform)) in
                 (&v_hit_points, &v_transform).iter().with_id()
             {
+                if entity_id == source_entity_id {
+                    continue;
+                }
                 let position = transform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
-                let distance = (crate::util::point3_to_vec3(position) - center).magnitude();
+                let position = crate::util::point3_to_vec3(position);
+                let distance = (position - center).magnitude();
                 if distance < radius {
                     let falloff = 1.0 - distance / radius;
-                    in_range.push((entity_id, intensity * falloff));
+                    let exposure = blast_exposure(
+                        &self.physics,
+                        source_entity_id,
+                        entity_id,
+                        center,
+                        position,
+                    );
+                    in_range.push((entity_id, intensity * falloff * exposure));
                 }
             }
         }
@@ -4824,7 +4990,17 @@ impl MissionCore {
             let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
             let distance = (player.pos - center).magnitude();
             if distance < radius && !in_range.iter().any(|(id, _)| *id == player.entity_id) {
-                in_range.push((player.entity_id, intensity * (1.0 - distance / radius)));
+                let exposure = blast_exposure(
+                    &self.physics,
+                    source_entity_id,
+                    player.entity_id,
+                    center,
+                    player.pos,
+                );
+                in_range.push((
+                    player.entity_id,
+                    intensity * (1.0 - distance / radius) * exposure,
+                ));
             }
         }
 
@@ -6305,12 +6481,19 @@ impl MissionCore {
                 }
 
                 Effect::RadiusBlast {
+                    source_entity_id,
                     center,
                     radius,
                     intensity,
                     stim_template_id,
                 } => {
-                    self.radius_blast(center, radius, intensity, stim_template_id);
+                    self.radius_blast(
+                        source_entity_id,
+                        center,
+                        radius,
+                        intensity,
+                        stim_template_id,
+                    );
                 }
 
                 Effect::RadiusStim {
