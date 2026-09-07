@@ -41,7 +41,19 @@
     ],
     "grab_radius": 0.07,
     "release_distance": 0.12,
-    "max_swing_degrees": 75.0
+    "max_swing_degrees": 75.0,
+    "region": {
+      "start": [
+        -0.05624297,
+        0.14,
+        0.02
+      ],
+      "end": [
+        -0.05624297,
+        0.43,
+        0.02
+      ]
+    }
   },
   "sg_h": {
     "palm_anchor": [

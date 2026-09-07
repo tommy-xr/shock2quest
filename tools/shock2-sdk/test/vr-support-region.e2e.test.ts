@@ -8,14 +8,16 @@ import { cycleToWeapon } from "./helpers/weapon.js";
 const vector = (v: ResolvedGrip["offset"]): Vec3 => [v.x,v.y,v.z];
 const quaternion = (q: ResolvedGrip["rotation"]): Quat => [...vector(q.v),q.s];
 const distance = (a: Vec3,b: Vec3) => Math.hypot(...sub(a,b));
-for (const [model,template] of [["fsn_h",-26],["al_h",-27]] as const) {
+for (const [model,template] of [["fsn_h",-26],["al_h",-27],["wrench_h",-928]] as const) {
   for (const primary of ["left","right"] as const) {
     test(`${model} ${primary}: broad support locks a contact until release`, {
       skip: process.env.SHOCK2_E2E !== "1", timeout:180_000,
     }, async () => {
-      await using game = await GameServer.launch({mission:"debug_weapons",debugFlags:["--vr"]});
+      await using game = await GameServer.launch({mission:model === "wrench_h" ? "debug_interactions" : "debug_weapons",debugFlags:["--vr"]});
       await game.step({frames:30});
-      const weapon = await cycleToWeapon(game,e=>e.template_id === template);
+      const weapon = model === "wrench_h"
+        ? (await game.entities.list()).entities.find(e=>e.template_id === template)!
+        : await cycleToWeapon(game,e=>e.template_id === template);
       await aimVrHandAt(game,weapon.position,.2,1,0,{hand:primary});
       const other = primary === "left" ? "right" : "left";
       await game.input.set(`${primary}_hand.position`,[0,1,-.5]);
@@ -35,6 +37,10 @@ for (const [model,template] of [["fsn_h",-26],["al_h",-27]] as const) {
         await game.input.set(`${other}_hand.position`,quatRotate(inverse,sub(wrist,player.position)));
         await game.input.set(`${other}_hand.rotation`,quatMultiply(inverse,quaternion(support.controller_rotation)));
       };
+      assert.equal((await game.scene.fromSource("vr_support_grip")).length,0,"overlay defaults off");
+      await game.devParams.set("vr_support_grips",1);
+      await game.step({frames:1});
+      assert.equal((await game.scene.fromSource("vr_support_grip")).length,2,"target and tracked-palm overlays render");
       await placeAt(.2);
       await game.input.set(`${other}_hand.squeeze`,1);
       await game.step({frames:20});
@@ -61,6 +67,9 @@ for (const [model,template] of [["fsn_h",-26],["al_h",-27]] as const) {
       const again = await grip();
       assert.equal(again.support!.attached,true);
       assert.ok(distance(vector(again.support!.support_anchor),contact)>length*.25,"fresh squeeze chooses a fresh contact");
+      await game.devParams.set("vr_support_grips",0);
+      await game.step({frames:1});
+      assert.equal((await game.scene.fromSource("vr_support_grip")).length,0,"overlay can be hidden while still holding");
       await game.input.set(`${primary}_hand.squeeze`,0);
       await game.step({frames:5});
       const player = (await game.info()).player;

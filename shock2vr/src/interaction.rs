@@ -1222,6 +1222,68 @@ impl PlayerInteraction for VrInteraction {
         // forearm panels carry their own label from `create_arm_hud_panels`,
         // which the `debug_hud` scene emits without going through here.
         crate::util::tag_render_source(&mut objs, crate::util::render_source::PLAYER_HANDS);
+        if crate::dev_params::get_bool(crate::dev_params::VR_SUPPORT_GRIPS) {
+            // Draw the same candidate geometry used for acquisition, including
+            // model mirroring, scale and collision-resolved weapon transforms.
+            if let Some(c) = &self.support_preview {
+                use cgmath::{Matrix4, vec3};
+                use engine::scene::{VertexPosition, color_material, lines_mesh};
+                let socket = c.model_pose.point(c.anchor);
+                let [a, b] = c
+                    .region
+                    .map_or([socket; 2], |ends| ends.map(|p| c.model_pose.point(p)));
+                let mut vertices = Vec::new();
+                dark::hit_box::append_capsule_lines(
+                    &mut vertices,
+                    &Matrix4::one(),
+                    a,
+                    b,
+                    c.profile.grab_radius,
+                );
+                dark::hit_box::append_capsule_lines(
+                    &mut vertices,
+                    &Matrix4::one(),
+                    socket,
+                    socket,
+                    0.008,
+                );
+                let attached = self
+                    .support
+                    .as_ref()
+                    .is_some_and(|s| s.active && s.entity == c.entity && s.primary == c.primary);
+                let mut overlay = vec![SceneObject::new(
+                    color_material::create(if attached {
+                        vec3(0.1, 1.0, 0.2)
+                    } else {
+                        vec3(0.1, 0.9, 1.0)
+                    }),
+                    Box::new(lines_mesh::create(vertices)),
+                )];
+                if let Some(rig) = &self.grip_kinematics {
+                    let pose = self.hand_poses()[1 - c.primary];
+                    if pose.is_tracked() {
+                        let palm = pose.point(rig[1 - c.primary].palm);
+                        let mut vertices = vec![
+                            VertexPosition { position: palm },
+                            VertexPosition { position: socket },
+                        ];
+                        dark::hit_box::append_capsule_lines(
+                            &mut vertices,
+                            &Matrix4::one(),
+                            palm,
+                            palm,
+                            0.012,
+                        );
+                        overlay.push(SceneObject::new(
+                            color_material::create(vec3(1.0, 0.65, 0.1)),
+                            Box::new(lines_mesh::create(vertices)),
+                        ));
+                    }
+                }
+                crate::util::tag_render_source(&mut overlay, "vr_support_grip");
+                objs.extend(overlay);
+            }
+        }
         objs.append(&mut create_arm_hud_panels(
             asset_cache,
             world,
