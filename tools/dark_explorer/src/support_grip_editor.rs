@@ -77,9 +77,11 @@ pub struct SupportEditor {
 impl SupportEditor {
     pub fn new(path: Option<PathBuf>) -> Self {
         Self {
-            document: SupportDocument::load(path.unwrap_or_else(|| {
-                default_library_path().with_file_name("astra-vr-support-grips.json")
-            })),
+            document: SupportDocument::load(
+                path.unwrap_or_else(|| {
+                    default_library_path().with_file_name("vr-support-grips.json")
+                }),
+            ),
             save_as: None,
             message: String::new(),
             rotation_step: 5.0,
@@ -141,7 +143,7 @@ impl SupportEditor {
                 self.message.clear();
                 self.save_as = Some(
                     doc.path
-                        .with_file_name("astra-vr-support-grips.custom.json")
+                        .with_file_name("vr-support-grips.custom.json")
                         .display()
                         .to_string(),
                 );

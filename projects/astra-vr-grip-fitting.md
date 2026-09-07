@@ -28,7 +28,7 @@ node scripts/bake-vr-grips.mjs
 
 The script launches `debug_interactions --vr`, discovers a representative for each of the 23 fitting models by
 stable template ID, grabs each with each hand, writes
-`assets/astra-vr-grips.json`, and shuts down its runtime. An optional first
+`assets/vr-grips.json`, and shuts down its runtime. An optional first
 argument selects an output path. It enables `--experimental astra-bake-vr-grips`:
 **that authoring mode intentionally blocks stepping while it searches**. Normal
 gameplay never enables the search or silently rebakes a missing entry.
@@ -131,7 +131,7 @@ are implemented.
 
 ## Weapon fitting
 
-`assets/astra-vr-weapon-grips.json` stores 28 poses: both hands for `atek_h`,
+`assets/vr-weapon-grips.json` stores 28 poses: both hands for `atek_h`,
 `ar15_h`, `sg_h`, `lasehand`, `empgun_h`, `gren_h`, `sfg_h`, `fsn_h`, `al_h`,
 `viro_h`, `wrench_h`, `rapier_h`, `shard_h`, and `psword_h`. The psi amp is excluded.
 To regenerate the weapon library, with the same runtime/SDK prerequisites:

@@ -8,7 +8,7 @@ import {preserveAuthoredGrips} from './prepared-grips.mjs';
 import { aimVrHandAt } from '../dist/test/helpers/vr-hand.js';
 
 const weapons = process.argv.includes('--weapons');
-const source = fileURLToPath(new URL(weapons ? '../../../assets/astra-vr-weapon-grips.json' : '../../../assets/astra-vr-grips.json', import.meta.url));
+const source = fileURLToPath(new URL(weapons ? '../../../assets/vr-weapon-grips.json' : '../../../assets/vr-grips.json', import.meta.url));
 const output = process.argv.slice(2).find(arg => arg !== '--weapons') ?? source;
 const readSource = () => readFile(source, 'utf8').catch(error => { if (error.code === 'ENOENT' && weapons) return null; throw error; });
 const sourceBytes = await readSource();

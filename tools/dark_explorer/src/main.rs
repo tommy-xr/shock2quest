@@ -52,7 +52,7 @@ enum Commands {
         /// Edit the supporting hand while previewing both gloves
         #[arg(long)]
         grip_support: bool,
-        /// Support-pose JSON to edit (defaults to assets/astra-vr-support-grips.json)
+        /// Support-pose JSON to edit (defaults to assets/vr-support-grips.json)
         #[arg(long)]
         support_grip_library: Option<std::path::PathBuf>,
         /// Hand to inspect in VR Grips
