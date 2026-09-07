@@ -285,12 +285,16 @@ impl PlayerInteraction for VrInteraction {
     fn update_hand_climb(&mut self, ctx: &ClimbContext) -> crate::vr_climb::ClimbFrame {
         use shipyard::EntitiesView;
 
+        // A hand supporting the other's weapon is not free either, even though
+        // it holds no entity of its own - without this it could take a ladder
+        // hold with the same closed grip that is already on the weapon.
+        let supporting = self.two_hand.latch().map(|latch| latch.hand);
         let hand_input = |hand: &VirtualHand, input: &crate::input_context::Hand| {
             crate::vr_climb::ClimbHandInput {
                 local_position: input.position,
                 squeeze: input.squeeze_value,
                 // A hand that is carrying something cannot also hold a ladder.
-                is_empty: hand.get_held_entity().is_none(),
+                is_empty: hand.get_held_entity().is_none() && supporting != Some(hand.handedness()),
             }
         };
         self.hand_climb.update(

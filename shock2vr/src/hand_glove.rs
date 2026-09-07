@@ -189,6 +189,11 @@ pub struct GloveRenderer {
     support_fits: HashMap<(GripKey, [i32; 3]), Option<FittedGrip>>,
 }
 
+/// How many support grips are remembered before the map is dropped wholesale.
+/// A session realistically takes a handful; the cap is only there so a player
+/// re-gripping a rifle all afternoon cannot grow it without bound.
+const SUPPORT_FIT_BUDGET: usize = 64;
+
 /// An authored pose a hand can be shown in when nothing analog is driving it -
 /// the VR frontend pointer, where there is no world to grab and the trigger is
 /// just a button.
@@ -305,13 +310,7 @@ impl GloveRenderer {
         gun_scale: f32,
         asset_cache: &mut AssetCache,
     ) -> Option<FittedGrip> {
-        // A tuner edit re-seats the item, so everything solved against the old
-        // seat is stale. Cheaper to drop the lot than to track what moved.
-        let generation = crate::vr_grips::generation();
-        if self.fits_generation != generation {
-            self.fits.clear();
-            self.fits_generation = generation;
-        }
+        self.drop_stale_fits();
         let key = GripKey::new(model_name, handedness, gun_scale);
         if let Some(cached) = self.fits.get(&key) {
             return *cached;
@@ -319,6 +318,18 @@ impl GloveRenderer {
         let fitted = self.solve(model_name, handedness, gun_scale, asset_cache);
         self.fits.insert(key, fitted);
         fitted
+    }
+
+    /// A tuner edit re-seats every item, so everything solved against the old
+    /// seat is stale. Both fit maps go together - dropping only one leaves a
+    /// support grip fitted against a seat the held item no longer uses.
+    fn drop_stale_fits(&mut self) {
+        let generation = crate::vr_grips::generation();
+        if self.fits_generation != generation {
+            self.fits.clear();
+            self.support_fits.clear();
+            self.fits_generation = generation;
+        }
     }
 
     /// The grip a *support* hand closes in on an item the other hand holds.
@@ -335,14 +346,10 @@ impl GloveRenderer {
         handedness: Handedness,
         gun_scale: f32,
         latch: Vector3<f32>,
+        seated: Option<GripFamily>,
         asset_cache: &mut AssetCache,
     ) -> Option<FittedGrip> {
-        let generation = crate::vr_grips::generation();
-        if self.fits_generation != generation {
-            self.fits.clear();
-            self.support_fits.clear();
-            self.fits_generation = generation;
-        }
+        self.drop_stale_fits();
         let key = (
             GripKey::new(model_name, handedness, gun_scale),
             crate::two_hand_grip::quantise_latch(latch),
@@ -350,7 +357,21 @@ impl GloveRenderer {
         if let Some(cached) = self.support_fits.get(&key) {
             return *cached;
         }
-        let fitted = self.solve_support(model_name, handedness, gun_scale, latch, asset_cache);
+        // A free latch is a distinct key per centimetre of surface, so this map
+        // could otherwise grow for as long as the player keeps re-gripping.
+        // Nothing here is expensive to rebuild - drop the lot rather than carry
+        // eviction machinery for a handful of entries.
+        if self.support_fits.len() >= SUPPORT_FIT_BUDGET {
+            self.support_fits.clear();
+        }
+        let fitted = self.solve_support(
+            model_name,
+            handedness,
+            gun_scale,
+            latch,
+            seated,
+            asset_cache,
+        );
         self.support_fits.insert(key, fitted);
         fitted
     }
@@ -361,6 +382,7 @@ impl GloveRenderer {
         handedness: Handedness,
         gun_scale: f32,
         latch: Vector3<f32>,
+        seated: Option<GripFamily>,
         asset_cache: &mut AssetCache,
     ) -> Option<FittedGrip> {
         use cgmath::{EuclideanSpace, Point3};
@@ -375,12 +397,12 @@ impl GloveRenderer {
         let mesh = placed_contact_mesh(model_name, handedness, gun_scale, slide, asset_cache)?;
 
         // The support hand has no trigger to rest on, so a gun's authored
-        // Trigger family is not its family. An authored support seat may name
-        // one; otherwise the item's own girth decides, which is what makes a
-        // basketball Broad and a rifle handguard Cylindrical.
-        let family = crate::vr_grips::support_seats(model_name)
-            .first()
-            .and_then(|seat| seat.family())
+        // Trigger family is not its family. The family of the seat that actually
+        // claimed this grip wins - `seated` is `None` for a free latch, which
+        // must not inherit a seat it did not land on - and otherwise the item's
+        // own girth decides, which is what makes a basketball Broad and a rifle
+        // handguard Cylindrical.
+        let family = seated
             .or_else(|| mesh.extents().map(hand_fit::family_from_extents))
             .unwrap_or(GripFamily::Cylindrical);
         let mut rig = GloveRig {

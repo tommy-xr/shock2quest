@@ -2456,7 +2456,7 @@ fn capture_frame_snapshot(
                 body_frame: game
                     .debug_scene()
                     .and_then(|scene| scene.player_body_frame()),
-                two_handed: two_hand.two_handed,
+                two_handed: two_hand.support_hand.is_some(),
                 two_hand,
             }
         },

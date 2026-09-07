@@ -124,21 +124,45 @@ test(
       "the supporting hand lights for the grip it holds",
     );
 
-    // The weapon now points at the support hand rather than down the wrist.
-    const aimed = await aimAxis(game, wrench.id);
-    const turn = degreesBetween(aimed, oneHanded);
-    assert.ok(
-      turn > 60,
-      `two hands should re-aim the weapon down the hand line, turned only ${turn.toFixed(1)} degrees`,
+    // A hand that closed in empty space and then swept onto the weapon must not
+    // silently attach: taking hold is a rising edge, like every other grip.
+    await releaseSupport(game);
+    await game.input.set("left_hand.position", [
+      onWrench[0] + 2.0,
+      onWrench[1],
+      onWrench[2],
+    ]);
+    await game.input.set("left_hand.squeeze", 1.0);
+    await game.step({ frames: 6 });
+    await game.input.set("left_hand.position", [
+      onWrench[0],
+      onWrench[1] + 0.6,
+      onWrench[2],
+    ]);
+    await game.step({ frames: 20 });
+    assert.equal(
+      (await game.info()).player.two_handed,
+      false,
+      "a fist swept onto the weapon should not grab it without a fresh grip",
     );
-    // The support hand is straight up from the primary, so that is where the
-    // weapon points.
-    assert.ok(
-      aimed[1] > 0.9,
-      `the weapon should aim at the support hand, got ${JSON.stringify(aimed)}`,
+    // Opening and closing again on the same spot does take hold.
+    await supportAt(game, [onWrench[0], onWrench[1] + 0.6, onWrench[2]]);
+    assert.equal(
+      (await game.info()).player.two_handed,
+      true,
+      "a fresh grip on the same spot takes hold",
     );
 
-    // Moving the support hand moves the aim with it.
+    // Taking hold where the hands already are changes nothing - the solve is
+    // the identity there, which is what makes the attach ease start from zero.
+    const attached = await aimAxis(game, wrench.id);
+    assert.ok(
+      degreesBetween(attached, oneHanded) < 5,
+      "attaching with the hands already in place should not move the weapon",
+    );
+
+    // MOVING the support hand is what turns it: the weapon swings so the point
+    // that hand has hold of follows it round.
     await game.input.set("left_hand.position", [
       onWrench[0],
       onWrench[1],
@@ -146,9 +170,10 @@ test(
     ]);
     await game.step({ frames: 20 });
     const moved = await aimAxis(game, wrench.id);
+    const turn = degreesBetween(moved, oneHanded);
     assert.ok(
-      moved[2] < -0.8,
-      `the aim should follow the support hand forward, got ${JSON.stringify(moved)}`,
+      turn > 45,
+      `the weapon should follow the support hand round, turned only ${turn.toFixed(1)} degrees`,
     );
 
     // Releasing the support hand hands the aim back to the wrist.
@@ -210,19 +235,20 @@ test(
 
     // Well back down the receiver, away from the pump: a free latch.
     await supportAt(game, gripAt(0.0));
-    const free = (await game.info()).player.two_hand;
+    const free = (await game.info()).player;
     assert.equal(free.two_handed, true, "the receiver is still grabbable");
     assert.equal(
-      free.snapped,
+      free.two_hand.snapped,
       false,
-      `a palm off the pump latches where it is, got ${JSON.stringify(free.support_point)}`,
+      `a palm off the pump latches where it is, got ${JSON.stringify(free.two_hand.support_point)}`,
     );
     await releaseSupport(game);
 
     // Out on the pump: the authored seat claims it.
     await supportAt(game, gripAt(-0.45));
-    const snapped = (await game.info()).player.two_hand;
-    assert.equal(snapped.two_handed, true, "the pump should take a support grip");
+    const withPump = (await game.info()).player;
+    assert.equal(withPump.two_handed, true, "the pump should take a support grip");
+    const snapped = withPump.two_hand;
     assert.equal(snapped.snapped, true, "the palm should snap to the authored pump");
     assert.ok(snapped.support_point, "a snapped grip reports where it landed");
     for (const [axis, want] of PUMP.entries()) {
@@ -238,9 +264,10 @@ test(
     // --- the fusion cannon: no authored seat anywhere on it ---
     const [fusion, fusionHand] = await grab("Fusion Cannon");
     await supportAt(game, [fusionHand[0], fusionHand[1], fusionHand[2] - 0.4]);
-    const oversized = (await game.info()).player.two_hand;
+    const held = (await game.info()).player;
+    const oversized = held.two_hand;
     assert.equal(
-      oversized.two_handed,
+      held.two_handed,
       true,
       "an oversized weapon must still take a second hand anywhere on its body",
     );

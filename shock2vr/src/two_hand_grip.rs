@@ -19,17 +19,19 @@
 //! crawl through the off-hand as the aim swung it.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use cgmath::{
-    EuclideanSpace, InnerSpace, Matrix3, Point3, Quaternion, Rotation, SquareMatrix, Transform,
-    Vector3, vec3,
+    EuclideanSpace, InnerSpace, Point3, Quaternion, Rotation, SquareMatrix, Transform, Vector3,
+    vec3,
 };
 use engine::assets::asset_cache::AssetCache;
 use once_cell::sync::Lazy;
 use shipyard::EntityId;
 
-use crate::hand_fit::ContactMesh;
+use crate::hand_fit::{ContactMesh, GripFamily};
+use crate::hand_glove::GripKey;
 use crate::physics::PhysicsWorld;
 use crate::util::meters;
 use crate::vr_config::{self, Handedness};
@@ -51,10 +53,10 @@ const MIN_HAND_SEPARATION: f32 = meters(0.10);
 /// weapon snaps to the new axis in one frame, which reads as a glitch.
 const BLEND_FRAMES: f32 = 6.0;
 
-/// How long a lost support pose is held before the grip is dropped. Same window
-/// as the body anchors' (`body_frame::ANCHOR_HOLD_FRAMES`): a controller that
-/// blinks out for a few frames has not let go.
-const TRACKING_HOLD_FRAMES: u8 = 12;
+/// How long a lost support pose is held before the grip is dropped: the body
+/// anchors' own window, shared rather than re-declared so the two cannot drift.
+/// A controller that blinks out for a few frames has not let go.
+use crate::body_frame::ANCHOR_HOLD_FRAMES as TRACKING_HOLD_FRAMES;
 
 /// Latch points are cached per centimetre; finer than that is below what a
 /// tracked hand resolves and would only thrash the cache.
@@ -72,6 +74,20 @@ pub struct SupportLatch {
     pub point: Vector3<f32>,
     /// Whether an authored support seat claimed it, rather than a free latch.
     pub snapped: bool,
+    /// The grip family the claiming seat named, if one did. A free latch has
+    /// none - the seat's family describes the seat, so a hand that landed
+    /// somewhere else must not inherit it.
+    pub family: Option<GripFamily>,
+    /// The grip -> latch direction, in the frame the item is *placed* in (the
+    /// tracked hand, before the glove's own reflection). This is the axis the
+    /// two hands aim: the part of the item the second hand has hold of is what
+    /// must end up at the second hand.
+    ///
+    /// Item-relative on purpose. Aiming a fixed hand-local forward would be
+    /// right only for a gun, whose barrel happens to run down the wrist; a
+    /// wrench's shaft does not, and forcing its forward onto the hand line
+    /// swings the handle out of both hands.
+    pub direction: Vector3<f32>,
 }
 
 /// What the two-hand resolve says about one hand this frame.
@@ -122,9 +138,21 @@ pub struct TwoHandGrip {
     /// degenerate frame and through the whole release ramp, which is what lets
     /// the weapon ease back to the wrist instead of snapping.
     axis: Option<Vector3<f32>>,
+    /// The latched item's grip -> latch direction, kept beside the axis so the
+    /// release ramp still has both halves of the solve after the latch is gone.
+    direction: Option<Vector3<f32>>,
     /// 0 = one-handed, 1 = fully aimed down the hand line.
     blend: f32,
     lost_frames: u8,
+    /// Last frame's squeeze per hand, indexed by [`vr_config::hand_slot`]. A
+    /// support grip is taken on the closing EDGE, so a hand closed in empty
+    /// space that then sweeps onto the weapon does not silently attach.
+    squeezing: [bool; 2],
+    /// The hand and item the aim belongs to while the ramp runs out after a
+    /// release. Without it a release would hand the fading aim to whichever
+    /// hand happens to hold something - including the off-hand, if it grabbed
+    /// something of its own on the way out.
+    fading: Option<(Handedness, EntityId)>,
 }
 
 impl TwoHandGrip {
@@ -140,38 +168,52 @@ impl TwoHandGrip {
     /// Advance a frame: take, keep or drop the support grip, then hand each
     /// hand what it needs to place and light itself.
     pub fn resolve(&mut self, ctx: &ResolveContext) -> [TwoHandFrame; 2] {
-        self.step_latch(ctx);
+        let offered = self.step_latch(ctx);
         self.ramp(self.latch.is_some());
 
         let mut frames = [TwoHandFrame::default(); 2];
+        // An empty hand on the other's item lights green whether or not it has
+        // closed on it yet.
+        if let Some(hand) = offered {
+            frames[vr_config::hand_slot(hand)].offered = true;
+        }
+
         let Some(latch) = self.latch else {
-            // Still easing back to the wrist after a release: the primary hand
-            // keeps an aim until the ramp reaches zero.
-            if self.blend > 0.0 {
-                if let Some(primary) = ctx
-                    .hands
-                    .iter()
-                    .find(|hand| hand.held.is_some() && !hand.claimed)
-                {
-                    frames[vr_config::hand_slot(primary.hand)].aim_rotation =
-                        self.aim_for(primary.rotation);
+            // Easing back to the wrist after a release. The aim goes to the
+            // hand that had it, and only while that hand still holds the same
+            // item - anything else and there is nothing left to ease.
+            match self.fading.filter(|(hand, entity_id)| {
+                self.blend > 0.0 && ctx.hands[vr_config::hand_slot(*hand)].held == Some(*entity_id)
+            }) {
+                Some((hand, _)) => {
+                    frames[vr_config::hand_slot(hand)].aim_rotation =
+                        self.aim_for(ctx.hands[vr_config::hand_slot(hand)].rotation);
                 }
-            }
-            // An empty hand resting on the other's item still lights green.
-            if let Some(offered) = self.offer(ctx) {
-                frames[vr_config::hand_slot(offered)].offered = true;
+                None => {
+                    self.blend = 0.0;
+                    self.axis = None;
+                    self.direction = None;
+                    self.fading = None;
+                }
             }
             return frames;
         };
 
         let support = ctx.hands[vr_config::hand_slot(latch.hand)];
-        let primary = ctx.hands[vr_config::hand_slot(vr_config::other_hand(latch.hand))];
+        let primary_hand = vr_config::other_hand(latch.hand);
+        let primary = ctx.hands[vr_config::hand_slot(primary_hand)];
 
-        self.track_axis(primary.position, support.position);
+        // A held pose is not a tracked one: reading the axis off an untracked
+        // position would swing the weapon for the whole hold window.
+        if crate::util::tracked_rotation(support.rotation).is_some() {
+            self.track_axis(primary.position, support.position);
+        }
+        self.direction = Some(latch.direction);
+        self.fading = Some((primary_hand, latch.entity_id));
 
         frames[vr_config::hand_slot(support.hand)].supporting = true;
         frames[vr_config::hand_slot(support.hand)].offered = true;
-        frames[vr_config::hand_slot(primary.hand)].aim_rotation = self.aim_for(primary.rotation);
+        frames[vr_config::hand_slot(primary_hand)].aim_rotation = self.aim_for(primary.rotation);
         frames
     }
 
@@ -188,6 +230,7 @@ impl TwoHandGrip {
         };
         if self.blend <= 0.0 {
             self.axis = None;
+            self.direction = None;
         }
     }
 
@@ -207,67 +250,86 @@ impl TwoHandGrip {
         if self.blend <= 0.0 {
             return None;
         }
-        let axis = self.axis?;
-        Some(wrist.slerp(aim_rotation(wrist, axis), self.blend.min(1.0)))
+        let (axis, direction) = (self.axis?, self.direction?);
+        Some(wrist.slerp(aim_rotation(wrist, direction, axis), self.blend))
     }
 
-    /// Take, keep, or drop the support grip.
-    fn step_latch(&mut self, ctx: &ResolveContext) {
+    /// Take, keep, or drop the support grip, and report the hand that is on the
+    /// other's item this frame (the one that lights green) - resolved once,
+    /// because the surface test it runs is the expensive part of the frame.
+    fn step_latch(&mut self, ctx: &ResolveContext) -> Option<Handedness> {
+        let closed = |hand: &HandInput| hand.squeeze >= crate::ui::VR_TRIGGER_THRESHOLD;
+        let mut now_closed = [false; 2];
+        for hand in ctx.hands {
+            now_closed[vr_config::hand_slot(hand.hand)] = closed(&hand);
+        }
+        let was_closed = std::mem::replace(&mut self.squeezing, now_closed);
+
         if let Some(latch) = self.latch {
             let support = ctx.hands[vr_config::hand_slot(latch.hand)];
             let primary = ctx.hands[vr_config::hand_slot(vr_config::other_hand(latch.hand))];
 
             // The primary letting go takes the support with it - the item is
             // dropped, and this slice does not hand it over.
-            if primary.held != Some(latch.entity_id) {
+            //
+            // The support hand is re-checked too: the two-hand grip only claims
+            // it for as long as the grip stands, so a hand that has since taken
+            // a climbing hold, reached a body anchor or picked something up has
+            // left.
+            if primary.held != Some(latch.entity_id)
+                || primary.claimed
+                || support.held.is_some()
+                || support.claimed
+            {
                 self.latch = None;
-                return;
+                return None;
             }
-            // A pose that blinks out is not a release: the controller keeps
-            // reporting its grip, so only a real open hand detaches. The hold
-            // window covers the pose, not the button.
+            // Opening the hand releases, tracked or not: the controller reports
+            // its grip through a lost pose, so the button is the reliable half
+            // and is read first. The hold window below covers the pose alone.
+            if !closed(&support) {
+                self.latch = None;
+                return None;
+            }
             if crate::util::tracked_rotation(support.rotation).is_none() {
                 if self.lost_frames >= TRACKING_HOLD_FRAMES {
                     self.latch = None;
-                } else {
-                    self.lost_frames += 1;
+                    return None;
                 }
-                return;
+                self.lost_frames += 1;
+                return Some(latch.hand);
             }
             self.lost_frames = 0;
-            if support.squeeze < crate::ui::VR_TRIGGER_THRESHOLD {
-                self.latch = None;
-            }
-            return;
+            return Some(latch.hand);
         }
 
         self.lost_frames = 0;
-        let Some(hand) = self.offer(ctx) else {
-            return;
-        };
+        let (hand, taken) = self.offer(ctx)?;
         let support = ctx.hands[vr_config::hand_slot(hand)];
-        // Closing on it is what takes hold, the same edge the world grab uses.
-        if support.squeeze < crate::ui::VR_TRIGGER_THRESHOLD {
-            return;
+        // Closing ON the item is what takes hold - the same rising edge the
+        // body anchors commit on. A hand already closed when it arrives has to
+        // open and close again, so sweeping a fist across a held weapon does
+        // not grab it.
+        if !closed(&support) || was_closed[vr_config::hand_slot(hand)] {
+            return Some(hand);
         }
+        // An untracked hand has no palm to latch at.
+        crate::util::tracked_rotation(support.rotation)?;
         let primary = ctx.hands[vr_config::hand_slot(vr_config::other_hand(hand))];
-        let Some(entity_id) = primary.held else {
-            return;
-        };
-        let Some((point, snapped)) = latch_point(ctx, primary, support) else {
-            return;
-        };
         self.latch = Some(SupportLatch {
-            entity_id,
+            entity_id: primary.held?,
             hand,
-            point,
-            snapped,
+            point: taken.point,
+            snapped: taken.snapped,
+            family: taken.family,
+            direction: taken.direction,
         });
+        Some(hand)
     }
 
     /// The hand that could take a support grip on the other's item this frame,
     /// if any: empty, unclaimed, and on the item's surface.
-    fn offer(&self, ctx: &ResolveContext) -> Option<Handedness> {
+    fn offer(&self, ctx: &ResolveContext) -> Option<(Handedness, TakenGrip)> {
         for support in ctx.hands {
             if support.held.is_some() || support.claimed {
                 continue;
@@ -276,46 +338,64 @@ impl TwoHandGrip {
             if primary.held.is_none() || primary.claimed {
                 continue;
             }
-            if latch_point(ctx, primary, support).is_some() {
-                return Some(support.hand);
+            // Resolved once and carried out: the surface test is the expensive
+            // part of the frame, and it runs whenever one hand holds something
+            // and the other is free - which is most of normal play.
+            if let Some(taken) = latch_point(ctx, primary, support) {
+                return Some((support.hand, taken));
             }
         }
         None
     }
 }
 
-/// The hand rotation that aims a held item down `axis`.
+/// The placement rotation that puts the part of the item the support hand has
+/// hold of onto the support hand.
 ///
-/// A VR hand points along its own -Z (the same forward the interaction ray
-/// uses), so aiming the item at the support hand means turning the placement
-/// frame until -Z lies along the hand line. Roll comes from the primary wrist's
-/// own up, projected off the axis: the player still decides which way the
-/// sights face, they just no longer decide where the barrel points.
-pub fn aim_rotation(wrist: Quaternion<f32>, axis: Vector3<f32>) -> Quaternion<f32> {
-    let z = -axis.normalize();
-    let up = wrist.rotate_vector(vec3(0.0, 1.0, 0.0));
-    // Hands stacked straight along the wrist's own up leave no roll reference;
-    // fall back to the wrist's right, which cannot also be parallel to z.
-    let mut x = up.cross(z);
-    if x.magnitude2() < 1e-6 {
-        x = wrist.rotate_vector(vec3(1.0, 0.0, 0.0));
-        x = x - z * x.dot(z);
-    }
-    if x.magnitude2() < 1e-6 {
+/// `direction` is the grip -> latch direction in the item's own placement frame
+/// and `axis` is where that has to point in the world (primary hand -> support
+/// hand). The answer is the wrist turned by the **shortest arc** between the two
+/// - which adds no twist about the axis, so the primary wrist keeps the roll,
+/// and which is exactly the identity while the hands are still where the
+/// one-hand pose put them. That last property is what makes attaching seamless:
+/// the ease starts from no correction at all and only grows as the hands move.
+pub fn aim_rotation(
+    wrist: Quaternion<f32>,
+    direction: Vector3<f32>,
+    axis: Vector3<f32>,
+) -> Quaternion<f32> {
+    let from = wrist.rotate_vector(direction);
+    if from.magnitude2() < 1e-12 || axis.magnitude2() < 1e-12 {
         return wrist;
     }
-    let x = x.normalize();
-    let y = z.cross(x);
-    Quaternion::from(Matrix3::from_cols(x, y, z))
+    let from = from.normalize();
+    let axis = axis.normalize();
+    // Hands folded back through the grip leave the arc ambiguous (any plane
+    // through the pair turns one onto the other); hold the pose rather than
+    // pick one at random.
+    if from.dot(axis) < -0.999_9 {
+        return wrist;
+    }
+    Quaternion::between_vectors(from, axis) * wrist
 }
 
-/// Where the off-hand's palm takes hold of the primary hand's item, in the
-/// primary hand's own space, and whether an authored seat claimed it.
-fn latch_point(
-    ctx: &ResolveContext,
-    primary: HandInput,
-    support: HandInput,
-) -> Option<(Vector3<f32>, bool)> {
+/// What the off-hand took hold of.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TakenGrip {
+    /// The grip point in the item's own model space.
+    point: Vector3<f32>,
+    snapped: bool,
+    family: Option<GripFamily>,
+    /// Grip -> latch, in the placement frame (see [`SupportLatch::direction`]).
+    direction: Vector3<f32>,
+}
+
+/// Where the off-hand's palm takes hold of the primary hand's item, and how.
+///
+/// The surface test comes first because it is the one that says *no* on almost
+/// every frame: the authored seats are only read once the palm is known to be
+/// on the item at all.
+fn latch_point(ctx: &ResolveContext, primary: HandInput, support: HandInput) -> Option<TakenGrip> {
     let entity_id = primary.held?;
     let (model_name, gun_scale) = vr_config::held_model_and_scale(ctx.world, entity_id)?;
 
@@ -326,19 +406,6 @@ fn latch_point(
         crate::hand_glove::hand_to_world(support.position, support.rotation, support.hand)
             .transform_point(Point3::from_vec(crate::hand_seat::PALM_CENTRE));
     let palm = to_hand.transform_point(palm_world);
-
-    let to_model = vr_config::held_model_hand_transform(&model_name, primary.hand, gun_scale);
-
-    let seats: Vec<SupportSeatPoint> = crate::vr_grips::support_seats(&model_name)
-        .into_iter()
-        .map(|seat| SupportSeatPoint {
-            model: seat.offset(),
-            hand: to_model.transform_point(Point3::from_vec(seat.offset())),
-        })
-        .collect();
-    if let Some(seat) = nearest_seat(palm, &seats) {
-        return Some((seat.model, true));
-    }
 
     if !on_surface(
         ctx,
@@ -351,9 +418,36 @@ fn latch_point(
     ) {
         return None;
     }
-    // Back into the item's own space, which is where the latch has to live to
-    // stay put while the aim swings the item about.
-    Some((to_model.invert()?.transform_point(palm).to_vec(), false))
+
+    let to_model = vr_config::held_model_hand_transform(&model_name, primary.hand, gun_scale);
+    // An authored seat within reach claims the grip; otherwise the palm latches
+    // where it landed. Either way the point goes back into the item's own space,
+    // which is where it has to live to stay put while the aim swings the item.
+    let seats: Vec<SupportSeatPoint> = crate::vr_grips::support_seats(&model_name)
+        .into_iter()
+        .map(|seat| SupportSeatPoint {
+            model: seat.offset(),
+            family: seat.family(),
+            hand: to_model.transform_point(Point3::from_vec(seat.offset())),
+        })
+        .collect();
+    let (point, hand_point, snapped, family) = match nearest_seat(palm, &seats) {
+        Some(seat) => (seat.model, seat.hand, true, seat.family),
+        None => (
+            to_model.invert()?.transform_point(palm).to_vec(),
+            palm,
+            false,
+            None,
+        ),
+    };
+    Some(TakenGrip {
+        point,
+        snapped,
+        family,
+        // The placement frame is the tracked hand BEFORE the glove's own
+        // reflection, so the grip's hand-space position reflects back out of it.
+        direction: primary.hand.mirror_point(hand_point.to_vec()),
+    })
 }
 
 /// The authored seat the palm should snap to, if one is within reach.
@@ -378,6 +472,7 @@ fn nearest_seat(palm: Point3<f32>, seats: &[SupportSeatPoint]) -> Option<Support
 struct SupportSeatPoint {
     model: Vector3<f32>,
     hand: Point3<f32>,
+    family: Option<GripFamily>,
 }
 
 /// Whether the palm is on the held item's own surface.
@@ -419,22 +514,26 @@ fn box_distance(point: Vector3<f32>, half_extents: Vector3<f32>) -> f32 {
     outside.magnitude()
 }
 
-/// Held items' contact meshes, in the holding hand's own space, keyed the same
-/// way the finger fit keys its cache.
+/// Held items' contact meshes, in the holding hand's own space, under the same
+/// key the finger fit uses - the model, the hand's reflection, and the scale the
+/// wield baked in decide the placement, so one key serves both.
 ///
 /// Filled by [`warm_contact_mesh`], where an asset cache is in reach, and read
 /// by the resolve, which runs in the hand update and has none - the same split
 /// [`crate::vr_grips`] uses for measured seats.
-type ContactKey = (String, Handedness, u32);
-static CONTACT: Lazy<RwLock<HashMap<ContactKey, Option<Arc<ContactMesh>>>>> =
+static CONTACT: Lazy<RwLock<HashMap<GripKey, Option<Arc<ContactMesh>>>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
-fn contact_key(model_name: &str, handedness: Handedness, gun_scale: f32) -> ContactKey {
-    (
-        model_name.to_ascii_lowercase(),
-        handedness,
-        gun_scale.to_bits(),
-    )
+/// The [`crate::vr_grips::generation`] the cache was filled at. A tuner edit
+/// re-seats every held item, so meshes placed against the old seat are stale -
+/// the same invalidation the finger fit's own cache runs.
+static CONTACT_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn drop_stale_contact_meshes() {
+    let generation = crate::vr_grips::generation();
+    if CONTACT_GENERATION.swap(generation, Ordering::Relaxed) != generation {
+        CONTACT.write().unwrap().clear();
+    }
 }
 
 /// Load and place `model_name`'s render triangles for a hand that holds it, if
@@ -447,7 +546,8 @@ pub fn warm_contact_mesh(
     gun_scale: f32,
     asset_cache: &mut AssetCache,
 ) {
-    let key = contact_key(model_name, handedness, gun_scale);
+    drop_stale_contact_meshes();
+    let key = GripKey::new(model_name, handedness, gun_scale);
     if CONTACT.read().unwrap().contains_key(&key) {
         return;
     }
@@ -463,7 +563,7 @@ fn contact_mesh(
     CONTACT
         .read()
         .unwrap()
-        .get(&contact_key(model_name, handedness, gun_scale))
+        .get(&GripKey::new(model_name, handedness, gun_scale))
         .cloned()
         .flatten()
 }
@@ -494,6 +594,7 @@ mod tests {
         SupportSeatPoint {
             model: vec3(x, 0.0, 0.0),
             hand: Point3::new(x, 0.0, 0.0),
+            family: None,
         }
     }
 
@@ -506,6 +607,10 @@ mod tests {
         rotation.rotate_vector(vec3(0.0, 1.0, 0.0))
     }
 
+    /// A gun-shaped latch: the second hand has hold of a point out along the
+    /// hand's own forward (a foregrip ahead of the pistol grip).
+    const ALONG_BARREL: Vector3<f32> = vec3(0.0, 0.0, -1.0);
+
     fn degrees_between(a: Vector3<f32>, b: Vector3<f32>) -> f32 {
         a.dot(b).clamp(-1.0, 1.0).acos().to_degrees()
     }
@@ -517,7 +622,7 @@ mod tests {
         // A wrist pointing straight ahead, with the support hand out to the
         // side: the aim has to leave the wrist's own forward entirely.
         let axis = vec3(1.0, 0.0, 0.0);
-        let aimed = aim_rotation(identity(), axis);
+        let aimed = aim_rotation(identity(), ALONG_BARREL, axis);
         assert_relative_eq!(forward(aimed), axis, epsilon = 1e-5);
     }
 
@@ -526,10 +631,10 @@ mod tests {
     #[test]
     fn the_primary_wrist_still_owns_the_roll() {
         let axis = vec3(1.0, 0.0, 0.0);
-        let upright = aim_rotation(identity(), axis);
+        let upright = aim_rotation(identity(), ALONG_BARREL, axis);
         // Rolling about the wrist's own forward is the gesture that must reach
         // the sights.
-        let rolled = aim_rotation(Quaternion::from_angle_z(Deg(90.0)), axis);
+        let rolled = aim_rotation(Quaternion::from_angle_z(Deg(90.0)), ALONG_BARREL, axis);
 
         assert_relative_eq!(forward(rolled), axis, epsilon = 1e-5);
         let turn = degrees_between(up(upright), up(rolled));
@@ -544,7 +649,7 @@ mod tests {
     #[test]
     fn an_axis_along_the_wrists_own_up_still_solves() {
         let axis = vec3(0.0, 1.0, 0.0);
-        let aimed = aim_rotation(identity(), axis);
+        let aimed = aim_rotation(identity(), ALONG_BARREL, axis);
         assert_relative_eq!(forward(aimed), axis, epsilon = 1e-5);
         assert_relative_eq!(up(aimed).magnitude(), 1.0, epsilon = 1e-4);
         assert_relative_eq!(up(aimed).dot(axis), 0.0, epsilon = 1e-4);
@@ -573,6 +678,7 @@ mod tests {
     #[test]
     fn the_aim_eases_in_and_back_out() {
         let mut grip = TwoHandGrip::default();
+        grip.direction = Some(ALONG_BARREL);
         grip.track_axis(Vector3::zero(), vec3(1.0, 0.0, 0.0));
 
         grip.ramp(true);
@@ -651,6 +757,205 @@ mod tests {
         assert!(
             crate::vr_grips::support_seats("fsn_h").is_empty(),
             "an oversized weapon bakes no support hand and authors no seat"
+        );
+    }
+
+    /// A support grip already taken, so the retention path can be driven with
+    /// no assets: `latch_point` is only consulted when taking a new one.
+    fn attached(hand: Handedness, entity_id: EntityId) -> TwoHandGrip {
+        TwoHandGrip {
+            latch: Some(SupportLatch {
+                entity_id,
+                hand,
+                point: Vector3::zero(),
+                snapped: false,
+                family: None,
+                direction: ALONG_BARREL,
+            }),
+            squeezing: [true, true],
+            ..Default::default()
+        }
+    }
+
+    /// Two closed, tracked hands a stride apart, with `entity_id` in `hand`.
+    fn held_by(hand: Handedness, entity_id: EntityId) -> [HandInput; 2] {
+        let mut hands = [
+            HandInput {
+                hand: Handedness::Left,
+                position: Vector3::zero(),
+                rotation: identity(),
+                squeeze: 1.0,
+                held: None,
+                claimed: false,
+            },
+            HandInput {
+                hand: Handedness::Right,
+                position: vec3(0.0, meters(0.4), 0.0),
+                rotation: identity(),
+                squeeze: 1.0,
+                held: None,
+                claimed: false,
+            },
+        ];
+        hands[vr_config::hand_slot(hand)].held = Some(entity_id);
+        hands
+    }
+
+    /// Drive one frame of the retention path.
+    fn step(grip: &mut TwoHandGrip, hands: [HandInput; 2]) {
+        let world = shipyard::World::new();
+        let physics = crate::physics::PhysicsWorld::new();
+        grip.resolve(&ResolveContext {
+            world: &world,
+            physics: &physics,
+            hands,
+        });
+    }
+
+    /// A controller that blinks out behind the player has not let go: the grip
+    /// survives the hold window, then gives up.
+    #[test]
+    fn a_lost_support_pose_is_held_then_dropped() {
+        let item = EntityId::from_inner(9).unwrap();
+        let mut grip = attached(Handedness::Left, item);
+        let mut hands = held_by(Handedness::Right, item);
+        // The zero quaternion is what a runtime reports for an untracked pose.
+        hands[vr_config::hand_slot(Handedness::Left)].rotation =
+            Quaternion::new(0.0, 0.0, 0.0, 0.0);
+
+        for frame in 0..TRACKING_HOLD_FRAMES {
+            step(&mut grip, hands);
+            assert!(
+                grip.is_two_handed(),
+                "frame {frame} inside the window let go"
+            );
+        }
+        step(&mut grip, hands);
+        assert!(!grip.is_two_handed(), "the window should eventually expire");
+    }
+
+    /// The controller keeps reporting its grip through a lost pose, so opening
+    /// the hand must release whether or not the pose came back.
+    #[test]
+    fn opening_an_untracked_support_hand_still_releases() {
+        let item = EntityId::from_inner(9).unwrap();
+        let mut grip = attached(Handedness::Left, item);
+        let mut hands = held_by(Handedness::Right, item);
+        hands[vr_config::hand_slot(Handedness::Left)].rotation =
+            Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        hands[vr_config::hand_slot(Handedness::Left)].squeeze = 0.0;
+
+        step(&mut grip, hands);
+        assert!(
+            !grip.is_two_handed(),
+            "an open hand is a release, tracked or not"
+        );
+    }
+
+    /// An untracked support pose must not drag the aim about: the axis is held
+    /// with the grip, not re-read off a position the runtime is not reporting.
+    #[test]
+    fn a_lost_support_pose_freezes_the_aim_axis() {
+        let item = EntityId::from_inner(9).unwrap();
+        let mut grip = attached(Handedness::Left, item);
+        let hands = held_by(Handedness::Right, item);
+        step(&mut grip, hands);
+        let tracked = grip.axis.expect("a tracked frame reads the axis");
+
+        // The pose drops out and the reported position lurches somewhere else.
+        let mut lost = hands;
+        lost[vr_config::hand_slot(Handedness::Left)].rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        lost[vr_config::hand_slot(Handedness::Left)].position = vec3(meters(0.9), 0.0, 0.0);
+        step(&mut grip, lost);
+        assert_relative_eq!(grip.axis.unwrap(), tracked, epsilon = 1e-5);
+    }
+
+    /// The support hand is only claimed for as long as the grip stands, so a
+    /// hand that has since been claimed by the body or a climb has left.
+    #[test]
+    fn a_support_hand_claimed_elsewhere_lets_go() {
+        let item = EntityId::from_inner(9).unwrap();
+        let mut grip = attached(Handedness::Left, item);
+        let mut hands = held_by(Handedness::Right, item);
+        hands[vr_config::hand_slot(Handedness::Left)].claimed = true;
+
+        step(&mut grip, hands);
+        assert!(
+            !grip.is_two_handed(),
+            "a hand claimed elsewhere is not supporting"
+        );
+    }
+
+    /// The primary letting go takes the support with it - and the fading aim
+    /// must not follow the ramp onto whatever either hand grabs next.
+    #[test]
+    fn the_primary_releasing_drops_the_support_and_its_aim() {
+        let item = EntityId::from_inner(9).unwrap();
+        let mut grip = attached(Handedness::Left, item);
+        let mut hands = held_by(Handedness::Right, item);
+        hands[vr_config::hand_slot(Handedness::Right)].held = None;
+
+        step(&mut grip, hands);
+        assert!(!grip.is_two_handed());
+
+        // A different item, in the other hand, one frame later.
+        step(
+            &mut grip,
+            held_by(Handedness::Left, EntityId::from_inner(11).unwrap()),
+        );
+        assert!(
+            grip.aim_for(identity()).is_none(),
+            "no aim survives the item it was solved for"
+        );
+    }
+
+    /// The aim points the part of the item the second hand HAS HOLD OF at the
+    /// second hand - not a fixed hand-local forward. A wrench's shaft does not
+    /// run down the wrist, and aiming the wrist's forward would swing its
+    /// handle out of both hands.
+    #[test]
+    fn the_aim_points_the_grip_the_second_hand_holds_at_that_hand() {
+        // A shaft running up out of the fist, as the melee wield seats it.
+        let shaft = vec3(0.0, 1.0, 0.0);
+        // ... and a support hand out to the right instead.
+        let axis = vec3(1.0, 0.0, 0.0);
+        let aimed = aim_rotation(identity(), shaft, axis);
+
+        assert_relative_eq!(aimed.rotate_vector(shaft), axis, epsilon = 1e-5);
+        // Aiming the hand's forward instead would have left the shaft pointing
+        // somewhere else entirely.
+        let wrong = aim_rotation(identity(), ALONG_BARREL, axis);
+        assert!(
+            degrees_between(wrong.rotate_vector(shaft), axis) > 45.0,
+            "the fixed-forward solve is what this test exists to rule out"
+        );
+    }
+
+    /// The solve is the identity while the hands are still where the one-hand
+    /// pose put them, which is what makes the attach ease start from nothing.
+    #[test]
+    fn an_attach_with_the_hands_already_in_place_changes_nothing() {
+        let wrist = Quaternion::from_angle_y(Deg(35.0));
+        let grip = vec3(0.2, 0.9, -0.3);
+        let aimed = aim_rotation(wrist, grip, wrist.rotate_vector(grip));
+        assert_relative_eq!(
+            aimed.rotate_vector(vec3(1.0, 2.0, 3.0)),
+            wrist.rotate_vector(vec3(1.0, 2.0, 3.0)),
+            epsilon = 1e-4
+        );
+    }
+
+    /// Hands folded back through the grip leave the arc ambiguous; hold the
+    /// pose rather than pick a plane at random.
+    #[test]
+    fn an_antiparallel_axis_holds_the_wrist_pose() {
+        let wrist = Quaternion::from_angle_y(Deg(20.0));
+        let grip = vec3(0.0, 0.0, -1.0);
+        let aimed = aim_rotation(wrist, grip, -wrist.rotate_vector(grip));
+        assert_relative_eq!(
+            aimed.rotate_vector(vec3(1.0, 2.0, 3.0)),
+            wrist.rotate_vector(vec3(1.0, 2.0, 3.0)),
+            epsilon = 1e-4
         );
     }
 }

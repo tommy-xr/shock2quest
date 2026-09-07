@@ -404,13 +404,12 @@ pub struct DebugHandAffordances {
 /// weapon two-handed, and where the off-hand took hold of it.
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct DebugTwoHandGrip {
-    /// Whether a support grip is attached right now.
-    pub two_handed: bool,
-    /// Which hand is supporting ("left"/"right"), or `null`.
+    /// Which hand is supporting ("left"/"right"), or `null`. `null` is also
+    /// what "not two-handed" reads as - `player.two_handed` is the flag.
     pub support_hand: Option<&'static str>,
     /// The entity the support hand has hold of, or `null`.
     pub support_of: Option<u64>,
-    /// Where it took hold, in the holding hand's own space.
+    /// Where it took hold, in the item's own model space.
     pub support_point: Option<[f32; 3]>,
     /// Whether an authored support seat claimed the grip rather than the palm
     /// latching wherever it met the surface.

@@ -12132,7 +12132,6 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             return Default::default();
         };
         crate::game_scene::DebugTwoHandGrip {
-            two_handed: true,
             support_hand: Some(match latch.hand {
                 Handedness::Left => "left",
                 Handedness::Right => "right",

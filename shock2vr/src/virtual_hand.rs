@@ -455,6 +455,7 @@ impl VirtualHand {
                         self.handedness,
                         scale,
                         latch.point,
+                        latch.family,
                         asset_cache,
                     )
                 },

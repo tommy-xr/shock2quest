@@ -686,8 +686,8 @@ export interface PlayerSnapshot {
 /** The second hand's grip on what the first hand holds
  * (GET /v1/info -> player.two_hand). */
 export interface TwoHandGrip {
-  two_handed: boolean;
-  /** Which hand is supporting, or null. */
+  /** Which hand is supporting, or null - which is also what "not two-handed"
+   * reads as; `player.two_handed` is the flag. */
   support_hand: "left" | "right" | null;
   /** The entity the support hand has hold of, or null. */
   support_of: number | null;

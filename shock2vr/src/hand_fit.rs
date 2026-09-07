@@ -154,11 +154,17 @@ const BISECT_ROUNDS: usize = 6;
 /// The triangles a hand can close against, in hand space.
 pub struct ContactMesh {
     triangles: Vec<[Point3<f32>; 3]>,
+    /// The whole soup's bounds, measured once. The support-grab test runs every
+    /// frame one hand holds something and the other is free, and a palm outside
+    /// these bounds cannot be near any triangle - that reject is the difference
+    /// between six float compares and a walk of the mesh.
+    bounds: Option<(Vector3<f32>, Vector3<f32>)>,
 }
 
 impl ContactMesh {
     pub fn new(triangles: Vec<[Point3<f32>; 3]>) -> Self {
-        Self { triangles }
+        let bounds = triangle_bounds(&triangles);
+        Self { triangles, bounds }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -171,7 +177,7 @@ impl ContactMesh {
 
     /// Axis-aligned extents of the mesh in hand space, or `None` when empty.
     pub fn extents(&self) -> Option<Vector3<f32>> {
-        triangle_bounds(&self.triangles).map(|(min, max)| max - min)
+        self.bounds.map(|(min, max)| max - min)
     }
 
     /// Whether any triangle comes within `radius` of `point`.
@@ -180,25 +186,20 @@ impl ContactMesh {
     /// hold wherever its palm meets the item's own surface, so the question is
     /// proximity to the mesh rather than to an authored point.
     pub fn within(&self, point: Point3<f32>, radius: f32) -> bool {
+        let reach = Vector3::new(radius, radius, radius);
         let p = point.to_vec();
-        self.triangles.iter().any(|triangle| {
-            // Reject on the triangle's own box before paying for the exact
-            // distance: at a few thousand triangles that is most of the cost.
-            let mut lo = triangle[0].to_vec();
-            let mut hi = lo;
-            for corner in &triangle[1..] {
-                let c = corner.to_vec();
-                lo = Vector3::new(lo.x.min(c.x), lo.y.min(c.y), lo.z.min(c.z));
-                hi = Vector3::new(hi.x.max(c.x), hi.y.max(c.y), hi.z.max(c.z));
-            }
-            lo.x - radius <= p.x
-                && hi.x + radius >= p.x
-                && lo.y - radius <= p.y
-                && hi.y + radius >= p.y
-                && lo.z - radius <= p.z
-                && hi.z + radius >= p.z
-                && point_triangle_distance(point, triangle) <= radius
-        })
+        let Some((lo, hi)) = self.bounds else {
+            return false;
+        };
+        if (p.x - radius > hi.x || p.x + radius < lo.x)
+            || (p.y - radius > hi.y || p.y + radius < lo.y)
+            || (p.z - radius > hi.z || p.z + radius < lo.z)
+        {
+            return false;
+        }
+        self.near(p - reach, p + reach)
+            .into_iter()
+            .any(|index| point_triangle_distance(point, &self.triangles[index]) <= radius)
     }
 
     /// Indices of the triangles whose bounding box overlaps `[min, max]`. Run

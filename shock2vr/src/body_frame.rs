@@ -224,7 +224,7 @@ pub fn worn_scene_objects(
 /// tracking is worst, and a pose that drops out for a frame must not read as
 /// "left the zone" - the release it is about to make would then land on the
 /// floor instead of in the backpack.
-const ANCHOR_HOLD_FRAMES: u8 = 12;
+pub(crate) const ANCHOR_HOLD_FRAMES: u8 = 12;
 
 /// What a hand's body-anchor gesture resolved to this frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
