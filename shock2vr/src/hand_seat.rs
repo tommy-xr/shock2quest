@@ -2,41 +2,73 @@
 //!
 //! The finger fit ([`crate::hand_fit`]) measures how far each finger closes on
 //! the item's surface, which only says anything once the item is somewhere a
-//! hand could hold it. A world pickup is drawn centred on the wrist, so this
-//! module puts it in the palm first, from the one thing every model has: the
-//! box its geometry occupies.
+//! hand could hold it - and specifically somewhere the **open** hand is not
+//! already touching, because a finger that starts in contact yields nothing and
+//! keeps its authored wrap. A world pickup is drawn centred on the wrist, so
+//! this module puts it against the open palm first, from the one thing every
+//! model has: the box its geometry occupies.
 //!
-//! Hand space is the glove's own: **+X toward the thumb side** of the right
-//! hand, **+Y out of the back of the hand** (so the palm faces -Y), **-Z along
-//! the fingers**. Units are world units (1 ~ 0.762 m), the space the seat
-//! offsets in [`crate::vr_grips`] are written in.
+//! Hand space is the glove's own, and it is not axis-aligned to the palm: the
+//! rig's palm plane runs obliquely through it. So the seat works in a **palm
+//! frame** measured off the open glove ([`PALM_CENTRE`], [`PALM_NORMAL`],
+//! [`PALM_CURL_AXIS`]) rather than in hand X/Y/Z. Units are world units
+//! (1 ~ 0.762 m), the space the seat offsets in [`crate::vr_grips`] are
+//! written in.
 
-use cgmath::{Matrix3, Quaternion, SquareMatrix, Vector3, vec3};
+use cgmath::{InnerSpace, Matrix3, Quaternion, Rotation, SquareMatrix, Vector3, vec3};
 
 use crate::hand_fit::{self, GripFamily};
 
-/// Where the palm's surface is, in hand space: the midpoint of the index and
-/// pinky knuckles at the glove's open pose - the line an item resting in the
-/// hand touches.
+/// Centre of the palm, in hand space: the mean of the four fingers'
+/// metacarpal bases and knuckles at the open pose - the middle of the flat
+/// the palm presents, roughly halfway between wrist and knuckles.
 ///
 /// Measured off the shipped rig; `hand_glove`'s
-/// `the_palm_anchor_matches_the_glove_rig` re-measures it and fails if the
-/// glove ever moves under it.
-pub const PALM_ANCHOR: Vector3<f32> = vec3(0.0055, -0.0002, -0.0971);
+/// `the_palm_frame_matches_the_glove_rig` re-measures the whole frame and
+/// fails if the glove ever moves under it.
+pub const PALM_CENTRE: Vector3<f32> = vec3(0.005287, -0.000243, -0.058655);
 
-/// How far the palm's skin is from that knuckle line, in world units - roughly
-/// half the thickness of a hand.
+/// Out of the palm, in hand space - the side the fingers curl toward, so the
+/// side a held item sits on.
+pub const PALM_NORMAL: Vector3<f32> = vec3(-0.97836, 0.15474, -0.13728);
+
+/// Across the palm, index knuckle to pinky knuckle: the axis the fingers curl
+/// about, so the axis a rod lies along when the fist closes on it.
+pub const PALM_CURL_AXIS: Vector3<f32> = vec3(-0.17354, -0.97693, 0.13556);
+
+/// Where thumb and index meet when the open hand closes on something thin: the
+/// midpoint of their tips at the open pose. A pinched item straddles this.
+pub const PINCH_POINT: Vector3<f32> = vec3(-0.05139, 0.055755, -0.168875);
+
+/// How far the palm's skin is from the joints the frame is measured through,
+/// in world units - roughly half the thickness of a hand.
 ///
-/// The anchor is a line of *joints*, which sit inside the flesh; an item rested
-/// on it would be buried in the palm and the fingers would start the fit
-/// already inside it (which the fit reads as "leave the authored wrap alone").
-/// Items sit on the skin instead.
+/// The frame runs through a plane of *joints*, which sit inside the flesh; an
+/// item rested on it would be buried in the palm and the fingers would start
+/// the fit already inside it (which the fit reads as "leave the authored wrap
+/// alone"). Items sit on the skin instead.
 const PALM_DEPTH: f32 = 0.012 / crate::METERS_PER_WORLD_UNIT;
 
-/// Where an item's surface rests: the palm's skin, on the -Y side of the
-/// knuckle line.
-pub fn palm_surface() -> Vector3<f32> {
-    PALM_ANCHOR - vec3(0.0, PALM_DEPTH, 0.0)
+/// How far toward the knuckles a wrapped item sits from the palm's centre, in
+/// world units.
+///
+/// A grip is not held in the middle of the palm: it sits under the base of the
+/// fingers, which is the only stretch of palm both the fingers and the *thumb*
+/// close over. Centred on the palm proper, a handle falls behind the thumb's
+/// whole swing and the thumb closes past it into a fist.
+const GRIP_SEAT_ALONG: f32 = 0.015 / crate::METERS_PER_WORLD_UNIT;
+
+/// The palm frame as the seat uses it: `(across, out, along)` - across the palm
+/// (the curl axis), out of the palm, and along the fingers wrist-to-tips.
+///
+/// The written-down axes are transcribed measurements and so are only unit and
+/// perpendicular to within a thousandth; everything here is a projection onto
+/// them, which needs them exact. Orthonormalized about the normal, and the
+/// third derived rather than written down so the three can never disagree.
+pub fn palm_frame() -> (Vector3<f32>, Vector3<f32>, Vector3<f32>) {
+    let out = PALM_NORMAL.normalize();
+    let across = (PALM_CURL_AXIS - out * PALM_CURL_AXIS.dot(out)).normalize();
+    (across, out, across.cross(out))
 }
 
 /// A held item's placement in hand space: where its model origin goes, and how
@@ -47,53 +79,93 @@ pub struct Seat {
     pub rotation: Quaternion<f32>,
 }
 
-/// Seat a model-space box in the hand.
+/// Seat a model-space box against the **open** hand, for the finger fit to
+/// close on.
 ///
-/// `authored_rotation` is the turn a grip profile already specifies; with none,
-/// the box is turned so its **longest** axis runs across the palm (hand X, the
-/// axis the fingers curl about - a rod lies through the fist), its **shortest**
-/// faces the palm (hand Y), and the remaining one runs along the fingers. Either
-/// way the box is then dropped onto the palm: its surface against
-/// [`palm_surface`], which is half its palm-facing extent below it.
+/// The family is read off the box first, because it decides both how the box
+/// is turned and where against the hand it goes:
 ///
-/// The family follows the seated box, so what the fingers are allowed to do
-/// matches what they are closing on: thin is pinched, wider than the palm is
-/// splayed on, anything else is wrapped.
+/// - wrapped or splayed on (cylindrical, broad, and an unprofiled trigger):
+///   the longest axis lies across the palm, the shortest faces it, and the
+///   nearest face rests on the palm skin at [`PALM_CENTRE`] - out of the open
+///   fingers' way, so every one of them has room to close;
+/// - pinched: the slab stands on edge between the open thumb and index pads,
+///   its thin axis along the palm normal and its long axis running out past
+///   the fingertips, with its near edge at [`PINCH_POINT`].
+///
+/// `authored_rotation` is the turn a grip profile already specifies; it is kept
+/// exactly, and only the placement is solved.
 pub fn seat(
     min: Vector3<f32>,
     max: Vector3<f32>,
     authored_rotation: Option<Quaternion<f32>>,
 ) -> (Seat, GripFamily) {
-    let rotation = authored_rotation.unwrap_or_else(|| across_the_palm(max - min));
+    let half = (max - min) * 0.5;
+    let family = hand_fit::family_from_extents(max - min);
+    let rotation = authored_rotation.unwrap_or_else(|| seating_turn(max - min, family));
 
-    // The box turned into hand space. A rotation of an axis-aligned box is not
-    // axis-aligned, so re-bound the eight corners rather than permuting extents.
-    let (hand_min, hand_max) = rotated_bounds(min, max, rotation);
-    let extents = hand_max - hand_min;
-    let centre = (hand_min + hand_max) * 0.5;
+    // Support of the turned box along `axis`: how far its surface reaches from
+    // its own centre that way. A rotated box is not axis-aligned in hand
+    // space, and the palm frame is oblique to it either way, so this is
+    // measured against the axis rather than read off a re-bound AABB.
+    let support = |axis: Vector3<f32>| {
+        let along = |unit: Vector3<f32>| axis.dot(rotation.rotate_vector(unit)).abs();
+        along(Vector3::unit_x()) * half.x
+            + along(Vector3::unit_y()) * half.y
+            + along(Vector3::unit_z()) * half.z
+    };
 
-    // The palm faces -Y, so the item hangs below the skin by half its depth.
-    let target = palm_surface() - vec3(0.0, extents.y * 0.5, 0.0);
+    let (_, out, along) = palm_frame();
+    let target = match family {
+        // The near face on the palm skin, the rest of the item out in front of
+        // it - and pushed toward the knuckles, which is the stretch of palm the
+        // fingers *and* the thumb can both reach round.
+        GripFamily::Cylindrical | GripFamily::Broad | GripFamily::Trigger => {
+            PALM_CENTRE + out * (PALM_DEPTH + support(out)) + along * GRIP_SEAT_ALONG
+        }
+        // Straddling the pinch line, running away from the hand: the pads meet
+        // its near edge and close onto its faces.
+        GripFamily::Pinch => PINCH_POINT + along * support(along),
+    };
+
+    let centre = rotation.rotate_vector((min + max) * 0.5);
     (
         Seat {
             offset: target - centre,
             rotation,
         },
-        hand_fit::family_from_extents(extents),
+        family,
     )
 }
 
-/// The turn that lays a box's longest axis across the palm and its shortest
-/// against it. A signed permutation of the model axes, kept a proper rotation
-/// (determinant +1) so it never reflects the geometry.
-fn across_the_palm(extents: Vector3<f32>) -> Quaternion<f32> {
+/// The turn that lays a box into the palm frame for its family.
+///
+/// A signed permutation of the model axes onto the frame's own axes, composed
+/// with the frame. Kept a proper rotation (determinant +1) throughout, so it
+/// never reflects the geometry.
+fn seating_turn(extents: Vector3<f32>, family: GripFamily) -> Quaternion<f32> {
+    let (across, out, along) = palm_frame();
+    // Where the box's longest / shortest / middle axes are sent.
+    let frame = match family {
+        // Long axis across the palm (a rod through the fist), flat side down.
+        GripFamily::Cylindrical | GripFamily::Broad | GripFamily::Trigger => {
+            Matrix3::from_cols(across, out, along)
+        }
+        // Long axis out past the fingertips, thin axis facing the palm, so the
+        // pads land on the faces. `-across` keeps the triple right-handed.
+        GripFamily::Pinch => Matrix3::from_cols(along, out, -across),
+    };
+    Quaternion::from(frame * axis_order(extents))
+}
+
+/// The signed permutation that sends a box's longest model axis to local X,
+/// its shortest to local Y and the remaining one to local Z.
+fn axis_order(extents: Vector3<f32>) -> Matrix3<f32> {
     let mut order = [0usize, 1, 2];
     let size = [extents.x.abs(), extents.y.abs(), extents.z.abs()];
     order.sort_by(|a, b| size[*b].total_cmp(&size[*a]));
     let [longest, middle, shortest] = order;
 
-    // Column j is where model axis j lands: longest across the palm, shortest
-    // through it, the remainder along the fingers.
     let mut columns = [Vector3::unit_x(); 3];
     columns[longest] = Vector3::unit_x();
     columns[middle] = Vector3::unit_z();
@@ -102,36 +174,13 @@ fn across_the_palm(extents: Vector3<f32>) -> Quaternion<f32> {
     if matrix.determinant() < 0.0 {
         matrix.z = -matrix.z;
     }
-    Quaternion::from(matrix)
-}
-
-/// The axis-aligned bounds of `[min, max]` after `rotation` - the same
-/// transform-the-corners-and-re-bound `dark::model` does for a posed hitbox.
-fn rotated_bounds(
-    min: Vector3<f32>,
-    max: Vector3<f32>,
-    rotation: Quaternion<f32>,
-) -> (Vector3<f32>, Vector3<f32>) {
-    use cgmath::{EuclideanSpace, Point3, Rotation};
-    use collision::{Aabb, Aabb3};
-
-    let box_of = Aabb3::new(Point3::from_vec(min), Point3::from_vec(max));
-    let turned = box_of
-        .to_corners()
-        .map(|corner| Point3::from_vec(rotation.rotate_vector(corner.to_vec())));
-    let bounds = turned
-        .iter()
-        .skip(1)
-        .fold(Aabb3::new(turned[0], turned[0]), |bounds, point| {
-            bounds.grow(*point)
-        });
-    (bounds.min.to_vec(), bounds.max.to_vec())
+    matrix
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::{Deg, InnerSpace, Rotation, Rotation3};
+    use cgmath::{Deg, Rotation3};
 
     /// Metres in the world units the hand frame is measured in.
     fn meters(m: f32) -> f32 {
@@ -142,16 +191,49 @@ mod tests {
         (-half, half)
     }
 
-    /// The seated box's own hand-space bounds - what the fingers see.
-    fn seated_bounds(
-        min: Vector3<f32>,
-        max: Vector3<f32>,
-        seat: Seat,
-    ) -> (Vector3<f32>, Vector3<f32>) {
-        let (lo, hi) = rotated_bounds(min, max, seat.rotation);
-        (lo + seat.offset, hi + seat.offset)
+    /// Where a seated box's corners land in the palm frame: `(normal, curl,
+    /// fingerward)` components of each of the eight.
+    fn seated_in_frame(min: Vector3<f32>, max: Vector3<f32>, seat: Seat) -> Vec<(f32, f32, f32)> {
+        let (across, out, along) = palm_frame();
+        let mut corners = Vec::new();
+        for i in 0..8 {
+            let corner = vec3(
+                if i & 1 == 0 { min.x } else { max.x },
+                if i & 2 == 0 { min.y } else { max.y },
+                if i & 4 == 0 { min.z } else { max.z },
+            );
+            let p = seat.rotation.rotate_vector(corner) + seat.offset - PALM_CENTRE;
+            corners.push((p.dot(out), p.dot(across), p.dot(along)));
+        }
+        corners
     }
 
+    /// The palm frame is orthonormal and right-handed - every projection the
+    /// seat takes assumes it, and the axes it is built from are transcribed
+    /// measurements rather than exact numbers.
+    #[test]
+    fn the_palm_frame_is_an_orthonormal_right_handed_basis() {
+        let (across, out, along) = palm_frame();
+        for axis in [across, out, along] {
+            assert!(
+                (axis.magnitude() - 1.0).abs() < 1e-5,
+                "{axis:?} is not unit"
+            );
+        }
+        assert!(out.dot(across).abs() < 1e-5);
+        assert!(out.dot(along).abs() < 1e-5);
+        assert!(across.dot(along).abs() < 1e-5);
+        assert!(
+            (across.cross(out) - along).magnitude() < 1e-5,
+            "the frame is left-handed"
+        );
+        // Orthonormalizing must not have turned the axes into different ones.
+        assert!(out.dot(PALM_NORMAL.normalize()) > 0.999);
+        assert!(across.dot(PALM_CURL_AXIS.normalize()) > 0.999);
+    }
+
+    /// A rod lies across the palm - along the axis the fingers curl about -
+    /// with its near face on the palm skin.
     #[test]
     fn a_rod_lies_across_the_palm() {
         let (min, max) = box_of(vec3(
@@ -162,34 +244,28 @@ mod tests {
 
         let (seat, family) = seat(min, max, None);
 
-        let (lo, hi) = seated_bounds(min, max, seat);
-        let extents = hi - lo;
+        let corners = seated_in_frame(min, max, seat);
+        let span = |pick: fn(&(f32, f32, f32)) -> f32| {
+            let lo = corners.iter().map(pick).fold(f32::INFINITY, f32::min);
+            let hi = corners.iter().map(pick).fold(f32::NEG_INFINITY, f32::max);
+            (lo, hi - lo)
+        };
+        let (near, depth) = span(|c| c.0);
+        let (_, across) = span(|c| c.1);
+        let (_, along) = span(|c| c.2);
         assert!(
-            extents.x > extents.y && extents.x > extents.z,
-            "the long axis should run across the palm, got {extents:?}"
+            across > along && across > depth,
+            "the long axis should run across the palm, got across {across} along {along} depth {depth}"
+        );
+        assert!(
+            (near - PALM_DEPTH).abs() < 1e-5,
+            "the rod's near face should rest on the palm skin, got {near}"
         );
         assert_eq!(family, GripFamily::Cylindrical);
     }
 
-    #[test]
-    fn a_slab_is_pinched_flat_against_the_palm() {
-        let (min, max) = box_of(vec3(
-            meters(0.35) * 0.5,
-            meters(0.02) * 0.5,
-            meters(0.48) * 0.5,
-        ));
-
-        let (seat, family) = seat(min, max, None);
-
-        let (lo, hi) = seated_bounds(min, max, seat);
-        let extents = hi - lo;
-        assert!(
-            extents.y < extents.x && extents.y < extents.z,
-            "the thin axis should face the palm, got {extents:?}"
-        );
-        assert_eq!(family, GripFamily::Pinch);
-    }
-
+    /// A ball's surface touches the palm skin too - the seat drops the surface,
+    /// not the origin, so shape does not change where contact happens.
     #[test]
     fn a_ball_rests_on_the_palm() {
         let radius = meters(0.35) * 0.5;
@@ -197,47 +273,82 @@ mod tests {
 
         let (seat, family) = seat(min, max, None);
 
-        let (_, hi) = seated_bounds(min, max, seat);
+        let near = seated_in_frame(min, max, seat)
+            .iter()
+            .map(|c| c.0)
+            .fold(f32::INFINITY, f32::min);
         assert!(
-            (hi.y - palm_surface().y).abs() < 1e-5,
-            "the ball's top should touch the palm, got {}",
-            hi.y
+            (near - PALM_DEPTH).abs() < 1e-5,
+            "the ball should touch the palm, got {near}"
         );
         assert_eq!(family, GripFamily::Broad);
     }
 
-    /// Everything sits against the palm, whatever its shape: the surface the
-    /// fingers close onto is the anchor, not the model origin.
+    /// A slab stands on edge at the pinch line: thin side facing the palm, near
+    /// edge at the pads, the rest of it out past the fingertips.
     #[test]
-    fn every_seat_puts_the_surface_on_the_palm() {
-        for half in [
-            vec3(meters(0.08), meters(0.01), meters(0.02)),
-            vec3(meters(0.02), meters(0.02), meters(0.02)),
-            vec3(meters(0.3), meters(0.05), meters(0.1)),
-        ] {
-            let (min, max) = box_of(half);
-            let (seat, _) = seat(min, max, None);
-            let (_, hi) = seated_bounds(min, max, seat);
-            assert!(
-                (hi.y - palm_surface().y).abs() < 1e-5,
-                "half {half:?} seated with its top at {}",
-                hi.y
-            );
-        }
+    fn a_slab_stands_on_edge_at_the_pinch_line() {
+        let (min, max) = box_of(vec3(
+            meters(0.35) * 0.5,
+            meters(0.02) * 0.5,
+            meters(0.48) * 0.5,
+        ));
+
+        let (seat, family) = seat(min, max, None);
+        assert_eq!(family, GripFamily::Pinch);
+
+        let corners = seated_in_frame(min, max, seat);
+        let pinch = PINCH_POINT - PALM_CENTRE;
+        let (_, out, fingerward) = palm_frame();
+        let (pinch_n, pinch_f) = (pinch.dot(out), pinch.dot(fingerward));
+
+        let depth = corners
+            .iter()
+            .map(|c| c.0)
+            .fold(f32::NEG_INFINITY, f32::max)
+            - corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+        let along_lo = corners.iter().map(|c| c.2).fold(f32::INFINITY, f32::min);
+        let along_hi = corners
+            .iter()
+            .map(|c| c.2)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let across = corners
+            .iter()
+            .map(|c| c.1)
+            .fold(f32::NEG_INFINITY, f32::max)
+            - corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+
+        assert!(
+            depth < across && depth < (along_hi - along_lo),
+            "the thin axis should face the palm, got depth {depth}"
+        );
+        assert!(
+            (along_lo - pinch_f).abs() < 1e-5,
+            "the near edge should sit at the pinch point, got {along_lo} vs {pinch_f}"
+        );
+        let mid_n = 0.5
+            * (corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min)
+                + corners
+                    .iter()
+                    .map(|c| c.0)
+                    .fold(f32::NEG_INFINITY, f32::max));
+        assert!(
+            (mid_n - pinch_n).abs() < 1e-5,
+            "the slab's mid-plane should be on the pinch line, got {mid_n} vs {pinch_n}"
+        );
     }
 
     /// An authored turn is kept as authored - the profile decides which way the
-    /// item faces - and only the drop onto the palm is computed.
+    /// item faces - and only the placement is solved.
     #[test]
-    fn an_authored_rotation_is_kept_and_only_the_drop_is_solved() {
+    fn an_authored_rotation_is_kept_and_only_the_placement_is_solved() {
         let (min, max) = box_of(vec3(meters(0.1), meters(0.02), meters(0.03)));
         let authored = Quaternion::from_angle_y(Deg(-90.0));
 
         let (seat, _) = seat(min, max, Some(authored));
 
         assert!((seat.rotation.s - authored.s).abs() < 1e-6);
-        let (_, hi) = seated_bounds(min, max, seat);
-        assert!((hi.y - palm_surface().y).abs() < 1e-5);
+        assert_eq!(seat.rotation, authored);
     }
 
     /// A permutation with an odd number of swaps must not sneak in as a
@@ -252,14 +363,17 @@ mod tests {
             vec3(3.0, 1.0, 2.0),
             vec3(2.0, 1.0, 3.0),
         ] {
-            let rotation = across_the_palm(extents);
-            let cross = rotation
-                .rotate_vector(Vector3::unit_x())
-                .cross(rotation.rotate_vector(Vector3::unit_y()));
-            assert!(
-                (cross - rotation.rotate_vector(Vector3::unit_z())).magnitude() < 1e-5,
-                "{extents:?} produced a reflection"
-            );
+            for family in GripFamily::ALL {
+                let rotation = seating_turn(extents, family);
+                let cross = rotation
+                    .rotate_vector(Vector3::unit_x())
+                    .cross(rotation.rotate_vector(Vector3::unit_y()));
+                assert!(
+                    (cross - rotation.rotate_vector(Vector3::unit_z())).magnitude() < 1e-3,
+                    "{extents:?} produced a reflection for {}",
+                    family.as_str()
+                );
+            }
         }
     }
 }

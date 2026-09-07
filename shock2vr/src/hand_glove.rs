@@ -347,7 +347,18 @@ impl GloveRenderer {
             fist: &self.fist,
             to_hand: glove_model_to_hand(),
         };
-        let amounts = hand_fit::fit(&mut rig, &mesh, family, GENERIC_GRIP);
+        // What a finger the fit can't measure falls back to, which depends on
+        // *why* it can't. An authored seat puts the item inside the closed hand
+        // on purpose (a gun's grip lives in the fist), so a finger already
+        // touching at the open pose keeps the generic wrap. A measured seat
+        // puts the item against the *open* palm on purpose, so a finger already
+        // touching it - the thumb lies on anything the palm is carrying - has
+        // finished closing, and curling it further would drive it through.
+        let resting = match grip.source {
+            crate::vr_grips::GripSource::Heuristic => FingerAmounts::default(),
+            _ => GENERIC_GRIP,
+        };
+        let amounts = hand_fit::fit(&mut rig, &mesh, family, resting);
         let solve = started.elapsed();
 
         tracing::debug!(
@@ -636,37 +647,60 @@ pub fn glove_material(
     })))
 }
 
-/// Where the palm faces the world, in the glove's own hand space: the midpoint
-/// of the index and pinky knuckles at the open pose - the line an item resting
-/// in the hand touches.
+/// The palm frame of the open glove, in the glove's own hand space: where the
+/// palm's centre is, which way it faces, which way the fingers curl about, and
+/// where thumb and index meet.
 ///
-/// [`crate::hand_seat`] seats unprofiled items against it. It is a constant of
-/// the rig rather than something a seat can afford to pose a glove for, so that
-/// module writes the number down and `the_palm_anchor_matches_the_glove_rig`
-/// holds it to this measurement.
+/// [`crate::hand_seat`] seats unprofiled items against this. It is a constant
+/// of the rig rather than something a seat can afford to pose a glove for, so
+/// that module writes the numbers down and
+/// `the_palm_frame_matches_the_glove_rig` holds them to this measurement.
 #[cfg(test)]
-fn palm_anchor_of(
+fn palm_frame_of(
     model: &mut GlbModel,
     retarget: &HandPoseRetarget,
     open: &Pose,
-    fist: &Pose,
-) -> Vector3<f32> {
-    use cgmath::Zero;
+) -> (Vector3<f32>, Vector3<f32>, Vector3<f32>, Vector3<f32>) {
+    use cgmath::{InnerSpace, Zero};
 
-    let mut rig = GloveRig {
-        model,
-        retarget,
-        open,
-        fist,
-        to_hand: glove_model_to_hand(),
-    };
-    let mut knuckle = |finger| {
-        rig.phalanges(finger, 0.0)
-            .first()
-            .map(|capsule: &Capsule| capsule.a.to_vec())
+    retarget.apply(open, model);
+    let to_hand = glove_model_to_hand();
+    let joint = |model: &mut GlbModel, index: usize| {
+        model
+            .skeleton()
+            .node_index_for_joint(index)
+            .and_then(|node| model.get_global_transform(node))
+            .map(|global| {
+                to_hand
+                    .transform_point(Point3::from_vec(global.w.truncate()))
+                    .to_vec()
+            })
             .unwrap_or_else(Vector3::zero)
     };
-    (knuckle(Finger::Index) + knuckle(Finger::Pinky)) * 0.5
+    // The palm's flat is the quad of the four fingers' metacarpals: base and
+    // knuckle of each. The thumb is left out - it swings out of that plane.
+    let fingers = [Finger::Index, Finger::Middle, Finger::Ring, Finger::Pinky];
+    let mut bases = Vector3::zero();
+    let mut knuckles = Vector3::zero();
+    for finger in fingers {
+        let mut bones = finger.bones();
+        bases += joint(model, *bones.start());
+        knuckles += joint(model, bones.nth(1).expect("a finger has a knuckle"));
+    }
+    let (bases, knuckles) = (bases * 0.25, knuckles * 0.25);
+
+    let centre = (bases + knuckles) * 0.5;
+    let curl = (joint(model, *Finger::Pinky.bones().nth(1).as_ref().unwrap())
+        - joint(model, *Finger::Index.bones().nth(1).as_ref().unwrap()))
+    .normalize();
+    // Out of the palm is what the fingers curl toward, which the wrist-to-
+    // knuckle run and the across-the-palm run bracket in this order.
+    let normal = (knuckles - bases).cross(curl).normalize();
+    // Thumb and index tips - the last joint of each chain.
+    let pinch = (joint(model, *Finger::Thumb.bones().end())
+        + joint(model, *Finger::Index.bones().end()))
+        * 0.5;
+    (centre, normal, curl, pinch)
 }
 
 /// The glove's colour map. One loader, shared with the `debug_gloves` harness,
@@ -696,6 +730,7 @@ fn load_texture(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::meters;
 
     /// Guards the two constants against drifting apart: the scale exists to put
     /// the authored glove at a real hand's length once the world's true scale
@@ -711,13 +746,9 @@ mod tests {
         );
     }
 
-    /// `hand_seat` writes the palm anchor down rather than posing a glove to
-    /// find it, so re-measure it off the shipped rig here: an unprofiled item
-    /// is seated against this line, and a glove that moved under it would seat
-    /// every one of them somewhere the fingers are not.
-    #[test]
-    fn the_palm_anchor_matches_the_glove_rig() {
-        use cgmath::{InnerSpace, Point3};
+    /// The glove built for a fit, from the shipped rig and nothing else.
+    #[cfg(test)]
+    fn test_glove() -> (GlbModel, HandPoseRetarget) {
         use collision::Aabb3;
         use dark::importers::skeleton_from_glb_bytes;
 
@@ -729,21 +760,141 @@ mod tests {
         let bytes = std::fs::read(path).expect("read the glove GLB");
         let skeleton = skeleton_from_glb_bytes(&bytes).expect("the glove GLB has a skeleton");
         let unit = Aabb3::new(Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 0.0));
-        let mut model = GlbModel::new(Vec::new(), unit, skeleton);
+        let model = GlbModel::new(Vec::new(), unit, skeleton);
         let retarget = HandPoseRetarget::for_right_glove(model.skeleton());
+        (model, retarget)
+    }
 
-        let measured = palm_anchor_of(
-            &mut model,
-            &retarget,
-            &hand_pose::open_right_hand(),
-            &hand_pose::fist_right_hand(),
-        );
+    /// `hand_seat` writes the palm frame down rather than posing a glove to
+    /// find it, so re-measure it off the shipped rig here: an unprofiled item
+    /// is seated against this frame, and a glove that moved under it would seat
+    /// every one of them somewhere the fingers are not.
+    #[test]
+    fn the_palm_frame_matches_the_glove_rig() {
+        use cgmath::InnerSpace;
 
+        let (mut model, retarget) = test_glove();
+
+        let (centre, normal, curl, pinch) =
+            palm_frame_of(&mut model, &retarget, &hand_pose::open_right_hand());
+
+        for (name, measured, written) in [
+            ("centre", centre, crate::hand_seat::PALM_CENTRE),
+            ("normal", normal, crate::hand_seat::PALM_NORMAL),
+            ("curl axis", curl, crate::hand_seat::PALM_CURL_AXIS),
+            ("pinch point", pinch, crate::hand_seat::PINCH_POINT),
+        ] {
+            assert!(
+                (measured - written).magnitude() < 2e-3,
+                "glove rig palm {name} is {measured:?}, hand_seat says {written:?}"
+            );
+        }
+    }
+
+    /// The whole point of the seat: a handle put against the open palm is
+    /// somewhere the fingers can *reach and stop on*, so the fit measures a
+    /// real wrap instead of falling back on a canned one.
+    ///
+    /// Negative test: seat the same cylinder the way #1385 did - dropped along
+    /// hand -Y, which runs across the knuckles rather than out of the palm, so
+    /// the item lands beside the hand - and every finger runs to its cap
+    /// without ever meeting it.
+    ///
+    /// The thumb is the deliberate exception: it lies *on* whatever the open
+    /// palm carries, so it is at contact before it curls at all. `solve` gives
+    /// a measured seat the open hand as its fallback for exactly that reason,
+    /// which is what this asserts for the thumb.
+    #[test]
+    fn a_seated_handle_is_somewhere_every_finger_can_close_onto_it() {
+        use crate::hand_fit::{ContactMesh, GripFamily};
+        use crate::hand_pose::Finger;
+
+        // A 40 mm handle, 150 mm long, drawn centred on the model origin the
+        // way a world pickup is.
+        let radius = meters(0.02);
+        let half_length = meters(0.075);
+        let half = Vector3::new(half_length, radius, radius);
+        let (seat, family) = crate::hand_seat::seat(-half, half, None);
+        assert_eq!(family, GripFamily::Cylindrical);
+
+        let mesh = ContactMesh::new(seated_cylinder(radius, half_length, seat));
+        let (mut model, retarget) = test_glove();
+        let open = hand_pose::open_right_hand();
+        let fist = hand_pose::fist_right_hand();
+        let mut rig = GloveRig {
+            model: &mut model,
+            retarget: &retarget,
+            open: &open,
+            fist: &fist,
+            to_hand: glove_model_to_hand(),
+        };
+
+        // Fitted twice against opposite fallbacks: a finger that answers the
+        // same either way measured the item, and one that just echoes the
+        // fallback did not.
+        let amounts = hand_fit::fit(&mut rig, &mesh, family, all_fingers(0.0));
+        let against_a_fist = hand_fit::fit(&mut rig, &mesh, family, all_fingers(1.0));
+
+        for finger in [Finger::Index, Finger::Middle, Finger::Ring, Finger::Pinky] {
+            let curl = finger.curl_of(&amounts);
+            assert!(
+                (curl - finger.curl_of(&against_a_fist)).abs() < 1e-6,
+                "{finger:?} answered the fallback, not the item"
+            );
+            assert!(
+                curl > 0.0 && curl < 1.0,
+                "{finger:?} closed to {curl} without stopping on the handle"
+            );
+        }
         assert!(
-            (measured - crate::hand_seat::PALM_ANCHOR).magnitude() < 1e-3,
-            "glove rig palm anchor is {measured:?}, hand_seat says {:?}",
-            crate::hand_seat::PALM_ANCHOR
+            Finger::Thumb.curl_of(&amounts) == 0.0 && Finger::Thumb.curl_of(&against_a_fist) == 1.0,
+            "the thumb should be reading its fallback - it starts resting on the handle"
         );
+    }
+
+    #[cfg(test)]
+    fn all_fingers(curl: f32) -> FingerAmounts {
+        FingerAmounts {
+            thumb: curl,
+            index: curl,
+            middle: curl,
+            ring: curl,
+            pinky: curl,
+        }
+    }
+
+    /// The cylinder of `a_seated_cylinder_gives_every_finger_something_to_close_on`,
+    /// in hand space: model-space triangles put through the seat.
+    #[cfg(test)]
+    fn seated_cylinder(
+        radius: f32,
+        half_length: f32,
+        seat: crate::hand_seat::Seat,
+    ) -> Vec<[Point3<f32>; 3]> {
+        use cgmath::Rotation;
+
+        const SEGMENTS: usize = 48;
+        let place =
+            |v: Vector3<f32>| Point3::from_vec(seat.rotation.rotate_vector(v) + seat.offset);
+        let ring = |i: usize| {
+            let angle = std::f32::consts::TAU * (i as f32) / (SEGMENTS as f32);
+            (radius * angle.cos(), radius * angle.sin())
+        };
+        let mut triangles = Vec::new();
+        for i in 0..SEGMENTS {
+            let (y0, z0) = ring(i);
+            let (y1, z1) = ring(i + 1);
+            let quad = [
+                Vector3::new(-half_length, y0, z0),
+                Vector3::new(half_length, y0, z0),
+                Vector3::new(half_length, y1, z1),
+                Vector3::new(-half_length, y1, z1),
+            ]
+            .map(place);
+            triangles.push([quad[0], quad[1], quad[2]]);
+            triangles.push([quad[0], quad[2], quad[3]]);
+        }
+        triangles
     }
 
     /// Only `Off` is dark, and no two lit states share a colour - a light the
