@@ -217,12 +217,13 @@ pub enum Effect {
         delta: i32,
     },
 
-    /// Wear a gun down by `amount` condition points (`PropGunState.condition`,
-    /// a 0..100 percentage), floored at 0. No-op for entities without a gun
-    /// state.
-    DegradeWeaponCondition {
+    /// Move a gun's condition (`PropGunState.condition`, a 0..100 percentage)
+    /// by `delta`, clamped to that range: negative for the wear a shot costs,
+    /// positive for the points the maintenance tool restores. No-op for
+    /// entities without a gun state.
+    AdjustWeaponCondition {
         entity_id: EntityId,
-        amount: f32,
+        delta: f32,
     },
 
     /// Start the wait a gun's fire setting imposes between shots
@@ -978,18 +979,19 @@ pub(crate) fn recharge_ammo_to_capacity(gun_state: &mut PropGunState, capacity: 
     gun_state.ammo = gun_state.ammo.max(capacity.max(0));
 }
 
-/// Wear a gun down by `amount` condition points. Condition is a 0..100
-/// percentage and never goes below 0 - a worn-out gun stays worn out rather
-/// than accumulating negative condition over the shots it keeps firing.
-pub(crate) fn degrade_condition(gun_state: &mut PropGunState, amount: f32) {
-    gun_state.condition = (gun_state.condition - amount).max(0.0);
+/// Move a gun's condition by `delta` (negative wears it, positive restores
+/// it). Condition is a 0..100 percentage and stays inside it: a worn-out gun
+/// does not accumulate negative condition over the shots it keeps firing, and
+/// a maintained one never reads better than new.
+pub(crate) fn adjust_condition(gun_state: &mut PropGunState, delta: f32) {
+    gun_state.condition = (gun_state.condition + delta).clamp(0.0, 100.0);
 }
 
 #[cfg(test)]
 mod tests {
     use dark::properties::PropGunState;
 
-    use super::{degrade_condition, recharge_ammo_to_capacity};
+    use super::{adjust_condition, recharge_ammo_to_capacity};
 
     fn gun_state(ammo: i32) -> PropGunState {
         PropGunState {
@@ -1020,9 +1022,9 @@ mod tests {
         let mut state = gun_state(12);
         state.condition = 100.0;
 
-        degrade_condition(&mut state, 1.0);
-        degrade_condition(&mut state, 1.0);
-        degrade_condition(&mut state, 1.0);
+        adjust_condition(&mut state, -1.0);
+        adjust_condition(&mut state, -1.0);
+        adjust_condition(&mut state, -1.0);
 
         assert_eq!(state.condition, 97.0);
         assert_eq!(state.ammo, 12);
@@ -1033,10 +1035,20 @@ mod tests {
         let mut state = gun_state(12);
         state.condition = 0.5;
 
-        degrade_condition(&mut state, 1.0);
-        degrade_condition(&mut state, 1.0);
+        adjust_condition(&mut state, -1.0);
+        adjust_condition(&mut state, -1.0);
 
         assert_eq!(state.condition, 0.0);
+    }
+
+    #[test]
+    fn a_restored_gun_never_reads_better_than_new() {
+        let mut state = gun_state(12);
+        state.condition = 95.0;
+
+        adjust_condition(&mut state, 10.0);
+
+        assert_eq!(state.condition, 100.0);
     }
 
     #[test]

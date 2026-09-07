@@ -40,6 +40,12 @@ pub fn hand_world_position(
 /// divides authored world geometry by [`SCALE_FACTOR`].
 pub(crate) const FROB_REACH: f32 = 7.071_068 / SCALE_FACTOR;
 
+/// How close the two hands must come for releasing a tool held in one to count
+/// as applying it to what the other holds. About a foot: close enough that the
+/// player has deliberately brought the two together, loose enough that they do
+/// not have to touch.
+const TWO_HAND_TOOL_REACH: f32 = 0.3;
+
 #[derive(Clone)]
 pub struct VirtualHand {
     position: Vector3<f32>,
@@ -233,6 +239,7 @@ impl VirtualHand {
         pawn_rot: Quaternion<f32>,
         input_hand: &Hand,
         held_by_other_hand: Option<EntityId>,
+        other_hand_position: Vector3<f32>,
     ) -> (VirtualHand, Vec<VirtualHandEffect>) {
         let handedness = prev.handedness;
         let hand_position = hand_world_position(pawn_pos, pawn_rot, input_hand.position);
@@ -253,19 +260,35 @@ impl VirtualHand {
                 if input_hand.squeeze_value < 0.5 {
                     let mut msgs = vec![VirtualHandEffect::DropItem { entity_id }];
 
-                    let result_copy = result.clone();
-                    if let Some(ray_cast_result) = result_copy {
-                        if let Some(hit_entity_id) = ray_cast_result.maybe_entity_id {
-                            msgs.push(VirtualHandEffect::OutMessage {
-                                message: Message {
-                                    to: hit_entity_id,
-                                    payload: MessagePayload::ProvideForConsumption {
-                                        entity: entity_id,
-                                    },
+                    // Releasing a tool against the weapon in the other hand is
+                    // the natural two-hand gesture, and it is the one target
+                    // the release ray usually misses: the hands are alongside
+                    // each other, not one pointed at the other. So the tool is
+                    // offered to what the other hand holds once it has been
+                    // brought to it - only for a pairing that item can take,
+                    // since offering on every release near the other hand would
+                    // e.g. post any dropped item into a held container.
+                    let two_hand_target = held_by_other_hand.filter(|other_held| {
+                        (hand_position - other_hand_position).magnitude() <= TWO_HAND_TOOL_REACH
+                            && crate::scripts::maintenance::offers_to(world, entity_id, *other_held)
+                    });
+
+                    // Exactly one recipient: a deliberate two-hand gesture wins
+                    // over whatever the ray happened to be pointing at, so one
+                    // tool can never be spent on two weapons (a released tool
+                    // over a weapons bench sees a second gun most of the time).
+                    let target = two_hand_target
+                        .or_else(|| result.clone().and_then(|hit| hit.maybe_entity_id));
+                    if let Some(target) = target {
+                        msgs.push(VirtualHandEffect::OutMessage {
+                            message: Message {
+                                to: target,
+                                payload: MessagePayload::ProvideForConsumption {
+                                    entity: entity_id,
                                 },
-                            });
-                        }
-                    };
+                            },
+                        });
+                    }
 
                     let updated_hand = VirtualHand {
                         position: hand_position,
@@ -789,6 +812,7 @@ mod tests {
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             &input,
             None,
+            Vector3::zero(),
         );
 
         effects
@@ -1215,6 +1239,7 @@ mod tests {
             identity,
             &input,
             None,
+            Vector3::zero(),
         );
         assert_eq!(far_hand.get_raytraced_entity(), None);
         assert!(
@@ -1231,6 +1256,7 @@ mod tests {
             identity,
             &input,
             None,
+            Vector3::zero(),
         );
         assert_eq!(near_hand.get_raytraced_entity(), Some(near_target));
         assert!(

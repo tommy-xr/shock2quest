@@ -378,31 +378,14 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             // (PropPlayerGun) or melee (PropLimbModel) - is wielded through
             // `GrabEntity` (flat: the first-person viewmodel wield path,
             // which also restores world refs and clears the Contains link;
-            // VR: a grab into the hand). Anything else gets its own Frob
-            // (use) action, e.g. a hypo consumes.
-            ContainerGuiMsg::Frob(ent) => {
-                let is_weapon = crate::virtual_hand::is_wieldable_weapon(world, *ent);
-                if is_weapon {
-                    (
-                        state.clone(),
-                        Effect::GrabEntity {
-                            entity_id: *ent,
-                            hand: crate::vr_config::Handedness::Right,
-                            current_parent_id: None,
-                        },
-                    )
-                } else {
-                    (
-                        state.clone(),
-                        Effect::Send {
-                            msg: Message {
-                                payload: MessagePayload::Frob,
-                                to: *ent,
-                            },
-                        },
-                    )
-                }
-            }
+            // VR: a grab into the hand). Anything else is used where it stands
+            // - a hypo consumes, a maintenance tool goes to the wielded
+            // weapon. Shared with the inventory strip's double-click, which is
+            // the same gesture (`maintenance::use_carried_item`).
+            ContainerGuiMsg::Frob(ent) => (
+                state.clone(),
+                crate::scripts::maintenance::use_carried_item(world, *ent),
+            ),
             // Transfer the clicked item's `Contains` link to the player's
             // backpack - the same `DropEntityInfo` path used when a VR hand
             // feeds an item into a container (drop_entity_into_container).

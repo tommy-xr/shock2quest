@@ -18,6 +18,10 @@ impl TechSkillValues {
         Self(std::array::from_fn(|_| read_i32(reader)))
     }
 
+    pub fn maintenance(self) -> i32 {
+        self.0[3]
+    }
+
     pub fn research(self) -> i32 {
         self.0[4]
     }
