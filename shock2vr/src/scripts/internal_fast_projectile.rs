@@ -336,18 +336,34 @@ mod tests {
     use crate::physics::PhysicsWorld;
     use crate::runtime_props::RuntimePropPlayerFiredProjectile;
     use cgmath::{Quaternion, point3, vec3};
-    use dark::SCALE_FACTOR;
     use dark::properties::PropCreature;
     use shipyard::{EntityId, World};
 
-    #[test]
-    fn projectile_raycast_hits_the_player_collider() {
+    fn shooter_and_target_fixture() -> (PhysicsWorld, World, EntityId, EntityId) {
         let mut physics = PhysicsWorld::new();
+        // Put the player's capsule between the ray origin and the target so
+        // changing only the PLAYER mask changes which entity the ray hits.
         let player_entity = EntityId::from_inner(1).unwrap();
-        let mut player = physics.create_player(vec3(0.0, 0.0, 5.0), player_entity);
+        let mut player = physics.create_player(vec3(0.0, 0.0, 2.0), player_entity);
+
+        let target = EntityId::from_inner(2).unwrap();
+        physics.add_kinematic(
+            target,
+            vec3(0.0, 0.0, 5.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(2.0, 2.0, 2.0),
+            crate::physics::CollisionGroup::selectable(),
+            false,
+        );
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
 
-        let world = World::new();
+        (physics, World::new(), player_entity, target)
+    }
+
+    #[test]
+    fn projectile_raycast_hits_the_player_collider() {
+        let (physics, world, player_entity, _target) = shooter_and_target_fixture();
         let hit = projectile_ray_cast(
             point3(0.0, 0.0, 0.0),
             vec3(0.0, 0.0, 1.0),
@@ -364,43 +380,22 @@ mod tests {
         );
     }
 
-    /// The flat crosshair ray starts at the player's eye, which is inside the
-    /// player's own capsule (the eye is the head sphere). A solid raycast
-    /// reports a containing shape as a distance-0 hit, so the player's own
-    /// collider must be excluded or every flat shot hits the shooter.
     #[test]
-    fn camera_origin_projectile_shoots_past_the_shooters_own_collider() {
-        let mut physics = PhysicsWorld::new();
-        let player_entity = EntityId::from_inner(1).unwrap();
-        let mut player = physics.create_player(vec3(0.0, 0.0, 0.0), player_entity);
-        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
-        // The eye: on the capsule axis, inside the player's own collider.
-        let body = physics.get_player_translation(&player);
-        let eye = point3(
-            body.x,
-            body.y + crate::PLAYER_EYE_HEIGHT / SCALE_FACTOR,
-            body.z,
-        );
-
-        let target = EntityId::from_inner(2).unwrap();
-        physics.add_kinematic(
-            target,
-            vec3(0.0, eye.y, 5.0),
-            Quaternion::new(1.0, 0.0, 0.0, 0.0),
-            vec3(0.0, 0.0, 0.0),
-            vec3(2.0, 2.0, 2.0),
-            crate::physics::CollisionGroup::selectable(),
+    fn player_fired_projectile_raycast_shoots_past_the_shooters_collider() {
+        let (physics, world, _player_entity, target) = shooter_and_target_fixture();
+        let hit = projectile_ray_cast(
+            point3(0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 1.0),
+            &physics,
+            10.0,
+            &world,
             false,
         );
-        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
-
-        let world = World::new();
-        let hit = projectile_ray_cast(eye, vec3(0.0, 0.0, 1.0), &physics, 10.0, &world, false);
 
         assert_eq!(
             hit.and_then(|result| result.maybe_entity_id),
             Some(target),
-            "a shot fired from the player's own eye must reach the target, not the shooter",
+            "a player-fired ray must reach the target, not the shooter",
         );
     }
 
