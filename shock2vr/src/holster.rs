@@ -22,10 +22,10 @@ pub struct HolsteredWeapon {
 }
 
 /// How a weapon with no authored holster pose hangs: a quarter turn about X
-/// stands the model's long axis (+Z, the way the world models are authored)
-/// on end, and the negative angle points the muzzle at the floor. Grip up and
-/// back, barrel down - the way a weapon sits in a real drop holster.
-const DEFAULT_HOLSTERED_DEG: [f32; 3] = [90.0, 0.0, 0.0];
+/// stands the model's long axis on end. The gun world models run barrel-first
+/// along -Z with the grip at +Z, so -90 puts the muzzle at the floor and the
+/// grip up - the way a weapon sits in a drop holster.
+const DEFAULT_HOLSTERED_DEG: [f32; 3] = [-90.0, 0.0, 0.0];
 
 /// How `model` is turned in the holster: its authored `holstered_deg`, else
 /// [`DEFAULT_HOLSTERED_DEG`]. XYZ Euler degrees applied Z * Y * X, the same
@@ -63,16 +63,17 @@ mod tests {
     use cgmath::{InnerSpace, Rotation, vec3};
 
     /// With nothing authored the muzzle points at the floor: the model's own
-    /// +Z (its long axis) ends up pointing down.
+    /// -Z (the barrel end of every gun world model) ends up pointing down, and
+    /// the grip at +Z points up.
     #[test]
     fn an_unprofiled_weapon_hangs_barrel_down() {
         let _guard = crate::vr_grips::test_guard();
         crate::vr_grips::set_profiles(Default::default());
 
-        let down = holstered_rotation("nothing_authored").rotate_vector(vec3(0.0, 0.0, 1.0));
+        let barrel = holstered_rotation("nothing_authored").rotate_vector(vec3(0.0, 0.0, -1.0));
         assert!(
-            down.y < -0.99,
-            "the long axis should point at the floor, got {down:?}"
+            barrel.y < -0.99,
+            "the barrel should point at the floor, got {barrel:?}"
         );
     }
 

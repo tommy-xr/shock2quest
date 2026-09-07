@@ -373,3 +373,26 @@ mod log_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The holster slot is campaign state, not presentation: it has to come
+    /// back off a save (and out of a level transition, which carries the same
+    /// struct) still holding the weapon the player put there.
+    #[test]
+    fn the_holstered_weapon_survives_a_round_trip() {
+        let mut quests = QuestInfo::new();
+        assert_eq!(
+            quests.holstered_weapon(),
+            None,
+            "nothing holstered to start"
+        );
+        quests.set_holstered_weapon(Some(-1893));
+
+        let restored: QuestInfo =
+            serde_json::from_str(&serde_json::to_string(&quests).unwrap()).unwrap();
+        assert_eq!(restored.holstered_weapon(), Some(-1893));
+    }
+}

@@ -735,6 +735,16 @@ export interface BodyFrame {
   belt_card: "belt" | "left" | "right" | null;
   /** The ammo pouch on the right hip. */
   pouch: AmmoPouch;
+  /** The weapon holster on the dominant thigh. */
+  holster: Holster;
+}
+
+/** The hip holster: where it is, and what is in it
+ * (GET /v1/info -> player.body_frame.holster). */
+export interface Holster {
+  position: [number, number, number];
+  /** The name of the holstered weapon, null when the slot is empty. */
+  occupied: string | null;
 }
 
 /** The right-hip ammo pouch: where it is, and what a grip there would produce
