@@ -46,7 +46,10 @@ import type {
   AimPoint,
   AimResult,
   AimVisibility,
+  PlayerSnapshot,
   Vec3,
+  VrGripProfile,
+  VrGripState,
 } from "./types.js";
 
 /**
@@ -671,6 +674,58 @@ export class DevParamsApi {
   }
 }
 
+/**
+ * Where a model sits in a VR hand - the grip tuner.
+ *
+ * Keyed by model name, because the profile registry is process-global and the
+ * `debug_grips` scene has no "held" entity at all. Ask a hand what it is
+ * holding with {@link VrGripsApi.heldModel}, which reads it off `/v1/info`.
+ */
+export class VrGripsApi {
+  constructor(
+    private readonly client: HttpClient,
+    private readonly player: () => Promise<PlayerSnapshot>,
+  ) {}
+
+  /** The model `hand` is holding, or null for an empty hand. */
+  async heldModel(hand: "left" | "right"): Promise<string | null> {
+    const affordance = (await this.player()).hand_affordance;
+    return (hand === "left" ? affordance?.left_model : affordance?.right_model) ?? null;
+  }
+
+  /** One model's resolved grip, and where it came from. */
+  async get(model: string): Promise<VrGripState> {
+    return this.client.get<VrGripState>(
+      `/v1/vr/grip?model=${encodeURIComponent(model)}`,
+    );
+  }
+
+  /**
+   * Author part of a model's grip. Fields given are merged into whatever it
+   * already has, so nudging an offset keeps the turn. Live on the next frame.
+   */
+  async set(
+    model: string,
+    profile: VrGripProfile,
+  ): Promise<{ model: string; profile: VrGripProfile }> {
+    return this.client.post(`/v1/vr/grip`, { model, ...profile });
+  }
+
+  /** Drop a model's authored profile, back to the seat measured off its box. */
+  async clear(model: string): Promise<{ model: string; cleared: boolean }> {
+    return this.client.post(`/v1/vr/grip`, { model, clear: true });
+  }
+
+  /**
+   * Write the in-memory profiles out, keys sorted. Defaults to the repo's own
+   * `assets/vr_grips.json`; pass `path` to write elsewhere - which is what a
+   * test does, so it never touches the shipped asset.
+   */
+  async save(path?: string): Promise<{ path: string }> {
+    return this.client.post(`/v1/vr/grip/save`, path ? { path } : {});
+  }
+}
+
 /** The free (debug) camera - a detached view that leaves the pawn alone. */
 export class CameraApi {
   constructor(private readonly client: HttpClient) {}
@@ -851,6 +906,7 @@ export class Game {
   readonly physics: PhysicsApi;
   readonly scene: SceneApi;
   readonly devParams: DevParamsApi;
+  readonly vrGrips: VrGripsApi;
   readonly camera: CameraApi;
   readonly quests: QuestsApi;
   readonly ui: UiApi;
@@ -866,6 +922,7 @@ export class Game {
     this.physics = new PhysicsApi(client);
     this.scene = new SceneApi(client);
     this.devParams = new DevParamsApi(client);
+    this.vrGrips = new VrGripsApi(client, async () => (await this.info()).player);
     this.camera = new CameraApi(client);
     this.quests = new QuestsApi(client);
     this.ui = new UiApi(client);

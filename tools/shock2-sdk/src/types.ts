@@ -517,6 +517,45 @@ export interface CameraPlacement {
   rotation?: [number, number, number, number];
 }
 
+/**
+ * One model's authored VR grip, as `assets/vr_grips.json` stores it. Every
+ * field is optional; what is missing is measured off the model's own box.
+ */
+export interface VrGripProfile {
+  /** How the model is turned in the hand, XYZ Euler degrees applied Z * Y * X. */
+  rotation_deg?: [number, number, number];
+  /** Where the model's origin goes in hand space, world units. */
+  offset?: [number, number, number];
+  /** "cylindrical" | "pinch" | "broad" | "trigger". */
+  family?: string;
+  /** Per-finger curls [thumb, index, middle, ring, pinky], 0 open .. 1 fist. */
+  fingers?: [number, number, number, number, number];
+  /** Uniform scale for the *held* geometry only. */
+  scale?: number;
+  /** "same" | "flip_x" - how the left hand derives this grip. */
+  mirror?: "same" | "flip_x";
+}
+
+/**
+ * A model's resolved grip (GET /v1/vr/grip).
+ *
+ * `source` says which layer won: `"profile"` (the file, or a live edit of it),
+ * `"heuristic"` (measured off the model's box), or `"unseated"` (nothing has
+ * measured it yet, so it is drawn on the wrist).
+ */
+export interface VrGripState {
+  model: string;
+  source: "profile" | "heuristic" | "unseated";
+  offset: [number, number, number];
+  /** Rotation as [w, x, y, z]. */
+  rotation_quat: [number, number, number, number];
+  scale: number;
+  family: string | null;
+  fingers: [number, number, number, number, number] | null;
+  /** The authored entry, or null where nothing is authored. */
+  profile: VrGripProfile | null;
+}
+
 /** What a POST /v1/dev-params actually applied (after clamp/snap). */
 export interface DevParamSetResult {
   key: string;
@@ -650,6 +689,9 @@ export interface HandAffordances {
   left_grip: HandGrip | null;
   /** The grip the right hand fitted to what it holds, or null. */
   right_grip: HandGrip | null;
+  /** The model each hand holds - the key `/v1/vr/grip` tunes under. */
+  left_model: string | null;
+  right_model: string | null;
 }
 
 /** The grip family a fit solved in. */
