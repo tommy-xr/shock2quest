@@ -5490,9 +5490,10 @@ impl PhysicsWorld {
         self.climbable_grip_above(point, radius, feet_y + PLAYER_STEP_HEIGHT / SCALE_FACTOR)
     }
 
-    /// Near a held ladder, the deck can be less than a step above the feet.
+    /// Near an existing ladder or ledge hold, the deck can be less than a step
+    /// above the feet, including when bringing the second hand onto the deck.
     /// It must still be above them, so ordinary floor support is never a grip.
-    pub fn climbable_grip_from_ladder_at(
+    pub fn climbable_grip_during_transfer_at(
         &self,
         point: Vector3<f32>,
         feet_y: f32,
@@ -10432,13 +10433,13 @@ mod tests {
         );
         assert!(
             world
-                .climbable_grip_from_ladder_at(vec3(0.0, 3.05, 0.0), 2.5)
+                .climbable_grip_during_transfer_at(vec3(0.0, 3.05, 0.0), 2.5)
                 .is_some(),
             "a nearby deck within a step is available during ladder transfer"
         );
         assert!(
             world
-                .climbable_grip_from_ladder_at(vec3(0.0, 3.05, 0.0), 3.0)
+                .climbable_grip_during_transfer_at(vec3(0.0, 3.05, 0.0), 3.0)
                 .is_none(),
             "even a transfer must not grip the floor under the feet"
         );

@@ -214,9 +214,10 @@ impl PlayerInteraction for VrInteraction {
                 hand_input(&self.left_hand, &ctx.input.left_hand),
                 hand_input(&self.right_hand, &ctx.input.right_hand),
             ],
-            |point, from_ladder| {
-                if from_ladder {
-                    ctx.physics.climbable_grip_from_ladder_at(point, ctx.feet_y)
+            |point, transferring| {
+                if transferring {
+                    ctx.physics
+                        .climbable_grip_during_transfer_at(point, ctx.feet_y)
                 } else {
                     ctx.physics.climbable_grip_at(
                         point,

@@ -165,7 +165,7 @@ impl HandClimb {
     /// demands, or `None` when no hand holds anything.
     ///
     /// `probe` answers "what could a hand at this world point grab?"; its bool
-    /// enables a nearby deck transfer from the other valid ladder hand (see
+    /// enables a nearby deck transfer from the other valid hold (see
     /// [`crate::physics::PhysicsWorld::climbable_grip_at`]) and `is_alive`
     /// whether a gripped entity still exists.
     pub fn update(
@@ -243,15 +243,16 @@ impl HandClimb {
             }
         }
         // Invalidate BOTH old holds before granting a contextual deck grab:
-        // a broken, deleted, released or newly occupied ladder hand cannot
+        // a broken, deleted, released or newly occupied hand cannot
         // authorize the free hand's transfer, regardless of hand iteration order.
         for index in 0..HANDS.len() {
             if self.grips[index].is_none() && self.grab_grace[index] > 0.0 {
-                let from_ladder = self.grips[1 - index].is_some_and(|other| {
-                    other.grip.kind == ClimbGripKind::Ladder
-                        && (hand_world[index] - other.grip.point).magnitude() <= 1.5
-                });
-                if let Some(grip) = probe(hand_world[index], from_ladder) {
+                // Keep the same deck within reach after releasing the ladder:
+                // the player can place the second hand beside the first and
+                // continue pulling hand over hand across the lip.
+                let transferring = self.grips[1 - index]
+                    .is_some_and(|other| (hand_world[index] - other.grip.point).magnitude() <= 1.5);
+                if let Some(grip) = probe(hand_world[index], transferring) {
                     self.grab_grace[index] = 0.0;
                     self.grips[index] = Some(GripAnchor {
                         grip,
@@ -481,6 +482,77 @@ mod tests {
         assert_eq!(released.translation, None);
         assert_eq!(climb.anchor(), None);
         assert_eq!(climb.grips().count(), 0);
+    }
+
+    #[test]
+    fn deck_transfer_requires_a_nearby_valid_hold_of_either_kind() {
+        for kind in [ClimbGripKind::Ladder, ClimbGripKind::Ledge] {
+            for (squeeze, empty, alive, distance, expected) in [
+                (1.0, true, true, 0.5, true),
+                (0.0, true, true, 0.5, false),
+                (1.0, false, true, 0.5, false),
+                (1.0, true, false, 0.5, false),
+                (1.0, true, true, 1.6, false),
+            ] {
+                for held in 0..2 {
+                    let mut climb = HandClimb::default();
+                    let pawn = Vector3::zero();
+                    let rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+                    let reach = vec3(0.0, 1.0, -1.0);
+                    let mut hands = [no_hand(), no_hand()];
+                    hands[held] = hand(reach, 1.0);
+                    climb.update(
+                        pawn,
+                        rotation,
+                        DT,
+                        hands,
+                        |p, _| {
+                            Some(ClimbGrip {
+                                kind,
+                                entity_id: Some(shipyard::EntityId::from_inner(123).unwrap()),
+                                ..ladder_grip(p)
+                            })
+                        },
+                        |_| true,
+                    );
+                    let mut hands = [
+                        hand(reach + vec3(distance, 0.0, 0.0), 1.0),
+                        hand(reach + vec3(distance, 0.0, 0.0), 1.0),
+                    ];
+                    hands[held] = ClimbHandInput {
+                        is_empty: empty,
+                        ..hand(reach, squeeze)
+                    };
+                    climb.update(
+                        pawn,
+                        rotation,
+                        DT,
+                        hands,
+                        |p, transfer| {
+                            assert_eq!(transfer, expected, "{kind:?}, hand {held}");
+                            transfer.then_some(ClimbGrip {
+                                kind: ClimbGripKind::Ledge,
+                                normal: vec3(0.0, 1.0, 0.0),
+                                ..ladder_grip(p)
+                            })
+                        },
+                        |_| alive,
+                    );
+                    assert_eq!(climb.grips[1 - held].is_some(), expected);
+                    if expected {
+                        assert_eq!(climb.grips().count(), 2);
+                        let mut hands = [
+                            hand(reach + vec3(distance, 0.0, 0.0), 1.0),
+                            hand(reach + vec3(distance, 0.0, 0.0), 1.0),
+                        ];
+                        hands[held] = no_hand();
+                        let frame = climb.update(pawn, rotation, DT, hands, |_, _| None, |_| true);
+                        assert_translation(frame, Vector3::zero());
+                        assert!(frame.launch.is_none());
+                    }
+                }
+            }
+        }
     }
 
     #[test]
