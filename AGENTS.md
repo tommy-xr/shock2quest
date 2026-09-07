@@ -489,6 +489,7 @@ For debugging visual/rendering changes without a full interactive session:
    | `debug_ragdoll`          | Test ragdoll physics                         |
    | `debug_hitbox`           | View fitted hitbox shapes vs ragdoll colliders across poses |
    | `debug_gloves`           | Test VR hand/glove rendering                 |
+   | `debug_grips`            | One held test item at a time in the VR glove, posed by the finger fit (`grip_item` dev param) |
    | `debug_hand_poses`       | 25AE authored hand poses, anchored at a common hand origin |
    | `debug_teleport`         | Test VR teleport locomotion                  |
    | `debug_joint_constraint` | Test physics joint constraints               |
