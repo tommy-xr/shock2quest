@@ -14,6 +14,13 @@ use std::{
     path::PathBuf,
 };
 
+pub(crate) const POSE_PRESETS: [(&str, [f32; 5]); 4] = [
+    ("Open", [0.0; 5]),
+    ("Point", [0.85, 0.0, 0.9, 0.9, 0.9]),
+    ("Closed", [1.0; 5]),
+    ("Ball", [0.35, 0.25, 0.3, 0.35, 0.4]),
+];
+
 pub fn default_library_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/astra-vr-grips.json")
 }
@@ -90,17 +97,7 @@ impl GripDocument {
         }
         let mut bytes = serde_json::to_vec_pretty(&self.library).map_err(|e| e.to_string())?;
         bytes.push(b'\n');
-        let mut temp =
-            tempfile::NamedTempFile::new_in(path.parent().unwrap()).map_err(|e| e.to_string())?;
-        temp.write_all(&bytes)
-            .and_then(|_| temp.as_file().sync_all())
-            .map_err(|e| e.to_string())?;
-        if new_file {
-            temp.persist_noclobber(&path)
-        } else {
-            temp.persist(&path)
-        }
-        .map_err(|e| e.to_string())?;
+        persist_json(&path, &bytes, new_file)?;
         self.path = path;
         self.saved_bytes = bytes;
         self.saved = self.library.clone();
@@ -120,7 +117,29 @@ impl GripDocument {
     }
 }
 
+pub(crate) fn persist_json(
+    path: &std::path::Path,
+    bytes: &[u8],
+    new_file: bool,
+) -> Result<(), String> {
+    let mut temp =
+        tempfile::NamedTempFile::new_in(path.parent().ok_or("Missing parent directory")?)
+            .map_err(|e| e.to_string())?;
+    temp.write_all(bytes)
+        .and_then(|_| temp.as_file().sync_all())
+        .map_err(|e| e.to_string())?;
+    if new_file {
+        temp.persist_noclobber(path)
+    } else {
+        temp.persist(path)
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub struct GripEditor {
+    support_editor: crate::support_grip_editor::SupportEditor,
+    support_mode: bool,
     document: Result<GripDocument, String>,
     hints: Result<BTreeMap<String, GripHints>, String>,
     model: String,
@@ -144,7 +163,14 @@ pub struct GripEditor {
 }
 
 impl GripEditor {
-    pub fn new(path: Option<PathBuf>, model: Option<String>, hand: String, view: String) -> Self {
+    pub fn new(
+        path: Option<PathBuf>,
+        model: Option<String>,
+        hand: String,
+        view: String,
+        support_mode: bool,
+        support_path: Option<PathBuf>,
+    ) -> Self {
         // Hints are the same authoring inputs used by gameplay and the baker.
         let hints_path = default_library_path().with_file_name("astra-vr-grip-hints.json");
         let hints = std::fs::read(hints_path)
@@ -159,6 +185,8 @@ impl GripEditor {
             default_library_path()
         };
         Self {
+            support_editor: crate::support_grip_editor::SupportEditor::new(support_path),
+            support_mode,
             document: GripDocument::load(path.unwrap_or(default_path)),
             hints,
             model: model.unwrap_or_else(|| "mug".into()),
@@ -357,11 +385,9 @@ impl GripEditor {
     pub fn guard_close(&mut self, ctx: &egui::Context) {
         self.poll_fit(ctx);
         let busy = self.is_busy();
-        let Ok(doc) = &mut self.document else {
-            return;
-        };
+        let primary_dirty = self.document.as_ref().is_ok_and(|doc| doc.dirty());
         if !self.allow_close
-            && (doc.dirty() || busy)
+            && (primary_dirty || self.support_editor.dirty() || busy)
             && ctx.input(|i| i.viewport().close_requested())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -383,7 +409,11 @@ impl GripEditor {
                         .add_enabled(!self.stale && !busy, egui::Button::new("Save and close"))
                         .clicked()
                     {
-                        match doc.save() {
+                        let primary_saved = match &mut self.document {
+                            Ok(doc) if doc.dirty() => doc.save(),
+                            _ => Ok(()),
+                        };
+                        match primary_saved.and_then(|_| self.support_editor.save()) {
                             Ok(()) => self.allow_close = true,
                             Err(e) => self.message = e,
                         }
@@ -422,8 +452,15 @@ impl GripEditor {
             }
         });
         if let Some((file, model)) = switch {
-            self.document = GripDocument::load(default_library_path().with_file_name(file));
-            self.open_model(model);
+            match GripDocument::load(default_library_path().with_file_name(file)) {
+                Ok(doc) => {
+                    self.document = Ok(doc);
+                    self.open_model(model);
+                }
+                Err(error) => {
+                    self.message = format!("Could not switch library: {error}");
+                }
+            }
         }
         ui.text_edit_singleline(&mut self.search);
         let Ok(doc) = &self.document else {
@@ -453,10 +490,10 @@ impl GripEditor {
         });
         ui.separator();
         ui.label(
-            "Edits affect every item using this model. Left and right hands save independently.",
+            "Primary grips affect every item using this model. Left and right primary hands save independently.",
         );
         ui.label("Weapon grips replace authored hands with the glove. Psi amp retains its integrated forearm.");
-        ui.small(format!("Saving to {}", doc.path.display()));
+        ui.small(format!("Primary grip resource: {}", doc.path.display()));
         if !can_switch {
             ui.small("Save or revert drafts before switching libraries.");
         }
@@ -510,6 +547,11 @@ impl GripEditor {
             .unwrap_or_default();
         ui.heading(format!("{} — grip override", self.model));
         ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.support_mode, false, "Primary grip");
+            ui.selectable_value(&mut self.support_mode, true, "Support grip");
+        });
+        ui.horizontal(|ui| {
+            ui.label("Primary hand");
             for hand in ["left", "right"] {
                 if ui
                     .selectable_value(&mut self.hand, hand.to_string(), hand)
@@ -580,20 +622,49 @@ impl GripEditor {
                 "Inputs changed: replace with an automatic fit before editing or saving this pose.",
             );
         }
+        if self.support_mode {
+            if doc.dirty() {
+                ui.label("Primary grip also has unsaved edits. Primary grip → Save all edits saves both resources.");
+            }
+            let entry = &doc.library.entries[index];
+            self.support_editor.show(
+                ui,
+                &self.model,
+                hand,
+                entry.grip.item_scale,
+                !self.stale && !busy,
+            );
+            let scene = PreviewScene::Grip(
+                hand,
+                entry.grip.clone(),
+                self.support_editor.profile(&self.model).cloned(),
+            );
+            preview.show_grip(
+                ui,
+                frame,
+                &key,
+                &scene,
+                self.camera_pending.then_some((&self.view, hand)),
+            );
+            self.camera_pending = false;
+            return;
+        }
         ui.horizontal(|ui| {
-            let label = if doc.dirty() {
+            let label = if doc.dirty() || self.support_editor.dirty() {
                 "Save all edits *"
             } else {
                 "Saved"
             };
             if ui
                 .add_enabled(
-                    doc.dirty() && !self.stale && !busy,
+                    (doc.dirty() || self.support_editor.dirty()) && !self.stale && !busy,
                     egui::Button::new(label),
                 )
                 .clicked()
             {
-                self.message = match doc.save() {
+                self.message = match (if doc.dirty() { doc.save() } else { Ok(()) })
+                    .and_then(|_| self.support_editor.save())
+                {
                     Ok(()) => "Saved. Restart the game runtime to load the resource.".into(),
                     Err(e) => e,
                 };
@@ -734,12 +805,7 @@ impl GripEditor {
             });
             ui.horizontal_wrapped(|ui| {
                 ui.label("Pose presets");
-                for (name, amounts) in [
-                    ("Open", [0.0; 5]),
-                    ("Point", [0.85, 0.0, 0.9, 0.9, 0.9]),
-                    ("Closed", [1.0; 5]),
-                    ("Ball", [0.35, 0.25, 0.3, 0.35, 0.4]),
-                ] {
+                for (name, amounts) in POSE_PRESETS {
                     if ui.button(name).clicked() {
                         entry.grip.curls = amounts;
                     }
@@ -758,13 +824,19 @@ impl GripEditor {
         ui.small("Drag sliders or click values to type. Ball is a cupped starting pose; adjust curls to the item. Unsaved drafts stay when switching models.");
         // Build first, then select the requested camera so the initial model
         // framing cannot overwrite it. show() keeps the same camera on edits.
-        let scene = PreviewScene::Grip(hand, entry.grip.clone());
-        preview.prepare(&key, &scene);
-        if self.camera_pending {
-            preview.grip_camera(&self.view, hand);
-            self.camera_pending = false;
-        }
-        preview.show(ui, frame, &key, &scene);
+        let scene = PreviewScene::Grip(
+            hand,
+            entry.grip.clone(),
+            self.support_editor.profile(&self.model).cloned(),
+        );
+        preview.show_grip(
+            ui,
+            frame,
+            &key,
+            &scene,
+            self.camera_pending.then_some((&self.view, hand)),
+        );
+        self.camera_pending = false;
         if let Some(path) = &mut self.save_as_path {
             let mut close = false;
             egui::Modal::new(egui::Id::new("save_grips_as")).show(ui.ctx(), |ui| {
@@ -805,7 +877,7 @@ impl GripEditor {
 }
 
 /// Each value offers a coarse slider, small nudges, and optional exact entry.
-fn tweak_slider(
+pub(crate) fn tweak_slider(
     ui: &mut egui::Ui,
     label: &str,
     value: &mut f32,

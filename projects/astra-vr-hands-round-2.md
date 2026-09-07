@@ -497,3 +497,31 @@ They need collider fitting from our stripped/scaled weapon geometry and the
 same post-physics glove placement, not a second motion solver. A merge trial
 against the committed parent found conflicts in `ss2_bin_obj_loader.rs`,
 `physics/mod.rs`, and `scripts/melee_weapon.rs`; neither PR was merged here.
+
+### Editing the supporting hand
+
+Explorer's VR Grips view now has **Primary grip** and **Support grip** modes.
+The left/right selector identifies the primary hand; the support pose mirrors
+for the other configuration. Both gloves remain visible in either mode.
+Support controls include palm XYZ position, wrist XYZ rotation, finger curls,
+Open/Point/Closed/Ball presets, sliders, nudge buttons, and exact value entry.
+Preview and runtime call the same palm-placement function, including item scale.
+
+Support edits save separately to `astra-vr-support-grips.json`. **Save As** writes
+a new JSON file without replacing an existing one. Reopen a custom support file
+with `--support-grip-library <path>`; gameplay reads the normal asset filename
+on startup. Closing prompts for unsaved primary or support edits, and external
+file changes are detected before overwriting. **Save all edits** in Primary grip
+mode saves both resources; **Save support edits** saves only the support file.
+
+To open directly:
+`cargo run -p dark_explorer -- ui --grip wrench_h --grip-support`
+Add `--grip-hand left` to inspect the mirrored configuration. Other models can
+have support drafts authored, but runtime two-hand grabbing currently opts in
+only the wrench; the tool labels those other support drafts as preview-only.
+
+To add a new primary model, use **Files → select the .bin model → Edit VR Grip**.
+The tool prepares left/right drafts (or offers **Prepare left and right drafts**),
+which enter the override map when saved. Nanites use `nanocan.bin`; nanite
+pickups still collect immediately in gameplay, so authoring their grip does not
+change their collection behavior.

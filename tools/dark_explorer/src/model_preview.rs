@@ -47,7 +47,11 @@ pub enum PreviewScene {
     Model,
     /// Authored VR weapon reference, retaining its integrated hand.
     VrReference,
-    Grip(Handedness, ResolvedGrip),
+    Grip(
+        Handedness,
+        ResolvedGrip,
+        Option<shock2vr::vr_support::SupportProfile>,
+    ),
     /// The `.bin` model animated by a motion clip (`<name>_.mc`).
     Clip(String),
     /// Bone lines only: the `.bin`'s skeleton posed by a motion clip.
@@ -221,6 +225,22 @@ impl ModelPreview {
         }
     }
 
+    /// Both grip editing modes share model preparation and camera ordering.
+    pub fn show_grip(
+        &mut self,
+        ui: &mut egui::Ui,
+        frame: &mut eframe::Frame,
+        key: &str,
+        scene: &PreviewScene,
+        camera: Option<(&str, Handedness)>,
+    ) {
+        self.prepare(key, scene);
+        if let Some((view, hand)) = camera {
+            self.grip_camera(view, hand);
+        }
+        self.show(ui, frame, key, scene);
+    }
+
     pub fn prepare(&mut self, key: &str, scene: &PreviewScene) {
         self.ensure_scene(key, scene);
     }
@@ -283,7 +303,7 @@ impl ModelPreview {
             PreviewScene::VrReference => Ok(Box::new(GripPreviewScene(
                 engine::scene::Scene::from_objects(model.clone_scene_objects()),
             ))),
-            PreviewScene::Grip(hand, grip) => quiet_catch(|| {
+            PreviewScene::Grip(hand, grip, support) => quiet_catch(|| {
                 let mut model = model.as_ref().clone();
                 if shock2vr::vr_weapon_grip::supports_model(key) {
                     let source = self
@@ -314,6 +334,42 @@ impl ModelPreview {
                     true,
                     Some((grip.finger_amounts(), 1.0)),
                 ));
+                let mut support_points = Vec::new();
+                if let Some(support) = support {
+                    let other = if *hand == Handedness::Left {
+                        Handedness::Right
+                    } else {
+                        Handedness::Left
+                    };
+                    let rig = glove.grip_kinematics(other);
+                    let pose = support.glove_pose(
+                        *hand,
+                        shock2vr::vr_support::GripPose {
+                            position: grip.offset,
+                            rotation: grip.rotation,
+                        },
+                        grip,
+                        &rig,
+                    );
+                    let mut support_grip = grip.clone();
+                    support_grip.curls = support.curls;
+                    objects.extend(glove.render_hand(
+                        pose.position,
+                        pose.rotation,
+                        other,
+                        0.0,
+                        0.0,
+                        false,
+                        Some((support_grip.finger_amounts(), 1.0)),
+                    ));
+                    support_points.extend(
+                        rig.fingers
+                            .iter()
+                            .flatten()
+                            .flatten()
+                            .map(|p| pose.point(*p)),
+                    );
+                }
                 let triangles = if shock2vr::vr_weapon_grip::supports_model(key) {
                     shock2vr::vr_weapon_grip::inputs(&mut self.asset_cache, key, *hand)
                         .ok_or("Weapon grip geometry unavailable")?
@@ -334,7 +390,8 @@ impl ModelPreview {
                     .iter()
                     .flatten()
                     .map(|p| (transform * p.to_homogeneous()).truncate())
-                    .chain(kinematics.fingers.iter().flatten().flatten().copied());
+                    .chain(kinematics.fingers.iter().flatten().flatten().copied())
+                    .chain(support_points);
                 let mut min = vec3(f32::INFINITY, f32::INFINITY, f32::INFINITY);
                 let mut max = -min;
                 for p in points {
