@@ -380,6 +380,17 @@ For debugging visual/rendering changes without a full interactive session:
    curl http://127.0.0.1:8080/v1/physics/joints
    curl http://127.0.0.1:8080/v1/ragdoll/metrics   # per-ragdoll settle metrics
 
+   # Tune where a model sits in a VR hand (`assets/vr_grips.json`). Read the
+   # resolved grip and whether it came from the file or was measured off the
+   # model's own box; nudge it live (merged into what is already authored, and
+   # re-seated on the next frame); write the registry back out, keys sorted.
+   # Ask `/v1/info` (player.hand_affordance.{left,right}_model) what a hand
+   # holds - these are keyed by model name, so they work in `debug_grips` too.
+   curl "http://127.0.0.1:8080/v1/vr/grip?model=mug"
+   curl -X POST http://127.0.0.1:8080/v1/vr/grip \
+     -d '{"model": "mug", "offset": [0.0, -0.06, -0.1], "family": "cylindrical"}'
+   curl -X POST http://127.0.0.1:8080/v1/vr/grip/save -d '{}'
+
    # Trigger discrete input actions (same actions as desktop keybindings)
    curl http://127.0.0.1:8080/v1/input/actions
    curl -X POST http://127.0.0.1:8080/v1/input/action -d '{"action": "PathfindingTestCycle"}'
