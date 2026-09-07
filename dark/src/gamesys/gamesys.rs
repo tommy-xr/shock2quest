@@ -2,7 +2,7 @@ use std::io;
 
 use crate::{
     EnvMap, EnvSoundQuery, ResolvedSoundSchema, SoundSchema, SpeechDB, TagDatabase,
-    gamesys::params::{HrmParams, SkillParams, TrainerCostTables},
+    gamesys::params::{GameParams, HrmParams, SkillParams, TrainerCostTables},
     properties::{LinkDefinition, LinkDefinitionWithData, PropertyDefinition},
     ss2_chunk_file_reader::{self},
     ss2_entity_info::{self, SystemShock2EntityInfo},
@@ -23,6 +23,8 @@ pub struct Gamesys {
     skill_params: Option<SkillParams>,
     player_pool_params: Option<crate::gamesys::PlayerPoolParams>,
     hazard_params: Option<crate::gamesys::HazardParams>,
+    /// General gameplay tuning, including the authored Agility speed table.
+    game_params: Option<GameParams>,
 }
 
 impl Gamesys {
@@ -84,6 +86,10 @@ impl Gamesys {
         self.hazard_params.as_ref()
     }
 
+    pub fn game_params(&self) -> Option<&GameParams> {
+        self.game_params.as_ref()
+    }
+
     pub fn skill_params(&self) -> Option<&SkillParams> {
         self.skill_params.as_ref()
     }
@@ -115,6 +121,7 @@ pub fn read<T: io::Read + io::Seek>(
     let skill_params = SkillParams::read(&table_of_contents, reader);
     let player_pool_params = crate::gamesys::PlayerPoolParams::read(&table_of_contents, reader);
     let hazard_params = crate::gamesys::HazardParams::read(&table_of_contents, reader);
+    let game_params = GameParams::read(&table_of_contents, reader);
 
     // Uncomment to output debug info for voices:
     // debug_print_voices(&sound_schema, &speech_db);
@@ -131,5 +138,6 @@ pub fn read<T: io::Read + io::Seek>(
         skill_params,
         hazard_params,
         player_pool_params,
+        game_params,
     }
 }
