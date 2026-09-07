@@ -6,6 +6,8 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import { cycleToWeapon } from "./helpers/weapon.js";
+import { dot, sub } from "./helpers/vr-hand.js";
+import type { Vec3 } from "../src/types.js";
 
 // Where a model sits in a VR hand is authored in `assets/vr_grips.json`, with
 // anything it leaves out measured off the model's own box. `/v1/vr/grip` reads
@@ -17,14 +19,19 @@ import { cycleToWeapon } from "./helpers/weapon.js";
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
 /**
- * Out of the palm, in the glove's hand space (`shock2vr::hand_seat`'s
- * `PALM_NORMAL`). The palm plane is oblique to every hand axis - the palm faces
- * roughly -X, not -Y - so "the seat put it against the palm" is a projection
- * onto this, not a sign test on one coordinate.
+ * The palm frame, copied from `shock2vr::hand_seat`: the palm's centre, the way
+ * it faces, and how far its skin is from the joints the frame runs through
+ * (`PALM_DEPTH`, 12 mm in world units).
+ *
+ * The palm plane is oblique to every hand axis - the palm faces roughly -X, not
+ * -Y - so "the seat put it against the palm" is a projection onto the normal,
+ * not a sign test on one coordinate. Transcribed rather than served over HTTP,
+ * so `the_palm_frame_matches_the_glove_rig` is what actually guards the numbers;
+ * this checks the *seat* built on them.
  */
-const PALM_NORMAL = [-0.97836, 0.15474, -0.13728];
-
-const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const PALM_CENTRE: Vec3 = [0.005287, -0.000243, -0.058655];
+const PALM_NORMAL: Vec3 = [-0.97836, 0.15474, -0.13728];
+const PALM_DEPTH = 0.012 / 0.762;
 
 /** Offsets round-trip through `f32`, so compare them with a tolerance. */
 function assertVecClose(actual: number[] | undefined, expected: number[], what: string) {
@@ -58,9 +65,15 @@ test(
     assert.equal(mug.source, "heuristic", "an unauthored seat is measured");
     assert.ok(Math.abs(mug.scale - 0.65) < 1e-5, `held at ${mug.scale}, expected 0.65`);
     assert.equal(mug.family, "cylindrical", "a mug-sized box is gripped");
+    // A measured seat puts the item's near face on the palm skin, so its origin
+    // clears the palm plane by at least that skin depth - and by rather more,
+    // since half the mug's own depth is added on top. The seat this replaced
+    // dropped it along hand -Y, which is *across* the knuckles: that lands the
+    // mug 0.014 on the wrong side of the palm and fails here.
+    const outOfPalm = dot(sub(mug.offset as Vec3, PALM_CENTRE), PALM_NORMAL);
     assert.ok(
-      dot(mug.offset, PALM_NORMAL) > 0,
-      `a measured seat should sit out of the palm, got ${mug.offset}`,
+      outOfPalm > PALM_DEPTH,
+      `a measured seat should clear the palm skin (${PALM_DEPTH}), got ${outOfPalm}`,
     );
 
     // Nudge it: the readout moves, and the change is merged rather than

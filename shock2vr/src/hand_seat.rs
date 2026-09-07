@@ -81,16 +81,23 @@ pub struct Seat {
 /// The family is read off the box first, because it decides both how the box
 /// is turned and where against the hand it goes:
 ///
-/// - wrapped or splayed on (cylindrical, broad, and an unprofiled trigger):
-///   the longest axis lies across the palm, the shortest faces it, and the
-///   nearest face rests on the palm skin at [`PALM_CENTRE`] - out of the open
-///   fingers' way, so every one of them has room to close;
-/// - pinched: the slab stands on edge between the open thumb and index pads,
-///   its thin axis along the palm normal and its long axis running out past
-///   the fingertips, with its near edge at [`PINCH_POINT`].
+/// - **pinched** (a slab): it stands on edge at the thumb and index pads, thin
+///   axis along the palm normal and long axis running out past the fingertips,
+///   near edge at [`PINCH_POINT`];
+/// - **wrapped or splayed on** (everything else): the longest axis lies across
+///   the palm, the shortest faces it, and the nearest face rests on the palm
+///   skin at [`PALM_CENTRE`] - clear of the open fingers, so every one of them
+///   has room to close.
+///
+/// Only [`hand_fit::family_from_extents`] decides here, so `Trigger` never
+/// arrives: a gun's family is attached by name later, in
+/// [`crate::vr_grips::resolve`], and a gun's seat is authored anyway.
 ///
 /// `authored_rotation` is the turn a grip profile already specifies; it is kept
-/// exactly, and only the placement is solved.
+/// exactly, and only the placement is solved. Note the placement then anchors
+/// the turned box's *support* along one frame axis, which is its near face only
+/// while the box is square to the frame - true of every measured turn, and
+/// approximate for an authored one.
 pub fn seat(
     min: Vector3<f32>,
     max: Vector3<f32>,
@@ -113,17 +120,15 @@ pub fn seat(
 
     let (_, out, along) = palm_frame();
     let target = match family {
+        // Straddling the pinch line, running away from the hand: the pads meet
+        // its near edge and close onto its faces.
+        GripFamily::Pinch => PINCH_POINT + along * support(along),
         // The near face on the palm skin, the rest of the item out in front of
         // it. Centred on the palm and no further toward the knuckles: the open
         // fingers' first phalanges run *below* the palm plane there, so a nudge
         // that way seats the item into the fingers rather than in front of
         // them, and they read as already closed before they move.
-        GripFamily::Cylindrical | GripFamily::Broad | GripFamily::Trigger => {
-            PALM_CENTRE + out * (PALM_DEPTH + support(out))
-        }
-        // Straddling the pinch line, running away from the hand: the pads meet
-        // its near edge and close onto its faces.
-        GripFamily::Pinch => PINCH_POINT + along * support(along),
+        _ => PALM_CENTRE + out * (PALM_DEPTH + support(out)),
     };
 
     let centre = rotation.rotate_vector((min + max) * 0.5);
@@ -145,13 +150,11 @@ fn seating_turn(extents: Vector3<f32>, family: GripFamily) -> Quaternion<f32> {
     let (across, out, along) = palm_frame();
     // Where the box's longest / shortest / middle axes are sent.
     let frame = match family {
-        // Long axis across the palm (a rod through the fist), flat side down.
-        GripFamily::Cylindrical | GripFamily::Broad | GripFamily::Trigger => {
-            Matrix3::from_cols(across, out, along)
-        }
         // Long axis out past the fingertips, thin axis facing the palm, so the
         // pads land on the faces. `-across` keeps the triple right-handed.
         GripFamily::Pinch => Matrix3::from_cols(along, out, -across),
+        // Long axis across the palm (a rod through the fist), flat side down.
+        _ => Matrix3::from_cols(across, out, along),
     };
     Quaternion::from(frame * axis_order(extents))
 }
@@ -180,10 +183,7 @@ mod tests {
     use super::*;
     use cgmath::{Deg, Rotation3};
 
-    /// Metres in the world units the hand frame is measured in.
-    fn meters(m: f32) -> f32 {
-        m / crate::METERS_PER_WORLD_UNIT
-    }
+    use crate::util::meters;
 
     fn box_of(half: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
         (-half, half)

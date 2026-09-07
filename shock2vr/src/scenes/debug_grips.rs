@@ -9,7 +9,7 @@
 //!
 //! Cycle items with the `grip_item` dev param; frame them with `/v1/camera`.
 
-use cgmath::{Deg, Quaternion, Rotation3, Vector3, vec3};
+use cgmath::{Deg, Matrix, Matrix3, Quaternion, Rotation3, Vector3, vec3};
 use dark::{
     importers::{MODELS_IMPORTER, VR_HELD_GUN_MODELS_IMPORTER},
     model::Model,
@@ -22,6 +22,7 @@ use crate::{
     GameOptions,
     game_scene::GameScene,
     hand_glove::{self, GloveRenderer, HandLight, HandPreshape},
+    hand_seat,
     mission::{GlobalContext, SpawnLocation, mission_core::MissionCore},
     scenes::debug_common::{
         DebugSceneBuildOptions, DebugSceneBuilder, DebugSceneHooks, HookedDebugScene,
@@ -49,6 +50,24 @@ struct GripHooks {
     /// on a change rather than every frame.
     shown: Option<usize>,
     glove: Option<GloveRenderer>,
+}
+
+/// The turn that presents the palm to the scene's camera, with the fingers
+/// running to the left across frame.
+///
+/// Derived from [`hand_seat::palm_frame`] rather than written as a pair of
+/// Euler angles: the palm plane is oblique to every hand axis, so a hand-picked
+/// roll that once looked right shows the *edge* of the hand as soon as the
+/// measured frame moves - which is exactly what a fixed `Ry(90)·Rz(90)` did
+/// once the frame was measured properly. This is the harness the fit is
+/// eyeballed in, so it has to follow the frame it is checking.
+fn palm_to_camera() -> Quaternion<f32> {
+    let (across, out, along) = hand_seat::palm_frame();
+    // Out of the palm toward the camera (-Z), fingers to the left (-X); the
+    // third axis follows, keeping the turn a proper rotation.
+    let hand = Matrix3::from_cols(across, out, along);
+    let world = Matrix3::from_cols(Vector3::unit_y(), -Vector3::unit_z(), -Vector3::unit_x());
+    Quaternion::from(world * hand.transpose())
 }
 
 /// The item the `grip_item` dev param selects, clamped to the list.
@@ -82,13 +101,9 @@ impl DebugSceneHooks for GripHooks {
             1.0
         };
 
-        // The right hand at a fixed spot, fingers along -X and rolled so the
-        // palm - the side the fit happens on - faces the -Z camera.
-        let hand = hand_glove::hand_to_world(
-            HAND_POSITION,
-            Quaternion::from_angle_y(Deg(90.0)) * Quaternion::from_angle_z(Deg(90.0)),
-            Handedness::Right,
-        );
+        // The right hand at a fixed spot, turned to show the camera the side
+        // the fit happens on.
+        let hand = hand_glove::hand_to_world(HAND_POSITION, palm_to_camera(), Handedness::Right);
 
         // The scene's own `MissionCore::update` already loaded the profiles;
         // what it cannot do is measure this item, which no entity is holding.

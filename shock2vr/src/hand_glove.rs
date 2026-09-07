@@ -347,18 +347,7 @@ impl GloveRenderer {
             fist: &self.fist,
             to_hand: glove_model_to_hand(),
         };
-        // What a finger the fit can't measure falls back to, which depends on
-        // *why* it can't. An authored seat puts the item inside the closed hand
-        // on purpose (a gun's grip lives in the fist), so a finger already
-        // touching at the open pose keeps the generic wrap. A measured seat
-        // puts the item against the *open* palm on purpose, so a finger already
-        // touching it - the thumb lies on anything the palm is carrying - has
-        // finished closing, and curling it further would drive it through.
-        let resting = match grip.source {
-            crate::vr_grips::GripSource::Heuristic => FingerAmounts::default(),
-            _ => GENERIC_GRIP,
-        };
-        let amounts = hand_fit::fit(&mut rig, &mesh, family, resting);
+        let amounts = hand_fit::fit(&mut rig, &mesh, family, unmeasured_wrap(family));
         let solve = started.elapsed();
 
         tracing::debug!(
@@ -619,6 +608,26 @@ const GENERIC_GRIP: FingerAmounts = FingerAmounts {
     pinky: 0.9,
 };
 
+/// Where a finger the contact fit could not measure is left.
+///
+/// The fit yields nothing for a finger already touching the item at the open
+/// pose, and what that *means* depends on what the hand is holding. A gun's
+/// grip is seated inside the closed hand on purpose, so its fingers start
+/// inside the mesh and the generic wrap is the answer. Everything else is
+/// seated against the **open** palm on purpose ([`crate::hand_seat`]), so a
+/// finger already touching has finished closing - the thumb lies on anything
+/// the palm carries - and curling it on would drive it through.
+///
+/// Keyed on the family, not on where the seat came from: `Trigger` is the one
+/// family nothing measures its way into, and authoring a pickup's offset in
+/// the tuner must not silently change how its fingers land.
+fn unmeasured_wrap(family: GripFamily) -> FingerAmounts {
+    match family {
+        GripFamily::Trigger => GENERIC_GRIP,
+        _ => FingerAmounts::default(),
+    }
+}
+
 /// One glove material, in a cell of its own. Shared with the `debug_gloves`
 /// harness so the two can't assemble the glove differently.
 ///
@@ -676,7 +685,7 @@ fn palm_frame_of(
                     .transform_point(Point3::from_vec(global.w.truncate()))
                     .to_vec()
             })
-            .unwrap_or_else(Vector3::zero)
+            .unwrap_or_else(|| panic!("the glove rig has no joint {index}"))
     };
     // The palm's flat is the quad of the four fingers' metacarpals: base and
     // knuckle of each. The thumb is left out - it swings out of that plane.
@@ -707,19 +716,25 @@ fn palm_frame_of(
         fist,
         to_hand,
     };
-    let tip = |rig: &mut GloveRig, finger, curl| {
-        rig.phalanges(finger, curl)
-            .last()
-            .map(|capsule: &Capsule| capsule.b.to_vec())
-            .unwrap_or_else(Vector3::zero)
+    let mut tip = |rig: &mut GloveRig, finger| {
+        // Posed once per curl per finger, not once per pair: the index's tip
+        // does not depend on where the thumb is, and posing the rig is what
+        // this costs.
+        (0..=PINCH_STEPS)
+            .map(|i| {
+                rig.phalanges(finger, i as f32 / PINCH_STEPS as f32)
+                    .last()
+                    .map(|capsule: &Capsule| capsule.b.to_vec())
+                    .expect("a finger has phalanges")
+            })
+            .collect::<Vec<_>>()
     };
     const PINCH_STEPS: usize = 20;
-    let step = |i: usize| i as f32 / PINCH_STEPS as f32;
+    let thumb_tips = tip(&mut rig, Finger::Thumb);
+    let index_tips = tip(&mut rig, Finger::Index);
     let mut pinch = (f32::INFINITY, Vector3::zero());
-    for t in 0..=PINCH_STEPS {
-        let thumb = tip(&mut rig, Finger::Thumb, step(t));
-        for i in 0..=PINCH_STEPS {
-            let index = tip(&mut rig, Finger::Index, step(i));
+    for &thumb in &thumb_tips {
+        for &index in &index_tips {
             let gap = (thumb - index).magnitude();
             if gap < pinch.0 {
                 pinch = (gap, (thumb + index) * 0.5);
@@ -821,6 +836,27 @@ mod tests {
         }
     }
 
+    /// Only a gun keeps the canned wrap. Everything else is seated against the
+    /// open palm, so an unmeasurable finger stays where it is - and because
+    /// this reads the family rather than the seat's provenance, authoring a
+    /// pickup's offset in the tuner cannot change how its fingers land.
+    #[test]
+    fn only_a_trigger_grip_falls_back_on_the_canned_wrap() {
+        for family in GripFamily::ALL {
+            let wrap = unmeasured_wrap(family);
+            if family == GripFamily::Trigger {
+                assert_eq!(wrap.thumb, GENERIC_GRIP.thumb);
+            } else {
+                assert_eq!(
+                    (wrap.thumb, wrap.index, wrap.middle, wrap.ring, wrap.pinky),
+                    (0.0, 0.0, 0.0, 0.0, 0.0),
+                    "{} should leave an unmeasured finger open",
+                    family.as_str()
+                );
+            }
+        }
+    }
+
     /// The whole point of the seat: a handle put against the open palm is
     /// somewhere the fingers can *reach and stop on*, so the fit measures a
     /// real wrap instead of falling back on a canned one.
@@ -893,7 +929,7 @@ mod tests {
         }
     }
 
-    /// The cylinder of `a_seated_cylinder_gives_every_finger_something_to_close_on`,
+    /// The cylinder of `a_seated_handle_is_somewhere_every_finger_can_close_onto_it`,
     /// in hand space: model-space triangles put through the seat.
     #[cfg(test)]
     fn seated_cylinder(
