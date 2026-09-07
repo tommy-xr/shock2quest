@@ -166,6 +166,18 @@ impl Script for HeldMeleeWeapon {
                     .may_damage(entity_id, owner, physics, *contact, player_velocity)
                     .then(|| authored_contact_damage(world, entity_id, owner))
                     .flatten()
+                    // The one-hand penalty is the first thing applied, before
+                    // any bonus: a wrench swung in one hand is worth less of
+                    // the blow the gamesys authored, and everything that
+                    // scales a swing scales that.
+                    .map(|amount| {
+                        amount
+                            * two_hand_damage_scale(
+                                world,
+                                entity_id,
+                                crate::melee_swing::latched_two_handed(world, entity_id),
+                            )
+                    })
                     // Adrenaline Overproduction scales the *player's* swing,
                     // so only a weapon in their hand gets the bonus (a wrench
                     // knocked into a creature is nobody's swing).
@@ -386,6 +398,28 @@ fn authored_contact_damage(world: &World, weapon: EntityId, victim: EntityId) ->
     let template_id = entity_class_template_id(world, weapon)?;
     let damage = contact_stim_damage(world, template_id, victim);
     (damage > 0.0).then_some(damage)
+}
+
+/// What this swing is worth, as a fraction of the weapon's authored contact
+/// damage. Two hands are worth the full blow rather than a bonus, so the
+/// gamesys number stays the number a proper swing costs and only a one-handed
+/// swing of a two-handed weapon is scaled back.
+///
+/// Only weapons whose grip profile is flagged `two_hand` (the wrench's long
+/// haft) can be swung two-handed at all; a rapier, a shard or the psi sword is
+/// a one-handed weapon and is never penalised. Applied once, here, before any
+/// bonus multiplies the result.
+pub fn two_hand_damage_scale(world: &World, weapon: EntityId, latched_two_handed: bool) -> f32 {
+    if latched_two_handed {
+        return 1.0;
+    }
+    let two_handed_weapon = crate::vr_config::held_model_and_scale(world, weapon)
+        .is_some_and(|(model_name, _)| crate::vr_grips::benefits_from_two_hands(&model_name));
+    if two_handed_weapon {
+        crate::dev_params::get(crate::dev_params::MELEE_ONE_HAND_SCALE)
+    } else {
+        1.0
+    }
 }
 
 fn contact_damage_effect(

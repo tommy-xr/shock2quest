@@ -2458,6 +2458,10 @@ fn capture_frame_snapshot(
                     .and_then(|scene| scene.player_body_frame()),
                 two_handed: two_hand.support_hand.is_some(),
                 two_hand,
+                melee: game
+                    .debug_scene()
+                    .map(|scene| scene.player_melee())
+                    .unwrap_or_default(),
             }
         },
         entity_count,

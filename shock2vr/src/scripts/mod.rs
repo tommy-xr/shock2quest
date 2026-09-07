@@ -40,7 +40,7 @@ mod internal_simple_health;
 mod internal_switch_held_model;
 mod level_change_button;
 mod many_ride;
-mod melee_weapon;
+pub(crate) mod melee_weapon;
 mod obj_consume_button;
 mod once_room;
 mod once_router;

@@ -934,6 +934,10 @@ pub struct PlayerInfo {
     pub two_handed: bool,
     /// Where that second hand took hold.
     pub two_hand: shock2vr::game_scene::DebugTwoHandGrip,
+    /// The melee swing in progress: whether it is hot, whether it was latched
+    /// two-handed, and what a blow landing now is worth. See
+    /// `shock2vr::melee_swing`.
+    pub melee: shock2vr::game_scene::DebugMelee,
 }
 
 /// Input state snapshot

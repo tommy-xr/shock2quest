@@ -13,6 +13,7 @@ pub mod input;
 pub mod input_context;
 pub mod install;
 pub mod inventory;
+pub mod melee_swing;
 pub mod message_trace;
 pub mod save_load;
 pub mod scenes;

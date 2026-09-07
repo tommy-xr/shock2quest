@@ -2024,6 +2024,7 @@ impl MissionCore {
         world.add_unique(crate::scripts::healing_item::ActiveHealing::default());
         world.add_unique(crate::scripts::radiation::ActiveRadiation::default());
         world.add_unique(DamageFlash::default());
+        world.add_unique(crate::melee_swing::MeleeSwings::default());
         world.add_unique(crate::hud::HudMessages::default());
 
         // ** Entity creation
@@ -3364,6 +3365,11 @@ impl MissionCore {
         player_info.left_hand_entity_id = left_hand_entity_id;
         player_info.right_hand_entity_id = right_hand_entity_id;
         drop(player_info);
+
+        // Latch each hand's melee swing before this frame's contacts are
+        // dispatched: the damage path reads the latch, so it has to be this
+        // frame's answer rather than the one the next frame would write.
+        self.update_melee_swings();
 
         // Handle collision events
         for ce in collision_events {
@@ -9159,6 +9165,37 @@ impl MissionCore {
     ///
     /// Latched on the target so resting the card against a panel frobs it once
     /// (a door frobbed every frame would toggle open/shut).
+    /// Fold this frame into each hand's melee swing latch and publish the
+    /// result, so the (pure) melee script can read at contact whether the
+    /// swing that landed was two-handed. See [`crate::melee_swing`].
+    fn update_melee_swings(&mut self) {
+        use crate::vr_config::Handedness;
+
+        let held = self.interaction.held_entities();
+        let support = self.interaction.support_latch();
+        let mut swings = self
+            .world
+            .borrow::<UniqueViewMut<crate::melee_swing::MeleeSwings>>()
+            .unwrap();
+        for (hand, weapon) in [(Handedness::Left, held.0), (Handedness::Right, held.1)] {
+            // Only a driven melee wield has a swing at all; anything else
+            // (a gun, an empty hand) reports no speed and latches nothing.
+            let speed =
+                weapon.and_then(|weapon| crate::melee_swing::swing_speed(&self.physics, weapon));
+            let mut latch = swings.get(hand);
+            latch.update(
+                speed.and(weapon),
+                speed.is_some_and(|speed| {
+                    speed >= crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED)
+                }),
+                // Supported by the *other* hand's resolved attachment, never
+                // by controller proximity.
+                support.is_some_and(|support| Some(support.entity_id) == weapon),
+            );
+            swings.set(hand, latch);
+        }
+    }
+
     fn update_belt_card_reader(&mut self) {
         let touched = self
             .belt_card_hand
@@ -12139,6 +12176,33 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             support_of: Some(latch.entity_id.inner()),
             support_point: Some([latch.point.x, latch.point.y, latch.point.z]),
             snapped: latch.snapped,
+        }
+    }
+
+    fn player_melee(&self) -> crate::game_scene::DebugMelee {
+        let Some(latch) = self
+            .world
+            .borrow::<UniqueView<crate::melee_swing::MeleeSwings>>()
+            .ok()
+            .and_then(|swings| swings.reportable())
+        else {
+            return Default::default();
+        };
+        crate::game_scene::DebugMelee {
+            swing: crate::game_scene::DebugMeleeSwing {
+                hot: latch.hot(),
+                two_handed_latched: latch.two_handed(),
+                damage_scale: latch
+                    .weapon()
+                    .map(|weapon| {
+                        crate::scripts::melee_weapon::two_hand_damage_scale(
+                            &self.world,
+                            weapon,
+                            latch.two_handed(),
+                        )
+                    })
+                    .unwrap_or(1.0),
+            },
         }
     }
 

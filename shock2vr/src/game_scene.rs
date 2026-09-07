@@ -416,6 +416,33 @@ pub struct DebugTwoHandGrip {
     pub snapped: bool,
 }
 
+/// The melee swing in progress: whether the weapon is moving fast enough to
+/// bill a blow, whether that swing was latched two-handed, and what a blow
+/// landing right now would be worth as a fraction of the weapon's authored
+/// damage. See [`crate::melee_swing`].
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugMeleeSwing {
+    pub hot: bool,
+    pub two_handed_latched: bool,
+    pub damage_scale: f32,
+}
+
+impl Default for DebugMeleeSwing {
+    fn default() -> Self {
+        Self {
+            hot: false,
+            two_handed_latched: false,
+            damage_scale: 1.0,
+        }
+    }
+}
+
+/// The player's melee state.
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct DebugMelee {
+    pub swing: DebugMeleeSwing,
+}
+
 /// The player's body anchors, and what hangs off them: where a hand has to go
 /// to reach the belt or a shoulder, what a shoulder would draw, and where the
 /// belt card is.
@@ -963,6 +990,12 @@ pub trait DebuggableScene {
     /// player report the idle state.
     fn player_two_hand(&self) -> DebugTwoHandGrip {
         DebugTwoHandGrip::default()
+    }
+
+    /// The melee swing in progress (see [`DebugMelee`]). Scenes without a
+    /// player report the idle state.
+    fn player_melee(&self) -> DebugMelee {
+        DebugMelee::default()
     }
 
     /// Teleport the player to a specific position
