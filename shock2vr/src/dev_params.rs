@@ -245,7 +245,7 @@ dev_params! {
     GUN_WIELD_SCALE = float("gun_scale", "Gun scale", 0.4, 0.1, 1.5, 0.05),
     /// Which of `debug_grips`' test items to show in the hand. Ignored
     /// everywhere else; the scene clamps it to its own list.
-    GRIP_ITEM = float("grip_item", "Grip test item", 0.0, 0.0, 15.0, 1.0),
+    GRIP_ITEM = float("grip_item", "Grip test item", 0.0, 0.0, 7.0, 1.0),
     /// Enables the detached debug ("free") camera. This is the *gate*, not
     /// the camera's own on/off: while it is false the toggle input is not
     /// even read, so a stray `Alt+V` (or controller chord) during normal play

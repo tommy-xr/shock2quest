@@ -679,6 +679,14 @@ pub fn sub_object_bounds(
         .collect()
 }
 
+/// Whether the renderer builds geometry from this polygon at all: a corner
+/// needs a UV, so [`to_vertices`] silently drops any polygon short of them.
+/// The contact walk has to drop exactly the same ones - a face nobody can see
+/// must not stop a finger either.
+fn is_rendered(polygon: &SystemShock2ObjectPolygon) -> bool {
+    polygon.vertex_indices.len() >= 3 && polygon.uv_indices.len() >= polygon.vertex_indices.len()
+}
+
 /// Every rendered triangle of `mesh`, in model space - the same fan
 /// triangulation and per-vertex sub-object placement [`to_vertices`] renders
 /// with, so a geometric test against these triangles tests the drawn surface.
@@ -694,20 +702,21 @@ pub fn to_triangles(mesh: &SystemShock2ObjectMesh) -> Vec<[Point3<f32>; 3]> {
 
     let mut triangles = Vec::new();
     for polygon in &mesh.polygons {
-        let indices = &polygon.vertex_indices;
-        if indices.len() < 3 {
+        if !is_rendered(polygon) {
             continue;
         }
-        let place = |index: u16| -> Option<Point3<f32>> {
-            let vertex = mesh.vertices.get(index as usize)?;
+        let indices = &polygon.vertex_indices;
+        // Fan from corner 0, and - as `to_vertices` does - place the whole
+        // triangle by the fan corner's sub-object, not each vertex by its own.
+        for corner in 1..(indices.len() - 1) {
             let transform = placements
-                .get(get_bone_index_for_point(mesh, index) as usize)
+                .get(get_bone_index_for_point(mesh, indices[corner]) as usize)
                 .copied()
                 .unwrap_or_else(Matrix4::identity);
-            Some(transform.transform_point(point3(vertex.x, vertex.y, vertex.z)))
-        };
-        // Fan from corner 0, matching `to_vertices`.
-        for corner in 1..(indices.len() - 1) {
+            let place = |index: u16| -> Option<Point3<f32>> {
+                let vertex = mesh.vertices.get(index as usize)?;
+                Some(transform.transform_point(point3(vertex.x, vertex.y, vertex.z)))
+            };
             let (Some(a), Some(b), Some(c)) = (
                 place(indices[0]),
                 place(indices[corner]),
@@ -743,7 +752,6 @@ pub fn to_vertices(
         let verts = hash_map.get_mut(&slot).unwrap();
 
         let len = indices.len();
-        let uv_len = uv_indices.len();
 
         let normal_for_corner = |corner: usize| -> Vector3<f32> {
             normals
@@ -752,7 +760,7 @@ pub fn to_vertices(
                 .unwrap()
         };
 
-        if len >= 3 && uv_len >= len {
+        if is_rendered(poly) {
             for idx in 1..(len - 1) {
                 let bone_idx = get_bone_index_for_point(mesh, indices[idx]);
 

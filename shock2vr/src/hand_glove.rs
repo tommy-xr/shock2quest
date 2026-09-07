@@ -23,9 +23,9 @@ use engine::{
 };
 
 use crate::{
-    hand_fit::{self, Capsule, ContactMesh, Finger, GripFamily, HandRig},
-    hand_pose::{self, FingerAmounts, HandPoseRetarget, Pose},
-    vr_config::{self, FingerOverrides, Handedness},
+    hand_fit::{self, Capsule, ContactMesh, GripFamily, HandRig},
+    hand_pose::{self, Finger, FingerAmounts, HandPoseRetarget, Pose},
+    vr_config::{self, Handedness},
 };
 
 const GLOVE_MODEL: &str = "vr_glove_model.glb";
@@ -85,6 +85,15 @@ impl HandLight {
     fn index(self) -> usize {
         self as usize
     }
+}
+
+/// What a hand is holding, as far as its pose is concerned: nothing, or an
+/// item - with the grip fitted to that item's own mesh when there was one to
+/// fit against.
+#[derive(Debug, Clone, Copy)]
+pub enum Hold {
+    Empty,
+    Item(Option<FingerAmounts>),
 }
 
 /// A prompt the hand leans into before the player acts: the shape says what
@@ -167,9 +176,10 @@ pub struct GloveRenderer {
     /// materials re-tinted per hand would give them both whichever colour was
     /// written last.
     materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
-    /// Solved grips, one per [`GripKey`]. The fit is a one-off per held model,
-    /// never a per-frame cost.
-    fits: HashMap<GripKey, FingerAmounts>,
+    /// Solved grips, one per [`GripKey`] - `None` for a model with no mesh to
+    /// fit against. The fit is a one-off per held model, never a per-frame
+    /// cost.
+    fits: HashMap<GripKey, Option<FittedGrip>>,
 }
 
 /// An authored pose a hand can be shown in when nothing analog is driving it -
@@ -238,11 +248,11 @@ impl GloveRenderer {
         hand_to_world: Matrix4<f32>,
         trigger_value: f32,
         squeeze_value: f32,
-        holding: Option<Option<FingerAmounts>>,
+        hold: Hold,
         light: HandLight,
         preshape: HandPreshape,
     ) -> Vec<SceneObject> {
-        let amounts = if let Some(fit) = holding {
+        let amounts = if let Hold::Item(fit) = hold {
             grip_amounts(fit, trigger_value)
         } else {
             // Empty hand: index follows the trigger; the other fingers follow
@@ -258,7 +268,7 @@ impl GloveRenderer {
         };
         let pose = self.open.blend_per_finger(&self.fist, &amounts);
         // A full hand has nothing to reach for, so it is never prompted.
-        let pose = if holding.is_some() {
+        let pose = if matches!(hold, Hold::Item(_)) {
             pose
         } else {
             prompted_pose(pose, &self.fist, &self.point, preshape)
@@ -272,17 +282,45 @@ impl GloveRenderer {
         )
     }
 
-    /// The fitted grip for a held item, solved once and remembered.
+    /// The fitted grip for a model held in `handedness`, solved once and
+    /// remembered - the *miss* included, so a held model with no mesh does not
+    /// re-enter the asset cache's miss path on every frame it is held.
     ///
-    /// Solved on the frame the item first appears in the hand rather than at
-    /// the grab itself: the answer depends only on the model, the hand and the
-    /// wield's scale, all of which the key carries, so one entry serves every
-    /// later pickup of the same thing.
-    pub fn fitted_grip(&mut self, key: GripKey, mesh: &ContactMesh) -> FingerAmounts {
+    /// Solved on the frame the item first appears in a hand rather than at the
+    /// grab itself: the answer depends only on the key, so one entry serves
+    /// every later pickup of the same thing in the same hand.
+    pub fn fitted_grip(
+        &mut self,
+        model_name: &str,
+        handedness: Handedness,
+        gun_scale: f32,
+        asset_cache: &mut AssetCache,
+    ) -> Option<FittedGrip> {
+        let key = GripKey::new(model_name, handedness, gun_scale);
         if let Some(cached) = self.fits.get(&key) {
             return *cached;
         }
-        let family = key.family();
+        let fitted = self.solve(model_name, handedness, gun_scale, asset_cache);
+        self.fits.insert(key, fitted);
+        fitted
+    }
+
+    /// One grip fit, start to finish. Only ever reached on a cache miss.
+    fn solve(
+        &mut self,
+        model_name: &str,
+        handedness: Handedness,
+        gun_scale: f32,
+        asset_cache: &mut AssetCache,
+    ) -> Option<FittedGrip> {
+        if !vr_config::has_hand_seat(model_name) {
+            return None;
+        }
+        let mesh = contact_mesh(model_name, handedness, gun_scale, asset_cache)?;
+        let family = vr_config::grip_family(model_name)
+            .or_else(|| mesh.extents().map(hand_fit::family_from_extents))?;
+
+        let started = std::time::Instant::now();
         let mut rig = GloveRig {
             model: &mut self.model,
             retarget: &self.retarget,
@@ -290,9 +328,15 @@ impl GloveRenderer {
             fist: &self.fist,
             to_hand: glove_model_to_hand(),
         };
-        let fitted = hand_fit::fit(&mut rig, mesh, family);
-        self.fits.insert(key, fitted);
-        fitted
+        let amounts = hand_fit::fit(&mut rig, &mesh, family, GENERIC_GRIP);
+        let solve = started.elapsed();
+
+        tracing::debug!(
+            "grip fit: {model_name} {handedness:?} x{gun_scale} family {} {} tris solved in {solve:?} -> {amounts:?}",
+            family.as_str(),
+            mesh.triangle_count()
+        );
+        Some(FittedGrip { family, amounts })
     }
 
     /// Build the glove in one of the authored [`StaticHandPose`]s.
@@ -364,17 +408,11 @@ const FINGER_RADIUS: f32 = 0.0075 / crate::METERS_PER_WORLD_UNIT;
 /// The thumb is thicker than the fingers, and lands flatter on an item.
 const THUMB_RADIUS: f32 = 0.0095 / crate::METERS_PER_WORLD_UNIT;
 
-/// SteamVR bones along one finger, knuckle to tip. The metacarpal (the first
-/// bone of each chain) is buried in the palm and cannot touch anything, so
-/// every chain starts one bone in.
-fn phalanx_bones(finger: Finger) -> &'static [usize] {
-    match finger {
-        Finger::Thumb => &[3, 4, 5],
-        Finger::Index => &[7, 8, 9, 10],
-        Finger::Middle => &[12, 13, 14, 15],
-        Finger::Ring => &[17, 18, 19, 20],
-        Finger::Pinky => &[22, 23, 24, 25],
-    }
+/// The joints a finger's phalanx capsules run between, knuckle to tip. The
+/// metacarpal - the first bone of the chain - is buried in the palm and cannot
+/// touch anything, so every chain starts one bone in.
+fn phalanx_bones(finger: Finger) -> impl Iterator<Item = usize> {
+    finger.bones().skip(1)
 }
 
 /// Glove model space -> hand space: the same seat [`GloveRenderer::render_posed`]
@@ -404,9 +442,8 @@ impl HandRig for GloveRig<'_> {
             FINGER_RADIUS
         };
         let joints = phalanx_bones(finger)
-            .iter()
             .filter_map(|joint| {
-                let node = self.model.skeleton().node_index_for_joint(*joint)?;
+                let node = self.model.skeleton().node_index_for_joint(joint)?;
                 let global = self.model.get_global_transform(node)?;
                 Some(
                     self.to_hand
@@ -426,48 +463,47 @@ impl HandRig for GloveRig<'_> {
     }
 }
 
-/// What a fitted grip is cached under. The solve depends on the item's
-/// geometry in hand space and nothing else, and those four values are what
-/// decide it: the model, which hand's reflection it is seen through, the
-/// family whose envelope it was solved in, and the scale the wield baked into
-/// the geometry.
+/// What a fitted grip is cached under: the model, which hand's reflection it
+/// is seen through, and the scale the wield baked into its geometry. Those
+/// three decide everything else - the family included - so the key can be
+/// built without touching the mesh, which is what keeps a held item's every
+/// later frame off the solver.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GripKey {
     model: String,
     handedness: Handedness,
-    family: GripFamily,
     /// `f32` has no `Hash`; the bit pattern is the exact-equality the cache
     /// wants anyway - a different scale is a different solve.
     scale_bits: u32,
 }
 
 impl GripKey {
-    pub fn new(model: &str, handedness: Handedness, family: GripFamily, scale: f32) -> Self {
+    pub fn new(model: &str, handedness: Handedness, scale: f32) -> Self {
         Self {
             model: model.to_ascii_lowercase(),
             handedness,
-            family,
             scale_bits: scale.to_bits(),
         }
     }
-
-    pub fn family(&self) -> GripFamily {
-        self.family
-    }
 }
 
-/// Everything the fit needs about one model held in one hand: the key to
-/// remember the solve under, its render mesh in hand space, and the per-finger
-/// corrections to write over the answer.
-///
-/// `None` when the model has no mesh to close against - a missing asset, or a
-/// skinned rig (the melee `_h` set, which draws its own arm anyway).
-pub fn grip_request(
+/// A hand's grip on one item: the family it was solved in, and how far each
+/// finger curled from `open` toward `fist` before it reached the surface.
+#[derive(Clone, Copy, Debug)]
+pub struct FittedGrip {
+    pub family: GripFamily,
+    pub amounts: FingerAmounts,
+}
+
+/// The item's render mesh in the glove's own hand space, or `None` when there
+/// is nothing to close against - a missing asset, or a skinned rig (the melee
+/// `_h` set, which draws its own arm anyway).
+fn contact_mesh(
     model_name: &str,
     handedness: Handedness,
     gun_scale: f32,
     asset_cache: &mut AssetCache,
-) -> Option<(GripKey, ContactMesh, FingerOverrides)> {
+) -> Option<ContactMesh> {
     let triangles = asset_cache
         .get_opt::<_, VrContactMesh, _>(&VR_CONTACT_MESH_IMPORTER, &format!("{model_name}.BIN"))?;
 
@@ -479,20 +515,7 @@ pub fn grip_request(
             .map(|triangle| triangle.map(|corner| to_hand.transform_point(corner)))
             .collect(),
     );
-    if mesh.is_empty() {
-        return None;
-    }
-
-    let hint = vr_config::grip_hint(model_name);
-    let family = hint
-        .family
-        .or_else(|| mesh.extents().map(hand_fit::family_from_extents))?;
-
-    Some((
-        GripKey::new(model_name, handedness, family, gun_scale),
-        mesh,
-        hint.fingers,
-    ))
+    (!mesh.is_empty()).then_some(mesh)
 }
 
 /// Where a tracked hand's own space sits in the world.
@@ -694,22 +717,18 @@ mod tests {
     }
 
     /// Everything the solve depends on is in the key, and nothing else is: the
-    /// same model in the other hand, at another scale, or under another family
-    /// is a different fit and must not be served the cached one - while the
-    /// same model spelled differently is the same fit.
+    /// same model in the other hand or at another scale is a different fit and
+    /// must not be served the cached one - while the same model spelled
+    /// differently is the same fit.
     #[test]
     fn a_grip_is_cached_by_what_the_solve_depends_on() {
-        let base = GripKey::new("atek_h", Handedness::Right, GripFamily::Trigger, 0.4);
+        let base = GripKey::new("atek_h", Handedness::Right, 0.4);
 
-        assert_eq!(
-            base,
-            GripKey::new("ATEK_H", Handedness::Right, GripFamily::Trigger, 0.4)
-        );
+        assert_eq!(base, GripKey::new("ATEK_H", Handedness::Right, 0.4));
         for other in [
-            GripKey::new("sg_h", Handedness::Right, GripFamily::Trigger, 0.4),
-            GripKey::new("atek_h", Handedness::Left, GripFamily::Trigger, 0.4),
-            GripKey::new("atek_h", Handedness::Right, GripFamily::Cylindrical, 0.4),
-            GripKey::new("atek_h", Handedness::Right, GripFamily::Trigger, 1.0),
+            GripKey::new("sg_h", Handedness::Right, 0.4),
+            GripKey::new("atek_h", Handedness::Left, 0.4),
+            GripKey::new("atek_h", Handedness::Right, 1.0),
         ] {
             assert_ne!(base, other, "{other:?} must not reuse {base:?}");
         }

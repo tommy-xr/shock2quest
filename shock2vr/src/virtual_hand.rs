@@ -423,36 +423,32 @@ impl VirtualHand {
         // renderer, so a hand that keeps holding the same thing pays for it
         // once; a held model with no mesh to close against reports `None` and
         // falls back to the generic wrap.
-        let mut family = None;
-        let holding = self.get_held_entity().map(|entity_id| {
+        let fit = self.get_held_entity().and_then(|entity_id| {
             let (model_name, scale) = vr_config::held_model_and_scale(world, entity_id)?;
-            let (key, mesh, corrections) =
-                crate::hand_glove::grip_request(&model_name, self.handedness, scale, asset_cache)?;
-            family = Some(key.family());
-            let mut fitted = renderer.fitted_grip(key, &mesh);
-            corrections.apply(&mut fitted);
-            Some(fitted)
+            renderer.fitted_grip(&model_name, self.handedness, scale, asset_cache)
         });
+        let hold = match self.get_held_entity() {
+            Some(_) => crate::hand_glove::Hold::Item(fit.map(|fit| fit.amounts)),
+            None => crate::hand_glove::Hold::Empty,
+        };
 
         let objects = renderer.render_hand(
             hand,
             self.trigger_value,
             self.squeeze_value,
-            holding,
+            hold,
             // Eligibility lights the glove; the action shapes it.
             self.affordance.state().light(),
             self.affordance.preshape(),
         );
 
-        let grip = holding.flatten().zip(family).map(|(fitted, family)| {
-            crate::game_scene::DebugHandGrip {
-                family: family.as_str(),
-                thumb: fitted.thumb,
-                index: fitted.index,
-                middle: fitted.middle,
-                ring: fitted.ring,
-                pinky: fitted.pinky,
-            }
+        let grip = fit.map(|fit| crate::game_scene::DebugHandGrip {
+            family: fit.family.as_str(),
+            thumb: fit.amounts.thumb,
+            index: fit.amounts.index,
+            middle: fit.amounts.middle,
+            ring: fit.amounts.ring,
+            pinky: fit.amounts.pinky,
         });
 
         (objects, grip)

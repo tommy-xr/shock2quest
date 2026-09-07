@@ -4,8 +4,11 @@
 //! `PhysType SPHERE` - so the fit runs against the item's **render mesh**
 //! ([`dark::importers::VrContactMesh`]), transformed into the hand's own
 //! space. For each finger the solver sweeps the open->fist blend the glove
-//! already poses with, takes the *largest* curl at which no phalanx capsule
-//! is inside the mesh, and bisects for the contact point. The result is a
+//! already poses with, stops at the first curl where a phalanx capsule
+//! reaches the surface, and bisects for the contact point. A finger already
+//! inside the item at the open pose gets no answer at all - the item is
+//! seated *through* the open hand, which is what a wield does deliberately -
+//! and keeps the resting wrap its caller passed in. The result is a
 //! [`FingerAmounts`] the renderer feeds straight to
 //! [`crate::hand_pose::Pose::blend_per_finger`].
 //!
@@ -15,57 +18,7 @@
 
 use cgmath::{EuclideanSpace, InnerSpace, Point3, Vector3};
 
-use crate::hand_pose::FingerAmounts;
-
-/// One finger of the hand.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Finger {
-    Thumb,
-    Index,
-    Middle,
-    Ring,
-    Pinky,
-}
-
-impl Finger {
-    pub const ALL: [Finger; 5] = [
-        Finger::Thumb,
-        Finger::Index,
-        Finger::Middle,
-        Finger::Ring,
-        Finger::Pinky,
-    ];
-
-    /// Where this finger's curl lands in a [`FingerAmounts`].
-    pub fn set(self, amounts: &mut FingerAmounts, curl: f32) {
-        match self {
-            Finger::Thumb => amounts.thumb = curl,
-            Finger::Index => amounts.index = curl,
-            Finger::Middle => amounts.middle = curl,
-            Finger::Ring => amounts.ring = curl,
-            Finger::Pinky => amounts.pinky = curl,
-        }
-    }
-
-    /// This finger's curl out of a [`FingerAmounts`].
-    pub fn curl_of(self, amounts: &FingerAmounts) -> f32 {
-        match self {
-            Finger::Thumb => amounts.thumb,
-            Finger::Index => amounts.index,
-            Finger::Middle => amounts.middle,
-            Finger::Ring => amounts.ring,
-            Finger::Pinky => amounts.pinky,
-        }
-    }
-
-    /// A blend that curls only this finger - what the solver poses the rig
-    /// with while it searches one finger at a time.
-    pub fn alone(self, curl: f32) -> FingerAmounts {
-        let mut amounts = FingerAmounts::default();
-        self.set(&mut amounts, curl);
-        amounts
-    }
-}
+use crate::hand_pose::{Finger, FingerAmounts};
 
 /// A capsule along one phalanx, in hand space (world units).
 #[derive(Debug, Clone, Copy)]
@@ -273,55 +226,72 @@ pub fn family_from_extents(extents: Vector3<f32>) -> GripFamily {
 
 /// Curl every finger until it reaches the item, within its family's envelope.
 ///
-/// An empty mesh (a model with no triangles, a skinned melee rig) fits nothing
-/// and every finger takes its cap - the same closed grip the glove posed
-/// before there was a fit at all.
-pub fn fit(rig: &mut impl HandRig, mesh: &ContactMesh, family: GripFamily) -> FingerAmounts {
+/// `resting` is what a finger keeps when the fit has nothing to say: the item
+/// is already through that finger at the open pose, which is exactly what a
+/// wield does on purpose (a gun's grip is seated inside the closed fist), so
+/// the authored wrap stands rather than being replaced by a guess. The
+/// family's envelope is applied either way - a trigger finger rests on the
+/// trigger whether or not anything was measured.
+pub fn fit(
+    rig: &mut impl HandRig,
+    mesh: &ContactMesh,
+    family: GripFamily,
+    resting: FingerAmounts,
+) -> FingerAmounts {
     let mut amounts = FingerAmounts::default();
     for finger in Finger::ALL {
-        finger.set(&mut amounts, fit_finger(rig, mesh, family, finger));
+        let Envelope { floor, cap } = family.envelope(finger);
+        let curl = fit_finger(rig, mesh, family, finger)
+            .unwrap_or_else(|| finger.curl_of(&resting))
+            .clamp(floor, cap);
+        finger.set(&mut amounts, curl);
     }
     amounts
 }
 
+/// The curl this finger stops at, or `None` when the mesh says nothing about
+/// it - nothing within reach, or the finger already inside the item at the
+/// open pose.
 fn fit_finger(
     rig: &mut impl HandRig,
     mesh: &ContactMesh,
     family: GripFamily,
     finger: Finger,
-) -> f32 {
+) -> Option<f32> {
     let Envelope { floor, cap } = family.envelope(finger);
     if cap <= floor || mesh.is_empty() {
-        return cap.max(floor);
+        return None;
     }
+
+    // Pose the coarse sweep once: the bounds pass and the scan below both
+    // want it, and posing the rig dominates the solve.
+    let curl_at = |step: usize| floor + (cap - floor) * (step as f32 / COARSE_STEPS as f32);
+    let sweep = (0..=COARSE_STEPS)
+        .map(|step| rig.phalanges(finger, curl_at(step)))
+        .collect::<Vec<_>>();
 
     // One prefilter per finger, over everything the finger sweeps through.
-    let (min, max) = swept_bounds(rig, finger, floor, cap);
+    let (min, max) = swept_bounds(&sweep);
     let candidates = mesh.near(min, max);
     if candidates.is_empty() {
-        return cap;
+        return Some(cap);
     }
 
-    let curl_at = |step: usize| floor + (cap - floor) * (step as f32 / COARSE_STEPS as f32);
-
-    // Scanned from the closed end down, not from the open end up. A held item
-    // is seated where the *closed* hand would be - a gun's grip lies right
-    // through the open hand's extended fingers - so "the first contact on the
-    // way in" is not the grip, it is the seat. The largest clear curl is.
-    let Some(step) = (0..=COARSE_STEPS)
-        .rev()
-        .find(|step| !mesh.touches(&rig.phalanges(finger, curl_at(*step)), &candidates))
+    // Scanned from the open end in, stopping at the first contact. A finger
+    // that is *already* in contact at the open pose has the item seated
+    // through it and yields nothing; scanning from the closed end instead
+    // would answer such a finger with whatever pose happens to be clear,
+    // including one buried inside a large closed mesh.
+    if mesh.touches(&sweep[0], &candidates) {
+        return None;
+    }
+    let Some(step) = (1..=COARSE_STEPS).find(|step| mesh.touches(&sweep[*step], &candidates))
     else {
-        // Nowhere clear: the item passes through the finger at every curl, so
-        // the only honest answer is the closed grip the wield authored.
-        return cap;
+        return Some(cap);
     };
-    if step == COARSE_STEPS {
-        return cap;
-    }
 
-    let mut clear = curl_at(step);
-    let mut blocked = curl_at(step + 1);
+    let mut clear = curl_at(step - 1);
+    let mut blocked = curl_at(step);
     for _ in 0..BISECT_ROUNDS {
         let middle = 0.5 * (clear + blocked);
         if mesh.touches(&rig.phalanges(finger, middle), &candidates) {
@@ -330,29 +300,20 @@ fn fit_finger(
             clear = middle;
         }
     }
-    clear
+    Some(clear)
 }
 
-/// Bounding box of everything one finger passes through between `floor` and
-/// `cap`, grown by the capsule radii.
-fn swept_bounds(
-    rig: &mut impl HandRig,
-    finger: Finger,
-    floor: f32,
-    cap: f32,
-) -> (Vector3<f32>, Vector3<f32>) {
+/// Bounding box of every capsule in a swept pose set, grown by their radii.
+fn swept_bounds(sweep: &[Vec<Capsule>]) -> (Vector3<f32>, Vector3<f32>) {
     let mut min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
     let mut max = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for step in 0..=COARSE_STEPS {
-        let curl = floor + (cap - floor) * (step as f32 / COARSE_STEPS as f32);
-        for capsule in rig.phalanges(finger, curl) {
-            let radius = Vector3::new(capsule.radius, capsule.radius, capsule.radius);
-            for point in [capsule.a.to_vec(), capsule.b.to_vec()] {
-                let lo = point - radius;
-                let hi = point + radius;
-                min = Vector3::new(min.x.min(lo.x), min.y.min(lo.y), min.z.min(lo.z));
-                max = Vector3::new(max.x.max(hi.x), max.y.max(hi.y), max.z.max(hi.z));
-            }
+    for capsule in sweep.iter().flatten() {
+        let radius = Vector3::new(capsule.radius, capsule.radius, capsule.radius);
+        for point in [capsule.a.to_vec(), capsule.b.to_vec()] {
+            let lo = point - radius;
+            let hi = point + radius;
+            min = Vector3::new(min.x.min(lo.x), min.y.min(lo.y), min.z.min(lo.z));
+            max = Vector3::new(max.x.max(hi.x), max.y.max(hi.y), max.z.max(hi.z));
         }
     }
     (min, max)
@@ -656,6 +617,18 @@ mod tests {
         }
     }
 
+    /// The wrap a finger keeps when the fit has nothing to say. Deliberately
+    /// short of a full fist so a test can tell "fitted" from "left alone".
+    fn resting() -> FingerAmounts {
+        FingerAmounts {
+            thumb: 0.85,
+            index: 0.5,
+            middle: 0.9,
+            ring: 0.9,
+            pinky: 0.9,
+        }
+    }
+
     /// The whole point of the fit, as a negative test and its fix in one: the
     /// ungoverned fist closes straight through a handle, and the fitted curl
     /// stops on its surface.
@@ -672,7 +645,7 @@ mod tests {
             "a full fist should close through a handle - otherwise this test proves nothing"
         );
 
-        let fitted = fit(&mut FlatHand, &mesh, GripFamily::Cylindrical);
+        let fitted = fit(&mut FlatHand, &mesh, GripFamily::Cylindrical, resting());
         assert!(
             !penetrates(&mesh, &fitted),
             "the fitted grip still penetrates: {fitted:?}"
@@ -684,17 +657,18 @@ mod tests {
         );
     }
 
-    /// Nothing in the hand means nothing to stop against: every finger takes
-    /// its family's cap.
+    /// Nothing in the hand means nothing measured: every finger keeps the
+    /// resting wrap its caller passed in.
     #[test]
-    fn an_empty_hand_closes_all_the_way() {
+    fn an_empty_hand_keeps_the_resting_wrap() {
         let fitted = fit(
             &mut FlatHand,
             &ContactMesh::new(Vec::new()),
             GripFamily::Cylindrical,
+            resting(),
         );
-        assert_eq!(fitted.middle, 1.0);
-        assert_eq!(fitted.thumb, 1.0);
+        assert_eq!(fitted.middle, resting().middle);
+        assert_eq!(fitted.thumb, resting().thumb);
     }
 
     /// A ball wider than the palm reads as broad, and the hand rests on its
@@ -710,7 +684,7 @@ mod tests {
 
         assert_eq!(family_from_extents(extents), GripFamily::Broad);
 
-        let fitted = fit(&mut FlatHand, &mesh, GripFamily::Broad);
+        let fitted = fit(&mut FlatHand, &mesh, GripFamily::Broad, resting());
         assert!(
             !penetrates(&mesh, &fitted),
             "hand inside the ball: {fitted:?}"
@@ -734,7 +708,7 @@ mod tests {
 
         assert_eq!(family_from_extents(extents), GripFamily::Pinch);
 
-        let fitted = fit(&mut FlatHand, &mesh, GripFamily::Pinch);
+        let fitted = fit(&mut FlatHand, &mesh, GripFamily::Pinch, resting());
         assert_eq!(fitted.middle, PINCH_REST);
         assert_eq!(fitted.ring, PINCH_REST);
         assert_eq!(fitted.pinky, PINCH_REST);
@@ -765,7 +739,7 @@ mod tests {
             meters(0.06),
         ));
 
-        let fitted = fit(&mut FlatHand, &mesh, GripFamily::Trigger);
+        let fitted = fit(&mut FlatHand, &mesh, GripFamily::Trigger, resting());
         assert!(fitted.index <= TRIGGER_INDEX_CAP);
         assert!(
             fitted.index < fitted.middle && fitted.index < fitted.ring,
@@ -774,6 +748,30 @@ mod tests {
             fitted.middle,
             fitted.ring
         );
+    }
+
+    /// An item seated *through* the open hand - a gun grip inside the fist -
+    /// tells the fit nothing, and the authored wrap stands. Scanning from the
+    /// closed end instead would answer with whatever pose happened to be
+    /// clear, which for a big closed mesh is one buried inside it.
+    #[test]
+    fn an_item_seated_through_the_open_hand_keeps_the_resting_wrap() {
+        // A slab straddling the fingers at every curl: it spans the whole
+        // sweep in Y and sits right on the open finger's line.
+        let mesh = ContactMesh::new(box_mesh(
+            vec3(0.0, meters(0.02), meters(-0.03)),
+            vec3(meters(0.2), meters(0.1), meters(0.005)),
+        ));
+        assert!(
+            mesh.touches(
+                &FlatHand.phalanges(Finger::Middle, 0.0),
+                &(0..mesh.triangle_count()).collect::<Vec<_>>()
+            ),
+            "the fixture must put the slab through the OPEN finger"
+        );
+
+        let fitted = fit(&mut FlatHand, &mesh, GripFamily::Cylindrical, resting());
+        assert_eq!(fitted.middle, resting().middle);
     }
 
     /// A segment threading through a triangle is touching it, not a finger's

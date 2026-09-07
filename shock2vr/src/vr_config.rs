@@ -4,7 +4,6 @@ use cgmath::{Deg, Quaternion, Rotation3, Vector3, vec3};
 use dark::properties::PropModelName;
 
 use crate::hand_fit::GripFamily;
-use crate::hand_pose::FingerAmounts;
 use crate::runtime_props::{RuntimePropVrGripOffset, RuntimePropVrGunWield};
 use once_cell::sync::Lazy;
 use shipyard::{EntityId, Get, View, World};
@@ -693,70 +692,29 @@ pub fn get_vr_hand_model_adjustments_from_model(
     }
 }
 
-/// A per-model steer for the finger fit, keyed like [`HAND_MODEL_POSITIONING`].
-///
-/// Two levels of override only: the **family hint**, which picks the curl
-/// envelope the solve runs in, and a **finger correction**, which pins one
-/// finger the solve gets wrong. Everything else stays automatic - the grip's
-/// wrist placement is already the positioning table's job, and a fully
-/// authored per-finger grip waits for a tuner that can author it.
-#[derive(Clone, Default)]
-pub struct GripHint {
-    /// The family to solve in; `None` measures it off the item's own box.
-    pub family: Option<GripFamily>,
-    /// Curls written over the solved result, per finger.
-    pub fingers: FingerOverrides,
-}
-
-/// Per-finger curl corrections, `None` where the solve stands.
-#[derive(Clone, Copy, Default)]
-pub struct FingerOverrides {
-    pub thumb: Option<f32>,
-    pub index: Option<f32>,
-    pub middle: Option<f32>,
-    pub ring: Option<f32>,
-    pub pinky: Option<f32>,
-}
-
-impl FingerOverrides {
-    /// Write whatever is set over a solved grip.
-    pub fn apply(&self, amounts: &mut FingerAmounts) {
-        for (over, amount) in [
-            (self.thumb, &mut amounts.thumb),
-            (self.index, &mut amounts.index),
-            (self.middle, &mut amounts.middle),
-            (self.ring, &mut amounts.ring),
-            (self.pinky, &mut amounts.pinky),
-        ] {
-            if let Some(over) = over {
-                *amount = over;
-            }
-        }
-    }
-}
-
-/// The models whose measured box lies about how they are held.
-///
-/// Empty so far, deliberately. The gun `_h` set takes
-/// [`GripFamily::Trigger`] from [`is_vr_gun_view_model`] rather than an entry
-/// each, and the plain pickups have no authored hand seat yet - they are drawn
-/// centred on the wrist - so there is nothing to judge a correction against.
-/// The first entries belong with the seat data, not before it.
-static GRIP_HINTS: Lazy<HashMap<&str, GripHint>> = Lazy::new(HashMap::new);
-
-/// How `model_name` should be held, when the data says something the geometry
-/// does not.
-pub fn grip_hint(model_name: &str) -> GripHint {
+/// The grip family `model_name` is held in when its measured box would say
+/// something else, keyed like [`HAND_MODEL_POSITIONING`]. A gun is the one
+/// entry the code can derive: its grip measures like any other handle, but the
+/// index belongs on the trigger.
+pub fn grip_family(model_name: &str) -> Option<GripFamily> {
     let name = model_name.to_ascii_lowercase();
-    if let Some(hint) = GRIP_HINTS.get(name.as_str()) {
-        return hint.clone();
-    }
-    GripHint {
-        // A gun is held by name, not by measurement: its grip looks like any
-        // other handle, but the index belongs on the trigger.
-        family: is_vr_gun_view_model(&name).then_some(GripFamily::Trigger),
-        ..GripHint::default()
-    }
+    is_vr_gun_view_model(&name).then_some(GripFamily::Trigger)
+}
+
+/// Whether the wield puts `model_name` somewhere specific in the hand - an
+/// entry that actually *moves* the model, not merely one that turns it.
+///
+/// Only a seated model can be fitted: the contact fit measures where the
+/// item's surface falls against the fingers, and a model the wield leaves at
+/// the wrist origin is drawn straight through the hand, so anything measured
+/// off it describes the missing placement rather than the grip. Those keep the
+/// generic wrap until there is seat data for them.
+pub fn has_hand_seat(model_name: &str) -> bool {
+    use cgmath::InnerSpace;
+
+    HAND_MODEL_POSITIONING
+        .get(model_name.to_ascii_lowercase().as_str())
+        .is_some_and(|adjustments| adjustments.right_hand.offset.magnitude2() > 0.0)
 }
 
 /// Where a held model's geometry sits in the **glove's own hand space**, so
@@ -784,10 +742,9 @@ pub fn held_model_hand_transform(
         Matrix4::identity()
     };
 
-    handedness
-        .mirror()
-        .invert()
-        .unwrap_or_else(Matrix4::identity)
+    // `mirror` is a reflection, so it is its own inverse - this IS the
+    // division of the glove's own reflection out of the item's transform.
+    handedness.mirror()
         * Matrix4::from_translation(seat.offset)
         * Matrix4::from(seat.rotation)
         * bake
@@ -808,46 +765,35 @@ mod tests {
 
     /// A gun is held by name: its grip measures like any other handle, but the
     /// index belongs on the trigger, so every gun `_h` reports the trigger
-    /// family without an entry of its own - and nothing else does.
+    /// family - and nothing else does.
     #[test]
     fn every_gun_view_model_is_held_by_its_trigger() {
         for name in VR_25AE_GUN_MODELS {
             assert_eq!(
-                grip_hint(name).family,
+                grip_family(name),
                 Some(GripFamily::Trigger),
                 "{name} should be held on its trigger"
             );
         }
-        assert_eq!(grip_hint("mug").family, None);
-        assert_eq!(grip_hint("hamball").family, None);
+        assert_eq!(grip_family("mug"), None);
+        assert_eq!(grip_family("hamball"), None);
     }
 
-    /// Both levels of the override: the family a model is solved in, and a
-    /// finger the solve gets wrong - and a correction only touches the finger
-    /// it names.
+    /// Only a seated model can be fitted. Every wielded gun is seated (their
+    /// grips were fitted onto the pistol grips); a plain world pickup with no
+    /// entry is not, and must keep the generic wrap.
     #[test]
-    fn a_hint_can_steer_the_family_and_pin_one_finger() {
-        let hint = GripHint {
-            family: Some(GripFamily::Pinch),
-            fingers: FingerOverrides {
-                thumb: Some(0.25),
-                ..FingerOverrides::default()
-            },
-        };
-
-        let mut solved = FingerAmounts {
-            thumb: 1.0,
-            index: 0.8,
-            middle: 0.8,
-            ring: 0.8,
-            pinky: 0.8,
-        };
-        hint.fingers.apply(&mut solved);
-
-        assert_eq!(hint.family, Some(GripFamily::Pinch));
-        assert_eq!(solved.thumb, 0.25);
-        assert_eq!(solved.index, 0.8);
-        assert_eq!(solved.pinky, 0.8);
+    fn only_a_seated_model_can_be_fitted() {
+        for name in VR_25AE_GUN_MODELS {
+            assert!(has_hand_seat(name), "{name} should be seated");
+        }
+        assert!(has_hand_seat("ATEK_H"), "the lookup is case-insensitive");
+        // An entry that only turns the model leaves it on the wrist origin,
+        // which is not a seat.
+        assert!(!has_hand_seat("battery"));
+        assert!(!has_hand_seat("laser"));
+        assert!(!has_hand_seat("mug"));
+        assert!(!has_hand_seat("hamball"));
     }
 
     /// Every wielded view model is either a gun (glove on it, arm stripped), a

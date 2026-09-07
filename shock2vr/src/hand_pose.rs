@@ -31,6 +31,76 @@ pub struct Pose {
     pub bone_positions: Vec<Vector3<f32>>,
 }
 
+/// One finger of the hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Finger {
+    Thumb,
+    Index,
+    Middle,
+    Ring,
+    Pinky,
+}
+
+impl Finger {
+    pub const ALL: [Finger; 5] = [
+        Finger::Thumb,
+        Finger::Index,
+        Finger::Middle,
+        Finger::Ring,
+        Finger::Pinky,
+    ];
+
+    /// This finger's chain of SteamVR bones, metacarpal first. The one table:
+    /// everything that has to know which bones a finger owns - the blend, the
+    /// contact fit's phalanx capsules - derives it from here.
+    pub fn bones(self) -> std::ops::RangeInclusive<usize> {
+        match self {
+            Finger::Thumb => 2..=5,
+            Finger::Index => 6..=10,
+            Finger::Middle => 11..=15,
+            Finger::Ring => 16..=20,
+            Finger::Pinky => 21..=25,
+        }
+    }
+
+    /// The finger a SteamVR bone belongs to, if any.
+    fn of_bone(bone: usize) -> Option<Finger> {
+        Finger::ALL
+            .into_iter()
+            .find(|finger| finger.bones().contains(&bone))
+    }
+
+    /// Where this finger's curl lands in a [`FingerAmounts`].
+    pub fn set(self, amounts: &mut FingerAmounts, curl: f32) {
+        match self {
+            Finger::Thumb => amounts.thumb = curl,
+            Finger::Index => amounts.index = curl,
+            Finger::Middle => amounts.middle = curl,
+            Finger::Ring => amounts.ring = curl,
+            Finger::Pinky => amounts.pinky = curl,
+        }
+    }
+
+    /// This finger's curl out of a [`FingerAmounts`].
+    pub fn curl_of(self, amounts: &FingerAmounts) -> f32 {
+        match self {
+            Finger::Thumb => amounts.thumb,
+            Finger::Index => amounts.index,
+            Finger::Middle => amounts.middle,
+            Finger::Ring => amounts.ring,
+            Finger::Pinky => amounts.pinky,
+        }
+    }
+
+    /// A blend that curls only this finger - what the contact fit poses the
+    /// rig with while it searches one finger at a time.
+    pub fn alone(self, curl: f32) -> FingerAmounts {
+        let mut amounts = FingerAmounts::default();
+        self.set(&mut amounts, curl);
+        amounts
+    }
+}
+
 /// Per-finger blend amounts (0.0 = first pose, 1.0 = second pose) for
 /// [`Pose::blend_per_finger`]. `Default` leaves every finger at 0.0.
 #[derive(Debug, Clone, Copy, Default)]
@@ -45,14 +115,7 @@ pub struct FingerAmounts {
 impl FingerAmounts {
     /// The blend amount for a SteamVR bone index (0.0 for non-finger bones).
     fn for_bone(&self, bone: usize) -> f32 {
-        match bone {
-            2..=5 => self.thumb,
-            6..=10 => self.index,
-            11..=15 => self.middle,
-            16..=20 => self.ring,
-            21..=25 => self.pinky,
-            _ => 0.0,
-        }
+        Finger::of_bone(bone).map_or(0.0, |finger| finger.curl_of(self))
     }
 }
 

@@ -3,8 +3,9 @@
 //!
 //! The item is drawn at the very transform the fit measured it in
 //! ([`vr_config::held_model_hand_transform`]) and the glove at the very grip
-//! the fit solved, so what the camera sees is what the solver decided - there
-//! is no second placement path that could flatter or slander it.
+//! the fit solved ([`GloveRenderer::fitted_grip`], the same call the wield
+//! makes), so what the camera sees is what the solver decided rather than a
+//! second, flattering placement.
 //!
 //! Cycle items with the `grip_item` dev param; frame them with `/v1/camera`.
 
@@ -88,27 +89,17 @@ impl DebugSceneHooks for GripHooks {
             Handedness::Right,
         );
 
-        let fit = hand_glove::grip_request(model_name, Handedness::Right, scale, asset_cache).map(
-            |(key, mesh, corrections)| {
-                let family = key.family();
-                // Timed around the solve alone - the mesh is already loaded and
-                // in hand space by here.
-                let started = std::time::Instant::now();
-                let mut fitted = glove.fitted_grip(key, &mesh);
-                let solve = started.elapsed();
-                corrections.apply(&mut fitted);
-                (family, mesh.triangle_count(), solve, mesh.extents(), fitted)
-            },
-        );
+        // The same cached entry point the wield uses; the mesh size and solve
+        // time are logged by the solve itself, at debug level.
+        let fit = glove.fitted_grip(model_name, Handedness::Right, scale, asset_cache);
 
         if self.shown != Some(index) {
             self.shown = Some(index);
             match &fit {
-                // The elapsed time is the *solve*: the fit is cached, so only
-                // the first frame showing an item pays it.
-                Some((family, triangles, solve, extents, fitted)) => info!(
-                    "debug_grips [{index}] {model_name}: family {} {triangles} tris solved in {solve:?} extents {extents:?} -> {fitted:?}",
-                    family.as_str()
+                Some(fit) => info!(
+                    "debug_grips [{index}] {model_name}: family {} -> {:?}",
+                    fit.family.as_str(),
+                    fit.amounts
                 ),
                 None => info!("debug_grips [{index}] {model_name}: no contact mesh"),
             }
@@ -118,7 +109,7 @@ impl DebugSceneHooks for GripHooks {
             hand,
             0.0,
             0.0,
-            Some(fit.map(|(_, _, _, _, fitted)| fitted)),
+            hand_glove::Hold::Item(fit.map(|fit| fit.amounts)),
             HandLight::Off,
             HandPreshape::None,
         ));
