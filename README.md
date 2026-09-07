@@ -53,7 +53,10 @@ However, you can play with a keyboard and a mouse, using the following hard-code
   above the fist confirms the hold. To descend from a deck, crouch and grab
   near the ladder's top edge, pull the held hand toward your chest to move
   your body beyond the edge, then raise that hand to lower yourself. Open
-  the hand to release.
+  the hand to release. When transferring onto a deck, keep its hand squeezed
+  while releasing the ladder and pulling yourself up. If the deck blocks your
+  pull, the held hand keeps supporting you until you open it; relax or adjust
+  the pull to continue.
 - Quest VR: reload by hand. Pull a clip out of the cyber interface's inventory
   strip with your free hand and bring it to the gun the other hand is holding -
   the clip goes in and the weapon is loaded. A clip of a different ammo type

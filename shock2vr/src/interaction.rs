@@ -76,6 +76,9 @@ pub trait PlayerInteraction {
         None
     }
 
+    /// Feed collision-resolved motion back into the held tracking reference.
+    fn resolve_hand_climb(&mut self, _requested: Vector3<f32>, _applied: Vector3<f32>) {}
+
     /// Drop every climb hold without throwing the body - the vault took over
     /// (see [`crate::vr_climb::HandClimb::release_all`]).
     fn release_climb_grips(&mut self) {}
@@ -233,6 +236,10 @@ impl PlayerInteraction for VrInteraction {
 
     fn hand_climb(&self) -> Option<&crate::vr_climb::HandClimb> {
         Some(&self.hand_climb)
+    }
+
+    fn resolve_hand_climb(&mut self, requested: Vector3<f32>, applied: Vector3<f32>) {
+        self.hand_climb.resolve_translation(requested, applied);
     }
 
     fn release_climb_grips(&mut self) {

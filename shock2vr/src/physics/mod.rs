@@ -10056,6 +10056,114 @@ mod tests {
     }
 
     #[test]
+    fn a_held_ledge_consumes_blocked_pull_without_falling_or_storing_motion() {
+        use crate::vr_climb::{ClimbHandInput, HandClimb};
+        let (mut world, mut player) = grip_world();
+        let block = EntityId::from_inner(2027).unwrap();
+        world.add_kinematic(
+            block,
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        world.set_player_translation(vec3(2.4, 2.0, 0.0), &mut player);
+        world.set_player_crouch_hanging(true, &mut player);
+        let mut climb = HandClimb::default();
+        let mut hand = vec3(-0.38, 1.04, 0.0);
+        let input = |local_position, squeeze| ClimbHandInput {
+            local_position,
+            squeeze,
+            is_empty: true,
+        };
+        let mut frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+            |p, _| world.climbable_grip_at(p, CLIMB_GRIP_RADIUS, 0.0),
+            |_| true,
+        );
+        assert!(climb.holds_a_ledge(), "must acquire the actual box's top");
+        let surface = climb.anchor_grip().unwrap().grip.point;
+        for _ in 0..8 {
+            let requested = frame.translation.expect("squeezed ledge retains support");
+            world.update_player_movement(
+                PlayerMoveRequest::HandClimb {
+                    translation: requested,
+                },
+                &mut player,
+            );
+            climb.resolve_translation(requested, player.self_translation());
+            let center = world.get_player_next_translation(&player);
+            assert!(
+                center.x >= 2.3,
+                "wall must stop the inward pull: {center:?}"
+            );
+            assert!(
+                (center.y - 2.0).abs() < 0.01,
+                "held hand must suppress gravity"
+            );
+            hand.x += 0.2;
+            frame = climb.update(
+                center,
+                identity_quat(),
+                world.player_step_dt(),
+                [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+                |_, _| None,
+                |_| true,
+            );
+        }
+        // Settle the last requested pull, then freeze the tracked hand. There
+        // must be no stored correction to snap the body inward on a later frame.
+        let requested = frame.translation.unwrap();
+        world.update_player_movement(
+            PlayerMoveRequest::HandClimb {
+                translation: requested,
+            },
+            &mut player,
+        );
+        climb.resolve_translation(requested, player.self_translation());
+        frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert!(frame.translation.unwrap().magnitude() < 0.001);
+        assert_eq!(climb.anchor_grip().unwrap().grip.point, surface);
+        // A small reverse motion takes effect immediately and only by the
+        // amount moved, instead of first paying back the blocked 1.6-unit pull.
+        hand.x -= 0.1;
+        frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert!((frame.translation.unwrap().x - 0.1).abs() < 0.001);
+        // Opening the hand still drops the body normally.
+        frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 0.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert!(frame.translation.is_none());
+        step(&mut world, &mut player, 30);
+        assert!(world.get_player_translation(&player).y < 1.5);
+    }
+
+    #[test]
     fn hand_top_out_tucks_past_the_wall_and_expands_only_at_the_landing() {
         for physically_crouched in [false, true] {
             let (mut world, mut player) = grip_world();
