@@ -6,7 +6,7 @@ use dark::{
         resolve_symbolic_name,
     },
     properties::{
-        ObjectNameType, PropGunState, PropHUDSelect, PropHitPoints, PropLog, PropMaxHitPoints,
+        ObjectNameType, ObjectState, PropHUDSelect, PropHitPoints, PropLog, PropMaxHitPoints,
         PropObjName, PropObjectNameType, PropShowHP, PropStackCount, PropSymName, PropTemplateId,
     },
 };
@@ -116,11 +116,10 @@ fn localized_log_title(
         .map(|name| format_inline_localized_text(name))
 }
 
+/// The WEAPON.STR key for a gun's condition word: `GunCondVal1..10`, one per
+/// tenth of the condition ("Terrible: 1" .. "Perfect: 10").
 fn weapon_condition_key(condition: f32) -> String {
-    // Looking Glass's GunGetConditionString truncates the 0..100 condition,
-    // divides it into ten buckets, and fetches GunCondVal1..10.
-    let bucket = ((condition as i32) / 10).clamp(0, 9) + 1;
-    format!("guncondval{bucket}")
+    format!("guncondval{}", super::gun_condition_bucket(condition))
 }
 
 fn localized_weapon_condition(
@@ -128,14 +127,45 @@ fn localized_weapon_condition(
     world: &World,
     entity_id: EntityId,
 ) -> Option<String> {
-    let condition = {
-        let gun_states = world.borrow::<View<PropGunState>>().ok()?;
-        gun_states.get(entity_id).ok()?.condition
-    };
+    let condition = crate::scripts::script_util::gun_condition(world, entity_id)?;
     asset_cache
         .get_opt(&STRINGS_IMPORTER, "weapon.str")?
         .get(&weapon_condition_key(condition))
         .cloned()
+}
+
+/// The parenthetical an object's working order adds to its display name -
+/// "(broken)", "(destroyed)" - from MISC.STR's `ObjState<n>` keys, numbered by
+/// the state itself. `None` for a working object, and for the states the
+/// original leaves off the *name*: an unresearched object has its whole name
+/// replaced by the research interface's own wording rather than suffixed, and
+/// locked/hacked ones say nothing here.
+///
+/// The table's own values lead with a space; the strings importer trims its
+/// values, so the caller supplies the separator.
+pub(crate) fn object_state_suffix(
+    asset_cache: &mut AssetCache,
+    world: &World,
+    entity_id: EntityId,
+) -> Option<String> {
+    let (key, fallback) =
+        object_state_suffix_strings(crate::scripts::gui::object_state(world, entity_id))?;
+    let strings = asset_cache.get_opt(&STRINGS_IMPORTER, "misc.str");
+    Some(crate::ui::resolve_menu_label(
+        strings.as_deref(),
+        key,
+        fallback,
+    ))
+}
+
+/// The MISC.STR key naming `state`'s parenthetical - numbered by the state -
+/// and the English text that key ships with, for an install that lacks it.
+fn object_state_suffix_strings(state: ObjectState) -> Option<(&'static str, &'static str)> {
+    match state {
+        ObjectState::Broken => Some(("objstate1", "(broken)")),
+        ObjectState::Destroyed => Some(("objstate2", "(destroyed)")),
+        _ => None,
+    }
 }
 
 /// An object with no `P$ObjName` of its own (e.g. the Wrench, which inherits
@@ -155,7 +185,8 @@ fn resolve_symname_fallback(
 /// through `objname.str`, falling back to its `P$SymName` when it has no
 /// `P$ObjName` of its own, and then through whatever substitution its
 /// `P$ObjectNameType` asks for (a stack count, a log's title, a gun's
-/// condition word). `None` when the object has no name to show.
+/// condition word), plus whatever its working order adds on the end. `None`
+/// when the object has no name to show.
 ///
 /// The single name resolution the interface has: the rollover label beside the
 /// HUD brackets and the inventory bar's mini-frame name line both read it, so
@@ -201,13 +232,26 @@ pub fn resolve_item_name(
     let weapon_condition = (name_type == ObjectNameType::Weapon)
         .then(|| localized_weapon_condition(asset_cache, world, entity_id))
         .flatten();
-    Some(format_typed_item_name(
+    let named = format_typed_item_name(
         &localized_name,
         name_type,
         stack_count,
         log_title.as_deref(),
         weapon_condition.as_deref(),
+    );
+    Some(append_object_state(
+        named,
+        object_state_suffix(asset_cache, world, entity_id).as_deref(),
     ))
+}
+
+/// Put an object's working order on the end of its name, separated by the space
+/// the shipped table authors and the strings importer trims off.
+fn append_object_state(name: String, suffix: Option<&str>) -> String {
+    match suffix {
+        Some(suffix) => format!("{name} {suffix}"),
+        None => name,
+    }
 }
 
 pub fn draw_item_name(
@@ -462,6 +506,45 @@ mod tests {
         assert_eq!(weapon_condition_key(10.0), "guncondval2");
         assert_eq!(weapon_condition_key(50.0), "guncondval6");
         assert_eq!(weapon_condition_key(100.0), "guncondval10");
+    }
+
+    /// A gun's name says its condition; its working order is a separate word
+    /// on the end, so "worn out" and "will not fire" read differently.
+    #[test]
+    fn only_a_broken_or_destroyed_object_names_its_state() {
+        assert_eq!(
+            object_state_suffix_strings(ObjectState::Broken),
+            Some(("objstate1", "(broken)"))
+        );
+        assert_eq!(
+            object_state_suffix_strings(ObjectState::Destroyed),
+            Some(("objstate2", "(destroyed)"))
+        );
+        // A working object says nothing extra, and neither do the states the
+        // original leaves off the name.
+        for quiet in [
+            ObjectState::Normal,
+            ObjectState::Unresearched,
+            ObjectState::Locked,
+            ObjectState::Hacked,
+        ] {
+            assert_eq!(object_state_suffix_strings(quiet), None, "{quiet:?}");
+        }
+    }
+
+    /// The state joins the name with a space of its own: the shipped strings
+    /// lead with one, but the strings importer trims every value, so a plain
+    /// concatenation would read "A Pistol. (Perfect: 10)(broken)".
+    #[test]
+    fn the_state_is_separated_from_the_name() {
+        assert_eq!(
+            append_object_state("A Pistol. (Perfect: 10)".to_owned(), Some("(broken)")),
+            "A Pistol. (Perfect: 10) (broken)"
+        );
+        assert_eq!(
+            append_object_state("A Pistol.".to_owned(), None),
+            "A Pistol."
+        );
     }
 
     #[test]

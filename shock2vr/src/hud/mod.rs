@@ -19,6 +19,16 @@ pub use message_line::HudMessages;
 mod flat_hud;
 pub(crate) use flat_hud::*;
 
+/// Which tenth of its condition a gun is in, 1 (worn out) to 10 (pristine).
+///
+/// The original truncates the 0..100 condition and divides it into ten
+/// buckets. Both readouts of a gun's condition - the word its name carries and
+/// the badge on the ammo gauge - grade it here, so the label and the picture
+/// can never disagree about how worn a gun is.
+pub(crate) fn gun_condition_bucket(condition: f32) -> i32 {
+    (condition as i32 / 10).clamp(0, 9) + 1
+}
+
 /// The English fallback for the reload button, verbatim from the shipped
 /// MISC.STR, for a data install that lacks the table.
 const FALLBACK_RELOAD_LABEL: &str = "RELOAD";
@@ -26,6 +36,10 @@ const FALLBACK_RELOAD_LABEL: &str = "RELOAD";
 /// The English fallback for the weapon-settings modification line, verbatim
 /// from the shipped MISC.STR (`%d` is the gun's `PropGunState.modification`).
 const FALLBACK_MOD_LEVEL_LABEL: &str = "Modification Level %d";
+
+/// The English fallback for the line a gun's owner gets when it breaks,
+/// verbatim from the shipped MISC.STR (`%s` is the gun's short name).
+const FALLBACK_WEAPON_BREAKS: &str = "%s has broken!";
 
 /// HUD label strings preloaded from MISC.STR, stored as a world `Unique`
 /// because the readout layout has no `AssetCache` at draw time (the
@@ -37,6 +51,9 @@ pub struct HudStrings {
     /// MISC.STR `ModLevel` ("Modification Level %d"), the settings MFD's
     /// modification line. The `%d` is substituted at draw time.
     pub mod_level_label: String,
+    /// MISC.STR `WeaponBreaks` ("%s has broken!"), the status line a gun posts
+    /// when it gives out. The `%s` is the gun's short name.
+    pub weapon_breaks_message: String,
 }
 
 impl Default for HudStrings {
@@ -44,6 +61,7 @@ impl Default for HudStrings {
         Self {
             reload_label: FALLBACK_RELOAD_LABEL.to_owned(),
             mod_level_label: FALLBACK_MOD_LEVEL_LABEL.to_owned(),
+            weapon_breaks_message: FALLBACK_WEAPON_BREAKS.to_owned(),
         }
     }
 }
@@ -61,6 +79,11 @@ impl HudStrings {
                 strings.as_deref(),
                 "modlevel",
                 FALLBACK_MOD_LEVEL_LABEL,
+            ),
+            weapon_breaks_message: crate::ui::resolve_menu_label(
+                strings.as_deref(),
+                "weaponbreaks",
+                FALLBACK_WEAPON_BREAKS,
             ),
         }
     }

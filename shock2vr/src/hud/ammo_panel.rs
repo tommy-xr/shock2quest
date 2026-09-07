@@ -19,7 +19,8 @@
 //! buttons do not land on top of it.
 
 use cgmath::{Vector2, vec2};
-use shipyard::World;
+use dark::properties::ObjectState;
+use shipyard::{EntityId, World};
 
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 
@@ -31,8 +32,13 @@ pub(crate) const PANEL_SIZE: Vector2<f32> = vec2(PANEL_W, PANEL_H);
 /// Selected ammo type's object icon (P$ObjIcon), at the gauge well's left -
 /// right of the cycle arrow, which claims the well's leading 12 px.
 pub(crate) const ICON: Rect = Rect::new(200.0, 18.0, 24.0, 24.0);
-/// Round count, right of the ammo icon inside the gauge well.
-pub(crate) const COUNT: Rect = Rect::new(224.0, 20.0, 25.0, 20.0);
+/// Round count, right of the ammo icon inside the gauge well - the middle of
+/// the well's three stacked bands (badge, count, ammo type), so the condition
+/// badge above it has the corner the original draws it in to itself.
+pub(crate) const COUNT: Rect = Rect::new(224.0, 28.0, 25.0, 14.0);
+/// The wielded gun's condition badge (`WSTATE*.PCX`, 14x14), in the gauge
+/// well's upper-right corner - where the original draws it.
+pub(crate) const CONDITION: Rect = Rect::new(235.0, 14.0, 14.0, 14.0);
 /// Ammo-type label (std/he/ap), across the bottom of the gauge well.
 pub(crate) const TYPE_LABEL: Rect = Rect::new(198.0, 42.0, 51.0, 13.0);
 
@@ -69,6 +75,40 @@ pub(crate) const PSI_SELECT: Rect = Rect::new(
 
 /// The font every readout label uses (the original's HUD font).
 const FONT: &str = "mainfont.fon";
+
+/// The condition badges, best first: a green "10" down through a red "1", then
+/// a crossed-out badge for a gun that is not in working order. The shipped art
+/// authors all eleven; the tenth is what a gun on its last legs shows and the
+/// eleventh is what a broken one shows.
+const CONDITION_ART: [&str; 11] = [
+    "wstate1.pcx",
+    "wstate2.pcx",
+    "wstate3.pcx",
+    "wstate4.pcx",
+    "wstate5.pcx",
+    "wstate6.pcx",
+    "wstate7.pcx",
+    "wstate8.pcx",
+    "wstate9.pcx",
+    "wstate10.pcx",
+    "wstate11.pcx",
+];
+
+/// Which badge a gun in `state` at `condition` (0..100) shows.
+///
+/// A gun that still works shows the badge for its condition tenth - the same
+/// tenth its name's condition word comes from, counted the other way round,
+/// since the art runs best-first and the words run worst-first. A gun that is
+/// broken or destroyed shows the crossed-out badge instead, so "worn out but
+/// firing" and "will not fire" are never the same picture. Only those two
+/// states change the badge: an unresearched weapon still fires here, so it
+/// still reads as its condition.
+pub(crate) fn condition_badge(state: ObjectState, condition: f32) -> &'static str {
+    if matches!(state, ObjectState::Broken | ObjectState::Destroyed) {
+        return CONDITION_ART[10];
+    }
+    CONDITION_ART[(10 - super::gun_condition_bucket(condition)) as usize]
+}
 
 /// A clickable control on the ammo readout. The layout owns the set, so the
 /// drawn button and the hit-tested rect can never disagree.
@@ -157,6 +197,9 @@ pub(crate) struct AmmoReadout {
     pub ammo_icon: Option<String>,
     /// The selected ammo type's class tag ("std", "he", "ap").
     pub ammo_type: Option<String>,
+    /// The wielded gun's condition badge art. Absent for a weapon that has no
+    /// condition to wear down (the psi amp, a melee weapon).
+    pub gun_condition: Option<&'static str>,
     /// The wielded gun's current fire-mode header ("NORM"/"BURST"/"AUTO") -
     /// the SETTING button's label. Absent when the gun names no header.
     pub gun_setting_header: Option<String>,
@@ -173,6 +216,15 @@ pub(crate) struct AmmoReadout {
     pub show_buttons: bool,
 }
 
+/// `weapon`'s condition badge, if it is the kind of weapon that has one.
+fn wielded_gun_condition(world: &World, weapon: EntityId) -> Option<&'static str> {
+    let condition = crate::scripts::script_util::gun_condition(world, weapon)?;
+    Some(condition_badge(
+        crate::scripts::gui::object_state(world, weapon),
+        condition,
+    ))
+}
+
 impl AmmoReadout {
     /// Read the wielded weapon's readout from the world. `show_buttons` is the
     /// caller's (presentation's) call.
@@ -183,6 +235,7 @@ impl AmmoReadout {
             ammo: super::get_wielded_ammo(world),
             ammo_icon: super::get_wielded_ammo_icon(world),
             ammo_type: super::get_wielded_ammo_type(world),
+            gun_condition: weapon.and_then(|w| wielded_gun_condition(world, w)),
             gun_setting_header: super::get_wielded_gun_setting(world)
                 .and_then(|(_, header)| header),
             can_cycle_ammo: weapon
@@ -314,6 +367,9 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
         if let Some(icon) = &readout.ammo_icon {
             canvas.image(at(origin, ICON), icon);
         }
+        if let Some(badge) = readout.gun_condition {
+            canvas.image(at(origin, CONDITION), badge);
+        }
         if let Some(ammo_type) = &readout.ammo_type {
             // Ellipsized: the class tag is data ("std", but also "lasershot"),
             // and an over-wide label would spill out of the gauge well.
@@ -419,6 +475,59 @@ mod tests {
         assert_eq!(text_of(AmmoReadout::default()), None);
     }
 
+    /// The badge grades a working gun and calls out one that will not fire.
+    #[test]
+    fn the_condition_badge_counts_down_with_the_gun() {
+        let working = |condition| condition_badge(ObjectState::Normal, condition);
+        assert_eq!(working(100.0), "wstate1.pcx", "pristine");
+        assert_eq!(working(91.0), "wstate1.pcx", "barely used");
+        assert_eq!(working(45.0), "wstate6.pcx", "half worn");
+        assert_eq!(working(5.0), "wstate10.pcx", "about to give out");
+        assert_eq!(working(0.0), "wstate10.pcx", "worn out");
+        // A gun that will not fire reads differently from one that barely
+        // will - that is the whole point of the eleventh badge.
+        assert_eq!(condition_badge(ObjectState::Broken, 0.0), "wstate11.pcx");
+        assert_eq!(
+            condition_badge(ObjectState::Destroyed, 90.0),
+            "wstate11.pcx"
+        );
+        // ...but a state that does not stop the gun leaves the grade alone.
+        assert_eq!(
+            condition_badge(ObjectState::Unresearched, 100.0),
+            working(100.0)
+        );
+    }
+
+    /// The badge is emitted with the gun's readout, in its own corner: both
+    /// presentations build this canvas, so neither can place it differently.
+    #[test]
+    fn the_condition_badge_takes_the_wells_corner_clear_of_the_count() {
+        let canvas = build_readout_canvas(&AmmoReadout {
+            gun_condition: Some("wstate11.pcx"),
+            ..gun(12, None, None)
+        });
+        let badge = canvas
+            .elements()
+            .iter()
+            .find_map(|element| match element {
+                crate::ui::UiElement::Image {
+                    texture, position, ..
+                } if texture == "wstate11.pcx" => Some(*position),
+                _ => None,
+            })
+            .expect("the readout draws the badge");
+        assert_eq!(badge, vec2(CONDITION.x, CONDITION.y));
+        // The well stacks three bands, and none of them may sit on another.
+        assert!(
+            CONDITION.y + CONDITION.h <= COUNT.y && COUNT.y + COUNT.h <= TYPE_LABEL.y,
+            "badge/count/type must stack: {CONDITION:?} {COUNT:?} {TYPE_LABEL:?}"
+        );
+        assert!(
+            CONDITION.x + CONDITION.w <= WELL.x + WELL.w,
+            "the badge must stay inside the gauge well"
+        );
+    }
+
     #[test]
     fn the_psi_amp_shows_its_discipline_on_the_forearm_too() {
         // Tier badge + discipline name = 2, and the amp's meaningless clip is
@@ -439,6 +548,7 @@ mod tests {
             COUNT,
             ICON,
             TYPE_LABEL,
+            CONDITION,
             CYCLE_BUTTON,
             SETTING_BUTTON,
             RELOAD_BUTTON,
@@ -470,7 +580,14 @@ mod tests {
     /// it on bare 3D view.
     #[test]
     fn the_readout_sits_inside_the_compact_gauge_well() {
-        for rect in [COUNT, ICON, TYPE_LABEL, PSI_TIER_BADGE, PSI_POWER_NAME] {
+        for rect in [
+            COUNT,
+            ICON,
+            TYPE_LABEL,
+            CONDITION,
+            PSI_TIER_BADGE,
+            PSI_POWER_NAME,
+        ] {
             assert!(
                 rect.x >= WELL.x && rect.x + rect.w <= WELL.x + WELL.w,
                 "{rect:?} leaves the gauge well horizontally"

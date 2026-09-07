@@ -10,7 +10,8 @@ use dark::{
     properties::{
         GunSettingDesc, Link, Links, ProjectileOptions, PropBaseGunDesc, PropClassTag,
         PropGunSettingHeader1, PropGunSettingHeader2, PropGunSettingText1, PropGunSettingText2,
-        PropGunState, PropMaterial, PropSymName, PropTemplateId, PropTweqModelConfig, ToLink,
+        PropGunState, PropMaterial, PropObjShortName, PropSymName, PropTemplateId,
+        PropTweqModelConfig, ToLink,
     },
     ss2_entity_info::SystemShock2EntityInfo,
 };
@@ -381,6 +382,37 @@ pub fn can_cycle_gun_setting(world: &World, weapon: EntityId) -> bool {
     let links = all_projectile_links(world, weapon);
     let second_header = gun_setting_header(world, weapon, 1);
     has_second_fire_mode(second_header.as_deref(), &links)
+}
+
+/// A gun's condition (`PropGunState`, 0..100), or `None` for a weapon that
+/// tracks none - a melee weapon, the psi amp.
+pub(crate) fn gun_condition(world: &World, entity_id: EntityId) -> Option<f32> {
+    world
+        .borrow::<View<PropGunState>>()
+        .ok()
+        .and_then(|v| v.get(entity_id).ok().map(|g| g.condition))
+}
+
+/// An object's short display name: its authored `P$ObjShortName` (an object
+/// string), falling back to the symbolic name every entity has. This is the
+/// terse name the original uses where a whole sentence will not fit - a panel's
+/// title bar, a status message - as opposed to the rollover's full name.
+pub fn object_short_name(world: &World, entity_id: EntityId) -> Option<String> {
+    let short = world
+        .borrow::<View<PropObjShortName>>()
+        .ok()
+        .and_then(|v| {
+            v.get(entity_id)
+                .ok()
+                .map(|n| crate::scripts::gui::localized_fallback(&n.0))
+        })
+        .filter(|name| !name.is_empty());
+    short.or_else(|| {
+        world
+            .borrow::<View<PropSymName>>()
+            .ok()
+            .and_then(|v| v.get(entity_id).ok().map(|n| n.0.clone()))
+    })
 }
 
 /// The short header for `weapon`'s fire setting `setting` - "NORM" / "BURST" -

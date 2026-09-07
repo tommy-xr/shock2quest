@@ -18,15 +18,13 @@
 //! no further wiring.
 
 use cgmath::{Vector2, Vector3, vec2};
-use dark::properties::{PropGunState, PropObjShortName, PropSymName};
+use dark::properties::PropGunState;
 use shipyard::{EntityId, Get, View, World};
 
 use crate::gui::{self, ButtonHoverBehavior, Gui, GuiComponent, GuiConfig, GuiCursor};
 use crate::scripts::Effect;
 use crate::scripts::script_util;
 use crate::ui::Rect;
-
-use super::research::localized_fallback;
 
 /// A panel-local rect's upper-left corner / extent, as the component builders
 /// want them.
@@ -110,22 +108,6 @@ pub fn should_close_settings_panel(opened_for: EntityId, wielded: Option<EntityI
     wielded != Some(opened_for)
 }
 
-/// The gun's display name: its authored short name (an object string), falling
-/// back to the symbolic name every entity has.
-fn display_name(world: &World, weapon: EntityId) -> Option<String> {
-    let short = world
-        .borrow::<View<PropObjShortName>>()
-        .ok()
-        .and_then(|v| v.get(weapon).ok().map(|n| localized_fallback(&n.0)))
-        .filter(|name| !name.is_empty());
-    short.or_else(|| {
-        world
-            .borrow::<View<PropSymName>>()
-            .ok()
-            .and_then(|v| v.get(weapon).ok().map(|n| n.0.clone()))
-    })
-}
-
 /// The line each row shows: "{header}: {description}". A gun that names no
 /// header for a setting has no such setting and draws no row.
 fn row_text(header: Option<&str>, description: Option<&str>) -> Option<String> {
@@ -202,7 +184,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
             .with_size(vec2(ROW_TEXT_RIGHT - NAME_POS.0, LINE_H)),
         );
 
-        if let Some(name) = display_name(world, weapon) {
+        if let Some(name) = script_util::object_short_name(world, weapon) {
             components.push(
                 gui::text(&name)
                     .with_position(vec2(NAME_POS.0, NAME_POS.1))
@@ -310,7 +292,8 @@ mod tests {
     use cgmath::{Quaternion, vec3};
     use dark::properties::{
         Link, Links, ProjectileOptions, PropGunSettingHeader1, PropGunSettingHeader2,
-        PropGunSettingText1, PropGunSettingText2, PropScripts, ToLink,
+        PropGunSettingText1, PropGunSettingText2, PropObjShortName, PropScripts, PropSymName,
+        ToLink,
     };
     use std::collections::HashMap;
 
