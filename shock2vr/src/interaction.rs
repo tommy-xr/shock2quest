@@ -239,6 +239,7 @@ struct GripGeometry {
 }
 
 struct HeldGrip {
+    model_mirror: Option<cgmath::Matrix4<f32>>,
     entity: EntityId,
     model: String,
     resolved: Option<crate::vr_grip::ResolvedGrip>,
@@ -318,7 +319,7 @@ impl VrInteraction {
             let Some(held) = self.fitted_grips[primary].as_ref() else {
                 continue;
             };
-            if held.model != "wrench_h"
+            if !crate::vr_support::supports_model(&held.model)
                 || hand.get_held_entity() != Some(held.entity)
                 || !poses[primary].is_tracked()
             {
@@ -337,7 +338,15 @@ impl VrInteraction {
                 .rotation
                 .conjugate()
                 .rotate_vector(rig[primary].palm - grip.offset);
-            let anchor = profile.anchor(primary) * grip.item_scale;
+            let handedness = if primary == 0 {
+                Handedness::Left
+            } else {
+                Handedness::Right
+            };
+            let Some(model_mirror) = held.model_mirror else {
+                continue;
+            };
+            let anchor = profile.anchor_in_frame(handedness, model_mirror) * grip.item_scale;
             let correction = self
                 .support
                 .as_ref()
@@ -351,17 +360,8 @@ impl VrInteraction {
             // Melee physics may stop short of its target at a wall. Acquisition
             // and visible gloves belong on that actual weapon, not an unseen target.
             let model_pose = held.physical_model_pose(world).unwrap_or(target_pose);
-            let hand_pose = profile.glove_pose(
-                if primary == 0 {
-                    Handedness::Left
-                } else {
-                    Handedness::Right
-                },
-                model_pose,
-                grip,
-                &rig[1 - primary],
-                anchor,
-            );
+            let hand_pose =
+                profile.glove_pose(handedness, model_pose, grip, &rig[1 - primary], anchor);
             return Some(SupportCandidate {
                 entity: held.entity,
                 primary,
@@ -584,8 +584,9 @@ impl PlayerInteraction for VrInteraction {
                     serde_json::from_str::<HashMap<String, SupportProfile>>(&text).ok()
                 })
                 .unwrap_or_default();
-            self.support_profiles
-                .retain(|model, profile| model == "wrench_h" && profile.is_valid());
+            self.support_profiles.retain(|model, profile| {
+                crate::vr_support::supports_model(model) && profile.is_valid()
+            });
             self.grip_library = Some(
                 assets
                     .get_opt(&TEXT_IMPORTER, "vr-grips.json")
@@ -784,7 +785,13 @@ impl PlayerInteraction for VrInteraction {
                     .as_ref()
                     .zip(geometry)
                     .and_then(|(grip, geometry)| grip.item_bounds(&geometry.triangles));
+                let model_mirror = if crate::vr_support::supports_model(&model) {
+                    crate::vr_weapon_grip::model_mirror(assets, &format!("{model}.bin"))
+                } else {
+                    None
+                };
                 self.fitted_grips[index] = Some(HeldGrip {
+                    model_mirror,
                     item_bounds,
                     entity,
                     model,
@@ -827,12 +834,18 @@ impl PlayerInteraction for VrInteraction {
         let poses = self.hand_poses();
         self.support_preview = self.support_candidate(world, poses);
         self.visual_hands = [None, None];
-        // All fitted physical melee gloves follow the synchronized body, even
-        // with one hand: locomotion and impacts must not separate mesh and grip.
+        // Physical melee follows its synchronized body even with one hand.
+        // Supported guns follow their solved pose so both gloves stay seated.
         for (index, held) in self.fitted_grips.iter().enumerate() {
             let Some(held) = held else { continue };
-            let (Some(grip), Some(model)) = (&held.resolved, held.physical_model_pose(world))
-            else {
+            let model = held.physical_model_pose(world).or_else(|| {
+                self.support.as_ref()?;
+                self.support_preview
+                    .as_ref()
+                    .filter(|c| c.primary == index && c.entity == held.entity)
+                    .map(|c| c.model_pose)
+            });
+            let (Some(grip), Some(model)) = (&held.resolved, model) else {
                 continue;
             };
             let rotation = model.rotation * grip.rotation.conjugate();
@@ -1386,6 +1399,7 @@ mod tests {
             },
         );
         interaction.fitted_grips[1] = Some(HeldGrip {
+            model_mirror: Some(Handedness::Left.mirror()),
             entity,
             model: "wrench_h".into(),
             resolved: Some(ResolvedGrip {

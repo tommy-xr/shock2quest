@@ -936,6 +936,35 @@ mod tests {
     }
 
     #[test]
+    fn supported_weapon_shots_follow_the_solved_barrel_in_both_hands() {
+        use crate::vr_support::solve_two_hand_pose;
+        for hand in [crate::Handedness::Left, crate::Handedness::Right] {
+            let base = Quaternion::from_angle_y(Deg(70.0));
+            let primary = vec3(1.0, 2.0, 3.0);
+            let anchor = hand
+                .gun_mirror()
+                .transform_point(point3(-0.6, -0.1, 0.04))
+                .to_vec();
+            let primary_anchor = vec3(0.02, 0.0, 0.0);
+            let support =
+                primary + base.rotate_vector(anchor - primary_anchor) + vec3(0.0, 0.15, 0.08);
+            let solved = solve_two_hand_pose(primary, support, base, primary_anchor, anchor, base);
+            let transform = Matrix4::from_translation(solved.position)
+                * Matrix4::from(solved.rotation)
+                * Matrix4::from_scale(0.7);
+            let muzzle = hand.gun_mirror().transform_point(point3(-0.9, 0.1, 0.03));
+            let (origin, velocity) = vr_fire_geometry(transform, vec![muzzle_vhot(muzzle)]);
+            assert!((origin - transform.transform_point(muzzle).to_vec()).magnitude() < 1e-5);
+            let forward = solved.rotation.rotate_vector(vec3(-1.0, 0.0, 0.0));
+            assert!(velocity.normalize().dot(forward) > 0.99999);
+            assert!(
+                (forward - base.rotate_vector(vec3(-1.0, 0.0, 0.0))).magnitude() > 0.05,
+                "support must actually steer the shot away from the single-hand direction"
+            );
+        }
+    }
+
+    #[test]
     fn scaled_weapons_move_the_muzzle_without_scaling_projectile_speed() {
         let rotation = Matrix4::from_angle_y(Deg(31.0)) * Matrix4::from_angle_x(Deg(-12.0));
         for scale in [0.4, 0.7, 1.3] {

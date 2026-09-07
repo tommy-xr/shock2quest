@@ -518,7 +518,7 @@ To open directly:
 `cargo run -p dark_explorer -- ui --grip wrench_h --grip-support`
 Add `--grip-hand left` to inspect the mirrored configuration. Other models can
 have support drafts authored, but runtime two-hand grabbing currently opts in
-only the wrench; the tool labels those other support drafts as preview-only.
+the wrench, pistol, and shotgun; the tool labels other support drafts as preview-only.
 
 To add a new primary model, use **Files → select the .bin model → Edit VR Grip**.
 The tool prepares left/right drafts (or offers **Prepare left and right drafts**),
@@ -533,3 +533,11 @@ change their collection behavior.
 - **Cylindrical** is now a finger-curl preset for handles, distinct from the more open, cupped **Ball** preset. Neither preset runs automatic fitting or changes item alignment.
 
 Support anchors and their position sliders use the weapon model reflection too: `atek_h` reflects model Z, while posed melee uses its own contact-origin frame. Support wrist rotation continues to mirror in glove space. This keeps the supporting palm aligned when mirroring the primary grip.
+
+### Pistol and shotgun runtime support
+
+Gameplay now enables fixed support sockets for `wrench_h`, `atek_h`, and `sg_h`. The pistol uses the authored support pose; shotgun starts with a pump grip that can be adjusted in Explorer. Other models remain preview-only. Runtime eligibility and Explorer's notice share one policy.
+
+A fresh free-hand squeeze near the socket attaches support. The primary hand owns and fires the weapon; the supporting trigger is reserved. The second hand steers without stretching the gun, and both visible gloves follow the solved grip. Releasing support blends back to one hand; releasing the primary drops once with no ownership transfer. Guns remain unphysical until the separate physical-gun integration.
+
+Gun support anchors mirror in model Z; glove orientation mirrors hand X. The stored item scale and authored primary poses are preserved. `vr-gun-support.e2e.test.ts` exercises both guns in both hands, steering, grip/glove alignment, scale, firing/ammo, reserved support input, and release. A weapon-script test checks shots leave the solved muzzle along the steered barrel; fast pistol/shotgun rounds use raycasts rather than persistent physics bodies.
