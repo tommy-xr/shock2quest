@@ -56,12 +56,16 @@ for (const [model, template] of [["atek_h",-17],["sg_h",-19]] as const) {
       await game.input.set(`${other}_hand.trigger`,1);
       await game.step({frames:2});
       assert.equal(ammoOf(await game.entities.detail(weapon.id)),ammo,"support trigger cannot fire");
+      assert.equal((await grip()).support!.visual_trigger,1,"reserved support input remains available to finger animation");
       assert.equal((await game.info()).player[empty],null);
       // Pistol/shotgun rounds are fast raycast projectiles, not Rapier bodies.
       // Barrel geometry is checked by the weapon-script solver integration test.
       await game.input.set(`${primary}_hand.trigger`,1);
       await game.step({frames:1});
       assert.equal(ammoOf(await game.entities.detail(weapon.id)),ammo-1,"primary trigger fires while supported");
+      const fired = await grip();
+      assert.equal(fired.visual_trigger,1);
+      assert.deepEqual(fired.finger_curls,fired.grip!.trigger_curls ?? fired.grip!.curls);
       await game.input.set(`${primary}_hand.trigger`,0);
       await game.input.set(`${other}_hand.squeeze`,0);
       await game.step({frames:1});

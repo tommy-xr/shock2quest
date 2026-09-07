@@ -1129,6 +1129,9 @@ export interface HandGrip {
   palm: {x:number;y:number;z:number};
   palm_normal: {x:number;y:number;z:number};
   grip: ResolvedGrip | null;
+  /** Raw analog input used for held finger animation, independent of action reservation. */
+  visual_trigger: number;
+  finger_curls: ResolvedGrip["curls"] | null;
   /** Glove pose following a physical melee body; null uses raw tracked pose. */
   glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
   /** Optional support socket on this owned item; the support hand owns no entity. */
@@ -1140,6 +1143,8 @@ export interface HandGrip {
     pressed: [boolean, boolean];
     blocked: [boolean, boolean];
     step_dt: number;
+    visual_trigger: number;
+    finger_curls: ResolvedGrip["curls"];
     socket_position: ResolvedGrip["offset"];
     controller_position: ResolvedGrip["offset"];
     controller_rotation: ResolvedGrip["rotation"];
@@ -1160,6 +1165,8 @@ export interface ResolvedGrip {
   offset: {x:number;y:number;z:number};
   rotation: {s:number;v:{x:number;y:number;z:number}};
   curls: [number,number,number,number,number];
+  /** Optional pressed pose; omission preserves resting curls at any trigger value. */
+  trigger_curls?: [number,number,number,number,number];
   contacts: (Vec3 | null)[];
   anchor: Vec3;
   score: number;

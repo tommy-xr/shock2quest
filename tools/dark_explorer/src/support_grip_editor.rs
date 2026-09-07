@@ -1,5 +1,5 @@
 //! Support-hand authoring uses the same resource and placement as gameplay.
-use crate::grip_editor::{POSE_PRESETS, default_library_path, persist_json, tweak_slider};
+use crate::grip_editor::{CurlPoseEditor, default_library_path, persist_json, tweak_slider};
 use eframe::egui;
 use shock2vr::{Handedness, vr_support::SupportProfile};
 use std::{collections::BTreeMap, path::PathBuf};
@@ -73,6 +73,7 @@ pub struct SupportEditor {
     save_as: Option<String>,
     message: String,
     rotation_step: f32,
+    curl_editor: CurlPoseEditor,
 }
 impl SupportEditor {
     pub fn new(path: Option<PathBuf>) -> Self {
@@ -85,6 +86,7 @@ impl SupportEditor {
             save_as: None,
             message: String::new(),
             rotation_step: 5.0,
+            curl_editor: CurlPoseEditor::default(),
         }
     }
     pub fn dirty(&self) -> bool {
@@ -98,6 +100,16 @@ impl SupportEditor {
     }
     pub fn profile(&self, model: &str) -> Option<&SupportProfile> {
         self.document.as_ref().ok()?.profiles.get(model)
+    }
+
+    pub fn preview_profile(&self, model: &str) -> Option<SupportProfile> {
+        let mut profile = self.profile(model)?.clone();
+        profile.curls = shock2vr::vr_grip::blended_curls(
+            profile.curls,
+            profile.trigger_curls,
+            self.curl_editor.preview,
+        );
+        Some(profile)
     }
 
     pub fn show(
@@ -169,6 +181,7 @@ impl SupportEditor {
                         palm_anchor: [-0.09, 0.35, 0.02],
                         rotation_degrees: [0.0; 3],
                         curls: [0.4; 5],
+                        trigger_curls: None,
                         grab_radius: 0.07,
                         release_distance: 0.12,
                         max_swing_degrees: 75.0,
@@ -226,20 +239,14 @@ impl SupportEditor {
                             }
                         }
                         columns[2].strong("Support finger curls");
-                        for (name, value) in ["Thumb", "Index", "Middle", "Ring", "Pinky"]
-                            .into_iter()
-                            .zip(&mut profile.curls)
-                        {
-                            tweak_slider(&mut columns[2], name, value, 0.0..=1.0, 0.02, 2);
-                        }
+                        self.curl_editor.show(
+                            &mut columns[2],
+                            &mut profile.curls,
+                            &mut profile.trigger_curls,
+                            "Support trigger preview",
+                        );
                     });
                     ui.horizontal_wrapped(|ui| {
-                        ui.label("Support pose presets");
-                        for (name, curls) in POSE_PRESETS {
-                            if ui.button(name).clicked() {
-                                profile.curls = curls;
-                            }
-                        }
                         ui.label("Rotation nudge");
                         ui.add(egui::Slider::new(&mut self.rotation_step, 0.1..=15.0).suffix("°"));
                     });
@@ -285,6 +292,21 @@ impl SupportEditor {
 mod tests {
     use super::*;
     #[test]
+    fn trigger_preview_does_not_change_saved_support_curls() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("support.json");
+        let bytes = br#"{"atek_h":{"palm_anchor":[-0.2,0.0,0.0],"curls":[0.2,0.2,0.2,0.2,0.2],"trigger_curls":[0.8,0.8,0.8,0.8,0.8],"grab_radius":0.07,"release_distance":0.12,"max_swing_degrees":75.0}}"#;
+        std::fs::write(&path, bytes).unwrap();
+        let mut editor = SupportEditor::new(Some(path.clone()));
+        editor.curl_editor.preview = 0.5;
+        assert_eq!(editor.preview_profile("atek_h").unwrap().curls, [0.5; 5]);
+        assert_eq!(editor.profile("atek_h").unwrap().curls, [0.2; 5]);
+        assert!(!editor.dirty());
+        editor.save().unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
     fn support_edits_round_trip_and_preserve_external_files() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("support.json");
@@ -303,6 +325,7 @@ mod tests {
         assert!(!doc.profiles.contains_key("nanocan"));
         doc.profiles.get_mut("wrench_h").unwrap().rotation_degrees = [20.0, -15.0, 30.0];
         doc.profiles.get_mut("wrench_h").unwrap().palm_anchor[2] = 0.04;
+        doc.profiles.get_mut("wrench_h").unwrap().trigger_curls = Some([0.7; 5]);
         doc.save().unwrap();
         assert_eq!(
             SupportDocument::load(path.clone()).unwrap().profiles,

@@ -197,6 +197,10 @@ impl VirtualHand {
         self.rotation
     }
 
+    pub(crate) fn get_trigger_value(&self) -> f32 {
+        self.trigger_value
+    }
+
     /// A supporting hand tracks its controller but cannot also ray-grab/frob.
     pub(crate) fn update_suppressed(
         &self,
@@ -445,7 +449,7 @@ impl VirtualHand {
                     self.trigger_value,
                     self.squeeze_value,
                     self.get_held_entity().is_some(),
-                    grip.map(|(grip, blend)| (grip.finger_amounts(), blend)),
+                    grip.map(|(grip, blend)| (grip.finger_amounts_at(self.trigger_value), blend)),
                 )
             })
             .unwrap_or_default();

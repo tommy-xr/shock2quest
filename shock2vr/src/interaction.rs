@@ -877,6 +877,10 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn grip_diagnostics(&self) -> serde_json::Value {
+        let visual_triggers = [
+            self.left_hand.get_trigger_value(),
+            self.right_hand.get_trigger_value(),
+        ];
         serde_json::Value::Array(self.fitted_grips.iter().enumerate().filter_map(|(i, grip)| {
             let grip=grip.as_ref()?;
             let support = self.support_preview.as_ref().filter(|c| c.primary == i && c.entity == grip.entity).map(|c| {
@@ -893,10 +897,13 @@ impl PlayerInteraction for VrInteraction {
                     "model_position": c.model_pose.position, "model_rotation": c.model_pose.rotation,
                     "primary_palm": c.primary_palm, "primary_anchor": c.primary_anchor,
                     "support_anchor": c.anchor, "grab_radius": c.profile.grab_radius,
+                    "visual_trigger": visual_triggers[1-i],
+                    "finger_curls": crate::vr_grip::blended_curls(c.profile.curls, c.profile.trigger_curls, visual_triggers[1-i]),
                     "release_distance": c.profile.release_distance, "max_swing_degrees": c.profile.max_swing_degrees
                 })
             });
             Some(serde_json::json!({"glove_pose": self.visual_hands[i], "support": support, "hand": if i == 0 {"left"} else {"right"}, "entity_id": grip.entity.inner() as i32,
+                "visual_trigger": visual_triggers[i], "finger_curls": grip.resolved.as_ref().map(|g| g.curls_at(visual_triggers[i])),
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
                 "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal)}))
@@ -1067,6 +1074,7 @@ impl PlayerInteraction for VrInteraction {
                 .resolved
                 .clone()?;
             grip.curls = self.support_preview.as_ref()?.profile.curls;
+            grip.trigger_curls = self.support_preview.as_ref()?.profile.trigger_curls;
             Some((1 - support.primary, grip))
         });
         for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
@@ -1393,6 +1401,7 @@ mod tests {
                 palm_anchor: [0.0, 0.2, 0.0],
                 rotation_degrees: [0.0; 3],
                 curls: [0.5; 5],
+                trigger_curls: None,
                 grab_radius: 0.07,
                 release_distance: 0.12,
                 max_swing_degrees: 75.0,
@@ -1408,6 +1417,7 @@ mod tests {
                 offset: vec3(0.0, 0.0, 0.0),
                 rotation: identity(),
                 curls: [0.5; 5],
+                trigger_curls: None,
                 contacts: [None; 5],
                 anchor: [0.0; 3],
                 score: 0.0,

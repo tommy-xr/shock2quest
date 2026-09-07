@@ -86,3 +86,22 @@ active document when missing. This also permits a custom weapon override in the
 pickup resource: a valid matching entry there takes precedence over the shipped
 weapon default. A separate Save As file must be copied to a runtime resource path
 to be loaded by gameplay.
+
+## Rest and Trigger pressed poses
+
+The finger controls offer **Rest** and **Trigger pressed** for primary and support
+hands. Select Trigger pressed, then **Customize pressed pose** to start with a
+copy of Rest. Adjust any finger: a gun can curl its index while a hypo can press
+with its thumb. **Use Rest for both** removes the pressed override.
+
+The **Trigger preview** slider blends the two poses without changing the saved
+values. Item position, wrist rotation, and item scale are shared by both poses.
+Copy/paste and mirroring carry both finger poses. Primary poses save optional
+`trigger_curls` in the pickup/weapon library; support poses save it in
+`vr-support-grips.json`. If absent, the resting pose remains unchanged at any
+trigger value. Existing resources therefore keep their authored fit.
+
+Gameplay blends using analog controller trigger input. Fire/use thresholds are
+unchanged, and the supporting hand can animate without firing or using an item.
+The debug runtime's hand-grip diagnostics report `visual_trigger` and
+`finger_curls` for the primary hand and its support hand.
