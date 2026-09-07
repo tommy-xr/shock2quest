@@ -34,13 +34,14 @@ const HAND_POSITION: Vector3<f32> = vec3(0.0, 2.6, 1.0);
 
 /// The owner's grip test cases: a mug (a handle its bounding box cannot see),
 /// a printed magazine (a slab), a clip (a small box), a basketball (bigger
-/// than the palm), and the four guns whose `_h` models range from an authored
-/// pistol grip to no grip at all.
+/// than the palm), the belt card (the thinnest slab there is, and what the
+/// body frame hangs on the hip), and the four guns whose `_h` models range
+/// from an authored pistol grip to no grip at all.
 ///
 /// `magci` is one of the six magazine covers the Magazines template picks
 /// from; they share a mesh, so any of them is the slab case.
 const GRIP_TEST_ITEMS: &[&str] = &[
-    "mug", "magci", "ammoss", "hamball", "atek_h", "sg_h", "fsn_h", "al_h",
+    "mug", "magci", "ammoss", "hamball", "scipass", "atek_h", "sg_h", "fsn_h", "al_h",
 ];
 
 struct GripHooks {

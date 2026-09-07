@@ -75,3 +75,63 @@ test(
     assert.equal((await game.info()).player.hand_affordance.right_grip, null);
   },
 );
+
+test(
+  "VR: a held mug is wrapped by the fingers, not answered with a canned grip",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "medsci1.mis",
+      debugFlags: ["--vr"],
+    });
+    await game.step({ frames: 10 });
+
+    // A plain pickup: no authored grip profile, so its seat and its whole
+    // finger wrap are measured off its own geometry.
+    const { entities } = await game.entities.list({ filter: "Mug" });
+    const mug = entities[0];
+    assert.ok(mug, "medsci1 should have a mug");
+
+    // Stand next to it and put the hand on it. `right_hand.position` is
+    // pawn-local, and the pawn is placed with identity rotation by teleport.
+    const [mx, my, mz] = mug.position;
+    await game.player.teleport({ x: mx - 1.2, y: my, z: mz });
+    await game.step({ frames: 30 });
+    const pawn = (await game.info()).player.position;
+    await game.input.set("right_hand.position", [
+      mx - pawn[0],
+      my - pawn[1],
+      mz - pawn[2],
+    ]);
+    await game.input.set("right_hand.squeeze", 1.0);
+    await game.step({ frames: 10 });
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      mug.id,
+      "the mug should be grabbed by the right hand",
+    );
+
+    const grip = (await game.info()).player.hand_affordance.right_grip;
+    assert.ok(grip, "a held mug should report a fitted grip");
+    assert.equal(grip.family, "cylindrical");
+
+    // The point of the open-palm seat: the four wrapping fingers each stop on
+    // the mug's own surface. A curl pinned at either end means the fit
+    // measured nothing and handed back a fallback - which is what #1385
+    // shipped, a closed fist beside the mug.
+    for (const finger of ["index", "middle", "ring", "pinky"] as const) {
+      assert.ok(
+        grip[finger] > 0 && grip[finger] < 1,
+        `${finger} should stop on the mug, got ${grip[finger]}`,
+      );
+    }
+    // The thumb is the exception, and deliberately so: it lies on whatever the
+    // open palm carries, so it is at contact before it curls at all and the
+    // measured seat's fallback leaves it open rather than closing it through
+    // the mug.
+    assert.ok(
+      grip.thumb >= 0 && grip.thumb <= 1,
+      `thumb curl out of range: ${grip.thumb}`,
+    );
+  },
+);
