@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use cgmath::{EuclideanSpace, Matrix4, Point3, Quaternion, Transform, Vector3, Zero};
+use cgmath::{EuclideanSpace, Matrix4, Point3, Quaternion, Transform, Vector3};
 use dark::{
     glb_model::GlbModel,
     importers::{GLB_MODELS_IMPORTER, TEXTURE_IMPORTER, VR_CONTACT_MESH_IMPORTER, VrContactMesh},
@@ -180,6 +180,8 @@ pub struct GloveRenderer {
     /// fit against. The fit is a one-off per held model, never a per-frame
     /// cost.
     fits: HashMap<GripKey, Option<FittedGrip>>,
+    /// The [`crate::vr_grips::generation`] `fits` was solved against.
+    fits_generation: u64,
 }
 
 /// An authored pose a hand can be shown in when nothing analog is driving it -
@@ -232,6 +234,7 @@ impl GloveRenderer {
             point: hand_pose::point_right_hand(),
             materials,
             fits: HashMap::new(),
+            fits_generation: crate::vr_grips::generation(),
         })
     }
 
@@ -289,11 +292,6 @@ impl GloveRenderer {
     /// [`crate::hand_seat`] seats unprofiled items against it. It is a constant
     /// of the rig, so that module pins the measurement rather than paying for a
     /// posed glove; [`glove_palm_anchor`] is how it is re-measured.
-    #[cfg(test)]
-    pub fn palm_anchor(&mut self) -> Vector3<f32> {
-        palm_anchor_of(&mut self.model, &self.retarget, &self.open, &self.fist)
-    }
-
     /// The fitted grip for a model held in `handedness`, solved once and
     /// remembered - the *miss* included, so a held model with no mesh does not
     /// re-enter the asset cache's miss path on every frame it is held.
@@ -308,6 +306,13 @@ impl GloveRenderer {
         gun_scale: f32,
         asset_cache: &mut AssetCache,
     ) -> Option<FittedGrip> {
+        // A tuner edit re-seats the item, so everything solved against the old
+        // seat is stale. Cheaper to drop the lot than to track what moved.
+        let generation = crate::vr_grips::generation();
+        if self.fits_generation != generation {
+            self.fits.clear();
+            self.fits_generation = generation;
+        }
         let key = GripKey::new(model_name, handedness, gun_scale);
         if let Some(cached) = self.fits.get(&key) {
             return *cached;
@@ -331,6 +336,12 @@ impl GloveRenderer {
         let mesh = contact_mesh(model_name, handedness, gun_scale, asset_cache)?;
         let family = vr_config::grip_family(model_name)
             .or_else(|| mesh.extents().map(hand_fit::family_from_extents))?;
+
+        // An authored per-finger curl is the last word - the escape hatch for a
+        // shape the contact sweep reads wrong (the mug's handle).
+        if let Some(amounts) = vr_config::authored_finger_curls(model_name) {
+            return Some(FittedGrip { family, amounts });
+        }
 
         let started = std::time::Instant::now();
         let mut rig = GloveRig {
@@ -507,6 +518,39 @@ pub struct FittedGrip {
     pub amounts: FingerAmounts,
 }
 
+/// Measure `model_name`'s seat off its own geometry, if it still needs one.
+///
+/// The placement path ([`vr_config::get_vr_hand_model_adjustments_from_entity`],
+/// called while the hands update) has no asset cache, so the answer is measured
+/// here - where the mesh is reachable - and left in [`crate::vr_grips`] for it
+/// to read. Called before the hands move, so a pickup is seated on the frame it
+/// is grabbed rather than the one after.
+pub fn warm_held_seat(model_name: &str, asset_cache: &mut AssetCache) {
+    if !crate::vr_grips::needs_measurement(model_name) {
+        return;
+    }
+    let Some(triangles) = asset_cache
+        .get_opt::<_, VrContactMesh, _>(&VR_CONTACT_MESH_IMPORTER, &format!("{model_name}.BIN"))
+    else {
+        return;
+    };
+    // The box of the geometry as it is *drawn*: the held scale is part of how
+    // deep the item sits in the palm.
+    let scale = crate::vr_grips::render_scale(model_name);
+    let mut min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut max = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for triangle in &triangles.0 {
+        for corner in triangle {
+            let point = corner.to_vec() * scale;
+            min = Vector3::new(min.x.min(point.x), min.y.min(point.y), min.z.min(point.z));
+            max = Vector3::new(max.x.max(point.x), max.y.max(point.y), max.z.max(point.z));
+        }
+    }
+    if min.x.is_finite() {
+        crate::vr_grips::remember_measured_seat(model_name, min, max);
+    }
+}
+
 /// The item's render mesh in the glove's own hand space, or `None` when there
 /// is nothing to close against - a missing asset, or a skinned rig (the melee
 /// `_h` set, which draws its own arm anyway).
@@ -605,12 +649,15 @@ pub fn glove_material(
 /// the rig rather than something a seat can afford to pose a glove for, so that
 /// module writes the number down and `the_palm_anchor_matches_the_glove_rig`
 /// holds it to this measurement.
+#[cfg(test)]
 fn palm_anchor_of(
     model: &mut GlbModel,
     retarget: &HandPoseRetarget,
     open: &Pose,
     fist: &Pose,
 ) -> Vector3<f32> {
+    use cgmath::Zero;
+
     let mut rig = GloveRig {
         model,
         retarget,

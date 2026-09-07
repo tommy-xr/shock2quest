@@ -2850,6 +2850,20 @@ impl MissionCore {
         let _ = self.world.remove_unique::<Time>();
         self.world.add_unique(time.clone());
 
+        // Where a held model sits in the hand is authored data, plus a seat
+        // measured off any model the data leaves out. Both are resolved here,
+        // before the hands place anything: the placement path has no asset
+        // cache, so the measurement has to happen where the mesh is reachable.
+        crate::vr_grips::ensure_loaded(asset_cache);
+        let (left_held, right_held) = self.interaction.held_entities();
+        for entity_id in [left_held, right_held].into_iter().flatten() {
+            if let Some((model_name, _)) =
+                crate::vr_config::held_model_and_scale(&self.world, entity_id)
+            {
+                crate::hand_glove::warm_held_seat(&model_name, asset_cache);
+            }
+        }
+
         // Old saves can legitimately restore a zero-HP player even though
         // PlayerLifeState itself is runtime-only. Enter death on the first
         // update in that case, then advance any pending QBR reconstruction.

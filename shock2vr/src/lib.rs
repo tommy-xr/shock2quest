@@ -52,6 +52,7 @@ pub mod ui;
 mod util;
 mod virtual_hand;
 mod vr_config;
+pub mod vr_grips;
 /// Re-exported (the module itself stays private) so the `melee_grip` example
 /// can re-measure the melee `_h` contact offsets off the shipped rigs with the
 /// same maths the wield uses.

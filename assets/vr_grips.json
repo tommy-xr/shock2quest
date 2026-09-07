@@ -1,0 +1,112 @@
+{
+  "al_h": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.0, 0.206, -0.442],
+    "mirror": "flip_x"
+  },
+  "al_w": {
+    "rotation_deg": [0.0, -90.0, 0.0]
+  },
+  "amp_h": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.0, 0.0, 0.4],
+    "mirror": "flip_x"
+  },
+  "amp_w": {
+    "rotation_deg": [0.0, -90.0, 0.0]
+  },
+  "ar15_h": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.0, 0.123, -0.469],
+    "mirror": "flip_x"
+  },
+  "ar15_w": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [-0.19, 0.0, -0.045]
+  },
+  "atek_h": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.0, 0.073, 0.02],
+    "mirror": "flip_x"
+  },
+  "atek_w": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.02, 0.04, -0.045]
+  },
+  "battery": {
+    "rotation_deg": [0.0, 180.0, 0.0]
+  },
+  "batteryb": {
+    "rotation_deg": [0.0, 180.0, 0.0]
+  },
+  "empgun": {
+    "rotation_deg": [0.0, -90.0, 0.0]
+  },
+  "empgun_h": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.0, 0.083, -0.473],
+    "mirror": "flip_x"
+  },
+  "fsn_h": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.0, 0.31, -0.516],
+    "mirror": "flip_x"
+  },
+  "fsn_w": {
+    "rotation_deg": [0.0, -90.0, 0.0]
+  },
+  "gameboy": {
+    "rotation_deg": [0.0, 180.0, 0.0]
+  },
+  "gamecart": {
+    "rotation_deg": [0.0, 180.0, 0.0]
+  },
+  "gren_h": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.0, 0.111, -0.96],
+    "mirror": "flip_x"
+  },
+  "gren_w": {
+    "rotation_deg": [0.0, -90.0, 0.0]
+  },
+  "lasehand": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.0, 0.096, 0.19],
+    "mirror": "flip_x"
+  },
+  "laser": {
+    "rotation_deg": [0.0, -90.0, 0.0]
+  },
+  "nanocan": {
+    "rotation_deg": [0.0, 180.0, 0.0]
+  },
+  "sfg_h": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.0, 0.466, -0.553],
+    "mirror": "flip_x"
+  },
+  "sfg_w": {
+    "rotation_deg": [0.0, -90.0, 0.0]
+  },
+  "sg_h": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.0, -0.025, -0.693],
+    "mirror": "flip_x"
+  },
+  "sg_w": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [-0.21, 0.0, -0.045]
+  },
+  "viro_h": {
+    "rotation_deg": [0.0, -90.0, 0.0],
+    "offset": [0.0, 0.111, -0.71],
+    "mirror": "flip_x"
+  },
+  "viro_w": {
+    "rotation_deg": [0.0, -90.0, 0.0]
+  },
+  "wrench_w": {
+    "rotation_deg": [0.0, 90.0, 0.0],
+    "offset": [0.0, 0.0, -0.4]
+  }
+}

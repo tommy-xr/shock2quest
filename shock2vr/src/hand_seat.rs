@@ -11,7 +11,7 @@
 //! the fingers**. Units are world units (1 ~ 0.762 m), the space the seat
 //! offsets in [`crate::vr_grips`] are written in.
 
-use cgmath::{InnerSpace, Matrix3, Quaternion, SquareMatrix, Vector3, vec3};
+use cgmath::{Matrix3, Quaternion, SquareMatrix, Vector3, vec3};
 
 use crate::hand_fit::{self, GripFamily};
 
@@ -118,7 +118,7 @@ fn rotated_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgmath::{Deg, Rotation, Rotation3};
+    use cgmath::{Deg, InnerSpace, Rotation, Rotation3};
 
     /// Metres in the world units the hand frame is measured in.
     fn meters(m: f32) -> f32 {
