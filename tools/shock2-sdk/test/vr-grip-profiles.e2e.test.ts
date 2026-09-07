@@ -16,6 +16,16 @@ import { cycleToWeapon } from "./helpers/weapon.js";
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
+/**
+ * Out of the palm, in the glove's hand space (`shock2vr::hand_seat`'s
+ * `PALM_NORMAL`). The palm plane is oblique to every hand axis - the palm faces
+ * roughly -X, not -Y - so "the seat put it against the palm" is a projection
+ * onto this, not a sign test on one coordinate.
+ */
+const PALM_NORMAL = [-0.97836, 0.15474, -0.13728];
+
+const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
 /** Offsets round-trip through `f32`, so compare them with a tolerance. */
 function assertVecClose(actual: number[] | undefined, expected: number[], what: string) {
   assert.ok(actual, `${what} should be present`);
@@ -49,8 +59,8 @@ test(
     assert.ok(Math.abs(mug.scale - 0.65) < 1e-5, `held at ${mug.scale}, expected 0.65`);
     assert.equal(mug.family, "cylindrical", "a mug-sized box is gripped");
     assert.ok(
-      mug.offset[1] < 0,
-      `a measured seat hangs below the palm, got ${mug.offset[1]}`,
+      dot(mug.offset, PALM_NORMAL) > 0,
+      `a measured seat should sit out of the palm, got ${mug.offset}`,
     );
 
     // Nudge it: the readout moves, and the change is merged rather than
