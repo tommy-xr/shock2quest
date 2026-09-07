@@ -50,6 +50,8 @@ pub struct InteractionContext<'a> {
     /// The clip on the ammo pouch's hip, or `None` when the pouch is empty (no
     /// gun wielded, or nothing compatible in reserve) and nothing is drawn.
     pub ammo_pouch: Option<crate::ammo_pouch::PouchClip>,
+    /// The weapon riding the hip holster, `None` when the slot is empty.
+    pub holster: Option<crate::holster::HolsteredWeapon>,
     /// What owns each hand this frame (a body anchor, or the belt card it is
     /// carrying), indexed by `vr_config::hand_slot`. `Some` claims the hand:
     /// its grip belongs to the body rather than to whatever its ray crossed.
@@ -218,6 +220,7 @@ pub struct VrInteraction {
     /// so nothing else in the scene would draw it.
     belt_card: std::cell::Cell<Option<crate::belt_card::CardPlacement>>,
     ammo_pouch: std::cell::RefCell<Option<crate::ammo_pouch::PouchClip>>,
+    holster: std::cell::RefCell<Option<crate::holster::HolsteredWeapon>>,
     /// The grip each hand's last render fitted, indexed by
     /// `vr_config::hand_slot`. Written where the fit is solved (render, which
     /// owns the glove and the asset cache) and read by the debug readout.
@@ -237,6 +240,7 @@ impl VrInteraction {
             body_frame: std::cell::Cell::new(None),
             belt_card: std::cell::Cell::new(None),
             ammo_pouch: std::cell::RefCell::new(None),
+            holster: std::cell::RefCell::new(None),
             fitted_grips: RefCell::new([None, None]),
             two_hand: crate::two_hand_grip::TwoHandGrip::default(),
         }
@@ -337,6 +341,7 @@ impl PlayerInteraction for VrInteraction {
         self.body_frame.set(ctx.body_frame);
         self.belt_card.set(ctx.belt_card);
         *self.ammo_pouch.borrow_mut() = ctx.ammo_pouch.clone();
+        *self.holster.borrow_mut() = ctx.holster.clone();
 
         // The two-hand resolve runs BEFORE either hand updates, because both
         // hands need its answer on the same frame: the support hand to know its
@@ -498,6 +503,20 @@ impl PlayerInteraction for VrInteraction {
                 asset_cache,
                 &clip.model,
                 crate::ammo_pouch::pouch_transform(frame, &clip.model),
+            ));
+        }
+
+        // The hip holster: the weapon a grip at the thigh would draw, hung in
+        // its authored holstered pose. Drawn only when the slot has one, so the
+        // thigh shows exactly what the gesture would produce.
+        if let (Some(weapon), Some(frame)) = (
+            self.holster.borrow().as_ref(),
+            self.body_frame.get().as_ref(),
+        ) {
+            objs.extend(crate::body_frame::worn_scene_objects(
+                asset_cache,
+                &weapon.model,
+                crate::holster::holster_transform(frame, &weapon.model),
             ));
         }
 
@@ -725,6 +744,7 @@ mod tests {
             body_frame: None,
             belt_card: None,
             ammo_pouch: None,
+            holster: None,
             anchor_claim: [None, None],
         }
     }

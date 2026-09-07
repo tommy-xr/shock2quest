@@ -43,10 +43,20 @@ const LATERAL_OFFSET: f32 = meters(0.18);
 const HIP_RADIUS: f32 = meters(0.09);
 const SHOULDER_RADIUS: f32 = meters(0.15);
 
+/// Reach radius of the thigh holster. Between the two: the holster is a
+/// deliberate reach for a specific object like a hip, but it hangs off a leg
+/// the player cannot see and has no tracked pose for, so it is given more room.
+const HOLSTER_RADIUS: f32 = meters(0.12);
+
 /// Minimum vertical gap between the hips and the shoulders, so a deep crouch
 /// (which lowers the eye, and with it both anchors) can never bring the two
 /// zones into contact and make "which anchor is this" a matter of rounding.
 const ANCHOR_SEPARATION: f32 = HIP_RADIUS + SHOULDER_RADIUS + meters(0.05);
+
+/// The same guarantee between the holster and the hip above it. Enforced as a
+/// clamp rather than trusted to the height fraction, because that fraction is a
+/// live dev param: no setting of it may make "which anchor is this" ambiguous.
+const HOLSTER_SEPARATION: f32 = HIP_RADIUS + HOLSTER_RADIUS + meters(0.05);
 
 /// Time constant of the yaw low-pass, in seconds. Long enough that a glance
 /// leaves the body where it was, short enough that turning to walk brings the
@@ -62,6 +72,18 @@ pub enum BodyAnchor {
     Pouch,
     /// Either shoulder: the backpack (stow what you hold, draw what you stowed).
     Shoulder(Handedness),
+    /// The dominant thigh: the one holster slot, which holds one weapon.
+    Holster,
+}
+
+/// Which hip the holster hangs beside this frame.
+pub fn holster_side() -> Handedness {
+    let dominant = crate::vr_config::dominant_hand();
+    if crate::dev_params::get_bool(crate::dev_params::HOLSTER_SIDE_FLIPPED) {
+        crate::vr_config::other_hand(dominant)
+    } else {
+        dominant
+    }
 }
 
 /// This frame's resolved body anchors, in world space.
@@ -69,6 +91,7 @@ pub enum BodyAnchor {
 pub struct BodyFrame {
     belt: Vector3<f32>,
     pouch: Vector3<f32>,
+    holster: Vector3<f32>,
     /// Indexed by [`crate::vr_config::hand_slot`].
     shoulders: [Vector3<f32>; 2],
     rotation: Quaternion<f32>,
@@ -83,6 +106,11 @@ impl BodyFrame {
     /// Where the ammo pouch sits.
     pub fn pouch(&self) -> Vector3<f32> {
         self.pouch
+    }
+
+    /// Where the weapon holster hangs.
+    pub fn holster(&self) -> Vector3<f32> {
+        self.holster
     }
 
     /// Where one shoulder socket sits.
@@ -105,6 +133,9 @@ impl BodyFrame {
         }
         if (position - self.pouch).magnitude2() <= HIP_RADIUS * HIP_RADIUS {
             return Some(BodyAnchor::Pouch);
+        }
+        if (position - self.holster).magnitude2() <= HOLSTER_RADIUS * HOLSTER_RADIUS {
+            return Some(BodyAnchor::Holster);
         }
         for hand in [Handedness::Left, Handedness::Right] {
             if (position - self.shoulder(hand)).magnitude2() <= SHOULDER_RADIUS * SHOULDER_RADIUS {
@@ -181,11 +212,23 @@ impl BodyFrameTracker {
             (floor_y + eye_above_floor * BELT_HEIGHT_FRACTION).min(shoulder_y - ANCHOR_SEPARATION);
         let at = |y: f32| vec3(ground.x, y, ground.z);
 
+        // The holster hangs off the same body, a clamped distance below the hip
+        // on its own side, so no dev-param setting can slide it into the pouch.
+        let holster_y = (floor_y
+            + eye_above_floor * crate::dev_params::get(crate::dev_params::HOLSTER_HEIGHT_FRACTION))
+        .min(belt_y - HOLSTER_SEPARATION);
+        let holster_out = match holster_side() {
+            Handedness::Right => 1.0,
+            Handedness::Left => -1.0,
+        } * meters(crate::dev_params::get(crate::dev_params::HOLSTER_LATERAL));
+        let holster_forward = meters(crate::dev_params::get(crate::dev_params::HOLSTER_FORWARD));
+
         let shoulder = at(shoulder_y) + back * SHOULDER_BEHIND;
         BodyFrame {
             // The card rides the left hip, the ammo pouch the right.
             belt: at(belt_y) - right * LATERAL_OFFSET,
             pouch: at(belt_y) + right * LATERAL_OFFSET,
+            holster: at(holster_y) + right * holster_out - back * holster_forward,
             shoulders: [
                 shoulder - right * LATERAL_OFFSET,
                 shoulder + right * LATERAL_OFFSET,
@@ -243,6 +286,11 @@ pub enum AnchorGesture {
     TakeClip(Handedness),
     /// Opened over the pouch holding a clip: its rounds go back to the reserve.
     ReturnClip(Handedness),
+    /// Opened at the holster holding a weapon: it goes into the slot.
+    Holster(Handedness),
+    /// Gripped at an occupied holster with an empty hand: the weapon comes out
+    /// into THAT hand.
+    Unholster(Handedness),
 }
 
 /// What one hand is doing this frame, for [`AnchorGestures::update`].
@@ -269,6 +317,12 @@ pub struct HandAnchorInput {
     pub can_stow: bool,
     /// Whether there is a stowed weapon left to draw.
     pub can_draw: bool,
+    /// Whether what the hand holds is a weapon the holster takes - a gun or a
+    /// melee weapon, but not the psi amp and not an ordinary pickup.
+    pub holds_weapon: bool,
+    /// Whether the holster already has a weapon in it. One slot: an occupied
+    /// holster refuses a second weapon, and an empty one has nothing to draw.
+    pub holster_occupied: bool,
     /// Whether the card is actually on the belt to be taken: the player has
     /// collected a credential AND no hand is already carrying it. There is one
     /// card, so a hand cannot take it out of the other hand's grip.
@@ -325,11 +379,13 @@ impl AnchorGestures {
             // Letting go is what puts something away.
             AnchorGesture::Stow(_)
             | AnchorGesture::ReturnCard(_)
-            | AnchorGesture::ReturnClip(_) => was_squeezing && !squeezing,
+            | AnchorGesture::ReturnClip(_)
+            | AnchorGesture::Holster(_) => was_squeezing && !squeezing,
             // Closing on it is what takes something out.
-            AnchorGesture::Draw(_) | AnchorGesture::TakeCard(_) | AnchorGesture::TakeClip(_) => {
-                !was_squeezing && squeezing
-            }
+            AnchorGesture::Draw(_)
+            | AnchorGesture::TakeCard(_)
+            | AnchorGesture::TakeClip(_)
+            | AnchorGesture::Unholster(_) => !was_squeezing && squeezing,
         };
         (fires && available).then_some(gesture)
     }
@@ -386,6 +442,17 @@ impl AnchorGestures {
                     AnchorGesture::TakeClip(input.hand),
                     input.pouch_clip_available,
                 ),
+                // One slot, weapons only. A full hand is always answered - with
+                // amber when the slot is taken or the thing held is not a
+                // weapon - so the light says the holster will not have it
+                // rather than leaving the hand to guess.
+                BodyAnchor::Holster if input.holding => (
+                    AnchorGesture::Holster(input.hand),
+                    input.holds_weapon && !input.holster_occupied && input.can_stow,
+                ),
+                BodyAnchor::Holster => {
+                    (AnchorGesture::Unholster(input.hand), input.holster_occupied)
+                }
             },
         )
     }
@@ -554,6 +621,7 @@ mod tests {
             let centers = [
                 (frame.belt(), HIP_RADIUS),
                 (frame.pouch(), HIP_RADIUS),
+                (frame.holster(), HOLSTER_RADIUS),
                 (frame.shoulder(Handedness::Left), SHOULDER_RADIUS),
                 (frame.shoulder(Handedness::Right), SHOULDER_RADIUS),
             ];
@@ -578,6 +646,7 @@ mod tests {
 
         assert_eq!(frame.anchor_at(frame.belt()), Some(BodyAnchor::Belt));
         assert_eq!(frame.anchor_at(frame.pouch()), Some(BodyAnchor::Pouch));
+        assert_eq!(frame.anchor_at(frame.holster()), Some(BodyAnchor::Holster));
         for hand in [Handedness::Left, Handedness::Right] {
             assert_eq!(
                 frame.anchor_at(frame.shoulder(hand)),
@@ -606,6 +675,8 @@ mod tests {
             pouch_clip_available: true,
             can_stow: true,
             can_draw: true,
+            holds_weapon: true,
+            holster_occupied: false,
             card_on_belt: true,
         }
     }
@@ -1000,6 +1071,146 @@ mod tests {
             holds_clip: false,
             squeeze: 1.0,
             ..at(POUCH)
+        };
+        gestures.update(&full);
+        assert_eq!(
+            gestures.claim(&full),
+            Some(HandClaim::Anchor(HandAffordance::Blocked))
+        );
+        assert_eq!(
+            gestures.update(&HandAnchorInput {
+                squeeze: 0.0,
+                ..full
+            }),
+            None
+        );
+    }
+
+    const HOLSTER: Option<BodyAnchor> = Some(BodyAnchor::Holster);
+
+    /// The holster hangs below the belt on the dominant side, and a head that
+    /// tilts or rolls does not take it with it - the frame is yaw-only, so a
+    /// player looking down at their own thigh finds the holster where they left
+    /// it rather than swung round with their gaze.
+    #[test]
+    fn the_holster_rides_the_dominant_thigh_and_ignores_head_tilt() {
+        let mut tracker = BodyFrameTracker::default();
+        let level = tracker.update(&standing(Quaternion::from_angle_y(Deg(0.0))));
+
+        let right = level.rotation().rotate_vector(vec3(1.0, 0.0, 0.0));
+        assert!(
+            (level.holster() - level.pouch()).dot(right) > 0.0,
+            "the holster should sit outboard of the pouch on the same (right) side"
+        );
+        assert!(
+            level.holster().y < level.belt().y,
+            "the holster {} should hang below the belt {}",
+            level.holster().y,
+            level.belt().y
+        );
+
+        // Same yaw, head pitched down at the thigh and rolled: pitch and roll
+        // are not readings the frame takes.
+        let mut tilted = standing(
+            Quaternion::from_angle_y(Deg(0.0))
+                * Quaternion::from_angle_x(Deg(-70.0))
+                * Quaternion::from_angle_z(Deg(25.0)),
+        );
+        tilted.dt = STEP;
+        let looked_down = tracker.update(&tilted);
+        assert!(
+            (looked_down.holster() - level.holster()).magnitude() < 1e-4,
+            "a tilted head moved the holster from {:?} to {:?}",
+            level.holster(),
+            looked_down.holster()
+        );
+    }
+
+    /// Opening a hand full of weapon at the holster docks it; closing an empty
+    /// one there draws it back.
+    #[test]
+    fn the_holster_takes_a_weapon_and_gives_it_back() {
+        let mut gestures = AnchorGestures::default();
+        let mut holding = HandAnchorInput {
+            holding: true,
+            squeeze: 1.0,
+            ..at(HOLSTER)
+        };
+        assert_eq!(gestures.update(&holding), None, "still gripping");
+        holding.squeeze = 0.0;
+        assert_eq!(
+            gestures.update(&holding),
+            Some(AnchorGesture::Holster(Handedness::Right))
+        );
+
+        let mut empty = HandAnchorInput {
+            holster_occupied: true,
+            ..at(HOLSTER)
+        };
+        assert_eq!(gestures.update(&empty), None, "an open hand does not draw");
+        empty.squeeze = 1.0;
+        assert_eq!(
+            gestures.update(&empty),
+            Some(AnchorGesture::Unholster(Handedness::Right))
+        );
+    }
+
+    /// One slot. A second weapon is recognised and refused - amber, not a
+    /// silent nothing - and an empty slot has nothing to draw.
+    #[test]
+    fn an_occupied_holster_refuses_a_second_weapon() {
+        use crate::hand_affordance::HandAffordance;
+
+        let mut gestures = AnchorGestures::default();
+        let full = HandAnchorInput {
+            holding: true,
+            holster_occupied: true,
+            squeeze: 1.0,
+            ..at(HOLSTER)
+        };
+        gestures.update(&full);
+        assert_eq!(
+            gestures.claim(&full),
+            Some(HandClaim::Anchor(HandAffordance::Blocked))
+        );
+        assert_eq!(
+            gestures.update(&HandAnchorInput {
+                squeeze: 0.0,
+                ..full
+            }),
+            None,
+            "an occupied holster must not take a second weapon"
+        );
+
+        let mut gestures = AnchorGestures::default();
+        let empty = at(HOLSTER);
+        gestures.update(&empty);
+        assert_eq!(
+            gestures.claim(&empty),
+            Some(HandClaim::Anchor(HandAffordance::Blocked)),
+            "nothing holstered means nothing to draw"
+        );
+        assert_eq!(
+            gestures.update(&HandAnchorInput {
+                squeeze: 1.0,
+                ..empty
+            }),
+            None
+        );
+    }
+
+    /// Weapons only: a hand full of anything else says so at the holster and
+    /// keeps its ordinary release.
+    #[test]
+    fn the_holster_refuses_what_is_not_a_weapon() {
+        use crate::hand_affordance::HandAffordance;
+
+        let mut gestures = AnchorGestures::default();
+        let full = HandAnchorInput {
+            holding: true,
+            holds_weapon: false,
+            squeeze: 1.0,
+            ..at(HOLSTER)
         };
         gestures.update(&full);
         assert_eq!(

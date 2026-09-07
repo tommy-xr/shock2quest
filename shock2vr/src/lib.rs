@@ -9,6 +9,7 @@ pub mod hand_fit;
 pub mod hand_pose;
 pub mod hand_pose_library;
 pub mod hit_feedback;
+pub mod holster;
 pub mod input;
 pub mod input_context;
 pub mod install;

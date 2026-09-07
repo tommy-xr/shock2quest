@@ -3745,6 +3745,7 @@ impl MissionCore {
         if let Some(frame) = body_frame {
             let can_stow = backpack_accepts_deposit(&self.world);
             let can_draw = self.stowed_weapon_to_draw().is_some();
+            let holstered = self.holstered_weapon_to_draw();
             // One card: it is on the belt only while no hand is carrying it.
             let card_on_belt = self.belt_card_hand.is_none()
                 && self
@@ -3783,6 +3784,8 @@ impl MissionCore {
                     pouch_clip_available: pouch_offer.is_some(),
                     can_stow,
                     can_draw,
+                    holds_weapon: held.is_some_and(|item| self.can_holster(item)),
+                    holster_occupied: holstered.is_some(),
                     card_on_belt,
                 };
                 anchor_gestures.extend(self.anchor_gestures.update(&input));
@@ -3845,6 +3848,46 @@ impl MissionCore {
                         });
                     }
                 }
+                crate::body_frame::AnchorGesture::Holster(hand) => {
+                    // The weapon goes into the pack, exactly as a shoulder stow
+                    // does - so it is the same entity, with its own magazine and
+                    // condition - and the slot records only which archetype is
+                    // on the thigh.
+                    if let Some(entity_id) = [left_hand_held, right_hand_held][hand_slot(hand)] {
+                        if let Some(class_template_id) =
+                            crate::scripts::script_util::entity_class_template_id(
+                                &self.world,
+                                entity_id,
+                            )
+                        {
+                            store.push((entity_id, None));
+                            if let Ok(mut quests) = self
+                                .world
+                                .borrow::<shipyard::UniqueViewMut<crate::quest_info::QuestInfo>>()
+                            {
+                                quests.set_holstered_weapon(Some(class_template_id));
+                            }
+                        }
+                    }
+                }
+                crate::body_frame::AnchorGesture::Unholster(hand) => {
+                    // The slot empties as the weapon leaves it, so a second grip
+                    // at the thigh finds nothing rather than the weapon now in
+                    // the hand.
+                    if let Some(entity_id) = self.holstered_weapon_to_draw() {
+                        effects.push(Effect::GrabEntity {
+                            entity_id,
+                            hand,
+                            current_parent_id: None,
+                        });
+                        if let Ok(mut quests) = self
+                            .world
+                            .borrow::<shipyard::UniqueViewMut<crate::quest_info::QuestInfo>>()
+                        {
+                            quests.set_holstered_weapon(None);
+                        }
+                    }
+                }
                 crate::body_frame::AnchorGesture::ReturnClip(hand) => {
                     // Back in the pouch is back in the backpack: claimed
                     // exactly the way a shoulder stow is, so one deposit path
@@ -3869,6 +3912,7 @@ impl MissionCore {
             body_frame,
             belt_card: belt_card_placement(&self.world, self.belt_card_hand),
             ammo_pouch: body_frame.and_then(|_| self.ammo_pouch_clip()),
+            holster: body_frame.and_then(|_| self.holstered_weapon()),
             anchor_claim,
         });
         rewrite_strip_release(&mut interaction_msgs, &store, &collect);
@@ -10803,6 +10847,47 @@ impl MissionCore {
             .filter(|entity_id| !self.interaction.is_holding(*entity_id))
     }
 
+    /// The weapon in the hip holster, if the player still carries it. A slot
+    /// whose weapon has since been dropped or destroyed reads as empty, which is
+    /// what makes the thigh show nothing and pre-light amber.
+    fn holstered_weapon_to_draw(&self) -> Option<EntityId> {
+        let class_template_id = self
+            .world
+            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+            .ok()?
+            .holstered_weapon()?;
+        crate::virtual_hand::carried_weapon_by_class(&self.world, class_template_id)
+            .filter(|entity_id| !self.interaction.is_holding(*entity_id))
+    }
+
+    /// The holstered weapon as something to draw on the thigh. Its model comes
+    /// off the carried entity, so the thigh shows the weapon the grip produces.
+    fn holstered_weapon(&self) -> Option<crate::holster::HolsteredWeapon> {
+        let entity_id = self.holstered_weapon_to_draw()?;
+        let model = self
+            .world
+            .borrow::<View<PropModelName>>()
+            .ok()
+            .and_then(|models| models.get(entity_id).ok().map(|model| model.0.clone()))?;
+        Some(crate::holster::HolsteredWeapon {
+            template_id: crate::scripts::script_util::entity_class_template_id(
+                &self.world,
+                entity_id,
+            )?,
+            model,
+        })
+    }
+
+    /// Whether the holster takes what a hand is holding: a wieldable weapon,
+    /// but not the psi amp (which is an implant, not a sidearm) and not a model
+    /// its grip profile has retired from the thigh.
+    fn can_holster(&self, entity_id: EntityId) -> bool {
+        crate::virtual_hand::is_wieldable_weapon(&self.world, entity_id)
+            && !crate::wielded_weapon::is_psi_amp(&self.world, entity_id)
+            && crate::vr_config::model_name_lower(&self.world, entity_id)
+                .is_none_or(|model| crate::holster::is_holsterable(&model))
+    }
+
     /// Undo a computed grip offset before a released item becomes a loose prop
     /// again.
     ///
@@ -12227,6 +12312,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     available: offer.is_some(),
                     clip_template: offer.map(|offer| offer.template_id),
                     clip_rounds: offer.map(|offer| offer.rounds),
+                }
+            },
+            holster: {
+                let held = self.holstered_weapon_to_draw();
+                crate::game_scene::DebugHolster {
+                    position: xyz(frame.holster()),
+                    occupied: held.and_then(|entity_id| {
+                        self.world
+                            .borrow::<View<dark::properties::PropSymName>>()
+                            .ok()
+                            .and_then(|names| names.get(entity_id).ok().map(|name| name.0.clone()))
+                    }),
                 }
             },
             belt_card: belt_card_placement(&self.world, self.belt_card_hand).map(|placement| {

@@ -61,6 +61,13 @@ pub struct QuestInfo {
     /// transitions where a runtime entity id would not.
     #[serde(default)]
     last_stowed_weapon: Option<i32>,
+    /// The gamesys weapon archetype sitting in the hip holster, if any. A
+    /// *class* template id for the same reason `last_stowed_weapon` is one: the
+    /// concrete weapon stays in the pack (so its ammo and condition are the
+    /// live entity's, never re-minted), and is re-found with
+    /// `carried_weapon_by_class` after a save or a level change.
+    #[serde(default)]
+    holstered_weapon: Option<i32>,
 }
 
 impl QuestInfo {
@@ -74,6 +81,7 @@ impl QuestInfo {
             explored_maps: HashMap::new(),
             research: ResearchState::default(),
             last_stowed_weapon: None,
+            holstered_weapon: None,
         }
     }
 
@@ -192,6 +200,14 @@ impl QuestInfo {
     /// The weapon archetype an empty grip at a shoulder draws back.
     pub fn last_stowed_weapon(&self) -> Option<i32> {
         self.last_stowed_weapon
+    }
+
+    pub fn holstered_weapon(&self) -> Option<i32> {
+        self.holstered_weapon
+    }
+
+    pub fn set_holstered_weapon(&mut self, class_template_id: Option<i32>) {
+        self.holstered_weapon = class_template_id;
     }
 
     pub fn set_last_stowed_weapon(&mut self, class_template_id: Option<i32>) {

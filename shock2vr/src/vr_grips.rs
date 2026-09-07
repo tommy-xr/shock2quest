@@ -49,7 +49,11 @@ pub enum Mirror {
 
 /// One model's authored grip. Every field but `rotation_deg` is optional; what
 /// is missing is measured off the model.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+///
+/// `Default` is hand-written rather than derived because `holster` defaults to
+/// **true**: an absent flag means "allowed", and a derived `false` would make
+/// `GripProfile::default()` disagree with the same profile parsed from JSON.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GripProfile {
     /// How the model is turned in the hand, as XYZ Euler degrees applied
     /// Z * Y * X. Omitted means "lay the long axis across the palm".
@@ -88,6 +92,34 @@ pub struct GripProfile {
     pub two_hand: bool,
     #[serde(default, skip_serializing_if = "is_default_mirror")]
     pub mirror: Mirror,
+    /// How the model hangs in the hip holster, as XYZ Euler degrees applied
+    /// Z * Y * X - the same convention as `rotation_deg`, in the body frame
+    /// rather than the hand's. Omitted means barrel down, grip up and back
+    /// (`holster::DEFAULT_HOLSTERED_DEG`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holstered_deg: Option<[f32; 3]>,
+    /// Whether the holster accepts this model at all. Defaults to true, so a
+    /// data set that says nothing holsters every weapon; set false to retire one
+    /// that reads badly on the thigh.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub holster: bool,
+}
+
+impl Default for GripProfile {
+    fn default() -> Self {
+        Self {
+            rotation_deg: None,
+            offset: None,
+            family: None,
+            fingers: None,
+            scale: None,
+            support: Vec::new(),
+            two_hand: false,
+            mirror: Mirror::default(),
+            holstered_deg: None,
+            holster: true,
+        }
+    }
 }
 
 /// One authored support-hand seat on a model.
@@ -126,6 +158,15 @@ fn is_default_mirror(mirror: &Mirror) -> bool {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+/// The `holster` flag's default: absent means allowed.
+fn yes() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// Whether holding `model_name` in two hands is worth anything - the authored

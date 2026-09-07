@@ -459,6 +459,17 @@ pub struct DebugBodyFrame {
     pub belt_card: Option<&'static str>,
     /// The ammo pouch on the other hip.
     pub pouch: DebugAmmoPouch,
+    /// The weapon holster on the dominant thigh.
+    pub holster: DebugHolster,
+}
+
+/// The hip holster: where it is, and what it is holding.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugHolster {
+    pub position: [f32; 3],
+    /// The name of the holstered weapon, `null` when the slot is empty (or its
+    /// weapon has since been lost).
+    pub occupied: Option<String>,
 }
 
 /// The right-hip ammo pouch: where it is, and what a grip there would produce.

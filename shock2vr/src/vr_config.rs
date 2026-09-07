@@ -92,6 +92,14 @@ pub fn other_hand(hand: Handedness) -> Handedness {
     }
 }
 
+/// The hand the player draws with. There is no handedness option yet, so this
+/// is the one definition of "dominant" for anything that has to pick a side -
+/// the weapon holster's hip. What flips it is
+/// [`crate::dev_params::HOLSTER_SIDE_FLIPPED`], at the one place that reads it.
+pub fn dominant_hand() -> Handedness {
+    Handedness::Right
+}
+
 #[derive(Clone, Debug)]
 pub struct VRHandModelPerHandAdjustments {
     pub offset: Vector3<f32>,
@@ -211,7 +219,7 @@ fn magazine_anchor_from_model(model_name: &str) -> Vector3<f32> {
 
 /// `entity_id`'s `PropModelName`, lowercased - the key every per-model table
 /// in this file is looked up by.
-fn model_name_lower(world: &World, entity_id: EntityId) -> Option<String> {
+pub(crate) fn model_name_lower(world: &World, entity_id: EntityId) -> Option<String> {
     world
         .borrow::<View<PropModelName>>()
         .ok()

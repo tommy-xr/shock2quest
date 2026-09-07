@@ -254,6 +254,28 @@ dev_params! {
     /// Which of `debug_grips`' test items to show in the hand. Ignored
     /// everywhere else; the scene clamps it to its own list.
     GRIP_ITEM = float("grip_item", "Grip test item", 0.0, 0.0, 8.0, 1.0),
+    /// Where the weapon holster hangs, as a fraction of the tracked eye height
+    /// - thigh height, below the belt. The default reads as a drop holster on
+    /// an average adult; the knob exists because a seated player's eye sits
+    /// much lower over the same legs, so the fraction that finds the thigh
+    /// standing does not find it in a chair.
+    ///
+    /// The frame clamps the result to stay clear of the hip zones whatever this
+    /// says, so no setting can make "which anchor is this" ambiguous.
+    HOLSTER_HEIGHT_FRACTION = float("holster_height", "Holster height", 0.42, 0.2, 0.55, 0.01),
+    /// How far the holster sits to the side of the body's midline, in
+    /// **meters**. Wider than the hips: a holster rides the outside of the
+    /// thigh, and the extra room keeps a hand reaching for it clear of the
+    /// pouch above.
+    HOLSTER_LATERAL = float("holster_lateral", "Holster lateral (m)", 0.20, 0.05, 0.4, 0.01),
+    /// How far the holster sits in FRONT of the body's midline, in **meters**.
+    /// Zero (the default) puts it on the hip line; a positive value brings it
+    /// forward onto the front of the thigh, which is where a seated player's
+    /// hand can still reach it.
+    HOLSTER_FORWARD = float("holster_forward", "Holster forward (m)", 0.0, -0.2, 0.3, 0.01),
+    /// Put the holster on the NON-dominant side instead - the left-handed
+    /// player's setting, until there is a real handedness option to read.
+    HOLSTER_SIDE_FLIPPED = bool("holster_side", "Holster on other side", false),
     /// Enables the detached debug ("free") camera. This is the *gate*, not
     /// the camera's own on/off: while it is false the toggle input is not
     /// even read, so a stray `Alt+V` (or controller chord) during normal play
