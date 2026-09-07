@@ -76,6 +76,16 @@ pub struct GripProfile {
     /// comes within snapping distance of it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub support: Vec<SupportSeat>,
+    /// Whether a second hand on this item is worth anything: a wrench swung
+    /// two-handed lands its full authored blow, a one-handed one is scaled
+    /// back (see [`crate::melee_swing`]). Only long-hafted melee earns it -
+    /// a rapier or a shard is a one-handed weapon and is never penalised.
+    ///
+    /// Flag **both** of a melee weapon's models: VR wields the `_h` view model
+    /// only on a 25AE install and keeps the world model otherwise, so a flag
+    /// on one of them alone would make the damage install-dependent.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub two_hand: bool,
     #[serde(default, skip_serializing_if = "is_default_mirror")]
     pub mirror: Mirror,
 }
@@ -112,6 +122,16 @@ pub fn support_seats(model_name: &str) -> Vec<SupportSeat> {
 
 fn is_default_mirror(mirror: &Mirror) -> bool {
     *mirror == Mirror::Same
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Whether holding `model_name` in two hands is worth anything - the authored
+/// `two_hand` flag, false for anything unprofiled.
+pub fn benefits_from_two_hands(model_name: &str) -> bool {
+    profile(model_name).is_some_and(|profile| profile.two_hand)
 }
 
 /// Where a resolved grip came from - what a tuner needs to know before it

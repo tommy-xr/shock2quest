@@ -681,6 +681,29 @@ export interface PlayerSnapshot {
   two_handed: boolean;
   /** Where that second hand took hold. */
   two_hand: TwoHandGrip;
+
+  /** The melee swing in progress. */
+  melee: MeleeState;
+}
+
+/** The player's melee state (GET /v1/info -> player.melee). */
+export interface MeleeState {
+  swing: MeleeSwing;
+}
+
+/** The swing in progress (GET /v1/info -> player.melee.swing). */
+export interface MeleeSwing {
+  /** Whether the weapon's head is over the free-swing gate right now, so a
+   * contact would bill a blow. */
+  hot: boolean;
+  /** Whether a support hand was on the weapon when the swing went hot, and has
+   * stayed on it since. Sampled once on the rising edge: a second hand taken
+   * later cannot upgrade the swing, one released downgrades it. */
+  two_handed_latched: boolean;
+  /** What a blow landing now is worth, as a fraction of the weapon's authored
+   * contact damage. 1.0 unless a two-handed weapon is being swung one-handed
+   * (see the `melee_one_hand_scale` dev param). */
+  damage_scale: number;
 }
 
 /** The second hand's grip on what the first hand holds

@@ -4070,6 +4070,22 @@ impl PhysicsWorld {
         self.body_velocity_at_point(target, point)
     }
 
+    /// The velocity the player's hand is driving a held melee weapon's *head*
+    /// at. The head is the weapon body's own origin: the wield seats the body
+    /// on the rendered weapon joint (`vr_config::melee_contact_offset`) and
+    /// offsets only the collider back over the haft, so the collider's centre
+    /// is mid-weapon and its far end is not reliably the head.
+    ///
+    /// The drive target rather than the body, for the same reason
+    /// [`Self::held_melee_target_velocity_at_point`] exists. `None` when this
+    /// entity is not a driven held melee wield.
+    pub fn held_melee_head_velocity(&self, entity_id: EntityId) -> Option<Vector3<f32>> {
+        let handle = *self.entity_id_to_body.get(&entity_id)?;
+        let head = self.get_position(handle)?;
+        let target = self.held_melee_drives.get(&handle)?.target;
+        self.body_velocity_at_point(target, head)
+    }
+
     fn body_velocity_at_point(
         &self,
         handle: RigidBodyHandle,

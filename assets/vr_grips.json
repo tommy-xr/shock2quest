@@ -314,6 +314,9 @@
       0.0
     ]
   },
+  "wrench_h": {
+    "two_hand": true
+  },
   "wrench_w": {
     "rotation_deg": [
       0.0,
@@ -324,6 +327,7 @@
       0.0,
       0.0,
       -0.4
-    ]
+    ],
+    "two_hand": true
   }
 }

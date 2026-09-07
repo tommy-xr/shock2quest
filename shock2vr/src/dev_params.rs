@@ -170,6 +170,14 @@ dev_params! {
     /// swing peaks at **4.07** and ordinary walking carries the weapon at
     /// **1.80**. 2.0 was then tuned in-headset from that measurement.
     MELEE_FREE_SWING_SPEED = float("melee_free_swing", "Free swing", 2.0, 0.5, 20.0, 0.5),
+    /// What a *one-handed* swing of a two-handed melee weapon is worth, as a
+    /// fraction of its authored contact damage. Only weapons whose grip
+    /// profile is flagged `two_hand` (the wrench) pay it; a rapier or a shard
+    /// is a one-handed weapon and always deals 1.0.
+    ///
+    /// Two hands restore the full blow rather than adding a bonus, so the
+    /// gamesys number stays the number a proper swing costs.
+    MELEE_ONE_HAND_SCALE = float("melee_one_hand_scale", "One-hand melee", 0.7, 0.1, 1.0, 0.05),
     /// Draw the tracked-hand glove *in addition to* a wielded weapon's own
     /// first-person model, instead of letting the weapon model stand in for the
     /// hand. `0` off, `1` on.
