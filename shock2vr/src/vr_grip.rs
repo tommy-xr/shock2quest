@@ -569,27 +569,15 @@ pub struct GripLibrary {
 }
 
 impl GripLibrary {
-    pub fn lookup(
-        &self,
-        model: &str,
-        hand: &str,
-        surface_hash: &str,
-        kinematics_hash: &str,
-        hints_hash: &str,
-    ) -> Option<&ResolvedGrip> {
-        if self.version != 1 || self.solver_revision != SOLVER_REVISION {
+    /// Prepared poses are selected by model identity and hand. Fit fingerprints
+    /// and solver revisions are provenance, never runtime eligibility gates.
+    pub fn lookup(&self, model: &str, hand: &str) -> Option<&ResolvedGrip> {
+        if self.version != 1 {
             return None;
         }
         self.entries
             .iter()
-            .find(|entry| {
-                entry.model == model
-                    && entry.hand == hand
-                    && entry.surface_hash == surface_hash
-                    && entry.kinematics_hash == kinematics_hash
-                    && entry.hints_hash == hints_hash
-                    && entry.grip.is_valid()
-            })
+            .find(|entry| entry.model == model && entry.hand == hand && entry.grip.is_valid())
             .map(|entry| &entry.grip)
     }
 }
@@ -608,17 +596,11 @@ impl Default for GripLibrary {
 /// sampled pose arcs change. Quantize below visible precision (0.076 mm) so
 /// host/Quest floating-point differences and signed zero do not invalidate a bake.
 fn fingerprint(values: impl IntoIterator<Item = f32>) -> String {
-    fingerprint_bytes(
-        values
-            .into_iter()
-            .flat_map(|value| ((value * 10_000.0).round() as i64).to_le_bytes()),
-    )
-}
-
-pub(crate) fn fingerprint_bytes(bytes: impl IntoIterator<Item = u8>) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
-    for byte in bytes {
-        hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+    for value in values {
+        for byte in ((value * 10_000.0).round() as i64).to_le_bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
+        }
     }
     format!("{hash:016x}")
 }
@@ -832,59 +814,33 @@ mod tests {
     }
 
     #[test]
-    fn prepared_lookup_rejects_wrong_hand_stale_mesh_and_stale_rig() {
+    fn prepared_lookup_uses_model_and_hand_despite_changed_fit_metadata() {
         let grip = plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
         let mut library = GripLibrary {
             version: 1,
-            solver_revision: SOLVER_REVISION,
+            solver_revision: SOLVER_REVISION + 1,
             entries: vec![BakedGripEntry {
                 authored: false,
                 model: "mug".into(),
                 hand: "right".into(),
-                surface_hash: "mesh1".into(),
-                kinematics_hash: "rig1".into(),
-                hints_hash: "hints1".into(),
-                grip,
+                surface_hash: "old-mesh".into(),
+                kinematics_hash: "old-rig".into(),
+                hints_hash: "old-hints".into(),
+                grip: grip.clone(),
             }],
         };
-        assert!(
-            library
-                .lookup("mug", "right", "mesh1", "rig1", "hints1")
-                .is_some()
-        );
-        assert!(
-            library
-                .lookup("mug", "left", "mesh1", "rig1", "hints1")
-                .is_none()
-        );
-        assert!(
-            library
-                .lookup("mug", "right", "mesh2", "rig1", "hints1")
-                .is_none()
-        );
-        assert!(
-            library
-                .lookup("mug", "right", "mesh1", "rig2", "hints1")
-                .is_none()
-        );
-        assert!(
-            library
-                .lookup("mug", "right", "mesh1", "rig1", "hints2")
-                .is_none()
-        );
-        library.solver_revision = SOLVER_REVISION + 1;
-        assert!(
-            library
-                .lookup("mug", "right", "mesh1", "rig1", "hints1")
-                .is_none()
-        );
-        library.solver_revision = SOLVER_REVISION;
+        assert_eq!(library.lookup("mug", "right"), Some(&grip));
+        assert!(library.lookup("mug", "left").is_none());
+        assert!(library.lookup("wrench_h", "right").is_none());
+        library.entries[0].surface_hash.clear();
+        library.entries[0].kinematics_hash.clear();
+        library.entries[0].hints_hash.clear();
+        assert_eq!(library.lookup("mug", "right"), Some(&grip));
+        library.entries[0].grip.item_scale = f32::NAN;
+        assert!(library.lookup("mug", "right").is_none());
+        library.entries[0].grip = grip;
         library.version = 2;
-        assert!(
-            library
-                .lookup("mug", "right", "mesh1", "rig1", "hints1")
-                .is_none()
-        );
+        assert!(library.lookup("mug", "right").is_none());
     }
     fn closed_cube() -> GripSurface {
         let (vertices, indices) =

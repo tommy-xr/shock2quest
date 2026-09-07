@@ -88,34 +88,13 @@ pub fn inputs(
         .flatten()
         .map(|p| mirror.transform_point(*p))
         .collect();
-    let fingerprint = if source.melee_joints.is_some() {
-        // Hash the inputs to posing, not its floating-point output: the same
-        // wrench on Quest and desktop can straddle a quantization boundary.
-        use std::io::Read;
-        let skeleton_name = std::path::Path::new(name).with_extension("cal");
-        let files = [
-            name,
-            skeleton_name.to_str()?,
-            dark::importers::GLOVE_MELEE_POSE_CLIP,
-            "motiondb.bin",
-        ];
-        let mut sources = Vec::new();
-        for file in files {
-            let mut bytes = Vec::new();
-            cache
-                .get_raw_reader(file)?
-                .borrow_mut()
-                .read_to_end(&mut bytes)
-                .ok()?;
-            sources.push(bytes);
-        }
-        melee_source_fingerprint([&sources[0], &sources[1], &sources[2], &sources[3]], hand)
-    } else {
-        let mut fingerprint_geometry = triangles.clone();
-        fingerprint_geometry.extend(arms.chunks_exact(3).map(|p| [p[0], p[1], p[2]]));
-        crate::vr_grip::surface_fingerprint(&fingerprint_geometry)
-    };
-    Some((triangles, arms, fingerprint))
+    let mut fingerprint_geometry = triangles.clone();
+    fingerprint_geometry.extend(arms.chunks_exact(3).map(|p| [p[0], p[1], p[2]]));
+    Some((
+        triangles,
+        arms,
+        crate::vr_grip::surface_fingerprint(&fingerprint_geometry),
+    ))
 }
 
 pub fn resolve(
@@ -169,47 +148,4 @@ pub fn resolve(
         }
     }
     best
-}
-
-/// Version the PMNM skinning/model-frame recipe here when it changes. File
-/// lengths delimit dependencies, so moving bytes between files changes the key.
-fn melee_source_fingerprint(sources: [&[u8]; 4], hand: Handedness) -> String {
-    let version = b"melee-pose-v1";
-    let hand = if hand == Handedness::Left { 0 } else { 1 };
-    let bytes = version
-        .iter()
-        .copied()
-        .chain([hand])
-        .chain(sources.into_iter().flat_map(|bytes| {
-            (bytes.len() as u64)
-                .to_le_bytes()
-                .into_iter()
-                .chain(bytes.iter().copied())
-        }));
-    format!(
-        "melee-source-v1:{}",
-        crate::vr_grip::fingerprint_bytes(bytes)
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn melee_source_key_tracks_each_dependency_and_hand_without_posed_floats() {
-        let source: [&[u8]; 4] = [b"model", b"skeleton", b"animation", b"motiondb"];
-        let key = melee_source_fingerprint(source, Handedness::Right);
-        assert_eq!(key, melee_source_fingerprint(source, Handedness::Right));
-        assert_ne!(key, melee_source_fingerprint(source, Handedness::Left));
-        for i in 0..4 {
-            let mut changed = source;
-            changed[i] = b"changed";
-            assert_ne!(key, melee_source_fingerprint(changed, Handedness::Right));
-        }
-        assert_ne!(
-            melee_source_fingerprint([b"ab", b"c", b"d", b"e"], Handedness::Right),
-            melee_source_fingerprint([b"a", b"bc", b"d", b"e"], Handedness::Right),
-        );
-    }
 }
