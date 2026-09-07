@@ -414,6 +414,21 @@ pub struct DebugBodyFrame {
     /// Where the belt card is: "belt", "left", "right", or `null` while the
     /// player has collected no credential.
     pub belt_card: Option<&'static str>,
+    /// The ammo pouch on the other hip.
+    pub pouch: DebugAmmoPouch,
+}
+
+/// The right-hip ammo pouch: where it is, and what a grip there would produce.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugAmmoPouch {
+    pub position: [f32; 3],
+    /// Whether a gun is wielded AND the reserve holds a clip for its selected
+    /// ammo - the pouch is drawn and the glove pre-lights green exactly then.
+    pub available: bool,
+    /// The clip archetype the pouch would hand over, `null` when empty.
+    pub clip_template: Option<i32>,
+    /// How many rounds that clip would carry.
+    pub clip_rounds: Option<i32>,
 }
 
 /// A hand's fitted grip: the family the fit solved in, and the curl it left

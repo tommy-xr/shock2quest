@@ -14,7 +14,8 @@
 //! and roll are ignored outright: leaning over does not move a real belt
 //! sideways.
 
-use cgmath::{InnerSpace, Quaternion, Rad, Rotation, Rotation3, Vector3, vec3};
+use cgmath::{InnerSpace, Matrix4, Quaternion, Rad, Rotation, Rotation3, Vector3, vec3};
+use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 
 use crate::{util::meters, vr_config::Handedness};
 
@@ -36,10 +37,13 @@ const SHOULDER_BEHIND: f32 = meters(0.12);
 /// body's midline.
 const LATERAL_OFFSET: f32 = meters(0.18);
 
-/// Reach radius of each anchor. The belt card is a small object the hand has to
-/// find; a shoulder is a "throw it back there" gesture and is deliberately more
-/// forgiving.
+/// Reach radius of each anchor. The belt card and the ammo pouch are small
+/// objects the hand has to find; a shoulder is a "throw it back there" gesture
+/// and is deliberately more forgiving.
 const BELT_RADIUS: f32 = meters(0.09);
+/// The pouch rides the opposite hip and is the same size as the card, so the
+/// vertical clearance computed from [`BELT_RADIUS`] covers it too.
+const POUCH_RADIUS: f32 = BELT_RADIUS;
 const SHOULDER_RADIUS: f32 = meters(0.15);
 
 /// Minimum vertical gap between the belt and the shoulders, so a deep crouch
@@ -57,6 +61,8 @@ const YAW_TIME_CONSTANT_SECS: f32 = 0.5;
 pub enum BodyAnchor {
     /// Left hip: the belt card.
     Belt,
+    /// Right hip: the ammo pouch that hands out clips for the wielded gun.
+    Pouch,
     /// Either shoulder: the backpack (stow what you hold, draw what you stowed).
     Shoulder(Handedness),
 }
@@ -65,6 +71,7 @@ pub enum BodyAnchor {
 #[derive(Clone, Copy, Debug)]
 pub struct BodyFrame {
     belt: Vector3<f32>,
+    pouch: Vector3<f32>,
     /// Indexed by [`crate::vr_config::hand_slot`].
     shoulders: [Vector3<f32>; 2],
     rotation: Quaternion<f32>,
@@ -74,6 +81,11 @@ impl BodyFrame {
     /// Where the belt card sits.
     pub fn belt(&self) -> Vector3<f32> {
         self.belt
+    }
+
+    /// Where the ammo pouch sits.
+    pub fn pouch(&self) -> Vector3<f32> {
+        self.pouch
     }
 
     /// Where one shoulder socket sits.
@@ -86,12 +98,16 @@ impl BodyFrame {
         self.rotation
     }
 
-    /// Which anchor, if any, a hand at `position` is inside. The belt is tested
-    /// first: it is the smaller, more precisely-placed zone, and
-    /// [`ANCHOR_SEPARATION`] keeps the two from ever overlapping anyway.
+    /// Which anchor, if any, a hand at `position` is inside. The hips are
+    /// tested first: they are the smaller, more precisely-placed zones, and
+    /// [`ANCHOR_SEPARATION`] keeps them from ever overlapping the shoulders
+    /// anyway.
     pub fn anchor_at(&self, position: Vector3<f32>) -> Option<BodyAnchor> {
         if (position - self.belt).magnitude2() <= BELT_RADIUS * BELT_RADIUS {
             return Some(BodyAnchor::Belt);
+        }
+        if (position - self.pouch).magnitude2() <= POUCH_RADIUS * POUCH_RADIUS {
+            return Some(BodyAnchor::Pouch);
         }
         for hand in [Handedness::Left, Handedness::Right] {
             if (position - self.shoulder(hand)).magnitude2() <= SHOULDER_RADIUS * SHOULDER_RADIUS {
@@ -170,8 +186,9 @@ impl BodyFrameTracker {
 
         let shoulder = at(shoulder_y) + back * SHOULDER_BEHIND;
         BodyFrame {
-            // The card rides the left hip.
+            // The card rides the left hip, the ammo pouch the right.
             belt: at(belt_y) - right * LATERAL_OFFSET,
+            pouch: at(belt_y) + right * LATERAL_OFFSET,
             shoulders: [
                 shoulder - right * LATERAL_OFFSET,
                 shoulder + right * LATERAL_OFFSET,
@@ -179,6 +196,30 @@ impl BodyFrameTracker {
             rotation,
         }
     }
+}
+
+/// The renderable geometry of a model worn at a body anchor - the belt card,
+/// the pouch's clip - placed at `transform`. Nothing if the model is missing,
+/// so a data set without it simply wears nothing.
+pub fn worn_scene_objects(
+    asset_cache: &mut AssetCache,
+    model: &str,
+    transform: Matrix4<f32>,
+) -> Vec<SceneObject> {
+    let Some(model) = asset_cache.get_opt::<_, dark::model::Model, _>(
+        &dark::importers::MODELS_IMPORTER,
+        &format!("{model}.BIN"),
+    ) else {
+        return Vec::new();
+    };
+    model
+        .clone_scene_objects()
+        .into_iter()
+        .map(|mut object| {
+            object.set_transform(transform);
+            object
+        })
+        .collect()
 }
 
 /// How long a hand keeps the anchor it was over after losing it, in fixed
@@ -200,6 +241,11 @@ pub enum AnchorGesture {
     /// Opened while holding the card: it goes back on the belt, wherever the
     /// hand is - the card is never dropped in the world.
     ReturnCard(Handedness),
+    /// Gripped at the pouch with an empty hand: take out a clip for the gun the
+    /// OTHER hand wields.
+    TakeClip(Handedness),
+    /// Opened over the pouch holding a clip: its rounds go back to the reserve.
+    ReturnClip(Handedness),
 }
 
 /// What one hand is doing this frame, for [`AnchorGestures::update`].
@@ -214,6 +260,14 @@ pub struct HandAnchorInput {
     pub holding: bool,
     /// Whether the hand holds the belt card.
     pub holds_card: bool,
+    /// Whether the hand holds an ammo clip - the one thing the pouch takes back.
+    pub holds_clip: bool,
+    /// Whether the pouch has a gun to serve this hand: the OTHER hand wields
+    /// one. Without it the pouch is not drawn and claims nothing, so a hand at
+    /// an empty hip goes on interacting with the world.
+    pub pouch_serves: bool,
+    /// Whether that gun's selected ammo has a compatible clip left in reserve.
+    pub pouch_clip_available: bool,
     /// Whether the backpack could take what the hand holds.
     pub can_stow: bool,
     /// Whether there is a stowed weapon left to draw.
@@ -272,9 +326,13 @@ impl AnchorGestures {
         let (gesture, available) = self.intent(input)?;
         let fires = match gesture {
             // Letting go is what puts something away.
-            AnchorGesture::Stow(_) | AnchorGesture::ReturnCard(_) => was_squeezing && !squeezing,
+            AnchorGesture::Stow(_)
+            | AnchorGesture::ReturnCard(_)
+            | AnchorGesture::ReturnClip(_) => was_squeezing && !squeezing,
             // Closing on it is what takes something out.
-            AnchorGesture::Draw(_) | AnchorGesture::TakeCard(_) => !was_squeezing && squeezing,
+            AnchorGesture::Draw(_) | AnchorGesture::TakeCard(_) | AnchorGesture::TakeClip(_) => {
+                !was_squeezing && squeezing
+            }
         };
         (fires && available).then_some(gesture)
     }
@@ -317,6 +375,19 @@ impl AnchorGestures {
                 }
                 // A full hand at the belt has nowhere to put what it holds.
                 BodyAnchor::Belt => return None,
+                // The pouch takes clips back and hands them out. Anything else
+                // in the hand is recognised and refused rather than silently
+                // ignored - the light says the pouch will not take it.
+                BodyAnchor::Pouch if input.holding => {
+                    (AnchorGesture::ReturnClip(input.hand), input.holds_clip)
+                }
+                // No gun wielded means no pouch on the hip at all, so there is
+                // nothing to light up or grip.
+                BodyAnchor::Pouch if !input.pouch_serves => return None,
+                BodyAnchor::Pouch => (
+                    AnchorGesture::TakeClip(input.hand),
+                    input.pouch_clip_available,
+                ),
             },
         )
     }
@@ -472,7 +543,7 @@ mod tests {
         );
     }
 
-    /// The three zones never overlap, standing or crouched - a hand is only
+    /// The four zones never overlap, standing or crouched - a hand is only
     /// ever in one of them, so the gesture it commits to is never a matter of
     /// test order.
     #[test]
@@ -484,6 +555,7 @@ mod tests {
 
             let centers = [
                 (frame.belt(), BELT_RADIUS),
+                (frame.pouch(), POUCH_RADIUS),
                 (frame.shoulder(Handedness::Left), SHOULDER_RADIUS),
                 (frame.shoulder(Handedness::Right), SHOULDER_RADIUS),
             ];
@@ -507,6 +579,7 @@ mod tests {
         let frame = tracker.update(&standing(Quaternion::from_angle_y(Deg(0.0))));
 
         assert_eq!(frame.anchor_at(frame.belt()), Some(BodyAnchor::Belt));
+        assert_eq!(frame.anchor_at(frame.pouch()), Some(BodyAnchor::Pouch));
         for hand in [Handedness::Left, Handedness::Right] {
             assert_eq!(
                 frame.anchor_at(frame.shoulder(hand)),
@@ -530,6 +603,9 @@ mod tests {
             anchor,
             holding: false,
             holds_card: false,
+            holds_clip: false,
+            pouch_serves: true,
+            pouch_clip_available: true,
             can_stow: true,
             can_draw: true,
             card_on_belt: true,
@@ -819,6 +895,7 @@ mod tests {
         let frame = tracker.update(&standing(Quaternion::from_angle_y(Deg(0.0))));
         // Facing -Z, the player's left is -X.
         assert!(frame.belt().x < 0.0, "belt should be on the left hip");
+        assert!(frame.pouch().x > 0.0, "pouch should be on the right hip");
         assert!(frame.shoulder(Handedness::Left).x < 0.0);
         assert!(frame.shoulder(Handedness::Right).x > 0.0);
 
@@ -831,6 +908,112 @@ mod tests {
             frame.belt().z > 0.0,
             "facing -X the left hip is at +Z, got {:?}",
             frame.belt()
+        );
+        assert!(
+            frame.pouch().z < 0.0,
+            "facing -X the right hip is at -Z, got {:?}",
+            frame.pouch()
+        );
+    }
+
+    const POUCH: Option<BodyAnchor> = Some(BodyAnchor::Pouch);
+
+    /// The pouch lends a clip to an empty hand and takes one back when the hand
+    /// opens over it.
+    #[test]
+    fn the_pouch_lends_a_clip_and_takes_one_back() {
+        let mut gestures = AnchorGestures::default();
+        let mut hand = at(POUCH);
+        gestures.update(&hand);
+        hand.squeeze = 1.0;
+        assert_eq!(
+            gestures.update(&hand),
+            Some(AnchorGesture::TakeClip(Handedness::Right))
+        );
+
+        let mut carrying = HandAnchorInput {
+            holding: true,
+            holds_clip: true,
+            squeeze: 1.0,
+            ..at(POUCH)
+        };
+        assert_eq!(gestures.update(&carrying), None);
+        carrying.squeeze = 0.0;
+        assert_eq!(
+            gestures.update(&carrying),
+            Some(AnchorGesture::ReturnClip(Handedness::Right))
+        );
+    }
+
+    /// A gun with nothing compatible left in reserve pre-lights amber and
+    /// refuses the grip, rather than handing out rounds that do not exist.
+    #[test]
+    fn a_pouch_with_no_compatible_clip_refuses_and_pre_lights_amber() {
+        use crate::hand_affordance::HandAffordance;
+
+        let mut gestures = AnchorGestures::default();
+        let empty = HandAnchorInput {
+            pouch_clip_available: false,
+            ..at(POUCH)
+        };
+        gestures.update(&empty);
+        assert_eq!(
+            gestures.claim(&empty),
+            Some(HandClaim::Anchor(HandAffordance::Blocked))
+        );
+        assert_eq!(
+            gestures.update(&HandAnchorInput {
+                squeeze: 1.0,
+                ..empty
+            }),
+            None
+        );
+    }
+
+    /// With no gun wielded there is no pouch on the hip, so the hand is left
+    /// to the world rather than claimed by an anchor that draws nothing.
+    #[test]
+    fn an_unserved_pouch_claims_nothing() {
+        let mut gestures = AnchorGestures::default();
+        let hand = HandAnchorInput {
+            pouch_serves: false,
+            ..at(POUCH)
+        };
+        gestures.update(&hand);
+        assert_eq!(gestures.claim(&hand), None);
+        assert_eq!(
+            gestures.update(&HandAnchorInput {
+                squeeze: 1.0,
+                ..hand
+            }),
+            None
+        );
+    }
+
+    /// The pouch holds clips, not everything: a hand full of something else
+    /// says so and leaves the release an ordinary world drop.
+    #[test]
+    fn the_pouch_refuses_what_is_not_a_clip() {
+        use crate::hand_affordance::HandAffordance;
+
+        let mut gestures = AnchorGestures::default();
+        let full = HandAnchorInput {
+            holding: true,
+            holds_clip: false,
+            squeeze: 1.0,
+            ..at(POUCH)
+        };
+        gestures.update(&full);
+        assert_eq!(
+            gestures.claim(&full),
+            Some(HandClaim::Anchor(HandAffordance::Blocked))
+        );
+        assert_eq!(
+            gestures.update(&HandAnchorInput {
+                squeeze: 0.0,
+                ..full
+            }),
+            None
         );
     }
 }

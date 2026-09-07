@@ -47,6 +47,9 @@ pub struct InteractionContext<'a> {
     /// Where the belt card is, or `None` while the player has collected no
     /// credential and there is no card.
     pub belt_card: Option<crate::belt_card::CardPlacement>,
+    /// The clip on the ammo pouch's hip, or `None` when the pouch is empty (no
+    /// gun wielded, or nothing compatible in reserve) and nothing is drawn.
+    pub ammo_pouch: Option<crate::ammo_pouch::PouchClip>,
     /// What owns each hand this frame (a body anchor, or the belt card it is
     /// carrying), indexed by `vr_config::hand_slot`. `Some` claims the hand:
     /// its grip belongs to the body rather than to whatever its ray crossed.
@@ -208,6 +211,7 @@ pub struct VrInteraction {
     /// Where the belt card is, so `render` can place it - it is not an entity,
     /// so nothing else in the scene would draw it.
     belt_card: std::cell::Cell<Option<crate::belt_card::CardPlacement>>,
+    ammo_pouch: std::cell::RefCell<Option<crate::ammo_pouch::PouchClip>>,
     /// The grip each hand's last render fitted, indexed by
     /// `vr_config::hand_slot`. Written where the fit is solved (render, which
     /// owns the glove and the asset cache) and read by the debug readout.
@@ -223,6 +227,7 @@ impl VrInteraction {
             hand_climb: crate::vr_climb::HandClimb::default(),
             body_frame: std::cell::Cell::new(None),
             belt_card: std::cell::Cell::new(None),
+            ammo_pouch: std::cell::RefCell::new(None),
             fitted_grips: RefCell::new([None, None]),
         }
     }
@@ -285,6 +290,7 @@ impl PlayerInteraction for VrInteraction {
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
         self.body_frame.set(ctx.body_frame);
         self.belt_card.set(ctx.belt_card);
+        *self.ammo_pouch.borrow_mut() = ctx.ammo_pouch.clone();
         let left_held_entity = self.left_hand.get_held_entity();
         let (right_hand, mut right_msgs) = VirtualHand::update(
             &self.right_hand,
@@ -399,7 +405,25 @@ impl PlayerInteraction for VrInteraction {
                 .map(|frame| crate::belt_card::belt_transform(&frame)),
             None => None,
         } {
-            objs.extend(crate::belt_card::scene_objects(asset_cache, transform));
+            objs.extend(crate::body_frame::worn_scene_objects(
+                asset_cache,
+                crate::belt_card::CARD_MODEL,
+                transform,
+            ));
+        }
+
+        // The ammo pouch: the top clip of the reserve stack a grip at the right
+        // hip would hand over. Drawn only when there is one, so the hip shows
+        // exactly what the gesture would produce.
+        if let (Some(clip), Some(frame)) = (
+            self.ammo_pouch.borrow().as_ref(),
+            self.body_frame.get().as_ref(),
+        ) {
+            objs.extend(crate::body_frame::worn_scene_objects(
+                asset_cache,
+                &clip.model,
+                crate::ammo_pouch::pouch_transform(frame, &clip.model),
+            ));
         }
 
         // Feedback comes from the resolved holds, never a second proximity
@@ -625,6 +649,7 @@ mod tests {
             eye_height: 1.04,
             body_frame: None,
             belt_card: None,
+            ammo_pouch: None,
             anchor_claim: [None, None],
         }
     }

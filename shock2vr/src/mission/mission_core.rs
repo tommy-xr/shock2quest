@@ -3744,6 +3744,12 @@ impl MissionCore {
                     crate::vr_config::Handedness::Left => &hands_input.left_hand,
                     crate::vr_config::Handedness::Right => &hands_input.right_hand,
                 };
+                let held = [left_hand_held, right_hand_held][slot];
+                // The pouch serves the gun in the OTHER hand, so a clip comes
+                // out on the side that is free to carry it. Both hands full of
+                // guns leaves nobody to take one.
+                let other_gun = [left_hand_held, right_hand_held][1 - slot]
+                    .filter(|weapon| self.magazine_capacity(*weapon).is_some());
                 let input = crate::body_frame::HandAnchorInput {
                     hand,
                     squeeze: hand_input.squeeze_value,
@@ -3754,6 +3760,13 @@ impl MissionCore {
                     )),
                     holding: [left_hand_held, right_hand_held][slot].is_some(),
                     holds_card: self.belt_card_hand == Some(hand),
+                    holds_clip: held.is_some_and(|item| {
+                        crate::mission::reload::is_ammo_clip(&self.world, item)
+                    }),
+                    pouch_serves: other_gun.is_some(),
+                    pouch_clip_available: other_gun.is_some_and(|weapon| {
+                        crate::mission::reload::pouch_withdrawal(&self.world, weapon).is_some()
+                    }),
                     can_stow,
                     can_draw,
                     card_on_belt,
@@ -3809,6 +3822,23 @@ impl MissionCore {
                 crate::body_frame::AnchorGesture::ReturnCard(_) => {
                     self.belt_card_hand = None;
                 }
+                crate::body_frame::AnchorGesture::TakeClip(hand) => {
+                    if let Some(entity_id) = self.take_pouch_clip(asset_cache, hand) {
+                        effects.push(Effect::GrabEntity {
+                            entity_id,
+                            hand,
+                            current_parent_id: None,
+                        });
+                    }
+                }
+                crate::body_frame::AnchorGesture::ReturnClip(hand) => {
+                    // Back in the pouch is back in the backpack: claimed
+                    // exactly the way a shoulder stow is, so one deposit path
+                    // covers both and the rounds are never duplicated.
+                    if let Some(entity_id) = [left_hand_held, right_hand_held][hand_slot(hand)] {
+                        store.push((entity_id, None));
+                    }
+                }
             }
         }
 
@@ -3824,6 +3854,7 @@ impl MissionCore {
             eye_height: crate::player_eye_height_for(self.player_handle.is_crouched()),
             body_frame,
             belt_card: belt_card_placement(&self.world, self.belt_card_hand),
+            ammo_pouch: body_frame.and_then(|_| self.ammo_pouch_clip()),
             anchor_claim,
         });
         rewrite_strip_release(&mut interaction_msgs, &store, &collect);
@@ -9014,6 +9045,93 @@ impl MissionCore {
         cues
     }
 
+    /// The gun in `hand`, if it is one that takes a magazine.
+    fn wielded_gun(&self, hand: crate::vr_config::Handedness) -> Option<EntityId> {
+        let (left, right) = self.interaction.held_entities();
+        let held = [left, right][hand_slot(hand)]?;
+        self.magazine_capacity(held).map(|_| held)
+    }
+
+    /// The clip sitting on the ammo pouch's hip: the one a grip there would
+    /// hand over, for whichever wielded gun the reserve can serve. `None` when
+    /// no gun is wielded or nothing compatible is left, which is exactly when
+    /// the hip is drawn empty and the glove pre-lights amber.
+    fn ammo_pouch_clip(&self) -> Option<crate::ammo_pouch::PouchClip> {
+        for hand in [
+            crate::vr_config::Handedness::Left,
+            crate::vr_config::Handedness::Right,
+        ] {
+            let Some(weapon) = self.wielded_gun(hand) else {
+                continue;
+            };
+            let Some(withdrawal) = crate::mission::reload::pouch_withdrawal(&self.world, weapon)
+            else {
+                continue;
+            };
+            // The pouch shows the ammo the player actually carries, so the
+            // model comes off the reserve stack rather than the archetype.
+            let Some(model) = self
+                .world
+                .borrow::<View<PropModelName>>()
+                .ok()
+                .and_then(|models| {
+                    models
+                        .get(withdrawal.item)
+                        .ok()
+                        .map(|model| model.0.clone())
+                })
+            else {
+                continue;
+            };
+            return Some(crate::ammo_pouch::PouchClip {
+                template_id: withdrawal.template_id,
+                model,
+                rounds: withdrawal.rounds,
+            });
+        }
+        None
+    }
+
+    /// Take one clip out of the reserve for the gun in `hand`'s other hand, and
+    /// return the entity to put in `hand`.
+    ///
+    /// A stack the clip empties is handed over as it stands - that is the strip
+    /// withdraw, unchanged. A larger stack is split: the clip carrying the
+    /// rounds is minted first and the reserve debited only once it exists, so
+    /// the rounds are in exactly one place at every instant and a failed mint
+    /// costs the player nothing.
+    fn take_pouch_clip(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        hand: crate::vr_config::Handedness,
+    ) -> Option<EntityId> {
+        let weapon = self.wielded_gun(crate::vr_config::other_hand(hand))?;
+        let withdrawal = crate::mission::reload::pouch_withdrawal(&self.world, weapon)?;
+        if withdrawal.takes_whole_stack {
+            return Some(withdrawal.item);
+        }
+        let entity_id = match self.spawn_into_backpack(asset_cache, withdrawal.template_id) {
+            Ok(entity_id) => entity_id,
+            Err(e) => {
+                game_log!(WARN, "Pouch clip could not be carried: {e}");
+                return None;
+            }
+        };
+        self.world.add_component(
+            entity_id,
+            dark::properties::PropStackCount(withdrawal.rounds),
+        );
+        if !crate::mission::reload::take_rounds_from_reserve(
+            &self.world,
+            withdrawal.item,
+            withdrawal.rounds,
+        ) {
+            self.destroy_entity(entity_id);
+            return None;
+        }
+        Some(entity_id)
+    }
+
     /// The belt card held against a reader. The card is a credential, not a
     /// tool: it sends the target the same `Frob` a hand would, and the door's
     /// own script runs the same key check - so a touch opens exactly what the
@@ -11989,6 +12107,15 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     .ok()
                     .and_then(|names| names.get(entity_id).ok().map(|name| name.0.clone()))
             }),
+            pouch: {
+                let clip = self.ammo_pouch_clip();
+                crate::game_scene::DebugAmmoPouch {
+                    position: xyz(frame.pouch()),
+                    available: clip.is_some(),
+                    clip_template: clip.as_ref().map(|clip| clip.template_id),
+                    clip_rounds: clip.as_ref().map(|clip| clip.rounds),
+                }
+            },
             belt_card: belt_card_placement(&self.world, self.belt_card_hand).map(|placement| {
                 match placement {
                     crate::belt_card::CardPlacement::Belt => "belt",

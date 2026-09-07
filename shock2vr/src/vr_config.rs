@@ -83,6 +83,15 @@ pub fn hand_slot(hand: Handedness) -> usize {
     }
 }
 
+/// The other hand. The ammo pouch serves the gun in it, so the clip comes out
+/// on the side that is free to carry it.
+pub fn other_hand(hand: Handedness) -> Handedness {
+    match hand {
+        Handedness::Left => Handedness::Right,
+        Handedness::Right => Handedness::Left,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct VRHandModelPerHandAdjustments {
     pub offset: Vector3<f32>,

@@ -91,7 +91,7 @@ pub(crate) struct ReloadOutcome {
 /// order the data's `Clip` relation authors them. `None` when the weapon has no
 /// projectile links at all, or the selected projectile has no clip archetype -
 /// which is also what makes its rounds unreturnable (see [`can_unload`]).
-fn selected_clip_templates(world: &World, weapon: EntityId) -> Option<Vec<i32>> {
+pub(crate) fn selected_clip_templates(world: &World, weapon: EntityId) -> Option<Vec<i32>> {
     let projectiles = crate::scripts::script_util::ordered_projectile_links(world, weapon);
     if projectiles.is_empty() {
         return None;
@@ -277,7 +277,7 @@ pub(crate) fn clip_insert_zone_engaged(was_engaged: bool, distance: f32, scale: 
 
 /// The backpack's stackable items whose class descends from one of
 /// `clip_templates` - the reserve a reload draws from and an unload merges into.
-fn compatible_reserve_items(world: &World, clip_templates: &[i32]) -> Vec<EntityId> {
+pub(crate) fn compatible_reserve_items(world: &World, clip_templates: &[i32]) -> Vec<EntityId> {
     let Ok(inventory) = world
         .borrow::<UniqueView<crate::mission::PlayerInfo>>()
         .map(|player| player.inventory_entity_id)
@@ -322,6 +322,98 @@ fn compatible_reserve_items(world: &World, clip_templates: &[i32]) -> Vec<Entity
                 })
         })
         .collect()
+}
+
+/// One clip's worth of reserve ammo, ready to be handed out of the belt pouch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PouchWithdrawal {
+    /// The reserve stack the rounds come out of.
+    pub item: EntityId,
+    /// That stack's own archetype - the clip the player actually carries, so a
+    /// pouch full of small clips never hands out a large one.
+    pub template_id: i32,
+    /// Rounds in the withdrawn clip: the archetype's authored stack size, or
+    /// the whole remaining stack when it holds less.
+    pub rounds: i32,
+    /// Whether `rounds` empties `item`, so the stack itself can be handed over
+    /// rather than split. Splitting is what needs a fresh entity.
+    pub takes_whole_stack: bool,
+}
+
+/// The clip the ammo pouch would hand out for `weapon`'s CURRENTLY selected
+/// ammo, or `None` when nothing compatible is in reserve - which is exactly
+/// when the pouch is empty and the glove pre-lights amber.
+///
+/// Rounds are never fabricated: everything here is measured off a stack the
+/// player is already carrying.
+pub(crate) fn pouch_withdrawal(world: &World, weapon: EntityId) -> Option<PouchWithdrawal> {
+    let clip_templates = selected_clip_templates(world, weapon)?;
+    let item = compatible_reserve_items(world, &clip_templates)
+        .into_iter()
+        .next()?;
+    let template_id = crate::scripts::script_util::entity_class_template_id(world, item)?;
+    let stack = world
+        .borrow::<View<PropStackCount>>()
+        .ok()
+        .and_then(|stacks| stacks.get(item).ok().map(|stack| stack.0))?;
+    if stack <= 0 {
+        return None;
+    }
+    // Reserve stacks are counted in ROUNDS, so a clip's worth is the
+    // archetype's authored stack size. An archetype with no authored size has
+    // no defined clip, and the whole remaining stack comes out in one go.
+    let clip_size = world
+        .borrow::<UniqueView<GlobalProjectileClips>>()
+        .ok()
+        .and_then(|clips| clip_size_of(world, &clips, &clip_templates, template_id))
+        .unwrap_or(stack);
+    let rounds = stack.min(clip_size.max(1));
+    Some(PouchWithdrawal {
+        item,
+        template_id,
+        rounds,
+        takes_whole_stack: rounds >= stack,
+    })
+}
+
+/// The authored stack size for the clip archetype `class_template_id` descends
+/// from. A reserve item's own class may be a mission-local child of the
+/// archetype the `Clip` relation names, so the size is looked up through the
+/// hierarchy rather than on the class directly.
+fn clip_size_of(
+    world: &World,
+    clips: &GlobalProjectileClips,
+    clip_templates: &[i32],
+    class_template_id: i32,
+) -> Option<i32> {
+    if let Some(size) = clips.clip_sizes.get(&class_template_id) {
+        return Some(*size);
+    }
+    let hierarchy = world
+        .borrow::<UniqueView<crate::mission::GlobalTemplateHierarchy>>()
+        .ok()?;
+    clip_templates
+        .iter()
+        .find(|clip| hierarchy.is_or_descends_from(class_template_id, **clip))
+        .and_then(|clip| clips.clip_sizes.get(clip))
+        .copied()
+}
+
+/// Take `rounds` out of a reserve stack, for a pouch withdrawal that splits it.
+/// The caller then mints the clip that carries them, so the rounds exist in
+/// exactly one place at every instant. `false` leaves the stack untouched.
+pub(crate) fn take_rounds_from_reserve(world: &World, item: EntityId, rounds: i32) -> bool {
+    let Ok(mut stacks) = world.borrow::<ViewMut<PropStackCount>>() else {
+        return false;
+    };
+    let Ok(stack) = (&mut stacks).get(item) else {
+        return false;
+    };
+    if rounds <= 0 || stack.0 < rounds {
+        return false;
+    }
+    stack.0 -= rounds;
+    true
 }
 
 /// Move matching reserve rounds from the backpack into `weapon`.

@@ -13,13 +13,12 @@
 //! opens.
 
 use cgmath::{Matrix4, Quaternion, Vector3};
-use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 
 use crate::{body_frame::BodyFrame, vr_config::Handedness};
 
 /// The gamesys's own ID-card art (`ID Cards`, template -157, `P$ModelName`) -
 /// the model every collected card in the game already wears.
-const CARD_MODEL: &str = "scipass";
+pub const CARD_MODEL: &str = "scipass";
 
 /// How far in front of the card a reader counts as touched, world units
 /// (~15 cm). Short on purpose: the card is placed against the panel, not
@@ -97,23 +96,4 @@ pub fn hand_transform(
 ) -> Matrix4<f32> {
     crate::hand_glove::hand_to_world(position, rotation, hand)
         * crate::vr_config::held_model_hand_transform(CARD_MODEL, hand, 1.0)
-}
-
-/// The card's renderable geometry at `transform`, or nothing if the model is
-/// missing (a data set without it simply has no belt card).
-pub fn scene_objects(asset_cache: &mut AssetCache, transform: Matrix4<f32>) -> Vec<SceneObject> {
-    let Some(model) = asset_cache.get_opt::<_, dark::model::Model, _>(
-        &dark::importers::MODELS_IMPORTER,
-        &format!("{CARD_MODEL}.BIN"),
-    ) else {
-        return Vec::new();
-    };
-    model
-        .clone_scene_objects()
-        .into_iter()
-        .map(|mut object| {
-            object.set_transform(transform);
-            object
-        })
-        .collect()
 }

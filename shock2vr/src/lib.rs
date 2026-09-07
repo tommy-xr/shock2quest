@@ -1,3 +1,4 @@
+pub mod ammo_pouch;
 pub mod audio_log;
 pub mod belt_card;
 pub mod body_frame;
