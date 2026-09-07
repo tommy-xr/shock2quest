@@ -4182,6 +4182,11 @@ impl MissionCore {
         // uses. Dispatched before the script update so hovers/clicks are
         // processed this frame.
         self.refresh_readouts();
+        // Double-click windows are counted in simulation frames, so the debug
+        // runtime's zero-time administrative updates do not consume them.
+        if !time.elapsed.is_zero() {
+            self.flat_ui.advance_simulation_frame();
+        }
         let (ui_messages, ui_drag_actions) = match game_options.presentation_mode {
             crate::PresentationMode::Flat => {
                 self.flat_ui.update(&self.world, input_context.pointer)

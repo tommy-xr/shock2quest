@@ -630,6 +630,20 @@ impl FlatUiHost {
         }
     }
 
+    /// Advance frame-counted gestures by one simulation frame.
+    ///
+    /// The debug runtime also calls [`update`](Self::update) with zero elapsed
+    /// time when it applies an HTTP command. Those administrative updates must
+    /// not consume the documented double-click window.
+    pub fn advance_simulation_frame(&mut self) {
+        if let Some(mark) = self.last_lift.as_mut() {
+            match mark.frames_left.checked_sub(1) {
+                Some(remaining) => mark.frames_left = remaining,
+                None => self.last_lift = None,
+            }
+        }
+    }
+
     /// The active panel's rect on the 640x480 canvas (None until its first
     /// `SetUI` arrives).
     fn panel_rect(&self) -> Option<Rect> {
@@ -717,14 +731,6 @@ impl FlatUiHost {
         let pressed = pointer.map(|p| p.pressed).unwrap_or(false);
         let pressed_edge = pressed && !self.last_pointer_pressed;
         self.last_pointer_pressed = pressed;
-
-        // Age out the double-click window since the last lift.
-        if let Some(mark) = self.last_lift.as_mut() {
-            match mark.frames_left.checked_sub(1) {
-                Some(remaining) => mark.frames_left = remaining,
-                None => self.last_lift = None,
-            }
-        }
 
         // MFD-slot auto-close: the bound object is gone (destroyed / level
         // state changed), or the player walked away from it (the original's
@@ -2429,6 +2435,36 @@ mod tests {
         let second = press_edge(&mut host, &world, (23.5, 34.0));
         assert_eq!(second, vec![FlatUiDragAction::Wield(wrench)]);
         assert!(host.cursor_debug().is_none(), "wielding clears the cursor");
+    }
+
+    #[test]
+    fn paused_updates_do_not_consume_the_double_click_window() {
+        let (world, mut host, wrench, _inv) = drag_world();
+        let position = norm(23.5, 34.0);
+        let pointer = |pressed| Some(Pointer2D { position, pressed });
+
+        // The HTTP input command itself is a zero-time update and observes
+        // the first press edge before the requested stepped frames begin.
+        host.update(&world, pointer(false));
+        let (_, first) = host.update(&world, pointer(true));
+        assert!(first.is_empty());
+
+        // Six held frames, six released frames, and six more released frames
+        // before the second click: the two press edges are 18 sim frames apart.
+        for pressed in [true, false, false] {
+            for _ in 0..6 {
+                host.advance_simulation_frame();
+                host.update(&world, pointer(pressed));
+            }
+            // Setting an input channel while paused invokes a zero-time update.
+            // It must not age the gesture window.
+            for _ in 0..8 {
+                host.update(&world, pointer(pressed));
+            }
+        }
+
+        let (_, second) = host.update(&world, pointer(true));
+        assert_eq!(second, vec![FlatUiDragAction::Wield(wrench)]);
     }
 
     #[test]
