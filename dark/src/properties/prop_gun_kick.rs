@@ -206,6 +206,62 @@ mod tests {
         assert_eq!(kick.settings[2], GunKickSetting::default());
     }
 
+    /// Pins the shipped assault rifle and shotgun: the rifle's single shot is
+    /// the gentlest kick of the three, its burst nearly doubles it, and the
+    /// shotgun's is the heaviest.
+    #[test]
+    fn parses_the_shipped_rifle_and_shotgun_records() {
+        let mut rifle = setting_bytes(
+            0.0,
+            [592, 592, 0, 1280],
+            [-0.25, -0.25, 1.25],
+            [1000, 800],
+            0.0,
+        );
+        rifle.extend(setting_bytes(
+            0.0,
+            [1280, 2048, 0, 2048],
+            [-0.5, -0.75, 1.5],
+            [500, 500],
+            1.0,
+        ));
+        rifle.extend(setting_bytes(0.0, [0; 4], [0.0; 3], [0; 2], 0.0));
+        let rifle = PropGunKick::read(&mut Cursor::new(rifle), 96);
+
+        assert_eq!(rifle.settings[0].kick_pitch_degrees, 3.251_953_1);
+        assert_eq!(rifle.settings[0].kick_angular_return_rate_degrees, 7.03125);
+        assert_eq!(rifle.settings[0].kick_back, -0.25);
+        assert_eq!(rifle.settings[0].kick_back_return_rate, 1.25);
+        assert_eq!(rifle.settings[0].jolt_back, 0.0);
+        assert_eq!(rifle.settings[1].kick_pitch_degrees, 7.03125);
+        assert_eq!(rifle.settings[1].kick_pitch_max_degrees, 11.25);
+        assert_eq!(rifle.settings[1].kick_back, -0.5);
+
+        let mut shotgun = setting_bytes(
+            0.0,
+            [2048, 4096, 0, 2048],
+            [-0.6, -0.75, 1.0],
+            [1500, 1500],
+            1.0,
+        );
+        shotgun.extend(setting_bytes(
+            0.0,
+            [4096, 4096, 0, 2048],
+            [-0.75, -0.75, 1.0],
+            [3000, 3000],
+            1.0,
+        ));
+        shotgun.extend(setting_bytes(0.0, [0; 4], [0.0; 3], [0; 2], 0.0));
+        let shotgun = PropGunKick::read(&mut Cursor::new(shotgun), 96);
+
+        assert_eq!(shotgun.settings[0].kick_pitch_degrees, 11.25);
+        assert_eq!(shotgun.settings[0].kick_pitch_max_degrees, 22.5);
+        assert_eq!(shotgun.settings[0].kick_back, -0.6);
+        assert_eq!(shotgun.settings[0].jolt_pitch_degrees, 8.239_746);
+        assert_eq!(shotgun.settings[1].kick_pitch_degrees, 22.5);
+        assert_eq!(shotgun.settings[1].jolt_pitch_degrees, 16.479_492);
+    }
+
     #[test]
     fn setting_selects_by_index_and_falls_back_to_the_first() {
         let kick = PropGunKick::read(&mut Cursor::new(pistol_chunk()), 96);
