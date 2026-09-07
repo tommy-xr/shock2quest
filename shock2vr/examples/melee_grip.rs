@@ -5,10 +5,10 @@
 //! baked fist lands on the tracked hand.
 //!
 //! It also prints each model's `melee_contact_offset` - where the rendered
-//! weapon head lands in hand-local space, which is what the model's
-//! `HAND_MODEL_POSITIONING` entry must be so the contact collider sits on the
-//! weapon the player sees. Re-run this and paste the numbers into
-//! `MELEE_CONTACT_*` if the rigs ever change.
+//! weapon head lands in hand-local space, which is what the wield stores on
+//! `RuntimePropVrGripOffset` so the contact collider sits on the weapon the
+//! player sees. Re-run this and paste the numbers into `MELEE_CONTACT_*` if the
+//! rigs ever change.
 //!
 //! ```bash
 //! DARK_ASSET_PATH=... cargo run -p shock2vr --example melee_grip

@@ -285,13 +285,6 @@ impl GloveRenderer {
         )
     }
 
-    /// Where the palm faces the world, in the glove's own hand space: the
-    /// midpoint of the index and pinky knuckles at the open pose - the line an
-    /// item resting in the hand touches.
-    ///
-    /// [`crate::hand_seat`] seats unprofiled items against it. It is a constant
-    /// of the rig, so that module pins the measurement rather than paying for a
-    /// posed glove; [`glove_palm_anchor`] is how it is re-measured.
     /// The fitted grip for a model held in `handedness`, solved once and
     /// remembered - the *miss* included, so a held model with no mesh does not
     /// re-enter the asset cache's miss path on every frame it is held.
@@ -330,18 +323,21 @@ impl GloveRenderer {
         gun_scale: f32,
         asset_cache: &mut AssetCache,
     ) -> Option<FittedGrip> {
-        if !vr_config::has_hand_seat(model_name) {
+        let grip = crate::vr_grips::resolve(model_name, handedness);
+        if grip.source == crate::vr_grips::GripSource::Unseated {
             return None;
         }
-        let mesh = contact_mesh(model_name, handedness, gun_scale, asset_cache)?;
-        let family = vr_config::grip_family(model_name)
-            .or_else(|| mesh.extents().map(hand_fit::family_from_extents))?;
 
         // An authored per-finger curl is the last word - the escape hatch for a
-        // shape the contact sweep reads wrong (the mug's handle).
-        if let Some(amounts) = vr_config::authored_finger_curls(model_name) {
+        // shape the contact sweep reads wrong - so it never pays for the mesh.
+        if let (Some(amounts), Some(family)) = (grip.fingers, grip.family) {
             return Some(FittedGrip { family, amounts });
         }
+
+        let mesh = contact_mesh(model_name, handedness, gun_scale, asset_cache)?;
+        let family = grip
+            .family
+            .or_else(|| mesh.extents().map(hand_fit::family_from_extents))?;
 
         let started = std::time::Instant::now();
         let mut rig = GloveRig {
@@ -523,31 +519,30 @@ pub struct FittedGrip {
 /// The placement path ([`vr_config::get_vr_hand_model_adjustments_from_entity`],
 /// called while the hands update) has no asset cache, so the answer is measured
 /// here - where the mesh is reachable - and left in [`crate::vr_grips`] for it
-/// to read. Called before the hands move, so a pickup is seated on the frame it
-/// is grabbed rather than the one after.
+/// to read. The mission loop calls this for whatever the hands already hold, so
+/// an item is seated on the frame *after* the one it was grabbed on; the first
+/// frame of a grab draws it on the wrist, as every frame used to.
+///
+/// A model with nothing to measure (a skinned melee rig, a missing `.BIN`)
+/// records that fact rather than nothing: the asset cache memoizes only
+/// successes, so an unremembered miss re-walks every mount, every frame the
+/// item is held.
 pub fn warm_held_seat(model_name: &str, asset_cache: &mut AssetCache) {
     if !crate::vr_grips::needs_measurement(model_name) {
         return;
     }
-    let Some(triangles) = asset_cache
-        .get_opt::<_, VrContactMesh, _>(&VR_CONTACT_MESH_IMPORTER, &format!("{model_name}.BIN"))
-    else {
-        return;
-    };
     // The box of the geometry as it is *drawn*: the held scale is part of how
     // deep the item sits in the palm.
-    let scale = crate::vr_grips::render_scale(model_name);
-    let mut min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
-    let mut max = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for triangle in &triangles.0 {
-        for corner in triangle {
-            let point = corner.to_vec() * scale;
-            min = Vector3::new(min.x.min(point.x), min.y.min(point.y), min.z.min(point.z));
-            max = Vector3::new(max.x.max(point.x), max.y.max(point.y), max.z.max(point.z));
+    let scale = vr_config::held_geometry_scale(model_name);
+    let measured = asset_cache
+        .get_opt::<_, VrContactMesh, _>(&VR_CONTACT_MESH_IMPORTER, &format!("{model_name}.BIN"))
+        .and_then(|triangles| hand_fit::triangle_bounds(&triangles.0));
+
+    match measured {
+        Some((min, max)) => {
+            crate::vr_grips::remember_measured_seat(model_name, min * scale, max * scale)
         }
-    }
-    if min.x.is_finite() {
-        crate::vr_grips::remember_measured_seat(model_name, min, max);
+        None => crate::vr_grips::remember_unmeasurable(model_name),
     }
 }
 

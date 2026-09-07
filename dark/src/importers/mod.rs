@@ -9,7 +9,6 @@ mod rect_list_importer;
 mod skeleton_importer;
 mod song_importer;
 mod strings_importer;
-mod text_importer;
 mod texture_importer;
 
 pub use animation_clip_importer::*;
@@ -23,7 +22,6 @@ pub use rect_list_importer::*;
 pub use skeleton_importer::*;
 pub use song_importer::*;
 pub use strings_importer::*;
-pub use text_importer::*;
 pub use texture_importer::*;
 
 #[cfg(test)]

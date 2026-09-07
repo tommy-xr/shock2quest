@@ -16,11 +16,10 @@
 
 use std::collections::BTreeMap;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use cgmath::{Deg, Quaternion, Rotation3, Vector3, vec3};
-use dark::importers::TEXT_IMPORTER;
-use engine::assets::asset_cache::AssetCache;
+use cgmath::{Deg, Quaternion, Rotation3, Vector3, Zero, vec3};
+use engine::assets::{asset_cache::AssetCache, text_importer::TEXT_IMPORTER};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
@@ -110,7 +109,10 @@ static PROFILES: Lazy<RwLock<BTreeMap<String, GripProfile>>> =
 /// Seats measured off a model's own box, keyed by model name. Filled in by
 /// [`remember_measured_seat`] the first time a hand can see the geometry; read
 /// by every later placement, which has no asset cache of its own.
-static MEASURED: Lazy<RwLock<BTreeMap<String, (Seat, GripFamily)>>> =
+/// `None` records a model with no mesh to measure (a skinned melee rig, a
+/// missing `.BIN`): remembering the miss is what keeps a held item off the
+/// asset cache's miss path, which memoizes only successes.
+static MEASURED: Lazy<RwLock<BTreeMap<String, Option<(Seat, GripFamily)>>>> =
     Lazy::new(|| RwLock::new(BTreeMap::new()));
 
 /// Load [`GRIP_PROFILES_ASSET`] once, through the asset mounts. The game loop
@@ -118,22 +120,37 @@ static MEASURED: Lazy<RwLock<BTreeMap<String, (Seat, GripFamily)>>> =
 /// have to be in place before the first hand places anything, and a `Once` is
 /// cheaper than the bookkeeping to prove some earlier call site always ran.
 pub fn ensure_loaded(asset_cache: &mut AssetCache) {
-    static LOADED: std::sync::Once = std::sync::Once::new();
-    LOADED.call_once(|| {
-        let Some(text) = asset_cache.get_opt(&TEXT_IMPORTER, GRIP_PROFILES_ASSET) else {
-            tracing::warn!(
-                "{GRIP_PROFILES_ASSET} not found; every held model is seated from its own geometry"
-            );
-            return;
-        };
-        match parse(&text.0) {
-            Ok(profiles) => {
-                tracing::info!("loaded {} VR grip profiles", profiles.len());
-                set_profiles(profiles);
-            }
-            Err(error) => tracing::error!("{GRIP_PROFILES_ASSET} is not valid JSON: {error}"),
+    // Latched on SUCCESS, not on the attempt: a `Once` would mark the load done
+    // even when the asset could not be resolved, leaving every grip in the
+    // process unseated for the rest of the run behind one warning.
+    if is_loaded() {
+        return;
+    }
+    let Some(text) = asset_cache.get_opt::<_, String, _>(&TEXT_IMPORTER, GRIP_PROFILES_ASSET)
+    else {
+        tracing::warn!(
+            "{GRIP_PROFILES_ASSET} not found; every held model is seated from its own geometry"
+        );
+        return;
+    };
+    match parse(&text) {
+        Ok(profiles) => {
+            tracing::info!("loaded {} VR grip profiles", profiles.len());
+            set_profiles(profiles);
+            LOAD_SUCCEEDED.store(true, Ordering::Relaxed);
         }
-    });
+        Err(error) => tracing::error!("{GRIP_PROFILES_ASSET} is not valid JSON: {error}"),
+    }
+}
+
+/// Whether [`ensure_loaded`] has actually put the authored file in the
+/// registry. Saving before it has is how an empty registry would overwrite the
+/// asset with `{}`.
+static LOAD_SUCCEEDED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the authored profiles are in the registry.
+pub fn is_loaded() -> bool {
+    LOAD_SUCCEEDED.load(Ordering::Relaxed)
 }
 
 /// Bumped whenever an edit changes what [`resolve`] would answer. A cached fit
@@ -203,16 +220,37 @@ pub fn clear_profile(model_name: &str) {
 /// Called from wherever the mesh is reachable (the wield's own asset cache);
 /// every later placement reads the answer out of the registry.
 pub fn remember_measured_seat(model_name: &str, min: Vector3<f32>, max: Vector3<f32>) {
+    remember(model_name, Some((min, max)));
+}
+
+/// Record that `model_name` has no box to measure - a skinned rig, or a model
+/// whose mesh never loaded. Remembering the miss is the point: without it every
+/// frame the item is held re-walks the asset mounts looking for it.
+pub fn remember_unmeasurable(model_name: &str) {
+    remember(model_name, None);
+}
+
+fn remember(model_name: &str, box_of: Option<(Vector3<f32>, Vector3<f32>)>) {
     let key = model_name.to_ascii_lowercase();
-    if MEASURED.read().unwrap().contains_key(&key) {
+    if !needs_measurement(&key) {
         return;
     }
     // Measured even for a model whose seat is fully authored: the box is also
     // where the grip *family* comes from, and an authored offset must not cost
     // the fingers their envelope.
+    let solved_at = generation();
     let rotation = profile(&key).as_ref().and_then(rotation_of);
-    let measured = hand_seat::seat(min, max, rotation);
-    MEASURED.write().unwrap().insert(key, measured);
+    let measured = box_of.map(|(min, max)| hand_seat::seat(min, max, rotation));
+
+    // An edit that landed while this was solving already cleared the entry and
+    // changed the turn it was solved against; drop the stale answer rather than
+    // parking it where nothing would ever re-measure it.
+    let mut cache = MEASURED.write().unwrap();
+    if generation() != solved_at {
+        return;
+    }
+    cache.insert(key, measured);
+    drop(cache);
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -240,22 +278,26 @@ pub fn resolve(model_name: &str, handedness: Handedness) -> ResolvedGrip {
         .read()
         .unwrap()
         .get(model_name.to_ascii_lowercase().as_str())
-        .copied();
+        .copied()
+        .flatten();
 
-    let (offset, rotation, source) = match (&authored, measured) {
-        (Some(profile), _) if profile.offset.is_some() => (
-            to_vec(profile.offset.unwrap()),
-            rotation_of(profile).unwrap_or_else(no_turn),
-            GripSource::Profile,
-        ),
-        (_, Some((seat, _))) => (seat.offset, seat.rotation, GripSource::Heuristic),
-        (Some(profile), None) => (
-            Vector3::new(0.0, 0.0, 0.0),
-            rotation_of(profile).unwrap_or_else(no_turn),
-            GripSource::Unseated,
-        ),
-        (None, None) => (Vector3::new(0.0, 0.0, 0.0), no_turn(), GripSource::Unseated),
+    // Offset and rotation resolve independently: authoring one must not throw
+    // away the measurement of the other (nudging an offset would otherwise
+    // reset a model's turn to no turn at all).
+    let authored_offset = authored.as_ref().and_then(|p| p.offset).map(to_vec);
+    let source = match (authored_offset, measured) {
+        (Some(_), _) => GripSource::Profile,
+        (None, Some(_)) => GripSource::Heuristic,
+        (None, None) => GripSource::Unseated,
     };
+    let offset = authored_offset
+        .or_else(|| measured.map(|(seat, _)| seat.offset))
+        .unwrap_or_else(Vector3::zero);
+    let rotation = authored
+        .as_ref()
+        .and_then(rotation_of)
+        .or_else(|| measured.map(|(seat, _)| seat.rotation))
+        .unwrap_or_else(no_turn);
 
     // The left hand's grip on a mirrored model is the right one reflected, so
     // the reflected geometry seats where the authored one does.
@@ -274,7 +316,7 @@ pub fn resolve(model_name: &str, handedness: Handedness) -> ResolvedGrip {
         family: authored
             .as_ref()
             .and_then(|p| p.family.as_deref())
-            .and_then(family_from_str)
+            .and_then(GripFamily::from_str)
             .or_else(|| {
                 crate::vr_config::is_vr_gun_view_model(model_name).then_some(GripFamily::Trigger)
             })
@@ -313,19 +355,6 @@ fn rotation_of(profile: &GripProfile) -> Option<Quaternion<f32>> {
     )
 }
 
-/// A family by its [`GripFamily::as_str`] name; unknown names are ignored so a
-/// typo degrades to the measured family rather than to a crash.
-pub fn family_from_str(name: &str) -> Option<GripFamily> {
-    [
-        GripFamily::Cylindrical,
-        GripFamily::Pinch,
-        GripFamily::Broad,
-        GripFamily::Trigger,
-    ]
-    .into_iter()
-    .find(|family| family.as_str() == name)
-}
-
 /// The shipped profile file, compiled in - so a test can exercise the real
 /// profiles without the asset mounts.
 #[cfg(test)]
@@ -344,6 +373,7 @@ pub fn test_guard() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 pub fn load_shipped_for_test() {
     set_profiles(parse(SHIPPED_PROFILES).expect("the shipped grip profiles parse"));
+    LOAD_SUCCEEDED.store(true, Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -448,19 +478,6 @@ mod tests {
             // Keys are sorted, so a save is byte-stable across runs.
             assert_eq!(to_json(), saved);
         });
-    }
-
-    #[test]
-    fn every_family_name_round_trips() {
-        for family in [
-            GripFamily::Cylindrical,
-            GripFamily::Pinch,
-            GripFamily::Broad,
-            GripFamily::Trigger,
-        ] {
-            assert_eq!(family_from_str(family.as_str()), Some(family));
-        }
-        assert_eq!(family_from_str("nonsense"), None);
     }
 
     #[test]

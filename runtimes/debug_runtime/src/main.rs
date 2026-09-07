@@ -4308,7 +4308,7 @@ async fn set_vr_grip(
     }
 
     if let Some(name) = &request.family
-        && shock2vr::vr_grips::family_from_str(name).is_none()
+        && shock2vr::hand_fit::GripFamily::from_str(name).is_none()
     {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -4349,15 +4349,31 @@ struct SaveGripsRequest {
 }
 
 /// HTTP handler writing the in-memory profiles back out, keys sorted so an
-/// unchanged registry reproduces the file it came from. Defaults to the repo's
-/// own `assets/vr_grips.json`; `path` writes somewhere else (what a test uses,
-/// so it never touches the asset).
+/// unchanged registry reproduces the file it came from.
+///
+/// Defaults to `assets/vr_grips.json` **relative to the working directory** -
+/// where the off-device asset mount reads it from, so a save lands in the same
+/// checkout the load came from. (A compile-time `CARGO_MANIFEST_DIR` path would
+/// send a binary built in one checkout writing into another's.) `path` writes
+/// somewhere else, which is what a test uses so it never touches the asset.
+///
+/// Refused until the profiles have actually loaded: the registry starts empty,
+/// and saving an empty registry would overwrite the file with `{}`.
 async fn save_vr_grips(
     LenientJson(request): LenientJson<SaveGripsRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let path = request.path.unwrap_or_else(|| {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/vr_grips.json").to_string()
-    });
+    if !shock2vr::vr_grips::is_loaded() {
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "{} has not loaded yet - step a scene first, or saving would erase it",
+                shock2vr::vr_grips::GRIP_PROFILES_ASSET
+            ),
+        ));
+    }
+    let path = request
+        .path
+        .unwrap_or_else(|| format!("assets/{}", shock2vr::vr_grips::GRIP_PROFILES_ASSET));
     std::fs::write(&path, shock2vr::vr_grips::to_json())
         .map_err(|error| (StatusCode::BAD_REQUEST, format!("{path}: {error}")))?;
     Ok(Json(json!({ "path": path })))

@@ -100,6 +100,22 @@ impl GripFamily {
         }
     }
 
+    /// Every family, so a name can be parsed back without a second list of
+    /// variants to keep in step (`HandLight::ALL` is the same pattern).
+    pub const ALL: [GripFamily; 4] = [
+        GripFamily::Cylindrical,
+        GripFamily::Pinch,
+        GripFamily::Broad,
+        GripFamily::Trigger,
+    ];
+
+    /// A family by its [`Self::as_str`] name; an unknown name is `None`, so a
+    /// typo in an authored profile degrades to the measured family rather than
+    /// to a crash.
+    pub fn from_str(name: &str) -> Option<GripFamily> {
+        Self::ALL.into_iter().find(|family| family.as_str() == name)
+    }
+
     /// Readable name, for the hand readout and the grip override table.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -159,16 +175,7 @@ impl ContactMesh {
 
     /// Axis-aligned extents of the mesh in hand space, or `None` when empty.
     pub fn extents(&self) -> Option<Vector3<f32>> {
-        let mut min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
-        let mut max = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-        for triangle in &self.triangles {
-            for corner in triangle {
-                let p = corner.to_vec();
-                min = Vector3::new(min.x.min(p.x), min.y.min(p.y), min.z.min(p.z));
-                max = Vector3::new(max.x.max(p.x), max.y.max(p.y), max.z.max(p.z));
-            }
-        }
-        min.x.is_finite().then(|| max - min)
+        triangle_bounds(&self.triangles).map(|(min, max)| max - min)
     }
 
     /// Indices of the triangles whose bounding box overlaps `[min, max]`. Run
@@ -206,6 +213,23 @@ impl ContactMesh {
             })
         })
     }
+}
+
+/// Axis-aligned bounds of a triangle soup, or `None` when there are none.
+///
+/// One routine, so the seat measured off a model's box and the box the fit
+/// reads are the same measurement (see [`crate::hand_seat`]).
+pub fn triangle_bounds(triangles: &[[Point3<f32>; 3]]) -> Option<(Vector3<f32>, Vector3<f32>)> {
+    let mut min = Vector3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    let mut max = Vector3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for triangle in triangles {
+        for corner in triangle {
+            let point = corner.to_vec();
+            min = Vector3::new(min.x.min(point.x), min.y.min(point.y), min.z.min(point.z));
+            max = Vector3::new(max.x.max(point.x), max.y.max(point.y), max.z.max(point.z));
+        }
+    }
+    min.x.is_finite().then_some((min, max))
 }
 
 /// The family to use for an item of these hand-space extents, when nothing
@@ -465,6 +489,16 @@ fn segment_segment_distance(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every family's name parses back to it - the profile file and the hand
+    /// readout are both text, so the pair has to be a real round trip.
+    #[test]
+    fn every_family_name_round_trips() {
+        for family in GripFamily::ALL {
+            assert_eq!(GripFamily::from_str(family.as_str()), Some(family));
+        }
+        assert_eq!(GripFamily::from_str("nonsense"), None);
+    }
     use cgmath::{Matrix3, Rad, point3, vec3};
 
     /// Phalanx thickness the synthetic hand tests with.

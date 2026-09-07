@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use cgmath::{Quaternion, Rotation3, Vector3, vec3};
 use dark::properties::PropModelName;
 
-use crate::hand_fit::GripFamily;
 use crate::runtime_props::{RuntimePropVrGripOffset, RuntimePropVrGunWield};
 use once_cell::sync::Lazy;
 use shipyard::{EntityId, Get, View, World};
@@ -105,11 +104,6 @@ impl VRHandModelPerHandAdjustments {
         VRHandModelPerHandAdjustments { offset, ..self }
     }
 }
-
-/// Where each model sits in a hand is authored data now
-/// ([`crate::vr_grips`], `assets/vr_grips.json`) rather than a table here:
-/// a model the file says nothing about is seated from its own geometry
-/// ([`crate::hand_seat`]), which a static table could never do.
 
 /// First-person models the flat wield swap may apply. Frozen to the set that
 /// was allowed before the VR `_h` route grew the grip table, so flat behavior
@@ -457,33 +451,6 @@ pub fn get_vr_hand_model_adjustments_from_model(
     }
 }
 
-/// The grip family `model_name` is held in, when something other than its own
-/// measured box decides. A gun is the one entry the code derives rather than
-/// reads: its grip measures like any other handle, but the index belongs on the
-/// trigger.
-pub fn grip_family(model_name: &str) -> Option<GripFamily> {
-    crate::vr_grips::resolve(model_name, Handedness::Right).family
-}
-
-/// The per-finger curls a profile authored for `model_name`, which replace the
-/// contact fit's answer outright.
-pub fn authored_finger_curls(model_name: &str) -> Option<crate::hand_pose::FingerAmounts> {
-    crate::vr_grips::resolve(model_name, Handedness::Right).fingers
-}
-
-/// Whether the wield puts `model_name` somewhere specific in the hand.
-///
-/// Only a seated model can be fitted: the contact fit measures where the item's
-/// surface falls against the fingers, and a model left at the wrist origin is
-/// drawn straight through the hand, so anything measured off it describes the
-/// missing placement rather than the grip. Everything with geometry gets a seat
-/// once it has been measured ([`crate::vr_grips::remember_measured_seat`]); a
-/// model whose mesh never loaded keeps the generic wrap.
-pub fn has_hand_seat(model_name: &str) -> bool {
-    crate::vr_grips::resolve(model_name, Handedness::Right).source
-        != crate::vr_grips::GripSource::Unseated
-}
-
 /// Where a held model's geometry sits in the **glove's own hand space**, so
 /// the finger fit and the grip debug scene measure the item in the frame the
 /// fingers are posed in.
@@ -509,7 +476,7 @@ pub fn held_model_hand_transform(
         // A pickup's own authored held scale: the game's world models run well
         // over life size, and a life-size glove is what they are now held
         // beside. Geometry only - what falls back on the floor is unchanged.
-        Matrix4::from_scale(crate::vr_grips::render_scale(model_name))
+        Matrix4::from_scale(held_geometry_scale(model_name))
     };
 
     // `mirror` is a reflection, so it is its own inverse - this IS the
@@ -528,8 +495,23 @@ pub fn held_model_hand_transform(
 /// moment it is dropped.
 pub fn held_render_scale(world: &World, entity_id: EntityId) -> f32 {
     model_name_lower(world, entity_id)
-        .map(|name| crate::vr_grips::render_scale(&name))
+        .map(|name| held_geometry_scale(&name))
         .unwrap_or(1.0)
+}
+
+/// The uniform scale `model_name`'s geometry is drawn at while held, from its
+/// grip profile.
+///
+/// A gun is always 1.0 here: its life-size shrink is a dev param the wield
+/// already baked into the geometry and into the grip offset with it, so a
+/// second per-model scale would shrink the model out from under its own seat.
+/// One definition, read by both the render and the contact fit, so the two
+/// cannot measure the item at different sizes.
+pub fn held_geometry_scale(model_name: &str) -> f32 {
+    if is_vr_gun_view_model(model_name) {
+        return 1.0;
+    }
+    crate::vr_grips::render_scale(model_name)
 }
 
 /// The model a hand is holding and the scale its wield baked into it, for
@@ -547,21 +529,24 @@ mod tests {
 
     /// A gun is held by name: its grip measures like any other handle, but the
     /// index belongs on the trigger, so every gun `_h` reports the trigger
-    /// family - and nothing else does.
+    /// family - and nothing else does until its own box has been measured.
     #[test]
     fn every_gun_view_model_is_held_by_its_trigger() {
+        use crate::hand_fit::GripFamily;
+
         let _guard = crate::vr_grips::test_guard();
         crate::vr_grips::load_shipped_for_test();
 
+        let family = |name: &str| crate::vr_grips::resolve(name, Handedness::Right).family;
         for name in VR_25AE_GUN_MODELS {
             assert_eq!(
-                grip_family(name),
+                family(name),
                 Some(GripFamily::Trigger),
                 "{name} should be held on its trigger"
             );
         }
-        assert_eq!(grip_family("mug"), None);
-        assert_eq!(grip_family("hamball"), None);
+        assert_eq!(family("mug"), None);
+        assert_eq!(family("hamball"), None);
     }
 
     /// Only a seated model can be fitted. Every wielded gun is seated by the
@@ -569,19 +554,30 @@ mod tests {
     /// and keeps the generic wrap until then.
     #[test]
     fn only_a_seated_model_can_be_fitted() {
+        use crate::vr_grips::GripSource;
+
         let _guard = crate::vr_grips::test_guard();
         crate::vr_grips::load_shipped_for_test();
 
+        let source = |name: &str| crate::vr_grips::resolve(name, Handedness::Right).source;
         for name in VR_25AE_GUN_MODELS {
-            assert!(has_hand_seat(name), "{name} should be seated");
+            assert_eq!(source(name), GripSource::Profile, "{name} should be seated");
         }
-        assert!(has_hand_seat("ATEK_H"), "the lookup is case-insensitive");
+        assert_eq!(
+            source("ATEK_H"),
+            GripSource::Profile,
+            "the lookup is case-insensitive"
+        );
         // Nothing has measured these yet, so they are still on the wrist.
-        assert!(!has_hand_seat("mug"));
-        assert!(!has_hand_seat("hamball"));
+        assert_eq!(source("mug"), GripSource::Unseated);
+        assert_eq!(source("hamball"), GripSource::Unseated);
 
         crate::vr_grips::remember_measured_seat("mug", vec3(-0.1, -0.1, -0.1), vec3(0.1, 0.1, 0.1));
-        assert!(has_hand_seat("mug"), "a measured pickup is seated");
+        assert_eq!(
+            source("mug"),
+            GripSource::Heuristic,
+            "a measured pickup is seated"
+        );
     }
 
     /// Every wielded view model is either a gun (glove on it, arm stripped), a
@@ -751,8 +747,13 @@ mod tests {
     }
 
     /// The grips as the static table held them, immediately before the move to
-    /// `assets/vr_grips.json`. Every wielded view model must still resolve to
-    /// exactly this - the file is a transcription, not a re-tune.
+    /// `assets/vr_grips.json`, resolved with nothing measured yet - the file is
+    /// a transcription, not a re-tune.
+    ///
+    /// The 13 entries with an authored offset keep that offset forever. The
+    /// rotation-only entries (`laser`, `battery`, ...) keep their *turn* but
+    /// take a measured drop once their geometry is seen, which is the point of
+    /// the slice; this table pins where they start, not where they end up.
     const MIGRATED_GRIPS: &[(&str, [f32; 3], f32)] = &[
         ("atek_h", [0.0, 0.073, 0.020], -90.0),
         ("ar15_h", [0.0, 0.123, -0.469], -90.0),

@@ -105,29 +105,27 @@ fn across_the_palm(extents: Vector3<f32>) -> Quaternion<f32> {
     Quaternion::from(matrix)
 }
 
-/// The axis-aligned bounds of `[min, max]` after `rotation`.
+/// The axis-aligned bounds of `[min, max]` after `rotation` - the same
+/// transform-the-corners-and-re-bound `dark::model` does for a posed hitbox.
 fn rotated_bounds(
     min: Vector3<f32>,
     max: Vector3<f32>,
     rotation: Quaternion<f32>,
 ) -> (Vector3<f32>, Vector3<f32>) {
-    use cgmath::Rotation;
+    use cgmath::{EuclideanSpace, Point3, Rotation};
+    use collision::{Aabb, Aabb3};
 
-    let mut lo = vec3(f32::INFINITY, f32::INFINITY, f32::INFINITY);
-    let mut hi = vec3(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
-    for corner in 0..8 {
-        let pick = |axis: usize, low: f32, high: f32| {
-            if corner & (1 << axis) == 0 { low } else { high }
-        };
-        let point = rotation.rotate_vector(vec3(
-            pick(0, min.x, max.x),
-            pick(1, min.y, max.y),
-            pick(2, min.z, max.z),
-        ));
-        lo = vec3(lo.x.min(point.x), lo.y.min(point.y), lo.z.min(point.z));
-        hi = vec3(hi.x.max(point.x), hi.y.max(point.y), hi.z.max(point.z));
-    }
-    (lo, hi)
+    let box_of = Aabb3::new(Point3::from_vec(min), Point3::from_vec(max));
+    let turned = box_of
+        .to_corners()
+        .map(|corner| Point3::from_vec(rotation.rotate_vector(corner.to_vec())));
+    let bounds = turned
+        .iter()
+        .skip(1)
+        .fold(Aabb3::new(turned[0], turned[0]), |bounds, point| {
+            bounds.grow(*point)
+        });
+    (bounds.min.to_vec(), bounds.max.to_vec())
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@
 //! `dark::importers::is_first_person_arm_material` and the trigger-hand pick
 //! are reviewable against the art instead of asserted.
 //!
-//! The silhouette is how `vr_config::HAND_MODEL_POSITIONING`'s grips are
+//! The silhouette is how `assets/vr_grips.json`'s gun grips are
 //! placed: it draws the weapon-only geometry in its own authored frame (barrel
 //! along -X, +Y up) on a labelled grid, so the pistol grip can be read off in
 //! model units instead of guessed from a screenshot. `o` marks the model
