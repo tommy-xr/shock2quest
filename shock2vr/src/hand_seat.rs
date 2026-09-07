@@ -36,9 +36,14 @@ pub const PALM_NORMAL: Vector3<f32> = vec3(-0.97836, 0.15474, -0.13728);
 /// about, so the axis a rod lies along when the fist closes on it.
 pub const PALM_CURL_AXIS: Vector3<f32> = vec3(-0.17354, -0.97693, 0.13556);
 
-/// Where thumb and index meet when the open hand closes on something thin: the
-/// midpoint of their tips at the open pose. A pinched item straddles this.
-pub const PINCH_POINT: Vector3<f32> = vec3(-0.05139, 0.055755, -0.168875);
+/// Where thumb and index meet when the hand closes on something thin: the
+/// point their pads converge on, searched over the pair's whole curl range
+/// rather than read off the open pose - at the open pose they are 7 cm apart
+/// and one behind the other, and only closing brings them face to face. A
+/// pinched item straddles this, and the direction between the pads there is
+/// (to within a few degrees) the palm normal, which is why a pinched slab
+/// faces the palm with its thin side.
+pub const PINCH_POINT: Vector3<f32> = vec3(-0.07385, 0.041375, -0.13198);
 
 /// How far the palm's skin is from the joints the frame is measured through,
 /// in world units - roughly half the thickness of a hand.
@@ -48,15 +53,6 @@ pub const PINCH_POINT: Vector3<f32> = vec3(-0.05139, 0.055755, -0.168875);
 /// the fit already inside it (which the fit reads as "leave the authored wrap
 /// alone"). Items sit on the skin instead.
 const PALM_DEPTH: f32 = 0.012 / crate::METERS_PER_WORLD_UNIT;
-
-/// How far toward the knuckles a wrapped item sits from the palm's centre, in
-/// world units.
-///
-/// A grip is not held in the middle of the palm: it sits under the base of the
-/// fingers, which is the only stretch of palm both the fingers and the *thumb*
-/// close over. Centred on the palm proper, a handle falls behind the thumb's
-/// whole swing and the thumb closes past it into a fist.
-const GRIP_SEAT_ALONG: f32 = 0.015 / crate::METERS_PER_WORLD_UNIT;
 
 /// The palm frame as the seat uses it: `(across, out, along)` - across the palm
 /// (the curl axis), out of the palm, and along the fingers wrist-to-tips.
@@ -118,10 +114,12 @@ pub fn seat(
     let (_, out, along) = palm_frame();
     let target = match family {
         // The near face on the palm skin, the rest of the item out in front of
-        // it - and pushed toward the knuckles, which is the stretch of palm the
-        // fingers *and* the thumb can both reach round.
+        // it. Centred on the palm and no further toward the knuckles: the open
+        // fingers' first phalanges run *below* the palm plane there, so a nudge
+        // that way seats the item into the fingers rather than in front of
+        // them, and they read as already closed before they move.
         GripFamily::Cylindrical | GripFamily::Broad | GripFamily::Trigger => {
-            PALM_CENTRE + out * (PALM_DEPTH + support(out)) + along * GRIP_SEAT_ALONG
+            PALM_CENTRE + out * (PALM_DEPTH + support(out))
         }
         // Straddling the pinch line, running away from the hand: the pads meet
         // its near edge and close onto its faces.

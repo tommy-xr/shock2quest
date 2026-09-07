@@ -660,6 +660,7 @@ fn palm_frame_of(
     model: &mut GlbModel,
     retarget: &HandPoseRetarget,
     open: &Pose,
+    fist: &Pose,
 ) -> (Vector3<f32>, Vector3<f32>, Vector3<f32>, Vector3<f32>) {
     use cgmath::{InnerSpace, Zero};
 
@@ -696,11 +697,36 @@ fn palm_frame_of(
     // Out of the palm is what the fingers curl toward, which the wrist-to-
     // knuckle run and the across-the-palm run bracket in this order.
     let normal = (knuckles - bases).cross(curl).normalize();
-    // Thumb and index tips - the last joint of each chain.
-    let pinch = (joint(model, *Finger::Thumb.bones().end())
-        + joint(model, *Finger::Index.bones().end()))
-        * 0.5;
-    (centre, normal, curl, pinch)
+    // Where thumb and index pads converge. Searched over the pair's curl
+    // range, not read off the open pose: open, the two are 7 cm apart and one
+    // behind the other, and their tips only come face to face part way closed.
+    let mut rig = GloveRig {
+        model,
+        retarget,
+        open,
+        fist,
+        to_hand,
+    };
+    let tip = |rig: &mut GloveRig, finger, curl| {
+        rig.phalanges(finger, curl)
+            .last()
+            .map(|capsule: &Capsule| capsule.b.to_vec())
+            .unwrap_or_else(Vector3::zero)
+    };
+    const PINCH_STEPS: usize = 20;
+    let step = |i: usize| i as f32 / PINCH_STEPS as f32;
+    let mut pinch = (f32::INFINITY, Vector3::zero());
+    for t in 0..=PINCH_STEPS {
+        let thumb = tip(&mut rig, Finger::Thumb, step(t));
+        for i in 0..=PINCH_STEPS {
+            let index = tip(&mut rig, Finger::Index, step(i));
+            let gap = (thumb - index).magnitude();
+            if gap < pinch.0 {
+                pinch = (gap, (thumb + index) * 0.5);
+            }
+        }
+    }
+    (centre, normal, curl, pinch.1)
 }
 
 /// The glove's colour map. One loader, shared with the `debug_gloves` harness,
@@ -775,8 +801,12 @@ mod tests {
 
         let (mut model, retarget) = test_glove();
 
-        let (centre, normal, curl, pinch) =
-            palm_frame_of(&mut model, &retarget, &hand_pose::open_right_hand());
+        let (centre, normal, curl, pinch) = palm_frame_of(
+            &mut model,
+            &retarget,
+            &hand_pose::open_right_hand(),
+            &hand_pose::fist_right_hand(),
+        );
 
         for (name, measured, written) in [
             ("centre", centre, crate::hand_seat::PALM_CENTRE),
