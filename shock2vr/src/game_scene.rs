@@ -400,6 +400,23 @@ pub struct DebugHandAffordances {
     pub right_model: Option<String>,
 }
 
+/// The second hand's grip on whatever the first hand holds: what makes a
+/// weapon two-handed, and where the off-hand took hold of it.
+#[derive(Debug, Serialize, Clone, Default)]
+pub struct DebugTwoHandGrip {
+    /// Whether a support grip is attached right now.
+    pub two_handed: bool,
+    /// Which hand is supporting ("left"/"right"), or `null`.
+    pub support_hand: Option<&'static str>,
+    /// The entity the support hand has hold of, or `null`.
+    pub support_of: Option<u64>,
+    /// Where it took hold, in the holding hand's own space.
+    pub support_point: Option<[f32; 3]>,
+    /// Whether an authored support seat claimed the grip rather than the palm
+    /// latching wherever it met the surface.
+    pub snapped: bool,
+}
+
 /// The player's body anchors, and what hangs off them: where a hand has to go
 /// to reach the belt or a shoulder, what a shoulder would draw, and where the
 /// belt card is.
@@ -941,6 +958,12 @@ pub trait DebuggableScene {
     /// and in scenes without a player.
     fn player_body_frame(&self) -> Option<DebugBodyFrame> {
         None
+    }
+
+    /// The second hand's grip (see [`DebugTwoHandGrip`]). Scenes without a
+    /// player report the idle state.
+    fn player_two_hand(&self) -> DebugTwoHandGrip {
+        DebugTwoHandGrip::default()
     }
 
     /// Teleport the player to a specific position

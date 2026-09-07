@@ -2895,10 +2895,20 @@ impl MissionCore {
         crate::vr_grips::ensure_loaded(asset_cache);
         let (left_held, right_held) = self.interaction.held_entities();
         for entity_id in [left_held, right_held].into_iter().flatten() {
-            if let Some((model_name, _)) =
+            if let Some((model_name, gun_scale)) =
                 crate::vr_config::held_model_and_scale(&self.world, entity_id)
             {
                 crate::hand_glove::warm_held_seat(&model_name, asset_cache);
+                // The same split for the item's contact triangles, which the
+                // second hand's grab test needs and cannot load itself.
+                if let Some(hand) = self.interaction.holding_hand(entity_id) {
+                    crate::two_hand_grip::warm_contact_mesh(
+                        &model_name,
+                        hand,
+                        gun_scale,
+                        asset_cache,
+                    );
+                }
             }
         }
 
@@ -12114,6 +12124,23 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             left_model: model_of(left_held),
             right_model: model_of(right_held),
         })
+    }
+
+    fn player_two_hand(&self) -> crate::game_scene::DebugTwoHandGrip {
+        use crate::vr_config::Handedness;
+        let Some(latch) = self.interaction.support_latch() else {
+            return Default::default();
+        };
+        crate::game_scene::DebugTwoHandGrip {
+            two_handed: true,
+            support_hand: Some(match latch.hand {
+                Handedness::Left => "left",
+                Handedness::Right => "right",
+            }),
+            support_of: Some(latch.entity_id.inner()),
+            support_point: Some([latch.point.x, latch.point.y, latch.point.z]),
+            snapped: latch.snapped,
+        }
     }
 
     fn player_body_frame(&self) -> Option<crate::game_scene::DebugBodyFrame> {

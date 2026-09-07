@@ -2370,6 +2370,10 @@ fn capture_frame_snapshot(
             // Real player state from the active world (position, look, and the
             // held/wielded entities), or zeros when the scene has no player.
             let state = game.player_state();
+            let two_hand = game
+                .debug_scene()
+                .map(|scene| scene.player_two_hand())
+                .unwrap_or_default();
             PlayerInfo {
                 entity_id: state.as_ref().map(|s| s.entity_id),
                 inventory_entity_id: state.as_ref().map(|s| s.inventory_entity_id),
@@ -2452,6 +2456,8 @@ fn capture_frame_snapshot(
                 body_frame: game
                     .debug_scene()
                     .and_then(|scene| scene.player_body_frame()),
+                two_handed: two_hand.two_handed,
+                two_hand,
             }
         },
         entity_count,

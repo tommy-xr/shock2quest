@@ -174,6 +174,33 @@ impl ContactMesh {
         triangle_bounds(&self.triangles).map(|(min, max)| max - min)
     }
 
+    /// Whether any triangle comes within `radius` of `point`.
+    ///
+    /// The support-grab test ([`crate::two_hand_grip`]): a second hand takes
+    /// hold wherever its palm meets the item's own surface, so the question is
+    /// proximity to the mesh rather than to an authored point.
+    pub fn within(&self, point: Point3<f32>, radius: f32) -> bool {
+        let p = point.to_vec();
+        self.triangles.iter().any(|triangle| {
+            // Reject on the triangle's own box before paying for the exact
+            // distance: at a few thousand triangles that is most of the cost.
+            let mut lo = triangle[0].to_vec();
+            let mut hi = lo;
+            for corner in &triangle[1..] {
+                let c = corner.to_vec();
+                lo = Vector3::new(lo.x.min(c.x), lo.y.min(c.y), lo.z.min(c.z));
+                hi = Vector3::new(hi.x.max(c.x), hi.y.max(c.y), hi.z.max(c.z));
+            }
+            lo.x - radius <= p.x
+                && hi.x + radius >= p.x
+                && lo.y - radius <= p.y
+                && hi.y + radius >= p.y
+                && lo.z - radius <= p.z
+                && hi.z + radius >= p.z
+                && point_triangle_distance(point, triangle) <= radius
+        })
+    }
+
     /// Indices of the triangles whose bounding box overlaps `[min, max]`. Run
     /// once per finger over its whole curl sweep, so the inner loop only ever
     /// sees triangles that finger could reach.

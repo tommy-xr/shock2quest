@@ -242,6 +242,7 @@ impl VirtualHand {
         input_hand: &Hand,
         held_by_other_hand: Option<EntityId>,
         anchor_claim: Option<crate::body_frame::HandClaim>,
+        two_hand: crate::two_hand_grip::TwoHandFrame,
     ) -> (VirtualHand, Vec<VirtualHandEffect>) {
         let handedness = prev.handedness;
         let hand_position = hand_world_position(pawn_pos, pawn_rot, input_hand.position);
@@ -329,12 +330,17 @@ impl VirtualHand {
                         });
                     }
 
+                    // A second hand on the item re-aims it down the line
+                    // between the hands; the tracked wrist still owns where it
+                    // is. One transform either way, so the muzzle, the magazine
+                    // anchors and the melee drive's kinematic target all follow.
+                    let placement = two_hand.aim_rotation.unwrap_or(hand_rotation);
                     msgs.push(VirtualHandEffect::SetPositionRotation {
                         entity_id,
                         // The offset is hand-local (e.g. seating a weapon's
                         // grip in the palm), so it must rotate with the hand
-                        position: hand_position + hand_rotation.rotate_vector(vr_offsets.offset),
-                        rotation: hand_rotation * vr_offsets.rotation,
+                        position: hand_position + placement.rotate_vector(vr_offsets.offset),
+                        rotation: placement * vr_offsets.rotation,
                         // A pickup's authored held scale (`vr_grips`): the
                         // world models run well over life size and the glove
                         // holding them is life size. Guns report 1.0 - their
@@ -368,6 +374,7 @@ impl VirtualHand {
                 input_hand,
                 held_by_other_hand,
                 anchor_claim,
+                two_hand,
             ),
         };
 
@@ -491,6 +498,7 @@ fn handle_empty_hand_state(
     input_hand: &Hand,
     held_by_other_hand: Option<EntityId>,
     anchor_claim: Option<crate::body_frame::HandClaim>,
+    two_hand: crate::two_hand_grip::TwoHandFrame,
 ) -> (VirtualHand, Vec<VirtualHandEffect>) {
     let ray_start = point3(hand_position.x, hand_position.y, hand_position.z);
     let forward = hand_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
@@ -524,6 +532,16 @@ fn handle_empty_hand_state(
             }
         }
     };
+    // A hand on the other hand's item advertises the support grip it could
+    // take, whatever its ray happens to cross past the item.
+    let (observed, preshape_weight) = if two_hand.offered {
+        (
+            HandAffordance::Grabbable,
+            hand_affordance::preshape_weight(0.0),
+        )
+    } else {
+        (observed, preshape_weight)
+    };
     let mut attempt_failed = false;
     // A refusal is one press, not one per frame the player keeps holding.
     let squeeze_pressed = prev_squeeze <= 0.5 && input_hand.squeeze_value > 0.5;
@@ -533,7 +551,10 @@ fn handle_empty_hand_state(
     let mut next_hand_state = HandState::Empty;
     // A claimed hand reaches for the body, not through it: its grip belongs to
     // the anchor gesture, so it must not also grab or frob what the ray found.
-    let claimed_by_anchor = anchor_claim.is_some();
+    // A supporting hand holds the other hand's weapon: like a hand at a body
+    // anchor, its grip is spoken for and must not also grab or frob whatever
+    // its ray found past the weapon.
+    let claimed_by_anchor = anchor_claim.is_some() || two_hand.supporting;
     if !claimed_by_anchor && (input_hand.trigger_value > 0.5 || input_hand.a_value > 0.5) {
         if let Some(RayCastResult {
             hit_point: _,
@@ -898,6 +919,7 @@ mod tests {
             &input,
             None,
             None,
+            Default::default(),
         );
 
         effects
@@ -1341,6 +1363,7 @@ mod tests {
             &input,
             None,
             None,
+            Default::default(),
         );
         assert_eq!(far_hand.get_raytraced_entity(), None);
         assert!(
@@ -1358,6 +1381,7 @@ mod tests {
             &input,
             None,
             None,
+            Default::default(),
         );
         assert_eq!(near_hand.get_raytraced_entity(), Some(near_target));
         assert!(
@@ -1392,6 +1416,7 @@ mod tests {
                 &idle,
                 None,
                 None,
+                Default::default(),
             )
             .0
             .affordance()
@@ -1419,6 +1444,7 @@ mod tests {
             &Hand::default(),
             None,
             None,
+            Default::default(),
         );
         assert_eq!(hovering.affordance(), HandAffordance::Blocked);
 
@@ -1434,6 +1460,7 @@ mod tests {
             },
             None,
             None,
+            Default::default(),
         );
         assert_eq!(frobbing.affordance(), HandAffordance::Failed);
     }
@@ -1461,6 +1488,7 @@ mod tests {
                 &squeeze,
                 None,
                 None,
+                Default::default(),
             )
             .0;
             assert_eq!(
@@ -1489,6 +1517,7 @@ mod tests {
             &squeeze,
             None,
             None,
+            Default::default(),
         );
         assert_eq!(hand.affordance(), HandAffordance::Failed);
     }

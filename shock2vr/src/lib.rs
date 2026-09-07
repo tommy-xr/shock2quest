@@ -18,6 +18,7 @@ pub mod save_load;
 pub mod scenes;
 pub mod teleport;
 pub mod time;
+pub mod two_hand_grip;
 
 pub mod career;
 pub mod creature;

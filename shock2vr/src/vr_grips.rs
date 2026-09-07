@@ -69,8 +69,45 @@ pub struct GripProfile {
     /// A uniform scale applied to the held geometry (not to the dropped item).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<f32>,
+    /// Where a *second* hand prefers to take hold, in the model's own space -
+    /// the shotgun's pump, the assault rifle's magwell. A preference, not a
+    /// requirement: the off-hand may latch anywhere on the item's surface
+    /// (see [`crate::two_hand_grip`]), and a seat only wins when the palm
+    /// comes within snapping distance of it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub support: Vec<SupportSeat>,
     #[serde(default, skip_serializing_if = "is_default_mirror")]
     pub mirror: Mirror,
+}
+
+/// One authored support-hand seat on a model.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SupportSeat {
+    /// The grip point in the model's own (unscaled) space, the same space the
+    /// render triangles are read in - so the wield's life-size shrink applies
+    /// to the seat exactly as it applies to the geometry.
+    pub offset: [f32; 3],
+    /// The grip family the support hand closes in, overriding what the item's
+    /// box measures. Omitted leaves it to the fit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+}
+
+impl SupportSeat {
+    pub fn offset(&self) -> Vector3<f32> {
+        to_vec(self.offset)
+    }
+
+    pub fn family(&self) -> Option<GripFamily> {
+        self.family.as_deref().and_then(GripFamily::from_str)
+    }
+}
+
+/// Every authored support seat on `model_name`, empty when it has none.
+pub fn support_seats(model_name: &str) -> Vec<SupportSeat> {
+    profile(model_name)
+        .map(|profile| profile.support)
+        .unwrap_or_default()
 }
 
 fn is_default_mirror(mirror: &Mirror) -> bool {

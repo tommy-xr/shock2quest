@@ -175,6 +175,12 @@ pub trait PlayerInteraction {
         None
     }
 
+    /// The second hand's grip on whatever the first hand holds, when there is
+    /// one. Flat has no second hand, so it never has one.
+    fn support_latch(&self) -> Option<crate::two_hand_grip::SupportLatch> {
+        None
+    }
+
     fn hand_affordance(&self, _hand: Handedness) -> crate::hand_affordance::HandAffordance {
         crate::hand_affordance::HandAffordance::None
     }
@@ -216,6 +222,9 @@ pub struct VrInteraction {
     /// `vr_config::hand_slot`. Written where the fit is solved (render, which
     /// owns the glove and the asset cache) and read by the debug readout.
     fitted_grips: RefCell<[Option<crate::game_scene::DebugHandGrip>; 2]>,
+    /// The second hand's grip on whatever the first hand holds. Owned here
+    /// because this is the only place that sees both hands at once.
+    two_hand: crate::two_hand_grip::TwoHandGrip,
 }
 
 impl VrInteraction {
@@ -229,6 +238,39 @@ impl VrInteraction {
             belt_card: std::cell::Cell::new(None),
             ammo_pouch: std::cell::RefCell::new(None),
             fitted_grips: RefCell::new([None, None]),
+            two_hand: crate::two_hand_grip::TwoHandGrip::default(),
+        }
+    }
+}
+
+impl VrInteraction {
+    /// One hand's inputs to the two-hand resolve, in the same world frame
+    /// `VirtualHand` places itself in.
+    fn two_hand_input(
+        &self,
+        ctx: &InteractionContext,
+        hand: Handedness,
+    ) -> crate::two_hand_grip::HandInput {
+        let (state, input) = match hand {
+            Handedness::Left => (&self.left_hand, &ctx.input.left_hand),
+            Handedness::Right => (&self.right_hand, &ctx.input.right_hand),
+        };
+        crate::two_hand_grip::HandInput {
+            hand,
+            position: crate::virtual_hand::hand_world_position(
+                ctx.player_pos,
+                ctx.player_rotation,
+                input.position,
+            ),
+            rotation: ctx.player_rotation * input.rotation,
+            squeeze: input.squeeze_value,
+            held: state.get_held_entity(),
+            // A hand at a body anchor or on a climbing hold is already busy.
+            claimed: ctx.anchor_claim[crate::vr_config::hand_slot(hand)].is_some()
+                || self
+                    .hand_climb
+                    .grips()
+                    .any(|(gripping, _)| gripping == hand),
         }
     }
 }
@@ -291,6 +333,23 @@ impl PlayerInteraction for VrInteraction {
         self.body_frame.set(ctx.body_frame);
         self.belt_card.set(ctx.belt_card);
         *self.ammo_pouch.borrow_mut() = ctx.ammo_pouch.clone();
+
+        // The two-hand resolve runs BEFORE either hand updates, because both
+        // hands need its answer on the same frame: the support hand to know its
+        // grip is spoken for, the primary to place the item down the hand line.
+        // It reads this frame's tracked poses with the previous frame's hold,
+        // which is the same one-frame lag the body anchors run on.
+        let two_hand = self
+            .two_hand
+            .resolve(&crate::two_hand_grip::ResolveContext {
+                world: ctx.world,
+                physics: ctx.physics,
+                hands: [
+                    self.two_hand_input(ctx, Handedness::Left),
+                    self.two_hand_input(ctx, Handedness::Right),
+                ],
+            });
+
         let left_held_entity = self.left_hand.get_held_entity();
         let (right_hand, mut right_msgs) = VirtualHand::update(
             &self.right_hand,
@@ -301,6 +360,7 @@ impl PlayerInteraction for VrInteraction {
             &ctx.input.right_hand,
             left_held_entity,
             ctx.anchor_claim[crate::vr_config::hand_slot(Handedness::Right)],
+            two_hand[crate::vr_config::hand_slot(Handedness::Right)],
         );
         self.right_hand = right_hand;
 
@@ -316,6 +376,7 @@ impl PlayerInteraction for VrInteraction {
             &ctx.input.left_hand,
             right_held_entity,
             ctx.anchor_claim[crate::vr_config::hand_slot(Handedness::Left)],
+            two_hand[crate::vr_config::hand_slot(Handedness::Left)],
         );
         self.left_hand = left_hand;
 
@@ -364,6 +425,10 @@ impl PlayerInteraction for VrInteraction {
 
     fn fitted_grip(&self, hand: Handedness) -> Option<crate::game_scene::DebugHandGrip> {
         self.fitted_grips.borrow()[crate::vr_config::hand_slot(hand)]
+    }
+
+    fn support_latch(&self) -> Option<crate::two_hand_grip::SupportLatch> {
+        self.two_hand.latch()
     }
 
     fn render(

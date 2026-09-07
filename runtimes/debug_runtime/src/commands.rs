@@ -928,6 +928,12 @@ pub struct PlayerInfo {
     /// The player's body anchors - belt and shoulders - and what hangs off
     /// them. `null` outside VR. See `shock2vr::body_frame`.
     pub body_frame: Option<shock2vr::game_scene::DebugBodyFrame>,
+    /// Whether a second hand has hold of what the first is holding - the
+    /// weapon is then aimed down the line between the hands, not down the
+    /// primary wrist. See `shock2vr::two_hand_grip`.
+    pub two_handed: bool,
+    /// Where that second hand took hold.
+    pub two_hand: shock2vr::game_scene::DebugTwoHandGrip,
 }
 
 /// Input state snapshot

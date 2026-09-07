@@ -3169,6 +3169,33 @@ impl PhysicsWorld {
         }
     }
 
+    /// The fitted contact cuboid of a held melee weapon, in world space:
+    /// `(centre, rotation, half extents)`. `None` for anything that is not a
+    /// driven melee wield, or whose collider is not a cuboid.
+    ///
+    /// This is the volume the weapon's damage is billed through and the volume
+    /// the player sees, so it is also what a second hand may take hold of - a
+    /// melee `_h` rig is skinned and reports no render triangles to test
+    /// against (see [`crate::two_hand_grip`]).
+    pub fn held_melee_contact_box(
+        &self,
+        entity_id: EntityId,
+    ) -> Option<(Vector3<f32>, Quaternion<f32>, Vector3<f32>)> {
+        let handle = *self.entity_id_to_body.get(&entity_id)?;
+        if !self.held_melee_drives.contains_key(&handle) {
+            return None;
+        }
+        let body = self.rigid_body_set.get(handle)?;
+        let collider = self.collider_set.get(*body.colliders().first()?)?;
+        let cuboid = collider.shape().as_cuboid()?;
+        let position = collider.position();
+        Some((
+            nvec_to_cgmath(position.translation.vector),
+            nquat_to_quat(position.rotation),
+            nvec_to_cgmath(cuboid.half_extents),
+        ))
+    }
+
     /// Turn an existing loose-prop body into a swept kinematic contact shape
     /// while a melee weapon is held in VR.
     ///
