@@ -12,7 +12,7 @@
 //! script owns the refusal - so what it opens is exactly what the collected set
 //! opens.
 
-use cgmath::{Matrix4, Quaternion, Vector3};
+use cgmath::{Matrix4, Quaternion, Rotation3, Vector3};
 use engine::{assets::asset_cache::AssetCache, scene::SceneObject};
 
 use crate::{body_frame::BodyFrame, vr_config::Handedness};
@@ -36,10 +36,18 @@ pub enum CardPlacement {
     InHand(Handedness),
 }
 
-/// The card resting on the belt: upright on the left hip, facing the way the
-/// body does.
+/// The card resting on the belt: clipped edge-on to the left hip, standing up
+/// and facing the way the body does.
+///
+/// The model is authored lying flat (its long axis is +Z, its face normal +Y),
+/// so standing it up is a quarter turn about X. Its held size comes from the
+/// same `vr_grips` profile the hand uses, so belt and hand can never disagree
+/// about how big the card is.
 pub fn belt_transform(frame: &BodyFrame) -> Matrix4<f32> {
-    Matrix4::from_translation(frame.belt()) * Matrix4::from(frame.rotation())
+    Matrix4::from_translation(frame.belt())
+        * Matrix4::from(frame.rotation())
+        * Matrix4::from_angle_x(cgmath::Deg(-90.0))
+        * Matrix4::from_scale(crate::vr_config::held_geometry_scale(CARD_MODEL))
 }
 
 /// The card in a hand, seated the way any held pickup is - so it sits in the

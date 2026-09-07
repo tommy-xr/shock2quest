@@ -216,6 +216,9 @@
       0.0
     ]
   },
+  "scipass": {
+    "scale": 0.28
+  },
   "sfg_h": {
     "rotation_deg": [
       0.0,
