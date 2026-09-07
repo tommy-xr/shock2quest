@@ -50,21 +50,19 @@ test(
 
     // Acquire the actual training nanites through the rendered world
     // interaction path (crosshair ray + right-hand squeeze), not debug give.
+    const naniteBalance = async () => {
+      const stats = (await game.info()).player.stats;
+      assert.ok(stats, "Earth should expose the player nanite balance");
+      return stats.nanites;
+    };
+    const balanceBeforePickup = await naniteBalance();
     await earthWorldUse(game, nanites);
-    const inventoryBefore = await game.player.inventory();
-    const carriedNanites = inventoryBefore.items.find(
-      (item) => item.name === "Big Nanite Pile",
+    const balanceBefore = await naniteBalance();
+    assert.equal(
+      balanceBefore - balanceBeforePickup,
+      250,
+      "physical pickup should credit the authored 250 nanites to the player balance",
     );
-    assert.ok(
-      carriedNanites,
-      `physical pickup should put Big Nanite Pile in the backpack (got ${JSON.stringify(inventoryBefore.items)})`,
-    );
-    const stackBefore = Number(
-      (await game.entities.detail(carriedNanites.entity_id)).properties.find(
-        (property) => property.name === "StackCount",
-      )?.value,
-    );
-    assert.equal(stackBefore, 250, "the physical Earth pile should carry 250 nanites");
 
     const doorBefore = await game.entities.detail(door.id);
 
@@ -137,14 +135,9 @@ test(
     };
 
     await clickElement(start);
-    const stackAfterPayment = Number(
-      (await game.entities.detail(carriedNanites.entity_id)).properties.find(
-        (property) => property.name === "StackCount",
-      )?.value,
-    );
     assert.equal(
-      stackAfterPayment,
-      stackBefore - cost,
+      await naniteBalance(),
+      balanceBefore - cost,
       "starting the board should deduct exactly the authored cost",
     );
 
@@ -206,5 +199,6 @@ test(
       `HRM success should TurnOn linked door 265 (moved ${doorMovement.toFixed(2)}; ` +
         `before=${doorBefore.position})`,
     );
+    await game.screenshot("earth-hack-success.png");
   },
 );
