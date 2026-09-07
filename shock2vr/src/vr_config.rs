@@ -836,19 +836,27 @@ mod tests {
         }
     }
 
-    /// A melee `_h` must NOT have a static grip entry: its grip is computed
-    /// per wield (`RuntimePropVrGripOffset`) because the collider has to land
-    /// on the rendered weapon head. A table entry here would take precedence
-    /// for anything that looks the model up by name and silently reintroduce a
-    /// fixed offset the render correction is not cancelling.
+    /// A melee `_h` must NOT have a static *placement* in the profile file:
+    /// its grip is computed per wield (`RuntimePropVrGripOffset`) because the
+    /// collider has to land on the rendered weapon head. An offset or a turn
+    /// here would take precedence for anything that looks the model up by name
+    /// and silently reintroduce a fixed offset the render correction is not
+    /// cancelling. Non-placement facts (the wrench's `two_hand` flag) are fine.
     #[test]
     fn melee_view_models_have_no_static_grip() {
         let _guard = crate::vr_grips::test_guard();
         crate::vr_grips::load_shipped_for_test();
 
         for name in MELEE_VIEW_MODELS {
+            let Some(profile) = crate::vr_grips::profile(name) else {
+                continue;
+            };
             assert!(
-                crate::vr_grips::profile(name).is_none(),
+                profile.offset.is_none()
+                    && profile.rotation_deg.is_none()
+                    && profile.scale.is_none()
+                    && profile.fingers.is_none()
+                    && profile.family.is_none(),
                 "{name} must take its grip from the posed rig, not the profile file"
             );
         }

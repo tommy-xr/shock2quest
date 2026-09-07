@@ -502,7 +502,8 @@ mod tests {
     use std::collections::HashMap;
 
     use dark::properties::{
-        Link, Links, PropClassTag, PropTemplateId, ReceptronEffect, ReceptronOptions, ToLink,
+        Link, Links, PropClassTag, PropModelName, PropTemplateId, ReceptronEffect,
+        ReceptronOptions, ToLink,
     };
 
     use crate::mission::stim_response::GlobalContactStims;
@@ -993,6 +994,152 @@ mod tests {
                 }),
             },
         )
+    }
+
+    /// The weapon's *held* model - what the grip profile (and so the two-hand
+    /// flag) is keyed on. A wield swaps the world model for the `_h` rig.
+    fn held_as(world: &mut World, weapon: EntityId, model_name: &str) {
+        world.add_component(weapon, PropModelName(model_name.to_owned()));
+    }
+
+    /// Publish a swing latch for `weapon` the way the mission loop does: the
+    /// frames the swing spent hot, and whether a support hand was on it in
+    /// each of them.
+    fn latch_swing(world: &mut World, weapon: EntityId, supported: &[bool]) {
+        let mut latch = crate::melee_swing::SwingLatch::default();
+        for supported in supported {
+            latch.update(Some(weapon), true, *supported);
+        }
+        let mut swings = crate::melee_swing::MeleeSwings::default();
+        swings.set(crate::vr_config::Handedness::Right, latch);
+        world.add_unique(swings);
+    }
+
+    /// What one landed swing costs the victim.
+    fn swing_damage(world: &World, weapon: EntityId, target: EntityId) -> f32 {
+        let mut script = HeldMeleeWeapon::new();
+        let Effect::Multiple(effects) = collide(&mut script, world, weapon, target) else {
+            panic!("expected melee impact effects");
+        };
+        effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::Send { msg } => match msg.payload {
+                    MessagePayload::Damage { amount, .. } => Some(amount),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("a landed swing should send Damage")
+    }
+
+    /// A wrench world with the shipped grip profiles loaded, so the two-hand
+    /// flag resolves as it does in the game.
+    fn wrench_world(
+        model_name: &str,
+        supported: &[bool],
+    ) -> (
+        World,
+        EntityId,
+        EntityId,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        let guard = crate::vr_grips::test_guard();
+        crate::vr_grips::load_shipped_for_test();
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        held_as(&mut world, weapon, model_name);
+        latch_swing(&mut world, weapon, supported);
+        (world, weapon, target, guard)
+    }
+
+    /// The penalty itself: a wrench swung in one hand costs a fraction of the
+    /// blow the gamesys authored.
+    ///
+    /// Negative-first: before the scale existed this read the full 9.0.
+    #[test]
+    fn a_one_handed_wrench_swing_costs_less_than_its_authored_damage() {
+        let scale = crate::dev_params::spec(crate::dev_params::MELEE_ONE_HAND_SCALE).default;
+        let (world, weapon, target, _guard) = wrench_world("wrench_h", &[false]);
+
+        let amount = swing_damage(&world, weapon, target);
+
+        assert!(
+            (amount - WEAPON_BASH_INTENSITY * scale).abs() < 1e-4,
+            "a one-handed wrench should cost {scale} of {WEAPON_BASH_INTENSITY}, got {amount}"
+        );
+    }
+
+    /// Two hands restore the full blow rather than adding a bonus.
+    #[test]
+    fn a_two_handed_wrench_swing_costs_its_full_authored_damage() {
+        let (world, weapon, target, _guard) = wrench_world("wrench_h", &[true]);
+
+        let amount = swing_damage(&world, weapon, target);
+
+        assert!(
+            (amount - WEAPON_BASH_INTENSITY).abs() < 1e-4,
+            "a two-handed wrench should cost the authored {WEAPON_BASH_INTENSITY}, got {amount}"
+        );
+    }
+
+    /// The cheat the latch exists to stop: grabbing the haft with the second
+    /// hand once the swing is already moving must not buy the full blow.
+    #[test]
+    fn a_second_hand_taken_after_the_swing_went_hot_does_not_restore_the_blow() {
+        let scale = crate::dev_params::spec(crate::dev_params::MELEE_ONE_HAND_SCALE).default;
+        let (world, weapon, target, _guard) = wrench_world("wrench_h", &[false, true]);
+
+        let amount = swing_damage(&world, weapon, target);
+
+        assert!(
+            (amount - WEAPON_BASH_INTENSITY * scale).abs() < 1e-4,
+            "a late second hand must not upgrade the swing, got {amount}"
+        );
+    }
+
+    /// And the converse: letting go before the blow lands costs the bonus.
+    #[test]
+    fn releasing_the_second_hand_before_impact_costs_the_full_blow() {
+        let scale = crate::dev_params::spec(crate::dev_params::MELEE_ONE_HAND_SCALE).default;
+        let (world, weapon, target, _guard) = wrench_world("wrench_h", &[true, false]);
+
+        let amount = swing_damage(&world, weapon, target);
+
+        assert!(
+            (amount - WEAPON_BASH_INTENSITY * scale).abs() < 1e-4,
+            "a support hand released before impact must not keep the blow, got {amount}"
+        );
+    }
+
+    /// Only long-hafted melee is penalised: the rapier is a one-handed weapon
+    /// and costs its authored damage in one hand.
+    #[test]
+    fn a_one_handed_rapier_swing_is_not_penalised() {
+        let (world, weapon, target, _guard) = wrench_world("rapier_h", &[false]);
+
+        let amount = swing_damage(&world, weapon, target);
+
+        assert!(
+            (amount - WEAPON_BASH_INTENSITY).abs() < 1e-4,
+            "a one-handed weapon must not pay the two-hand penalty, got {amount}"
+        );
+    }
+
+    /// Flat has no second hand, and no physical contact damage either - the
+    /// penalty must not reach it through a stale latch.
+    #[test]
+    fn a_flat_swing_is_untouched_by_the_two_hand_penalty() {
+        let _guard = crate::vr_grips::test_guard();
+        crate::vr_grips::load_shipped_for_test();
+        let (mut world, weapon, target) = test_world(PresentationMode::Flat);
+        held_as(&mut world, weapon, "wrench_h");
+        latch_swing(&mut world, weapon, &[false]);
+
+        let mut script = HeldMeleeWeapon::new();
+        assert!(matches!(
+            collide(&mut script, &world, weapon, target),
+            Effect::NoEffect
+        ));
     }
 
     /// A weapon that is audible on contact: `test_world`'s weapon deliberately
