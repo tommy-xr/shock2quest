@@ -1129,6 +1129,29 @@ export interface HandGrip {
   palm: {x:number;y:number;z:number};
   palm_normal: {x:number;y:number;z:number};
   grip: ResolvedGrip | null;
+  /** Glove pose following a physical melee body; null uses raw tracked pose. */
+  glove_pose: { position: ResolvedGrip["offset"]; rotation: ResolvedGrip["rotation"] } | null;
+  /** Optional support socket on this owned item; the support hand owns no entity. */
+  support: {
+    hand: "left" | "right";
+    attached: boolean;
+    blend: number;
+    tracked_palm: ResolvedGrip["offset"];
+    pressed: [boolean, boolean];
+    blocked: [boolean, boolean];
+    step_dt: number;
+    socket_position: ResolvedGrip["offset"];
+    controller_position: ResolvedGrip["offset"];
+    controller_rotation: ResolvedGrip["rotation"];
+    model_position: ResolvedGrip["offset"];
+    model_rotation: ResolvedGrip["rotation"];
+    primary_palm: ResolvedGrip["offset"];
+    primary_anchor: ResolvedGrip["offset"];
+    support_anchor: ResolvedGrip["offset"];
+    grab_radius: number;
+    release_distance: number;
+    max_swing_degrees: number;
+  } | null;
 }
 
 export interface ResolvedGrip {

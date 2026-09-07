@@ -197,6 +197,24 @@ impl VirtualHand {
         self.rotation
     }
 
+    /// A supporting hand tracks its controller but cannot also ray-grab/frob.
+    pub(crate) fn update_suppressed(
+        &self,
+        pawn_pos: Vector3<f32>,
+        pawn_rot: Quaternion<f32>,
+        input: &Hand,
+    ) -> Self {
+        debug_assert!(self.get_held_entity().is_none());
+        let mut hand = self.clone();
+        hand.position = hand_world_position(pawn_pos, pawn_rot, input.position);
+        hand.rotation = pawn_rot * input.rotation;
+        hand.squeeze_value = input.squeeze_value;
+        hand.trigger_value = input.trigger_value;
+        hand.raytrace_hit = None;
+        hand.last_frobbed_entity = None;
+        hand
+    }
+
     pub fn grab_entity(
         &self,
         _world: &World,
@@ -404,21 +422,30 @@ impl VirtualHand {
         &self,
         world: &World,
         glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
-        grip: Option<&crate::vr_grip::ResolvedGrip>,
+        grip: Option<(&crate::vr_grip::ResolvedGrip, f32)>,
+        visual_pose: Option<crate::vr_support::GripPose>,
     ) -> Vec<SceneObject> {
+        let hand_pose = visual_pose.unwrap_or(crate::vr_support::GripPose {
+            position: self.position,
+            rotation: self.rotation,
+        });
+        // Invalid controller tracking must not send a non-finite transform to GL.
+        if !hand_pose.is_tracked() {
+            return Vec::new();
+        }
         // The hand itself: the skinned hand model, posed from the analog
         // inputs - unless a wielded weapon's model stands in for it.
         let mut scene_objects = glove_renderer
             .filter(|_| shows_hand_visual(world, self.get_held_entity()))
             .map(|renderer| {
                 renderer.render_hand(
-                    self.position,
-                    self.rotation,
+                    hand_pose.position,
+                    hand_pose.rotation,
                     self.handedness,
                     self.trigger_value,
                     self.squeeze_value,
                     self.get_held_entity().is_some(),
-                    grip.map(|grip| grip.finger_amounts()),
+                    grip.map(|(grip, blend)| (grip.finger_amounts(), blend)),
                 )
             })
             .unwrap_or_default();

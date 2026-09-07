@@ -439,3 +439,61 @@ into/out of holding, and repeated pouch/stow operations without loss or duplicat
 Record grab success, accidental actions, correction effort, visible penetration,
 and device timing against the baseline. Set final reach distances and blend times
 from these trials rather than hard-coding guesses into the design.
+
+### Wrench support increment
+
+The first support implementation opts in `wrench_h` only. Hold it in either
+hand, bring the free palm to the upper shaft, and squeeze. The primary hand
+owns the item and fixes its palm anchor; the support hand steers the vector
+between the two anchors. Primary wrist rotation supplies twist. The solver supplies the physics target;
+visible attached gloves and grab sockets follow the collision-resolved weapon. Weapon scale
+stays at the prepared primary grip's scale regardless of controller separation.
+
+Release support to blend back to the primary pose. Release the primary to drop
+once; the supporting hand never becomes a second owner. Support input is
+reserved until squeeze and trigger are both released, including after an excessive-separation break, so
+returning to the handle while still squeezed cannot reacquire or grab through
+it. Support cannot share a hand with climbing or another held item. Invalid
+pose data cancels support; headset tracking-loss behavior still needs device
+validation because this does not add OpenXR tracking-validity channels.
+
+`assets/astra-vr-support-grips.json` holds the fixed support palm anchor and
+finger curls. Anchors use normalized weapon coordinates before uniform item
+scale; X is mirrored for a left-primary hold. `grab_radius` and
+`release_distance` use runtime world units. The latter is allowed deviation
+from the fixed anchor separation. Initial capture uses a 0.07 grab radius,
+0.12 separation allowance, a 75-degree maximum support swing from the primary
+orientation, 80 ms glove/finger attachment blend, and 60 ms orientation
+smoothing. These are starting values for headset review. Missing or invalid
+profiles leave ordinary one-hand behavior available.
+
+The debug runtime exposes `hand_grips[].support` on the primary grip, including
+attachment state, desired support controller pose, tracked palm, both anchors,
+and solved model transform. Run the SDK's `vr-wrench-support.e2e.test.ts` with
+`SHOCK2_E2E=1` to exercise either hand, fresh-press acquisition, steering, constant
+scale, support release, separation break, and primary release. Rust tests cover
+degenerate geometry, invalid pose data, disabled support, and zero-dt input
+edges. The existing grip gallery remains the primary-fit inspection tool;
+this increment adds motion capture for the support behavior.
+
+Sliding/broad support regions, other weapons, and melee damage/perk changes
+remain separate increments. Headset comfort and collision contact under a
+real swing are still required checks before expanding the support policy.
+
+Single-hand fitted melee gloves also follow the synchronized physical weapon.
+The runtime walking/wall-contact regression checks their relative pose every
+frame, including a controller target past the debug melee wall. Weapon scale
+was accepted in headset; pickup scales (including ammo) remain individual
+Explorer overrides. No weapon scales changed in this increment.
+
+Capture a local gallery after building the SDK:
+`node scripts/capture-wrench-support.mjs --output /tmp/astra-wrench-support/gallery`
+(from `tools/shock2-sdk`). `--reference <data.json>` replays the saved sequence
+for comparable before/after captures.
+
+Physical guns are a subsequent integration: PR #1142 extends the existing
+swept held-item drive to inert ranged weapons, and #1153 adds impact sounds.
+They need collider fitting from our stripped/scaled weapon geometry and the
+same post-physics glove placement, not a second motion solver. A merge trial
+against the committed parent found conflicts in `ss2_bin_obj_loader.rs`,
+`physics/mod.rs`, and `scripts/melee_weapon.rs`; neither PR was merged here.

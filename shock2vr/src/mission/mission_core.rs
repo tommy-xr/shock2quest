@@ -4095,6 +4095,10 @@ impl MissionCore {
             physics: &self.physics,
             world: &self.world,
             input: hands_input,
+            step_dt: time.elapsed.as_secs_f32(),
+            support_enabled: !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
             player_pos,
             player_rotation: player_rot,
             head_rotation: input_context.head.rotation,
@@ -4142,6 +4146,7 @@ impl MissionCore {
         // The timing of this is important - things like the GUI rendering depend on an up-to-date position
         // from physics
         self.synchronize_physics_positions();
+        self.interaction.synchronize_held_visuals(&self.world);
 
         // Re-anchor attached entities (e.g. a muzzle flash) to their parent's
         // now-current transform, so they track a moving parent rather than their
