@@ -23,6 +23,7 @@ pub mod dev_params;
 mod flat_player_controller;
 pub mod free_camera;
 mod gui;
+mod hand_feedback;
 mod hand_glove;
 mod hud;
 mod interaction;
@@ -49,7 +50,7 @@ pub mod ui;
 mod util;
 mod virtual_hand;
 mod vr_config;
-pub use hand_glove::GloveRenderer;
+pub use hand_glove::{GloveRenderer, HandLight};
 /// Re-exported (the module itself stays private) so the `melee_grip` example
 /// can re-measure the melee `_h` contact offsets off the shipped rigs with the
 /// same maths the wield uses.

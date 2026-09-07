@@ -12258,6 +12258,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         })
     }
 
+    fn hand_feedback(&self) -> serde_json::Value {
+        self.interaction.hand_feedback_diagnostics()
+    }
+
     fn hand_grips(&self) -> serde_json::Value {
         self.interaction.grip_diagnostics()
     }

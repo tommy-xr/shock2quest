@@ -14,6 +14,7 @@ use tracing::{self, trace};
 
 use crate::{
     gui::GuiPropProxyEntity,
+    hand_feedback::{HandAffordance, HandFeedback, HandTarget},
     input_context::Hand,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     scripts::{Message, MessagePayload},
@@ -60,6 +61,7 @@ pub struct VirtualHand {
     hand_state: HandState,
 
     handedness: Handedness,
+    feedback: HandFeedback,
 }
 
 #[derive(Debug)]
@@ -152,6 +154,7 @@ impl VirtualHand {
             last_frobbed_entity: None,
             hand_state: HandState::Empty,
             handedness,
+            feedback: HandFeedback::default(),
         }
     }
     pub fn destroy_entity(&self, entity_to_destroy_id: EntityId) -> VirtualHand {
@@ -214,6 +217,7 @@ impl VirtualHand {
         hand.rotation = pawn_rot * input.rotation;
         hand.squeeze_value = input.squeeze_value;
         hand.trigger_value = input.trigger_value;
+        hand.feedback = HandFeedback::default();
         hand.raytrace_hit = None;
         hand.last_frobbed_entity = None;
         hand
@@ -232,6 +236,7 @@ impl VirtualHand {
 
         VirtualHand {
             hand_state: HandState::Grabbing { entity_id },
+            feedback: HandFeedback::default(),
             ..self.clone()
         }
     }
@@ -268,6 +273,7 @@ impl VirtualHand {
         input_hand: &Hand,
         held_by_other_hand: Option<EntityId>,
         other_hand_position: Vector3<f32>,
+        dt: f32,
     ) -> (VirtualHand, Vec<VirtualHandEffect>) {
         let handedness = prev.handedness;
         let hand_position = hand_world_position(pawn_pos, pawn_rot, input_hand.position);
@@ -276,10 +282,12 @@ impl VirtualHand {
         // Also do a raycast to provide the 'Hover' effect
         let ray_start = point3(hand_position.x, hand_position.y, hand_position.z);
         let forward = hand_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-        let result =
-            interaction_ray_cast(physics, world, ray_start, forward, prev.get_held_entity());
+        // Empty hands resolve their target once in handle_empty_hand_state.
+        let result = prev
+            .get_held_entity()
+            .and_then(|held| interaction_ray_cast(physics, world, ray_start, forward, Some(held)));
 
-        let (hand, mut effs) = match prev.hand_state {
+        let (mut hand, mut effs) = match prev.hand_state {
             HandState::Grabbing { entity_id } => {
                 // See what we're hitting
                 let mut msgs = Vec::new();
@@ -327,6 +335,7 @@ impl VirtualHand {
                         last_frobbed_entity: None,
                         hand_state: HandState::Empty,
                         handedness,
+                        feedback: HandFeedback::default(),
                     };
                     (updated_hand, msgs)
                 } else {
@@ -378,6 +387,7 @@ impl VirtualHand {
                         last_frobbed_entity: None,
                         hand_state: next_hand_state,
                         handedness,
+                        feedback: HandFeedback::default(),
                     };
                     (updated_hand, msgs)
                 }
@@ -394,6 +404,34 @@ impl VirtualHand {
             ),
         };
 
+        let observed = if hand.get_held_entity().is_some() {
+            HandAffordance::None
+        } else {
+            hand.feedback.observed
+        };
+        let failed = observed == HandAffordance::Blocked
+            && effs.iter().any(|effect| {
+                matches!(
+                    effect,
+                    VirtualHandEffect::OutMessage {
+                        message: Message {
+                            payload: MessagePayload::Frob,
+                            ..
+                        }
+                    }
+                )
+            });
+        hand.feedback = if hand.get_held_entity().is_some() {
+            HandFeedback::default()
+        } else {
+            prev.feedback
+        };
+        hand.feedback.update(observed, failed, dt);
+        let result = if matches!(prev.hand_state, HandState::Empty) {
+            hand.raytrace_hit.clone()
+        } else {
+            result
+        };
         match result {
             Some(RayCastResult {
                 hit_point,
@@ -450,6 +488,7 @@ impl VirtualHand {
                     self.squeeze_value,
                     self.get_held_entity().is_some(),
                     grip.map(|(grip, blend)| (grip.finger_amounts_at(self.trigger_value), blend)),
+                    self.feedback.light(),
                 )
             })
             .unwrap_or_default();
@@ -470,6 +509,11 @@ impl VirtualHand {
         }
 
         scene_objects
+    }
+
+    pub(crate) fn feedback_diagnostics(&self) -> serde_json::Value {
+        serde_json::json!({"target": self.get_raytraced_entity().map(|id| id.inner() as i32),
+            "affordance": self.feedback.observed, "light": format!("{:?}", self.feedback.light())})
     }
 
     fn color_from_state(&self) -> Vector3<f32> {
@@ -496,7 +540,22 @@ fn handle_empty_hand_state(
 ) -> (VirtualHand, Vec<VirtualHandEffect>) {
     let ray_start = point3(hand_position.x, hand_position.y, hand_position.z);
     let forward = hand_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-    let result = interaction_ray_cast(physics, world, ray_start, forward, held_by_other_hand);
+    let tracked = crate::vr_support::GripPose {
+        position: hand_position,
+        rotation: hand_rotation,
+    }
+    .is_tracked();
+    let result = tracked
+        .then(|| interaction_ray_cast(physics, world, ray_start, forward, held_by_other_hand))
+        .flatten();
+    let target = result
+        .as_ref()
+        .and_then(|hit| {
+            hit.maybe_entity_id.map(|entity| {
+                HandTarget::resolve(world, entity, hit.maybe_rigid_body_handle.is_some())
+            })
+        })
+        .unwrap_or_default();
     trace!("ray cast result: {:?}", &result);
     let mut msgs = Vec::new();
     let mut last_frobbed_entity = frobbed_entity;
@@ -542,17 +601,12 @@ fn handle_empty_hand_state(
             hit_point: _,
             hit_normal: _,
             maybe_entity_id: Some(entity_id),
-            maybe_rigid_body_handle: Some(rigid_body_handle),
+            maybe_rigid_body_handle: Some(_),
             is_sensor: _,
         }) = result
         {
-            let needs_scripted_frob = uses_scripted_world_frob(world, entity_id);
-            if Some(entity_id) != held_by_other_hand
-                && can_grab_item(world, entity_id)
-                && !needs_scripted_frob
-            {
-                let position = &physics.get_position(rigid_body_handle).unwrap();
-                let _dir = hand_position - position;
+            let needs_scripted_frob = target.scripted;
+            if Some(entity_id) != held_by_other_hand && target.grabbable {
                 msgs.push(VirtualHandEffect::HoldItem { entity_id });
 
                 next_hand_state = HandState::Grabbing { entity_id };
@@ -575,6 +629,8 @@ fn handle_empty_hand_state(
         }
     }
 
+    let mut feedback = HandFeedback::default();
+    feedback.observed = target.affordance;
     let updated_hand = VirtualHand {
         position: hand_position,
         rotation: hand_rotation,
@@ -584,6 +640,7 @@ fn handle_empty_hand_state(
         last_frobbed_entity,
         hand_state: next_hand_state,
         handedness,
+        feedback,
     };
     (updated_hand, msgs)
 }
@@ -855,6 +912,7 @@ mod tests {
             &input,
             None,
             Vector3::zero(),
+            1.0 / 60.0,
         );
 
         effects
@@ -1296,6 +1354,7 @@ mod tests {
             &input,
             None,
             Vector3::zero(),
+            1.0 / 60.0,
         );
         assert_eq!(far_hand.get_raytraced_entity(), None);
         assert!(
@@ -1313,6 +1372,7 @@ mod tests {
             &input,
             None,
             Vector3::zero(),
+            1.0 / 60.0,
         );
         assert_eq!(near_hand.get_raytraced_entity(), Some(near_target));
         assert!(
@@ -1327,5 +1387,105 @@ mod tests {
             )),
             "an in-reach VR trigger should preserve frob behavior, got {near_effects:?}"
         );
+    }
+    #[test]
+    fn glove_feedback_matches_lock_attempt_and_ignores_untracked_hands() {
+        use crate::hand_glove::HandLight;
+        let (mut world, physics, target) = frob_fixture(1.0);
+        world.add_unique(crate::quest_info::QuestInfo::new());
+        world.add_component(target, dark::properties::PropLocked(true));
+        let mut input = Hand::default();
+        let update = |hand: &VirtualHand, input: &Hand, world: &World| {
+            VirtualHand::update(
+                hand,
+                &physics,
+                world,
+                Vector3::zero(),
+                Quaternion::new(1.0, 0.0, 0.0, 0.0),
+                input,
+                None,
+                Vector3::zero(),
+                1.0 / 60.0,
+            )
+        };
+        let (hand, effects) = update(&VirtualHand::new(Handedness::Right), &input, &world);
+        assert_eq!(hand.feedback.light(), HandLight::Amber);
+        assert_eq!(frob_message_count(&effects), 0);
+        input.trigger_value = 1.0;
+        let (mut hand, effects) = update(&hand, &input, &world);
+        assert_eq!(hand.feedback.light(), HandLight::Red);
+        assert_eq!(frob_message_count(&effects), 1);
+        for _ in 0..16 {
+            let (next, effects) = update(&hand, &input, &world);
+            assert_eq!(
+                frob_message_count(&effects),
+                0,
+                "held trigger must not repeat refusal"
+            );
+            hand = next;
+        }
+        assert_eq!(hand.feedback.light(), HandLight::Amber);
+        world.add_component(target, dark::properties::PropLocked(false));
+        input.trigger_value = 0.0;
+        let (hand, _) = update(&hand, &input, &world);
+        assert_eq!(hand.feedback.light(), HandLight::Green);
+        input.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        input.trigger_value = 1.0;
+        let (hand, effects) = update(&hand, &input, &world);
+        assert_eq!(hand.feedback.light(), HandLight::Off);
+        assert_eq!(frob_message_count(&effects), 0);
+    }
+
+    #[test]
+    fn grabbing_or_support_suppression_clears_the_glove_prompt() {
+        use crate::hand_glove::HandLight;
+        let (mut world, physics, target) = frob_fixture(1.0);
+        world.add_component(
+            target,
+            PropFrobInfo {
+                world_action: FrobFlag::MOVE,
+                inventory_action: FrobFlag::empty(),
+                tool_action: FrobFlag::empty(),
+            },
+        );
+        let input = Hand::default();
+        let (hand, _) = VirtualHand::update(
+            &VirtualHand::new(Handedness::Right),
+            &physics,
+            &world,
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            &input,
+            None,
+            Vector3::zero(),
+            1.0 / 60.0,
+        );
+        assert_eq!(hand.feedback.light(), HandLight::Green);
+        assert_eq!(
+            hand.update_suppressed(Vector3::zero(), Quaternion::new(1.0, 0.0, 0.0, 0.0), &input)
+                .feedback
+                .light(),
+            HandLight::Off
+        );
+        let input = Hand {
+            squeeze_value: 1.0,
+            ..input
+        };
+        let (hand, effects) = VirtualHand::update(
+            &hand,
+            &physics,
+            &world,
+            Vector3::zero(),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            &input,
+            None,
+            Vector3::zero(),
+            1.0 / 60.0,
+        );
+        assert!(effects.iter().any(
+            |e| matches!(e, VirtualHandEffect::HoldItem { entity_id } if *entity_id == target)
+        ));
+        assert_eq!(hand.get_held_entity(), Some(target));
+        assert_eq!(hand.feedback.light(), HandLight::Off);
     }
 }
