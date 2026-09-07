@@ -675,6 +675,27 @@ export interface PlayerSnapshot {
   /** The player's body anchors (belt, shoulders) and what hangs off them.
    * Null outside VR. */
   body_frame: BodyFrame | null;
+
+  /** Whether a second hand has hold of what the first is holding - the weapon
+   * is then aimed down the line between the hands. */
+  two_handed: boolean;
+  /** Where that second hand took hold. */
+  two_hand: TwoHandGrip;
+}
+
+/** The second hand's grip on what the first hand holds
+ * (GET /v1/info -> player.two_hand). */
+export interface TwoHandGrip {
+  two_handed: boolean;
+  /** Which hand is supporting, or null. */
+  support_hand: "left" | "right" | null;
+  /** The entity the support hand has hold of, or null. */
+  support_of: number | null;
+  /** Where it took hold, in the item's own model space. */
+  support_point: [number, number, number] | null;
+  /** True when an authored support seat claimed the grip (the shotgun's pump,
+   * the rifle's magwell) rather than the palm latching where it landed. */
+  snapped: boolean;
 }
 
 /** Where the player's belt and shoulders are, and what they hold
