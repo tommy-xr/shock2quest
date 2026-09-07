@@ -735,25 +735,14 @@ impl FingerOverrides {
     }
 }
 
-/// The models whose measured box lies about how they are held. Everything not
-/// listed is solved from its own geometry; the gun `_h` set gets
+/// The models whose measured box lies about how they are held.
+///
+/// Empty so far, deliberately. The gun `_h` set takes
 /// [`GripFamily::Trigger`] from [`is_vr_gun_view_model`] rather than an entry
-/// each.
-static GRIP_HINTS: Lazy<HashMap<&str, GripHint>> = Lazy::new(|| {
-    HashMap::from([
-        // The mug's handle is a sub-feature its bounding box knows nothing
-        // about: measured, it is a fat cylinder and the hand would wrap the
-        // body. Pinch puts the thumb and index through the handle and holds
-        // the other three clear of the hot side.
-        (
-            "mug",
-            GripHint {
-                family: Some(GripFamily::Pinch),
-                ..GripHint::default()
-            },
-        ),
-    ])
-});
+/// each, and the plain pickups have no authored hand seat yet - they are drawn
+/// centred on the wrist - so there is nothing to judge a correction against.
+/// The first entries belong with the seat data, not before it.
+static GRIP_HINTS: Lazy<HashMap<&str, GripHint>> = Lazy::new(HashMap::new);
 
 /// How `model_name` should be held, when the data says something the geometry
 /// does not.
@@ -816,6 +805,50 @@ mod tests {
     use cgmath::InnerSpace;
 
     use super::*;
+
+    /// A gun is held by name: its grip measures like any other handle, but the
+    /// index belongs on the trigger, so every gun `_h` reports the trigger
+    /// family without an entry of its own - and nothing else does.
+    #[test]
+    fn every_gun_view_model_is_held_by_its_trigger() {
+        for name in VR_25AE_GUN_MODELS {
+            assert_eq!(
+                grip_hint(name).family,
+                Some(GripFamily::Trigger),
+                "{name} should be held on its trigger"
+            );
+        }
+        assert_eq!(grip_hint("mug").family, None);
+        assert_eq!(grip_hint("hamball").family, None);
+    }
+
+    /// Both levels of the override: the family a model is solved in, and a
+    /// finger the solve gets wrong - and a correction only touches the finger
+    /// it names.
+    #[test]
+    fn a_hint_can_steer_the_family_and_pin_one_finger() {
+        let hint = GripHint {
+            family: Some(GripFamily::Pinch),
+            fingers: FingerOverrides {
+                thumb: Some(0.25),
+                ..FingerOverrides::default()
+            },
+        };
+
+        let mut solved = FingerAmounts {
+            thumb: 1.0,
+            index: 0.8,
+            middle: 0.8,
+            ring: 0.8,
+            pinky: 0.8,
+        };
+        hint.fingers.apply(&mut solved);
+
+        assert_eq!(hint.family, Some(GripFamily::Pinch));
+        assert_eq!(solved.thumb, 0.25);
+        assert_eq!(solved.index, 0.8);
+        assert_eq!(solved.pinky, 0.8);
+    }
 
     /// Every wielded view model is either a gun (glove on it, arm stripped), a
     /// melee rig (posed skeleton, arm kept) or the amp (arm kept) - exactly

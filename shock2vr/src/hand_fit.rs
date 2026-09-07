@@ -4,8 +4,8 @@
 //! `PhysType SPHERE` - so the fit runs against the item's **render mesh**
 //! ([`dark::importers::VrContactMesh`]), transformed into the hand's own
 //! space. For each finger the solver sweeps the open->fist blend the glove
-//! already poses with, brackets the first curl at which a phalanx capsule
-//! reaches the surface, and bisects for the contact point. The result is a
+//! already poses with, takes the *largest* curl at which no phalanx capsule
+//! is inside the mesh, and bisects for the contact point. The result is a
 //! [`FingerAmounts`] the renderer feeds straight to
 //! [`crate::hand_pose::Pose::blend_per_finger`].
 //!
@@ -164,8 +164,10 @@ const fn meters(m: f32) -> f32 {
 }
 
 /// Thinner than this in its smallest dimension and an item is pinched rather
-/// than gripped - a magazine, a keycard.
-const PINCH_THICKNESS: f32 = meters(0.018);
+/// than gripped. Measured off the art: a printed magazine (`magci`) is 21 mm
+/// through, the thinnest thing any of the test items presents to the hand,
+/// while the next thinnest - a pistol grip - is 34 mm.
+const PINCH_THICKNESS: f32 = meters(0.025);
 
 /// Wider than this across its two smaller dimensions and the hand cannot close
 /// round it at all - a basketball, a helmet.
@@ -302,21 +304,24 @@ fn fit_finger(
 
     let curl_at = |step: usize| floor + (cap - floor) * (step as f32 / COARSE_STEPS as f32);
 
-    let mut clear = floor;
-    let mut first_contact = None;
-    for step in 1..=COARSE_STEPS {
-        let curl = curl_at(step);
-        if mesh.touches(&rig.phalanges(finger, curl), &candidates) {
-            first_contact = Some(curl);
-            break;
-        }
-        clear = curl;
-    }
-
-    let Some(mut blocked) = first_contact else {
+    // Scanned from the closed end down, not from the open end up. A held item
+    // is seated where the *closed* hand would be - a gun's grip lies right
+    // through the open hand's extended fingers - so "the first contact on the
+    // way in" is not the grip, it is the seat. The largest clear curl is.
+    let Some(step) = (0..=COARSE_STEPS)
+        .rev()
+        .find(|step| !mesh.touches(&rig.phalanges(finger, curl_at(*step)), &candidates))
+    else {
+        // Nowhere clear: the item passes through the finger at every curl, so
+        // the only honest answer is the closed grip the wield authored.
         return cap;
     };
+    if step == COARSE_STEPS {
+        return cap;
+    }
 
+    let mut clear = curl_at(step);
+    let mut blocked = curl_at(step + 1);
     for _ in 0..BISECT_ROUNDS {
         let middle = 0.5 * (clear + blocked);
         if mesh.touches(&rig.phalanges(finger, middle), &candidates) {

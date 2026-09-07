@@ -24,6 +24,7 @@ pub mod cutscene_skip;
 pub mod debug_camera;
 pub mod debug_common;
 pub mod debug_gloves;
+pub mod debug_grips;
 pub mod debug_hand_poses;
 pub mod debug_hitbox;
 pub mod debug_hud;
@@ -49,6 +50,7 @@ pub mod no_assets;
 pub use cutscene_player::CutscenePlayerScene;
 pub use debug_camera::DebugCameraScene;
 pub use debug_gloves::DebugGlovesScene;
+pub use debug_grips::DebugGripsScene;
 pub use debug_hand_poses::DebugHandPosesScene;
 pub use debug_hitbox::DebugHitboxScene;
 pub use debug_hud::DebugHudScene;
@@ -180,6 +182,7 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
         Box::new(DebugHudScene::new())
     }),
     ("debug_gloves", DebugGlovesScene::new),
+    ("debug_grips", DebugGripsScene::new),
     ("debug_hand_poses", DebugHandPosesScene::new),
     ("debug_joint_constraint", DebugJointConstraintScene::new),
     ("debug_map", |_global, _options, _assets, _audio| {
