@@ -44,6 +44,9 @@ pub struct InteractionContext<'a> {
     /// owns the gestures they drive; the hands only need it to draw the belt
     /// card.
     pub body_frame: Option<crate::body_frame::BodyFrame>,
+    /// Where the belt card is, or `None` while the player has collected no
+    /// credential and there is no card.
+    pub belt_card: Option<crate::belt_card::CardPlacement>,
     /// What each hand's body anchor offers this frame, indexed by
     /// `vr_config::hand_slot`. `Some` claims the hand: its light shows the
     /// anchor's eligibility and its grip belongs to the anchor gesture rather
@@ -164,6 +167,12 @@ pub trait PlayerInteraction {
         None
     }
 
+    /// Where a tracked hand is in the world. `None` for flat, which has no
+    /// hand to place anything at.
+    fn hand_pose(&self, _hand: Handedness) -> Option<(Vector3<f32>, Quaternion<f32>)> {
+        None
+    }
+
     fn hand_affordance(&self, _hand: Handedness) -> crate::hand_affordance::HandAffordance {
         crate::hand_affordance::HandAffordance::None
     }
@@ -197,6 +206,9 @@ pub struct VrInteraction {
     /// This frame's body anchors, for drawing the belt card. Written by
     /// `update`, read by `render` (which has no context of its own).
     body_frame: std::cell::Cell<Option<crate::body_frame::BodyFrame>>,
+    /// Where the belt card is, so `render` can place it - it is not an entity,
+    /// so nothing else in the scene would draw it.
+    belt_card: std::cell::Cell<Option<crate::belt_card::CardPlacement>>,
     /// The grip each hand's last render fitted, indexed by
     /// `vr_config::hand_slot`. Written where the fit is solved (render, which
     /// owns the glove and the asset cache) and read by the debug readout.
@@ -211,6 +223,7 @@ impl VrInteraction {
             glove_renderer: RefCell::new(None),
             hand_climb: crate::vr_climb::HandClimb::default(),
             body_frame: std::cell::Cell::new(None),
+            belt_card: std::cell::Cell::new(None),
             fitted_grips: RefCell::new([None, None]),
         }
     }
@@ -272,6 +285,7 @@ impl PlayerInteraction for VrInteraction {
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
         self.body_frame.set(ctx.body_frame);
+        self.belt_card.set(ctx.belt_card);
         let left_held_entity = self.left_hand.get_held_entity();
         let (right_hand, mut right_msgs) = VirtualHand::update(
             &self.right_hand,
@@ -328,6 +342,14 @@ impl PlayerInteraction for VrInteraction {
         }
     }
 
+    fn hand_pose(&self, hand: Handedness) -> Option<(Vector3<f32>, Quaternion<f32>)> {
+        let hand = match hand {
+            Handedness::Left => &self.left_hand,
+            Handedness::Right => &self.right_hand,
+        };
+        Some((hand.get_position(), hand.get_rotation()))
+    }
+
     fn hand_affordance(&self, hand: Handedness) -> crate::hand_affordance::HandAffordance {
         match hand {
             Handedness::Left => self.left_hand.affordance(),
@@ -364,6 +386,23 @@ impl PlayerInteraction for VrInteraction {
                 *self.fitted_grips.borrow_mut() = [None, None];
             }
         }
+        // The belt card: in the hand that took it, else on the hip, following
+        // the body frame. It is not an entity, so nothing else would draw it.
+        if let Some(transform) = match self.belt_card.get() {
+            Some(crate::belt_card::CardPlacement::InHand(hand)) => {
+                self.hand_pose(hand).map(|(position, rotation)| {
+                    crate::belt_card::hand_transform(position, rotation, hand)
+                })
+            }
+            Some(crate::belt_card::CardPlacement::Belt) => self
+                .body_frame
+                .get()
+                .map(|frame| crate::belt_card::belt_transform(&frame)),
+            None => None,
+        } {
+            objs.extend(crate::belt_card::scene_objects(asset_cache, transform));
+        }
+
         // Feedback comes from the resolved holds, never a second proximity
         // query: a blocked pull still shows a catch; release/break removes it.
         // Float just above the fist so the glove cannot hide the marker.
@@ -586,6 +625,7 @@ mod tests {
             head_rotation: identity(),
             eye_height: 1.04,
             body_frame: None,
+            belt_card: None,
             anchor_affordance: [None, None],
         }
     }

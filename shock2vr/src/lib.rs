@@ -1,4 +1,5 @@
 pub mod audio_log;
+pub mod belt_card;
 pub mod body_frame;
 pub mod game_scene;
 pub mod hand_affordance;

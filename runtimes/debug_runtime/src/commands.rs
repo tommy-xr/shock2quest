@@ -925,6 +925,9 @@ pub struct PlayerInfo {
     /// that lights the glove and pre-shapes its fingers. See
     /// `shock2vr::hand_affordance`.
     pub hand_affordance: shock2vr::game_scene::DebugHandAffordances,
+    /// The player's body anchors - belt and shoulders - and what hangs off
+    /// them. `null` outside VR. See `shock2vr::body_frame`.
+    pub body_frame: Option<shock2vr::game_scene::DebugBodyFrame>,
 }
 
 /// Input state snapshot

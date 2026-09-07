@@ -2449,6 +2449,9 @@ fn capture_frame_snapshot(
                     .debug_scene()
                     .and_then(|scene| scene.player_hand_affordances())
                     .unwrap_or_default(),
+                body_frame: game
+                    .debug_scene()
+                    .and_then(|scene| scene.player_body_frame()),
             }
         },
         entity_count,

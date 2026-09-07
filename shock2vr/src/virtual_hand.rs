@@ -788,7 +788,7 @@ fn resolve_hit_proxy_entity(world: &World, ray_cast_result: RayCastResult) -> Ra
     }
 }
 
-fn interaction_ray_cast(
+pub(crate) fn interaction_ray_cast(
     physics: &PhysicsWorld,
     world: &World,
     ray_start: cgmath::Point3<f32>,

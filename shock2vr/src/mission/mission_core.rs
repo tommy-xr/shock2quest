@@ -361,6 +361,22 @@ fn rewrite_strip_release(
     *effects = rewritten;
 }
 
+/// Where the belt card is this frame. It exists only once the player has
+/// collected a credential - it stands in for the whole set - and is derived
+/// here rather than stored, so nothing about it needs saving.
+fn belt_card_placement(
+    world: &World,
+    held_by: Option<crate::vr_config::Handedness>,
+) -> Option<crate::belt_card::CardPlacement> {
+    let has_card = world
+        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+        .is_ok_and(|quests| quests.has_key_cards());
+    has_card.then(|| match held_by {
+        Some(hand) => crate::belt_card::CardPlacement::InHand(hand),
+        None => crate::belt_card::CardPlacement::Belt,
+    })
+}
+
 /// Whether the player's backpack can actually take a deposit right now.
 ///
 /// This is exactly [`move_live_entity_into_container`]'s success condition for
@@ -1661,6 +1677,9 @@ pub struct MissionCore {
     /// presentation - derived from `QuestInfo`'s collected credentials each
     /// frame - so nothing here needs saving: a reload puts it back on the belt.
     belt_card_hand: Option<crate::vr_config::Handedness>,
+    /// The reader the belt card is currently touching, so one touch sends one
+    /// frob rather than one every frame it rests there.
+    belt_card_reader: Option<EntityId>,
 
     /// The trigger-safe decision in flight for each hand (indexed by
     /// [`hand_slot`]), or `None` when that hand's trigger is released. The
@@ -2584,6 +2603,7 @@ impl MissionCore {
             anchor_gestures: crate::body_frame::AnchorGestures::default(),
             body_anchors: None,
             belt_card_hand: None,
+            belt_card_reader: None,
             vr_trigger_safe_latch: [None; 2],
             vr_clip_insert_engaged: [false; 2],
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
@@ -3795,6 +3815,7 @@ impl MissionCore {
             head_rotation: input_context.head.rotation,
             eye_height: crate::player_eye_height_for(self.player_handle.is_crouched()),
             body_frame,
+            belt_card: belt_card_placement(&self.world, self.belt_card_hand),
             anchor_affordance,
         });
         rewrite_strip_release(&mut interaction_msgs, &store, &collect);
@@ -3806,6 +3827,7 @@ impl MissionCore {
         if game_options.presentation_mode == crate::PresentationMode::Vr {
             let cues = self.update_clip_insert_gesture(asset_cache);
             effects.extend(cues);
+            self.update_belt_card_reader();
         }
 
         // Tag the wielded weapon with the flat camera/crosshair fire ray so its
@@ -8984,6 +9006,42 @@ impl MissionCore {
         cues
     }
 
+    /// The belt card held against a reader. The card is a credential, not a
+    /// tool: it sends the target the same `Frob` a hand would, and the door's
+    /// own script runs the same key check - so a touch opens exactly what the
+    /// collected set opens, and refuses the rest.
+    ///
+    /// Latched on the target so resting the card against a panel frobs it once
+    /// (a door frobbed every frame would toggle open/shut).
+    fn update_belt_card_reader(&mut self) {
+        let touched = self
+            .belt_card_hand
+            .and_then(|hand| self.interaction.hand_pose(hand))
+            .and_then(|(position, rotation)| {
+                let forward = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+                let hit = crate::virtual_hand::interaction_ray_cast(
+                    &self.physics,
+                    &self.world,
+                    vec3_to_point3(position),
+                    forward,
+                    None,
+                )?;
+                ((hit.hit_point - vec3_to_point3(position)).magnitude()
+                    <= crate::belt_card::READER_REACH)
+                    .then_some(hit.maybe_entity_id)
+                    .flatten()
+            });
+        if touched != self.belt_card_reader {
+            self.belt_card_reader = touched;
+            if let Some(entity_id) = touched {
+                self.script_world.dispatch(Message {
+                    payload: MessagePayload::Frob,
+                    to: entity_id,
+                });
+            }
+        }
+    }
+
     /// How many rounds `weapon`'s magazine holds, or `None` when it is not a
     /// gun that takes one.
     fn magazine_capacity(&self, weapon: EntityId) -> Option<i32> {
@@ -11887,6 +11945,30 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             right_grip: self.interaction.fitted_grip(Handedness::Right),
             left_model: model_of(left_held),
             right_model: model_of(right_held),
+        })
+    }
+
+    fn player_body_frame(&self) -> Option<crate::game_scene::DebugBodyFrame> {
+        use crate::vr_config::Handedness;
+        let frame = self.body_anchors?;
+        let xyz = |v: Vector3<f32>| [v.x, v.y, v.z];
+        Some(crate::game_scene::DebugBodyFrame {
+            belt: xyz(frame.belt()),
+            left_shoulder: xyz(frame.shoulder(Handedness::Left)),
+            right_shoulder: xyz(frame.shoulder(Handedness::Right)),
+            last_stowed_weapon: self.stowed_weapon_to_draw().and_then(|entity_id| {
+                self.world
+                    .borrow::<View<dark::properties::PropSymName>>()
+                    .ok()
+                    .and_then(|names| names.get(entity_id).ok().map(|name| name.0.clone()))
+            }),
+            belt_card: belt_card_placement(&self.world, self.belt_card_hand).map(|placement| {
+                match placement {
+                    crate::belt_card::CardPlacement::Belt => "belt",
+                    crate::belt_card::CardPlacement::InHand(Handedness::Left) => "left",
+                    crate::belt_card::CardPlacement::InHand(Handedness::Right) => "right",
+                }
+            }),
         })
     }
 
