@@ -1106,3 +1106,26 @@ export interface WaitForOptions {
   /** Description used in the timeout error message. */
   description?: string;
 }
+
+/** Opt-in debug VR floor-relative stage poses, in meters. Requires --vr. */
+export interface TrackingPatch {
+  enabled?: boolean;
+  position_tracked?: boolean;
+  /** Forget standing calibration after changing reference space. */
+  reset?: boolean;
+  head_position?: Vec3;
+  left_hand_position?: Vec3;
+  right_hand_position?: Vec3;
+}
+
+export interface TrackingStatus {
+  enabled: boolean;
+  position_tracked: boolean;
+  head_position: Vec3 | null;
+  left_hand_position: Vec3 | null;
+  right_hand_position: Vec3 | null;
+  physical_crouch: boolean;
+  explicit_crouch: boolean;
+  /** Actual post-stance pawn-local eye, in world units. */
+  resolved_head_position: Vec3;
+}

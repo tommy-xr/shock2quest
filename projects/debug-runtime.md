@@ -253,6 +253,12 @@ on-device automation - see the `vr-device-loop` skill. There it is applied as an
 override on top of the OpenXR-built `InputContext` (`InputOverrides`); here the
 runtime owns the context and patches it directly.
 
+Floor-relative VR tracking is available through `GET/POST /v1/control/tracking`
+when launched with `--vr`. It is opt-in; legacy pawn-local input channels keep
+their existing meaning. See the [SDK tracking guide](../tools/shock2-sdk/README.md#simulated-floor-relative-vr-tracking)
+for units, complete initial rig poses, calibration/reset, tracking loss, and
+resolved-camera diagnostics.
+
 ## Usage
 
 ### Starting the Debug Runtime
