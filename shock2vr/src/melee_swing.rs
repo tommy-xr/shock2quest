@@ -12,6 +12,10 @@
 //! - a second hand released **before** contact downgrades it - the blow landed
 //!   with one hand on the weapon whatever the swing started as.
 //!
+//! Below the gate there is no swing to latch and the answer is just "are both
+//! hands on it now" - a contact can bill on the *victim's* speed (a creature
+//! charging onto a held blade), and that blow is two-handed if the weapon is.
+//!
 //! Eligibility comes from [`crate::two_hand_grip`]'s latch (a resolved support
 //! attachment), never from how close the other controller happens to be.
 
@@ -42,8 +46,12 @@ impl SwingLatch {
             // Still swinging: losing the support hand loses the latch, and
             // gaining one cannot raise it.
             (true, true) => self.two_handed &= supported,
-            // Below the gate: no swing, nothing latched.
-            (false, _) => self.two_handed = false,
+            // Below the gate there is no swing to latch, so the answer is
+            // simply whether both hands are on the weapon *now*. A contact can
+            // still bill while the weapon is barely moving - a creature
+            // charging onto a held blade impales itself on its own speed - and
+            // that blow is two-handed if the player is holding it in two.
+            (false, _) => self.two_handed = supported,
         }
         self.hot = hot;
     }
@@ -111,28 +119,16 @@ pub fn latched_two_handed(world: &shipyard::World, weapon: EntityId) -> bool {
 ///
 /// The head, not the centre of mass: a weapon swung about the wrist moves its
 /// far end fast while its centre barely moves, so a centre reading under-reads
-/// exactly the gesture the gate is meant to catch. The hand's drive target
-/// rather than the body, for the same reason
-/// [`crate::scripts::melee_weapon`]'s own gate reads it - an obstructed weapon
-/// reports its catch-up as speed the player never produced.
+/// exactly the gesture the gate is meant to catch. Read off the hand's drive
+/// target rather than the weapon body, for the same reason the melee script's
+/// own gate reads it - an obstructed weapon reports its catch-up as speed the
+/// player never produced.
 pub fn swing_speed(physics: &crate::physics::PhysicsWorld, weapon: EntityId) -> Option<f32> {
-    use cgmath::{InnerSpace, Vector3};
-
-    let (centre, rotation, half_extents) = physics.held_melee_contact_box(weapon)?;
-    // The long axis of the fitted box is the haft; its far end is the head.
-    let axis = [
-        Vector3::new(half_extents.x, 0.0, 0.0),
-        Vector3::new(0.0, half_extents.y, 0.0),
-        Vector3::new(0.0, 0.0, half_extents.z),
-    ]
-    .into_iter()
-    .max_by(|a, b| a.magnitude2().total_cmp(&b.magnitude2()))?;
-    let head = centre + rotation * axis;
-    let velocity = physics.held_melee_target_velocity_at_point(weapon, head)?;
+    let velocity = physics.held_melee_head_velocity(weapon)?;
     Some(crate::physics::relative_swing_speed(
         velocity,
         physics.player_velocity(),
-        Vector3::new(0.0, 0.0, 0.0),
+        cgmath::Vector3::new(0.0, 0.0, 0.0),
         None,
     ))
 }
@@ -177,11 +173,25 @@ mod tests {
 
     /// Dropping below the gate ends the swing, so the next one samples afresh.
     #[test]
-    fn a_swing_that_ends_latches_nothing() {
+    fn a_swing_that_ends_stops_being_hot() {
         let mut latch = SwingLatch::default();
         latch.update(weapon(), true, true);
         latch.update(weapon(), false, true);
-        assert!(!latch.hot() && !latch.two_handed());
+        assert!(!latch.hot());
+        latch.update(weapon(), true, false);
+        assert!(!latch.two_handed(), "the next swing samples afresh");
+    }
+
+    /// A blow that lands while the weapon is barely moving - a creature
+    /// charging onto a held blade - is still two-handed if the player is
+    /// holding it in two hands.
+    #[test]
+    fn a_weapon_held_still_in_two_hands_is_two_handed() {
+        let mut latch = SwingLatch::default();
+        latch.update(weapon(), false, true);
+        assert!(!latch.hot() && latch.two_handed());
+        latch.update(weapon(), false, false);
+        assert!(!latch.two_handed());
     }
 
     /// A latch belongs to the weapon it was taken on; swapping weapons in the

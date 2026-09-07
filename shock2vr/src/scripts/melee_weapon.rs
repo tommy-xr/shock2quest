@@ -90,8 +90,10 @@ const IMPACT_SOUND_COOLDOWN_SECONDS: f32 = 0.15;
 /// (`MELEE_FREE_SWING_SPEED`), so a light tap that does no damage still clinks.
 const IMPACT_SOUND_MIN_SPEED: f32 = 0.1;
 
-/// The swing/graze gate: minimum closing speed for a contact to damage.
-fn free_swing_speed_threshold() -> f32 {
+/// The swing/graze gate: minimum closing speed for a contact to damage. Also
+/// what [`crate::melee_swing`] latches a swing's two-handedness on, so the two
+/// read one gate.
+pub(crate) fn free_swing_speed_threshold() -> f32 {
     crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED)
 }
 
@@ -166,27 +168,20 @@ impl Script for HeldMeleeWeapon {
                     .may_damage(entity_id, owner, physics, *contact, player_velocity)
                     .then(|| authored_contact_damage(world, entity_id, owner))
                     .flatten()
-                    // The one-hand penalty is the first thing applied, before
-                    // any bonus: a wrench swung in one hand is worth less of
-                    // the blow the gamesys authored, and everything that
-                    // scales a swing scales that.
+                    // Both of these scale the *player's* swing, so a weapon
+                    // that is not in their hand gets neither (a wrench knocked
+                    // into a creature is nobody's swing). The one-hand penalty
+                    // goes first, before any bonus: it says how much of the
+                    // authored blow the swing was worth, and everything else
+                    // scales that.
                     .map(|amount| {
-                        amount
-                            * two_hand_damage_scale(
-                                world,
-                                entity_id,
-                                crate::melee_swing::latched_two_handed(world, entity_id),
-                            )
-                    })
-                    // Adrenaline Overproduction scales the *player's* swing,
-                    // so only a weapon in their hand gets the bonus (a wrench
-                    // knocked into a creature is nobody's swing).
-                    .map(|amount| {
-                        if self.is_held(world, entity_id) {
-                            amount * crate::scripts::berserk::melee_damage_multiplier(world)
-                        } else {
-                            amount
+                        if !is_held {
+                            return amount;
                         }
+                        let two_handed = crate::melee_swing::latched_two_handed(world, entity_id);
+                        amount
+                            * two_hand_damage_scale(world, entity_id, two_handed)
+                            * crate::scripts::berserk::melee_damage_multiplier(world)
                     });
 
                 let mut effects = Vec::new();
@@ -996,10 +991,18 @@ mod tests {
         )
     }
 
-    /// The weapon's *held* model - what the grip profile (and so the two-hand
-    /// flag) is keyed on. A wield swaps the world model for the `_h` rig.
+    /// Put the weapon in the player's hand: the VR grip offset is what
+    /// `is_held` reads, and `model_name` is what the grip profile (and so the
+    /// two-hand flag) is keyed on - a wield swaps the world model for the
+    /// `_h` rig on a 25AE install and keeps it otherwise.
     fn held_as(world: &mut World, weapon: EntityId, model_name: &str) {
-        world.add_component(weapon, PropModelName(model_name.to_owned()));
+        world.add_component(
+            weapon,
+            (
+                PropModelName(model_name.to_owned()),
+                crate::runtime_props::RuntimePropVrGripOffset(vec3(0.0, 0.0, 0.0)),
+            ),
+        );
     }
 
     /// Publish a swing latch for `weapon` the way the mission loop does: the
@@ -1108,6 +1111,24 @@ mod tests {
         assert!(
             (amount - WEAPON_BASH_INTENSITY * scale).abs() < 1e-4,
             "a support hand released before impact must not keep the blow, got {amount}"
+        );
+    }
+
+    /// A weapon nobody is holding is nobody's swing: a wrench knocked into a
+    /// creature bills its authored damage, penalty and bonuses alike skipped.
+    #[test]
+    fn a_loose_wrench_pays_no_one_hand_penalty() {
+        let _guard = crate::vr_grips::test_guard();
+        crate::vr_grips::load_shipped_for_test();
+        let (mut world, weapon, target) = test_world(PresentationMode::Vr);
+        world.add_component(weapon, PropModelName("wrench_h".to_owned()));
+        latch_swing(&mut world, weapon, &[false]);
+
+        let amount = swing_damage(&world, weapon, target);
+
+        assert!(
+            (amount - WEAPON_BASH_INTENSITY).abs() < 1e-4,
+            "a loose weapon is nobody's swing, got {amount}"
         );
     }
 

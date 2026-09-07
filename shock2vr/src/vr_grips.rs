@@ -80,6 +80,10 @@ pub struct GripProfile {
     /// two-handed lands its full authored blow, a one-handed one is scaled
     /// back (see [`crate::melee_swing`]). Only long-hafted melee earns it -
     /// a rapier or a shard is a one-handed weapon and is never penalised.
+    ///
+    /// Flag **both** of a melee weapon's models: VR wields the `_h` view model
+    /// only on a 25AE install and keeps the world model otherwise, so a flag
+    /// on one of them alone would make the damage install-dependent.
     #[serde(default, skip_serializing_if = "is_false")]
     pub two_hand: bool,
     #[serde(default, skip_serializing_if = "is_default_mirror")]

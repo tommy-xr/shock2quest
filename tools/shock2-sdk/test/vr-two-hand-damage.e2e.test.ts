@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { Vec3 } from "../src/types.js";
+import type { MeleeSwing, Vec3 } from "../src/types.js";
 
 // A one-handed swing of a two-handed weapon lands a lesser blow; a second hand
 // on the haft restores the full one. The latch is taken when the swing goes
@@ -63,8 +63,10 @@ async function supportAt(game: GameServer, at: Vec3): Promise<void> {
 
 /**
  * Swing the held weapon by sliding the tracked hand (and, when it is holding
- * on, the support hand with it) along +Z, sampling the swing readout every few
- * frames. Returns the sample taken while the swing was hottest.
+ * on, the support hand with it) along +Z. Returns EVERY frame the swing spent
+ * hot, so a caller asserts over the whole swing rather than over one sample it
+ * chose - a latch that wrongly flips mid-swing must not be able to hide in an
+ * unread frame.
  *
  * `grabDuring` closes the off-hand on the shaft partway through the sweep -
  * the late grab the latch is meant to refuse.
@@ -73,10 +75,10 @@ async function swing(
   game: GameServer,
   from: Vec3,
   options: { support?: Vec3; grabDuring?: Vec3 } = {},
-): Promise<{ hot: boolean; two_handed_latched: boolean; damage_scale: number }> {
+): Promise<MeleeSwing[]> {
   const FRAMES = 30;
   const TRAVEL = 3.0;
-  let hottest = (await game.info()).player.melee.swing;
+  const hot: MeleeSwing[] = [];
   for (let frame = 1; frame <= FRAMES; frame += 1) {
     const dz = (TRAVEL * frame) / FRAMES;
     await game.input.set("right_hand.position", [from[0], from[1], from[2] + dz]);
@@ -87,22 +89,44 @@ async function swing(
         options.support[2] + dz,
       ]);
     }
-    await game.step({ frames: 1 });
     if (options.grabDuring && frame === Math.round(FRAMES / 2)) {
-      // Mid-swing: close the off-hand where the shaft has travelled to.
+      // Mid-swing: close the off-hand where the shaft has travelled to. Set
+      // BEFORE the step, so the swing never spends a frame standing still -
+      // a stationary frame drops below the gate and legitimately ends the
+      // swing, and the next one would be a fresh (two-handed) swing.
       await game.input.set("left_hand.position", [
         options.grabDuring[0],
         options.grabDuring[1],
         options.grabDuring[2] + dz,
       ]);
       await game.input.set("left_hand.squeeze", 1.0);
-      await game.step({ frames: 1 });
     }
+    await game.step({ frames: 1 });
     const swing = (await game.info()).player.melee.swing;
-    if (swing.hot && !hottest.hot) hottest = swing;
-    else if (swing.hot && hottest.hot && !swing.two_handed_latched) hottest = swing;
+    if (swing.hot) hot.push(swing);
   }
-  return hottest;
+  assert.ok(hot.length > 0, "the sweep should cross the swing gate");
+  return hot;
+}
+
+/** Assert every hot frame of one swing agrees on what it was worth. */
+function assertSwingWorth(
+  swing: MeleeSwing[],
+  latched: boolean,
+  scale: number,
+  what: string,
+): void {
+  for (const [frame, sample] of swing.entries()) {
+    assert.equal(
+      sample.two_handed_latched,
+      latched,
+      `${what}: frame ${frame} of ${swing.length} read latched=${sample.two_handed_latched}`,
+    );
+    assert.ok(
+      Math.abs(sample.damage_scale - scale) < 1e-3,
+      `${what}: frame ${frame} should be worth ${scale}, got ${sample.damage_scale}`,
+    );
+  }
 }
 
 test(
@@ -127,16 +151,7 @@ test(
 
     // --- one hand ---
     const oneHanded = await swing(game, hand);
-    assert.equal(oneHanded.hot, true, "the sweep should cross the swing gate");
-    assert.equal(
-      oneHanded.two_handed_latched,
-      false,
-      "one hand on the weapon is not a two-handed swing",
-    );
-    assert.ok(
-      Math.abs(oneHanded.damage_scale - ONE_HAND_SCALE) < 1e-3,
-      `a one-handed wrench should be worth ${ONE_HAND_SCALE}, got ${oneHanded.damage_scale}`,
-    );
+    assertSwingWorth(oneHanded, false, ONE_HAND_SCALE, "a one-handed wrench swing");
 
     // --- two hands ---
     await game.input.set("right_hand.position", hand);
@@ -148,20 +163,7 @@ test(
       "the off-hand should have taken hold of the shaft",
     );
     const twoHanded = await swing(game, hand, { support: shaft });
-    assert.equal(twoHanded.hot, true, "the two-handed sweep should also be hot");
-    assert.equal(
-      twoHanded.two_handed_latched,
-      true,
-      "a swing started with both hands on the weapon is two-handed",
-    );
-    assert.ok(
-      Math.abs(twoHanded.damage_scale - 1.0) < 1e-3,
-      `two hands restore the authored blow, got ${twoHanded.damage_scale}`,
-    );
-    assert.ok(
-      oneHanded.damage_scale / twoHanded.damage_scale - ONE_HAND_SCALE < 1e-3,
-      "the one-handed swing should be the smaller of the two",
-    );
+    assertSwingWorth(twoHanded, true, 1.0, "a two-handed wrench swing");
 
     // --- a hand grabbed after the swing went hot ---
     await game.input.set("left_hand.squeeze", 0.0);
@@ -173,17 +175,10 @@ test(
       false,
       "the off-hand should be clear again before the late-grab swing",
     );
+    // Asserted over EVERY hot frame, so a wrong upgrade after the grab lands
+    // cannot hide in a frame the test did not read.
     const lateGrab = await swing(game, hand, { grabDuring: shaft });
-    assert.equal(lateGrab.hot, true, "the late-grab sweep should be hot");
-    assert.equal(
-      lateGrab.two_handed_latched,
-      false,
-      "a second hand taken after the swing went hot must not upgrade it",
-    );
-    assert.ok(
-      Math.abs(lateGrab.damage_scale - ONE_HAND_SCALE) < 1e-3,
-      `a late grab stays a one-handed swing, got ${lateGrab.damage_scale}`,
-    );
+    assertSwingWorth(lateGrab, false, ONE_HAND_SCALE, "a swing grabbed after it went hot");
     // ...and the grab really did take hold - otherwise the assertion above
     // would pass for the wrong reason.
     assert.equal(

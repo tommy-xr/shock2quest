@@ -851,12 +851,15 @@ mod tests {
             let Some(profile) = crate::vr_grips::profile(name) else {
                 continue;
             };
-            assert!(
-                profile.offset.is_none()
-                    && profile.rotation_deg.is_none()
-                    && profile.scale.is_none()
-                    && profile.fingers.is_none()
-                    && profile.family.is_none(),
+            // Compared against a default profile carrying only the
+            // non-placement flags, so a placement field added later fails
+            // closed rather than escaping an enumerated list.
+            assert_eq!(
+                profile,
+                crate::vr_grips::GripProfile {
+                    two_hand: profile.two_hand,
+                    ..Default::default()
+                },
                 "{name} must take its grip from the posed rig, not the profile file"
             );
         }

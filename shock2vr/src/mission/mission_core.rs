@@ -9158,13 +9158,6 @@ impl MissionCore {
         Some(entity_id)
     }
 
-    /// The belt card held against a reader. The card is a credential, not a
-    /// tool: it sends the target the same `Frob` a hand would, and the door's
-    /// own script runs the same key check - so a touch opens exactly what the
-    /// collected set opens, and refuses the rest.
-    ///
-    /// Latched on the target so resting the card against a panel frobs it once
-    /// (a door frobbed every frame would toggle open/shut).
     /// Fold this frame into each hand's melee swing latch and publish the
     /// result, so the (pure) melee script can read at contact whether the
     /// swing that landed was two-handed. See [`crate::melee_swing`].
@@ -9180,14 +9173,14 @@ impl MissionCore {
         for (hand, weapon) in [(Handedness::Left, held.0), (Handedness::Right, held.1)] {
             // Only a driven melee wield has a swing at all; anything else
             // (a gun, an empty hand) reports no speed and latches nothing.
-            let speed =
-                weapon.and_then(|weapon| crate::melee_swing::swing_speed(&self.physics, weapon));
+            let swinging = weapon.and_then(|weapon| {
+                crate::melee_swing::swing_speed(&self.physics, weapon).map(|speed| (weapon, speed))
+            });
+            let gate = crate::scripts::melee_weapon::free_swing_speed_threshold();
             let mut latch = swings.get(hand);
             latch.update(
-                speed.and(weapon),
-                speed.is_some_and(|speed| {
-                    speed >= crate::dev_params::get(crate::dev_params::MELEE_FREE_SWING_SPEED)
-                }),
+                swinging.map(|(weapon, _)| weapon),
+                swinging.is_some_and(|(_, speed)| speed >= gate),
                 // Supported by the *other* hand's resolved attachment, never
                 // by controller proximity.
                 support.is_some_and(|support| Some(support.entity_id) == weapon),
@@ -9196,6 +9189,13 @@ impl MissionCore {
         }
     }
 
+    /// The belt card held against a reader. The card is a credential, not a
+    /// tool: it sends the target the same `Frob` a hand would, and the door's
+    /// own script runs the same key check - so a touch opens exactly what the
+    /// collected set opens, and refuses the rest.
+    ///
+    /// Latched on the target so resting the card against a panel frobs it once
+    /// (a door frobbed every frame would toggle open/shut).
     fn update_belt_card_reader(&mut self) {
         let touched = self
             .belt_card_hand
