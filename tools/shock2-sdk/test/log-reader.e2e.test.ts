@@ -280,16 +280,16 @@ test(
   },
 );
 
-// Hydro 3's Korenchkin entry is authored as `LogText12:  "..."` in
-// LEVEL03.STR, with two spaces between the colon and opening quote. It follows
-// the same Dark string-table grammar as the compact `Key:"..."` form and must
-// remain available after the disc has been consumed into the PDA.
+// The mounted transcript can use either the original ellipses or SCP's
+// punctuation. String-table colon whitespace is covered independently by
+// strings_importer::tests::accepts_whitespace_between_colon_and_opening_quote.
 test(
-  "hydro3: collected Korenchkin log opens its double-spaced transcript",
+  "hydro3: collected Korenchkin log opens its mounted transcript",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await GameServer.launch({
       mission: "hydro3.mis",
+      port: Number(process.env.SHOCK2_E2E_PORT ?? 0),
     });
     await game.step({ frames: 5 });
 
@@ -309,14 +309,27 @@ test(
 
     const panel = (await game.ui.state()).active_panel;
     assert.ok(panel, "the collected Hydro 3 log should open in the reader");
+    assert.notEqual(
+      panel.entity_id,
+      korenchkin.id,
+      "the collected log must open in the player-owned reader, not its source disc",
+    );
     const transcript = panel.elements
       .filter((element) => element.kind === "text" && element.text)
       .map((element) => element.text)
       .join(" ");
     assert.ok(
-      transcript.includes("Glory... to the Many"),
+      [
+        "Glory... to the Many... I am a voice in their choir.",
+        "Glory to the Many. I am a voice in their choir.",
+      ].some((opening) => transcript.includes(opening)),
       `the reader should render Korenchkin's transcript (got: ${transcript.slice(0, 160)})`,
     );
+    assert.ok(
+      transcript.toUpperCase().includes("KORENCHKIN"),
+      "the reader should identify Korenchkin as the sender",
+    );
+    await game.screenshot("hydro3-korenchkin-mounted-transcript.png");
     assert.deepEqual(
       (await game.info()).player.collected_logs,
       [{ deck: 3, log: 12, read: true }],
