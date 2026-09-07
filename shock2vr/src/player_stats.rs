@@ -208,8 +208,10 @@ pub struct PlayerStats {
 /// The player has four O/S trait slots (one per single-use machine in the game).
 pub const OS_TRAIT_SLOTS: usize = 4;
 
-/// The highest level a trainable skill reaches.
-pub const MAX_SKILL_LEVEL: i32 = 6;
+/// Stats cap at 6 (start 1); skills cap at 6 (start 0); psi tiers cap at 5.
+pub const STAT_CAP: i32 = 6;
+pub const SKILL_CAP: i32 = 6;
+pub const PSI_TIER_CAP: i32 = 5;
 
 impl Default for PlayerStats {
     fn default() -> PlayerStats {
@@ -314,9 +316,9 @@ impl PlayerStats {
     /// Per-shot deviation from the aim direction for a weapon fired at
     /// `skill_level`, in degrees: the gamesys inaccuracy angle
     /// (`SkillParams::inaccuracy_degrees`) scaled by how far the skill falls
-    /// short of [`MAX_SKILL_LEVEL`]. A maxed skill shoots dead straight.
+    /// short of [`SKILL_CAP`]. A maxed skill shoots dead straight.
     pub fn shot_deviation_degrees(inaccuracy_degrees: f32, skill_level: i32) -> f32 {
-        inaccuracy_degrees * (MAX_SKILL_LEVEL - skill_level).max(0) as f32
+        inaccuracy_degrees * (SKILL_CAP - skill_level).max(0) as f32
     }
 
     /// Raise a primary stat by one level (a trainer purchase).
@@ -530,10 +532,7 @@ mod tests {
         // gamesys authors 0, so this uses a non-zero angle to pin the scaling.
         assert_eq!(PlayerStats::shot_deviation_degrees(11.25, 1), 56.25);
         assert_eq!(PlayerStats::shot_deviation_degrees(11.25, 5), 11.25);
-        assert_eq!(
-            PlayerStats::shot_deviation_degrees(11.25, MAX_SKILL_LEVEL),
-            0.0
-        );
+        assert_eq!(PlayerStats::shot_deviation_degrees(11.25, SKILL_CAP), 0.0);
         assert_eq!(
             PlayerStats::shot_deviation_degrees(11.25, 9),
             0.0,

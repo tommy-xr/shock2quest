@@ -15,7 +15,7 @@ use std::io;
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::ss2_chunk_file_reader::ChunkFileTableOfContents;
+use crate::{ss2_chunk_file_reader::ChunkFileTableOfContents, ss2_common::DEGREES_PER_ANGLE_UNIT};
 
 /// The trainer upgrade cost tables (Normal difficulty), as authored in the
 /// gamesys. Each row is one stat/skill/tier; each column is the cost of buying
@@ -50,9 +50,6 @@ pub struct HrmParams {
     /// landing on a failed mine breaks a hack target unconditionally.
     pub stat_break_chance: [f32; 8],
 }
-
-/// Angles are stored as 16-bit turns: `0x10000` units make a full circle.
-const DEGREES_PER_ANGLE_UNIT: f32 = 360.0 / 65536.0;
 
 /// Retail `SKILLPARAM` file-var (`sSkillParams`). Research scales authored
 /// progress by `1 + research_factor * (skill - 1)^2`.

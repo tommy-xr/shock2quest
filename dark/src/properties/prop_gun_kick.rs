@@ -4,38 +4,43 @@ use shipyard::Component;
 
 use crate::{
     properties::GUN_SETTING_COUNT,
-    ss2_common::{read_single, read_u16},
+    ss2_common::{read_single, read_u16_angle},
 };
 
 use serde::{Deserialize, Serialize};
-
-/// Angles are stored as 16-bit turns: `0x10000` units make a full circle.
-const DEGREES_PER_ANGLE_UNIT: f32 = 360.0 / 65536.0;
 
 /// On-disk size of one [`GunKickSetting`]: the eleven fields below, with the
 /// six 16-bit angles packed in pairs between the 32-bit floats.
 const SETTING_SIZE: u64 = 32;
 
-/// One fire setting's authored recoil. Angles are converted to degrees at
-/// parse time; the remaining fields are the raw authored scalars.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+/// One fire setting's authored recoil.
+///
+/// Six fields are 16-bit turns, decoded here to degrees; the rest are the raw
+/// authored scalars. The *magnitudes* are what the data verifies - whether a
+/// field is applied per shot or per second is not settled by the data, and the
+/// shotgun's 22.5 deg kick / the 65.9 deg jolt on template -26 are too large to
+/// be instantaneous angles, so the first consumer must decide that, not these
+/// names. Angles are read unsigned: no shipped record exceeds 12000 units
+/// (65.9 deg), so whether the top half of the range is meant as negative is
+/// untested.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct GunKickSetting {
     /// Fraction of the kick applied before the shot leaves the barrel.
     pub pre_kick_pct: f32,
-    /// Pitch added to the gun per shot, in degrees.
+    /// Pitch the shot adds to the gun, in degrees.
     pub kick_pitch_degrees: f32,
     /// Ceiling on accumulated kick pitch, in degrees.
     pub kick_pitch_max_degrees: f32,
-    /// Heading added to the gun per shot, in degrees.
+    /// Heading the shot adds to the gun, in degrees.
     pub kick_heading_degrees: f32,
-    /// Rate the accumulated kick angles return to rest, in degrees.
+    /// How fast the accumulated kick angles return to rest, in degrees.
     pub kick_angular_return_rate_degrees: f32,
-    /// Displacement of the gun per shot (negative drives it towards the
+    /// Displacement the shot adds to the gun (negative drives it towards the
     /// player).
     pub kick_back: f32,
     /// Ceiling on accumulated kick back.
     pub kick_back_max: f32,
-    /// Rate the accumulated kick back returns to rest.
+    /// How fast the accumulated kick back returns to rest.
     pub kick_back_return_rate: f32,
     /// Pitch imparted to the player, in degrees.
     pub jolt_pitch_degrees: f32,
@@ -48,15 +53,15 @@ pub struct GunKickSetting {
 impl GunKickSetting {
     fn read<T: io::Read>(reader: &mut T) -> GunKickSetting {
         let pre_kick_pct = read_single(reader);
-        let kick_pitch_degrees = read_angle(reader);
-        let kick_pitch_max_degrees = read_angle(reader);
-        let kick_heading_degrees = read_angle(reader);
-        let kick_angular_return_rate_degrees = read_angle(reader);
+        let kick_pitch_degrees = read_u16_angle(reader).0;
+        let kick_pitch_max_degrees = read_u16_angle(reader).0;
+        let kick_heading_degrees = read_u16_angle(reader).0;
+        let kick_angular_return_rate_degrees = read_u16_angle(reader).0;
         let kick_back = read_single(reader);
         let kick_back_max = read_single(reader);
         let kick_back_return_rate = read_single(reader);
-        let jolt_pitch_degrees = read_angle(reader);
-        let jolt_heading_degrees = read_angle(reader);
+        let jolt_pitch_degrees = read_u16_angle(reader).0;
+        let jolt_heading_degrees = read_u16_angle(reader).0;
         let jolt_back = read_single(reader);
 
         GunKickSetting {
@@ -75,16 +80,14 @@ impl GunKickSetting {
     }
 }
 
-fn read_angle<T: io::Read>(reader: &mut T) -> f32 {
-    read_u16(reader) as f32 * DEGREES_PER_ANGLE_UNIT
-}
-
 /// `P$GunKick` - a gun archetype's authored recoil, one [`GunKickSetting`] per
 /// fire setting, selected by the same index as [`super::PropBaseGunDesc`].
 ///
 /// Every shipped record is exactly `GUN_SETTING_COUNT * SETTING_SIZE` bytes.
-/// Only the two selectable settings are authored; the third is zeroed.
-#[derive(Debug, Component, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// Only the first two settings are selectable; the third still carries data on
+/// 24 of the 37 shipped records (usually a stale copy of setting 1), so it must
+/// not be read as "authored means used".
+#[derive(Debug, Component, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PropGunKick {
     pub settings: [GunKickSetting; GUN_SETTING_COUNT],
 }
@@ -148,7 +151,8 @@ mod tests {
     }
 
     /// The pistol as shipped: single shot, then a 3-round burst that drives the
-    /// gun back further. The third setting is zeroed.
+    /// gun back further. The pistol's unselectable third setting happens to be all
+    /// zeros - other guns carry data there.
     fn pistol_chunk() -> Vec<u8> {
         let mut bytes = setting_bytes(
             0.0,

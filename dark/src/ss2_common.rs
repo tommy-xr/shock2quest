@@ -25,10 +25,11 @@ pub struct LevelChunk {
     pub length: u32, // Length of chunk, in bytes
 }
 
+/// Angles are stored as 16-bit turns: `0x10000` units make a full circle.
+pub const DEGREES_PER_ANGLE_UNIT: f32 = 360.0 / 65536.0;
+
 pub fn read_u16_angle<T: io::Read>(reader: &mut T) -> Deg<f32> {
-    let denom = 0x8000 as f32;
-    let v = read_u16(reader) as f32;
-    Deg(v * 180.0 / denom)
+    Deg(read_u16(reader) as f32 * DEGREES_PER_ANGLE_UNIT)
 }
 
 pub fn read_u16_vec3<T: io::Read>(reader: &mut T) -> Vector3<Deg<f32>> {
