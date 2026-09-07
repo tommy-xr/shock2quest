@@ -49,11 +49,14 @@ async function reachIntoPouch(game: GameServer): Promise<void> {
   await game.step({ frames: 4 });
 }
 
-/** Total reserve rounds the backpack carries in `template` stacks. */
+/** Total reserve rounds the BACKPACK carries in `template` stacks. A held clip
+ * is still a carried item, so the hands are excluded - the point of every
+ * assertion here is that rounds moved between the reserve and a hand. */
 async function reserveRounds(game: GameServer, template: number): Promise<number> {
   const items = (await game.player.inventory()).items;
   let rounds = 0;
   for (const item of items) {
+    if (item.location !== "inventory") continue;
     const detail = await game.entities.detail(item.entity_id);
     if (detail.template_id !== template) continue;
     rounds += stackOf(detail);
@@ -156,12 +159,20 @@ test(
     // Put one back: a clip released in the pouch returns to the reserve rather
     // than falling on the floor.
     const second = await spawnClip(game, STD_CLIP);
+    // Open the hand first: the withdraw is a grip EDGE, and the hand is still
+    // closed from carrying the last clip into the gun.
+    await game.input.set("left_hand.squeeze", 0);
+    await game.step({ frames: 4 });
     await reachIntoPouch(game);
     await game.input.set("left_hand.squeeze", 1);
     await game.step({ frames: 6 });
     const carried = offHandEntityId(await game.info());
     assert.ok(carried, "the restocked pouch should hand out another clip");
-    assert.equal(await reserveRounds(game, STD_CLIP), 0);
+    assert.equal(
+      await reserveRounds(game, STD_CLIP),
+      0,
+      "the second clip should come out of the reserve too",
+    );
 
     await reachIntoPouch(game);
     await game.input.set("left_hand.squeeze", 0);
