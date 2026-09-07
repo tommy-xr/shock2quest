@@ -29,8 +29,6 @@ use engine::assets::asset_cache::AssetCache;
 use once_cell::sync::Lazy;
 use shipyard::EntityId;
 
-use dark::importers::{VR_CONTACT_MESH_IMPORTER, VrContactMesh};
-
 use crate::hand_fit::ContactMesh;
 use crate::physics::PhysicsWorld;
 use crate::util::meters;
@@ -453,21 +451,8 @@ pub fn warm_contact_mesh(
     if CONTACT.read().unwrap().contains_key(&key) {
         return;
     }
-    let to_hand = vr_config::held_model_hand_transform(model_name, handedness, gun_scale);
-    let mesh = asset_cache
-        .get_opt::<_, VrContactMesh, _>(&VR_CONTACT_MESH_IMPORTER, &format!("{model_name}.BIN"))
-        .map(|triangles| {
-            ContactMesh::new(
-                triangles
-                    .0
-                    .iter()
-                    .map(|triangle| triangle.map(|corner| to_hand.transform_point(corner)))
-                    .collect(),
-            )
-        })
-        .filter(|mesh| !mesh.is_empty())
-        .map(Arc::new);
-    CONTACT.write().unwrap().insert(key, mesh);
+    let mesh = crate::hand_glove::contact_mesh(model_name, handedness, gun_scale, asset_cache);
+    CONTACT.write().unwrap().insert(key, mesh.map(Arc::new));
 }
 
 fn contact_mesh(

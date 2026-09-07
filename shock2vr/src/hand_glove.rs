@@ -363,29 +363,16 @@ impl GloveRenderer {
         latch: Vector3<f32>,
         asset_cache: &mut AssetCache,
     ) -> Option<FittedGrip> {
-        use cgmath::{EuclideanSpace, Point3, Transform};
+        use cgmath::{EuclideanSpace, Point3};
 
-        let triangles = asset_cache.get_opt::<_, VrContactMesh, _>(
-            &VR_CONTACT_MESH_IMPORTER,
-            &format!("{model_name}.BIN"),
-        )?;
         // Slide the item along until the latched point sits on the palm; its
         // turn in the hand is the one the model's own grip already gives, which
         // is close enough at a support grip and keeps the answer cacheable.
         let seat = vr_config::held_model_hand_transform(model_name, handedness, gun_scale);
-        let place = Matrix4::from_translation(
+        let slide = Matrix4::from_translation(
             crate::hand_seat::PALM_CENTRE - seat.transform_point(Point3::from_vec(latch)).to_vec(),
-        ) * seat;
-        let mesh = ContactMesh::new(
-            triangles
-                .0
-                .iter()
-                .map(|triangle| triangle.map(|corner| place.transform_point(corner)))
-                .collect(),
         );
-        if mesh.is_empty() {
-            return None;
-        }
+        let mesh = placed_contact_mesh(model_name, handedness, gun_scale, slide, asset_cache)?;
 
         // The support hand has no trigger to rest on, so a gun's authored
         // Trigger family is not its family. An authored support seat may name
@@ -641,16 +628,36 @@ pub fn warm_held_seat(model_name: &str, asset_cache: &mut AssetCache) {
 /// The item's render mesh in the glove's own hand space, or `None` when there
 /// is nothing to close against - a missing asset, or a skinned rig (the melee
 /// `_h` set, which draws its own arm anyway).
-fn contact_mesh(
+pub(crate) fn contact_mesh(
     model_name: &str,
     handedness: Handedness,
     gun_scale: f32,
     asset_cache: &mut AssetCache,
 ) -> Option<ContactMesh> {
+    placed_contact_mesh(
+        model_name,
+        handedness,
+        gun_scale,
+        <Matrix4<f32> as cgmath::SquareMatrix>::identity(),
+        asset_cache,
+    )
+}
+
+/// [`contact_mesh`], with `slide` applied on top of the item's own seat: the
+/// support grip slides the item along until the point that hand latched sits on
+/// the palm, because that hand did not pick the item up, it took hold of it
+/// somewhere.
+fn placed_contact_mesh(
+    model_name: &str,
+    handedness: Handedness,
+    gun_scale: f32,
+    slide: Matrix4<f32>,
+    asset_cache: &mut AssetCache,
+) -> Option<ContactMesh> {
     let triangles = asset_cache
         .get_opt::<_, VrContactMesh, _>(&VR_CONTACT_MESH_IMPORTER, &format!("{model_name}.BIN"))?;
 
-    let to_hand = vr_config::held_model_hand_transform(model_name, handedness, gun_scale);
+    let to_hand = slide * vr_config::held_model_hand_transform(model_name, handedness, gun_scale);
     let mesh = ContactMesh::new(
         triangles
             .0
