@@ -218,6 +218,8 @@ struct SupportAttachment {
     blend: f32,
     correction: Quaternion<f32>,
     anchor: Vector3<f32>, // Scaled model-space contact, fixed until release.
+    primary_offset: Vector3<f32>, // Grab-time collision offset, in world space.
+    player_rotation: Quaternion<f32>, // Rebase the offset on locomotion turns, never wrist twists.
 }
 
 #[derive(Clone)]
@@ -226,6 +228,8 @@ struct SupportCandidate {
     primary: usize,
     profile: SupportProfile,
     primary_palm: Vector3<f32>,
+    visible_primary_palm: Vector3<f32>,
+    control_primary_palm: Vector3<f32>,
     primary_anchor: Vector3<f32>,
     tracked_axis: Vector3<f32>,
     anchor: Vector3<f32>,
@@ -393,6 +397,18 @@ impl VrInteraction {
                 primary,
                 profile: profile.clone(),
                 primary_palm,
+                visible_primary_palm: model_pose.point(primary_anchor),
+                // Calibrate the controller reference once when grabbing a blocked
+                // weapon. Later collision motion is feedback, not a release gesture.
+                control_primary_palm: self
+                    .support
+                    .as_ref()
+                    .filter(|s| {
+                        prefer_locked_anchor && s.entity == held.entity && s.primary == primary
+                    })
+                    .map_or(model_pose.point(primary_anchor), |s| {
+                        primary_palm + s.primary_offset
+                    }),
                 primary_anchor,
                 tracked_axis: base_rotation.rotate_vector(anchor - primary_anchor),
                 anchor,
@@ -410,6 +426,12 @@ impl VrInteraction {
 
     fn update_support(&mut self, ctx: &InteractionContext) {
         self.step_dt = ctx.step_dt.max(0.0);
+        if let Some(s) = self.support.as_mut() {
+            let player_rotation = ctx.player_rotation.normalize();
+            s.primary_offset =
+                (player_rotation * s.player_rotation.conjugate()).rotate_vector(s.primary_offset);
+            s.player_rotation = player_rotation;
+        }
         let inputs = [&ctx.input.left_hand, &ctx.input.right_hand];
         let poses = inputs.map(|input| GripPose {
             position: crate::virtual_hand::hand_world_position(
@@ -451,7 +473,8 @@ impl VrInteraction {
                 let Some(rig) = self.grip_kinematics.as_ref() else {
                     return false;
                 };
-                let separation = (poses[other].point(rig[other].palm) - c.primary_palm).magnitude();
+                let separation =
+                    (poses[other].point(rig[other].palm) - c.control_primary_palm).magnitude();
                 support.entity == c.entity
                     && support.primary == c.primary
                     && ctx.support_enabled
@@ -462,7 +485,7 @@ impl VrInteraction {
                     && separation > 0.06
                     && c.profile.allows_swing(
                         c.tracked_axis,
-                        poses[other].point(rig[other].palm) - c.primary_palm,
+                        poses[other].point(rig[other].palm) - c.control_primary_palm,
                     )
                     && (separation - (c.anchor - c.primary_anchor).magnitude()).abs()
                         <= c.profile.release_distance
@@ -485,9 +508,9 @@ impl VrInteraction {
                         && pressed[other]
                         && !self.support_pressed[other]
                         && !self.support_blocked[other]
-                        && (palm - c.primary_palm).magnitude() > 0.08
+                        && (palm - c.control_primary_palm).magnitude() > 0.08
                         && c.profile
-                            .allows_swing(c.tracked_axis, palm - c.primary_palm)
+                            .allows_swing(c.tracked_axis, palm - c.control_primary_palm)
                         && (palm - c.model_pose.point(c.anchor)).magnitude()
                             <= c.profile.grab_radius
                     {
@@ -503,6 +526,11 @@ impl VrInteraction {
                             blend,
                             correction,
                             anchor: c.anchor,
+                            // Lock this reference until release, including after a block
+                            // clears. Following the body would turn physics recovery into
+                            // a steering/release gesture with stationary controllers.
+                            primary_offset: c.visible_primary_palm - c.primary_palm,
+                            player_rotation: ctx.player_rotation.normalize(),
                         });
                         self.support_blocked[other] = true;
                     }
@@ -551,7 +579,10 @@ impl VrInteraction {
             let target = if s.active && poses[other].is_tracked() {
                 solve_two_hand_pose(
                     c.primary_palm,
-                    poses[other].point(rig[other].palm),
+                    // Use the grab-time calibrated controller reference for aim.
+                    // Collision motion must not steer the target back into itself.
+                    // Translation still follows the primary controller.
+                    c.primary_palm + (poses[other].point(rig[other].palm) - c.control_primary_palm),
                     base_rotation,
                     c.primary_anchor,
                     c.anchor,
@@ -932,6 +963,8 @@ impl PlayerInteraction for VrInteraction {
                     "controller_rotation": c.hand_pose.rotation,
                     "model_position": c.model_pose.position, "model_rotation": c.model_pose.rotation,
                     "primary_palm": c.primary_palm, "primary_anchor": c.primary_anchor,
+                    "visible_primary_palm": c.visible_primary_palm,
+                    "control_primary_palm": c.control_primary_palm,
                     "support_anchor": c.anchor, "grab_radius": c.profile.grab_radius,
                     "region_endpoints": c.region.map(|ends| ends.map(|p| c.model_pose.point(p))),
                     "visual_trigger": visual_triggers[1-i],
@@ -1419,8 +1452,7 @@ mod tests {
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
     }
 
-    #[test]
-    fn support_accepts_zero_dt_input_edges_and_requires_release_after_break() {
+    fn wrench_support_fixture() -> (World, EntityId, PhysicsWorld, VrInteraction, InputContext) {
         use crate::vr_grip::{GripKinematics, ResolvedGrip};
         let mut world = World::new();
         let entity = grabbable(&mut world);
@@ -1475,6 +1507,12 @@ mod tests {
         input.left_hand.position = vec3(0.0, 1.2, 0.0);
         input.left_hand.rotation = identity();
         input.left_hand.squeeze_value = 0.0;
+        (world, entity, physics, interaction, input)
+    }
+
+    #[test]
+    fn support_accepts_zero_dt_input_edges_and_requires_release_after_break() {
+        let (mut world, entity, physics, mut interaction, mut input) = wrench_support_fixture();
         interaction.update_support(&context(&world, &physics, &input));
         input.left_hand.squeeze_value = 1.0;
         let mut ctx = context(&world, &physics, &input);
@@ -1605,6 +1643,78 @@ mod tests {
         assert_eq!(
             interaction.held_entities(),
             (Some(other_item), Some(entity))
+        );
+    }
+
+    #[test]
+    fn physical_support_calibration_ignores_body_recovery_and_wrist_twists() {
+        use cgmath::{Deg, Rotation3};
+        let (mut world, entity, physics, mut interaction, mut input) = wrench_support_fixture();
+        world.add_component(
+            entity,
+            (
+                dark::properties::PropPosition {
+                    position: vec3(0.8, 1.0, 0.3),
+                    rotation: identity(),
+                    cell: 0,
+                },
+                crate::runtime_props::RuntimePropVrGripOffset(vec3(0.0, 0.0, 0.1)),
+            ),
+        );
+        input.left_hand.position = vec3(0.8, 1.2, 0.2);
+        interaction.update_support(&context(&world, &physics, &input));
+        input.left_hand.squeeze_value = 1.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        let offset = vec3(0.8, 0.0, 0.2);
+        assert!(interaction.support.as_ref().unwrap().active);
+        assert!((interaction.support.as_ref().unwrap().primary_offset - offset).magnitude() < 1e-5);
+        // The collision clears all the way back to the primary controller.
+        world.add_component(
+            entity,
+            dark::properties::PropPosition {
+                position: vec3(0.0, 1.0, 0.1),
+                rotation: identity(),
+                cell: 0,
+            },
+        );
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(
+            interaction.support.as_ref().unwrap().active,
+            "body recovery cannot release unchanged controllers"
+        );
+        // Twist around the handle axis: the calibrated pivot must not orbit the wrist.
+        input.right_hand.rotation = Quaternion::from_angle_y(Deg(90.0));
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(interaction.support.as_ref().unwrap().active);
+        assert!((interaction.support.as_ref().unwrap().primary_offset - offset).magnitude() < 1e-5);
+        // A player turn, unlike a wrist twist, rotates both controller references.
+        let yaw = Quaternion::from_angle_y(Deg(90.0));
+        let mut ctx = context(&world, &physics, &input);
+        ctx.player_rotation = yaw;
+        interaction.update_support(&ctx);
+        assert!(interaction.support.as_ref().unwrap().active);
+        assert!(
+            (interaction.support.as_ref().unwrap().primary_offset - yaw.rotate_vector(offset))
+                .magnitude()
+                < 1e-5
+        );
+        // A new squeeze at the now-unblocked socket discards the old calibration.
+        input.right_hand.rotation = identity();
+        input.left_hand.position = vec3(0.0, 1.2, 0.0);
+        input.left_hand.squeeze_value = 0.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(!interaction.support.as_ref().unwrap().active);
+        input.left_hand.squeeze_value = 1.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(interaction.support.as_ref().unwrap().active);
+        assert!(
+            interaction
+                .support
+                .as_ref()
+                .unwrap()
+                .primary_offset
+                .magnitude()
+                < 1e-5
         );
     }
 
