@@ -46,7 +46,7 @@ const LABEL_HEIGHT: f32 = 10.0;
 /// of text drawn above it.
 const LABEL_MARGIN: f32 = BRACKET_SIZE + LABEL_HEIGHT;
 
-fn format_stack_aware_item_name(item_name: &str, stack_count: Option<i32>) -> String {
+pub(crate) fn format_stack_aware_item_name(item_name: &str, stack_count: Option<i32>) -> String {
     match stack_count {
         Some(count) => item_name.replace("%d", &count.to_string()),
         None => item_name.to_owned(),
