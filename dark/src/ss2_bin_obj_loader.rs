@@ -679,6 +679,48 @@ pub fn sub_object_bounds(
         .collect()
 }
 
+/// Every rendered triangle of `mesh`, in model space - the same fan
+/// triangulation and per-vertex sub-object placement [`to_vertices`] renders
+/// with, so a geometric test against these triangles tests the drawn surface.
+///
+/// The contact proxy for a held item: pickup physics is a sphere for every
+/// template, so nothing but the render mesh describes the shape a hand closes
+/// around.
+pub fn to_triangles(mesh: &SystemShock2ObjectMesh) -> Vec<[Point3<f32>; 3]> {
+    let placements = sub_object_transforms(mesh)
+        .into_iter()
+        .map(|(_, transform)| transform)
+        .collect::<Vec<_>>();
+
+    let mut triangles = Vec::new();
+    for polygon in &mesh.polygons {
+        let indices = &polygon.vertex_indices;
+        if indices.len() < 3 {
+            continue;
+        }
+        let place = |index: u16| -> Option<Point3<f32>> {
+            let vertex = mesh.vertices.get(index as usize)?;
+            let transform = placements
+                .get(get_bone_index_for_point(mesh, index) as usize)
+                .copied()
+                .unwrap_or_else(Matrix4::identity);
+            Some(transform.transform_point(point3(vertex.x, vertex.y, vertex.z)))
+        };
+        // Fan from corner 0, matching `to_vertices`.
+        for corner in 1..(indices.len() - 1) {
+            let (Some(a), Some(b), Some(c)) = (
+                place(indices[0]),
+                place(indices[corner]),
+                place(indices[corner + 1]),
+            ) else {
+                continue;
+            };
+            triangles.push([a, b, c]);
+        }
+    }
+    triangles
+}
+
 pub fn to_vertices(
     mesh: &SystemShock2ObjectMesh,
 ) -> HashMap<u16, Vec<VertexPositionTextureSkinnedNormal>> {

@@ -371,6 +371,39 @@ pub static VR_HELD_GUN_MODELS_IMPORTER: Lazy<
     AssetImporter<SystemShockContentModel, VrHeldGunModel, ()>,
 > = Lazy::new(|| AssetImporter::define(load_model, process_vr_held_gun_model));
 
+/// The triangles of a held item's render mesh, in model space, with any baked
+/// first-person arm stripped.
+///
+/// The contact proxy the VR finger fit closes the glove against: every pickup
+/// template is `PhysType SPHERE`, so the physics collider says nothing about
+/// the shape of a mug, a magazine or a pistol grip - only the drawn surface
+/// does. Stripping the arm matches what a VR wield actually draws
+/// ([`VrHeldGunModel`]); leaving it in would stop the fingers on a hand that
+/// is not there.
+///
+/// Newtype for cache separation, as [`VrHeldGunModel`].
+pub struct VrContactMesh(pub Vec<[Point3<f32>; 3]>);
+
+fn process_vr_contact_mesh(
+    mesh: SystemShockContentModel,
+    _asset_cache: &mut AssetCache,
+    _config: &(),
+) -> VrContactMesh {
+    match mesh {
+        SystemShockContentModel::Obj(obj) => VrContactMesh(ss2_bin_obj_loader::to_triangles(
+            &ss2_bin_obj_loader::retain_materials(obj, |name| !is_first_person_arm_material(name)),
+        )),
+        // Skinned rigs (the melee `_h` set) draw their weapon from a posed
+        // skeleton, and their grip is computed from that pose rather than
+        // fitted - so there is nothing here for the fit to close against.
+        _ => VrContactMesh(Vec::new()),
+    }
+}
+
+pub static VR_CONTACT_MESH_IMPORTER: Lazy<
+    AssetImporter<SystemShockContentModel, VrContactMesh, ()>,
+> = Lazy::new(|| AssetImporter::define(load_model, process_vr_contact_mesh));
+
 /// Newtype so this importer gets its own [`AssetCache`] bucket.
 ///
 /// The cache keys by `importer.type_id()`, which is the *type* of the importer,

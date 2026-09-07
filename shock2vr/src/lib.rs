@@ -2,6 +2,7 @@ pub mod audio_log;
 pub mod game_scene;
 pub mod hand_affordance;
 pub mod hand_buttons;
+pub mod hand_fit;
 pub mod hand_pose;
 pub mod hand_pose_library;
 pub mod hit_feedback;
