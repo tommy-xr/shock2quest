@@ -1269,11 +1269,10 @@ fn process_command(
         }
         RuntimeCommand::LoadGame { file, reply } => {
             tracing::info!("Loading game from '{}'", file);
-            // Existence is pre-checked in the handler, but a file that exists yet
-            // is truncated / not UTF-8 / an incompatible save schema still panics
-            // inside SaveData::read. Contain it so a corrupt save returns an error
-            // rather than bricking the game-loop thread. load_from_file only swaps
-            // `active_game_scene` as its final step (after all fallible reads), so
+            // Truncated, non-UTF-8 and schema-incompatible saves return a normal
+            // load error. Keep this outer guard for an unexpected panic deeper in
+            // mission reconstruction rather than bricking the game-loop thread.
+            // load_from_file only swaps `active_game_scene` as its final step, so
             // a caught panic leaves the previously-active scene intact.
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 game.load_game(file.clone())
@@ -3165,8 +3164,8 @@ async fn load_game(
     match reply_rx.await {
         Ok(result) if result.success => Ok(Json(result)),
         // The save existed but was corrupt / schema-incompatible: the game loop
-        // caught the panic and kept the previous scene, so surface a 500 rather
-        // than a misleading success.
+        // kept the previous scene, so surface a 500 rather than a misleading
+        // success.
         Ok(result) => Err((StatusCode::INTERNAL_SERVER_ERROR, result.message)),
         Err(_) => {
             tracing::error!("Failed to receive load result - sender dropped");

@@ -191,7 +191,7 @@ fn listener_ear_positions(
 
 fn read_save_file(path: &Path) -> io::Result<SaveData> {
     let mut file = File::open(path)?;
-    Ok(SaveData::read(&mut file))
+    SaveData::read(&mut file)
 }
 
 /// Whether the resolved data root is a 25th Anniversary Edition install rather
@@ -1932,6 +1932,7 @@ impl Game {
             GlobalEffect::Load { file_name } => {
                 if let Err(error) = self.load_from_file(file_name.clone()) {
                     warn!("Unable to load save '{}': {}", file_name, error);
+                    self.active_game_scene.on_load_failed();
                 }
             }
             GlobalEffect::TransitionLevel {
@@ -2606,6 +2607,20 @@ mod tests {
         let result = read_save_file(&missing);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn malformed_save_file_returns_an_error_instead_of_panicking() {
+        let directory = crate::test_support::TempDir::new("malformed-save-file");
+        let path = directory.path().join("corrupt.sav");
+        std::fs::write(&path, b"this is not a valid save file").unwrap();
+
+        let outcome = std::panic::catch_unwind(|| read_save_file(&path));
+
+        assert!(
+            matches!(outcome, Ok(Err(_))),
+            "malformed save data must be reported through the load result"
+        );
     }
 
     #[test]

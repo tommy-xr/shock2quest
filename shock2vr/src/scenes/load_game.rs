@@ -110,6 +110,8 @@ const ACTIVE_OPACITY: f32 = 1.0;
 /// `GAMELOD.STR` keys, with the shipped English text as a fallback.
 const HEADER_KEY: &str = "initial";
 const HEADER_FALLBACK: &str = "Select a file to load.";
+const FAILED_KEY: &str = "failed";
+const FAILED_FALLBACK: &str = "Load Failed";
 const EMPTY_KEY: &str = "unused";
 const EMPTY_FALLBACK: &str = "< EMPTY >";
 const LOAD_KEY: &str = "load";
@@ -125,6 +127,13 @@ enum LoadGameAction {
     Load,
     /// Return to the main menu.
     Done,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LoadGameStatus {
+    #[default]
+    Initial,
+    Failed,
 }
 
 /// Resolve the screen's widget rects from `GAMELODR.BIN`, falling back to the
@@ -236,12 +245,18 @@ pub struct LoadGameScene {
     saves: Vec<SaveFile>,
     /// Index into [`Self::saves`] of the highlighted row, if any.
     selected: Option<usize>,
+    /// Result of the latest load attempt. The header is the screen's authored
+    /// status line (`initial` / `failed` in `GAMELOD.STR`).
+    status: LoadGameStatus,
     menu: FrontendMenu<LoadGameAction>,
 }
 
 impl LoadGameScene {
     pub fn new() -> Self {
-        let saves = all_saves();
+        Self::from_saves(all_saves())
+    }
+
+    fn from_saves(saves: Vec<SaveFile>) -> Self {
         // Preselect the most recent save so "Load" is immediately meaningful,
         // matching the recovery the game-over screen offers.
         let selected = (!saves.is_empty()).then_some(0);
@@ -251,7 +266,44 @@ impl LoadGameScene {
             scene_name: "load_game".to_owned(),
             saves,
             selected,
+            status: LoadGameStatus::Initial,
             menu: FrontendMenu::new(vec2(CANVAS_W, CANVAS_H), SCALE_MODE),
+        }
+    }
+
+    fn header_label(&self, strings: Option<&HashMap<String, String>>) -> String {
+        match self.status {
+            LoadGameStatus::Initial => label(strings, HEADER_KEY, HEADER_FALLBACK),
+            LoadGameStatus::Failed => label(strings, FAILED_KEY, FAILED_FALLBACK),
+        }
+    }
+
+    fn apply_action(&mut self, action: Option<LoadGameAction>) -> Vec<Effect> {
+        match action {
+            Some(LoadGameAction::Select(index)) => {
+                self.selected = Some(index);
+                // The previous failure belonged to the old selection.
+                self.status = LoadGameStatus::Initial;
+                Vec::new()
+            }
+            Some(LoadGameAction::Load) => {
+                // Clear stale feedback while the retry is dispatched. A
+                // synchronous failure sets it again through `on_load_failed`;
+                // success replaces this scene.
+                self.status = LoadGameStatus::Initial;
+                self.selected
+                    .and_then(|index| self.saves.get(index))
+                    .map(|save| {
+                        vec![Effect::GlobalEffect(GlobalEffect::Load {
+                            file_name: save.path.to_string_lossy().into_owned(),
+                        })]
+                    })
+                    .unwrap_or_default()
+            }
+            Some(LoadGameAction::Done) => {
+                vec![Effect::GlobalEffect(GlobalEffect::ShowMainMenu)]
+            }
+            None => Vec::new(),
         }
     }
 }
@@ -277,7 +329,7 @@ impl LoadGameScene {
 
         canvas.text_native(
             rects[HEADER_RECT_INDEX],
-            &label(strings, HEADER_KEY, HEADER_FALLBACK),
+            &self.header_label(strings),
             MENU_FONT,
             HAlign::Center,
             VAlign::Middle,
@@ -392,24 +444,7 @@ impl GameScene for LoadGameScene {
             |point| hit(point, &rects, 0, selected.is_some()),
         );
 
-        match action {
-            Some(LoadGameAction::Select(index)) => {
-                self.selected = Some(index);
-                Vec::new()
-            }
-            Some(LoadGameAction::Load) => selected
-                .and_then(|index| self.saves.get(index))
-                .map(|save| {
-                    vec![Effect::GlobalEffect(GlobalEffect::Load {
-                        file_name: save.path.to_string_lossy().into_owned(),
-                    })]
-                })
-                .unwrap_or_default(),
-            Some(LoadGameAction::Done) => {
-                vec![Effect::GlobalEffect(GlobalEffect::ShowMainMenu)]
-            }
-            None => Vec::new(),
-        }
+        self.apply_action(action)
     }
 
     fn render(
@@ -459,6 +494,10 @@ impl GameScene for LoadGameScene {
 
     fn on_exit(&mut self, audio_context: &mut AudioContext<EntityId, String>) {
         self.menu.stop_sfx(audio_context);
+    }
+
+    fn on_load_failed(&mut self) {
+        self.status = LoadGameStatus::Failed;
     }
 
     fn wants_pointer(&self) -> bool {
@@ -737,6 +776,7 @@ mod tests {
 
         for (key, fallback) in [
             (HEADER_KEY, HEADER_FALLBACK),
+            (FAILED_KEY, FAILED_FALLBACK),
             (EMPTY_KEY, EMPTY_FALLBACK),
             (LOAD_KEY, LOAD_FALLBACK),
             (DONE_KEY, DONE_FALLBACK),
@@ -754,5 +794,55 @@ mod tests {
         // An empty shipped value must not blank the widget.
         let strings = HashMap::from([(DONE_KEY.to_owned(), String::new())]);
         assert_eq!(label(Some(&strings), DONE_KEY, DONE_FALLBACK), "Done");
+    }
+
+    fn scene_with_save() -> LoadGameScene {
+        LoadGameScene::from_saves(vec![SaveFile {
+            name: "corrupt".to_owned(),
+            path: std::path::PathBuf::from("corrupt.sav"),
+            modified: std::time::SystemTime::UNIX_EPOCH,
+        }])
+    }
+
+    #[test]
+    fn failed_load_uses_the_shipped_status_label() {
+        let lines: Vec<String> = SHIPPED_GAMELOD_STR.lines().map(str::to_owned).collect();
+        let strings = dark::importers::parse_strings(&lines);
+        let mut scene = scene_with_save();
+
+        assert_eq!(scene.header_label(Some(&strings)), HEADER_FALLBACK);
+        scene.on_load_failed();
+        assert_eq!(scene.header_label(Some(&strings)), FAILED_FALLBACK);
+    }
+
+    #[test]
+    fn failure_state_clears_for_selection_and_retry_and_is_fresh_on_reentry() {
+        let mut scene = scene_with_save();
+        scene.menu.set_last_pressed(true);
+
+        scene.on_load_failed();
+        assert_eq!(scene.status, LoadGameStatus::Failed);
+        assert!(
+            scene.menu.last_pressed(),
+            "load feedback must not rearm a held press"
+        );
+
+        scene.apply_action(Some(LoadGameAction::Select(0)));
+        assert_eq!(scene.status, LoadGameStatus::Initial);
+
+        scene.on_load_failed();
+        let effects = scene.apply_action(Some(LoadGameAction::Load));
+        assert_eq!(scene.status, LoadGameStatus::Initial);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::GlobalEffect(GlobalEffect::Load { file_name })]
+                if file_name == "corrupt.sav"
+        ));
+
+        // A failed retry reports the same state again, while leaving and
+        // re-entering constructs a new prompt rather than preserving it.
+        scene.on_load_failed();
+        assert_eq!(scene.status, LoadGameStatus::Failed);
+        assert_eq!(scene_with_save().status, LoadGameStatus::Initial);
     }
 }

@@ -255,7 +255,7 @@ pub fn create_initial_scene(
 
     if let Some(save_file_path) = &options.save_file {
         let mut file = OpenOptions::new().read(true).open(save_file_path).unwrap();
-        let save_data = SaveData::read(&mut file);
+        let save_data = SaveData::read(&mut file).unwrap();
         let (mission, mission_to_save_data) = load_mission_from_save_data(
             save_data,
             asset_cache,
