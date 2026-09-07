@@ -689,6 +689,21 @@ export interface BodyFrame {
   last_stowed_weapon: string | null;
   /** Where the belt card is, or null while no credential has been collected. */
   belt_card: "belt" | "left" | "right" | null;
+  /** The ammo pouch on the right hip. */
+  pouch: AmmoPouch;
+}
+
+/** The right-hip ammo pouch: where it is, and what a grip there would produce
+ * (GET /v1/info -> player.body_frame.pouch). */
+export interface AmmoPouch {
+  position: [number, number, number];
+  /** True when a gun is wielded AND the reserve holds a clip for its selected
+   * ammo - the pouch is drawn and the glove pre-lights green exactly then. */
+  available: boolean;
+  /** The clip archetype the pouch would hand over, null when empty. */
+  clip_template: number | null;
+  /** How many rounds that clip would carry. */
+  clip_rounds: number | null;
 }
 
 /** Per-hand affordance names in the /v1/info readout. */

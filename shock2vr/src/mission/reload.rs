@@ -392,10 +392,14 @@ fn clip_size_of(
     let hierarchy = world
         .borrow::<UniqueView<crate::mission::GlobalTemplateHierarchy>>()
         .ok()?;
-    clip_templates
-        .iter()
-        .find(|clip| hierarchy.is_or_descends_from(class_template_id, **clip))
-        .and_then(|clip| clips.clip_sizes.get(clip))
+    // `get_ancestors` is root-first, so the NEAREST clip archetype the item
+    // descends from is the last match: a mission's own small clip holds six
+    // rounds, not the twelve of the family archetype it ultimately inherits.
+    dark::ss2_entity_info::get_ancestors(&hierarchy.0, &class_template_id)
+        .into_iter()
+        .rev()
+        .find(|ancestor| clip_templates.contains(ancestor))
+        .and_then(|clip| clips.clip_sizes.get(&clip))
         .copied()
 }
 
@@ -774,6 +778,102 @@ mod tests {
                 .unwrap()
                 .0
         }
+    }
+
+    /// The pouch hands out one clip's worth - the archetype's authored stack
+    /// size - and leaves the rest of the stack behind.
+    #[test]
+    fn the_pouch_hands_out_one_clips_worth() {
+        let mut fixture = Fixture::new(0, 0);
+        let reserve = fixture.reserve(STD_CLIP, 30);
+
+        let withdrawal = pouch_withdrawal(&fixture.world, fixture.weapon).unwrap();
+        assert_eq!(
+            withdrawal,
+            PouchWithdrawal {
+                item: reserve,
+                template_id: STD_CLIP,
+                rounds: 12,
+                takes_whole_stack: false,
+            }
+        );
+        assert!(take_rounds_from_reserve(
+            &fixture.world,
+            withdrawal.item,
+            withdrawal.rounds
+        ));
+        assert_eq!(fixture.rounds(reserve), 18, "the rest stays in the pouch");
+    }
+
+    /// A stack smaller than a clip comes out whole, so the hand gets the stack
+    /// itself and nothing has to be minted.
+    #[test]
+    fn a_short_stack_comes_out_whole() {
+        let mut fixture = Fixture::new(0, 0);
+        let reserve = fixture.reserve(STD_CLIP, 5);
+
+        let withdrawal = pouch_withdrawal(&fixture.world, fixture.weapon).unwrap();
+        assert_eq!(withdrawal.item, reserve);
+        assert_eq!(withdrawal.rounds, 5);
+        assert!(withdrawal.takes_whole_stack);
+    }
+
+    /// The pouch hands out the clip the player actually carries, sized by the
+    /// archetype it descends from - not the family archetype the `Clip`
+    /// relation names.
+    #[test]
+    fn the_pouch_hands_out_the_carried_archetype() {
+        let mut fixture = Fixture::new(0, 0);
+        let reserve = fixture.reserve(EARTH_SMALL_STD_CLIP, 20);
+
+        let withdrawal = pouch_withdrawal(&fixture.world, fixture.weapon).unwrap();
+        assert_eq!(withdrawal.item, reserve);
+        assert_eq!(withdrawal.template_id, EARTH_SMALL_STD_CLIP);
+        assert_eq!(
+            withdrawal.rounds, 6,
+            "a small clip holds 6, however big the stack"
+        );
+    }
+
+    /// Nothing compatible in reserve is an EMPTY pouch, not a free clip.
+    #[test]
+    fn an_empty_pouch_hands_out_nothing() {
+        let mut fixture = Fixture::new(0, 0);
+        assert_eq!(pouch_withdrawal(&fixture.world, fixture.weapon), None);
+
+        // Ammo for the OTHER selected type is not this gun's ammo.
+        fixture.reserve(HE_CLIP, 12);
+        assert_eq!(pouch_withdrawal(&fixture.world, fixture.weapon), None);
+
+        // A spent stack is not a source either.
+        fixture.reserve(STD_CLIP, 0);
+        assert_eq!(pouch_withdrawal(&fixture.world, fixture.weapon), None);
+    }
+
+    /// The pouch follows the SELECTED ammo, so cycling ammo type changes what
+    /// the hip offers.
+    #[test]
+    fn the_pouch_follows_the_selected_ammo() {
+        let mut fixture = Fixture::new(0, 1);
+        let he = fixture.reserve(HE_CLIP, 12);
+        fixture.reserve(STD_CLIP, 12);
+
+        let withdrawal = pouch_withdrawal(&fixture.world, fixture.weapon).unwrap();
+        assert_eq!(withdrawal.item, he);
+        assert_eq!(withdrawal.template_id, HE_CLIP);
+    }
+
+    /// The debit never invents rounds: it refuses a take the stack cannot
+    /// cover, and leaves the stack alone.
+    #[test]
+    fn a_reserve_debit_never_goes_negative() {
+        let mut fixture = Fixture::new(0, 0);
+        let reserve = fixture.reserve(STD_CLIP, 5);
+
+        assert!(!take_rounds_from_reserve(&fixture.world, reserve, 12));
+        assert_eq!(fixture.rounds(reserve), 5);
+        assert!(!take_rounds_from_reserve(&fixture.world, reserve, 0));
+        assert_eq!(fixture.rounds(reserve), 5);
     }
 
     #[test]
