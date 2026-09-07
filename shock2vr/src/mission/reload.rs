@@ -352,13 +352,12 @@ pub(crate) fn pouch_withdrawal(world: &World, weapon: EntityId) -> Option<PouchW
         .into_iter()
         .next()?;
     let template_id = crate::scripts::script_util::entity_class_template_id(world, item)?;
+    // `compatible_reserve_items` already rejected spent stacks, so this is the
+    // stack's real, positive size.
     let stack = world
         .borrow::<View<PropStackCount>>()
         .ok()
         .and_then(|stacks| stacks.get(item).ok().map(|stack| stack.0))?;
-    if stack <= 0 {
-        return None;
-    }
     // Reserve stacks are counted in ROUNDS, so a clip's worth is the
     // archetype's authored stack size. An archetype with no authored size has
     // no defined clip, and the whole remaining stack comes out in one go.
@@ -404,8 +403,8 @@ fn clip_size_of(
 }
 
 /// Take `rounds` out of a reserve stack, for a pouch withdrawal that splits it.
-/// The caller then mints the clip that carries them, so the rounds exist in
-/// exactly one place at every instant. `false` leaves the stack untouched.
+/// The caller debits only once the clip carrying the rounds exists, so they are
+/// in exactly one place at every instant. `false` leaves the stack untouched.
 pub(crate) fn take_rounds_from_reserve(world: &World, item: EntityId, rounds: i32) -> bool {
     let Ok(mut stacks) = world.borrow::<ViewMut<PropStackCount>>() else {
         return false;

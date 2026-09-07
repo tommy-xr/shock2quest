@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
-import { quatConjugate, quatRotate, sub, type Quat } from "./helpers/vr-hand.js";
+import { vrHandLocal } from "./helpers/vr-climb.js";
 import { fireOnce } from "./helpers/weapon.js";
 import {
   STD_CLIP,
@@ -28,23 +28,13 @@ import {
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8666);
 
-/** A world point in the hand channel's pawn-local space. */
-function toPawnLocal(world: Vec3, pawnPosition: Vec3, pawnRotation: Quat): Vec3 {
-  return quatRotate(quatConjugate(pawnRotation), sub(world, pawnPosition));
-}
-
 /** Put the LEFT hand exactly on the pouch the runtime reports this frame. */
 async function reachIntoPouch(game: GameServer): Promise<void> {
-  const info = await game.info();
-  const pouch = info.player.body_frame?.pouch;
+  const pouch = (await game.info()).player.body_frame?.pouch;
   assert.ok(pouch, "VR should report the ammo pouch on the body frame");
   await game.input.set(
     "left_hand.position",
-    toPawnLocal(
-      pouch.position as Vec3,
-      info.player.position as Vec3,
-      info.player.rotation as Quat,
-    ),
+    await vrHandLocal(game, pouch.position as Vec3),
   );
   await game.step({ frames: 4 });
 }
@@ -186,6 +176,38 @@ test(
       await reserveRounds(game, STD_CLIP),
       second.rounds,
       "and its rounds should be back in the reserve",
+    );
+
+    // A stack bigger than one clip is SPLIT, not emptied. Build one by ejecting
+    // the loaded magazine into the stack that is already there.
+    await game.input.trigger("EjectClip");
+    await game.step({ frames: 10 });
+    const pooled = await reserveRounds(game, STD_CLIP);
+    assert.equal(
+      pooled,
+      second.rounds + capacity,
+      "the ejected magazine should merge into the carried stack",
+    );
+
+    await reachIntoPouch(game);
+    assert.equal(
+      (await game.info()).player.body_frame?.pouch.clip_rounds,
+      second.rounds,
+      "the pouch offers ONE clip's worth out of the bigger stack",
+    );
+    await game.input.set("left_hand.squeeze", 1);
+    await game.step({ frames: 6 });
+    const split = offHandEntityId(await game.info());
+    assert.ok(split, "the split withdraw should still fill the hand");
+    assert.equal(
+      stackOf(await game.entities.detail(split)),
+      second.rounds,
+      "the minted clip carries one clip's worth",
+    );
+    assert.equal(
+      await reserveRounds(game, STD_CLIP),
+      pooled - second.rounds,
+      "and exactly that many rounds left the reserve - no more, no fewer",
     );
   },
 );

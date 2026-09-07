@@ -22,7 +22,7 @@ export const STD_CLIP = -31;
  * the magazine zone. The live radius rides the gun's wield scale
  * (`reload::clip_insert_radii`), so it is read through
  * [`clipInsertExitRadius`] rather than used raw. */
-export const CLIP_INSERT_EXIT_RADIUS = 0.35;
+const CLIP_INSERT_EXIT_RADIUS = 0.35;
 
 /** The exit radius as a VR-wielded gun actually gets it: the constant above
  * times the live `gun_scale` dev param, so a test is not pinned to a

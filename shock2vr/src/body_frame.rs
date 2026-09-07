@@ -37,19 +37,16 @@ const SHOULDER_BEHIND: f32 = meters(0.12);
 /// body's midline.
 const LATERAL_OFFSET: f32 = meters(0.18);
 
-/// Reach radius of each anchor. The belt card and the ammo pouch are small
-/// objects the hand has to find; a shoulder is a "throw it back there" gesture
-/// and is deliberately more forgiving.
-const BELT_RADIUS: f32 = meters(0.09);
-/// The pouch rides the opposite hip and is the same size as the card, so the
-/// vertical clearance computed from [`BELT_RADIUS`] covers it too.
-const POUCH_RADIUS: f32 = BELT_RADIUS;
+/// Reach radius of each anchor. The hips carry small objects the hand has to
+/// find; a shoulder is a "throw it back there" gesture and is deliberately more
+/// forgiving.
+const HIP_RADIUS: f32 = meters(0.09);
 const SHOULDER_RADIUS: f32 = meters(0.15);
 
-/// Minimum vertical gap between the belt and the shoulders, so a deep crouch
+/// Minimum vertical gap between the hips and the shoulders, so a deep crouch
 /// (which lowers the eye, and with it both anchors) can never bring the two
 /// zones into contact and make "which anchor is this" a matter of rounding.
-const ANCHOR_SEPARATION: f32 = BELT_RADIUS + SHOULDER_RADIUS + meters(0.05);
+const ANCHOR_SEPARATION: f32 = HIP_RADIUS + SHOULDER_RADIUS + meters(0.05);
 
 /// Time constant of the yaw low-pass, in seconds. Long enough that a glance
 /// leaves the body where it was, short enough that turning to walk brings the
@@ -103,10 +100,10 @@ impl BodyFrame {
     /// [`ANCHOR_SEPARATION`] keeps them from ever overlapping the shoulders
     /// anyway.
     pub fn anchor_at(&self, position: Vector3<f32>) -> Option<BodyAnchor> {
-        if (position - self.belt).magnitude2() <= BELT_RADIUS * BELT_RADIUS {
+        if (position - self.belt).magnitude2() <= HIP_RADIUS * HIP_RADIUS {
             return Some(BodyAnchor::Belt);
         }
-        if (position - self.pouch).magnitude2() <= POUCH_RADIUS * POUCH_RADIUS {
+        if (position - self.pouch).magnitude2() <= HIP_RADIUS * HIP_RADIUS {
             return Some(BodyAnchor::Pouch);
         }
         for hand in [Handedness::Left, Handedness::Right] {
@@ -378,9 +375,10 @@ impl AnchorGestures {
                 // The pouch takes clips back and hands them out. Anything else
                 // in the hand is recognised and refused rather than silently
                 // ignored - the light says the pouch will not take it.
-                BodyAnchor::Pouch if input.holding => {
-                    (AnchorGesture::ReturnClip(input.hand), input.holds_clip)
-                }
+                BodyAnchor::Pouch if input.holding => (
+                    AnchorGesture::ReturnClip(input.hand),
+                    input.holds_clip && input.can_stow,
+                ),
                 // No gun wielded means no pouch on the hip at all, so there is
                 // nothing to light up or grip.
                 BodyAnchor::Pouch if !input.pouch_serves => return None,
@@ -554,8 +552,8 @@ mod tests {
             let frame = BodyFrameTracker::default().update(&input);
 
             let centers = [
-                (frame.belt(), BELT_RADIUS),
-                (frame.pouch(), POUCH_RADIUS),
+                (frame.belt(), HIP_RADIUS),
+                (frame.pouch(), HIP_RADIUS),
                 (frame.shoulder(Handedness::Left), SHOULDER_RADIUS),
                 (frame.shoulder(Handedness::Right), SHOULDER_RADIUS),
             ];
