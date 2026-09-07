@@ -17,6 +17,9 @@ import { GameServer } from "../src/index.js";
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
 
+/** STAT_CAP - the highest stat `POST /v1/player/stats` will provision. */
+const PSI_STAT = 6;
+
 test(
   "psi amp hold-to-overload: normal cast, overload, and burnout",
   { skip: !e2eEnabled, timeout: 600_000 },
@@ -26,6 +29,7 @@ test(
     });
 
     await game.step({ frames: 10 });
+    await game.player.setStats({ psionic_ability: PSI_STAT });
     let player = (await game.info()).player;
     assert.equal(player.selected_psi_power, "Cryokinesis");
     const startPsi = player.psi_points!;
@@ -34,7 +38,7 @@ test(
       (await game.entities.list({ limit: 120 })).entities.some((e) => e.name === name);
 
     // 1) Quick click: released long before the zone -> normal cast at the
-    // base effective PSI (5 -> "Cryo PSI 5"), meter cleared immediately.
+    // player's PSI stat ("Cryo PSI 6"), meter cleared immediately.
     await game.input.set("right_hand.trigger", 1.0);
     await game.step({ frames: 3 });
     player = (await game.info()).player;
@@ -44,10 +48,13 @@ test(
     player = (await game.info()).player;
     assert.equal(player.psi_points, startPsi - 1, "normal cast costs the tier");
     assert.equal(player.psi_charge_phase, null, "meter clears on a normal release");
-    assert.ok(await hasProjectile("Cryo PSI 5"), "normal cast fires the PSI-5 projectile");
+    assert.ok(
+      await hasProjectile(`Cryo PSI ${PSI_STAT}`),
+      "normal cast fires the projectile for the player's PSI stat",
+    );
 
     // 2) Overload: hold 110/120 frames (fraction ~0.92, inside the 0.85+
-    // zone), then release -> +2 effective PSI -> "Cryo PSI 7".
+    // zone), then release -> +2 effective PSI -> "Cryo PSI 8".
     await game.step({ frames: 120 }); // let the previous bolt clear frame counts
     await game.input.set("right_hand.trigger", 1.0);
     await game.step({ frames: 110 });
@@ -56,7 +63,10 @@ test(
     player = (await game.info()).player;
     assert.equal(player.psi_points, startPsi - 2, "overload costs the same as a normal cast");
     assert.equal(player.psi_charge_phase, "overloaded", "meter flashes the overload result");
-    assert.ok(await hasProjectile("Cryo PSI 7"), "overload fires the PSI-7 projectile");
+    assert.ok(
+      await hasProjectile(`Cryo PSI ${PSI_STAT + 2}`),
+      "overload fires the +2 projectile",
+    );
 
     // The result flash expires (~0.6s = 36 frames).
     await game.step({ frames: 45 });

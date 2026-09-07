@@ -1,8 +1,7 @@
-use dark::properties::{PropHitPoints, PropMaxHitPoints};
 use serde::{Deserialize, Serialize};
-use shipyard::{Get, Unique, UniqueView, View, World};
+use shipyard::{Unique, UniqueView, World};
 
-use crate::{mission::PlayerInfo, physics::PhysicsWorld, quest_info::QuestInfo};
+use crate::{physics::PhysicsWorld, quest_info::QuestInfo};
 
 use super::{Effect, MessagePayload, Script};
 use crate::scripts::gui::TRAIT_PHARMO_FRIENDLY;
@@ -173,20 +172,7 @@ impl ActiveHealing {
 /// effect. `MissionCore` remains the only place that mutates HP, preserving its
 /// player-death guard and the shared HP trace.
 pub fn tick_player_healing(world: &World, elapsed_secs: f32) -> Option<Effect> {
-    let player = world.borrow::<UniqueView<PlayerInfo>>().ok()?.entity_id;
-    let current = world
-        .borrow::<View<PropHitPoints>>()
-        .ok()
-        .and_then(|hit_points| hit_points.get(player).ok().map(|hp| hp.hit_points))?;
-    let maximum = world
-        .borrow::<View<PropMaxHitPoints>>()
-        .ok()
-        .and_then(|max_hit_points| {
-            max_hit_points
-                .get(player)
-                .ok()
-                .map(|hp| hp.hit_points.min(i32::MAX as u32) as i32)
-        })?;
+    let (player, current, maximum) = crate::scripts::script_util::player_hit_points(world)?;
     let delta = world
         .borrow::<shipyard::UniqueViewMut<ActiveHealing>>()
         .ok()

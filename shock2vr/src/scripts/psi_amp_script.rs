@@ -12,8 +12,8 @@
 //! full bar is a psi burnout - the cast fails, the points are spent, and the
 //! player takes damage. Non-overloadable powers cast immediately on pull.
 //!
-//! Only projectile ("shot") powers actually fire so far - sustained, shield,
-//! and cursor-targeted powers are logged and skipped without spending points.
+//! Projectile ("shot"), sustained, and instant self-targeted powers cast so
+//! far - the remaining kinds are logged and skipped without spending points.
 
 use engine::{audio::AudioHandle, game_log};
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -32,11 +32,29 @@ use super::{
     weapon_script::{create_muzzle_flash, create_projectile},
 };
 
-/// The caster's effective PSI stat, used to pick the power's projectile
-/// (links are ordered by PSI level 1..8) - a mid-range placeholder until
-/// player stats are tracked (P$BaseStats authors all stats at 1, pending
-/// character creation/training).
-const EFFECTIVE_PSI_STAT: i32 = 5;
+/// The caster's PSI stat from the character sheet, used to pick the power's
+/// projectile (links are ordered by PSI level 1..8) and to scale sustained
+/// durations. Falls back to the sheet's baseline when the scene has no
+/// `QuestInfo` (a bare debug scene) - logged, because the same borrow also
+/// fails if something else holds `QuestInfo` mutably, and a silent fallback
+/// would cast at the wrong tier.
+fn player_psi_stat(world: &World) -> i32 {
+    match world.borrow::<UniqueView<crate::quest_info::QuestInfo>>() {
+        Ok(quests) => quests
+            .player_stats()
+            .stat_level(crate::player_stats::Stat::PsionicAbility),
+        Err(err) => {
+            let baseline = crate::player_stats::PlayerStats::default().psionic_ability;
+            game_log!(
+                WARN,
+                "No character sheet for the psi cast ({}); casting at PSI {}",
+                err,
+                baseline
+            );
+            baseline
+        }
+    }
+}
 
 /// The amp's charge/result state while the meter is on screen.
 enum ChargeState {
@@ -107,6 +125,13 @@ impl Script for PsiAmpScript {
                         );
                         return Effect::NoEffect;
                     }
+                    // Nor charge a cast that would resolve to nothing (a heal
+                    // at full health): over-holding it would burn out for a
+                    // cast the release refuses anyway.
+                    if instant_cast_is_futile(world, &power, player_psi_stat(world)) {
+                        game_log!(INFO, "{} would do nothing right now", power.name);
+                        return Effect::NoEffect;
+                    }
                     // Cast happens on release; start the meter.
                     let duration = charge_duration_secs(power.power.psi_cost);
                     self.charge = Some(ChargeState::Charging {
@@ -120,7 +145,7 @@ impl Script for PsiAmpScript {
                         phase: PsiChargePhase::Charging,
                     }
                 } else {
-                    cast_selected_power(world, entity_id, EFFECTIVE_PSI_STAT)
+                    cast_selected_power(world, entity_id, player_psi_stat(world))
                 }
             }
             MessagePayload::TriggerRelease => {
@@ -144,12 +169,7 @@ impl Script for PsiAmpScript {
                 }
                 let fraction = elapsed / duration;
                 let overload = fraction >= psi::OVERLOAD_ZONE_START;
-                let effective_psi = if overload {
-                    (EFFECTIVE_PSI_STAT + psi::OVERLOAD_PSI_BONUS)
-                        .min(psi::OVERLOAD_MAX_EFFECTIVE_PSI)
-                } else {
-                    EFFECTIVE_PSI_STAT
-                };
+                let effective_psi = psi::effective_psi_for_cast(player_psi_stat(world), overload);
                 let cast = cast_selected_power(world, entity_id, effective_psi);
                 // A successful overload flashes the success art briefly; a
                 // normal cast - or a fizzle (no psi / power not implemented)
@@ -331,6 +351,12 @@ fn cast_selected_power(world: &World, amp_entity: EntityId, effective_psi: i32) 
         return cast_sustained_power(world, amp_entity, &power, effective_psi);
     }
 
+    // Instant (self-targeted) powers resolve immediately - no duration, no
+    // projectile.
+    if power.power.activation_type == psi::ACTIVATION_TYPE_INSTANT {
+        return cast_instant_power(world, amp_entity, &power, effective_psi);
+    }
+
     let Some(projectile_template) = power.projectile_for_psi_stat(effective_psi) else {
         game_log!(
             INFO,
@@ -418,6 +444,120 @@ fn cast_sustained_power(
     Effect::Multiple(effects)
 }
 
+/// Cast an instant (activation type 2) power: it resolves on the spot, with
+/// no duration and no projectile. Dispatch is by template id so the remaining
+/// instant powers (Major Heal, SomaDrain, ForceWall, CyberHack) slot in
+/// beside this one.
+fn cast_instant_power(
+    world: &World,
+    amp_entity: EntityId,
+    power: &PsiPowerInfo,
+    effective_psi: i32,
+) -> Effect {
+    match power.template_id {
+        // Cerebro-stimulated Regeneration: restores the caster's health.
+        psi::PSI_HEAL_TEMPLATE_ID => cast_self_heal(world, amp_entity, power, effective_psi),
+        _ => {
+            game_log!(
+                INFO,
+                "Instant psi power {} is not implemented yet",
+                power.name
+            );
+            Effect::NoEffect
+        }
+    }
+}
+
+/// Heal the caster by [`self_heal_amount`], spending the power's tier. A cast
+/// at full health is refused and spends nothing, matching the empty-pool
+/// guard - the player keeps their points rather than burning them on a cast
+/// that could do nothing.
+fn cast_self_heal(
+    world: &World,
+    amp_entity: EntityId,
+    power: &PsiPowerInfo,
+    effective_psi: i32,
+) -> Effect {
+    let Some((player_entity, current_hp, max_hp)) = super::script_util::player_hit_points(world)
+    else {
+        game_log!(WARN, "No player hit points for {}", power.name);
+        return Effect::NoEffect;
+    };
+    let amount = self_heal_amount(&power.power.data, effective_psi);
+    if amount <= 0 {
+        game_log!(INFO, "{} has no heal data (P$PsiPower)", power.name);
+        return Effect::NoEffect;
+    }
+    let heal = clamped_self_heal(&power.power.data, effective_psi, current_hp, max_hp);
+    if heal <= 0 {
+        game_log!(
+            INFO,
+            "{} would heal nothing (already at full health)",
+            power.name
+        );
+        return Effect::NoEffect;
+    }
+
+    let mut effects = vec![
+        play_environmental_sound(world, amp_entity, "shoot", vec![], AudioHandle::new()),
+        Effect::SpendPsiPoints {
+            amount: power.power.psi_cost,
+        },
+        // PlayerScript handles only Damage - there is no heal message - so
+        // adjust HP directly. The applier does not clamp to the maximum,
+        // hence the clamp above.
+        Effect::AdjustHitPoints {
+            entity_id: player_entity,
+            delta: heal,
+        },
+    ];
+    effects.extend(amp_cast_flashes(world, amp_entity));
+
+    game_log!(
+        INFO,
+        "Cast psi power: {} (tier {}, healed {} HP at effective PSI {})",
+        power.name,
+        power.power.psi_cost,
+        heal,
+        effective_psi
+    );
+    Effect::Multiple(effects)
+}
+
+/// The HP an instant self-heal restores at full strength (the caller clamps
+/// it to the caster's missing health): `data[0] + data[1] x effective PSI`.
+/// 0 for a power with no (or unusable) heal data.
+///
+/// Assumption: the two floats split base / per-PSI the way the sustained
+/// powers' `P$PsiShield` duration data does. PsiHeal's `[0, 2]` therefore
+/// reads as 2 HP per point of PSI (Major Heal's `[5, 5]` as 5 + 5 x PSI).
+fn self_heal_amount(data: &[f32; 4], effective_psi: i32) -> i32 {
+    let amount = data[0] + data[1] * effective_psi as f32;
+    if !amount.is_finite() || amount <= 0.0 {
+        return 0;
+    }
+    amount.floor().min(i32::MAX as f32) as i32
+}
+
+/// Whether an instant cast would resolve to nothing right now (a heal with
+/// no health missing). Checked before a charge starts so a pointless cast
+/// cannot be over-held into a burnout, which spends points and deals damage.
+fn instant_cast_is_futile(world: &World, power: &PsiPowerInfo, effective_psi: i32) -> bool {
+    if power.template_id != psi::PSI_HEAL_TEMPLATE_ID {
+        return false;
+    }
+    let Some((_, current_hp, max_hp)) = super::script_util::player_hit_points(world) else {
+        return false;
+    };
+    clamped_self_heal(&power.power.data, effective_psi, current_hp, max_hp) <= 0
+}
+
+/// The HP a cast actually restores: [`self_heal_amount`] clamped to the
+/// caster's missing health.
+fn clamped_self_heal(data: &[f32; 4], effective_psi: i32, current_hp: i32, max_hp: i32) -> i32 {
+    self_heal_amount(data, effective_psi).min((max_hp - current_hp).max(0))
+}
+
 /// The amp's `GunFlash` links supply the cast visual (Spinning Psi Ring).
 fn amp_cast_flashes(world: &World, amp_entity: EntityId) -> Vec<Effect> {
     super::script_util::get_all_links_with_template(world, amp_entity, |link| match link {
@@ -427,4 +567,58 @@ fn amp_cast_flashes(world: &World, amp_entity: EntityId) -> Vec<Effect> {
     .into_iter()
     .map(|(template_id, options)| create_muzzle_flash(world, amp_entity, template_id, &options))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::quest_info::QuestInfo;
+
+    #[test]
+    fn self_heal_scales_with_psi() {
+        // PsiHeal's authored data: 0 base + 2 HP per PSI point.
+        assert_eq!(self_heal_amount(&[0.0, 2.0, 0.0, 0.0], 5), 10);
+        assert_eq!(self_heal_amount(&[0.0, 2.0, 0.0, 0.0], 7), 14);
+        // A base term adds on top of the per-PSI term (Major Heal's shape).
+        assert_eq!(self_heal_amount(&[5.0, 5.0, 0.0, 0.0], 5), 30);
+    }
+
+    #[test]
+    fn self_heal_ignores_powers_with_no_heal_data() {
+        assert_eq!(self_heal_amount(&[0.0, 0.0, 0.0, 0.0], 5), 0);
+        assert_eq!(self_heal_amount(&[f32::NAN, 2.0, 0.0, 0.0], 5), 0);
+        assert_eq!(self_heal_amount(&[-4.0, 0.0, 0.0, 0.0], 5), 0);
+    }
+
+    /// The applier does not clamp, so an overshoot would push HP past the
+    /// maximum - the clamp lives here instead.
+    #[test]
+    fn the_heal_is_clamped_to_missing_health() {
+        // 2 x PSI 5 = 10, but only 4 HP are missing.
+        assert_eq!(clamped_self_heal(&[0.0, 2.0, 0.0, 0.0], 5, 96, 100), 4);
+        // At full health the heal is nothing (the cast is refused).
+        assert_eq!(clamped_self_heal(&[0.0, 2.0, 0.0, 0.0], 5, 100, 100), 0);
+        // Over-healed (or a bogus maximum) never produces a negative delta.
+        assert_eq!(clamped_self_heal(&[0.0, 2.0, 0.0, 0.0], 5, 120, 100), 0);
+    }
+
+    #[test]
+    fn psi_stat_comes_from_the_character_sheet() {
+        let world = World::new();
+        let mut quests = QuestInfo::new();
+        quests.player_stats_mut().psionic_ability = 6;
+        world.add_unique(quests);
+
+        assert_eq!(player_psi_stat(&world), 6);
+    }
+
+    #[test]
+    fn psi_stat_falls_back_to_the_sheet_baseline_without_quest_info() {
+        let world = World::new();
+
+        assert_eq!(
+            player_psi_stat(&world),
+            crate::player_stats::PlayerStats::default().psionic_ability
+        );
+    }
 }
