@@ -360,6 +360,7 @@ impl VrInteraction {
                 model_pose,
                 grip,
                 &rig[1 - primary],
+                anchor,
             );
             return Some(SupportCandidate {
                 entity: held.entity,

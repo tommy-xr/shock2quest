@@ -1,5 +1,5 @@
 //! Rigid two-anchor posing. Geometry, scale and ownership stay with the primary hand.
-use cgmath::{Deg, Euler, InnerSpace, Quaternion, Rotation, Vector3};
+use cgmath::{Deg, Euler, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Transform, Vector3};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -30,7 +30,7 @@ impl GripPose {
 }
 
 /// Anchor in the normalized weapon mesh used by prepared grips (before item scale).
-/// The left-primary variant mirrors X. This first slice opts in only the wrench.
+/// Stored in the right-primary model frame; the renderer supplies the opposite frame.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SupportProfile {
     pub palm_anchor: [f32; 3],
@@ -68,23 +68,19 @@ impl SupportProfile {
         model: GripPose,
         grip: &crate::vr_grip::ResolvedGrip,
         support_rig: &crate::vr_grip::GripKinematics,
+        scaled_anchor: Vector3<f32>,
     ) -> GripPose {
         let [x, y, z] = self.rotation_degrees;
         let q = Quaternion::from(Euler::new(Deg(x), Deg(y), Deg(z)));
-        // Reflect the authored rotation along with the palm's X mirror.
+        // Glove rotation mirrors hand X independently of the item's model axes.
         let q = if primary == crate::Handedness::Left {
             Quaternion::new(q.s, q.v.x, -q.v.y, -q.v.z)
         } else {
             q
         };
         let rotation = model.rotation * grip.rotation.conjugate() * q;
-        let anchor = self.anchor(if primary == crate::Handedness::Left {
-            0
-        } else {
-            1
-        }) * grip.item_scale;
         GripPose {
-            position: model.point(anchor) - rotation.rotate_vector(support_rig.palm),
+            position: model.point(scaled_anchor) - rotation.rotate_vector(support_rig.palm),
             rotation,
         }
     }
@@ -96,13 +92,27 @@ impl SupportProfile {
     }
 
     pub fn anchor(&self, primary: usize) -> Vector3<f32> {
-        let [x, y, z] = self.palm_anchor;
         let hand = if primary == 0 {
             crate::vr_config::Handedness::Left
         } else {
             crate::vr_config::Handedness::Right
         };
-        hand.mirror_point(Vector3::new(x, y, z))
+        self.anchor_in_frame(hand, crate::Handedness::Left.mirror())
+    }
+    /// Use the same reflection as the rendered item: gun Z and posed melee X
+    /// are different model frames even though both gloves mirror hand X.
+    pub fn anchor_in_frame(
+        &self,
+        primary: crate::Handedness,
+        model_mirror: Matrix4<f32>,
+    ) -> Vector3<f32> {
+        let point = Point3::from(self.palm_anchor);
+        let point = if primary == crate::Handedness::Left {
+            model_mirror.transform_point(point)
+        } else {
+            point
+        };
+        point.to_homogeneous().truncate()
     }
 }
 
@@ -172,7 +182,14 @@ mod tests {
                 palm: vec3(0.01, -0.001, -0.079),
                 normal: Vector3::unit_x(),
             };
-            let pose = profile.glove_pose(primary, model, &grip, &rig);
+            let pose = profile.glove_pose(
+                primary,
+                model,
+                &grip,
+                &rig,
+                profile.anchor_in_frame(primary, crate::Handedness::Left.mirror())
+                    * grip.item_scale,
+            );
             let expected =
                 model.point(primary.mirror_point(vec3(-0.09, 0.354, 0.02)) * grip.item_scale);
             assert!((pose.point(rig.palm) - expected).magnitude() < 1e-5);
