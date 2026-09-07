@@ -462,11 +462,7 @@ pub fn get_vr_hand_model_adjustments_from_model(
 /// reads: its grip measures like any other handle, but the index belongs on the
 /// trigger.
 pub fn grip_family(model_name: &str) -> Option<GripFamily> {
-    let name = model_name.to_ascii_lowercase();
-    if is_vr_gun_view_model(&name) {
-        return Some(GripFamily::Trigger);
-    }
-    crate::vr_grips::resolve(&name, Handedness::Right).family
+    crate::vr_grips::resolve(model_name, Handedness::Right).family
 }
 
 /// The per-finger curls a profile authored for `model_name`, which replace the

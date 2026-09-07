@@ -24,6 +24,21 @@ use crate::hand_fit::{self, GripFamily};
 /// glove ever moves under it.
 pub const PALM_ANCHOR: Vector3<f32> = vec3(0.0055, -0.0002, -0.0971);
 
+/// How far the palm's skin is from that knuckle line, in world units - roughly
+/// half the thickness of a hand.
+///
+/// The anchor is a line of *joints*, which sit inside the flesh; an item rested
+/// on it would be buried in the palm and the fingers would start the fit
+/// already inside it (which the fit reads as "leave the authored wrap alone").
+/// Items sit on the skin instead.
+const PALM_DEPTH: f32 = 0.012 / crate::METERS_PER_WORLD_UNIT;
+
+/// Where an item's surface rests: the palm's skin, on the -Y side of the
+/// knuckle line.
+pub fn palm_surface() -> Vector3<f32> {
+    PALM_ANCHOR - vec3(0.0, PALM_DEPTH, 0.0)
+}
+
 /// A held item's placement in hand space: where its model origin goes, and how
 /// its geometry is turned to get there.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,7 +54,7 @@ pub struct Seat {
 /// axis the fingers curl about - a rod lies through the fist), its **shortest**
 /// faces the palm (hand Y), and the remaining one runs along the fingers. Either
 /// way the box is then dropped onto the palm: its surface against
-/// [`PALM_ANCHOR`], which is half its palm-facing extent below the anchor.
+/// [`palm_surface`], which is half its palm-facing extent below it.
 ///
 /// The family follows the seated box, so what the fingers are allowed to do
 /// matches what they are closing on: thin is pinched, wider than the palm is
@@ -57,8 +72,8 @@ pub fn seat(
     let extents = hand_max - hand_min;
     let centre = (hand_min + hand_max) * 0.5;
 
-    // The palm faces -Y, so the item hangs below the anchor by half its depth.
-    let target = PALM_ANCHOR - vec3(0.0, extents.y * 0.5, 0.0);
+    // The palm faces -Y, so the item hangs below the skin by half its depth.
+    let target = palm_surface() - vec3(0.0, extents.y * 0.5, 0.0);
     (
         Seat {
             offset: target - centre,
@@ -186,7 +201,7 @@ mod tests {
 
         let (_, hi) = seated_bounds(min, max, seat);
         assert!(
-            (hi.y - PALM_ANCHOR.y).abs() < 1e-5,
+            (hi.y - palm_surface().y).abs() < 1e-5,
             "the ball's top should touch the palm, got {}",
             hi.y
         );
@@ -206,7 +221,7 @@ mod tests {
             let (seat, _) = seat(min, max, None);
             let (_, hi) = seated_bounds(min, max, seat);
             assert!(
-                (hi.y - PALM_ANCHOR.y).abs() < 1e-5,
+                (hi.y - palm_surface().y).abs() < 1e-5,
                 "half {half:?} seated with its top at {}",
                 hi.y
             );
@@ -224,7 +239,7 @@ mod tests {
 
         assert!((seat.rotation.s - authored.s).abs() < 1e-6);
         let (_, hi) = seated_bounds(min, max, seat);
-        assert!((hi.y - PALM_ANCHOR.y).abs() < 1e-5);
+        assert!((hi.y - palm_surface().y).abs() < 1e-5);
     }
 
     /// A permutation with an odd number of swaps must not sneak in as a

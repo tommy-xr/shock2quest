@@ -207,14 +207,10 @@ pub fn remember_measured_seat(model_name: &str, min: Vector3<f32>, max: Vector3<
     if MEASURED.read().unwrap().contains_key(&key) {
         return;
     }
-    let authored = profile(&key);
-    if authored
-        .as_ref()
-        .is_some_and(|profile| profile.offset.is_some())
-    {
-        return;
-    }
-    let rotation = authored.as_ref().and_then(rotation_of);
+    // Measured even for a model whose seat is fully authored: the box is also
+    // where the grip *family* comes from, and an authored offset must not cost
+    // the fingers their envelope.
+    let rotation = profile(&key).as_ref().and_then(rotation_of);
     let measured = hand_seat::seat(min, max, rotation);
     MEASURED.write().unwrap().insert(key, measured);
     GENERATION.fetch_add(1, Ordering::Relaxed);
@@ -222,11 +218,10 @@ pub fn remember_measured_seat(model_name: &str, min: Vector3<f32>, max: Vector3<
 
 /// Whether `model_name`'s seat still has to be measured off its geometry.
 pub fn needs_measurement(model_name: &str) -> bool {
-    let key = model_name.to_ascii_lowercase();
-    if MEASURED.read().unwrap().contains_key(&key) {
-        return false;
-    }
-    !profile(&key).is_some_and(|profile| profile.offset.is_some())
+    !MEASURED
+        .read()
+        .unwrap()
+        .contains_key(model_name.to_ascii_lowercase().as_str())
 }
 
 /// The scale a held `model_name` is drawn at, from its profile - 1.0 for
@@ -273,10 +268,16 @@ pub fn resolve(model_name: &str, handedness: Handedness) -> ResolvedGrip {
         offset,
         rotation,
         scale: authored.as_ref().and_then(|p| p.scale).unwrap_or(1.0),
+        // Authored first, then the one family the code derives rather than
+        // measures: a gun's grip measures like any other handle, but the index
+        // belongs on the trigger.
         family: authored
             .as_ref()
             .and_then(|p| p.family.as_deref())
             .and_then(family_from_str)
+            .or_else(|| {
+                crate::vr_config::is_vr_gun_view_model(model_name).then_some(GripFamily::Trigger)
+            })
             .or_else(|| measured.map(|(_, family)| family)),
         fingers: authored.as_ref().and_then(|p| p.fingers).map(to_fingers),
         source,
@@ -421,16 +422,19 @@ mod tests {
         });
     }
 
-    /// An authored offset is the last word: nothing measures over it.
+    /// An authored offset is the last word about *placement* - but the box is
+    /// still measured, because that is where the grip family comes from, and an
+    /// authored seat must not cost the fingers their envelope.
     #[test]
-    fn an_authored_offset_is_never_measured_over() {
+    fn an_authored_offset_is_never_measured_over_but_still_gets_a_family() {
         with_profiles(r#"{"atek_h": {"offset": [0, 0.073, 0.02]}}"#, || {
-            assert!(!needs_measurement("atek_h"));
-            remember_measured_seat("atek_h", vec3(-1.0, -1.0, -1.0), vec3(1.0, 1.0, 1.0));
+            assert!(needs_measurement("atek_h"));
+            remember_measured_seat("atek_h", vec3(-0.1, -0.1, -0.1), vec3(0.1, 0.1, 0.1));
 
             let grip = resolve("atek_h", Handedness::Right);
             assert_eq!(grip.source, GripSource::Profile);
             assert_eq!(grip.offset, vec3(0.0, 0.073, 0.02));
+            assert!(grip.family.is_some(), "the box still names a family");
         });
     }
 
