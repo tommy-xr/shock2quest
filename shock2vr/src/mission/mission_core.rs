@@ -1677,9 +1677,11 @@ pub struct MissionCore {
     /// presentation - derived from `QuestInfo`'s collected credentials each
     /// frame - so nothing here needs saving: a reload puts it back on the belt.
     belt_card_hand: Option<crate::vr_config::Handedness>,
-    /// The reader the belt card is currently touching, so one touch sends one
-    /// frob rather than one every frame it rests there.
-    belt_card_reader: Option<EntityId>,
+    /// The reader the belt card is currently touching, and how many frames its
+    /// claim survives the ray coming off it - so one touch sends one frob
+    /// rather than one every frame it rests there, and a card jittering across
+    /// the panel edge does not re-frob (which on a door shuts it again).
+    belt_card_reader: Option<(EntityId, u8)>,
 
     /// The trigger-safe decision in flight for each hand (indexed by
     /// [`hand_slot`]), or `None` when that hand's trigger is released. The
@@ -3710,23 +3712,29 @@ impl MissionCore {
                     pawn_rotation: player_rot,
                     head_position: input_context.head.position,
                     head_rotation: input_context.head.rotation,
+                    // The stance the tracked head was rebased with (see
+                    // `rebase_input`), NOT the collider's - they disagree while
+                    // the player hangs from their hands, and the belt would
+                    // drop out from under the hand that reaches for it.
                     pawn_above_floor: crate::physics::player_center_above_floor(
-                        self.player_handle.is_crouched(),
+                        self.player_handle.tracking_is_crouched(),
                     ),
                     dt: time.elapsed.as_secs_f32(),
                 })
             });
         self.body_anchors = body_frame;
 
-        let mut anchor_affordance = [None, None];
+        let mut anchor_claim = [None, None];
         let mut anchor_gestures = Vec::new();
         if let Some(frame) = body_frame {
             let can_stow = backpack_accepts_deposit(&self.world);
             let can_draw = self.stowed_weapon_to_draw().is_some();
-            let has_card = self
-                .world
-                .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-                .is_ok_and(|quests| quests.has_key_cards());
+            // One card: it is on the belt only while no hand is carrying it.
+            let card_on_belt = self.belt_card_hand.is_none()
+                && self
+                    .world
+                    .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+                    .is_ok_and(|quests| quests.has_key_cards());
             for hand in [
                 crate::vr_config::Handedness::Left,
                 crate::vr_config::Handedness::Right,
@@ -3748,10 +3756,10 @@ impl MissionCore {
                     holds_card: self.belt_card_hand == Some(hand),
                     can_stow,
                     can_draw,
-                    has_card,
+                    card_on_belt,
                 };
                 anchor_gestures.extend(self.anchor_gestures.update(&input));
-                anchor_affordance[slot] = self.anchor_gestures.affordance(&input);
+                anchor_claim[slot] = self.anchor_gestures.claim(&input);
             }
         }
         for gesture in &anchor_gestures {
@@ -3816,7 +3824,7 @@ impl MissionCore {
             eye_height: crate::player_eye_height_for(self.player_handle.is_crouched()),
             body_frame,
             belt_card: belt_card_placement(&self.world, self.belt_card_hand),
-            anchor_affordance,
+            anchor_claim,
         });
         rewrite_strip_release(&mut interaction_msgs, &store, &collect);
         self.process_virtual_hand_effects(asset_cache, interaction_msgs);
@@ -9016,29 +9024,48 @@ impl MissionCore {
     fn update_belt_card_reader(&mut self) {
         let touched = self
             .belt_card_hand
-            .and_then(|hand| self.interaction.hand_pose(hand))
-            .and_then(|(position, rotation)| {
-                let forward = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+            .and_then(|hand| {
+                self.interaction
+                    .hand_pose(hand)
+                    .map(|(position, rotation)| {
+                        crate::belt_card::reader_ray(position, rotation, hand)
+                    })
+            })
+            .and_then(|(origin, forward)| {
+                let start = vec3_to_point3(origin);
                 let hit = crate::virtual_hand::interaction_ray_cast(
                     &self.physics,
                     &self.world,
-                    vec3_to_point3(position),
+                    start,
                     forward,
                     None,
                 )?;
-                ((hit.hit_point - vec3_to_point3(position)).magnitude()
-                    <= crate::belt_card::READER_REACH)
-                    .then_some(hit.maybe_entity_id)
-                    .flatten()
+                let entity_id = hit.maybe_entity_id?;
+                ((hit.hit_point - start).magnitude() <= crate::belt_card::READER_REACH
+                    && crate::belt_card::is_reader(&self.world, entity_id))
+                .then_some(entity_id)
             });
-        if touched != self.belt_card_reader {
-            self.belt_card_reader = touched;
-            if let Some(entity_id) = touched {
+
+        match (touched, self.belt_card_reader) {
+            // Still on the same reader, or back on it inside the window: the
+            // touch it already made stands.
+            (Some(entity_id), Some((claimed, _))) if entity_id == claimed => {
+                self.belt_card_reader = Some((claimed, crate::belt_card::READER_RELEASE_FRAMES));
+            }
+            (Some(entity_id), _) => {
+                self.belt_card_reader = Some((entity_id, crate::belt_card::READER_RELEASE_FRAMES));
+                // The card is a credential, not a tool: the reader gets the same
+                // `Frob` a hand would send, and its own script runs the same key
+                // check - so a touch opens exactly what the collected set opens.
                 self.script_world.dispatch(Message {
                     payload: MessagePayload::Frob,
                     to: entity_id,
                 });
             }
+            (None, Some((claimed, frames))) => {
+                self.belt_card_reader = frames.checked_sub(1).map(|left| (claimed, left));
+            }
+            (None, None) => {}
         }
     }
 

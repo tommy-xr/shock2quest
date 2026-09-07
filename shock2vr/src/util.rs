@@ -198,6 +198,53 @@ pub fn tracked_rotation(rotation: Quaternion<f32>) -> Option<Quaternion<f32>> {
     (rotation.magnitude2() >= 1e-6).then(|| rotation.normalize())
 }
 
+/// The horizontal direction a tracked head faces, as a unit vector. Handles
+/// the two poses that break a naive `forward.xz`:
+///
+/// - the **zero quaternion**, which is what a runtime reports for an untracked
+///   pose (rotating by it silently returns the input vector), is treated as
+///   identity - see [`tracked_rotation`];
+/// - a **vertical** forward (looking straight down or up), where the horizontal
+///   projection vanishes. There the head's own **up** axis carries the yaw -
+///   but only with the right sign: looking at the floor the top of your head
+///   points where you are facing, while looking at the ceiling it points
+///   *behind* you, so the up axis is negated in that case. (Getting this wrong
+///   spawned the frontend panel behind a player who entered the menu looking
+///   up, and swings the body frame's belt out from under a player looking down
+///   at it.)
+pub fn horizontal_forward(head_rotation: Quaternion<f32>) -> Vector3<f32> {
+    use cgmath::Rotation;
+    let rotation = tracked_rotation(head_rotation).unwrap_or(Quaternion::new(1.0, 0.0, 0.0, 0.0));
+
+    let flatten = |v: Vector3<f32>| {
+        let flat = vec3(v.x, 0.0, v.z);
+        (flat.magnitude2() > 1e-6).then(|| flat.normalize())
+    };
+
+    let forward = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
+    flatten(forward)
+        .or_else(|| {
+            let up = rotation.rotate_vector(vec3(0.0, 1.0, 0.0));
+            flatten(if forward.y > 0.0 { -up } else { up })
+        })
+        // Unreachable for a real rotation (forward and up cannot both be
+        // vertical), but a defined answer beats a NaN basis.
+        .unwrap_or_else(|| vec3(0.0, 0.0, -1.0))
+}
+
+/// Fold an angle into `[-pi, pi]`, so interpolating or smoothing a yaw takes
+/// the short way round instead of unwinding almost a full turn.
+pub fn wrap_pi(angle: f32) -> f32 {
+    let tau = std::f32::consts::TAU;
+    angle - tau * (angle / tau).round()
+}
+
+/// Metres expressed in world units - the units every distance in the game is
+/// measured in, while body and hand dimensions are naturally written in metres.
+pub const fn meters(m: f32) -> f32 {
+    m / crate::METERS_PER_WORLD_UNIT
+}
+
 /// Smoothstep over `t`, clamped to `[0, 1]`: no velocity discontinuity at
 /// either end, which is what makes a timed ease read as a move rather than a
 /// jump. Shared by the UI panel re-placement ease and the death camera's fall.

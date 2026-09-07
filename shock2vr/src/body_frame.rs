@@ -16,13 +16,7 @@
 
 use cgmath::{InnerSpace, Quaternion, Rad, Rotation, Rotation3, Vector3, vec3};
 
-use crate::{METERS_PER_WORLD_UNIT, vr_config::Handedness};
-
-/// Convert a real-world measurement (the units body dimensions are naturally
-/// written in) into world units.
-const fn meters(m: f32) -> f32 {
-    m / METERS_PER_WORLD_UNIT
-}
+use crate::{util::meters, vr_config::Handedness};
 
 /// Belt height as a fraction of the tracked eye height. ~0.55 puts it at the
 /// top of the hip on an average adult, which is where a real belt sits and
@@ -31,6 +25,12 @@ const BELT_HEIGHT_FRACTION: f32 = 0.55;
 
 /// How far the shoulder sockets sit below the eye.
 const SHOULDER_DROP: f32 = meters(0.2);
+
+/// How far the shoulder sockets sit BEHIND the eye. The head's floor
+/// projection is roughly the neck, not the shoulder joint - without this the
+/// zone sits beside the ear, and the "throw it over your shoulder" reach (which
+/// takes the hand back past the head) never enters it.
+const SHOULDER_BEHIND: f32 = meters(0.12);
 
 /// Half the shoulder/hip width: how far each anchor sits to the side of the
 /// body's midline.
@@ -112,8 +112,10 @@ pub struct BodyFrameInput {
     pub head_position: Vector3<f32>,
     pub head_rotation: Quaternion<f32>,
     /// How far the pawn origin sits above the floor, world units
-    /// (`physics::player_center_above_floor`). Crouching shrinks it, which is
-    /// what lowers the anchors with the player.
+    /// (`physics::player_center_above_floor`). Only the belt reads it - the
+    /// shoulders hang off the eye, where it cancels - so it must be the same
+    /// stance the tracked head was rebased with, or the belt moves out from
+    /// under the hand without the shoulders moving with it.
     pub pawn_above_floor: f32,
     /// The fixed simulation step this frame integrates, for the yaw low-pass.
     pub dt: f32,
@@ -141,22 +143,24 @@ impl BodyFrameTracker {
                 None => observed,
                 Some(current) => {
                     let alpha = 1.0 - (-input.dt / YAW_TIME_CONSTANT_SECS).exp();
-                    wrap_pi(current + wrap_pi(observed - current) * alpha)
+                    crate::util::wrap_pi(current + crate::util::wrap_pi(observed - current) * alpha)
                 }
             });
         }
         let rotation = input.pawn_rotation * Quaternion::from_angle_y(Rad(self.yaw.unwrap_or(0.0)));
         let right = rotation.rotate_vector(vec3(1.0, 0.0, 0.0));
+        let back = rotation.rotate_vector(vec3(0.0, 0.0, 1.0));
 
         // Horizontal placement follows the head (lean out over a railing and
-        // your belt goes with you); heights come off the tracked eye.
+        // your belt goes with you); heights come off the tracked eye. The head
+        // is in the same pawn space the hands are, so it converts to world
+        // through the same function the hands tested against these anchors do.
         let floor_y = input.pawn_position.y - input.pawn_above_floor;
-        let ground = input.pawn_position
-            + input.pawn_rotation.rotate_vector(vec3(
-                input.head_position.x,
-                0.0,
-                input.head_position.z,
-            ));
+        let ground = crate::virtual_hand::hand_world_position(
+            input.pawn_position,
+            input.pawn_rotation,
+            vec3(input.head_position.x, 0.0, input.head_position.z),
+        );
         let eye_above_floor = input.head_position.y + input.pawn_above_floor;
 
         let shoulder_y = floor_y + eye_above_floor - SHOULDER_DROP;
@@ -164,12 +168,13 @@ impl BodyFrameTracker {
             (floor_y + eye_above_floor * BELT_HEIGHT_FRACTION).min(shoulder_y - ANCHOR_SEPARATION);
         let at = |y: f32| vec3(ground.x, y, ground.z);
 
+        let shoulder = at(shoulder_y) + back * SHOULDER_BEHIND;
         BodyFrame {
             // The card rides the left hip.
             belt: at(belt_y) - right * LATERAL_OFFSET,
             shoulders: [
-                at(shoulder_y) - right * LATERAL_OFFSET,
-                at(shoulder_y) + right * LATERAL_OFFSET,
+                shoulder - right * LATERAL_OFFSET,
+                shoulder + right * LATERAL_OFFSET,
             ],
             rotation,
         }
@@ -213,14 +218,19 @@ pub struct HandAnchorInput {
     pub can_stow: bool,
     /// Whether there is a stowed weapon left to draw.
     pub can_draw: bool,
-    /// Whether the player has collected any credential, i.e. whether the belt
-    /// card exists at all.
-    pub has_card: bool,
+    /// Whether the card is actually on the belt to be taken: the player has
+    /// collected a credential AND no hand is already carrying it. There is one
+    /// card, so a hand cannot take it out of the other hand's grip.
+    pub card_on_belt: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 struct HandAnchorState {
     squeezing: bool,
+    /// The anchor this hand is treated as being at - the live one, or the last
+    /// one for [`ANCHOR_HOLD_FRAMES`] after the pose is lost. One value, so the
+    /// gesture a grip commits to and the claim [`AnchorGestures::claim`] makes
+    /// on the hand can never disagree about where the hand is.
     anchor: Option<BodyAnchor>,
     hold_frames: u8,
 }
@@ -234,95 +244,107 @@ pub struct AnchorGestures {
 }
 
 impl AnchorGestures {
-    /// Advance one hand a frame. Returns the gesture its grip edge committed
-    /// to, if any, and leaves [`Self::affordance`] describing what the hand
-    /// could do next.
+    /// Advance one hand a frame, and return the gesture its grip edge committed
+    /// to. [`Self::claim`] must be read after this - both answers come from the
+    /// one intent this resolves.
     pub fn update(&mut self, input: &HandAnchorInput) -> Option<AnchorGesture> {
         let state = &mut self.hands[crate::vr_config::hand_slot(input.hand)];
-        // Decide on this frame's anchor first, then expire: the frame the
-        // window runs out is still one the hand gets to act on.
-        let anchor = input.anchor.or(state.anchor);
         match input.anchor {
             Some(anchor) => {
                 state.anchor = Some(anchor);
                 state.hold_frames = ANCHOR_HOLD_FRAMES;
             }
+            // The window is spent frame by frame; only when it runs out is the
+            // anchor really gone.
             None if state.hold_frames > 0 => state.hold_frames -= 1,
             None => state.anchor = None,
         }
 
-        let squeezing = input.squeeze > crate::ui::VR_TRIGGER_THRESHOLD;
+        // Thresholded to match `VirtualHand`'s own hold test exactly: a squeeze
+        // sitting on the threshold must not read as released here while the
+        // hand still holds the item, or a stow would claim a release the hand
+        // never made and the item would land on the floor a frame later.
+        let squeezing = input.squeeze >= crate::ui::VR_TRIGGER_THRESHOLD;
         let was_squeezing = std::mem::replace(&mut state.squeezing, squeezing);
 
         // Only a real grip edge commits. Losing the pose behind the shoulder
         // changes nothing: the controller keeps reporting its grip.
-        if !was_squeezing && squeezing {
-            return match anchor {
-                Some(BodyAnchor::Shoulder(_)) if !input.holding && !input.holds_card => {
-                    input.can_draw.then_some(AnchorGesture::Draw(input.hand))
-                }
-                Some(BodyAnchor::Belt) if !input.holding && !input.holds_card => input
-                    .has_card
-                    .then_some(AnchorGesture::TakeCard(input.hand)),
-                _ => None,
-            };
-        }
-        if was_squeezing && !squeezing {
-            if input.holds_card {
-                return Some(AnchorGesture::ReturnCard(input.hand));
-            }
-            if input.holding && input.can_stow {
-                if let Some(BodyAnchor::Shoulder(_)) = anchor {
-                    return Some(AnchorGesture::Stow(input.hand));
-                }
-            }
-        }
-        None
+        let (gesture, available) = self.intent(input)?;
+        let fires = match gesture {
+            // Letting go is what puts something away.
+            AnchorGesture::Stow(_) | AnchorGesture::ReturnCard(_) => was_squeezing && !squeezing,
+            // Closing on it is what takes something out.
+            AnchorGesture::Draw(_) | AnchorGesture::TakeCard(_) => !was_squeezing && squeezing,
+        };
+        (fires && available).then_some(gesture)
     }
 
-    /// What the hand's anchor offers right now: green when the gesture would
-    /// go through, amber when the anchor is recognised but the action is not
-    /// available (a full backpack, nothing stowed to draw). `None` leaves the
-    /// light to the hand's own raycast.
-    pub fn affordance(
-        &self,
-        input: &HandAnchorInput,
-    ) -> Option<crate::hand_affordance::HandAffordance> {
+    /// What owns this hand this frame, if anything. Must be read *after*
+    /// [`Self::update`], which resolves the anchor both answers come from.
+    pub fn claim(&self, input: &HandAnchorInput) -> Option<HandClaim> {
         use crate::hand_affordance::HandAffordance;
 
-        let state = &self.hands[crate::vr_config::hand_slot(input.hand)];
-        let eligible = |yes: bool| {
-            Some(if yes {
+        let (gesture, available) = self.intent(input)?;
+        Some(match gesture {
+            AnchorGesture::ReturnCard(_) => HandClaim::CarryingCard,
+            _ => HandClaim::Anchor(if available {
                 HandAffordance::Grabbable
             } else {
                 HandAffordance::Blocked
-            })
-        };
-        match state.anchor? {
-            BodyAnchor::Shoulder(_) if input.holding => eligible(input.can_stow),
-            BodyAnchor::Shoulder(_) if !input.holds_card => eligible(input.can_draw),
-            BodyAnchor::Belt if !input.holding && !input.holds_card => eligible(input.has_card),
-            _ => None,
+            }),
+        })
+    }
+
+    /// What this hand's next grip edge would do, and whether it could. The one
+    /// place the rules live: the light and the committed gesture both read it,
+    /// so the glove can never promise an action the grip would not perform.
+    fn intent(&self, input: &HandAnchorInput) -> Option<(AnchorGesture, bool)> {
+        // A hand carrying the belt card is full, wherever it is: it must not
+        // also grab a pickup or frob what its ray crosses, because the card's
+        // own touch already frobs (and a second Frob would shut the door the
+        // first opened). Opening it returns the card to the belt.
+        if input.holds_card {
+            return Some((AnchorGesture::ReturnCard(input.hand), true));
         }
+        Some(
+            match self.hands[crate::vr_config::hand_slot(input.hand)].anchor? {
+                BodyAnchor::Shoulder(_) if input.holding => {
+                    (AnchorGesture::Stow(input.hand), input.can_stow)
+                }
+                BodyAnchor::Shoulder(_) => (AnchorGesture::Draw(input.hand), input.can_draw),
+                BodyAnchor::Belt if !input.holding => {
+                    (AnchorGesture::TakeCard(input.hand), input.card_on_belt)
+                }
+                // A full hand at the belt has nowhere to put what it holds.
+                BodyAnchor::Belt => return None,
+            },
+        )
     }
 }
 
-/// The yaw a rotation faces, radians about +Y, or `None` for an untracked
-/// (zero-magnitude) pose.
+/// Why a hand is not an ordinary world-interacting hand this frame. Either way
+/// its grip belongs to the body, not to whatever its ray crossed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandClaim {
+    /// The hand is at a body anchor. The value is the anchor's eligibility -
+    /// green when the gesture would go through, amber when the anchor is
+    /// recognised but the action is not available (a full backpack, nothing
+    /// stowed to draw, an empty belt).
+    Anchor(crate::hand_affordance::HandAffordance),
+    /// The hand is carrying the belt card. Its light keeps reading its own
+    /// raycast, so a reader it is held against still shows locked or openable.
+    CarryingCard,
+}
+
+/// The yaw a tracked head faces, radians about +Y, or `None` for an untracked
+/// (zero-magnitude) pose - which is not a reading, and must not be smoothed
+/// toward. A head looking straight down at its own belt is exactly the pose
+/// whose horizontal forward vanishes, so the flattening is
+/// [`crate::util::horizontal_forward`]'s rather than a bare `atan2` on `xz`.
 fn head_yaw(rotation: Quaternion<f32>) -> Option<f32> {
-    if rotation.magnitude2() < 1e-6 {
-        return None;
-    }
+    let forward = crate::util::horizontal_forward(crate::util::tracked_rotation(rotation)?);
     // `Quaternion::from_angle_y(t) * (0, 0, -1)` is `(-sin t, 0, -cos t)`.
-    let forward = rotation.normalize().rotate_vector(vec3(0.0, 0.0, -1.0));
     Some((-forward.x).atan2(-forward.z))
-}
-
-/// Fold an angle into `[-pi, pi]`, so smoothing takes the short way round.
-fn wrap_pi(angle: f32) -> f32 {
-    let tau = std::f32::consts::TAU;
-    let wrapped = (angle + std::f32::consts::PI).rem_euclid(tau);
-    wrapped - std::f32::consts::PI
 }
 
 #[cfg(test)]
@@ -510,7 +532,7 @@ mod tests {
             holds_card: false,
             can_stow: true,
             can_draw: true,
-            has_card: true,
+            card_on_belt: true,
         }
     }
 
@@ -558,7 +580,9 @@ mod tests {
             ..at(anchor)
         };
         gestures.update(&holding(1.0, SHOULDER));
-        for _ in 0..ANCHOR_HOLD_FRAMES {
+        // The pose stays lost for the whole window; the release lands on its
+        // last frame and still stows.
+        for _ in 1..ANCHOR_HOLD_FRAMES {
             assert_eq!(gestures.update(&holding(1.0, None)), None);
         }
         assert_eq!(
@@ -589,7 +613,10 @@ mod tests {
             ..at(SHOULDER)
         };
         gestures.update(&empty);
-        assert_eq!(gestures.affordance(&empty), Some(HandAffordance::Blocked));
+        assert_eq!(
+            gestures.claim(&empty),
+            Some(HandClaim::Anchor(HandAffordance::Blocked))
+        );
         assert_eq!(
             gestures.update(&HandAnchorInput {
                 squeeze: 1.0,
@@ -606,7 +633,10 @@ mod tests {
             ..at(SHOULDER)
         };
         gestures.update(&full);
-        assert_eq!(gestures.affordance(&full), Some(HandAffordance::Blocked));
+        assert_eq!(
+            gestures.claim(&full),
+            Some(HandClaim::Anchor(HandAffordance::Blocked))
+        );
         assert_eq!(
             gestures.update(&HandAnchorInput {
                 squeeze: 0.0,
@@ -652,17 +682,116 @@ mod tests {
 
         let mut gestures = AnchorGestures::default();
         let hand = HandAnchorInput {
-            has_card: false,
+            card_on_belt: false,
             ..at(Some(BodyAnchor::Belt))
         };
         gestures.update(&hand);
-        assert_eq!(gestures.affordance(&hand), Some(HandAffordance::Blocked));
+        assert_eq!(
+            gestures.claim(&hand),
+            Some(HandClaim::Anchor(HandAffordance::Blocked))
+        );
         assert_eq!(
             gestures.update(&HandAnchorInput {
                 squeeze: 1.0,
                 ..hand
             }),
             None
+        );
+    }
+
+    /// A hand carrying the card is claimed wherever it is - it must not also
+    /// grab a pickup its ray crosses on the way to a reader, and the shoulder
+    /// must not promise a stow the release would not perform.
+    #[test]
+    fn a_hand_carrying_the_card_is_claimed_everywhere() {
+        let mut gestures = AnchorGestures::default();
+        for anchor in [None, SHOULDER, Some(BodyAnchor::Belt)] {
+            let hand = HandAnchorInput {
+                holds_card: true,
+                squeeze: 1.0,
+                ..at(anchor)
+            };
+            gestures.update(&hand);
+            assert_eq!(
+                gestures.claim(&hand),
+                Some(HandClaim::CarryingCard),
+                "the card fills the hand at {anchor:?}"
+            );
+            assert_eq!(
+                gestures.update(&HandAnchorInput {
+                    squeeze: 0.0,
+                    ..hand
+                }),
+                Some(AnchorGesture::ReturnCard(Handedness::Right)),
+                "and opening it returns the card rather than stowing"
+            );
+        }
+    }
+
+    /// There is one card. A hand at the belt while the other carries it finds
+    /// the hip empty rather than taking it out of that grip.
+    #[test]
+    fn the_belt_is_empty_while_the_other_hand_has_the_card() {
+        let mut gestures = AnchorGestures::default();
+        let hand = HandAnchorInput {
+            hand: Handedness::Left,
+            card_on_belt: false,
+            ..at(Some(BodyAnchor::Belt))
+        };
+        gestures.update(&hand);
+        assert_eq!(
+            gestures.claim(&hand),
+            Some(HandClaim::Anchor(
+                crate::hand_affordance::HandAffordance::Blocked
+            ))
+        );
+        assert_eq!(
+            gestures.update(&HandAnchorInput {
+                squeeze: 1.0,
+                ..hand
+            }),
+            None,
+            "the second hand must not take the card out of the first"
+        );
+    }
+
+    /// The light and the gesture read one resolved anchor: a hand the
+    /// hysteresis has let go of neither commits nor claims.
+    #[test]
+    fn an_expired_anchor_neither_claims_nor_commits() {
+        let mut gestures = AnchorGestures::default();
+        let empty = |anchor| at(anchor);
+        gestures.update(&empty(SHOULDER));
+        for _ in 0..=ANCHOR_HOLD_FRAMES {
+            gestures.update(&empty(None));
+        }
+        assert_eq!(gestures.claim(&empty(None)), None);
+        assert_eq!(
+            gestures.update(&HandAnchorInput {
+                squeeze: 1.0,
+                ..empty(None)
+            }),
+            None,
+            "an expired anchor must not draw into a hand it no longer owns"
+        );
+    }
+
+    /// The release edge is the same one `VirtualHand` drops on. A squeeze
+    /// resting exactly on the threshold is still a hold, so a stow cannot claim
+    /// a release the hand never made.
+    #[test]
+    fn the_release_edge_matches_the_hands_own_hold_test() {
+        let mut gestures = AnchorGestures::default();
+        let holding = |squeeze: f32| HandAnchorInput {
+            holding: true,
+            squeeze,
+            ..at(SHOULDER)
+        };
+        gestures.update(&holding(1.0));
+        assert_eq!(
+            gestures.update(&holding(crate::ui::VR_TRIGGER_THRESHOLD)),
+            None,
+            "a squeeze on the threshold still holds, so nothing is stowed"
         );
     }
 
@@ -676,7 +805,7 @@ mod tests {
             squeeze: 1.0,
             ..at(None)
         };
-        assert_eq!(gestures.affordance(&hand), None);
+        assert_eq!(gestures.claim(&hand), None);
         gestures.update(&hand);
         hand.squeeze = 0.0;
         assert_eq!(gestures.update(&hand), None);

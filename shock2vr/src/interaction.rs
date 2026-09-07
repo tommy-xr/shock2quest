@@ -47,11 +47,10 @@ pub struct InteractionContext<'a> {
     /// Where the belt card is, or `None` while the player has collected no
     /// credential and there is no card.
     pub belt_card: Option<crate::belt_card::CardPlacement>,
-    /// What each hand's body anchor offers this frame, indexed by
-    /// `vr_config::hand_slot`. `Some` claims the hand: its light shows the
-    /// anchor's eligibility and its grip belongs to the anchor gesture rather
-    /// than to whatever its ray crossed.
-    pub anchor_affordance: [Option<crate::hand_affordance::HandAffordance>; 2],
+    /// What owns each hand this frame (a body anchor, or the belt card it is
+    /// carrying), indexed by `vr_config::hand_slot`. `Some` claims the hand:
+    /// its grip belongs to the body rather than to whatever its ray crossed.
+    pub anchor_claim: [Option<crate::body_frame::HandClaim>; 2],
 }
 
 /// Read-only per-frame inputs for the VR hand-climb resolve. Separate from
@@ -295,7 +294,7 @@ impl PlayerInteraction for VrInteraction {
             ctx.player_rotation,
             &ctx.input.right_hand,
             left_held_entity,
-            ctx.anchor_affordance[crate::vr_config::hand_slot(Handedness::Right)],
+            ctx.anchor_claim[crate::vr_config::hand_slot(Handedness::Right)],
         );
         self.right_hand = right_hand;
 
@@ -310,7 +309,7 @@ impl PlayerInteraction for VrInteraction {
             ctx.player_rotation,
             &ctx.input.left_hand,
             right_held_entity,
-            ctx.anchor_affordance[crate::vr_config::hand_slot(Handedness::Left)],
+            ctx.anchor_claim[crate::vr_config::hand_slot(Handedness::Left)],
         );
         self.left_hand = left_hand;
 
@@ -626,7 +625,7 @@ mod tests {
             eye_height: 1.04,
             body_frame: None,
             belt_card: None,
-            anchor_affordance: [None, None],
+            anchor_claim: [None, None],
         }
     }
 
