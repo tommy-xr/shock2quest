@@ -26,6 +26,7 @@ mod flat_player_controller;
 pub mod free_camera;
 mod gui;
 mod hand_glove;
+pub mod hand_seat;
 mod hud;
 mod interaction;
 mod mission;

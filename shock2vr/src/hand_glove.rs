@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use cgmath::{EuclideanSpace, Matrix4, Point3, Quaternion, Transform, Vector3};
+use cgmath::{EuclideanSpace, Matrix4, Point3, Quaternion, Transform, Vector3, Zero};
 use dark::{
     glb_model::GlbModel,
     importers::{GLB_MODELS_IMPORTER, TEXTURE_IMPORTER, VR_CONTACT_MESH_IMPORTER, VrContactMesh},
@@ -280,6 +280,18 @@ impl GloveRenderer {
             &pose,
             hand_to_world,
         )
+    }
+
+    /// Where the palm faces the world, in the glove's own hand space: the
+    /// midpoint of the index and pinky knuckles at the open pose - the line an
+    /// item resting in the hand touches.
+    ///
+    /// [`crate::hand_seat`] seats unprofiled items against it. It is a constant
+    /// of the rig, so that module pins the measurement rather than paying for a
+    /// posed glove; [`glove_palm_anchor`] is how it is re-measured.
+    #[cfg(test)]
+    pub fn palm_anchor(&mut self) -> Vector3<f32> {
+        palm_anchor_of(&mut self.model, &self.retarget, &self.open, &self.fist)
     }
 
     /// The fitted grip for a model held in `handedness`, solved once and
@@ -585,6 +597,36 @@ pub fn glove_material(
     })))
 }
 
+/// Where the palm faces the world, in the glove's own hand space: the midpoint
+/// of the index and pinky knuckles at the open pose - the line an item resting
+/// in the hand touches.
+///
+/// [`crate::hand_seat`] seats unprofiled items against it. It is a constant of
+/// the rig rather than something a seat can afford to pose a glove for, so that
+/// module writes the number down and `the_palm_anchor_matches_the_glove_rig`
+/// holds it to this measurement.
+fn palm_anchor_of(
+    model: &mut GlbModel,
+    retarget: &HandPoseRetarget,
+    open: &Pose,
+    fist: &Pose,
+) -> Vector3<f32> {
+    let mut rig = GloveRig {
+        model,
+        retarget,
+        open,
+        fist,
+        to_hand: glove_model_to_hand(),
+    };
+    let mut knuckle = |finger| {
+        rig.phalanges(finger, 0.0)
+            .first()
+            .map(|capsule: &Capsule| capsule.a.to_vec())
+            .unwrap_or_else(Vector3::zero)
+    };
+    (knuckle(Finger::Index) + knuckle(Finger::Pinky)) * 0.5
+}
+
 /// The glove's colour map. One loader, shared with the `debug_gloves` harness,
 /// so the two can't end up on different textures.
 pub fn load_glove_color(
@@ -624,6 +666,41 @@ mod tests {
         assert!(
             (rendered_meters - REAL_HAND_LENGTH_METERS).abs() < 1e-4,
             "glove renders {rendered_meters} m, expected {REAL_HAND_LENGTH_METERS} m"
+        );
+    }
+
+    /// `hand_seat` writes the palm anchor down rather than posing a glove to
+    /// find it, so re-measure it off the shipped rig here: an unprofiled item
+    /// is seated against this line, and a glove that moved under it would seat
+    /// every one of them somewhere the fingers are not.
+    #[test]
+    fn the_palm_anchor_matches_the_glove_rig() {
+        use cgmath::{InnerSpace, Point3};
+        use collision::Aabb3;
+        use dark::importers::skeleton_from_glb_bytes;
+
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../assets/",
+            "vr_glove_model.glb"
+        );
+        let bytes = std::fs::read(path).expect("read the glove GLB");
+        let skeleton = skeleton_from_glb_bytes(&bytes).expect("the glove GLB has a skeleton");
+        let unit = Aabb3::new(Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 0.0));
+        let mut model = GlbModel::new(Vec::new(), unit, skeleton);
+        let retarget = HandPoseRetarget::for_right_glove(model.skeleton());
+
+        let measured = palm_anchor_of(
+            &mut model,
+            &retarget,
+            &hand_pose::open_right_hand(),
+            &hand_pose::fist_right_hand(),
+        );
+
+        assert!(
+            (measured - crate::hand_seat::PALM_ANCHOR).magnitude() < 1e-3,
+            "glove rig palm anchor is {measured:?}, hand_seat says {:?}",
+            crate::hand_seat::PALM_ANCHOR
         );
     }
 
