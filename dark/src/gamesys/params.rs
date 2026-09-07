@@ -51,11 +51,16 @@ pub struct HrmParams {
     pub stat_break_chance: [f32; 8],
 }
 
+/// Angles are stored as 16-bit turns: `0x10000` units make a full circle.
+const DEGREES_PER_ANGLE_UNIT: f32 = 360.0 / 65536.0;
+
 /// Retail `SKILLPARAM` file-var (`sSkillParams`). Research scales authored
 /// progress by `1 + research_factor * (skill - 1)^2`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillParams {
-    pub weapon_break_angle: i16,
+    /// Shot deviation per level of weapon skill missing, in degrees. The
+    /// shipped gamesys authors 0, so retail shots never deviate.
+    pub inaccuracy_degrees: f32,
     pub weapon_break_factor: f32,
     pub research_factor: f32,
     pub damage_modifier: f32,
@@ -156,7 +161,8 @@ impl SkillParams {
 
     fn read_record<T: io::Read>(reader: &mut T) -> Option<Self> {
         Some(Self {
-            weapon_break_angle: reader.read_i16::<LittleEndian>().ok()?,
+            inaccuracy_degrees: reader.read_u16::<LittleEndian>().ok()? as f32
+                * DEGREES_PER_ANGLE_UNIT,
             weapon_break_factor: reader.read_f32::<LittleEndian>().ok()?,
             research_factor: reader.read_f32::<LittleEndian>().ok()?,
             damage_modifier: reader.read_f32::<LittleEndian>().ok()?,
@@ -173,17 +179,29 @@ mod tests {
 
     #[test]
     fn parses_packed_retail_skill_params_layout() {
-        let mut bytes = 0_i16.to_le_bytes().to_vec();
+        // The shipped gamesys record: inaccuracy 0, then the four floats.
+        let mut bytes = 0_u16.to_le_bytes().to_vec();
         for value in [0.0_f32, 1.0, 0.15, 1.25] {
             bytes.extend(value.to_le_bytes());
         }
         assert_eq!(bytes.len(), 18);
 
         let parsed = SkillParams::read_record(&mut Cursor::new(bytes)).unwrap();
-        assert_eq!(parsed.weapon_break_angle, 0);
+        assert_eq!(parsed.inaccuracy_degrees, 0.0);
         assert_eq!(parsed.weapon_break_factor, 0.0);
         assert_eq!(parsed.research_factor, 1.0);
         assert!((parsed.damage_modifier - 0.15).abs() < f32::EPSILON);
         assert_eq!(parsed.organ_damage, 1.25);
+    }
+
+    /// The leading field is a 16-bit turn, not a raw count of degrees.
+    #[test]
+    fn inaccuracy_converts_from_sixteen_bit_turns() {
+        let mut bytes = 2048_u16.to_le_bytes().to_vec();
+        bytes.extend([0u8; 16]);
+
+        let parsed = SkillParams::read_record(&mut Cursor::new(bytes)).unwrap();
+
+        assert_eq!(parsed.inaccuracy_degrees, 11.25);
     }
 }
