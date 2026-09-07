@@ -2264,6 +2264,33 @@ impl CollisionGroup {
         CollisionGroup { collision, solver }
     }
 
+    /// A projectile the *player* fired: an ordinary physical entity that is
+    /// transparent to the player's own capsule.
+    ///
+    /// A slow (physics) projectile leaves the muzzle of a weapon the player is
+    /// holding, and in VR that muzzle is inside the player's own capsule
+    /// whenever the weapon is held in close to the body - a natural chest or
+    /// hip hold. Solid to `PLAYER`, the shot collides on its first step, and a
+    /// `DESTROY_ON_IMPACT` projectile is consumed there and then: the psi bolt
+    /// never leaves the amp, the points are spent, and the player takes their
+    /// own damage. AI and turret projectiles keep `CollisionGroup::entity()`
+    /// and hit the player normally.
+    ///
+    /// Rapier's `InteractionGroups` test is an AND across both colliders, so
+    /// clearing `PLAYER` from this side alone is enough - the player capsule's
+    /// own `ALL_COLLIDABLE` filter cannot re-enable the pair. Same idiom as
+    /// `held_melee`. See `RuntimePropPlayerFiredProjectile` for what the
+    /// lifetime-long transparency does and does not cost.
+    pub fn player_projectile() -> CollisionGroup {
+        Self::solid(InteractionGroups {
+            memberships: InternalCollisionGroups::ENTITY.bits.into(),
+            filter: (InternalCollisionGroups::ALL_COLLIDABLE.bits
+                & !InternalCollisionGroups::PLAYER.bits)
+                .into(),
+            test_mode: Default::default(),
+        })
+    }
+
     /// Collision behavior for a living creature capsule. It collides exactly
     /// like an ordinary physical entity, but its distinct membership lets
     /// interaction-only fixtures and unsimulated movable debris opt out of
@@ -7403,6 +7430,63 @@ mod tests {
 
     fn identity_quat() -> Quaternion<f32> {
         Quaternion::new(1.0, 0.0, 0.0, 0.0)
+    }
+
+    /// A player-fired projectile is transparent to the shooter's own capsule -
+    /// the muzzle of a weapon held in at the body sits inside it - while
+    /// staying solid to everything it is supposed to hit. With
+    /// `CollisionGroup::entity()` the first assertion fails: the bolt collides
+    /// with the player on its first step and, being DESTROY_ON_IMPACT, never
+    /// leaves the weapon.
+    #[test]
+    fn a_player_fired_projectile_passes_through_the_shooter_but_hits_everything_else() {
+        let mut world = PhysicsWorld::new();
+        let bolt = EntityId::from_inner(1).unwrap();
+        world.add_dynamic(
+            bolt,
+            vec3(0.0, 0.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Sphere(0.1),
+            CollisionGroup::player_projectile(),
+            false,
+            DynamicPhysicsOptions::default(),
+        );
+
+        let body = world
+            .debug_list_bodies()
+            .into_iter()
+            .find(|body| body.entity_id == Some(bolt.inner() as i32))
+            .unwrap();
+        assert!(
+            !body.blocks_player,
+            "a player-fired shot must pass through the player who fired it"
+        );
+        assert!(
+            body.blocks_actor,
+            "a player-fired shot must still hit creatures"
+        );
+
+        // Rapier's `test` is an AND across both colliders, so clearing PLAYER
+        // from this side alone is what makes the shot transparent.
+        let filter = CollisionGroup::player_projectile().collision.filter.bits();
+        assert_eq!(
+            filter & InternalCollisionGroups::PLAYER.bits,
+            0,
+            "the player's own capsule must not interact with the shot"
+        );
+        for still_solid in [
+            InternalCollisionGroups::WORLD,
+            InternalCollisionGroups::ENTITY,
+            InternalCollisionGroups::ACTOR,
+            InternalCollisionGroups::SELECTABLE,
+        ] {
+            assert_ne!(
+                filter & still_solid.bits,
+                0,
+                "a player-fired shot must still hit {still_solid:?}"
+            );
+        }
     }
 
     #[test]

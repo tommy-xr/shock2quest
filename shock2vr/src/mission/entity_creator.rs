@@ -185,6 +185,10 @@ pub fn create_entity_with_position(
         world.add_component(entity_id, RuntimePropProjectileRayOrigin(origin));
     }
 
+    if additional_options.player_fired_projectile {
+        world.add_component(entity_id, RuntimePropPlayerFiredProjectile);
+    }
+
     if additional_options.launch_projectile {
         world.add_component(entity_id, RuntimePropLaunchedProjectile);
     }
@@ -990,6 +994,20 @@ fn create_physics_representation_with_options(
         .map(|scale| scale.0)
         .unwrap_or_else(|_| vec3(1.0, 1.0, 1.0));
 
+    // The membership every ordinary physical collider below uses. A projectile
+    // the player fired takes the variant that is transparent to the player's
+    // own capsule, so a shot leaving a weapon held in at the body is not
+    // consumed on the shooter - see `CollisionGroup::player_projectile`.
+    let is_player_fired = world
+        .borrow::<View<RuntimePropPlayerFiredProjectile>>()
+        .unwrap()
+        .contains(entity_id);
+    let entity_group = if is_player_fired {
+        CollisionGroup::player_projectile()
+    } else {
+        CollisionGroup::entity()
+    };
+
     let (
         v_pos,
         v_phys_attr,
@@ -1133,7 +1151,7 @@ fn create_physics_representation_with_options(
                     pos.rotation,
                     dimensions.offset0,
                     shape,
-                    CollisionGroup::entity(),
+                    entity_group,
                     false,
                     dynamics_options,
                 ));
@@ -1201,10 +1219,13 @@ fn create_physics_representation_with_options(
             }
             _ => None,
         };
-        let mut frob_group = CollisionGroup::entity();
-        if v_hud_select
-            .get(entity_id)
-            .is_ok_and(|hud_select| hud_select.0)
+        // The pick bias is for fixtures: a player-fired shot keeps its
+        // shooter-transparent group even if it were HUD-selectable.
+        let mut frob_group = entity_group;
+        if !is_player_fired
+            && v_hud_select
+                .get(entity_id)
+                .is_ok_and(|hud_select| hud_select.0)
         {
             frob_group = CollisionGroup::selectable();
         }
@@ -1269,7 +1290,7 @@ fn create_physics_representation_with_options(
                 shape,
                 // TODO: Kinematic experiment
                 //is_sensor,
-                CollisionGroup::entity(),
+                entity_group,
                 false,
                 dynamics_options,
             );
@@ -1470,7 +1491,7 @@ fn create_physics_representation_with_options(
             let group = if is_climbable {
                 CollisionGroup::climbable_entity()
             } else {
-                CollisionGroup::entity()
+                entity_group
             };
 
             // `SPHERE` is Dark's *moving* physics model - a simulated sphere
@@ -1625,6 +1646,9 @@ pub struct CreateEntityOptions {
     /// projectile. Flat firing supplies the camera origin while retaining the
     /// forward spawn clearance needed by slow physics projectiles.
     pub projectile_raycast_origin: Option<Point3<f32>>,
+    /// The player fired this projectile, so its collision ray must skip the
+    /// player's own capsule (see `RuntimePropPlayerFiredProjectile`).
+    pub player_fired_projectile: bool,
     /// Create the authored physics model as a launched dynamic body. Dark's
     /// Tweq emitter calls `launchProjectile`; this keeps frobbable emitted
     /// archetypes from being reduced to kinematic selection colliders.
@@ -1646,6 +1670,7 @@ impl Default for CreateEntityOptions {
             attach_to: None,
             transient_fx: false,
             projectile_raycast_origin: None,
+            player_fired_projectile: false,
             launch_projectile: false,
             shot_modifiers: None,
             flinderize_debris: false,

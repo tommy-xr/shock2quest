@@ -12,7 +12,8 @@ use crate::{
     mission::entity_creator::CreateEntityOptions,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::{
-        RuntimePropProjectileRayOrigin, RuntimePropShotModifiers, RuntimePropTransform,
+        RuntimePropPlayerFiredProjectile, RuntimePropProjectileRayOrigin, RuntimePropShotModifiers,
+        RuntimePropTransform,
     },
     scripts::{
         Message,
@@ -66,12 +67,15 @@ impl Script for InternalFastProjectileScript {
             .and_then(|origins| origins.get(entity_id).ok().map(|origin| origin.0));
         let start_point =
             maybe_camera_origin.unwrap_or(current_position - forward * SCALE_FACTOR * 0.25);
-        // A camera-origin ray starts at the player's eye, which is INSIDE the
-        // player's own capsule (the eye is the head sphere). Rapier's solid
-        // raycast reports a shape containing the origin as a hit at
-        // distance 0, so keeping `PLAYER` in the mask would make every flat
-        // shot hit the shooter instead of what the crosshair is on.
-        let can_hit_player = maybe_camera_origin.is_none();
+        // A player-fired shot must never hit the player. Rapier's solid raycast
+        // reports a shape containing the ray origin as a hit at distance 0, and
+        // the ray starts inside the player's own capsule in both presentations:
+        // flat rays start at the eye (the head sphere), and a VR ray starts at
+        // the weapon's muzzle, which is inside the capsule whenever the weapon
+        // is held in close to the body. Keeping `PLAYER` in the mask makes the
+        // shot spang on the shooter before it travels. AI and turret
+        // projectiles carry no marker and can still hit the player.
+        let can_hit_player = !is_player_fired(world, entity_id);
         let maybe_hit_spot = projectile_ray_cast(
             start_point,
             forward,
@@ -173,6 +177,14 @@ impl Script for InternalFastProjectileScript {
     ) -> Effect {
         Effect::NoEffect
     }
+}
+
+/// Whether this projectile came out of a weapon the player fired (every
+/// `weapon_script::create_projectile` shot - flat and VR alike).
+fn is_player_fired(world: &World, entity_id: EntityId) -> bool {
+    world
+        .borrow::<View<RuntimePropPlayerFiredProjectile>>()
+        .is_ok_and(|fired| fired.contains(entity_id))
 }
 
 /// Whether a collider is one of this creature's own hitboxes. Read from the
@@ -319,9 +331,10 @@ fn projectile_ray_cast(
 
 #[cfg(test)]
 mod tests {
-    use super::{hitbox_belongs_to_entity, projectile_ray_cast};
+    use super::{hitbox_belongs_to_entity, is_player_fired, projectile_ray_cast};
     use crate::creature::{HitBoxType, RuntimePropHitBox};
     use crate::physics::PhysicsWorld;
+    use crate::runtime_props::RuntimePropPlayerFiredProjectile;
     use cgmath::{Quaternion, point3, vec3};
     use dark::SCALE_FACTOR;
     use dark::properties::PropCreature;
@@ -643,6 +656,37 @@ mod tests {
             Some(corpse),
             "a body with no hitboxes is hit on its own collider, as it always was",
         );
+    }
+
+    /// A VR shot carries no camera origin, so before this marker its ray kept
+    /// `PLAYER` in the mask. Held in close to the body - a natural chest or hip
+    /// hold - the muzzle sits inside the player's own capsule, and a solid
+    /// raycast reports the containing shape as a hit at distance 0: the shot
+    /// spanged on the shooter instead of leaving the weapon, spending psi/ammo
+    /// and damaging the player. What excludes the player is now this marker,
+    /// set by `create_projectile` in BOTH presentations, rather than the
+    /// incidental presence of a camera origin.
+    ///
+    /// This asserts only the predicate. The containment itself is not
+    /// reproducible in a bare `PhysicsWorld` - the sibling raycast tests below
+    /// pass with `can_hit_player` either way, so they never covered it - so the
+    /// behavioural regression test is the earth.mis e2e
+    /// (`earth-psi-cryo-self-hit.e2e.test.ts`), which fires the mission's own
+    /// psi amp from a natural hold and requires the bolt to survive.
+    #[test]
+    fn a_projectile_from_create_projectile_is_marked_player_fired() {
+        let mut world = World::new();
+        let projectile = world.add_entity(RuntimePropPlayerFiredProjectile);
+        assert!(is_player_fired(&world, projectile));
+    }
+
+    /// The counterpart gate: an unmarked projectile (AI, turret) still hits the
+    /// player, so the fix cannot be "never hit the player".
+    #[test]
+    fn an_unmarked_projectile_is_not_player_fired() {
+        let mut world = World::new();
+        let ai_projectile = world.add_entity(());
+        assert!(!is_player_fired(&world, ai_projectile));
     }
 
     #[test]
