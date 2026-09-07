@@ -12,7 +12,7 @@ import { teleportVerified } from "./helpers/teleport.js";
 // the current level and the cost of the next level from the gamesys cost
 // tables (STATCOST 3/8/15/30/50 etc.). Only stats with live effects may be
 // bought: Strength expands the backpack, Endurance raises maximum HP,
-// Cybernetics feeds the hacking path, and storage-only stats refuse without
+// Cybernetics feeds the hacking path, and capped stats refuse without
 // spending modules.
 //
 // Negative-first: on the C1 base, frobbing the Stats Trainer hits the
@@ -38,7 +38,7 @@ test(
 
     // Provision only currency/items; purchases still go through the real MFD,
     // button messages, effect queue, cost table, and live player properties.
-    const funded = await game.player.setStats({ cyber_modules: 29 });
+    const funded = await game.player.setStats({ cyber_modules: 29, agility: 6 });
     assert.equal(funded.cyber_modules, 29);
     assert.equal(funded.endurance, 1, "the regression starts at Endurance 1");
     await Promise.all([
@@ -86,8 +86,8 @@ test(
     await game.screenshot("trainer-panel-open.png");
 
     // --- The panel lists labeled rows with current level + cost from the
-    // gamesys STATCOST table (Endurance 1 -> 2 costs 3). Unsupported stats
-    // remain listed but clearly unavailable instead of quoting a price. ---
+    // gamesys STATCOST table (Endurance 1 -> 2 costs 3). Capped stats
+    // remain listed at MAX instead of quoting another price. ---
     const textEl = (needle: string, els: UiElement[]) =>
       els.find((e) => e.kind === "text" && e.text?.includes(needle));
     const els = opened.active_panel.elements;
@@ -101,10 +101,10 @@ test(
         els.filter((e) => e.kind === "text").map((e) => e.text),
       )}`,
     );
-    assert.ok(textEl("unavailable", els), "storage-only stats are marked unavailable");
+    assert.ok(textEl("lvl 6 (MAX)", els), "capped Agility is marked MAX");
     assert.ok(textEl("modules: 29", els), "panel shows the module pool");
 
-    // --- A storage-only stat refuses without taking currency. The same
+    // --- A capped stat refuses without taking currency. The same
     // machine then remains usable for a supported purchase. ---
     const rowButton = (label: string, from: UiElement[]) => {
       const el = from.find((e) => e.kind === "button" && e.label === label);
@@ -130,7 +130,7 @@ test(
     );
     let refreshed = await game.ui.state();
     assert.ok(
-      textEl("Upgrade unavailable", refreshed.active_panel!.elements),
+      textEl("Already at maximum", refreshed.active_panel!.elements),
       "the panel explains the refusal",
     );
 

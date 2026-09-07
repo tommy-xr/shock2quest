@@ -241,9 +241,9 @@ dev_params! {
     /// something. Inert while the camera is attached (the two poses are the
     /// same pose).
     FREE_CAMERA_CULL_FROM_CAMERA = bool("free_camera_cull", "Cull from cam", false),
-    /// How fast the free camera flies, in the player's own speed units - the
-    /// default IS [`PLAYER_MOVE_SPEED`], so "walking pace" cannot drift from
-    /// what walking actually is. These are pre-scale SS2 units, not world
+    /// How fast the free camera flies, in the player's own speed units. Its
+    /// default is the established Agility-1 rate [`PLAYER_MOVE_SPEED`]; stat
+    /// upgrades do not change developer flight. These are SS2 units, not world
     /// units per second: the consumer divides by `dark::SCALE_FACTOR` (2.5)
     /// exactly as the player's locomotion does, so the default 25 travels 10
     /// world units a second, not 25. The range spans a crawl to a fast survey of a

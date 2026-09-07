@@ -62,6 +62,47 @@ pub struct SkillParams {
     pub organ_damage: f32,
 }
 
+/// Retail `GAMEPARAM` (`sGameParams`): 19 packed little-endian floats.
+/// Agility consumes `speed[AGI-1]`; the other authored fields remain data only.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GameParams {
+    pub throw_power: f32,
+    pub bash: [f32; 8],
+    pub speed: [f32; 8],
+    pub overlay_distance: f32,
+    pub frob_distance: f32,
+}
+
+impl GameParams {
+    pub fn read<T: io::Read + io::Seek>(
+        table_of_contents: &ChunkFileTableOfContents,
+        reader: &mut T,
+    ) -> Option<Self> {
+        let chunk = table_of_contents.get_chunk("GAMEPARAM".to_owned())?;
+        if chunk.length < 76 {
+            return None;
+        }
+        reader.seek(io::SeekFrom::Start(chunk.offset)).ok()?;
+        Self::read_record(reader)
+    }
+
+    fn read_record<T: io::Read>(reader: &mut T) -> Option<Self> {
+        let throw_power = reader.read_f32::<LittleEndian>().ok()?;
+        let mut bash = [0.0; 8];
+        let mut speed = [0.0; 8];
+        for value in bash.iter_mut().chain(speed.iter_mut()) {
+            *value = reader.read_f32::<LittleEndian>().ok()?;
+        }
+        Some(Self {
+            throw_power,
+            bash,
+            speed,
+            overlay_distance: reader.read_f32::<LittleEndian>().ok()?,
+            frob_distance: reader.read_f32::<LittleEndian>().ok()?,
+        })
+    }
+}
+
 fn read_table<T: io::Read + io::Seek, const COLS: usize, const ROWS: usize>(
     table_of_contents: &ChunkFileTableOfContents,
     reader: &mut T,
@@ -169,7 +210,23 @@ impl SkillParams {
 mod tests {
     use std::io::Cursor;
 
-    use super::SkillParams;
+    use super::{GameParams, SkillParams};
+
+    #[test]
+    fn parses_game_params_speed_after_throw_and_bash_fields() {
+        let values = [
+            10.0_f32, 0.005, 0.0045, 0.004, 0.0035, 0.003, 0.0025, 0.002, 0.0015, 1.2, 1.3, 1.4,
+            1.5, 1.6, 1.7, 1.85, 2.0, 175.0, 50.0,
+        ];
+        let bytes: Vec<u8> = values.into_iter().flat_map(f32::to_le_bytes).collect();
+        let params = GameParams::read_record(&mut Cursor::new(&bytes)).unwrap();
+        assert_eq!(params.speed, [1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.85, 2.0]);
+        assert_eq!(params.bash[7], 0.0015);
+        assert_eq!(params.frob_distance, 50.0);
+        for length in 0..bytes.len() {
+            assert!(GameParams::read_record(&mut Cursor::new(&bytes[..length])).is_none());
+        }
+    }
 
     #[test]
     fn parses_packed_retail_skill_params_layout() {
