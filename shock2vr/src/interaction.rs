@@ -40,6 +40,15 @@ pub struct InteractionContext<'a> {
     /// Eye height above `player_pos` in SS2 units - crouch-aware, so the flat
     /// controller's shot/viewmodel origin follows the actual camera.
     pub eye_height: f32,
+    /// This frame's body anchors (VR only). Resolved by `mission_core`, which
+    /// owns the gestures they drive; the hands only need it to draw the belt
+    /// card.
+    pub body_frame: Option<crate::body_frame::BodyFrame>,
+    /// What each hand's body anchor offers this frame, indexed by
+    /// `vr_config::hand_slot`. `Some` claims the hand: its light shows the
+    /// anchor's eligibility and its grip belongs to the anchor gesture rather
+    /// than to whatever its ray crossed.
+    pub anchor_affordance: [Option<crate::hand_affordance::HandAffordance>; 2],
 }
 
 /// Read-only per-frame inputs for the VR hand-climb resolve. Separate from
@@ -185,6 +194,9 @@ pub struct VrInteraction {
     glove_renderer: RefCell<Option<Option<GloveRenderer>>>,
     /// Which hands hold a climbing hold, and which one moves the body.
     hand_climb: crate::vr_climb::HandClimb,
+    /// This frame's body anchors, for drawing the belt card. Written by
+    /// `update`, read by `render` (which has no context of its own).
+    body_frame: std::cell::Cell<Option<crate::body_frame::BodyFrame>>,
     /// The grip each hand's last render fitted, indexed by
     /// `vr_config::hand_slot`. Written where the fit is solved (render, which
     /// owns the glove and the asset cache) and read by the debug readout.
@@ -198,6 +210,7 @@ impl VrInteraction {
             right_hand: VirtualHand::new(Handedness::Right),
             glove_renderer: RefCell::new(None),
             hand_climb: crate::vr_climb::HandClimb::default(),
+            body_frame: std::cell::Cell::new(None),
             fitted_grips: RefCell::new([None, None]),
         }
     }
@@ -258,6 +271,7 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
+        self.body_frame.set(ctx.body_frame);
         let left_held_entity = self.left_hand.get_held_entity();
         let (right_hand, mut right_msgs) = VirtualHand::update(
             &self.right_hand,
@@ -267,6 +281,7 @@ impl PlayerInteraction for VrInteraction {
             ctx.player_rotation,
             &ctx.input.right_hand,
             left_held_entity,
+            ctx.anchor_affordance[crate::vr_config::hand_slot(Handedness::Right)],
         );
         self.right_hand = right_hand;
 
@@ -281,6 +296,7 @@ impl PlayerInteraction for VrInteraction {
             ctx.player_rotation,
             &ctx.input.left_hand,
             right_held_entity,
+            ctx.anchor_affordance[crate::vr_config::hand_slot(Handedness::Left)],
         );
         self.left_hand = left_hand;
 
@@ -569,6 +585,8 @@ mod tests {
             player_rotation: identity(),
             head_rotation: identity(),
             eye_height: 1.04,
+            body_frame: None,
+            anchor_affordance: [None, None],
         }
     }
 

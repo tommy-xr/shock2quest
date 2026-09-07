@@ -1650,6 +1650,18 @@ pub struct MissionCore {
     /// its own squeeze again, or the eventual release would not drop it.
     vr_squeeze_swallow: [bool; 2],
 
+    /// The player's body anchors (belt, shoulders) and the gestures the hands
+    /// make at them. Runtime state: the frame is re-derived from the live head
+    /// each tick, and what a stow *left behind* lives in `QuestInfo`.
+    body_frame: crate::body_frame::BodyFrameTracker,
+    anchor_gestures: crate::body_frame::AnchorGestures,
+    /// This frame's resolved anchors, for the belt card and the debug readout.
+    body_anchors: Option<crate::body_frame::BodyFrame>,
+    /// Which hand, if either, has the belt card off its hip. The card is
+    /// presentation - derived from `QuestInfo`'s collected credentials each
+    /// frame - so nothing here needs saving: a reload puts it back on the belt.
+    belt_card_hand: Option<crate::vr_config::Handedness>,
+
     /// The trigger-safe decision in flight for each hand (indexed by
     /// [`hand_slot`]), or `None` when that hand's trigger is released. The
     /// squeeze counterpart above latches because grabbing is *level*-triggered;
@@ -2568,6 +2580,10 @@ impl MissionCore {
             vr_trigger_swallow: false,
             vr_use_mode_pointer: None,
             vr_squeeze_swallow: [false; 2],
+            body_frame: crate::body_frame::BodyFrameTracker::default(),
+            anchor_gestures: crate::body_frame::AnchorGestures::default(),
+            body_anchors: None,
+            belt_card_hand: None,
             vr_trigger_safe_latch: [None; 2],
             vr_clip_insert_engaged: [false; 2],
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
@@ -3634,7 +3650,7 @@ impl MissionCore {
         let (collect, store): (Vec<_>, Vec<_>) = strip_deposits.iter().partition(|entity_id| {
             crate::scripts::script_util::is_always_collected(&self.world, **entity_id)
         });
-        let collect: Vec<_> = collect.into_iter().copied().collect();
+        let mut collect: Vec<_> = collect.into_iter().copied().collect();
         // The cell the depositing hand's ray was over, for a stored item -
         // whichever on-strip slot actually held it. `None` (a ray gone off
         // the strip between resolving `strip_cell` and here, or generally
@@ -3652,7 +3668,7 @@ impl MissionCore {
         // backpack can actually take it - a release is never suppressed into an
         // item that lands nowhere. A collected one never enters the pack (its
         // Frob awards and destroys it), so it is claimed either way.
-        let store: Vec<(EntityId, Option<(usize, usize)>)> =
+        let mut store: Vec<(EntityId, Option<(usize, usize)>)> =
             if backpack_accepts_deposit(&self.world) {
                 store
                     .into_iter()
@@ -3661,6 +3677,112 @@ impl MissionCore {
             } else {
                 Vec::new()
             };
+
+        // The player's own body: where the belt and shoulders are this frame,
+        // and what each hand's grip means there. VR only - flat has no tracked
+        // hand to reach with. Resolved BEFORE the hands update, like the strip
+        // deposit above and for the same reason: the release a gesture claims
+        // must be exactly the release `VirtualHand` is about to perform.
+        let body_frame =
+            (game_options.presentation_mode == crate::PresentationMode::Vr).then(|| {
+                self.body_frame.update(&crate::body_frame::BodyFrameInput {
+                    pawn_position: player_pos,
+                    pawn_rotation: player_rot,
+                    head_position: input_context.head.position,
+                    head_rotation: input_context.head.rotation,
+                    pawn_above_floor: crate::physics::player_center_above_floor(
+                        self.player_handle.is_crouched(),
+                    ),
+                    dt: time.elapsed.as_secs_f32(),
+                })
+            });
+        self.body_anchors = body_frame;
+
+        let mut anchor_affordance = [None, None];
+        let mut anchor_gestures = Vec::new();
+        if let Some(frame) = body_frame {
+            let can_stow = backpack_accepts_deposit(&self.world);
+            let can_draw = self.stowed_weapon_to_draw().is_some();
+            let has_card = self
+                .world
+                .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+                .is_ok_and(|quests| quests.has_key_cards());
+            for hand in [
+                crate::vr_config::Handedness::Left,
+                crate::vr_config::Handedness::Right,
+            ] {
+                let slot = hand_slot(hand);
+                let hand_input = match hand {
+                    crate::vr_config::Handedness::Left => &hands_input.left_hand,
+                    crate::vr_config::Handedness::Right => &hands_input.right_hand,
+                };
+                let input = crate::body_frame::HandAnchorInput {
+                    hand,
+                    squeeze: hand_input.squeeze_value,
+                    anchor: frame.anchor_at(crate::virtual_hand::hand_world_position(
+                        player_pos,
+                        player_rot,
+                        hand_input.position,
+                    )),
+                    holding: [left_hand_held, right_hand_held][slot].is_some(),
+                    holds_card: self.belt_card_hand == Some(hand),
+                    can_stow,
+                    can_draw,
+                    has_card,
+                };
+                anchor_gestures.extend(self.anchor_gestures.update(&input));
+                anchor_affordance[slot] = self.anchor_gestures.affordance(&input);
+            }
+        }
+        for gesture in &anchor_gestures {
+            match *gesture {
+                crate::body_frame::AnchorGesture::Stow(hand) => {
+                    // Over the shoulder is the backpack. Claimed exactly the
+                    // way a strip deposit is, so one rewrite covers both.
+                    if let Some(entity_id) = [left_hand_held, right_hand_held][hand_slot(hand)] {
+                        if crate::scripts::script_util::is_always_collected(&self.world, entity_id)
+                        {
+                            collect.push(entity_id);
+                        } else {
+                            store.push((entity_id, None));
+                            let stowed_class =
+                                crate::virtual_hand::is_wieldable_weapon(&self.world, entity_id)
+                                    .then(|| {
+                                        crate::scripts::script_util::entity_class_template_id(
+                                            &self.world,
+                                            entity_id,
+                                        )
+                                    })
+                                    .flatten();
+                            if let Some(class_template_id) = stowed_class {
+                                if let Ok(mut quests) = self
+                                    .world
+                                    .borrow::<shipyard::UniqueViewMut<crate::quest_info::QuestInfo>>(
+                                    )
+                                {
+                                    quests.set_last_stowed_weapon(Some(class_template_id));
+                                }
+                            }
+                        }
+                    }
+                }
+                crate::body_frame::AnchorGesture::Draw(hand) => {
+                    if let Some(entity_id) = self.stowed_weapon_to_draw() {
+                        effects.push(Effect::GrabEntity {
+                            entity_id,
+                            hand,
+                            current_parent_id: None,
+                        });
+                    }
+                }
+                crate::body_frame::AnchorGesture::TakeCard(hand) => {
+                    self.belt_card_hand = Some(hand);
+                }
+                crate::body_frame::AnchorGesture::ReturnCard(_) => {
+                    self.belt_card_hand = None;
+                }
+            }
+        }
 
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
@@ -3672,6 +3794,8 @@ impl MissionCore {
             player_rotation: player_rot,
             head_rotation: input_context.head.rotation,
             eye_height: crate::player_eye_height_for(self.player_handle.is_crouched()),
+            body_frame,
+            anchor_affordance,
         });
         rewrite_strip_release(&mut interaction_msgs, &store, &collect);
         self.process_virtual_hand_effects(asset_cache, interaction_msgs);
@@ -10390,6 +10514,20 @@ impl MissionCore {
 
     fn is_vr_melee_weapon(&self, entity_id: EntityId) -> bool {
         is_vr_melee_weapon(&self.world, entity_id)
+    }
+
+    /// The weapon an empty grip at a shoulder would draw: the last one stowed
+    /// there, if the player still carries it and is not already holding it.
+    /// `None` (nothing stowed, spent, or dropped since) is what makes the
+    /// shoulder pre-light amber instead of green.
+    fn stowed_weapon_to_draw(&self) -> Option<EntityId> {
+        let class_template_id = self
+            .world
+            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+            .ok()?
+            .last_stowed_weapon()?;
+        crate::virtual_hand::carried_weapon_by_class(&self.world, class_template_id)
+            .filter(|entity_id| !self.interaction.is_holding(*entity_id))
     }
 
     /// Undo a computed grip offset before a released item becomes a loose prop
