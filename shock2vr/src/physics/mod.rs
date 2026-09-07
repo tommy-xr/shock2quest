@@ -6217,6 +6217,72 @@ impl PhysicsWorld {
         (collision_events, character_body)
     }
 
+    /// Move a host-bound panel just far enough outward to clear neighboring
+    /// geometry across its full footprint. The center must have a clear path
+    /// to the bounded search start, so this cannot relocate a panel through a
+    /// wall into another room. A blocked search leaves its authored pose alone.
+    pub fn clear_world_panel_position(
+        &self,
+        position: Vector3<f32>,
+        facing: Quaternion<f32>,
+        size: cgmath::Vector2<f32>,
+        entity_filter: &dyn Fn(EntityId) -> bool,
+    ) -> Vector3<f32> {
+        const MAX_OUTSET: f32 = 0.5;
+        const SKIN: f32 = 0.02;
+        if !size.x.is_finite() || !size.y.is_finite() || size.x <= 0.0 || size.y <= 0.0 {
+            return position;
+        }
+        let filter_entity = |_handle: ColliderHandle, collider: &Collider| {
+            EntityId::from_inner(collider.user_data as u64).is_none_or(entity_filter)
+        };
+        let groups = InternalCollisionGroups::ENTITIES
+            | InternalCollisionGroups::SELECTABLE
+            | InternalCollisionGroups::WORLD
+            | InternalCollisionGroups::RAYCAST;
+        let filter = QueryFilter::new()
+            .exclude_sensors()
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::ALL.bits.into(),
+                groups.bits.into(),
+                Default::default(),
+            ))
+            .predicate(&filter_entity);
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            filter,
+        );
+        let rotation = quat_to_nquat(facing);
+        let outward = rotation * -Vector::z();
+        let center = vec_to_nvec(position);
+        let start = center + outward * MAX_OUTSET;
+        let shape = Cuboid::new(vector![size.x / 2.0, size.y / 2.0, SKIN]);
+        let start_pose = Isometry::from_parts(Translation::from(start), rotation);
+        if queries.intersect_shape(start_pose, &shape).next().is_some()
+            || queries
+                .cast_ray(&Ray::new(Point::from(center), outward), MAX_OUTSET, true)
+                .is_some()
+        {
+            return position;
+        }
+        let Some((_, hit)) = queries.cast_shape(
+            &start_pose,
+            &-outward,
+            &shape,
+            rapier3d::parry::query::ShapeCastOptions {
+                max_time_of_impact: MAX_OUTSET,
+                target_distance: SKIN,
+                stop_at_penetration: true,
+                compute_impact_geometry_on_penetration: true,
+            },
+        ) else {
+            return position;
+        };
+        nvec_to_cgmath(center + outward * (MAX_OUTSET - hit.time_of_impact).max(0.0))
+    }
+
     pub fn ray_cast2(
         &self,
         start_point: Point3<f32>,
@@ -8112,6 +8178,89 @@ mod tests {
             EntityId::from_inner(1001).unwrap(),
         );
         (world, player)
+    }
+
+    #[test]
+    fn world_panel_clearance_respects_host_orientation_and_keeps_clear_poses() {
+        use cgmath::{Rotation, Rotation3, vec2};
+        for yaw in [0.0, 90.0] {
+            let (mut world, mut player) = world_with_floor();
+            let facing = Quaternion::from_angle_y(cgmath::Deg(yaw));
+            let authored = facing.rotate_vector(vec3(0.0, 3.0, -0.1));
+            let size = vec2(0.752, 1.184);
+            step(&mut world, &mut player, 1);
+            assert_eq!(
+                world.clear_world_panel_position(authored, facing, size, &|_| true),
+                authored
+            );
+            world.add_kinematic(
+                EntityId::from_inner(2200).unwrap(),
+                facing.rotate_vector(vec3(-0.32, 3.0, -0.12)),
+                facing,
+                vec3(0.0, 0.0, 0.0),
+                vec3(0.12, 2.0, 0.2),
+                CollisionGroup::entity(),
+                false,
+            );
+            step(&mut world, &mut player, 1);
+            let placed = world.clear_world_panel_position(authored, facing, size, &|_| true);
+            let local = facing.conjugate().rotate_vector(placed);
+            assert!(
+                local.z < -0.22 && local.z > -0.3,
+                "minimal outward clearance: {local:?}"
+            );
+            assert!(local.x.abs() < 0.001 && (local.y - 3.0).abs() < 0.001);
+            // Left and right controls remain reachable by real world rays.
+            for x in [-0.32, 0.32] {
+                let start = facing.rotate_vector(vec3(0.0, 3.0, -1.0));
+                let target = placed + facing.rotate_vector(vec3(x, 0.0, 0.0));
+                assert!(
+                    world
+                        .ray_cast2(
+                            Point3::new(start.x, start.y, start.z),
+                            target - start,
+                            (target - start).magnitude(),
+                            InternalCollisionGroups::ENTITY,
+                            None,
+                            true
+                        )
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn world_panel_clearance_never_crosses_an_intervening_wall_or_exceeds_its_bound() {
+        use cgmath::vec2;
+        for (center, size) in [
+            (vec3(0.0, 3.0, -0.35), vec3(2.0, 2.0, 0.1)),
+            // Only the left edge covers the bounded search start; the center
+            // ray is clear but no full panel can fit within the allowed inset.
+            (vec3(-0.32, 3.0, -0.6), vec3(0.12, 2.0, 0.4)),
+        ] {
+            let (mut world, mut player) = world_with_floor();
+            world.add_kinematic(
+                EntityId::from_inner(2201).unwrap(),
+                center,
+                identity_quat(),
+                vec3(0.0, 0.0, 0.0),
+                size,
+                CollisionGroup::entity(),
+                false,
+            );
+            step(&mut world, &mut player, 1);
+            let authored = vec3(0.0, 3.0, -0.1);
+            assert_eq!(
+                world.clear_world_panel_position(
+                    authored,
+                    identity_quat(),
+                    vec2(0.752, 1.184),
+                    &|_| true
+                ),
+                authored
+            );
+        }
     }
 
     fn step(world: &mut PhysicsWorld, player: &mut PlayerHandle, frames: usize) {

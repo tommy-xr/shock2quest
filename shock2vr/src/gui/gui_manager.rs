@@ -253,6 +253,15 @@ impl GuiManager {
         offset: Vector3<f32>,
         components: Vec<GuiComponentRenderInfo>,
     ) {
+        let authored = get_position_from_transform(world, parent_entity, offset);
+        let facing = get_rotation_from_transform(world, parent_entity);
+        // World presentation boundary only: shared canvas pixels and widget
+        // layout stay unchanged. Resolve one full-panel pose for both drawing
+        // and its clickable proxy, using the same host exclusion as hand rays.
+        let is_not_host =
+            |entity| crate::util::resolve_proxy_entity(world, entity) != parent_entity;
+        let position =
+            physics.clear_world_panel_position(authored.to_vec(), facing, world_size, &is_not_host);
         if let std::collections::hash_map::Entry::Vacant(e) = self.handle_to_instance.entry(handle)
         {
             // Add proxy entity to world
@@ -264,12 +273,10 @@ impl GuiManager {
             self.entity_id_to_proxy_entity_id.insert(parent_entity, ent);
 
             log_entity(world, parent_entity);
-            let pos = get_position_from_transform(world, parent_entity, offset);
-            let facing = get_rotation_from_transform(world, parent_entity);
             // Create physics for this entity
             let physics_handle = physics.add_kinematic(
                 ent,
-                pos.to_vec(),
+                position,
                 facing,
                 vec3(0.0, 0.0, 0.0),
                 vec3(world_size.x, world_size.y, 0.0),
@@ -303,9 +310,7 @@ impl GuiManager {
                     vec3(world_size.x, world_size.y, 0.0),
                 );
             }
-            let pos = get_position_from_transform(world, parent_entity, offset);
-            let facing = get_rotation_from_transform(world, parent_entity);
-            physics.set_position_rotation(instance.physics_handle, pos.to_vec(), facing)
+            physics.set_position_rotation(instance.physics_handle, position, facing)
         }
     }
 
@@ -477,6 +482,84 @@ mod tests {
     use shipyard::{EntitiesView, Get};
 
     use super::*;
+
+    #[test]
+    fn world_panel_clears_trim_across_its_full_canvas() {
+        let mut world = World::new();
+        let parent = world.add_entity((RuntimePropTransform(Matrix4::from_scale(1.0)),));
+        let trim = world.add_entity(());
+        let player_entity = world.add_entity(());
+        let mut physics = PhysicsWorld::new();
+        let mut player = physics.create_player(vec3(10.0, 10.0, 10.0), player_entity);
+        physics.add_kinematic(
+            trim,
+            vec3(-0.32, 0.0, -0.12),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.12, 2.0, 0.2),
+            CollisionGroup::entity(),
+            false,
+        );
+        // A normal keypad's own mounting collider reaches the authored
+        // panel plane; it is excluded just like it is from controller rays.
+        physics.add_kinematic(
+            parent,
+            vec3(0.0, 0.0, 0.0),
+            Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            vec3(0.0, 0.0, 0.0),
+            vec3(0.25, 0.5, 0.2),
+            CollisionGroup::entity(),
+            false,
+        );
+        physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+        let mut scripts = ScriptWorld::new();
+        let mut id_to_physics = HashMap::new();
+        let mut manager = GuiManager::new();
+        let handle = GuiHandle::new();
+        manager.update_ui(
+            &mut world,
+            &mut physics,
+            &mut scripts,
+            &mut id_to_physics,
+            handle,
+            parent,
+            vec2(188.0, 296.0),
+            vec2(0.752, 1.184),
+            vec3(0.0, 0.0, -0.1),
+            Vec::new(),
+        );
+        let first = physics
+            .get_position(manager.handle_to_instance[&handle].physics_handle)
+            .unwrap();
+        // Later GUI updates see their own collider in the broad phase. It
+        // must not push the panel farther out on each frame.
+        for _ in 0..3 {
+            physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+            manager.update_ui(
+                &mut world,
+                &mut physics,
+                &mut scripts,
+                &mut id_to_physics,
+                handle,
+                parent,
+                vec2(188.0, 296.0),
+                vec2(0.752, 1.184),
+                vec3(0.0, 0.0, -0.1),
+                Vec::new(),
+            );
+        }
+        let instance = manager.handle_to_instance.get(&handle).unwrap();
+        let position = physics.get_position(instance.physics_handle).unwrap();
+        assert!(
+            position.z < -0.22,
+            "left controls must clear the trim: {position:?}"
+        );
+        assert_eq!(position, first, "own proxy must not cause placement drift");
+        assert_eq!(position.x, 0.0);
+        assert_eq!(position.y, 0.0);
+        assert_eq!(instance.canvas_size_px, vec2(188.0, 296.0));
+        assert_eq!(instance.world_size, vec2(0.752, 1.184));
+    }
 
     #[test]
     fn live_panel_resize_updates_render_input_and_collider_geometry() {
