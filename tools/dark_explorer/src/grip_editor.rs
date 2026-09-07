@@ -81,7 +81,8 @@ impl CurlPoseEditor {
                 }
             });
         });
-        ui.add(egui::Slider::new(&mut self.preview, 0.0..=1.0).text(preview_label));
+        ui.label(preview_label);
+        ui.add(egui::Slider::new(&mut self.preview, 0.0..=1.0));
     }
 }
 
