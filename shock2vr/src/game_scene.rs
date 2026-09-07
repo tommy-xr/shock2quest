@@ -400,6 +400,22 @@ pub struct DebugHandAffordances {
     pub right_model: Option<String>,
 }
 
+/// The player's body anchors, and what hangs off them: where a hand has to go
+/// to reach the belt or a shoulder, what a shoulder would draw, and where the
+/// belt card is.
+#[derive(Debug, Serialize, Clone)]
+pub struct DebugBodyFrame {
+    pub belt: [f32; 3],
+    pub left_shoulder: [f32; 3],
+    pub right_shoulder: [f32; 3],
+    /// The weapon an empty grip at a shoulder would draw right now, by name -
+    /// `null` when nothing was stowed, or it is gone/already in hand.
+    pub last_stowed_weapon: Option<String>,
+    /// Where the belt card is: "belt", "left", "right", or `null` while the
+    /// player has collected no credential.
+    pub belt_card: Option<&'static str>,
+}
+
 /// A hand's fitted grip: the family the fit solved in, and the curl it left
 /// each finger at (0 = open, 1 = closed fist), before the trigger adds its own.
 #[derive(Debug, Serialize, Clone, Copy)]
@@ -903,6 +919,12 @@ pub trait DebuggableScene {
     /// Each hand's affordance (see [`DebugHandAffordances`]). Scenes without a
     /// player report nothing.
     fn player_hand_affordances(&self) -> Option<DebugHandAffordances> {
+        None
+    }
+
+    /// The player's body anchors (see [`DebugBodyFrame`]). `None` outside VR,
+    /// and in scenes without a player.
+    fn player_body_frame(&self) -> Option<DebugBodyFrame> {
         None
     }
 

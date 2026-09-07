@@ -671,6 +671,24 @@ export interface PlayerSnapshot {
   /** What each VR hand could do with whatever it is pointing at - the state
    * that lights the glove and pre-shapes its fingers. Flat reports "None". */
   hand_affordance: HandAffordances;
+
+  /** The player's body anchors (belt, shoulders) and what hangs off them.
+   * Null outside VR. */
+  body_frame: BodyFrame | null;
+}
+
+/** Where the player's belt and shoulders are, and what they hold
+ * (GET /v1/info -> player.body_frame). */
+export interface BodyFrame {
+  /** World position of the belt-card anchor on the left hip. */
+  belt: [number, number, number];
+  left_shoulder: [number, number, number];
+  right_shoulder: [number, number, number];
+  /** Name of the weapon an empty grip at a shoulder would draw, or null when
+   * nothing was stowed (or it is gone / already in hand). */
+  last_stowed_weapon: string | null;
+  /** Where the belt card is, or null while no credential has been collected. */
+  belt_card: "belt" | "left" | "right" | null;
 }
 
 /** Per-hand affordance names in the /v1/info readout. */

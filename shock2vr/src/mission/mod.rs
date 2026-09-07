@@ -379,6 +379,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.player_hand_affordances()
     }
 
+    fn player_body_frame(&self) -> Option<crate::game_scene::DebugBodyFrame> {
+        self.mission_core.player_body_frame()
+    }
+
     fn teleport_player(&mut self, position: Vector3<f32>) -> Result<(), String> {
         self.mission_core.teleport_player(position)
     }

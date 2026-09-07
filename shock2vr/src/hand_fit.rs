@@ -19,6 +19,7 @@
 use cgmath::{EuclideanSpace, InnerSpace, Point3, Vector3};
 
 use crate::hand_pose::{Finger, FingerAmounts};
+use crate::util::meters;
 
 /// A capsule along one phalanx, in hand space (world units).
 #[derive(Debug, Clone, Copy)]
@@ -125,11 +126,6 @@ impl GripFamily {
             GripFamily::Trigger => "trigger",
         }
     }
-}
-
-/// Metres expressed in the world units the hand frame is measured in.
-const fn meters(m: f32) -> f32 {
-    m / crate::METERS_PER_WORLD_UNIT
 }
 
 /// Thinner than this in its smallest dimension and an item is pinched rather

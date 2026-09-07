@@ -53,6 +53,14 @@ pub struct QuestInfo {
     /// Campaign-wide research progress, keyed by stable gamesys archetype.
     #[serde(default)]
     research: ResearchState,
+    /// The gamesys weapon archetype of the last weapon the player stowed over
+    /// a shoulder, so an empty grip there draws it back
+    /// (`body_frame::AnchorGesture::Draw`). A canonical *class* template id
+    /// rather than an entity: the concrete weapon is re-found in the pack with
+    /// `carried_weapon_by_class`, which survives save/load and level
+    /// transitions where a runtime entity id would not.
+    #[serde(default)]
+    last_stowed_weapon: Option<i32>,
 }
 
 impl QuestInfo {
@@ -65,6 +73,7 @@ impl QuestInfo {
             collected_logs: Vec::new(),
             explored_maps: HashMap::new(),
             research: ResearchState::default(),
+            last_stowed_weapon: None,
         }
     }
 
@@ -172,6 +181,21 @@ impl QuestInfo {
 
     pub fn add_key_card(&mut self, key_card: KeyCard) {
         self.key_cards.push(key_card)
+    }
+
+    /// Whether the player carries any credential at all - what decides whether
+    /// the belt card exists (it stands in for the whole collected set).
+    pub fn has_key_cards(&self) -> bool {
+        !self.key_cards.is_empty()
+    }
+
+    /// The weapon archetype an empty grip at a shoulder draws back.
+    pub fn last_stowed_weapon(&self) -> Option<i32> {
+        self.last_stowed_weapon
+    }
+
+    pub fn set_last_stowed_weapon(&mut self, class_template_id: Option<i32>) {
+        self.last_stowed_weapon = class_template_id;
     }
 
     pub fn can_unlock(&self, key_dst: &KeyCard) -> bool {

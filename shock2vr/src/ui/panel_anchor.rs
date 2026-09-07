@@ -18,7 +18,7 @@
 
 use std::time::Duration;
 
-use cgmath::{Deg, InnerSpace, Quaternion, Rad, Rotation, Vector3, vec3};
+use cgmath::{Deg, InnerSpace, Quaternion, Rad, Vector3, vec3};
 
 use crate::ui::{FRONTEND_PANEL_SIZE, WorldPanel, frontend_panel_distance};
 
@@ -47,43 +47,6 @@ pub struct PanelPlacement {
     pub forward: Vector3<f32>,
 }
 
-/// The head's facing flattened onto the horizontal plane.
-///
-/// Yaw only, so a panel built from it is vertical however the head is pitched
-/// or rolled. Two degenerate inputs are handled:
-///
-/// - the **zero quaternion**, which is what a runtime reports for an untracked
-///   pose (rotating by it silently returns the input vector), is treated as
-///   identity;
-/// - a **vertical** forward (looking straight down or up), where the horizontal
-///   projection vanishes. There the head's own **up** axis carries the yaw -
-///   but only with the right sign: looking at the floor the top of your head
-///   points where you are facing, while looking at the ceiling it points
-///   *behind* you, so the up axis is negated in that case. (Getting this wrong
-///   spawns the panel behind a player who entered the menu looking up.)
-fn horizontal_forward(head_rotation: Quaternion<f32>) -> Vector3<f32> {
-    let rotation = if head_rotation.magnitude2() < 1e-6 {
-        Quaternion::new(1.0, 0.0, 0.0, 0.0)
-    } else {
-        head_rotation.normalize()
-    };
-
-    let flatten = |v: Vector3<f32>| {
-        let flat = vec3(v.x, 0.0, v.z);
-        (flat.magnitude2() > 1e-6).then(|| flat.normalize())
-    };
-
-    let forward = rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
-    flatten(forward)
-        .or_else(|| {
-            let up = rotation.rotate_vector(vec3(0.0, 1.0, 0.0));
-            flatten(if forward.y > 0.0 { -up } else { up })
-        })
-        // Unreachable for a real rotation (forward and up cannot both be
-        // vertical), but a defined answer beats a NaN basis.
-        .unwrap_or_else(|| vec3(0.0, 0.0, -1.0))
-}
-
 /// The compass angle of a horizontal unit vector, and its inverse. Yaw is the
 /// only degree of freedom a placement has, so interpolating it directly is what
 /// makes a recenter turn the short way round at any angle - blending the
@@ -101,7 +64,7 @@ impl PanelPlacement {
     pub fn from_head(head_position: Vector3<f32>, head_rotation: Quaternion<f32>) -> Self {
         Self {
             head_position,
-            forward: horizontal_forward(head_rotation),
+            forward: crate::util::horizontal_forward(head_rotation),
         }
     }
 
@@ -123,7 +86,7 @@ impl PanelPlacement {
 
     /// Unsigned angle between this placement's yaw and a head facing.
     pub fn yaw_offset_degrees(&self, head_rotation: Quaternion<f32>) -> f32 {
-        let gaze = horizontal_forward(head_rotation);
+        let gaze = crate::util::horizontal_forward(head_rotation);
         let dot = self.forward.dot(gaze).clamp(-1.0, 1.0);
         Deg::from(Rad(dot.acos())).0
     }
@@ -149,8 +112,7 @@ fn lerp_placement(from: PanelPlacement, to: PanelPlacement, t: f32) -> PanelPlac
     // through the middle - exactly the teleport the ease exists to avoid.
     let from_yaw = yaw_of(from.forward);
     let mut delta = yaw_of(to.forward) - from_yaw;
-    let tau = std::f32::consts::TAU;
-    delta = delta - tau * (delta / tau).round();
+    delta = crate::util::wrap_pi(delta);
     PanelPlacement {
         head_position,
         forward: forward_of(from_yaw + delta * s),
@@ -265,6 +227,7 @@ impl FrontendPanelAnchor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cgmath::Rotation;
     use cgmath::{Rotation3, Zero};
 
     const FRAME: Duration = Duration::from_millis(1000 / 60);
@@ -313,7 +276,7 @@ mod tests {
         // and the fallback decides the answer. It must still be the yaw the
         // player is facing, not a fixed world axis.
         let straight_down = yaw(90.0) * Quaternion::from_angle_x(Deg(-90.0));
-        let forward = horizontal_forward(straight_down);
+        let forward = crate::util::horizontal_forward(straight_down);
         let expected = yaw(90.0).rotate_vector(vec3(0.0, 0.0, -1.0));
         assert!(
             (forward - expected).magnitude() < 1e-3,
@@ -328,7 +291,7 @@ mod tests {
         // fallback: looking up, the head's up axis points BEHIND the player,
         // so using it unsigned spawns the panel over their shoulder.
         let straight_up = yaw(90.0) * Quaternion::from_angle_x(Deg(90.0));
-        let forward = horizontal_forward(straight_up);
+        let forward = crate::util::horizontal_forward(straight_up);
         let expected = yaw(90.0).rotate_vector(vec3(0.0, 0.0, -1.0));
         assert!(
             (forward - expected).magnitude() < 1e-3,
@@ -338,7 +301,7 @@ mod tests {
 
     #[test]
     fn an_untracked_head_is_treated_as_identity() {
-        let forward = horizontal_forward(Quaternion::zero());
+        let forward = crate::util::horizontal_forward(Quaternion::zero());
         assert!((forward - vec3(0.0, 0.0, -1.0)).magnitude() < 1e-6);
     }
 

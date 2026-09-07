@@ -241,6 +241,7 @@ impl VirtualHand {
         pawn_rot: Quaternion<f32>,
         input_hand: &Hand,
         held_by_other_hand: Option<EntityId>,
+        anchor_claim: Option<crate::body_frame::HandClaim>,
     ) -> (VirtualHand, Vec<VirtualHandEffect>) {
         let handedness = prev.handedness;
         let hand_position = hand_world_position(pawn_pos, pawn_rot, input_hand.position);
@@ -259,8 +260,13 @@ impl VirtualHand {
 
                 // A full hand has nothing to reach for. Clear rather than decay:
                 // closing on an item is a hard transition, so the light must not
-                // keep advertising the grab for the hysteresis window.
-                let affordance = AffordanceTracker::default();
+                // keep advertising the grab for the hysteresis window. A body
+                // anchor is the exception - a hand carried to the shoulder must
+                // show whether opening it there will stow, before it opens.
+                let mut affordance = AffordanceTracker::default();
+                if let Some(crate::body_frame::HandClaim::Anchor(observed)) = anchor_claim {
+                    affordance.update(observed, 0.0, false);
+                }
 
                 // If we're holding onto something, but not grabbing, we can drop it
                 if input_hand.squeeze_value < 0.5 {
@@ -361,6 +367,7 @@ impl VirtualHand {
                 physics,
                 input_hand,
                 held_by_other_hand,
+                anchor_claim,
             ),
         };
 
@@ -483,6 +490,7 @@ fn handle_empty_hand_state(
     physics: &PhysicsWorld,
     input_hand: &Hand,
     held_by_other_hand: Option<EntityId>,
+    anchor_claim: Option<crate::body_frame::HandClaim>,
 ) -> (VirtualHand, Vec<VirtualHandEffect>) {
     let ray_start = point3(hand_position.x, hand_position.y, hand_position.z);
     let forward = hand_rotation.rotate_vector(vec3(0.0, 0.0, -1.0));
@@ -492,15 +500,29 @@ fn handle_empty_hand_state(
     // One resolved target per hand per frame: the glove's light and pre-shape
     // read the same hit the trigger and squeeze below act on, so the hand can
     // never advertise an action the input would refuse.
-    let (observed, preshape_weight) = match result.as_ref().and_then(|hit| {
-        hit.maybe_entity_id
-            .map(|entity_id| (entity_id, (hit.hit_point - ray_start).magnitude()))
-    }) {
-        Some((entity_id, distance)) => (
-            hand_affordance::classify(world, entity_id),
-            hand_affordance::preshape_weight(distance),
-        ),
-        None => (HandAffordance::None, 0.0),
+    //
+    // A hand at one of the player's own body anchors is the exception: it is
+    // reaching for the belt or a shoulder, not for whatever its ray happens to
+    // cross, so the anchor owns the light as well as the input this frame
+    // (`mission_core` runs the gesture the grip commits to). A hand *carrying*
+    // the belt card is claimed too, but keeps its own light: what it needs to
+    // show is the reader it is being held against.
+    let (observed, preshape_weight) = match anchor_claim {
+        Some(crate::body_frame::HandClaim::Anchor(observed)) => {
+            (observed, hand_affordance::preshape_weight(0.0))
+        }
+        Some(crate::body_frame::HandClaim::CarryingCard) | None => {
+            match result.as_ref().and_then(|hit| {
+                hit.maybe_entity_id
+                    .map(|entity_id| (entity_id, (hit.hit_point - ray_start).magnitude()))
+            }) {
+                Some((entity_id, distance)) => (
+                    hand_affordance::classify(world, entity_id),
+                    hand_affordance::preshape_weight(distance),
+                ),
+                None => (HandAffordance::None, 0.0),
+            }
+        }
     };
     let mut attempt_failed = false;
     // A refusal is one press, not one per frame the player keeps holding.
@@ -509,7 +531,10 @@ fn handle_empty_hand_state(
     let mut msgs = Vec::new();
     let mut last_frobbed_entity = frobbed_entity;
     let mut next_hand_state = HandState::Empty;
-    if input_hand.trigger_value > 0.5 || input_hand.a_value > 0.5 {
+    // A claimed hand reaches for the body, not through it: its grip belongs to
+    // the anchor gesture, so it must not also grab or frob what the ray found.
+    let claimed_by_anchor = anchor_claim.is_some();
+    if !claimed_by_anchor && (input_hand.trigger_value > 0.5 || input_hand.a_value > 0.5) {
         if let Some(RayCastResult {
             hit_point: _,
             hit_normal: _,
@@ -548,7 +573,7 @@ fn handle_empty_hand_state(
         last_frobbed_entity = None
     }
 
-    if input_hand.squeeze_value > 0.5 {
+    if !claimed_by_anchor && input_hand.squeeze_value > 0.5 {
         if let Some(RayCastResult {
             hit_point: _,
             hit_normal: _,
@@ -769,7 +794,7 @@ fn resolve_hit_proxy_entity(world: &World, ray_cast_result: RayCastResult) -> Ra
     }
 }
 
-fn interaction_ray_cast(
+pub(crate) fn interaction_ray_cast(
     physics: &PhysicsWorld,
     world: &World,
     ray_start: cgmath::Point3<f32>,
@@ -871,6 +896,7 @@ mod tests {
             Vector3::zero(),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             &input,
+            None,
             None,
         );
 
@@ -1175,6 +1201,7 @@ mod tests {
             &physics,
             &input,
             None,
+            None,
         );
         assert_eq!(frob_message_count(&effects), 1, "first frame should Frob");
 
@@ -1188,6 +1215,7 @@ mod tests {
             &world,
             &physics,
             &input,
+            None,
             None,
         );
         assert_eq!(
@@ -1222,6 +1250,7 @@ mod tests {
             &physics,
             &input,
             None,
+            None,
         );
         assert_eq!(
             frob_message_count(&effects),
@@ -1242,6 +1271,7 @@ mod tests {
             &world,
             &physics,
             &input,
+            None,
             None,
         );
         let frobbed_second = effects.iter().any(|effect| {
@@ -1310,6 +1340,7 @@ mod tests {
             identity,
             &input,
             None,
+            None,
         );
         assert_eq!(far_hand.get_raytraced_entity(), None);
         assert!(
@@ -1325,6 +1356,7 @@ mod tests {
             vec3(0.0, 0.0, 0.0),
             identity,
             &input,
+            None,
             None,
         );
         assert_eq!(near_hand.get_raytraced_entity(), Some(near_target));
@@ -1359,6 +1391,7 @@ mod tests {
                 identity,
                 &idle,
                 None,
+                None,
             )
             .0
             .affordance()
@@ -1385,6 +1418,7 @@ mod tests {
             identity,
             &Hand::default(),
             None,
+            None,
         );
         assert_eq!(hovering.affordance(), HandAffordance::Blocked);
 
@@ -1398,6 +1432,7 @@ mod tests {
                 trigger_value: 1.0,
                 ..Hand::default()
             },
+            None,
             None,
         );
         assert_eq!(frobbing.affordance(), HandAffordance::Failed);
@@ -1425,6 +1460,7 @@ mod tests {
                 identity,
                 &squeeze,
                 None,
+                None,
             )
             .0;
             assert_eq!(
@@ -1451,6 +1487,7 @@ mod tests {
             vec3(0.0, 0.0, 0.0),
             Quaternion::new(1.0, 0.0, 0.0, 0.0),
             &squeeze,
+            None,
             None,
         );
         assert_eq!(hand.affordance(), HandAffordance::Failed);
