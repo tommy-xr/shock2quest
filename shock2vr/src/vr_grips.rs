@@ -98,6 +98,11 @@ pub struct GripProfile {
     /// (`holster::DEFAULT_HOLSTERED_DEG`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holstered_deg: Option<[f32; 3]>,
+    /// The uniform scale this model is drawn at in the hip holster, which wears
+    /// the *world* model rather than the `_h` one a hand wields. Omitted falls
+    /// back to the in-hand `scale`; see `holster::holstered_scale`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holstered_scale: Option<f32>,
     /// Whether the holster accepts this model at all. Defaults to true, so a
     /// data set that says nothing holsters every weapon; set false to retire one
     /// that reads badly on the thigh.
@@ -117,6 +122,7 @@ impl Default for GripProfile {
             two_hand: false,
             mirror: Mirror::default(),
             holstered_deg: None,
+            holstered_scale: None,
             holster: true,
         }
     }
@@ -442,15 +448,19 @@ fn to_fingers(values: [f32; 5]) -> FingerAmounts {
     }
 }
 
-/// A profile's turn as a quaternion. Euler degrees composed Z * Y * X, so a
-/// yaw-only entry is exactly `Quaternion::from_angle_y`.
+/// Authored XYZ Euler degrees as a quaternion, composed Z * Y * X - so a
+/// yaw-only entry is exactly `Quaternion::from_angle_y`. Every authored turn in
+/// the profile file (in the hand, in the holster) reads this one composition,
+/// so the convention cannot drift between them.
+pub fn euler_zyx_deg([x, y, z]: [f32; 3]) -> Quaternion<f32> {
+    Quaternion::from_angle_z(Deg(z))
+        * Quaternion::from_angle_y(Deg(y))
+        * Quaternion::from_angle_x(Deg(x))
+}
+
+/// A profile's in-hand turn as a quaternion.
 fn rotation_of(profile: &GripProfile) -> Option<Quaternion<f32>> {
-    let [x, y, z] = profile.rotation_deg?;
-    Some(
-        Quaternion::from_angle_z(Deg(z))
-            * Quaternion::from_angle_y(Deg(y))
-            * Quaternion::from_angle_x(Deg(x)),
-    )
+    Some(euler_zyx_deg(profile.rotation_deg?))
 }
 
 /// The shipped profile file, compiled in - so a test can exercise the real

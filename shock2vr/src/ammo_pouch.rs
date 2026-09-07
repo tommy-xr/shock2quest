@@ -7,7 +7,7 @@
 //! An empty pouch simply is not drawn, and the glove's amber light is what says
 //! the gun is held but the reserve has nothing for it.
 
-use cgmath::Matrix4;
+use cgmath::{Matrix4, One, Quaternion};
 
 use crate::body_frame::BodyFrame;
 
@@ -26,7 +26,11 @@ pub struct PouchClip {
 /// size comes from the same `vr_grips` profile the hand uses, so hip and hand
 /// can never disagree about how big a clip is.
 pub fn pouch_transform(frame: &BodyFrame, model: &str) -> Matrix4<f32> {
-    Matrix4::from_translation(frame.pouch())
-        * Matrix4::from(frame.rotation())
-        * Matrix4::from_scale(crate::vr_config::held_geometry_scale(model))
+    // A clip is authored upright already, so it needs no turn of its own.
+    crate::body_frame::worn_transform(
+        frame,
+        frame.pouch(),
+        crate::vr_config::held_geometry_scale(model),
+        Quaternion::one(),
+    )
 }

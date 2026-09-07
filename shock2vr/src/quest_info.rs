@@ -64,8 +64,13 @@ pub struct QuestInfo {
     /// The gamesys weapon archetype sitting in the hip holster, if any. A
     /// *class* template id for the same reason `last_stowed_weapon` is one: the
     /// concrete weapon stays in the pack (so its ammo and condition are the
-    /// live entity's, never re-minted), and is re-found with
-    /// `carried_weapon_by_class` after a save or a level change.
+    /// live entity's, never re-minted), and is re-found by class after a save or
+    /// a level change, where a runtime entity id would not survive.
+    ///
+    /// The cost of keying by class: the slot names a *kind* of weapon, not one
+    /// weapon. Losing the holstered pistol empties the thigh, but acquiring
+    /// another pistol later fills it again without a dock, and with two in the
+    /// pack the one drawn is whichever the carried list yields first.
     #[serde(default)]
     holstered_weapon: Option<i32>,
 }

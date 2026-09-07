@@ -12,7 +12,7 @@
 //! script owns the refusal - so what it opens is exactly what the collected set
 //! opens.
 
-use cgmath::{Matrix4, Quaternion, Vector3};
+use cgmath::{Matrix4, Quaternion, Rotation3, Vector3};
 
 use crate::{body_frame::BodyFrame, vr_config::Handedness};
 
@@ -81,10 +81,12 @@ pub enum CardPlacement {
 /// same `vr_grips` profile the hand uses, so belt and hand can never disagree
 /// about how big the card is.
 pub fn belt_transform(frame: &BodyFrame) -> Matrix4<f32> {
-    Matrix4::from_translation(frame.belt())
-        * Matrix4::from(frame.rotation())
-        * Matrix4::from_angle_x(cgmath::Deg(-90.0))
-        * Matrix4::from_scale(crate::vr_config::held_geometry_scale(CARD_MODEL))
+    crate::body_frame::worn_transform(
+        frame,
+        frame.belt(),
+        crate::vr_config::held_geometry_scale(CARD_MODEL),
+        Quaternion::from_angle_x(cgmath::Deg(-90.0)),
+    )
 }
 
 /// The card in a hand, seated the way any held pickup is - so it sits in the

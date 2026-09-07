@@ -76,7 +76,7 @@
       0.0,
       -0.045
     ],
-    "scale": 0.4
+    "holstered_scale": 0.4
   },
   "atek_h": {
     "rotation_deg": [
@@ -102,7 +102,7 @@
       0.04,
       -0.045
     ],
-    "scale": 0.44
+    "holstered_scale": 0.44
   },
   "battery": {
     "rotation_deg": [
@@ -295,12 +295,12 @@
       0.0,
       -0.045
     ],
-    "scale": 0.42,
     "holstered_deg": [
       90.0,
       0.0,
       0.0
-    ]
+    ],
+    "holstered_scale": 0.42
   },
   "viro_h": {
     "rotation_deg": [
@@ -337,11 +337,11 @@
       -0.4
     ],
     "two_hand": true,
-    "scale": 0.32,
     "holstered_deg": [
       0.0,
       0.0,
       -90.0
-    ]
+    ],
+    "holstered_scale": 0.32
   }
 }

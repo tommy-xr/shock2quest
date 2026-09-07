@@ -3742,10 +3742,14 @@ impl MissionCore {
 
         let mut anchor_claim = [None, None];
         let mut anchor_gestures = Vec::new();
+        // The holster slot as the gestures see it. Latched here rather than
+        // re-read per gesture: a dock's deposit only lands after this update, so
+        // two hands opening at the thigh in the same frame would both read the
+        // slot empty and the second would overwrite the first.
+        let mut holster_taken = self.holstered_weapon_to_draw().is_some();
         if let Some(frame) = body_frame {
             let can_stow = backpack_accepts_deposit(&self.world);
             let can_draw = self.stowed_weapon_to_draw().is_some();
-            let holstered = self.holstered_weapon_to_draw();
             // One card: it is on the belt only while no hand is carrying it.
             let card_on_belt = self.belt_card_hand.is_none()
                 && self
@@ -3785,7 +3789,7 @@ impl MissionCore {
                     can_stow,
                     can_draw,
                     holds_weapon: held.is_some_and(|item| self.can_holster(item)),
-                    holster_occupied: holstered.is_some(),
+                    holster_occupied: holster_taken,
                     card_on_belt,
                 };
                 anchor_gestures.extend(self.anchor_gestures.update(&input));
@@ -3852,15 +3856,21 @@ impl MissionCore {
                     // The weapon goes into the pack, exactly as a shoulder stow
                     // does - so it is the same entity, with its own magazine and
                     // condition - and the slot records only which archetype is
-                    // on the thigh.
-                    if let Some(entity_id) = [left_hand_held, right_hand_held][hand_slot(hand)] {
+                    // on the thigh. The deposit is claimed unconditionally, like
+                    // the shoulder's: a weapon with no class id to record must
+                    // still not fall on the floor after a green light.
+                    if let Some(entity_id) = (!holster_taken)
+                        .then(|| [left_hand_held, right_hand_held][hand_slot(hand)])
+                        .flatten()
+                    {
+                        store.push((entity_id, None));
                         if let Some(class_template_id) =
                             crate::scripts::script_util::entity_class_template_id(
                                 &self.world,
                                 entity_id,
                             )
                         {
-                            store.push((entity_id, None));
+                            holster_taken = true;
                             if let Ok(mut quests) = self
                                 .world
                                 .borrow::<shipyard::UniqueViewMut<crate::quest_info::QuestInfo>>()
@@ -3880,6 +3890,7 @@ impl MissionCore {
                             hand,
                             current_parent_id: None,
                         });
+                        holster_taken = false;
                         if let Ok(mut quests) = self
                             .world
                             .borrow::<shipyard::UniqueViewMut<crate::quest_info::QuestInfo>>()
@@ -7263,10 +7274,12 @@ impl MissionCore {
                 }
 
                 Effect::EquipCarriedWeapon { class_template_id } => {
-                    let maybe_weapon = crate::virtual_hand::carried_weapon_by_class(
+                    let maybe_weapon = crate::virtual_hand::carried_weapons_by_class(
                         &self.world,
                         class_template_id,
-                    );
+                    )
+                    .into_iter()
+                    .next();
                     if let Some(entity_id) = maybe_weapon
                         // Either hand: in VR the weapon may already be held in
                         // the right one. Asked of the interaction controller
@@ -10833,48 +10846,53 @@ impl MissionCore {
         is_vr_melee_weapon(&self.world, entity_id)
     }
 
+    /// The weapon a body slot's archetype resolves to: one the player still
+    /// carries and is not already holding. `None` (nothing there, or it was
+    /// spent or dropped since) is what makes the anchor pre-light amber instead
+    /// of green.
+    ///
+    /// The held ones are skipped *inside* the search rather than after it: a
+    /// player carrying two of a kind would otherwise have the one in the hand
+    /// stand in for the one in the slot, and the slot would read empty for as
+    /// long as its twin was held.
+    fn slotted_weapon_to_draw(&self, class_template_id: i32) -> Option<EntityId> {
+        crate::virtual_hand::carried_weapons_by_class(&self.world, class_template_id)
+            .into_iter()
+            .find(|entity_id| !self.interaction.is_holding(*entity_id))
+    }
+
     /// The weapon an empty grip at a shoulder would draw: the last one stowed
-    /// there, if the player still carries it and is not already holding it.
-    /// `None` (nothing stowed, spent, or dropped since) is what makes the
-    /// shoulder pre-light amber instead of green.
+    /// there - unless that is the very weapon on the thigh, which the holster
+    /// owns. Both slots are keyed by archetype over the one pack, so without
+    /// this a weapon stowed and then holstered would answer to both anchors and
+    /// the shoulder could draw it out from under the holster's picture.
     fn stowed_weapon_to_draw(&self) -> Option<EntityId> {
         let class_template_id = self
             .world
             .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
             .ok()?
             .last_stowed_weapon()?;
-        crate::virtual_hand::carried_weapon_by_class(&self.world, class_template_id)
-            .filter(|entity_id| !self.interaction.is_holding(*entity_id))
+        let holstered = self.holstered_weapon_to_draw();
+        self.slotted_weapon_to_draw(class_template_id)
+            .filter(|entity_id| Some(*entity_id) != holstered)
     }
 
-    /// The weapon in the hip holster, if the player still carries it. A slot
-    /// whose weapon has since been dropped or destroyed reads as empty, which is
-    /// what makes the thigh show nothing and pre-light amber.
+    /// The weapon in the hip holster, if the player still carries it.
     fn holstered_weapon_to_draw(&self) -> Option<EntityId> {
         let class_template_id = self
             .world
             .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
             .ok()?
             .holstered_weapon()?;
-        crate::virtual_hand::carried_weapon_by_class(&self.world, class_template_id)
-            .filter(|entity_id| !self.interaction.is_holding(*entity_id))
+        self.slotted_weapon_to_draw(class_template_id)
     }
 
     /// The holstered weapon as something to draw on the thigh. Its model comes
     /// off the carried entity, so the thigh shows the weapon the grip produces.
     fn holstered_weapon(&self) -> Option<crate::holster::HolsteredWeapon> {
         let entity_id = self.holstered_weapon_to_draw()?;
-        let model = self
-            .world
-            .borrow::<View<PropModelName>>()
-            .ok()
-            .and_then(|models| models.get(entity_id).ok().map(|model| model.0.clone()))?;
         Some(crate::holster::HolsteredWeapon {
-            template_id: crate::scripts::script_util::entity_class_template_id(
-                &self.world,
-                entity_id,
-            )?,
-            model,
+            model: self.entity_model_name(entity_id)?,
         })
     }
 
@@ -10884,8 +10902,17 @@ impl MissionCore {
     fn can_holster(&self, entity_id: EntityId) -> bool {
         crate::virtual_hand::is_wieldable_weapon(&self.world, entity_id)
             && !crate::wielded_weapon::is_psi_amp(&self.world, entity_id)
-            && crate::vr_config::model_name_lower(&self.world, entity_id)
+            && self
+                .entity_model_name(entity_id)
                 .is_none_or(|model| crate::holster::is_holsterable(&model))
+    }
+
+    /// An entity's authored model name, the key every `vr_grips` lookup uses.
+    fn entity_model_name(&self, entity_id: EntityId) -> Option<String> {
+        self.world
+            .borrow::<View<PropModelName>>()
+            .ok()
+            .and_then(|models| models.get(entity_id).ok().map(|model| model.0.clone()))
     }
 
     /// Undo a computed grip offset before a released item becomes a loose prop

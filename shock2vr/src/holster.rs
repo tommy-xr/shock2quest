@@ -8,23 +8,26 @@
 //! the way the pouch derives its clip, so nothing about the picture needs
 //! saving.
 
-use cgmath::{Matrix4, Quaternion, Rotation3};
+use cgmath::{Matrix4, Quaternion};
 
 use crate::body_frame::BodyFrame;
 
 /// The weapon in the holster this frame.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HolsteredWeapon {
-    /// Its gamesys archetype - the id the slot actually stores.
-    pub template_id: i32,
     /// Its model, so the thigh shows the weapon the player will draw.
     pub model: String,
 }
 
 /// How a weapon with no authored holster pose hangs: a quarter turn about X
-/// stands the model's long axis on end. The gun world models run barrel-first
-/// along -Z with the grip at +Z, so -90 puts the muzzle at the floor and the
-/// grip up - the way a weapon sits in a drop holster.
+/// stands the model's long axis on end, muzzle down and grip up, the way a
+/// weapon sits in a drop holster.
+///
+/// It is a **placeholder, not a rule**. The world models do not share an axis
+/// convention - the pistol and the assault rifle run barrel-first along -Z, so
+/// -90 turns them the right way up, while the shotgun runs the other way and
+/// authors `holstered_deg` to say so. A model nobody has looked at hangs
+/// whichever way its own axes fall; authoring it is a `holstered_deg` entry.
 const DEFAULT_HOLSTERED_DEG: [f32; 3] = [-90.0, 0.0, 0.0];
 
 /// How `model` is turned in the holster: its authored `holstered_deg`, else
@@ -32,12 +35,11 @@ const DEFAULT_HOLSTERED_DEG: [f32; 3] = [-90.0, 0.0, 0.0];
 /// convention the in-hand `rotation_deg` uses, so one authored number means the
 /// same thing in both places.
 pub fn holstered_rotation(model: &str) -> Quaternion<f32> {
-    let [x, y, z] = crate::vr_grips::profile(model)
-        .and_then(|profile| profile.holstered_deg)
-        .unwrap_or(DEFAULT_HOLSTERED_DEG);
-    Quaternion::from_angle_z(cgmath::Deg(z))
-        * Quaternion::from_angle_y(cgmath::Deg(y))
-        * Quaternion::from_angle_x(cgmath::Deg(x))
+    crate::vr_grips::euler_zyx_deg(
+        crate::vr_grips::profile(model)
+            .and_then(|profile| profile.holstered_deg)
+            .unwrap_or(DEFAULT_HOLSTERED_DEG),
+    )
 }
 
 /// Whether `model` may be holstered at all. Everything may, unless its profile
@@ -48,13 +50,29 @@ pub fn is_holsterable(model: &str) -> bool {
 }
 
 /// The weapon on the thigh: turned into its holstered pose, facing the way the
-/// body does. Its size comes from the same `vr_grips` profile the hand uses, so
-/// holster and hand can never disagree about how big a weapon is.
+/// body does, at its authored holstered size.
 pub fn holster_transform(frame: &BodyFrame, model: &str) -> Matrix4<f32> {
-    Matrix4::from_translation(frame.holster())
-        * Matrix4::from(frame.rotation())
-        * Matrix4::from(holstered_rotation(model))
-        * Matrix4::from_scale(crate::vr_config::held_geometry_scale(model))
+    crate::body_frame::worn_transform(
+        frame,
+        frame.holster(),
+        holstered_scale(model),
+        holstered_rotation(model),
+    )
+}
+
+/// How big `model` is drawn on the thigh: its authored `holstered_scale`, else
+/// the size a hand would hold it at.
+///
+/// A separate number from the in-hand `scale` because the two paths measure
+/// different geometry. VR wields a gun's shrunk-to-life-size `_h` view model,
+/// which reports 1.0 here, so the holster - which wears the *world* model, at
+/// its full authored size - needs its own life-size figure. Making the world
+/// model's own `scale` carry it would silently resize every held world model on
+/// a classic install, which is not this anchor's business.
+pub fn holstered_scale(model: &str) -> f32 {
+    crate::vr_grips::profile(model)
+        .and_then(|profile| profile.holstered_scale)
+        .unwrap_or_else(|| crate::vr_config::held_geometry_scale(model))
 }
 
 #[cfg(test)]
@@ -89,6 +107,28 @@ mod tests {
         assert!(
             (along - vec3(0.0, 0.0, 1.0)).magnitude() < 1e-5,
             "an authored zero turn should leave the model as authored, got {along:?}"
+        );
+    }
+
+    /// The holster wears the world model at its own authored size, and falls
+    /// back to the in-hand size only where none is authored - a gun's `_h`
+    /// scale must not stand in for the world model's, which is a different
+    /// mesh at a different size.
+    #[test]
+    fn a_holstered_size_is_its_own_number() {
+        let _guard = crate::vr_grips::test_guard();
+        crate::vr_grips::set_profiles(
+            crate::vr_grips::parse(
+                r#"{ "atek_w": { "scale": 0.9, "holstered_scale": 0.44 },
+                     "mug": { "scale": 0.5 } }"#,
+            )
+            .unwrap(),
+        );
+
+        assert!((holstered_scale("atek_w") - 0.44).abs() < 1e-6);
+        assert!(
+            (holstered_scale("mug") - 0.5).abs() < 1e-6,
+            "with nothing authored the holster falls back to the held size"
         );
     }
 

@@ -76,13 +76,15 @@ pub enum BodyAnchor {
     Holster,
 }
 
-/// Which hip the holster hangs beside this frame.
+/// Which hip the holster hangs beside. The dominant hand's - the right, since
+/// there is no handedness option to read - unless
+/// [`crate::dev_params::HOLSTER_SIDE_FLIPPED`] moves it across for a left-handed
+/// player.
 pub fn holster_side() -> Handedness {
-    let dominant = crate::vr_config::dominant_hand();
     if crate::dev_params::get_bool(crate::dev_params::HOLSTER_SIDE_FLIPPED) {
-        crate::vr_config::other_hand(dominant)
+        Handedness::Left
     } else {
-        dominant
+        Handedness::Right
     }
 }
 
@@ -236,6 +238,21 @@ impl BodyFrameTracker {
             rotation,
         }
     }
+}
+
+/// Where a model worn at `anchor` is drawn: upright, facing the way the body
+/// does, turned by `turn` in the body's own frame, at `scale`. One definition
+/// for every anchor, so a new one cannot invent its own placement rules.
+pub fn worn_transform(
+    frame: &BodyFrame,
+    anchor: Vector3<f32>,
+    scale: f32,
+    turn: Quaternion<f32>,
+) -> Matrix4<f32> {
+    Matrix4::from_translation(anchor)
+        * Matrix4::from(frame.rotation())
+        * Matrix4::from(turn)
+        * Matrix4::from_scale(scale)
 }
 
 /// The renderable geometry of a model worn at a body anchor - the belt card,
@@ -450,9 +467,13 @@ impl AnchorGestures {
                     AnchorGesture::Holster(input.hand),
                     input.holds_weapon && !input.holster_occupied && input.can_stow,
                 ),
-                BodyAnchor::Holster => {
-                    (AnchorGesture::Unholster(input.hand), input.holster_occupied)
-                }
+                // An empty holster has nothing to offer an empty hand, so it
+                // claims nothing - like an unserved pouch. Claiming it would
+                // make a 12 cm sphere beside the thigh, where a resting hand
+                // already is, refuse to grab or frob for the whole game up to
+                // the player's first dock.
+                BodyAnchor::Holster if !input.holster_occupied => return None,
+                BodyAnchor::Holster => (AnchorGesture::Unholster(input.hand), true),
             },
         )
     }
@@ -1187,8 +1208,8 @@ mod tests {
         gestures.update(&empty);
         assert_eq!(
             gestures.claim(&empty),
-            Some(HandClaim::Anchor(HandAffordance::Blocked)),
-            "nothing holstered means nothing to draw"
+            None,
+            "an empty holster must leave an empty hand free to reach past it"
         );
         assert_eq!(
             gestures.update(&HandAnchorInput {
