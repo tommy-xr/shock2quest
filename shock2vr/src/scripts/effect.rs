@@ -488,6 +488,14 @@ pub enum Effect {
         name: String,
         duration_secs: f32,
     },
+    SummonPsiSword {
+        amp: EntityId,
+        duration_secs: f32,
+    },
+    FinishPsiSword {
+        blade: EntityId,
+        amp: Option<EntityId>,
+    },
 
     /// Set the psi amp's hold-to-overload meter state
     /// (`RuntimePropPsiCharge`) on the amp entity - drives the HUD meter and

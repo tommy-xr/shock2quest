@@ -7369,6 +7369,48 @@ impl MissionCore {
                     self.destroy_entity(entity_id);
                 }
 
+                Effect::SummonPsiSword { amp, duration_secs } => {
+                    // This power's flat weapon replacement uses the ordinary
+                    // wield slot; VR two-hand sword handling is separate.
+                    if game_options.presentation_mode != crate::PresentationMode::Flat {
+                        continue;
+                    }
+                    let (pos, rot) = {
+                        let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                        (vec3_to_point3(player.pos), player.rotation)
+                    };
+                    let blade = self
+                        .create_entity_with_position(
+                            asset_cache,
+                            -2291,
+                            pos,
+                            rot,
+                            Matrix4::identity(),
+                            CreateEntityOptions::default(),
+                        )
+                        .entity_id;
+                    self.script_world.dispatch(Message {
+                        to: blade,
+                        payload: MessagePayload::BeginPsiSword { amp, duration_secs },
+                    });
+                    let msgs = self.interaction.wield(blade);
+                    effects.extend(self.process_virtual_hand_effects(asset_cache, msgs));
+                }
+                Effect::FinishPsiSword { blade, amp } => {
+                    let held = self.interaction.holding_hand(blade).is_some();
+                    self.world
+                        .borrow::<UniqueViewMut<crate::psi::ActivePsiPowers>>()
+                        .unwrap()
+                        .0
+                        .retain(|power| power.template_id != -1119);
+                    self.destroy_entity(blade);
+                    if let Some(amp) = amp.filter(|amp| {
+                        held && self.world.borrow::<EntitiesView>().unwrap().is_alive(*amp)
+                    }) {
+                        let msgs = self.interaction.wield(amp);
+                        effects.extend(self.process_virtual_hand_effects(asset_cache, msgs));
+                    }
+                }
                 Effect::ActivatePsiPower {
                     template_id,
                     name,

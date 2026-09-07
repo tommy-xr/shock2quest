@@ -59,6 +59,7 @@ mod room_trigger;
 pub mod script_util;
 mod setup_initial_debrief;
 mod std_door;
+mod summoned_psi_sword;
 mod tool_consumable;
 mod transluce;
 mod trap_delay;
@@ -225,6 +226,10 @@ pub struct DamageImpact {
 
 #[derive(Clone, Debug)]
 pub enum MessagePayload {
+    BeginPsiSword {
+        amp: EntityId,
+        duration_secs: f32,
+    },
     Frob,
 
     /// This entity's MFD panel was opened. Frobbing used to be the only way in,
@@ -958,6 +963,9 @@ impl ScriptWorld {
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
             "pistolmodify" => Box::new(NoopScript::new()),
+            "internal_summoned_psi_sword" => {
+                Box::new(summoned_psi_sword::SummonedPsiSword::default())
+            }
 
             // TODO: Necessary
             "changeinterface" => Box::new(NoopScript::new()),
