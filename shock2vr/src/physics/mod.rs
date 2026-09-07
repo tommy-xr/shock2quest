@@ -3177,6 +3177,12 @@ impl PhysicsWorld {
     /// the player sees, so it is also what a second hand may take hold of - a
     /// melee `_h` rig is skinned and reports no render triangles to test
     /// against (see [`crate::two_hand_grip`]).
+    ///
+    /// The *body's* pose, deliberately, not the drive target's: the sweep stops
+    /// the body on world geometry, and the render transform is read back off
+    /// that same body (`mission_core::synchronize_physics_positions`). So a
+    /// weapon held against a wall offers its grip where it is drawn, not where
+    /// the controller is asking for it.
     pub fn held_melee_contact_box(
         &self,
         entity_id: EntityId,
