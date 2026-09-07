@@ -42,6 +42,11 @@ pub enum RuntimeCommand {
 
     /// Get current input state
     GetInput(oneshot::Sender<InputState>),
+    GetTracking(oneshot::Sender<crate::tracking::TrackingStatus>),
+    SetTracking(
+        crate::tracking::TrackingPatch,
+        oneshot::Sender<Result<(), String>>,
+    ),
 
     /// Set one or more input channel values. Replies `Ok(())` when every patch
     /// applied, or `Err(message)` describing the first invalid channel/value so
