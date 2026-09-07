@@ -446,8 +446,14 @@ impl PlayerInteraction for VrInteraction {
         match glove_renderer {
             Some(renderer) => {
                 let mut grips = self.fitted_grips.borrow_mut();
+                let support = self.two_hand.latch();
                 for hand in [&self.left_hand, &self.right_hand] {
-                    let (mut hand_objects, grip) = hand.render(world, asset_cache, renderer);
+                    let (mut hand_objects, grip) = hand.render(
+                        world,
+                        asset_cache,
+                        renderer,
+                        support.filter(|latch| latch.hand == hand.handedness()),
+                    );
                     grips[crate::vr_config::hand_slot(hand.handedness())] = grip;
                     objs.append(&mut hand_objects);
                 }

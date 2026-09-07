@@ -68,8 +68,9 @@ pub struct SupportLatch {
     pub entity_id: EntityId,
     /// The hand doing the supporting.
     pub hand: Handedness,
-    /// The grip point, in the **primary** hand's own space - rigid with the
-    /// item, so it survives the aim swinging the item about.
+    /// The grip point in the item's own **model** space - rigid with the item,
+    /// so it survives the aim swinging the item about, and the space the
+    /// authored seats and the render triangles are already written in.
     pub point: Vector3<f32>,
     /// Whether an authored support seat claimed it, rather than a free latch.
     pub snapped: bool,
@@ -142,19 +143,7 @@ impl TwoHandGrip {
     /// hand what it needs to place and light itself.
     pub fn resolve(&mut self, ctx: &ResolveContext) -> [TwoHandFrame; 2] {
         self.step_latch(ctx);
-
-        // Ramp toward the state the latch just settled on, so attach and
-        // release share one ease.
-        let target = if self.latch.is_some() { 1.0 } else { 0.0 };
-        let step = 1.0 / BLEND_FRAMES;
-        self.blend = if self.blend < target {
-            (self.blend + step).min(target)
-        } else {
-            (self.blend - step).max(target)
-        };
-        if self.blend <= 0.0 {
-            self.axis = None;
-        }
+        self.ramp(self.latch.is_some());
 
         let mut frames = [TwoHandFrame::default(); 2];
         let Some(latch) = self.latch else {
@@ -180,17 +169,38 @@ impl TwoHandGrip {
         let support = ctx.hands[vr_config::hand_slot(latch.hand)];
         let primary = ctx.hands[vr_config::hand_slot(vr_config::other_hand(latch.hand))];
 
-        // The axis is re-read from the live hands every frame the pose is
-        // good; a lost or degenerate one keeps the last.
-        let delta = support.position - primary.position;
-        if delta.magnitude() >= MIN_HAND_SEPARATION {
-            self.axis = Some(delta.normalize());
-        }
+        self.track_axis(primary.position, support.position);
 
         frames[vr_config::hand_slot(support.hand)].supporting = true;
         frames[vr_config::hand_slot(support.hand)].offered = true;
         frames[vr_config::hand_slot(primary.hand)].aim_rotation = self.aim_for(primary.rotation);
         frames
+    }
+
+    /// Advance the attach/release ease one frame toward `attached`. One ramp
+    /// in both directions, so a weapon eases back to the wrist exactly as it
+    /// eased onto the hand line.
+    fn ramp(&mut self, attached: bool) {
+        let target = if attached { 1.0 } else { 0.0 };
+        let step = 1.0 / BLEND_FRAMES;
+        self.blend = if self.blend < target {
+            (self.blend + step).min(target)
+        } else {
+            (self.blend - step).max(target)
+        };
+        if self.blend <= 0.0 {
+            self.axis = None;
+        }
+    }
+
+    /// Re-read the aim axis from the live hands. Hands closer together than
+    /// [`MIN_HAND_SEPARATION`] carry no direction, so the last good one stands
+    /// - hands do cross, and the weapon must not spin when they do.
+    fn track_axis(&mut self, primary: Vector3<f32>, support: Vector3<f32>) {
+        let delta = support - primary;
+        if delta.magnitude() >= MIN_HAND_SEPARATION {
+            self.axis = Some(delta.normalize());
+        }
     }
 
     /// The placement rotation for a primary wrist at `wrist`, blended over the
@@ -321,19 +331,18 @@ fn latch_point(
 
     let to_model = vr_config::held_model_hand_transform(&model_name, primary.hand, gun_scale);
 
-    // An authored seat within reach wins: a hand brought to a shotgun's pump
-    // lands on the pump rather than a centimetre off it.
-    let snap = crate::vr_grips::support_seats(&model_name)
+    let seats: Vec<SupportSeatPoint> = crate::vr_grips::support_seats(&model_name)
         .into_iter()
-        .map(|seat| to_model.transform_point(Point3::from_vec(seat.offset())))
-        .map(|seat| (seat, (seat - palm).magnitude()))
-        .filter(|(_, distance)| *distance <= ANCHOR_SNAP_RADIUS)
-        .min_by(|a, b| a.1.total_cmp(&b.1));
-    if let Some((seat, _)) = snap {
-        return Some((seat.to_vec(), true));
+        .map(|seat| SupportSeatPoint {
+            model: seat.offset(),
+            hand: to_model.transform_point(Point3::from_vec(seat.offset())),
+        })
+        .collect();
+    if let Some(seat) = nearest_seat(palm, &seats) {
+        return Some((seat.model, true));
     }
 
-    on_surface(
+    if !on_surface(
         ctx,
         entity_id,
         &model_name,
@@ -341,8 +350,36 @@ fn latch_point(
         gun_scale,
         palm,
         palm_world,
-    )
-    .then_some((palm.to_vec(), false))
+    ) {
+        return None;
+    }
+    // Back into the item's own space, which is where the latch has to live to
+    // stay put while the aim swings the item about.
+    Some((to_model.invert()?.transform_point(palm).to_vec(), false))
+}
+
+/// The authored seat the palm should snap to, if one is within reach.
+///
+/// The snap is a *preference*: away from every seat - and on a model that
+/// authors none at all, which the oversized weapons do not - the palm latches
+/// wherever it is. That is what makes "take hold anywhere" the rule and the
+/// authored seats the exception.
+fn nearest_seat(palm: Point3<f32>, seats: &[SupportSeatPoint]) -> Option<SupportSeatPoint> {
+    seats
+        .iter()
+        .copied()
+        .map(|seat| (seat, (seat.hand - palm).magnitude()))
+        .filter(|(_, distance)| *distance <= ANCHOR_SNAP_RADIUS)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(seat, _)| seat)
+}
+
+/// One authored seat, in both the spaces the choice needs: the hand space the
+/// palm is measured in, and the model space the latch is recorded in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SupportSeatPoint {
+    model: Vector3<f32>,
+    hand: Point3<f32>,
 }
 
 /// Whether the palm is on the held item's own surface.
@@ -454,4 +491,181 @@ pub fn quantise_latch(point: Vector3<f32>) -> [i32; 3] {
         (point.y / LATCH_QUANTUM).round() as i32,
         (point.z / LATCH_QUANTUM).round() as i32,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use cgmath::{Deg, Rotation3, Zero, assert_relative_eq};
+
+    use super::*;
+
+    fn identity() -> Quaternion<f32> {
+        Quaternion::new(1.0, 0.0, 0.0, 0.0)
+    }
+
+    /// A seat on the hand-space x axis; the model-space half is irrelevant to
+    /// the choice, so it just mirrors it.
+    fn seat_at(x: f32) -> SupportSeatPoint {
+        SupportSeatPoint {
+            model: vec3(x, 0.0, 0.0),
+            hand: Point3::new(x, 0.0, 0.0),
+        }
+    }
+
+    /// The placement's own forward is the interaction ray's: hand-local -Z.
+    fn forward(rotation: Quaternion<f32>) -> Vector3<f32> {
+        rotation.rotate_vector(vec3(0.0, 0.0, -1.0))
+    }
+
+    fn up(rotation: Quaternion<f32>) -> Vector3<f32> {
+        rotation.rotate_vector(vec3(0.0, 1.0, 0.0))
+    }
+
+    fn degrees_between(a: Vector3<f32>, b: Vector3<f32>) -> f32 {
+        a.dot(b).clamp(-1.0, 1.0).acos().to_degrees()
+    }
+
+    /// The whole point of the solve: the weapon points at the second hand, not
+    /// where the first wrist happens to be turned.
+    #[test]
+    fn the_item_aims_down_the_line_between_the_hands() {
+        // A wrist pointing straight ahead, with the support hand out to the
+        // side: the aim has to leave the wrist's own forward entirely.
+        let axis = vec3(1.0, 0.0, 0.0);
+        let aimed = aim_rotation(identity(), axis);
+        assert_relative_eq!(forward(aimed), axis, epsilon = 1e-5);
+    }
+
+    /// Roll is the half the player keeps: rolling the primary wrist rolls the
+    /// sights, without moving the barrel off the hand line.
+    #[test]
+    fn the_primary_wrist_still_owns_the_roll() {
+        let axis = vec3(1.0, 0.0, 0.0);
+        let upright = aim_rotation(identity(), axis);
+        // Rolling about the wrist's own forward is the gesture that must reach
+        // the sights.
+        let rolled = aim_rotation(Quaternion::from_angle_z(Deg(90.0)), axis);
+
+        assert_relative_eq!(forward(rolled), axis, epsilon = 1e-5);
+        let turn = degrees_between(up(upright), up(rolled));
+        assert!(
+            (turn - 90.0).abs() < 1.0,
+            "a 90 degree wrist roll should roll the sights 90 degrees, got {turn}"
+        );
+    }
+
+    /// Hands stacked along the wrist's own up leave `up x axis` degenerate; the
+    /// solve must still produce an orthonormal frame aimed down the line.
+    #[test]
+    fn an_axis_along_the_wrists_own_up_still_solves() {
+        let axis = vec3(0.0, 1.0, 0.0);
+        let aimed = aim_rotation(identity(), axis);
+        assert_relative_eq!(forward(aimed), axis, epsilon = 1e-5);
+        assert_relative_eq!(up(aimed).magnitude(), 1.0, epsilon = 1e-4);
+        assert_relative_eq!(up(aimed).dot(axis), 0.0, epsilon = 1e-4);
+    }
+
+    /// Hands crossing over each other must not spin the weapon: inside the
+    /// separation floor the last good axis stands.
+    #[test]
+    fn hands_too_close_together_keep_the_last_axis() {
+        let mut grip = TwoHandGrip::default();
+        grip.track_axis(Vector3::zero(), vec3(1.0, 0.0, 0.0));
+        assert_relative_eq!(grip.axis.unwrap(), vec3(1.0, 0.0, 0.0), epsilon = 1e-5);
+
+        // The support hand slides in to well under 10 cm, on a wholly different
+        // bearing. Without the guard this would swing the weapon 90 degrees.
+        grip.track_axis(Vector3::zero(), vec3(0.0, 0.0, meters(0.02)));
+        assert_relative_eq!(grip.axis.unwrap(), vec3(1.0, 0.0, 0.0), epsilon = 1e-5);
+
+        // Past the floor it tracks again.
+        grip.track_axis(Vector3::zero(), vec3(0.0, 0.0, meters(0.3)));
+        assert_relative_eq!(grip.axis.unwrap(), vec3(0.0, 0.0, 1.0), epsilon = 1e-5);
+    }
+
+    /// Attach and release both ease: neither may land in one frame, and both
+    /// must actually arrive.
+    #[test]
+    fn the_aim_eases_in_and_back_out() {
+        let mut grip = TwoHandGrip::default();
+        grip.track_axis(Vector3::zero(), vec3(1.0, 0.0, 0.0));
+
+        grip.ramp(true);
+        let first = grip.aim_for(identity()).expect("attaching aims already");
+        let turn = degrees_between(forward(first), vec3(0.0, 0.0, -1.0));
+        assert!(
+            turn > 0.0 && turn < 89.0,
+            "the first frame should be partway onto the hand line, got {turn} degrees"
+        );
+
+        for _ in 1..BLEND_FRAMES as usize {
+            grip.ramp(true);
+        }
+        assert_relative_eq!(
+            forward(grip.aim_for(identity()).unwrap()),
+            vec3(1.0, 0.0, 0.0),
+            epsilon = 1e-4
+        );
+
+        // Releasing runs the same ease back, and ends by handing placement to
+        // the wrist outright rather than leaving a stale aim behind.
+        for _ in 0..BLEND_FRAMES as usize {
+            assert!(grip.aim_for(identity()).is_some());
+            grip.ramp(false);
+        }
+        assert!(grip.aim_for(identity()).is_none());
+        assert!(grip.axis.is_none());
+    }
+
+    /// An authored seat is a preference, not a gate: only a palm that arrives
+    /// near one snaps to it.
+    #[test]
+    fn a_seat_only_claims_a_palm_that_arrives_near_it() {
+        let seat = seat_at(0.0);
+        let near = Point3::new(meters(0.04), 0.0, 0.0);
+        let far = Point3::new(meters(0.3), 0.0, 0.0);
+
+        assert_eq!(nearest_seat(near, &[seat]), Some(seat));
+        assert_eq!(
+            nearest_seat(far, &[seat]),
+            None,
+            "a palm well off the seat latches where it is"
+        );
+        assert_eq!(
+            nearest_seat(near, &[]),
+            None,
+            "a model with no authored seat always latches free"
+        );
+    }
+
+    /// With more than one seat the palm takes the one it is actually on.
+    #[test]
+    fn the_nearest_seat_wins() {
+        let pump = seat_at(0.0);
+        let magwell = seat_at(meters(0.07));
+        let palm = Point3::new(meters(0.06), 0.0, 0.0);
+        assert_eq!(nearest_seat(palm, &[pump, magwell]), Some(magwell));
+    }
+
+    /// The three authored gun seats must survive the shipped profile file's
+    /// round trip, or a support hand silently stops snapping.
+    #[test]
+    fn the_shipped_profiles_author_the_support_seats() {
+        let _guard = crate::vr_grips::test_guard();
+        crate::vr_grips::load_shipped_for_test();
+
+        for model in ["sg_h", "empgun_h", "ar15_h"] {
+            let seats = crate::vr_grips::support_seats(model);
+            assert_eq!(seats.len(), 1, "{model} should author one support seat");
+            assert_eq!(
+                seats[0].family(),
+                Some(crate::hand_fit::GripFamily::Cylindrical),
+                "{model}'s support seat should name a family the fit understands"
+            );
+        }
+        assert!(
+            crate::vr_grips::support_seats("fsn_h").is_empty(),
+            "an oversized weapon bakes no support hand and authors no seat"
+        );
+    }
 }

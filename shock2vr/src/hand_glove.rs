@@ -182,6 +182,11 @@ pub struct GloveRenderer {
     fits: HashMap<GripKey, Option<FittedGrip>>,
     /// The [`crate::vr_grips::generation`] `fits` was solved against.
     fits_generation: u64,
+    /// Grips a *support* hand solved, keyed by the item and where on it the
+    /// hand latched (see [`crate::two_hand_grip`]). Separate from `fits`
+    /// because the same model gives a different answer at every grip point:
+    /// a shotgun's pump closes the hand, its receiver barely does.
+    support_fits: HashMap<(GripKey, [i32; 3]), Option<FittedGrip>>,
 }
 
 /// An authored pose a hand can be shown in when nothing analog is driving it -
@@ -234,6 +239,7 @@ impl GloveRenderer {
             point: hand_pose::point_right_hand(),
             materials,
             fits: HashMap::new(),
+            support_fits: HashMap::new(),
             fits_generation: crate::vr_grips::generation(),
         })
     }
@@ -313,6 +319,92 @@ impl GloveRenderer {
         let fitted = self.solve(model_name, handedness, gun_scale, asset_cache);
         self.fits.insert(key, fitted);
         fitted
+    }
+
+    /// The grip a *support* hand closes in on an item the other hand holds.
+    ///
+    /// Same contact fit as a held item's, but the item is placed at the point
+    /// this hand latched rather than at its own authored seat - the support
+    /// hand did not pick the item up, it took hold of it somewhere.
+    ///
+    /// Cached per grip point rounded to the centimetre: finer is below what a
+    /// tracked hand resolves, and would re-solve every frame.
+    pub fn support_grip(
+        &mut self,
+        model_name: &str,
+        handedness: Handedness,
+        gun_scale: f32,
+        latch: Vector3<f32>,
+        asset_cache: &mut AssetCache,
+    ) -> Option<FittedGrip> {
+        let generation = crate::vr_grips::generation();
+        if self.fits_generation != generation {
+            self.fits.clear();
+            self.support_fits.clear();
+            self.fits_generation = generation;
+        }
+        let key = (
+            GripKey::new(model_name, handedness, gun_scale),
+            crate::two_hand_grip::quantise_latch(latch),
+        );
+        if let Some(cached) = self.support_fits.get(&key) {
+            return *cached;
+        }
+        let fitted = self.solve_support(model_name, handedness, gun_scale, latch, asset_cache);
+        self.support_fits.insert(key, fitted);
+        fitted
+    }
+
+    fn solve_support(
+        &mut self,
+        model_name: &str,
+        handedness: Handedness,
+        gun_scale: f32,
+        latch: Vector3<f32>,
+        asset_cache: &mut AssetCache,
+    ) -> Option<FittedGrip> {
+        use cgmath::{EuclideanSpace, Point3, Transform};
+
+        let triangles = asset_cache.get_opt::<_, VrContactMesh, _>(
+            &VR_CONTACT_MESH_IMPORTER,
+            &format!("{model_name}.BIN"),
+        )?;
+        // Slide the item along until the latched point sits on the palm; its
+        // turn in the hand is the one the model's own grip already gives, which
+        // is close enough at a support grip and keeps the answer cacheable.
+        let seat = vr_config::held_model_hand_transform(model_name, handedness, gun_scale);
+        let place = Matrix4::from_translation(
+            crate::hand_seat::PALM_CENTRE - seat.transform_point(Point3::from_vec(latch)).to_vec(),
+        ) * seat;
+        let mesh = ContactMesh::new(
+            triangles
+                .0
+                .iter()
+                .map(|triangle| triangle.map(|corner| place.transform_point(corner)))
+                .collect(),
+        );
+        if mesh.is_empty() {
+            return None;
+        }
+
+        // The support hand has no trigger to rest on, so a gun's authored
+        // Trigger family is not its family. An authored support seat may name
+        // one; otherwise the item's own girth decides, which is what makes a
+        // basketball Broad and a rifle handguard Cylindrical.
+        let family = crate::vr_grips::support_seats(model_name)
+            .first()
+            .and_then(|seat| seat.family())
+            .or_else(|| mesh.extents().map(hand_fit::family_from_extents))
+            .unwrap_or(GripFamily::Cylindrical);
+        let mut rig = GloveRig {
+            model: &mut self.model,
+            retarget: &self.retarget,
+            open: &self.open,
+            fist: &self.fist,
+            to_hand: glove_model_to_hand(),
+        };
+        let amounts = hand_fit::fit(&mut rig, &mesh, family, unmeasured_wrap(family));
+        Some(FittedGrip { family, amounts })
     }
 
     /// One grip fit, start to finish. Only ever reached on a cache miss.

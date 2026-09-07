@@ -424,13 +424,17 @@ impl VirtualHand {
         world: &World,
         asset_cache: &mut AssetCache,
         renderer: &mut crate::hand_glove::GloveRenderer,
+        support: Option<crate::two_hand_grip::SupportLatch>,
     ) -> (Vec<SceneObject>, Option<crate::game_scene::DebugHandGrip>) {
         // A wielded gun draws the glove in place of the baked hand the wield
         // stripped off it; everything else draws it at the tracked hand, or not
         // at all when the held model draws a hand of its own. Either way the
         // glove is the tracked pose at life size - the gun is the thing scaled
         // to meet it (`vr_config::gun_wield_scale`).
-        if !holds_gun_glove(world, self.get_held_entity())
+        // A hand supporting the other's weapon is an empty hand as far as its
+        // own visual goes: it always draws.
+        if support.is_none()
+            && !holds_gun_glove(world, self.get_held_entity())
             && !shows_hand_visual(world, self.get_held_entity())
         {
             return (Vec::new(), None);
@@ -441,13 +445,30 @@ impl VirtualHand {
         // renderer, so a hand that keeps holding the same thing pays for it
         // once; a held model with no mesh to close against reports `None` and
         // falls back to the generic wrap.
-        let fit = self.get_held_entity().and_then(|entity_id| {
-            let (model_name, scale) = vr_config::held_model_and_scale(world, entity_id)?;
-            renderer.fitted_grip(&model_name, self.handedness, scale, asset_cache)
-        });
-        let hold = match self.get_held_entity() {
-            Some(_) => crate::hand_glove::Hold::Item(fit.map(|fit| fit.amounts)),
-            None => crate::hand_glove::Hold::Empty,
+        // A support hand closes on the item at the point it latched, not at the
+        // item's own grip, so it fits against the same mesh placed there.
+        let fit = match support {
+            Some(latch) => vr_config::held_model_and_scale(world, latch.entity_id).and_then(
+                |(model_name, scale)| {
+                    renderer.support_grip(
+                        &model_name,
+                        self.handedness,
+                        scale,
+                        latch.point,
+                        asset_cache,
+                    )
+                },
+            ),
+            None => self.get_held_entity().and_then(|entity_id| {
+                let (model_name, scale) = vr_config::held_model_and_scale(world, entity_id)?;
+                renderer.fitted_grip(&model_name, self.handedness, scale, asset_cache)
+            }),
+        };
+        let hold = match (support, self.get_held_entity()) {
+            (Some(_), _) | (_, Some(_)) => {
+                crate::hand_glove::Hold::Item(fit.map(|fit| fit.amounts))
+            }
+            _ => crate::hand_glove::Hold::Empty,
         };
 
         let objects = renderer.render_hand(
@@ -1224,6 +1245,7 @@ mod tests {
             &input,
             None,
             None,
+            Default::default(),
         );
         assert_eq!(frob_message_count(&effects), 1, "first frame should Frob");
 
@@ -1239,6 +1261,7 @@ mod tests {
             &input,
             None,
             None,
+            Default::default(),
         );
         assert_eq!(
             frob_message_count(&effects),
@@ -1273,6 +1296,7 @@ mod tests {
             &input,
             None,
             None,
+            Default::default(),
         );
         assert_eq!(
             frob_message_count(&effects),
@@ -1295,6 +1319,7 @@ mod tests {
             &input,
             None,
             None,
+            Default::default(),
         );
         let frobbed_second = effects.iter().any(|effect| {
             matches!(

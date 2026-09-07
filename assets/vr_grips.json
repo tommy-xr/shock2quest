@@ -53,7 +53,17 @@
       0.123,
       -0.469
     ],
-    "mirror": "flip_x"
+    "mirror": "flip_x",
+    "support": [
+      {
+        "offset": [
+          -0.299,
+          0.025,
+          -0.008
+        ],
+        "family": "cylindrical"
+      }
+    ]
   },
   "ar15_w": {
     "rotation_deg": [
@@ -124,7 +134,17 @@
       0.083,
       -0.473
     ],
-    "mirror": "flip_x"
+    "mirror": "flip_x",
+    "support": [
+      {
+        "offset": [
+          -0.386,
+          0.019,
+          -0.035
+        ],
+        "family": "cylindrical"
+      }
+    ]
   },
   "fsn_h": {
     "rotation_deg": [
@@ -250,7 +270,17 @@
       -0.025,
       -0.693
     ],
-    "mirror": "flip_x"
+    "mirror": "flip_x",
+    "support": [
+      {
+        "offset": [
+          -0.382,
+          0.014,
+          -0.052
+        ],
+        "family": "cylindrical"
+      }
+    ]
   },
   "sg_w": {
     "rotation_deg": [
