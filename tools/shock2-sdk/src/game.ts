@@ -1,6 +1,8 @@
 import { HttpClient, HttpError } from "./client.js";
 import type {
   AnimationState,
+  TrackingPatch,
+  TrackingStatus,
   CommandResult,
   DebugEntityMessage,
   DevParamSetResult,
@@ -411,6 +413,16 @@ export class EntitiesApi {
 /** Discrete input actions and continuous input channels. */
 export class InputApi {
   constructor(private readonly client: HttpClient) {}
+
+  /** Patch opt-in floor-relative head/hand positions in meters (--vr only). */
+  async setTracking(patch: TrackingPatch): Promise<void> {
+    await this.client.post("/v1/control/tracking", patch);
+  }
+
+  /** Requested stage poses and resolved pawn-local eye/crouch diagnostics. */
+  async tracking(): Promise<TrackingStatus> {
+    return this.client.get<TrackingStatus>("/v1/control/tracking");
+  }
 
   /** Trigger a discrete action (as if its bound key was pressed). Applies on the next update. */
   async trigger(action: InputAction): Promise<CommandResult> {

@@ -27,6 +27,7 @@ use tracing::info;
 
 mod commands;
 mod lifecycle;
+mod tracking;
 use commands::*;
 use lifecycle::{DEFAULT_IDLE_TIMEOUT_SECS, IDLE_POLL_INTERVAL, IdleWatchdog};
 
@@ -412,6 +413,7 @@ async fn start_http_server(
         )
         .route("/v1/physics/colliders/validate", get(audit_colliders))
         .route("/v1/ragdoll/metrics", get(get_ragdoll_metrics))
+        .route("/v1/control/tracking", get(get_tracking).post(set_tracking))
         .route("/v1/control/input", get(get_input_state))
         .route("/v1/control/input", axum::routing::post(set_input_channel))
         .route(
@@ -629,6 +631,7 @@ fn run_game_blocking(
     // The head starts at the desktop default view; the SAME head rotation also
     // drives the render camera (below), so the flat viewmodel stays aligned with
     // what is rendered.
+    let mut tracking = tracking::TrackingSimulation::default();
     let mut current_input = InputContext::default();
     current_input.head.rotation = default_camera_head_rotation();
     // In VR mode, give the simulated hands a natural first-person rest pose
@@ -761,6 +764,8 @@ fn run_game_blocking(
                         frame_counter,
                         &mut action_state,
                         &mut current_input,
+                        &mut tracking,
+                        args.vr,
                         &last_scene,
                         last_scene_frame,
                         args.defer_transitions,
@@ -799,6 +804,9 @@ fn run_game_blocking(
             continue;
         }
 
+        tracking.update(game.player_is_gripping());
+        let effective_input = tracking_input(&game, &current_input, &tracking);
+
         // Only update the game if not paused or if step was requested
         let actual_game_time = if !is_paused || step_requested {
             // Deterministic stepping: while stepping (frame- or time-based) advance
@@ -818,7 +826,7 @@ fn run_game_blocking(
             };
             profile!(
                 "game.update",
-                game.update(&game_time, &current_input, &mut action_state)
+                game.update(&game_time, &effective_input, &mut action_state)
             );
             // An in-game transition (a frobbed bulkhead button, a trigger
             // volume) starts here; land it now for the same reason a warp does.
@@ -826,7 +834,7 @@ fn run_game_blocking(
                 complete_pending_transition(
                     &mut game,
                     &game_time,
-                    &current_input,
+                    &effective_input,
                     &mut action_state,
                 );
             }
@@ -912,13 +920,13 @@ fn run_game_blocking(
             // Still call update with zero time to maintain state consistency
             profile!(
                 "game.update",
-                game.update(&zero_time, &current_input, &mut action_state)
+                game.update(&zero_time, &effective_input, &mut action_state)
             );
             if !args.defer_transitions {
                 complete_pending_transition(
                     &mut game,
                     &zero_time,
-                    &current_input,
+                    &effective_input,
                     &mut action_state,
                 );
             }
@@ -938,7 +946,10 @@ fn run_game_blocking(
         // player is dying the game blends this tracked pose toward the fallen
         // death pose, once, for every runtime (see `shock2vr::death_camera`).
         // Alive, it hands back exactly what went in.
-        let render_context = resolved_camera(&game, pawn_offset, pawn_rotation, &current_input)
+        // Physics may have changed stance (or refused standing). Re-resolve
+        // the whole rig just as Quest does before drawing both eyes.
+        let rendered_input = tracking_input(&game, &current_input, &tracking);
+        let render_context = resolved_camera(&game, pawn_offset, pawn_rotation, &rendered_input)
             // Accumulated game time, not real time.
             .into_render_context(actual_game_time, projection_matrix, screen_size);
 
@@ -1066,13 +1077,16 @@ fn process_command(
     frame_counter: u64,
     action_state: &mut InputActionState,
     current_input: &mut InputContext,
+    tracking: &mut tracking::TrackingSimulation,
+    vr: bool,
     last_scene: &[commands::SceneObjectSummary],
     last_scene_frame: u64,
     defer_transitions: bool,
 ) {
+    let effective_input = tracking_input(game, current_input, tracking);
     match command {
         RuntimeCommand::GetInfo(reply) => {
-            let snapshot = capture_frame_snapshot(game, time, frame_counter, current_input);
+            let snapshot = capture_frame_snapshot(game, time, frame_counter, &effective_input);
             if let Err(_) = reply.send(snapshot) {
                 tracing::warn!("Failed to send frame snapshot - receiver dropped");
             }
@@ -1196,7 +1210,7 @@ fn process_command(
             // Land the warp before replying, so `success` and every later
             // request see the destination level (see `complete_pending_transition`).
             if !defer_transitions {
-                complete_pending_transition(game, time, current_input, action_state);
+                complete_pending_transition(game, time, &effective_input, action_state);
             }
             // Report the ACTUAL post-switch scene rather than assuming success.
             let mission = game.scene_name().to_string();
@@ -1449,13 +1463,13 @@ fn process_command(
             }
         }
         RuntimeCommand::GetCameraState(reply) => {
-            if reply.send(camera_snapshot(game, current_input)).is_err() {
+            if reply.send(camera_snapshot(game, &effective_input)).is_err() {
                 tracing::warn!("Failed to send camera state - receiver dropped");
             }
         }
         RuntimeCommand::SetCameraState { request, reply } => {
-            let result = apply_camera_request(game, current_input, &request)
-                .map(|()| camera_snapshot(game, current_input));
+            let result = apply_camera_request(game, &effective_input, &request)
+                .map(|()| camera_snapshot(game, &effective_input));
             if reply.send(result).is_err() {
                 tracing::warn!("Failed to send camera placement result - receiver dropped");
             }
@@ -2003,9 +2017,16 @@ fn process_command(
                 tracing::warn!("Failed to send impulse result - receiver dropped");
             }
         }
+        RuntimeCommand::GetTracking(reply) => {
+            let (head, _) = tracked_head(game, &effective_input);
+            let _ = reply.send(tracking.status(current_input, head));
+        }
+        RuntimeCommand::SetTracking(patch, reply) => {
+            let _ = reply.send(tracking.patch(patch, vr));
+        }
         RuntimeCommand::GetInput(reply) => {
             // Report the runtime-owned input state (what is fed to game.update).
-            let input_state = input_state_from_context(current_input);
+            let input_state = input_state_from_context(&effective_input);
             if let Err(_) = reply.send(input_state) {
                 tracing::warn!("Failed to send input state - receiver dropped");
             }
@@ -2059,6 +2080,11 @@ fn input_state_from_context(input: &InputContext) -> commands::InputState {
             pressed: p.pressed,
         }),
         head: commands::InputHead {
+            position: [
+                input.head.position.x,
+                input.head.position.y,
+                input.head.position.z,
+            ],
             rotation: [
                 input.head.rotation.v.x,
                 input.head.rotation.v.y,
@@ -2109,7 +2135,22 @@ fn input_snapshot_from_context(input: &InputContext) -> InputSnapshot {
 /// drift from the one that matters.
 /// The *tracked* head this runtime reports: the crouch-aware eye height and
 /// whatever `/v1/control/input` last aimed the head at.
+fn tracking_input(
+    game: &Game,
+    raw: &InputContext,
+    tracking: &tracking::TrackingSimulation,
+) -> InputContext {
+    tracking.resolve(
+        raw,
+        game.player_center_above_floor(),
+        game.player_eye_cap_above_center(),
+    )
+}
+
 fn tracked_head(game: &Game, input: &InputContext) -> (Vector3<f32>, Quaternion<f32>) {
+    if input.tracking.is_some() {
+        return (input.head.position, input.head.rotation);
+    }
     (
         vec3(0.0, game.player_eye_height() / SCALE_FACTOR, 0.0),
         input.head.rotation,
@@ -3985,6 +4026,34 @@ fn parse_input_patches(body: &serde_json::Value) -> Result<Vec<commands::InputPa
         .into_iter()
         .map(|(channel, value)| commands::InputPatch { channel, value })
         .collect())
+}
+
+/// Explicit, opt-in floor-relative pose simulation; does not reinterpret the
+/// existing pawn-local /control/input position channels.
+async fn set_tracking(
+    State(tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+    LenientJson(patch): LenientJson<tracking::TrackingPatch>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let (reply, response) = oneshot::channel();
+    tx.send(RuntimeCommand::SetTracking(patch, reply))
+        .map_err(|_| game_loop_unavailable())?;
+    match response.await {
+        Ok(Ok(())) => Ok(Json(serde_json::json!({"success": true}))),
+        Ok(Err(error)) => Err((StatusCode::BAD_REQUEST, error)),
+        Err(_) => Err(game_loop_unavailable()),
+    }
+}
+
+async fn get_tracking(
+    State(tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<tracking::TrackingStatus>, (StatusCode, String)> {
+    let (reply, response) = oneshot::channel();
+    tx.send(RuntimeCommand::GetTracking(reply))
+        .map_err(|_| game_loop_unavailable())?;
+    response
+        .await
+        .map(Json)
+        .map_err(|_| game_loop_unavailable())
 }
 
 /// HTTP endpoint handler: Set one or more input channel values.

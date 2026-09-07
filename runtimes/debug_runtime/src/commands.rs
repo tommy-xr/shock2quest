@@ -25,6 +25,11 @@ pub enum RuntimeCommand {
 
     /// Get current input state
     GetInput(oneshot::Sender<InputState>),
+    GetTracking(oneshot::Sender<crate::tracking::TrackingStatus>),
+    SetTracking(
+        crate::tracking::TrackingPatch,
+        oneshot::Sender<Result<(), String>>,
+    ),
 
     /// Set one or more input channel values. Replies `Ok(())` when every patch
     /// applied, or `Err(message)` describing the first invalid channel/value so
@@ -512,6 +517,7 @@ pub struct InputPointer {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InputHead {
+    pub position: [f32; 3],
     pub rotation: [f32; 4], // Quaternion [x, y, z, w]
 }
 
@@ -541,6 +547,7 @@ impl Default for InputState {
 impl Default for InputHead {
     fn default() -> Self {
         Self {
+            position: [0.0, shock2vr::input_context::DEFAULT_HEAD_HEIGHT, 0.0],
             rotation: [0.0, 0.0, 0.0, 1.0], // Identity quaternion
         }
     }
