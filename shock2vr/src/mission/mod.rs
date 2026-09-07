@@ -387,6 +387,10 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.player_two_hand()
     }
 
+    fn player_melee(&self) -> crate::game_scene::DebugMelee {
+        self.mission_core.player_melee()
+    }
+
     fn teleport_player(&mut self, position: Vector3<f32>) -> Result<(), String> {
         self.mission_core.teleport_player(position)
     }

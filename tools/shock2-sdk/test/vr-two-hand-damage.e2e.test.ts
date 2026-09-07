@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GameServer } from "../src/index.js";
-import type { MeleeSwing, Vec3 } from "../src/types.js";
+import type { EntitySummary, MeleeSwing, Vec3 } from "../src/types.js";
 
 // A one-handed swing of a two-handed weapon lands a lesser blow; a second hand
 // on the haft restores the full one. The latch is taken when the swing goes
@@ -185,6 +185,75 @@ test(
       (await game.info()).player.two_handed,
       true,
       "the late grab should still have attached the support hand",
+    );
+  },
+);
+
+// The readout reaches `/v1/info` through `Mission`'s own delegation to its
+// core, which is a separate list from the debug scenes' - a reading that works
+// in `debug_melee` can still be dead in every shipped level. So this one runs
+// in a real mission.
+//
+// Staging (the authored command2 Wrench, its mission object id, the hand
+// sweep) is `vr-melee-contact.e2e.test.ts`'s.
+const COMMAND2_WRENCH = 786;
+const REST: Vec3 = [0.7, 0.45, 0.3];
+const SWEEP_END: Vec3 = [0.05, 0.45, 3.4];
+
+test(
+  "VR: a real mission reports the swing it is billing",
+  { skip: !e2eEnabled, timeout: 600_000 },
+  async () => {
+    await using game = await GameServer.launch({
+      mission: "command2.mis",
+      debugFlags: ["--vr"],
+      echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
+    });
+    const wrench: EntitySummary | undefined = (
+      await game.entities.list({ filter: "Wrench", limit: 20 })
+    ).entities.find((candidate) => candidate.template_id === COMMAND2_WRENCH);
+    assert.ok(wrench, `expected the Wrench mission object ${COMMAND2_WRENCH}`);
+
+    await game.player.teleport({
+      x: wrench.position[0],
+      y: wrench.position[1] - 1.4,
+      z: wrench.position[2] + 1.2,
+    });
+    await game.input.lookAtWorldPoint(wrench.position);
+    await game.input.set("right_hand.position", [0, 1.4, 0]);
+    await game.input.set("right_hand.rotation", [0, 0, 0, 1]);
+    await game.input.set("right_hand.squeeze", 0);
+    await game.step({ frames: 2 });
+    await game.input.set("right_hand.squeeze", 1);
+    await game.step({ frames: 2 });
+    assert.equal(
+      (await game.info()).player.right_hand_entity_id,
+      wrench.id,
+      "the authored Wrench should be in hand",
+    );
+
+    await game.input.set("right_hand.position", REST);
+    await game.step({ frames: 30 });
+
+    const FRAMES = 60;
+    const hot: MeleeSwing[] = [];
+    for (let frame = 1; frame <= FRAMES; frame += 1) {
+      const t = frame / FRAMES;
+      await game.input.set("right_hand.position", [
+        REST[0] + (SWEEP_END[0] - REST[0]) * t,
+        REST[1],
+        REST[2] + (SWEEP_END[2] - REST[2]) * t,
+      ]);
+      await game.step({ frames: 1 });
+      const sample = (await game.info()).player.melee.swing;
+      if (sample.hot) hot.push(sample);
+    }
+    assert.ok(hot.length > 0, "a real mission must report the swing it bills");
+    assertSwingWorth(
+      hot,
+      false,
+      ONE_HAND_SCALE,
+      "a one-handed wrench swing in command2",
     );
   },
 );
