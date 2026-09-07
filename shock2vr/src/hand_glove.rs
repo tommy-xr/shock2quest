@@ -9,12 +9,13 @@
 //! forearm mesh.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use cgmath::{Matrix4, Quaternion, Vector3};
+use cgmath::{EuclideanSpace, Matrix4, Point3, Quaternion, Transform, Vector3};
 use dark::{
     glb_model::GlbModel,
-    importers::{GLB_MODELS_IMPORTER, TEXTURE_IMPORTER},
+    importers::{GLB_MODELS_IMPORTER, TEXTURE_IMPORTER, VR_CONTACT_MESH_IMPORTER, VrContactMesh},
 };
 use engine::{
     assets::asset_cache::AssetCache,
@@ -22,8 +23,9 @@ use engine::{
 };
 
 use crate::{
+    hand_fit::{self, Capsule, ContactMesh, Finger, GripFamily, HandRig},
     hand_pose::{self, FingerAmounts, HandPoseRetarget, Pose},
-    vr_config::Handedness,
+    vr_config::{self, FingerOverrides, Handedness},
 };
 
 const GLOVE_MODEL: &str = "vr_glove_model.glb";
@@ -165,6 +167,9 @@ pub struct GloveRenderer {
     /// materials re-tinted per hand would give them both whichever colour was
     /// written last.
     materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
+    /// Solved grips, one per [`GripKey`]. The fit is a one-off per held model,
+    /// never a per-frame cost.
+    fits: HashMap<GripKey, FingerAmounts>,
 }
 
 /// An authored pose a hand can be shown in when nothing analog is driving it -
@@ -216,6 +221,7 @@ impl GloveRenderer {
             fist: hand_pose::fist_right_hand(),
             point: hand_pose::point_right_hand(),
             materials,
+            fits: HashMap::new(),
         })
     }
 
@@ -232,12 +238,12 @@ impl GloveRenderer {
         hand_to_world: Matrix4<f32>,
         trigger_value: f32,
         squeeze_value: f32,
-        holding: bool,
+        holding: Option<Option<FingerAmounts>>,
         light: HandLight,
         preshape: HandPreshape,
     ) -> Vec<SceneObject> {
-        let amounts = if holding {
-            grip_amounts(trigger_value)
+        let amounts = if let Some(fit) = holding {
+            grip_amounts(fit, trigger_value)
         } else {
             // Empty hand: index follows the trigger; the other fingers follow
             // the squeeze. A full squeeze also curls the index so a squeezed
@@ -252,7 +258,7 @@ impl GloveRenderer {
         };
         let pose = self.open.blend_per_finger(&self.fist, &amounts);
         // A full hand has nothing to reach for, so it is never prompted.
-        let pose = if holding {
+        let pose = if holding.is_some() {
             pose
         } else {
             prompted_pose(pose, &self.fist, &self.point, preshape)
@@ -264,6 +270,29 @@ impl GloveRenderer {
             &pose,
             hand_to_world,
         )
+    }
+
+    /// The fitted grip for a held item, solved once and remembered.
+    ///
+    /// Solved on the frame the item first appears in the hand rather than at
+    /// the grab itself: the answer depends only on the model, the hand and the
+    /// wield's scale, all of which the key carries, so one entry serves every
+    /// later pickup of the same thing.
+    pub fn fitted_grip(&mut self, key: GripKey, mesh: &ContactMesh) -> FingerAmounts {
+        if let Some(cached) = self.fits.get(&key) {
+            return *cached;
+        }
+        let family = key.family();
+        let mut rig = GloveRig {
+            model: &mut self.model,
+            retarget: &self.retarget,
+            open: &self.open,
+            fist: &self.fist,
+            to_hand: glove_model_to_hand(),
+        };
+        let fitted = hand_fit::fit(&mut rig, mesh, family);
+        self.fits.insert(key, fitted);
+        fitted
     }
 
     /// Build the glove in one of the authored [`StaticHandPose`]s.
@@ -316,8 +345,7 @@ impl GloveRenderer {
         // fingers up with where the hand points. Verified against the
         // raycast hit markers in-game; on-headset fine tuning would adjust
         // this rotation.
-        let grip = Matrix4::from_angle_y(cgmath::Deg(180.0));
-        let world = hand_to_world * grip * Matrix4::from_scale(GLOVE_SCALE);
+        let world = hand_to_world * glove_model_to_hand();
 
         let mut objects = model.to_scene_objects_with_skinning();
         for (object, material) in objects.iter_mut().zip(skin) {
@@ -327,6 +355,144 @@ impl GloveRenderer {
 
         objects
     }
+}
+
+/// Thickness of a finger's phalanx capsule, in world units - the flesh the
+/// fit stops on rather than the bone the rig gives it.
+const FINGER_RADIUS: f32 = 0.0075 / crate::METERS_PER_WORLD_UNIT;
+
+/// The thumb is thicker than the fingers, and lands flatter on an item.
+const THUMB_RADIUS: f32 = 0.0095 / crate::METERS_PER_WORLD_UNIT;
+
+/// SteamVR bones along one finger, knuckle to tip. The metacarpal (the first
+/// bone of each chain) is buried in the palm and cannot touch anything, so
+/// every chain starts one bone in.
+fn phalanx_bones(finger: Finger) -> &'static [usize] {
+    match finger {
+        Finger::Thumb => &[3, 4, 5],
+        Finger::Index => &[7, 8, 9, 10],
+        Finger::Middle => &[12, 13, 14, 15],
+        Finger::Ring => &[17, 18, 19, 20],
+        Finger::Pinky => &[22, 23, 24, 25],
+    }
+}
+
+/// Glove model space -> hand space: the same seat [`GloveRenderer::render_posed`]
+/// draws the glove at, so the fit measures the hand the player actually sees.
+fn glove_model_to_hand() -> Matrix4<f32> {
+    Matrix4::from_angle_y(cgmath::Deg(180.0)) * Matrix4::from_scale(GLOVE_SCALE)
+}
+
+/// The glove as the finger fit poses it: one finger curled from `open` toward
+/// `fist`, its phalanges read straight back out of the rig.
+struct GloveRig<'a> {
+    model: &'a mut GlbModel,
+    retarget: &'a HandPoseRetarget,
+    open: &'a Pose,
+    fist: &'a Pose,
+    to_hand: Matrix4<f32>,
+}
+
+impl HandRig for GloveRig<'_> {
+    fn phalanges(&mut self, finger: Finger, curl: f32) -> Vec<Capsule> {
+        let pose = self.open.blend_per_finger(self.fist, &finger.alone(curl));
+        self.retarget.apply(&pose, self.model);
+
+        let radius = if finger == Finger::Thumb {
+            THUMB_RADIUS
+        } else {
+            FINGER_RADIUS
+        };
+        let joints = phalanx_bones(finger)
+            .iter()
+            .filter_map(|joint| {
+                let node = self.model.skeleton().node_index_for_joint(*joint)?;
+                let global = self.model.get_global_transform(node)?;
+                Some(
+                    self.to_hand
+                        .transform_point(Point3::from_vec(global.w.truncate())),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        joints
+            .windows(2)
+            .map(|bone| Capsule {
+                a: bone[0],
+                b: bone[1],
+                radius,
+            })
+            .collect()
+    }
+}
+
+/// What a fitted grip is cached under. The solve depends on the item's
+/// geometry in hand space and nothing else, and those four values are what
+/// decide it: the model, which hand's reflection it is seen through, the
+/// family whose envelope it was solved in, and the scale the wield baked into
+/// the geometry.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GripKey {
+    model: String,
+    handedness: Handedness,
+    family: GripFamily,
+    /// `f32` has no `Hash`; the bit pattern is the exact-equality the cache
+    /// wants anyway - a different scale is a different solve.
+    scale_bits: u32,
+}
+
+impl GripKey {
+    pub fn new(model: &str, handedness: Handedness, family: GripFamily, scale: f32) -> Self {
+        Self {
+            model: model.to_ascii_lowercase(),
+            handedness,
+            family,
+            scale_bits: scale.to_bits(),
+        }
+    }
+
+    pub fn family(&self) -> GripFamily {
+        self.family
+    }
+}
+
+/// Everything the fit needs about one model held in one hand: the key to
+/// remember the solve under, its render mesh in hand space, and the per-finger
+/// corrections to write over the answer.
+///
+/// `None` when the model has no mesh to close against - a missing asset, or a
+/// skinned rig (the melee `_h` set, which draws its own arm anyway).
+pub fn grip_request(
+    model_name: &str,
+    handedness: Handedness,
+    gun_scale: f32,
+    asset_cache: &mut AssetCache,
+) -> Option<(GripKey, ContactMesh, FingerOverrides)> {
+    let triangles = asset_cache
+        .get_opt::<_, VrContactMesh, _>(&VR_CONTACT_MESH_IMPORTER, &format!("{model_name}.BIN"))?;
+
+    let to_hand = vr_config::held_model_hand_transform(model_name, handedness, gun_scale);
+    let mesh = ContactMesh::new(
+        triangles
+            .0
+            .iter()
+            .map(|triangle| triangle.map(|corner| to_hand.transform_point(corner)))
+            .collect(),
+    );
+    if mesh.is_empty() {
+        return None;
+    }
+
+    let hint = vr_config::grip_hint(model_name);
+    let family = hint
+        .family
+        .or_else(|| mesh.extents().map(hand_fit::family_from_extents))?;
+
+    Some((
+        GripKey::new(model_name, handedness, family, gun_scale),
+        mesh,
+        hint.fingers,
+    ))
 }
 
 /// Where a tracked hand's own space sits in the world.
@@ -343,19 +509,30 @@ pub fn hand_to_world(
     Matrix4::from_translation(position) * Matrix4::from(rotation) * handedness.mirror()
 }
 
-/// The curl of a hand closed around something it is holding: fingers wrapped on
-/// the handle, thumb locked, index resting on the trigger and curling with the
-/// pull (the squeeze is what holds the item, so it doesn't drive the pose here).
-/// Constants tuned visually against the held pistol.
-fn grip_amounts(trigger_value: f32) -> FingerAmounts {
+/// The curl of a hand closed around something it is holding: the grip fitted
+/// to that item's own mesh when there is one, else the generic wrap below.
+///
+/// The trigger always adds curl on top of the index, from wherever the fit
+/// left it: a real pull outranks a fitted rest position, the same way it
+/// outranks a pre-shape. The squeeze is what holds the item, so it does not
+/// drive the pose here.
+fn grip_amounts(fit: Option<FingerAmounts>, trigger_value: f32) -> FingerAmounts {
+    let base = fit.unwrap_or(GENERIC_GRIP);
     FingerAmounts {
-        thumb: 0.85,
-        index: 0.5 + 0.5 * trigger_value,
-        middle: 0.9,
-        ring: 0.9,
-        pinky: 0.9,
+        index: base.index + (1.0 - base.index) * trigger_value,
+        ..base
     }
 }
+
+/// The wrap a hand falls back on when the item has no mesh to fit against.
+/// Constants tuned visually against the held pistol.
+const GENERIC_GRIP: FingerAmounts = FingerAmounts {
+    thumb: 0.85,
+    index: 0.5,
+    middle: 0.9,
+    ring: 0.9,
+    pinky: 0.9,
+};
 
 /// One glove material, in a cell of its own. Shared with the `debug_gloves`
 /// harness so the two can't assemble the glove differently.
@@ -514,6 +691,54 @@ mod tests {
                 "the grip prompt moved bone {bone} of an already closed hand"
             );
         }
+    }
+
+    /// Everything the solve depends on is in the key, and nothing else is: the
+    /// same model in the other hand, at another scale, or under another family
+    /// is a different fit and must not be served the cached one - while the
+    /// same model spelled differently is the same fit.
+    #[test]
+    fn a_grip_is_cached_by_what_the_solve_depends_on() {
+        let base = GripKey::new("atek_h", Handedness::Right, GripFamily::Trigger, 0.4);
+
+        assert_eq!(
+            base,
+            GripKey::new("ATEK_H", Handedness::Right, GripFamily::Trigger, 0.4)
+        );
+        for other in [
+            GripKey::new("sg_h", Handedness::Right, GripFamily::Trigger, 0.4),
+            GripKey::new("atek_h", Handedness::Left, GripFamily::Trigger, 0.4),
+            GripKey::new("atek_h", Handedness::Right, GripFamily::Cylindrical, 0.4),
+            GripKey::new("atek_h", Handedness::Right, GripFamily::Trigger, 1.0),
+        ] {
+            assert_ne!(base, other, "{other:?} must not reuse {base:?}");
+        }
+    }
+
+    /// A trigger pull only ever adds curl to the index, from wherever the fit
+    /// left it - and touches nothing else.
+    #[test]
+    fn a_trigger_pull_closes_the_fitted_index_the_rest_of_the_way() {
+        let fitted = FingerAmounts {
+            thumb: 0.7,
+            index: 0.3,
+            middle: 0.6,
+            ring: 0.6,
+            pinky: 0.6,
+        };
+
+        let resting = grip_amounts(Some(fitted), 0.0);
+        assert_eq!(resting.index, fitted.index);
+        assert_eq!(resting.middle, fitted.middle);
+
+        let pulled = grip_amounts(Some(fitted), 1.0);
+        assert_eq!(pulled.index, 1.0);
+        assert_eq!(pulled.middle, fitted.middle);
+        assert_eq!(pulled.thumb, fitted.thumb);
+
+        // No fit: the generic wrap, still with the trigger on top.
+        assert_eq!(grip_amounts(None, 0.0).index, GENERIC_GRIP.index);
+        assert_eq!(grip_amounts(None, 1.0).index, 1.0);
     }
 
     /// The uncorrected glove is undersized, not oversized - a scale below 1.0

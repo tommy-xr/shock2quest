@@ -148,6 +148,13 @@ pub trait PlayerInteraction {
 
     /// What this hand could do with whatever it is pointing at. Flatscreen has
     /// no per-hand affordance to report.
+    /// The grip this hand's last render fitted to whatever it holds. `None`
+    /// for a hand holding nothing, holding something with no mesh to fit
+    /// against, or on a presentation with no glove at all.
+    fn fitted_grip(&self, _hand: Handedness) -> Option<crate::game_scene::DebugHandGrip> {
+        None
+    }
+
     fn hand_affordance(&self, _hand: Handedness) -> crate::hand_affordance::HandAffordance {
         crate::hand_affordance::HandAffordance::None
     }
@@ -178,6 +185,10 @@ pub struct VrInteraction {
     glove_renderer: RefCell<Option<Option<GloveRenderer>>>,
     /// Which hands hold a climbing hold, and which one moves the body.
     hand_climb: crate::vr_climb::HandClimb,
+    /// The grip each hand's last render fitted, indexed by
+    /// `vr_config::hand_slot`. Written where the fit is solved (render, which
+    /// owns the glove and the asset cache) and read by the debug readout.
+    fitted_grips: RefCell<[Option<crate::game_scene::DebugHandGrip>; 2]>,
 }
 
 impl VrInteraction {
@@ -187,6 +198,7 @@ impl VrInteraction {
             right_hand: VirtualHand::new(Handedness::Right),
             glove_renderer: RefCell::new(None),
             hand_climb: crate::vr_climb::HandClimb::default(),
+            fitted_grips: RefCell::new([None, None]),
         }
     }
 }
@@ -307,6 +319,10 @@ impl PlayerInteraction for VrInteraction {
         }
     }
 
+    fn fitted_grip(&self, hand: Handedness) -> Option<crate::game_scene::DebugHandGrip> {
+        self.fitted_grips.borrow()[crate::vr_config::hand_slot(hand)]
+    }
+
     fn render(
         &self,
         asset_cache: &mut AssetCache,
@@ -321,12 +337,15 @@ impl PlayerInteraction for VrInteraction {
         let mut objs = Vec::new();
         match glove_renderer {
             Some(renderer) => {
-                objs.append(&mut self.left_hand.render(world, Some(renderer)));
-                objs.append(&mut self.right_hand.render(world, Some(renderer)));
+                let mut grips = self.fitted_grips.borrow_mut();
+                for hand in [&self.left_hand, &self.right_hand] {
+                    let (mut hand_objects, grip) = hand.render(world, asset_cache, renderer);
+                    grips[crate::vr_config::hand_slot(hand.handedness())] = grip;
+                    objs.append(&mut hand_objects);
+                }
             }
             None => {
-                objs.append(&mut self.left_hand.render(world, None));
-                objs.append(&mut self.right_hand.render(world, None));
+                *self.fitted_grips.borrow_mut() = [None, None];
             }
         }
         // Feedback comes from the resolved holds, never a second proximity

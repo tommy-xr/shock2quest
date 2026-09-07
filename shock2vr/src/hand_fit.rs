@@ -37,7 +37,7 @@ impl Finger {
     ];
 
     /// Where this finger's curl lands in a [`FingerAmounts`].
-    fn set(self, amounts: &mut FingerAmounts, curl: f32) {
+    pub fn set(self, amounts: &mut FingerAmounts, curl: f32) {
         match self {
             Finger::Thumb => amounts.thumb = curl,
             Finger::Index => amounts.index = curl,
@@ -45,6 +45,25 @@ impl Finger {
             Finger::Ring => amounts.ring = curl,
             Finger::Pinky => amounts.pinky = curl,
         }
+    }
+
+    /// This finger's curl out of a [`FingerAmounts`].
+    pub fn curl_of(self, amounts: &FingerAmounts) -> f32 {
+        match self {
+            Finger::Thumb => amounts.thumb,
+            Finger::Index => amounts.index,
+            Finger::Middle => amounts.middle,
+            Finger::Ring => amounts.ring,
+            Finger::Pinky => amounts.pinky,
+        }
+    }
+
+    /// A blend that curls only this finger - what the solver poses the rig
+    /// with while it searches one finger at a time.
+    pub fn alone(self, curl: f32) -> FingerAmounts {
+        let mut amounts = FingerAmounts::default();
+        self.set(&mut amounts, curl);
+        amounts
     }
 }
 
@@ -617,16 +636,9 @@ mod tests {
     /// Whether the hand, curled by `amounts`, is inside the mesh anywhere.
     fn penetrates(mesh: &ContactMesh, amounts: &FingerAmounts) -> bool {
         let all = (0..mesh.triangle_count()).collect::<Vec<_>>();
-        Finger::ALL.iter().any(|finger| {
-            let curl = match finger {
-                Finger::Thumb => amounts.thumb,
-                Finger::Index => amounts.index,
-                Finger::Middle => amounts.middle,
-                Finger::Ring => amounts.ring,
-                Finger::Pinky => amounts.pinky,
-            };
-            mesh.touches(&FlatHand.phalanges(*finger, curl), &all)
-        })
+        Finger::ALL
+            .iter()
+            .any(|finger| mesh.touches(&FlatHand.phalanges(*finger, finger.curl_of(amounts)), &all))
     }
 
     fn closed_fist() -> FingerAmounts {

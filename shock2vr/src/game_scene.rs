@@ -391,6 +391,22 @@ pub struct DebugClimbState {
 pub struct DebugHandAffordances {
     pub left: &'static str,
     pub right: &'static str,
+    /// The grip each hand fitted to whatever it holds, when it holds
+    /// something with a mesh to fit against.
+    pub left_grip: Option<DebugHandGrip>,
+    pub right_grip: Option<DebugHandGrip>,
+}
+
+/// A hand's fitted grip: the family the fit solved in, and the curl it left
+/// each finger at (0 = open, 1 = closed fist), before the trigger adds its own.
+#[derive(Debug, Serialize, Clone, Copy)]
+pub struct DebugHandGrip {
+    pub family: &'static str,
+    pub thumb: f32,
+    pub index: f32,
+    pub middle: f32,
+    pub ring: f32,
+    pub pinky: f32,
 }
 
 /// A scene with no hands reports the same name an idle hand does, so the field
@@ -401,6 +417,8 @@ impl Default for DebugHandAffordances {
         Self {
             left: idle,
             right: idle,
+            left_grip: None,
+            right_grip: None,
         }
     }
 }

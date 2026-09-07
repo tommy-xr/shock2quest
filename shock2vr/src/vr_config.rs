@@ -3,11 +3,13 @@ use std::collections::HashMap;
 use cgmath::{Deg, Quaternion, Rotation3, Vector3, vec3};
 use dark::properties::PropModelName;
 
+use crate::hand_fit::GripFamily;
+use crate::hand_pose::FingerAmounts;
 use crate::runtime_props::{RuntimePropVrGripOffset, RuntimePropVrGunWield};
 use once_cell::sync::Lazy;
 use shipyard::{EntityId, Get, View, World};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Handedness {
     Left,
     Right,
@@ -689,6 +691,124 @@ pub fn get_vr_hand_model_adjustments_from_model(
     } else {
         adjustments.right_hand.clone()
     }
+}
+
+/// A per-model steer for the finger fit, keyed like [`HAND_MODEL_POSITIONING`].
+///
+/// Two levels of override only: the **family hint**, which picks the curl
+/// envelope the solve runs in, and a **finger correction**, which pins one
+/// finger the solve gets wrong. Everything else stays automatic - the grip's
+/// wrist placement is already the positioning table's job, and a fully
+/// authored per-finger grip waits for a tuner that can author it.
+#[derive(Clone, Default)]
+pub struct GripHint {
+    /// The family to solve in; `None` measures it off the item's own box.
+    pub family: Option<GripFamily>,
+    /// Curls written over the solved result, per finger.
+    pub fingers: FingerOverrides,
+}
+
+/// Per-finger curl corrections, `None` where the solve stands.
+#[derive(Clone, Copy, Default)]
+pub struct FingerOverrides {
+    pub thumb: Option<f32>,
+    pub index: Option<f32>,
+    pub middle: Option<f32>,
+    pub ring: Option<f32>,
+    pub pinky: Option<f32>,
+}
+
+impl FingerOverrides {
+    /// Write whatever is set over a solved grip.
+    pub fn apply(&self, amounts: &mut FingerAmounts) {
+        for (over, amount) in [
+            (self.thumb, &mut amounts.thumb),
+            (self.index, &mut amounts.index),
+            (self.middle, &mut amounts.middle),
+            (self.ring, &mut amounts.ring),
+            (self.pinky, &mut amounts.pinky),
+        ] {
+            if let Some(over) = over {
+                *amount = over;
+            }
+        }
+    }
+}
+
+/// The models whose measured box lies about how they are held. Everything not
+/// listed is solved from its own geometry; the gun `_h` set gets
+/// [`GripFamily::Trigger`] from [`is_vr_gun_view_model`] rather than an entry
+/// each.
+static GRIP_HINTS: Lazy<HashMap<&str, GripHint>> = Lazy::new(|| {
+    HashMap::from([
+        // The mug's handle is a sub-feature its bounding box knows nothing
+        // about: measured, it is a fat cylinder and the hand would wrap the
+        // body. Pinch puts the thumb and index through the handle and holds
+        // the other three clear of the hot side.
+        (
+            "mug",
+            GripHint {
+                family: Some(GripFamily::Pinch),
+                ..GripHint::default()
+            },
+        ),
+    ])
+});
+
+/// How `model_name` should be held, when the data says something the geometry
+/// does not.
+pub fn grip_hint(model_name: &str) -> GripHint {
+    let name = model_name.to_ascii_lowercase();
+    if let Some(hint) = GRIP_HINTS.get(name.as_str()) {
+        return hint.clone();
+    }
+    GripHint {
+        // A gun is held by name, not by measurement: its grip looks like any
+        // other handle, but the index belongs on the trigger.
+        family: is_vr_gun_view_model(&name).then_some(GripFamily::Trigger),
+        ..GripHint::default()
+    }
+}
+
+/// Where a held model's geometry sits in the **glove's own hand space**, so
+/// the finger fit and the grip debug scene measure the item in the frame the
+/// fingers are posed in.
+///
+/// Three things compose. The wield seats the item in the hand's *rotation*
+/// frame ([`get_vr_hand_model_adjustments_from_model`], its offset scaled with
+/// the geometry). A gun's geometry additionally carries the wield's own bake -
+/// the life-size shrink and, for the left hand, [`Handedness::gun_mirror`] -
+/// which `Effect::ChangeModel` applies to the runtime model but not to the
+/// mesh an importer hands back. And the glove itself is drawn through
+/// [`Handedness::mirror`], which this divides back out.
+pub fn held_model_hand_transform(
+    model_name: &str,
+    handedness: Handedness,
+    gun_scale: f32,
+) -> cgmath::Matrix4<f32> {
+    use cgmath::{Matrix4, SquareMatrix};
+
+    let seat = gun_wield_adjustments(model_name, handedness, gun_scale);
+    let bake = if is_vr_gun_view_model(model_name) {
+        gun_wield_model_transform(handedness, gun_scale)
+    } else {
+        Matrix4::identity()
+    };
+
+    handedness
+        .mirror()
+        .invert()
+        .unwrap_or_else(Matrix4::identity)
+        * Matrix4::from_translation(seat.offset)
+        * Matrix4::from(seat.rotation)
+        * bake
+}
+
+/// The model a hand is holding and the scale its wield baked into it, for
+/// anything that has to measure the held geometry.
+pub fn held_model_and_scale(world: &World, entity_id: EntityId) -> Option<(String, f32)> {
+    let model_name = model_name_lower(world, entity_id)?;
+    Some((model_name, gun_wield_scale_of_entity(world, entity_id)))
 }
 
 #[cfg(test)]

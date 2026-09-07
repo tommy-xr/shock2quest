@@ -11726,6 +11726,8 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         Some(crate::game_scene::DebugHandAffordances {
             left: self.interaction.hand_affordance(Handedness::Left).as_str(),
             right: self.interaction.hand_affordance(Handedness::Right).as_str(),
+            left_grip: self.interaction.fitted_grip(Handedness::Left),
+            right_grip: self.interaction.fitted_grip(Handedness::Right),
         })
     }
 

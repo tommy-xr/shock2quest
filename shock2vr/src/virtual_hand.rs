@@ -5,6 +5,7 @@ use dark::{
     SCALE_FACTOR,
     properties::{FrobFlag, PropFrobInfo, PropModelName},
 };
+use engine::assets::asset_cache::AssetCache;
 use engine::scene::SceneObject;
 use engine::script_log;
 
@@ -391,17 +392,21 @@ impl VirtualHand {
         self.affordance.state()
     }
 
-    /// Render the glove for this hand. The hand renderer is owned by the caller
-    /// (`VrInteraction`) so its cached state is shared between both hands.
+    /// Which hand this is.
+    pub fn handedness(&self) -> Handedness {
+        self.handedness
+    }
+
+    /// Render the glove for this hand, and report the grip it fitted to
+    /// whatever the hand holds. The hand renderer is owned by the caller
+    /// (`VrInteraction`) so its cached state - the fit cache included - is
+    /// shared between both hands.
     pub fn render(
         &self,
         world: &World,
-        glove_renderer: Option<&mut crate::hand_glove::GloveRenderer>,
-    ) -> Vec<SceneObject> {
-        let Some(renderer) = glove_renderer else {
-            return Vec::new();
-        };
-
+        asset_cache: &mut AssetCache,
+        renderer: &mut crate::hand_glove::GloveRenderer,
+    ) -> (Vec<SceneObject>, Option<crate::game_scene::DebugHandGrip>) {
         // A wielded gun draws the glove in place of the baked hand the wield
         // stripped off it; everything else draws it at the tracked hand, or not
         // at all when the held model draws a hand of its own. Either way the
@@ -410,19 +415,47 @@ impl VirtualHand {
         if !holds_gun_glove(world, self.get_held_entity())
             && !shows_hand_visual(world, self.get_held_entity())
         {
-            return Vec::new();
+            return (Vec::new(), None);
         }
         let hand = crate::hand_glove::hand_to_world(self.position, self.rotation, self.handedness);
 
-        renderer.render_hand(
+        // The fit is solved against the held item's own mesh and cached by the
+        // renderer, so a hand that keeps holding the same thing pays for it
+        // once; a held model with no mesh to close against reports `None` and
+        // falls back to the generic wrap.
+        let mut family = None;
+        let holding = self.get_held_entity().map(|entity_id| {
+            let (model_name, scale) = vr_config::held_model_and_scale(world, entity_id)?;
+            let (key, mesh, corrections) =
+                crate::hand_glove::grip_request(&model_name, self.handedness, scale, asset_cache)?;
+            family = Some(key.family());
+            let mut fitted = renderer.fitted_grip(key, &mesh);
+            corrections.apply(&mut fitted);
+            Some(fitted)
+        });
+
+        let objects = renderer.render_hand(
             hand,
             self.trigger_value,
             self.squeeze_value,
-            self.get_held_entity().is_some(),
+            holding,
             // Eligibility lights the glove; the action shapes it.
             self.affordance.state().light(),
             self.affordance.preshape(),
-        )
+        );
+
+        let grip = holding.flatten().zip(family).map(|(fitted, family)| {
+            crate::game_scene::DebugHandGrip {
+                family: family.as_str(),
+                thumb: fitted.thumb,
+                index: fitted.index,
+                middle: fitted.middle,
+                ring: fitted.ring,
+                pinky: fitted.pinky,
+            }
+        });
+
+        (objects, grip)
     }
 }
 
