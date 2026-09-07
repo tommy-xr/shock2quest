@@ -642,10 +642,28 @@ export type HandAffordance =
   | "Blocked"
   | "Failed";
 
-/** Both hands' affordances (GET /v1/info). */
+/** Both hands' affordances, and the grip each one fitted (GET /v1/info). */
 export interface HandAffordances {
   left: HandAffordance;
   right: HandAffordance;
+  /** The grip the left hand fitted to what it holds, or null. */
+  left_grip: HandGrip | null;
+  /** The grip the right hand fitted to what it holds, or null. */
+  right_grip: HandGrip | null;
+}
+
+/** The grip family a fit solved in. */
+export type GripFamily = "cylindrical" | "pinch" | "broad" | "trigger";
+
+/** A hand's fitted grip: how far each finger curled from open (0) toward a
+ * closed fist (1), before the trigger adds its own pull on the index. */
+export interface HandGrip {
+  family: GripFamily;
+  thumb: number;
+  index: number;
+  middle: number;
+  ring: number;
+  pinky: number;
 }
 
 /** One hand's hold in the /v1/info climb readout. */
