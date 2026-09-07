@@ -390,6 +390,9 @@ pub struct GloveWeaponModel {
     pub melee_joints: Option<[Matrix4<f32>; MAX_SKINNED_JOINTS]>,
 }
 
+/// Pose guide shared by the melee renderer and prepared-grip source validation.
+pub const GLOVE_MELEE_POSE_CLIP: &str = "ph212203_.mc";
+
 pub static GLOVE_WEAPON_IMPORTER: Lazy<
     AssetImporter<SystemShockContentModel, Option<GloveWeaponModel>, ()>,
 > = Lazy::new(|| {
@@ -404,7 +407,7 @@ pub static GLOVE_WEAPON_IMPORTER: Lazy<
                 {
                     return None;
                 }
-                let clip = cache.get_opt(&super::ANIMATION_CLIP_IMPORTER, "ph212203_.mc")?;
+                let clip = cache.get_opt(&super::ANIMATION_CLIP_IMPORTER, GLOVE_MELEE_POSE_CLIP)?;
                 let player = AnimationPlayer::with_root_motion_cancelled(
                     &AnimationPlayer::from_completed_animation(clip),
                 );

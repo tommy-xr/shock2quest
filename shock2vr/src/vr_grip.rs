@@ -608,11 +608,17 @@ impl Default for GripLibrary {
 /// sampled pose arcs change. Quantize below visible precision (0.076 mm) so
 /// host/Quest floating-point differences and signed zero do not invalidate a bake.
 fn fingerprint(values: impl IntoIterator<Item = f32>) -> String {
+    fingerprint_bytes(
+        values
+            .into_iter()
+            .flat_map(|value| ((value * 10_000.0).round() as i64).to_le_bytes()),
+    )
+}
+
+pub(crate) fn fingerprint_bytes(bytes: impl IntoIterator<Item = u8>) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
-    for value in values {
-        for byte in ((value * 10_000.0).round() as i64).to_le_bytes() {
-            hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
-        }
+    for byte in bytes {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3);
     }
     format!("{hash:016x}")
 }

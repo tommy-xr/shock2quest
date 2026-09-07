@@ -366,7 +366,7 @@
       "authored": true,
       "model": "wrench_h",
       "hand": "left",
-      "surface_hash": "b60b69f44acee767",
+      "surface_hash": "melee-source-v1:ddda920ecc1537cf",
       "kinematics_hash": "fc822f2d8e6d2d89",
       "hints_hash": "3e42e05263705d8b",
       "grip": {
@@ -601,7 +601,7 @@
     {
       "model": "rapier_h",
       "hand": "left",
-      "surface_hash": "6d329510bb5130a3",
+      "surface_hash": "melee-source-v1:ff0250dc3c089cb7",
       "kinematics_hash": "fc822f2d8e6d2d89",
       "hints_hash": "3e42e05263705d8b",
       "grip": {
@@ -665,7 +665,7 @@
     {
       "model": "shard_h",
       "hand": "left",
-      "surface_hash": "5985cf3c2791a1f2",
+      "surface_hash": "melee-source-v1:ba7a57ec9258a1f7",
       "kinematics_hash": "fc822f2d8e6d2d89",
       "hints_hash": "3e42e05263705d8b",
       "grip": {
@@ -729,7 +729,7 @@
     {
       "model": "psword_h",
       "hand": "left",
-      "surface_hash": "373984e46346144f",
+      "surface_hash": "melee-source-v1:7676f21cbfa48c6c",
       "kinematics_hash": "fc822f2d8e6d2d89",
       "hints_hash": "3e42e05263705d8b",
       "grip": {
@@ -974,7 +974,7 @@
       "authored": true,
       "model": "wrench_h",
       "hand": "right",
-      "surface_hash": "e8a35331abc8357e",
+      "surface_hash": "melee-source-v1:d0e92143f4bfdb0a",
       "kinematics_hash": "30ce474673f17dd7",
       "hints_hash": "3e42e05263705d8b",
       "grip": {
@@ -1209,7 +1209,7 @@
     {
       "model": "rapier_h",
       "hand": "right",
-      "surface_hash": "85bca09b3eadc8a7",
+      "surface_hash": "melee-source-v1:3fcd1ec1d658d082",
       "kinematics_hash": "30ce474673f17dd7",
       "hints_hash": "3e42e05263705d8b",
       "grip": {
@@ -1273,7 +1273,7 @@
     {
       "model": "shard_h",
       "hand": "right",
-      "surface_hash": "ea60923961bd3cc8",
+      "surface_hash": "melee-source-v1:c79e87707659fdea",
       "kinematics_hash": "30ce474673f17dd7",
       "hints_hash": "3e42e05263705d8b",
       "grip": {
@@ -1337,7 +1337,7 @@
     {
       "model": "psword_h",
       "hand": "right",
-      "surface_hash": "05ad0b266d96056d",
+      "surface_hash": "melee-source-v1:eae76059ba544cd1",
       "kinematics_hash": "30ce474673f17dd7",
       "hints_hash": "3e42e05263705d8b",
       "grip": {

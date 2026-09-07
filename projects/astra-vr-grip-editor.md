@@ -156,3 +156,16 @@ curl -X POST http://127.0.0.1:8080/v1/dev-params \
 
 The overlay uses the rendered weapon's mirrored/scaled support geometry, and
 `/v1/scene` labels its objects `vr_support_grip`. It does not change grab rules.
+
+### Prepared melee pose validation
+
+Melee preparation keys use the resolved model, skeleton, pose clip, and motion
+database bytes plus handedness and a posing-recipe version. They avoid hashing
+the floating-point posed mesh, whose quantization can differ between desktop
+and Quest despite identical assets. The source key still invalidates prepared
+poses when those dependencies change. Glove and hint keys remain separate.
+
+On rejection, device logs include `SHOCK2QUEST_VR_GRIP_REJECT` with actual
+surface/glove/hint keys and geometry availability, followed by
+`SHOCK2QUEST_VR_GRIP_EXPECTED` for matching prepared entries. This distinguishes
+a missing asset from a stale preparation without guessing from glove placement.

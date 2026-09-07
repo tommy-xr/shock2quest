@@ -812,6 +812,28 @@ impl PlayerInteraction for VrInteraction {
                 println!(
                     "SHOCK2QUEST_VR_GRIP model={model} hand={hand_name} source={source} elapsed_ms={solve_ms:.3}"
                 );
+                if resolved.is_none() {
+                    println!(
+                        "SHOCK2QUEST_VR_GRIP_REJECT model={model} hand={hand_name} geometry={} surface={surface_hash} kinematics={kinematics_hash} hints={hints_hash}",
+                        geometry.is_some(),
+                    );
+                    for entry in self
+                        .grip_library
+                        .as_ref()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .filter(|e| e.model == model && e.hand == hand_name)
+                    {
+                        println!(
+                            "SHOCK2QUEST_VR_GRIP_EXPECTED model={model} hand={hand_name} surface={} kinematics={} hints={} valid={}",
+                            entry.surface_hash,
+                            entry.kinematics_hash,
+                            entry.hints_hash,
+                            entry.grip.is_valid(),
+                        );
+                    }
+                }
                 let authored = !bake
                     && resolved.is_some()
                     && self.grip_library.as_ref().unwrap().entries.iter().any(|e| {
