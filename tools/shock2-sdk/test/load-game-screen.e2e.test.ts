@@ -150,7 +150,7 @@ test(
 
     let flatFailureObjects = 0;
     {
-      await using game = await GameServer.launch({ mission: "main_menu", port: 8124 });
+      await using game = await GameServer.launch({ mission: "main_menu" });
       await game.step({ frames: 5 });
       await click(game, LOAD_GAME_ENTRY);
       assert.equal((await game.info()).mission, "load_game");
@@ -206,7 +206,6 @@ test(
     {
       await using game = await GameServer.launch({
         mission: "main_menu",
-        port: 8125,
         debugFlags: ["--vr"],
       });
       await game.step({ frames: 5 });

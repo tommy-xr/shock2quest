@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer, findRepoRoot } from "../src/index.js";
 import { cycleToWeapon } from "./helpers/weapon.js";
 
@@ -205,7 +206,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8108),
+      port: e2ePort(),
       debugFlags: ["--vr"],
     });
 

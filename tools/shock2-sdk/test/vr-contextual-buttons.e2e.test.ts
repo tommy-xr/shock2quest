@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
@@ -15,7 +16,6 @@ import { cycleToWeapon } from "./helpers/weapon.js";
 // The interface itself is reached from the Menu button now
 // (`vr-buttons-v2.e2e.test.ts`), which is what these tests use to open it.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8656);
 
 /** The debug pistol `DebugCycleWeapon` spawns first. */
 const PISTOL = -17;
@@ -52,7 +52,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort,
+      port: e2ePort(),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -86,7 +86,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort + 1,
+      port: e2ePort(1),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -119,7 +119,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort + 2,
+      port: e2ePort(2),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -159,7 +159,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort + 3,
+      port: e2ePort(3),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });

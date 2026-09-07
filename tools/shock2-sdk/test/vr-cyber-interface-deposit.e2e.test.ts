@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 import type { EntitySummary } from "../src/types.js";
 import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
@@ -15,7 +16,6 @@ import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 // in the backpack" - the clip is a loose world prop on the floor instead, with
 // a physics body and no Contains link.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8619);
 
 /** Stable earth.mis mission object: the Weapons Training standard clip, a
  * loose grabbable world prop (see flat-world-pickup.e2e.test.ts). */
@@ -101,7 +101,7 @@ test(
   "releasing a held item over the VR inventory strip deposits it in the backpack",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
   async () => {
-    const { game, clip } = await launchWithHeldClip(basePort);
+    const { game, clip } = await launchWithHeldClip(e2ePort());
     await using _game = game;
 
     const pose = (await game.ui.state()).panel_pose!;
@@ -153,7 +153,7 @@ test(
   "releasing a held item away from the VR inventory strip still drops it into the world",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
   async () => {
-    const { game, clip } = await launchWithHeldClip(basePort + 1);
+    const { game, clip } = await launchWithHeldClip(e2ePort(1));
     await using _game = game;
 
     const pose = (await game.ui.state()).panel_pose!;
@@ -192,7 +192,7 @@ test(
   "releasing a held item on the cyber-interface canvas below the strip still drops it into the world",
   { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run", timeout: 600_000 },
   async () => {
-    const { game, clip } = await launchWithHeldClip(basePort + 2);
+    const { game, clip } = await launchWithHeldClip(e2ePort(2));
     await using _game = game;
 
     // The actual boundary the rule draws: the hand IS on the panel (it owns
@@ -236,7 +236,7 @@ test(
     //
     // A fresh earth character carries nothing, so deposit the clip first - the
     // scenario above, which is now the setup for the round trip.
-    const { game, clip } = await launchWithHeldClip(basePort + 3);
+    const { game, clip } = await launchWithHeldClip(e2ePort(3));
     await using _game = game;
     const item = clip.id;
 
@@ -291,7 +291,7 @@ test(
     // Retail drops a dragged item into the cell the player is pointing at.
     // Negative-first: on the parent this lands at the backpack's first free
     // cell (0, 0) regardless of where the release ray was aimed.
-    const { game, clip } = await launchWithHeldClip(basePort + 4);
+    const { game, clip } = await launchWithHeldClip(e2ePort(4));
     await using _game = game;
     // A middle cell, well clear of (0, 0) - a fresh earth character's
     // backpack is empty, so first-free would also land at (0, 0).

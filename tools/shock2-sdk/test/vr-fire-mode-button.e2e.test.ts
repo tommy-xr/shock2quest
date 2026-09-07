@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
 import { describeSounds } from "./helpers/audio.js";
@@ -15,7 +16,6 @@ import { cycleToWeapon } from "./helpers/weapon.js";
 // (`vr-contextual-buttons` asserts it reaches no panel), so the mode never
 // leaves NORM and no `bset` sting plays.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8686);
 
 /** The debug pistol (NORM / BURST). */
 const PISTOL = -17;
@@ -57,7 +57,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort,
+      port: e2ePort(),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -117,7 +117,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort + 1,
+      port: e2ePort(1),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
@@ -23,7 +24,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_melee",
-      port: Number(process.env.SHOCK2_E2E_HITBOX_COVERAGE_PORT ?? 8393),
+      port: e2ePort(0, "SHOCK2_E2E_HITBOX_COVERAGE_PORT"),
     });
     // Hitbox proxies are built (and their bodies registered with the query
     // pipeline) on the first updates.
