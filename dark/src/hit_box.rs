@@ -309,7 +309,7 @@ fn append_box_lines(
 
 /// Capsule wireframe (joint-local) between `a` and `b`: end rings, longitudinal
 /// lines, and two great-circle arcs over each hemispherical cap.
-fn append_capsule_lines(
+pub fn append_capsule_lines(
     verts: &mut Vec<VertexPosition>,
     xform: &Matrix4<f32>,
     a: Vector3<f32>,
@@ -318,10 +318,12 @@ fn append_capsule_lines(
 ) {
     let axis_vec = b - a;
     let len = axis_vec.magnitude();
-    if len < 1e-5 {
-        return;
-    }
-    let axis = axis_vec / len;
+    // A zero-length support region is a spherical socket.
+    let axis = if len < 1e-5 {
+        Vector3::unit_y()
+    } else {
+        axis_vec / len
+    };
     // Two unit vectors perpendicular to the axis.
     let mut helper = Vector3::new(0.0, 1.0, 0.0);
     if axis.dot(helper).abs() > 0.99 {
@@ -375,6 +377,17 @@ mod tests {
         for vertex in &verts {
             let r = (vertex.position - center).magnitude();
             assert!((r - 0.25).abs() < 1e-5, "vertex off the sphere: r = {r}");
+        }
+    }
+
+    #[test]
+    fn zero_length_capsule_draws_a_finite_sphere_at_the_requested_radius() {
+        let mut points = Vec::new();
+        let center = Vector3::new(1.0, 2.0, 3.0);
+        append_capsule_lines(&mut points, &Matrix4::from_scale(1.0), center, center, 0.07);
+        assert!(!points.is_empty());
+        for point in points {
+            assert!(((point.position - center).magnitude() - 0.07).abs() < 1e-5);
         }
     }
 }

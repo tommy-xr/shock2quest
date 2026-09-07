@@ -217,6 +217,7 @@ struct SupportAttachment {
     active: bool,
     blend: f32,
     correction: Quaternion<f32>,
+    anchor: Vector3<f32>, // Scaled model-space contact, fixed until release.
 }
 
 #[derive(Clone)]
@@ -228,6 +229,7 @@ struct SupportCandidate {
     primary_anchor: Vector3<f32>,
     tracked_axis: Vector3<f32>,
     anchor: Vector3<f32>,
+    region: Option<[Vector3<f32>; 2]>,
     model_pose: GripPose,
     hand_pose: GripPose,
 }
@@ -313,7 +315,12 @@ impl VrInteraction {
         })
     }
 
-    fn support_candidate(&self, world: &World, poses: [GripPose; 2]) -> Option<SupportCandidate> {
+    fn support_candidate(
+        &self,
+        world: &World,
+        poses: [GripPose; 2],
+        prefer_locked_anchor: bool,
+    ) -> Option<SupportCandidate> {
         let rig = self.grip_kinematics.as_ref()?;
         for (primary, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
             let Some(held) = self.fitted_grips[primary].as_ref() else {
@@ -346,7 +353,6 @@ impl VrInteraction {
             let Some(model_mirror) = held.model_mirror else {
                 continue;
             };
-            let anchor = profile.anchor_in_frame(handedness, model_mirror) * grip.item_scale;
             let correction = self
                 .support
                 .as_ref()
@@ -360,6 +366,26 @@ impl VrInteraction {
             // Melee physics may stop short of its target at a wall. Acquisition
             // and visible gloves belong on that actual weapon, not an unseen target.
             let model_pose = held.physical_model_pose(world).unwrap_or(target_pose);
+            let anchor = self
+                .support
+                .as_ref()
+                .filter(|s| prefer_locked_anchor && s.entity == held.entity && s.primary == primary)
+                .map_or_else(
+                    || {
+                        if !poses[1 - primary].is_tracked() {
+                            return profile.region_in_frame(handedness, model_mirror)[0]
+                                * grip.item_scale;
+                        }
+                        profile.closest_anchor(
+                            handedness,
+                            model_mirror,
+                            grip.item_scale,
+                            model_pose,
+                            poses[1 - primary].point(rig[1 - primary].palm),
+                        )
+                    },
+                    |s| s.anchor,
+                );
             let hand_pose =
                 profile.glove_pose(handedness, model_pose, grip, &rig[1 - primary], anchor);
             return Some(SupportCandidate {
@@ -370,6 +396,11 @@ impl VrInteraction {
                 primary_anchor,
                 tracked_axis: base_rotation.rotate_vector(anchor - primary_anchor),
                 anchor,
+                region: profile.region.as_ref().map(|_| {
+                    profile
+                        .region_in_frame(handedness, model_mirror)
+                        .map(|p| p * grip.item_scale)
+                }),
                 model_pose,
                 hand_pose,
             });
@@ -394,7 +425,10 @@ impl VrInteraction {
                 self.support_blocked[i] = false;
             }
         }
-        let candidate = self.support_candidate(ctx.world, poses);
+        let candidate = self
+            .support
+            .as_ref()
+            .and_then(|_| self.support_candidate(ctx.world, poses, true));
         let available = |primary: usize| {
             let other = 1 - primary;
             let hand = if other == 0 {
@@ -440,6 +474,7 @@ impl VrInteraction {
         // Hand input still updates on render-only (zero-dt) frames, just like
         // VirtualHand. Consume the squeeze edge there too; only blending needs dt.
         if ctx.support_enabled && self.support.as_ref().is_none_or(|s| !s.active) {
+            let candidate = self.support_candidate(ctx.world, poses, false);
             if let Some(c) = candidate.as_ref() {
                 let other = 1 - c.primary;
                 if let Some(rig) = self.grip_kinematics.as_ref() {
@@ -467,6 +502,7 @@ impl VrInteraction {
                             active: true,
                             blend,
                             correction,
+                            anchor: c.anchor,
                         });
                         self.support_blocked[other] = true;
                     }
@@ -480,7 +516,7 @@ impl VrInteraction {
         use shipyard::{Get, View};
         self.visual_hands = [None, None];
         let poses = self.hand_poses();
-        let candidate = self.support_candidate(world, poses);
+        let candidate = self.support_candidate(world, poses, true);
         let valid = self
             .support
             .as_ref()
@@ -832,7 +868,7 @@ impl PlayerInteraction for VrInteraction {
 
     fn synchronize_held_visuals(&mut self, world: &World) {
         let poses = self.hand_poses();
-        self.support_preview = self.support_candidate(world, poses);
+        self.support_preview = self.support_candidate(world, poses, true);
         self.visual_hands = [None, None];
         // Physical melee follows its synchronized body even with one hand.
         // Supported guns follow their solved pose so both gloves stay seated.
@@ -897,6 +933,7 @@ impl PlayerInteraction for VrInteraction {
                     "model_position": c.model_pose.position, "model_rotation": c.model_pose.rotation,
                     "primary_palm": c.primary_palm, "primary_anchor": c.primary_anchor,
                     "support_anchor": c.anchor, "grab_radius": c.profile.grab_radius,
+                    "region_endpoints": c.region.map(|ends| ends.map(|p| c.model_pose.point(p))),
                     "visual_trigger": visual_triggers[1-i],
                     "finger_curls": crate::vr_grip::blended_curls(c.profile.curls, c.profile.trigger_curls, visual_triggers[1-i]),
                     "release_distance": c.profile.release_distance, "max_swing_degrees": c.profile.max_swing_degrees
@@ -1399,6 +1436,7 @@ mod tests {
             "wrench_h".into(),
             SupportProfile {
                 palm_anchor: [0.0, 0.2, 0.0],
+                region: None,
                 rotation_degrees: [0.0; 3],
                 curls: [0.5; 5],
                 trigger_curls: None,
@@ -1517,6 +1555,43 @@ mod tests {
         input.left_hand.squeeze_value = 1.0;
         interaction.update_support(&context(&world, &physics, &input));
         assert!(interaction.support.as_ref().unwrap().active);
+        // A broad region chooses a fresh nearest point only on a new squeeze.
+        interaction.support = None;
+        interaction
+            .support_profiles
+            .get_mut("wrench_h")
+            .unwrap()
+            .region = Some(crate::vr_support::SupportRegion {
+            start: [0.0, 0.2, 0.0],
+            end: [0.0, 0.35, 0.0],
+        });
+        input.left_hand.squeeze_value = 0.0;
+        let mut untracked = interaction.hand_poses();
+        untracked[0].position.x = f32::NAN;
+        let preview = interaction
+            .support_candidate(&world, untracked, false)
+            .unwrap();
+        assert_eq!(preview.anchor, vec3(0.0, 0.2, 0.0));
+        assert!(
+            preview.hand_pose.is_tracked(),
+            "untracked support input keeps a finite region preview"
+        );
+        input.left_hand.position.y = 1.22;
+        interaction.update_support(&context(&world, &physics, &input));
+        input.left_hand.squeeze_value = 1.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        let locked = interaction.support.as_ref().unwrap().anchor;
+        assert!((locked.y - 0.22).abs() < 1e-5);
+        input.left_hand.position.y = 1.28;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(interaction.support.as_ref().unwrap().active);
+        assert_eq!(interaction.support.as_ref().unwrap().anchor, locked);
+        input.left_hand.squeeze_value = 0.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        input.left_hand.squeeze_value = 1.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!((interaction.support.as_ref().unwrap().anchor.y - 0.28).abs() < 1e-5);
+        interaction.support.as_mut().unwrap().blend = 1.0;
         let mut ctx = context(&world, &physics, &input);
         ctx.support_enabled = false;
         interaction.update_support(&ctx);

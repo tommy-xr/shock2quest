@@ -105,3 +105,26 @@ Gameplay blends using analog controller trigger input. Fire/use thresholds are
 unchanged, and the supporting hand can animate without firing or using an item.
 The debug runtime's hand-grip diagnostics report `visual_trigger` and
 `finger_curls` for the primary hand and its support hand.
+
+## Support regions for large weapons
+
+In **Support hand**, choose **Fixed socket** or **Support region**. A region has
+editable XYZ start/end points in the displayed hand's frame, plus a grab radius
+in centimeters. The cyan wire capsule shows the eligible area. **Position along
+region** previews the support glove along it without editing the saved pose.
+Wrist rotation and both finger poses apply everywhere on that region.
+
+The fusion cannon (`fsn_h`) and worm launcher (`al_h`) use regions; the wrench,
+pistol, and shotgun retain fixed sockets by default. Their existing primary
+poses and uniform scales are preserved. A support squeeze selects the closest
+point on the region and locks that contact until release. Moving the second
+hand steers the weapon; it does not slide the contact or resize the model.
+Releasing and squeezing again selects a new nearest point. The primary hand
+retains ownership, and releasing it drops the weapon.
+
+Regions save as optional `region: {start: [x,y,z], end: [x,y,z]}` in
+`vr-support-grips.json`, in normalized right-primary model coordinates before
+item scale. The editor mirrors them through the same model frame as gameplay.
+Omitting the region uses `palm_anchor` as a fixed socket. A zero-length region
+also behaves as a socket. Runtime diagnostics expose world-space
+`support.region_endpoints` and the locked scaled-model-space `support_anchor`.

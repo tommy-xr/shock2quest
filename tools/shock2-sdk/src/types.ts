@@ -1153,6 +1153,8 @@ export interface HandGrip {
     primary_palm: ResolvedGrip["offset"];
     primary_anchor: ResolvedGrip["offset"];
     support_anchor: ResolvedGrip["offset"];
+    /** World-space segment endpoints, or null for a fixed socket. */
+    region_endpoints: [ResolvedGrip["offset"], ResolvedGrip["offset"]] | null;
     grab_radius: number;
     release_distance: number;
     max_swing_degrees: number;

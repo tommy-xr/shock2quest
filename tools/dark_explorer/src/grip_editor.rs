@@ -1154,6 +1154,7 @@ mod tests {
             }
             let support = shock2vr::vr_support::SupportProfile {
                 palm_anchor: [0.13, -0.21, 0.34],
+                region: None,
                 rotation_degrees: [15.0, -20.0, 30.0],
                 curls: [0.4; 5],
                 trigger_curls: None,

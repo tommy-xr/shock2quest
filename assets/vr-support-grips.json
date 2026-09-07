@@ -64,5 +64,73 @@
     "grab_radius": 0.07,
     "release_distance": 0.12,
     "max_swing_degrees": 75.0
+  },
+  "fsn_h": {
+    "palm_anchor": [
+      -0.7,
+      -0.38,
+      0.0
+    ],
+    "region": {
+      "start": [
+        -0.55,
+        -0.38,
+        0.0
+      ],
+      "end": [
+        -0.85,
+        -0.38,
+        0.0
+      ]
+    },
+    "rotation_degrees": [
+      0,
+      0,
+      90
+    ],
+    "curls": [
+      0.3,
+      0.3,
+      0.35,
+      0.4,
+      0.45
+    ],
+    "grab_radius": 0.07,
+    "release_distance": 0.12,
+    "max_swing_degrees": 75.0
+  },
+  "al_h": {
+    "palm_anchor": [
+      -0.175,
+      -0.04,
+      0.1
+    ],
+    "region": {
+      "start": [
+        -0.1,
+        -0.04,
+        0.1
+      ],
+      "end": [
+        -0.25,
+        -0.04,
+        0.1
+      ]
+    },
+    "rotation_degrees": [
+      90,
+      0,
+      0
+    ],
+    "curls": [
+      0.4,
+      0.45,
+      0.5,
+      0.55,
+      0.6
+    ],
+    "grab_radius": 0.07,
+    "release_distance": 0.12,
+    "max_swing_degrees": 75.0
   }
 }
