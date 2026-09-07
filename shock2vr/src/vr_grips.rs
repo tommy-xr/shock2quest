@@ -189,6 +189,14 @@ pub fn set_profile(model_name: &str, profile: GripProfile) {
     GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Forget one model's authored profile, back to whatever its own box says.
+pub fn clear_profile(model_name: &str) {
+    let key = model_name.to_ascii_lowercase();
+    PROFILES.write().unwrap().remove(&key);
+    MEASURED.write().unwrap().remove(&key);
+    GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Record the seat measured off `model_name`'s own box - the model-space bounds
 /// of the geometry as it is drawn, at the scale its profile asks for.
 ///

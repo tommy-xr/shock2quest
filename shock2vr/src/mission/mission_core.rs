@@ -11737,11 +11737,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
     fn player_hand_affordances(&self) -> Option<crate::game_scene::DebugHandAffordances> {
         use crate::vr_config::Handedness;
+        // The model a hand holds is the key the grip tuner authors under.
+        let (left_held, right_held) = self.interaction.held_entities();
+        let model_of = |entity_id: Option<EntityId>| {
+            crate::vr_config::held_model_and_scale(&self.world, entity_id?).map(|(name, _)| name)
+        };
         Some(crate::game_scene::DebugHandAffordances {
             left: self.interaction.hand_affordance(Handedness::Left).as_str(),
             right: self.interaction.hand_affordance(Handedness::Right).as_str(),
             left_grip: self.interaction.fitted_grip(Handedness::Left),
             right_grip: self.interaction.fitted_grip(Handedness::Right),
+            left_model: model_of(left_held),
+            right_model: model_of(right_held),
         })
     }
 

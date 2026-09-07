@@ -524,6 +524,18 @@ pub fn held_model_hand_transform(
         * bake
 }
 
+/// The uniform scale `entity_id` is drawn at while held, from its model's grip
+/// profile - 1.0 for anything unprofiled, and for a gun, whose life-size shrink
+/// is already baked into its geometry by the wield's `Effect::ChangeModel`.
+///
+/// Held only: the entity gets its physics body (and its authored size) back the
+/// moment it is dropped.
+pub fn held_render_scale(world: &World, entity_id: EntityId) -> f32 {
+    model_name_lower(world, entity_id)
+        .map(|name| crate::vr_grips::render_scale(&name))
+        .unwrap_or(1.0)
+}
+
 /// The model a hand is holding and the scale its wield baked into it, for
 /// anything that has to measure the held geometry.
 pub fn held_model_and_scale(world: &World, entity_id: EntityId) -> Option<(String, f32)> {

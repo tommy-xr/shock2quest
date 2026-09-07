@@ -1,6 +1,6 @@
 // Helper to convert the input context to a form more useful for gameplay / interacting with the world
 
-use cgmath::{InnerSpace, Quaternion, Rotation, Vector3, Zero, point3, vec3};
+use cgmath::{Array, InnerSpace, Quaternion, Rotation, Vector3, Zero, point3, vec3};
 use dark::{
     SCALE_FACTOR,
     properties::{FrobFlag, PropFrobInfo, PropModelName},
@@ -329,7 +329,11 @@ impl VirtualHand {
                         // grip in the palm), so it must rotate with the hand
                         position: hand_position + hand_rotation.rotate_vector(vr_offsets.offset),
                         rotation: hand_rotation * vr_offsets.rotation,
-                        scale: vec3(1.0, 1.0, 1.0),
+                        // A pickup's authored held scale (`vr_grips`): the
+                        // world models run well over life size and the glove
+                        // holding them is life size. Guns report 1.0 - their
+                        // shrink is already baked into the wielded geometry.
+                        scale: Vector3::from_value(vr_config::held_render_scale(world, entity_id)),
                     });
 
                     let updated_hand = VirtualHand {

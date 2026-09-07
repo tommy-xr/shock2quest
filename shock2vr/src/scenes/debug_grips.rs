@@ -89,6 +89,12 @@ impl DebugSceneHooks for GripHooks {
             Handedness::Right,
         );
 
+        // The same two calls the mission loop makes before a hand places
+        // anything: the profiles, then the seat measured off any model they
+        // leave out.
+        crate::vr_grips::ensure_loaded(asset_cache);
+        hand_glove::warm_held_seat(model_name, asset_cache);
+
         // The same cached entry point the wield uses; the mesh size and solve
         // time are logged by the solve itself, at debug level.
         let fit = glove.fitted_grip(model_name, Handedness::Right, scale, asset_cache);

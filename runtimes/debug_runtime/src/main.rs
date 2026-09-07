@@ -427,6 +427,9 @@ async fn start_http_server(
         .route("/v1/input/actions", get(list_input_actions))
         .route("/v1/dev-params", get(list_dev_params))
         .route("/v1/dev-params", axum::routing::post(set_dev_param))
+        .route("/v1/vr/grip", get(get_vr_grip))
+        .route("/v1/vr/grip", axum::routing::post(set_vr_grip))
+        .route("/v1/vr/grip/save", axum::routing::post(save_vr_grips))
         .route("/v1/audio/recent", get(get_recent_audio))
         .route("/v1/messages/recent", get(get_recent_messages))
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
@@ -4232,6 +4235,132 @@ async fn set_dev_param(
         }
     };
     Ok(Json(json!({ "key": request.key, "value": applied })))
+}
+
+#[derive(Deserialize)]
+struct GripQuery {
+    model: String,
+}
+
+/// HTTP handler reading one model's resolved VR grip: what the profile file
+/// (or a live edit of it) says, what was measured off the model's own box, and
+/// which of the two won.
+///
+/// Keyed by model name rather than by hand: the registry is process-global, so
+/// this needs no game-loop round trip, and it works in `debug_grips` where
+/// nothing is "held". Ask `/v1/info` (`player.hand_affordance.{left,right}_model`)
+/// what a hand is holding.
+async fn get_vr_grip(Query(query): Query<GripQuery>) -> Json<Value> {
+    use shock2vr::Handedness;
+    let resolved = shock2vr::vr_grips::resolve(&query.model, Handedness::Right);
+    let authored = shock2vr::vr_grips::profile(&query.model);
+    Json(json!({
+        "model": query.model.to_ascii_lowercase(),
+        "source": match resolved.source {
+            shock2vr::vr_grips::GripSource::Profile => "profile",
+            shock2vr::vr_grips::GripSource::Heuristic => "heuristic",
+            shock2vr::vr_grips::GripSource::Unseated => "unseated",
+        },
+        "offset": [resolved.offset.x, resolved.offset.y, resolved.offset.z],
+        "rotation_quat": [
+            resolved.rotation.s,
+            resolved.rotation.v.x,
+            resolved.rotation.v.y,
+            resolved.rotation.v.z,
+        ],
+        "scale": resolved.scale,
+        "family": resolved.family.map(|family| family.as_str()),
+        "fingers": resolved.fingers.map(|f| [f.thumb, f.index, f.middle, f.ring, f.pinky]),
+        "profile": authored,
+    }))
+}
+
+#[derive(Deserialize)]
+struct SetGripRequest {
+    model: String,
+    #[serde(default)]
+    offset: Option<[f32; 3]>,
+    #[serde(default)]
+    rotation_deg: Option<[f32; 3]>,
+    #[serde(default)]
+    family: Option<String>,
+    #[serde(default)]
+    fingers: Option<[f32; 5]>,
+    #[serde(default)]
+    scale: Option<f32>,
+    #[serde(default)]
+    mirror: Option<shock2vr::vr_grips::Mirror>,
+    /// Drop the model's authored profile entirely, back to the measured seat.
+    #[serde(default)]
+    clear: bool,
+}
+
+/// HTTP handler authoring one model's grip in memory. Fields given are merged
+/// into whatever the model already has, so nudging an offset keeps the turn;
+/// `clear: true` removes the entry. Live on the next frame - the fit cache is
+/// keyed on the profile generation this bumps.
+async fn set_vr_grip(
+    LenientJson(request): LenientJson<SetGripRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    if request.clear {
+        shock2vr::vr_grips::clear_profile(&request.model);
+        return Ok(Json(json!({ "model": request.model, "cleared": true })));
+    }
+
+    if let Some(name) = &request.family
+        && shock2vr::vr_grips::family_from_str(name).is_none()
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("unknown grip family: {name}"),
+        ));
+    }
+
+    let mut profile = shock2vr::vr_grips::profile(&request.model).unwrap_or_default();
+    if request.offset.is_some() {
+        profile.offset = request.offset;
+    }
+    if request.rotation_deg.is_some() {
+        profile.rotation_deg = request.rotation_deg;
+    }
+    if request.family.is_some() {
+        profile.family = request.family;
+    }
+    if request.fingers.is_some() {
+        profile.fingers = request.fingers;
+    }
+    if request.scale.is_some() {
+        profile.scale = request.scale;
+    }
+    if let Some(mirror) = request.mirror {
+        profile.mirror = mirror;
+    }
+    shock2vr::vr_grips::set_profile(&request.model, profile.clone());
+
+    Ok(Json(
+        json!({ "model": request.model.to_ascii_lowercase(), "profile": profile }),
+    ))
+}
+
+#[derive(Deserialize)]
+struct SaveGripsRequest {
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// HTTP handler writing the in-memory profiles back out, keys sorted so an
+/// unchanged registry reproduces the file it came from. Defaults to the repo's
+/// own `assets/vr_grips.json`; `path` writes somewhere else (what a test uses,
+/// so it never touches the asset).
+async fn save_vr_grips(
+    LenientJson(request): LenientJson<SaveGripsRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let path = request.path.unwrap_or_else(|| {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/vr_grips.json").to_string()
+    });
+    std::fs::write(&path, shock2vr::vr_grips::to_json())
+        .map_err(|error| (StatusCode::BAD_REQUEST, format!("{path}: {error}")))?;
+    Ok(Json(json!({ "path": path })))
 }
 
 /// HTTP endpoint handler: List available input actions

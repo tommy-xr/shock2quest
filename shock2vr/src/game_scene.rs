@@ -395,6 +395,9 @@ pub struct DebugHandAffordances {
     /// something with a mesh to fit against.
     pub left_grip: Option<DebugHandGrip>,
     pub right_grip: Option<DebugHandGrip>,
+    /// The model each hand is holding - the key `/v1/vr/grip` tunes under.
+    pub left_model: Option<String>,
+    pub right_model: Option<String>,
 }
 
 /// A hand's fitted grip: the family the fit solved in, and the curl it left
@@ -419,6 +422,8 @@ impl Default for DebugHandAffordances {
             right: idle,
             left_grip: None,
             right_grip: None,
+            left_model: None,
+            right_model: None,
         }
     }
 }
