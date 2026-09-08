@@ -23,6 +23,11 @@ the same workflow and engine reference.
 - Commit messages and PR titles use Conventional Commit style: `type(scope): summary`
   (e.g. `fix(physics): mantle over ladder tops`, `feat(play-through): ...`,
   `docs:`, `test:`, `refactor:`). Scope is optional; the type prefix is not.
+- Never automate `git rebase --skip` across conflicts. Inspect each conflict
+  and skip a commit only after verifying its changes already exist upstream.
+- Agents that change git state must use isolated worktrees. Verify the starting
+  ref and `git merge-base` before building a dependent PR; isolation alone does
+  not guarantee the branch starts from the intended parent.
 
 ### 3. UI Renders Identically in Flatscreen and VR
 
@@ -293,6 +298,12 @@ Run `cargo bn path bench` before and after touching `shock2vr/src/pathfinding/` 
 To visualize a path in-game instead of numerically: launch the debug runtime, set start/goal with the `PathfindingTestCycle` input action (bound to P on desktop), and screenshot - see "Iterating on Visual Features" below.
 
 ### Iterating on Visual Features
+
+When content and transforms are hard to distinguish, swap the suspect canvas
+into a known-working scene, or render an asymmetric probe through the same
+transform. This isolates placement from content before tuning offsets or axes.
+For VR interaction and device-verification lessons, see
+[vr-ui-design](.claude/skills/vr-ui-design/SKILL.md).
 
 For debugging visual/rendering changes without a full interactive session:
 
@@ -570,6 +581,11 @@ each (`file_size / 8` = widget count), in a screen-defined order. Load via
 `dark::importers::UI_LAYOUT_IMPORTER` → `Vec<MapRect>` (same binary format as the
 map-position files). See `shock2vr/src/scenes/loading.rs` for a usage example, and
 `projects/loading-screen.md` §6.1 for the loading-screen breakdown.
+
+Pair layouts with their shipped backdrop and string table: mods such as SCP
+retune both the art and `*R.BIN` rectangles, so stock hardcoded coordinates can
+misalign modded installs. String-table order is not screen order: `MAIN.STR`
+lists Quit through New Game bottom-to-top; map labels by key, not file order.
 
 Quick peek (decode the rects directly):
 
