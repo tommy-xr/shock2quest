@@ -299,7 +299,7 @@ impl Inventory {
 
     /// The cell an ordinal names, or `None` if it is not a cell in this grid
     /// (an equip slot, or beyond the grid's bounds).
-    fn cell_of(&self, ordinal: u32) -> Option<(usize, usize)> {
+    pub(crate) fn cell_of(&self, ordinal: u32) -> Option<(usize, usize)> {
         if ordinal >= EQUIP_SLOT_BASE {
             return None;
         }

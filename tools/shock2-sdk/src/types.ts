@@ -660,7 +660,15 @@ export interface PlayerSnapshot {
     target: number | null;
     affordance: "None" | "Grabbable" | "Frobbable" | "Blocked";
     light: "Off" | "Green" | "Amber" | "Red";
-  }> | null;
+  }> & {
+    /** Shoulder stow targets in world space; absent on older runtimes. */
+    shoulder_backpack?: {
+      centers: [Vec3, Vec3] | null;
+      radius: number;
+      near: [boolean, boolean];
+      retained: [boolean, boolean];
+    };
+  } | null;
   /** Prepared VR pickup grips; empty for flat presentation or empty hands. */
   hand_grips: HandGrip[];
 }

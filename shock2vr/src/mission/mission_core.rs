@@ -284,7 +284,7 @@ fn strip_deposit_entities(
         .collect()
 }
 
-/// Rewrite a release that [`strip_deposit_entities`] claimed, from the world
+/// Rewrite a release claimed by the inventory strip or shoulder backpack, from the world
 /// drop `VirtualHand` emitted into the backpack deposit the player meant.
 ///
 /// Each claimed item's `DropItem` - the world drop itself, which restores its
@@ -300,7 +300,7 @@ fn strip_deposit_entities(
 /// rather than stored, so the credential is recorded instead of an inert card
 /// being banked.
 ///
-/// `store` pairs each stored item with the strip cell its release was over,
+/// `store` pairs each stored item with its targeted or reserved inventory cell,
 /// when one resolved - the deposit becomes a [`VirtualHandEffect::StoreItemAtCell`]
 /// there, falling back to the first-free [`VirtualHandEffect::StoreItem`]
 /// only when no cell resolved.
@@ -310,7 +310,7 @@ fn strip_deposit_entities(
 /// that ray reaches straight through it - so a container standing behind the
 /// interface would otherwise take the item as well and the deposit would land
 /// twice. Everything else the hand emitted this frame is untouched.
-fn rewrite_strip_release(
+fn rewrite_inventory_release(
     effects: &mut Vec<VirtualHandEffect>,
     store: &[(EntityId, Option<(usize, usize)>)],
     collect: &[EntityId],
@@ -2101,6 +2101,7 @@ pub struct MissionCore {
     ///
     /// [`update_clip_insert_gesture`]: MissionCore::update_clip_insert_gesture
     vr_clip_insert_engaged: [bool; 2],
+    shoulder_backpack: super::shoulder_backpack::ShoulderBackpack,
 
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
@@ -3027,6 +3028,7 @@ impl MissionCore {
             vr_squeeze_swallow: [false; 2],
             vr_trigger_safe_latch: [None; 2],
             vr_clip_insert_engaged: [false; 2],
+            shoulder_backpack: Default::default(),
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
@@ -4059,6 +4061,76 @@ impl MissionCore {
         });
         let hands_input = weapon_safe_input.as_ref().unwrap_or(input_context);
 
+        let held = [left_hand_held, right_hand_held];
+        let shoulder_releases = self.shoulder_backpack.update(
+            hands_input,
+            held,
+            game_options.presentation_mode == crate::PresentationMode::Vr
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
+            time.elapsed.as_secs_f32(),
+        );
+        let shoulder_collect = std::array::from_fn::<_, 2, _>(|i| {
+            shoulder_releases[i]
+                && held[i].is_some_and(|entity| {
+                    crate::scripts::script_util::is_always_collected(&self.world, entity)
+                })
+        });
+        let shoulder_cells = if (0..2).any(|i| {
+            shoulder_releases[i]
+                && held[i].is_some_and(|entity| backpack_accepts_deposit(&self.world, entity))
+        }) {
+            let inventory = self
+                .world
+                .borrow::<UniqueView<PlayerInfo>>()
+                .unwrap()
+                .inventory_entity_id;
+            super::shoulder_backpack::reserve_slots(
+                &self.world,
+                inventory,
+                std::array::from_fn(|i| {
+                    (shoulder_releases[i] && !shoulder_collect[i])
+                        .then_some(held[i])
+                        .flatten()
+                }),
+            )
+        } else {
+            [None; 2]
+        };
+        let mut shoulder_input = hands_input.clone();
+        for i in 0..2 {
+            if shoulder_releases[i] {
+                let accepted = shoulder_collect[i] || shoulder_cells[i].is_some();
+                if !accepted {
+                    self.shoulder_backpack.retain(i, held[i].unwrap());
+                }
+                effects.push(Effect::ShowMessage {
+                    text: if shoulder_collect[i] {
+                        "Collected".to_owned()
+                    } else if accepted {
+                        "Stored in backpack".to_owned()
+                    } else {
+                        "Backpack full — item kept in hand. Squeeze to re-grip.".to_owned()
+                    },
+                });
+                effects.push(Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    name: if accepted { "bset" } else { "repfail" }.to_owned(),
+                    source: held[i],
+                    spatial: false,
+                });
+                tracing::info!(hand = i, entity = ?held[i], accepted, "shoulder backpack release");
+            }
+            if self.shoulder_backpack.keep_grip(i) {
+                match i {
+                    0 => shoulder_input.left_hand.squeeze_value = 1.0,
+                    _ => shoulder_input.right_hand.squeeze_value = 1.0,
+                }
+            }
+        }
+        let hands_input = &shoulder_input;
+
         // Opening a hand over the inventory strip puts the item in the
         // backpack instead of on the floor. Decided from the input the hands
         // are about to see, so the release this claims is exactly the release
@@ -4084,7 +4156,12 @@ impl MissionCore {
         let (collect, store): (Vec<_>, Vec<_>) = strip_deposits.iter().partition(|entity_id| {
             crate::scripts::script_util::is_always_collected(&self.world, **entity_id)
         });
-        let collect: Vec<_> = collect.into_iter().copied().collect();
+        let mut collect: Vec<_> = collect.into_iter().copied().collect();
+        collect.extend(
+            (0..2)
+                .filter(|i| shoulder_collect[*i])
+                .filter_map(|i| held[i]),
+        );
         // The cell the depositing hand's ray was over, for a stored item -
         // whichever on-strip slot actually held it. `None` (a ray gone off
         // the strip between resolving `strip_cell` and here, or generally
@@ -4105,11 +4182,13 @@ impl MissionCore {
         // release can claim one item and leave the other to its ordinary
         // world drop. A collected one never enters the pack (its Frob awards
         // and destroys it), so it is claimed either way.
-        let store: Vec<(EntityId, Option<(usize, usize)>)> = store
+        let mut store: Vec<(EntityId, Option<(usize, usize)>)> = store
             .into_iter()
             .filter(|entity_id| backpack_accepts_deposit(&self.world, **entity_id))
             .map(|entity_id| (*entity_id, cell_for(*entity_id)))
             .collect();
+
+        store.extend((0..2).filter_map(|i| Some((held[i]?, Some(shoulder_cells[i]?)))));
 
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
@@ -4132,7 +4211,7 @@ impl MissionCore {
             &mut interaction_msgs,
             game_options,
         );
-        rewrite_strip_release(&mut interaction_msgs, &store, &collect);
+        rewrite_inventory_release(&mut interaction_msgs, &store, &collect);
         effects.extend(self.process_virtual_hand_effects(asset_cache, interaction_msgs));
 
         // The physical VR reload: a clip carried into the other hand's weapon
@@ -10644,6 +10723,12 @@ impl MissionCore {
                 .render(asset_cache, &self.world, self.use_mode),
         );
 
+        if options.presentation_mode == crate::PresentationMode::Vr
+            && crate::dev_params::get_bool(crate::dev_params::VR_BACKPACK_ZONES)
+        {
+            scene.extend(self.shoulder_backpack.render(player.pos, player.rotation));
+        }
+
         // The old synthetic blue inventory cube remains a desktop diagnostic.
         // VR presents the authored INVBACK canvas through GuiManager instead.
         if options.presentation_mode == crate::PresentationMode::Flat {
@@ -12519,7 +12604,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
     }
 
     fn hand_feedback(&self) -> serde_json::Value {
-        self.interaction.hand_feedback_diagnostics()
+        let mut feedback = self.interaction.hand_feedback_diagnostics();
+        if let (Some(object), Ok(player)) = (
+            feedback.as_object_mut(),
+            self.world.borrow::<UniqueView<PlayerInfo>>(),
+        ) {
+            object.insert(
+                "shoulder_backpack".to_owned(),
+                self.shoulder_backpack
+                    .diagnostics(player.pos, player.rotation),
+            );
+        }
+        feedback
     }
 
     fn hand_grips(&self) -> serde_json::Value {
@@ -14159,7 +14255,7 @@ mod strip_deposit_tests {
             VirtualHandEffect::DropItem { entity_id: item },
             VirtualHandEffect::DropItem { entity_id: other },
         ];
-        rewrite_strip_release(&mut effects, &[(item, None)], &[]);
+        rewrite_inventory_release(&mut effects, &[(item, None)], &[]);
         assert!(
             matches!(
                 effects.as_slice(),
@@ -14186,7 +14282,7 @@ mod strip_deposit_tests {
     fn a_claimed_release_with_a_resolved_cell_targets_it() {
         let (_world, item, _other) = two_entities();
         let mut effects = vec![VirtualHandEffect::DropItem { entity_id: item }];
-        rewrite_strip_release(&mut effects, &[(item, Some((3, 1)))], &[]);
+        rewrite_inventory_release(&mut effects, &[(item, Some((3, 1)))], &[]);
         assert!(
             matches!(
                 effects.as_slice(),
@@ -14213,7 +14309,7 @@ mod strip_deposit_tests {
     fn a_claimed_key_source_is_frobbed_instead() {
         let (_world, card, _other) = two_entities();
         let mut effects = vec![VirtualHandEffect::DropItem { entity_id: card }];
-        rewrite_strip_release(&mut effects, &[], &[card]);
+        rewrite_inventory_release(&mut effects, &[], &[card]);
         assert!(
             matches!(
                 effects.as_slice(),
@@ -14248,7 +14344,7 @@ mod strip_deposit_tests {
                 payload: MessagePayload::ProvideForConsumption { entity: item },
             },
         }];
-        rewrite_strip_release(&mut effects, &[(item, None)], &[]);
+        rewrite_inventory_release(&mut effects, &[(item, None)], &[]);
         assert!(effects.is_empty(), "got {effects:?}");
     }
 
@@ -14267,7 +14363,7 @@ mod strip_deposit_tests {
             },
             VirtualHandEffect::HoldItem { entity_id: item },
         ];
-        rewrite_strip_release(&mut effects, &[(item, None)], &[]);
+        rewrite_inventory_release(&mut effects, &[(item, None)], &[]);
         assert!(
             matches!(
                 effects.as_slice(),
@@ -14290,7 +14386,7 @@ mod strip_deposit_tests {
     fn an_unclaimed_frame_is_untouched() {
         let (_world, item, _other) = two_entities();
         let mut effects = vec![VirtualHandEffect::DropItem { entity_id: item }];
-        rewrite_strip_release(&mut effects, &[], &[]);
+        rewrite_inventory_release(&mut effects, &[], &[]);
         assert!(
             matches!(effects.as_slice(), [VirtualHandEffect::DropItem { .. }]),
             "got {effects:?}"
