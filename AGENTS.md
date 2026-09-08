@@ -495,6 +495,7 @@ For debugging visual/rendering changes without a full interactive session:
    | `debug_hud`              | Test HUD rendering                           |
    | `debug_map`              | Test map/automap rendering                   |
    | `debug_melee`            | VR melee: weapon rack, hybrids and arachnids to hit, trigger-free contact damage |
+   | `debug_interactions`     | Quiet labeled rack: mug, magazine, basketball, wrench, pistol, shotgun, fusion cannon, worm launcher, ammo clip, psi amp; DebugReloadLevel resets the rack |
    | `debug_ladder`           | Climbing stations: ledge top-out, two-sided arch, stacked rungs, short ladder, mantle block, plain wall (flat + VR) |
    | `debug_minimal`          | Bare minimum scene for basic testing         |
    | `debug_weapons`          | Flat weapon viewmodel + aim (wall ahead; cycle weapons with `DebugCycleWeapon`) |

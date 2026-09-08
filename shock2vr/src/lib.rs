@@ -23,7 +23,6 @@ pub mod dev_params;
 mod flat_player_controller;
 pub mod free_camera;
 mod gui;
-mod hand_forearm;
 mod hand_glove;
 mod hud;
 mod interaction;

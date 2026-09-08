@@ -27,6 +27,7 @@ pub mod debug_gloves;
 pub mod debug_hand_poses;
 pub mod debug_hitbox;
 pub mod debug_hud;
+pub mod debug_interactions;
 pub mod debug_joint_constraint;
 pub mod debug_ladder;
 pub mod debug_map;
@@ -168,6 +169,10 @@ const DEBUG_SCENES: &[(&str, DebugSceneCtor)] = &[
     }),
     ("debug_weapons", create_debug_weapons_scene),
     ("debug_melee", create_debug_melee_scene),
+    (
+        "debug_interactions",
+        debug_interactions::create_debug_interactions_scene,
+    ),
     ("debug_ladder", create_debug_ladder_scene),
     ("debug_psi", create_debug_psi_scene),
     ("debug_teleport", |global, options, assets, audio| {

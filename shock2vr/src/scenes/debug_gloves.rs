@@ -205,9 +205,9 @@ impl DebugGlovesScene {
         let core = builder.build_core(build_options);
 
         let glove_model = asset_cache.get(&GLB_MODELS_IMPORTER, "vr_glove_model.glb");
-        // The same skin the production hands use, so this scene can't show a
+        // The same texture the production hands use, so this scene can't show a
         // different hand from the one the player wears.
-        let texture = crate::hand_glove::load_hand_skin(asset_cache);
+        let texture = crate::hand_glove::load_glove_texture(asset_cache);
         let retarget = HandPoseRetarget::for_right_glove(glove_model.skeleton());
 
         let open = hand_pose::open_right_hand();

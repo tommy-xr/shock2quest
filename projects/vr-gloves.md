@@ -120,9 +120,15 @@ per-model — probe with exaggerated single-axis offsets when tuning a new one.
 
 ## Bare hands + sleeved forearm (#950, first pass)
 
-The glove *mechanics* are unchanged; only its look is. Three parts:
+Historical first pass: the Astra interaction work restores `vr_glove_color.jpg`
+through `hand_glove::load_glove_texture`, shared with `debug_gloves`. The sleeve
+remains. `vr_hand_skin.png` and its generator are retained as reference assets
+but are no longer loaded by the hand renderer. See
+[the current workbench](astra-debug-interactions.md).
 
-- **Skin instead of glove.** `hand_glove.rs` skins the same GLB with
+The original bare-hand pass kept the glove mechanics and changed its look:
+
+- **Skin instead of glove.** `hand_glove.rs` skinned the same GLB with
   `assets/vr_hand_skin.png` rather than `vr_glove_color.jpg`. The hand has to be
   textured in the *glove's* UV atlas, so the skin map is that atlas recoloured:
 
@@ -163,9 +169,8 @@ The glove *mechanics* are unchanged; only its look is. Three parts:
   texture `res/obj/txt16/HRPistArm.gif` — `(185, 139, 124)` — **divided by 1.5**:
   both material shaders composite `texel * 0.5` (ambient) `+ texel * emissivity`
   and the hands render at emissivity 1.0, so an undivided tone clips at white
-  and washes out. `load_hand_skin` is the single loader, used by `debug_gloves`
-  too, so the harness cannot drift onto a different skin from the production
-  hands.
+  and washes out. The shared loader was then called `load_hand_skin`; it is
+  now `load_glove_texture`, loading the restored glove map in both presentations.
 
   Two approaches were tried and rejected first: the game's own hand texture
   (`HRPistArm.gif`) through the glove's UVs renders **magenta** - the glove's

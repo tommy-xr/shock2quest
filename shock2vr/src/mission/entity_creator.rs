@@ -106,6 +106,14 @@ pub fn create_entity_with_position(
     // Add props, based on inheritance
     initialize_entity_with_props(template_id, entity_info, world, entity_id, obj_name_map);
 
+    // Some archetypes (e.g. Magazines) leave the appearance to each mission
+    // instance. Resolve it before building visuals/physics, and preserve that
+    // instance model when a held item is dropped back into the world.
+    if let Some(model_name) = &additional_options.model_override {
+        world.add_component(entity_id, PropModelName(model_name.clone()));
+        world.add_component(entity_id, InternalPropOriginalModelName(model_name.clone()));
+    }
+
     if additional_options.force_visible {
         world.add_component(entity_id, PropHasRefs(true));
         world.add_component(entity_id, PropRenderType(RenderType::Normal));
@@ -1633,6 +1641,9 @@ pub fn live_creature_shape(
 #[derive(Clone, Debug)]
 pub struct CreateEntityOptions {
     pub force_visible: bool,
+    /// Instance-specific appearance, for archetypes whose model is assigned
+    /// by a mission rather than the gamesys. Applied before visuals/physics.
+    pub model_override: Option<String>,
     /// Bolt the new entity to this parent's transform for its lifetime (see
     /// `RuntimePropAttachment`). The spawn-time relative pose is captured and the
     /// child then tracks the parent each frame - used so a weapon's muzzle flash
@@ -1667,6 +1678,7 @@ impl Default for CreateEntityOptions {
     fn default() -> Self {
         CreateEntityOptions {
             force_visible: false,
+            model_override: None,
             attach_to: None,
             transient_fx: false,
             projectile_raycast_origin: None,
