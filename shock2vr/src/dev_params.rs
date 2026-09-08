@@ -191,6 +191,8 @@ dev_params! {
     /// weapon is". Read out of Rapier at the collider's own isometry, so it
     /// shows what is actually simulated rather than what the wield intended.
     MELEE_VOLUMES = float("melee_volumes", "Show hurtbox", 0.0, 0.0, 1.0, 1.0),
+    /// VR support target/radius (cyan; green when attached) and tracked palm (amber).
+    VR_SUPPORT_GRIPS = bool("vr_support_grips", "Support grips", false),
     /// Draw a floating "-7 HP" at the point each blow lands, labeled with the
     /// hitbox it struck.
     ///
