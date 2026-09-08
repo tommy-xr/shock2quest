@@ -179,11 +179,9 @@ impl GloveRenderer {
         trigger_value: f32,
         squeeze_value: f32,
         holding: bool,
-        fitted: Option<FingerAmounts>,
+        fitted: Option<(FingerAmounts, f32)>,
     ) -> Vec<SceneObject> {
-        let amounts = if let Some(fitted) = fitted {
-            fitted
-        } else if holding {
+        let mut amounts = if holding {
             // Gripping a held item: fingers wrapped on the handle, thumb
             // locked, index resting on the trigger and curling with the pull
             // (the squeeze is what holds the item, so it doesn't drive the
@@ -207,6 +205,16 @@ impl GloveRenderer {
                 pinky: squeeze_value,
             }
         };
+        if let Some((fitted, blend)) = fitted {
+            let t = blend.clamp(0.0, 1.0);
+            amounts = FingerAmounts {
+                thumb: amounts.thumb * (1.0 - t) + fitted.thumb * t,
+                index: amounts.index * (1.0 - t) + fitted.index * t,
+                middle: amounts.middle * (1.0 - t) + fitted.middle * t,
+                ring: amounts.ring * (1.0 - t) + fitted.ring * t,
+                pinky: amounts.pinky * (1.0 - t) + fitted.pinky * t,
+            };
+        }
         let pose = self.open.blend_per_finger(&self.fist, &amounts);
         Self::render_posed(
             &mut self.model,

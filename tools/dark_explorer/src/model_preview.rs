@@ -312,7 +312,7 @@ impl ModelPreview {
                     0.0,
                     0.0,
                     true,
-                    Some(grip.finger_amounts()),
+                    Some((grip.finger_amounts(), 1.0)),
                 ));
                 let triangles = if shock2vr::vr_weapon_grip::supports_model(key) {
                     shock2vr::vr_weapon_grip::inputs(&mut self.asset_cache, key, *hand)

@@ -57,6 +57,7 @@ pub use vr_config::{Handedness, MeleePosedArm, melee_contact_offset};
 pub mod vr_climb;
 pub mod vr_crouch;
 pub mod vr_grip;
+pub mod vr_support;
 pub mod vr_tracking;
 pub mod vr_weapon_grip;
 mod wielded_weapon;

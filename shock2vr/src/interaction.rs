@@ -10,7 +10,7 @@
 
 use std::{cell::RefCell, collections::HashMap};
 
-use cgmath::{InnerSpace, Point3, Quaternion, Vector3, Vector4};
+use cgmath::{InnerSpace, One, Point3, Quaternion, Rotation, Vector3, Vector4};
 use engine::{
     assets::asset_cache::AssetCache,
     scene::{SceneObject, light::SpotLight},
@@ -27,6 +27,7 @@ use crate::{
     physics::PhysicsWorld,
     virtual_hand::{VirtualHand, VirtualHandEffect, hand_world_position},
     vr_config::Handedness,
+    vr_support::{GripPose, SupportProfile, solve_two_hand_pose},
 };
 
 /// Read-only per-frame inputs an interaction controller needs to update.
@@ -40,6 +41,8 @@ pub struct InteractionContext<'a> {
     /// Eye height above `player_pos` in SS2 units - crouch-aware, so the flat
     /// controller's shot/viewmodel origin follows the actual camera.
     pub eye_height: f32,
+    pub step_dt: f32,
+    pub support_enabled: bool,
 }
 
 /// Read-only per-frame inputs for the VR hand-climb resolve. Separate from
@@ -73,6 +76,9 @@ pub trait PlayerInteraction {
         _options: &GameOptions,
     ) {
     }
+
+    /// Refresh glove attachment from the collision-resolved item transform.
+    fn synchronize_held_visuals(&mut self, _world: &World) {}
 
     fn grip_diagnostics(&self) -> serde_json::Value {
         serde_json::json!([])
@@ -196,6 +202,34 @@ pub struct VrInteraction {
     grip_hints: HashMap<String, crate::vr_grip::GripHints>,
     grip_overlay: bool,
     fitted_grips: [Option<HeldGrip>; 2],
+    support_profiles: HashMap<String, SupportProfile>,
+    support: Option<SupportAttachment>,
+    support_preview: Option<SupportCandidate>,
+    support_pressed: [bool; 2],
+    support_blocked: [bool; 2],
+    visual_hands: [Option<GripPose>; 2],
+    step_dt: f32,
+}
+
+struct SupportAttachment {
+    entity: EntityId,
+    primary: usize,
+    active: bool,
+    blend: f32,
+    correction: Quaternion<f32>,
+}
+
+#[derive(Clone)]
+struct SupportCandidate {
+    entity: EntityId,
+    primary: usize,
+    profile: SupportProfile,
+    primary_palm: Vector3<f32>,
+    primary_anchor: Vector3<f32>,
+    tracked_axis: Vector3<f32>,
+    anchor: Vector3<f32>,
+    model_pose: GripPose,
+    hand_pose: GripPose,
 }
 
 struct GripGeometry {
@@ -217,6 +251,28 @@ struct HeldGrip {
     item_bounds: Option<[[f32; 3]; 2]>,
 }
 
+impl HeldGrip {
+    /// Undo the contact-origin split on the collision-resolved melee body.
+    fn physical_model_pose(&self, world: &World) -> Option<GripPose> {
+        use shipyard::{Get, View};
+        let grip = self.resolved.as_ref()?;
+        let (positions, offsets) = world
+            .borrow::<(
+                View<dark::properties::PropPosition>,
+                View<crate::runtime_props::RuntimePropVrGripOffset>,
+            )>()
+            .ok()?;
+        let position = positions.get(self.entity).ok()?;
+        let contact = offsets.get(self.entity).ok()?.0;
+        let pose = GripPose {
+            position: position.position
+                - position.rotation.rotate_vector(contact * grip.item_scale),
+            rotation: position.rotation,
+        };
+        pose.is_tracked().then_some(pose)
+    }
+}
+
 impl VrInteraction {
     pub fn new() -> Self {
         Self {
@@ -231,6 +287,13 @@ impl VrInteraction {
             grip_hints: HashMap::new(),
             grip_overlay: false,
             fitted_grips: [None, None],
+            support_profiles: HashMap::new(),
+            support: None,
+            support_preview: None,
+            support_pressed: [true; 2],
+            support_blocked: [false; 2],
+            visual_hands: [None, None],
+            step_dt: 0.0,
         }
     }
 }
@@ -238,6 +301,259 @@ impl VrInteraction {
 impl Default for VrInteraction {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl VrInteraction {
+    fn hand_poses(&self) -> [GripPose; 2] {
+        [&self.left_hand, &self.right_hand].map(|hand| GripPose {
+            position: hand.get_position(),
+            rotation: hand.get_rotation(),
+        })
+    }
+
+    fn support_candidate(&self, world: &World, poses: [GripPose; 2]) -> Option<SupportCandidate> {
+        let rig = self.grip_kinematics.as_ref()?;
+        for (primary, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
+            let Some(held) = self.fitted_grips[primary].as_ref() else {
+                continue;
+            };
+            if held.model != "wrench_h"
+                || hand.get_held_entity() != Some(held.entity)
+                || !poses[primary].is_tracked()
+            {
+                continue;
+            }
+            let Some(grip) = held.resolved.as_ref() else {
+                continue;
+            };
+            let Some(profile) = self.support_profiles.get(&held.model) else {
+                continue;
+            };
+            let base_rotation = poses[primary].rotation.normalize() * grip.rotation;
+            let primary_palm = poses[primary].point(rig[primary].palm);
+            // Scaled model-space anchors, independent of the melee contact-origin split.
+            let primary_anchor = grip
+                .rotation
+                .conjugate()
+                .rotate_vector(rig[primary].palm - grip.offset);
+            let anchor = profile.anchor(primary) * grip.item_scale;
+            let correction = self
+                .support
+                .as_ref()
+                .filter(|s| s.entity == held.entity && s.primary == primary)
+                .map_or(Quaternion::one(), |s| s.correction);
+            let rotation = base_rotation * correction;
+            let target_pose = GripPose {
+                position: primary_palm - rotation.rotate_vector(primary_anchor),
+                rotation,
+            };
+            // Melee physics may stop short of its target at a wall. Acquisition
+            // and visible gloves belong on that actual weapon, not an unseen target.
+            let model_pose = held.physical_model_pose(world).unwrap_or(target_pose);
+            let hand_rotation = model_pose.rotation * grip.rotation.conjugate();
+            let hand_pose = GripPose {
+                position: model_pose.point(anchor)
+                    - hand_rotation.rotate_vector(rig[1 - primary].palm),
+                rotation: hand_rotation,
+            };
+            return Some(SupportCandidate {
+                entity: held.entity,
+                primary,
+                profile: profile.clone(),
+                primary_palm,
+                primary_anchor,
+                tracked_axis: base_rotation.rotate_vector(anchor - primary_anchor),
+                anchor,
+                model_pose,
+                hand_pose,
+            });
+        }
+        None
+    }
+
+    fn update_support(&mut self, ctx: &InteractionContext) {
+        self.step_dt = ctx.step_dt.max(0.0);
+        let inputs = [&ctx.input.left_hand, &ctx.input.right_hand];
+        let poses = inputs.map(|input| GripPose {
+            position: crate::virtual_hand::hand_world_position(
+                ctx.player_pos,
+                ctx.player_rotation,
+                input.position,
+            ),
+            rotation: ctx.player_rotation * input.rotation,
+        });
+        let pressed = inputs.map(|input| input.squeeze_value >= 0.5);
+        for i in 0..2 {
+            if !pressed[i] && inputs[i].trigger_value < 0.5 {
+                self.support_blocked[i] = false;
+            }
+        }
+        let candidate = self.support_candidate(ctx.world, poses);
+        let available = |primary: usize| {
+            let other = 1 - primary;
+            let hand = if other == 0 {
+                &self.left_hand
+            } else {
+                &self.right_hand
+            };
+            hand.get_held_entity().is_none()
+                && !self.hand_climb.grips().any(|(h, _)| {
+                    h == if other == 0 {
+                        Handedness::Left
+                    } else {
+                        Handedness::Right
+                    }
+                })
+        };
+        if let Some(support) = self.support.as_mut() {
+            let valid = candidate.as_ref().is_some_and(|c| {
+                let other = 1 - c.primary;
+                let Some(rig) = self.grip_kinematics.as_ref() else {
+                    return false;
+                };
+                let separation = (poses[other].point(rig[other].palm) - c.primary_palm).magnitude();
+                support.entity == c.entity
+                    && support.primary == c.primary
+                    && ctx.support_enabled
+                    && available(c.primary)
+                    && poses.iter().all(|p| p.is_tracked())
+                    && pressed[c.primary]
+                    && pressed[other]
+                    && separation > 0.06
+                    && c.profile.allows_swing(
+                        c.tracked_axis,
+                        poses[other].point(rig[other].palm) - c.primary_palm,
+                    )
+                    && (separation - (c.anchor - c.primary_anchor).magnitude()).abs()
+                        <= c.profile.release_distance
+            });
+            if !valid {
+                support.active = false;
+            }
+        }
+        // Hand input still updates on render-only (zero-dt) frames, just like
+        // VirtualHand. Consume the squeeze edge there too; only blending needs dt.
+        if ctx.support_enabled && self.support.as_ref().is_none_or(|s| !s.active) {
+            if let Some(c) = candidate.as_ref() {
+                let other = 1 - c.primary;
+                if let Some(rig) = self.grip_kinematics.as_ref() {
+                    let palm = poses[other].point(rig[other].palm);
+                    if available(c.primary)
+                        && poses.iter().all(|p| p.is_tracked())
+                        && pressed[c.primary]
+                        && pressed[other]
+                        && !self.support_pressed[other]
+                        && !self.support_blocked[other]
+                        && (palm - c.primary_palm).magnitude() > 0.08
+                        && c.profile
+                            .allows_swing(c.tracked_axis, palm - c.primary_palm)
+                        && (palm - c.model_pose.point(c.anchor)).magnitude()
+                            <= c.profile.grab_radius
+                    {
+                        let (blend, correction) = self
+                            .support
+                            .as_ref()
+                            .filter(|s| s.entity == c.entity && s.primary == c.primary)
+                            .map_or((0.0, Quaternion::one()), |s| (s.blend, s.correction));
+                        self.support = Some(SupportAttachment {
+                            entity: c.entity,
+                            primary: c.primary,
+                            active: true,
+                            blend,
+                            correction,
+                        });
+                        self.support_blocked[other] = true;
+                    }
+                }
+            }
+        }
+        self.support_pressed = pressed;
+    }
+
+    fn apply_support(&mut self, world: &World, effects: &mut Vec<VirtualHandEffect>) {
+        use shipyard::{Get, View};
+        self.visual_hands = [None, None];
+        let poses = self.hand_poses();
+        let candidate = self.support_candidate(world, poses);
+        let valid = self
+            .support
+            .as_ref()
+            .zip(candidate.as_ref())
+            .is_some_and(|(s, c)| {
+                s.entity == c.entity
+                    && s.primary == c.primary
+                    && (!s.active
+                        || [
+                            self.left_hand.get_held_entity(),
+                            self.right_hand.get_held_entity(),
+                        ][1 - s.primary]
+                            .is_none())
+            });
+        if !valid {
+            self.support = None;
+        }
+        if let (Some(s), Some(c), Some(rig)) = (
+            &mut self.support,
+            candidate.as_ref(),
+            self.grip_kinematics.as_ref(),
+        ) {
+            let primary = s.primary;
+            let other = 1 - primary;
+            let grip = self.fitted_grips[primary]
+                .as_ref()
+                .unwrap()
+                .resolved
+                .as_ref()
+                .unwrap();
+            let base_rotation = poses[primary].rotation.normalize() * grip.rotation;
+            let target = if s.active && poses[other].is_tracked() {
+                solve_two_hand_pose(
+                    c.primary_palm,
+                    poses[other].point(rig[other].palm),
+                    base_rotation,
+                    c.primary_anchor,
+                    c.anchor,
+                    base_rotation * s.correction,
+                )
+                .rotation
+            } else {
+                base_rotation
+            };
+            let alpha = 1.0 - (-self.step_dt / 0.06).exp();
+            s.correction = s
+                .correction
+                .slerp(base_rotation.conjugate() * target, alpha)
+                .normalize();
+            s.blend = (s.blend
+                + if s.active {
+                    self.step_dt / 0.08
+                } else {
+                    -self.step_dt / 0.08
+                })
+            .clamp(0.0, 1.0);
+            let rotation = base_rotation * s.correction;
+            let model_pose = GripPose {
+                position: c.primary_palm - rotation.rotate_vector(c.primary_anchor),
+                rotation,
+            };
+            let contact = world
+                .borrow::<View<crate::runtime_props::RuntimePropVrGripOffset>>()
+                .ok()
+                .and_then(|v| v.get(c.entity).ok().map(|p| p.0))
+                .unwrap_or(Vector3::new(0.0, 0.0, 0.0));
+            effects.retain(|e| !matches!(e, VirtualHandEffect::SetPositionRotation { entity_id, .. } if *entity_id == c.entity));
+            effects.push(VirtualHandEffect::SetPositionRotation {
+                entity_id: c.entity,
+                position: model_pose.point(contact * grip.item_scale),
+                rotation,
+                scale: Vector3::new(grip.item_scale, grip.item_scale, grip.item_scale),
+            });
+            if !s.active && s.blend == 0.0 && s.correction.s.abs() > 0.99999 {
+                self.support = None;
+                self.visual_hands = [None, None];
+            }
+        }
     }
 }
 
@@ -257,6 +573,14 @@ impl PlayerInteraction for VrInteraction {
         use engine::assets::text_importer::TEXT_IMPORTER;
         use shipyard::{Get, View};
         if self.grip_library.is_none() {
+            self.support_profiles = assets
+                .get_opt(&TEXT_IMPORTER, "astra-vr-support-grips.json")
+                .and_then(|text| {
+                    serde_json::from_str::<HashMap<String, SupportProfile>>(&text).ok()
+                })
+                .unwrap_or_default();
+            self.support_profiles
+                .retain(|model, profile| model == "wrench_h" && profile.is_valid());
             self.grip_library = Some(
                 assets
                     .get_opt(&TEXT_IMPORTER, "astra-vr-grips.json")
@@ -490,12 +814,71 @@ impl PlayerInteraction for VrInteraction {
                 });
             }
         }
+        drop(slot);
+        self.apply_support(world, effects);
+    }
+
+    fn synchronize_held_visuals(&mut self, world: &World) {
+        let poses = self.hand_poses();
+        self.support_preview = self.support_candidate(world, poses);
+        self.visual_hands = [None, None];
+        // All fitted physical melee gloves follow the synchronized body, even
+        // with one hand: locomotion and impacts must not separate mesh and grip.
+        for (index, held) in self.fitted_grips.iter().enumerate() {
+            let Some(held) = held else { continue };
+            let (Some(grip), Some(model)) = (&held.resolved, held.physical_model_pose(world))
+            else {
+                continue;
+            };
+            let rotation = model.rotation * grip.rotation.conjugate();
+            self.visual_hands[index] = Some(GripPose {
+                position: model.position - rotation.rotate_vector(grip.offset),
+                rotation,
+            });
+        }
+        let (Some(support), Some(candidate)) = (&self.support, &self.support_preview) else {
+            return;
+        };
+        let other = 1 - support.primary;
+        if poses[other].is_tracked()
+            && [
+                self.left_hand.get_held_entity(),
+                self.right_hand.get_held_entity(),
+            ][other]
+                .is_none()
+        {
+            self.visual_hands[other] = Some(GripPose {
+                position: poses[other].position * (1.0 - support.blend)
+                    + candidate.hand_pose.position * support.blend,
+                rotation: poses[other]
+                    .rotation
+                    .normalize()
+                    .slerp(candidate.hand_pose.rotation, support.blend),
+            });
+        }
     }
 
     fn grip_diagnostics(&self) -> serde_json::Value {
         serde_json::Value::Array(self.fitted_grips.iter().enumerate().filter_map(|(i, grip)| {
             let grip=grip.as_ref()?;
-            Some(serde_json::json!({"hand": if i == 0 {"left"} else {"right"}, "entity_id": grip.entity.inner() as i32,
+            let support = self.support_preview.as_ref().filter(|c| c.primary == i && c.entity == grip.entity).map(|c| {
+                let attachment = self.support.as_ref().filter(|s| s.primary == i && s.entity == grip.entity);
+                serde_json::json!({
+                    "hand": if i == 0 { "right" } else { "left" },
+                    "attached": attachment.is_some_and(|s| s.active),
+                    "blend": attachment.map_or(0.0, |s| s.blend),
+                    "tracked_palm": self.grip_kinematics.as_ref().map(|rig| self.hand_poses()[1-i].point(rig[1-i].palm)),
+                    "pressed": self.support_pressed, "blocked": self.support_blocked, "step_dt": self.step_dt,
+                    "socket_position": c.model_pose.point(c.anchor),
+                    "controller_position": c.hand_pose.position,
+                    "controller_rotation": c.hand_pose.rotation,
+                    "model_position": c.model_pose.position, "model_rotation": c.model_pose.rotation,
+                    "primary_palm": c.primary_palm, "primary_anchor": c.primary_anchor,
+                    "support_anchor": c.anchor, "grab_radius": c.profile.grab_radius,
+                    "release_distance": c.profile.release_distance, "max_swing_degrees": c.profile.max_swing_degrees
+                })
+            });
+            Some(serde_json::json!({"glove_pose": self.visual_hands[i], "support": support, "hand": if i == 0 {"left"} else {"right"}, "entity_id": grip.entity.inner() as i32,
                 "model": grip.model, "item_bounds": grip.item_bounds, "solve_ms": grip.solve_ms, "grip": grip.resolved,
                 "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
                 "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal)}))
@@ -505,12 +888,12 @@ impl PlayerInteraction for VrInteraction {
     fn update_hand_climb(&mut self, ctx: &ClimbContext) -> crate::vr_climb::ClimbFrame {
         use shipyard::EntitiesView;
 
-        let hand_input = |hand: &VirtualHand, input: &crate::input_context::Hand| {
+        let hand_input = |index: usize, hand: &VirtualHand, input: &crate::input_context::Hand| {
             crate::vr_climb::ClimbHandInput {
                 local_position: input.position,
                 squeeze: input.squeeze_value,
                 // A hand that is carrying something cannot also hold a ladder.
-                is_empty: hand.get_held_entity().is_none(),
+                is_empty: hand.get_held_entity().is_none() && !self.support_blocked[index],
             }
         };
         self.hand_climb.update(
@@ -518,8 +901,8 @@ impl PlayerInteraction for VrInteraction {
             ctx.pawn_rotation,
             ctx.step_dt,
             [
-                hand_input(&self.left_hand, &ctx.input.left_hand),
-                hand_input(&self.right_hand, &ctx.input.right_hand),
+                hand_input(0, &self.left_hand, &ctx.input.left_hand),
+                hand_input(1, &self.right_hand, &ctx.input.right_hand),
             ],
             |point, transferring| {
                 if transferring {
@@ -555,40 +938,69 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn update(&mut self, ctx: &InteractionContext) -> Vec<VirtualHandEffect> {
+        self.update_support(ctx);
         let left_held_entity = self.left_hand.get_held_entity();
-        // Both hands' positions come from this frame's input, before either
-        // update: the two-hand gesture must read the same distance whichever
-        // hand releases.
-        let hand_position = |hand: &crate::input_context::Hand| {
-            hand_world_position(ctx.player_pos, ctx.player_rotation, hand.position)
-        };
-        let left_position = hand_position(&ctx.input.left_hand);
-        let right_position = hand_position(&ctx.input.right_hand);
-        let (right_hand, mut right_msgs) = VirtualHand::update(
-            &self.right_hand,
-            ctx.physics,
-            ctx.world,
+        // Read both positions from this frame before either hand updates, so
+        // native-toxin self-use has the same distance in either hand.
+        let left_position = hand_world_position(
             ctx.player_pos,
             ctx.player_rotation,
-            &ctx.input.right_hand,
-            left_held_entity,
-            left_position,
+            ctx.input.left_hand.position,
         );
+        let right_position = hand_world_position(
+            ctx.player_pos,
+            ctx.player_rotation,
+            ctx.input.right_hand.position,
+        );
+        let (right_hand, mut right_msgs) =
+            if self.support_blocked[1] && self.right_hand.get_held_entity().is_none() {
+                (
+                    self.right_hand.update_suppressed(
+                        ctx.player_pos,
+                        ctx.player_rotation,
+                        &ctx.input.right_hand,
+                    ),
+                    Vec::new(),
+                )
+            } else {
+                VirtualHand::update(
+                    &self.right_hand,
+                    ctx.physics,
+                    ctx.world,
+                    ctx.player_pos,
+                    ctx.player_rotation,
+                    &ctx.input.right_hand,
+                    left_held_entity,
+                    left_position,
+                )
+            };
         self.right_hand = right_hand;
 
         // Right updates first, so a same-frame right-hand grab is visible to
         // the left hand and one physical item cannot enter both hand states.
         let right_held_entity = self.right_hand.get_held_entity();
-        let (left_hand, mut left_msgs) = VirtualHand::update(
-            &self.left_hand,
-            ctx.physics,
-            ctx.world,
-            ctx.player_pos,
-            ctx.player_rotation,
-            &ctx.input.left_hand,
-            right_held_entity,
-            right_position,
-        );
+        let (left_hand, mut left_msgs) =
+            if self.support_blocked[0] && self.left_hand.get_held_entity().is_none() {
+                (
+                    self.left_hand.update_suppressed(
+                        ctx.player_pos,
+                        ctx.player_rotation,
+                        &ctx.input.left_hand,
+                    ),
+                    Vec::new(),
+                )
+            } else {
+                VirtualHand::update(
+                    &self.left_hand,
+                    ctx.physics,
+                    ctx.world,
+                    ctx.player_pos,
+                    ctx.player_rotation,
+                    &ctx.input.left_hand,
+                    right_held_entity,
+                    right_position,
+                )
+            };
         self.left_hand = left_hand;
 
         left_msgs.append(&mut right_msgs);
@@ -626,36 +1038,43 @@ impl PlayerInteraction for VrInteraction {
         use_mode: bool,
     ) -> Vec<SceneObject> {
         let mut glove_slot = self.glove_renderer.borrow_mut();
-        let glove_renderer = glove_slot
+        let mut glove_renderer = glove_slot
             .get_or_insert_with(|| GloveRenderer::new(asset_cache))
             .as_mut();
 
         let mut objs = Vec::new();
-        match glove_renderer {
-            Some(renderer) => {
-                objs.append(
-                    &mut self.left_hand.render(
-                        world,
-                        Some(renderer),
-                        self.fitted_grips[0]
+        let support_grip = self.support.as_ref().and_then(|support| {
+            let mut grip = self.fitted_grips[support.primary]
+                .as_ref()?
+                .resolved
+                .clone()?;
+            grip.curls = self.support_preview.as_ref()?.profile.curls;
+            Some((1 - support.primary, grip))
+        });
+        for (index, hand) in [&self.left_hand, &self.right_hand].into_iter().enumerate() {
+            let grip = self.fitted_grips[index]
+                .as_ref()
+                .and_then(|g| g.resolved.as_ref())
+                .or_else(|| {
+                    support_grip
+                        .as_ref()
+                        .filter(|(i, _)| *i == index)
+                        .map(|(_, g)| g)
+                });
+            objs.extend(hand.render(
+                world,
+                glove_renderer.as_deref_mut(),
+                grip.map(|grip| {
+                    (
+                        grip,
+                        self.support
                             .as_ref()
-                            .and_then(|g| g.resolved.as_ref()),
-                    ),
-                );
-                objs.append(
-                    &mut self.right_hand.render(
-                        world,
-                        Some(renderer),
-                        self.fitted_grips[1]
-                            .as_ref()
-                            .and_then(|g| g.resolved.as_ref()),
-                    ),
-                );
-            }
-            None => {
-                objs.append(&mut self.left_hand.render(world, None, None));
-                objs.append(&mut self.right_hand.render(world, None, None));
-            }
+                            .filter(|s| 1 - s.primary == index && hand.get_held_entity().is_none())
+                            .map_or(1.0, |s| s.blend),
+                    )
+                }),
+                self.visual_hands[index],
+            ));
         }
         if self.grip_overlay {
             use cgmath::{Matrix4, Rotation, vec3};
@@ -749,6 +1168,18 @@ impl PlayerInteraction for VrInteraction {
         if self.left_hand.is_holding(entity_id) || self.right_hand.is_holding(entity_id) {
             return Vec::new();
         }
+        let index = if hand == Handedness::Left { 0 } else { 1 };
+        if let Some(support) = self.support.as_mut() {
+            if support.primary == index {
+                self.support = None;
+            } else {
+                // A new offhand item must not snap the primary out of its decay.
+                support.active = false;
+            }
+        }
+        // Consumed squeeze/trigger input remains blocked until both release.
+        self.support_preview = None;
+        self.visual_hands = [None, None];
         if hand == Handedness::Left {
             self.left_hand = self.left_hand.grab_entity(world, entity_id);
         } else {
@@ -758,11 +1189,21 @@ impl PlayerInteraction for VrInteraction {
     }
 
     fn replace_entity(&mut self, old: EntityId, new: EntityId, rigid_body: RigidBodyHandle) {
+        if self.support.as_ref().is_some_and(|s| s.entity == old) {
+            self.support = None;
+            self.support_preview = None;
+            self.visual_hands = [None, None];
+        }
         self.left_hand = self.left_hand.replace_entity(old, new, rigid_body);
         self.right_hand = self.right_hand.replace_entity(old, new, rigid_body);
     }
 
     fn on_entity_destroyed(&mut self, entity_id: EntityId) {
+        if self.support.as_ref().is_some_and(|s| s.entity == entity_id) {
+            self.support = None;
+            self.support_preview = None;
+            self.visual_hands = [None, None];
+        }
         self.left_hand = self.left_hand.destroy_entity(entity_id);
         self.right_hand = self.right_hand.destroy_entity(entity_id);
     }
@@ -904,6 +1345,8 @@ mod tests {
             player_rotation: identity(),
             head_rotation: identity(),
             eye_height: 1.04,
+            step_dt: 1.0 / 60.0,
+            support_enabled: true,
         }
     }
 
@@ -911,6 +1354,153 @@ mod tests {
         let player = EntityId::from_inner(10_000).unwrap();
         let mut player = physics.create_player(vec3(10.0, 10.0, 10.0), player);
         physics.update(vec3(0.0, 0.0, 0.0), &mut player);
+    }
+
+    #[test]
+    fn support_accepts_zero_dt_input_edges_and_requires_release_after_break() {
+        use crate::vr_grip::{GripKinematics, ResolvedGrip};
+        let mut world = World::new();
+        let entity = grabbable(&mut world);
+        let physics = PhysicsWorld::new();
+        let mut interaction = VrInteraction::new();
+        interaction.grab(&world, entity, Handedness::Right);
+        interaction.grip_kinematics = Some(std::array::from_fn(|_| GripKinematics {
+            fingers: std::array::from_fn(|_| Vec::new()),
+            palm: vec3(0.0, 0.0, 0.0),
+            normal: Vector3::unit_x(),
+        }));
+        interaction.support_profiles.insert(
+            "wrench_h".into(),
+            SupportProfile {
+                palm_anchor: [0.0, 0.2, 0.0],
+                curls: [0.5; 5],
+                grab_radius: 0.07,
+                release_distance: 0.12,
+                max_swing_degrees: 75.0,
+            },
+        );
+        interaction.fitted_grips[1] = Some(HeldGrip {
+            entity,
+            model: "wrench_h".into(),
+            resolved: Some(ResolvedGrip {
+                item_scale: 1.0,
+                pose_family: "cylindrical".into(),
+                offset: vec3(0.0, 0.0, 0.0),
+                rotation: identity(),
+                curls: [0.5; 5],
+                contacts: [None; 5],
+                anchor: [0.0; 3],
+                score: 0.0,
+            }),
+            solve_ms: 0.0,
+            surface_hash: String::new(),
+            kinematics_hash: String::new(),
+            hints_hash: String::new(),
+            source: "prepared",
+            authored: false,
+            item_bounds: None,
+        });
+        let mut input = InputContext::default();
+        input.right_hand.position = vec3(0.0, 1.0, 0.0);
+        input.right_hand.rotation = identity();
+        input.right_hand.squeeze_value = 1.0;
+        input.left_hand.position = vec3(0.0, 1.2, 0.0);
+        input.left_hand.rotation = identity();
+        input.left_hand.squeeze_value = 0.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        input.left_hand.squeeze_value = 1.0;
+        let mut ctx = context(&world, &physics, &input);
+        ctx.step_dt = 0.0;
+        interaction.update_support(&ctx);
+        assert!(interaction.support.as_ref().unwrap().active);
+        // Supporting hand input is swallowed even on render-only frames.
+        let effects = interaction.update(&ctx);
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, VirtualHandEffect::HoldItem { .. }))
+        );
+        assert_eq!(interaction.held_entities(), (None, Some(entity)));
+        // Simulate collision blocking the physical wrench away from its target.
+        world.add_component(
+            entity,
+            (
+                dark::properties::PropPosition {
+                    position: vec3(0.0, 1.0, 0.3),
+                    rotation: identity(),
+                    cell: 0,
+                },
+                crate::runtime_props::RuntimePropVrGripOffset(vec3(0.0, 0.0, 0.1)),
+            ),
+        );
+        interaction.support.as_mut().unwrap().blend = 1.0;
+        interaction.synchronize_held_visuals(&world);
+        let actual = interaction.support_preview.as_ref().unwrap();
+        assert!((actual.model_pose.position - vec3(0.0, 1.0, 0.2)).magnitude() < 1e-5);
+        assert!(
+            (interaction.visual_hands[0].unwrap().position - vec3(0.0, 1.2, 0.2)).magnitude()
+                < 1e-5
+        );
+        assert!(
+            (interaction.visual_hands[1].unwrap().position - vec3(0.0, 1.0, 0.2)).magnitude()
+                < 1e-5
+        );
+        let attachment = interaction.support.take();
+        interaction.synchronize_held_visuals(&world);
+        assert!(
+            (interaction.visual_hands[1].unwrap().position - vec3(0.0, 1.0, 0.2)).magnitude()
+                < 1e-5,
+            "single-hand melee also follows the physical body"
+        );
+        interaction.support = attachment;
+        world.remove::<crate::runtime_props::RuntimePropVrGripOffset>(entity);
+        // A trigger consumed while supporting must not leak on squeeze release.
+        input.left_hand.trigger_value = 1.0;
+        input.left_hand.squeeze_value = 0.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(interaction.support_blocked[0]);
+        input.left_hand.trigger_value = 0.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(!interaction.support_blocked[0]);
+        input.left_hand.squeeze_value = 1.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(interaction.support.as_ref().unwrap().active);
+        input.left_hand.position.y = 2.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(!interaction.support.as_ref().unwrap().active);
+        input.left_hand.position.y = 1.2;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(!interaction.support.as_ref().unwrap().active);
+        input.left_hand.squeeze_value = 0.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        input.left_hand.squeeze_value = 1.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(interaction.support.as_ref().unwrap().active);
+        input.left_hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(!interaction.support.as_ref().unwrap().active);
+        input.left_hand.rotation = identity();
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(!interaction.support.as_ref().unwrap().active);
+        input.left_hand.squeeze_value = 0.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        input.left_hand.squeeze_value = 1.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert!(interaction.support.as_ref().unwrap().active);
+        let mut ctx = context(&world, &physics, &input);
+        ctx.support_enabled = false;
+        interaction.update_support(&ctx);
+        assert!(!interaction.support.as_ref().unwrap().active);
+        let other_item = grabbable(&mut world);
+        interaction.grab(&world, other_item, Handedness::Left);
+        interaction.apply_support(&world, &mut Vec::new());
+        // The owning wrench keeps its release blend while the new item gets
+        // its own grip; there is no support-hand visual attached to the wrench.
+        assert!(interaction.support.as_ref().is_some_and(|s| !s.active));
+        assert_eq!(
+            interaction.held_entities(),
+            (Some(other_item), Some(entity))
+        );
     }
 
     #[test]
