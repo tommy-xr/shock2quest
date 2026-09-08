@@ -407,7 +407,7 @@ impl Script for WeaponScript {
                 else {
                     return Effect::NoEffect;
                 };
-                flat_melee_hit(physics, aim, world)
+                flat_melee_hit(physics, aim, world, entity_id)
             }
             // The maintenance tool, offered to this weapon on the port's tool
             // channel: a VR hand releasing it onto the gun, or the flat
@@ -631,7 +631,12 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
 /// Resolve the authored hit event of a flat melee swing: raycast a short
 /// distance along the current crosshair ray and damage the hit entity (hitbox
 /// proxies resolve to their parent).
-fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World) -> Effect {
+fn flat_melee_hit(
+    physics: &PhysicsWorld,
+    aim: RuntimePropFlatAim,
+    world: &World,
+    weapon: EntityId,
+) -> Effect {
     let hit = physics.ray_cast(
         aim.origin,
         aim.forward.normalize() * MELEE_RANGE,
@@ -646,13 +651,18 @@ fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World
     }) = hit
     {
         let target = resolve_proxy_entity(world, target);
+        let damage = if super::script_util::entity_class_template_id(world, weapon) == Some(-2291) {
+            crate::mission::stim_response::contact_stim_damage(world, -2291, target)
+        } else {
+            MELEE_DAMAGE
+        };
         return Effect::Send {
             msg: Message {
                 to: target,
                 payload: MessagePayload::Damage {
                     // Adrenaline Overproduction scales the player's melee
                     // damage while it is active (1.0 otherwise).
-                    amount: MELEE_DAMAGE * crate::scripts::berserk::melee_damage_multiplier(world),
+                    amount: damage * crate::scripts::berserk::melee_damage_multiplier(world),
                     // Swing direction + contact point seed the victim's
                     // death-ragdoll reaction. No bone: melee resolves a hitbox
                     // proxy to its parent BEFORE sending (so HitBoxScript
@@ -878,6 +888,7 @@ mod tests {
                         forward: vec3(0.0, 0.0, 1.0),
                     },
                     &world,
+                    weapon,
                 ),
                 target,
             ),

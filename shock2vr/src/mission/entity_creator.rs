@@ -418,6 +418,12 @@ pub fn create_entity_core(
     if needs_internal_triggered_melee(v_limb_model.get(entity_id).is_ok()) {
         processed_scripts.push("internal_triggered_melee_weapon".to_owned());
     }
+    if v_limb_model
+        .get(entity_id)
+        .is_ok_and(|model| model.0.eq_ignore_ascii_case("psword_h"))
+    {
+        processed_scripts.push("internal_summoned_psi_sword".to_owned());
+    }
 
     // `MOVE` is an engine frob action, not an object script. Ordinary goodies
     // such as Med Patches and armor only inherit that flag, so give them the

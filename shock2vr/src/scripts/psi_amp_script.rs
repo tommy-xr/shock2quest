@@ -434,6 +434,13 @@ fn cast_sustained_power(
     ];
     effects.extend(amp_cast_flashes(world, amp_entity));
 
+    if power.template_id == -1119 {
+        effects.push(Effect::SummonPsiSword {
+            amp: amp_entity,
+            duration_secs,
+        });
+    }
+
     game_log!(
         INFO,
         "Cast psi power: {} (tier {}, sustained {}s)",

@@ -242,6 +242,10 @@ impl DebugScene {
 }
 
 impl GameScene for DebugScene {
+    fn script_world(&self) -> Option<&crate::scripts::ScriptWorld> {
+        Some(&self.core.script_world)
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
@@ -456,6 +460,10 @@ impl<H> HookedDebugScene<H> {
 }
 
 impl<H: DebugSceneHooks> GameScene for HookedDebugScene<H> {
+    fn script_world(&self) -> Option<&crate::scripts::ScriptWorld> {
+        Some(&self.core.script_world)
+    }
+
     fn is_pausable(&self) -> bool {
         true
     }
