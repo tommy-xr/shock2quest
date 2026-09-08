@@ -1577,6 +1577,39 @@ fn create_physics_representation_with_options(
                 // the hand grip query needs the authored per-face bits.
                 physics.set_climbable_sides(entity_id, climbable_sides);
             }
+
+            // Multi-submodel OBBs are compound visible fixtures in Dark, but
+            // this port deliberately keeps their authored aggregate OBB as
+            // the conservative simulation hull. Add the bind-pose render mesh
+            // as a query-only sibling so flat and VR frob rays do not treat
+            // the empty corners of that aggregate box as visible matter
+            // (#1101). Sensors remain volume queries and must not acquire a
+            // surface interpretation.
+            if !is_sensor
+                && phys_type.phys_type == PhysicsModelType::ORIENTED_BOUNDING_BOX
+                && phys_type.num_submodels > 1
+            {
+                if let Some(model) = maybe_model.as_ref() {
+                    let triangles = model.interaction_triangles();
+                    if !triangles.is_empty() {
+                        let mut vertices = Vec::with_capacity(triangles.len() * 3);
+                        let mut indices = Vec::with_capacity(triangles.len());
+                        for triangle in triangles.iter() {
+                            let base = vertices.len() as u32;
+                            vertices.extend(triangle.iter().map(|vertex| {
+                                vec3(
+                                    vertex.x * scale_factor.x.abs(),
+                                    vertex.y * scale_factor.y.abs(),
+                                    vertex.z * scale_factor.z.abs(),
+                                )
+                            }));
+                            indices.push([base, base + 1, base + 2]);
+                        }
+                        let _ =
+                            physics.attach_interaction_mesh(rigid_body_handle, vertices, indices);
+                    }
+                }
+            }
             Some(rigid_body_handle)
         } else {
             None

@@ -7,7 +7,7 @@ use crate::{
     ss2_bin_obj_loader::{self, SystemShock2ObjectMesh, Vhot},
     ss2_skeleton::{self, AnimationInfo, Bone, Skeleton},
 };
-use cgmath::{Matrix4, SquareMatrix, Transform, Vector2};
+use cgmath::{Matrix4, Point3, SquareMatrix, Transform, Vector2, Vector3, prelude::*};
 use collision::{Aabb, Aabb3};
 use engine::{
     assets::asset_cache::AssetCache,
@@ -37,6 +37,7 @@ pub struct StaticModel {
     bounding_box: Aabb3<f32>,
     vhots: Vec<Vhot>,
     sub_objects: Vec<SubObject>,
+    interaction_triangles: Rc<Vec<[Vector3<f32>; 3]>>,
 }
 
 impl StaticModel {
@@ -63,6 +64,7 @@ impl StaticModel {
             bounding_box: model.bounding_box,
             vhots: model.vhots.clone(),
             sub_objects: model.sub_objects.clone(),
+            interaction_triangles: model.interaction_triangles.clone(),
         }
     }
 }
@@ -85,6 +87,7 @@ pub struct AnimatedModel {
     /// there is no record of the pose the model is actually drawn in, and a
     /// corpse lying flat would be bounded by the standing rest skeleton.
     posed_bounds: Option<Aabb3<f32>>,
+    interaction_triangles: Rc<Vec<[Vector3<f32>; 3]>>,
 }
 
 /// Build the render palette, undoing the bind pose first when the geometry needs
@@ -202,6 +205,7 @@ impl AnimatedModel {
             sub_objects: self.sub_objects.clone(),
             bind: self.bind.clone(),
             posed_bounds: joint_box_bounds(&animated_skeleton.get_transforms(), &self.hit_boxes),
+            interaction_triangles: self.interaction_triangles.clone(),
         }
     }
 
@@ -226,6 +230,7 @@ impl AnimatedModel {
             sub_objects: model.sub_objects.clone(),
             bind: model.bind.clone(),
             posed_bounds: model.posed_bounds,
+            interaction_triangles: model.interaction_triangles.clone(),
         }
     }
 
@@ -240,6 +245,35 @@ pub enum InnerModel {
     Animated(AnimatedModel),
 }
 
+fn object_interaction_triangles(mesh: &SystemShock2ObjectMesh) -> Vec<[Vector3<f32>; 3]> {
+    let sub_object_transforms = ss2_bin_obj_loader::sub_object_transforms(mesh);
+    ss2_bin_obj_loader::to_vertices(mesh)
+        .into_values()
+        .flat_map(|vertices| {
+            vertices
+                .chunks_exact(3)
+                .map(|triangle| {
+                    let transform_vertex =
+                        |vertex: &engine::scene::VertexPositionTextureSkinnedNormal| {
+                            let transform = sub_object_transforms
+                                .get(vertex.bone_indices[0] as usize)
+                                .map(|(_, transform)| *transform)
+                                .unwrap_or_else(Matrix4::identity);
+                            transform
+                                .transform_point(Point3::from_vec(vertex.position))
+                                .to_vec()
+                        };
+                    [
+                        transform_vertex(&triangle[0]),
+                        transform_vertex(&triangle[1]),
+                        transform_vertex(&triangle[2]),
+                    ]
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 pub struct Model {
     inner: InnerModel,
@@ -251,6 +285,7 @@ impl Model {
         static_mesh: SystemShock2ObjectMesh,
         asset_cache: &mut AssetCache,
     ) -> Model {
+        let interaction_triangles = Rc::new(object_interaction_triangles(&static_mesh));
         let (scene_objects, skeleton) =
             ss2_bin_obj_loader::to_scene_objects(&static_mesh, asset_cache);
         let bounding_box = static_mesh.bounding_box;
@@ -282,6 +317,7 @@ impl Model {
                     sub_objects,
                     bind: None,
                     posed_bounds: None,
+                    interaction_triangles,
                 }),
             }
         } else {
@@ -292,6 +328,7 @@ impl Model {
                     bounding_box,
                     vhots: static_mesh.vhots.clone(),
                     sub_objects,
+                    interaction_triangles,
                 }),
             }
         }
@@ -352,6 +389,7 @@ impl Model {
                 sub_objects: vec![],
                 bind,
                 posed_bounds: None,
+                interaction_triangles: Rc::new(Vec::new()),
             }),
         }
     }
@@ -379,6 +417,7 @@ impl Model {
                     sub_objects: vec![],
                     bind: None,
                     posed_bounds: None,
+                    interaction_triangles: Rc::new(Vec::new()),
                 }),
             }
         } else {
@@ -391,6 +430,7 @@ impl Model {
                     bounding_box,
                     vhots: vec![],
                     sub_objects: vec![],
+                    interaction_triangles: Rc::new(Vec::new()),
                 }),
             }
         }
@@ -495,6 +535,16 @@ impl Model {
         };
         for obj in objs {
             obj.set_depth_bias(enabled);
+        }
+    }
+
+    /// Triangle soup in object-local bind-pose space for precise interaction
+    /// queries. Physical simulation continues to use the authored PhysType;
+    /// this is only the visible surface the player can point at.
+    pub fn interaction_triangles(&self) -> Rc<Vec<[Vector3<f32>; 3]>> {
+        match &self.inner {
+            InnerModel::Animated(animated_model) => animated_model.interaction_triangles.clone(),
+            InnerModel::Static(static_model) => static_model.interaction_triangles.clone(),
         }
     }
 
