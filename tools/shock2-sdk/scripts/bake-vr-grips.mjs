@@ -1,12 +1,21 @@
 // Run after npm run build, with Node 22+. This intentionally runs the expensive
 // search headlessly; gameplay only reads the prepared resource it writes.
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { GameServer } from '../dist/src/index.js';
+import {preserveAuthoredGrips} from './prepared-grips.mjs';
 import { aimVrHandAt } from '../dist/test/helpers/vr-hand.js';
 
-const output = process.argv[2] ?? fileURLToPath(new URL('../../../assets/astra-vr-grips.json', import.meta.url));
+const source = fileURLToPath(new URL('../../../assets/astra-vr-grips.json', import.meta.url));
+const output = process.argv[2] ?? source;
+const sourceBytes = await readFile(source, 'utf8');
+const readOutput = () => readFile(output, 'utf8').catch(error => {
+  if (error.code === 'ENOENT') return null;
+  throw error;
+});
+const outputBytes = await readOutput();
+const previous = JSON.parse(outputBytes ?? sourceBytes);
 const entries = [];
 let solverRevision;
 const game = await GameServer.launch({mission: 'debug_interactions', debugFlags: ['--vr', '--experimental', 'astra-bake-vr-grips']});
@@ -37,5 +46,14 @@ try {
 } finally {
   await game.shutdown();
 }
-await writeFile(output,JSON.stringify({version:1,solver_revision:solverRevision,entries},null,2)+'\n');
+const library = preserveAuthoredGrips(previous, {version:1,solver_revision:solverRevision,entries});
+assert.equal(await readFile(source, 'utf8'), sourceBytes, 'Source grips changed during baking; no output written');
+assert.equal(await readOutput(), outputBytes, 'Output grips changed during baking; no output written');
+const temporary = `${output}.${process.pid}.tmp`;
+try {
+  await writeFile(temporary,JSON.stringify(library,null,2)+'\n', {flag:'wx'});
+  await rename(temporary,output);
+} finally {
+  await rm(temporary,{force:true});
+}
 console.log(`Wrote ${entries.length} prepared grips to ${output}`);

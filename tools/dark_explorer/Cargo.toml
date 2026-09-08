@@ -21,3 +21,5 @@ clap = { version = "4.5.4", features = ["derive"] }
 eframe = { version = "=0.36.1", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
 # Same version the engine uses, so the workspace builds one copy.
 image = { version = "0.24.3", default-features = false, features = ["png"] }
+serde_json = "1.0"
+tempfile = "3"

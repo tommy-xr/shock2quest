@@ -22,8 +22,11 @@ pub struct GripKinematics {
     pub normal: Vector3<f32>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedGrip {
+    /// Uniform held-item scale; the glove calibration is unchanged.
+    #[serde(default = "default_item_scale")]
+    pub item_scale: f32,
     pub pose_family: String,
     /// Item origin and rotation in tracked-hand space (world units).
     pub offset: Vector3<f32>,
@@ -33,6 +36,10 @@ pub struct ResolvedGrip {
     pub contacts: [Option<[f32; 3]>; 5],
     pub anchor: [f32; 3],
     pub score: f32,
+}
+
+fn default_item_scale() -> f32 {
+    1.0
 }
 
 impl ResolvedGrip {
@@ -49,6 +56,9 @@ impl ResolvedGrip {
         ]
         .into_iter()
         .all(f32::is_finite)
+            && self.item_scale.is_finite()
+            && self.item_scale > 0.0
+            && self.item_scale <= 10.0
             && (self.rotation.magnitude2() - 1.0).abs() < 0.001
             && self
                 .curls
@@ -409,6 +419,7 @@ impl GripSurface {
             score = f32::NEG_INFINITY;
         }
         ResolvedGrip {
+            item_scale: 1.0,
             pose_family: "broad".to_owned(),
             offset,
             rotation,
@@ -429,7 +440,7 @@ pub fn glove_to_hand(hand: Handedness) -> Matrix4<f32> {
 
 /// Authoring hints are inputs to the offline baker. Numbers are stable:
 /// 0 cylindrical, 1 pinch, 2 broad grasp, 3 trigger. Omission stays automatic.
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct GripHints {
     pub pose_family: Option<u8>,
@@ -446,8 +457,11 @@ pub struct GripHints {
     pub curls: [Option<f32>; 5],
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BakedGripEntry {
+    /// Edited in Explorer; bulk baking must preserve this pose.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub authored: bool,
     pub model: String,
     pub hand: String,
     pub surface_hash: String,
@@ -456,7 +470,7 @@ pub struct BakedGripEntry {
     pub grip: ResolvedGrip,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GripLibrary {
     pub version: u32,
     pub solver_revision: u32,
@@ -695,6 +709,7 @@ mod tests {
             version: 1,
             solver_revision: SOLVER_REVISION,
             entries: vec![BakedGripEntry {
+                authored: false,
                 model: "mug".into(),
                 hand: "right".into(),
                 surface_hash: "mesh1".into(),
@@ -829,5 +844,24 @@ mod tests {
             }
             .is_valid()
         );
+    }
+    #[test]
+    fn uniform_item_scale_defaults_to_one_and_rejects_invalid_values() {
+        let mut grip =
+            plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
+        let mut json = serde_json::to_value(&grip).unwrap();
+        json.as_object_mut().unwrap().remove("item_scale");
+        assert_eq!(
+            serde_json::from_value::<ResolvedGrip>(json)
+                .unwrap()
+                .item_scale,
+            1.0
+        );
+        for scale in [0.0, -1.0, f32::NAN, f32::INFINITY, 11.0] {
+            grip.item_scale = scale;
+            assert!(!grip.is_valid());
+        }
+        grip.item_scale = 0.8;
+        assert!(grip.is_valid());
     }
 }

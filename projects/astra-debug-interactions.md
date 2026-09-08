@@ -65,3 +65,10 @@ loads image-review notes keyed by negative template ID, with `status` (`reviewed
 existing capture manifest after updating those notes, without launching a game.
 The default gallery includes the psi amp as an authored-forearm reference. Other
 authored weapon grips remain a separate pass.
+
+## Editing pickup grips
+
+Use Explorer’s [VR Grips editor](astra-vr-grip-editor.md) to adjust position,
+rotation and finger amounts, then save the prepared resource directly. The
+gallery remains useful for sharing reviews; `_h` weapons will extend both tools
+in the next workstream.

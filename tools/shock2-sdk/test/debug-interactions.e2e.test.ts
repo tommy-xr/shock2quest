@@ -56,8 +56,13 @@ test(
           const before = (await game.info()).player.hand_grips.find(g => g.hand === hand)!;
           assert.equal(before.source, "prepared", "gameplay reads a bake instead of running the search");
           assert.ok(before.grip);
-          assert.ok(before.grip.contacts.filter(Boolean).length >= 3, "at least three fingers support each fixture");
+          if (!before.authored) assert.ok(before.grip.contacts.filter(Boolean).length >= 3, "at least three fingers support each automatic fixture fit");
           assert.ok(before.grip.curls.every(c => Number.isFinite(c) && c >= 0 && c <= 1));
+          const heldDraws = (await game.scene.objects({entityId:item.id})).objects;
+          assert.ok(heldDraws.length > 0);
+          for (const draw of heldDraws) for (const scale of draw.scale) {
+            assert.ok(Math.abs(scale - before.grip.item_scale) < 1e-5, "rendered item uses uniform grip scale");
+          }
           await game.input.set(`${hand}_hand.position`, [0, 3, 0]);
           await game.input.set(`${hand}_hand.rotation`, [0, Math.sin(0.3), 0, Math.cos(0.3)]);
           await game.step({frames: 30});
@@ -79,6 +84,11 @@ test(
           `${hand} releases ${item.name}`,
         );
         assert.ok(!(await game.info()).player.hand_grips.some(g => g.hand === hand), "release clears the fitted grip");
+        if (![-928, -17, -19, -26, -27, -247].includes(template)) {
+          for (const draw of (await game.scene.objects({entityId:item.id})).objects) {
+            for (const scale of draw.scale) assert.ok(Math.abs(scale - 1) < 1e-5, "release restores world size");
+          }
+        }
       }
     }
     await game.input.trigger("DebugReloadLevel");

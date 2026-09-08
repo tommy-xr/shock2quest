@@ -212,6 +212,7 @@ struct HeldGrip {
     kinematics_hash: String,
     hints_hash: String,
     source: &'static str,
+    authored: bool,
 }
 
 impl VrInteraction {
@@ -366,6 +367,15 @@ impl PlayerInteraction for VrInteraction {
                 println!(
                     "SHOCK2QUEST_VR_GRIP model={model} hand={hand_name} source={source} elapsed_ms={solve_ms:.3}"
                 );
+                let authored = !bake
+                    && resolved.is_some()
+                    && self
+                        .grip_library
+                        .as_ref()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .any(|e| e.model == model && e.hand == hand_name && e.authored);
                 self.fitted_grips[index] = Some(HeldGrip {
                     entity,
                     model,
@@ -375,6 +385,7 @@ impl PlayerInteraction for VrInteraction {
                     kinematics_hash,
                     hints_hash,
                     source,
+                    authored,
                 });
             }
             if let Some(grip) = self.fitted_grips[index]
@@ -389,7 +400,7 @@ impl PlayerInteraction for VrInteraction {
                     entity_id: entity,
                     position: hand.get_position() + hand.get_rotation().rotate_vector(grip.offset),
                     rotation: hand.get_rotation() * grip.rotation,
-                    scale: cgmath::vec3(1.0, 1.0, 1.0),
+                    scale: cgmath::vec3(grip.item_scale, grip.item_scale, grip.item_scale),
                 });
             }
         }
@@ -400,7 +411,7 @@ impl PlayerInteraction for VrInteraction {
             let grip=grip.as_ref()?;
             Some(serde_json::json!({"hand": if i == 0 {"left"} else {"right"}, "entity_id": grip.entity.inner() as i32,
                 "model": grip.model, "solve_ms": grip.solve_ms, "grip": grip.resolved,
-                "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source,
+                "surface_hash": grip.surface_hash, "kinematics_hash": grip.kinematics_hash, "hints_hash": grip.hints_hash, "solver_revision": crate::vr_grip::SOLVER_REVISION, "source": grip.source, "authored": grip.authored,
                 "palm": self.grip_kinematics.as_ref().map(|k| k[i].palm), "palm_normal": self.grip_kinematics.as_ref().map(|k| k[i].normal)}))
         }).collect())
     }

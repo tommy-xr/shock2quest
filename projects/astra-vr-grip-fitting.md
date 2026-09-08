@@ -97,8 +97,9 @@ that model's hint fingerprint and requires rebaking.
 
 Pronged implants constrain contact to the housing; GamePig constrains it to the
 middle of a side. These are model-space region hints rather than changes to glove
-calibration or asset scale. The current gallery remains a review tool. A usable
-override editor is the next prerequisite before moving to `_h` weapon fitting.
+calibration or asset scale. The gallery remains a review tool. The
+[Explorer override editor](astra-vr-grip-editor.md) now supports direct pickup
+pose editing and saves; `_h` weapon fitting is the next workstream.
 
 The output resource has a versioned schema and one entry per model and hand.
 Mesh, glove-kinematics, and hints fingerprints plus a solver revision prevent a

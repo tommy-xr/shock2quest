@@ -1013,7 +1013,8 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
         .iter()
         .map(|obj| {
             let tag = obj.debug_tag();
-            let translation = obj.get_transform().w;
+            let transform = obj.get_transform();
+            let translation = transform.w;
             let render_layer = obj.render_layer();
             let first_in_layer = seen_layers.insert(render_layer);
             commands::SceneObjectSummary {
@@ -1022,6 +1023,11 @@ fn summarize_scene(scene: &[engine::scene::SceneObject]) -> Vec<commands::SceneO
                 model: tag.and_then(|t| t.model.clone()),
                 source: tag.and_then(|t| t.source.clone()),
                 position: [translation.x, translation.y, translation.z],
+                scale: [
+                    transform.x.truncate().magnitude(),
+                    transform.y.truncate().magnitude(),
+                    transform.z.truncate().magnitude(),
+                ],
                 transparency: obj.effective_transparency(),
                 depth_write: obj.depth_write,
                 depth_bias: obj.depth_bias(),
@@ -1818,6 +1824,7 @@ fn process_command(
                     model: o.model.clone(),
                     source: o.source.clone(),
                     position: o.position,
+                    scale: o.scale,
                     transparency: o.transparency,
                     depth_write: o.depth_write,
                     depth_bias: o.depth_bias,

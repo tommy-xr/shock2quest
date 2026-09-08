@@ -446,6 +446,8 @@ export interface SceneObjectSummary {
    */
   source: string | null;
   position: Vec3;
+  /** Rendered world-transform axis magnitudes, excluding mesh-local transforms. */
+  scale: Vec3;
   /** Transparency in effect for this draw (0 = opaque, 1 = invisible). */
   transparency: number | null;
   depth_write: boolean;
@@ -1111,6 +1113,8 @@ export interface WaitForOptions {
 
 /** Diagnostics from the same resolved pose used by gameplay and rendering. */
 export interface HandGrip {
+  /** Manual Explorer override; solver contact samples do not validate this pose. */
+  authored: boolean;
   hand: "left" | "right";
   entity_id: number;
   model: string;
@@ -1126,6 +1130,7 @@ export interface HandGrip {
 }
 
 export interface ResolvedGrip {
+  item_scale: number;
   pose_family: string;
   offset: {x:number;y:number;z:number};
   rotation: {s:number;v:{x:number;y:number;z:number}};
