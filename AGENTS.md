@@ -23,11 +23,6 @@ the same workflow and engine reference.
 - Commit messages and PR titles use Conventional Commit style: `type(scope): summary`
   (e.g. `fix(physics): mantle over ladder tops`, `feat(play-through): ...`,
   `docs:`, `test:`, `refactor:`). Scope is optional; the type prefix is not.
-- Never automate `git rebase --skip` across conflicts. Inspect each conflict
-  and skip a commit only after verifying its changes already exist upstream.
-- Agents that change git state must use isolated worktrees. Verify the starting
-  ref and `git merge-base` before building a dependent PR; isolation alone does
-  not guarantee the branch starts from the intended parent.
 
 ### 3. UI Renders Identically in Flatscreen and VR
 
@@ -299,12 +294,6 @@ To visualize a path in-game instead of numerically: launch the debug runtime, se
 
 ### Iterating on Visual Features
 
-When content and transforms are hard to distinguish, swap the suspect canvas
-into a known-working scene, or render an asymmetric probe through the same
-transform. This isolates placement from content before tuning offsets or axes.
-For VR interaction and device-verification lessons, see
-[vr-ui-design](.claude/skills/vr-ui-design/SKILL.md).
-
 For debugging visual/rendering changes without a full interactive session:
 
 1. **dark_viewer with `--debug-no-render`**: Loads assets and exits after the first frame, useful for adding logging to inspect model/asset data:
@@ -314,10 +303,6 @@ For debugging visual/rendering changes without a full interactive session:
    # Overlay the fitted per-joint hitbox shapes (capsules/boxes) on the animated
    # mesh - physics-free, animatable - to eyeball fit across poses:
    cargo dv grunt_p.bin --animation <clip> --debug-hitboxes --debug-skeletons
-   # Dump a .bin object model's sub-objects with their model-space bounds, to
-   # read a per-model anchor (a magazine, a grip) off the art instead of
-   # eyeballing it - see `vr_config::MAGAZINE_ANCHORS`:
-   cargo dv ar15_h.bin --debug-subobjects
    ```
 
 2. **Debug Runtime** (see `projects/debug-runtime.md`): HTTP-controlled game runtime for programmatic control and introspection:
@@ -506,7 +491,6 @@ For debugging visual/rendering changes without a full interactive session:
    | `debug_hud`              | Test HUD rendering                           |
    | `debug_map`              | Test map/automap rendering                   |
    | `debug_melee`            | VR melee: weapon rack, hybrids and arachnids to hit, trigger-free contact damage |
-   | `debug_interactions`     | Quiet labeled rack: mug, magazine, basketball, wrench, pistol, shotgun, fusion cannon, worm launcher, ammo clip, psi amp; DebugReloadLevel resets the rack |
    | `debug_ladder`           | Climbing stations: ledge top-out, two-sided arch, stacked rungs, short ladder, mantle block, plain wall (flat + VR) |
    | `debug_minimal`          | Bare minimum scene for basic testing         |
    | `debug_weapons`          | Flat weapon viewmodel + aim (wall ahead; cycle weapons with `DebugCycleWeapon`) |
@@ -581,11 +565,6 @@ each (`file_size / 8` = widget count), in a screen-defined order. Load via
 `dark::importers::UI_LAYOUT_IMPORTER` → `Vec<MapRect>` (same binary format as the
 map-position files). See `shock2vr/src/scenes/loading.rs` for a usage example, and
 `projects/loading-screen.md` §6.1 for the loading-screen breakdown.
-
-Pair layouts with their shipped backdrop and string table: mods such as SCP
-retune both the art and `*R.BIN` rectangles, so stock hardcoded coordinates can
-misalign modded installs. String-table order is not screen order: `MAIN.STR`
-lists Quit through New Game bottom-to-top; map labels by key, not file order.
 
 Quick peek (decode the rects directly):
 
