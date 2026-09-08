@@ -27,7 +27,8 @@ use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 /// The AMMOFULL panel's authored pixel size.
 pub(crate) const PANEL_W: f32 = 260.0;
 pub(crate) const PANEL_H: f32 = 64.0;
-pub(crate) const PANEL_SIZE: Vector2<f32> = vec2(PANEL_W, PANEL_H);
+#[cfg(test)]
+const PANEL_SIZE: Vector2<f32> = vec2(PANEL_W, PANEL_H);
 
 /// Selected ammo type's object icon (P$ObjIcon), at the gauge well's left -
 /// right of the cycle arrow, which claims the well's leading 12 px.
