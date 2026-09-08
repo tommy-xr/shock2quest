@@ -22,6 +22,70 @@ pub(crate) const POSE_PRESETS: [(&str, [f32; 5]); 5] = [
     ("Ball", [0.35, 0.25, 0.3, 0.35, 0.4]),
 ];
 
+/// Shared Rest/pressed authoring for primary and support finger poses.
+#[derive(Default)]
+pub(crate) struct CurlPoseEditor {
+    pressed: bool,
+    pub preview: f32,
+}
+impl CurlPoseEditor {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        rest: &mut [f32; 5],
+        pressed: &mut Option<[f32; 5]>,
+        preview_label: &str,
+    ) {
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .selectable_value(&mut self.pressed, false, "Rest")
+                .clicked()
+            {
+                self.preview = 0.0;
+            }
+            if ui
+                .selectable_value(&mut self.pressed, true, "Trigger pressed")
+                .clicked()
+            {
+                self.preview = 1.0;
+            }
+        });
+        if self.pressed {
+            if pressed.is_none() {
+                ui.small("Pressed uses Rest until customized.");
+                if ui.button("Customize pressed pose").clicked() {
+                    *pressed = Some(*rest);
+                }
+            } else if ui.button("Use Rest for both").clicked() {
+                *pressed = None;
+            }
+        }
+        let editable = !self.pressed || pressed.is_some();
+        let curls = if self.pressed {
+            pressed.as_mut().unwrap_or(rest)
+        } else {
+            rest
+        };
+        ui.add_enabled_ui(editable, |ui| {
+            for (name, value) in ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+                .into_iter()
+                .zip(curls.iter_mut())
+            {
+                tweak_slider(ui, name, value, 0.0..=1.0, 0.02, 2);
+            }
+            ui.horizontal_wrapped(|ui| {
+                for (name, values) in POSE_PRESETS {
+                    if ui.button(name).clicked() {
+                        *curls = values;
+                    }
+                }
+            });
+        });
+        ui.label(preview_label);
+        ui.add(egui::Slider::new(&mut self.preview, 0.0..=1.0));
+    }
+}
+
 pub fn default_library_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/vr-grips.json")
 }
@@ -179,6 +243,7 @@ fn transfer_grip(
 pub struct GripEditor {
     support_editor: crate::support_grip_editor::SupportEditor,
     support_mode: bool,
+    curl_editor: CurlPoseEditor,
     clipboard: Option<(String, String, ResolvedGrip)>,
     document: Result<GripDocument, String>,
     hints: Result<BTreeMap<String, GripHints>, String>,
@@ -227,6 +292,7 @@ impl GripEditor {
         Self {
             support_editor: crate::support_grip_editor::SupportEditor::new(support_path),
             support_mode,
+            curl_editor: CurlPoseEditor::default(),
             clipboard: None,
             document: GripDocument::load(path.unwrap_or(default_path)),
             hints,
@@ -681,10 +747,12 @@ impl GripEditor {
                 model_mirror,
                 !self.stale && !busy,
             );
+            let mut visual_grip = entry.grip.clone();
+            visual_grip.curls = entry.grip.curls_at(self.curl_editor.preview);
             let scene = PreviewScene::Grip(
                 hand,
-                entry.grip.clone(),
-                self.support_editor.profile(&self.model).cloned(),
+                visual_grip,
+                self.support_editor.preview_profile(&self.model),
             );
             preview.show_grip(
                 ui,
@@ -880,12 +948,12 @@ impl GripEditor {
                     *last = entry.grip.rotation;
                 }
                 columns[2].strong("Finger curls");
-                for (name, value) in ["Thumb", "Index", "Middle", "Ring", "Pinky"]
-                    .into_iter()
-                    .zip(&mut entry.grip.curls)
-                {
-                    tweak_slider(&mut columns[2], name, value, 0.0..=1.0, 0.02, 2);
-                }
+                self.curl_editor.show(
+                    &mut columns[2],
+                    &mut entry.grip.curls,
+                    &mut entry.grip.trigger_curls,
+                    "Primary trigger preview",
+                );
             });
             ui.horizontal(|ui| {
                 ui.label("Rotation nudge step");
@@ -893,14 +961,6 @@ impl GripEditor {
                 ui.separator();
                 ui.label("Uniform item scale");
                 tweak_slider(ui, "×", &mut entry.grip.item_scale, 0.1..=3.0, 0.02, 2);
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Pose presets");
-                for (name, amounts) in POSE_PRESETS {
-                    if ui.button(name).clicked() {
-                        entry.grip.curls = amounts;
-                    }
-                }
             });
         });
         if before != entry.grip {
@@ -915,10 +975,12 @@ impl GripEditor {
         ui.small("Drag sliders or click values to type. Ball is a cupped starting pose; adjust curls to the item. Unsaved drafts stay when switching models.");
         // Build first, then select the requested camera so the initial model
         // framing cannot overwrite it. show() keeps the same camera on edits.
+        let mut visual_grip = entry.grip.clone();
+        visual_grip.curls = entry.grip.curls_at(self.curl_editor.preview);
         let scene = PreviewScene::Grip(
             hand,
-            entry.grip.clone(),
-            self.support_editor.profile(&self.model).cloned(),
+            visual_grip,
+            self.support_editor.preview_profile(&self.model),
         );
         preview.show_grip(
             ui,
@@ -1018,6 +1080,7 @@ mod tests {
         let mut source = doc.library.entries[0].grip.clone();
         source.item_scale = 0.63;
         source.curls = [0.1, 0.2, 0.3, 0.4, 0.5];
+        source.trigger_curls = Some([0.6, 0.7, 0.3, 0.4, 0.5]);
         let identity = doc.library.entries[1].clone();
         transfer_grip(&source, &mut doc.library.entries[1], None).unwrap();
         let target = &doc.library.entries[1];
@@ -1038,6 +1101,7 @@ mod tests {
             )
         );
         assert_eq!(target.grip.curls, source.curls);
+        assert_eq!(target.grip.trigger_curls, source.trigger_curls);
         assert_eq!(target.grip.item_scale, 0.63);
         assert_eq!(target.grip.contacts, [None; 5]);
         assert!(target.authored);
@@ -1064,6 +1128,7 @@ mod tests {
         source.offset = cgmath::vec3(0.12, -0.08, 0.03);
         source.rotation = Quaternion::from(Euler::new(Deg(23.0), Deg(-37.0), Deg(11.0)));
         source.item_scale = 0.7;
+        source.trigger_curls = Some([0.2, 0.8, 0.3, 0.4, 0.5]);
         // Guns reflect Z; posed melee reflects X around its contact origin.
         let contact = cgmath::vec3(0.15, 0.2, -0.1);
         for mirror in [
@@ -1074,6 +1139,7 @@ mod tests {
         ] {
             transfer_grip(&source, &mut target, Some(mirror)).unwrap();
             assert!(target.grip.is_valid());
+            assert_eq!(target.grip.trigger_curls, source.trigger_curls);
             for point in [
                 cgmath::Point3::new(0.2, 0.1, 0.4),
                 cgmath::Point3::new(-0.1, 0.4, -0.3),
@@ -1090,6 +1156,7 @@ mod tests {
                 palm_anchor: [0.13, -0.21, 0.34],
                 rotation_degrees: [15.0, -20.0, 30.0],
                 curls: [0.4; 5],
+                trigger_curls: None,
                 grab_radius: 0.07,
                 release_distance: 0.12,
                 max_swing_degrees: 75.0,
@@ -1129,6 +1196,7 @@ mod tests {
             assert!((target.grip.offset - source.offset).magnitude() < 1e-5);
             assert!((target.grip.rotation.dot(source.rotation).abs() - 1.0).abs() < 1e-5);
             assert_eq!(target.grip.curls, source.curls);
+            assert_eq!(target.grip.trigger_curls, source.trigger_curls);
             assert!(
                 (cgmath::Vector3::from(target.grip.anchor) - cgmath::Vector3::from(source.anchor))
                     .magnitude()

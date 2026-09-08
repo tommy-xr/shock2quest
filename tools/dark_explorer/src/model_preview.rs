@@ -357,6 +357,7 @@ impl ModelPreview {
                     );
                     let mut support_grip = grip.clone();
                     support_grip.curls = support.curls;
+                    support_grip.trigger_curls = None; // Preview curls are already blended.
                     objects.extend(glove.render_hand(
                         pose.position,
                         pose.rotation,

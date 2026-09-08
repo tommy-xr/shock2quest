@@ -44,6 +44,8 @@ pub struct SupportProfile {
     #[serde(default)]
     pub rotation_degrees: [f32; 3],
     pub curls: [f32; 5],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_curls: Option<[f32; 5]>,
     pub grab_radius: f32,
     pub release_distance: f32,
     pub max_swing_degrees: f32,
@@ -60,6 +62,11 @@ impl SupportProfile {
                 .curls
                 .iter()
                 .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+            && self.trigger_curls.is_none_or(|curls| {
+                curls
+                    .into_iter()
+                    .all(|v| v.is_finite() && (0.0..=1.0).contains(&v))
+            })
             && self.grab_radius.is_finite()
             && (0.01..=0.15).contains(&self.grab_radius)
             && self.release_distance.is_finite()
@@ -156,6 +163,7 @@ mod tests {
             palm_anchor: [-0.09, 0.354, 0.02],
             rotation_degrees: [20.0, 15.0, -30.0],
             curls: [0.4; 5],
+            trigger_curls: None,
             grab_radius: 0.07,
             release_distance: 0.12,
             max_swing_degrees: 75.0,
@@ -166,6 +174,7 @@ mod tests {
             offset: vec3(-0.05, -0.1, 0.02),
             rotation: Quaternion::from_angle_x(Deg(20.0)),
             curls: [0.4; 5],
+            trigger_curls: None,
             contacts: [None; 5],
             anchor: [0.0; 3],
             score: 0.0,
@@ -225,6 +234,7 @@ mod tests {
             palm_anchor: [0.02, 0.2, 0.0],
             rotation_degrees: [0.0; 3],
             curls: [0.5; 5],
+            trigger_curls: None,
             grab_radius: 0.07,
             release_distance: 0.12,
             max_swing_degrees: 75.0,

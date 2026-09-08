@@ -34,6 +34,8 @@ pub struct ResolvedGrip {
     pub offset: Vector3<f32>,
     pub rotation: Quaternion<f32>,
     pub curls: [f32; 5],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_curls: Option<[f32; 5]>,
     /// Contact samples in item-local space; null means no contact was found.
     pub contacts: [Option<[f32; 3]>; 5],
     pub anchor: [f32; 3],
@@ -66,6 +68,11 @@ impl ResolvedGrip {
                 .curls
                 .iter()
                 .all(|c| c.is_finite() && (0.0..=1.0).contains(c))
+            && self.trigger_curls.is_none_or(|curls| {
+                curls
+                    .into_iter()
+                    .all(|v| v.is_finite() && (0.0..=1.0).contains(&v))
+            })
             && self
                 .anchor
                 .iter()
@@ -90,8 +97,16 @@ impl ResolvedGrip {
         ])
     }
 
+    pub fn curls_at(&self, trigger: f32) -> [f32; 5] {
+        blended_curls(self.curls, self.trigger_curls, trigger)
+    }
+
     pub fn finger_amounts(&self) -> FingerAmounts {
-        let [thumb, index, middle, ring, pinky] = self.curls;
+        self.finger_amounts_at(0.0)
+    }
+
+    pub fn finger_amounts_at(&self, trigger: f32) -> FingerAmounts {
+        let [thumb, index, middle, ring, pinky] = self.curls_at(trigger);
         FingerAmounts {
             thumb,
             index,
@@ -100,6 +115,17 @@ impl ResolvedGrip {
             pinky,
         }
     }
+}
+
+/// Analog visual blend, independent of the fire/use action threshold.
+pub fn blended_curls(rest: [f32; 5], pressed: Option<[f32; 5]>, trigger: f32) -> [f32; 5] {
+    let amount = if trigger.is_finite() {
+        trigger.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let pressed = pressed.unwrap_or(rest);
+    std::array::from_fn(|i| rest[i] + (pressed[i] - rest[i]) * amount)
 }
 
 pub struct GripSurface {
@@ -488,6 +514,7 @@ impl GripSurface {
             offset,
             rotation,
             curls,
+            trigger_curls: None,
             contacts,
             anchor: [0.0; 3],
             score,
@@ -766,6 +793,38 @@ mod tests {
         restored.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
         assert!(!restored.is_valid());
     }
+    #[test]
+    fn trigger_curls_blend_independently_and_round_trip() {
+        let mut grip =
+            plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
+        grip.curls = [0.2, 0.4, 0.6, 0.8, 1.0];
+        assert_eq!(grip.curls_at(1.0), grip.curls);
+        let legacy = serde_json::to_value(&grip).unwrap();
+        assert!(legacy.get("trigger_curls").is_none());
+        assert_eq!(
+            serde_json::from_value::<ResolvedGrip>(legacy)
+                .unwrap()
+                .trigger_curls,
+            None
+        );
+        grip.trigger_curls = Some([0.8, 0.8, 0.6, 0.8, 1.0]);
+        assert_eq!(grip.curls_at(-1.0), grip.curls);
+        assert_eq!(grip.curls_at(f32::NAN), grip.curls);
+        assert_eq!(grip.curls_at(2.0), grip.trigger_curls.unwrap());
+        let halfway = grip.curls_at(0.5);
+        assert!((halfway[0] - 0.5).abs() < 1e-6);
+        assert!((halfway[1] - 0.6).abs() < 1e-6);
+        assert_eq!(&halfway[2..], &grip.curls[2..]);
+        let restored: ResolvedGrip =
+            serde_json::from_str(&serde_json::to_string(&grip).unwrap()).unwrap();
+        assert_eq!(restored, grip);
+        assert!(restored.is_valid());
+        grip.trigger_curls = Some([1.1; 5]);
+        assert!(!grip.is_valid());
+        grip.trigger_curls = Some([f32::NAN; 5]);
+        assert!(!grip.is_valid());
+    }
+
     #[test]
     fn prepared_lookup_rejects_wrong_hand_stale_mesh_and_stale_rig() {
         let grip = plane(0.05).fit_at(&straight_fingers(), vec3(0.0, 0.0, 0.0), Quaternion::one());
