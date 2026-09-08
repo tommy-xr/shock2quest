@@ -12,7 +12,7 @@
 
 use std::ffi::CString;
 
-use cgmath::{InnerSpace, Matrix4, One, Quaternion, Rad, Rotation3, vec2, vec3};
+use cgmath::{InnerSpace, Matrix4, One, Quaternion, Rad, Rotation3, SquareMatrix, vec2, vec3};
 use dark::importers::MODELS_IMPORTER;
 use dark::model::Model;
 use dark_viewer::scenes::{BinAiViewerScene, BinObjViewerScene, SkeletonViewerScene, ToolScene};
@@ -304,6 +304,9 @@ impl ModelPreview {
                 engine::scene::Scene::from_objects(model.clone_scene_objects()),
             ))),
             PreviewScene::Grip(hand, grip, support) => quiet_catch(|| {
+                let model_mirror = self
+                    .grip_model_mirror(key)
+                    .map_err(|_| "Weapon mirror unavailable")?;
                 let mut model = model.as_ref().clone();
                 if shock2vr::vr_weapon_grip::supports_model(key) {
                     let source = self
@@ -350,6 +353,7 @@ impl ModelPreview {
                         },
                         grip,
                         &rig,
+                        support.anchor_in_frame(*hand, model_mirror) * grip.item_scale,
                     );
                     let mut support_grip = grip.clone();
                     support_grip.curls = support.curls;
@@ -483,6 +487,25 @@ impl ModelPreview {
             }
             Err(err) => self.error = Some(err),
         }
+    }
+
+    /// Reflection between the two rendered weapon frames. Ordinary pickups
+    /// retain their mesh, so X reflection supplies an approximate opposite-side fit.
+    pub fn grip_model_mirror(&mut self, key: &str) -> Result<Matrix4<f32>, String> {
+        if !shock2vr::vr_weapon_grip::supports_model(key) {
+            return Ok(Handedness::Left.mirror());
+        }
+        let source = self
+            .asset_cache
+            .get_opt(&dark::importers::GLOVE_WEAPON_IMPORTER, key)
+            .ok_or("Weapon grip geometry unavailable")?;
+        let source = source
+            .as_ref()
+            .as_ref()
+            .ok_or("Weapon grip geometry unavailable")?;
+        let right = shock2vr::vr_weapon_grip::model_frame(source, Handedness::Right);
+        let left = shock2vr::vr_weapon_grip::model_frame(source, Handedness::Left);
+        Ok(left * right.invert().ok_or("Invalid weapon frame")?)
     }
 
     /// Shared game geometry and rig samples for validation and explicit auto-fit.

@@ -104,6 +104,7 @@ impl SupportEditor {
         model: &str,
         primary: Handedness,
         item_scale: f32,
+        model_mirror: cgmath::Matrix4<f32>,
         enabled: bool,
     ) {
         let doc = match &mut self.document {
@@ -179,19 +180,29 @@ impl SupportEditor {
                 |ui| {
                     ui.columns(3, |columns| {
                         columns[0].strong("Palm position on item (cm)");
+                        use cgmath::{SquareMatrix, Transform};
+                        let factor = item_scale * shock2vr::METERS_PER_WORLD_UNIT * 100.0;
+                        let mut anchor: [f32; 3] =
+                            profile.anchor_in_frame(primary, model_mirror).into();
+                        let mut changed = false;
                         for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
-                            let mirror = if primary == Handedness::Left && i == 0 {
-                                -1.0
-                            } else {
-                                1.0
-                            };
-                            let factor =
-                                item_scale * shock2vr::METERS_PER_WORLD_UNIT * 100.0 * mirror;
-                            let mut cm = profile.palm_anchor[i] * factor;
+                            let mut cm = anchor[i] * factor;
                             if tweak_slider(&mut columns[0], axis, &mut cm, -100.0..=100.0, 0.1, 2)
                             {
-                                profile.palm_anchor[i] = cm / factor;
+                                anchor[i] = cm / factor;
+                                changed = true;
                             }
+                        }
+                        if changed {
+                            let anchor = cgmath::Point3::from(anchor);
+                            profile.palm_anchor = if primary == Handedness::Left {
+                                model_mirror
+                                    .invert()
+                                    .map(|inverse| inverse.transform_point(anchor).into())
+                                    .unwrap_or(profile.palm_anchor)
+                            } else {
+                                anchor.into()
+                            };
                         }
                         columns[1].strong("Support wrist rotation (degrees)");
                         for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {

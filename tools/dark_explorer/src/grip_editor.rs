@@ -1,12 +1,12 @@
 //! Local authoring of prepared grips. The preview and runtime share geometry,
 //! glove poses, transforms, and fingerprint validation.
 use crate::model_preview::{ModelPreview, PreviewScene};
-use cgmath::{Deg, Euler, InnerSpace, Quaternion, Rad};
+use cgmath::{Deg, Euler, InnerSpace, Matrix3, Matrix4, Quaternion, Rad, SquareMatrix, Transform};
 use eframe::egui;
 use shock2vr::{
     Handedness,
     scenes::debug_interactions::INTERACTION_FIXTURES,
-    vr_grip::{BakedGripEntry, GripHints, GripLibrary, SOLVER_REVISION},
+    vr_grip::{BakedGripEntry, GripHints, GripLibrary, ResolvedGrip, SOLVER_REVISION},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -14,10 +14,11 @@ use std::{
     path::PathBuf,
 };
 
-pub(crate) const POSE_PRESETS: [(&str, [f32; 5]); 4] = [
+pub(crate) const POSE_PRESETS: [(&str, [f32; 5]); 5] = [
     ("Open", [0.0; 5]),
     ("Point", [0.85, 0.0, 0.9, 0.9, 0.9]),
     ("Closed", [1.0; 5]),
+    ("Cylindrical", [0.65, 0.65, 0.7, 0.7, 0.7]),
     ("Ball", [0.35, 0.25, 0.3, 0.35, 0.4]),
 ];
 
@@ -137,9 +138,48 @@ pub(crate) fn persist_json(
     Ok(())
 }
 
+/// Copies authoring values only; destination identity and validation hashes stay intact.
+fn transfer_grip(
+    source: &ResolvedGrip,
+    target: &mut BakedGripEntry,
+    mirror: Option<Matrix4<f32>>,
+) -> Result<(), String> {
+    let mut grip = source.clone();
+    if let Some(model_mirror) = mirror {
+        // The glove reflects across hand X. Guns and posed melee geometry use
+        // their own model reflection, including the melee contact-origin offset.
+        let scale = Matrix4::from_scale(grip.item_scale);
+        let pose = Handedness::Left.mirror()
+            * Matrix4::from_translation(grip.offset)
+            * Matrix4::from(grip.rotation)
+            * scale
+            * model_mirror.invert().ok_or("Invalid model reflection")?
+            * Matrix4::from_scale(1.0 / grip.item_scale);
+        grip.offset = pose.w.truncate();
+        grip.rotation = Quaternion::from(Matrix3::from_cols(
+            pose.x.truncate(),
+            pose.y.truncate(),
+            pose.z.truncate(),
+        ))
+        .normalize();
+        grip.anchor = model_mirror
+            .transform_point(cgmath::Point3::from(grip.anchor))
+            .into();
+    }
+    grip.contacts = [None; 5];
+    grip.score = 0.0;
+    if !grip.is_valid() {
+        return Err("Cannot transfer an invalid pose".into());
+    }
+    target.grip = grip;
+    target.authored = true;
+    Ok(())
+}
+
 pub struct GripEditor {
     support_editor: crate::support_grip_editor::SupportEditor,
     support_mode: bool,
+    clipboard: Option<(String, String, ResolvedGrip)>,
     document: Result<GripDocument, String>,
     hints: Result<BTreeMap<String, GripHints>, String>,
     model: String,
@@ -187,6 +227,7 @@ impl GripEditor {
         Self {
             support_editor: crate::support_grip_editor::SupportEditor::new(support_path),
             support_mode,
+            clipboard: None,
             document: GripDocument::load(path.unwrap_or(default_path)),
             hints,
             model: model.unwrap_or_else(|| "mug".into()),
@@ -627,11 +668,19 @@ impl GripEditor {
                 ui.label("Primary grip also has unsaved edits. Primary grip → Save all edits saves both resources.");
             }
             let entry = &doc.library.entries[index];
+            let model_mirror = match preview.grip_model_mirror(&key) {
+                Ok(mirror) => mirror,
+                Err(error) => {
+                    ui.label(error);
+                    return;
+                }
+            };
             self.support_editor.show(
                 ui,
                 &self.model,
                 hand,
                 entry.grip.item_scale,
+                model_mirror,
                 !self.stale && !busy,
             );
             let scene = PreviewScene::Grip(
@@ -699,6 +748,50 @@ impl GripEditor {
             } else {
                 "Automatic fit"
             });
+        });
+        ui.horizontal_wrapped(|ui| {
+            if ui.add_enabled(!self.stale && !busy, egui::Button::new("Copy pose")).clicked() {
+                self.clipboard = Some((self.model.clone(), self.hand.clone(), doc.library.entries[index].grip.clone()));
+                self.message = format!("Copied {} {} pose", self.model, self.hand);
+            }
+            if ui.add_enabled(!self.stale && !busy && self.clipboard.is_some(), egui::Button::new("Paste pose")).clicked() {
+                let (model, source_hand, grip) = self.clipboard.as_ref().unwrap();
+                let mirror = if source_hand != &self.hand { preview.grip_model_mirror(&key).map(Some) } else { Ok(None) };
+                match mirror {
+                    Ok(mirror) => {
+                        self.message = match transfer_grip(grip, &mut doc.library.entries[index], mirror) {
+                            Ok(()) => format!("Pasted {model} {source_hand} pose. Review the fit, then save."),
+                            Err(e) => e,
+                        };
+                    }
+                    Err(e) => self.message = e,
+                }
+            }
+            let opposite = if self.hand == "right" { "left" } else { "right" };
+            if ui.add_enabled(!self.stale && !busy, egui::Button::new(format!("Mirror to {opposite} hand"))).clicked() {
+                let other = if hand == Handedness::Right { Handedness::Left } else { Handedness::Right };
+                let result = preview.grip_inputs(&key, other).and_then(|(_, rig, surface, _)| {
+                    let mirror = preview.grip_model_mirror(&key)?;
+                    let mut target = doc.library.entries[index].clone();
+                    target.hand = opposite.into();
+                    target.surface_hash = surface;
+                    target.kinematics_hash = rig.fingerprint();
+                    transfer_grip(&doc.library.entries[index].grip, &mut target, Some(mirror))?;
+                    Ok(target)
+                });
+                match result {
+                    Ok(target) => {
+                        if let Some(existing) = doc.library.entries.iter_mut().find(|e| e.model == self.model && e.hand == opposite) {
+                            *existing = target;
+                        } else {
+                            doc.library.entries.push(target);
+                        }
+                        self.message = format!("Mirrored to {opposite} hand. Switch hands to review; Save all edits keeps both.");
+                    }
+                    Err(e) => self.message = e,
+                }
+            }
+            if let Some((model, hand, _)) = &self.clipboard { ui.small(format!("Copied: {model} · {hand}")); }
         });
         egui::CollapsingHeader::new("Automatic fitting").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -919,6 +1012,131 @@ mod tests {
         std::fs::write(&path, include_bytes!("../../../assets/astra-vr-grips.json")).unwrap();
         let doc = GripDocument::load(path).unwrap();
         (dir, doc)
+    }
+
+    #[test]
+    fn copied_pose_preserves_destination_identity_and_round_trips() {
+        let (_dir, mut doc) = document();
+        let mut source = doc.library.entries[0].grip.clone();
+        source.item_scale = 0.63;
+        source.curls = [0.1, 0.2, 0.3, 0.4, 0.5];
+        let identity = doc.library.entries[1].clone();
+        transfer_grip(&source, &mut doc.library.entries[1], None).unwrap();
+        let target = &doc.library.entries[1];
+        assert_eq!(
+            (
+                &target.model,
+                &target.hand,
+                &target.surface_hash,
+                &target.kinematics_hash,
+                &target.hints_hash
+            ),
+            (
+                &identity.model,
+                &identity.hand,
+                &identity.surface_hash,
+                &identity.kinematics_hash,
+                &identity.hints_hash
+            )
+        );
+        assert_eq!(target.grip.curls, source.curls);
+        assert_eq!(target.grip.item_scale, 0.63);
+        assert_eq!(target.grip.contacts, [None; 5]);
+        assert!(target.authored);
+        let before_invalid = doc.library.entries[1].grip.clone();
+        assert!(
+            transfer_grip(
+                &source,
+                &mut doc.library.entries[1],
+                Some(Matrix4::from_scale(0.0))
+            )
+            .is_err()
+        );
+        assert_eq!(doc.library.entries[1].grip, before_invalid);
+        doc.save().unwrap();
+        let loaded = GripDocument::load(doc.path.clone()).unwrap();
+        assert_eq!(loaded.library.entries[1].grip, doc.library.entries[1].grip);
+    }
+
+    #[test]
+    fn mirrored_pose_reflects_rendered_points_and_round_trips_for_weapon_frames() {
+        let (_dir, doc) = document();
+        let mut target = doc.library.entries[0].clone();
+        let mut source = target.grip.clone();
+        source.offset = cgmath::vec3(0.12, -0.08, 0.03);
+        source.rotation = Quaternion::from(Euler::new(Deg(23.0), Deg(-37.0), Deg(11.0)));
+        source.item_scale = 0.7;
+        // Guns reflect Z; posed melee reflects X around its contact origin.
+        let contact = cgmath::vec3(0.15, 0.2, -0.1);
+        for mirror in [
+            Handedness::Left.gun_mirror(),
+            Matrix4::from_translation(contact)
+                * Handedness::Left.mirror()
+                * Matrix4::from_translation(-contact),
+        ] {
+            transfer_grip(&source, &mut target, Some(mirror)).unwrap();
+            assert!(target.grip.is_valid());
+            for point in [
+                cgmath::Point3::new(0.2, 0.1, 0.4),
+                cgmath::Point3::new(-0.1, 0.4, -0.3),
+            ] {
+                let original = source.offset
+                    + source.rotation * (point.to_homogeneous().truncate() * source.item_scale);
+                let reflected = target.grip.offset
+                    + target.grip.rotation
+                        * (mirror.transform_point(point).to_homogeneous().truncate()
+                            * target.grip.item_scale);
+                assert!((reflected - Handedness::Left.mirror_point(original)).magnitude() < 1e-5);
+            }
+            let support = shock2vr::vr_support::SupportProfile {
+                palm_anchor: [0.13, -0.21, 0.34],
+                rotation_degrees: [15.0, -20.0, 30.0],
+                curls: [0.4; 5],
+                grab_radius: 0.07,
+                release_distance: 0.12,
+                max_swing_degrees: 75.0,
+            };
+            let mut rig = shock2vr::vr_grip::GripKinematics {
+                fingers: std::array::from_fn(|_| Vec::new()),
+                palm: cgmath::vec3(0.02, -0.01, -0.08),
+                normal: cgmath::Vector3::unit_x(),
+            };
+            let right = support.glove_pose(
+                Handedness::Right,
+                shock2vr::vr_support::GripPose {
+                    position: source.offset,
+                    rotation: source.rotation,
+                },
+                &source,
+                &rig,
+                support.anchor_in_frame(Handedness::Right, mirror) * source.item_scale,
+            );
+            rig.palm = Handedness::Left.mirror_point(rig.palm);
+            let left = support.glove_pose(
+                Handedness::Left,
+                shock2vr::vr_support::GripPose {
+                    position: target.grip.offset,
+                    rotation: target.grip.rotation,
+                },
+                &target.grip,
+                &rig,
+                support.anchor_in_frame(Handedness::Left, mirror) * target.grip.item_scale,
+            );
+            assert!(
+                (left.position - Handedness::Left.mirror_point(right.position)).magnitude() < 1e-5,
+                "support glove must use the gun/offset-melee model reflection too"
+            );
+            let mirrored = target.grip.clone();
+            transfer_grip(&mirrored, &mut target, Some(mirror)).unwrap();
+            assert!((target.grip.offset - source.offset).magnitude() < 1e-5);
+            assert!((target.grip.rotation.dot(source.rotation).abs() - 1.0).abs() < 1e-5);
+            assert_eq!(target.grip.curls, source.curls);
+            assert!(
+                (cgmath::Vector3::from(target.grip.anchor) - cgmath::Vector3::from(source.anchor))
+                    .magnitude()
+                    < 1e-5
+            );
+        }
     }
 
     #[test]

@@ -525,3 +525,11 @@ The tool prepares left/right drafts (or offers **Prepare left and right drafts**
 which enter the override map when saved. Nanites use `nanocan.bin`; nanite
 pickups still collect immediately in gameplay, so authoring their grip does not
 change their collection behavior.
+
+### Reusing a primary pose
+
+- **Copy pose**, select another model, then **Paste pose** copies position, rotation, finger curls, pose family, and uniform item scale into that hand's draft. The clipboard stays available while switching models/libraries. Target model identity and validation hashes stay intact. Review size and fit before saving.
+- **Mirror to left/right hand** replaces the opposite primary hand's draft using the current pose. It does not save automatically. Weapons use their actual rendered reflection (including the melee contact origin); asymmetric pickups receive an approximate opposite-side starting pose. The two hands remain independently editable.
+- **Cylindrical** is now a finger-curl preset for handles, distinct from the more open, cupped **Ball** preset. Neither preset runs automatic fitting or changes item alignment.
+
+Support anchors and their position sliders use the weapon model reflection too: `atek_h` reflects model Z, while posed melee uses its own contact-origin frame. Support wrist rotation continues to mirror in glove space. This keeps the supporting palm aligned when mirroring the primary grip.
