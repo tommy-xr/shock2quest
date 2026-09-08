@@ -1552,6 +1552,9 @@ impl Game {
             if let Some(cue_schema) = state.environmental_cue {
                 let resolved = self.resolve_schema(&cue_schema);
                 self.update_env_sound_if_necessary(resolved);
+            } else {
+                self.audio_context.stop_environmental_sound();
+                self.last_env_sound = None;
             }
 
             state
@@ -1566,6 +1569,8 @@ impl Game {
                 })
                 .collect::<Vec<(EntityId, Vector3<f32>, Rc<AudioClip>)>>()
         } else {
+            self.audio_context.stop_environmental_sound();
+            self.last_env_sound = None;
             Vec::new()
         };
 
@@ -2076,6 +2081,8 @@ impl Game {
     /// scene swap goes through here so that hook cannot be forgotten.
     fn set_active_scene(&mut self, scene: Box<dyn GameScene>) {
         self.active_game_scene.on_exit(&mut self.audio_context);
+        self.audio_context.stop_ambient_sounds();
+        self.last_env_sound = None;
         // Only a cutscene standing in for a scene carries state on its behalf,
         // and `PlayCutscene` re-arms this straight after the swap. Clearing it
         // for every other swap means a chain that ends anywhere but a
@@ -2494,8 +2501,15 @@ impl Game {
         }
     }
 
+    /// Snapshot real live looping sinks; duration follows rodio's wall clock.
+    pub fn active_audio_loops(&self) -> Vec<engine::audio::ActiveLoop<EntityId>> {
+        self.audio_context.active_loops()
+    }
+
     fn update_env_sound_if_necessary(&mut self, new_cue: String) {
         if self.last_env_sound.is_none() || !self.last_env_sound.as_ref().unwrap().eq(&new_cue) {
+            self.audio_context.stop_environmental_sound();
+            self.last_env_sound = None;
             let maybe_audio_clip = self
                 .asset_cache
                 .get_opt(&AUDIO_IMPORTER, &format!("{new_cue}.wav"));

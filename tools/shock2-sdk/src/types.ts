@@ -1019,6 +1019,19 @@ export interface SoundSourceEntity {
   template_id: number | null;
 }
 
+/** Real live repeating sinks, independent of the finite recent-play ring buffer. */
+export interface ActiveAudioLoopsResult {
+  loops: Array<{
+    handle: number;
+    sample: string;
+    owner: "scene" | "environmental" | "ambient_emitter";
+    /** Runtime entity ID for ambient emitters; discover again each launch. */
+    entity_id: number | null;
+    /** Wall-clock playback age; audio runs independently of simulation stepping. */
+    elapsed_secs: number;
+  }>;
+}
+
 /** One resolved-and-played sound (GET /v1/audio/recent). */
 export interface PlayedSound {
   /** Monotonically increasing id - diff against a snapshot to find new plays. */

@@ -1,5 +1,6 @@
 import { HttpClient, HttpError } from "./client.js";
 import type {
+  ActiveAudioLoopsResult,
   AnimationState,
   CommandResult,
   DebugEntityMessage,
@@ -782,6 +783,11 @@ export class UiApi {
 /** Played-sound introspection (there is no other headless way to observe audio). */
 export class AudioApi {
   constructor(private readonly client: HttpClient) {}
+
+  /** Live looping sinks, queried on the game thread (elapsed time is wall time). */
+  async loops(): Promise<ActiveAudioLoopsResult> {
+    return this.client.get<ActiveAudioLoopsResult>("/v1/audio/loops");
+  }
 
   /**
    * The most recently played sounds (oldest first): resolved schema sample,

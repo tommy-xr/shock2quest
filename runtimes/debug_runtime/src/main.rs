@@ -429,6 +429,7 @@ async fn start_http_server(
         .route("/v1/dev-params", get(list_dev_params))
         .route("/v1/dev-params", axum::routing::post(set_dev_param))
         .route("/v1/audio/recent", get(get_recent_audio))
+        .route("/v1/audio/loops", get(get_audio_loops))
         .route("/v1/messages/recent", get(get_recent_messages))
         .route("/v1/screenshot", axum::routing::post(take_screenshot))
         .with_state(command_tx)
@@ -493,6 +494,9 @@ async fn start_http_server(
         "  POST /v1/dev-params       - Set a dev param {{key, value}} (clamped + snapped, live next frame)"
     );
     info!("  GET  /v1/audio/recent     - Recently played sounds (sample, tags, duration, source)");
+    info!(
+        "  GET  /v1/audio/loops      - Live looping sinks (sample, handle, owner, elapsed wall time)"
+    );
     info!("  GET  /v1/messages/recent  - Recently delivered script messages (to/payload/from)");
     info!("  POST /v1/screenshot       - Capture the current framebuffer");
     info!("");
@@ -1458,6 +1462,13 @@ fn process_command(
             if reply.send(camera_snapshot(game, current_input)).is_err() {
                 tracing::warn!("Failed to send camera state - receiver dropped");
             }
+        }
+        RuntimeCommand::GetAudioLoops(reply) => {
+            let loops: Vec<_> = game.active_audio_loops().into_iter().map(|entry| json!({
+                "handle": entry.handle, "sample": entry.sample, "owner": entry.owner,
+                "entity_id": entry.source.map(|id| id.inner()), "elapsed_secs": entry.elapsed_secs,
+            })).collect();
+            let _ = reply.send(json!({ "loops": loops }));
         }
         RuntimeCommand::SetCameraState { request, reply } => {
             let result = apply_camera_request(game, current_input, &request)
@@ -4318,6 +4329,19 @@ async fn list_input_actions() -> Json<Value> {
 /// schema. Reads a process-wide log, so no game-loop round-trip is needed.
 async fn get_recent_audio() -> Json<Value> {
     Json(serde_json::json!({ "sounds": shock2vr::audio_log::recent() }))
+}
+
+async fn get_audio_loops(
+    State(command_tx): State<mpsc::UnboundedSender<RuntimeCommand>>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::GetAudioLoops(reply_tx))
+        .map_err(|_| game_loop_unavailable())?;
+    reply_rx
+        .await
+        .map(Json)
+        .map_err(|_| game_loop_unavailable())
 }
 
 /// HTTP handler for the recently delivered script messages (receiver, payload
