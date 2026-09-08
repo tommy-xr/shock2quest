@@ -1,12 +1,12 @@
 //! Local authoring of prepared grips. The preview and runtime share geometry,
-//! glove poses, transforms, and fingerprint validation.
+//! glove poses, transforms, and pose validation.
 use crate::model_preview::{ModelPreview, PreviewScene};
 use cgmath::{Deg, Euler, InnerSpace, Matrix3, Matrix4, Quaternion, Rad, SquareMatrix, Transform};
 use eframe::egui;
 use shock2vr::{
     Handedness,
     scenes::debug_interactions::INTERACTION_FIXTURES,
-    vr_grip::{BakedGripEntry, GripHints, GripLibrary, ResolvedGrip, SOLVER_REVISION},
+    vr_grip::{BakedGripEntry, GripHints, GripLibrary, ResolvedGrip},
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -109,8 +109,8 @@ impl GripDocument {
         let saved_bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
         let library: GripLibrary =
             serde_json::from_slice(&saved_bytes).map_err(|e| e.to_string())?;
-        if library.version != 1 || library.solver_revision != SOLVER_REVISION {
-            return Err("Unsupported grip resource revision; rebake with this build first".into());
+        if library.version != 1 {
+            return Err("Unsupported grip resource version".into());
         }
         let mut keys = BTreeSet::new();
         for e in &library.entries {
@@ -254,7 +254,6 @@ pub struct GripEditor {
     camera_pending: bool,
     validated: Option<(String, String)>,
     hashes: Option<(String, String)>,
-    stale: bool,
     message: String,
     family: Option<u8>,
     rotation_edit: Option<(Quaternion<f32>, [f32; 3])>,
@@ -303,7 +302,6 @@ impl GripEditor {
             camera_pending: true,
             validated: None,
             hashes: None,
-            stale: false,
             message: String::new(),
             family: None,
             rotation_edit: None,
@@ -511,7 +509,7 @@ impl GripEditor {
                         self.confirm_close = false;
                     }
                     if ui
-                        .add_enabled(!self.stale && !busy, egui::Button::new("Save and close"))
+                        .add_enabled(!busy, egui::Button::new("Save and close"))
                         .clicked()
                     {
                         let primary_saved = match &mut self.document {
@@ -715,18 +713,6 @@ impl GripEditor {
             };
             self.validated = Some(identity);
         }
-        let entry = &doc.library.entries[index];
-        self.stale = self.hashes.as_ref().is_none_or(|(surface, rig)| {
-            entry.surface_hash != *surface
-                || entry.kinematics_hash != *rig
-                || entry.hints_hash != hints.fingerprint()
-        });
-        if self.stale {
-            ui.colored_label(
-                egui::Color32::YELLOW,
-                "Inputs changed: replace with an automatic fit before editing or saving this pose.",
-            );
-        }
         if self.support_mode {
             if doc.dirty() {
                 ui.label("Primary grip also has unsaved edits. Primary grip → Save all edits saves both resources.");
@@ -745,7 +731,7 @@ impl GripEditor {
                 hand,
                 entry.grip.item_scale,
                 model_mirror,
-                !self.stale && !busy,
+                !busy,
             );
             let mut visual_grip = entry.grip.clone();
             visual_grip.curls = entry.grip.curls_at(self.curl_editor.preview);
@@ -772,7 +758,7 @@ impl GripEditor {
             };
             if ui
                 .add_enabled(
-                    (doc.dirty() || self.support_editor.dirty()) && !self.stale && !busy,
+                    (doc.dirty() || self.support_editor.dirty()) && !busy,
                     egui::Button::new(label),
                 )
                 .clicked()
@@ -816,11 +802,11 @@ impl GripEditor {
             });
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.add_enabled(!self.stale && !busy, egui::Button::new("Copy pose")).clicked() {
+            if ui.add_enabled(!busy, egui::Button::new("Copy pose")).clicked() {
                 self.clipboard = Some((self.model.clone(), self.hand.clone(), doc.library.entries[index].grip.clone()));
                 self.message = format!("Copied {} {} pose", self.model, self.hand);
             }
-            if ui.add_enabled(!self.stale && !busy && self.clipboard.is_some(), egui::Button::new("Paste pose")).clicked() {
+            if ui.add_enabled(!busy && self.clipboard.is_some(), egui::Button::new("Paste pose")).clicked() {
                 let (model, source_hand, grip) = self.clipboard.as_ref().unwrap();
                 let mirror = if source_hand != &self.hand { preview.grip_model_mirror(&key).map(Some) } else { Ok(None) };
                 match mirror {
@@ -834,7 +820,7 @@ impl GripEditor {
                 }
             }
             let opposite = if self.hand == "right" { "left" } else { "right" };
-            if ui.add_enabled(!self.stale && !busy, egui::Button::new(format!("Mirror to {opposite} hand"))).clicked() {
+            if ui.add_enabled(!busy, egui::Button::new(format!("Mirror to {opposite} hand"))).clicked() {
                 let other = if hand == Handedness::Right { Handedness::Left } else { Handedness::Right };
                 let result = preview.grip_inputs(&key, other).and_then(|(_, rig, surface, _)| {
                     let mirror = preview.grip_model_mirror(&key)?;
@@ -912,7 +898,7 @@ impl GripEditor {
                 ],
             ));
         }
-        ui.add_enabled_ui(!self.stale && !busy, |ui| {
+        ui.add_enabled_ui(!busy, |ui| {
             ui.columns(3, |columns| {
                 columns[0].strong("Position (cm)");
                 for (axis, value) in ["X", "Y", "Z"].into_iter().zip([
@@ -1209,6 +1195,7 @@ mod tests {
     #[test]
     fn saved_manual_pose_round_trips_through_runtime_lookup_without_changing_other_hands() {
         let (_dir, mut doc) = document();
+        doc.library.solver_revision = shock2vr::vr_grip::SOLVER_REVISION + 1;
         let untouched = serde_json::to_vec(&doc.library.entries[1..]).unwrap();
         let entry = &mut doc.library.entries[0];
         entry.authored = true;
@@ -1222,13 +1209,7 @@ mod tests {
         let entry = &loaded.library.entries[0];
         assert!(entry.authored);
         assert_eq!(
-            loaded.library.lookup(
-                &entry.model,
-                &entry.hand,
-                &entry.surface_hash,
-                &entry.kinematics_hash,
-                &entry.hints_hash
-            ),
+            loaded.library.lookup(&entry.model, &entry.hand),
             Some(&expected)
         );
         assert_eq!(

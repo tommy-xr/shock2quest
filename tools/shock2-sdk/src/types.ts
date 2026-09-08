@@ -1133,7 +1133,7 @@ export interface HandGrip {
   hand: "left" | "right";
   entity_id: number;
   model: string;
-  source: "bake" | "prepared" | "missing_or_stale";
+  source: "bake" | "prepared" | "missing_or_invalid";
   solve_ms: number;
   surface_hash: string;
   kinematics_hash: string;

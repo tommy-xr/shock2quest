@@ -45,18 +45,16 @@ entries using a background worker, keeping the preview responsive. Review and
 save the pair with Save or Save As. `--grip <model>` also prepares missing
 entries, so the same path is available for automated captures.
 
-Manual poses carry `authored: true`. For rack models the bulk baker preserves
-them if mesh, rig, hints and solver revision still match; otherwise it stops
-without writing and asks for review. Entries for additional models outside the
-rack are kept verbatim with their original fingerprints; gameplay still rejects
-stale geometry/rig/hints. A solver revision change requires their review. Manual edits clear old solver contact diagnostics, since
+Manual poses carry `authored: true`. The bulk baker preserves manual overrides
+by model and hand even when assets, hints, or the fitter change. Additional models
+outside the rack remain untouched. Fingerprints record fitting provenance only;
+they never disable runtime lookup, editing, or saving. Manual edits clear old solver contact diagnostics, since
 those samples no longer describe the edited pose. A successful load is not a
 visual approval. The scene regression still verifies holding, motion and
 release, but does not assert old automatic contact counts for authored poses.
 
 The editor rejects malformed resources and detects concurrent changes to the
-resource before saving. Stale selected poses are visible for diagnosis but must
-be refitted before editing/saving. Use `--grip-library /path/to/grips.json` to
+resource before saving. Prepared poses remain editable after their fitting inputs change. Use `--grip-library /path/to/grips.json` to
 work on a copy; automatic fitting still uses this checkout's model hints.
 
 For repeatable screenshots:
@@ -156,3 +154,14 @@ curl -X POST http://127.0.0.1:8080/v1/dev-params \
 
 The overlay uses the rendered weapon's mirrored/scaled support geometry, and
 `/v1/scene` labels its objects `vr_support_grip`. It does not change grab rules.
+
+### Prepared pose lookup
+
+Prepared poses are keyed by model name, with a separate pose for each hand.
+Mesh/glove/hint fingerprints and solver revisions are fitting provenance only;
+changes do not disable a prepared pose. The resource schema and pose values are
+still validated, including finite transforms, positive scale, and valid curls.
+
+If no valid model/hand entry exists, device logs report
+`SHOCK2QUEST_VR_GRIP_REJECT` with the number of matching entries and
+`reason=missing_or_invalid_pose`. Missing models retain their existing fallback.

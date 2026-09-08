@@ -40,7 +40,7 @@ cargo dbgr --mission debug_interactions --vr --experimental astra-grip-overlay
 ```
 
 `GET /v1/info` → `player.hand_grips` reports each active hand's model, source
-(`prepared`, `bake`, or `missing_or_stale`), lookup/bake time, palm and palm normal,
+(`prepared`, `bake`, or `missing_or_invalid`), lookup/bake time, palm and palm normal,
 item-local anchor, hand-local item offset/rotation, pose family, five curls, and
 item-local contact points. Cyan overlay cubes mark those same resolved contacts.
 A null contact means that finger could not reach a surface; its curl minimizes
@@ -94,7 +94,7 @@ must point near the calibrated hand's +Y axis. It does not restrict anchor heigh
 or lock the object to world gravity: the baked pose still follows the controller.
 An explicit `rotation` overrides automatic orientation selection. Omitting this
 axis preserves the existing solver policy and fingerprints; opting in changes
-that model's hint fingerprint and requires rebaking.
+that model's hint fingerprint. Refit explicitly to apply the new hint.
 
 Pronged implants constrain contact to the housing; GamePig constrains it to the
 middle of a side. These are model-space region hints rather than changes to glove
@@ -103,10 +103,10 @@ calibration or asset scale. The gallery remains a review tool. The
 and weapon pose editing and saves.
 
 The output resource has a versioned schema and one entry per model and hand.
-Mesh, glove-kinematics, and hints fingerprints plus a solver revision prevent a
-bake from being applied after its inputs change. Fingerprints quantize coordinates to 0.0001 world units to
-ignore insignificant floating-point differences. Missing, stale, malformed, or
-unsupported entries retain the existing generic grip and report that fallback.
+Runtime lookup uses model name and hand. Mesh, glove-kinematics, and hints
+fingerprints plus the solver revision record fitting provenance; they do not
+reject a pose after its inputs change. Missing or invalid poses retain the
+existing generic grip and report that fallback.
 
 ## Resolver boundaries
 
@@ -142,7 +142,7 @@ node scripts/astra-grip-gallery.mjs --weapons --output /tmp/astra-weapon-gallery
 ```
 
 An optional output path after `--weapons` writes a separate file. Authored edits
-are preserved under the same fingerprint/concurrent-edit safeguards as pickups.
+are preserved by model and hand, with the same concurrent-edit checks as pickups.
 Weapon candidates with weak finger contact remain reviewable drafts; unlike the
 pickup bake, they do not require three contacts to write. Inspect their images.
 
@@ -165,7 +165,7 @@ origins, and rendered meshes use the same scale; dropping restores world size.
 Scaled guns keep scaled muzzle positions but unit projectile direction/speed.
 `player.hand_grips[].item_bounds` reports the fitted weapon bounds in controller
 space for repeatable gallery framing. Mesh fingerprints include the transformed
-weapon and arm guide, separately for each hand.
+weapon and arm guide, separately for each hand, as diagnostic metadata only.
 
 
 ### Initial weapon pose review

@@ -660,23 +660,18 @@ impl PlayerInteraction for VrInteraction {
                     .and_then(|text| {
                         serde_json::from_str::<crate::vr_grip::GripLibrary>(&text).ok()
                     })
-                    .filter(|library| {
-                        library.version == 1
-                            && library.solver_revision == crate::vr_grip::SOLVER_REVISION
-                    })
+                    .filter(|library| library.version == 1)
                     .unwrap_or_default(),
             );
             if let Some(weapons) = assets
                 .get_opt(&TEXT_IMPORTER, "vr-weapon-grips.json")
                 .and_then(|text| serde_json::from_str::<crate::vr_grip::GripLibrary>(&text).ok())
-                .filter(|lib| {
-                    lib.version == 1 && lib.solver_revision == crate::vr_grip::SOLVER_REVISION
-                })
+                .filter(|lib| lib.version == 1)
             {
                 // Explicit pickup-library edits take precedence over the shipped weapon defaults.
                 let library = self.grip_library.as_mut().unwrap();
-                // Lookup skips stale entries, so a stale custom override can
-                // fall back to the current shipped default for the same hand.
+                // The first valid model/hand entry wins; explicit pickup-library
+                // overrides remain ahead of shipped weapon defaults.
                 library.entries.extend(weapons.entries);
             }
             self.grip_hints = assets
@@ -790,13 +785,7 @@ impl PlayerInteraction for VrInteraction {
                     self.grip_library
                         .as_ref()
                         .unwrap()
-                        .lookup(
-                            &model,
-                            hand_name,
-                            &surface_hash,
-                            &kinematics_hash,
-                            &hints_hash,
-                        )
+                        .lookup(&model, hand_name)
                         .cloned()
                 };
                 let source = if bake {
@@ -804,7 +793,7 @@ impl PlayerInteraction for VrInteraction {
                 } else if resolved.is_some() {
                     "prepared"
                 } else {
-                    "missing_or_stale"
+                    "missing_or_invalid"
                 };
                 // The Quest runtime has no tracing subscriber; use its structured
                 // stdout marker convention for on-device verification.
@@ -812,15 +801,25 @@ impl PlayerInteraction for VrInteraction {
                 println!(
                     "SHOCK2QUEST_VR_GRIP model={model} hand={hand_name} source={source} elapsed_ms={solve_ms:.3}"
                 );
+                if resolved.is_none() {
+                    let matching = self
+                        .grip_library
+                        .as_ref()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .filter(|e| e.model == model && e.hand == hand_name)
+                        .count();
+                    println!(
+                        "SHOCK2QUEST_VR_GRIP_REJECT model={model} hand={hand_name} matching_entries={matching} reason=missing_or_invalid_pose"
+                    );
+                }
                 let authored = !bake
                     && resolved.is_some()
                     && self.grip_library.as_ref().unwrap().entries.iter().any(|e| {
                         e.model == model
                             && e.hand == hand_name
                             && e.authored
-                            && e.surface_hash == surface_hash
-                            && e.kinematics_hash == kinematics_hash
-                            && e.hints_hash == hints_hash
                             && resolved.as_ref() == Some(&e.grip)
                     });
                 if crate::vr_weapon_grip::is_melee(&model) {
