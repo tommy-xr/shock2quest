@@ -1,7 +1,9 @@
 # Astra prepared pickup grips
 
-The first fitting increment covers the coffee mug, printed magazine (`magci`),
-and basketball (`hamball`) in `debug_interactions`, for both hands. It preserves
+Prepared grips cover the coffee mug, printed magazine (`magci`), basketball
+(`hamball`), four hypos, maintenance tool, French-Epstein device, auto-repair
+unit, an inert access-card sample, implants, worm beakers, GamePig, and ICE-Pick in `debug_interactions`, for both hands.
+The 23 unique models produce 46 prepared grips. This preserves
 the headset-approved glove scale and wrist/palm calibration. Weapons, including
 their authored hands, continue through the existing weapon path.
 
@@ -23,7 +25,7 @@ npm run build
 node scripts/bake-vr-grips.mjs
 ```
 
-The script launches `debug_interactions --vr`, discovers the three fixtures by
+The script launches `debug_interactions --vr`, discovers a representative for each of the 23 fitting models by
 stable template ID, grabs each with each hand, writes
 `assets/astra-vr-grips.json`, and shuts down its runtime. An optional first
 argument selects an output path. It enables `--experimental astra-bake-vr-grips`:
@@ -71,12 +73,32 @@ Each field is optional; unspecified fingers continue to fit automatically:
 }
 ```
 
+`anchor_region` is an optional pair of inclusive item-local minimum/maximum
+bounds, in game world units. It restricts automatic surface candidates; the
+magazine uses this to avoid its corners, and the auto-repair unit restricts
+candidates to its carry handle. An explicit `anchor` can replace the
+selected contact after candidate selection. The mug overrides only its thumb curl
+to leave more clearance.
+
 `anchor` is an item-local palm contact point in game world units. `rotation` is
 item-to-hand orientation in **[w, x, y, z]** order (different from the debug input
 API's [x, y, z, w]). Changing either reruns automatic finger contact at that
 placement during the bake. `keep_upright` keeps the item's Y axis near the hand's
 Y axis and restricts candidates to the middle of its height, avoiding rim/base
 grips on vessels. These hints are authoring inputs; rebake after editing them.
+
+`upright_axis` optionally names an item-local direction, for example `[0, 0, 1]`
+for the ICE-Pick cable. During automatic orientation selection, that direction
+must point near the calibrated hand's +Y axis. It does not restrict anchor height
+or lock the object to world gravity: the baked pose still follows the controller.
+An explicit `rotation` overrides automatic orientation selection. Omitting this
+axis preserves the existing solver policy and fingerprints; opting in changes
+that model's hint fingerprint and requires rebaking.
+
+Pronged implants constrain contact to the housing; GamePig constrains it to the
+middle of a side. These are model-space region hints rather than changes to glove
+calibration or asset scale. The current gallery remains a review tool. A usable
+override editor is the next prerequisite before moving to `_h` weapon fitting.
 
 The output resource has a versioned schema and one entry per model and hand.
 Mesh, glove-kinematics, and hints fingerprints plus a solver revision prevent a

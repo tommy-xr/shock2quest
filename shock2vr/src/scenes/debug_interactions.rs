@@ -5,7 +5,7 @@
 use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, vec3};
 use dark::importers::FONT_IMPORTER;
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
-use shipyard::EntityId;
+use shipyard::{EntityId, IntoIter, IntoWithId, View};
 
 use crate::{
     GameOptions,
@@ -80,17 +80,144 @@ pub const INTERACTION_FIXTURES: &[InteractionFixture] = &[
         template_id: -247,
         model: "amp_w",
     },
+    InteractionFixture {
+        label: "Health hypo",
+        template_id: -52,
+        model: "medpatch",
+    },
+    InteractionFixture {
+        label: "Psi hypo",
+        template_id: -57,
+        model: "psipatch",
+    },
+    InteractionFixture {
+        label: "Anti-radiation hypo",
+        template_id: -54,
+        model: "radpatch",
+    },
+    InteractionFixture {
+        label: "Anti-toxin hypo",
+        template_id: -53,
+        model: "toxpatch",
+    },
+    InteractionFixture {
+        label: "Maintenance tool",
+        template_id: -2949,
+        model: "techt",
+    },
+    InteractionFixture {
+        label: "French-Epstein device",
+        template_id: -1488,
+        model: "dingus",
+    },
+    InteractionFixture {
+        label: "Auto-repair unit",
+        template_id: -74,
+        model: "molean",
+    },
+    // The base card has no credential: it is a holdable geometry sample.
+    InteractionFixture {
+        label: "Card grip sample (inert)",
+        template_id: -157,
+        model: "scipass",
+    },
+    InteractionFixture {
+        label: "Security access card",
+        template_id: -2998,
+        model: "scipass",
+    },
+    InteractionFixture {
+        label: "Bridge access card",
+        template_id: -2594,
+        model: "scipass",
+    },
+    InteractionFixture {
+        label: "BrawnBoost implant",
+        template_id: -101,
+        model: "softred",
+    },
+    InteractionFixture {
+        label: "EndurBoost implant",
+        template_id: -102,
+        model: "softred",
+    },
+    InteractionFixture {
+        label: "SwiftBoost implant",
+        template_id: -103,
+        model: "softblue",
+    },
+    InteractionFixture {
+        label: "SmartBoost implant",
+        template_id: -104,
+        model: "softpurp",
+    },
+    InteractionFixture {
+        label: "LabAssistant implant",
+        template_id: -969,
+        model: "softgren",
+    },
+    InteractionFixture {
+        label: "RunFast implant (inert)",
+        template_id: -1344,
+        model: "softblue",
+    },
+    InteractionFixture {
+        label: "ExperTech implant",
+        template_id: -1661,
+        model: "softblue",
+    },
+    InteractionFixture {
+        label: "WormBlood implant",
+        template_id: -106,
+        model: "animp01",
+    },
+    InteractionFixture {
+        label: "WormBlend implant (inert)",
+        template_id: -762,
+        model: "animp02",
+    },
+    InteractionFixture {
+        label: "WormHeart implant",
+        template_id: -1334,
+        model: "animp03",
+    },
+    InteractionFixture {
+        label: "WormMind implant",
+        template_id: -1660,
+        model: "animp04",
+    },
+    InteractionFixture {
+        label: "Small worm beaker",
+        template_id: -48,
+        model: "beakew1",
+    },
+    InteractionFixture {
+        label: "Large worm beaker",
+        template_id: -1264,
+        model: "beakew2",
+    },
+    InteractionFixture {
+        label: "GamePig",
+        template_id: -3864,
+        model: "gameboy",
+    },
+    InteractionFixture {
+        label: "ICE-Pick hack tool",
+        template_id: -73,
+        model: "icepick",
+    },
 ];
 
 const RACK_HEIGHT: f32 = 1.1;
 
-/// Five stations on each side of a clear aisle. Walk along the aisle to reach
+/// Stations on each side of a clear aisle. Walk along the aisle to reach
 /// each object; oversized pickups get the same generous spacing as the rest.
 fn station_position(index: usize) -> cgmath::Vector3<f32> {
+    let per_side = INTERACTION_FIXTURES.len().div_ceil(2);
     vec3(
-        -1.2 - (index % 5) as f32 * 1.8,
+        -1.2 - (index % per_side) as f32 * 1.8,
         RACK_HEIGHT,
-        if index < 5 { -1.2 } else { 1.2 },
+        if index < per_side { -1.2 } else { 1.2 },
     )
 }
 
@@ -100,10 +227,12 @@ pub fn create_debug_interactions_scene(
     asset_cache: &mut AssetCache,
     audio_context: &mut AudioContext<EntityId, String>,
 ) -> Box<dyn GameScene> {
+    let per_side = INTERACTION_FIXTURES.len().div_ceil(2);
+    let rack_length = (per_side - 1) as f32 * 1.8;
     let mut boxes = vec![(
         vec3(0.13, 0.16, 0.19),
-        vec3(-4.0, -0.5, 0.0),
-        vec3(24.0, 1.0, 18.0),
+        vec3(-1.2 - rack_length / 2.0, -0.5, 0.0),
+        vec3(rack_length + 12.0, 1.0, 18.0),
     )];
     for index in 0..INTERACTION_FIXTURES.len() {
         let p = station_position(index);
@@ -205,5 +334,17 @@ impl DebugSceneHooks for InteractionHooks {
             asset_cache,
             audio_context,
         );
+        // These two gameplay scripts are unimplemented and panic on initialize.
+        // Keep their actual geometry available as explicitly labeled inert grip
+        // samples here; production implant behavior is untouched.
+        let templates = core
+            .world
+            .borrow::<View<dark::properties::PropTemplateId>>()
+            .unwrap();
+        for (entity, template) in (&templates).iter().with_id() {
+            if matches!(template.template_id, -1344 | -762) {
+                core.script_world.remove_entity(entity);
+            }
+        }
     }
 }

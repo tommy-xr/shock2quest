@@ -14,7 +14,7 @@ try {
   for (const hand of ['left', 'right']) {
     if (hand === 'right') await game.input.trigger('DebugReloadLevel');
     await game.step({frames:90});
-    for (const template of [-1221, -1255, -4286]) {
+    for (const template of [-1221, -1255, -4286, -52, -57, -54, -53, -2949, -1488, -74, -157, -101, -103, -104, -969, -106, -762, -1334, -1660, -48, -1264, -3864, -73]) {
       const item = (await game.entities.list()).entities.find(e => e.template_id === template);
       assert.ok(item, `Missing fixture ${template}`);
       await game.player.teleport({x:item.position[0],y:1,z:0});
