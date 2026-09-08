@@ -790,6 +790,26 @@ struct ClimbTopOut {
     is_crouched: bool,
 }
 
+impl ClimbTopOut {
+    /// Hand vaults retain the tucked capsule that made the hold valid. A
+    /// sphere can classify a one-sided level mesh differently at that same
+    /// pose, aborting an otherwise clear climb the moment the shape changes.
+    /// Flat Dark jump-throughs retain their original compressed sphere.
+    fn movement_shape(&self) -> SharedShape {
+        if self.collide_terrain {
+            // Hand routes always tuck (is_crouched=true); the requested
+            // landing stance is tracked separately by stand_on_completion.
+            crouched_player_shared_shape()
+        } else {
+            SharedShape::ball(if self.is_crouched {
+                PLAYER_CROUCH_RADIUS / SCALE_FACTOR
+            } else {
+                CLIMB_TOP_OUT_RADIUS
+            })
+        }
+    }
+}
+
 struct PlayerMovement {
     movement: EffectiveCharacterMovement,
     /// `movement.translation` with the moving-platform carry removed, i.e.
@@ -1667,7 +1687,7 @@ fn plan_jump_mantle(
 /// before the capsule is expanded, and final standing fit is checked against
 /// every collider.
 /// Give the player the collider their top-out state calls for: the scripted
-/// mantle's compressed ball while it runs, their own capsule again once it
+/// route's tucked capsule or compressed ball while it runs, their own capsule once it
 /// ends. One place, because a top-out is entered both from the movement pass
 /// (flat, pushing into a ladder top) and outright (a VR hand vault - see
 /// [`PhysicsWorld::plan_hand_top_out`]).
@@ -1680,15 +1700,8 @@ fn sync_top_out_collider(
     let is_top_out = player_handle.top_out.is_some();
     let collider_handle = rigid_body_set[player_handle.character_handle].colliders()[0];
     if !was_top_out && is_top_out {
-        let compressed_radius = if player_handle
-            .top_out
-            .is_some_and(|top_out| top_out.is_crouched)
-        {
-            PLAYER_CROUCH_RADIUS / SCALE_FACTOR
-        } else {
-            CLIMB_TOP_OUT_RADIUS
-        };
-        collider_set[collider_handle].set_shape(SharedShape::ball(compressed_radius));
+        collider_set[collider_handle]
+            .set_shape(player_handle.top_out.as_ref().unwrap().movement_shape());
     } else if was_top_out && !is_top_out {
         let restored = if player_handle.is_crouched {
             crouched_player_shared_shape()
@@ -1768,24 +1781,22 @@ fn advance_climb_top_out(
             top_out.next_waypoint += 1;
         }
     };
-    let compressed_radius = if top_out.is_crouched {
-        PLAYER_CROUCH_RADIUS / SCALE_FACTOR
-    } else {
-        CLIMB_TOP_OUT_RADIUS
-    };
-    let compressed = Ball::new(compressed_radius);
-    // A live entity can move into the compressed sphere between frames. The
+    let compressed = top_out.movement_shape();
+    // A live entity can move into the movement shape between frames. The
     // forward route must stop, but refusing every cast from an overlapping
     // pose would pin the recovery forever. During reversal only, let Rapier's
     // character controller compute a collision-checked depenetrating step
     // toward the preceding validated waypoint.
-    let movement = (!shape_intersects(scripted_queries, pos.translation.vector, &compressed)
-        || top_out.reversing)
+    let movement = (!shape_intersects(
+        scripted_queries,
+        pos.translation.vector,
+        compressed.as_ref(),
+    ) || top_out.reversing)
         .then(|| {
             slide_toward(
                 controller,
                 scripted_queries,
-                &compressed,
+                compressed.as_ref(),
                 pos.translation.vector,
                 target,
                 dt,
@@ -5244,7 +5255,13 @@ impl PhysicsWorld {
         if player.top_out.is_some() || grip.kind != ClimbGripKind::Ledge {
             return false;
         }
-        let start = *self.rigid_body_set[player.character_handle].translation();
+        // The next physics step consumes the last hand pull before advancing
+        // this route. Planning from the old pose would first pull backwards to
+        // it; a tiny rejected step reverses the vault after its grips release.
+        let start = self.rigid_body_set[player.character_handle]
+            .next_position()
+            .translation
+            .vector;
         let toward = vec_to_nvec(grip.point) - start;
         let horizontal = vector![toward.x, 0.0, toward.z];
         if horizontal.norm() < 1e-4 {
@@ -5265,7 +5282,6 @@ impl PhysicsWorld {
             } else {
                 crouched_player_capsule()
             };
-            let compressed = Ball::new(PLAYER_CROUCH_RADIUS / SCALE_FACTOR);
             if shape_intersects(&route_queries, start, &crouched) {
                 return false;
             }
@@ -5301,9 +5317,9 @@ impl PhysicsWorld {
                 }
                 let raised = vector![start.x, start.y.max(landing.y), start.z];
                 let crossed = vector![landing.x, raised.y, landing.z];
-                if !shape_sweep_is_clear(&route_queries, start, raised, &compressed)
-                    || !shape_sweep_is_clear(&route_queries, raised, crossed, &compressed)
-                    || !shape_sweep_is_clear(&route_queries, crossed, landing, &compressed)
+                if !shape_sweep_is_clear(&route_queries, start, raised, &crouched)
+                    || !shape_sweep_is_clear(&route_queries, raised, crossed, &crouched)
+                    || !shape_sweep_is_clear(&route_queries, crossed, landing, &crouched)
                 {
                     continue;
                 }
@@ -5324,6 +5340,9 @@ impl PhysicsWorld {
             return false;
         };
         self.set_player_crouch_hanging(true, player);
+        // A stance change may reset the body's queued translation. Preserve
+        // the collision-resolved hand movement this route was planned from.
+        self.rigid_body_set[player.character_handle].set_next_kinematic_translation(start);
         player.top_out = Some(route);
         sync_top_out_collider(
             &mut self.collider_set,
@@ -5490,9 +5509,10 @@ impl PhysicsWorld {
         self.climbable_grip_above(point, radius, feet_y + PLAYER_STEP_HEIGHT / SCALE_FACTOR)
     }
 
-    /// Near a held ladder, the deck can be less than a step above the feet.
+    /// Near an existing ladder or ledge hold, the deck can be less than a step
+    /// above the feet, including when bringing the second hand onto the deck.
     /// It must still be above them, so ordinary floor support is never a grip.
-    pub fn climbable_grip_from_ladder_at(
+    pub fn climbable_grip_during_transfer_at(
         &self,
         point: Vector3<f32>,
         feet_y: f32,
@@ -10056,8 +10076,118 @@ mod tests {
     }
 
     #[test]
+    fn a_held_ledge_consumes_blocked_pull_without_falling_or_storing_motion() {
+        use crate::vr_climb::{ClimbHandInput, HandClimb};
+        let (mut world, mut player) = grip_world();
+        let block = EntityId::from_inner(2027).unwrap();
+        world.add_kinematic(
+            block,
+            vec3(0.0, 1.5, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            vec3(4.0, 3.0, 4.0),
+            CollisionGroup::entity(),
+            false,
+        );
+        step(&mut world, &mut player, 1);
+        world.set_player_translation(vec3(2.4, 2.0, 0.0), &mut player);
+        world.set_player_crouch_hanging(true, &mut player);
+        let mut climb = HandClimb::default();
+        let mut hand = vec3(-0.38, 1.04, 0.0);
+        let input = |local_position, squeeze| ClimbHandInput {
+            local_position,
+            squeeze,
+            is_empty: true,
+        };
+        let mut frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+            |p, _| world.climbable_grip_at(p, CLIMB_GRIP_RADIUS, 0.0),
+            |_| true,
+        );
+        assert!(climb.holds_a_ledge(), "must acquire the actual box's top");
+        let surface = climb.anchor_grip().unwrap().grip.point;
+        for _ in 0..8 {
+            let requested = frame.translation.expect("squeezed ledge retains support");
+            world.update_player_movement(
+                PlayerMoveRequest::HandClimb {
+                    translation: requested,
+                },
+                &mut player,
+            );
+            climb.resolve_translation(requested, player.self_translation());
+            let center = world.get_player_next_translation(&player);
+            assert!(
+                center.x >= 2.3,
+                "wall must stop the inward pull: {center:?}"
+            );
+            assert!(
+                (center.y - 2.0).abs() < 0.01,
+                "held hand must suppress gravity"
+            );
+            hand.x += 0.2;
+            frame = climb.update(
+                center,
+                identity_quat(),
+                world.player_step_dt(),
+                [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+                |_, _| None,
+                |_| true,
+            );
+        }
+        // Settle the last requested pull, then freeze the tracked hand. There
+        // must be no stored correction to snap the body inward on a later frame.
+        let requested = frame.translation.unwrap();
+        world.update_player_movement(
+            PlayerMoveRequest::HandClimb {
+                translation: requested,
+            },
+            &mut player,
+        );
+        climb.resolve_translation(requested, player.self_translation());
+        frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert!(frame.translation.unwrap().magnitude() < 0.001);
+        assert_eq!(climb.anchor_grip().unwrap().grip.point, surface);
+        // A small reverse motion takes effect immediately and only by the
+        // amount moved, instead of first paying back the blocked 1.6-unit pull.
+        hand.x -= 0.1;
+        frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 1.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert!((frame.translation.unwrap().x - 0.1).abs() < 0.001);
+        // Opening the hand still drops the body normally.
+        frame = climb.update(
+            world.get_player_next_translation(&player),
+            identity_quat(),
+            world.player_step_dt(),
+            [input(vec3(0.0, 0.0, 0.0), 0.0), input(hand, 0.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert!(frame.translation.is_none());
+        step(&mut world, &mut player, 30);
+        assert!(world.get_player_translation(&player).y < 1.5);
+    }
+
+    #[test]
     fn hand_top_out_tucks_past_the_wall_and_expands_only_at_the_landing() {
-        for physically_crouched in [false, true] {
+        for (physically_crouched, pending_rise) in
+            [(false, 0.0), (true, 0.0), (false, 0.01), (true, 0.01)]
+        {
             let (mut world, mut player) = grip_world();
             let block = EntityId::from_inner(2020).unwrap();
             world.add_kinematic(
@@ -10079,8 +10209,29 @@ mod tests {
                 normal: vec3(0.0, 1.0, 0.0),
             };
             assert!(!world.standing_player_pose_is_clear(vec3(2.4, 2.4, 0.0), &player));
+            // Real hand pulls are queued for the next physics step; a static
+            // teleport alone misses the hand-to-vault transition. The held
+            // ledge has already tucked the body without changing tracking.
+            if pending_rise > 0.0 {
+                world.set_player_crouch_hanging(true, &mut player);
+            }
+            world.rigid_body_set[player.character_handle].set_next_kinematic_translation(vector![
+                2.4,
+                2.4 + pending_rise,
+                0.0
+            ]);
             assert!(world.plan_hand_top_out(grip, &mut player));
             assert!(player.is_crouched());
+            assert_eq!(
+                world.get_player_next_translation(&player),
+                vec3(2.4, 2.4 + pending_rise, 0.0),
+                "committing a vault must retain the queued hand pull"
+            );
+            assert_eq!(
+                player.top_out.unwrap().save_pose,
+                vector![2.4, 2.4 + pending_rise, 0.0],
+                "the route must start where the queued pull will land"
+            );
             let mut previous = world.get_player_translation(&player);
             for _ in 0..180 {
                 step(&mut world, &mut player, 1);
@@ -10324,13 +10475,13 @@ mod tests {
         );
         assert!(
             world
-                .climbable_grip_from_ladder_at(vec3(0.0, 3.05, 0.0), 2.5)
+                .climbable_grip_during_transfer_at(vec3(0.0, 3.05, 0.0), 2.5)
                 .is_some(),
             "a nearby deck within a step is available during ladder transfer"
         );
         assert!(
             world
-                .climbable_grip_from_ladder_at(vec3(0.0, 3.05, 0.0), 3.0)
+                .climbable_grip_during_transfer_at(vec3(0.0, 3.05, 0.0), 3.0)
                 .is_none(),
             "even a transfer must not grip the floor under the feet"
         );

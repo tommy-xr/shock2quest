@@ -3662,11 +3662,16 @@ impl MissionCore {
                     push_to_climb: game_options.presentation_mode == crate::PresentationMode::Flat,
                 },
             };
-            profile!(
+            let moved = profile!(
                 "shock2.update.physics",
                 self.physics
                     .update_player_movement(request, &mut self.player_handle)
-            )
+            );
+            if let Some(requested) = hand_climb.translation {
+                self.interaction
+                    .resolve_hand_climb(requested, self.player_handle.self_translation());
+            }
+            moved
         };
 
         if !time.elapsed.is_zero() {

@@ -132,8 +132,9 @@ test(
 );
 
 for (const transferHeight of [4.5, 5.1]) {
+for (const twoDeckHands of [false, true]) {
 test(
-  `debug_ladder (VR): a deck grab at body height ${transferHeight} vaults off the ladder`,
+  `debug_ladder (VR): ${twoDeckHands ? "two deck hands" : "a deck grab"} at body height ${transferHeight} vaults off the ladder`,
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
     await using game = await launchVr();
@@ -186,8 +187,8 @@ test(
 
     // Reach onto the deck AFTER the head clears it: this used to permanently
     // fail the historical eye-at-grab gate. The new grip still waits for a pull.
-    const other: "left" | "right" = pulling === "right" ? "left" : "right";
-    const onTop = await grab(game, other, [-7.1, 6.05, LEDGE_Z]);
+    let other: "left" | "right" = pulling === "right" ? "left" : "right";
+    let onTop = await grab(game, other, [-7.1, 6.05, LEDGE_Z]);
     const held = (await game.info()).player.climb;
     assert.equal(held.anchor_hand, other);
     assert.equal(held.vaulting, false, "resting the hand on the deck is not a vault");
@@ -196,6 +197,28 @@ test(
       "ledge",
       "the block's top surface is a ledge hold",
     );
+
+    if (twoDeckHands) {
+      // Move the old ladder hand onto the same deck while the first deck
+      // hand supports us. Then release that first hand: either deck hand
+      // must support a slow pull, without a release flick.
+      await game.input.set(`${pulling}_hand.squeeze`, 0);
+      await game.step({ frames: 1 });
+      const second = await grab(game, pulling, [-7.1, 6.05, LEDGE_Z + 0.3]);
+      const atSecondGrip = (await game.info()).player;
+      const both = atSecondGrip.climb;
+      assert.equal(both.grips.length, 2);
+      assert.ok(both.grips.every((grip) => grip.kind === "ledge"));
+      await game.input.set(`${other}_hand.squeeze`, 0);
+      await game.step({ frames: 30 });
+      const supported = (await game.info()).player;
+      assert.equal(supported.climb.grips.length, 1);
+      assert.equal(supported.climb.anchor_hand, pulling);
+      assert.ok(Math.abs(supported.position[1] - atSecondGrip.position[1]) < 0.01,
+        `the second deck hand must prevent falling while resting: before=${atSecondGrip.position}, after=${supported.position}, climb=${JSON.stringify(supported.climb)}`);
+      other = pulling;
+      onTop = second;
+    }
 
     const topOut = await vrHandLocalDelta(game, [0, -0.8, 0]);
     const heights: number[] = [];
@@ -227,6 +250,7 @@ test(
   },
 );
 
+}
 }
 
 test(

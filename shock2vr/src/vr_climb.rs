@@ -14,8 +14,8 @@ use crate::{
     vr_config::Handedness,
 };
 
-/// How far a gripping hand may drift from the point it grabbed before the grip
-/// breaks. The drift IS the body's failure to follow: the body is cast every
+/// How far a ladder hand or passive hold may drift before the grip breaks.
+/// An active ledge instead consumes collision-rejected travel and stays held. The drift IS the body's failure to follow: the body is cast every
 /// frame at exactly the offset the hand opened up, so a persistent gap means
 /// something blocked it. Roughly Dark's 2 ft climb-detach distance.
 pub const CLIMB_STRETCH_BREAK: f32 = 0.6;
@@ -101,6 +101,8 @@ pub struct ClimbFrame {
 #[derive(Clone, Copy, Debug)]
 pub struct GripAnchor {
     pub grip: ClimbGrip,
+    /// Tracking reference; an active ledge adjusts this by rejected movement
+    /// while `grip.point` continues to identify the actual held surface.
     pub hand_world_at_grab: Vector3<f32>,
     /// Where the body was when this hold was taken, so a vault can tell a pull
     /// from a grab (see [`vault_ready`]).
@@ -163,7 +165,7 @@ impl HandClimb {
     /// demands, or `None` when no hand holds anything.
     ///
     /// `probe` answers "what could a hand at this world point grab?"; its bool
-    /// enables a nearby deck transfer from the other valid ladder hand (see
+    /// enables a nearby deck transfer from the other valid hold (see
     /// [`crate::physics::PhysicsWorld::climbable_grip_at`]) and `is_alive`
     /// whether a gripped entity still exists.
     pub fn update(
@@ -186,9 +188,15 @@ impl HandClimb {
             .each_ref()
             .map(|hand| hand_world_position(pawn_pos, pawn_rotation, hand.local_position));
 
-        // Sample the anchor's travel BEFORE the releases below, so the flick
-        // on the very frame the hand opens is part of what throws the body.
-        if let Some(hand) = previous_anchor {
+        // Ladder releases include the final tracking flick. Ledge throws use
+        // collision-resolved held motion only: the opening frame has no held
+        // movement to resolve, so its raw tracking delta cannot prove momentum.
+        if let Some(hand) = previous_anchor.filter(|hand| {
+            self.grips[slot(*hand)].is_none_or(|anchor| {
+                anchor.grip.kind != ClimbGripKind::Ledge
+                    || hands[slot(*hand)].squeeze > crate::ui::VR_TRIGGER_THRESHOLD
+            })
+        }) {
             let local = hands[slot(hand)].local_position;
             match self.last_anchor_local.replace(local) {
                 Some(previous) => {
@@ -212,9 +220,15 @@ impl HandClimb {
             }
             match self.grips[index] {
                 Some(anchor) => {
-                    let over_stretched = (hand_world[index] - anchor.hand_world_at_grab)
-                        .magnitude()
-                        > CLIMB_STRETCH_BREAK;
+                    // A deck can block the hips while its hand stays closed.
+                    // Keep that support until the player opens the hand; a
+                    // blocked pull must not silently abandon a ladder handoff.
+                    // Passive holds still break when the other hand carries
+                    // the body away: they no longer provide reachable support.
+                    let over_stretched = (anchor.grip.kind == ClimbGripKind::Ladder
+                        || previous_anchor != Some(HANDS[index]))
+                        && (hand_world[index] - anchor.hand_world_at_grab).magnitude()
+                            > CLIMB_STRETCH_BREAK;
                     let gone = anchor.grip.entity_id.is_some_and(|id| !is_alive(id));
                     // The hands update after this, so the same squeeze that
                     // took a hold can also close on an item; a full hand lets
@@ -229,15 +243,16 @@ impl HandClimb {
             }
         }
         // Invalidate BOTH old holds before granting a contextual deck grab:
-        // a broken, deleted, released or newly occupied ladder hand cannot
+        // a broken, deleted, released or newly occupied hand cannot
         // authorize the free hand's transfer, regardless of hand iteration order.
         for index in 0..HANDS.len() {
             if self.grips[index].is_none() && self.grab_grace[index] > 0.0 {
-                let from_ladder = self.grips[1 - index].is_some_and(|other| {
-                    other.grip.kind == ClimbGripKind::Ladder
-                        && (hand_world[index] - other.grip.point).magnitude() <= 1.5
-                });
-                if let Some(grip) = probe(hand_world[index], from_ladder) {
+                // Keep the same deck within reach after releasing the ladder:
+                // the player can place the second hand beside the first and
+                // continue pulling hand over hand across the lip.
+                let transferring = self.grips[1 - index]
+                    .is_some_and(|other| (hand_world[index] - other.grip.point).magnitude() <= 1.5);
+                if let Some(grip) = probe(hand_world[index], transferring) {
                     self.grab_grace[index] = 0.0;
                     self.grips[index] = Some(GripAnchor {
                         grip,
@@ -296,6 +311,24 @@ impl HandClimb {
         ClimbFrame {
             translation,
             launch,
+        }
+    }
+
+    /// Consume only the part of a ledge pull that collision prevented. The
+    /// actual surface and acquisition pose stay fixed, but rejected tracking
+    /// travel must not accumulate into a sudden move when the obstruction
+    /// clears. Ladder holds retain their existing stretch-and-break behavior.
+    pub fn resolve_translation(&mut self, requested: Vector3<f32>, applied: Vector3<f32>) {
+        let Some(anchor) = self.anchor.and_then(|hand| self.grips[slot(hand)].as_mut()) else {
+            return;
+        };
+        if anchor.grip.kind == ClimbGripKind::Ledge {
+            anchor.hand_world_at_grab += applied - requested;
+            // A blocked pull made no body momentum. Do not turn that rejected
+            // travel into a throw when the hand is deliberately opened.
+            if let Some(travel) = self.recent_anchor_travel.back_mut() {
+                *travel = -applied;
+            }
         }
     }
 
@@ -449,6 +482,77 @@ mod tests {
         assert_eq!(released.translation, None);
         assert_eq!(climb.anchor(), None);
         assert_eq!(climb.grips().count(), 0);
+    }
+
+    #[test]
+    fn deck_transfer_requires_a_nearby_valid_hold_of_either_kind() {
+        for kind in [ClimbGripKind::Ladder, ClimbGripKind::Ledge] {
+            for (squeeze, empty, alive, distance, expected) in [
+                (1.0, true, true, 0.5, true),
+                (0.0, true, true, 0.5, false),
+                (1.0, false, true, 0.5, false),
+                (1.0, true, false, 0.5, false),
+                (1.0, true, true, 1.6, false),
+            ] {
+                for held in 0..2 {
+                    let mut climb = HandClimb::default();
+                    let pawn = Vector3::zero();
+                    let rotation = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+                    let reach = vec3(0.0, 1.0, -1.0);
+                    let mut hands = [no_hand(), no_hand()];
+                    hands[held] = hand(reach, 1.0);
+                    climb.update(
+                        pawn,
+                        rotation,
+                        DT,
+                        hands,
+                        |p, _| {
+                            Some(ClimbGrip {
+                                kind,
+                                entity_id: Some(shipyard::EntityId::from_inner(123).unwrap()),
+                                ..ladder_grip(p)
+                            })
+                        },
+                        |_| true,
+                    );
+                    let mut hands = [
+                        hand(reach + vec3(distance, 0.0, 0.0), 1.0),
+                        hand(reach + vec3(distance, 0.0, 0.0), 1.0),
+                    ];
+                    hands[held] = ClimbHandInput {
+                        is_empty: empty,
+                        ..hand(reach, squeeze)
+                    };
+                    climb.update(
+                        pawn,
+                        rotation,
+                        DT,
+                        hands,
+                        |p, transfer| {
+                            assert_eq!(transfer, expected, "{kind:?}, hand {held}");
+                            transfer.then_some(ClimbGrip {
+                                kind: ClimbGripKind::Ledge,
+                                normal: vec3(0.0, 1.0, 0.0),
+                                ..ladder_grip(p)
+                            })
+                        },
+                        |_| alive,
+                    );
+                    assert_eq!(climb.grips[1 - held].is_some(), expected);
+                    if expected {
+                        assert_eq!(climb.grips().count(), 2);
+                        let mut hands = [
+                            hand(reach + vec3(distance, 0.0, 0.0), 1.0),
+                            hand(reach + vec3(distance, 0.0, 0.0), 1.0),
+                        ];
+                        hands[held] = no_hand();
+                        let frame = climb.update(pawn, rotation, DT, hands, |_, _| None, |_| true);
+                        assert_translation(frame, Vector3::zero());
+                        assert!(frame.launch.is_none());
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -650,6 +754,263 @@ mod tests {
                 .translation,
             None,
         );
+    }
+
+    #[test]
+    fn a_blocked_deck_pull_keeps_support_when_the_ladder_hand_opens() {
+        let mut climb = HandClimb::default();
+        let pawn = Vector3::zero();
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let ladder = vec3(-0.3, 1.0, -0.5);
+        let deck = vec3(0.3, 1.2, -0.5);
+        climb.update(
+            pawn,
+            identity,
+            DT,
+            [hand(ladder, 1.0), no_hand()],
+            |p, _| Some(ladder_grip(p)),
+            |_| true,
+        );
+        climb.update(
+            pawn,
+            identity,
+            DT,
+            [hand(ladder, 1.0), hand(deck, 1.0)],
+            |p, _| {
+                Some(ClimbGrip {
+                    kind: ClimbGripKind::Ledge,
+                    ..ladder_grip(p)
+                })
+            },
+            |_| true,
+        );
+        // The wall prevents the pawn following this ordinary inward pull.
+        // A still-closed deck hand must not silently lose its hold underneath
+        // the ladder hand, leaving the next handoff unsupported.
+        for distance in [0.2, 0.4, 0.6, 0.8] {
+            let frame = climb.update(
+                pawn,
+                identity,
+                DT,
+                [
+                    hand(ladder, 1.0),
+                    hand(deck + vec3(0.0, 0.0, distance), 1.0),
+                ],
+                |_, _| None,
+                |_| true,
+            );
+            assert!(frame.translation.is_some());
+            assert!(frame.launch.is_none());
+        }
+        let pulled = deck + vec3(0.0, 0.0, 0.8);
+        let handoff = climb.update(
+            pawn,
+            identity,
+            DT,
+            [hand(ladder, 0.0), hand(pulled, 1.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert_eq!(climb.anchor(), Some(Handedness::Right));
+        assert!(climb.holds_a_ledge());
+        assert!(handoff.translation.is_some());
+        assert!(handoff.launch.is_none());
+        // Relaxing the pull recovers the same anchored hold; it never rebases
+        // the hand into space or ratchets the pawn through the obstruction.
+        let relaxed = climb.update(
+            pawn,
+            identity,
+            DT,
+            [no_hand(), hand(deck, 1.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert_translation(relaxed, Vector3::zero());
+        for _ in 0..RELEASE_SAMPLE_FRAMES {
+            climb.update(
+                pawn,
+                identity,
+                DT,
+                [no_hand(), hand(deck, 1.0)],
+                |_, _| None,
+                |_| true,
+            );
+        }
+        let released = climb.update(
+            pawn,
+            identity,
+            DT,
+            [no_hand(), hand(deck, 0.0)],
+            |_, _| None,
+            |_| true,
+        );
+        assert!(released.translation.is_none());
+        assert!(released.launch.is_none());
+        assert!(!climb.holds_a_ledge());
+    }
+
+    #[test]
+    fn a_passive_ledge_cannot_support_a_handoff_after_the_body_moves_away() {
+        for active in 0..2 {
+            for active_kind in [ClimbGripKind::Ladder, ClimbGripKind::Ledge] {
+                let mut climb = HandClimb::default();
+                let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+                let positions = [vec3(-0.3, 1.0, -0.5), vec3(0.3, 1.0, -0.5)];
+                let inputs = |active_squeeze, travel| {
+                    std::array::from_fn(|i| {
+                        hand(
+                            positions[i] - if i == active { travel } else { Vector3::zero() },
+                            if i == active { active_squeeze } else { 1.0 },
+                        )
+                    })
+                };
+                climb.update(
+                    Vector3::zero(),
+                    identity,
+                    DT,
+                    inputs(0.0, Vector3::zero()),
+                    |p, _| {
+                        Some(ClimbGrip {
+                            kind: ClimbGripKind::Ledge,
+                            ..ladder_grip(p)
+                        })
+                    },
+                    |_| true,
+                );
+                climb.update(
+                    Vector3::zero(),
+                    identity,
+                    DT,
+                    inputs(1.0, Vector3::zero()),
+                    |p, _| {
+                        Some(ClimbGrip {
+                            kind: active_kind,
+                            ..ladder_grip(p)
+                        })
+                    },
+                    |_| true,
+                );
+                let travel = vec3(0.0, 0.8, 0.0);
+                climb.update(
+                    travel,
+                    identity,
+                    DT,
+                    inputs(1.0, travel),
+                    |_, _| None,
+                    |_| true,
+                );
+                assert_eq!(
+                    climb.grips().count(),
+                    1,
+                    "abandoned passive ledge must break"
+                );
+                let released = climb.update(
+                    travel,
+                    identity,
+                    DT,
+                    inputs(0.0, travel),
+                    |_, _| None,
+                    |_| true,
+                );
+                assert!(
+                    released.translation.is_none(),
+                    "cannot hang from a distant stale ledge"
+                );
+                assert!(climb.anchor().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn only_applied_ledge_pull_motion_becomes_a_release_throw() {
+        for blocked in [false, true] {
+            let mut climb = HandClimb::default();
+            let mut pawn = Vector3::zero();
+            let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+            let mut at = vec3(0.3, 1.2, -0.5);
+            climb.update(
+                pawn,
+                identity,
+                DT,
+                [no_hand(), hand(at, 1.0)],
+                |p, _| {
+                    Some(ClimbGrip {
+                        kind: ClimbGripKind::Ledge,
+                        ..ladder_grip(p)
+                    })
+                },
+                |_| true,
+            );
+            for _ in 0..RELEASE_SAMPLE_FRAMES {
+                at.y -= 0.1;
+                let frame = climb.update(
+                    pawn,
+                    identity,
+                    DT,
+                    [no_hand(), hand(at, 1.0)],
+                    |_, _| None,
+                    |_| true,
+                );
+                let requested = frame.translation.unwrap();
+                let applied = if blocked { Vector3::zero() } else { requested };
+                climb.resolve_translation(requested, applied);
+                pawn += applied;
+            }
+            // Opening can coincide with one more tracked pull. That frame
+            // never moved the body and must not resurrect blocked momentum.
+            at.y -= 0.2;
+            let released = climb.update(
+                pawn,
+                identity,
+                DT,
+                [no_hand(), hand(at, 0.0)],
+                |_, _| None,
+                |_| true,
+            );
+            assert!(released.translation.is_none());
+            assert_eq!(
+                released.launch.is_none(),
+                blocked,
+                "opening after a blocked pull drops; a real pull still throws"
+            );
+        }
+    }
+
+    #[test]
+    fn a_held_ledge_still_releases_if_occupied_or_removed() {
+        for occupied in [false, true] {
+            let mut climb = HandClimb::default();
+            let pawn = Vector3::zero();
+            let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+            let at = vec3(0.3, 1.2, -0.5);
+            climb.update(
+                pawn,
+                identity,
+                DT,
+                [no_hand(), hand(at, 1.0)],
+                |p, _| {
+                    Some(ClimbGrip {
+                        kind: ClimbGripKind::Ledge,
+                        entity_id: Some(shipyard::EntityId::from_inner(123).unwrap()),
+                        ..ladder_grip(p)
+                    })
+                },
+                |_| true,
+            );
+            let mut holding = hand(at, 1.0);
+            holding.is_empty = !occupied;
+            let frame = climb.update(
+                pawn,
+                identity,
+                DT,
+                [no_hand(), holding],
+                |_, _| None,
+                |_| occupied,
+            );
+            assert!(frame.translation.is_none());
+            assert!(frame.launch.is_none());
+            assert!(!climb.holds_a_ledge());
+        }
     }
 
     #[test]
