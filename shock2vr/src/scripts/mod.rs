@@ -57,6 +57,7 @@ mod reroute_elevator_button;
 mod researchable;
 mod room_trigger;
 pub mod script_util;
+mod security_computer;
 mod setup_initial_debrief;
 mod std_door;
 mod tool_consumable;
@@ -1106,7 +1107,7 @@ impl ScriptWorld {
             // partially implemented:
             "keypadunhackable" => gui_script(Box::new(KeyPadGui)),
             "keypad" => gui_script(Box::new(KeyPadGui)),
-            "securitycomputer" => Box::new(UnimplementedScript::new(&script_name)),
+            "securitycomputer" => gui_script(Box::new(ComputerGui::security())),
             "resurrectmachine" => Box::new(BaseButton {}),
             "twostatebutton" => Box::new(BaseButton::new()),
 
@@ -1156,7 +1157,7 @@ impl ScriptWorld {
             "medpatchscript" => Box::new(HealingItemScript::new(HealingItemKind::MedPatch)),
             "psikitscript" => Box::new(PsiKitScript::new()),
             "psimine" => Box::new(PsiMine::new()),
-            "computer" => gui_script(Box::new(ComputerGui)),
+            "computer" => gui_script(Box::new(ComputerGui::new())),
             "lightsoundon" => Box::new(NoopScript::new()),
             "hackablecrate" => gui_script(Box::new(HackableCrateGui::new())),
             "turret" => Box::new(UnimplementedScript::new(&script_name)),

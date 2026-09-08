@@ -9,7 +9,7 @@ use shipyard::{EntityId, Get, UniqueView, View, World};
 use crate::{
     mission::PlayerInfo,
     physics::PhysicsWorld,
-    scripts::{Effect, ai::ai_util, speech_util},
+    scripts::{Effect, ai::ai_util, security_computer, speech_util},
     time::Time,
 };
 
@@ -447,13 +447,14 @@ impl Script for CameraAI {
             let effective_heading = Deg(self.state.view_angle + 90.0);
 
             // Check visibility with FOV constraint
-            is_visible = ai_util::is_player_visible_in_fov(
-                entity_id,
-                world,
-                physics,
-                effective_heading,
-                CAMERA_FOV_HALF_ANGLE,
-            );
+            is_visible = security_computer::security_devices_can_detect_player(world)
+                && ai_util::is_player_visible_in_fov(
+                    entity_id,
+                    world,
+                    physics,
+                    effective_heading,
+                    CAMERA_FOV_HALF_ANGLE,
+                );
 
             if is_visible {
                 let v_pos = world.borrow::<View<PropPosition>>().unwrap();

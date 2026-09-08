@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use cgmath::{Vector2, Vector3, vec2};
 use dark::{
     properties::{
-        Link, Links, ObjectState, PropHackDiff, PropHackText, PropTemplateId, ToLink,
+        Link, Links, ObjectState, PropHackDiff, PropHackText, PropHackTime, PropTemplateId, ToLink,
         WrappedEntityId,
     },
     ss2_entity_info::SystemShock2EntityInfo,
@@ -13,7 +13,7 @@ use shipyard::{EntityId, Get, IntoIter, IntoWithId, Unique, UniqueView, View, Wo
 
 use crate::{
     gui::{Gui, GuiComponent, GuiConfig, GuiCursor},
-    scripts::{Effect, Message, MessagePayload, script_util::*},
+    scripts::{Effect, Message, MessagePayload, script_util::*, security_computer},
 };
 
 use super::keypad::{
@@ -48,7 +48,7 @@ impl ComputerContext {
     }
 }
 
-/// Older saves made before `P$HackText` / `L$HackingLi` were parsed cannot
+/// Older saves made before `P$HackText` / `P$HackTime` / `L$HackingLi` were parsed cannot
 /// contain those components. Restore them from the same authored object data
 /// used for a fresh mission, so such a save retains Computer instructions and
 /// the genuine downstream hacking circuit.
@@ -78,6 +78,18 @@ pub(crate) fn restore_authored_computer_data(
             && let Some(text) = hydrate_template_component::<PropHackText>(template_id, entity_info)
         {
             world.add_component(entity_id, text);
+        }
+
+        let has_hack_time = world
+            .borrow::<View<PropHackTime>>()
+            .unwrap()
+            .get(entity_id)
+            .is_ok();
+        if !has_hack_time
+            && let Some(hack_time) =
+                hydrate_template_component::<PropHackTime>(template_id, entity_info)
+        {
+            world.add_component(entity_id, hack_time);
         }
 
         let has_hacking_link = world
@@ -119,7 +131,36 @@ pub(crate) fn restore_authored_computer_data(
     }
 }
 
-pub struct ComputerGui;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ComputerKind {
+    #[default]
+    Ordinary,
+    Security,
+}
+
+pub struct ComputerGui {
+    kind: ComputerKind,
+}
+
+impl ComputerGui {
+    pub fn new() -> Self {
+        Self {
+            kind: ComputerKind::Ordinary,
+        }
+    }
+
+    pub fn security() -> Self {
+        Self {
+            kind: ComputerKind::Security,
+        }
+    }
+}
+
+impl Default for ComputerGui {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct ComputerState {
@@ -252,18 +293,25 @@ impl Gui<ComputerState, ComputerMsg> for ComputerGui {
             return (state.clone(), Effect::NoEffect);
         };
         let ComputerMsg::Hack(msg) = msg;
-        let (hack, effect) = handle_hack_msg(
-            entity_id,
-            world,
-            &state.hack,
-            msg,
-            diff,
-            HackOutcomeEffects {
+        let outcomes = match self.kind {
+            ComputerKind::Ordinary => HackOutcomeEffects {
                 success: computer_hack_success,
                 critical_failure: computer_hack_critical_failure,
             },
-        );
+            ComputerKind::Security => HackOutcomeEffects {
+                success: security_computer::successful_hack,
+                critical_failure: security_computer::critical_failure,
+            },
+        };
+        let (hack, effect) = handle_hack_msg(entity_id, world, &state.hack, msg, diff, outcomes);
         (ComputerState { hack }, effect)
+    }
+
+    fn on_frob(&self, entity_id: EntityId, world: &World) -> Effect {
+        match self.kind {
+            ComputerKind::Ordinary => Effect::NoEffect,
+            ComputerKind::Security => security_computer::normal_frob(world, entity_id),
+        }
     }
 
     fn opens_on_frob(&self, entity_id: EntityId, world: &World) -> bool {
@@ -363,7 +411,7 @@ mod tests {
 
     #[test]
     fn broken_and_hacked_computers_do_not_reopen() {
-        let gui = ComputerGui;
+        let gui = ComputerGui::new();
         for state in [ObjectState::Broken, ObjectState::Hacked] {
             let mut world = World::new();
             let computer = world.add_entity((
@@ -388,7 +436,7 @@ mod tests {
 
     #[test]
     fn reopening_preserves_only_an_in_progress_hack() {
-        let gui = ComputerGui;
+        let gui = ComputerGui::new();
         let mut state = ComputerState {
             hack: HackState {
                 phase: HackPhase::Playing,
