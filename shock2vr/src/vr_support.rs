@@ -2,6 +2,12 @@
 use cgmath::{Deg, Euler, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Transform, Vector3};
 use serde::{Deserialize, Serialize};
 
+/// Fixed authored support sockets currently enabled in gameplay.
+/// Keep the Explorer eligibility notice and runtime policy together.
+pub fn supports_model(model: &str) -> bool {
+    matches!(model, "wrench_h" | "atek_h" | "sg_h")
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct GripPose {
     pub position: Vector3<f32>,
@@ -91,14 +97,6 @@ impl SupportProfile {
             && from.normalize().dot(to.normalize()) >= self.max_swing_degrees.to_radians().cos()
     }
 
-    pub fn anchor(&self, primary: usize) -> Vector3<f32> {
-        let hand = if primary == 0 {
-            crate::vr_config::Handedness::Left
-        } else {
-            crate::vr_config::Handedness::Right
-        };
-        self.anchor_in_frame(hand, crate::Handedness::Left.mirror())
-    }
     /// Use the same reflection as the rendered item: gun Z and posed melee X
     /// are different model frames even though both gloves mirror hand X.
     pub fn anchor_in_frame(
@@ -234,7 +232,14 @@ mod tests {
         assert!(profile.is_valid());
         assert!(profile.allows_swing(Vector3::unit_y(), Vector3::unit_y()));
         assert!(!profile.allows_swing(Vector3::unit_y(), Vector3::unit_x()));
-        assert_eq!(profile.anchor(0).x, -profile.anchor(1).x);
+        assert_eq!(
+            profile
+                .anchor_in_frame(crate::Handedness::Left, crate::Handedness::Left.mirror())
+                .x,
+            -profile
+                .anchor_in_frame(crate::Handedness::Right, crate::Handedness::Left.mirror())
+                .x
+        );
         profile.release_distance = 0.02;
         assert!(!profile.is_valid());
         profile.release_distance = 0.12;

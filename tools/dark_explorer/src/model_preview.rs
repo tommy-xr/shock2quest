@@ -12,7 +12,7 @@
 
 use std::ffi::CString;
 
-use cgmath::{InnerSpace, Matrix4, One, Quaternion, Rad, Rotation3, SquareMatrix, vec2, vec3};
+use cgmath::{InnerSpace, Matrix4, One, Quaternion, Rad, Rotation3, vec2, vec3};
 use dark::importers::MODELS_IMPORTER;
 use dark::model::Model;
 use dark_viewer::scenes::{BinAiViewerScene, BinObjViewerScene, SkeletonViewerScene, ToolScene};
@@ -495,17 +495,8 @@ impl ModelPreview {
         if !shock2vr::vr_weapon_grip::supports_model(key) {
             return Ok(Handedness::Left.mirror());
         }
-        let source = self
-            .asset_cache
-            .get_opt(&dark::importers::GLOVE_WEAPON_IMPORTER, key)
-            .ok_or("Weapon grip geometry unavailable")?;
-        let source = source
-            .as_ref()
-            .as_ref()
-            .ok_or("Weapon grip geometry unavailable")?;
-        let right = shock2vr::vr_weapon_grip::model_frame(source, Handedness::Right);
-        let left = shock2vr::vr_weapon_grip::model_frame(source, Handedness::Left);
-        Ok(left * right.invert().ok_or("Invalid weapon frame")?)
+        shock2vr::vr_weapon_grip::model_mirror(&mut self.asset_cache, key)
+            .ok_or_else(|| "Weapon mirror unavailable".into())
     }
 
     /// Shared game geometry and rig samples for validation and explicit auto-fit.

@@ -117,7 +117,7 @@ impl SupportEditor {
             }
         };
         ui.label("Adjust the free hand while the primary grip stays visible. One support pose mirrors for either primary hand.");
-        if model != "wrench_h" {
+        if !shock2vr::vr_support::supports_model(model) {
             ui.colored_label(
                 egui::Color32::YELLOW,
                 "Preview only: this model does not yet support two-hand grabbing in game.",

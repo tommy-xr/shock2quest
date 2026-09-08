@@ -1,5 +1,5 @@
 //! Authored weapon hands guide offline fitting; only weapon geometry is drawn.
-use cgmath::{Matrix4, One, Point3, Quaternion, Transform, Vector3, Zero};
+use cgmath::{Matrix4, One, Point3, Quaternion, SquareMatrix, Transform, Vector3, Zero};
 use dark::importers::GLOVE_WEAPON_IMPORTER;
 use engine::assets::asset_cache::AssetCache;
 
@@ -48,6 +48,16 @@ pub fn model_frame(source: &dark::importers::GloveWeaponModel, hand: Handedness)
     } else {
         hand.gun_mirror()
     }
+}
+
+/// Reflection between the actual rendered weapon frames, shared by support
+/// gameplay and authoring. Asset arm data decides the frame, not a name list.
+pub fn model_mirror(cache: &mut AssetCache, name: &str) -> Option<Matrix4<f32>> {
+    let source = cache.get_opt(&GLOVE_WEAPON_IMPORTER, name)?;
+    let source = source.as_ref().as_ref()?;
+    let right = model_frame(source, Handedness::Right);
+    let left = model_frame(source, Handedness::Left);
+    Some(left * right.invert()?)
 }
 
 /// Geometry is reflected exactly as the rendered gun. The canonical hash also
