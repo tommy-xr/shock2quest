@@ -84,7 +84,12 @@ and skill inaccuracy (#1406). Recheck earlier findings against this baseline.
   #1142. Uses blocking sweep contacts for held-gun impact audio without enabling
   projectile/solver collisions against the held gun.
 - [#1080](https://github.com/tommy-xr/shock2quest/pull/1080): open geometry-based
-  muzzle fallback fix; inspect before adding another implementation.
+  muzzle fallback fix. Reuse its bounds plumbing selectively: its claim that
+  `GunFlash.vhot` is a file index is incorrect. Dark's `gunflash.cpp` calls
+  `VHotGetLoc`, whose evaluated table is keyed by `v->id` in
+  `libsrc/md/render.c::md_eval_vhot_subobj`. `VHotGetRaw` is a distinct,
+  file-indexed helper. Preserve authored IDs and current scale-normalized shot
+  frames when adapting this reference.
 - [#1325](https://github.com/tommy-xr/shock2quest/pull/1325): open Sharpshooter
   damage work; coordinate rather than implement the trait twice.
 - [#140](https://github.com/tommy-xr/shock2quest/pull/140) is a query-name filter
@@ -137,6 +142,16 @@ has not yet been established as an insufficient-skill rejection. Existing
   the existing firing paths alongside the new real save/load regression.
 - [ ] Audit muzzle/vhot lookup and missing-vhot fallbacks for all held models.
   Ensure no fallback or clearance moves a shot through a wall.
+  The `fix/weapon-vhot-identities` layer preserves raw IDs (including sparse IDs
+  and values above 8) and file order, and resolves GunFlash attachments by ID.
+  It explicitly retains the current lowest-ID projectile muzzle choice for
+  existing weapon assets. Missing-muzzle geometry and obstruction are the next
+  separate layer; no unverified barrel-tip fallback is introduced here.
+  For sparse IDs, direct lookup intentionally avoids Dark's inconsistent
+  count-bound guard before its ID-keyed evaluated table. Inspected normal held
+  weapon models use dense IDs, so no visible change is claimed for those
+  assets. The existing VR muzzle regression now accounts for calibrated item
+  scale; its prior unscaled laser expectation failed on the parent as well.
 - [ ] Reproduce flash/casing regressions with matched world/held models. Inspect
   GunFlash flags, attachment point identity, orientation, visibility and lifetime.
   Muzzle flashes may follow the gun; ejected shells must detach correctly.

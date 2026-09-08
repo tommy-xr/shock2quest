@@ -126,7 +126,13 @@ async function fireAndTrack(
   const weapon = await entityTransform(game, weaponId);
   const vhot = muzzleVhotFor(weapon.model, hand);
   assert.ok(vhot, `VR should wield a view model with a known muzzle vhot, got "${weapon.model}"`);
-  const muzzle = add(weapon.position, quatRotate(weapon.rotation, vhot));
+  // Grip calibration can scale the displayed item (the laser is 1.3x).
+  // The muzzle follows that rendered scale; projectile speed does not.
+  const grip = (await game.info()).player.hand_grips.find(g => g.hand === hand && g.entity_id === weaponId)?.grip;
+  // The psi amp retains its legacy hand mesh and has no glove item scaling.
+  const itemScale = grip?.item_scale ?? 1;
+  const scaledVhot: Vec3 = [vhot[0] * itemScale, vhot[1] * itemScale, vhot[2] * itemScale];
+  const muzzle = add(weapon.position, quatRotate(weapon.rotation, scaledVhot));
   // The 25AE view models are authored with the barrel along the model's -X.
   const barrel = quatRotate(weapon.rotation, [-1, 0, 0]);
 

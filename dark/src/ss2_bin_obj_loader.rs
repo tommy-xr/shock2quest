@@ -18,9 +18,7 @@ use engine::{
     },
     texture::{AnimatedTexture, TextureTrait},
 };
-use num_derive::{FromPrimitive, ToPrimitive};
-use num_traits::FromPrimitive;
-use tracing::{trace, warn};
+use tracing::warn;
 
 use crate::{
     SCALE_FACTOR,
@@ -37,38 +35,19 @@ use crate::{
 // Dark LGMD polygons use clockwise front faces.
 const DARK_OBJECT_FRONT_FACE: FrontFaceWinding = FrontFaceWinding::Clockwise;
 
-#[derive(FromPrimitive, ToPrimitive, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum VhotType {
-    Unknown = 0,
-    LightSource = 1,
-    Anchor = 2,
-    Particle1 = 3,
-    Particle2 = 4,
-    Particle3 = 5,
-    Particle4 = 6,
-    Particle5 = 7,
-    LightSource2 = 8,
-}
-
 #[derive(Debug, Clone)]
 pub struct Vhot {
-    pub vhot_type: VhotType,
+    /// Authored attachment ID, not a type or an index into the file's table.
+    /// Dark's evaluated vhot table is keyed by this integer (`md_eval_vhots`).
+    pub id: u32,
     pub point: Point3<f32>,
 }
 
 impl Vhot {
     pub fn read<T: Read + Seek>(reader: &mut T) -> Vhot {
-        let vhot_type_num = read_u32(reader);
-        // Vhot ids outside the set we model are harmless - nothing reads the type
-        // today - so treat them as Unknown rather than refusing the whole model.
-        // (SCP's escpod.bin uses ids 10 and 11.)
-        let vhot_type = VhotType::from_u32(vhot_type_num).unwrap_or_else(|| {
-            trace!("unrecognized vhot type {vhot_type_num}, treating as Unknown");
-            VhotType::Unknown
-        });
-
+        let id = read_u32(reader);
         let point = read_point3(reader) / SCALE_FACTOR;
-        Vhot { vhot_type, point }
+        Vhot { id, point }
     }
 }
 
@@ -872,7 +851,8 @@ pub fn read_vhots<T: Read + Seek>(header: &ObjBinHeader, reader: &mut T) -> Vec<
             vhots.push(Vhot::read(reader));
         }
     }
-    vhots.sort_by(|a, b| a.vhot_type.cmp(&b.vhot_type));
+    // Keep file order for consumers that explicitly need it. ID-based
+    // attachments must look up `Vhot::id`, including sparse/high identifiers.
     vhots
 }
 
@@ -1372,6 +1352,28 @@ mod tests {
             transparency: 0.0,
             emissivity: 0.0,
         }
+    }
+
+    #[test]
+    fn vhots_preserve_sparse_ids_and_authored_file_order() {
+        let mut header = header_with_mat_extra(8);
+        header.num_vhots = 4;
+        header.offset_vhots = 0;
+        let ids = [10_u32, 1, 0, u32::MAX];
+        let mut bytes = Vec::new();
+        for id in ids {
+            bytes.extend_from_slice(&id.to_le_bytes());
+            for coordinate in [1.0_f32, 2.0, 3.0] {
+                bytes.extend_from_slice(&(coordinate * SCALE_FACTOR).to_le_bytes());
+            }
+        }
+        let vhots = read_vhots(&header, &mut Cursor::new(bytes));
+        assert_eq!(vhots.iter().map(|vhot| vhot.id).collect::<Vec<_>>(), ids);
+        assert!(
+            vhots
+                .iter()
+                .all(|vhot| vhot.point == point3(-1.0, 3.0, 2.0))
+        );
     }
 
     /// Header with just the fields `read_extended_materials` reads.
