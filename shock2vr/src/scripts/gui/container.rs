@@ -385,17 +385,13 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
             // feeds an item into a container (drop_entity_into_container).
             // Guarded by the same grabbability check as the debug give
             // lever: reparenting a non-grabbable entity would corrupt it.
-            // Use-only contained objects (notably corpse audio logs) still
-            // need their normal Frob behavior when clicked; they are consumed
-            // or recorded in place rather than moved into the backpack.
+            // Scripted contained objects must run their authored Frob behavior
+            // first. `MOVE | SCRIPT` objects receive the engine move handler
+            // as another script, while keycards and FrobQB objects keep sole
+            // ownership of their established transfer/consumption paths.
+            // Ordinary MOVE loot keeps the direct transfer below.
             ContainerGuiMsg::Take(ent) => {
-                // The always-collected categories are decided before anything
-                // physical is considered: a nanite pile is grabbable metadata-
-                // wise (`MOVE`), so without this it would be banked as an inert
-                // can instead of being credited. Keycards, modules and logs took
-                // the Frob branches below already; routing all four here is what
-                // makes the rule one rule (#583, and the M2 recovery path).
-                if crate::scripts::script_util::is_always_collected(world, *ent) {
+                if crate::virtual_hand::uses_scripted_world_frob(world, *ent) {
                     return (
                         state.clone(),
                         Effect::Send {
@@ -410,10 +406,8 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                     let is_use_only = world
                         .borrow::<View<PropFrobInfo>>()
                         .map(|frob| {
-                            frob.get(*ent).is_ok_and(|frob| {
-                                frob.world_action.contains(FrobFlag::SCRIPT)
-                                    || frob.inventory_action.contains(FrobFlag::SCRIPT)
-                            })
+                            frob.get(*ent)
+                                .is_ok_and(|frob| frob.inventory_action.contains(FrobFlag::SCRIPT))
                         })
                         .unwrap_or(false);
                     return if is_use_only {
@@ -430,10 +424,6 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
                         (state.clone(), Effect::NoEffect)
                     };
                 }
-                // Deliberately *not* gated on the broader
-                // `uses_scripted_world_frob`: that also matches authored
-                // MOVE|SCRIPT items like eng1's circuit board, which keep their
-                // pre-existing Take behavior of moving into the backpack.
                 let inventory_entity = world
                     .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
                     .map(|player| player.inventory_entity_id)
@@ -537,12 +527,12 @@ mod tests {
     /// A world with a loot container holding one iconed, grabbable item,
     /// plus the player-info unique the Take path resolves the backpack
     /// through.
-    fn loot_world() -> (World, EntityId, EntityId, EntityId) {
+    fn loot_world_with_action(world_action: FrobFlag) -> (World, EntityId, EntityId, EntityId) {
         let mut world = World::new();
         let item = world.add_entity((
             PropObjIcon("icn_psi".to_owned()),
             PropFrobInfo {
-                world_action: FrobFlag::MOVE,
+                world_action,
                 inventory_action: FrobFlag::empty(),
                 tool_action: FrobFlag::empty(),
             },
@@ -576,6 +566,10 @@ mod tests {
                 lock_id: 0,
             }),
         );
+    }
+
+    fn loot_world() -> (World, EntityId, EntityId, EntityId) {
+        loot_world_with_action(FrobFlag::MOVE)
     }
 
     fn input_at(cursor: cgmath::Point2<f32>, pressed: bool) -> GuiInputInfo {
@@ -750,6 +744,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn loot_container_click_frobs_a_scripted_pickup() {
+        let (world, container, item, _inventory) =
+            loot_world_with_action(FrobFlag::MOVE | FrobFlag::SCRIPT);
+        let gui = ContainerGui::loot_container();
+
+        let (_state, effect) = gui.handle_msg(
+            container,
+            &world,
+            &ContainerGuiState {},
+            &ContainerGuiMsg::Take(item),
+        );
+
+        assert!(
+            matches!(
+                effect,
+                Effect::Send {
+                    msg: Message {
+                        to,
+                        payload: MessagePayload::Frob,
+                    },
+                } if to == item
+            ),
+            "taking MOVE | SCRIPT loot must run its authored Frob path, got {effect:?}"
+        );
     }
 
     /// Both panels' item grids must land on their cell separators - the loot
