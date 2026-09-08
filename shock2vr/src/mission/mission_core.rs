@@ -8583,6 +8583,20 @@ impl MissionCore {
                         .push(text, now);
                 }
 
+                Effect::SetRotatingDoorState {
+                    entity_id,
+                    state,
+                    progress,
+                } => {
+                    let mut v_rot_door = self
+                        .world
+                        .borrow::<ViewMut<dark::properties::PropRotatingDoor>>()
+                        .unwrap();
+                    if let Ok(door) = (&mut v_rot_door).get(entity_id) {
+                        door.state = state;
+                        door.progress = progress;
+                    }
+                }
                 Effect::SetQuestBit {
                     quest_bit_name,
                     quest_bit_value,

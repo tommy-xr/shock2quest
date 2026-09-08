@@ -406,9 +406,9 @@ pub fn yaw_between_vectors(a: Vector3<f32>, b: Vector3<f32>) -> Deg<f32> {
 
 pub(crate) fn is_entity_door(world: &shipyard::World, entity_id: shipyard::EntityId) -> bool {
     let v_door_prop = world.borrow::<View<PropTranslatingDoor>>().unwrap();
-    //let v_rot_door_prop = world.borrow::<View<PropRotating>>.unwrap();
+    let v_rot_door_prop = world.borrow::<View<PropRotatingDoor>>().unwrap();
 
-    v_door_prop.contains(entity_id)
+    v_rot_door_prop.contains(entity_id) || v_door_prop.contains(entity_id)
 }
 
 /// Fire Ranged Weapon

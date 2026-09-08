@@ -1,13 +1,16 @@
 use cgmath::{InnerSpace, Vector3, Zero};
-use dark::properties::{Link, Links, PropKeypadCode, PropTranslatingDoor};
+use dark::properties::{
+    Link, Links, PropDoorTimer, PropKeypadCode, PropRotatingDoor, PropTranslatingDoor,
+};
 use engine::audio::AudioHandle;
+use serde::{Deserialize, Serialize};
 use shipyard::{EntityId, Get, IntoIter, View, World};
 use tracing::trace;
 
 use crate::{physics::PhysicsWorld, time::Time};
 
 use super::{
-    Effect, Message, MessagePayload, Script,
+    Effect, Message, MessagePayload, Script, ScriptRestoreContext, ScriptState, ScriptStateError,
     script_util::{is_entity_locked, play_environmental_sound},
 };
 
@@ -29,11 +32,26 @@ fn has_incoming_keypad_switch(world: &World, door: EntityId) -> bool {
     })
 }
 
+const SCRIPT_STATE_KEY: &str = "std_door";
+
+#[derive(Debug, Deserialize, Serialize)]
+struct StdDoorState {
+    current_position: Vector3<f32>,
+    desired_position: Vector3<f32>,
+    is_moving: bool,
+    rotation_progress: f32,
+    rotation_target_open: bool,
+    auto_close_remaining: Option<f32>,
+}
+
 pub struct StdDoor {
     audio_handle: AudioHandle,
     current_position: Vector3<f32>,
     desired_position: Vector3<f32>,
     is_moving: bool,
+    rotation_progress: f32,
+    rotation_target_open: bool,
+    auto_close_remaining: Option<f32>,
 }
 
 impl StdDoor {
@@ -43,12 +61,25 @@ impl StdDoor {
             current_position: Vector3::zero(),
             desired_position: Vector3::zero(),
             is_moving: false,
+            rotation_progress: 0.0,
+            rotation_target_open: false,
+            auto_close_remaining: None,
         }
     }
 
     fn target_is_open(&self, trans_door: &PropTranslatingDoor) -> bool {
         (self.desired_position - trans_door.base_open_location).magnitude2()
             < (self.desired_position - trans_door.base_closed_location).magnitude2()
+    }
+
+    fn automatic_close_delay(world: &World, entity_id: EntityId) -> Option<f32> {
+        world
+            .borrow::<View<PropDoorTimer>>()
+            .ok()?
+            .get(entity_id)
+            .ok()
+            .map(|timer| timer.0 as f32)
+            .filter(|seconds| *seconds > 0.0)
     }
 
     /// Door motion is persisted through the effect pipeline (applied by
@@ -58,6 +89,68 @@ impl StdDoor {
             entity_id,
             state,
             base_location: position,
+        }
+    }
+
+    fn persist_rotation(entity_id: EntityId, state: i32, progress: f32) -> Effect {
+        Effect::SetRotatingDoorState {
+            entity_id,
+            state,
+            progress,
+        }
+    }
+
+    fn open_rotation(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        _rot_door: &PropRotatingDoor,
+    ) -> Effect {
+        if self.rotation_target_open {
+            return Effect::NoEffect;
+        }
+
+        self.rotation_target_open = true;
+        self.is_moving = true;
+        self.auto_close_remaining = None;
+        Effect::Combined {
+            effects: vec![
+                Self::persist_rotation(entity_id, 3, self.rotation_progress),
+                play_environmental_sound(
+                    world,
+                    entity_id,
+                    "statechange",
+                    vec![("openstate", "opening"), ("oldopenstate", "closed")],
+                    self.audio_handle.clone(),
+                ),
+            ],
+        }
+    }
+
+    fn close_rotation(
+        &mut self,
+        entity_id: EntityId,
+        world: &World,
+        _rot_door: &PropRotatingDoor,
+    ) -> Effect {
+        if !self.rotation_target_open {
+            return Effect::NoEffect;
+        }
+
+        self.rotation_target_open = false;
+        self.is_moving = true;
+        self.auto_close_remaining = None;
+        Effect::Combined {
+            effects: vec![
+                Self::persist_rotation(entity_id, 2, self.rotation_progress),
+                play_environmental_sound(
+                    world,
+                    entity_id,
+                    "statechange",
+                    vec![("openstate", "closing"), ("oldopenstate", "open")],
+                    self.audio_handle.clone(),
+                ),
+            ],
         }
     }
 
@@ -111,6 +204,45 @@ impl StdDoor {
 }
 impl Script for StdDoor {
     fn initialize(&mut self, entity_id: EntityId, world: &World) -> Effect {
+        let rot_door = {
+            let doors = world.borrow::<View<PropRotatingDoor>>().unwrap();
+            doors.get(entity_id).ok().cloned()
+        };
+        if let Some(rot_door) = rot_door {
+            // Dark's GetDoorProperty chooses RotDoor before TransDoor. That
+            // precedence matters because rotating doors commonly inherit a
+            // zero-filled translating property from StdDoor (#861).
+            self.rotation_progress = match rot_door.state {
+                0 => 0.0,
+                1 => 1.0,
+                _ => rot_door.progress.clamp(0.0, 1.0),
+            };
+            self.rotation_target_open = match rot_door.state {
+                1 | 3 => true,
+                0 | 2 => false,
+                _ => self.rotation_progress >= 0.5,
+            };
+            self.is_moving = matches!(rot_door.state, 2 | 3);
+            self.auto_close_remaining = if rot_door.state == 1 {
+                Self::automatic_close_delay(world, entity_id)
+            } else {
+                None
+            };
+            let (position, rotation) = rot_door.pose_at_progress(self.rotation_progress);
+            self.current_position = position;
+            self.desired_position = if self.rotation_target_open {
+                rot_door.base_open_location
+            } else {
+                rot_door.base_closed_location
+            };
+
+            return Effect::SetPositionRotation {
+                entity_id,
+                position,
+                rotation,
+            };
+        }
+
         let trans_door = {
             let doors = world.borrow::<View<PropTranslatingDoor>>().unwrap();
             doors.get(entity_id).ok().cloned()
@@ -151,8 +283,98 @@ impl Script for StdDoor {
         _physics: &PhysicsWorld,
         time: &Time,
     ) -> Effect {
-        //println!("Updating door: {:?}", entity_id);
-        let _lerpval = (f32::cos(time.total.as_secs_f32()) + 1.0) * 0.5;
+        let rot_door = {
+            let doors = world.borrow::<View<PropRotatingDoor>>().unwrap();
+            doors.get(entity_id).ok().cloned()
+        };
+        if let Some(rot_door) = rot_door {
+            self.rotation_progress = rot_door.progress.clamp(0.0, 1.0);
+            self.rotation_target_open = matches!(rot_door.state, 1 | 3);
+            self.is_moving = matches!(rot_door.state, 2 | 3);
+            if !self.is_moving {
+                if rot_door.state == 1
+                    && let Some(remaining) = self.auto_close_remaining
+                {
+                    let remaining = remaining - time.elapsed.as_secs_f32();
+                    if remaining <= 0.0 {
+                        self.auto_close_remaining = None;
+                        return self.close_rotation(entity_id, world, &rot_door);
+                    }
+                    self.auto_close_remaining = Some(remaining);
+                }
+                return Effect::NoEffect;
+            }
+
+            let target = if self.rotation_target_open { 1.0 } else { 0.0 };
+            let remaining = (target - self.rotation_progress).abs();
+            let travel_radians = rot_door.travel_degrees().to_radians().abs();
+            let step = if travel_radians > f32::EPSILON {
+                time.elapsed.as_secs_f32() * rot_door.speed.abs() / travel_radians
+            } else {
+                0.0
+            };
+            if step <= f32::EPSILON {
+                return Effect::NoEffect;
+            }
+
+            let reached_endpoint = remaining <= step.max(0.0001);
+            if reached_endpoint {
+                self.rotation_progress = target;
+                self.is_moving = false;
+                self.auto_close_remaining = if self.rotation_target_open {
+                    Self::automatic_close_delay(world, entity_id)
+                } else {
+                    None
+                };
+            } else {
+                self.rotation_progress += (target - self.rotation_progress).signum() * step;
+            }
+
+            let (position, rotation) = rot_door.pose_at_progress(self.rotation_progress);
+            self.current_position = position;
+            let state = if reached_endpoint {
+                if self.rotation_target_open { 1 } else { 0 }
+            } else if self.rotation_target_open {
+                3
+            } else {
+                2
+            };
+            let mut effects = vec![
+                Effect::SetPositionRotation {
+                    entity_id,
+                    position,
+                    rotation,
+                },
+                Self::persist_rotation(entity_id, state, self.rotation_progress),
+            ];
+            if reached_endpoint {
+                let reached_open = self.rotation_target_open;
+                effects.push(play_environmental_sound(
+                    world,
+                    entity_id,
+                    "statechange",
+                    if reached_open {
+                        vec![("openstate", "open"), ("oldopenstate", "opening")]
+                    } else {
+                        vec![("openstate", "closed"), ("oldopenstate", "closing")]
+                    },
+                    self.audio_handle.clone(),
+                ));
+                effects.push(Effect::Send {
+                    msg: Message {
+                        to: entity_id,
+                        payload: MessagePayload::Signal {
+                            name: if reached_open {
+                                "DoorOpen".to_string()
+                            } else {
+                                "DoorClose".to_string()
+                            },
+                        },
+                    },
+                });
+            }
+            return Effect::Combined { effects };
+        }
 
         let trans_door = {
             let doors = world.borrow::<View<PropTranslatingDoor>>().unwrap();
@@ -250,6 +472,42 @@ impl Script for StdDoor {
         _physics: &PhysicsWorld,
         msg: &MessagePayload,
     ) -> Effect {
+        let rot_door = {
+            let doors = world.borrow::<View<PropRotatingDoor>>().unwrap();
+            doors.get(entity_id).ok().cloned()
+        };
+        if let Some(rot_door) = rot_door {
+            self.rotation_progress = rot_door.progress.clamp(0.0, 1.0);
+            self.rotation_target_open = matches!(rot_door.state, 1 | 3);
+            self.is_moving = matches!(rot_door.state, 2 | 3);
+            if !rot_door.has_travel() {
+                return Effect::NoEffect;
+            }
+            return match msg {
+                MessagePayload::Frob => {
+                    if self.rotation_target_open {
+                        self.close_rotation(entity_id, world, &rot_door)
+                    } else if is_entity_locked(world, entity_id) {
+                        Effect::PlaySound {
+                            handle: AudioHandle::new(),
+                            source: Some(entity_id),
+                            name: "hackfail".to_owned(),
+                            spatial: false,
+                        }
+                    } else {
+                        self.open_rotation(entity_id, world, &rot_door)
+                    }
+                }
+                MessagePayload::TurnOn { from: _ } => {
+                    self.open_rotation(entity_id, world, &rot_door)
+                }
+                MessagePayload::TurnOff { from: _ } => {
+                    self.close_rotation(entity_id, world, &rot_door)
+                }
+                _ => Effect::NoEffect,
+            };
+        }
+
         let trans_door = {
             let doors = world.borrow::<View<PropTranslatingDoor>>().unwrap();
             doors.get(entity_id).ok().cloned()
@@ -301,13 +559,47 @@ impl Script for StdDoor {
             Effect::NoEffect
         }
     }
+
+    fn script_state_key(&self) -> Option<&'static str> {
+        Some(SCRIPT_STATE_KEY)
+    }
+
+    fn save_state(&self) -> Result<ScriptState, ScriptStateError> {
+        ScriptState::encode(
+            1,
+            &StdDoorState {
+                current_position: self.current_position,
+                desired_position: self.desired_position,
+                is_moving: self.is_moving,
+                rotation_progress: self.rotation_progress,
+                rotation_target_open: self.rotation_target_open,
+                auto_close_remaining: self.auto_close_remaining,
+            },
+            SCRIPT_STATE_KEY,
+        )
+    }
+
+    fn restore_state(
+        &mut self,
+        state: &ScriptState,
+        _context: &ScriptRestoreContext<'_>,
+    ) -> Result<(), ScriptStateError> {
+        let restored: StdDoorState = state.decode(1, SCRIPT_STATE_KEY)?;
+        self.current_position = restored.current_position;
+        self.desired_position = restored.desired_position;
+        self.is_moving = restored.is_moving;
+        self.rotation_progress = restored.rotation_progress;
+        self.rotation_target_open = restored.rotation_target_open;
+        self.auto_close_remaining = restored.auto_close_remaining;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{collections::HashMap, time::Duration};
 
-    use cgmath::{Matrix4, vec3};
+    use cgmath::{Deg, Matrix4, Quaternion, Rotation3, vec3};
     use dark::properties::{
         KeyCard, Link, Links, PropClassTag, PropKeyDst, PropKeypadCode, PropLocked, ToLink,
         WrappedEntityId,
@@ -351,6 +643,48 @@ mod tests {
             quest.add_key_card(key_card());
         }
         world.add_unique(quest);
+        (world, entity_id)
+    }
+
+    fn rotating_world() -> (World, EntityId) {
+        let mut world = World::new();
+        let closed = vec3(5.0, 6.0, 7.0);
+        let open = vec3(5.0, 7.0, 8.0);
+        let identity = Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        let entity_id = world.add_entity((
+            PropRotatingDoor {
+                door_type: 0,
+                closed: 0.0,
+                open: 90.0,
+                speed: 1.0,
+                axis: 0,
+                state: 0,
+                clockwise: false,
+                base_closed_location: closed,
+                base_open_location: open,
+                base_location: closed,
+                base_rotation: identity,
+                base_closed_rotation: identity,
+                base_open_rotation: Quaternion::from_angle_x(Deg(-90.0)),
+                progress: 0.0,
+            },
+            // Real RotDoors inherit this unusable zero property. The rotating
+            // component must win exactly as Dark's GetDoorProperty did.
+            PropTranslatingDoor {
+                door_type: 1,
+                closed: 0.0,
+                open: 0.0,
+                speed: 0.0,
+                axis: 0,
+                state: 0,
+                base_closed_location: Vector3::zero(),
+                base_open_location: Vector3::zero(),
+                base_location: Vector3::zero(),
+            },
+            PropClassTag::from_string("doortype hatch"),
+            RuntimePropTransform(Matrix4::from_translation(closed)),
+        ));
+        world.add_unique(QuestInfo::new());
         (world, entity_id)
     }
 
@@ -509,25 +843,129 @@ mod tests {
         }
     }
 
-    /// Stand-in for `mission_core`'s `Effect::SetTranslatingDoorState` handler -
-    /// the script only emits the effect, the world write happens here.
+    /// Stand-in for mission_core's persistent door-state effect handlers - the
+    /// script only emits effects, and the world writes happen here.
     fn apply(world: &World, effect: Effect) {
         for effect in Effect::flatten(vec![effect]) {
-            if let Effect::SetTranslatingDoorState {
-                entity_id,
-                state,
-                base_location,
-            } = effect
-            {
-                let mut doors = world
-                    .borrow::<shipyard::ViewMut<PropTranslatingDoor>>()
-                    .unwrap();
-                if let Ok(door) = (&mut doors).get(entity_id) {
-                    door.state = state;
-                    door.base_location = base_location;
+            match effect {
+                Effect::SetTranslatingDoorState {
+                    entity_id,
+                    state,
+                    base_location,
+                } => {
+                    let mut doors = world
+                        .borrow::<shipyard::ViewMut<PropTranslatingDoor>>()
+                        .unwrap();
+                    if let Ok(door) = (&mut doors).get(entity_id) {
+                        door.state = state;
+                        door.base_location = base_location;
+                    }
                 }
+                Effect::SetRotatingDoorState {
+                    entity_id,
+                    state,
+                    progress,
+                } => {
+                    let mut doors = world
+                        .borrow::<shipyard::ViewMut<PropRotatingDoor>>()
+                        .unwrap();
+                    if let Ok(door) = (&mut doors).get(entity_id) {
+                        door.state = state;
+                        door.progress = progress;
+                    }
+                }
+                _ => {}
             }
         }
+    }
+
+    #[test]
+    fn rotating_door_initialization_ignores_inherited_zero_translation() {
+        let (world, entity_id) = rotating_world();
+        let mut door = StdDoor::new();
+
+        let effect = door.initialize(entity_id, &world);
+
+        match effect {
+            Effect::SetPositionRotation {
+                entity_id: id,
+                position,
+                rotation,
+            } => {
+                assert_eq!(id, entity_id);
+                assert_eq!(position, vec3(5.0, 6.0, 7.0));
+                assert!(rotation.s > 0.999);
+            }
+            unexpected => panic!("expected rotating pose, got {unexpected:?}"),
+        }
+    }
+
+    #[test]
+    fn rotating_door_open_and_closed_endpoints_are_persisted() {
+        let (world, entity_id) = rotating_world();
+        let physics = PhysicsWorld::new();
+        let mut door = initialized_door(entity_id, &world);
+
+        let effect = door.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: entity_id },
+        );
+        apply(&world, effect);
+        let effect = door.update(entity_id, &world, &physics, &step(2.0));
+        apply(&world, effect);
+        {
+            let doors = world.borrow::<View<PropRotatingDoor>>().unwrap();
+            let saved = doors.get(entity_id).unwrap();
+            assert_eq!(saved.state, 1);
+            assert_eq!(saved.progress, 1.0);
+        }
+
+        let effect = door.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::TurnOff { from: entity_id },
+        );
+        apply(&world, effect);
+        let effect = door.update(entity_id, &world, &physics, &step(2.0));
+        apply(&world, effect);
+        let doors = world.borrow::<View<PropRotatingDoor>>().unwrap();
+        let saved = doors.get(entity_id).unwrap();
+        assert_eq!(saved.state, 0);
+        assert_eq!(saved.progress, 0.0);
+    }
+
+    #[test]
+    fn rotating_door_closes_after_its_authored_timer() {
+        let (mut world, entity_id) = rotating_world();
+        world.add_component(entity_id, PropDoorTimer(1));
+        let physics = PhysicsWorld::new();
+        let mut door = initialized_door(entity_id, &world);
+
+        let effect = door.handle_message(
+            entity_id,
+            &world,
+            &physics,
+            &MessagePayload::TurnOn { from: entity_id },
+        );
+        apply(&world, effect);
+        let effect = door.update(entity_id, &world, &physics, &step(2.0));
+        apply(&world, effect);
+        let effect = door.update(entity_id, &world, &physics, &step(1.1));
+        apply(&world, effect);
+
+        {
+            let doors = world.borrow::<View<PropRotatingDoor>>().unwrap();
+            assert_eq!(doors.get(entity_id).unwrap().state, 2);
+        }
+
+        let effect = door.update(entity_id, &world, &physics, &step(2.0));
+        apply(&world, effect);
+        let doors = world.borrow::<View<PropRotatingDoor>>().unwrap();
+        assert_eq!(doors.get(entity_id).unwrap().state, 0);
+        assert_eq!(doors.get(entity_id).unwrap().progress, 0.0);
     }
 
     #[test]
@@ -566,6 +1004,24 @@ mod tests {
                 _ => None,
             });
         assert_eq!(persisted, Some((3, vec3(1.0, 2.0, 3.0))));
+    }
+
+    #[test]
+    fn translating_door_private_motion_survives_script_state_round_trip() {
+        let (world, entity_id) = test_world(false, false);
+        let physics = PhysicsWorld::new();
+        let mut before = initialized_door(entity_id, &world);
+        before.handle_message(entity_id, &world, &physics, &MessagePayload::Frob);
+
+        let state = before.save_state().unwrap();
+        let mut after = StdDoor::new();
+        let entity_map = HashMap::new();
+        let context = ScriptRestoreContext::new(&entity_map);
+        after.restore_state(&state, &context).unwrap();
+
+        assert_eq!(after.current_position, before.current_position);
+        assert_eq!(after.desired_position, before.desired_position);
+        assert_eq!(after.is_moving, before.is_moving);
     }
 
     #[test]

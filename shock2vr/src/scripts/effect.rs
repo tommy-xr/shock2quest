@@ -839,6 +839,15 @@ pub enum Effect {
         base_location: Vector3<f32>,
     },
 
+    /// Persistently set Dark's `P$RotDoor` motion fields on one live object.
+    /// Keeping normalized progress lets an interrupted hinged motion resume
+    /// faithfully after a save/load.
+    SetRotatingDoorState {
+        entity_id: EntityId,
+        state: i32,
+        progress: f32,
+    },
+
     ResetGravity {
         entity_id: EntityId,
     },
