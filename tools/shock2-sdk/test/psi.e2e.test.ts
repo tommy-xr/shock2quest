@@ -79,16 +79,26 @@ test(
   "the projectile tier follows the player's PSI stat",
   { skip: !e2eEnabled, timeout: 600_000 },
   async () => {
-    // The same cast from a sheet raised only to PSI 2 fires the PSI-2 bolt,
-    // not the capped one. (`/v1/player/stats` only raises, so the lower stat
-    // needs its own runtime.)
+    // debug_psi caps stats at 6. Start with the minimal scene's low-stat
+    // player instead: provisioning may raise PSI to 2, but never lower it.
+    // Debug scenes already train Cryokinesis; only the amp needs supplying.
     await using game = await GameServer.launch({
-      mission: "debug_psi",
+      mission: "debug_minimal",
     });
 
     await game.step({ frames: 10 });
     await game.player.setStats({ psionic_ability: 2 });
-    assert.equal((await game.info()).player.selected_psi_power, "Cryokinesis");
+    const amp = await game.player.spawnItem(-247); // Psi Amp
+    await game.input.trigger("EquipPsiAmp");
+    await game.step({ frames: 10 });
+    const player = (await game.info()).player;
+    assert.equal(player.stats?.psionic_ability, 2);
+    assert.equal(
+      player.wielded_entity_id,
+      amp.entity_id,
+      "the supplied amp should be wielded",
+    );
+    assert.equal(player.selected_psi_power, "Cryokinesis");
 
     await fireOnce(game);
     await game.step({ frames: 3 });
