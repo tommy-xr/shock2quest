@@ -65,6 +65,13 @@ const detail = await game.entities.detail(doors.entities[0].id);
 // entity also reports its container's runtime id directly.
 const containerId = detail.contained_by; // number, null, or undefined on an older runtime
 
+// Summaries stay discoverable after pickup. `location` is "world",
+// "inventory", "left_hand", or "right_hand". Backpack entries report the
+// player's current position and distance 0 instead of their stale floor data;
+// directly held items retain their useful live hand/viewmodel transform.
+const pickups = await game.entities.list({ filter: "*Nanites*" });
+console.log(pickups.entities[0].location);
+
 // Inject a script message into an entity (damage, frob, AI signal)
 await game.entities.sendMessage(doors.entities[0].id, { type: "Damage", amount: 5 });
 await game.entities.sendMessage(doors.entities[0].id, { type: "Frob" });

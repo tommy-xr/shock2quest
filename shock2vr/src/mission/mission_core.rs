@@ -11726,6 +11726,19 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         use shipyard::*;
 
         let player_pos = self.player_position();
+        let carried_locations: std::collections::HashMap<_, _> = self
+            .player_inventory()
+            .into_iter()
+            .map(|item| (item.entity_id, item.location))
+            .collect();
+        let direct_hand_entities: std::collections::HashSet<_> = {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            [player.left_hand_entity_id, player.right_hand_entity_id]
+                .into_iter()
+                .flatten()
+                .map(|entity_id| entity_id.inner() as i32)
+                .collect()
+        };
         let mut entities = Vec::new();
 
         // Query all entities with position
@@ -11750,16 +11763,20 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         }
                     }
 
-                    // Prefer the live transform; PropPosition can lag for
-                    // entities moved by animation/physics (e.g. walking AIs)
-                    let live_pos = v_transform
-                        .get(entity_id)
-                        .map(|xform| {
-                            use cgmath::Transform;
-                            let p = xform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
-                            cgmath::vec3(p.x, p.y, p.z)
-                        })
-                        .unwrap_or(pos.position);
+                    let (location, live_pos) = debug_entity_listing_location(
+                        entity_id.inner() as i32,
+                        v_transform
+                            .get(entity_id)
+                            .map(|xform| {
+                                use cgmath::Transform;
+                                let p = xform.0.transform_point(cgmath::point3(0.0, 0.0, 0.0));
+                                cgmath::vec3(p.x, p.y, p.z)
+                            })
+                            .unwrap_or(pos.position),
+                        player_pos,
+                        &carried_locations,
+                        &direct_hand_entities,
+                    );
                     let position = [live_pos.x, live_pos.y, live_pos.z];
                     let distance = (cgmath::Vector3::from(position) - player_pos).magnitude();
 
@@ -11786,6 +11803,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                         id: entity_id.inner() as i32,
                         name,
                         template_id,
+                        location,
                         position,
                         distance,
                         script_count,
@@ -13236,6 +13254,81 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
         self.script_world.dispatch(Message { to: id, payload });
         true
+    }
+}
+
+/// Resolve the automation-facing spatial state for one entity summary.
+///
+/// World entities use their live transform (which may differ from the authored
+/// `PropPosition`). Backpack and nested carried entities have no meaningful
+/// world transform after pickup, so expose the player's current position instead
+/// of the stale floor position retained by the entity properties. Directly held
+/// items retain their live hand/viewmodel transform, which is useful for visual
+/// automation while `location` still makes their carried state explicit.
+fn debug_entity_listing_location(
+    entity_id: i32,
+    world_position: Vector3<f32>,
+    player_position: Vector3<f32>,
+    carried_locations: &std::collections::HashMap<i32, String>,
+    direct_hand_entities: &std::collections::HashSet<i32>,
+) -> (String, Vector3<f32>) {
+    match carried_locations.get(&entity_id) {
+        Some(location) if direct_hand_entities.contains(&entity_id) => {
+            (location.clone(), world_position)
+        }
+        Some(location) => (location.clone(), player_position),
+        None => ("world".to_string(), world_position),
+    }
+}
+
+#[cfg(test)]
+mod debug_entity_listing_tests {
+    use super::debug_entity_listing_location;
+    use cgmath::vec3;
+    use std::collections::{HashMap, HashSet};
+
+    #[test]
+    fn inventory_entity_uses_inventory_location_and_player_position() {
+        let carried = HashMap::from([(42, "inventory".to_string())]);
+        let (location, position) = debug_entity_listing_location(
+            42,
+            vec3(10.0, 20.0, 30.0),
+            vec3(1.0, 2.0, 3.0),
+            &carried,
+            &HashSet::new(),
+        );
+
+        assert_eq!(location, "inventory");
+        assert_eq!(position, vec3(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn directly_held_entity_keeps_its_live_transform() {
+        let carried = HashMap::from([(42, "right_hand".to_string())]);
+        let (location, position) = debug_entity_listing_location(
+            42,
+            vec3(10.0, 20.0, 30.0),
+            vec3(1.0, 2.0, 3.0),
+            &carried,
+            &HashSet::from([42]),
+        );
+
+        assert_eq!(location, "right_hand");
+        assert_eq!(position, vec3(10.0, 20.0, 30.0));
+    }
+
+    #[test]
+    fn world_entity_keeps_its_live_position() {
+        let (location, position) = debug_entity_listing_location(
+            42,
+            vec3(10.0, 20.0, 30.0),
+            vec3(1.0, 2.0, 3.0),
+            &HashMap::new(),
+            &HashSet::new(),
+        );
+
+        assert_eq!(location, "world");
+        assert_eq!(position, vec3(10.0, 20.0, 30.0));
     }
 }
 

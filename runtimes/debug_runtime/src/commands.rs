@@ -725,6 +725,8 @@ pub struct EntitySummary {
     pub id: i32,
     pub name: String,
     pub template_id: i32,
+    /// "world", "inventory", "left_hand", or "right_hand".
+    pub location: String,
     pub position: [f32; 3],
     pub distance: f32,
     pub script_count: usize,

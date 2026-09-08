@@ -1608,6 +1608,7 @@ fn process_command(
                             id: e.id,
                             name: e.name,
                             template_id: e.template_id,
+                            location: e.location,
                             position: e.position,
                             distance: e.distance,
                             script_count: e.script_count,
