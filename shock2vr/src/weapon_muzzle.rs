@@ -1,6 +1,6 @@
 //! Muzzle geometry in the rendered weapon's local frame. Authored ID 0 wins;
 //! missing points use the barrel end of the visible gun, excluding its arms.
-use cgmath::{EuclideanSpace, InnerSpace, Point3, Vector3, point3, vec3};
+use cgmath::{EuclideanSpace, InnerSpace, Matrix4, Point3, Transform, Vector3, point3, vec3};
 use collision::{Aabb, Aabb3};
 use dark::{
     importers::{GLOVE_WEAPON_IMPORTER, GRIP_SURFACE_IMPORTER},
@@ -15,6 +15,23 @@ use crate::{physics::PhysicsWorld, runtime_props::RuntimePropVhots};
 pub(crate) struct MuzzleFallback {
     pub point: Point3<f32>,
     pub axis: Vector3<f32>,
+}
+
+impl MuzzleFallback {
+    /// Unit right/up/forward frame at this attachment. Item scaling affects the
+    /// attachment position, never launched projectile size or velocity.
+    pub(crate) fn shot_frame(self, transform: Matrix4<f32>) -> Matrix4<f32> {
+        let origin = transform.transform_point(self.point);
+        let forward = transform.transform_vector(self.axis).normalize();
+        let up = transform.transform_vector(vec3(0.0, 1.0, 0.0)).normalize();
+        let right = up.cross(forward).normalize();
+        Matrix4::from_cols(
+            right.extend(0.0),
+            forward.cross(right).extend(0.0),
+            forward.extend(0.0),
+            origin.to_homogeneous(),
+        )
+    }
 }
 
 /// These are authored weapon frames, not an inference from the longest mesh

@@ -250,3 +250,25 @@ grenade-family clicks to `out_gren`, heavy/shotgun clicks to `out_sg`, and
 broken-gun feedback to `gunbrok1`. Existing skill, reload and cooldown gates
 retain their priority. A partial magazine below a mode's shot cost also uses
 OutofAmmo; no projectile, flash, wear or ammo debit accompanies that refusal.
+
+## GunFlash casing launch
+
+GunFlash flag 1 now creates a detached dynamic casing at its authored ejection
+point, preserving the full parsed PhysInitV vector in a normalized barrel frame.
+The left VR gun reflects lateral ejection; the right-handed flat viewmodel does
+not, even though it occupies the logical left inventory slot. Ordinary flashes
+remain attached. Cosmetic casings and impact-spang transients are omitted from
+saves so loading cannot relaunch stale effects through the bullet velocity path.
+
+Flat/right/left casing scenarios reproduce the frozen-shell regression on the
+parent, then verify upward launch, ejection side and lifetime after the fix.
+The flat case saves while a casing is alive and verifies it does not return;
+the normal projectile owner-save regression remains green. Matched VR footage
+shows the casing rise and fall independently of subsequent hand movement.
+Random-bank flag 2 and inherited player movement remain audit followups; this
+layer only establishes the distinct authored casing-launch path.
+
+User followup: the EMP footage reveals red splatter. EMP Shot explicitly authors
+`swingba2` with `NoRender`, but player projectile creation forces visibility.
+Respecting that hidden model and inspecting its legitimate particle riders is
+the next presentation fix, alongside the remaining muzzle-flash audit.

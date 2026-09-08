@@ -209,6 +209,7 @@ pub fn create_entity_with_position(
 
     if additional_options.transient_fx {
         world.add_component(entity_id, crate::runtime_props::RuntimePropTransientFx);
+        world.add_component(entity_id, crate::runtime_props::RuntimePropDoNotSerialize);
     }
 
     if let Some(origin) = additional_options.projectile_raycast_origin {
@@ -1678,7 +1679,8 @@ pub struct CreateEntityOptions {
     pub attach_to: Option<EntityId>,
     /// Mark the entity as a fire-and-forget effect (`RuntimePropTransientFx`):
     /// it is destroyed once its one-shot particle burst expires. Used for
-    /// impact spangs so they don't accumulate at every bullet hole.
+    /// impact spangs so they don't accumulate at every bullet hole. Cosmetic
+    /// transients are excluded from saves rather than replayed after loading.
     pub transient_fx: bool,
     /// Override the collision-ray origin when this entity resolves as a fast
     /// projectile. Flat firing supplies the camera origin while retaining the
@@ -1696,6 +1698,8 @@ pub struct CreateEntityOptions {
     /// Tweq emitter calls `launchProjectile`; this keeps frobbable emitted
     /// archetypes from being reduced to kinematic selection colliders.
     pub launch_projectile: bool,
+    /// Preserve the full authored velocity for GunFlash-launched casings.
+    pub authored_velocity_frame: Option<Matrix4<f32>>,
     /// The firing gun's per-shot multipliers, stamped on a launched projectile
     /// as `RuntimePropShotModifiers` so its damage and speed follow the fire
     /// mode that launched it. `None` for anything that is not a gun shot.
@@ -1718,6 +1722,7 @@ impl Default for CreateEntityOptions {
             projectile_weapon: None,
             player_fired_projectile: false,
             launch_projectile: false,
+            authored_velocity_frame: None,
             shot_modifiers: None,
             flinderize_debris: false,
         }
