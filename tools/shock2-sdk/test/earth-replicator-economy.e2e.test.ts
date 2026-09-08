@@ -88,7 +88,12 @@ test(
     const text = opened.elements
       .filter((element) => element.kind === "text")
       .map((element) => element.text ?? "");
-    for (const expected of ["003", "004", "040", "0270"]) {
+    // Honor the active localized catalog wording (which may omit a count).
+    // The actual purchase below still verifies the child's six-round stack.
+    for (const expected of [
+      "003", "004", "040", "0270",
+      "Bag of chips", "Bottle of juice", "Standard bullets",
+    ]) {
       assert.ok(
         text.includes(expected),
         `replicator should visibly render ${expected}; got ${JSON.stringify(text)}`,
@@ -153,7 +158,21 @@ test(
         (element) => element.label === "buy:small standard clip",
       );
       assert.ok(clip, "Standard Clip row should remain available");
+      const beforeClips = new Set(
+        (await game.entities.byTemplate(-1358)).map((entity) => entity.id),
+      );
       await clickUiElement(game, clip);
+      const purchasedClip = (await game.entities.byTemplate(-1358)).find(
+        (entity) => !beforeClips.has(entity.id),
+      );
+      assert.ok(purchasedClip, "purchase should create Small Standard Clip");
+      assert.equal(
+        Number((await game.entities.detail(purchasedClip.id)).properties.find(
+          (property) => property.name === "StackCount",
+        )?.value),
+        6,
+        "Small Standard Clip must override its parent's twelve-round stack",
+      );
     }
     for (let purchase = 0; purchase < 2; purchase++) {
       const panel = (await game.ui.state()).active_panel;

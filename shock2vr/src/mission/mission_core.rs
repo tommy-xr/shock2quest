@@ -1764,6 +1764,7 @@ pub struct DebugLine {
 pub struct EntityMetadata {
     pub template_id: i32,
     pub obj_icon: Option<String>,
+    /// Localized catalog label, with the purchase template's stack quantity.
     pub obj_short_name: Option<String>,
     #[allow(dead_code)]
     pub obj_name: Option<String>,
@@ -2282,8 +2283,12 @@ impl MissionCore {
 
         // Create a map of template name (ie 'HE Explosion' to the template id).
         // This is important for creating entities based on template name
+        let short_name_strings = asset_cache
+            .get_opt(&dark::importers::STRINGS_IMPORTER, "objshort.str")
+            .map(|strings| (*strings).clone())
+            .unwrap_or_default();
         let (template_name_to_template_id, unique_gamesys_template_names) =
-            create_template_name_map(game_entity_info);
+            create_template_name_map(game_entity_info, &short_name_strings);
         let mission_object_name_to_id = create_mission_object_name_map(&entity_info_rc);
 
         world.add_unique(GlobalEntityMetadata(template_name_to_template_id.clone()));
@@ -11018,6 +11023,7 @@ impl MissionCore {
 
 fn create_template_name_map(
     game_entity_info: &Gamesys,
+    short_name_strings: &HashMap<String, String>,
 ) -> (HashMap<String, EntityMetadata>, HashMap<String, i32>) {
     let mut gamesys_world = World::new();
     game_entity_info.entity_info.initialize_world_with_entities(
@@ -11026,6 +11032,13 @@ fn create_template_name_map(
         |_id| true,
     );
 
+    template_name_map_from_world(&gamesys_world, short_name_strings)
+}
+
+fn template_name_map_from_world(
+    gamesys_world: &World,
+    short_name_strings: &HashMap<String, String>,
+) -> (HashMap<String, EntityMetadata>, HashMap<String, i32>) {
     let mut name_to_template_id = HashMap::new();
     let mut template_ids_by_exact_name: HashMap<String, Vec<i32>> = HashMap::new();
 
@@ -11034,6 +11047,7 @@ fn create_template_name_map(
          v_obj_icon: View<dark::properties::PropObjIcon>,
          v_obj_short_name: View<dark::properties::PropObjShortName>,
          v_obj_name: View<dark::properties::PropObjName>,
+         v_stack_count: View<dark::properties::PropStackCount>,
          v_template_id: View<dark::properties::PropTemplateId>| {
             for (entity_id, (sym_name, template_id)) in
                 (&v_sym_name, &v_template_id).iter().with_id()
@@ -11047,7 +11061,22 @@ fn create_template_name_map(
                             .map(|p| format!("{}.pcx", p.0))
                             .ok(),
                         obj_name: v_obj_name.get(entity_id).map(|p| p.0.clone()).ok(),
-                        obj_short_name: v_obj_short_name.get(entity_id).map(|p| p.0.clone()).ok(),
+                        obj_short_name: v_obj_short_name.get(entity_id).ok().map(|p| {
+                            let name = dark::importers::resolve_localized_property_string(
+                                &p.0,
+                                short_name_strings,
+                            );
+                            // This world is hydrated through the full hierarchy:
+                            // Small Standard Clip's six overrides its parent's twelve.
+                            let quantity = v_stack_count.get(entity_id).ok().map(|p| p.0);
+                            if name.contains("%d") && quantity.is_none() {
+                                // Do not show a format token or promise an invented
+                                // quantity when an incomplete template lacks one.
+                                sym_name.0.clone()
+                            } else {
+                                crate::hud::format_stack_aware_item_name(&name, quantity)
+                            }
+                        }),
                     },
                 );
                 if template_id.template_id < 0 {
@@ -13388,6 +13417,116 @@ mod held_item_restore_tests {
                 VirtualHandEffect::StoreItem { entity_id } if *entity_id == left
             )),
             "the displaced left-hand item must be returned to the backpack, got {effects:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod template_catalog_name_tests {
+    use super::*;
+    use crate::gui::{Gui, GuiComponent};
+    use crate::scripts::gui::{ReplicatorGui, ReplicatorState};
+    use dark::properties::{
+        ObjectState, PropObjIcon, PropObjShortName, PropObjState, PropReplicatorContents,
+        PropReplicatorHackedContents, PropStackCount, PropSymName, PropTemplateId,
+    };
+
+    #[test]
+    fn replicator_catalog_resolves_names_and_effective_quantities_in_both_inventories() {
+        // Template hydration applies inherited properties before the child's
+        // overrides. Standard Clip supplies twelve; Small Standard Clip six.
+        let mut templates = World::new();
+        let clip = templates.add_entity((
+            PropTemplateId { template_id: -1358 },
+            PropSymName("Small Standard Clip".to_owned()),
+            PropObjIcon("clip".to_owned()),
+            PropObjShortName("Standard_Clip: \"%d standard bullets\"".to_owned()),
+            PropStackCount(12),
+        ));
+        templates.add_component(clip, PropStackCount(6));
+        templates.add_entity((
+            PropTemplateId { template_id: -100 },
+            PropSymName("Chips".to_owned()),
+            PropObjIcon("chips".to_owned()),
+            PropObjShortName("Chips: \"Bag of chips\"".to_owned()),
+        ));
+        let strings = HashMap::from([
+            (
+                "standard_clip".to_owned(),
+                "%d translated bullets".to_owned(),
+            ),
+            ("chips".to_owned(), "Translated chips".to_owned()),
+        ]);
+        let (metadata, _) = template_name_map_from_world(&templates, &strings);
+        let mut world = World::new();
+        world.add_unique(GlobalEntityMetadata(metadata));
+        let names = |first: &str, second: &str| {
+            [
+                first.to_owned(),
+                second.to_owned(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ]
+        };
+        let replicator = world.add_entity((
+            PropReplicatorContents {
+                costs: [3, 40, 0, 0, 0, 0],
+                object_names: names("chips", "small standard clip"),
+            },
+            PropReplicatorHackedContents {
+                costs: [25, 2, 0, 0, 0, 0],
+                object_names: names("small standard clip", "chips"),
+            },
+        ));
+        for state in [ObjectState::Normal, ObjectState::Hacked] {
+            world.add_component(replicator, PropObjState(state));
+            let texts: Vec<_> = ReplicatorGui
+                .get_components(&None, replicator, &world, &ReplicatorState::default())
+                .into_iter()
+                .filter_map(|component| match component {
+                    GuiComponent::Text { text, .. } => Some(text),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                texts.iter().any(|text| text == "Translated chips"),
+                "{texts:?}"
+            );
+            assert!(
+                texts.iter().any(|text| text == "6 translated bullets"),
+                "{texts:?}"
+            );
+            assert!(
+                texts
+                    .iter()
+                    .all(|text| !text.contains("%d") && !text.contains('"'))
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_names_use_authored_fallback_and_do_not_invent_missing_quantities() {
+        let mut templates = World::new();
+        templates.add_entity((
+            PropTemplateId { template_id: -1 },
+            PropSymName("Juice bottle".to_owned()),
+            PropObjShortName("Juice_bottle: \"Bottle of juice\"".to_owned()),
+        ));
+        templates.add_entity((
+            PropTemplateId { template_id: -2 },
+            PropSymName("Unknown clip".to_owned()),
+            PropObjShortName("Clip: \"%d bullets\"".to_owned()),
+        ));
+        let (metadata, _) = template_name_map_from_world(&templates, &HashMap::new());
+        assert_eq!(
+            metadata["juice bottle"].obj_short_name.as_deref(),
+            Some("Bottle of juice")
+        );
+        assert_eq!(
+            metadata["unknown clip"].obj_short_name.as_deref(),
+            Some("Unknown clip")
         );
     }
 }
