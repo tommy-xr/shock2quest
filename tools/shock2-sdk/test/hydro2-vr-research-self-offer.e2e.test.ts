@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 import type {
   EntityDetailResult,
@@ -115,7 +116,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "hydro2.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8592),
+      port: e2ePort(),
       debugFlags: ["--vr"],
       echoLogs: process.env.SHOCK2_ECHO_LOGS === "1",
     });

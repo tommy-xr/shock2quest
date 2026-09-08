@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 import type { EntitySummary, Vec3 } from "../src/index.js";
 
@@ -67,14 +68,14 @@ test(
   async () => {
     const covered = await detonateBesidePlayer(
       "covered",
-      Number(process.env.SHOCK2_E2E_PORT ?? 8144),
+      e2ePort(),
     );
     assert.ok(covered.lineBlocked, "the covered control ray must hit the corridor wall");
     assert.equal(covered.damage, 0, "the wall must absorb the whole blast");
 
     const uncovered = await detonateBesidePlayer(
       "uncovered",
-      Number(process.env.SHOCK2_E2E_CONTROL_PORT ?? 8145),
+      e2ePort(0, "SHOCK2_E2E_CONTROL_PORT"),
     );
     assert.ok(!uncovered.lineBlocked, "the open-space control ray must stay clear");
     assert.ok(uncovered.damage > 0, "the unobstructed blast must still hurt the player");

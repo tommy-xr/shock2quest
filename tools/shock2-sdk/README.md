@@ -166,9 +166,12 @@ const game = await GameServer.connect("http://127.0.0.1:8080");
 - The e2e suite runs **serially** (`--test-concurrency=1`): each test spawns its
   own heavy debug runtime, so one-at-a-time avoids resource contention. Ports
   no longer need hand-syncing across files - omit `port` and each runtime gets
-  its own ephemeral one. (Existing tests still pass a fixed port; that is now
-  an exact request, so a leftover runtime on it fails the launch loudly instead
-  of silently drifting to the next port.)
+  its own ephemeral one. Fixtures with a developer port override use
+  `test/helpers/e2e-port.ts`: unset or `0` requests an ephemeral port even for
+  offset cases; a positive override requests that exact base plus the case's
+  offset. An occupied explicit port fails loudly. Concurrent suites also need
+  separate asset roots with private `saves/` directories, since fixtures can
+  reuse save names.
 - Both `npm test` and `npm run test:e2e` end with a single verdict line,
   `shock2-sdk tests: PASS|FAIL ...`, and exit non-zero on any failure (a
   runner killed by a signal included). Gate on the exit code; when only a

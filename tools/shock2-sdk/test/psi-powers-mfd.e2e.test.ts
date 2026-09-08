@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer, type UiElement, type Vec3 } from "../src/index.js";
 import { clickUiElement } from "./helpers/ui.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
@@ -24,7 +25,6 @@ import { aimVrHandAt } from "./helpers/vr-hand.js";
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PSI_PORT ?? 8711);
 
 /** The synthetic host entity's name, as `/v1/ui` reports it. */
 const PANEL_NAME = "Psi Powers";
@@ -97,7 +97,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_psi",
-      port: basePort,
+      port: e2ePort(0, "SHOCK2_E2E_PSI_PORT"),
     });
     await game.step({ frames: 30 });
     await game.input.trigger("ToggleUseMode");
@@ -191,7 +191,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_psi",
-      port: basePort + 1,
+      port: e2ePort(1, "SHOCK2_E2E_PSI_PORT"),
     });
     await game.step({ frames: 30 });
     await game.input.trigger("ToggleUseMode");
@@ -251,7 +251,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_psi",
-      port: basePort + 2,
+      port: e2ePort(2, "SHOCK2_E2E_PSI_PORT"),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });

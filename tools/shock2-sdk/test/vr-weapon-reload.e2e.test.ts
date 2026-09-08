@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 import type { EntitySummary, PlayedSound, Vec3 } from "../src/index.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
@@ -22,7 +23,6 @@ import { fireOnce, cycleToWeapon } from "./helpers/weapon.js";
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8412);
 
 /** Pistol (first DebugCycleWeapon roster entry) and its standard clip. */
 const PISTOL = -17;
@@ -91,7 +91,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort,
+      port: e2ePort(),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -164,7 +164,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort + 1,
+      port: e2ePort(1),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });

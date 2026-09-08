@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 import type { EntitySummary, Vec3 } from "../src/index.js";
 import { aimVrHandAt } from "./helpers/vr-hand.js";
@@ -14,7 +15,6 @@ import { cycleToWeapon } from "./helpers/weapon.js";
 // itself is unchanged and still reachable from the flat key, HTTP and the SDK,
 // which is what these tests drive.
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_PORT ?? 8676);
 
 /** The debug pistol, and the standard clip its rounds come back as. */
 const PISTOL = -17;
@@ -93,7 +93,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort,
+      port: e2ePort(),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -179,7 +179,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort + 1,
+      port: e2ePort(1),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });

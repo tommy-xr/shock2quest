@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer, HttpError } from "../src/index.js";
 import type { UiElement } from "../src/types.js";
 import { earthWorldUse } from "./helpers/earth-world-use.js";
@@ -59,7 +60,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 9501),
+      port: e2ePort(),
     });
     await game.step({ frames: 2 });
 
@@ -103,7 +104,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 9501) + 1,
+      port: e2ePort(1),
     });
     await game.step({ frames: 5 });
 
@@ -183,7 +184,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 9501) + 2,
+      port: e2ePort(2),
     });
     await game.step({ frames: 30 });
 
@@ -217,7 +218,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 9501) + 3,
+      port: e2ePort(3),
     });
     await game.step({ frames: 2 });
 
@@ -255,7 +256,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 9501) + 4,
+      port: e2ePort(4),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -330,7 +331,7 @@ test(
     // the backpack, not in the world, not held.
     await using game = await GameServer.launch({
       mission: "earth.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 9501) + 5,
+      port: e2ePort(5),
     });
     await game.step({ frames: 30 });
 

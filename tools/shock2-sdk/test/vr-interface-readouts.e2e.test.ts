@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 import type { UiElement, UiState, Vec3 } from "../src/index.js";
 import {
@@ -24,7 +25,6 @@ import { aimVrHandAt, aimVrHandAtCanvas } from "./helpers/vr-hand.js";
 // Opt-in (compiles the runtime + needs Data/ assets):
 //   npm run test:e2e        (or SHOCK2_E2E=1 node --test dist/test/)
 const e2eEnabled = process.env.SHOCK2_E2E === "1";
-const basePort = Number(process.env.SHOCK2_E2E_VR_READOUT_PORT ?? 8731);
 
 /** The debug pistol: a magazine, two fire modes, and more than one ammo type. */
 const PISTOL = -17;
@@ -88,7 +88,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort,
+      port: e2ePort(0, "SHOCK2_E2E_VR_READOUT_PORT"),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -151,7 +151,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_weapons",
-      port: basePort + 1,
+      port: e2ePort(1, "SHOCK2_E2E_VR_READOUT_PORT"),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });
@@ -198,7 +198,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "debug_psi",
-      port: basePort + 2,
+      port: e2ePort(2, "SHOCK2_E2E_VR_READOUT_PORT"),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 30 });

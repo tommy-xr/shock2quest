@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { e2ePort } from "./helpers/e2e-port.js";
 import { GameServer } from "../src/index.js";
 import type { EntitySummary } from "../src/types.js";
 import { teleportVerified } from "./helpers/teleport.js";
@@ -45,7 +46,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8631),
+      port: e2ePort(),
       debugFlags: ["--vr"],
     });
     await game.step({ frames: 5 });
@@ -100,7 +101,7 @@ test(
   async () => {
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
-      port: Number(process.env.SHOCK2_E2E_PORT ?? 8632),
+      port: e2ePort(),
     });
     await game.step({ frames: 5 });
 
