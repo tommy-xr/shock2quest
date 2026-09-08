@@ -4,8 +4,9 @@ Prepared grips cover the coffee mug, printed magazine (`magci`), basketball
 (`hamball`), four hypos, maintenance tool, French-Epstein device, auto-repair
 unit, an inert access-card sample, implants, worm beakers, GamePig, and ICE-Pick in `debug_interactions`, for both hands.
 The 23 unique models produce 46 prepared grips. This preserves
-the headset-approved glove scale and wrist/palm calibration. Weapons, including
-their authored hands, continue through the existing weapon path.
+the headset-approved glove scale and wrist/palm calibration. Fourteen weapon
+models now have a separate prepared library, described below; the psi amp keeps
+its integrated authored forearm.
 
 Fitting is an **offline bake**, not a gameplay-frame search. The debug build's
 candidate searches took seconds; loading prepared results took roughly 0.3–1.5 ms
@@ -99,7 +100,7 @@ Pronged implants constrain contact to the housing; GamePig constrains it to the
 middle of a side. These are model-space region hints rather than changes to glove
 calibration or asset scale. The gallery remains a review tool. The
 [Explorer override editor](astra-vr-grip-editor.md) now supports direct pickup
-pose editing and saves; `_h` weapon fitting is the next workstream.
+and weapon pose editing and saves.
 
 The output resource has a versioned schema and one entry per model and hand.
 Mesh, glove-kinematics, and hints fingerprints plus a solver revision prevent a
@@ -124,6 +125,61 @@ segment checks rather than assuming a closed solid. The fixture bake requires at
 least three supported fingers before writing results. This remains approximate
 contact fitting, not articulated collision physics.
 The mug currently uses a body grasp; automatic recognition of a semantic handle,
-full authored bone overrides, and the SS2 Explorer editing UI are subsequent
-increments. The basketball remains a one-hand support pose until support grips
+and full authored bone overrides remain subsequent increments. The basketball remains a one-hand support pose until support grips
 are implemented.
+
+
+## Weapon fitting
+
+`assets/astra-vr-weapon-grips.json` stores 28 poses: both hands for `atek_h`,
+`ar15_h`, `sg_h`, `lasehand`, `empgun_h`, `gren_h`, `sfg_h`, `fsn_h`, `al_h`,
+`viro_h`, `wrench_h`, `rapier_h`, `shard_h`, and `psword_h`. The psi amp is excluded.
+To regenerate the weapon library, with the same runtime/SDK prerequisites:
+
+```sh
+node scripts/bake-vr-grips.mjs --weapons
+node scripts/astra-grip-gallery.mjs --weapons --output /tmp/astra-weapon-gallery
+```
+
+An optional output path after `--weapons` writes a separate file. Authored edits
+are preserved under the same fingerprint/concurrent-edit safeguards as pickups.
+Weapon candidates with weak finger contact remain reviewable drafts; unlike the
+pickup bake, they do not require three contacts to write. Inspect their images.
+
+The dedicated importer separates arm materials from weapon materials, preserving
+weapon hierarchy and muzzle points. Skinned melee geometry is sampled in the
+same idle pose and skinning palette used to render it. A failed remaster import
+retains the legacy model and suppresses the extra glove. Flat viewmodels keep
+their existing authored hands.
+
+The offline search fits near authored arm geometry or the posed melee fist,
+trying several uniform weapon scales. Typical candidates include 0.7, the old
+melee default. It starts from a unit-scale melee frame so this is applied once;
+the calibrated glove stays the same size. Some guns have no useful authored hand,
+and the shotgun's authored hand is on the fore-end. Explicit overrides provide
+the intended primary grip in these cases. This is approximate contact fitting,
+not semantic recognition of every handle.
+
+Normal gameplay only loads prepared results. Held melee colliders, contact
+origins, and rendered meshes use the same scale; dropping restores world size.
+Scaled guns keep scaled muzzle positions but unit projectile direction/speed.
+`player.hand_grips[].item_bounds` reports the fitted weapon bounds in controller
+space for repeatable gallery framing. Mesh fingerprints include the transformed
+weapon and arm guide, separately for each hand.
+
+
+### Initial weapon pose review
+
+These are editable starting poses, with visual refinement still in progress.
+The wrench is the strongest automatic result; the other melee models also use
+plausible basal handle grasps. Gun primary-grip locations needed manual correction
+because several authored meshes supply a support hand. Most guns now use 0.55
+uniform scale; the wrench remains 0.7. Every shipped model has the same scale in
+both hands, though its offsets and curls can be edited separately.
+
+Close-up review still finds finger/handle intersections or gaps on several guns,
+particularly the grenade launcher and bulky/organic weapons. The stasis model
+also contains remote geometry that inflates its full-object framing; use the
+contact close-ups to inspect its hand. Successful prepared lookup and passing
+interaction tests are not visual approval. Keep this slice in draft until the
+remaining contact issues and headset feel have been reviewed.

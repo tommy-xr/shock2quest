@@ -6,7 +6,7 @@ import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
 const enabled = process.env.SHOCK2_E2E === "1";
 // Owner-approved rack contract; extend alongside INTERACTION_FIXTURES in
 // shock2vr/src/scenes/debug_interactions.rs when adding another fixture.
-const templates = [-1221, -1255, -4286, -928, -17, -19, -26, -27, -1358, -247, -52, -57, -54, -53, -2949, -1488, -74, -157, -2998, -2594, -101, -102, -103, -104, -969, -1344, -1661, -106, -762, -1334, -1660, -48, -1264, -3864, -73];
+const templates = [-1221, -1255, -4286, -928, -17, -19, -26, -27, -1358, -247, -52, -57, -54, -53, -2949, -1488, -74, -157, -2998, -2594, -101, -102, -103, -104, -969, -1344, -1661, -106, -762, -1334, -1660, -48, -1264, -3864, -73, -18, -22, -23, -21, -25, -29, -24, -28, -2291];
 
 test(
   "interaction rack: every fixture renders and either hand can hold samples or collect credentials",
@@ -31,8 +31,9 @@ test(
         );
         assert.equal(matches.length, 1, `one fixture for ${template}`);
         const item = matches[0];
+        const worldDraws = (await game.scene.objects({ entityId: item.id })).objects;
         assert.ok(
-          (await game.scene.objects({ entityId: item.id })).objects.length > 0,
+          worldDraws.length > 0,
           `${item.name} renders`,
         );
         await game.player.teleport({ x: item.position[0], y: 1.0, z: 0 });
@@ -52,6 +53,17 @@ test(
           (await game.info()).player[heldSlot], item.id,
           `${hand} grabs ${item.name}`,
         );
+        if ([-928,-17,-19,-26,-27,-18,-22,-23,-21,-25,-29,-24,-28,-2291].includes(template)) {
+          const grip = (await game.info()).player.hand_grips.find(g => g.hand === hand);
+          assert.equal(grip?.source, "prepared", `${item.name} uses a prepared weapon grip`);
+          assert.ok(grip?.grip);
+          const weaponDraws = (await game.scene.objects({entityId:item.id})).objects;
+          assert.ok(weaponDraws.length > 0, `${item.name}: held weapon renders`);
+          for (const draw of weaponDraws) {
+            for (const scale of draw.scale) assert.ok(Math.abs(scale - grip.grip.item_scale) < 1e-5,
+              `${item.name}: rendered scale follows prepared grip, including physical melee`);
+          }
+        }
         if ([-1221, -1255, -4286, -52, -57, -54, -53, -2949, -1488, -74, -157, -101, -102, -103, -104, -969, -1344, -1661, -106, -762, -1334, -1660, -48, -1264, -3864, -73].includes(template)) {
           const before = (await game.info()).player.hand_grips.find(g => g.hand === hand)!;
           assert.equal(before.source, "prepared", "gameplay reads a bake instead of running the search");
@@ -84,10 +96,9 @@ test(
           `${hand} releases ${item.name}`,
         );
         assert.ok(!(await game.info()).player.hand_grips.some(g => g.hand === hand), "release clears the fitted grip");
-        if (![-928, -17, -19, -26, -27, -247].includes(template)) {
-          for (const draw of (await game.scene.objects({entityId:item.id})).objects) {
-            for (const scale of draw.scale) assert.ok(Math.abs(scale - 1) < 1e-5, "release restores world size");
-          }
+        for (const draw of (await game.scene.objects({entityId:item.id})).objects) {
+          for (let axis = 0; axis < 3; axis++) assert.ok(Math.abs(draw.scale[axis] - worldDraws[0].scale[axis]) < 1e-5,
+            `${item.name}: release restores the original world size`);
         }
       }
     }

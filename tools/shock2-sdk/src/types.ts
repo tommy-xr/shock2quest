@@ -1113,6 +1113,8 @@ export interface WaitForOptions {
 
 /** Diagnostics from the same resolved pose used by gameplay and rendering. */
 export interface HandGrip {
+  /** Visible fitted mesh bounds in controller-local space, excluding the glove. */
+  item_bounds: [Vec3, Vec3] | null;
   /** Manual Explorer override; solver contact samples do not validate this pose. */
   authored: boolean;
   hand: "left" | "right";

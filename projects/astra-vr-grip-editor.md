@@ -1,6 +1,6 @@
 # Astra VR grip editor
 
-Explorer's **VR Grips** tab edits the prepared pickup grips used by the game.
+Explorer's **VR Grips** tab edits the prepared pickup and weapon grips used by the game.
 It uses the game renderer, calibrated glove, and model importers directly.
 
 From the repository root:
@@ -25,7 +25,8 @@ and right poses are independent. Drafts stay in memory when switching models.
   (open) to 1 (closed).
 - Uniform item scale affects the held model, preserving glove calibration.
   Dropping the item restores its normal world size before loose physics resumes.
-- **Save all edits** writes `assets/astra-vr-grips.json` atomically. Restart the
+- **Save all edits** writes the selected library atomically: pickups use
+  `assets/astra-vr-grips.json`; weapons use `assets/astra-vr-weapon-grips.json`. Restart the
   game/debug runtime process to load the saved resource (scene reloads can retain
   cached assets). Closing Explorer with unsaved drafts offers save, discard, or keep editing.
 - **Save As…** writes a separate JSON file and makes it the active save target.
@@ -67,7 +68,21 @@ cargo run -p dark_explorer -- ui --grip icepick --grip-hand left \
 
 The native Explorer capture is used here because the debug runtime does not host
 the desktop egui tool. The standalone gallery remains available for sharing and
-multi-item review. The `_h` weapon workstream will expand both tools after
-stripping authored weapon hands and fitting the gloves; psi amp keeps its
-integrated forearm. This editor supports pickup model entries. Authored weapon hands are not
-stripped here; their special handling remains in the `_h` workstream.
+multi-item review. Use **Pickups / Weapons** to switch libraries after saving or
+reverting drafts. `--grip atek_h` opens the weapon library directly. All fourteen
+weapon models preview with their authored arms removed and the calibrated glove
+in their place. Melee previews use the same posed mesh as gameplay. The psi amp
+is a reference-only preview retaining its integrated forearm.
+
+Weapon auto-fitting uses authored arm geometry or the posed melee fist as a
+starting guide; it cannot distinguish a support grip from a firing grip. Manual
+position, rotation, curls, and uniform scale remain editable. The initial manual
+weapon overrides correct primary/support-grip ambiguities; inspect the gallery
+for remaining contact and clearance concerns.
+Weapon scale does not resize the glove or multiply the old melee scale again.
+
+From Files, opening a supported weapon imports its prepared default pair into the
+active document when missing. This also permits a custom weapon override in the
+pickup resource: a valid matching entry there takes precedence over the shipped
+weapon default. A separate Save As file must be copied to a runtime resource path
+to be loaded by gameplay.

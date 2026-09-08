@@ -45,6 +45,8 @@ pub fn init_raw_gl(cc: &eframe::CreationContext<'_>) {
 pub enum PreviewScene {
     /// The `.bin` model alone.
     Model,
+    /// Authored VR weapon reference, retaining its integrated hand.
+    VrReference,
     Grip(Handedness, ResolvedGrip),
     /// The `.bin` model animated by a motion clip (`<name>_.mc`).
     Clip(String),
@@ -55,7 +57,7 @@ pub enum PreviewScene {
 impl PreviewScene {
     fn clip(&self) -> Option<&str> {
         match self {
-            PreviewScene::Model | PreviewScene::Grip(..) => None,
+            PreviewScene::Model | PreviewScene::VrReference | PreviewScene::Grip(..) => None,
             PreviewScene::Clip(clip) | PreviewScene::Skeleton(clip) => Some(clip),
         }
     }
@@ -164,7 +166,10 @@ impl ModelPreview {
         // itself triggers that repaint). The overlays mean nothing in
         // skeleton-only mode, which draws bones and nothing else.
         ui.horizontal(|ui| {
-            if !matches!(scene, PreviewScene::Skeleton(_) | PreviewScene::Grip(..)) {
+            if !matches!(
+                scene,
+                PreviewScene::Skeleton(_) | PreviewScene::Grip(..) | PreviewScene::VrReference
+            ) {
                 ui.checkbox(&mut self.debug_skeletons, "Skeleton");
                 ui.checkbox(&mut self.debug_hit_boxes, "Hitboxes");
             }
@@ -244,7 +249,27 @@ impl ModelPreview {
         // failure becomes an error label instead of a crash. The key resolves
         // through the full game mount stack (obj outranks mesh; the two
         // families currently share no `.bin` basenames).
-        let model = match quiet_catch(|| self.asset_cache.get(&MODELS_IMPORTER, key)) {
+        let model = match quiet_catch(|| {
+            if matches!(scene, PreviewScene::VrReference) {
+                return std::rc::Rc::new(
+                    self.asset_cache
+                        .get(&dark::importers::VR_HELD_MODELS_IMPORTER, key)
+                        .model
+                        .clone(),
+                );
+            }
+            if matches!(scene, PreviewScene::Grip(..))
+                && shock2vr::vr_weapon_grip::supports_model(key)
+            {
+                let source = self
+                    .asset_cache
+                    .get(&dark::importers::GLOVE_WEAPON_IMPORTER, key);
+                if let Some(source) = source.as_ref() {
+                    return std::rc::Rc::new(source.model.clone());
+                }
+            }
+            self.asset_cache.get(&MODELS_IMPORTER, key)
+        }) {
             Ok(model) => model,
             Err(msg) => {
                 self.error = Some(msg);
@@ -255,7 +280,20 @@ impl ModelPreview {
         // bounding box for `frame_camera` to use.
         let mut pose_bounds = None;
         let built: Result<Box<dyn ToolScene>, String> = match scene {
+            PreviewScene::VrReference => Ok(Box::new(GripPreviewScene(
+                engine::scene::Scene::from_objects(model.clone_scene_objects()),
+            ))),
             PreviewScene::Grip(hand, grip) => quiet_catch(|| {
+                let mut model = model.as_ref().clone();
+                if shock2vr::vr_weapon_grip::supports_model(key) {
+                    let source = self
+                        .asset_cache
+                        .get(&dark::importers::GLOVE_WEAPON_IMPORTER, key);
+                    let source = source.as_ref().as_ref().ok_or("Weapon model unavailable")?;
+                    model.apply_local_transform(shock2vr::vr_weapon_grip::model_frame(
+                        source, *hand,
+                    ));
+                }
                 let mut objects = Model::transform(
                     &model,
                     Matrix4::from_translation(grip.offset)
@@ -276,9 +314,16 @@ impl ModelPreview {
                     true,
                     Some(grip.finger_amounts()),
                 ));
-                let triangles = self
-                    .asset_cache
-                    .get(&dark::importers::GRIP_SURFACE_IMPORTER, key);
+                let triangles = if shock2vr::vr_weapon_grip::supports_model(key) {
+                    shock2vr::vr_weapon_grip::inputs(&mut self.asset_cache, key, *hand)
+                        .ok_or("Weapon grip geometry unavailable")?
+                        .0
+                } else {
+                    self.asset_cache
+                        .get(&dark::importers::GRIP_SURFACE_IMPORTER, key)
+                        .as_ref()
+                        .clone()
+                };
                 let transform = Matrix4::from_translation(grip.offset)
                     * Matrix4::from(grip.rotation)
                     * Matrix4::from_scale(grip.item_scale);
@@ -388,11 +433,36 @@ impl ModelPreview {
         &mut self,
         key: &str,
         hand: Handedness,
-    ) -> Result<(GripSurface, GripKinematics, String), String> {
+    ) -> Result<
+        (
+            GripSurface,
+            GripKinematics,
+            String,
+            Option<(Vec<[cgmath::Point3<f32>; 3]>, Vec<cgmath::Point3<f32>>)>,
+        ),
+        String,
+    > {
         quiet_catch(|| {
-            let triangles = self
-                .asset_cache
-                .get(&dark::importers::GRIP_SURFACE_IMPORTER, key);
+            let weapon = if shock2vr::vr_weapon_grip::supports_model(key) {
+                Some(
+                    shock2vr::vr_weapon_grip::inputs(&mut self.asset_cache, key, hand)
+                        .ok_or("Weapon grip geometry unavailable")?,
+                )
+            } else {
+                None
+            };
+            let (triangles, hash, guide) = if let Some((triangles, arms, hash)) = weapon {
+                (triangles.clone(), hash, Some((triangles, arms)))
+            } else {
+                let triangles = self
+                    .asset_cache
+                    .get(&dark::importers::GRIP_SURFACE_IMPORTER, key);
+                (
+                    triangles.as_ref().clone(),
+                    surface_fingerprint(&triangles),
+                    None,
+                )
+            };
             let surface = GripSurface::new(&triangles).ok_or("No usable pickup surface")?;
             if self.glove.is_none() {
                 self.glove = GloveRenderer::new(&mut self.asset_cache);
@@ -402,7 +472,7 @@ impl ModelPreview {
                 .as_mut()
                 .ok_or("Glove model unavailable")?
                 .grip_kinematics(hand);
-            Ok((surface, rig, surface_fingerprint(&triangles)))
+            Ok((surface, rig, hash, guide))
         })
         .and_then(|r: Result<_, &str>| r.map_err(str::to_string))
     }

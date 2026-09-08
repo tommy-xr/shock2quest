@@ -150,8 +150,16 @@ impl GripEditor {
         let hints = std::fs::read(hints_path)
             .map_err(|e| e.to_string())
             .and_then(|bytes| serde_json::from_slice(&bytes).map_err(|e| e.to_string()));
+        let default_path = if model
+            .as_ref()
+            .is_some_and(|m| shock2vr::vr_weapon_grip::supports_model(m))
+        {
+            default_library_path().with_file_name("astra-vr-weapon-grips.json")
+        } else {
+            default_library_path()
+        };
         Self {
-            document: GripDocument::load(path.unwrap_or_else(default_library_path)),
+            document: GripDocument::load(path.unwrap_or(default_path)),
             hints,
             model: model.unwrap_or_else(|| "mug".into()),
             hand,
@@ -180,6 +188,30 @@ impl GripEditor {
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase();
+        if shock2vr::vr_weapon_grip::supports_model(&self.model) {
+            if let (Ok(doc), Ok(defaults)) = (
+                &mut self.document,
+                GripDocument::load(
+                    default_library_path().with_file_name("astra-vr-weapon-grips.json"),
+                ),
+            ) {
+                for entry in defaults
+                    .library
+                    .entries
+                    .into_iter()
+                    .filter(|e| e.model == self.model)
+                {
+                    if !doc
+                        .library
+                        .entries
+                        .iter()
+                        .any(|e| e.model == entry.model && e.hand == entry.hand)
+                    {
+                        doc.library.entries.push(entry);
+                    }
+                }
+            }
+        }
         self.prepare_missing = true;
         self.validated = None;
         self.camera_pending = true;
@@ -218,7 +250,7 @@ impl GripEditor {
                 Handedness::Right
             };
             match preview.grip_inputs(&key, hand) {
-                Ok((surface, rig, hash)) => inputs.push((name, surface, rig, hash)),
+                Ok((surface, rig, hash, guide)) => inputs.push((name, surface, rig, hash, guide)),
                 Err(e) => {
                     self.message = e;
                     return;
@@ -233,8 +265,18 @@ impl GripEditor {
         std::thread::spawn(move || {
             let result = inputs
                 .into_iter()
-                .map(|(hand, surface, rig, surface_hash)| {
-                    let grip = surface.resolve(&rig, &hints).ok_or_else(|| {
+                .map(|(hand, surface, rig, surface_hash, guide)| {
+                    let resolved = if let Some((triangles, arms)) = guide {
+                        let side = if hand == "left" {
+                            Handedness::Left
+                        } else {
+                            Handedness::Right
+                        };
+                        shock2vr::vr_weapon_grip::resolve(&model, side, &triangles, &arms, &rig)
+                    } else {
+                        surface.resolve(&rig, &hints)
+                    };
+                    let grip = resolved.ok_or_else(|| {
                         format!("No valid {hand} fit for {model}; existing drafts kept")
                     })?;
                     Ok(BakedGripEntry {
@@ -294,6 +336,9 @@ impl GripEditor {
     }
 
     pub fn error(&self) -> Option<&str> {
+        if matches!(self.model.as_str(), "amp_h" | "amp_w") {
+            return None;
+        }
         match (&self.document, &self.hints) {
             (Err(e), _) | (_, Err(e)) => Some(e),
             (Ok(doc), _)
@@ -359,7 +404,27 @@ impl GripEditor {
 
     pub fn show_list(&mut self, ui: &mut egui::Ui) {
         ui.heading("VR Grips");
-        ui.label("Pickup overrides · shared glove rig");
+        ui.label("Grip overrides · shared glove rig");
+        let can_switch = !self.is_busy() && self.document.as_ref().is_ok_and(|doc| !doc.dirty());
+        let mut switch = None;
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(can_switch, egui::Button::new("Pickups"))
+                .clicked()
+            {
+                switch = Some(("astra-vr-grips.json", "mug"));
+            }
+            if ui
+                .add_enabled(can_switch, egui::Button::new("Weapons"))
+                .clicked()
+            {
+                switch = Some(("astra-vr-weapon-grips.json", "atek_h"));
+            }
+        });
+        if let Some((file, model)) = switch {
+            self.document = GripDocument::load(default_library_path().with_file_name(file));
+            self.open_model(model);
+        }
         ui.text_edit_singleline(&mut self.search);
         let Ok(doc) = &self.document else {
             return;
@@ -390,7 +455,11 @@ impl GripEditor {
         ui.label(
             "Edits affect every item using this model. Left and right hands save independently.",
         );
-        ui.label("Authored weapon hands and psi-amp editing arrive in the weapon workstream.");
+        ui.label("Weapon grips replace authored hands with the glove. Psi amp retains its integrated forearm.");
+        ui.small(format!("Saving to {}", doc.path.display()));
+        if !can_switch {
+            ui.small("Save or revert drafts before switching libraries.");
+        }
     }
 
     pub fn show(
@@ -399,6 +468,12 @@ impl GripEditor {
         frame: &mut eframe::Frame,
         preview: &mut ModelPreview,
     ) {
+        if matches!(self.model.as_str(), "amp_h" | "amp_w") {
+            ui.heading("Psi amp — integrated forearm reference");
+            ui.label("The psi amp retains its authored forearm and does not use a glove override.");
+            preview.show(ui, frame, "amp_h.bin", &PreviewScene::VrReference);
+            return;
+        }
         if let (Err(error), _) | (_, Err(error)) = (&self.document, &self.hints) {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
             return;
@@ -485,7 +560,7 @@ impl GripEditor {
         let identity = (self.model.clone(), self.hand.clone());
         if self.validated.as_ref() != Some(&identity) {
             self.hashes = match preview.grip_inputs(&key, hand) {
-                Ok((_, rig, surface)) => Some((surface, rig.fingerprint())),
+                Ok((_, rig, surface, _)) => Some((surface, rig.fingerprint())),
                 Err(e) => {
                     self.message = e;
                     None
@@ -556,23 +631,27 @@ impl GripEditor {
         });
         egui::CollapsingHeader::new("Automatic fitting").show(ui, |ui| {
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("grip_family")
-                    .selected_text(match self.family {
-                        Some(0) => "Cylindrical",
-                        Some(1) => "Pinch",
-                        Some(2) => "Broad grasp",
-                        Some(3) => "Trigger",
-                        _ => "Model defaults",
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.family, None, "Model defaults");
-                        for (i, name) in ["Cylindrical", "Pinch", "Broad grasp", "Trigger"]
-                            .iter()
-                            .enumerate()
-                        {
-                            ui.selectable_value(&mut self.family, Some(i as u8), *name);
-                        }
-                    });
+                if shock2vr::vr_weapon_grip::supports_model(&self.model) {
+                    ui.label("Fit near the authored weapon grip");
+                } else {
+                    egui::ComboBox::from_id_salt("grip_family")
+                        .selected_text(match self.family {
+                            Some(0) => "Cylindrical",
+                            Some(1) => "Pinch",
+                            Some(2) => "Broad grasp",
+                            Some(3) => "Trigger",
+                            _ => "Model defaults",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.family, None, "Model defaults");
+                            for (i, name) in ["Cylindrical", "Pinch", "Broad grasp", "Trigger"]
+                                .iter()
+                                .enumerate()
+                            {
+                                ui.selectable_value(&mut self.family, Some(i as u8), *name);
+                            }
+                        });
+                }
                 if ui
                     .add_enabled(
                         self.hashes.is_some() && !busy,

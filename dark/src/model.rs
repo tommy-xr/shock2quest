@@ -90,10 +90,10 @@ pub struct AnimatedModel {
 /// Build the render palette, undoing the bind pose first when the geometry needs
 /// it. `expand_skinning_palette`'s stretchy parent frames are a vanilla-LGMM
 /// concept, so a bind-space mesh takes the plain per-joint product.
-fn build_palette(
+pub(crate) fn build_palette(
     pose: &[Matrix4<f32>; MAX_SKINNED_JOINTS],
     skeleton: &Skeleton,
-    bind: Option<&Rc<[Matrix4<f32>; MAX_SKINNED_JOINTS]>>,
+    bind: Option<&[Matrix4<f32>; MAX_SKINNED_JOINTS]>,
 ) -> [Matrix4<f32>; SKINNING_PALETTE_SIZE] {
     match bind {
         None => Skeleton::expand_skinning_palette(pose, skeleton),
@@ -152,7 +152,7 @@ impl AnimatedModel {
 
     fn to_animated_scene_objects(&self, player: &AnimationPlayer) -> Vec<SceneObject> {
         let pose = player.get_transforms(&self.skeleton);
-        let palette = build_palette(&pose, &self.skeleton, self.bind.as_ref());
+        let palette = build_palette(&pose, &self.skeleton, self.bind.as_deref());
 
         self.scene_objects
             .iter()
@@ -179,7 +179,7 @@ impl AnimatedModel {
         let new_data = build_palette(
             &animated_skeleton.get_transforms(),
             &animated_skeleton,
-            self.bind.as_ref(),
+            self.bind.as_deref(),
         );
 
         let new_scene_objects = self
@@ -413,6 +413,16 @@ impl Model {
             InnerModel::Animated(animated_model) => animated_model.bind.clone(),
             InnerModel::Static(_) => None,
         }
+    }
+
+    /// Bake one player pose into the model's scene objects for immutable tool previews.
+    /// The skeleton is retained, so gameplay can still drive it with the same player.
+    pub fn with_animation_pose(&self, player: &AnimationPlayer) -> Model {
+        let mut model = self.clone();
+        if let InnerModel::Animated(ref mut animated) = model.inner {
+            animated.scene_objects = animated.to_animated_scene_objects(player);
+        }
+        model
     }
 
     pub fn clone_scene_objects(&self) -> Vec<SceneObject> {

@@ -14,13 +14,14 @@ const { values } = parseArgs({ options: {
   output: { type: 'string', default: '/tmp/astra-grip-gallery' },
   templates: { type: 'string' },
   reviews: { type: 'string' },
+  weapons: { type: 'boolean', default: false },
   'render-only': { type: 'boolean', default: false },
 } });
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const output = resolve(values.output);
 const manifestPath = join(output, 'data.json');
-const viewNames = ['front', 'back', 'top', 'oblique', 'palm'];
-const weaponTemplates = new Set([-928, -17, -19, -26, -27]);
+const viewNames = ['front', 'back', 'top', 'oblique', 'palm', 'knuckles', 'underside'];
+const weaponTemplates = new Set([-928, -17, -19, -26, -27, -18, -22, -23, -21, -25, -29, -24, -28, -2291]);
 const credentialTemplates = new Set([-2998, -2594]);
 const reviewStatuses = new Set(['reviewed', 'adjust', 'uncertain']);
 const reviews = values.reviews ? JSON.parse(await readFile(resolve(values.reviews), 'utf8')) : {};
@@ -38,7 +39,7 @@ const catalog = [...sceneSource.matchAll(/InteractionFixture\s*\{\s*label:\s*"([
 assert.ok(catalog.length > 0 && catalog.every((f) => Number.isInteger(f.template)), 'Unable to read the canonical fixture catalog');
 const requested = values.templates ? new Set(values.templates.split(',').map(Number)) : null;
 if (requested) for (const template of requested) assert.ok(catalog.some((f) => f.template === template), `Unknown fixture ${template}`);
-const fixtures = catalog.filter((f) => requested ? requested.has(f.template) : !weaponTemplates.has(f.template));
+const fixtures = catalog.filter((f) => requested ? requested.has(f.template) : values.weapons ? (weaponTemplates.has(f.template) || f.template === -247) : true);
 // Produce the newly requested samples first so partial galleries are useful
 // while a full capture is still running. Variants remain distinct entries.
 fixtures.sort((a, b) => Number(/implant|worm|gamepig|ice/i.test(b.label)) - Number(/implant|worm|gamepig|ice/i.test(a.label)));
@@ -98,7 +99,7 @@ for name in sys.argv[2:]:
 *{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;background:#14181e;color:#edf1f5;font:16px system-ui,sans-serif}header{padding:18px 24px;border-bottom:1px solid #3d4856}h1{font-size:24px;margin:0 0 8px}p{margin:8px 0;line-height:1.5;color:#bdc8d4}.layout{display:grid;grid-template-columns:260px minmax(0,1fr)}aside{padding:16px;border-right:1px solid #3d4856;max-height:calc(100vh - 130px);overflow:auto;position:sticky;top:0}main{padding:20px;min-width:0}button,select,input{font:inherit;color:inherit;background:#273240;border:1px solid #536477;border-radius:6px;padding:8px;cursor:pointer}button.active{background:#34657c;border-color:#8fd1ed}nav button{display:block;width:100%;text-align:left;margin:8px 0}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}figure{margin:0;background:#07090c;border:1px solid #536477}#shot{display:block;width:100%;height:clamp(300px,calc(100vh - 390px),800px);object-fit:contain}figcaption{padding:10px;color:#bdc8d4}h2{margin:0;font-size:24px}.status{display:inline-block;padding:4px 8px;border-radius:4px;background:#455466}.adjust{background:#80431d}.reviewed{background:#245b48}.uncertain{background:#455466}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}details{margin:16px 0}a{color:#a0d9ed}#search{width:100%;cursor:text}.small{font-size:13px}#note{max-width:1000px}#error{color:#ffc6ab}.empty{padding:50px} @media(max-width:800px){.layout{grid-template-columns:1fr}aside{position:static;max-height:230px;border-right:0;border-bottom:1px solid #3d4856}main{padding:12px}header{padding:14px}#shot{height:auto;max-height:none}}
 </style><header><h1>Astra VR grip inspection</h1><p>Diagnostic gallery — not headset approval. Inspect both hands and multiple angles before accepting a fit.</p><p class="small">${escapeHtml(manifest.created)} · ${embedded.length} item variants · normal prepared lookup · original glove calibration</p></header>
 <div class="layout"><aside><label for="search">Find an item</label><input id="search" type="search" placeholder="Name or model"><nav id="items" aria-label="Items"></nav></aside><main><h2 id="name"></h2><p id="identity" class="small"></p><span id="status" class="status"></span><p id="note"></p><p id="error"></p><div class="toolbar" id="hands" aria-label="Hand"></div><div class="toolbar" id="views" aria-label="Camera view"></div><figure><img id="shot" alt=""><figcaption id="caption"></figcaption></figure><div class="toolbar"><button id="previous">Previous item</button><button id="next">Next item</button><a id="download" download>Download full-resolution image</a></div><details><summary>Capture and grip diagnostics</summary><pre id="diagnostics"></pre></details><details><summary>How to interpret review status</summary><p>Uncertain means these views still need inspection. Adjust records a known placement or contact concern. Reviewed means an explicit review note was supplied; it does not imply headset comfort or approval.</p><p>Palm close-up prioritizes hand contact and may crop the rest of a large item. Front/back/top/oblique include the full hand/object bounds. The same model may appear in several variants intentionally.</p></details></main></div>
-<script>const items=${payload};let selected=0,hand='left',view='oblique';const el=id=>document.getElementById(id);const labels={front:'Front',back:'Back',top:'Top',oblique:'Oblique',palm:'Palm close-up',station:'Station (credential)'};
+<script>const items=${payload};let selected=0,hand='left',view='oblique';const el=id=>document.getElementById(id);const labels={front:'Front',back:'Back',top:'Top',oblique:'Oblique',palm:'Palm close-up',knuckles:'Knuckles close-up',underside:'Underside close-up',station:'Station (credential)'};
 function buttons(id,values,current,select){const root=el(id);root.replaceChildren();for(const v of values){const b=document.createElement('button');b.textContent=labels[v]||v;b.className=v===current?'active':'';b.setAttribute('aria-pressed',String(v===current));b.onclick=()=>{select(v);render()};root.append(b)}}
 function navigation(){const q=el('search').value.toLowerCase();const root=el('items');root.replaceChildren();items.forEach((item,i)=>{if(![item.label,item.model,String(item.template)].some(s=>s.toLowerCase().includes(q)))return;const b=document.createElement('button');b.textContent=item.label+' · '+item.review.status;b.className=i===selected?'active':'';b.onclick=()=>{selected=i;render()};root.append(b)})}
 function render(){if(!items.length){el('name').textContent='No captures yet';return}const item=items[selected];const hands=Object.keys(item.images);if(!hands.includes(hand))hand=hands[0];const shots=item.images[hand]||{};const views=Object.keys(shots);if(!views.includes(view))view=views.includes('oblique')?'oblique':views[0];const shot=shots[view];el('name').textContent=item.label;el('identity').textContent=item.model+' · template '+item.template+(item.sharedModel?' · shared geometry: '+item.sharedModel:'');el('status').textContent=item.review.status;el('status').className='status '+item.review.status;el('note').textContent=item.review.note;el('error').textContent=item.error||'';buttons('hands',hands,hand,v=>hand=v);buttons('views',views,view,v=>view=v);el('shot').hidden=!shot;el('download').hidden=!shot;if(shot){el('shot').src=shot.image;el('shot').alt=item.label+', '+hand+', '+(labels[view]||view);el('caption').textContent=(labels[view]||view)+' · '+shot.framing;el('download').href=shot.image;el('download').download=item.model+'-'+hand+'-'+view+'.webp'}else {el('shot').removeAttribute('src');el('download').removeAttribute('href');el('caption').textContent='No successful image; inspect error and diagnostics.';}el('diagnostics').textContent=JSON.stringify({capture:item.hands[hand]?.diagnostic,camera:shot?{position:shot.position,lookAt:shot.lookAt}:null},null,2);el('previous').disabled=selected===0;el('next').disabled=selected===items.length-1;navigation()}
@@ -155,6 +156,7 @@ if (values['render-only']) {
           const pawn = info.player.position;
           const palm = [pawn[0] - 0.09, pawn[1] + 1, pawn[2]];
           const detail = await game.entities.detail(item.id);
+          record.model = grip?.model ?? detail.model ?? fixture.model;
           let bounds = detail.selection_bounds;
           // Holding removes the pickup collider. Reuse the loose collider's
           // eight corners, mapped through its old/new entity transforms.
@@ -167,6 +169,16 @@ if (values['render-only']) {
             }
             bounds = [0, 1].map((side) => [0, 1, 2].map((axis) => (side ? Math.max : Math.min)(...corners.map((v) => v[axis]))));
           }
+          if (grip?.item_bounds) {
+            const points = [];
+            const handRotation = [0, Math.SQRT1_2, 0, Math.SQRT1_2];
+            const handOrigin = quatRotate(info.player.rotation, [0,1,0]).map((v,i) => v + pawn[i]);
+            for (const x of [0,1]) for (const y of [0,1]) for (const z of [0,1]) {
+              const p = [grip.item_bounds[x][0], grip.item_bounds[y][1], grip.item_bounds[z][2]];
+              points.push(quatRotate(info.player.rotation, quatRotate(handRotation, p)).map((v,i) => v + handOrigin[i]));
+            }
+            bounds = [0,1].map(side => [0,1,2].map(axis => (side ? Math.max : Math.min)(...points.map(p => p[axis]))));
+          }
           // Union the live object collider with the calibrated glove envelope.
           // A separate close-up prevents large models making the hand tiny.
           const min = palm.map((v, i) => Math.min(v - 0.14, bounds?.[0]?.[i] ?? v));
@@ -174,13 +186,13 @@ if (values['render-only']) {
           const center = min.map((v, i) => (v + max[i]) / 2);
           const radius = Math.hypot(...max.map((v, i) => (v - min[i]) / 2));
           const distance = Math.max(0.42, radius * 2.4);
-          capture.diagnostic = { entity: item.id, model: fixture.model, grip, selection_bounds: bounds, pawn, handPosition: [0, 1, 0] };
+          capture.diagnostic = { entity: item.id, model: detail.model ?? grip?.model ?? fixture.model, grip, selection_bounds: bounds, pawn, handPosition: [0, 1, 0] };
           if (fixture.template !== -247 && (!grip?.grip || grip.source !== 'prepared')) {
             record.review = { status: 'uncertain', note: `Prepared fit unavailable for ${hand}; captured fallback for diagnosis.` };
           }
-          const directions = { front: [0, 0, 1], back: [0, 0, -1], top: [0, 1, 0.01], oblique: [0.8, 0.5, -0.8], palm: [0.5, 0.5, hand === 'right' ? 1 : -1] };
+          const directions = { front: [0, 0, 1], back: [0, 0, -1], top: [0, 1, 0.01], oblique: [0.8, 0.5, -0.8], palm: [0.5, 0.5, hand === 'right' ? 1 : -1], knuckles: [0, 0, hand === 'right' ? -1 : 1], underside: [0.1, -1, 0.1] };
           for (const view of viewNames) {
-            const close = view === 'palm';
+            const close = ['palm', 'knuckles', 'underside'].includes(view);
             const lookAt = close ? palm : center;
             const direction = directions[view];
             const length = Math.hypot(...direction);

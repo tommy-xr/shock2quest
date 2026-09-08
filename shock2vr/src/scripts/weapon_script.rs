@@ -797,6 +797,24 @@ pub(super) fn create_projectile(
 
     let transform = v_transform.get(entity_id).unwrap();
 
+    // Item size changes muzzle placement, never projectile size or speed.
+    let origin = transform.0.transform_point(muzzle);
+    let forward = transform
+        .0
+        .transform_vector(barrel_axis_from_forward() * cgmath::Vector3::unit_z())
+        .normalize();
+    let up = transform
+        .0
+        .transform_vector(cgmath::vec3(0.0, 1.0, 0.0))
+        .normalize();
+    let right = up.cross(forward).normalize();
+    let shot_frame = Matrix4::from_cols(
+        right.extend(0.0),
+        forward.cross(right).extend(0.0),
+        forward.extend(0.0),
+        origin.to_homogeneous(),
+    );
+
     Effect::CreateEntity {
         template_id: projectile_template_id,
         position: point3(0.0, 0.0, 0.0),
@@ -805,9 +823,7 @@ pub(super) fn create_projectile(
         orientation: Quaternion::from_angle_y(Deg(90.0)),
         // Projectile velocity is `root_transform * (0, 0, magnitude)`, so put
         // the muzzle at the origin and aim +Z down the barrel.
-        root_transform: transform.0
-            * Matrix4::from_translation(muzzle.to_vec())
-            * Matrix4::from(barrel_axis_from_forward()),
+        root_transform: shot_frame,
         options: CreateEntityOptions {
             force_visible: true,
             shot_modifiers: Some(modifiers),
@@ -916,7 +932,24 @@ mod tests {
         // Projectile velocity is root_transform * (0, 0, magnitude).
         let origin = root_transform.transform_point(position).to_vec();
         let forward = root_transform.transform_vector(vec3(0.0, 0.0, 1.0));
-        (origin, forward.normalize())
+        (origin, forward)
+    }
+
+    #[test]
+    fn scaled_weapons_move_the_muzzle_without_scaling_projectile_speed() {
+        let rotation = Matrix4::from_angle_y(Deg(31.0)) * Matrix4::from_angle_x(Deg(-12.0));
+        for scale in [0.4, 0.7, 1.3] {
+            let transform = Matrix4::from_translation(vec3(3.0, 4.0, 5.0))
+                * rotation
+                * Matrix4::from_scale(scale);
+            let muzzle = point3(-0.8, 0.1, 0.03);
+            let (origin, velocity) = vr_fire_geometry(transform, vec![muzzle_vhot(muzzle)]);
+            assert!((origin - transform.transform_point(muzzle).to_vec()).magnitude() < 1e-5);
+            assert!((velocity.magnitude() - 1.0).abs() < 1e-5);
+            assert!(
+                (velocity - rotation.transform_vector(vec3(-1.0, 0.0, 0.0))).magnitude() < 1e-5
+            );
+        }
     }
 
     fn muzzle_vhot(point: cgmath::Point3<f32>) -> dark::ss2_bin_obj_loader::Vhot {

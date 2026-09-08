@@ -74,6 +74,12 @@ pub enum VirtualHandEffect {
         force: Vector3<f32>,
         torque: Vector3<f32>,
     },
+    /// Refit contact geometry once when a prepared melee grip is acquired.
+    FitHeldMelee {
+        entity_id: EntityId,
+        size: Vector3<f32>,
+        center: Vector3<f32>,
+    },
     SetPositionRotation {
         entity_id: EntityId,
         position: Vector3<f32>,
@@ -655,14 +661,11 @@ pub(crate) fn is_wieldable_weapon(world: &World, entity_id: EntityId) -> bool {
             .unwrap_or(false)
 }
 
-/// Whether the hand visual (skin + forearm) is drawn for a hand holding
-/// `held_entity`.
+/// Whether the calibrated glove is drawn for a hand holding `held_entity`.
 ///
-/// A wielded weapon's model is drawn at the hand's transform and *replaces*
-/// the hand - drawing both puts a hand inside the gun. On a 25AE install VR
-/// wields the remastered first-person model (baked hand and forearm included);
-/// otherwise the weapon's world model is drawn. Anything else - an empty hand,
-/// or a held object that is not a wieldable weapon - keeps the hand.
+/// Successfully stripped weapon models keep the glove. Legacy weapon models
+/// and the psi amp replace it with their authored hand; drawing both would
+/// overlap. Empty hands and ordinary held objects also keep the glove.
 pub(crate) fn shows_hand_visual(world: &World, held_entity: Option<EntityId>) -> bool {
     // Calibration override: draw the glove *as well as* the weapon model, so
     // the `_h` rig's baked fist can be compared against where the controller
@@ -672,7 +675,13 @@ pub(crate) fn shows_hand_visual(world: &World, held_entity: Option<EntityId>) ->
     }
     match held_entity {
         None => true,
-        Some(entity_id) => !is_wieldable_weapon(world, entity_id),
+        Some(entity_id) => {
+            !is_wieldable_weapon(world, entity_id)
+                || world
+                    .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+                    .map(|v| v.get(entity_id).is_ok())
+                    .unwrap_or(false)
+        }
     }
 }
 
@@ -1023,6 +1032,20 @@ mod tests {
         let weapon = world.add_entity(player_gun());
 
         assert!(!shows_hand_visual(&world, Some(weapon)));
+    }
+
+    #[test]
+    fn only_successfully_stripped_weapons_keep_the_glove() {
+        let mut world = World::new();
+        let gun = world.add_entity((player_gun(),));
+        assert!(!shows_hand_visual(&world, Some(gun)));
+        world.add_component(
+            gun,
+            crate::runtime_props::RuntimePropGloveWeapon { item_scale: 0.7 },
+        );
+        assert!(shows_hand_visual(&world, Some(gun)));
+        world.remove::<crate::runtime_props::RuntimePropGloveWeapon>(gun);
+        assert!(!shows_hand_visual(&world, Some(gun)));
     }
 
     /// An empty hand, or one holding something with no first-person weapon
