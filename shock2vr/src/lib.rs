@@ -254,8 +254,8 @@ fn mod_layer_may_override(family: &str, archive: &str) -> bool {
 /// Mount one resource family, matching the options its `.crf` counterpart uses.
 ///
 /// `strings` must not collapse basenames (translated tables share them), and
-/// `iface` additionally registers an `iface/`-qualified key because it collides
-/// with `obj`/`bitmap` on seven names. Getting these wrong is silent: the wrong
+/// `iface` and `bitmap` register family-qualified keys because their basenames
+/// collide with object textures. Getting these wrong is silent: the wrong
 /// string table or the wrong texture simply resolves first.
 fn mount_family(
     archive: String,
@@ -264,7 +264,7 @@ fn mount_family(
 ) -> Box<dyn engine::assets::asset_paths::AbstractAssetPath> {
     match family {
         "strings" => ZipAssetPath::with_prefix_opts(archive, prefix, false, None),
-        "iface" => ZipAssetPath::with_prefix_opts(archive, prefix, true, Some("iface")),
+        "iface" | "bitmap" => ZipAssetPath::with_prefix_opts(archive, prefix, true, Some(family)),
         _ => ZipAssetPath::with_prefix(archive, prefix),
     }
 }
@@ -342,7 +342,7 @@ pub fn game_asset_mounts(
             AssetPath::folder(resource_path("res/obj")),
             // AssetPath::folder(resource_path("res/obj/txt16")),
             ZipAssetPath::new(resource_path("res/obj.crf")),
-            ZipAssetPath::new(resource_path("res/bitmap.crf")),
+            mount_family(resource_path("res/bitmap.crf"), "", "bitmap"),
             // Log/email sender portraits + deck icons (the reader panel art).
             ZipAssetPath::new(resource_path("res/book.crf")),
             ZipAssetPath::new(resource_path("res/fam.crf")),
@@ -2543,6 +2543,47 @@ mod tests {
     use super::*;
     use cgmath::{Deg, InnerSpace, Rotation3};
     use std::path::PathBuf;
+
+    #[test]
+    fn particle_bitmap_namespace_avoids_object_texture_collisions() {
+        for prefix in ["", "data/res/bitmap/", "bitmap/"] {
+            let root = crate::test_support::TempDir::new("particle-bitmap-family");
+            let object_archive = root.path().join("obj.zip");
+            let bitmap_archive = root.path().join("bitmap.zip");
+            let sprite = format!("{prefix}BLOOD.PCX");
+            crate::test_support::write_archive(
+                &object_archive,
+                &[("obj/txt16/BLOOD.PCX", b"red object blood")],
+            );
+            crate::test_support::write_archive(
+                &bitmap_archive,
+                &[(&sprite, b"blue particle glow")],
+            );
+            let mounts = AssetPath::combine(vec![
+                ZipAssetPath::with_prefix(object_archive.to_string_lossy().into_owned(), "obj/"),
+                mount_family(
+                    bitmap_archive.to_string_lossy().into_owned(),
+                    prefix,
+                    "bitmap",
+                ),
+            ]);
+            for (name, expected) in [
+                ("blood.pcx", "red object blood"),
+                ("bitmap/blood.pcx", "blue particle glow"),
+            ] {
+                let reader = mounts
+                    .get_reader(String::new(), name.to_owned())
+                    .expect("qualified bitmap must resolve");
+                let mut bytes = Vec::new();
+                reader.borrow_mut().read_to_end(&mut bytes).unwrap();
+                assert_eq!(
+                    bytes,
+                    expected.as_bytes(),
+                    "wrong family for {name} in {prefix}"
+                );
+            }
+        }
+    }
 
     fn features(list: &[&str]) -> HashSet<String> {
         list.iter().map(|s| s.to_string()).collect()

@@ -272,3 +272,24 @@ User followup: the EMP footage reveals red splatter. EMP Shot explicitly authors
 `swingba2` with `NoRender`, but player projectile creation forces visibility.
 Respecting that hidden model and inspecting its legitimate particle riders is
 the next presentation fix, alongside the remaining muzzle-flash audit.
+
+## EMP presentation correction
+
+The red splatter had a separate, confirmed resource collision: `blood.pcx` in
+`bitmap.crf` is a 32×32 blue glow; `obj.crf/txt16/BLOOD.PCX` is a 128×128 red
+splatter. The EMP Blue particle correctly authors the former. Bare texture
+lookup selected the latter because object resources precede bitmap resources.
+Particle sprites now use a `bitmap/`-qualified key, registered for classic and
+25AE base/mod mounts through the existing namespace mechanism. Unqualified
+object-texture precedence is unchanged.
+
+Player projectile creation also stops forcing `RenderType::Normal`: EMP Shot
+intentionally carries a hidden `swingba2` model. The render audit drops its four
+root draws to zero while retaining EMP Blue and EMP2. Matched before/after
+footage confirms the correct blue glow replaces the splatter. A fixture covers
+colliding bitmap/object basenames for all three archive layouts; flat and VR
+SDK checks verify hidden-root rendering and surviving particle riders.
+
+Remaining particle audit includes authored units, animation frames, tint/fade
+and additional jet attachments; this correction does not claim that every
+projectile's particle behavior now matches the original engine.

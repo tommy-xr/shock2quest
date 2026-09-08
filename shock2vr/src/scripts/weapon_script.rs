@@ -790,7 +790,6 @@ pub(super) fn create_projectile(
                 orientation: Quaternion::from_angle_y(Deg(90.0)),
                 root_transform: Matrix4::from_translation(origin.to_vec()) * rot,
                 options: CreateEntityOptions {
-                    force_visible: true,
                     projectile_raycast_origin: Some(aim.origin),
                     projectile_launch_origin: Some(aim.origin),
                     shot_modifiers: Some(modifiers),
@@ -822,7 +821,6 @@ pub(super) fn create_projectile(
         // the muzzle at the origin and aim +Z down the barrel.
         root_transform: shot_frame,
         options: CreateEntityOptions {
-            force_visible: true,
             shot_modifiers: Some(modifiers),
             player_fired_projectile: true,
             projectile_launch_origin: Some(transform.0.transform_point(point3(0.0, 0.0, 0.0))),
