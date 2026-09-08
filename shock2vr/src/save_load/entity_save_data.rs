@@ -7,7 +7,7 @@ use shipyard::{EntityId, World};
 
 use crate::runtime_props::{
     RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropLaunchedProjectile,
-    RuntimePropSelectedAmmo,
+    RuntimePropPlayerFiredProjectile, RuntimePropSelectedAmmo,
 };
 use crate::scripts::SavedScriptState;
 
@@ -39,6 +39,10 @@ pub struct EntitySaveData {
     /// from taking velocity ownership after load.
     #[serde(default)]
     pub launched_projectiles: Vec<u64 /* entity id */>,
+    /// Player-owned shots retain their shooter collision filter after load.
+    /// This is separate from launch provenance: enemy shots are launched too.
+    #[serde(default)]
+    pub player_fired_projectiles: Vec<u64 /* entity id */>,
     /// Opt-in private state owned by scripts on these entities. Registered ECS
     /// properties and links remain in their existing fields above; this is only
     /// for runtime modes, timers, latches, and similar script internals.
@@ -57,6 +61,7 @@ impl EntitySaveData {
             selected_ammo: HashMap::new(),
             canonical_template_ids: HashMap::new(),
             launched_projectiles: Vec::new(),
+            player_fired_projectiles: Vec::new(),
             script_states: Vec::new(),
         }
     }
@@ -128,6 +133,12 @@ impl EntitySaveData {
                 world.add_component(*new_entity_id, RuntimePropLaunchedProjectile);
             }
         }
+        for old_entity_id in &self.player_fired_projectiles {
+            let old_entity_id = EntityId::from_inner(*old_entity_id).unwrap();
+            if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&old_entity_id) {
+                world.add_component(*new_entity_id, RuntimePropPlayerFiredProjectile);
+            }
+        }
         (template_to_entity_id, old_entity_id_to_new_entity_id)
     }
 }
@@ -138,6 +149,69 @@ mod tests {
     use crate::scripts::{SavedScriptState, ScriptState, ScriptStateIdentity};
     use dark::properties::{Link, ToLink};
     use shipyard::{Get, View};
+
+    #[test]
+    fn player_projectile_ownership_round_trips_without_marking_enemy_shots() {
+        use crate::mission::{GlobalTemplateIdMap, PlayerInfo};
+        use crate::runtime_props::{RuntimePropDoNotSerialize, RuntimePropPlayerFiredProjectile};
+        let mut world = World::new();
+        let player = world.add_entity(RuntimePropDoNotSerialize);
+        let inventory = world.add_entity(());
+        let shot = world.add_entity((
+            RuntimePropPlayerFiredProjectile,
+            RuntimePropLaunchedProjectile,
+        ));
+        let held_shot = world.add_entity((
+            RuntimePropPlayerFiredProjectile,
+            RuntimePropLaunchedProjectile,
+        ));
+        let enemy_shot = world.add_entity(RuntimePropLaunchedProjectile);
+        let excluded =
+            world.add_entity((RuntimePropPlayerFiredProjectile, RuntimePropDoNotSerialize));
+        world.add_unique(GlobalTemplateIdMap(HashMap::new()));
+        world.add_unique(PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            inventory_entity_id: inventory,
+            left_hand_entity_id: Some(held_shot),
+            right_hand_entity_id: None,
+        });
+        let (saved, held) = crate::save_load::to_save_data(&world);
+        assert!(!saved.all_entities.contains(&excluded.inner()));
+        assert!(!saved.all_entities.contains(&held_shot.inner()));
+        for (data, expected) in [(saved, shot), (held.held_entities, held_shot)] {
+            let encoded = serde_json::to_string(&data).unwrap();
+            let decoded: EntitySaveData = serde_json::from_str(&encoded).unwrap();
+            let mut restored = World::new();
+            for _ in 0..20 {
+                restored.add_entity(());
+            }
+            let (_, remapped) = decoded.instantiate(&mut restored);
+            let markers = restored
+                .borrow::<View<RuntimePropPlayerFiredProjectile>>()
+                .unwrap();
+            assert_ne!(remapped[&expected], expected);
+            assert!(
+                markers.contains(remapped[&expected]),
+                "saved ownership must reach the remapped shot"
+            );
+            if let Some(enemy) = remapped.get(&enemy_shot) {
+                assert!(
+                    !markers.contains(*enemy),
+                    "enemy projectiles must still hit the player"
+                );
+                assert!(
+                    restored
+                        .borrow::<View<RuntimePropLaunchedProjectile>>()
+                        .unwrap()
+                        .contains(*enemy),
+                    "launch provenance must survive without granting player ownership"
+                );
+            }
+            assert!(!remapped.contains_key(&excluded));
+        }
+    }
 
     #[test]
     fn legacy_save_without_death_poses_defaults_to_empty() {

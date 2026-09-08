@@ -345,13 +345,10 @@ pub struct RuntimePropProjectileRayOrigin(pub Point3<f32>);
 /// (`player_movement_filter`), so the player can walk through their own grenade
 /// at rest - preferred over the alternative of being able to shoot yourself.
 ///
-/// Not serialized, like every other runtime prop, and - unlike
-/// `RuntimePropLaunchedProjectile` - deliberately not restored on load either,
-/// matching `RuntimePropProjectileRayOrigin`: in-flight projectile state is
-/// already lossy across a save. The residual case is a save taken during the
-/// frame or two a bolt still overlaps the capsule, which reloads solid to the
-/// player. If that ever proves reachable in practice, mirror the
-/// `launched_projectiles` round-trip in `EntitySaveData`.
+/// Round-tripped separately in `EntitySaveData::player_fired_projectiles`,
+/// before physics reconstruction, so a saved shot does not become solid to its
+/// shooter after load. Launch provenance alone cannot restore ownership because
+/// enemy projectiles also carry `RuntimePropLaunchedProjectile`.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropPlayerFiredProjectile;
 
