@@ -457,7 +457,7 @@ it. Support cannot share a hand with climbing or another held item. Invalid
 pose data cancels support; headset tracking-loss behavior still needs device
 validation because this does not add OpenXR tracking-validity channels.
 
-`assets/astra-vr-support-grips.json` holds the fixed support palm anchor and
+`assets/vr-support-grips.json` holds the fixed support palm anchor and
 finger curls. Anchors use normalized weapon coordinates before uniform item
 scale; X is mirrored for a left-primary hold. `grab_radius` and
 `release_distance` use runtime world units. The latter is allowed deviation
@@ -507,7 +507,7 @@ Support controls include palm XYZ position, wrist XYZ rotation, finger curls,
 Open/Point/Closed/Ball presets, sliders, nudge buttons, and exact value entry.
 Preview and runtime call the same palm-placement function, including item scale.
 
-Support edits save separately to `astra-vr-support-grips.json`. **Save As** writes
+Support edits save separately to `vr-support-grips.json`. **Save As** writes
 a new JSON file without replacing an existing one. Reopen a custom support file
 with `--support-grip-library <path>`; gameplay reads the normal asset filename
 on startup. Closing prompts for unsaved primary or support edits, and external

@@ -23,7 +23,7 @@ pub(crate) const POSE_PRESETS: [(&str, [f32; 5]); 5] = [
 ];
 
 pub fn default_library_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/astra-vr-grips.json")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/vr-grips.json")
 }
 
 pub struct GripDocument {
@@ -220,7 +220,7 @@ impl GripEditor {
             .as_ref()
             .is_some_and(|m| shock2vr::vr_weapon_grip::supports_model(m))
         {
-            default_library_path().with_file_name("astra-vr-weapon-grips.json")
+            default_library_path().with_file_name("vr-weapon-grips.json")
         } else {
             default_library_path()
         };
@@ -260,9 +260,7 @@ impl GripEditor {
         if shock2vr::vr_weapon_grip::supports_model(&self.model) {
             if let (Ok(doc), Ok(defaults)) = (
                 &mut self.document,
-                GripDocument::load(
-                    default_library_path().with_file_name("astra-vr-weapon-grips.json"),
-                ),
+                GripDocument::load(default_library_path().with_file_name("vr-weapon-grips.json")),
             ) {
                 for entry in defaults
                     .library
@@ -483,13 +481,13 @@ impl GripEditor {
                 .add_enabled(can_switch, egui::Button::new("Pickups"))
                 .clicked()
             {
-                switch = Some(("astra-vr-grips.json", "mug"));
+                switch = Some(("vr-grips.json", "mug"));
             }
             if ui
                 .add_enabled(can_switch, egui::Button::new("Weapons"))
                 .clicked()
             {
-                switch = Some(("astra-vr-weapon-grips.json", "atek_h"));
+                switch = Some(("vr-weapon-grips.json", "atek_h"));
             }
         });
         if let Some((file, model)) = switch {
@@ -724,7 +722,7 @@ impl GripEditor {
             {
                 self.save_as_path = Some(
                     doc.path
-                        .with_file_name("astra-vr-grips.custom.json")
+                        .with_file_name("vr-grips.custom.json")
                         .display()
                         .to_string(),
                 );
@@ -1009,7 +1007,7 @@ mod tests {
     fn document() -> (tempfile::TempDir, GripDocument) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("grips.json");
-        std::fs::write(&path, include_bytes!("../../../assets/astra-vr-grips.json")).unwrap();
+        std::fs::write(&path, include_bytes!("../../../assets/vr-grips.json")).unwrap();
         let doc = GripDocument::load(path).unwrap();
         (dir, doc)
     }

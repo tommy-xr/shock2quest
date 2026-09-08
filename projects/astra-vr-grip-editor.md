@@ -26,7 +26,7 @@ and right poses are independent. Drafts stay in memory when switching models.
 - Uniform item scale affects the held model, preserving glove calibration.
   Dropping the item restores its normal world size before loose physics resumes.
 - **Save all edits** writes the selected library atomically: pickups use
-  `assets/astra-vr-grips.json`; weapons use `assets/astra-vr-weapon-grips.json`. Restart the
+  `assets/vr-grips.json`; weapons use `assets/vr-weapon-grips.json`. Restart the
   game/debug runtime process to load the saved resource (scene reloads can retain
   cached assets). Closing Explorer with unsaved drafts offers save, discard, or keep editing.
 - **Save As…** writes a separate JSON file and makes it the active save target.

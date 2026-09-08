@@ -579,7 +579,7 @@ impl PlayerInteraction for VrInteraction {
         use shipyard::{Get, View};
         if self.grip_library.is_none() {
             self.support_profiles = assets
-                .get_opt(&TEXT_IMPORTER, "astra-vr-support-grips.json")
+                .get_opt(&TEXT_IMPORTER, "vr-support-grips.json")
                 .and_then(|text| {
                     serde_json::from_str::<HashMap<String, SupportProfile>>(&text).ok()
                 })
@@ -588,7 +588,7 @@ impl PlayerInteraction for VrInteraction {
                 .retain(|model, profile| model == "wrench_h" && profile.is_valid());
             self.grip_library = Some(
                 assets
-                    .get_opt(&TEXT_IMPORTER, "astra-vr-grips.json")
+                    .get_opt(&TEXT_IMPORTER, "vr-grips.json")
                     .and_then(|text| {
                         serde_json::from_str::<crate::vr_grip::GripLibrary>(&text).ok()
                     })
@@ -599,7 +599,7 @@ impl PlayerInteraction for VrInteraction {
                     .unwrap_or_default(),
             );
             if let Some(weapons) = assets
-                .get_opt(&TEXT_IMPORTER, "astra-vr-weapon-grips.json")
+                .get_opt(&TEXT_IMPORTER, "vr-weapon-grips.json")
                 .and_then(|text| serde_json::from_str::<crate::vr_grip::GripLibrary>(&text).ok())
                 .filter(|lib| {
                     lib.version == 1 && lib.solver_revision == crate::vr_grip::SOLVER_REVISION
