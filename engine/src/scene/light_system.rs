@@ -153,6 +153,11 @@ impl Clone for Box<dyn Light> {
                     color.w,
                 ))
             }
+            LightType::PointLight => Box::new(crate::scene::light::PointLight {
+                position: self.position(),
+                color_intensity: self.color_intensity(),
+                range: f32::MAX,
+            }),
         }
     }
 }

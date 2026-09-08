@@ -4,7 +4,6 @@ use std::ops::Deref;
 
 use crate::engine::EngineRenderContext;
 use crate::scene::Material;
-use crate::scene::light::Light;
 use crate::shader_program::ShaderProgram;
 
 use crate::texture::TextureTrait;
@@ -78,18 +77,21 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 
             vec3 lightDir = normalize(lightVec);
 
-            // Cone attenuation for spotlight
-            float cosOuterCone = cos(spotlightOuterAngle[i]);
-            float cosInnerCone = cos(spotlightInnerAngle[i]);
-            float spotFactor = dot(-lightDir, normalize(spotlightDirection[i]));
-
-            if (spotFactor < cosOuterCone) {
-                return vec3(0.0);
-            }
-
+            // Cone attenuation. A negative inner angle marks a point light -
+            // it has no cone, so it lights every direction equally.
             float coneAttenuation = 1.0;
-            if (spotFactor < cosInnerCone) {
-                coneAttenuation = (spotFactor - cosOuterCone) / (cosInnerCone - cosOuterCone);
+            if (spotlightInnerAngle[i] >= 0.0) {
+                float cosOuterCone = cos(spotlightOuterAngle[i]);
+                float cosInnerCone = cos(spotlightInnerAngle[i]);
+                float spotFactor = dot(-lightDir, normalize(spotlightDirection[i]));
+
+                if (spotFactor < cosOuterCone) {
+                    return vec3(0.0);
+                }
+
+                if (spotFactor < cosInnerCone) {
+                    coneAttenuation = (spotFactor - cosOuterCone) / (cosInnerCone - cosOuterCone);
+                }
             }
 
             // Distance attenuation
@@ -190,10 +192,10 @@ where
 
             // Set spotlight array uniforms
             for i in 0..6 {
-                if let Some(spotlight) = lights.get_spotlight(i) {
-                    let pos = spotlight.position();
-                    let color_intensity = spotlight.color_intensity();
-                    let direction = spotlight.direction;
+                if let Some(light) = lights.get_light(i) {
+                    let pos = light.position();
+                    let color_intensity = light.color_intensity();
+                    let direction = light.direction();
 
                     gl::Uniform3f(uniforms.spotlight_pos_loc[i], pos.x, pos.y, pos.z);
                     gl::Uniform4f(
@@ -211,13 +213,13 @@ where
                     );
                     gl::Uniform1f(
                         uniforms.spotlight_inner_angle_loc[i],
-                        spotlight.inner_cone_angle,
+                        light.inner_cone_angle(),
                     );
                     gl::Uniform1f(
                         uniforms.spotlight_outer_angle_loc[i],
-                        spotlight.outer_cone_angle,
+                        light.outer_cone_angle(),
                     );
-                    gl::Uniform1f(uniforms.spotlight_range_loc[i], spotlight.range);
+                    gl::Uniform1f(uniforms.spotlight_range_loc[i], light.range());
                 } else {
                     // Disable this light slot by setting intensity to 0
                     gl::Uniform4f(

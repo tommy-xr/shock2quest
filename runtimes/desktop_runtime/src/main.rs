@@ -545,7 +545,7 @@ pub fn main() {
         // Add hand spotlights for enhanced lighting testing (experimental feature)
         let hand_spotlights = game.get_hand_spotlights();
         for spotlight in hand_spotlights {
-            scene_for_render.lights_mut().add_spotlight(spotlight);
+            scene_for_render.lights_mut().add_light(spotlight);
         }
 
         profile!(
