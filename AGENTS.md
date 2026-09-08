@@ -303,6 +303,10 @@ For debugging visual/rendering changes without a full interactive session:
    # Overlay the fitted per-joint hitbox shapes (capsules/boxes) on the animated
    # mesh - physics-free, animatable - to eyeball fit across poses:
    cargo dv grunt_p.bin --animation <clip> --debug-hitboxes --debug-skeletons
+   # Dump a .bin object model's sub-objects with their model-space bounds, to
+   # read a per-model anchor (a magazine, a grip) off the art instead of
+   # eyeballing it - see `vr_config::MAGAZINE_ANCHORS`:
+   cargo dv ar15_h.bin --debug-subobjects
    ```
 
 2. **Debug Runtime** (see `projects/debug-runtime.md`): HTTP-controlled game runtime for programmatic control and introspection:
@@ -491,6 +495,7 @@ For debugging visual/rendering changes without a full interactive session:
    | `debug_hud`              | Test HUD rendering                           |
    | `debug_map`              | Test map/automap rendering                   |
    | `debug_melee`            | VR melee: weapon rack, hybrids and arachnids to hit, trigger-free contact damage |
+   | `debug_interactions`     | Quiet labeled rack: mug, magazine, basketball, wrench, pistol, shotgun, fusion cannon, worm launcher, ammo clip, psi amp; DebugReloadLevel resets the rack |
    | `debug_ladder`           | Climbing stations: ledge top-out, two-sided arch, stacked rungs, short ladder, mantle block, plain wall (flat + VR) |
    | `debug_minimal`          | Bare minimum scene for basic testing         |
    | `debug_weapons`          | Flat weapon viewmodel + aim (wall ahead; cycle weapons with `DebugCycleWeapon`) |
