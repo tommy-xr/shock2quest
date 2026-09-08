@@ -16,6 +16,7 @@ pub(super) enum Action {
 }
 
 pub(super) struct AmmoPouch {
+    pub enabled: bool,
     pub center: Option<Vector3<f32>>,
     pub near: [bool; 2],
     pub blocks_grab: [bool; 2],
@@ -29,6 +30,7 @@ pub(super) struct AmmoPouch {
 impl Default for AmmoPouch {
     fn default() -> Self {
         Self {
+            enabled: false,
             center: None,
             near: [false; 2],
             blocks_grab: [false; 2],
@@ -53,6 +55,7 @@ impl AmmoPouch {
         offers: [Option<PouchClip>; 2],
         enabled: bool,
     ) -> [Option<Action>; 2] {
+        self.enabled = enabled && body.is_some();
         self.center = body.map(|body| body.front(BELOW, FORWARD));
         self.offers = offers;
         self.near = [false; 2];

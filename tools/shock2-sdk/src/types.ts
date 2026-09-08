@@ -661,7 +661,13 @@ export interface PlayerSnapshot {
     affordance: "None" | "Grabbable" | "Frobbable" | "Blocked";
     light: "Off" | "Green" | "Amber" | "Red";
   }> & {
-    /** Thigh slots are right then left; hand arrays remain left/right. */
+    /** Rendered pouch selection and per-weapon holster ammo state. */
+    body_gear?: {
+      pouch: { weapon: number | null; icon: string | null; state: "inactive" | "ready" | "empty" | "refused"; near: boolean };
+      /** Right thigh then left thigh, independently resolved. */
+      holsters: { weapon: number | null; ammo: number | null; capacity: number | null; segments: number }[];
+    };
+    /** Hand arrays are left then right. */
     ammo_pouch?: {
       center: Vec3 | null;
       radius: number;

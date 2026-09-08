@@ -1,0 +1,58 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { GameServer } from "../src/index.js";
+import { aimVrHandAt, quatConjugate, quatRotate, sub } from "./helpers/vr-hand.js";
+
+const enabled = process.env.SHOCK2_E2E === "1";
+test("pouch badge reports available selected ammo; holster readout follows its stored gun", { skip: !enabled, timeout: 180_000 }, async () => {
+  await using game = await GameServer.launch({mission:"debug_interactions", debugFlags:["--vr"]});
+  await game.step({frames:30});
+  let gear = (await game.info()).player.hand_feedback?.body_gear;
+  assert.equal(gear?.pouch.state, "inactive");
+  assert.equal(gear?.pouch.icon, null);
+  assert.ok(gear?.holsters.every(slot => slot.weapon === null));
+  const pistol=(await game.entities.list()).entities.find(e=>e.template_id===-17)!;
+  await aimVrHandAt(game,pistol.position,0.2,1);
+  await game.step({frames:5});
+  gear=(await game.info()).player.hand_feedback?.body_gear;
+  assert.equal(gear?.pouch.weapon,pistol.id);
+  assert.equal(gear?.pouch.state,"empty");
+  assert.ok(gear?.pouch.icon, "selected type remains visible even without stock");
+  const icon=gear.pouch.icon;
+  await game.player.spawnItem(-31);
+  await game.step({frames:5});
+  gear=(await game.info()).player.hand_feedback?.body_gear;
+  assert.equal(gear?.pouch.state,"ready");
+  assert.equal(gear?.pouch.icon,icon);
+  const player=(await game.info()).player;
+  const center=player.hand_feedback?.holsters?.centers?.[0];
+  assert.ok(center);
+  await game.input.set("right_hand.position",quatRotate(quatConjugate(player.rotation),sub(center,player.position)));
+  await game.step({frames:3});
+  await game.input.set("right_hand.squeeze",0);
+  await game.step({frames:8});
+  gear=(await game.info()).player.hand_feedback?.body_gear;
+  assert.equal(gear?.pouch.weapon,null);
+  assert.equal(gear?.pouch.state,"inactive");
+  assert.equal(gear?.holsters[0].weapon,pistol.id);
+  assert.ok((gear?.holsters[0].ammo ?? 0)>0);
+  assert.ok((gear?.holsters[0].segments ?? 0)>0);
+  assert.equal(gear?.holsters[1].weapon,null);
+  const stored = gear.holsters[0];
+  const shotgun = (await game.entities.list()).entities.find(e => e.template_id === -19)!;
+  await aimVrHandAt(game, shotgun.position, 0.2, 1, 0, { hand: "left" });
+  await game.step({ frames: 5 });
+  gear = (await game.info()).player.hand_feedback?.body_gear;
+  assert.equal(gear?.pouch.weapon, shotgun.id);
+  assert.ok(gear?.pouch.icon);
+  assert.notEqual(gear.pouch.icon, icon, "shotgun displays its selected shell icon");
+  assert.deepEqual(gear.holsters[0], stored, "holding a different gun cannot change holstered ammo lights");
+  // The right hand is still at the holster: a fresh press draws that pistol.
+  await game.input.set("right_hand.squeeze", 1);
+  await game.step({ frames: 8 });
+  gear = (await game.info()).player.hand_feedback?.body_gear;
+  assert.equal((await game.info()).player.right_hand_entity_id, pistol.id);
+  assert.equal(gear?.pouch.state, "inactive");
+  assert.equal(gear?.pouch.icon, null, "dual wield must not advertise an ambiguous shared ammo draw");
+
+});
