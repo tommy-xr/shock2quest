@@ -384,13 +384,39 @@ pub fn can_cycle_gun_setting(world: &World, weapon: EntityId) -> bool {
     has_second_fire_mode(second_header.as_deref(), &links)
 }
 
-/// The player's level in one skill, or 0 in a world with no character sheet
-/// (the unit-test worlds). Every skill gate reads it the same way.
+/// The player's effective skill. Authored factory skills are a mission-local
+/// floor (Earth's training guns), reconstructed on load without granting
+/// permanent career upgrades. Dark stores both in its player property; our
+/// split runtime/persistent sheet combines them here. Missing data means zero.
 pub(crate) fn player_skill_level(world: &World, skill: crate::player_stats::Skill) -> i32 {
-    world
+    let trained = world
         .borrow::<shipyard::UniqueView<crate::quest_info::QuestInfo>>()
         .map(|quests| quests.player_stats().skill_level(skill))
-        .unwrap_or(0)
+        .unwrap_or(0);
+    use crate::player_stats::Skill;
+    let index = match skill {
+        Skill::StandardWeapons => 0,
+        Skill::EnergyWeapons => 1,
+        Skill::HeavyWeapons => 2,
+        Skill::ExoticWeapons => 3,
+        _ => return trained,
+    };
+    let authored = world
+        .borrow::<shipyard::UniqueView<crate::mission::PlayerInfo>>()
+        .ok()
+        .and_then(|player| {
+            world
+                .borrow::<View<dark::properties::PropBaseWeaponDesc>>()
+                .ok()
+                .and_then(|skills| {
+                    skills
+                        .get(player.entity_id)
+                        .ok()
+                        .map(|skills| skills.0[index])
+                })
+        })
+        .unwrap_or(0);
+    trained.max(authored)
 }
 
 /// A gun's condition (`PropGunState`, 0..100), or `None` for a weapon that

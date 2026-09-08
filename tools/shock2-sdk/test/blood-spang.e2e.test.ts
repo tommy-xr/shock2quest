@@ -39,6 +39,8 @@ test(
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
     });
+    // Exercise pistol behavior with its authored Standard 1 requirement met.
+    await game.player.setStats({ skills: { standard_weapons: 1 } });
 
     // Wield the pistol (first DebugCycleWeapon roster entry).
     await game.step({ frames: 5 });

@@ -3,6 +3,54 @@
 Status: agreed direction, 2026-09-08. Implementation and runtime verification are
 tracked below; a source inspection is not a completed projectile audit.
 
+## First implementation slice
+
+Implemented on `feat/weapon-feedback-workstream`: authored `BaseWeaponDesc`
+weapon-skill parsing, a shared trigger-time skill check, and a three-second
+refusal bound to the attempted weapon. An existing burst stops if the weapon
+becomes ineligible. Repeated pulls while the same notice is active do not extend
+its lifetime or stack messages. Flat and VR read the same active notice and
+shared message layout; meeting the requirement clears it immediately. VR
+anchors the text above the firing hand, including when the weapon supplies its
+own hand mesh, and for a trigger-driven weapon with no ammo readout. The amp
+retains its separate psi eligibility path. VR melee contact eligibility remains
+part of the broader audit; this slice gates `WeaponScript` trigger pulls.
+
+The first text is `Requires Standard Weapons 6 - You have 4` (ASCII separator
+for the shipped bitmap font). This slice adds no denial sound, stat/research
+gate, grip change, recoil, or projectile behavior change beyond skill gating.
+Those remain separate increments. Headset readability is not yet verified.
+
+Earth's `PlayerFactory` marker authors Standard 1 / Energy 2. Dark's
+`sim/plyrloop.cpp::create_player_obj` clones that marker's properties onto the
+player, and `shkplayr.cpp::GetWeaponSkills` reads them. Mission construction now
+copies that weapon-skill allowance onto the nonserialized runtime player;
+`player_skill_level` takes the maximum of it and the persistent trained skill.
+This maximum is the port's adaptation to its split runtime/career state, not
+an original-engine formula. The allowance is reconstructed on same-mission
+load and rederived on transition, so tutorial Energy 2 never becomes a permanent
+career reward. Character-sheet/trainer displays still show persistent training.
+
+The SDK scenario `weapon-skill-feedback.e2e.test.ts` exercises a real mission
+with an under-skilled rifle, checks unchanged ammo and message expiry while
+holding the trigger, and raises the skill to the authored threshold to verify
+firing. It covers flat and both VR hands. The unit rejection assertion was run
+red before connecting the gate and green afterward.
+
+Verification: 14 focused runtime cases pass, including Earth firing/reload,
+save/load and removal of its allowance on transition; flat and left/right VR
+refusals; and the affected projectile-effect scenarios. Rust library tests pass
+(166 dark, 1600 shock2vr, 2 ignored), as do warning-denied runtime/package checks
+and 63 fast SDK tests. All 23 mission-load smoke cases passed during this slice.
+The full SDK run was stopped after failures and is not a complete green run;
+the unrelated Watts reader assertion is already tracked by #1415. Complete the
+full suite and headset review before landing.
+
+[Flat and both-hand captures](https://gist.githubusercontent.com/tommy-xr/ed550c7bd1ae1809da251e03f6a5793c/raw/presentations.png)
+and [notice-expiry GIF](https://gist.githubusercontent.com/tommy-xr/ed550c7bd1ae1809da251e03f6a5793c/raw/right.gif)
+show the first presentation; a headless capture establishes placement, not
+headset comfort.
+
 ## Decisions
 
 - Establish original-game combat parity first, then layer deliberate VR
@@ -62,13 +110,13 @@ has not yet been established as an insufficient-skill rejection. Existing
 `script_util::player_skill_level` supplies the character-sheet lookup and
 `hud::message_line` supplies reusable status-text layout and expiry patterns.
 
-- [ ] Trace original requirement properties and current eligibility checks;
+- [x] Trace original requirement properties and current eligibility checks;
   reproduce a failed trigger with insufficient skill. Do not assume every
   silent trigger is an existing skill gate.
-- [ ] Return a structured rejection with required/current values and weapon
+- [x] Return a structured rejection with required/current values and weapon
   identity from shared gameplay code. VR presents it above the firing glove;
   flat presents the same content through shared canvas layout.
-- [ ] Show feedback on an actual failed attempt, rate-limit repeated pulls,
+- [x] Show feedback on an actual failed attempt, rate-limit repeated pulls,
   and avoid restarting it every frame while the trigger stays held.
 - [ ] Verify left/right hands, dual wield, support hand, weapon changes,
   untracked hands, use-mode suppression, and successful firing at the threshold.

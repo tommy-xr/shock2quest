@@ -11,6 +11,7 @@ mod prop_ambient_hacked;
 mod prop_anim_light;
 mod prop_anim_tex;
 mod prop_base_gun_desc;
+mod prop_base_weapon_desc;
 mod prop_bitmap_animation;
 mod prop_collision_type;
 mod prop_creature_pose;
@@ -57,6 +58,7 @@ pub use prop_ambient_hacked::*;
 pub use prop_anim_light::*;
 pub use prop_anim_tex::*;
 pub use prop_base_gun_desc::*;
+pub use prop_base_weapon_desc::*;
 pub use prop_bitmap_animation::*;
 pub use prop_collision_type::*;
 pub use prop_creature_pose::*;
@@ -1555,6 +1557,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$BaseTechD",
             PropBaseTechDesc::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$BaseWeapo",
+            PropBaseWeaponDesc::read,
             identity,
             accumulator::latest,
         ),

@@ -114,6 +114,9 @@ test(
     // Provisioning only supplies the loadout; aiming, firing, projectile
     // raycasts, proxy resolution, melee reach, and damage all use production
     // paths. This independently guards the issue's weapon-immunity symptom.
+    // A fresh Hydro3 sheet is untrained: provision the pistol's authored
+    // Standard 1 requirement so this exercises damage, not skill rejection.
+    await game.player.setStats({ skills: { standard_weapons: 1 } });
     await game.input.trigger("SpawnDebugItem");
     await game.step({ frames: 5 });
     const pistolBefore = hitPoints(await game.entities.detail(north.id));

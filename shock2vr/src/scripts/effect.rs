@@ -940,6 +940,11 @@ pub enum Effect {
         text: String,
     },
 
+    ShowWeaponSkillRequirement {
+        entity_id: EntityId,
+        requirement: crate::weapon_requirements::WeaponSkillRequirement,
+    },
+
     Multiple(Vec<Effect>),
     // Deprecated:
     // Use Multiple instead

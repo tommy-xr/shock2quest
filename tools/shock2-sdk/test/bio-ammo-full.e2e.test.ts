@@ -40,6 +40,8 @@ test(
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
     });
+    // Exercise pistol behavior with its authored Standard 1 requirement met.
+    await game.player.setStats({ skills: { standard_weapons: 1 } });
     await game.step({ frames: 5 });
 
     const clickScreen = async (rect: [number, number, number, number]) => {
