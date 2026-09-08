@@ -1865,6 +1865,10 @@ pub struct GlobalHrmParams(pub Option<dark::gamesys::HrmParams>);
 #[derive(Unique, Clone)]
 pub struct GlobalSkillParams(pub Option<dark::gamesys::SkillParams>);
 
+/// Authored Agility movement table, shared by flat and VR locomotion.
+#[derive(Unique)]
+pub struct GlobalGameParams(pub Option<dark::gamesys::GameParams>);
+
 /// Whether `template_id` is `class_template_id` or inherits from it, given a
 /// template-inheritance hierarchy (MetaProp parent map). A free function
 /// (rather than only the `GlobalTemplateHierarchy` method below) so callers
@@ -1913,10 +1917,10 @@ struct FailedAnimationGuard {
 /// both, rather than the two silently drifting apart.
 pub const PLAYER_TURN_RATE: f32 = 2.0;
 
-/// How fast the player walks, in SS2 units per second at full deflection
-/// (divided by `dark::SCALE_FACTOR` at the point of use). Shared with the
-/// free camera, whose speed dev param defaults to it so "walking pace" stays
-/// the same pace.
+/// Established Agility-1 movement rate, in SS2 units/second at full
+/// deflection (divided by `dark::SCALE_FACTOR` at the point of use). Ordinary
+/// locomotion applies authored Agility ratios here; the free camera keeps
+/// this unmodified rate as its developer speed default.
 pub const PLAYER_MOVE_SPEED: f32 = 25.0;
 
 pub struct MissionCore {
@@ -2321,6 +2325,7 @@ impl MissionCore {
         ));
         world.add_unique(GlobalHrmParams(game_entity_info.hrm_params().cloned()));
         world.add_unique(GlobalSkillParams(game_entity_info.skill_params().cloned()));
+        world.add_unique(GlobalGameParams(game_entity_info.game_params().cloned()));
         let (mut psi_powers, psi_selection) = crate::psi::build_psi_power_registry(&entity_info_rc);
         // Player-facing discipline names come from the psihelp string table;
         // a data install without it just keeps the gamesys symbolic names.
@@ -3535,10 +3540,22 @@ impl MissionCore {
         let dir = new_rotation * input_context.head.rotation;
         let facing = dir.rotate_vector(cgmath::vec3(0.0, 0.0, -1.0));
         let move_thumbstick_value = input_context.right_hand.thumbstick;
+        let movement_scale = {
+            let quests = self.world.borrow::<UniqueView<QuestInfo>>().unwrap();
+            let params = self.world.borrow::<UniqueView<GlobalGameParams>>().unwrap();
+            crate::player_stats::agility_movement_scale(
+                quests.player_stats().agility,
+                params.0.as_ref(),
+            )
+        };
+        // Apply once to ordinary stick movement, before collision/flat ladder
+        // redirection. Hand pulls, turn, jump launch and free-camera flight
+        // have their own paths and do not gain an Agility multiplier.
+        let move_speed = PLAYER_MOVE_SPEED * movement_scale;
         let forward = dir.rotate_vector(cgmath::vec3(
-            -delta_time * move_thumbstick_value.x * PLAYER_MOVE_SPEED / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.x * move_speed / dark::SCALE_FACTOR,
             0.0,
-            -delta_time * move_thumbstick_value.y * PLAYER_MOVE_SPEED / dark::SCALE_FACTOR,
+            -delta_time * move_thumbstick_value.y * move_speed / dark::SCALE_FACTOR,
         ));
 
         let up_value = input_context.left_hand.thumbstick.y / dark::SCALE_FACTOR;
