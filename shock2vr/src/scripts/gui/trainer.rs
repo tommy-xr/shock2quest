@@ -32,7 +32,7 @@ use dark::gamesys::TrainerCostTables;
 use shipyard::{EntityId, UniqueView, World};
 
 use crate::gui::{Gui, GuiComponent, GuiConfig, GuiCursor};
-use crate::player_stats::{PlayerStats, Skill, Stat};
+use crate::player_stats::{PSI_TIER_CAP, PlayerStats, SKILL_CAP, STAT_CAP, Skill, Stat};
 use crate::quest_info::QuestInfo;
 use crate::scripts::Effect;
 
@@ -55,11 +55,6 @@ pub enum TrainerMode {
     Weapons,
     Psi,
 }
-
-/// Stats cap at 6 (start 1); skills cap at 6 (start 0); psi tiers cap at 5.
-pub const STAT_CAP: i32 = 6;
-pub const SKILL_CAP: i32 = 6;
-pub const PSI_TIER_CAP: i32 = 5;
 
 /// Normal difficulty grants five maximum hit points per Endurance level. The
 /// original manual documents the stat as raising maximum HP; the retail Normal

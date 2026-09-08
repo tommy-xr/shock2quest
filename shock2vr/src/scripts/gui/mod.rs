@@ -13,6 +13,7 @@ mod trainer;
 mod traits;
 mod weapon_settings;
 
+pub use crate::player_stats::{PSI_TIER_CAP, SKILL_CAP, STAT_CAP};
 pub use computer::*;
 pub use container::*;
 pub use elevator::*;

@@ -18,6 +18,7 @@ mod prop_ecology;
 mod prop_frame_anim_config;
 mod prop_frame_anim_state;
 mod prop_frob_info;
+mod prop_gun_kick;
 mod prop_gun_reliability;
 mod prop_gun_state;
 mod prop_hack_diff;
@@ -63,6 +64,7 @@ pub use prop_ecology::*;
 pub use prop_frame_anim_config::*;
 pub use prop_frame_anim_state::*;
 pub use prop_frob_info::*;
+pub use prop_gun_kick::*;
 pub use prop_gun_reliability::*;
 pub use prop_gun_state::*;
 pub use prop_hack_diff::*;
@@ -1559,6 +1561,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         define_prop(
             "P$GunState",
             PropGunState::read,
+            identity,
+            accumulator::latest,
+        ),
+        define_prop(
+            "P$GunKick",
+            PropGunKick::read,
             identity,
             accumulator::latest,
         ),
