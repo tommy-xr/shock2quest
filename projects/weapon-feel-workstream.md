@@ -160,6 +160,30 @@ has not yet been established as an insufficient-skill rejection. Existing
 - [ ] Adapt #1142/#1153 to current main. Verify fitted gun-only colliders,
   wall stops, material impact sounds, rotation into walls and lifecycle cleanup.
 
+### Muzzle geometry implementation
+
+The next stacked layer selects authored muzzle ID 0 first. Known weapon models
+without that point use the center of their frontmost gun-only polygon cap;
+arm materials are excluded through the existing glove geometry importer.
+Explicit barrel-frame profiles distinguish world -Z guns from held -X guns.
+Unknown models retain their prior lowest-ID/origin behavior. Model swaps and
+current-build loads regenerate the fallback, and left-hand reflection applies
+to both the authored point and fallback. Projectile frames remain normalized,
+so grip scaling changes muzzle placement without changing speed.
+
+Spawn clearance begins at the tracked firing palm (the camera in flatscreen),
+not the calibrated model origin. It sweeps an enclosing sphere for authored
+projectile radii/offsets and a tiny sphere for point projectiles, excluding the
+player and held objects while retaining anonymous level geometry. Spawn
+translation also applies to projectile trails. This prevents forward muzzle
+placement across a wall; a controller already pushed into the wall still needs
+the later physical-held collision work.
+
+Matched EMP footage demonstrates the former inside-gun origin and corrected
+barrel-tip origin. Independent archive polygon decoding supplies regression
+coordinates for both hands. This layer does not implement GunFlash launch/
+random-bank flags or physical recoil; those remain separate increments.
+
 ### 3. Recoil, VR augmentation and audit completion
 
 - [ ] Implement authored accuracy/recoil behavior in shared gameplay code,

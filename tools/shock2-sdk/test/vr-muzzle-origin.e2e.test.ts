@@ -46,6 +46,11 @@ const SCALE_FACTOR = 2.5;
 const MUZZLE_VHOT: Record<string, Vec3> = {
   lasehand: [-1.913 / SCALE_FACTOR, -0.0688 / SCALE_FACTOR, 0.16 / SCALE_FACTOR],
   amp_h: [-1.1072 / SCALE_FACTOR, 0.2719 / SCALE_FACTOR, -0.1199 / SCALE_FACTOR],
+  // No authored vhots: independently decoded front-cap vertices from 25AE
+  // object polygons, with ND-arm material removed and bind translations applied.
+  empgun_h: [-1.614333725, 0.100172064, -0.000514221],
+  gren_h: [-1.105836868, 0.020605141, -0.000560760],
+  fsn_h: [-1.244823456, 0.002128685, -0.003411102],
 };
 
 const len = (v: Vec3): number => Math.sqrt(dot(v, v));
@@ -292,3 +297,47 @@ test(
     assertLeftTheMuzzle(shot, "cryo bolt");
   },
 );
+
+for (const hand of ["left", "right"] as const) {
+  test(`a ${hand}-held EMP rifle without vhots fires from the visible barrel cap`,
+    { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" }, async () => {
+      await using game = await GameServer.launch({ mission: "debug_weapons", debugFlags: ["--vr"] });
+      await game.step({ frames: 30 });
+      const gun = await cycleToWeapon(game, e => e.name === "EMP Rifle", { settleFrames: 90 });
+      await aimVrHandAt(game, gun.position as Vec3, 0.45, 1, 0, { hand });
+      await game.step({ frames: 8 });
+      const info = await game.info();
+      assert.equal(hand === "right" ? info.player.right_hand_entity_id : info.player.wielded_entity_id, gun.id);
+      const shot = await fireAndTrack(game, gun.id, [0, 1, -2], [-1, 0, 0], e => e.name === "EMP Shot", hand);
+      assertLeftTheMuzzle(shot, `${hand} EMP bolt`);
+    });
+}
+
+test("an EMP muzzle extending through the backstop cannot shoot through it",
+  { skip: e2eEnabled ? false : "set SHOCK2_E2E=1 to run" }, async () => {
+    await using game = await GameServer.launch({ mission: "debug_weapons", debugFlags: ["--vr"] });
+    await game.step({ frames: 30 });
+    const gun = await cycleToWeapon(game, e => e.name === "EMP Rifle", { settleFrames: 90 });
+    await aimVrHandAt(game, gun.position as Vec3, 0.45, 1, 0);
+    await game.step({ frames: 8 });
+    assert.equal((await game.info()).player.right_hand_entity_id, gun.id);
+    // Backstop front is x=-11.5; the palm is in front and the barrel crosses it.
+    await game.input.set("right_hand.position", [-10.5, 1, -2]);
+    await game.input.set("right_hand.rotation", quatFromTo([0, 0, -1], [-1, 0, 0]));
+    await game.step({ frames: 5 });
+    const weapon = await entityTransform(game, gun.id);
+    assert.ok(weapon.position[0] > -11.5 && weapon.position[0] < -10.6);
+    const before = new Set((await game.entities.list()).entities.map(e => e.id));
+    await game.input.set("right_hand.trigger", 1);
+    await game.step({ frames: 1 });
+    await game.input.set("right_hand.trigger", 0);
+    let remaining = 0;
+    for (let frame = 0; frame < 8; frame++) {
+      const shots = (await game.entities.list()).entities.filter(e => !before.has(e.id) && e.name === "EMP Shot");
+      // The sampled frame already integrated physics; allow its contact skin.
+      for (const shot of shots) assert.ok(shot.position[0] >= -11.55, `bolt must not appear beyond the backstop: ${JSON.stringify(shot.position)}, weapon ${JSON.stringify(weapon.position)}, frame ${frame}`);
+      remaining = shots.length;
+      await game.step({ frames: 1 });
+    }
+    assert.equal(remaining, 0, "nearby backstop must absorb the bolt");
+  });

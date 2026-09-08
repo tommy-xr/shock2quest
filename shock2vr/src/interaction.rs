@@ -166,6 +166,11 @@ pub trait PlayerInteraction {
     /// right, matching the right-hand trigger it fires with.
     fn holding_hand(&self, entity_id: EntityId) -> Option<Handedness>;
 
+    /// Tracked palm on the firing side of a held weapon's muzzle offset.
+    fn held_launch_origin(&self, _entity_id: EntityId) -> Option<Point3<f32>> {
+        None
+    }
+
     /// Whether `entity_id` is currently held. Answered from
     /// [`Self::holding_hand`] so "is it held" and "which hand holds it" cannot
     /// give different answers.
@@ -1381,6 +1386,19 @@ impl PlayerInteraction for VrInteraction {
         self.right_hand = self.right_hand.destroy_entity(entity_id);
     }
 
+    fn held_launch_origin(&self, entity_id: EntityId) -> Option<Point3<f32>> {
+        let index = [&self.left_hand, &self.right_hand]
+            .iter()
+            .position(|hand| hand.get_held_entity() == Some(entity_id))?;
+        let pose = self.hand_poses()[index];
+        let palm = self
+            .grip_kinematics
+            .as_ref()
+            .map_or(Vector3::new(0.0, 0.0, 0.0), |rig| rig[index].palm);
+        let point = pose.point(palm);
+        Some(Point3::new(point.x, point.y, point.z))
+    }
+
     fn holding_hand(&self, entity_id: EntityId) -> Option<Handedness> {
         if self.left_hand.is_holding(entity_id) {
             Some(Handedness::Left)
@@ -1585,6 +1603,25 @@ mod tests {
         input.left_hand.rotation = identity();
         input.left_hand.squeeze_value = 0.0;
         (world, entity, physics, interaction, input)
+    }
+
+    #[test]
+    fn weapon_clearance_starts_at_palm_despite_model_anchor_offset() {
+        let (world, entity, physics, mut interaction, input) = wrench_support_fixture();
+        interaction.grip_kinematics.as_mut().unwrap()[1].palm = vec3(0.0, 0.0, 0.1);
+        interaction.fitted_grips[1]
+            .as_mut()
+            .unwrap()
+            .resolved
+            .as_mut()
+            .unwrap()
+            .offset = vec3(0.0, 0.0, 0.5);
+        interaction.update(&context(&world, &physics, &input));
+        let start = interaction.held_launch_origin(entity).unwrap();
+        assert!(
+            (start.z - 0.1).abs() < 0.001,
+            "must start at the palm, not the offset model: {start:?}"
+        );
     }
 
     #[test]

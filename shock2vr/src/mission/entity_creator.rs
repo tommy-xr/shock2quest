@@ -1,3 +1,4 @@
+use cgmath::InnerSpace;
 use std::{collections::HashMap, rc::Rc};
 
 use crate::{
@@ -138,6 +139,27 @@ pub fn create_entity_with_position(
     let _time_in_seconds = {
         let u_time = world.borrow::<UniqueView<Time>>().unwrap();
         u_time.total.as_secs_f32()
+    };
+
+    let root_transform = if let Some(origin) = additional_options.projectile_launch_origin {
+        // Enclose the authored projectile sphere, including its local offset.
+        let radius = world
+            .borrow::<View<PropPhysDimensions>>()
+            .unwrap()
+            .get(entity_id)
+            .map(|dims| dims.radius0.abs().max(dims.radius1.abs()) + dims.offset0.magnitude())
+            .unwrap_or(0.0);
+        let requested = root_transform.transform_point(position);
+        let clamped = crate::weapon_muzzle::clamp_projectile_spawn(
+            physics,
+            origin,
+            requested,
+            radius,
+            &|entity| !crate::wielded_weapon::held_in_hand(world, entity),
+        );
+        Matrix4::from_translation(clamped - requested) * root_transform
+    } else {
+        root_transform
     };
 
     let transformed_position = root_transform.transform_point(position);
@@ -656,6 +678,7 @@ fn create_model(
         _v_rendertype,
         v_scale,
         mut rv_vhots,
+        mut rv_muzzle,
     ) = world
         .borrow::<(
             EntitiesView,
@@ -667,6 +690,7 @@ fn create_model(
             View<PropRenderType>,
             View<PropScale>,
             ViewMut<RuntimePropVhots>,
+            ViewMut<crate::weapon_muzzle::MuzzleFallback>,
         )>()
         .unwrap();
 
@@ -681,6 +705,9 @@ fn create_model(
 
         let vhots = model.vhots();
         entities.add_component(entity_id, &mut rv_vhots, RuntimePropVhots(vhots));
+        if let Some(muzzle) = crate::weapon_muzzle::load_fallback(asset_cache, &model_name) {
+            entities.add_component(entity_id, &mut rv_muzzle, muzzle);
+        }
 
         let qrotation = pos.rotation;
         let rotation = Matrix4::<f32>::from(qrotation);
@@ -1657,6 +1684,11 @@ pub struct CreateEntityOptions {
     /// projectile. Flat firing supplies the camera origin while retaining the
     /// forward spawn clearance needed by slow physics projectiles.
     pub projectile_raycast_origin: Option<Point3<f32>>,
+    /// Starting side of a player-shot spawn offset (camera or held gun grip).
+    /// Checked against world geometry before applying the requested muzzle pose.
+    pub projectile_launch_origin: Option<Point3<f32>>,
+    /// VR weapon whose tracked palm supplies the launch clearance start.
+    pub projectile_weapon: Option<EntityId>,
     /// The player fired this projectile, so its collision ray must skip the
     /// player's own capsule (see `RuntimePropPlayerFiredProjectile`).
     pub player_fired_projectile: bool,
@@ -1682,6 +1714,8 @@ impl Default for CreateEntityOptions {
             attach_to: None,
             transient_fx: false,
             projectile_raycast_origin: None,
+            projectile_launch_origin: None,
+            projectile_weapon: None,
             player_fired_projectile: false,
             launch_projectile: false,
             shot_modifiers: None,
