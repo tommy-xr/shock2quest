@@ -74,11 +74,14 @@ fn wrist_panel_transform(
     hand: Handedness,
 ) -> Matrix4<f32> {
     const WIDTH: f32 = 0.085;
-    // Read across the body when turning either wrist toward the eyes.
-    let roll = if (hand == Handedness::Right) != under {
-        90.0
-    } else {
+    // The bio face runs around the wrist like a bracelet. Keep the ammo
+    // face oriented for an across-body underside glance.
+    let roll = if !under {
+        0.0
+    } else if hand == Handedness::Right {
         -90.0
+    } else {
+        90.0
     };
     root * Matrix4::from_translation(vec3(0.0, -0.015, if under { -0.06 } else { 0.04 }))
         * Matrix4::from_angle_y(Deg(if under { 180.0 } else { 0.0 }))

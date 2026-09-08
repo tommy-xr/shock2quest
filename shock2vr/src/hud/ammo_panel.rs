@@ -414,33 +414,21 @@ fn build_readout_canvas(readout: &AmmoReadout) -> UiCanvas {
     canvas
 }
 
-/// The gauge well with the bezel around it, cropped out of AMMOFULL.PCX - what
-/// each VR wrist wears. Outside this box the panel art is palette index 0
-/// (the cyan key colour ordinary UI art does not drop), so a wider crop would
-/// frame the readout in cyan.
-pub(crate) const WRIST_CROP: Rect = Rect::new(168.0, 14.0, 90.0, 44.0);
-
-/// The wrist canvas is exactly its crop.
+/// The complete compact ammo UI, the rightmost 94x64 pixels of AMMOFULL.
+/// Preserve AMMOBACK's authored frame rather than cutting through its bezel.
+pub(crate) const WRIST_CROP: Rect = Rect::new(166.0, 0.0, 94.0, 64.0);
 pub(crate) const WRIST_CROP_SIZE: Vector2<f32> = vec2(WRIST_CROP.w, WRIST_CROP.h);
 
-/// The readout as each VR wrist draws it: the cropped gauge well at canvas
-/// origin, with the readout placed over it by the shared [`emit`] off the panel
-/// corner the crop was taken from (hence the negative origin, exactly as the
-/// flat HUD anchors the same contents over the compact AMMOBACK crop).
-///
-/// Empty when nothing gun-like is wielded: flat drops the whole gauge then, and
-/// a bare plate strapped to the wrist would say less than nothing. Pure (no
-/// asset/GL access), so it is unit-testable like `build_flat_hud_canvas`.
+/// The shipped compact ammo panel with the same overlay origin as the flat HUD.
+/// Empty hands have no panel; the wrist has no clickable controls.
 pub(crate) fn build_wrist_canvas(readout: &AmmoReadout) -> UiCanvas {
     let mut canvas = UiCanvas::new(WRIST_CROP_SIZE);
     if readout.is_empty() {
         return canvas;
     }
-    canvas.cropped_image(
+    canvas.image(
         Rect::new(0.0, 0.0, WRIST_CROP.w, WRIST_CROP.h),
-        "AMMOFULL.PCX",
-        WRIST_CROP,
-        PANEL_SIZE,
+        "AMMOBACK.PCX",
     );
     let passive = AmmoReadout {
         show_buttons: false,
@@ -455,9 +443,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wrist_crop_preserves_the_shared_readout_layout_and_omits_controls() {
+    fn wrist_preserves_the_complete_compact_panel_and_shared_overlay_layout() {
         let readout = full_gun();
         let wrist = build_wrist_canvas(&readout);
+        assert_eq!(wrist.size(), vec2(94.0, 64.0));
+        assert!(
+            matches!(&wrist.elements()[0], crate::ui::UiElement::Image { texture, kind: crate::ui::ImageKind::Ui, .. } if texture == "AMMOBACK.PCX")
+        );
         let passive = AmmoReadout {
             show_buttons: false,
             ..readout
