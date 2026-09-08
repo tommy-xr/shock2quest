@@ -351,12 +351,16 @@ impl VrInteraction {
             // Melee physics may stop short of its target at a wall. Acquisition
             // and visible gloves belong on that actual weapon, not an unseen target.
             let model_pose = held.physical_model_pose(world).unwrap_or(target_pose);
-            let hand_rotation = model_pose.rotation * grip.rotation.conjugate();
-            let hand_pose = GripPose {
-                position: model_pose.point(anchor)
-                    - hand_rotation.rotate_vector(rig[1 - primary].palm),
-                rotation: hand_rotation,
-            };
+            let hand_pose = profile.glove_pose(
+                if primary == 0 {
+                    Handedness::Left
+                } else {
+                    Handedness::Right
+                },
+                model_pose,
+                grip,
+                &rig[1 - primary],
+            );
             return Some(SupportCandidate {
                 entity: held.entity,
                 primary,
@@ -1373,6 +1377,7 @@ mod tests {
             "wrench_h".into(),
             SupportProfile {
                 palm_anchor: [0.0, 0.2, 0.0],
+                rotation_degrees: [0.0; 3],
                 curls: [0.5; 5],
                 grab_radius: 0.07,
                 release_distance: 0.12,

@@ -6,6 +6,7 @@ mod archives;
 mod explorer;
 mod grip_editor;
 mod model_preview;
+mod support_grip_editor;
 mod ui;
 
 use explorer::{family_entries, family_names, print_coverage_caveat, short_source};
@@ -48,6 +49,12 @@ enum Commands {
         /// Open VR Grips with this prepared pickup model selected (e.g. mug)
         #[arg(long)]
         grip: Option<String>,
+        /// Edit the supporting hand while previewing both gloves
+        #[arg(long)]
+        grip_support: bool,
+        /// Support-pose JSON to edit (defaults to assets/astra-vr-support-grips.json)
+        #[arg(long)]
+        support_grip_library: Option<std::path::PathBuf>,
         /// Hand to inspect in VR Grips
         #[arg(long, default_value = "right", value_parser = ["left", "right"])]
         grip_hand: String,
@@ -235,6 +242,8 @@ fn main() {
         Commands::Ui {
             grip,
             grip_hand,
+            grip_support,
+            support_grip_library,
             grip_view,
             grip_library,
             screenshot,
@@ -252,6 +261,8 @@ fn main() {
         } => ui::run(ui::UiOptions {
             grip,
             grip_hand,
+            grip_support,
+            support_grip_library,
             grip_view,
             grip_library,
             screenshot,

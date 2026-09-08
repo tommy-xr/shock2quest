@@ -30,6 +30,8 @@ const THUMBS_PER_FRAME: usize = 6;
 pub struct UiOptions {
     pub grip: Option<String>,
     pub grip_hand: String,
+    pub grip_support: bool,
+    pub support_grip_library: Option<PathBuf>,
     pub grip_view: String,
     pub grip_library: Option<PathBuf>,
     pub screenshot: Option<PathBuf>,
@@ -348,13 +350,15 @@ struct MountIndex {
 
 impl ExplorerApp {
     fn new(options: UiOptions) -> ExplorerApp {
-        let grip_tab = options.grip.is_some();
+        let grip_tab = options.grip.is_some() || options.grip_support;
         let mut app = ExplorerApp {
             grip_editor: crate::grip_editor::GripEditor::new(
                 options.grip_library,
                 options.grip,
                 options.grip_hand,
                 options.grip_view,
+                options.grip_support,
+                options.support_grip_library,
             ),
             tab: if grip_tab { Tab::Grips } else { Tab::Files },
             family_names: explorer::family_names(),
