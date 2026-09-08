@@ -156,7 +156,13 @@ test(
     const ammo = ammoOf(await game.entities.detail(gun));
     const condition = (await game.info()).player.wielded_gun_condition;
 
+    const soundSequence = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
     for (let i = 0; i < 3; i += 1) await fireOnce(game);
+    const brokenCues = (await game.audio.recent()).sounds.filter(sound =>
+      sound.sequence > soundSequence && sound.sample === "gunbrok1" &&
+      sound.tags.some(([tag, value]) => tag === "event" && value === "broken"));
+    assert.equal(brokenCues.length, 3, "broken pulls use Broken, not OutofAmmo");
+
 
     const detail = await game.entities.detail(gun);
     assert.equal(ammoOf(detail), ammo, "a broken gun spends no ammo");

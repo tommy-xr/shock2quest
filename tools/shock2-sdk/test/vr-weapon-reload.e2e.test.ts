@@ -106,6 +106,12 @@ test(
     const capacity = ammoOf(await game.entities.detail(pistol.id));
     assert.ok(capacity > 0, "the debug pistol starts loaded");
     await emptyTheMagazine(game, pistol);
+    const emptySequence = (await game.audio.recent()).sounds.at(-1)?.sequence ?? 0;
+    await fireOnce(game);
+    const emptyCue = (await game.audio.recent()).sounds.find(sound =>
+      sound.sequence > emptySequence && tagValue(sound, "event") === "outofammo");
+    assert.equal(emptyCue?.sample, "out_pist", "an empty VR pull must play its authored click");
+
 
     // Reserve rounds are what a reload consumes. Two standard clips so the
     // reload has to drain the first and dip into the second.
