@@ -137,4 +137,35 @@ test("physical wrench glove stays attached during walking and wall contact", {
   const trackedModel = add(player.position,quatRotate(player.rotation,add([-3,1,0],vector(blocked.grip!.offset))));
   assert.ok(distance(trackedModel,vector(blocked.support!.model_position)) > .5,"wall actually blocks the weapon away from the tracked target");
   assert.ok(vector(blocked.support!.model_position)[0] > -13,"weapon remains on near side of wall");
+  // The controller is beyond the wall, but both visible glove and wrench stop
+  // on this side. A second hand on that visible socket must still attach.
+  await game.input.set("left_hand.squeeze",0);
+  const visiblePalm = add(vector(blocked.support!.model_position),quatRotate(quaternion(blocked.support!.model_rotation),vector(blocked.support!.primary_anchor)));
+  assert.ok(distance(visiblePalm,vector(blocked.support!.primary_palm))>.5,"visible primary palm is displaced from its controller");
+  const inverse = quatConjugate(player.rotation);
+  await game.input.set("left_hand.position",quatRotate(inverse,sub(vector(blocked.support!.controller_position),player.position)));
+  await game.input.set("left_hand.rotation",quatMultiply(inverse,quaternion(blocked.support!.controller_rotation)));
+  await game.step({frames:1});
+  await game.input.set("left_hand.squeeze",1);
+  await game.step({frames:10});
+  const supported = await check();
+  assert.equal(supported.support!.attached,true,"second hand can grab the visible wrench while its primary controller is blocked: "+JSON.stringify({before:blocked.support,after:supported.support}));
+  assert.equal((await game.info()).player.right_hand_entity_id,wrench.id);
+  assert.equal((await game.info()).player.hand_grips.length,1,"support retains one owner");
+  await game.input.set("left_hand.position",quatRotate(inverse,sub(add(vector(blocked.support!.controller_position),[.025,0,.025]),player.position)));
+  for (let frame=0;frame<8;frame++) {
+    await game.step({frames:1});
+    const moving = await check();
+    assert.equal(moving.support!.attached,true,"physical contact feedback is not a support-release gesture");
+  }
+  await game.input.set("right_hand.position",[-2.98,1,0]);
+  await game.step({frames:8});
+  const shifted = await check();
+  assert.equal(shifted.support!.attached,true);
+  const primaryMotion = sub(vector(shifted.support!.primary_palm),vector(supported.support!.primary_palm));
+  assert.ok(Math.hypot(...primaryMotion)>.01,"primary controller moved");
+  assert.ok(distance(vector(shifted.support!.control_primary_palm),add(vector(supported.support!.control_primary_palm),primaryMotion))<.0001,"control pivot follows the primary palm translation exactly, including player motion");
+  await game.input.set("left_hand.squeeze",0);
+  await game.step({frames:1});
+  assert.equal((await check()).support!.attached,false,"explicit release still ends support");
 });

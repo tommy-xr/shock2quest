@@ -1164,6 +1164,10 @@ export interface HandGrip {
     model_position: ResolvedGrip["offset"];
     model_rotation: ResolvedGrip["rotation"];
     primary_palm: ResolvedGrip["offset"];
+    /** Primary palm on the rendered, collision-resolved weapon. */
+    visible_primary_palm: ResolvedGrip["offset"];
+    /** Controller-driven pivot calibrated on support acquisition. */
+    control_primary_palm: ResolvedGrip["offset"];
     primary_anchor: ResolvedGrip["offset"];
     support_anchor: ResolvedGrip["offset"];
     /** World-space segment endpoints, or null for a fixed socket. */
