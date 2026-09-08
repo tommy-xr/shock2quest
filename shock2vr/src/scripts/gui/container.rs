@@ -266,12 +266,6 @@ impl Gui<ContainerGuiState, ContainerGuiMsg> for ContainerGui {
 
             let obj_icon = &maybe_obj_icon.unwrap().0;
 
-            // TODO: Fix this issue:
-            // thread 'main' panicked at 'called `Result::unwrap()` on an `Err` value: Custom { kind: InvalidInput, error: "pcx::Reader::next_row_paletted called on non-paletted image" }', engine/src/texture_format.rs:81:45
-            if obj_icon.contains("upgrade") {
-                continue;
-            }
-
             let on_click = if self.take_on_click {
                 ContainerGuiMsg::Take(ent)
             } else {
@@ -878,6 +872,29 @@ mod tests {
                 kinds.iter().all(|k| *k == ImageKind::ObjectIcon),
                 "every item icon should be object-icon art, got {:?}",
                 kinds
+            );
+        }
+    }
+
+    #[test]
+    fn cyber_module_icons_remain_collectible_in_both_container_layouts() {
+        let (mut world, container, item, _inventory) = loot_world();
+        world.add_component(item, PropObjIcon("upgrade".to_owned()));
+
+        for gui in [
+            ContainerGui::loot_container(),
+            ContainerGui::inv_container(),
+        ] {
+            let components = gui.get_components(&None, container, &world, &ContainerGuiState {});
+            assert!(
+                components.iter().any(|component| matches!(
+                    component,
+                    GuiComponent::Button { texture, entity: Some(entity), kind, .. }
+                        if texture == "upgrade.pcx"
+                            && *entity == item
+                            && *kind == crate::ui::ImageKind::ObjectIcon
+                )),
+                "a contained cyber-module pile must emit its collectible object-icon button"
             );
         }
     }
