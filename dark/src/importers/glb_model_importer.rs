@@ -36,9 +36,9 @@ pub struct LoadedGlbData {
 }
 
 fn load_glb(
-    _name: String,
+    name: String,
     reader: &mut Box<dyn engine::assets::asset_paths::ReadableAndSeekable>,
-    _assets: &mut AssetCache,
+    assets: &mut AssetCache,
     _config: &(),
 ) -> LoadedGlbData {
     // Read the entire GLB file into memory
@@ -73,27 +73,29 @@ fn load_glb(
                 let end = start + view.length();
                 let buf = buffer[start..end].to_vec();
 
-                match image::load_from_memory(&buf) {
-                    Ok(loaded_image) => {
-                        let rgba_image = loaded_image.to_rgba8();
-                        let width = rgba_image.width();
-                        let height = rgba_image.height();
-                        gltf::image::Data {
-                            pixels: rgba_image.into_raw(),
-                            format: gltf::image::Format::R8G8B8A8,
-                            width,
-                            height,
-                        }
-                    }
-                    Err(_) => {
-                        // Could not decode embedded image, using checkerboard fallback
-                        create_checkerboard_image_data()
-                    }
-                }
+                decode_glb_image(&buf).unwrap_or_else(create_checkerboard_image_data)
             }
-            gltf::image::Source::Uri { uri: _uri, .. } => {
-                // GLB file contains external image reference, using checkerboard pattern as fallback
-                create_checkerboard_image_data()
+            gltf::image::Source::Uri { uri, .. } => {
+                // Resolve through the same asset mounts on desktop and Quest,
+                // rather than opening a host filesystem path from the model.
+                let parent = std::path::Path::new(&name)
+                    .parent()
+                    .unwrap_or(std::path::Path::new(""));
+                let asset_name = parent.join(uri).to_string_lossy().replace('\\', "/");
+                assets
+                    .asset_paths()
+                    .exists(
+                        assets.base_path().to_owned(),
+                        asset_name.to_ascii_lowercase(),
+                    )
+                    .then(|| assets.get_raw_reader(&asset_name))
+                    .flatten()
+                    .and_then(|reader| {
+                        let mut bytes = Vec::new();
+                        std::io::copy(&mut *reader.borrow_mut(), &mut bytes).ok()?;
+                        decode_glb_image(&bytes)
+                    })
+                    .unwrap_or_else(create_checkerboard_image_data)
             }
         };
         images.push(image_data);
@@ -249,6 +251,17 @@ fn extract_inverse_bind_matrices(
         .read_inverse_bind_matrices()
         .map(|iter| iter.map(Matrix4::from).collect::<Vec<_>>())
         .unwrap_or_default()
+}
+
+fn decode_glb_image(bytes: &[u8]) -> Option<gltf::image::Data> {
+    let image = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let (width, height) = image.dimensions();
+    Some(gltf::image::Data {
+        pixels: image.into_raw(),
+        format: gltf::image::Format::R8G8B8A8,
+        width,
+        height,
+    })
 }
 
 fn create_checkerboard_image_data() -> gltf::image::Data {
@@ -493,6 +506,10 @@ fn process_glb_data(
     _config: &(),
 ) -> GlbModel {
     let mut scene_objects = Vec::new();
+    // Upload each image once per model, then share it across its primitives.
+    let textures: Vec<_> = (0..loaded_data.images.len())
+        .map(|index| create_texture_from_image(&loaded_data.images, index).unwrap())
+        .collect();
 
     // Convert GLB meshes to SceneObjects
     for glb_mesh in loaded_data.meshes.into_iter() {
@@ -514,9 +531,9 @@ fn process_glb_data(
         };
 
         let material = if is_skinned {
-            create_skinned_material(&loaded_data.images, texture_index, base_color)
+            create_skinned_material(&textures, texture_index, base_color)
         } else {
-            create_static_material(&loaded_data.images, texture_index, base_color)
+            create_static_material(&textures, texture_index, base_color)
         };
 
         let scene_object = SceneObject::create(material, std::rc::Rc::new(Box::new(geometry)));
@@ -582,13 +599,13 @@ fn create_solid_color_texture(
 }
 
 fn create_static_material(
-    images: &[gltf::image::Data],
+    textures: &[std::rc::Rc<dyn engine::texture::TextureTrait>],
     texture_index: Option<usize>,
     base_color: [f32; 4],
 ) -> std::cell::RefCell<Box<dyn engine::scene::Material>> {
     match texture_index {
         Some(texture_index) => {
-            if let Some(texture) = create_texture_from_image(images, texture_index) {
+            if let Some(texture) = textures.get(texture_index).cloned() {
                 return std::cell::RefCell::new(engine::scene::basic_material::create(
                     texture, 1.0, 0.0,
                 ));
@@ -609,13 +626,13 @@ fn create_static_material(
 }
 
 fn create_skinned_material(
-    images: &[gltf::image::Data],
+    textures: &[std::rc::Rc<dyn engine::texture::TextureTrait>],
     texture_index: Option<usize>,
     base_color: [f32; 4],
 ) -> std::cell::RefCell<Box<dyn engine::scene::Material>> {
     let texture: std::rc::Rc<dyn engine::texture::TextureTrait> =
         if let Some(texture_index) = texture_index {
-            match create_texture_from_image(images, texture_index) {
+            match textures.get(texture_index).cloned() {
                 Some(tex) => tex,
                 None => create_solid_color_texture(base_color),
             }
@@ -641,4 +658,35 @@ fn extract_base_color_and_texture(material: &gltf::Material) -> ([f32; 4], Optio
         .base_color_texture()
         .map(|texture_info| texture_info.texture().source().index());
     (base_color, texture_index)
+}
+
+#[cfg(test)]
+mod external_texture_tests {
+    use super::*;
+    use engine::assets::asset_paths::{AssetPath, ReadableAndSeekable};
+    use std::io::Cursor;
+
+    #[test]
+    fn gear_texture_loads_through_asset_mount_and_missing_image_falls_back() {
+        let root = format!("{}/..", env!("CARGO_MANIFEST_DIR"));
+        let mut assets = AssetCache::new(String::new(), AssetPath::folder(root));
+        for (uri, expected) in [
+            (
+                "astra-vr-body-gear-color.png",
+                Some(include_bytes!("../../../assets/astra-vr-body-gear-color.png").as_slice()),
+            ),
+            ("missing-astra-gear-texture.png", None),
+            ("source/vr-body-gear.md", None),
+        ] {
+            let json = format!(r#"{{"asset":{{"version":"2.0"}},"images":[{{"uri":"{uri}"}}]}}"#);
+            let mut reader: Box<dyn ReadableAndSeekable> = Box::new(Cursor::new(json.into_bytes()));
+            let loaded = load_glb("assets/test.glb".to_owned(), &mut reader, &mut assets, &());
+            let expected = expected
+                .and_then(decode_glb_image)
+                .unwrap_or_else(create_checkerboard_image_data);
+            assert_eq!(loaded.images[0].width, expected.width);
+            assert_eq!(loaded.images[0].height, expected.height);
+            assert_eq!(loaded.images[0].pixels, expected.pixels);
+        }
+    }
 }
