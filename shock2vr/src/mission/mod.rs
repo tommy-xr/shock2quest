@@ -1,5 +1,6 @@
 pub mod entity_creator;
 use tracing::info;
+mod ammo_pouch;
 mod body_inventory;
 pub mod entity_populator;
 pub mod flat_ui_host;

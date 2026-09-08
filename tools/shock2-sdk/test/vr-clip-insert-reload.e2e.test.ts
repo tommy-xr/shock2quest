@@ -284,7 +284,7 @@ test(
       (await entityById(game, pistol.id))!.position as Vec3,
     );
     assert.ok(
-      2 * magnitude(anchorOffset) > CLIP_INSERT_EXIT_RADIUS,
+      magnitude(anchorOffset) > 0.01,
       `the pistol's magazine anchor must sit off its origin (offset ${JSON.stringify(anchorOffset)})`,
     );
     // The debug pistol spawns with a FULL magazine, so what it holds now is its
@@ -318,8 +318,11 @@ test(
     const far = await steerHeldClip(game, "left", parked, clip.id, () =>
       alongAnchorRay(8),
     );
+    // Authored weapon scales can put the mirrored origin inside the zone.
+    // Continue along the same ray until the test point is definitely outside.
+    const outsideSteps = Math.max(2, (CLIP_INSERT_EXIT_RADIUS + 0.1) / magnitude(anchorOffset));
     const mirrored = await steerHeldClip(game, "left", far.handPosition, clip.id, () =>
-      alongAnchorRay(2),
+      alongAnchorRay(outsideSteps),
     );
     await game.step({ frames: 5 });
     assert.equal(

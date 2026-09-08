@@ -31,3 +31,19 @@ impl RetainedRelease {
         self.0[hand].is_some()
     }
 }
+
+/// Shared head-relative frame for adjacent belt and thigh targets. Distances
+/// are metres at this boundary; gameplay uses world units internally.
+#[derive(Clone, Copy)]
+pub(super) struct BodyPose {
+    pub head: cgmath::Vector3<f32>,
+    pub yaw: f32,
+}
+
+impl BodyPose {
+    pub fn front(&self, below: f32, forward: f32) -> cgmath::Vector3<f32> {
+        self.head
+            + cgmath::vec3(self.yaw.sin() * forward, -below, -self.yaw.cos() * forward)
+                / crate::METERS_PER_WORLD_UNIT
+    }
+}

@@ -746,14 +746,12 @@ fn matching_stack_at_cell(
     if occupant == dropped_entity_id {
         return None;
     }
-    let v_template = world
-        .borrow::<View<dark::properties::PropTemplateId>>()
-        .ok()?;
     let v_stacks = world
         .borrow::<View<dark::properties::PropStackCount>>()
         .ok()?;
-    let dropped_template = v_template.get(dropped_entity_id).ok()?.template_id;
-    let occupant_template = v_template.get(occupant).ok()?.template_id;
+    let dropped_template =
+        crate::scripts::script_util::entity_class_template_id(world, dropped_entity_id)?;
+    let occupant_template = crate::scripts::script_util::entity_class_template_id(world, occupant)?;
     if dropped_template != occupant_template {
         return None;
     }
@@ -776,17 +774,16 @@ fn find_mergeable_stack_anywhere(
 ) -> Option<EntityId> {
     let grid = crate::inventory::grid_for(world, container_entity_id);
     let occupied = crate::inventory::Inventory::from_container(world, container_entity_id, grid);
-    let v_template = world
-        .borrow::<View<dark::properties::PropTemplateId>>()
-        .ok()?;
     let v_stacks = world
         .borrow::<View<dark::properties::PropStackCount>>()
         .ok()?;
     v_stacks.get(dropped_entity_id).ok()?;
-    let dropped_template = v_template.get(dropped_entity_id).ok()?.template_id;
+    let dropped_template =
+        crate::scripts::script_util::entity_class_template_id(world, dropped_entity_id)?;
     occupied.all_items().find_map(|item| {
         (item.entity != dropped_entity_id
-            && v_template.get(item.entity).ok().map(|t| t.template_id) == Some(dropped_template)
+            && crate::scripts::script_util::entity_class_template_id(world, item.entity)
+                == Some(dropped_template)
             && v_stacks.get(item.entity).is_ok())
         .then_some(item.entity)
     })
@@ -1423,6 +1420,20 @@ mod capacity_enforcement_tests {
 
         assert_eq!(
             find_mergeable_stack_anywhere(&world, container, dropped),
+            Some(occupant)
+        );
+        // Mission-local identity and a split archetype still share one class.
+        world.add_component(
+            occupant,
+            crate::runtime_props::RuntimePropCanonicalTemplateId(-31),
+        );
+        world.add_component(dropped, PropTemplateId { template_id: -31 });
+        assert_eq!(
+            find_mergeable_stack_anywhere(&world, container, dropped),
+            Some(occupant)
+        );
+        assert_eq!(
+            matching_stack_at_cell(&world, container, dropped, (3, 0)),
             Some(occupant)
         );
     }
@@ -2105,6 +2116,7 @@ pub struct MissionCore {
     vr_clip_insert_engaged: [bool; 2],
     shoulder_backpack: super::shoulder_backpack::ShoulderBackpack,
     holsters: super::holsters::Holsters,
+    ammo_pouch: super::ammo_pouch::AmmoPouch,
 
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
@@ -3033,6 +3045,7 @@ impl MissionCore {
             vr_clip_insert_engaged: [false; 2],
             shoulder_backpack: Default::default(),
             holsters: Default::default(),
+            ammo_pouch: Default::default(),
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
@@ -4095,6 +4108,7 @@ impl MissionCore {
         }
 
         let held = [left_hand_held, right_hand_held];
+        self.holsters.freeze_heading = self.ammo_pouch.near.iter().any(|near| *near);
         let holster_actions = self.holsters.update(
             hands_input,
             held,
@@ -4116,7 +4130,33 @@ impl MissionCore {
                 && self.player_controls_enabled,
             time.elapsed.as_secs_f32(),
         );
-        let shoulder_releases = self.shoulder_backpack.update(
+        let pouch_available = [crate::Handedness::Left, crate::Handedness::Right]
+            .map(|hand| self.interaction.hand_available_for_body_slot(hand));
+        let pouch_weapons = std::array::from_fn(|i| {
+            held[1 - i].filter(|gun| self.magazine_capacity(*gun).is_some())
+        });
+        let pouch_offers = std::array::from_fn(|i| {
+            pouch_available[i]
+                .then_some(pouch_weapons[i])
+                .flatten()
+                .and_then(|gun| super::reload::reserve_clip_for_pouch(&self.world, gun))
+        });
+        let pouch_actions = self.ammo_pouch.update(
+            hands_input,
+            self.holsters.body_pose,
+            held,
+            pouch_available,
+            pouch_weapons,
+            held.map(|item| {
+                item.is_some_and(|item| super::reload::is_ammo_clip(&self.world, item))
+            }),
+            pouch_offers,
+            game_options.presentation_mode == crate::PresentationMode::Vr
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
+        );
+        let mut shoulder_releases = self.shoulder_backpack.update(
             hands_input,
             held,
             game_options.presentation_mode == crate::PresentationMode::Vr
@@ -4125,6 +4165,35 @@ impl MissionCore {
                 && self.player_controls_enabled,
             time.elapsed.as_secs_f32(),
         );
+        for i in 0..2 {
+            self.ammo_pouch.refused[i] &= self.shoulder_backpack.keep_grip(i);
+            shoulder_releases[i] |= matches!(
+                pouch_actions[i],
+                Some(super::ammo_pouch::Action::Return { .. })
+            );
+        }
+        let merge_returns = std::array::from_fn::<_, 2, _>(|i| {
+            if !matches!(
+                pouch_actions[i],
+                Some(super::ammo_pouch::Action::Return { .. })
+            ) {
+                return None;
+            }
+            let inventory = self
+                .world
+                .borrow::<UniqueView<PlayerInfo>>()
+                .unwrap()
+                .inventory_entity_id;
+            let item = held[i]?;
+            let target = find_mergeable_stack_anywhere(&self.world, inventory, item)?;
+            let grid = crate::inventory::grid_for(&self.world, inventory);
+            let contents =
+                crate::inventory::Inventory::from_container(&self.world, inventory, grid);
+            contents
+                .all_items()
+                .find(|item| item.entity == target)
+                .map(|item| (item.x, item.y))
+        });
         let shoulder_collect = std::array::from_fn::<_, 2, _>(|i| {
             shoulder_releases[i]
                 && held[i].is_some_and(|entity| {
@@ -4144,7 +4213,7 @@ impl MissionCore {
                 &self.world,
                 inventory,
                 std::array::from_fn(|i| {
-                    (shoulder_releases[i] && !shoulder_collect[i])
+                    (shoulder_releases[i] && !shoulder_collect[i] && merge_returns[i].is_none())
                         .then_some(held[i])
                         .flatten()
                 }),
@@ -4155,9 +4224,15 @@ impl MissionCore {
         let mut shoulder_input = hands_input.clone();
         for i in 0..2 {
             if shoulder_releases[i] {
-                let accepted = shoulder_collect[i] || shoulder_cells[i].is_some();
+                let accepted = shoulder_collect[i]
+                    || shoulder_cells[i].is_some()
+                    || merge_returns[i].is_some();
                 if !accepted {
                     self.shoulder_backpack.retain(i, held[i].unwrap());
+                    self.ammo_pouch.refused[i] = matches!(
+                        pouch_actions[i],
+                        Some(super::ammo_pouch::Action::Return { .. })
+                    );
                 }
                 effects.push(Effect::ShowMessage {
                     text: if shoulder_collect[i] {
@@ -4205,6 +4280,39 @@ impl MissionCore {
                     hand.trigger_value = 0.0;
                     self.vr_trigger_safe_latch[i] = Some(true);
                 }
+            }
+            if self.ammo_pouch.blocks_grab[i] {
+                let hand = if i == 0 {
+                    &mut shoulder_input.left_hand
+                } else {
+                    &mut shoulder_input.right_hand
+                };
+                hand.squeeze_value = 0.0;
+                hand.trigger_value = 0.0;
+            }
+            match pouch_actions[i] {
+                Some(super::ammo_pouch::Action::Withdraw { weapon }) => {
+                    effects.push(Effect::WithdrawPouchAmmo {
+                        weapon,
+                        hand: if i == 0 {
+                            crate::Handedness::Left
+                        } else {
+                            crate::Handedness::Right
+                        },
+                    });
+                }
+                Some(super::ammo_pouch::Action::Empty) => {
+                    effects.push(Effect::ShowMessage {
+                        text: "No reserve for the selected ammo type".to_owned(),
+                    });
+                    effects.push(Effect::PlaySound {
+                        handle: AudioHandle::new(),
+                        name: "repfail".to_owned(),
+                        source: None,
+                        spatial: false,
+                    });
+                }
+                _ => {}
             }
             if self.shoulder_backpack.keep_grip(i) || self.holsters.retained.keep_grip(i) {
                 match i {
@@ -4272,7 +4380,10 @@ impl MissionCore {
             .map(|entity_id| (*entity_id, cell_for(*entity_id)))
             .collect();
 
-        store.extend((0..2).filter_map(|i| Some((held[i]?, Some(shoulder_cells[i]?)))));
+        store.extend((0..2).filter_map(|i| {
+            (shoulder_cells[i].is_some() || merge_returns[i].is_some())
+                .then_some((held[i]?, merge_returns[i].or(shoulder_cells[i])))
+        }));
 
         // VR drives two hands; flat drives a single first-person weapon
         // controller. Both feed the same effect-processing path.
@@ -7914,54 +8025,21 @@ impl MissionCore {
                     }
                 }
 
+                Effect::WithdrawPouchAmmo { weapon, hand } => {
+                    if game_options.presentation_mode == crate::PresentationMode::Vr
+                        && !self.use_mode
+                        && self.player_is_alive()
+                        && self.player_controls_enabled
+                    {
+                        effects.extend(self.withdraw_pouch_ammo(asset_cache, weapon, hand));
+                    }
+                }
                 Effect::GrabEntity {
                     entity_id,
                     hand,
                     current_parent_id: _,
                 } => {
-                    // A grab that displaces something (the flat wield swapping
-                    // the viewmodel out) holsters it back into the backpack
-                    // itself, via the `StoreItem` the controller returns. VR
-                    // grabs into an occupied hand no-op, so nothing is
-                    // displaced there.
-                    let grab_effects = self.interaction.grab(&self.world, entity_id, hand);
-                    effects.extend(self.process_virtual_hand_effects(asset_cache, grab_effects));
-
-                    if self.interaction.is_holding(entity_id) {
-                        self.world
-                            .remove::<crate::runtime_props::RuntimePropHolstered>(entity_id);
-                        // A grab routed through this effect (equip a carried
-                        // weapon, a backpack double-click) never emits
-                        // `HoldItem`, so establish the melee contact body here
-                        // too - otherwise a weapon equipped this way is held
-                        // without a collider and never reports contacts.
-                        if self.is_vr_melee_weapon(entity_id) {
-                            self.attach_held_melee_physics(entity_id);
-                        }
-
-                        // Let the scripts know we are now holding the item..
-                        self.script_world.dispatch(Message {
-                            payload: MessagePayload::Hold,
-                            to: entity_id,
-                        });
-
-                        let mut v_has_refs = self.world.borrow::<ViewMut<PropHasRefs>>().unwrap();
-                        if let Ok(has_refs) = (&mut v_has_refs).get(entity_id) {
-                            has_refs.0 = true;
-                        }
-
-                        let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
-
-                        for links in (&mut v_links).iter() {
-                            links.to_links.retain(|link| {
-                                let is_link_to_entity = matches!(link.link, Link::Contains(_))
-                                    && link.to_entity_id.is_some()
-                                    && link.to_entity_id.unwrap().0 == entity_id;
-
-                                !is_link_to_entity
-                            })
-                        }
-                    }
+                    effects.extend(self.grab_entity_into_hand(asset_cache, entity_id, hand));
                 }
                 Effect::SetJointTransform {
                     entity_id,
@@ -10849,6 +10927,79 @@ impl MissionCore {
                 self.holsters
                     .render(&self.world, player.pos, player.rotation),
             );
+            if crate::dev_params::get_bool(crate::dev_params::VR_AMMO_POUCH_ZONES) {
+                scene.extend(self.ammo_pouch.render_zone(player.pos, player.rotation));
+            }
+            // The pieces are authored in metres, with independent attachment
+            // origins. Gameplay zones and visuals use the same body frame.
+            if let Some(body) = self.holsters.body_pose {
+                let root_rotation = self.holsters.world_rotation(player.rotation);
+                let belt_center = player.pos + player.rotation.rotate_vector(body.front(0.55, 0.0));
+                let pouch_center = self.ammo_pouch.world_center(player.pos, player.rotation);
+                let mut parts = vec![("astra-vr-belt.glb", belt_center, Matrix4::from_scale(1.0))];
+                if let Some(center) = pouch_center {
+                    parts.push(("astra-vr-ammo-pouch.glb", center, Matrix4::from_scale(1.0)));
+                }
+                if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
+                    let occupants = super::holsters::occupants(&self.world);
+                    for (slot, center) in centers.into_iter().enumerate() {
+                        if slot < super::holsters::slot_count(&self.world)
+                            || occupants[slot].is_some()
+                        {
+                            parts.push(("astra-vr-holster.glb", center, Matrix4::from_scale(1.0)));
+                        }
+                    }
+                }
+                for (name, center, local) in parts {
+                    if let Some(model) =
+                        asset_cache.get_opt(&dark::importers::GLB_MODELS_IMPORTER, name)
+                    {
+                        let mut objects = model.clone_scene_objects();
+                        let root = Matrix4::from_translation(center)
+                            * root_rotation
+                            * local
+                            * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT);
+                        for object in &mut objects {
+                            object.set_transform(root * object.get_transform());
+                        }
+                        crate::util::tag_render_source(
+                            &mut objects,
+                            crate::util::render_source::PLAYER_HANDS,
+                        );
+                        scene.extend(objects);
+                    }
+                }
+                // A preview of the actual reserve stack makes the selected
+                // ammo type visible without creating another inventory entity.
+                if let (Some(center), Some(offer)) =
+                    (pouch_center, self.ammo_pouch.offers.iter().flatten().next())
+                {
+                    if let Some(model) = self.id_to_model.get(&offer.reserve) {
+                        if let Some(bounds) = model.bounding_box() {
+                            let extent = bounds.max - bounds.min;
+                            let longest = extent.x.max(extent.y).max(extent.z);
+                            if longest > 0.0001 {
+                                let scale = 0.09 / crate::METERS_PER_WORLD_UNIT / longest;
+                                let midpoint = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
+                                let root = Matrix4::from_translation(
+                                    center + vec3(0.0, 0.04 / crate::METERS_PER_WORLD_UNIT, 0.0),
+                                ) * root_rotation
+                                    * Matrix4::from_scale(scale)
+                                    * Matrix4::from_translation(-midpoint);
+                                let mut objects = model.to_scene_objects().clone();
+                                for object in &mut objects {
+                                    object.set_transform(root);
+                                }
+                                crate::util::tag_render_source(
+                                    &mut objects,
+                                    crate::util::render_source::PLAYER_HANDS,
+                                );
+                                scene.extend(objects);
+                            }
+                        }
+                    }
+                }
+            }
             if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
                 for (slot, entity) in super::holsters::occupants(&self.world)
                     .into_iter()
@@ -11267,6 +11418,111 @@ impl MissionCore {
     pub fn restore_saved_crouch(&mut self) {
         self.physics
             .set_player_crouch(true, &mut self.player_handle);
+    }
+
+    fn grab_entity_into_hand(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        entity_id: EntityId,
+        hand: crate::Handedness,
+    ) -> Vec<Effect> {
+        // A grab that displaces something (the flat wield swapping
+        // the viewmodel out) holsters it back into the backpack
+        // itself, via the `StoreItem` the controller returns. VR
+        // grabs into an occupied hand no-op, so nothing is
+        // displaced there.
+        let grab_effects = self.interaction.grab(&self.world, entity_id, hand);
+        let deferred = self.process_virtual_hand_effects(asset_cache, grab_effects);
+
+        if self.interaction.is_holding(entity_id) {
+            // A grab routed through this effect (equip a carried
+            // weapon, a backpack double-click) never emits
+            // `HoldItem`, so establish the melee contact body here
+            // too - otherwise a weapon equipped this way is held
+            // without a collider and never reports contacts.
+            if self.is_vr_melee_weapon(entity_id) {
+                self.attach_held_melee_physics(entity_id);
+            }
+
+            // Let the scripts know we are now holding the item..
+            self.script_world.dispatch(Message {
+                payload: MessagePayload::Hold,
+                to: entity_id,
+            });
+
+            let mut v_has_refs = self.world.borrow::<ViewMut<PropHasRefs>>().unwrap();
+            if let Ok(has_refs) = (&mut v_has_refs).get(entity_id) {
+                has_refs.0 = true;
+            }
+
+            drop(v_has_refs);
+            self.detach_from_containers(entity_id);
+        }
+        deferred
+    }
+
+    /// Re-resolve stock at commit time. A split is debited only after its new
+    /// clip is actually in the requested hand; a failed grab rolls it back.
+    fn withdraw_pouch_ammo(
+        &mut self,
+        asset_cache: &mut AssetCache,
+        weapon: EntityId,
+        hand: crate::Handedness,
+    ) -> Vec<Effect> {
+        let i = crate::vr_config::hand_slot(hand);
+        let held = self.interaction.held_entities();
+        if !self.interaction.hand_available_for_body_slot(hand)
+            || [held.0, held.1][1 - i] != Some(weapon)
+        {
+            return vec![];
+        }
+        let Some(offer) = super::reload::reserve_clip_for_pouch(&self.world, weapon) else {
+            return vec![];
+        };
+        let split = offer.stock > offer.rounds;
+        let clip = if split {
+            let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+            let position = vec3_to_point3(player.pos);
+            let rotation = player.rotation;
+            drop(player);
+            let item = self
+                .create_entity_with_position(
+                    asset_cache,
+                    offer.template,
+                    position,
+                    rotation,
+                    Matrix4::identity(),
+                    CreateEntityOptions::default(),
+                )
+                .entity_id;
+            self.world
+                .add_component(item, dark::properties::PropStackCount(offer.rounds));
+            self.make_un_physical(item);
+            item
+        } else {
+            offer.reserve
+        };
+        let mut effects = self.grab_entity_into_hand(asset_cache, clip, hand);
+        if self.interaction.holding_hand(clip) == Some(hand) {
+            if split {
+                self.world.add_component(
+                    offer.reserve,
+                    dark::properties::PropStackCount(offer.stock - offer.rounds),
+                );
+            }
+            effects.push(Effect::ShowMessage {
+                text: "Ammo drawn".to_owned(),
+            });
+            effects.push(Effect::PlaySound {
+                handle: AudioHandle::new(),
+                name: "bset".to_owned(),
+                source: None,
+                spatial: false,
+            });
+        } else if split {
+            self.destroy_entity(clip);
+        }
+        effects
     }
 
     /// Apply the effects produced by an interaction controller (the VR hands or
@@ -12863,6 +13119,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             feedback.as_object_mut(),
             self.world.borrow::<UniqueView<PlayerInfo>>(),
         ) {
+            object.insert(
+                "ammo_pouch".to_owned(),
+                self.ammo_pouch.diagnostics(player.pos, player.rotation),
+            );
             object.insert(
                 "holsters".to_owned(),
                 self.holsters

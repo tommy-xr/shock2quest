@@ -309,6 +309,51 @@ fn compatible_reserve_items(world: &World, clip_templates: &[i32]) -> Vec<Entity
         .collect()
 }
 
+/// A read-only offer shared by the pouch preview and atomic withdrawal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PouchClip {
+    pub reserve: EntityId,
+    pub template: i32,
+    pub rounds: i32,
+    pub stock: i32,
+}
+
+pub(crate) fn reserve_clip_for_pouch(world: &World, weapon: EntityId) -> Option<PouchClip> {
+    let templates = selected_clip_templates(world, weapon)?;
+    let reserve = compatible_reserve_items(world, &templates)
+        .into_iter()
+        .next()?;
+    let class = crate::scripts::script_util::entity_class_template_id(world, reserve)?;
+    let clips = world.borrow::<UniqueView<GlobalProjectileClips>>().ok()?;
+    let hierarchy = world
+        .borrow::<UniqueView<crate::mission::GlobalTemplateHierarchy>>()
+        .ok()?;
+    // Prefer the concrete clip's authored size (e.g. small six-round clip),
+    // then a compatible authored ancestor. Never convert to another ammo type.
+    let template = if clips.clip_sizes.contains_key(&class) {
+        class
+    } else {
+        *templates
+            .iter()
+            .filter(|t| hierarchy.is_or_descends_from(class, **t))
+            .min_by_key(|t| if **t == class { 0 } else { 1 })?
+    };
+    let stock = clip_rounds(world, reserve);
+    let rounds = clips
+        .clip_sizes
+        .get(&template)
+        .copied()
+        .unwrap_or(stock)
+        .max(1)
+        .min(stock);
+    (rounds > 0).then_some(PouchClip {
+        reserve,
+        template,
+        rounds,
+        stock,
+    })
+}
+
 /// Move matching reserve rounds from the backpack into `weapon`.
 ///
 pub(crate) fn load_from_reserve(world: &World, weapon: EntityId, capacity: i32) -> ReloadOutcome {
@@ -503,6 +548,38 @@ mod tests {
     const HE_CLIP: i32 = -32;
     const SMALL_PRISM: i32 = -41;
     const LARGE_PRISM: i32 = -44;
+
+    #[test]
+    fn pouch_offer_respects_selected_ammo_real_stock_and_authored_clip_size() {
+        let mut f = Fixture::new(0, 0);
+        assert_eq!(reserve_clip_for_pouch(&f.world, f.weapon), None);
+        let standard = f.reserve(STD_CLIP, 27);
+        let he = f.reserve(HE_CLIP, 4);
+        let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
+        assert_eq!(
+            (offer.reserve, offer.rounds, offer.stock),
+            (standard, 12, 27)
+        );
+        assert_eq!(
+            clip_rounds(&f.world, standard),
+            27,
+            "preview cannot debit stock"
+        );
+        f.world.add_component(f.weapon, RuntimePropSelectedAmmo(1));
+        let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
+        assert_eq!((offer.reserve, offer.rounds), (he, 4));
+    }
+
+    #[test]
+    fn pouch_offer_uses_small_clip_canonical_size_after_a_mission_remap() {
+        let mut f = Fixture::new(0, 0);
+        let clip = f.reserve_with_canonical_template(EARTH_SMALL_STD_CLIP, SMALL_STD_CLIP, 17);
+        let offer = reserve_clip_for_pouch(&f.world, f.weapon).unwrap();
+        assert_eq!(
+            (offer.reserve, offer.template, offer.rounds),
+            (clip, SMALL_STD_CLIP, 6)
+        );
+    }
 
     struct Fixture {
         world: World,

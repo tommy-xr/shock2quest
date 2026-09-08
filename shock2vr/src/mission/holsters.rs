@@ -291,6 +291,8 @@ mod tests {
 }
 
 pub(super) struct Holsters {
+    pub body_pose: Option<super::body_inventory::BodyPose>,
+    pub freeze_heading: bool,
     yaw: Option<f32>,
     pub centers: Option<[Vector3<f32>; 2]>,
     pub near: [Option<usize>; 2],
@@ -302,6 +304,8 @@ pub(super) struct Holsters {
 impl Default for Holsters {
     fn default() -> Self {
         Self {
+            body_pose: None,
+            freeze_heading: false,
             yaw: None,
             centers: None,
             near: [None; 2],
@@ -356,6 +360,7 @@ impl Holsters {
         };
         if !head.is_tracked() || input.pose_tracking.is_some_and(|p| !p.head) {
             self.centers = None;
+            self.body_pose = None;
             self.near = [None; 2];
             self.pressed = [true; 2];
             self.pressed_item = [None; 2];
@@ -366,10 +371,14 @@ impl Holsters {
         let yaw = followed_yaw(
             self.yaw,
             direction.x.atan2(-direction.z),
-            self.near.iter().any(Option::is_some),
+            self.freeze_heading || self.near.iter().any(Option::is_some),
             dt,
         );
         self.yaw = Some(yaw);
+        self.body_pose = Some(super::body_inventory::BodyPose {
+            head: head.position,
+            yaw,
+        });
         let forward = vec3(yaw.sin(), 0.0, -yaw.cos());
         let right = forward.cross(Vector3::unit_y());
         let base = head.position
