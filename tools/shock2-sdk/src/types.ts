@@ -655,6 +655,12 @@ export interface PlayerSnapshot {
   explored_map_locations: number[];
   /** Climb state: ladder/hand climbing, and (VR) the hands holding on. */
   climb: ClimbState;
+  /** Resolved per-hand glove feedback; null in flat presentation. */
+  hand_feedback: Record<"left" | "right", {
+    target: number | null;
+    affordance: "None" | "Grabbable" | "Frobbable" | "Blocked";
+    light: "Off" | "Green" | "Amber" | "Red";
+  }> | null;
   /** Prepared VR pickup grips; empty for flat presentation or empty hands. */
   hand_grips: HandGrip[];
 }

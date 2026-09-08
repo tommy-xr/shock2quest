@@ -859,6 +859,10 @@ pub trait DebuggableScene {
 
     /// The player's climb state (see [`DebugClimbState`]). Scenes without a
     /// player report nothing.
+    fn hand_feedback(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
     fn hand_grips(&self) -> serde_json::Value {
         serde_json::json!([])
     }

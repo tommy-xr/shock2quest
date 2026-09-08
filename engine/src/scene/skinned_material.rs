@@ -9,6 +9,7 @@ use crate::shader_program::ShaderProgram;
 use crate::texture::TextureTrait;
 use c_string::*;
 use cgmath::Matrix4;
+use cgmath::Vector3;
 use cgmath::prelude::*;
 
 use once_cell::sync::OnceCell;
@@ -90,6 +91,13 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform float emissivity;
         uniform float transparency;
 
+        // A light painted onto part of the mesh: the mask's red channel says
+        // where, `emissiveTint` says what colour and how bright. A zero tint
+        // (the default) leaves the mesh exactly as it was, so meshes without a
+        // light bind their own diffuse map here and pay only the sample.
+        uniform sampler2D emissiveMask;
+        uniform vec3 emissiveTint;
+
         // Spotlight array uniforms (up to 6 spotlights)
         uniform vec3 spotlightPos[6];
         uniform vec4 spotlightColorIntensity[6];  // RGB + intensity
@@ -150,6 +158,12 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
             // Add emissive contribution
             finalColor += texColor.rgb * emissivity;
 
+            // Add the painted-on light. The branch is uniform across the draw,
+            // so a mesh without a light never pays the second fetch.
+            if (any(greaterThan(emissiveTint, vec3(0.0)))) {
+                finalColor += texture(emissiveMask, texCoord).r * emissiveTint;
+            }
+
             // Calculate contribution from all 6 spotlights
             vec3 normal = normalize(worldNormal);
             for (int i = 0; i < 6; i++) {
@@ -169,6 +183,7 @@ struct UnifiedUniforms {
     // Material properties
     emissivity_loc: i32,
     transparency_loc: i32,
+    emissive_tint_loc: i32,
 
     // Bone matrices for skeletal animation
     bone_matrices_loc: i32,
@@ -190,6 +205,12 @@ pub struct SkinnedMaterial {
     emissivity: f32,
     transparency: f32,
     base_transparency: f32,
+    /// Where the painted-on light sits, in the diffuse map's own UVs (red
+    /// channel). `None` binds the diffuse map in its place, so the sampler
+    /// always has a real texture; `emissive_tint` is then zero and the sample
+    /// contributes nothing.
+    emissive_mask: Option<Rc<dyn TextureTrait>>,
+    emissive_tint: Vector3<f32>,
 }
 
 impl SkinnedMaterial {
@@ -217,6 +238,10 @@ impl SkinnedMaterial {
             .get()
             .expect("unified shader not compiled");
         self.diffuse_texture.bind0(render_context);
+        self.emissive_mask
+            .as_ref()
+            .unwrap_or(&self.diffuse_texture)
+            .bind1(render_context);
         unsafe {
             gl::UseProgram(shader_program.gl_id);
 
@@ -230,6 +255,12 @@ impl SkinnedMaterial {
             // Set material properties
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
             gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
+            gl::Uniform3f(
+                uniforms.emissive_tint_loc,
+                self.emissive_tint.x,
+                self.emissive_tint.y,
+                self.emissive_tint.z,
+            );
 
             // Pack each affine bone as its 3 matrix rows (the shader-side
             // mat3x4's columns) and upload the whole palette in one call.
@@ -340,6 +371,20 @@ impl Material for SkinnedMaterial {
             unsafe {
                 let shader = crate::shader_program::link(&vertex_shader, &fragment_shader);
 
+                // Which texture unit each sampler reads is program state, not
+                // per-material state, so it is set once here rather than on
+                // every draw. (`texture1` would default to unit 0 anyway; the
+                // mask has to be told about unit 1.)
+                gl::UseProgram(shader.gl_id);
+                gl::Uniform1i(
+                    gl::GetUniformLocation(shader.gl_id, c_str!("texture1").as_ptr()),
+                    0,
+                );
+                gl::Uniform1i(
+                    gl::GetUniformLocation(shader.gl_id, c_str!("emissiveMask").as_ptr()),
+                    1,
+                );
+
                 // Get uniform locations for all shader variables
                 let bone_matrices_loc =
                     gl::GetUniformLocation(shader.gl_id, c_str!("bone_matrices[0]").as_ptr());
@@ -361,6 +406,10 @@ impl Material for SkinnedMaterial {
                     transparency_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("transparency").as_ptr(),
+                    ),
+                    emissive_tint_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("emissiveTint").as_ptr(),
                     ),
 
                     // Bone matrices
@@ -546,12 +595,49 @@ impl SkinnedMaterial {
         emissivity: f32,
         transparency: f32,
     ) -> Box<dyn Material> {
+        Self::build(
+            diffuse_texture,
+            emissivity,
+            transparency,
+            None,
+            Vector3::new(0.0, 0.0, 0.0),
+        )
+    }
+
+    /// As [`SkinnedMaterial::create`], plus a light painted onto the parts of
+    /// the mesh `emissive_mask` marks (its red channel), in `emissive_tint`'s
+    /// colour. A zero tint renders identically to `create`.
+    pub fn create_with_light(
+        diffuse_texture: Rc<dyn TextureTrait>,
+        emissivity: f32,
+        transparency: f32,
+        emissive_mask: Rc<dyn TextureTrait>,
+        emissive_tint: Vector3<f32>,
+    ) -> Box<dyn Material> {
+        Self::build(
+            diffuse_texture,
+            emissivity,
+            transparency,
+            Some(emissive_mask),
+            emissive_tint,
+        )
+    }
+
+    fn build(
+        diffuse_texture: Rc<dyn TextureTrait>,
+        emissivity: f32,
+        transparency: f32,
+        emissive_mask: Option<Rc<dyn TextureTrait>>,
+        emissive_tint: Vector3<f32>,
+    ) -> Box<dyn Material> {
         Box::new(SkinnedMaterial {
             diffuse_texture,
             has_initialized: false,
             emissivity,
             transparency,
             base_transparency: transparency,
+            emissive_mask,
+            emissive_tint,
         })
     }
 }

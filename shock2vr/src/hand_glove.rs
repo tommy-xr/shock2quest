@@ -27,6 +27,30 @@ const GLOVE_MODEL: &str = "vr_glove_model.glb";
 
 /// Authored glove colour map, shared with the pose inspection scene.
 const GLOVE_TEXTURE: &str = "vr_glove_color.jpg";
+const GLOVE_EMISSIVE_TEXTURE: &str = "vr_glove_emissive.png";
+
+/// The per-hand feedback colour, applied only to the authored emissive mask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HandLight {
+    #[default]
+    Off,
+    Green,
+    Amber,
+    Red,
+}
+
+impl HandLight {
+    pub const ALL: [Self; 4] = [Self::Off, Self::Green, Self::Amber, Self::Red];
+
+    pub fn tint(self) -> Vector3<f32> {
+        match self {
+            Self::Off => Vector3::new(0.0, 0.0, 0.0),
+            Self::Green => Vector3::new(0.05, 0.85, 0.25),
+            Self::Amber => Vector3::new(0.90, 0.55, 0.05),
+            Self::Red => Vector3::new(0.90, 0.10, 0.10),
+        }
+    }
+}
 
 /// Wrist-to-fingertip length the glove model is authored at, in world units -
 /// the +Z span of its bind-pose bounding box (fingers point along +Z).
@@ -62,7 +86,7 @@ pub struct GloveRenderer {
     open: Pose,
     fist: Pose,
     point: Pose,
-    materials: Vec<Rc<RefCell<Box<dyn Material>>>>,
+    materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
 }
 
 /// An authored pose a hand can be shown in when nothing analog is driving it -
@@ -89,18 +113,31 @@ impl GloveRenderer {
 
         let texture = load_glove_texture(asset_cache);
 
-        // One material per mesh; without the external texture, keep the
-        // materials the importer built (solid-color fallback).
-        let materials = model
-            .to_scene_objects()
-            .iter()
-            .map(|object| match &texture {
-                Some(texture) => Rc::new(RefCell::new(SkinnedMaterial::create(
-                    texture.clone(),
-                    1.0,
-                    0.0,
-                ))),
-                None => object.material.clone(),
+        let emissive = asset_cache
+            .get_opt::<_, engine::texture::Texture, _>(&TEXTURE_IMPORTER, GLOVE_EMISSIVE_TEXTURE)
+            .map(|texture| texture as Rc<dyn engine::texture::TextureTrait>);
+        // Immutable material sets per colour: drawing the second hand cannot
+        // recolour scene objects already submitted for the first hand.
+        let authored = model.to_scene_objects();
+        let materials = HandLight::ALL
+            .into_iter()
+            .map(|light| {
+                authored
+                    .iter()
+                    .map(|object| match &texture {
+                        Some(texture) => Rc::new(RefCell::new(match &emissive {
+                            Some(mask) => SkinnedMaterial::create_with_light(
+                                texture.clone(),
+                                1.0,
+                                0.0,
+                                mask.clone(),
+                                light.tint(),
+                            ),
+                            None => SkinnedMaterial::create(texture.clone(), 1.0, 0.0),
+                        })),
+                        None => object.material.clone(),
+                    })
+                    .collect()
             })
             .collect();
 
@@ -180,6 +217,7 @@ impl GloveRenderer {
         squeeze_value: f32,
         holding: bool,
         fitted: Option<(FingerAmounts, f32)>,
+        light: HandLight,
     ) -> Vec<SceneObject> {
         let mut amounts = if holding {
             // Gripping a held item: fingers wrapped on the handle, thumb
@@ -219,7 +257,7 @@ impl GloveRenderer {
         Self::render_posed(
             &mut self.model,
             &self.retarget,
-            &self.materials,
+            &self.materials[light as usize],
             &pose,
             position,
             rotation,
@@ -250,7 +288,7 @@ impl GloveRenderer {
         Self::render_posed(
             &mut self.model,
             &self.retarget,
-            &self.materials,
+            &self.materials[HandLight::Off as usize],
             pose,
             position,
             rotation,

@@ -5,7 +5,7 @@
 use cgmath::{Deg, Matrix4, Point3, Quaternion, Rotation3, vec3};
 use dark::importers::FONT_IMPORTER;
 use engine::{assets::asset_cache::AssetCache, audio::AudioContext, scene::SceneObject};
-use shipyard::{EntityId, IntoIter, IntoWithId, View};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, View};
 
 use crate::{
     GameOptions,
@@ -287,6 +287,14 @@ pub fn create_debug_interactions_scene(
             vec3(1.2, RACK_HEIGHT, 0.7),
         ));
     }
+    // Production buttons on small posts provide repeatable glove-feedback targets.
+    for x in [1.2, 2.2] {
+        boxes.push((
+            vec3(0.23, 0.29, 0.32),
+            vec3(x, 0.6, -1.4),
+            vec3(0.5, 1.2, 0.3),
+        ));
+    }
     let (objects, collider) = boxes_to_geometry(&boxes);
     let mut builder = DebugSceneBuilder::new("debug_interactions")
         .with_spawn_location(SpawnLocation::PositionRotation(
@@ -309,6 +317,19 @@ pub fn create_debug_interactions_scene(
                 * Matrix4::from_nonuniform_scale(
                     0.10 * engine::measure_text_width(&**font, fixture.label, 1.0),
                     0.10,
+                    1.0,
+                )
+                * Matrix4::from_angle_x(Deg(180.0)),
+        );
+        builder = builder.add_scene_object(label);
+    }
+    for (x, text) in [(1.2, "Feedback: locked"), (2.2, "Feedback: ready")] {
+        let mut label = SceneObject::world_space_text(text, font.clone(), 0.0);
+        label.set_transform(
+            Matrix4::from_translation(vec3(x, 1.8, -1.2))
+                * Matrix4::from_nonuniform_scale(
+                    0.07 * engine::measure_text_width(&**font, text, 1.0),
+                    0.07,
                     1.0,
                 )
                 * Matrix4::from_angle_x(Deg(180.0)),
@@ -356,7 +377,7 @@ impl DebugSceneHooks for InteractionHooks {
             return;
         }
         self.populated = true;
-        let spawns = INTERACTION_FIXTURES
+        let mut spawns: Vec<Effect> = INTERACTION_FIXTURES
             .iter()
             .enumerate()
             .map(|(index, fixture)| {
@@ -375,6 +396,7 @@ impl DebugSceneHooks for InteractionHooks {
                 spawn
             })
             .collect();
+        spawns.extend([1.2, 2.2].map(|x| spawn_at(-201, Point3::new(x, 1.3, -1.2))));
         core.handle_effects(
             spawns,
             global_context,
@@ -382,6 +404,38 @@ impl DebugSceneHooks for InteractionHooks {
             asset_cache,
             audio_context,
         );
+        let buttons = {
+            let templates = core
+                .world
+                .borrow::<View<dark::properties::PropTemplateId>>()
+                .unwrap();
+            let positions = core
+                .world
+                .borrow::<View<dark::properties::PropPosition>>()
+                .unwrap();
+            (&templates)
+                .iter()
+                .with_id()
+                .filter(|(_, template)| template.template_id == -201)
+                .map(|(entity, _)| (entity, positions.get(entity).unwrap().position.x < 1.7))
+                .collect::<Vec<_>>()
+        };
+        for (entity, locked) in buttons {
+            core.world.add_component(
+                entity,
+                (
+                    dark::properties::PropLocked(locked),
+                    dark::properties::PropSymName(
+                        if locked {
+                            "Feedback locked button"
+                        } else {
+                            "Feedback ready button"
+                        }
+                        .to_owned(),
+                    ),
+                ),
+            );
+        }
         // These two gameplay scripts are unimplemented and panic on initialize.
         // Keep their actual geometry available as explicitly labeled inert grip
         // samples here; production implant behavior is untouched.

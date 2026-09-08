@@ -371,6 +371,14 @@ impl crate::game_scene::DebuggableScene for Mission {
         self.mission_core.climb_grip(point, radius, feet_y)
     }
 
+    fn hand_feedback(&self) -> serde_json::Value {
+        self.mission_core.hand_feedback()
+    }
+
+    fn hand_grips(&self) -> serde_json::Value {
+        self.mission_core.hand_grips()
+    }
+
     fn player_climb(&self) -> Option<crate::game_scene::DebugClimbState> {
         self.mission_core.player_climb()
     }

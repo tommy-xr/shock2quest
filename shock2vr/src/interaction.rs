@@ -80,6 +80,10 @@ pub trait PlayerInteraction {
     /// Refresh glove attachment from the collision-resolved item transform.
     fn synchronize_held_visuals(&mut self, _world: &World) {}
 
+    fn hand_feedback_diagnostics(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
     fn grip_diagnostics(&self) -> serde_json::Value {
         serde_json::json!([])
     }
@@ -942,6 +946,10 @@ impl PlayerInteraction for VrInteraction {
         }
     }
 
+    fn hand_feedback_diagnostics(&self) -> serde_json::Value {
+        serde_json::json!({"left": self.left_hand.feedback_diagnostics(), "right": self.right_hand.feedback_diagnostics()})
+    }
+
     fn grip_diagnostics(&self) -> serde_json::Value {
         let visual_triggers = [
             self.left_hand.get_trigger_value(),
@@ -1066,6 +1074,7 @@ impl PlayerInteraction for VrInteraction {
                     &ctx.input.right_hand,
                     left_held_entity,
                     left_position,
+                    ctx.step_dt,
                 )
             };
         self.right_hand = right_hand;
@@ -1093,6 +1102,7 @@ impl PlayerInteraction for VrInteraction {
                     &ctx.input.left_hand,
                     right_held_entity,
                     right_position,
+                    ctx.step_dt,
                 )
             };
         self.left_hand = left_hand;

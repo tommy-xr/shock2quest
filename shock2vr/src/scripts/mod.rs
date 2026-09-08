@@ -59,6 +59,7 @@ mod room_trigger;
 pub mod script_util;
 mod setup_initial_debrief;
 mod std_door;
+pub(crate) use std_door::player_door_frob_blocked;
 mod tool_consumable;
 mod transluce;
 mod trap_delay;

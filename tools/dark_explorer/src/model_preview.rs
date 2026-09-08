@@ -336,6 +336,7 @@ impl ModelPreview {
                     0.0,
                     true,
                     Some((grip.finger_amounts(), 1.0)),
+                    shock2vr::HandLight::Off,
                 ));
                 let mut support_points = Vec::new();
                 if let Some(support) = support {
@@ -376,6 +377,7 @@ impl ModelPreview {
                         0.0,
                         false,
                         Some((support_grip.finger_amounts(), 1.0)),
+                        shock2vr::HandLight::Off,
                     ));
                     support_points.extend(
                         rig.fingers

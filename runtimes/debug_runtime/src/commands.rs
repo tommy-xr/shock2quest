@@ -931,6 +931,7 @@ pub struct PlayerInfo {
     /// Climb state: whether the player is on a ladder/hand hold at all, and
     /// (VR) which hands hold what. See `shock2vr::vr_climb`.
     pub climb: shock2vr::game_scene::DebugClimbState,
+    pub hand_feedback: serde_json::Value,
     pub hand_grips: serde_json::Value,
 }
 
