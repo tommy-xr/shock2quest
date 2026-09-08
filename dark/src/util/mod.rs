@@ -77,6 +77,13 @@ pub fn resolve_object_material_texture_name(
 }
 
 fn object_material_primary_texture(asset_cache: &AssetCache, requested: &str) -> Option<String> {
+    let script = object_material_script(asset_cache, requested)?;
+    let texture = primary_render_pass_texture(&script)?;
+    trace!("object material {requested} primary pass redirects to {texture}");
+    Some(texture)
+}
+
+fn object_material_script(asset_cache: &AssetCache, requested: &str) -> Option<String> {
     let stem = Path::new(requested).with_extension("");
     let stem = stem.to_str()?.to_ascii_lowercase();
     let candidates = [
@@ -90,9 +97,23 @@ fn object_material_primary_texture(asset_cache: &AssetCache, requested: &str) ->
     let reader = asset_cache.get_raw_reader(&script_name)?;
     let mut script = String::new();
     reader.borrow_mut().read_to_string(&mut script).ok()?;
-    let texture = primary_render_pass_texture(&script)?;
-    trace!("object material {requested} primary pass redirects to {texture}");
-    Some(texture)
+    Some(script)
+}
+
+/// A sole unlit, additive pass using the authored texture (25AE gun flashes).
+/// Do not apply overlay blending to ordinary multi-pass weapon materials.
+pub fn object_material_is_additive_flash(asset_cache: &AssetCache, requested: &str) -> bool {
+    object_material_script(asset_cache, requested)
+        .is_some_and(|script| is_additive_flash_script(&script))
+}
+
+fn is_additive_flash_script(script: &str) -> bool {
+    let passes = render_passes(script);
+    passes.len() == 1
+        && passes[0].keeps_authored_texture
+        && passes[0].additive_color
+        && passes[0].unlit
+        && passes[0].texture.is_none()
 }
 
 /// Find the texture a render-material script substitutes for the model's own
@@ -106,6 +127,21 @@ fn object_material_primary_texture(asset_cache: &AssetCache, requested: &str) ->
 /// skipped, and `$TEXTURE` in a base pass means the model keeps its authored
 /// texture.
 fn primary_render_pass_texture(script: &str) -> Option<String> {
+    for pass in render_passes(script) {
+        if pass.blend_is_base.unwrap_or(true) {
+            if pass.keeps_authored_texture {
+                return None;
+            }
+            if let Some(texture) = pass.texture.as_deref() {
+                return normalize_material_texture_reference(texture);
+            }
+        }
+    }
+    None
+}
+
+fn render_passes(script: &str) -> Vec<RenderPassFields> {
+    let mut passes = Vec::new();
     let mut pass: Option<RenderPassFields> = None;
     let mut brace_depth = 0_i32;
     let mut saw_open_brace = false;
@@ -148,6 +184,11 @@ fn primary_render_pass_texture(script: &str) -> Option<String> {
                 let source = fields.next();
                 let destination = fields.next();
                 fields_so_far.blend_is_base = Some(blend_is_base(source, destination));
+                fields_so_far.additive_color = source
+                    .is_some_and(|s| s.eq_ignore_ascii_case("SRC_COLOR"))
+                    && destination.is_some_and(|s| s.eq_ignore_ascii_case("ONE"));
+            } else if directive.eq_ignore_ascii_case("shaded") {
+                fields_so_far.unlit = fields.next() == Some("0");
             }
         }
 
@@ -159,22 +200,13 @@ fn primary_render_pass_texture(script: &str) -> Option<String> {
 
         if saw_open_brace && brace_depth <= 0 {
             if let Some(fields_so_far) = pass.take() {
-                // A pass with no `blend` directive draws normally.
-                if fields_so_far.blend_is_base.unwrap_or(true) {
-                    if fields_so_far.keeps_authored_texture {
-                        return None;
-                    }
-                    if let Some(texture) = fields_so_far.texture.as_deref() {
-                        return normalize_material_texture_reference(texture);
-                    }
-                }
-                // An overlay, or a base pass naming no texture: keep looking.
+                passes.push(fields_so_far);
             }
             saw_open_brace = false;
         }
     }
 
-    None
+    passes
 }
 
 /// The fields of one `render_pass` block that texture selection depends on.
@@ -186,6 +218,8 @@ struct RenderPassFields {
     keeps_authored_texture: bool,
     /// `None` when the pass carries no `blend` directive at all.
     blend_is_base: Option<bool>,
+    additive_color: bool,
+    unlit: bool,
 }
 
 /// Whether a `blend <source> <destination>` pair describes a base pass - one
@@ -603,5 +637,26 @@ render_pass
             resolve_object_material_texture_name(&asset_cache, "PANEL.PCX"),
             Some("txt16/panel.dds".to_owned())
         );
+    }
+}
+
+#[cfg(test)]
+mod additive_tests {
+    use super::*;
+    #[test]
+    fn additive_flash_requires_one_authored_unlit_pass() {
+        let flash = "render_material_only 1\nrender_pass\n{\nblend SRC_COLOR ONE\ntexture $TEXTURE\nshaded 0\n}\n";
+        assert!(is_additive_flash_script(flash));
+        assert!(!is_additive_flash_script(
+            &flash.replace("shaded 0", "shaded 1")
+        ));
+        assert!(!is_additive_flash_script(
+            &flash.replace("SRC_COLOR ONE", "ONE ZERO")
+        ));
+        assert!(!is_additive_flash_script(
+            &flash.replace("$TEXTURE", "specular")
+        ));
+        assert!(!is_additive_flash_script(&format!("{flash}{flash}")));
+        assert!(!is_additive_flash_script(&flash.replace('}', "")));
     }
 }

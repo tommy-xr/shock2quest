@@ -41,16 +41,30 @@ for (const presentation of ["flat", "left", "right"] as const) {
         assert.ok(hand === "left" ? sideways > 0.01 : sideways < -0.01,
           `casing must leave the ${hand} ejection side: ${sideways}`);
       }
-      if (!vr) {
-        const save = `casing_fx_${Date.now()}`;
-        assert.equal((await game.save(save)).success, true);
-        assert.equal((await game.load(save)).success, true);
-        assert.ok(!(await game.entities.list()).entities.some(e => e.template_id === -2657),
-          "short-lived cosmetic casings must not be relaunched by save/load");
-        return;
-      }
       await game.step({ frames: 60 });
       assert.ok(!(await game.entities.list()).entities.some(e => e.id === casing.id),
         "casing retains its authored effect lifetime");
     });
 }
+
+// Debug scenes have no mission file to reload; exercise saves in a real mission.
+test("flat AR15 casings stay transient across save/load", { skip: !enabled, timeout: 180_000 }, async () => {
+  await using game = await GameServer.launch({ mission: "earth.mis" });
+  await game.step({ frames: 30 });
+  await game.player.setStats({ skills: { standard_weapons: 6 } });
+  await game.player.spawnItem("Assault Rifle");
+  await game.input.trigger("EquipAssaultRifle");
+  await game.step({ frames: 5 });
+  await game.input.set("right_hand.trigger", 1);
+  await game.step({ frames: 1 });
+  await game.input.set("right_hand.trigger", 0);
+  assert.ok((await game.entities.list()).entities.some(e => e.template_id === -2657));
+  const save = `casing_fx_${Date.now()}`;
+  assert.equal((await game.save(save)).success, true);
+  assert.equal((await game.load(save)).success, true);
+  assert.ok(!(await game.entities.list()).entities.some(e => e.template_id === -2657),
+    "short-lived casings must not return after loading");
+  const gun = (await game.info()).player.wielded_entity_id;
+  assert.ok(gun);
+  assert.ok((await game.entities.detail(gun)).properties.some(p => p.name === "Model" && p.value === "ar15_h"));
+});

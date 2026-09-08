@@ -293,3 +293,32 @@ SDK checks verify hidden-root rendering and surviving particle riders.
 Remaining particle audit includes authored units, animation frames, tint/fade
 and additional jet attachments; this correction does not claim that every
 projectile's particle behavior now matches the original engine.
+
+
+## Visible muzzle flashes
+
+The held-model grip correction rotated the one-sided flash cone 180 degrees,
+pointing it back into the weapon and culling its surface from the shooter.
+Flash orientation now maps its authored -X axis onto the weapon barrel frame;
+a unit regression covers held -X and classic world -Z models.
+
+25AE `ND-gunflash.mtl` also authors a sole unlit `SRC_COLOR ONE` pass using
+`$TEXTURE`. Ignoring it rendered a black polygon once orientation was fixed.
+The existing material-script parser now recognizes that narrow form, with an
+unlit additive shader and blend state scoped to the draw. Ordinary multi-pass
+weapon overlays retain existing behavior. Additive materials enter the
+transparent pass and scale accumulated light by authored opacity. Flat
+attachments now apply RenderAlpha as the VR world pass already does, and carry
+render-debug identity so SDK assertions inspect actual flash draws.
+
+The user's followup confirms casing motion improved in #1447 but its long
+axis remains upright. The casing asset is authored along Y; launch yaw alone
+does not lay it sideways. Correcting initial casing pose is the next layer;
+authored random bank and spin remain part of the weapon-effects audit.
+
+Flat AR15 verification also exposed a stale four-model wield whitelist: the
+renderer used `ar15_h`, but attachment data still came from `ar15_w`. Flat now
+adopts every authored first-person mesh through the existing ChangeModel path,
+matching its renderer and restoring the correct attachment positions and axes.
+The casing-side regression reproduced on the parent as well; this model fix
+addresses that underlying mismatch rather than changing its assertion.

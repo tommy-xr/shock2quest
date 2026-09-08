@@ -1,6 +1,4 @@
-use cgmath::{
-    Deg, EuclideanSpace, InnerSpace, Matrix4, Quaternion, Rotation, Rotation3, Transform, point3,
-};
+use cgmath::{Deg, EuclideanSpace, InnerSpace, Matrix4, Quaternion, Rotation3, Transform, point3};
 use dark::{
     SCALE_FACTOR,
     properties::{
@@ -732,12 +730,11 @@ pub(super) fn create_muzzle_flash(
         };
     }
 
-    let adjustments = vr_config::get_vr_hand_model_adjustments_from_entity(
-        entity_id,
-        world,
-        vr_config::Handedness::Left,
-    );
-    let orientation = adjustments.rotation.invert() * Quaternion::from_angle_y(Deg(90.0));
+    // Flash meshes are authored along -X, just like held gun barrels. The old
+    // inverse grip adjustment turned them 180 degrees, putting their one-sided
+    // faces away from the shooter and the cone back inside the gun.
+    let axis = crate::weapon_muzzle::resolve(world, entity_id).axis;
+    let orientation = Quaternion::from_arc(cgmath::vec3(-1.0, 0.0, 0.0), axis, None);
 
     Effect::CreateEntity {
         template_id: muzzle_flash_template_id,
@@ -832,6 +829,34 @@ pub(super) fn create_projectile(
 
 #[cfg(test)]
 mod tests {
+    use cgmath::Rotation;
+    #[test]
+    fn flash_cone_points_out_of_held_and_world_barrels() {
+        for (name, axis) in [
+            ("ar15_h", vec3(-1.0, 0.0, 0.0)),
+            ("ar15_w", vec3(0.0, 0.0, -1.0)),
+        ] {
+            let mut world = World::new();
+            let gun = world.add_entity((
+                dark::properties::PropModelName(name.to_owned()),
+                RuntimePropTransform(Matrix4::from_scale(0.55)),
+                RuntimePropVhots(vec![muzzle_vhot(point3(-1.0, 0.0, 0.0))]),
+            ));
+            let Effect::CreateEntity { orientation, .. } =
+                create_muzzle_flash(&world, gun, -2653, &GunFlashOptions { vhot: 0, flags: 0 })
+            else {
+                panic!("flash must spawn");
+            };
+            // The assflash cone extends down local -X. Flipping it points the
+            // visible CW front away from the shooter and buries it in the gun.
+            let forward = orientation.rotate_vector(vec3(-1.0, 0.0, 0.0));
+            assert!(
+                (forward - axis).magnitude() < 0.001,
+                "{name}: cone faces {forward:?}"
+            );
+        }
+    }
+
     #[test]
     fn gun_flash_resolves_a_sparse_authored_vhot_id() {
         let mut world = World::new();
