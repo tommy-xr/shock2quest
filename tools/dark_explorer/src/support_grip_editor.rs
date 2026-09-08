@@ -1,7 +1,10 @@
 //! Support-hand authoring uses the same resource and placement as gameplay.
 use crate::grip_editor::{CurlPoseEditor, default_library_path, persist_json, tweak_slider};
 use eframe::egui;
-use shock2vr::{Handedness, vr_support::SupportProfile};
+use shock2vr::{
+    Handedness,
+    vr_support::{SupportProfile, SupportRegion},
+};
 use std::{collections::BTreeMap, path::PathBuf};
 
 struct SupportDocument {
@@ -68,12 +71,44 @@ impl SupportDocument {
     }
 }
 
+/// Edit model-local points in the displayed hand frame and physical centimeters.
+fn tweak_anchor(
+    ui: &mut egui::Ui,
+    point: &mut [f32; 3],
+    primary: Handedness,
+    mirror: cgmath::Matrix4<f32>,
+    item_scale: f32,
+) {
+    use cgmath::{SquareMatrix, Transform};
+    let factor = item_scale * shock2vr::METERS_PER_WORLD_UNIT * 100.0;
+    let mut anchor: [f32; 3] = SupportProfile::point_in_frame(*point, primary, mirror).into();
+    let mut changed = false;
+    for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+        let mut cm = anchor[i] * factor;
+        if tweak_slider(ui, axis, &mut cm, -100.0..=100.0, 0.1, 2) {
+            anchor[i] = cm / factor;
+            changed = true;
+        }
+    }
+    if changed {
+        *point = if primary == Handedness::Left {
+            mirror
+                .invert()
+                .map(|inverse| inverse.transform_point(cgmath::Point3::from(anchor)).into())
+                .unwrap_or(*point)
+        } else {
+            anchor
+        };
+    }
+}
+
 pub struct SupportEditor {
     document: Result<SupportDocument, String>,
     save_as: Option<String>,
     message: String,
     rotation_step: f32,
     curl_editor: CurlPoseEditor,
+    region_preview: f32,
 }
 impl SupportEditor {
     pub fn new(path: Option<PathBuf>) -> Self {
@@ -87,6 +122,7 @@ impl SupportEditor {
             message: String::new(),
             rotation_step: 5.0,
             curl_editor: CurlPoseEditor::default(),
+            region_preview: 0.5,
         }
     }
     pub fn dirty(&self) -> bool {
@@ -104,6 +140,11 @@ impl SupportEditor {
 
     pub fn preview_profile(&self, model: &str) -> Option<SupportProfile> {
         let mut profile = self.profile(model)?.clone();
+        if let Some(region) = &profile.region {
+            profile.palm_anchor = std::array::from_fn(|i| {
+                region.start[i] + (region.end[i] - region.start[i]) * self.region_preview
+            });
+        }
         profile.curls = shock2vr::vr_grip::blended_curls(
             profile.curls,
             profile.trigger_curls,
@@ -179,6 +220,7 @@ impl SupportEditor {
                     model.into(),
                     SupportProfile {
                         palm_anchor: [-0.09, 0.35, 0.02],
+                        region: None,
                         rotation_degrees: [0.0; 3],
                         curls: [0.4; 5],
                         trigger_curls: None,
@@ -193,31 +235,27 @@ impl SupportEditor {
             ui.add_enabled_ui(
                 enabled && item_scale.is_finite() && item_scale > 0.0,
                 |ui| {
-                    ui.columns(3, |columns| {
-                        columns[0].strong("Palm position on item (cm)");
-                        use cgmath::{SquareMatrix, Transform};
-                        let factor = item_scale * shock2vr::METERS_PER_WORLD_UNIT * 100.0;
-                        let mut anchor: [f32; 3] =
-                            profile.anchor_in_frame(primary, model_mirror).into();
-                        let mut changed = false;
-                        for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
-                            let mut cm = anchor[i] * factor;
-                            if tweak_slider(&mut columns[0], axis, &mut cm, -100.0..=100.0, 0.1, 2)
-                            {
-                                anchor[i] = cm / factor;
-                                changed = true;
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(profile.region.is_none(), "Fixed socket").clicked() {
+                            if let Some(region) = profile.region.take() {
+                                profile.palm_anchor = std::array::from_fn(|i| region.start[i] + (region.end[i] - region.start[i]) * self.region_preview);
                             }
                         }
-                        if changed {
-                            let anchor = cgmath::Point3::from(anchor);
-                            profile.palm_anchor = if primary == Handedness::Left {
-                                model_mirror
-                                    .invert()
-                                    .map(|inverse| inverse.transform_point(anchor).into())
-                                    .unwrap_or(profile.palm_anchor)
-                            } else {
-                                anchor.into()
-                            };
+                        if ui.selectable_label(profile.region.is_some(), "Support region").clicked() && profile.region.is_none() {
+                            let mut end = profile.palm_anchor;
+                            end[0] -= 0.2 / item_scale;
+                            profile.region = Some(SupportRegion { start: profile.palm_anchor, end });
+                        }
+                    });
+                    ui.columns(3, |columns| {
+                        columns[0].strong("Palm position on item (cm)");
+                        if let Some(region) = &mut profile.region {
+                            columns[0].small("Region start");
+                            tweak_anchor(&mut columns[0], &mut region.start, primary, model_mirror, item_scale);
+                            columns[0].small("Region end");
+                            tweak_anchor(&mut columns[0], &mut region.end, primary, model_mirror, item_scale);
+                        } else {
+                            tweak_anchor(&mut columns[0], &mut profile.palm_anchor, primary, model_mirror, item_scale);
                         }
                         columns[1].strong("Support wrist rotation (degrees)");
                         for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
@@ -246,6 +284,16 @@ impl SupportEditor {
                             "Support trigger preview",
                         );
                     });
+                    if profile.region.is_some() {
+                        ui.add(egui::Slider::new(&mut self.region_preview, 0.0..=1.0).text("Position along region"));
+                        ui.small("Squeeze selects the nearest point; the contact stays fixed until release.");
+                    }
+                    let units = shock2vr::METERS_PER_WORLD_UNIT * 100.0;
+                    let mut radius = profile.grab_radius * units;
+                    if tweak_slider(ui, "Grab radius (cm)", &mut radius, 0.01*units..=0.15*units, 0.1, 2) {
+                        profile.grab_radius = (radius / units).clamp(0.01,0.15);
+                        profile.release_distance = profile.release_distance.max(profile.grab_radius);
+                    }
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Rotation nudge");
                         ui.add(egui::Slider::new(&mut self.rotation_step, 0.1..=15.0).suffix("°"));
@@ -325,6 +373,10 @@ mod tests {
         assert!(!doc.profiles.contains_key("nanocan"));
         doc.profiles.get_mut("wrench_h").unwrap().rotation_degrees = [20.0, -15.0, 30.0];
         doc.profiles.get_mut("wrench_h").unwrap().palm_anchor[2] = 0.04;
+        doc.profiles.get_mut("wrench_h").unwrap().region = Some(SupportRegion {
+            start: [0.0, 0.2, 0.0],
+            end: [0.0, 0.4, 0.0],
+        });
         doc.profiles.get_mut("wrench_h").unwrap().trigger_curls = Some([0.7; 5]);
         doc.save().unwrap();
         assert_eq!(

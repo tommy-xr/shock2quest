@@ -2,10 +2,10 @@
 use cgmath::{Deg, Euler, InnerSpace, Matrix4, Point3, Quaternion, Rotation, Transform, Vector3};
 use serde::{Deserialize, Serialize};
 
-/// Fixed authored support sockets currently enabled in gameplay.
+/// Authored support sockets and regions currently enabled in gameplay.
 /// Keep the Explorer eligibility notice and runtime policy together.
 pub fn supports_model(model: &str) -> bool {
-    matches!(model, "wrench_h" | "atek_h" | "sg_h")
+    matches!(model, "wrench_h" | "atek_h" | "sg_h" | "fsn_h" | "al_h")
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -35,11 +35,20 @@ impl GripPose {
     }
 }
 
+/// A model-local segment swept by the profile's grab radius.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SupportRegion {
+    pub start: [f32; 3],
+    pub end: [f32; 3],
+}
+
 /// Anchor in the normalized weapon mesh used by prepared grips (before item scale).
 /// Stored in the right-primary model frame; the renderer supplies the opposite frame.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SupportProfile {
     pub palm_anchor: [f32; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<SupportRegion>,
     /// Support wrist rotation relative to the primary wrist; authored right-primary.
     #[serde(default)]
     pub rotation_degrees: [f32; 3],
@@ -54,6 +63,10 @@ pub struct SupportProfile {
 impl SupportProfile {
     pub fn is_valid(&self) -> bool {
         self.palm_anchor.iter().all(|v| v.is_finite())
+            && self
+                .region
+                .as_ref()
+                .is_none_or(|r| r.start.iter().chain(&r.end).all(|v| v.is_finite()))
             && self
                 .rotation_degrees
                 .iter()
@@ -104,6 +117,49 @@ impl SupportProfile {
             && from.normalize().dot(to.normalize()) >= self.max_swing_degrees.to_radians().cos()
     }
 
+    pub fn region_in_frame(
+        &self,
+        primary: crate::Handedness,
+        mirror: Matrix4<f32>,
+    ) -> [Vector3<f32>; 2] {
+        let points = self
+            .region
+            .as_ref()
+            .map_or([self.palm_anchor; 2], |r| [r.start, r.end]);
+        points.map(|p| Self::point_in_frame(p, primary, mirror))
+    }
+
+    /// Query in scaled model space. The chosen anchor is locked by the attachment.
+    pub fn closest_anchor(
+        &self,
+        primary: crate::Handedness,
+        mirror: Matrix4<f32>,
+        scale: f32,
+        model: GripPose,
+        palm: Vector3<f32>,
+    ) -> Vector3<f32> {
+        use rapier3d::{
+            na,
+            parry::{query::PointQuery, shape::Segment},
+        };
+        let [a, b] = self.region_in_frame(primary, mirror).map(|p| p * scale);
+        if (b - a).magnitude2() < 1e-8 {
+            return a;
+        }
+        let local = model
+            .rotation
+            .conjugate()
+            .rotate_vector(palm - model.position);
+        let segment = Segment::new(
+            na::Point3::new(a.x, a.y, a.z),
+            na::Point3::new(b.x, b.y, b.z),
+        );
+        let point = segment
+            .project_local_point(&na::Point3::new(local.x, local.y, local.z), false)
+            .point;
+        Vector3::new(point.x, point.y, point.z)
+    }
+
     /// Use the same reflection as the rendered item: gun Z and posed melee X
     /// are different model frames even though both gloves mirror hand X.
     pub fn anchor_in_frame(
@@ -111,7 +167,15 @@ impl SupportProfile {
         primary: crate::Handedness,
         model_mirror: Matrix4<f32>,
     ) -> Vector3<f32> {
-        let point = Point3::from(self.palm_anchor);
+        Self::point_in_frame(self.palm_anchor, primary, model_mirror)
+    }
+
+    pub fn point_in_frame(
+        point: [f32; 3],
+        primary: crate::Handedness,
+        model_mirror: Matrix4<f32>,
+    ) -> Vector3<f32> {
+        let point = Point3::from(point);
         let point = if primary == crate::Handedness::Left {
             model_mirror.transform_point(point)
         } else {
@@ -158,9 +222,55 @@ mod tests {
     use cgmath::{Deg, One, Rotation3, vec3};
 
     #[test]
+    fn support_region_projects_in_scaled_rotated_and_mirrored_model_frames() {
+        let mut profile: SupportProfile = serde_json::from_value(serde_json::json!({
+            "palm_anchor": [0.0,0.2,0.0], "curls":[0.5,0.5,0.5,0.5,0.5],
+            "grab_radius":0.07,"release_distance":0.12,"max_swing_degrees":75.0
+        }))
+        .unwrap();
+        profile.region = Some(SupportRegion {
+            start: [0.1, 0.2, 0.1],
+            end: [0.1, 0.6, 0.1],
+        });
+        let model = GripPose {
+            position: vec3(2.0, 3.0, 4.0),
+            rotation: Quaternion::from_angle_z(Deg(47.0)),
+        };
+        for hand in [crate::Handedness::Left, crate::Handedness::Right] {
+            let mirror = Matrix4::from_translation(vec3(0.0, 0.0, 0.15))
+                * crate::Handedness::Left.gun_mirror();
+            let [a, b] = profile.region_in_frame(hand, mirror).map(|p| p * 0.55);
+            for t in [-0.5_f32, 0.0, 0.3, 1.0, 1.5] {
+                let palm = model.point(a + (b - a) * t + vec3(0.02, 0.0, 0.0));
+                let anchor = profile.closest_anchor(hand, mirror, 0.55, model, palm);
+                assert!((anchor - (a + (b - a) * t.clamp(0.0, 1.0))).magnitude() < 1e-5);
+            }
+        }
+        profile.region.as_mut().unwrap().end = profile.region.as_ref().unwrap().start;
+        assert!(profile.is_valid(), "zero-length region behaves as a socket");
+        let expected = Vector3::from(profile.region.as_ref().unwrap().start);
+        assert_eq!(
+            profile.closest_anchor(
+                crate::Handedness::Right,
+                Matrix4::one(),
+                1.0,
+                model,
+                model.position
+            ),
+            expected
+        );
+        let restored: SupportProfile =
+            serde_json::from_str(&serde_json::to_string(&profile).unwrap()).unwrap();
+        assert_eq!(restored, profile);
+        profile.region.as_mut().unwrap().start[0] = f32::NAN;
+        assert!(!profile.is_valid());
+    }
+
+    #[test]
     fn rotated_support_pose_preserves_the_mirrored_palm_in_runtime_and_editor() {
         let profile = SupportProfile {
             palm_anchor: [-0.09, 0.354, 0.02],
+            region: None,
             rotation_degrees: [20.0, 15.0, -30.0],
             curls: [0.4; 5],
             trigger_curls: None,
@@ -232,6 +342,7 @@ mod tests {
         );
         let mut profile = SupportProfile {
             palm_anchor: [0.02, 0.2, 0.0],
+            region: None,
             rotation_degrees: [0.0; 3],
             curls: [0.5; 5],
             trigger_curls: None,

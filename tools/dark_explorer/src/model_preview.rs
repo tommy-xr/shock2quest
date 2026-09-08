@@ -339,6 +339,16 @@ impl ModelPreview {
                 ));
                 let mut support_points = Vec::new();
                 if let Some(support) = support {
+                    if support.region.is_some() {
+                        let [a, b] = support
+                            .region_in_frame(*hand, model_mirror)
+                            .map(|p| grip.offset + grip.rotation * (p * grip.item_scale));
+                        objects.push(support_region_overlay(a, b, support.grab_radius));
+                        for p in [a, b] {
+                            support_points.push(p - vec3(1.0, 1.0, 1.0) * support.grab_radius);
+                            support_points.push(p + vec3(1.0, 1.0, 1.0) * support.grab_radius);
+                        }
+                    }
                     let other = if *hand == Handedness::Left {
                         Handedness::Right
                     } else {
@@ -839,4 +849,22 @@ impl ToolScene for GripPreviewScene {
     fn render(&self, _asset_cache: &mut AssetCache) -> engine::scene::Scene {
         self.0.clone()
     }
+}
+
+/// Wire capsule in preview coordinates: the same world-unit radius used to grab.
+fn support_region_overlay(
+    a: cgmath::Vector3<f32>,
+    b: cgmath::Vector3<f32>,
+    radius: f32,
+) -> engine::scene::SceneObject {
+    use engine::scene::{SceneObject, VertexPosition, color_material, lines_mesh};
+    let mut vertices = vec![
+        VertexPosition { position: a },
+        VertexPosition { position: b },
+    ];
+    dark::hit_box::append_capsule_lines(&mut vertices, &Matrix4::one(), a, b, radius);
+    SceneObject::new(
+        color_material::create(vec3(0.1, 0.9, 0.8)),
+        Box::new(lines_mesh::create(vertices)),
+    )
 }
