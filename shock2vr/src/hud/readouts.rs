@@ -134,12 +134,17 @@ fn emit_bio_overlays(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &BioR
         );
 }
 
-/// The bio overlays on a panel-sized canvas at panel origin (0,0), for a
-/// presentation that supplies its own BIOFULL backdrop - the VR left forearm.
-/// The counterpart of [`ammo_panel::build_readout_canvas`].
-pub(crate) fn build_bio_readout_canvas(readout: &BioReadout) -> UiCanvas {
-    let mut canvas = UiCanvas::new(BIO_FULL_SIZE);
-    emit_bio_overlays(&mut canvas, vec2(0.0, 0.0), readout);
+/// Both rows of the shipped bio monitor, cropped to a compact wrist face.
+pub(crate) const WATCH_CROP: Rect = Rect::new(0.0, 14.0, 128.0, 44.0);
+pub(crate) fn build_watch_canvas(readout: &BioReadout) -> UiCanvas {
+    let mut canvas = UiCanvas::new(vec2(WATCH_CROP.w, WATCH_CROP.h));
+    canvas.cropped_image(
+        Rect::new(0.0, 0.0, WATCH_CROP.w, WATCH_CROP.h),
+        "BIO.PCX",
+        WATCH_CROP,
+        BIO_SIZE,
+    );
+    emit_bio_overlays(&mut canvas, vec2(-WATCH_CROP.x, -WATCH_CROP.y), readout);
     canvas
 }
 
@@ -328,13 +333,10 @@ mod tests {
         }
     }
 
-    /// The VR left forearm and the interface canvas draw ONE bio layout: the
-    /// forearm's panel-local canvas carries exactly the elements `emit_bio`
-    /// places (minus the backdrop art the forearm wears as its own quad), at
-    /// the same rects relative to the panel origin. A forearm that re-derived
-    /// its bars would drift from the interface silently (issue #1268).
+    /// Cropping the wrist face translates the shared bio layout without
+    /// independently placing either row (issue #1268).
     #[test]
-    fn the_forearm_canvas_is_the_interface_bio_layout_at_panel_origin() {
+    fn the_watch_preserves_both_rows_of_the_interface_bio_layout() {
         let bio = BioReadout {
             health_fraction: 0.4,
             psi_fraction: 0.9,
@@ -349,15 +351,26 @@ mod tests {
             &bio,
         );
 
-        let forearm = build_bio_readout_canvas(&bio);
-        assert_eq!(forearm.size(), BIO_FULL_SIZE);
-        // The backdrop is the interface's first element and the forearm's quad.
-        assert_eq!(forearm.element_count(), interface.element_count() - 1);
+        let forearm = build_watch_canvas(&bio);
+        assert_eq!(forearm.size(), vec2(WATCH_CROP.w, WATCH_CROP.h));
+        // Each canvas has one backdrop followed by the same four overlays.
+        assert_eq!(forearm.element_count(), interface.element_count());
 
-        for (on_arm, on_panel) in forearm.elements().iter().zip(&interface.elements()[1..]) {
+        for (on_arm, on_panel) in forearm.elements()[1..]
+            .iter()
+            .zip(&interface.elements()[1..])
+        {
             let (arm, panel) = (on_arm.rect(), on_panel.rect());
-            assert_eq!(arm.x + BIO_ORIGIN.x, panel.x, "{arm:?} vs {panel:?}");
-            assert_eq!(arm.y + BIO_ORIGIN.y, panel.y, "{arm:?} vs {panel:?}");
+            assert_eq!(
+                arm.x + WATCH_CROP.x + BIO_ORIGIN.x,
+                panel.x,
+                "{arm:?} vs {panel:?}"
+            );
+            assert_eq!(
+                arm.y + WATCH_CROP.y + BIO_ORIGIN.y,
+                panel.y,
+                "{arm:?} vs {panel:?}"
+            );
             assert_eq!((arm.w, arm.h), (panel.w, panel.h));
         }
     }

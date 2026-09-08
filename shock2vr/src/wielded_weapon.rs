@@ -11,10 +11,10 @@
 //!
 //! **Both-hands precedence.** When both hands hold a weapon, the RIGHT hand
 //! wins. It is the dominant/aiming hand for the default VR player, it is the
-//! hand the forearm ammo panel is worn beside, and - because flat never fills
-//! the right slot - preferring it leaves flatscreen behaviour exactly as it
-//! was. A future hand-specific affordance (e.g. a reload gesture that starts
-//! from one controller) should resolve its own hand with [`weapon_in_hand`]
+//! default for hand-agnostic controls. Because flat never fills the right
+//! slot, this leaves flatscreen behaviour as it was. Hand-specific affordances
+//! (the wrist ammo monitors and controller buttons) resolve their own hand
+//! with [`weapon_in_hand`]
 //! rather than going through [`wielded_weapon`].
 
 use dark::properties::PropGunState;

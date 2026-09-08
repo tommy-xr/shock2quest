@@ -366,7 +366,7 @@ pub enum ButtonHoverBehavior {
 /// than their cell (the wrench is 22 wide) - and are blitted 1:1 into the
 /// slot, not stretched to it. They also key transparency on palette index 0,
 /// independent of that entry's RGB.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum ImageKind {
     /// Ordinary UI art: opaque, stretched to the element's rect.
     #[default]
@@ -385,6 +385,12 @@ pub enum ImageKind {
     /// `tiles_y` times across the element's rect, with its black dropped and
     /// its lines tinted (see [`HOLOGRAM_TINT`]). Sized like [`Self::Ui`].
     Hologram { tiles_x: u8, tiles_y: u8 },
+    /// One sub-rectangle of the art, stretched to the element's rect - the
+    /// corners in normalized texture coordinates, `v` measured from the top of
+    /// the bitmap. Built by [`UiCanvas::cropped_image`]; lets a panel wear a
+    /// region of a shipped bitmap (a single row of the bio monitor, the ammo
+    /// gauge's well) without a second, hand-cut copy of the art.
+    Crop { u0: f32, v0: f32, u1: f32, v1: f32 },
 }
 
 /// The grid tile every hologram panel is drawn from (`shodan/s45.pcx`): a black
@@ -426,6 +432,7 @@ impl ImageKind {
                     vec2(first + tiles_x as f32, first + tiles_y as f32),
                 ))
             }
+            Self::Crop { u0, v0, u1, v1 } => Some((vec2(u0, v0), vec2(u1, v1))),
             _ => None,
         }
     }
@@ -631,6 +638,30 @@ where
             texture: texture.to_owned(),
             alpha: 1.0,
             kind: ImageKind::Ui,
+        });
+        self
+    }
+
+    /// Draw the `source` region of `texture` - in the art's own texels, with
+    /// `art_size` its authored pixel size - stretched to `rect`.
+    pub fn cropped_image(
+        &mut self,
+        rect: Rect,
+        texture: &str,
+        source: Rect,
+        art_size: Vector2<f32>,
+    ) -> &mut Self {
+        self.elements.push(UiElement::Image {
+            position: vec2(rect.x, rect.y),
+            size: vec2(rect.w, rect.h),
+            texture: texture.to_owned(),
+            alpha: 1.0,
+            kind: ImageKind::Crop {
+                u0: source.x / art_size.x,
+                v0: source.y / art_size.y,
+                u1: (source.x + source.w) / art_size.x,
+                v1: (source.y + source.h) / art_size.y,
+            },
         });
         self
     }
@@ -1158,7 +1189,7 @@ pub(crate) fn drawn_rect(
     kind: ImageKind,
 ) -> (Vector2<f32>, Vector2<f32>) {
     match kind {
-        ImageKind::Ui | ImageKind::Hologram { .. } => (position, size),
+        ImageKind::Ui | ImageKind::Hologram { .. } | ImageKind::Crop { .. } => (position, size),
         ImageKind::ObjectIcon => (position + centered_offset(size, texture_px), texture_px),
         ImageKind::ObjectIconFit => {
             let scale = (size.x / texture_px.x).min(size.y / texture_px.y).min(1.0);
@@ -1212,6 +1243,37 @@ fn world_element_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cropped_art_keeps_its_destination_rect_and_authored_texel_bounds() {
+        let mut canvas = UiCanvas::new(vec2(90.0, 44.0));
+        canvas.cropped_image(
+            Rect::new(0.0, 0.0, 90.0, 44.0),
+            "AMMOFULL.PCX",
+            Rect::new(168.0, 14.0, 90.0, 44.0),
+            vec2(260.0, 64.0),
+        );
+        let UiElement::Image {
+            position,
+            size,
+            kind,
+            ..
+        } = &canvas.elements()[0]
+        else {
+            panic!("expected image")
+        };
+        assert_eq!(
+            drawn_rect(*position, *size, vec2(260.0, 64.0), *kind),
+            (*position, *size)
+        );
+        assert_eq!(
+            kind.uv_rect(),
+            Some((
+                vec2(168.0 / 260.0, 14.0 / 64.0),
+                vec2(258.0 / 260.0, 58.0 / 64.0)
+            ))
+        );
+    }
 
     #[test]
     fn rect_contains() {
