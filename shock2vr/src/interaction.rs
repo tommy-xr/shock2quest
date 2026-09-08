@@ -22,7 +22,7 @@ use crate::{
     GameOptions,
     flat_player_controller::FlatPlayerController,
     hand_glove::GloveRenderer,
-    hud::create_arm_hud_panels,
+    hud::create_wrist_hud_panels,
     input_context::InputContext,
     physics::PhysicsWorld,
     virtual_hand::{VirtualHand, VirtualHandEffect, hand_world_position},
@@ -1228,7 +1228,7 @@ impl PlayerInteraction for VrInteraction {
         }
         // Labelled as the player's hands: that is what `Game` drops while the
         // pause menu is up (issue #1018), and what `/v1/scene` reports. The
-        // forearm panels carry their own label from `create_arm_hud_panels`,
+        // forearm panels carry their own label from `create_wrist_hud_panels`,
         // which the `debug_hud` scene emits without going through here.
         crate::util::tag_render_source(&mut objs, crate::util::render_source::PLAYER_HANDS);
         if crate::dev_params::get_bool(crate::dev_params::VR_SUPPORT_GRIPS) {
@@ -1293,15 +1293,21 @@ impl PlayerInteraction for VrInteraction {
                 objs.extend(overlay);
             }
         }
-        objs.append(&mut create_arm_hud_panels(
-            asset_cache,
-            world,
-            use_mode,
-            self.left_hand.get_position(),
-            self.left_hand.get_rotation(),
-            self.right_hand.get_position(),
-            self.right_hand.get_rotation(),
-        ));
+        if let Some(renderer) = glove_renderer.as_deref_mut() {
+            let frames = [
+                renderer.wrist_frame(Handedness::Left),
+                renderer.wrist_frame(Handedness::Right),
+            ];
+            let tracked = self.hand_poses();
+            let visible = std::array::from_fn(|i| self.visual_hands[i].unwrap_or(tracked[i]));
+            objs.append(&mut create_wrist_hud_panels(
+                asset_cache,
+                world,
+                use_mode,
+                visible,
+                frames,
+            ));
+        }
         objs
     }
 

@@ -86,6 +86,7 @@ pub struct GloveRenderer {
     open: Pose,
     fist: Pose,
     point: Pose,
+    wrist_frames: Option<[Matrix4<f32>; 2]>,
     materials: Vec<Vec<Rc<RefCell<Box<dyn Material>>>>>,
 }
 
@@ -150,6 +151,7 @@ impl GloveRenderer {
             fist: hand_pose::fist_right_hand(),
             point: hand_pose::point_right_hand(),
             materials,
+            wrist_frames: None,
         })
     }
 
@@ -205,6 +207,34 @@ impl GloveRenderer {
             palm,
             normal,
         }
+    }
+
+    /// A readable plate basis measured from this glove's wrist and palm, in
+    /// calibrated hand space. Keep text right-handed even on the mirrored glove.
+    pub(crate) fn wrist_frame(&mut self, hand: Handedness) -> Matrix4<f32> {
+        use cgmath::InnerSpace;
+        if self.wrist_frames.is_none() {
+            self.wrist_frames = Some([Handedness::Left, Handedness::Right].map(|side| {
+                let rig = self.grip_kinematics(side);
+                self.retarget.apply(&self.open, &mut self.model);
+                let node = self.model.skeleton().node_index_for_joint(1).unwrap();
+                let wrist = (crate::vr_grip::glove_to_hand(side)
+                    * self.model.get_global_transform(node).unwrap())
+                .w
+                .truncate();
+                let normal = -rig.normal;
+                let along = rig.palm - wrist;
+                let up = (along - normal * along.dot(normal)).normalize();
+                let right = up.cross(normal).normalize();
+                Matrix4::from_cols(
+                    right.extend(0.0),
+                    up.extend(0.0),
+                    normal.extend(0.0),
+                    wrist.extend(1.0),
+                )
+            }));
+        }
+        self.wrist_frames.unwrap()[if hand == Handedness::Left { 0 } else { 1 }]
     }
 
     /// Build the posed glove scene objects for one hand at its world transform.

@@ -11,13 +11,16 @@ use shipyard::{UniqueViewMut, World};
 use crate::{
     GameOptions,
     game_scene::GameScene,
-    hud::create_arm_hud_panels,
+    hand_glove::GloveRenderer,
+    hud::create_wrist_hud_panels,
     input_context::InputContext,
     inventory::PlayerInventoryEntity,
     mission::{GlobalEntityMetadata, GlobalTemplateIdMap, PlayerInfo},
     quest_info::QuestInfo,
     scripts::Effect,
     time::Time,
+    vr_config::Handedness,
+    vr_support::GripPose,
 };
 
 /// Debug HUD positioning constants
@@ -44,6 +47,7 @@ pub struct DebugHudScene {
     right_hand_position: Vector3<f32>,
     right_hand_rotation: Quaternion<f32>,
     scene_name: String,
+    wrist_frames: Option<[cgmath::Matrix4<f32>; 2]>,
 }
 
 impl DebugHudScene {
@@ -88,6 +92,7 @@ impl DebugHudScene {
             right_hand_position: vec3(0.0, 0.0, 0.0),
             right_hand_rotation: Quaternion::new(1.0, 0.0, 0.0, 0.0),
             scene_name: "debug_hud".to_owned(),
+            wrist_frames: None,
         }
     }
 
@@ -199,17 +204,28 @@ impl GameScene for DebugHudScene {
         asset_cache: &mut AssetCache,
         _options: &GameOptions,
     ) -> (Vec<SceneObject>, Vector3<f32>, Quaternion<f32>) {
-        // Only render the virtual arms HUD panels
-        let hud_panels = create_arm_hud_panels(
+        let frames = *self.wrist_frames.get_or_insert_with(|| {
+            let mut gloves = GloveRenderer::new(asset_cache).expect("debug HUD requires VR gloves");
+            [
+                gloves.wrist_frame(Handedness::Left),
+                gloves.wrist_frame(Handedness::Right),
+            ]
+        });
+        let hud_panels = create_wrist_hud_panels(
             asset_cache,
             &self.world,
-            // The debug scene has no cyber interface, so the arms are never
-            // duplicating it.
             false,
-            self.left_hand_position,
-            self.left_hand_rotation,
-            self.right_hand_position,
-            self.right_hand_rotation,
+            [
+                GripPose {
+                    position: self.left_hand_position,
+                    rotation: self.left_hand_rotation,
+                },
+                GripPose {
+                    position: self.right_hand_position,
+                    rotation: self.right_hand_rotation,
+                },
+            ],
+            frames,
         );
 
         (hud_panels, self.player_position, self.player_rotation)

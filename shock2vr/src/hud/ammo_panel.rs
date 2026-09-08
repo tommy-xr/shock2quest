@@ -27,7 +27,8 @@ use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
 /// The AMMOFULL panel's authored pixel size.
 pub(crate) const PANEL_W: f32 = 260.0;
 pub(crate) const PANEL_H: f32 = 64.0;
-pub(crate) const PANEL_SIZE: Vector2<f32> = vec2(PANEL_W, PANEL_H);
+#[cfg(test)]
+const PANEL_SIZE: Vector2<f32> = vec2(PANEL_W, PANEL_H);
 
 /// Selected ammo type's object icon (P$ObjIcon), at the gauge well's left -
 /// right of the cycle arrow, which claims the well's leading 12 px.
@@ -229,14 +230,26 @@ impl AmmoReadout {
     /// Read the wielded weapon's readout from the world. `show_buttons` is the
     /// caller's (presentation's) call.
     pub(crate) fn from_world(world: &World, show_buttons: bool) -> Self {
-        let weapon = crate::wielded_weapon::wielded_weapon(world);
+        Self::for_weapon(
+            world,
+            crate::wielded_weapon::wielded_weapon(world),
+            show_buttons,
+        )
+    }
+
+    /// Resolve every field from the same weapon, including a gun beside a psi amp.
+    pub(crate) fn for_weapon(
+        world: &World,
+        weapon: Option<shipyard::EntityId>,
+        show_buttons: bool,
+    ) -> Self {
         Self {
-            psi_power: super::get_wielded_psi_power(world),
-            ammo: super::get_wielded_ammo(world),
-            ammo_icon: super::get_wielded_ammo_icon(world),
-            ammo_type: super::get_wielded_ammo_type(world),
             gun_condition: weapon.and_then(|w| wielded_gun_condition(world, w)),
-            gun_setting_header: super::get_wielded_gun_setting(world)
+            psi_power: super::get_weapon_psi_power(world, weapon),
+            ammo: super::get_weapon_ammo(world, weapon),
+            ammo_icon: super::get_weapon_ammo_icon(world, weapon),
+            ammo_type: super::get_weapon_ammo_type(world, weapon),
+            gun_setting_header: super::get_weapon_gun_setting(world, weapon)
                 .and_then(|(_, header)| header),
             can_cycle_ammo: weapon
                 .is_some_and(|w| crate::scripts::script_util::can_cycle_ammo(world, w)),
@@ -395,15 +408,157 @@ pub(crate) fn emit(canvas: &mut UiCanvas, origin: Vector2<f32>, readout: &AmmoRe
 /// panel *is* the canvas here, so the elements are emitted at panel origin
 /// (0,0) - flat emits the same ones at its own panel origin. Pure (no
 /// asset/GL access), so it is unit-testable like `build_flat_hud_canvas`.
-pub(crate) fn build_readout_canvas(readout: &AmmoReadout) -> UiCanvas {
+#[cfg(test)]
+fn build_readout_canvas(readout: &AmmoReadout) -> UiCanvas {
     let mut canvas = UiCanvas::new(PANEL_SIZE);
     emit(&mut canvas, vec2(0.0, 0.0), readout);
+    canvas
+}
+
+/// The complete compact ammo UI, the rightmost 94x64 pixels of AMMOFULL.
+/// Preserve AMMOBACK's authored frame rather than cutting through its bezel.
+pub(crate) const WRIST_CROP: Rect = Rect::new(166.0, 0.0, 94.0, 64.0);
+pub(crate) const WRIST_CROP_SIZE: Vector2<f32> = vec2(WRIST_CROP.w, WRIST_CROP.h);
+
+/// The shipped compact ammo panel with the same overlay origin as the flat HUD.
+/// Empty hands have no panel; the wrist has no clickable controls.
+pub(crate) fn build_wrist_canvas(readout: &AmmoReadout) -> UiCanvas {
+    let mut canvas = UiCanvas::new(WRIST_CROP_SIZE);
+    if readout.is_empty() {
+        return canvas;
+    }
+    canvas.image(
+        Rect::new(0.0, 0.0, WRIST_CROP.w, WRIST_CROP.h),
+        "AMMOBACK.PCX",
+    );
+    let passive = AmmoReadout {
+        show_buttons: false,
+        ..readout.clone()
+    };
+    emit(&mut canvas, vec2(-WRIST_CROP.x, -WRIST_CROP.y), &passive);
     canvas
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrist_preserves_the_complete_compact_panel_and_shared_overlay_layout() {
+        let readout = full_gun();
+        let wrist = build_wrist_canvas(&readout);
+        assert_eq!(wrist.size(), vec2(94.0, 64.0));
+        assert!(
+            matches!(&wrist.elements()[0], crate::ui::UiElement::Image { texture, kind: crate::ui::ImageKind::Ui, .. } if texture == "AMMOBACK.PCX")
+        );
+        let passive = AmmoReadout {
+            show_buttons: false,
+            ..readout
+        };
+        let panel = build_readout_canvas(&passive);
+        assert_eq!(wrist.element_count(), panel.element_count() + 1);
+        for (cropped, full) in wrist.elements()[1..].iter().zip(panel.elements()) {
+            let (a, b) = (cropped.rect(), full.rect());
+            assert_eq!(
+                (a.x + WRIST_CROP.x, a.y + WRIST_CROP.y, a.w, a.h),
+                (b.x, b.y, b.w, b.h)
+            );
+        }
+        assert_eq!(
+            build_wrist_canvas(&AmmoReadout::default()).element_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn each_wrist_reads_its_own_clip_and_empty_support_hand_has_no_counter() {
+        use crate::{mission::PlayerInfo, vr_config::Handedness, wielded_weapon::weapon_in_hand};
+        use dark::properties::PropGunState;
+        let mut world = World::new();
+        let player = world.add_entity(());
+        let left = world.add_entity((PropGunState {
+            ammo: 6,
+            condition: 100.0,
+            setting: 0,
+            modification: 0,
+            silence_value: 0.0,
+        },));
+        let right = world.add_entity((PropGunState {
+            ammo: 12,
+            condition: 100.0,
+            setting: 1,
+            modification: 0,
+            silence_value: 0.0,
+        },));
+        let mut info = PlayerInfo {
+            pos: cgmath::vec3(0.0, 0.0, 0.0),
+            rotation: cgmath::Quaternion::new(1.0, 0.0, 0.0, 0.0),
+            entity_id: player,
+            inventory_entity_id: player,
+            left_hand_entity_id: Some(left),
+            right_hand_entity_id: Some(right),
+        };
+        world.add_unique(info.clone());
+        let read = |world: &World, hand| {
+            AmmoReadout::for_weapon(world, weapon_in_hand(world, hand), false)
+        };
+        assert_eq!(read(&world, Handedness::Left).ammo, Some(6));
+        assert_eq!(read(&world, Handedness::Right).ammo, Some(12));
+        info.left_hand_entity_id = Some(right);
+        info.right_hand_entity_id = None;
+        *world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap() = info;
+        assert_eq!(read(&world, Handedness::Left).ammo, Some(12));
+        assert!(read(&world, Handedness::Right).is_empty());
+    }
+
+    #[test]
+    fn psi_amp_beside_a_gun_does_not_steal_its_ammo_readout() {
+        use crate::{
+            mission::mission_core::GlobalTemplateClassTags,
+            psi::{GlobalPsiPowers, PsiPowerInfo, PsiPowerSelection},
+        };
+        use dark::properties::{PropGunState, PropPsiPower, PropTemplateId};
+        use std::collections::HashMap;
+        let mut world = World::new();
+        let gun = world.add_entity((PropGunState {
+            ammo: 12,
+            condition: 100.0,
+            setting: 0,
+            modification: 0,
+            silence_value: 0.0,
+        },));
+        let amp = world.add_entity((PropTemplateId { template_id: -247 },));
+        world.add_unique(GlobalTemplateClassTags(HashMap::from([(
+            -247,
+            HashMap::from([("weapontype".to_owned(), "psiamp".to_owned())]),
+        )])));
+        world.add_unique(GlobalPsiPowers(vec![PsiPowerInfo {
+            template_id: -100,
+            name: "Cryokinesis".to_owned(),
+            display_name: Some("Projected Cryokinesis".to_owned()),
+            power: PropPsiPower {
+                power_id: 1,
+                activation_type: 0,
+                psi_cost: 99,
+                data: [0.0; 4],
+            },
+            projectiles: vec![],
+            overloadable: false,
+            duration: None,
+        }]));
+        world.add_unique(PsiPowerSelection { index: 0 });
+        let gun_readout = AmmoReadout::for_weapon(&world, Some(gun), false);
+        let amp_readout = AmmoReadout::for_weapon(&world, Some(amp), false);
+        assert_eq!(gun_readout.ammo, Some(12));
+        assert_eq!(gun_readout.psi_power, None);
+        assert_eq!(amp_readout.ammo, None);
+        assert_eq!(
+            amp_readout.psi_power,
+            Some(("Projected Cryokinesis".to_owned(), 1))
+        );
+    }
 
     /// The gauge well the compact AMMOBACK crop shows, read off the art.
     const WELL: Rect = Rect::new(176.0, 13.0, 73.0, 42.0);
