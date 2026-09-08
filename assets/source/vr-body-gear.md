@@ -9,7 +9,8 @@ with OpenAI image generation on 2026-09-08, without reference images or input
 textures. It contains charcoal nylon, rubber, molded polymer and fabric
 swatches. A subsequent image-generation edit of that original atlas reduced
 the fabric weave to nearly smooth, low-contrast micrograin. No external
-reference was used for the edit. It is not sampled from the glove atlas or System Shock 2 assets.
+reference was used for the edit. A further edit darkened all swatches to
+near-black charcoal for contrast with emissive indicators. It is not sampled from the glove atlas or System Shock 2 assets.
 The geometry generator, GLB exports and Blender source use only this atlas.
 
 Regenerate from the repository root:
