@@ -116,6 +116,60 @@ impl GloveRenderer {
         })
     }
 
+    /// Sample the renderer's actual retargeted finger arcs once for fitting.
+    pub fn grip_kinematics(&mut self, handedness: Handedness) -> crate::vr_grip::GripKinematics {
+        use crate::vr_grip::{CURL_STEPS, GripKinematics, glove_to_hand};
+        let transform = glove_to_hand(handedness);
+        let mut fingers: [Vec<Vec<Vector3<f32>>>; 5] = std::array::from_fn(|_| Vec::new());
+        let mut open_joints = Vec::new();
+        let mut closed_joints = Vec::new();
+        for step in 0..=CURL_STEPS {
+            let pose = self.open.blend(&self.fist, step as f32 / CURL_STEPS as f32);
+            self.retarget.apply(&pose, &mut self.model);
+            let joints = (0..26)
+                .map(|joint| {
+                    let node = self.model.skeleton().node_index_for_joint(joint).unwrap();
+                    (transform * self.model.get_global_transform(node).unwrap())
+                        .w
+                        .truncate()
+                })
+                .collect::<Vec<_>>();
+            if step == 0 {
+                open_joints = joints.clone();
+            }
+            if step == CURL_STEPS {
+                closed_joints = joints.clone();
+            }
+            for (finger, range) in [3..5, 7..10, 12..15, 17..20, 22..25]
+                .into_iter()
+                .enumerate()
+            {
+                let mut points = Vec::new();
+                for joint in range {
+                    for t in [0.0, 0.5, 1.0] {
+                        points.push(joints[joint] * (1.0 - t) + joints[joint + 1] * t);
+                    }
+                }
+                fingers[finger].push(points);
+            }
+        }
+        use cgmath::InnerSpace;
+        let knuckles =
+            (open_joints[7] + open_joints[12] + open_joints[17] + open_joints[22]) * 0.25;
+        let palm = knuckles * 0.8 + open_joints[1] * 0.2;
+        let along = (knuckles - open_joints[1]).normalize();
+        let across = (open_joints[7] - open_joints[22]).normalize();
+        let mut normal = along.cross(across).normalize();
+        if normal.dot(closed_joints[15] - palm) < 0.0 {
+            normal = -normal;
+        }
+        GripKinematics {
+            fingers,
+            palm,
+            normal,
+        }
+    }
+
     /// Build the posed glove scene objects for one hand at its world transform.
     pub fn render_hand(
         &mut self,
@@ -125,8 +179,11 @@ impl GloveRenderer {
         trigger_value: f32,
         squeeze_value: f32,
         holding: bool,
+        fitted: Option<FingerAmounts>,
     ) -> Vec<SceneObject> {
-        let amounts = if holding {
+        let amounts = if let Some(fitted) = fitted {
+            fitted
+        } else if holding {
             // Gripping a held item: fingers wrapped on the handle, thumb
             // locked, index resting on the trigger and curling with the pull
             // (the squeeze is what holds the item, so it doesn't drive the
@@ -217,13 +274,9 @@ impl GloveRenderer {
         // fingers up with where the hand points. Verified against the
         // raycast hit markers in-game; on-headset fine tuning would adjust
         // this rotation.
-        let grip = Matrix4::from_angle_y(cgmath::Deg(180.0));
-        let mirror = handedness.mirror();
         let world = Matrix4::from_translation(position)
             * Matrix4::from(rotation)
-            * mirror
-            * grip
-            * Matrix4::from_scale(GLOVE_SCALE);
+            * crate::vr_grip::glove_to_hand(handedness);
 
         let mut objects = model.to_scene_objects_with_skinning();
         for (object, material) in objects.iter_mut().zip(materials) {

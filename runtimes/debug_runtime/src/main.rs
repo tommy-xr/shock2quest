@@ -2446,6 +2446,10 @@ fn capture_frame_snapshot(
                     .as_ref()
                     .map(|s| s.explored_map_locations.clone())
                     .unwrap_or_default(),
+                hand_grips: game
+                    .debug_scene()
+                    .map(|s| s.hand_grips())
+                    .unwrap_or_else(|| json!([])),
                 climb: game
                     .debug_scene()
                     .and_then(|scene| scene.player_climb())

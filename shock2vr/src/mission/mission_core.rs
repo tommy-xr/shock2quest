@@ -4095,6 +4095,12 @@ impl MissionCore {
             head_rotation: input_context.head.rotation,
             eye_height: crate::player_eye_height_for(self.player_handle.is_crouched()),
         });
+        self.interaction.fit_held_items(
+            &self.world,
+            asset_cache,
+            &mut interaction_msgs,
+            game_options,
+        );
         rewrite_strip_release(&mut interaction_msgs, &store, &collect);
         effects.extend(self.process_virtual_hand_effects(asset_cache, interaction_msgs));
 
@@ -12143,6 +12149,10 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             point: [grip.point.x, grip.point.y, grip.point.z],
             normal: [grip.normal.x, grip.normal.y, grip.normal.z],
         })
+    }
+
+    fn hand_grips(&self) -> serde_json::Value {
+        self.interaction.grip_diagnostics()
     }
 
     fn player_climb(&self) -> Option<crate::game_scene::DebugClimbState> {

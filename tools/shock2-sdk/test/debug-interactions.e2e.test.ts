@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
-import { aimVrHandAt } from "./helpers/vr-hand.js";
+import { add, aimVrHandAt, quatRotate } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 // Owner-approved rack contract; extend alongside INTERACTION_FIXTURES in
@@ -45,12 +45,33 @@ test(
           (await game.info()).player[heldSlot], item.id,
           `${hand} grabs ${item.name}`,
         );
+        if ([-1221, -1255, -4286].includes(template)) {
+          const before = (await game.info()).player.hand_grips.find(g => g.hand === hand)!;
+          assert.equal(before.source, "prepared", "gameplay reads a bake instead of running the search");
+          assert.ok(before.grip);
+          assert.ok(before.grip.contacts.filter(Boolean).length >= 3, "at least three fingers support each fixture");
+          assert.ok(before.grip.curls.every(c => Number.isFinite(c) && c >= 0 && c <= 1));
+          await game.input.set(`${hand}_hand.position`, [0, 3, 0]);
+          await game.input.set(`${hand}_hand.rotation`, [0, Math.sin(0.3), 0, Math.cos(0.3)]);
+          await game.step({frames: 30});
+          const snapshot = await game.info();
+          const after = snapshot.player.hand_grips.find(g => g.hand === hand)!;
+          assert.deepEqual(after, before, "tracked motion must not refit or change the cached grip");
+          const offset = before.grip.offset;
+          const input = { position: [0, 3, 0] as [number, number, number],
+            rotation: [0, Math.sin(0.3), 0, Math.cos(0.3)] as [number, number, number, number] };
+          const expected = add(snapshot.player.position, quatRotate(snapshot.player.rotation,
+            add(input.position, quatRotate(input.rotation, [offset.x, offset.y, offset.z]))));
+          const actual = (await game.entities.list()).entities.find(e => e.id === item.id)!.position;
+          assert.ok(actual.every((v,i) => Math.abs(v-expected[i]) < 0.001), "item origin follows the fitted hand-local offset");
+        }
         await game.input.set(`${hand}_hand.squeeze`, 0);
         await game.step({ frames: 3 });
         assert.equal(
           (await game.info()).player[heldSlot], null,
           `${hand} releases ${item.name}`,
         );
+        assert.ok(!(await game.info()).player.hand_grips.some(g => g.hand === hand), "release clears the fitted grip");
       }
     }
     await game.input.trigger("DebugReloadLevel");

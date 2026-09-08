@@ -1,0 +1,5 @@
+{
+  "mug": { "pose_family": 0, "keep_upright": true },
+  "magci": { "pose_family": 1 },
+  "hamball": { "pose_family": 2 }
+}
