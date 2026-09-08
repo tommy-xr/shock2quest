@@ -124,6 +124,11 @@ await game.raycast({
 // the headless way to assert audio, e.g. weapon impact sounds.
 const { sounds } = await game.audio.recent();
 
+// Live looping sinks: sample, handle, owner, ambient entity ID, elapsed wall time.
+// Unlike recent().still_playing (a simulation-time estimate for finite clips),
+// this reads actual sink ownership and can prove a bed stopped on scene exit.
+const { loops } = await game.audio.loops();
+
 // Live-tunable dev params (shock2vr::dev_params): list every knob with its
 // range/current/default, or set one - clamped + snapped, applied next frame.
 const { params } = await game.devParams.list();

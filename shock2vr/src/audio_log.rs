@@ -17,7 +17,8 @@
 //! when the debug runtime steps frames faster (or slower) than real time.
 //! Entries whose duration is unknown report `still_playing: false`, and a
 //! looping sound's duration is one iteration, so it can read as finished while
-//! still audible. The buffer is process-global and never cleared, so it can
+//! still audible. Query `GET /v1/audio/loops` for actual live looping sinks.
+//! The buffer is process-global and never cleared, so it can
 //! span a level transition; `sim_time` stays monotonic across one.
 
 use std::collections::VecDeque;
