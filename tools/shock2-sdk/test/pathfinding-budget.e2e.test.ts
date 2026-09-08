@@ -30,15 +30,18 @@ test(
     // Queries now run on the pathfinding worker thread, so per-frame stat
     // deltas jitter with the worker's clock; the invariant the budget
     // enforces is the SUBMISSION rate, observable as a cumulative bound on
-    // completed queries across the burst window (plus slack for requests
+    // worker searches across the burst window (plus slack for requests
     // already in flight at the window edges).
+    const previouslyServed = new Set(
+      (await game.pathfinding.aiPaths()).map((path) => path.entity_id),
+    );
     await game.input.trigger("DebugAlertAll");
 
     const FRAMES = 12;
     const before = (await game.pathfinding.stats())!;
     await game.step({ frames: FRAMES });
-    // Give the worker a beat to drain the final frame's submissions, then
-    // step once more so its results are observable.
+    // Include one final frame in the budget window; this does not guarantee
+    // that the asynchronous worker has drained its submissions.
     await game.step({ frames: 1 });
     const after = (await game.pathfinding.stats())!;
     const total = after.queries - before.queries;
@@ -49,11 +52,37 @@ test(
       `${total} pathfind queries across ${FRAMES + 1} frames (budget is ${QUERIES_PER_FRAME}/frame)`,
     );
 
-    // The budget defers work rather than dropping it: across the burst
-    // window, multiple AIs must still have been served.
+    // A fixed simulation window cannot promise a minimum amount of worker
+    // service. Keep the short-window cap above, then observe bounded progress:
+    // four previously unserved AIs must actually receive worker outcomes.
+    // Counting distinct records also prevents one AI's retries from satisfying
+    // the service assertion. Failed/partial routes still prove a request ran.
+    let elapsedFrames = FRAMES + 1;
+    let served = (await game.pathfinding.aiPaths()).filter(
+      (path) => !previouslyServed.has(path.entity_id),
+    );
+    let queries = total;
+    const MAX_SERVICE_FRAMES = 180;
+    for (
+      let extra = 0;
+      (served.length < 4 || queries < 4) && extra < MAX_SERVICE_FRAMES;
+      extra += 6
+    ) {
+      await game.step({ frames: 6 });
+      elapsedFrames += 6;
+      queries = (await game.pathfinding.stats())!.queries - before.queries;
+      assert.ok(
+        queries <= QUERIES_PER_FRAME * elapsedFrames + SLACK,
+        `${queries} queries across ${elapsedFrames} frames exceeded the budget`,
+      );
+      served = (await game.pathfinding.aiPaths()).filter(
+        (path) => !previouslyServed.has(path.entity_id),
+      );
+    }
     assert.ok(
-      total >= 4,
-      `expected several pathfind queries across the burst, got ${total}`,
+      queries >= 4 && served.length >= 4,
+      `expected four newly served AIs within ${elapsedFrames} frames; ` +
+        `queries=${queries}, outcomes=${JSON.stringify(served)}`,
     );
   },
 );
