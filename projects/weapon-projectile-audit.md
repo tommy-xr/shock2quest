@@ -157,3 +157,16 @@ have no TODO. The original baseline above remains historical: its remaining
 known launch failures are the four worm-launcher presentation/mode cases.
 General projectile damage, pellet spread, homing and other effect lifecycles
 remain the follow-ups listed above.
+
+
+## Annelid homing followup
+
+Both worm-launcher modes now fire without the unimplemented-script panic.
+All four affected flat/VR matrix rows pass and their TODO annotations are
+removed; the historical 76-case baseline above is not a new full-matrix rerun.
+Authored homing masks, angular limits, pulse timing and target remapping are
+covered by focused tests. Both modes visibly steer toward a hybrid (target
+mask 3), hit it, and remove the rocket and its flight riders. Visible impact
+particles expire, but three secondary effect entities persist after 26 seconds;
+cleanup remains open. See [the workstream](weapon-feel-workstream.md#annelid-homing)
+for source references and intentional VR adaptations.

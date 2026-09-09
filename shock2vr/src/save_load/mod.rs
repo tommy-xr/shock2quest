@@ -264,6 +264,14 @@ pub fn to_save_data_with_scripts(
         .collect();
     let (held_shoulders, world_shoulders) =
         partition_map(raw_shoulders, |id| held_entities.contains(id));
+    let (held_velocities, world_velocities): (Vec<_>, Vec<_>) = world
+        .borrow::<View<crate::runtime_props::RuntimePropProjectileVelocity>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .map(|(id, velocity)| (id.inner(), velocity.0))
+        .filter(|(id, _)| !entities_to_filter.contains(id))
+        .partition(|(id, _)| held_entities.contains(id));
     let world_entity_data = EntitySaveData {
         properties: world_serialized_properties,
         template_id_to_entity_id: template_id_to_entity_id.0.clone(),
@@ -276,6 +284,7 @@ pub fn to_save_data_with_scripts(
         canonical_template_ids: world_canonical_templates,
         launched_projectiles: world_launched_projectiles,
         player_fired_projectiles: world_player_fired_projectiles,
+        projectile_velocities: world_velocities.into_iter().collect(),
         script_states: world_script_states,
     };
 
@@ -291,6 +300,7 @@ pub fn to_save_data_with_scripts(
         canonical_template_ids: held_canonical_templates,
         launched_projectiles: held_launched_projectiles,
         player_fired_projectiles: held_player_fired_projectiles,
+        projectile_velocities: held_velocities.into_iter().collect(),
         script_states: held_script_states,
     };
 

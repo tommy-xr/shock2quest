@@ -4979,12 +4979,33 @@ impl MissionCore {
                 .borrow::<ViewMut<RuntimePropTransform>>()
                 .unwrap();
             let mut v_prop_position = self.world.borrow::<ViewMut<PropPosition>>().unwrap();
+            let launched = self
+                .world
+                .borrow::<View<crate::runtime_props::RuntimePropLaunchedProjectile>>()
+                .unwrap();
+            let player_fired = self
+                .world
+                .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
+                .unwrap();
+            let mut velocities = self
+                .world
+                .borrow::<ViewMut<crate::runtime_props::RuntimePropProjectileVelocity>>()
+                .unwrap();
             let v_entities = self.world.borrow::<EntitiesView>().unwrap();
             let v_glove_weapon = self
                 .world
                 .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
                 .unwrap();
             for (entity_id, handle) in &self.id_to_physics {
+                if launched.contains(*entity_id) || player_fired.contains(*entity_id) {
+                    if let Some(velocity) = self.physics.get_velocity(*entity_id) {
+                        v_entities.add_component(
+                            *entity_id,
+                            &mut velocities,
+                            crate::runtime_props::RuntimePropProjectileVelocity(velocity),
+                        );
+                    }
+                }
                 let scale = v_glove_weapon
                     .get(*entity_id)
                     .ok()
@@ -6649,6 +6670,34 @@ impl MissionCore {
             }
         };
 
+        // Saved world-space flight velocity takes precedence over launch-time
+        // defaults before the first physics step of a restored mission.
+        drop(v_initial_velocity);
+        if world
+            .borrow::<View<crate::runtime_props::RuntimePropLaunchedProjectile>>()
+            .unwrap()
+            .contains(created_entity.entity_id)
+            || world
+                .borrow::<View<crate::runtime_props::RuntimePropPlayerFiredProjectile>>()
+                .unwrap()
+                .contains(created_entity.entity_id)
+        {
+            let restored = world
+                .borrow::<View<crate::runtime_props::RuntimePropProjectileVelocity>>()
+                .unwrap()
+                .get(created_entity.entity_id)
+                .ok()
+                .map(|v| v.0);
+            if let Some(velocity) =
+                restored.or_else(|| physics.get_velocity(created_entity.entity_id))
+            {
+                physics.set_velocity(created_entity.entity_id, velocity);
+                world.add_component(
+                    created_entity.entity_id,
+                    crate::runtime_props::RuntimePropProjectileVelocity(velocity),
+                );
+            }
+        }
         ret
     }
 
@@ -9188,6 +9237,18 @@ impl MissionCore {
                             v_teleported.remove(entity_id);
                         },
                     );
+                }
+                Effect::SetLinearVelocity {
+                    entity_id,
+                    velocity,
+                } => {
+                    self.physics.set_velocity(entity_id, velocity);
+                    if self.physics.get_velocity(entity_id).is_some() {
+                        self.world.add_component(
+                            entity_id,
+                            crate::runtime_props::RuntimePropProjectileVelocity(velocity),
+                        );
+                    }
                 }
                 Effect::SetRenderType {
                     entity_id,

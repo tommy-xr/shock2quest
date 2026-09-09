@@ -30,6 +30,7 @@ mod exp_cookie;
 mod frob_qb;
 pub mod gui;
 pub mod healing_item;
+mod homing;
 mod internal_collision_type;
 mod internal_explosion;
 pub mod internal_fast_projectile;
@@ -919,6 +920,7 @@ impl ScriptWorld {
         match script_name.to_ascii_lowercase().as_str() {
             // PROJECTILE stuff
             "lasershot" => Box::new(laser_shot::LaserShot::new()),
+            "homing" => Box::new(homing::Homing::default()),
             "proxgrenade" => Box::new(proximity_grenade::ProximityGrenade::new(false)),
             "contactproxgrenade" => Box::new(proximity_grenade::ProximityGrenade::new(true)),
             "proxgrenadetrigger" => Box::new(proximity_grenade::ProximityTrigger::default()),
