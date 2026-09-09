@@ -4137,6 +4137,10 @@ impl MissionCore {
         }
 
         let held = [left_hand_held, right_hand_held];
+        let pouch_weapons = std::array::from_fn(|i| {
+            held[1 - i].filter(|gun| self.magazine_capacity(*gun).is_some())
+        });
+        self.holsters.pouch_priority = pouch_weapons.map(|weapon| weapon.is_some());
         self.holsters.freeze_heading = self.ammo_pouch.near.iter().any(|near| *near);
         let holster_actions = self.holsters.update(
             hands_input,
@@ -4164,9 +4168,6 @@ impl MissionCore {
         );
         let pouch_available = [crate::Handedness::Left, crate::Handedness::Right]
             .map(|hand| self.interaction.hand_available_for_body_slot(hand));
-        let pouch_weapons = std::array::from_fn(|i| {
-            held[1 - i].filter(|gun| self.magazine_capacity(*gun).is_some())
-        });
         let pouch_offers = std::array::from_fn(|i| {
             pouch_available[i]
                 .then_some(pouch_weapons[i])
@@ -11034,7 +11035,13 @@ impl MissionCore {
             // origins. Gameplay zones and visuals use the same body frame.
             if let Some(body) = self.holsters.body_pose {
                 let root_rotation = self.holsters.world_rotation(player.rotation);
-                let belt_center = player.pos + player.rotation.rotate_vector(body.front(0.55, 0.0));
+                // The belt mesh already places its front 30 cm forward of its
+                // origin. Expose the actual belt distance, not that asset origin.
+                let belt_center = player.pos
+                    + player.rotation.rotate_vector(body.front(
+                        0.55,
+                        crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) - 0.30,
+                    ));
                 let pouch_center = self.ammo_pouch.world_center(player.pos, player.rotation);
                 let mut parts = vec![("astra-vr-belt.glb", belt_center, Matrix4::from_scale(1.0))];
                 if let Some(center) = pouch_center {
