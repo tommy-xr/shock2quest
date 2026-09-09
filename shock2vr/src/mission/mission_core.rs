@@ -9166,6 +9166,30 @@ impl MissionCore {
                         );
                     }
                 }
+                Effect::PlayEnvironmentalSoundWithFallback {
+                    query,
+                    fallback,
+                    position,
+                    audio_handle,
+                } => {
+                    if !play_environmental_sound(
+                        &global_context.gamesys,
+                        asset_cache,
+                        audio_context,
+                        query,
+                        audio_handle.clone(),
+                        position,
+                    ) {
+                        play_environmental_sound(
+                            &global_context.gamesys,
+                            asset_cache,
+                            audio_context,
+                            fallback,
+                            audio_handle,
+                            position,
+                        );
+                    }
+                }
                 Effect::PlayEnvironmentalSound {
                     query,
                     position,
@@ -9199,7 +9223,7 @@ impl MissionCore {
                                 env_sound_query,
                                 AudioHandle::new(),
                                 position,
-                            )
+                            );
                         }
 
                         // With the `ragdoll` experimental flag, replace the slain
@@ -12937,7 +12961,7 @@ fn play_environmental_sound(
     query: dark::EnvSoundQuery,
     audio_handle: AudioHandle,
     position: Vector3<f32>,
-) {
+) -> bool {
     if let Some(resolved) = gamesys.get_random_environmental_sound(&query) {
         let audio_clip = asset_cache.get(&AUDIO_IMPORTER, &format!("{}.wav", resolved.sample_name));
 
@@ -12966,6 +12990,9 @@ fn play_environmental_sound(
                 source_entity: None,
             },
         );
+        true
+    } else {
+        false
     }
 }
 

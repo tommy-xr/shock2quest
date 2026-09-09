@@ -617,3 +617,22 @@ headset feel and rotational clearance remain explicit validation boundaries.
 Validation: 1,634 gameplay tests, 172 Dark tests, warning-denied desktop/debug
 checks, and three SDK cases (left/right wall contact and firing, withdrawal,
 drop, and full-backpack release). [Before/after evidence](https://gist.github.com/tommy-xr/7e0d0b99cfebcb5cae09724ee16e5376).
+
+
+## Held-gun collision audio
+
+Adapt #1153 on the physical-held foundation. The same blocking sweep now emits
+one contact edge when an inert held gun reaches world geometry. Reuse the
+melee sound cooldown and approach-speed guard; resting and grazing contacts
+remain quiet. This adds no contact damage and leaves projectile filtering inert.
+
+Stock gun classes have no collision sound schemas. Prefer an authored gun
+schema when available; otherwise use the wrench's material-sensitive solid-metal
+impact query as an explicit VR augmentation. Preserve `NO_COLLISION_SOUND`.
+Validation asserts an actual resolved sample, silence at rest, and another
+sample after withdrawal and a second tap in the isolated weapon scene.
+
+Audio validation: 1,638 gameplay tests pass (2 diagnostic ignores), all 23
+missions load, and 27 SDK cases pass. Warning-denied desktop/debug checks pass.
+The near-boundary impact regression verifies that pre-stop speed keeps a fast
+tap audible even when the body can travel less than a millimetre.

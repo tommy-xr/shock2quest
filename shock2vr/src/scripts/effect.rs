@@ -726,6 +726,13 @@ pub enum Effect {
         query: EnvSoundQuery,
         position: Vector3<f32>,
     },
+    /// Try the authored schema first, using a fallback only when none resolves.
+    PlayEnvironmentalSoundWithFallback {
+        audio_handle: AudioHandle,
+        query: EnvSoundQuery,
+        fallback: EnvSoundQuery,
+        position: Vector3<f32>,
+    },
     PositionInventory {
         position: Vector3<f32>,
         rotation: Quaternion<f32>,

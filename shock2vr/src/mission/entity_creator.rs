@@ -24,9 +24,10 @@ use dark::{
         FrobFlag, InternalPropOriginalModelName, Link, Links, PhysicsModelType, PoseType, PropAI,
         PropClassTag, PropCollisionType, PropCreature, PropCreaturePose, PropFrobInfo,
         PropHUDSelect, PropHasRefs, PropHitPoints, PropImmobile, PropKeySrc, PropLimbModel,
-        PropModelName, PropPhysAttr, PropPhysDimensions, PropPhysState, PropPhysType, PropPosition,
-        PropRenderType, PropScale, PropSymName, PropTemplateId, PropTranslatingDoor, PropTripFlags,
-        RenderType, StimPropagator, StimSourceOptions, TemplateLinks, WrappedEntityId,
+        PropModelName, PropPhysAttr, PropPhysDimensions, PropPhysState, PropPhysType,
+        PropPlayerGun, PropPosition, PropRenderType, PropScale, PropSymName, PropTemplateId,
+        PropTranslatingDoor, PropTripFlags, RenderType, StimPropagator, StimSourceOptions,
+        TemplateLinks, WrappedEntityId,
     },
     ss2_entity_info,
 };
@@ -449,6 +450,20 @@ pub fn create_entity_core(
     let v_limb_model = world.borrow::<View<PropLimbModel>>().unwrap();
     if needs_internal_triggered_melee(v_limb_model.get(entity_id).is_ok()) {
         processed_scripts.push("internal_triggered_melee_weapon".to_owned());
+    }
+
+    // A gun held under `physical_held_items` is stopped by the level but takes
+    // part in no collision, so the only report that it touched anything is the
+    // block its drive's sweep found (see `scripts::impact_sound`). Give every
+    // gun the handler that turns that into a sound; it is inert whenever the
+    // gun is not being held that way, and unlike the melee script above it
+    // never deals damage - a gun is not a club.
+    let is_player_gun = {
+        let v_player_gun = world.borrow::<View<PropPlayerGun>>().unwrap();
+        v_player_gun.get(entity_id).is_ok()
+    };
+    if is_player_gun && v_limb_model.get(entity_id).is_err() {
+        processed_scripts.push("internal_held_item_impact_sound".to_owned());
     }
 
     // `MOVE` is an engine frob action, not an object script. Ordinary goodies

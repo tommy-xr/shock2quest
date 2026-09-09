@@ -1150,7 +1150,7 @@ pub const DEFAULT_IMPACT_MATERIAL: &str = "metal";
 /// "Material FleshTarget", authored via archetypes such as `MatFlesh`),
 /// falling back to the default for world hits / untagged entities. Hitbox
 /// proxies resolve to their parent creature.
-fn get_impact_material(world: &World, hit_entity_id: EntityId) -> String {
+pub(super) fn get_impact_material(world: &World, hit_entity_id: EntityId) -> String {
     let victim = resolve_proxy_entity(world, hit_entity_id);
     world
         .borrow::<View<PropMaterial>>()
