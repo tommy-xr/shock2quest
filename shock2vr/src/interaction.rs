@@ -1059,6 +1059,7 @@ impl PlayerInteraction for VrInteraction {
             ctx.player_rotation,
             ctx.input.right_hand.position,
         );
+        let right_held_before = self.right_hand.get_held_entity();
         let (right_hand, mut right_msgs) =
             if self.support_blocked[1] && self.right_hand.get_held_entity().is_none() {
                 (
@@ -1086,7 +1087,9 @@ impl PlayerInteraction for VrInteraction {
 
         // Right updates first, so a same-frame right-hand grab is visible to
         // the left hand and one physical item cannot enter both hand states.
-        let right_held_entity = self.right_hand.get_held_entity();
+        // A release is still owned until its effects run (it may be a backpack
+        // deposit), so the left hand must not acquire that same entity either.
+        let right_held_entity = self.right_hand.get_held_entity().or(right_held_before);
         let (left_hand, mut left_msgs) =
             if self.support_blocked[0] && self.left_hand.get_held_entity().is_none() {
                 (
@@ -1868,6 +1871,18 @@ mod tests {
             1,
             "one physical item must produce exactly one hold transition"
         );
+
+        // The release may be rewritten into a backpack deposit by the caller.
+        // Until effects remove its body, the left hand must not steal it.
+        input.right_hand.squeeze_value = 0.0;
+        let effects = interaction.update(&context(&world, &physics, &input));
+        assert_eq!(interaction.held_entities(), (None, None));
+        assert!(effects.iter().any(|effect| matches!(
+            effect, VirtualHandEffect::DropItem { entity_id } if *entity_id == item
+        )));
+        assert!(!effects.iter().any(|effect| matches!(
+            effect, VirtualHandEffect::HoldItem { entity_id } if *entity_id == item
+        )));
     }
 
     #[test]

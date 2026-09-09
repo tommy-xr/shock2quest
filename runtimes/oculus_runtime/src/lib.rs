@@ -992,6 +992,21 @@ fn main() {
         input_context.head.rotation = head_rotation;
         input_context.head.position = tracking.stage_to_pawn(head_stage);
         input_context.tracking = Some(tracking);
+        let tracked_pose_flags = xr::SpaceLocationFlags::POSITION_VALID
+            | xr::SpaceLocationFlags::POSITION_TRACKED
+            | xr::SpaceLocationFlags::ORIENTATION_VALID
+            | xr::SpaceLocationFlags::ORIENTATION_TRACKED;
+        input_context.pose_tracking = Some(shock2vr::input_context::PoseTracking {
+            head: head_location.location_flags.contains(tracked_pose_flags),
+            hands: [
+                left_aim_location
+                    .location_flags
+                    .contains(tracked_pose_flags),
+                right_aim_location
+                    .location_flags
+                    .contains(tracked_pose_flags),
+            ],
+        });
         input_context.right_hand.rotation = aim_rotation;
         input_context.right_hand.position = right_hand_position;
         input_context.right_hand.trigger_value = right_trigger_value;

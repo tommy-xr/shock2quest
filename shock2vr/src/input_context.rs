@@ -31,6 +31,15 @@ pub struct InputContext {
 
     /// Conversion used by a tracked runtime; lets a stance change rebase all poses together.
     pub tracking: Option<crate::vr_tracking::TrackingTransform>,
+    /// Live runtime tracking validity, separate from fallback/stale pose values.
+    /// None means synthetic input (desktop/debug), whose poses are validated directly.
+    pub pose_tracking: Option<PoseTracking>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PoseTracking {
+    pub head: bool,
+    pub hands: [bool; 2],
 }
 
 impl InputContext {
@@ -44,6 +53,7 @@ impl InputContext {
             crouch: false,
             jump: false,
             tracking: None,
+            pose_tracking: None,
         }
     }
 }
