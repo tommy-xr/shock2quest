@@ -1,8 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { GameServer } from "../src/index.js";
-import { aimVrHandAt } from "./helpers/vr-hand.js";
+import {
+  aimVrHandAt,
+  quatConjugate,
+  quatMultiply,
+  quatNormalize,
+  type Quat,
+} from "./helpers/vr-hand.js";
 import { ammoOf, cycleToWeapon } from "./helpers/weapon.js";
+
+function rotationDifferenceDegrees(a: Quat, b: Quat): number {
+  const relative = quatNormalize(quatMultiply(quatConjugate(a), b));
+  return (
+    (2 *
+      Math.atan2(Math.hypot(...relative.slice(0, 3)), Math.abs(relative[3])) *
+      180) /
+    Math.PI
+  );
+}
 
 for (const [name, template, hand] of [
   ["pistol", -17, "right"],
@@ -14,7 +30,7 @@ for (const [name, template, hand] of [
       skip: process.env.SHOCK2_E2E !== "1",
       timeout: 180_000,
     },
-    async () => {
+    async (context) => {
       await using game = await GameServer.launch({
         mission: "medsci1.mis",
         debugFlags: ["--vr", "--experimental", "physical_held_items"],
@@ -65,26 +81,50 @@ for (const [name, template, hand] of [
       await game.input.set(`${hand}_hand.trigger`, 1);
       await game.step({ frames: 1 });
       await game.input.set(`${hand}_hand.trigger`, 0);
+      let peakAngle = rotationDifferenceDegrees(
+        initial.rotation,
+        (await body()).rotation,
+      );
       await game.step({ frames: 1 });
+      peakAngle = Math.max(
+        peakAngle,
+        rotationDifferenceDegrees(initial.rotation, (await body()).rotation),
+      );
       const firedAmmo = ammoOf(await game.entities.detail(gun.id));
       assert.ok(firedAmmo < initialAmmo);
       await game.input.set(`${hand}_hand.trigger`, 1);
       await game.step({ frames: 1 });
       await game.input.set(`${hand}_hand.trigger`, 0);
+      peakAngle = Math.max(
+        peakAngle,
+        rotationDifferenceDegrees(initial.rotation, (await body()).rotation),
+      );
       assert.equal(
         ammoOf(await game.entities.detail(gun.id)),
         firedAmmo,
         "cooldown refuses a second immediate shot",
       );
-      await game.step({ frames: 12 });
+      for (let frame = 0; frame < 12; frame++) {
+        await game.step({ frames: 1 });
+        peakAngle = Math.max(
+          peakAngle,
+          rotationDifferenceDegrees(initial.rotation, (await body()).rotation),
+        );
+      }
       const kicked = await body();
       assert.ok(
         kicked.position[0] > initial.position[0] + 0.005,
         "gun kicks backward from the barrel direction",
       );
       assert.ok(
-        Math.abs(kicked.rotation[2]) > 0.005,
-        "Agility 1 leaves authored angular recoil",
+        peakAngle > 1,
+        `Agility 1 leaves authored angular recoil; measured peak ${peakAngle} degrees`,
+      );
+      // AR's minimum randomized pitch is 1.626 degrees. Its fast return can
+      // already fall below 0.573 degrees (quaternion Z=.005) at 15 frames;
+      // inspect the early peak instead of treating that valid recovery as no kick.
+      context.diagnostic(
+        `peak=${peakAngle.toFixed(4)}deg, late=${rotationDifferenceDegrees(initial.rotation, kicked.rotation).toFixed(4)}deg, oldLateZ=${Math.abs(kicked.rotation[2]).toFixed(6)}`,
       );
       assert.deepEqual(
         (await game.info()).player.camera_rotation,
@@ -99,7 +139,7 @@ for (const [name, template, hand] of [
         ) < 0.005,
       );
       assert.ok(
-        Math.abs(settled.rotation[2]) < 0.001,
+        rotationDifferenceDegrees(initial.rotation, settled.rotation) < 0.1,
         "spring returns to the unchanged controller pose",
       );
     },

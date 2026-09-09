@@ -667,3 +667,8 @@ This baseline does not yet distinguish support or Strength. Those are the next
 VR augmentation. Flat firing and nonexperimental VR do not draw recoil RNG or
 receive impulses. Translation-only wall clearance remains the foundation's
 limit; Quest feel still needs device validation.
+
+Baseline validation: 1,644 gameplay tests (2 diagnostic ignores), 172 Dark tests,
+warning-denied runtime checks, and all 23 mission loads pass. Fixed-hand pistol
+and AR captures show kick and recovery with unchanged head pose;
+[before/after GIFs and stills](https://gist.github.com/tommy-xr/d5bfc0ed59cbabb6906079601764b3a0).
