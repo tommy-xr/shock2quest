@@ -39,6 +39,7 @@ mod internal_nanites_script;
 pub(crate) mod internal_radiation_source;
 mod internal_simple_health;
 mod internal_switch_held_model;
+mod laser_shot;
 mod level_change_button;
 pub mod maintenance;
 mod many_ride;
@@ -917,7 +918,7 @@ impl ScriptWorld {
     fn create_script(script_name: String) -> Box<dyn Script> {
         match script_name.to_ascii_lowercase().as_str() {
             // PROJECTILE stuff
-            "lasershot" => Box::new(NoopScript::new()),
+            "lasershot" => Box::new(laser_shot::LaserShot::new()),
             "proxgrenade" => Box::new(proximity_grenade::ProximityGrenade::new(false)),
             "contactproxgrenade" => Box::new(proximity_grenade::ProximityGrenade::new(true)),
             "proxgrenadetrigger" => Box::new(proximity_grenade::ProximityTrigger::default()),

@@ -128,6 +128,13 @@ Before making any changes, review these documents:
   - `dark_engine_climbing_info.md` - Climbing mechanics reference
   - Various `.spew` files with animation and sound data
 - **`projects/`** - In-progress feature documentation and design notes
+- **[Telliamed's script reference](https://thiefmissions.com/telliamed/allscripts.html)**
+  - Reference for original Dark Engine object scripts, including their inheritance,
+    messages, properties, links, and behavior. Consult it when implementing or
+    debugging script parity; for example, `LaserShot` delays making its object
+    visible, so an authored `NoRender` property need not mean permanent invisibility.
+  - Cross-check with game data and original source where available; the reference
+    does not specify every implementation detail or timing value.
 
 ## Project Structure
 
