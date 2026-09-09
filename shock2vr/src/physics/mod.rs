@@ -2745,6 +2745,7 @@ pub struct PlayerHandle {
 #[derive(Clone, Copy)]
 struct HeldItemDrive {
     recoil: crate::weapon_recoil::RecoilState,
+    one_hand_recoil: crate::weapon_recoil::RecoilState,
     target: RigidBodyHandle,
     /// The weapon's own entity, so a swept blow can be reported without
     /// digging it back out of the body's user data every frame.
@@ -3267,6 +3268,7 @@ impl PhysicsWorld {
                 handle,
                 HeldItemDrive {
                     recoil: crate::weapon_recoil::RecoilState::default(),
+                    one_hand_recoil: crate::weapon_recoil::RecoilState::default(),
                     target,
                     weapon_entity: EntityId::from_inner(
                         self.rigid_body_set
@@ -3306,13 +3308,19 @@ impl PhysicsWorld {
         &mut self,
         entity: EntityId,
         impulse: crate::weapon_recoil::RecoilImpulse,
+        strength: i32,
+        supported: bool,
     ) {
         if !self.is_held_inert(entity) {
             return;
         }
         let handle = self.entity_id_to_body[&entity];
         if let Some(drive) = self.held_item_drives.get_mut(&handle) {
-            drive.recoil.kick(impulse);
+            let (baseline, extra) = crate::weapon_recoil::vr_impulses(impulse, strength, supported);
+            drive.recoil.kick(baseline);
+            if let Some(extra) = extra {
+                drive.one_hand_recoil.kick(extra);
+            }
         }
     }
 
@@ -4661,8 +4669,10 @@ impl PhysicsWorld {
             };
             if let Some(drive) = self.held_item_drives.get_mut(&weapon) {
                 let (offset, rotation) = drive.recoil.step(self.integration_parameters.dt);
-                desired.translation.vector += desired.rotation * vec_to_nvec(offset);
-                desired.rotation *= quat_to_nquat(rotation);
+                let (extra_offset, extra_rotation) =
+                    drive.one_hand_recoil.step(self.integration_parameters.dt);
+                desired.translation.vector += desired.rotation * vec_to_nvec(offset + extra_offset);
+                desired.rotation *= quat_to_nquat(rotation * extra_rotation);
             }
             let Some(body) = self.rigid_body_set.get(weapon) else {
                 continue;

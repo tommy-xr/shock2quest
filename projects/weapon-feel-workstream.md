@@ -672,3 +672,47 @@ Baseline validation: 1,644 gameplay tests (2 diagnostic ignores), 172 Dark tests
 warning-denied runtime checks, and all 23 mission loads pass. Fixed-hand pistol
 and AR captures show kick and recovery with unchanged head pose;
 [before/after GIFs and stills](https://gist.github.com/tommy-xr/d5bfc0ed59cbabb6906079601764b3a0).
+
+
+## Strength and one-handed recoil control
+
+Strength is a VR augmentation, applied after the original Agility/Still Hand/
+aiming-implant angular modifiers. At Strength `S` (clamped 1–6), scale each new
+baseline impulse by `1 / (1 + 0.1 * (S - 1))`. If the gun has no active latched
+support grip, add a separate spring impulse of
+`1 / (1 + 0.3 * (S - 1))` times its unscaled authored kick. At Strength 1,
+two hands use the full authored baseline and one hand adds an equal penalty.
+At Strength 6, the baseline is about 67% and the extra penalty is 40%.
+These are initial tuning values, not values taken from Dark Engine.
+
+Both pitch/heading and backward kick scale. Spring recovery rates and authored
+caps do not change with Strength or support, so an existing offset is never
+rescaled or reset. Both springs continue settling every physics step. A support
+preview or fading released glove is not an active support grip; only a latched,
+active attachment removes the penalty from future shots. Strength does not
+change the accuracy cone or the tracked head pose.
+
+
+Initial fixed-hand measurements (Agility 1, Standard 6; peak backward gun
+travel in world units):
+
+| Strength | Pistol, one hand | Pistol, two hands | AR, one hand |
+| --- | ---: | ---: | ---: |
+| 1 | 0.279430 | 0.139714 | 0.198354 |
+| 3 | 0.203750 | 0.116430 | 0.144634 |
+| 6 | 0.149030 | 0.093144 | 0.105789 |
+
+The deterministic backward kick follows the expected scaling within 0.003
+world units. Angular kick retains its authored randomness, so separate shots
+are not matched angular samples. AR two-hand measurements require the next
+support-socket increment; attachment success and glove placement must both
+be validated before calling that comparison two-handed.
+
+[Measured gun-pose curves and comparison media](https://gist.github.com/tommy-xr/253123eebb4d23982df1c6fddcb7cf2b)
+include the raw CSV and summary JSON. These measure the physical gun pose that
+drives the muzzle; they do not independently sample the muzzle endpoint.
+
+Runtime checks also acquire support at the live moving socket, then release it
+mid-kick: the existing backward recoil curve continues within 0.005 world
+units of an uninterrupted shot. Every matrix shot recovers within 0.005 world
+units and 0.1 degrees of its starting pose, with unchanged head orientation.

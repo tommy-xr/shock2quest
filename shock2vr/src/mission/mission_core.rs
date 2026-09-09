@@ -9167,7 +9167,17 @@ impl MissionCore {
                     }
                 }
                 Effect::KickHeldGun { entity_id, impulse } => {
-                    self.physics.kick_held_gun(entity_id, impulse);
+                    let strength = self
+                        .world
+                        .borrow::<UniqueView<QuestInfo>>()
+                        .map(|q| q.player_stats().strength)
+                        .unwrap_or(1);
+                    self.physics.kick_held_gun(
+                        entity_id,
+                        impulse,
+                        strength,
+                        self.interaction.is_supported(entity_id),
+                    );
                 }
                 Effect::PlayEnvironmentalSoundWithFallback {
                     query,

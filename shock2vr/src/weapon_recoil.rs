@@ -20,6 +20,27 @@ pub struct RecoilImpulse {
     pub forward: Vector3<f32>,
 }
 
+/// Intentional VR control tuning, separate from Dark's Agility modifier.
+/// Caps and spring rates remain authored: changing Strength/support affects
+/// future impulses, never the pose or recovery of an already moving spring.
+pub fn vr_impulses(
+    impulse: RecoilImpulse,
+    strength: i32,
+    supported: bool,
+) -> (RecoilImpulse, Option<RecoilImpulse>) {
+    let above_minimum = (strength.clamp(1, 6) - 1) as f32;
+    let scaled = |scale| RecoilImpulse {
+        pitch: impulse.pitch * scale,
+        heading: impulse.heading * scale,
+        back: impulse.back * scale,
+        ..impulse
+    };
+    (
+        scaled(1.0 / (1.0 + 0.1 * above_minimum)),
+        (!supported).then(|| scaled(1.0 / (1.0 + 0.3 * above_minimum))),
+    )
+}
+
 /// Original CalcKickAngle: Agility, Still Hand, then the aiming implant.
 fn kick_angle<R: Rng + ?Sized>(
     degrees: f32,
@@ -243,6 +264,71 @@ impl RecoilState {
 mod tests {
     use super::*;
     use rand::{SeedableRng, rngs::StdRng};
+    #[test]
+    fn strength_reduces_both_new_impulses_without_changing_recovery_or_caps() {
+        let authored = RecoilImpulse {
+            pitch: 7.0,
+            heading: 1.0,
+            back: -0.1,
+            pitch_limit: 10.0,
+            back_limit: 0.2,
+            angular_rate: 1.0,
+            back_rate: 2.0,
+            forward: -Vector3::unit_x(),
+        };
+        let mut previous = (f32::MAX, f32::MAX);
+        for strength in [1, 3, 6] {
+            let (base, extra) = vr_impulses(authored, strength, false);
+            let extra = extra.unwrap();
+            assert!(base.pitch < previous.0 && extra.pitch < previous.1);
+            previous = (base.pitch, extra.pitch);
+            assert_eq!(base.pitch_limit, authored.pitch_limit);
+            assert_eq!(extra.back_limit, authored.back_limit);
+            assert_eq!(base.angular_rate, authored.angular_rate);
+            assert_eq!(extra.back_rate, authored.back_rate);
+            let (supported, penalty) = vr_impulses(authored, strength, true);
+            assert!(penalty.is_none());
+            assert_eq!(supported.pitch, base.pitch);
+            assert_eq!(supported.back, base.back);
+        }
+        assert_eq!(vr_impulses(authored, 1, true).0.pitch, authored.pitch);
+        assert_eq!(vr_impulses(authored, -2, true).0.pitch, authored.pitch);
+        assert_eq!(
+            vr_impulses(authored, 99, true).0.pitch,
+            vr_impulses(authored, 6, true).0.pitch
+        );
+    }
+
+    #[test]
+    fn acquiring_support_preserves_the_previous_one_hand_kick() {
+        let authored = RecoilImpulse {
+            pitch: 4.0,
+            heading: 0.0,
+            back: -0.1,
+            pitch_limit: 10.0,
+            back_limit: 0.2,
+            angular_rate: 1.0,
+            back_rate: 1.0,
+            forward: -Vector3::unit_x(),
+        };
+        let mut penalty = RecoilState::default();
+        penalty.kick(vr_impulses(authored, 1, false).1.unwrap());
+        penalty.step(0.1);
+        let mut uninterrupted = penalty;
+        // A supported follow-up shot has no new penalty; the old spring remains.
+        if let Some(extra) = vr_impulses(authored, 6, true).1 {
+            penalty.kick(extra);
+        }
+        assert_eq!(penalty.step(0.1), uninterrupted.step(0.1));
+        assert!(penalty.pitch.position > 0.0);
+        // Losing support adds velocity, without resetting accumulated displacement.
+        let before = penalty.step(0.0);
+        penalty.kick(vr_impulses(authored, 6, false).1.unwrap());
+        assert_eq!(penalty.step(0.0), before);
+        penalty.step(5.0);
+        assert!(penalty.pitch.position.abs() < 1e-6);
+    }
+
     #[test]
     fn recoil_raises_and_backs_away_along_each_model_barrel() {
         use cgmath::Rotation;
