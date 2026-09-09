@@ -12,6 +12,15 @@ pub const SHOULDER_READY: HapticPulse = HapticPulse {
     duration_ms: 60,
 };
 
+pub const GUN_RECOIL: HapticPulse = HapticPulse {
+    amplitude: 0.75,
+    duration_ms: 45,
+};
+pub const GUN_SUPPORT: HapticPulse = HapticPulse {
+    amplitude: 0.3,
+    duration_ms: 30,
+};
+
 #[derive(Default, Unique, serde::Serialize)]
 pub struct HapticFeedback {
     pub pending: [Option<HapticPulse>; 2],
@@ -29,6 +38,7 @@ impl HapticFeedback {
             amplitude: pulse.amplitude.min(1.0),
             duration_ms: pulse.duration_ms,
         };
+        self.sequence[hand] += 1;
         // Same-frame effects resolve deterministically: the stronger pulse
         // wins, then the longer one. A ready tick cannot overwrite an impact.
         if self.pending[hand].is_none_or(|current| {
@@ -37,7 +47,35 @@ impl HapticFeedback {
         }) {
             self.pending[hand] = Some(pulse);
         }
-        self.sequence[hand] += 1;
+    }
+}
+
+/// Pure output arbitration. The runtime supplies a monotonic timestamp at
+/// submission, after gameplay update, so slow frames cannot age a fresh pulse.
+#[derive(Default)]
+pub struct HapticMixer {
+    active: [Option<(f32, std::time::Duration)>; 2],
+}
+
+impl HapticMixer {
+    pub fn select(
+        &mut self,
+        now: std::time::Duration,
+        requests: [Option<HapticPulse>; 2],
+    ) -> [Option<HapticPulse>; 2] {
+        std::array::from_fn(|hand| {
+            let pulse = requests[hand]?;
+            if self.active[hand]
+                .is_some_and(|(amplitude, until)| now < until && amplitude > pulse.amplitude)
+            {
+                return None;
+            }
+            self.active[hand] = Some((
+                pulse.amplitude,
+                now.saturating_add(std::time::Duration::from_millis(pulse.duration_ms.into())),
+            ));
+            Some(pulse)
+        })
     }
 }
 
@@ -52,6 +90,41 @@ pub fn take(world: &World) -> [Option<HapticPulse>; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn submitted_recoil_survives_weaker_later_requests_without_delaying_them() {
+        use std::time::Duration;
+        let mut mixer = HapticMixer::default();
+        // A slow 100 ms update has just completed; the pulse starts NOW.
+        let at = |ms| Duration::from_millis(ms);
+        assert_eq!(
+            mixer.select(at(100), [None, Some(GUN_RECOIL)]),
+            [None, Some(GUN_RECOIL)]
+        );
+        assert_eq!(
+            mixer.select(at(116), [Some(SHOULDER_READY), Some(SHOULDER_READY)]),
+            [Some(SHOULDER_READY), None]
+        );
+        // Equal-strength shots retrigger; later weaker requests cannot truncate them.
+        assert_eq!(
+            mixer.select(at(120), [None, Some(GUN_RECOIL)])[1],
+            Some(GUN_RECOIL)
+        );
+        assert_eq!(mixer.select(at(150), [None, Some(SHOULDER_READY)])[1], None);
+        assert_eq!(
+            mixer.select(at(165), [None; 2]),
+            [None; 2],
+            "no delayed tick"
+        );
+        assert_eq!(
+            mixer.select(at(165), [None, Some(SHOULDER_READY)])[1],
+            Some(SHOULDER_READY)
+        );
+        assert_eq!(
+            mixer.select(at(166), [None, Some(GUN_RECOIL)])[1],
+            Some(GUN_RECOIL)
+        );
+    }
 
     #[test]
     fn output_is_consumed_once_and_absent_worlds_are_silent() {

@@ -128,21 +128,27 @@ Gameplay emits `Effect::HandHaptic { hand, pulse }`, with hardware-independent
 amplitude and duration. Only the central effect handler updates the transient
 per-hand output state. The Quest runtime consumes that state once and performs
 the OpenXR call; pause/loading discard unconsumed output. Same-frame requests
-resolve to the strongest pulse, then longest duration for equal strength.
+resolve to the strongest pulse, then longest duration for equal strength. An
+active pulse also blocks weaker later requests until its duration expires;
+equal-strength shots can retrigger immediately. Suppressed cues are discarded.
+The shared `HapticMixer` takes a monotonic timestamp supplied just before
+OpenXR submission, so a slow gameplay update cannot expire a fresh vibration.
 The request counters remain available to headless assertions.
 
-Next increments can translate semantic weapon events into named pulse profiles:
+Successful shots now emit `WeaponRecoil`, resolved centrally to the primary VR
+hand (0.75 / 45 ms) and an actively attached support hand (0.30 / 30 ms). Each
+burst round cues independently. Dry fire, a broken gun, and a rejected trigger
+emit no recoil. Flat and unheld weapons produce no controller output. These
+initial generic profiles still need headset tuning; weapon-specific profiles
+can follow.
 
-- Successful shot: short firing-hand recoil; a weaker optional support-hand
-  pulse, with weapon-specific strength/duration. Do not cue a dry fire as a shot.
+Next increments can translate additional semantic events into named profiles:
+
 - Melee enemy hit: contact pulse in the primary hand and, when attached, the
   support hand. Use real impact/damage events, not overlap every physics frame.
 - Melee wall block: a distinct, lighter profile, with per-contact cooldown so
   resting a weapon against a surface never produces continuous buzzing.
 - Inventory refusal: distinguish it from the light shoulder-ready tick.
 
-Before multiple sources ship, add arbitration over the lifetime of an active
-pulse as well as within a frame, so a weaker later ready tick cannot interrupt a
-strong impact. Keep profiles and cooldown policy in shared gameplay, leaving
-only haptic submission in platform runtimes. These weapon cues are planned;
-this increment emits shoulder-ready feedback only.
+Keep profiles and cooldown policy in shared gameplay, leaving only haptic
+submission in platform runtimes. Headset validation is deferred.

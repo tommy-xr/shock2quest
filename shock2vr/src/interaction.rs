@@ -166,6 +166,12 @@ pub trait PlayerInteraction {
     /// right, matching the right-hand trigger it fires with.
     fn holding_hand(&self, entity_id: EntityId) -> Option<Handedness>;
 
+    /// Primary and actively attached support hand for controller feedback.
+    /// Flatscreen and unheld weapons produce no controller output.
+    fn haptic_hands(&self, _entity_id: EntityId) -> [Option<Handedness>; 2] {
+        [None; 2]
+    }
+
     /// Tracked palm on the firing side of a held weapon's muzzle offset.
     fn held_launch_origin(&self, _entity_id: EntityId) -> Option<Point3<f32>> {
         None
@@ -1439,6 +1445,22 @@ impl PlayerInteraction for VrInteraction {
         Some(Point3::new(point.x, point.y, point.z))
     }
 
+    fn haptic_hands(&self, entity_id: EntityId) -> [Option<Handedness>; 2] {
+        let primary = self.holding_hand(entity_id);
+        let support = self
+            .support
+            .as_ref()
+            .filter(|s| s.active && s.entity == entity_id && primary.is_some())
+            .map(|s| {
+                if s.primary == 0 {
+                    Handedness::Right
+                } else {
+                    Handedness::Left
+                }
+            });
+        [primary, support]
+    }
+
     fn holding_hand(&self, entity_id: EntityId) -> Option<Handedness> {
         if self.left_hand.is_holding(entity_id) {
             Some(Handedness::Left)
@@ -1688,6 +1710,30 @@ mod tests {
             (start.z - 0.1).abs() < 0.001,
             "must start at the palm, not the offset model: {start:?}"
         );
+    }
+
+    #[test]
+    fn recoil_routes_only_to_the_owner_and_active_support_hand() {
+        let (world, entity, physics, mut interaction, mut input) = wrench_support_fixture();
+        assert_eq!(
+            interaction.haptic_hands(entity),
+            [Some(Handedness::Right), None]
+        );
+        interaction.update_support(&context(&world, &physics, &input));
+        input.left_hand.squeeze_value = 1.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert_eq!(
+            interaction.haptic_hands(entity),
+            [Some(Handedness::Right), Some(Handedness::Left)]
+        );
+        input.left_hand.squeeze_value = 0.0;
+        interaction.update_support(&context(&world, &physics, &input));
+        assert_eq!(
+            interaction.haptic_hands(entity),
+            [Some(Handedness::Right), None]
+        );
+        assert_eq!(interaction.haptic_hands(EntityId::dead()), [None; 2]);
+        assert_eq!(FlatInteraction::new().haptic_hands(entity), [None; 2]);
     }
 
     #[test]

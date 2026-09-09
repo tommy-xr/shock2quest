@@ -588,6 +588,9 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
 
     // Consume the setting's per-shot cost when the weapon tracks ammo.
     let mut effects = vec![sound_effect, muzzle_flash_effect, projectile_effect];
+    if is_gunshot {
+        effects.push(Effect::WeaponRecoil { entity_id });
+    }
     if maybe_ammo.is_some() {
         effects.push(Effect::AdjustAmmo {
             entity_id,
@@ -1321,6 +1324,38 @@ mod tests {
         assert!(matches!(
             fire_one_shot(&world, gun, &GunSettingDesc::default()),
             ShotOutcome::Fired(_)
+        ));
+    }
+
+    #[test]
+    fn recoil_is_a_successful_shot_effect_not_a_trigger_effect() {
+        let (mut world, gun) = gun_world(None);
+        let ShotOutcome::Fired(Effect::Multiple(effects)) =
+            fire_one_shot(&world, gun, &GunSettingDesc::default())
+        else {
+            panic!("loaded gun must fire");
+        };
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| matches!(effect,
+            Effect::WeaponRecoil { entity_id } if *entity_id == gun))
+                .count(),
+            1
+        );
+        world.add_component(
+            gun,
+            dark::properties::PropGunState {
+                ammo: 0,
+                condition: 100.0,
+                setting: 0,
+                modification: 0,
+                silence_value: 0.0,
+            },
+        );
+        assert!(matches!(
+            fire_one_shot(&world, gun, &GunSettingDesc::default()),
+            ShotOutcome::Empty
         ));
     }
 
