@@ -9,12 +9,12 @@ const vector = (v: ResolvedGrip["offset"]): Vec3 => [v.x,v.y,v.z];
 const quaternion = (q: ResolvedGrip["rotation"]): Quat => [...vector(q.v),q.s];
 const distance = (a: Vec3,b: Vec3) => Math.hypot(...sub(a,b));
 
-for (const [model, template] of [["atek_h",-17],["sg_h",-19]] as const) {
+for (const [model, template] of [["atek_h",-17],["ar15_h",-18],["sg_h",-19]] as const) {
   for (const primary of ["left","right"] as const) {
     test(`${model} support (${primary}): steering, firing, scale, ownership and release`, {
       skip: process.env.SHOCK2_E2E !== "1", timeout: 180_000,
     }, async () => {
-      await using game = await GameServer.launch({mission:"debug_weapons",debugFlags:["--vr"]});
+      await using game = await GameServer.launch({mission:"debug_weapons",debugFlags:model === "ar15_h" ? ["--vr","--experimental","physical_held_items"] : ["--vr"]});
       await game.step({frames:30});
       const weapon = await cycleToWeapon(game,e=>e.template_id === template);
       await aimVrHandAt(game,weapon.position,.2,1,0,{hand:primary});
@@ -27,6 +27,13 @@ for (const [model, template] of [["atek_h",-17],["sg_h",-19]] as const) {
       await game.step({frames:30});
       const grip = async (): Promise<HandGrip> => (await game.info()).player.hand_grips.find(g=>g.hand === primary)!;
       const before = await grip();
+      const initialBody = model === "ar15_h"
+        ? (await game.physics.bodies({entityId:weapon.id})).bodies[0] : null;
+      if (model === "ar15_h") {
+        assert.ok(initialBody,"AR support must retain the physical held body");
+        assert.deepEqual(initialBody.collision_groups,[],"held gun contacts stay inert");
+      }
+      if (initialBody) assert.equal(initialBody.body_type,"kinematic");
       assert.ok(before?.support && before.grip,`${model} publishes its authored support socket`);
       const socket = vector(before.support.controller_position);
       const place = async (worldPosition: Vec3) => {
@@ -39,6 +46,13 @@ for (const [model, template] of [["atek_h",-17],["sg_h",-19]] as const) {
       await game.input.set(`${other}_hand.squeeze`,1);
       await game.step({frames:15});
       assert.equal((await grip()).support!.attached,true);
+      if (initialBody) {
+        const body = (await game.physics.bodies({entityId:weapon.id})).bodies[0]!;
+        const forward = quatRotate(body.rotation,[-1,0,0]);
+        const original = quatRotate(initialBody.rotation,[-1,0,0]);
+        assert.ok(forward.reduce((sum,v,i)=>sum+v*original[i]!,0) > .99,
+          "support attachment preserves the primary barrel direction");
+      }
       await place(add(socket,[.07,0,0]));
       await game.step({frames:30});
       const steered = await grip();
@@ -64,16 +78,21 @@ for (const [model, template] of [["atek_h",-17],["sg_h",-19]] as const) {
       await game.step({frames:1});
       assert.equal(ammoOf(await game.entities.detail(weapon.id)),ammo-1,"primary trigger fires while supported");
       const fired = await grip();
+      assert.equal(fired.support!.attached,true,"support latch survives actual firing");
       assert.equal(fired.visual_trigger,1);
       assert.deepEqual(fired.finger_curls,fired.grip!.trigger_curls ?? fired.grip!.curls);
       await game.input.set(`${primary}_hand.trigger`,0);
+      if (model === "ar15_h") {
+        await game.step({frames:12});
+        assert.equal((await grip()).support!.attached,true,"support stays latched through physical recoil");
+      }
       await game.input.set(`${other}_hand.squeeze`,0);
       await game.step({frames:1});
       assert.equal((await grip()).support!.attached,false);
       assert.equal((await game.info()).player[owner],weapon.id);
       assert.equal((await game.info()).player[empty],null);
       await game.input.set(`${other}_hand.trigger`,0);
-      await game.step({frames:60});
+      await game.step({frames:model === "ar15_h" ? 180 : 60});
       assert.ok(distance(vector((await grip()).support!.model_position),vector(before.support.model_position)) < .001);
       await place(socket);
       await game.input.set(`${other}_hand.squeeze`,1);

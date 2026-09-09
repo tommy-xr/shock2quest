@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 /// Authored support sockets and regions currently enabled in gameplay.
 /// Keep the Explorer eligibility notice and runtime policy together.
 pub fn supports_model(model: &str) -> bool {
-    matches!(model, "wrench_h" | "atek_h" | "sg_h" | "fsn_h" | "al_h")
+    matches!(
+        model,
+        "wrench_h" | "atek_h" | "ar15_h" | "sg_h" | "fsn_h" | "al_h"
+    )
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
