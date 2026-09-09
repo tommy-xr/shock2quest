@@ -283,12 +283,33 @@ Particle sprites now use a `bitmap/`-qualified key, registered for classic and
 25AE base/mod mounts through the existing namespace mechanism. Unqualified
 object-texture precedence is unchanged.
 
-Player projectile creation also stops forcing `RenderType::Normal`: EMP Shot
-intentionally carries a hidden `swingba2` model. The render audit drops its four
-root draws to zero while retaining EMP Blue and EMP2. Matched before/after
-footage confirms the correct blue glow replaces the splatter. A fixture covers
-colliding bitmap/object basenames for all three archive layouts; flat and VR
-SDK checks verify hidden-root rendering and surviving particle riders.
+Player projectile creation also stopped forcing `RenderType::Normal`. The
+initial audit incorrectly treated EMP Shot's hidden `swingba2` model as
+permanently hidden; the same change regressed the laser bolt. Both use
+`LaserShot`, which was still a no-op. The bitmap namespace correction above
+remains valid independently of this mistake.
+
+`LaserShot` now reveals its root after 50 ms with `RenderType::FullBright` and
+sets attached particle groups to `Normal`. The pending/completed timer is saved.
+[Telliamed's reference](https://thiefmissions.com/telliamed/allscripts.html)
+documents `Timer(RenderMe)` and its delayed visibility transition. Timing and
+values were checked against the installed 25AE `allobjs-windows-x86_64.dll`:
+the RenderMe scheduling call at RVA `0x63810` passes `0x32` milliseconds;
+the handler at RVA `0x63860` writes root RenderType 2 and incoming
+`~ParticleAttachement` source RenderType 0. Flat/VR render checks now verify
+both the initially hidden root and the subsequent visible bolt.
+FullBright-specific shading is still a renderer gap: this layer restores the
+script's render mode transition and visible geometry, not new lighting logic.
+Runtime-created particle riders also remain excluded from saves without being
+regenerated on load; that existing lifecycle gap is separate from the saved
+root visibility and script timer.
+
+Stasis and fusion projectiles were visible in matched flat and VR debug-runtime
+captures on the parent of this fix. Their reported disappearance is not yet
+reproduced; those captures do not establish headset or every-mission parity.
+The shotgun's authored GunFlash relation contains only `SG Eject`, consistent
+with the original link-driven `CreateGunFlashes` path; an added muzzle flash
+would be an augmentation.
 
 Remaining particle audit includes authored units, animation frames, tint/fade
 and additional jet attachments; this correction does not claim that every

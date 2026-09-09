@@ -8635,6 +8635,22 @@ impl MissionCore {
                         },
                     );
                 }
+                Effect::SetRenderType {
+                    entity_id,
+                    render_type,
+                } => {
+                    // An impact can delete the bolt (and its riders) earlier
+                    // in this effect batch, on the same frame RenderMe expires.
+                    let is_alive = self
+                        .world
+                        .borrow::<shipyard::EntitiesView>()
+                        .map(|entities| entities.is_alive(entity_id))
+                        .unwrap_or(false);
+                    if is_alive {
+                        self.world
+                            .add_component(entity_id, PropRenderType(render_type));
+                    }
+                }
                 Effect::SetRenderAlpha { entity_id, alpha } => {
                     self.world.add_component(
                         entity_id,

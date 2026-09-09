@@ -760,6 +760,12 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// Transition an object's authored render mode, e.g. LaserShot's delayed reveal.
+    SetRenderType {
+        entity_id: EntityId,
+        render_type: dark::properties::RenderType,
+    },
+
     /// Set an entity's render alpha (Renderer\Transparency (alpha): 1.0 =
     /// opaque, 0.0 = invisible). Drives holo/ghost fades (Transluce scripts,
     /// CS9 cutscene exhibits).
