@@ -1,7 +1,7 @@
 //! Release-to-stow behind either shoulder. Coordinates are in tracked pawn space.
 //! Uses the head's slowly followed yaw, never its pitch/roll, for body direction.
 use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, vec3};
-use shipyard::{EntityId, Get, View, World};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 
 use crate::{input_context::InputContext, vr_support::GripPose};
 
@@ -11,13 +11,74 @@ const DROP: f32 = 0.20 / SCALE;
 const BEHIND: f32 = 0.18 / SCALE;
 pub(super) const RADIUS: f32 = 0.18 / SCALE;
 
-#[derive(Default)]
 pub(super) struct ShoulderBackpack {
     yaw: Option<f32>,
     pressed_item: [Option<EntityId>; 2],
     retained: super::body_inventory::RetainedRelease,
     pub centers: Option<[Vector3<f32>; 2]>,
     pub near: [bool; 2],
+    pub near_slot: [Option<usize>; 2],
+    pub draws: [Option<usize>; 2],
+    pub blocks_grab: [bool; 2],
+    draw_pressed: [bool; 2],
+    consumed: [bool; 2],
+}
+
+impl Default for ShoulderBackpack {
+    fn default() -> Self {
+        Self {
+            yaw: None,
+            pressed_item: [None; 2],
+            retained: Default::default(),
+            centers: None,
+            near: [false; 2],
+            near_slot: [None; 2],
+            draws: [None; 2],
+            blocks_grab: [false; 2],
+            draw_pressed: [true; 2],
+            consumed: [false; 2],
+        }
+    }
+}
+
+/// Only live inventory membership can supply a shoulder recall. A marker never
+/// creates ownership or allows a dropped/destroyed/transferred weapon to return.
+pub(super) fn weapons(world: &World, inventory: EntityId) -> [Option<EntityId>; 2] {
+    let mut slots = [None; 2];
+    let contents = crate::inventory::Inventory::from_container(
+        world,
+        inventory,
+        crate::inventory::grid_for(world, inventory),
+    );
+    let marked = world
+        .borrow::<View<crate::runtime_props::RuntimePropShoulderWeapon>>()
+        .unwrap();
+    for item in contents.all_items() {
+        if let Ok(slot) = marked.get(item.entity) {
+            if let Some(out) = slots.get_mut(slot.0 as usize) {
+                *out = Some(item.entity);
+            }
+        }
+    }
+    slots
+}
+
+pub(super) fn remember(world: &mut World, entity: EntityId, slot: usize) {
+    let old: Vec<_> = world
+        .borrow::<View<crate::runtime_props::RuntimePropShoulderWeapon>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(_, marker)| marker.0 as usize == slot)
+        .map(|(id, _)| id)
+        .collect();
+    for id in old {
+        world.remove::<crate::runtime_props::RuntimePropShoulderWeapon>(id);
+    }
+    world.add_component(
+        entity,
+        crate::runtime_props::RuntimePropShoulderWeapon(slot as u8),
+    );
 }
 
 impl ShoulderBackpack {
@@ -32,6 +93,24 @@ impl ShoulderBackpack {
     ) -> [bool; 2] {
         let hands = [&input.left_hand, &input.right_hand];
         self.retained.update(held, hands.map(|h| h.squeeze_value));
+        self.draws = [None; 2];
+        self.near_slot = [None; 2];
+        let tracked = std::array::from_fn::<_, 2, _>(|i| {
+            let hand = hands[i];
+            (GripPose {
+                position: hand.position,
+                rotation: hand.rotation,
+            })
+            .is_tracked()
+                && hand.squeeze_value.is_finite()
+                && input.pose_tracking.is_none_or(|p| p.hands[i])
+        });
+        for i in 0..2 {
+            if tracked[i] && hands[i].squeeze_value < 0.5 {
+                self.consumed[i] = false;
+            }
+            self.blocks_grab[i] = held[i].is_none() && self.consumed[i];
+        }
         let head = GripPose {
             position: input.head.position,
             rotation: input.head.rotation,
@@ -41,6 +120,7 @@ impl ShoulderBackpack {
             self.near = [false; 2];
             self.pressed_item = [None; 2];
             self.yaw = None;
+            self.draw_pressed = [true; 2];
             return [false; 2];
         }
         let forward = crate::ui::PanelPlacement::from_head(head.position, head.rotation).forward;
@@ -60,20 +140,35 @@ impl ShoulderBackpack {
         let mut released = [false; 2];
         for i in 0..2 {
             let hand = hands[i];
-            let tracked = GripPose {
-                position: hand.position,
-                rotation: hand.rotation,
-            }
-            .is_tracked()
-                && hand.squeeze_value.is_finite()
-                && input.pose_tracking.is_none_or(|p| p.hands[i]);
+            let tracked = tracked[i];
             // Require the hand genuinely behind the head, not beside the face.
-            self.near[i] = tracked
-                && held[i].is_some()
-                && (hand.position - head.position).dot(forward) < -0.03 / SCALE
-                && centers
-                    .iter()
-                    .any(|c| (hand.position - c).magnitude2() <= RADIUS * RADIUS);
+            self.near_slot[i] = (tracked
+                && (hand.position - head.position).dot(forward) < -0.03 / SCALE)
+                .then(|| {
+                    centers
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| (hand.position - **c).magnitude2() <= RADIUS * RADIUS)
+                        .min_by(|(_, a), (_, b)| {
+                            (hand.position - **a)
+                                .magnitude2()
+                                .total_cmp(&(hand.position - **b).magnitude2())
+                        })
+                        .map(|(slot, _)| slot)
+                })
+                .flatten();
+            self.near[i] = self.near_slot[i].is_some();
+            let pressed = hand.squeeze_value >= 0.5;
+            if held[i].is_none() && self.near[i] {
+                self.blocks_grab[i] = true;
+                if pressed {
+                    self.consumed[i] = true;
+                    if !self.draw_pressed[i] {
+                        self.draws[i] = self.near_slot[i];
+                    }
+                }
+            }
+            self.draw_pressed[i] = !tracked || pressed;
             released[i] = self.near[i]
                 && hand.squeeze_value < 0.5
                 && held[i].is_some()
@@ -132,7 +227,7 @@ impl ShoulderBackpack {
     ) -> serde_json::Value {
         serde_json::json!({
             "centers": self.centers.map(|cs| cs.map(|c| { let p = position + rotation.rotate_vector(c); [p.x,p.y,p.z] })),
-            "radius": RADIUS, "near": self.near,
+            "radius": RADIUS, "near": self.near, "near_slot": self.near_slot,
             "retained": self.retained.0.map(|e| e.is_some()),
         })
     }
@@ -214,6 +309,37 @@ mod tests {
                 assert_eq!(tracker.update(&input, held, true, 0.016), [false; 2]);
             }
         }
+    }
+
+    #[test]
+    fn recall_requires_fresh_tracked_press_and_consumes_it_until_release() {
+        let (mut tracker, mut input, _) = fixture();
+        tracker.update(&input, [None; 2], true, 0.016);
+        input.left_hand.position = tracker.centers.unwrap()[1];
+        tracker.update(&input, [None; 2], true, 0.016);
+        assert_eq!(tracker.draws, [None; 2]);
+        input.left_hand.squeeze_value = 1.0;
+        tracker.update(&input, [None; 2], true, 0.016);
+        assert_eq!(tracker.draws, [Some(1), None]);
+        input.left_hand.position = vec3(-1.0, 1.0, -1.0);
+        tracker.update(&input, [None; 2], true, 0.016);
+        assert_eq!(tracker.draws, [None; 2]);
+        assert!(tracker.blocks_grab[0]);
+        tracker.update(&input, [None; 2], false, 0.016);
+        input.left_hand.position = input.head.position + vec3(-SIDE, -DROP, BEHIND);
+        tracker.update(&input, [None; 2], true, 0.016);
+        assert_eq!(tracker.draws, [None; 2]);
+        input.left_hand.squeeze_value = 0.0;
+        tracker.update(&input, [None; 2], true, 0.016);
+        input.pose_tracking = Some(crate::input_context::PoseTracking {
+            head: true,
+            hands: [false, true],
+        });
+        input.left_hand.squeeze_value = 1.0;
+        tracker.update(&input, [None; 2], true, 0.016);
+        input.pose_tracking = None;
+        tracker.update(&input, [None; 2], true, 0.016);
+        assert_eq!(tracker.draws, [None; 2]);
     }
 
     #[test]

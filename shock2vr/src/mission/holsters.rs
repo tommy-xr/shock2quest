@@ -4,7 +4,7 @@ use crate::{
     input_context::InputContext, runtime_props::RuntimePropHolstered, vr_support::GripPose,
 };
 use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, vec3};
-use shipyard::{EntityId, IntoIter, IntoWithId, UniqueView, View, World};
+use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
 const SCALE: f32 = crate::METERS_PER_WORLD_UNIT;
 pub(super) const RADIUS: f32 = 0.14 / SCALE;
@@ -25,9 +25,39 @@ mod tests {
         let mut h = Holsters::default();
         let input = InputContext::default();
         h.update(
-            &input, [None; 2], [true; 2], [None; 2], 1, [false; 2], true, 0.016,
+            &input, [None; 2], [true; 2], [None; 2], 1, [false; 2], [false; 2], true, 0.016,
         );
         (h, input, ids)
+    }
+
+    #[test]
+    fn only_melee_and_compact_pistols_fit() {
+        let mut world = World::new();
+        let melee = world.add_entity((dark::properties::PropLimbModel("wrench_h".to_owned()),));
+        assert!(accepts(&world, melee));
+        for (model, expected) in [
+            ("atek_h", true),
+            ("LASEHAND.BIN", true),
+            ("shotg_h", false),
+            ("assault", false),
+            ("fusion_h", false),
+            ("worm_h", false),
+        ] {
+            let gun = world.add_entity((dark::properties::PropPlayerGun {
+                flags: 0,
+                hand_model: model.to_owned(),
+                icon_file: String::new(),
+                model_offset: vec3(0.0, 0.0, 0.0),
+                fire_offset: vec3(0.0, 0.0, 0.0),
+                heading: 0,
+                reload_pitch: 0,
+                reload_rate: 0,
+                gun_type: 0,
+            },));
+            assert_eq!(accepts(&world, gun), expected, "{model}");
+        }
+        let item = world.add_entity(());
+        assert!(!accepts(&world, item));
     }
 
     #[test]
@@ -59,7 +89,7 @@ mod tests {
             controller.squeeze_value = 1.0;
             assert_eq!(
                 h.update(
-                    &input, held, [false; 2], [None; 2], 1, [true; 2], true, 0.016
+                    &input, held, [false; 2], [None; 2], 1, [true; 2], [true; 2], true, 0.016
                 ),
                 [None; 2]
             );
@@ -71,7 +101,7 @@ mod tests {
             controller.squeeze_value = 0.0;
             assert_eq!(
                 h.update(
-                    &input, held, [false; 2], [None; 2], 1, [true; 2], true, 0.016
+                    &input, held, [false; 2], [None; 2], 1, [true; 2], [true; 2], true, 0.016
                 )[hand],
                 Some(Action::Store {
                     entity: ids[0],
@@ -92,6 +122,7 @@ mod tests {
                     [Some(ids[0]), None],
                     1,
                     [false; 2],
+                    [false; 2],
                     true,
                     0.016
                 )[hand],
@@ -107,6 +138,7 @@ mod tests {
                     [true; 2],
                     [Some(ids[0]), None],
                     1,
+                    [false; 2],
                     [false; 2],
                     true,
                     0.016
@@ -125,12 +157,12 @@ mod tests {
         }
         let held = ids.map(Some);
         h.update(
-            &input, held, [false; 2], [None; 2], 2, [true; 2], true, 0.016,
+            &input, held, [false; 2], [None; 2], 2, [true; 2], [true; 2], true, 0.016,
         );
         input.left_hand.squeeze_value = 0.0;
         input.right_hand.squeeze_value = 0.0;
         let actions = h.update(
-            &input, held, [false; 2], [None; 2], 2, [true; 2], true, 0.016,
+            &input, held, [false; 2], [None; 2], 2, [true; 2], [true; 2], true, 0.016,
         );
         assert_eq!(
             actions,
@@ -151,6 +183,7 @@ mod tests {
             [true; 2],
             [Some(ids[0]), None],
             2,
+            [false; 2],
             [false; 2],
             true,
             0.016,
@@ -180,6 +213,7 @@ mod tests {
                 [None; 2],
                 count,
                 [true; 2],
+                [true; 2],
                 true,
                 0.016,
             );
@@ -190,6 +224,7 @@ mod tests {
                 [false; 2],
                 [None; 2],
                 count,
+                [true; 2],
                 [true; 2],
                 true,
                 0.016,
@@ -204,6 +239,7 @@ mod tests {
                 [None; 2],
                 count,
                 [false; 2],
+                [false; 2],
                 true,
                 0.016,
             );
@@ -215,6 +251,7 @@ mod tests {
                     [false; 2],
                     [None; 2],
                     count,
+                    [false; 2],
                     [false; 2],
                     true,
                     0.016
@@ -241,6 +278,7 @@ mod tests {
                 [Some(ids[0]), None],
                 1,
                 [false; 2],
+                [false; 2],
                 true,
                 0.016
             ),
@@ -255,6 +293,7 @@ mod tests {
                 [Some(ids[0]), None],
                 1,
                 [false; 2],
+                [false; 2],
                 true,
                 0.016
             ),
@@ -266,6 +305,7 @@ mod tests {
             [true; 2],
             [Some(ids[0]), None],
             1,
+            [false; 2],
             [false; 2],
             false,
             0.016,
@@ -281,6 +321,7 @@ mod tests {
                 [true; 2],
                 [Some(ids[0]), None],
                 1,
+                [false; 2],
                 [false; 2],
                 true,
                 0.016
@@ -328,6 +369,21 @@ pub(super) fn occupants(world: &World) -> [Option<EntityId>; 2] {
     slots
 }
 
+/// The thigh slots accept melee arms and the two compact pistols only.
+pub(super) fn accepts(world: &World, entity: EntityId) -> bool {
+    super::mission_core::is_melee_weapon(world, entity)
+        || world
+            .borrow::<View<dark::properties::PropPlayerGun>>()
+            .is_ok_and(|guns| {
+                guns.get(entity).is_ok_and(|gun| {
+                    matches!(
+                        gun.hand_model.to_ascii_lowercase().trim_end_matches(".bin"),
+                        "atek_h" | "lasehand"
+                    )
+                })
+            })
+}
+
 pub(super) fn slot_count(world: &World) -> usize {
     1 + usize::from(
         world
@@ -349,6 +405,7 @@ impl Holsters {
         mut slots: [Option<EntityId>; 2],
         count: usize,
         weapons: [bool; 2],
+        eligible: [bool; 2],
         enabled: bool,
         dt: f32,
     ) -> [Option<Action>; 2] {
@@ -415,7 +472,7 @@ impl Holsters {
             if let Some(slot) = self.near[i] {
                 if let Some(entity) = held[i] {
                     if !pressed && self.pressed_item[i] == Some(entity) {
-                        if weapons[i] && slot < count && slots[slot].is_none() && !claimed[slot] {
+                        if eligible[i] && slot < count && slots[slot].is_none() && !claimed[slot] {
                             claimed[slot] = true;
                             slots[slot] = Some(entity);
                             actions[i] = Some(Action::Store { entity, slot });

@@ -33,6 +33,8 @@ pub struct EntitySaveData {
     /// Exact weapon membership in right/left thigh slots.
     #[serde(default)]
     pub holstered: HashMap<u64, crate::runtime_props::RuntimePropHolstered>,
+    #[serde(default)]
+    pub shoulder_weapons: HashMap<u64, crate::runtime_props::RuntimePropShoulderWeapon>,
     /// Stable gamesys archetype for entities whose `PropTemplateId` is a
     /// positive, mission-local object ID.
     #[serde(default)]
@@ -63,6 +65,7 @@ impl EntitySaveData {
             death_poses: HashMap::new(),
             selected_ammo: HashMap::new(),
             holstered: HashMap::new(),
+            shoulder_weapons: HashMap::new(),
             canonical_template_ids: HashMap::new(),
             launched_projectiles: Vec::new(),
             player_fired_projectiles: Vec::new(),
@@ -114,6 +117,13 @@ impl EntitySaveData {
             if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&entity_id) {
                 let links = Links::deserialize(link.clone(), &old_entity_id_to_new_entity_id);
                 world.add_component(*new_entity_id, links);
+            }
+        }
+        for (old, slot) in &self.shoulder_weapons {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(*new, *slot);
             }
         }
         for (old, slot) in &self.holstered {
@@ -238,12 +248,25 @@ mod tests {
             },
         );
         data.selected_ammo.insert(weapon.inner(), 2);
+        data.shoulder_weapons.insert(
+            weapon.inner(),
+            crate::runtime_props::RuntimePropShoulderWeapon(0),
+        );
         let data: EntitySaveData =
             serde_json::from_str(&serde_json::to_string(&data).unwrap()).unwrap();
         let mut restored = World::new();
         restored.add_entity(());
         let (_, map) = data.instantiate(&mut restored);
         let id = map[&weapon];
+        assert_eq!(
+            restored
+                .borrow::<View<crate::runtime_props::RuntimePropShoulderWeapon>>()
+                .unwrap()
+                .get(id)
+                .unwrap()
+                .0,
+            0
+        );
         assert_eq!(
             restored
                 .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()

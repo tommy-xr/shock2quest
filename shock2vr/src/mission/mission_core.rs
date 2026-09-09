@@ -4124,6 +4124,9 @@ impl MissionCore {
                     crate::virtual_hand::is_wieldable_weapon(&self.world, entity)
                 })
             }),
+            held.map(|entity| {
+                entity.is_some_and(|entity| super::holsters::accepts(&self.world, entity))
+            }),
             game_options.presentation_mode == crate::PresentationMode::Vr
                 && !self.use_mode
                 && self.player_is_alive()
@@ -4165,6 +4168,49 @@ impl MissionCore {
                 && self.player_controls_enabled,
             time.elapsed.as_secs_f32(),
         );
+        let shoulder_slots = self.shoulder_backpack.near_slot;
+        let inventory = self
+            .world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .unwrap()
+            .inventory_entity_id;
+        let mut recalls = if self.shoulder_backpack.draws.iter().any(Option::is_some) {
+            super::shoulder_backpack::weapons(&self.world, inventory)
+        } else {
+            [None; 2]
+        };
+        for i in 0..2 {
+            if !pouch_available[i] {
+                continue;
+            }
+            if let Some(slot) = self.shoulder_backpack.draws[i] {
+                if let Some(entity) = recalls[slot].take() {
+                    effects.push(Effect::GrabEntity {
+                        entity_id: entity,
+                        hand: if i == 0 {
+                            crate::Handedness::Left
+                        } else {
+                            crate::Handedness::Right
+                        },
+                        current_parent_id: Some(inventory),
+                    });
+                    self.vr_trigger_safe_latch[i] = Some(true);
+                    effects.push(Effect::ShowMessage {
+                        text: "Weapon drawn from backpack".to_owned(),
+                    });
+                } else {
+                    effects.push(Effect::ShowMessage {
+                        text: "No weapon stored at this shoulder".to_owned(),
+                    });
+                    effects.push(Effect::PlaySound {
+                        handle: AudioHandle::new(),
+                        name: "repfail".to_owned(),
+                        source: None,
+                        spatial: false,
+                    });
+                }
+            }
+        }
         for i in 0..2 {
             self.ammo_pouch.refused[i] &= self.shoulder_backpack.keep_grip(i);
             shoulder_releases[i] |= matches!(
@@ -4259,7 +4305,7 @@ impl MissionCore {
                         Action::Store { .. } => "Weapon holstered",
                         Action::Retrieve { .. } => "Weapon drawn",
                         Action::Refuse { .. } => {
-                            "Holster unavailable — weapons only, one per slot. Squeeze to re-grip."
+                            "Holster accepts melee weapons and pistols, one per slot. Use a shoulder for larger weapons. Squeeze to re-grip."
                         }
                     }
                     .to_owned(),
@@ -4281,7 +4327,9 @@ impl MissionCore {
                     self.vr_trigger_safe_latch[i] = Some(true);
                 }
             }
-            if self.ammo_pouch.blocks_grab[i] {
+            if self.ammo_pouch.blocks_grab[i]
+                || (pouch_available[i] && self.shoulder_backpack.blocks_grab[i])
+            {
                 let hand = if i == 0 {
                     &mut shoulder_input.left_hand
                 } else {
@@ -4441,6 +4489,29 @@ impl MissionCore {
             }
         }
         effects.extend(self.process_virtual_hand_effects(asset_cache, interaction_msgs));
+        // Remember only successful shoulder deposits, after the shared storage
+        // transition has committed real backpack ownership. Other items and
+        // refused deposits cannot overwrite a weapon shortcut.
+        if shoulder_releases.iter().any(|released| *released) {
+            let contents = crate::inventory::Inventory::from_container(
+                &self.world,
+                inventory,
+                crate::inventory::grid_for(&self.world, inventory),
+            );
+            let remembered: Vec<_> = (0..2)
+                .filter_map(|i| {
+                    let entity = held[i]?;
+                    let slot = shoulder_slots[i]?;
+                    (shoulder_releases[i]
+                        && crate::virtual_hand::is_wieldable_weapon(&self.world, entity)
+                        && contents.all_items().any(|item| item.entity == entity))
+                    .then_some((entity, slot))
+                })
+                .collect();
+            for (entity, slot) in remembered {
+                super::shoulder_backpack::remember(&mut self.world, entity, slot);
+            }
+        }
 
         // The physical VR reload: a clip carried into the other hand's weapon
         // loads it. Runs after the hands have been updated so the held pair is
@@ -13133,6 +13204,7 @@ impl crate::game_scene::DebuggableScene for MissionCore {
         let mut feedback = self.interaction.hand_feedback_diagnostics();
         if let Some(object) = feedback.as_object_mut() {
             object.insert("body_gear".to_owned(), serde_json::json!({
+                "shoulder_weapons": self.world.borrow::<UniqueView<PlayerInfo>>().ok().map(|player| super::shoulder_backpack::weapons(&self.world, player.inventory_entity_id).map(|item| item.map(|id| id.inner() as i32))),
                 "pouch": self.body_pouch_readout(),
                 "holsters": super::holsters::occupants(&self.world).map(|item| super::body_gear_feedback::HolsterReadout::resolve(&self.world, item)),
             }));
