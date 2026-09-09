@@ -279,7 +279,7 @@ struct HeldGrip {
 }
 
 impl HeldGrip {
-    /// Undo the contact-origin split on the collision-resolved melee body.
+    /// Resolve the physical weapon pose, undoing melee's contact-origin split.
     fn physical_model_pose(&self, world: &World) -> Option<GripPose> {
         use shipyard::{Get, View};
         let grip = self.resolved.as_ref()?;
@@ -290,7 +290,13 @@ impl HeldGrip {
             )>()
             .ok()?;
         let position = positions.get(self.entity).ok()?;
-        let contact = offsets.get(self.entity).ok()?.0;
+        let contact = match offsets.get(self.entity) {
+            Ok(offset) => offset.0,
+            Err(_) => {
+                crate::mission::mission_core::held_item_collision_group(world, self.entity)?;
+                Vector3::new(0.0, 0.0, 0.0)
+            }
+        };
         let pose = GripPose {
             position: position.position
                 - position.rotation.rotate_vector(contact * grip.item_scale),
@@ -868,14 +874,16 @@ impl PlayerInteraction for VrInteraction {
                             && e.authored
                             && resolved.as_ref() == Some(&e.grip)
                     });
-                if crate::vr_weapon_grip::is_melee(&model) {
+                if crate::mission::mission_core::held_item_collision_group(world, entity).is_some()
+                {
                     if let (Some(grip), Some(geometry), Some(contact)) = (
                         resolved.as_ref(),
                         geometry,
                         world
                             .borrow::<View<crate::runtime_props::RuntimePropVrGripOffset>>()
                             .ok()
-                            .and_then(|v| v.get(entity).ok().map(|p| p.0)),
+                            .and_then(|v| v.get(entity).ok().map(|p| p.0))
+                            .or(Some(cgmath::vec3(0.0, 0.0, 0.0))),
                     ) {
                         let mut min = cgmath::vec3(f32::INFINITY, f32::INFINITY, f32::INFINITY);
                         let mut max = -min;
@@ -886,7 +894,7 @@ impl PlayerInteraction for VrInteraction {
                                 max[axis] = max[axis].max(p[axis]);
                             }
                         }
-                        effects.push(VirtualHandEffect::FitHeldMelee {
+                        effects.push(VirtualHandEffect::FitHeldItem {
                             entity_id: entity,
                             size: max - min,
                             center: (min + max) * 0.5,

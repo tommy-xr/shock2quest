@@ -77,7 +77,7 @@ pub enum VirtualHandEffect {
         torque: Vector3<f32>,
     },
     /// Refit contact geometry once when a prepared melee grip is acquired.
-    FitHeldMelee {
+    FitHeldItem {
         entity_id: EntityId,
         size: Vector3<f32>,
         center: Vector3<f32>,

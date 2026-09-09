@@ -40,7 +40,7 @@ mod internal_keycard_script;
 mod internal_nanites_script;
 pub(crate) mod internal_radiation_source;
 mod internal_simple_health;
-mod internal_switch_held_model;
+pub(crate) mod internal_switch_held_model;
 mod laser_shot;
 mod level_change_button;
 pub mod maintenance;
