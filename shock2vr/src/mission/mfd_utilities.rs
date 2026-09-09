@@ -2,7 +2,7 @@
 
 use cgmath::Vector2;
 use engine::assets::asset_cache::AssetCache;
-use shipyard::{EntitiesView, EntityId, Get, View, World};
+use shipyard::{EntitiesView, EntityId, Get, UniqueView, View, World};
 
 use crate::{
     scripts::gui::wrap_text,
@@ -10,12 +10,21 @@ use crate::{
 };
 
 const PANEL: Rect = Rect::new(450.0, 124.0, 188.0, 248.0);
+const CHARACTER_PANEL: Rect = Rect::new(450.0, 124.0, 188.0, 296.0);
+const CHARACTER_STATS: [(&str, crate::player_stats::Stat); 5] = [
+    ("STRENGTH", crate::player_stats::Stat::Strength),
+    ("ENDURANCE", crate::player_stats::Stat::Endurance),
+    ("PSIONICS", crate::player_stats::Stat::PsionicAbility),
+    ("AGILITY", crate::player_stats::Stat::Agility),
+    ("CYBER", crate::player_stats::Stat::CyberAffinity),
+];
 const FONT: &str = "mainfont.fon";
 const PAGE_LINES: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Control {
     Inspect,
+    Character,
     Research,
     Map,
     Close,
@@ -28,6 +37,8 @@ pub(crate) struct MfdUtilities {
     inspecting: bool,
     research: bool,
     empty_logs: bool,
+    character: bool,
+    character_stats: crate::player_stats::PlayerStats,
     map_requested: bool,
     research_catalog: super::research_overview::ResearchCatalog,
     selected: Option<EntityId>,
@@ -56,7 +67,11 @@ impl MfdUtilities {
         }
     }
     pub(crate) fn is_open(&self) -> bool {
-        self.inspecting || self.selected.is_some() || self.research || self.empty_logs
+        self.inspecting
+            || self.selected.is_some()
+            || self.research
+            || self.empty_logs
+            || self.character
     }
     pub(crate) fn take_map_request(&mut self) -> bool {
         std::mem::take(&mut self.map_requested)
@@ -65,9 +80,14 @@ impl MfdUtilities {
         self.inspecting
     }
     fn controls(&self) -> Vec<(Control, Rect, &'static str, &'static str)> {
-        // Retail shkiface.cpp iface_rects[3..6], on BIOFULL at (2, 414).
+        // Retail shkiface.cpp iface_rects[2..6], on the bottom bio/ammo strips.
         // Keep art, hit testing, and debug discovery on these same canvas rects.
         let mut controls = vec![
+            (
+                Control::Character,
+                Rect::new(460.0, 430.0, 32.0, 40.0),
+                "MFD",
+            ),
             (Control::Inspect, Rect::new(150.0, 431.0, 32.0, 18.0), "?"),
             (
                 Control::Research,
@@ -76,6 +96,9 @@ impl MfdUtilities {
             ),
             (Control::Map, Rect::new(150.0, 451.0, 32.0, 18.0), "MAP"),
         ];
+        if self.character {
+            controls.push((Control::Close, Rect::new(455.0, 132.0, 20.0, 21.0), ""));
+        }
         if self.empty_logs {
             controls.push((Control::Close, Rect::new(165.0, 132.0, 20.0, 21.0), ""));
         }
@@ -92,6 +115,9 @@ impl MfdUtilities {
             .into_iter()
             .map(|(control, rect, label)| {
                 let texture = match control {
+                    Control::Character if self.character => "iface/ifbtn21.pcx",
+                    Control::Character => "iface/ifbtn20.pcx",
+                    Control::Close if self.character => "iface/closeoff.pcx",
                     Control::Inspect if self.inspecting => "iface/ifbtn31.pcx",
                     Control::Inspect => "iface/ifbtn30.pcx",
                     Control::Research if self.research => "iface/ifbtn41.pcx",
@@ -120,12 +146,18 @@ impl MfdUtilities {
         {
             if pressed {
                 match control {
+                    Control::Character => {
+                        let open = !self.character;
+                        *self = Self::default();
+                        self.character = open;
+                    }
                     Control::Inspect => {
                         if self.inspecting {
                             *self = Self::default();
                         } else {
                             self.research = false;
                             self.empty_logs = false;
+                            self.character = false;
                             self.inspecting = true;
                             self.selected = None;
                             self.set_content("Item information".into(), "Select an inventory or held item to inspect. Select ? again to cancel.".into());
@@ -145,6 +177,9 @@ impl MfdUtilities {
                 }
             }
             return true;
+        }
+        if self.character {
+            return CHARACTER_PANEL.contains(point);
         }
         if self.empty_logs {
             return Rect::new(2.0, 124.0, 188.0, 296.0).contains(point);
@@ -184,6 +219,23 @@ impl MfdUtilities {
         assets: &mut AssetCache,
         info: &dark::ss2_entity_info::SystemShock2EntityInfo,
     ) {
+        if self.character {
+            if let Ok(quests) = world.borrow::<UniqueView<crate::quest_info::QuestInfo>>() {
+                self.character_stats = quests.player_stats().clone();
+            }
+            self.title = "OS UPGRADES".into();
+            self.lines = self
+                .character_stats
+                .os_traits
+                .iter()
+                .take(4)
+                .map(|id| crate::scripts::gui::trait_name(*id).to_owned())
+                .collect();
+            if self.lines.is_empty() {
+                self.lines = vec!["No OS upgrades".into(), "installed.".into()];
+            }
+            return;
+        }
         if self.research {
             self.research_catalog.refresh(world, assets, info);
             return;
@@ -205,6 +257,60 @@ impl MfdUtilities {
     }
 
     pub(crate) fn draw(&self, canvas: &mut UiCanvas) {
+        if self.character {
+            canvas.image(CHARACTER_PANEL, "iface/stats.pcx");
+            for (rect, label) in self.character_labels() {
+                // 25AE removes the baked labels; cover the classic label bands
+                // too, then draw one shared layer. Cover the original glyphs'
+                // final pixel row; arrows begin immediately afterward at y=22.
+                canvas.cropped_image(
+                    Rect { h: 14.0, ..rect },
+                    "iface/stats.pcx",
+                    Rect::new(40.0, 134.0, 80.0, 6.0),
+                    Vector2::new(188.0, 296.0),
+                );
+                canvas.text_native_fit(
+                    rect,
+                    &label,
+                    crate::ui::MFD_FONT,
+                    HAlign::Left,
+                    VAlign::Top,
+                );
+            }
+            for (row, (_, stat)) in CHARACTER_STATS.iter().enumerate() {
+                for level in 0..self
+                    .character_stats
+                    .stat_level(*stat)
+                    .clamp(0, crate::player_stats::STAT_CAP)
+                {
+                    canvas.image(
+                        Rect::new(
+                            483.0 + level as f32 * 17.0,
+                            146.0 + row as f32 * 26.0,
+                            20.0,
+                            14.0,
+                        ),
+                        "iface/skilstat.pcx",
+                    );
+                }
+            }
+            for (slot, id) in self.character_stats.os_traits.iter().take(4).enumerate() {
+                canvas.image(
+                    Rect::new(487.0 + slot as f32 * 35.0, 268.0, 32.0, 32.0),
+                    &crate::scripts::gui::trait_icon(*id),
+                );
+            }
+            canvas.text_native_fit(
+                Rect::new(465.0, 314.0, 159.0, 12.0),
+                &self.title,
+                crate::ui::MFD_FONT,
+                HAlign::Left,
+                VAlign::Top,
+            );
+            for (rect, line) in self.visible_lines() {
+                canvas.text_native_fit(rect, line, crate::ui::MFD_FONT, HAlign::Left, VAlign::Top);
+            }
+        }
         if self.empty_logs {
             canvas.image(Rect::new(2.0, 124.0, 188.0, 296.0), "iface/pda.pcx");
             canvas.text_native_fit(
@@ -249,6 +355,23 @@ impl MfdUtilities {
         }
     }
 
+    /// Shared stat-label rectangles for rendering and debug inspection.
+    fn character_labels(&self) -> Vec<(Rect, String)> {
+        if !self.character {
+            return Vec::new();
+        }
+        CHARACTER_STATS
+            .iter()
+            .enumerate()
+            .map(|(row, (name, stat))| {
+                (
+                    Rect::new(480.0, 132.0 + row as f32 * 26.0, 148.0, 12.0),
+                    format!("{name} {}", self.character_stats.stat_level(*stat)),
+                )
+            })
+            .collect()
+    }
+
     fn visible_lines(&self) -> impl Iterator<Item = (Rect, &String)> {
         self.lines
             .iter()
@@ -258,6 +381,8 @@ impl MfdUtilities {
             .map(|(i, line)| {
                 let rect = if self.empty_logs {
                     Rect::new(17.0, 170.0 + i as f32 * 12.0, 139.0, 12.0)
+                } else if self.character {
+                    Rect::new(465.0, 332.0 + i as f32 * 12.0, 159.0, 12.0)
                 } else {
                     Rect::new(460.0, 152.0 + i as f32 * 11.0, 168.0, 11.0)
                 };
@@ -275,6 +400,7 @@ impl MfdUtilities {
                     text: Some(label.into()),
                     label: Some(
                         match control {
+                            Control::Character => "character_stats",
                             Control::Inspect => "inspect",
                             Control::Research => "research_overview",
                             Control::Map => "map",
@@ -294,6 +420,17 @@ impl MfdUtilities {
             } else {
                 Vec::new()
             })
+            .chain(self.character_labels().into_iter().map(|(r, text)| {
+                crate::game_scene::DebugUiElement {
+                    kind: "text".into(),
+                    texture: None,
+                    text: Some(text),
+                    label: Some("character_stat".into()),
+                    entity_id: None,
+                    rect: [r.x, r.y, r.w, r.h],
+                    screen_rect: [r.x, r.y, r.w, r.h],
+                }
+            }))
             .chain(self.visible_lines().map(|(rect, line)| {
                 let r = [rect.x, rect.y, rect.w, rect.h];
                 crate::game_scene::DebugUiElement {

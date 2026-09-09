@@ -111,3 +111,16 @@ Opening the cyber interface currently releases a support grip for pointing,
 so the freed hand reads EMPTY and a two-handed weapon appears only once. If
 that interaction policy changes, add an explicit SUPPORTING state rather than
 representing the support hand as another owner.
+
+### Character MFD
+
+The native MFD control (IFBTN20/21, at 460,430) toggles a read-only character
+sheet in the original right STATS panel. It shows the five trained base levels
+in retail order and acquired OS upgrade icons/names. Bars use shkstats.cpp's
+33,22 origin, 17-pixel horizontal step and 26-pixel row step; acquired traits
+pack left-to-right at 35-pixel spacing. Label bands are replaced consistently
+in classic and 25AE artwork so the HD art's removed labels remain readable.
+
+This first sheet reports base levels, not temporary boosted-stat segments.
+Upgrade purchases remain at trainers. TECH/CMBT/PSI pages and their navigation
+controls are deferred; no inactive tabs are presented as working controls.
