@@ -9166,7 +9166,11 @@ impl MissionCore {
                         );
                     }
                 }
-                Effect::KickHeldGun { entity_id, impulse } => {
+                Effect::KickHeldGun {
+                    entity_id,
+                    impulse,
+                    one_hand,
+                } => {
                     let strength = self
                         .world
                         .borrow::<UniqueView<QuestInfo>>()
@@ -9175,6 +9179,7 @@ impl MissionCore {
                     self.physics.kick_held_gun(
                         entity_id,
                         impulse,
+                        one_hand,
                         strength,
                         self.interaction.is_supported(entity_id),
                     );

@@ -3,7 +3,8 @@
 //! damping=14 response is integrated analytically, without frame-rate drift.
 use cgmath::{InnerSpace, Vector3, vec3};
 use dark::properties::{
-    GunKickSetting, Link, Links, PropGunKick, PropGunState, PropImplantDesc, PropPlayerGun,
+    GunKickSetting, Link, Links, PropGunKick, PropGunState, PropImplantDesc, PropModelName,
+    PropPlayerGun,
 };
 use rand::Rng;
 use shipyard::{EntityId, Get, UniqueView, View, World};
@@ -15,29 +16,31 @@ pub struct RecoilImpulse {
     pub back: f32,
     pub pitch_limit: f32,
     pub back_limit: f32,
+    pub heading_limit: f32,
     pub angular_rate: f32,
     pub back_rate: f32,
     pub forward: Vector3<f32>,
 }
 
 /// Intentional VR control tuning, separate from Dark's Agility modifier.
-/// Caps and spring rates remain authored: changing Strength/support affects
+/// Caps and spring rates remain fixed: changing Strength/support affects
 /// future impulses, never the pose or recovery of an already moving spring.
 pub fn vr_impulses(
     impulse: RecoilImpulse,
+    one_hand: RecoilImpulse,
     strength: i32,
     supported: bool,
 ) -> (RecoilImpulse, Option<RecoilImpulse>) {
     let above_minimum = (strength.clamp(1, 6) - 1) as f32;
-    let scaled = |scale| RecoilImpulse {
+    let scaled = |impulse: RecoilImpulse, scale| RecoilImpulse {
         pitch: impulse.pitch * scale,
         heading: impulse.heading * scale,
         back: impulse.back * scale,
         ..impulse
     };
     (
-        scaled(1.0 / (1.0 + 0.1 * above_minimum)),
-        (!supported).then(|| scaled(1.0 / (1.0 + 0.3 * above_minimum))),
+        scaled(impulse, 1.0 / (1.0 + 0.1 * above_minimum)),
+        (!supported).then(|| scaled(one_hand, 1.0 / (1.0 + 0.3 * above_minimum))),
     )
 }
 
@@ -97,7 +100,7 @@ fn aiming_implant(world: &World) -> bool {
 }
 
 /// Called only after the shared firing gate succeeds, once per shell (not pellet).
-pub fn shot_impulse(world: &World, gun: EntityId) -> Option<RecoilImpulse> {
+pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, RecoilImpulse)> {
     // Keep the flat/nonphysical firing path free of recoil RNG draws.
     crate::mission::mission_core::held_item_collision_group(world, gun)?;
     let (kicks, states, guns) = world
@@ -115,15 +118,54 @@ pub fn shot_impulse(world: &World, gun: EntityId) -> Option<RecoilImpulse> {
         .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()
         .is_ok_and(|powers| powers.is_active(-1107));
     let mut rng = rand::thread_rng();
-    Some(authored_impulse(
+    let aiming = aiming_implant(world);
+    let authored = authored_impulse(
         kick,
         flags,
         agility,
         still_hand,
-        aiming_implant(world),
+        aiming,
         crate::weapon_muzzle::resolve(world, gun).axis,
         &mut rng,
-    ))
+    );
+    let model = world.borrow::<View<PropModelName>>().ok()?;
+    let extra = one_hand_impulse(
+        authored,
+        &model.get(gun).ok()?.0,
+        agility,
+        still_hand,
+        aiming,
+        &mut rng,
+    );
+    Some((authored, extra))
+}
+
+/// Deliberate VR tuning: forward-heavy rifles need more angular correction
+/// one-handed. This replaces the generic extra angular kick for these models;
+/// authored two-hand kick and the existing extra backward kick are preserved.
+fn one_hand_impulse<R: Rng + ?Sized>(
+    authored: RecoilImpulse,
+    model: &str,
+    agility: i32,
+    still_hand: bool,
+    aiming: bool,
+    rng: &mut R,
+) -> RecoilImpulse {
+    let (pitch, yaw, rate) = match model.to_ascii_lowercase().trim_end_matches(".bin") {
+        "atek_h" => (2.0, 0.75, 2.0),
+        "ar15_h" => (8.0, 2.0, 1.0),
+        _ => return authored,
+    };
+    RecoilImpulse {
+        // Strength scales this later. Agility affects horizontal stability,
+        // without making a heavy gun effortless vertically at Agility 6.
+        pitch: kick_angle(pitch, 1, 1, still_hand, aiming, rng),
+        heading: kick_angle(yaw, 3, agility, still_hand, aiming, rng),
+        pitch_limit: pitch * 2.0,
+        heading_limit: yaw * 2.0,
+        angular_rate: rate,
+        ..authored
+    }
 }
 
 fn authored_impulse<R: Rng + ?Sized>(
@@ -155,6 +197,7 @@ fn authored_impulse<R: Rng + ?Sized>(
         back: kick.kick_back / dark::SCALE_FACTOR,
         pitch_limit: kick.kick_pitch_max_degrees.abs(),
         back_limit: kick.kick_back_max.abs() / dark::SCALE_FACTOR,
+        heading_limit: f32::MAX,
         angular_rate: recovery_rate(
             kick.kick_angular_return_rate_degrees,
             kick.kick_pitch_max_degrees,
@@ -220,6 +263,7 @@ impl RecoilState {
             impulse.back,
             impulse.pitch_limit,
             impulse.back_limit,
+            impulse.heading_limit,
             impulse.angular_rate,
             impulse.back_rate,
             impulse.forward.x,
@@ -232,6 +276,7 @@ impl RecoilState {
             || impulse.back_rate <= 0.0
             || impulse.pitch_limit < 0.0
             || impulse.back_limit < 0.0
+            || impulse.heading_limit < 0.0
             || Vector3::unit_y().cross(impulse.forward).magnitude2() < 1e-8
         {
             return;
@@ -248,7 +293,7 @@ impl RecoilState {
             return (vec3(0.0, 0.0, 0.0), Quaternion::new(1.0, 0.0, 0.0, 0.0));
         };
         self.pitch.step(dt, i.angular_rate, i.pitch_limit);
-        self.heading.step(dt, i.angular_rate, f32::MAX);
+        self.heading.step(dt, i.angular_rate, i.heading_limit);
         self.back.step(dt, i.back_rate, i.back_limit);
         let forward = i.forward.normalize();
         let right = Vector3::unit_y().cross(forward).normalize();
@@ -265,6 +310,59 @@ mod tests {
     use super::*;
     use rand::{SeedableRng, rngs::StdRng};
     #[test]
+    fn one_hand_profiles_separate_vertical_load_from_agility_and_preserve_baseline() {
+        let authored = RecoilImpulse {
+            pitch: 3.0,
+            heading: 0.0,
+            back: -0.1,
+            pitch_limit: 4.0,
+            heading_limit: f32::MAX,
+            back_limit: 0.2,
+            angular_rate: 2.0,
+            back_rate: 1.0,
+            forward: -Vector3::unit_x(),
+        };
+        let extra = |model, agility, still| {
+            one_hand_impulse(
+                authored,
+                model,
+                agility,
+                still,
+                false,
+                &mut StdRng::seed_from_u64(7),
+            )
+        };
+        let pistol = extra("atek_h", 1, false);
+        let ar = extra("ar15_h", 1, false);
+        assert!(ar.pitch > pistol.pitch * 3.9);
+        assert!(ar.heading.abs() > pistol.heading.abs() * 2.6);
+        assert!(ar.angular_rate < pistol.angular_rate);
+        assert_eq!(ar.back, authored.back);
+        let agile = extra("ar15_h", 6, false);
+        assert_eq!(agile.pitch, ar.pitch);
+        assert_eq!(agile.heading, 0.0);
+        let middle = extra("ar15_h", 3, false);
+        assert!(middle.heading.abs() < ar.heading.abs());
+        let still = extra("ar15_h", 1, true);
+        assert_eq!((still.pitch, still.heading), (0.0, 0.0));
+        assert_eq!(still.back, authored.back);
+        let (base, penalty) = vr_impulses(authored, ar, 1, true);
+        assert_eq!((base.pitch, base.heading, base.back), (3.0, 0.0, -0.1));
+        assert!(penalty.is_none());
+        let low = vr_impulses(authored, ar, 1, false).1.unwrap();
+        let high = vr_impulses(authored, ar, 6, false).1.unwrap();
+        assert!(high.pitch < low.pitch && high.heading.abs() < low.heading.abs());
+        assert_eq!(extra("sg_h", 1, false).pitch, authored.pitch);
+        let mut state = RecoilState::default();
+        for _ in 0..200 {
+            state.kick(ar);
+            state.step(1.0 / 60.0);
+            assert!(state.heading.position.abs() <= ar.heading_limit);
+            assert!(state.pitch.position.abs() <= ar.pitch_limit);
+        }
+    }
+
+    #[test]
     fn strength_reduces_both_new_impulses_without_changing_recovery_or_caps() {
         let authored = RecoilImpulse {
             pitch: 7.0,
@@ -272,13 +370,14 @@ mod tests {
             back: -0.1,
             pitch_limit: 10.0,
             back_limit: 0.2,
+            heading_limit: f32::MAX,
             angular_rate: 1.0,
             back_rate: 2.0,
             forward: -Vector3::unit_x(),
         };
         let mut previous = (f32::MAX, f32::MAX);
         for strength in [1, 3, 6] {
-            let (base, extra) = vr_impulses(authored, strength, false);
+            let (base, extra) = vr_impulses(authored, authored, strength, false);
             let extra = extra.unwrap();
             assert!(base.pitch < previous.0 && extra.pitch < previous.1);
             previous = (base.pitch, extra.pitch);
@@ -286,16 +385,22 @@ mod tests {
             assert_eq!(extra.back_limit, authored.back_limit);
             assert_eq!(base.angular_rate, authored.angular_rate);
             assert_eq!(extra.back_rate, authored.back_rate);
-            let (supported, penalty) = vr_impulses(authored, strength, true);
+            let (supported, penalty) = vr_impulses(authored, authored, strength, true);
             assert!(penalty.is_none());
             assert_eq!(supported.pitch, base.pitch);
             assert_eq!(supported.back, base.back);
         }
-        assert_eq!(vr_impulses(authored, 1, true).0.pitch, authored.pitch);
-        assert_eq!(vr_impulses(authored, -2, true).0.pitch, authored.pitch);
         assert_eq!(
-            vr_impulses(authored, 99, true).0.pitch,
-            vr_impulses(authored, 6, true).0.pitch
+            vr_impulses(authored, authored, 1, true).0.pitch,
+            authored.pitch
+        );
+        assert_eq!(
+            vr_impulses(authored, authored, -2, true).0.pitch,
+            authored.pitch
+        );
+        assert_eq!(
+            vr_impulses(authored, authored, 99, true).0.pitch,
+            vr_impulses(authored, authored, 6, true).0.pitch
         );
     }
 
@@ -307,23 +412,24 @@ mod tests {
             back: -0.1,
             pitch_limit: 10.0,
             back_limit: 0.2,
+            heading_limit: f32::MAX,
             angular_rate: 1.0,
             back_rate: 1.0,
             forward: -Vector3::unit_x(),
         };
         let mut penalty = RecoilState::default();
-        penalty.kick(vr_impulses(authored, 1, false).1.unwrap());
+        penalty.kick(vr_impulses(authored, authored, 1, false).1.unwrap());
         penalty.step(0.1);
         let mut uninterrupted = penalty;
         // A supported follow-up shot has no new penalty; the old spring remains.
-        if let Some(extra) = vr_impulses(authored, 6, true).1 {
+        if let Some(extra) = vr_impulses(authored, authored, 6, true).1 {
             penalty.kick(extra);
         }
         assert_eq!(penalty.step(0.1), uninterrupted.step(0.1));
         assert!(penalty.pitch.position > 0.0);
         // Losing support adds velocity, without resetting accumulated displacement.
         let before = penalty.step(0.0);
-        penalty.kick(vr_impulses(authored, 6, false).1.unwrap());
+        penalty.kick(vr_impulses(authored, authored, 6, false).1.unwrap());
         assert_eq!(penalty.step(0.0), before);
         penalty.step(5.0);
         assert!(penalty.pitch.position.abs() < 1e-6);
@@ -340,6 +446,7 @@ mod tests {
                 back: -0.1,
                 pitch_limit: 10.0,
                 back_limit: 0.2,
+                heading_limit: f32::MAX,
                 angular_rate: 1.0,
                 back_rate: 1.0,
                 forward,
@@ -362,6 +469,7 @@ mod tests {
             back: -0.1,
             pitch_limit: 10.0,
             back_limit: 0.2,
+            heading_limit: f32::MAX,
             angular_rate: 1.0,
             back_rate: 1.0,
             forward: Vector3::unit_y(),

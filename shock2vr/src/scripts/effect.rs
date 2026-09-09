@@ -724,6 +724,7 @@ pub enum Effect {
     KickHeldGun {
         entity_id: EntityId,
         impulse: crate::weapon_recoil::RecoilImpulse,
+        one_hand: crate::weapon_recoil::RecoilImpulse,
     },
     PlayEnvironmentalSound {
         audio_handle: AudioHandle,

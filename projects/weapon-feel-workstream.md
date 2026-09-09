@@ -781,3 +781,30 @@ increases and remove the extra load with an active support grip. Ease changes
 through a spring around the primary grip, preserving the tracked hand and head;
 apply the result to the actual held gun and muzzle. Keep weight and shot impulses
 independently tunable and evaluate both with direct muzzle pitch/yaw measurements.
+
+
+## Weapon-specific one-handed angular recoil
+
+The pistol and AR now replace the generic extra angular impulse with explicit
+VR handling profiles. The authored baseline and extra backward kick are unchanged.
+
+| Held model | Extra pitch peak | Extra yaw peak | Angular spring rate | Pitch/yaw caps |
+| --- | ---: | ---: | ---: | --- |
+| Pistol (`atek_h`) | 2 degrees | ±0.75 degrees | 2 | 4 / 1.5 degrees |
+| AR (`ar15_h`) | 8 degrees | ±2 degrees | 1 | 16 / 4 degrees |
+
+The sampled magnitude is 50–100% of the listed peak, before modifiers. Strength
+scales both axes using the existing extra-impulse curve. Agility scales extra yaw
+with Dark's angular modifier, while extra pitch remains at Agility 6. Still Hand
+suppresses both angular axes; the aiming implant reduces both. These profiles
+are intentional VR tuning: they model the AR's greater one-handed control burden,
+not measured recoil energy or collider mass. Unprofiled guns retain the generic
+extra impulse pending weapon-by-weapon tuning. Supported firing uses the original
+baseline (including original Agility behavior) with the established Strength scale.
+
+The extra profile has its own bounded pitch/yaw and return rate, independent of
+the authored caps. Strength and support changes affect new impulses without
+resetting ongoing spring displacement. The runtime matrix checks nonzero yaw
+only when unsupported, zero yaw at Agility 6, and retained one-handed vertical
+kick at Agility 6. Seeded unit tests isolate the larger/slower AR extra response
+from the independently randomized authored baseline.

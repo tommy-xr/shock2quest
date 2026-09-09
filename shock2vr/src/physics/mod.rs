@@ -3308,6 +3308,7 @@ impl PhysicsWorld {
         &mut self,
         entity: EntityId,
         impulse: crate::weapon_recoil::RecoilImpulse,
+        one_hand: crate::weapon_recoil::RecoilImpulse,
         strength: i32,
         supported: bool,
     ) {
@@ -3316,7 +3317,8 @@ impl PhysicsWorld {
         }
         let handle = self.entity_id_to_body[&entity];
         if let Some(drive) = self.held_item_drives.get_mut(&handle) {
-            let (baseline, extra) = crate::weapon_recoil::vr_impulses(impulse, strength, supported);
+            let (baseline, extra) =
+                crate::weapon_recoil::vr_impulses(impulse, one_hand, strength, supported);
             drive.recoil.kick(baseline);
             if let Some(extra) = extra {
                 drive.one_hand_recoil.kick(extra);

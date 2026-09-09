@@ -121,7 +121,19 @@ for (const [name, template] of [
             muzzle.some(
               (sample) => sample.forward[1] > initialMuzzle.forward[1] + 0.005,
             ),
-            "subsequent shots aim along the recoiling barrel",
+            "the live barrel direction rises during recoil",
+          );
+          const yaw = Math.max(
+            ...muzzle.map((sample) =>
+              Math.abs(
+                sample.forward[0] * initialMuzzle.forward[2] -
+                  sample.forward[2] * initialMuzzle.forward[0],
+              ),
+            ),
+          );
+          assert.ok(
+            supported ? yaw < 0.0001 : yaw > 0.001,
+            `one-hand handling adds horizontal recoil; supported=${supported}, yaw=${yaw}`,
           );
           for (let frame = 26; frame <= 200; frame += 6) {
             await game.step({ frames: 6 });
@@ -240,6 +252,38 @@ for (const [name, template] of [
           );
         }
         assert.deepEqual((await game.info()).player.camera_rotation, head);
+      }
+      await game.step({ frames: 300 });
+      await game.player.setStats({ agility: 6 });
+      for (const supported of [false, true]) {
+        await support(supported);
+        await game.step({ frames: 180 });
+        const initial = muzzleFrameOf(await game.entities.detail(gun.id));
+        const ammo = ammoOf(await game.entities.detail(gun.id));
+        await game.input.set("right_hand.trigger", 1);
+        let pitch = 0;
+        let yaw = 0;
+        for (let frame = 0; frame < 30; frame++) {
+          await game.step({ frames: 1 });
+          if (frame === 0) await game.input.set("right_hand.trigger", 0);
+          const current = muzzleFrameOf(await game.entities.detail(gun.id));
+          pitch = Math.max(pitch, current.forward[1] - initial.forward[1]);
+          yaw = Math.max(
+            yaw,
+            Math.abs(
+              current.forward[0] * initial.forward[2] -
+                current.forward[2] * initial.forward[0],
+            ),
+          );
+        }
+        assert.equal(ammoOf(await game.entities.detail(gun.id)), ammo - 1);
+        assert.ok(yaw < 0.0001, `Agility 6 suppresses horizontal kick: ${yaw}`);
+        assert.ok(
+          supported ? pitch < 0.0001 : pitch > 0.002,
+          `Agility 6 keeps extra one-hand vertical load; supported=${supported}, pitch=${pitch}`,
+        );
+        assert.deepEqual((await game.info()).player.camera_rotation, head);
+        await game.step({ frames: 300 });
       }
     },
   );
