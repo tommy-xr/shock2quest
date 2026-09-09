@@ -54,9 +54,24 @@ texture is shipped. The original strip scales uniformly by about 0.945 to fit
 both arms within the existing canvas width; inventory drop coordinates map
 back into the original grid. Flat and VR use the same layout.
 
-The new arm is decorative for this increment: clicking it does not equip or
-throw a cursor-held item. Armor, implant and inventory controls retain their
-existing behavior. A follow-up can place explicitly named LEFT HAND / RIGHT
-HAND item readouts over the two arms, with SUPPORTING for a support grip rather
-than duplicate ownership. Those readouts describe held items independently of
-the shoulder recall marks on backpack items.
+### Held-item readouts
+
+Both arms now carry LEFT / RIGHT labels and a fitted icon for the item that
+hand owns, or EMPTY. The paperdoll faces the viewer: RIGHT is left of the torso
+and LEFT is right of it. Hover names include the hand and full item name;
+missing icons fall back to ITEM. The flat viewmodel maps to RIGHT through the
+interaction's physical handedness, even though its internal storage uses the
+left slot.
+
+The empty caption uses an explicit compact font size so it fits without an
+ellipsis. Adjacent background crops share a depth plane in VR; only overlapping
+resolved elements advance toward the viewer to preserve painter order. This
+avoids introducing a perspective seam between pieces of the same border.
+
+The arms are read-only: clicking them does not equip, use, or throw an item.
+Armor, implant and inventory controls retain their existing behavior. These
+readouts describe held items independently of shoulder recall assignments.
+Opening the cyber interface currently releases a support grip for pointing,
+so the freed hand reads EMPTY and a two-handed weapon appears only once. If
+that interaction policy changes, add an explicit SUPPORTING state rather than
+representing the support hand as another owner.
