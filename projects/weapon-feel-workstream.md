@@ -808,3 +808,52 @@ resetting ongoing spring displacement. The runtime matrix checks nonzero yaw
 only when unsupported, zero yaw at Agility 6, and retained one-handed vertical
 kick at Agility 6. Seeded unit tests isolate the larger/slower AR extra response
 from the independently randomized authored baseline.
+
+
+## Shotgun recoil evaluation
+
+Extend the [angular-handling PR #1482](https://github.com/tommy-xr/shock2quest/pull/1482)
+evaluation to the shotgun's normal and three-shell modes, Strength 1/3/6 and
+one/two hands. Keep gameplay tuning unchanged for this evaluation.
+
+The shotgun's own `GunKick` overrides the generic Weapon template:
+
+| Mode | Authored pitch | Pitch cap | Backward kick | Back cap | Ammo per shot |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Normal | 11.25 degrees | 22.5 degrees | -0.6 | -0.75 | 1 |
+| Three-shell | 22.5 degrees | 22.5 degrees | -0.75 | -0.75 | 3 |
+
+Backward values above are authored Dark units, before conversion to world
+units. Both modes author zero heading kick. The pitch return/limit ratio is
+0.5, giving a slower angular spring than pistol or AR. Sample through frame 320
+at 60 Hz to verify recovery. The three-shell mode uses its authored larger
+impulse once per firing event, rather than multiplying recoil by pellet count.
+
+The shotgun currently uses the generic extra one-handed spring: at Strength 1,
+one hand doubles its authored impulse, while two hands retain the baseline.
+Its normal-mode backward kick is already about 1.7 times the pistol's and
+2.4 times the AR's. The dedicated pistol/AR angular profiles do not apply to
+the shotgun: horizontal kick remains zero, and Agility 6 suppresses its angular
+kick even one-handed. A dedicated shotgun handling profile remains a separate
+tuning gap; this evaluation records the existing behavior without inventing one.
+
+The runtime matrix checks correct one/three-shell consumption, reloads through
+the normal ammo path, verifies support and fixed head pose, and samples the
+shared live muzzle plus gun body. Compare backward travel quantitatively;
+pitch samples retain independently randomized authored magnitudes.
+
+
+Measured peak backward gun-body travel (world units, fixed controllers):
+
+| Strength | Normal, one hand | Normal, two hands | Three-shell, one hand | Three-shell, two hands |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 0.479925 | 0.239965 | 0.599905 | 0.299955 |
+| 3 | 0.349945 | 0.199965 | 0.437431 | 0.249962 |
+| 6 | 0.255959 | 0.159975 | 0.319950 | 0.199965 |
+
+All twelve combinations and four Agility 6 checks pass. The latter confirm
+that the unprofiled shotgun retains zero angular kick at Agility 6 while still
+kicking backward. Actual support stays latched through the captured recoil and
+recovery; the tracked head remains fixed. [Comparison GIFs and raw muzzle
+measurements](https://gist.github.com/tommy-xr/bddb134ab070671f551e77acdf3a42df)
+separate pitch/yaw and endpoint motion from backward gun-body travel.

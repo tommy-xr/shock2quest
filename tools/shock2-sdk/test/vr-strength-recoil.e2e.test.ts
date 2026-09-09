@@ -13,9 +13,11 @@ import {
 } from "./helpers/vr-hand.js";
 import { ammoOf, cycleToWeapon, muzzleFrameOf } from "./helpers/weapon.js";
 
-for (const [name, template] of [
-  ["pistol", -17],
-  ["AR", -18],
+for (const [name, template, profiled, setting] of [
+  ["pistol", -17, true, 0],
+  ["AR", -18, true, 0],
+  ["shotgun", -19, false, 0],
+  ["shotgun-triple", -19, false, 1],
 ] as const) {
   test(
     `${name} recoil decreases with Strength and genuine support removes the extra spring`,
@@ -42,6 +44,21 @@ for (const [name, template] of [
         Math.SQRT1_2,
       ]);
       await game.step({ frames: 180 });
+      if (setting) {
+        await game.input.trigger("CycleGunSetting");
+        await game.step({ frames: 2 });
+      }
+      const ammoUsage = setting ? 3 : 1;
+      const ensureShotAmmo = async () => {
+        if (ammoOf(await game.entities.detail(gun.id)) >= ammoUsage) return;
+        // The shotgun's three-shell matrix exceeds one magazine. Supply both
+        // authored clip types and reload through the normal selected-ammo path.
+        await game.player.spawnItem(-42);
+        await game.player.spawnItem(-43);
+        await game.input.trigger("Reload");
+        await game.step({ frames: 180 });
+        assert.ok(ammoOf(await game.entities.detail(gun.id)) >= ammoUsage);
+      };
       const head = (await game.info()).player.camera_rotation;
       const body = async () =>
         (await game.physics.bodies({ entityId: gun.id })).bodies[0]!;
@@ -89,6 +106,7 @@ for (const [name, template] of [
         for (const supported of [false, true]) {
           await support(supported);
           await game.step({ frames: 180 });
+          await ensureShotAmmo();
           const initial = await body();
           const initialDetail = await game.entities.detail(gun.id);
           const ammo = ammoOf(initialDetail);
@@ -108,7 +126,10 @@ for (const [name, template] of [
               ...muzzleFrameOf(await game.entities.detail(gun.id)),
             });
           }
-          assert.equal(ammoOf(await game.entities.detail(gun.id)), ammo - 1);
+          assert.equal(
+            ammoOf(await game.entities.detail(gun.id)),
+            ammo - ammoUsage,
+          );
           assert.deepEqual((await game.info()).player.camera_rotation, head);
           assert.ok(
             muzzle.some(
@@ -132,10 +153,12 @@ for (const [name, template] of [
             ),
           );
           assert.ok(
-            supported ? yaw < 0.0001 : yaw > 0.001,
-            `one-hand handling adds horizontal recoil; supported=${supported}, yaw=${yaw}`,
+            supported || !profiled ? yaw < 0.0001 : yaw > 0.001,
+            `profiled one-hand handling adds horizontal recoil; supported=${supported}, profiled=${profiled}, yaw=${yaw}`,
           );
-          for (let frame = 26; frame <= 200; frame += 6) {
+          // Shotgun pitch has a slower authored return/limit ratio (0.5).
+          const recoveryFrames = template === -19 ? 320 : 200;
+          for (let frame = 26; frame <= recoveryFrames; frame += 6) {
             await game.step({ frames: 6 });
             muzzle.push({
               frame,
@@ -194,7 +217,14 @@ for (const [name, template] of [
         await writeFile(
           join(output, `${name.toLowerCase()}.json`),
           JSON.stringify(
-            { weapon: name, agility: 1, standard: 6, hz: 60, measurements },
+            {
+              weapon: name,
+              setting,
+              agility: 1,
+              standard: 6,
+              hz: 60,
+              measurements,
+            },
             null,
             2,
           ) + "\n",
@@ -258,6 +288,7 @@ for (const [name, template] of [
       for (const supported of [false, true]) {
         await support(supported);
         await game.step({ frames: 180 });
+        await ensureShotAmmo();
         const initial = muzzleFrameOf(await game.entities.detail(gun.id));
         const ammo = ammoOf(await game.entities.detail(gun.id));
         await game.input.set("right_hand.trigger", 1);
@@ -276,11 +307,14 @@ for (const [name, template] of [
             ),
           );
         }
-        assert.equal(ammoOf(await game.entities.detail(gun.id)), ammo - 1);
+        assert.equal(
+          ammoOf(await game.entities.detail(gun.id)),
+          ammo - ammoUsage,
+        );
         assert.ok(yaw < 0.0001, `Agility 6 suppresses horizontal kick: ${yaw}`);
         assert.ok(
-          supported ? pitch < 0.0001 : pitch > 0.002,
-          `Agility 6 keeps extra one-hand vertical load; supported=${supported}, pitch=${pitch}`,
+          supported || !profiled ? pitch < 0.0001 : pitch > 0.002,
+          `Agility 6 retains vertical load only for a dedicated profile; supported=${supported}, profiled=${profiled}, pitch=${pitch}`,
         );
         assert.deepEqual((await game.info()).player.camera_rotation, head);
         await game.step({ frames: 300 });
