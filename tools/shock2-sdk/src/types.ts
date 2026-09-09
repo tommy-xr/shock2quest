@@ -663,6 +663,7 @@ export interface PlayerSnapshot {
   }> & {
     /** Rendered pouch selection and per-weapon holster ammo state. */
     body_gear?: {
+      shoulder_weapons: [number | null, number | null];
       pouch: { weapon: number | null; icon: string | null; state: "inactive" | "ready" | "empty" | "refused"; near: boolean };
       /** Right thigh then left thigh, independently resolved. */
       holsters: { weapon: number | null; ammo: number | null; capacity: number | null; segments: number }[];

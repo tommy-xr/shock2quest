@@ -421,3 +421,8 @@ pub struct RuntimePropHolstered {
     /// Longest extent of the calibrated held mesh, in world units.
     pub held_extent: Option<f32>,
 }
+
+/// Last weapon stored at a shoulder, still owned by the normal backpack.
+/// 0 is left, 1 is right. Inventory membership gates recall availability.
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct RuntimePropShoulderWeapon(pub u8);

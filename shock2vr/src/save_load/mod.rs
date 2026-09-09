@@ -254,6 +254,16 @@ pub fn to_save_data_with_scripts(
         .collect();
     let (held_holstered, world_holstered) =
         partition_map(raw_holstered, |id| held_entities.contains(id));
+    let raw_shoulders: HashMap<u64, crate::runtime_props::RuntimePropShoulderWeapon> = world
+        .borrow::<View<crate::runtime_props::RuntimePropShoulderWeapon>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(id, _)| !entities_to_filter.contains(&id.inner()))
+        .map(|(id, marker)| (id.inner(), *marker))
+        .collect();
+    let (held_shoulders, world_shoulders) =
+        partition_map(raw_shoulders, |id| held_entities.contains(id));
     let world_entity_data = EntitySaveData {
         properties: world_serialized_properties,
         template_id_to_entity_id: template_id_to_entity_id.0.clone(),
@@ -262,6 +272,7 @@ pub fn to_save_data_with_scripts(
         death_poses: world_death_poses,
         selected_ammo: world_selected_ammo,
         holstered: world_holstered,
+        shoulder_weapons: world_shoulders,
         canonical_template_ids: world_canonical_templates,
         launched_projectiles: world_launched_projectiles,
         player_fired_projectiles: world_player_fired_projectiles,
@@ -276,6 +287,7 @@ pub fn to_save_data_with_scripts(
         death_poses: held_death_poses,
         selected_ammo: held_selected_ammo,
         holstered: held_holstered,
+        shoulder_weapons: held_shoulders,
         canonical_template_ids: held_canonical_templates,
         launched_projectiles: held_launched_projectiles,
         player_fired_projectiles: held_player_fired_projectiles,
