@@ -4609,6 +4609,32 @@ impl MissionCore {
             }
         }
 
+        // Weight is an independent VR experiment. Configure the existing held
+        // drive after acquisition/fitting so all physics substeps share it.
+        let (left, right) = self.interaction.held_entities();
+        let strength = self
+            .world
+            .borrow::<UniqueView<QuestInfo>>()
+            .map(|q| q.player_stats().strength)
+            .unwrap_or(1);
+        for gun in [left, right].into_iter().flatten() {
+            let target = game_options
+                .experimental_features
+                .contains("physical_gun_weight")
+                .then(|| self.interaction.held_grip_anchor(gun))
+                .flatten()
+                .and_then(|anchor| {
+                    crate::weapon_recoil::gun_weight_target(
+                        &self.world,
+                        gun,
+                        anchor,
+                        strength,
+                        self.interaction.is_supported(gun),
+                    )
+                });
+            self.physics.set_held_gun_weight(gun, target);
+        }
+
         // The physical VR reload: a clip carried into the other hand's weapon
         // loads it. Runs after the hands have been updated so the held pair is
         // this frame's.

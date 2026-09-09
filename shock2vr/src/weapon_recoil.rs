@@ -140,6 +140,27 @@ pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, Reco
     Some((authored, extra))
 }
 
+struct HandlingProfile {
+    pitch: f32,
+    yaw: f32,
+    rate: f32,
+    sag: f32,
+}
+
+fn handling_profile(model: &str) -> Option<HandlingProfile> {
+    let (pitch, yaw, rate, sag) = match model.to_ascii_lowercase().trim_end_matches(".bin") {
+        "atek_h" => (2.0, 0.75, 2.0, 1.0),
+        "ar15_h" => (8.0, 2.0, 1.0, 8.0),
+        _ => return None,
+    };
+    Some(HandlingProfile {
+        pitch,
+        yaw,
+        rate,
+        sag,
+    })
+}
+
 /// Deliberate VR tuning: forward-heavy rifles need more angular correction
 /// one-handed. This replaces the generic extra angular kick for these models;
 /// authored two-hand kick and the existing extra backward kick are preserved.
@@ -151,10 +172,11 @@ fn one_hand_impulse<R: Rng + ?Sized>(
     aiming: bool,
     rng: &mut R,
 ) -> RecoilImpulse {
-    let (pitch, yaw, rate) = match model.to_ascii_lowercase().trim_end_matches(".bin") {
-        "atek_h" => (2.0, 0.75, 2.0),
-        "ar15_h" => (8.0, 2.0, 1.0),
-        _ => return authored,
+    let Some(HandlingProfile {
+        pitch, yaw, rate, ..
+    }) = handling_profile(model)
+    else {
+        return authored;
     };
     RecoilImpulse {
         // Strength scales this later. Agility affects horizontal stability,
@@ -230,6 +252,16 @@ impl Spring {
         let peak = ((-4.0 * peak_time).exp() - (-10.0 * peak_time).exp()) / 6.0;
         self.velocity += amount * rate / peak;
     }
+    fn step_toward(&mut self, dt: f32, target: f32) {
+        if dt <= 0.0 || !dt.is_finite() {
+            return;
+        }
+        // Integrate error around a moving equilibrium with the same analytic
+        // spring as firing recoil. Preserve displacement and velocity on change.
+        self.position -= target;
+        self.step(dt, 1.0, f32::MAX);
+        self.position += target;
+    }
     fn step(&mut self, dt: f32, rate: f32, limit: f32) {
         if dt <= 0.0 || !dt.is_finite() {
             return;
@@ -243,6 +275,76 @@ impl Spring {
         if self.position.abs() > limit {
             self.position = self.position.clamp(-limit, limit);
             self.velocity = 0.0;
+        }
+    }
+}
+
+/// A continuously updated weight bias. The anchor is in scaled model space.
+#[derive(Clone, Copy, Debug)]
+pub struct GunWeightTarget {
+    pub anchor: Vector3<f32>,
+    pub forward: Vector3<f32>,
+    pub degrees: f32,
+}
+
+pub fn gun_weight_target(
+    world: &World,
+    gun: EntityId,
+    anchor: Vector3<f32>,
+    strength: i32,
+    supported: bool,
+) -> Option<GunWeightTarget> {
+    crate::mission::mission_core::held_item_collision_group(world, gun)?;
+    let models = world.borrow::<View<PropModelName>>().ok()?;
+    let profile = handling_profile(&models.get(gun).ok()?.0)?;
+    Some(GunWeightTarget {
+        anchor,
+        forward: crate::weapon_muzzle::resolve(world, gun).axis,
+        degrees: if supported {
+            0.0
+        } else {
+            profile.sag * (6 - strength.clamp(1, 6)) as f32 / 5.0
+        },
+    })
+}
+
+/// Spring the world-space angular bias, so rolled wrists still sag downward
+/// and pointing vertically smoothly removes the lever arm. This is a bounded
+/// handling approximation, not a calibrated mass/centre-of-mass simulation.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GunWeightState {
+    rotation: [Spring; 3],
+}
+impl GunWeightState {
+    pub fn step(
+        &mut self,
+        dt: f32,
+        forward: Vector3<f32>,
+        degrees: f32,
+    ) -> cgmath::Quaternion<f32> {
+        use cgmath::{Deg, Quaternion, Rotation3};
+        if ![forward.x, forward.y, forward.z, degrees]
+            .into_iter()
+            .all(f32::is_finite)
+            || forward.magnitude2() < 1e-8
+        {
+            return Quaternion::new(1.0, 0.0, 0.0, 0.0);
+        }
+        let target = forward.normalize().cross(-Vector3::unit_y()) * degrees.clamp(0.0, 8.0);
+        let target = [target.x, target.y, target.z];
+        for (spring, target) in self.rotation.iter_mut().zip(target) {
+            spring.step_toward(dt, target);
+        }
+        let angle = vec3(
+            self.rotation[0].position,
+            self.rotation[1].position,
+            self.rotation[2].position,
+        );
+        let magnitude = angle.magnitude();
+        if magnitude < 1e-8 {
+            Quaternion::new(1.0, 0.0, 0.0, 0.0)
+        } else {
+            Quaternion::from_axis_angle(angle / magnitude, Deg(magnitude.min(8.0)))
         }
     }
 }
@@ -309,6 +411,50 @@ impl RecoilState {
 mod tests {
     use super::*;
     use rand::{SeedableRng, rngs::StdRng};
+    #[test]
+    fn weight_follows_world_gravity_and_smoothly_releases_without_frame_drift() {
+        use cgmath::Rotation;
+        for forward in [-Vector3::unit_x(), Vector3::unit_x(), -Vector3::unit_z()] {
+            let mut slow = GunWeightState::default();
+            let mut fast = GunWeightState::default();
+            for _ in 0..120 {
+                slow.step(1.0 / 60.0, forward, 8.0);
+            }
+            for _ in 0..240 {
+                fast.step(1.0 / 120.0, forward, 8.0);
+            }
+            let before = slow.step(0.0, forward, 8.0).rotate_vector(forward);
+            let other = fast.step(0.0, forward, 8.0).rotate_vector(forward);
+            assert!((before - other).magnitude() < 1e-5);
+            assert!((before.y + 8.0_f32.to_radians().sin()).abs() < 0.001);
+            // Stat/support changes change the target, not the current pose.
+            assert!(
+                (slow.step(0.0, forward, 0.0).rotate_vector(forward) - before).magnitude() < 1e-6
+            );
+            let first = slow.step(1.0 / 60.0, forward, 0.0).rotate_vector(forward);
+            assert!((first - before).magnitude() < 0.001);
+            for _ in 0..240 {
+                slow.step(1.0 / 60.0, forward, 0.0);
+            }
+            assert!(
+                (slow.step(0.0, forward, 0.0).rotate_vector(forward) - forward).magnitude() < 1e-5
+            );
+        }
+        for forward in [Vector3::unit_y(), -Vector3::unit_y()] {
+            let mut state = GunWeightState::default();
+            assert_eq!(
+                state.step(1.0, forward, 8.0).rotate_vector(forward),
+                forward
+            );
+        }
+        let mut state = GunWeightState::default();
+        for i in 0..1000 {
+            let forward = vec3((i as f32).sin(), 0.0, (i as f32).cos());
+            let q = state.step(1.0 / 60.0, forward, 8.0);
+            assert!(q.s.is_finite() && q.v.magnitude() <= (4.0_f32.to_radians()).sin() + 1e-6);
+        }
+    }
+
     #[test]
     fn one_hand_profiles_separate_vertical_load_from_agility_and_preserve_baseline() {
         let authored = RecoilImpulse {

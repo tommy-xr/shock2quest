@@ -2744,6 +2744,8 @@ pub struct PlayerHandle {
 /// authoritative rendered/contact body.
 #[derive(Clone, Copy)]
 struct HeldItemDrive {
+    weight: crate::weapon_recoil::GunWeightState,
+    weight_target: Option<crate::weapon_recoil::GunWeightTarget>,
     recoil: crate::weapon_recoil::RecoilState,
     one_hand_recoil: crate::weapon_recoil::RecoilState,
     target: RigidBodyHandle,
@@ -3267,6 +3269,8 @@ impl PhysicsWorld {
             self.held_item_drives.insert(
                 handle,
                 HeldItemDrive {
+                    weight: crate::weapon_recoil::GunWeightState::default(),
+                    weight_target: None,
                     recoil: crate::weapon_recoil::RecoilState::default(),
                     one_hand_recoil: crate::weapon_recoil::RecoilState::default(),
                     target,
@@ -3302,6 +3306,32 @@ impl PhysicsWorld {
         self.entity_id_to_body
             .get(&entity_id)
             .is_some_and(|handle| self.held_item_drives.contains_key(handle))
+    }
+
+    pub fn set_held_gun_weight(
+        &mut self,
+        entity: EntityId,
+        target: Option<crate::weapon_recoil::GunWeightTarget>,
+    ) {
+        if !self.is_held_inert(entity) {
+            return;
+        }
+        let handle = self.entity_id_to_body[&entity];
+        if let Some(drive) = self.held_item_drives.get_mut(&handle) {
+            drive.weight_target = target.filter(|t| {
+                [
+                    t.anchor.x,
+                    t.anchor.y,
+                    t.anchor.z,
+                    t.forward.x,
+                    t.forward.y,
+                    t.forward.z,
+                    t.degrees,
+                ]
+                .into_iter()
+                .all(f32::is_finite)
+            });
+        }
     }
 
     pub fn kick_held_gun(
@@ -4670,6 +4700,18 @@ impl PhysicsWorld {
                 continue;
             };
             if let Some(drive) = self.held_item_drives.get_mut(&weapon) {
+                if let Some(weight) = drive.weight_target {
+                    let anchor =
+                        desired.translation.vector + desired.rotation * vec_to_nvec(weight.anchor);
+                    let forward = nvec_to_cgmath(desired.rotation * vec_to_nvec(weight.forward));
+                    let rotation =
+                        drive
+                            .weight
+                            .step(self.integration_parameters.dt, forward, weight.degrees);
+                    desired.rotation = quat_to_nquat(rotation) * desired.rotation;
+                    desired.translation.vector =
+                        anchor - desired.rotation * vec_to_nvec(weight.anchor);
+                }
                 let (offset, rotation) = drive.recoil.step(self.integration_parameters.dt);
                 let (extra_offset, extra_rotation) =
                     drive.one_hand_recoil.step(self.integration_parameters.dt);
