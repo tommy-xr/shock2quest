@@ -906,3 +906,20 @@ reduces it. Support removes new extra impulses while existing recoil settles.
 The original kickback, pitch baseline, ammo consumption and pellet behavior
 remain unchanged. These are initial VR handling values requiring headset tuning.
 The optional shotgun weight profile follows as a separate increment.
+
+
+## Optional shotgun weight
+
+Extend `physical_gun_weight` to the shotgun with the same 8-degree maximum
+one-handed bias as the AR. At Strength 1/3/6, a horizontal shotgun settles at
+8/4.8/0 degrees downward. Both fire modes share the same weight because the
+held model has not changed. Active support removes the extra load; acquiring
+the lowered fore-end and lifting it uses the existing two-hand steering.
+
+Enable `--experimental physical_held_items,physical_gun_weight` in VR. The
+existing world-down spring rotates around the calibrated primary palm, and
+firing recoil recovers to the weighted resting pose. No integration or recoil
+coefficients change in this increment. Runtime coverage adds both shotgun
+hands, Strength transitions, support acquisition/release, firing/recovery,
+palm anchoring, fixed head, and a disabled-weight control. Final comfort and
+angle tuning remain a headset validation task.

@@ -15,6 +15,9 @@ import { ammoOf, cycleToWeapon, muzzleFrameOf } from "./helpers/weapon.js";
 
 for (const [name, template, sag, enabled, hand] of [
   ["pistol", -17, 1, true, "right"],
+  ["shotgun", -19, 8, true, "right"],
+  ["shotgun left hand", -19, 8, true, "left"],
+  ["shotgun without weight flag", -19, 0, false, "right"],
   ["AR", -18, 8, true, "right"],
   ["AR left hand", -18, 8, true, "left"],
   ["AR without weight flag", -18, 0, false, "right"],
@@ -95,7 +98,7 @@ for (const [name, template, sag, enabled, hand] of [
         if (strength !== 1 || !enabled) continue;
 
         // Acquire the actual lowered fore-end first, then lift it to level.
-        // On the AR the neutral socket is outside the sagged socket's grab
+        // On long guns the neutral socket is outside the sagged socket's grab
         // radius. Resolve both poses from the live barrel and primary palm.
         const s = await socket();
         const player = (await game.info()).player;
