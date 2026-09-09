@@ -3,7 +3,9 @@ import { test } from "node:test";
 import { GameServer } from "../src/index.js";
 import type { Vec3 } from "../src/index.js";
 import { cycleToWeapon } from "./helpers/weapon.js";
-import { aimVrHandAt, quatFromTo } from "./helpers/vr-hand.js";
+import { aimVrHandAt, quatFromTo, quatRotate } from "./helpers/vr-hand.js";
+
+import type { Quat } from "./helpers/vr-hand.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 for (const presentation of ["flat", "left", "right"] as const) {
@@ -30,6 +32,12 @@ for (const presentation of ["flat", "left", "right"] as const) {
       const casing = (await game.entities.list()).entities.find(e => !before.has(e.id) && e.template_id === -2657);
       assert.ok(casing, "the authored casing GunFlash link must spawn an object");
       const initial = casing.position as Vec3;
+      // Both classic and 25AE shell meshes have their long axis along +Y.
+      // A level gun must launch that axis sideways, not standing upright.
+      const pose = (await game.entities.detail(casing.id)).rotation as Quat;
+      const longAxis = quatRotate(pose, [0, 1, 0]);
+      assert.ok(Math.abs(longAxis[1]) < 0.3,
+        `casing must lie along the barrel at launch: ${JSON.stringify(longAxis)}`);
       await game.step({ frames: 8 });
       const later = (await game.entities.detail(casing.id)).position as Vec3;
       assert.ok(later[1] - initial[1] > 0.15,

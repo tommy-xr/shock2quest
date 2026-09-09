@@ -716,7 +716,9 @@ pub(super) fn create_muzzle_flash(
         return Effect::CreateEntity {
             template_id: muzzle_flash_template_id,
             position: point3(0.0, 0.0, 0.0),
-            orientation: Quaternion::from_angle_y(Deg(90.0)),
+            // Casing meshes are long along +Y. Lay that axis along the
+            // barrel (+Z in this launch frame), not upright above the gun.
+            orientation: Quaternion::from_angle_x(Deg(90.0)),
             root_transform: frame,
             options: CreateEntityOptions {
                 launch_projectile: true,

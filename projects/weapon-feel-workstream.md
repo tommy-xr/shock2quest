@@ -322,3 +322,19 @@ adopts every authored first-person mesh through the existing ChangeModel path,
 matching its renderer and restoring the correct attachment positions and axes.
 The casing-side regression reproduced on the parent as well; this model fix
 addresses that underlying mismatch rather than changing its assertion.
+
+
+## Casing launch pose
+
+The shell's long axis is authored along Y in both classic and 25AE assets.
+The launch path's inherited bullet yaw left it upright. A quarter turn around
+launch-frame X now lays it along the barrel, independently of the existing
+velocity frame. Flat/right/left scenarios assert the actual spawned pose as
+well as upward/lateral motion and expiry; real-mission save/load remains
+covered. Matched side footage checks the visual pose while it rises and falls.
+
+Render verification caught the rotate Tweq replacing the entire launch pose
+with absolute world-time yaw every frame. Its existing 20 degrees/second spin
+now advances relative to the current orientation using elapsed time, preserving
+pitch/roll and resuming consistently after save/load. Authored rotate config
+rates/axes remain a separate parity audit; this does not claim to implement them.

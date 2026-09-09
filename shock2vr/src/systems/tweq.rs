@@ -27,11 +27,14 @@ pub fn run_tweq(
     mut v_tweq_delete_config: ViewMut<PropTweqDeleteConfig>,
     mut effects: UniqueViewMut<EffectQueue>,
 ) {
-    for (id, tweq) in v_tweq_rotate_state.iter().with_id() {
+    for (id, (tweq, position)) in (&v_tweq_rotate_state, &v_prop_position).iter().with_id() {
         if tweq.animation_state.contains(TweqAnimationState::ON) {
             effects.push(Effect::SetRotation {
                 entity_id: id,
-                rotation: Quaternion::from_angle_y(Deg(u_time.total.as_secs_f32() * 20.0)),
+                // Advance from the current pose; absolute world-time yaw erased
+                // authored pitch/roll (including a sideways ejected casing).
+                rotation: Quaternion::from_angle_y(Deg(u_time.elapsed.as_secs_f32() * 20.0))
+                    * position.rotation,
             });
         }
     }
@@ -203,6 +206,39 @@ mod tests {
             },
         ));
         (world, emitter)
+    }
+
+    #[test]
+    fn rotate_tweq_preserves_launch_tilt_and_uses_elapsed_time() {
+        let tilt = Quaternion::from_angle_x(Deg(90.0));
+        let (mut world, emitter) = world_with_ops4_emitter(vec3(0.0, 0.0, 0.0), tilt, false, 0);
+        world.add_component(
+            emitter,
+            PropTweqRotateState {
+                animation_state: TweqAnimationState::ON,
+                axis1_animation_state: TweqAnimationState::ON,
+                axis2_animation_state: TweqAnimationState::empty(),
+                axis3_animation_state: TweqAnimationState::empty(),
+            },
+        );
+        world.borrow::<UniqueViewMut<Time>>().unwrap().total = std::time::Duration::from_secs(1000);
+        world.run(run_tweq);
+        let effects = world
+            .borrow::<UniqueViewMut<EffectQueue>>()
+            .unwrap()
+            .flush();
+        let rotation = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::SetRotation {
+                    entity_id,
+                    rotation,
+                } if *entity_id == emitter => Some(*rotation),
+                _ => None,
+            })
+            .unwrap();
+        let expected = Quaternion::from_angle_y(Deg(0.501 * 20.0)) * tilt;
+        assert!((rotation - expected).magnitude2() < 1.0e-6);
     }
 
     #[test]
