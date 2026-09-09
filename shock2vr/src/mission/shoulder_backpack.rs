@@ -15,7 +15,7 @@ pub(super) const RADIUS: f32 = 0.18 / SCALE;
 pub(super) struct ShoulderBackpack {
     yaw: Option<f32>,
     pressed_item: [Option<EntityId>; 2],
-    retained: [Option<EntityId>; 2],
+    retained: super::body_inventory::RetainedRelease,
     pub centers: Option<[Vector3<f32>; 2]>,
     pub near: [bool; 2],
 }
@@ -31,11 +31,7 @@ impl ShoulderBackpack {
         dt: f32,
     ) -> [bool; 2] {
         let hands = [&input.left_hand, &input.right_hand];
-        for i in 0..2 {
-            if self.retained[i] != held[i] || hands[i].squeeze_value > 0.5 {
-                self.retained[i] = None;
-            }
-        }
+        self.retained.update(held, hands.map(|h| h.squeeze_value));
         let head = GripPose {
             position: input.head.position,
             rotation: input.head.rotation,
@@ -49,16 +45,12 @@ impl ShoulderBackpack {
         }
         let forward = crate::ui::PanelPlacement::from_head(head.position, head.rotation).forward;
         let observed = forward.x.atan2(-forward.z);
-        let yaw = match self.yaw {
-            // Keep the shoulder target still while a hand is reaching into it.
-            Some(yaw) if self.near.iter().any(|near| *near) => yaw,
-            Some(yaw) => {
-                let delta = observed - yaw;
-                let delta = delta.sin().atan2(delta.cos());
-                yaw + delta * (1.0 - (-dt.max(0.0).min(0.1) / 0.5).exp())
-            }
-            None => observed,
-        };
+        let yaw = super::body_inventory::followed_yaw(
+            self.yaw,
+            observed,
+            self.near.iter().any(|near| *near),
+            dt,
+        );
         self.yaw = Some(yaw);
         let forward = vec3(yaw.sin(), 0.0, -yaw.cos());
         let right = forward.cross(Vector3::unit_y());
@@ -98,10 +90,10 @@ impl ShoulderBackpack {
     /// A rejected deposit stays held until a real re-grip, even if the hand
     /// leaves the zone or the cyber interface opens. No invisible floor drop.
     pub fn retain(&mut self, slot: usize, entity: EntityId) {
-        self.retained[slot] = Some(entity);
+        self.retained.retain(slot, entity);
     }
     pub fn keep_grip(&self, slot: usize) -> bool {
-        self.retained[slot].is_some()
+        self.retained.keep_grip(slot)
     }
 
     pub fn render(
@@ -118,7 +110,7 @@ impl ShoulderBackpack {
         for center in centers {
             dark::hit_box::append_capsule_lines(&mut vertices, &root, center, center, RADIUS);
         }
-        let color = if self.retained.iter().any(Option::is_some) {
+        let color = if self.retained.0.iter().any(Option::is_some) {
             vec3(1.0, 0.3, 0.1)
         } else if self.near.iter().any(|near| *near) {
             vec3(0.1, 1.0, 0.2)
@@ -141,7 +133,7 @@ impl ShoulderBackpack {
         serde_json::json!({
             "centers": self.centers.map(|cs| cs.map(|c| { let p = position + rotation.rotate_vector(c); [p.x,p.y,p.z] })),
             "radius": RADIUS, "near": self.near,
-            "retained": self.retained.map(|e| e.is_some()),
+            "retained": self.retained.0.map(|e| e.is_some()),
         })
     }
 }

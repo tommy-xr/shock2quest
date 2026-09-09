@@ -30,6 +30,9 @@ pub struct EntitySaveData {
     /// the Dark property registry.
     #[serde(default)]
     pub selected_ammo: HashMap<u64 /* entity id */, usize>,
+    /// Exact weapon membership in right/left thigh slots.
+    #[serde(default)]
+    pub holstered: HashMap<u64, crate::runtime_props::RuntimePropHolstered>,
     /// Stable gamesys archetype for entities whose `PropTemplateId` is a
     /// positive, mission-local object ID.
     #[serde(default)]
@@ -59,6 +62,7 @@ impl EntitySaveData {
             links: HashMap::new(),
             death_poses: HashMap::new(),
             selected_ammo: HashMap::new(),
+            holstered: HashMap::new(),
             canonical_template_ids: HashMap::new(),
             launched_projectiles: Vec::new(),
             player_fired_projectiles: Vec::new(),
@@ -110,6 +114,13 @@ impl EntitySaveData {
             if let Some(new_entity_id) = old_entity_id_to_new_entity_id.get(&entity_id) {
                 let links = Links::deserialize(link.clone(), &old_entity_id_to_new_entity_id);
                 world.add_component(*new_entity_id, links);
+            }
+        }
+        for (old, slot) in &self.holstered {
+            if let Some(new) =
+                EntityId::from_inner(*old).and_then(|id| old_entity_id_to_new_entity_id.get(&id))
+            {
+                world.add_component(*new, *slot);
             }
         }
         for (old_entity_id, selected_ammo) in &self.selected_ammo {
@@ -211,6 +222,46 @@ mod tests {
             }
             assert!(!remapped.contains_key(&excluded));
         }
+    }
+
+    #[test]
+    fn holster_membership_and_ammo_remap_to_the_same_saved_weapon() {
+        let mut source = World::new();
+        let weapon = source.add_entity(());
+        let mut data = EntitySaveData::empty();
+        data.all_entities.push(weapon.inner());
+        data.holstered.insert(
+            weapon.inner(),
+            crate::runtime_props::RuntimePropHolstered {
+                slot: 1,
+                held_extent: Some(0.3),
+            },
+        );
+        data.selected_ammo.insert(weapon.inner(), 2);
+        let data: EntitySaveData =
+            serde_json::from_str(&serde_json::to_string(&data).unwrap()).unwrap();
+        let mut restored = World::new();
+        restored.add_entity(());
+        let (_, map) = data.instantiate(&mut restored);
+        let id = map[&weapon];
+        assert_eq!(
+            restored
+                .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()
+                .unwrap()
+                .get(id)
+                .unwrap()
+                .slot,
+            1
+        );
+        assert_eq!(
+            restored
+                .borrow::<View<RuntimePropSelectedAmmo>>()
+                .unwrap()
+                .get(id)
+                .unwrap()
+                .0,
+            2
+        );
     }
 
     #[test]

@@ -1,7 +1,9 @@
 pub mod entity_creator;
 use tracing::info;
+mod body_inventory;
 pub mod entity_populator;
 pub mod flat_ui_host;
+mod holsters;
 pub mod mission_core;
 pub mod pathfinding_debug;
 pub mod pathfinding_test;

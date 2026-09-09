@@ -412,3 +412,12 @@ pub struct RuntimePropVrGripOffset(pub Vector3<f32>);
 /// Diagnostic only: not saved and never consulted by firing logic.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropLastFiredProjectile(pub i32);
+
+/// A weapon owned by a thigh holster: 0 right, 1 left. Saved and carried
+/// independently of backpack cells; not a world pickup while present.
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct RuntimePropHolstered {
+    pub slot: u8,
+    /// Longest extent of the calibrated held mesh, in world units.
+    pub held_extent: Option<f32>,
+}

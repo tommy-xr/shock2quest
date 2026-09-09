@@ -178,6 +178,11 @@ pub trait PlayerInteraction {
         self.holding_hand(entity_id).is_some()
     }
 
+    /// Body-slot retrieval cannot share a hand with support or climbing.
+    fn hand_available_for_body_slot(&self, _hand: Handedness) -> bool {
+        false
+    }
+
     /// Wield `entity_id` as the first-person weapon (flat); no-op for VR.
     fn wield(&mut self, _entity_id: EntityId) -> Vec<VirtualHandEffect> {
         Vec::new()
@@ -639,6 +644,17 @@ impl VrInteraction {
 }
 
 impl PlayerInteraction for VrInteraction {
+    fn hand_available_for_body_slot(&self, hand: Handedness) -> bool {
+        let i = crate::vr_config::hand_slot(hand);
+        let held = if i == 0 {
+            self.left_hand.get_held_entity()
+        } else {
+            self.right_hand.get_held_entity()
+        };
+        held.is_none()
+            && !self.support_blocked[i]
+            && !self.hand_climb.grips().any(|(h, _)| h == hand)
+    }
     fn fit_held_items(
         &mut self,
         world: &World,

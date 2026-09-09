@@ -135,3 +135,50 @@ remaining gap - PR/issue and open/closed state are marked where it matters.
     luminance) when correctness of *which* element reacted matters; and for
     timing-dependent device bugs, prefer deterministic fault injection over
     waiting for a natural repro (#1009's technique).
+
+## Held items and body inventory
+
+14. **One item, one owner, including within a frame.** A support hand steers
+    the primary hand's item; it never owns a second copy. Reserve a released
+    entity until its effects finish, because a release may become a backpack
+    deposit. The other hand must not acquire its still-present collider during
+    that frame. Test simultaneous grabs/releases, not only alternating input.
+15. **Attached gloves follow the final physical item.** Drive the weapon toward
+    the controller, then derive attached glove transforms from the synchronized,
+    collision-resolved weapon. Sampling the controller for one and the physics
+    body for the other separates them during locomotion and impacts. Verify the
+    relative grip transform every frame while walking and touching a wall.
+16. **Body storage needs an explicit grip edge and a clear refusal.** Reaching
+    through a slot while holding must not silently store an item. Deposit on a
+    deliberate release; retrieval requires a fresh squeeze. Define occupied/full
+    behavior before implementation. A refused shoulder deposit retains the item,
+    plays a refusal cue, and explains how to re-grip; leaving the zone must not
+    unexpectedly drop it behind the player. Enter disabled/recovered states
+    disarmed so stale input cannot create a gesture.
+17. **Tracking validity is separate from plausible pose values.** A finite pose
+    and nonzero quaternion can still be a stale runtime fallback. Body gestures
+    must honor live head/hand validity (`InputContext::pose_tracking`) as well as
+    numeric validation. Head-relative body targets use horizontal heading, not
+    head pitch/roll. Treat their offsets as estimates until tested seated and
+    standing in a headset; debug-runtime coordinates do not prove reach comfort.
+18. **Reuse ownership and inventory transitions.** Preserve the exact entity,
+    ammo, condition, and script state. Keep the normal `Drop`/`Hold` signals when
+    redirecting a release, and preserve deferred effects returned by shared
+    handlers. Check real capacity and reserve simultaneous destinations before
+    claiming releases. Carry additional body storage through save/load and level
+    transitions explicitly; hiding a world model is not storage.
+19. **Resolve readouts per hand and per weapon.** Dual wielding makes a global
+    “current weapon” ambiguous. Ammo, ammo type, condition, settings, and their
+    actions must all come from the same explicit entity. Exercise gun/gun and
+    gun/psi-amp combinations. Preserve the complete authored UI canvas when
+    mounting it on a glove; avoid arbitrary cropping to make it fit.
+
+## Evidence for physical interactions
+
+20. **Pair pictures with state assertions.** Before/after screenshots can show a
+    release, but cannot prove the stored item is the original instance. Assert
+    entity identity, ownership, containment, physics removal/restoration, and
+    retained weapon state. Include refusal, tracking recovery, and simultaneous
+    hand cases. Show the interaction's approach and release, not just an empty
+    hand afterward. Label debug zones as instrumentation; they do not establish
+    production discoverability or headset tracking reliability.

@@ -193,6 +193,9 @@ dev_params! {
     MELEE_VOLUMES = float("melee_volumes", "Show hurtbox", 0.0, 0.0, 1.0, 1.0),
     /// Visualize shoulder backpack stow zones (cyan; green while reached).
     VR_BACKPACK_ZONES = bool("vr_backpack_zones", "Backpack zones", false),
+    VR_HOLSTER_ZONES = bool("vr_holster_zones", "Holster zones", false),
+    VR_HOLSTER_DROP = float("vr_holster_drop", "Holster below eyes (m)", 0.78, 0.55, 1.1, 0.02),
+    VR_HOLSTER_SIDE = float("vr_holster_side", "Holster side (m)", 0.23, 0.16, 0.40, 0.01),
     /// VR support target/radius (cyan; green when attached) and tracked palm (amber).
     VR_SUPPORT_GRIPS = bool("vr_support_grips", "Support grips", false),
     /// Draw a floating "-7 HP" at the point each blow lands, labeled with the

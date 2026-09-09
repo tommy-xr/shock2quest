@@ -661,6 +661,15 @@ export interface PlayerSnapshot {
     affordance: "None" | "Grabbable" | "Frobbable" | "Blocked";
     light: "Off" | "Green" | "Amber" | "Red";
   }> & {
+    /** Thigh slots are right then left; hand arrays remain left/right. */
+    holsters?: {
+      centers: [Vec3, Vec3] | null;
+      radius: number;
+      enabled_slots: number;
+      near: [number | null, number | null];
+      items: [number | null, number | null];
+      retained: [boolean, boolean];
+    };
     /** Shoulder stow targets in world space; absent on older runtimes. */
     shoulder_backpack?: {
       centers: [Vec3, Vec3] | null;

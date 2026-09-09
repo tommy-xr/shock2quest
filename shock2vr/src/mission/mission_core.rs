@@ -905,6 +905,7 @@ fn move_live_entity_into_container_at_slot(
         }
     }
     if was_able_to_drop {
+        world.remove::<crate::runtime_props::RuntimePropHolstered>(dropped_entity_id);
         world.add_component(dropped_entity_id, PropHasRefs(false));
     }
     was_able_to_drop
@@ -1037,6 +1038,7 @@ fn restore_live_entity_world_refs(world: &mut World, entity_id: EntityId) -> boo
             drop_contains_links_to(links, entity_id);
         }
     }
+    world.remove::<crate::runtime_props::RuntimePropHolstered>(entity_id);
     world.add_component(entity_id, PropHasRefs(true));
     true
 }
@@ -2102,6 +2104,7 @@ pub struct MissionCore {
     /// [`update_clip_insert_gesture`]: MissionCore::update_clip_insert_gesture
     vr_clip_insert_engaged: [bool; 2],
     shoulder_backpack: super::shoulder_backpack::ShoulderBackpack,
+    holsters: super::holsters::Holsters,
 
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
@@ -3029,6 +3032,7 @@ impl MissionCore {
             vr_trigger_safe_latch: [None; 2],
             vr_clip_insert_engaged: [false; 2],
             shoulder_backpack: Default::default(),
+            holsters: Default::default(),
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
             player_controls_enabled: true,
             screen_fade_alpha: 0.0,
@@ -4061,7 +4065,57 @@ impl MissionCore {
         });
         let hands_input = weapon_safe_input.as_ref().unwrap_or(input_context);
 
+        // VR body slots have no flat input surface. On a flat load, return
+        // their exact entities to the backpack, or visibly drop them if full.
+        if game_options.presentation_mode == crate::PresentationMode::Flat {
+            let stored = super::holsters::occupants(&self.world);
+            for entity in stored.into_iter().flatten() {
+                let inventory = self
+                    .world
+                    .borrow::<UniqueView<PlayerInfo>>()
+                    .unwrap()
+                    .inventory_entity_id;
+                if !self.drop_entity_into_container(inventory, entity) {
+                    let player = self.world.borrow::<UniqueView<PlayerInfo>>().unwrap();
+                    let position = player.pos
+                        + player
+                            .rotation
+                            .rotate_vector(input_context.head.position + vec3(0.0, 0.0, -0.5));
+                    let rotation = player.rotation;
+                    drop(player);
+                    self.set_entity_position_rotation(
+                        entity,
+                        position,
+                        rotation,
+                        vec3(1.0, 1.0, 1.0),
+                    );
+                    self.drop_held_item_into_world(entity);
+                }
+            }
+        }
+
         let held = [left_hand_held, right_hand_held];
+        let holster_actions = self.holsters.update(
+            hands_input,
+            held,
+            [
+                crate::vr_config::Handedness::Left,
+                crate::vr_config::Handedness::Right,
+            ]
+            .map(|hand| self.interaction.hand_available_for_body_slot(hand)),
+            super::holsters::occupants(&self.world),
+            super::holsters::slot_count(&self.world),
+            held.map(|entity| {
+                entity.is_some_and(|entity| {
+                    crate::virtual_hand::is_wieldable_weapon(&self.world, entity)
+                })
+            }),
+            game_options.presentation_mode == crate::PresentationMode::Vr
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
+            time.elapsed.as_secs_f32(),
+        );
         let shoulder_releases = self.shoulder_backpack.update(
             hands_input,
             held,
@@ -4122,7 +4176,37 @@ impl MissionCore {
                 });
                 tracing::info!(hand = i, entity = ?held[i], accepted, "shoulder backpack release");
             }
-            if self.shoulder_backpack.keep_grip(i) {
+            if let Some(action) = holster_actions[i] {
+                use super::holsters::Action;
+                let refused = matches!(action, Action::Refuse { .. });
+                effects.push(Effect::ShowMessage {
+                    text: match action {
+                        Action::Store { .. } => "Weapon holstered",
+                        Action::Retrieve { .. } => "Weapon drawn",
+                        Action::Refuse { .. } => {
+                            "Holster unavailable — weapons only, one per slot. Squeeze to re-grip."
+                        }
+                    }
+                    .to_owned(),
+                });
+                effects.push(Effect::PlaySound {
+                    handle: AudioHandle::new(),
+                    name: if refused { "repfail" } else { "bset" }.to_owned(),
+                    source: held[i],
+                    spatial: false,
+                });
+                if matches!(action, Action::Retrieve { .. }) {
+                    let hand = if i == 0 {
+                        &mut shoulder_input.left_hand
+                    } else {
+                        &mut shoulder_input.right_hand
+                    };
+                    hand.squeeze_value = 0.0;
+                    hand.trigger_value = 0.0;
+                    self.vr_trigger_safe_latch[i] = Some(true);
+                }
+            }
+            if self.shoulder_backpack.keep_grip(i) || self.holsters.retained.keep_grip(i) {
                 match i {
                     0 => shoulder_input.left_hand.squeeze_value = 1.0,
                     _ => shoulder_input.right_hand.squeeze_value = 1.0,
@@ -4212,6 +4296,39 @@ impl MissionCore {
             game_options,
         );
         rewrite_inventory_release(&mut interaction_msgs, &store, &collect);
+        // Holstering claims only this release, including its consumption offer.
+        for (i, action) in holster_actions.into_iter().enumerate() {
+            let Some(action) = action else {
+                continue;
+            };
+            match action {
+                super::holsters::Action::Store { entity, slot } => {
+                    interaction_msgs.retain(|effect| !matches!(effect, VirtualHandEffect::OutMessage { message }
+                        if matches!(message.payload, MessagePayload::ProvideForConsumption { entity: offered } if offered == entity)));
+                    for effect in &mut interaction_msgs {
+                        if matches!(effect, VirtualHandEffect::DropItem { entity_id } if *entity_id == entity)
+                        {
+                            *effect = VirtualHandEffect::HolsterItem {
+                                entity_id: entity,
+                                slot,
+                            };
+                        }
+                    }
+                }
+                super::holsters::Action::Retrieve { entity, .. } => {
+                    effects.push(Effect::GrabEntity {
+                        entity_id: entity,
+                        hand: if i == 0 {
+                            crate::vr_config::Handedness::Left
+                        } else {
+                            crate::vr_config::Handedness::Right
+                        },
+                        current_parent_id: None,
+                    });
+                }
+                super::holsters::Action::Refuse { .. } => {}
+            }
+        }
         effects.extend(self.process_virtual_hand_effects(asset_cache, interaction_msgs));
 
         // The physical VR reload: a clip carried into the other hand's weapon
@@ -5819,6 +5936,8 @@ impl MissionCore {
     /// Remove every incoming `Contains` link to `entity_id` (take it out of
     /// whatever container holds it) without giving it world presence.
     fn detach_from_containers(&mut self, entity_id: EntityId) {
+        self.world
+            .remove::<crate::runtime_props::RuntimePropHolstered>(entity_id);
         let mut v_links = self.world.borrow::<ViewMut<Links>>().unwrap();
         for links in (&mut v_links).iter() {
             links.to_links.retain(|link| {
@@ -7809,6 +7928,8 @@ impl MissionCore {
                     effects.extend(self.process_virtual_hand_effects(asset_cache, grab_effects));
 
                     if self.interaction.is_holding(entity_id) {
+                        self.world
+                            .remove::<crate::runtime_props::RuntimePropHolstered>(entity_id);
                         // A grab routed through this effect (equip a carried
                         // weapon, a backpack double-click) never emits
                         // `HoldItem`, so establish the melee contact body here
@@ -10723,6 +10844,75 @@ impl MissionCore {
                 .render(asset_cache, &self.world, self.use_mode),
         );
 
+        if options.presentation_mode == crate::PresentationMode::Vr {
+            scene.extend(
+                self.holsters
+                    .render(&self.world, player.pos, player.rotation),
+            );
+            if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
+                for (slot, entity) in super::holsters::occupants(&self.world)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let Some(model) = entity.and_then(|entity| self.id_to_model.get(&entity))
+                    else {
+                        continue;
+                    };
+                    let Some(bounds) = model.bounding_box() else {
+                        continue;
+                    };
+                    let extent = bounds.max - bounds.min;
+                    let longest = extent.x.max(extent.y).max(extent.z);
+                    if longest <= 0.0001 {
+                        continue;
+                    }
+                    let held_extent = entity
+                        .and_then(|id| {
+                            self.world
+                                .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()
+                                .ok()
+                                .and_then(|slots| {
+                                    slots.get(id).ok().and_then(|slot| slot.held_extent)
+                                })
+                        })
+                        .unwrap_or(longest);
+                    let scale = held_extent.min(0.45 / crate::METERS_PER_WORLD_UNIT) / longest;
+                    let center = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
+                    // World meshes have different authored long axes. These
+                    // two corrections adapt the authored profiles from #1399.
+                    let name = entity
+                        .and_then(|id| {
+                            self.world
+                                .borrow::<View<PropModelName>>()
+                                .ok()
+                                .and_then(|names| {
+                                    names.get(id).ok().map(|name| name.0.to_ascii_lowercase())
+                                })
+                        })
+                        .unwrap_or_default();
+                    let orientation = match name.trim_end_matches(".bin") {
+                        "sg_w" => Matrix4::from_angle_x(cgmath::Deg(90.0)),
+                        "wrench_w" => Matrix4::from_angle_z(cgmath::Deg(-90.0)),
+                        _ => Matrix4::from_angle_x(cgmath::Deg(-90.0)),
+                    };
+                    let root = Matrix4::from_translation(centers[slot])
+                        * self.holsters.world_rotation(player.rotation)
+                        * orientation
+                        * Matrix4::from_scale(scale)
+                        * Matrix4::from_translation(-center);
+                    let mut objects = model.to_scene_objects().clone();
+                    for object in &mut objects {
+                        object.set_transform(root);
+                    }
+                    crate::util::tag_render_source(
+                        &mut objects,
+                        crate::util::render_source::PLAYER_HANDS,
+                    );
+                    scene.extend(objects);
+                }
+            }
+        }
+
         if options.presentation_mode == crate::PresentationMode::Vr
             && crate::dev_params::get_bool(crate::dev_params::VR_BACKPACK_ZONES)
         {
@@ -11145,6 +11335,8 @@ impl MissionCore {
                     );
                 }
                 VirtualHandEffect::HoldItem { entity_id } => {
+                    self.world
+                        .remove::<crate::runtime_props::RuntimePropHolstered>(entity_id);
                     if self.is_vr_melee_weapon(entity_id) {
                         // Held guns/items stay unphysical, but a VR melee
                         // weapon needs its authored collider to report genuine
@@ -11158,6 +11350,68 @@ impl MissionCore {
                     self.script_world.dispatch(Message {
                         payload: MessagePayload::Hold,
                         to: entity_id,
+                    });
+                }
+                VirtualHandEffect::HolsterItem { entity_id, slot } => {
+                    // Drop can swap the calibrated viewmodel for a differently
+                    // sized world mesh. Preserve its apparent size across that swap.
+                    let scale = self
+                        .world
+                        .borrow::<View<crate::runtime_props::RuntimePropGloveWeapon>>()
+                        .ok()
+                        .and_then(|v| v.get(entity_id).ok().map(|p| p.item_scale))
+                        .unwrap_or(1.0);
+                    let model_name = self
+                        .world
+                        .borrow::<View<PropModelName>>()
+                        .ok()
+                        .and_then(|names| names.get(entity_id).ok().map(|name| name.0.clone()));
+                    // Authored header bounds can still include the removed arms.
+                    // Measure only the same visible triangles used by grip fitting.
+                    let weapon_extent = model_name
+                        .filter(|name| crate::vr_weapon_grip::supports_model(name))
+                        .and_then(|name| {
+                            asset_cache.get_opt(
+                                &dark::importers::GLOVE_WEAPON_IMPORTER,
+                                &format!("{name}.bin"),
+                            )
+                        })
+                        .and_then(|source| {
+                            let source = source.as_ref().as_ref()?;
+                            let mut points = source.triangles.iter().flatten();
+                            let first = *points.next()?;
+                            let (min, max) = points.fold((first, first), |(min, max), p| {
+                                (
+                                    Point3::new(min.x.min(p.x), min.y.min(p.y), min.z.min(p.z)),
+                                    Point3::new(max.x.max(p.x), max.y.max(p.y), max.z.max(p.z)),
+                                )
+                            });
+                            Some(max - min)
+                        });
+                    let held_extent = weapon_extent
+                        .or_else(|| {
+                            self.id_to_model
+                                .get(&entity_id)
+                                .and_then(|model| model.bounding_box())
+                                .map(|bounds| bounds.max - bounds.min)
+                        })
+                        .map(|extent| extent.x.max(extent.y).max(extent.z) * scale)
+                        .filter(|extent| extent.is_finite() && *extent > 0.0001);
+                    self.detach_from_containers(entity_id);
+                    self.make_un_physical(entity_id);
+                    self.world.add_component(
+                        entity_id,
+                        (
+                            crate::runtime_props::RuntimePropHolstered {
+                                slot: slot as u8,
+                                held_extent,
+                            },
+                            PropHasRefs(false),
+                        ),
+                    );
+                    self.script_world.dispatch(Message {
+                        to: entity_id,
+                        payload: MessagePayload::Drop,
                     });
                 }
                 VirtualHandEffect::StoreItem { entity_id } => {
@@ -12609,6 +12863,11 @@ impl crate::game_scene::DebuggableScene for MissionCore {
             feedback.as_object_mut(),
             self.world.borrow::<UniqueView<PlayerInfo>>(),
         ) {
+            object.insert(
+                "holsters".to_owned(),
+                self.holsters
+                    .diagnostics(&self.world, player.pos, player.rotation),
+            );
             object.insert(
                 "shoulder_backpack".to_owned(),
                 self.shoulder_backpack

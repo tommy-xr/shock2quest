@@ -44,6 +44,16 @@ fn get_held_items(world: &World) -> HashSet<u64> {
         add_contained_entities(&mut out, world, 2, right_hand);
     }
 
+    for (entity, _) in world
+        .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()
+        .unwrap()
+        .iter()
+        .with_id()
+    {
+        out.insert(entity.inner());
+        add_contained_entities(&mut out, world, 2, entity);
+    }
+
     out.insert(player.inventory_entity_id.inner());
     add_contained_entities(&mut out, world, 2, player.inventory_entity_id);
 
@@ -233,6 +243,17 @@ pub fn to_save_data_with_scripts(
         .map(|(entity_id, _)| entity_id.inner())
         .filter(|entity_id| !entities_to_filter.contains(entity_id))
         .partition(|entity_id| held_entities.contains(entity_id));
+
+    let raw_holstered: HashMap<u64, crate::runtime_props::RuntimePropHolstered> = world
+        .borrow::<View<crate::runtime_props::RuntimePropHolstered>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .filter(|(id, _)| !entities_to_filter.contains(&id.inner()))
+        .map(|(id, slot)| (id.inner(), *slot))
+        .collect();
+    let (held_holstered, world_holstered) =
+        partition_map(raw_holstered, |id| held_entities.contains(id));
     let world_entity_data = EntitySaveData {
         properties: world_serialized_properties,
         template_id_to_entity_id: template_id_to_entity_id.0.clone(),
@@ -240,6 +261,7 @@ pub fn to_save_data_with_scripts(
         all_entities: all_world_entities,
         death_poses: world_death_poses,
         selected_ammo: world_selected_ammo,
+        holstered: world_holstered,
         canonical_template_ids: world_canonical_templates,
         launched_projectiles: world_launched_projectiles,
         player_fired_projectiles: world_player_fired_projectiles,
@@ -253,6 +275,7 @@ pub fn to_save_data_with_scripts(
         properties: held_serialized_properties,
         death_poses: held_death_poses,
         selected_ammo: held_selected_ammo,
+        holstered: held_holstered,
         canonical_template_ids: held_canonical_templates,
         launched_projectiles: held_launched_projectiles,
         player_fired_projectiles: held_player_fired_projectiles,
