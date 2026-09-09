@@ -1478,9 +1478,13 @@ impl FlatUiHost {
                                 let name = item
                                     .map(|item| item.label.as_deref().unwrap_or("Held item"))
                                     .unwrap_or("Empty");
-                                match self.hand_ammo[slot].ammo {
-                                    Some(ammo) => format!("{name}: {ammo}"),
-                                    None => name.to_owned(),
+                                if self.hand_ammo[slot].psi_power.is_some() {
+                                    format!("{name}: PSI")
+                                } else {
+                                    match self.hand_ammo[slot].ammo {
+                                        Some(ammo) => format!("{name}: {ammo}"),
+                                        None => name.to_owned(),
+                                    }
                                 }
                             }),
                             label: Some(["Left hand", "Right hand"][slot].to_owned()),

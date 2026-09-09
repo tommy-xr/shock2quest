@@ -248,7 +248,9 @@ impl AmmoReadout {
         Self {
             gun_condition: weapon.and_then(|w| wielded_gun_condition(world, w)),
             psi_power: super::get_weapon_psi_power(world, weapon),
-            ammo: super::get_weapon_ammo(world, weapon),
+            ammo: weapon
+                .filter(|w| !crate::wielded_weapon::is_psi_amp(world, *w))
+                .and_then(|w| super::get_weapon_ammo(world, Some(w))),
             ammo_icon: super::get_weapon_ammo_icon(world, weapon),
             ammo_type: super::get_weapon_ammo_type(world, weapon),
             gun_setting_header: super::get_weapon_gun_setting(world, weapon)
@@ -531,7 +533,16 @@ mod tests {
             modification: 0,
             silence_value: 0.0,
         },));
-        let amp = world.add_entity((PropTemplateId { template_id: -247 },));
+        let amp = world.add_entity((
+            PropTemplateId { template_id: -247 },
+            PropGunState {
+                ammo: 0,
+                condition: 100.0,
+                setting: 0,
+                modification: 0,
+                silence_value: 0.0,
+            },
+        ));
         world.add_unique(GlobalTemplateClassTags(HashMap::from([(
             -247,
             HashMap::from([("weapontype".to_owned(), "psiamp".to_owned())]),
