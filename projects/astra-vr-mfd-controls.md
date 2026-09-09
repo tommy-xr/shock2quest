@@ -133,3 +133,22 @@ in classic and 25AE artwork so the HD art's removed labels remain readable.
 This first sheet reports base levels, not temporary boosted-stat segments.
 Upgrade purchases remain at trainers. TECH/CMBT/PSI pages and their navigation
 controls are deferred; no inactive tabs are presented as working controls.
+
+## UI bitmap resolution
+
+Object-icon elements first resolve the `objicon/` family, preventing names such
+as `DISC` from selecting the unrelated model texture in `obj/txt16`. Both classic
+CRF and anniversary KPF mounts expose that namespace. Legacy non-object previews
+may still use bare names when no object icon exists; explicit family paths remain
+explicit.
+
+For object icons, the shared canvas chooses DDS/PNG variants before PCX within
+each mount, retaining
+mod-layer priority. Replacement texel dimensions do not enlarge inventory icons:
+when available, the same family's classic PCX supplies their authored layout size.
+Both flat and VR then draw the same resolved image into the same rectangle.
+
+Ordinary panel backgrounds and controls keep their requested encoding. The HD
+variants omit baked labels such as MAP, INVENTORY, EQUIP, and RESEARCH; upgrading
+those safely requires separately emitted labels first. Do not globally substitute
+PNG/DDS for these bitmaps based on filename alone.

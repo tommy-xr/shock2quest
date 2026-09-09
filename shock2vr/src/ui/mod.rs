@@ -1029,8 +1029,32 @@ fn place_image(
     alpha: f32,
     kind: ImageKind,
 ) -> PlacedElement {
-    let loaded = asset_cache.get_ext(&TEXTURE_IMPORTER, texture, &texture_options(kind));
-    let (position, size) = drawn_rect(position, size, texture_px(&loaded), kind);
+    // Upgrade object icons, whose art is self-contained. Ordinary UI bitmaps
+    // may contain baked labels that HD replacements omit (MAP/RESEARCH/etc.),
+    // so keep their requested encoding until their labels are drawn separately.
+    let texture = if kind.transparent_index_0() {
+        dark::util::resolve_object_icon_name(asset_cache, texture)
+            .unwrap_or_else(|| texture.to_owned())
+    } else {
+        texture.to_owned()
+    };
+    let loaded = asset_cache.get_ext(&TEXTURE_IMPORTER, &texture, &texture_options(kind));
+    // Replacement icons have more texels, not a larger inventory footprint.
+    // Keep the classic bitmap's authored size while drawing the upgraded art.
+    let authored = if matches!(kind, ImageKind::ObjectIcon | ImageKind::ObjectIconFit) {
+        let original = std::path::Path::new(&texture).with_extension("pcx");
+        asset_cache
+            .get_ext_opt(
+                &TEXTURE_IMPORTER,
+                original.to_str().unwrap(),
+                &texture_options(kind),
+            )
+            .map(|original| texture_px(&original))
+            .unwrap_or_else(|| texture_px(&loaded))
+    } else {
+        texture_px(&loaded)
+    };
+    let (position, size) = drawn_rect(position, size, authored, kind);
     PlacedElement {
         rect: Rect::new(position.x, position.y, size.x, size.y),
         alpha,
