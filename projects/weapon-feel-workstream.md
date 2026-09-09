@@ -746,3 +746,38 @@ Both hands preserve the primary barrel direction when support attaches. The
 six-shot AR matrix verifies ammo use, fixed head pose, expected scaling and
 recovery after every shot. These are headless checks; headset fit and feel
 remain a device-validation task.
+
+
+## Direct muzzle measurements
+
+The entity detail diagnostic `WeaponMuzzle` exposes the world-space `position`
+and unit `forward` from the same resolver and live gun transform used by VR
+firing. This is the barrel frame before projectile spawn offsets and clearance
+clamping; it does not describe the separate flat crosshair aim path.
+
+The SDK Strength matrix samples that frame for pistol and AR, Strength 1/3/6,
+and one/two hands at Agility 1 and Standard 6. It checks upward motion, recovery,
+ammo consumption and unchanged head orientation. Set `WEAPON_RECOIL_OUTPUT` to
+an output directory when running `vr-strength-recoil.e2e.test.ts` with
+`SHOCK2_E2E=1` to export the sampled endpoint and direction as JSON at a fixed
+60 Hz simulation rate. Samples include their actual simulation-frame number.
+Plot pitch and yaw separately from endpoint vertical and backward travel.
+Stock pistol and AR have zero authored heading kick: that is the current
+baseline, not evidence that horizontal handling has been implemented.
+
+## Next: weapon-specific one-handed handling
+
+Keep the authored two-handed recoil baseline. Add an explicit VR one-handed
+angular handling profile: the AR should be harder to control than the pistol,
+with larger angular displacement and slower recovery. Strength reduces vertical
+kick and the overall one-handed burden; Agility improves horizontal stability.
+Extra one-handed vertical kick should not disappear merely because Agility is
+maximized. Preserve Still Hand's angular suppression. These are VR tuning
+choices, not authored Dark Engine behavior or calibrated real-world gun masses.
+
+Follow firing recoil with a separate weight layer: larger guns held one-handed
+at low Strength should have a downward muzzle bias. Reduce that bias as Strength
+increases and remove the extra load with an active support grip. Ease changes
+through a spring around the primary grip, preserving the tracked hand and head;
+apply the result to the actual held gun and muzzle. Keep weight and shot impulses
+independently tunable and evaluate both with direct muzzle pitch/yaw measurements.
