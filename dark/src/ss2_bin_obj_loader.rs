@@ -195,6 +195,8 @@ pub fn to_scene_objects(
                 transparency = 0.8
             }
 
+            let additive = !is_skinned && !debug_normals_enabled
+                && crate::util::object_material_is_additive_flash(asset_cache, &tex_path);
             let mat: Box<dyn engine::scene::Material> = if debug_normals_enabled {
                 if is_skinned {
                     engine::scene::debug_normal_material::create_skinned()
@@ -211,19 +213,22 @@ pub fn to_scene_objects(
                     transparency,
                 )
             } else {
-                engine::scene::basic_material::create(
+                engine::scene::basic_material::create_with_additive(
                     diffuse_texture
                         .as_ref()
                         .expect("diffuse texture should exist when debug normals disabled")
                         .clone(),
                     material.emissivity,
                     transparency,
+                    additive,
                 )
             };
 
             let material = RefCell::new(mat);
             let mut so = create_dark_object_scene_object(material, geometry);
 
+            so.additive_color = additive;
+            if additive { so.set_depth_write(false); }
             so.set_skinning_data(skeleton.get_transforms());
 
             Some(so)

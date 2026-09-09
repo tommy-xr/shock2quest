@@ -301,16 +301,6 @@ static HAND_MODEL_POSITIONING: Lazy<HashMap<&str, VRHandModelAdjustments>> = Laz
     map
 });
 
-/// First-person models the flat wield swap may apply. Frozen to the set that
-/// was allowed before the VR `_h` route grew the grip table, so flat behavior
-/// (which models donate vhots via the swap) is unchanged by VR tuning entries.
-const FLAT_WIELD_SWAP_MODELS: &[&str] = &["atek_h", "amp_h", "lasehand", "wrench_h"];
-
-pub fn is_allowed_hand_model(model_name: &str) -> bool {
-    let name = model_name.to_ascii_lowercase();
-    FLAT_WIELD_SWAP_MODELS.contains(&name.as_str())
-}
-
 /// The 25th Anniversary Edition's remastered first-person gun models
 /// (`obj/*_h.bin`, LGMD), shipped in `mods/sshock2ee.kpf` which outranks every
 /// classic archive - so on a 25AE install these names always resolve to the
@@ -650,18 +640,6 @@ mod tests {
                 HAND_MODEL_POSITIONING.contains_key(name),
                 "missing HAND_MODEL_POSITIONING entry for {name}"
             );
-        }
-    }
-
-    /// Flat's wield swap is frozen: growing the VR grip table must not change
-    /// which models flat swaps to (and thereby its vhot donors).
-    #[test]
-    fn flat_wield_swap_set_is_frozen() {
-        for name in ["atek_h", "amp_h", "lasehand", "wrench_h"] {
-            assert!(is_allowed_hand_model(name));
-        }
-        for name in ["sg_h", "ar15_h", "empgun_h", "atek_w", "battery"] {
-            assert!(!is_allowed_hand_model(name), "{name} must not swap in flat");
         }
     }
 

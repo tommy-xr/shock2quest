@@ -52,6 +52,7 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
         uniform sampler2D texture1;
         uniform float emissivity;
         uniform float transparency;
+        uniform bool additiveUnlit;
 
         // Spotlight array uniforms (up to 6 spotlights)
         uniform vec3 spotlightPos[6];
@@ -105,6 +106,12 @@ const UNIFIED_FRAGMENT_SHADER_SOURCE: &str = r#"
 
         void main() {
             vec4 texColor = texture(texture1, texCoord);
+            if (additiveUnlit) {
+                // SRC_COLOR/ONE squares RGB. Scale by sqrt(opacity) so the
+                // accumulated light fades linearly with authored alpha.
+                fragColor = vec4(texColor.rgb * sqrt(texColor.a * (1.0 - transparency)), 1.0);
+                return;
+            }
             if (texColor.a < 0.1) discard;
 
             // Base material color (ambient)
@@ -132,6 +139,7 @@ struct UnifiedUniforms {
     // Material properties
     emissivity_loc: i32,
     transparency_loc: i32,
+    additive_unlit_loc: i32,
 
     // Spotlight array uniforms (6 spotlights)
     spotlight_pos_loc: [i32; 6],
@@ -153,6 +161,7 @@ where
     emissivity: f32,
     transparency: f32,
     base_transparency: f32,
+    additive_unlit: bool,
 }
 
 impl<T> BasicMaterial<T>
@@ -160,7 +169,7 @@ where
     T: Deref<Target = dyn TextureTrait>,
 {
     pub fn is_transparent(&self) -> bool {
-        self.transparency > 0.01
+        self.additive_unlit || self.transparency > 0.01
     }
 
     pub fn draw_unified(
@@ -185,6 +194,7 @@ where
             gl::UniformMatrix4fv(uniforms.projection_loc, 1, gl::FALSE, projection.as_ptr());
 
             // Set material properties
+            gl::Uniform1i(uniforms.additive_unlit_loc, i32::from(self.additive_unlit));
             gl::Uniform1f(uniforms.transparency_loc, self.transparency);
             gl::Uniform1f(uniforms.emissivity_loc, self.emissivity);
 
@@ -291,6 +301,10 @@ where
                     emissivity_loc: gl::GetUniformLocation(
                         shader.gl_id,
                         c_str!("emissivity").as_ptr(),
+                    ),
+                    additive_unlit_loc: gl::GetUniformLocation(
+                        shader.gl_id,
+                        c_str!("additiveUnlit").as_ptr(),
                     ),
                     transparency_loc: gl::GetUniformLocation(
                         shader.gl_id,
@@ -463,11 +477,24 @@ pub fn create<T>(diffuse_texture: T, emissivity: f32, transparency: f32) -> Box<
 where
     T: Deref<Target = dyn TextureTrait> + 'static,
 {
+    create_with_additive(diffuse_texture, emissivity, transparency, false)
+}
+
+pub fn create_with_additive<T>(
+    diffuse_texture: T,
+    emissivity: f32,
+    transparency: f32,
+    additive_unlit: bool,
+) -> Box<dyn Material>
+where
+    T: Deref<Target = dyn TextureTrait> + 'static,
+{
     Box::new(BasicMaterial {
         diffuse_texture,
         has_initialized: false,
         emissivity,
         transparency,
         base_transparency: transparency,
+        additive_unlit,
     })
 }

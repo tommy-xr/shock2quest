@@ -10056,6 +10056,12 @@ impl MissionCore {
                             .filter_map(|(id, _)| v_transform.get(id).ok().map(|t| (id, t.0)))
                             .collect()
                     };
+                    let render_alpha = self
+                        .world
+                        .borrow::<View<dark::properties::PropRenderAlpha>>()
+                        .unwrap();
+                    let names = self.world.borrow::<View<PropSymName>>().unwrap();
+                    let models = self.world.borrow::<View<PropModelName>>().unwrap();
                     for (attached_id, attached_xform) in attached {
                         if let Some(model) = self.id_to_model.get(&attached_id) {
                             let objs = match self.id_to_animation_player.get(&attached_id) {
@@ -10065,6 +10071,18 @@ impl MissionCore {
                             for obj in objs {
                                 let mut o = obj.clone();
                                 o.set_transform(squish * attached_xform);
+                                o.set_debug_tag(Some(Rc::new(
+                                    engine::scene::SceneObjectDebugTag {
+                                        entity_id: Some(attached_id.inner()),
+                                        name: names.get(attached_id).ok().map(|n| n.0.clone()),
+                                        model: models.get(attached_id).ok().map(|m| m.0.clone()),
+                                        source: Some("viewmodel_attachment".to_owned()),
+                                    },
+                                )));
+                                if let Ok(alpha) = render_alpha.get(attached_id) {
+                                    o.set_depth_write(false);
+                                    o.set_transparency(Some(1.0 - alpha.0.clamp(0.0, 1.0)));
+                                }
                                 ret.push(o);
                             }
                         }

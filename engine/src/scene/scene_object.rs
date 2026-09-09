@@ -105,6 +105,8 @@ pub struct SceneObject {
     /// a lasting material-level override would bleed between entities; instead
     /// this is applied to the material only around this object's own draw.
     pub transparency_override: Option<f32>,
+    /// Authored SRC_COLOR/ONE light accumulation, scoped to this draw.
+    pub additive_color: bool,
     /// Front-face winding used to cull backfaces for this object. Most engine
     /// geometry remains double-sided; imported Dark models opt in explicitly.
     backface_culling: Option<FrontFaceWinding>,
@@ -337,6 +339,7 @@ impl SceneObject {
             depth_write: true,
             render_layer: RenderLayer::World,
             transparency_override: None,
+            additive_color: false,
             debug_tag: None,
             backface_culling: None,
             depth_bias: false,
@@ -464,6 +467,7 @@ impl SceneObject {
             depth_write: true,
             render_layer: RenderLayer::World,
             transparency_override: None,
+            additive_color: false,
             debug_tag: None,
             backface_culling: None,
             depth_bias: false,
@@ -480,6 +484,7 @@ impl SceneObject {
             depth_write: self.depth_write,
             render_layer: self.render_layer,
             transparency_override: self.transparency_override,
+            additive_color: self.additive_color,
             debug_tag: self.debug_tag.clone(),
             backface_culling: self.backface_culling,
             depth_bias: self.depth_bias,
@@ -554,7 +559,17 @@ impl SceneObject {
             }
         }
 
+        if self.additive_color {
+            unsafe {
+                gl::BlendFunc(gl::SRC_COLOR, gl::ONE);
+            }
+        }
         self.geometry.draw();
+        if self.additive_color {
+            unsafe {
+                gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+            }
+        }
 
         if self.backface_culling.is_some() {
             // Culling is an explicit per-object opt-in; restore the default for

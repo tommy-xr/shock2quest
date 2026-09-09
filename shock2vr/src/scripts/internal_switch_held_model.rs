@@ -69,7 +69,9 @@ impl Script for InternalSwitchHeldModelScript {
                     return Effect::Multiple(effects);
                 }
 
-                if let Some(view_model) = get_view_model(world, entity_id) {
+                // Flat renders every authored first-person model. Its attachment
+                // data must use that same mesh, without the old VR whitelist.
+                if let Some(view_model) = get_raw_view_model(world, entity_id) {
                     Effect::ChangeModel {
                         entity_id,
                         model_name: view_model,
@@ -116,10 +118,6 @@ fn get_raw_view_model(world: &World, entity_id: EntityId) -> Option<String> {
     } else {
         None
     }
-}
-
-fn get_view_model(world: &World, entity_id: EntityId) -> Option<String> {
-    get_raw_view_model(world, entity_id).filter(|str| vr_config::is_allowed_hand_model(str))
 }
 
 fn get_current_model(world: &World, entity_id: EntityId) -> Option<String> {
