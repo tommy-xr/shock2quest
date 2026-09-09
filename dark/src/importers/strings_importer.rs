@@ -116,6 +116,22 @@ pub fn resolve_symbolic_name(sym_name: &str, strings: &HashMap<String, String>) 
     lookup(strings, &sym_name.replace(' ', "_"))
 }
 
+/// Ordinary items reuse their ObjName key in OBJLOOKS unless ObjLookS
+/// overrides it. A short display name is never a description fallback.
+pub fn resolve_object_description(
+    look: Option<&str>,
+    name: Option<&str>,
+    sym_name: Option<&str>,
+    strings: &HashMap<String, String>,
+) -> Option<String> {
+    look.map(|raw| resolve_localized_property_string(raw, strings))
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| name.and_then(|raw| lookup(strings, split_object_string(raw).0)))
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| sym_name.and_then(|name| resolve_symbolic_name(name, strings)))
+        .filter(|text| !text.trim().is_empty())
+}
+
 /// Resolve a gun fire-setting string (`P$Sett1`/`P$SHead2`/...) against its
 /// `SETT*`/`SHEAD*` table.
 ///
@@ -139,6 +155,51 @@ pub static STRINGS_IMPORTER: Lazy<AssetImporter<Vec<String>, HashMap<String, Str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn empty_description_entries_allow_symbolic_fallback() {
+        let blank = std::collections::HashMap::from([
+            ("empty".into(), " ".into()),
+            ("symbol".into(), "Description".into()),
+        ]);
+        assert_eq!(
+            super::resolve_object_description(None, Some("empty"), Some("symbol"), &blank)
+                .as_deref(),
+            Some("Description")
+        );
+        assert_eq!(
+            super::resolve_object_description(None, Some("empty"), None, &blank),
+            None
+        );
+    }
+    #[test]
+    fn description_uses_name_key_but_not_name_fallback() {
+        let strings =
+            std::collections::HashMap::from([("med_patch".into(), "Medical description".into())]);
+        assert_eq!(
+            super::resolve_object_description(
+                None,
+                Some("Med_Patch: \"A medical hypo\""),
+                None,
+                &strings
+            )
+            .as_deref(),
+            Some("Medical description")
+        );
+        assert_eq!(
+            super::resolve_object_description(None, Some("missing: \"A name\""), None, &strings),
+            None
+        );
+        assert_eq!(
+            super::resolve_object_description(
+                Some("custom: \"An override\""),
+                Some("Med_Patch"),
+                None,
+                &strings
+            )
+            .as_deref(),
+            Some("An override")
+        );
+    }
     use std::collections::HashMap;
 
     use super::{parse_strings, resolve_gun_setting_string, resolve_localized_property_string};

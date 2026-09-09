@@ -24,6 +24,21 @@ Retail behavior below is confirmed by the [System Shock 2 manual, PDF page 5](ht
 
 ## Review cases
 
+### Item information control
+
+The `?` utility enters a selection mode that consumes click/grab edges before
+inventory use, wield, drop or Frob. Select an inventory item, cursor item, or
+held-item arm readout to open its localized description in the right MFD.
+`?` again cancels selection; CLOSE dismisses the reader. Long descriptions
+have previous/next pages. Closing the cyber interface resets inspection.
+Ordinary items use their object-name key in OBJLOOKS; an authored look-string
+override takes priority. Missing entries show an explicit fallback, never the
+short item name masquerading as a description.
+
+Utility buttons occupy a dedicated row below the reserved right MFD slot and
+above the ammo readout. Their drawing, input and debug rectangles are shared
+in canvas pixels; these are new layout rectangles, not guessed BIN indices.
+
 Two different guns; gun plus psi amp; swapped hands; one support grip; no weapon; dropping/swapping a weapon between drawing and clicking its control. Research active, chemical-paused and completed after the item is gone. Inspect a hypo without consumption, a gun without firing, and an ordinary object without research data. Use the same rendered/hit-test rectangles in flat and VR, and retain press-edge protection when opening or switching panels.
 
 A weapon-pinned ammo display remains a separate optional grip-editor placement mode. The psi amp keeps its authored forearm and needs its own mount; glove-mounted wrist plates deliberately skip it.
