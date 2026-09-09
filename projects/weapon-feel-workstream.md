@@ -338,3 +338,13 @@ with absolute world-time yaw every frame. Its existing 20 degrees/second spin
 now advances relative to the current orientation using elapsed time, preserving
 pitch/roll and resuming consistently after save/load. Authored rotate config
 rates/axes remain a separate parity audit; this does not claim to implement them.
+
+
+## Data-driven audit baseline
+
+See [weapon-projectile-audit.md](weapon-projectile-audit.md) for all 38 gun,
+setting and ammo combinations and the current verification boundaries.
+`cargo dq weapon-audit [mission]` exports inherited weapon/projectile metadata,
+including setting-filtered link inputs and unparsed-property gaps. The SDK
+matrix exercises both flat and right VR; diagnostic last-projectile identity
+keeps instantaneous ray shots observable without changing their lifetime.

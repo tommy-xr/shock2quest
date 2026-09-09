@@ -406,3 +406,9 @@ pub struct RuntimePropLogData {
 // first-person model is (re)applied, including on load.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct RuntimePropVrGripOffset(pub Vector3<f32>);
+
+/// Last successfully instantiated player projectile, retained on its firing
+/// weapon for debug inspection after an instantaneous ray has already expired.
+/// Diagnostic only: not saved and never consulted by firing logic.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RuntimePropLastFiredProjectile(pub i32);

@@ -6,6 +6,7 @@ mod data_loader;
 mod entity_analyzer;
 mod motion_analyzer;
 mod speech_analyzer;
+mod weapon_audit;
 
 use data_loader::load_entity_data;
 use entity_analyzer::{EntityType, FilterCriteria, analyze_entities, filter_entities};
@@ -27,6 +28,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Export inherited weapon/projectile properties and links as JSON
+    WeaponAudit { mission: Option<String> },
     /// Query entities and templates from gamesys and optional mission
     Entities {
         /// Mission file to load (loads shock2.gam by default, or shock2.gam + mission if specified)
@@ -124,6 +127,7 @@ fn init_logging(verbose: bool) -> Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(level)
         .with_target(false)
+        .with_writer(std::io::stderr)
         .init();
 
     Ok(())
@@ -138,6 +142,7 @@ fn main() -> Result<()> {
     info!("Starting dark_query");
 
     match cli.command {
+        Commands::WeaponAudit { mission } => weapon_audit::run(mission.as_deref())?,
         Commands::Entities {
             mission,
             id,

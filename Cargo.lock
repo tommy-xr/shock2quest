@@ -1178,6 +1178,7 @@ dependencies = [
  "dark",
  "engine",
  "glob",
+ "serde_json",
  "shipyard",
  "shock2vr",
  "tracing",

@@ -5820,7 +5820,10 @@ impl MissionCore {
             .projectile_weapon
             .and_then(|weapon| self.interaction.held_launch_origin(weapon))
             .or(additional_options.projectile_launch_origin);
-        self.create_entity_with_position_and_rider_depth(
+        let firing_weapon = additional_options.projectile_weapon.filter(|_| {
+            additional_options.player_fired_projectile && !additional_options.transient_fx
+        });
+        let created = self.create_entity_with_position_and_rider_depth(
             asset_cache,
             template_id,
             position,
@@ -5829,7 +5832,14 @@ impl MissionCore {
             additional_options,
             0,
             None,
-        )
+        );
+        if let Some(weapon) = firing_weapon {
+            self.world.add_component(
+                weapon,
+                crate::runtime_props::RuntimePropLastFiredProjectile(template_id),
+            );
+        }
+        created
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -12239,6 +12249,18 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                     properties.push(DebugPropertyInfo {
                         name: "Model".to_string(),
                         value: model_name.0.clone(),
+                    });
+                }
+
+                if let Ok(last) = self
+                    .world
+                    .borrow::<View<crate::runtime_props::RuntimePropLastFiredProjectile>>()
+                    .unwrap()
+                    .get(id)
+                {
+                    properties.push(DebugPropertyInfo {
+                        name: "LastFiredProjectile".to_string(),
+                        value: last.0.to_string(),
                     });
                 }
 
