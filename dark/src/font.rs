@@ -334,6 +334,10 @@ impl Font {
         mesh::create(vertices)
     }
     pub fn read<T: io::Read + io::Seek>(reader: &mut T) -> Font {
+        Self::read_tinted(reader, [255, 255, 255])
+    }
+
+    pub fn read_tinted<T: io::Read + io::Seek>(reader: &mut T, tint: [u8; 3]) -> Font {
         let font_bitmap = FontBitmap::read(reader);
         let metrics = &font_bitmap.metrics;
 
@@ -352,7 +356,12 @@ impl Font {
             // White glyphs; the bitmap only carries coverage.
             let img: ImageBuffer<image::Rgba<u8>, std::vec::Vec<u8>> =
                 image::ImageBuffer::from_fn(width as u32, metrics.height as u32, |x, y| {
-                    image::Rgba([255, 255, 255, alpha[(y as usize) * width + x as usize]])
+                    image::Rgba([
+                        tint[0],
+                        tint[1],
+                        tint[2],
+                        alpha[(y as usize) * width + x as usize],
+                    ])
                 });
 
             let texture_pack_result = texture_packer.pack(&img);

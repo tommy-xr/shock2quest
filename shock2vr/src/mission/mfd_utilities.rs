@@ -34,6 +34,16 @@ pub(crate) struct MfdUtilities {
 }
 
 impl MfdUtilities {
+    pub(crate) fn is_research(&self) -> bool {
+        self.research
+    }
+    pub(crate) fn open_research(&mut self, template: Option<i32>) {
+        *self = Self::default();
+        self.research = true;
+        if let Some(id) = template {
+            self.research_catalog.select_project(id);
+        }
+    }
     pub(crate) fn is_inspecting(&self) -> bool {
         self.inspecting
     }
@@ -46,7 +56,7 @@ impl MfdUtilities {
             Rect::new(488.0, 382.0, 36.0, 26.0),
             "RES",
         ));
-        if self.inspecting || self.selected.is_some() || self.research {
+        if self.inspecting || self.selected.is_some() {
             controls.push((Control::Close, Rect::new(570.0, 346.0, 60.0, 20.0), "CLOSE"));
             if self.page > 0 {
                 controls.push((Control::Previous, Rect::new(458.0, 346.0, 28.0, 20.0), "<"));
@@ -94,6 +104,13 @@ impl MfdUtilities {
             }
             return true;
         }
+        if self.research {
+            let consumed = self.research_catalog.contains(point);
+            if self.research_catalog.update(point, pressed) {
+                *self = Self::default();
+            }
+            return consumed;
+        }
         if self.inspecting {
             if pressed && let Some(entity) = candidate {
                 self.selected = Some(entity);
@@ -123,8 +140,7 @@ impl MfdUtilities {
         info: &dark::ss2_entity_info::SystemShock2EntityInfo,
     ) {
         if self.research {
-            let body = self.research_catalog.body(world, assets, info);
-            self.set_content("Research overview".into(), body);
+            self.research_catalog.refresh(world, assets, info);
             return;
         }
         let Some(entity) = self.selected else {
@@ -144,7 +160,10 @@ impl MfdUtilities {
     }
 
     pub(crate) fn draw(&self, canvas: &mut UiCanvas) {
-        if self.inspecting || self.selected.is_some() || self.research {
+        if self.research {
+            self.research_catalog.draw(canvas);
+        }
+        if self.inspecting || self.selected.is_some() {
             canvas.image(PANEL, "IFBTN00.PCX");
             canvas.text_native_fit(
                 Rect::new(458.0, 130.0, 172.0, 16.0),
@@ -196,6 +215,11 @@ impl MfdUtilities {
                 entity_id: None,
                 rect: [r.x, r.y, r.w, r.h],
                 screen_rect: [r.x, r.y, r.w, r.h],
+            })
+            .chain(if self.research {
+                self.research_catalog.elements()
+            } else {
+                Vec::new()
             })
             .chain(self.visible_lines().map(|(rect, line)| {
                 let r = [rect.x, rect.y, rect.w, rect.h];

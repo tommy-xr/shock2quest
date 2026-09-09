@@ -41,35 +41,20 @@ in canvas pixels; these are new layout rectangles, not guessed BIN indices.
 
 ### Research overview
 
-RES reads campaign research projects without starting or resuming them. Active
-work comes first, with progress and any required chemical; suspended projects
-and completed reports remain browsable with the reader's page controls.
-Completed descriptions resolve from archetype metadata, so destroying or using
-the original inventory item does not erase the report. Metadata is cached while
-the reader is open; progress remains live. The overview offers no research-use
-actions and makes no changes to campaign research state.
+RES opens the retail PDA-style research list in the left MFD. Active projects
+open the RESEARCH status layout; completed entries open RESREP with the
+portrait, flask icon and report text from RESEARCH.STR, not OBJLOOKS. Reports
+are selected from collected report bits and survive the original specimen.
+Opening or paging the journal never changes research or consumes chemicals.
+The live specimen panel exposes REPORTS and SUSPEND through normal effects.
 
-Two different guns; gun plus psi amp; swapped hands; one support grip; no weapon; dropping/swapping a weapon between drawing and clicking its control. Research active, chemical-paused and completed after the item is gone. Inspect a hypo without consumption, a gun without firing, and an ordinary object without research data. Use the same rendered/hit-test rectangles in flat and VR, and retain press-edge protection when opening or switching panels.
+Layout references are `shkrsrch.cpp`, `shkpda.cpp`, and `shkemail.cpp` in the
+original Dark engine: the progress well is (15,267), the specimen slot is
+(15,14,138,109), and report body starts at (15,105). Retail MAINAA is loaded
+explicitly from `fonts/` and tinted cyan; the alternate `iface/fonts` copy is
+not suitable. Specimens currently use their inventory artwork in the preview;
+a rotating 3D specimen is still a separate rendering increment.
 
-A weapon-pinned ammo display remains a separate optional grip-editor placement mode. The psi amp keeps its authored forearm and needs its own mount; glove-mounted wrist plates deliberately skip it.
-
-## Shoulder assignments in the inventory
-
-The first MFD increment marks the existing backpack weapon icon with L or R.
-The idle item-name line explains `L / R: shoulder recall`; hovering an assigned
-weapon prefixes its name with `Left shoulder:` or `Right shoulder:`. These are
-shoulder recall assignments, independent of controller handedness.
-
-The assignment list comes from the same live backpack-membership query used by
-shoulder retrieval. There are no duplicate weapon slots or extra grab targets.
-The normal item click/grab behavior stays on the original icon, including under
-the badge. A cursor lift hides both icon and badge; recall/world removal hides
-the badge when the item leaves the backpack. Returning an assigned weapon to
-the backpack restores its mark. Reassigning a shoulder marks its new weapon.
-
-Layout is emitted once in the shared interface canvas for flat and VR. This
-increment makes existing assignments visible; editing assignments from the MFD
-is a follow-up interaction, alongside the retail utility controls above.
 
 ### Mirrored arm layout prototype
 

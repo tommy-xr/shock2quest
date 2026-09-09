@@ -7390,7 +7390,34 @@ impl MissionCore {
                     }
                 }
 
+                Effect::OpenResearchReports => {
+                    if !self.player_is_alive() {
+                        continue;
+                    }
+                    self.gui.close_panel(
+                        &mut self.world,
+                        &mut self.physics,
+                        &mut self.script_world,
+                        &mut self.id_to_physics,
+                    );
+                    if !self.use_mode {
+                        effects.push_front(
+                            self.enter_use_mode(crate::ui::entry_ramp::DEFAULT_ENTRY_EXIT),
+                        );
+                        self.reset_vr_use_mode_placement();
+                    }
+                    self.flat_ui.close();
+                    self.flat_ui.utilities.open_research(None);
+                }
+                Effect::SuspendResearch => {
+                    if let Ok(mut quests) = self.world.borrow::<UniqueViewMut<QuestInfo>>() {
+                        quests.research_mut().suspend();
+                    }
+                }
                 Effect::OpenPanel { entity } => {
+                    if self.flat_ui.utilities.is_research() {
+                        self.flat_ui.utilities = Default::default();
+                    }
                     // Bind the presentation's single object-panel slot to the
                     // frobbed entity (the original's frob-script -> overlay
                     // flow). Flat docks it in the MFD; default VR creates a

@@ -247,6 +247,36 @@ pub const INTERACTION_FIXTURES: &[InteractionFixture] = &[
         model: "gameboy",
     },
     InteractionFixture {
+        label: "Research: monkey brain",
+        template_id: -148,
+        model: "monbr",
+    },
+    InteractionFixture {
+        label: "Research: hybrid organ",
+        template_id: -1095,
+        model: "organ",
+    },
+    InteractionFixture {
+        label: "Research: Toxin-A",
+        template_id: -1341,
+        model: "filter",
+    },
+    InteractionFixture {
+        label: "Chemical: Antimony",
+        template_id: -145,
+        model: "Sb",
+    },
+    InteractionFixture {
+        label: "Chemical: Vanadium",
+        template_id: -139,
+        model: "V",
+    },
+    InteractionFixture {
+        label: "Chemical: Fermium",
+        template_id: -20,
+        model: "Fm",
+    },
+    InteractionFixture {
         label: "ICE-Pick hack tool",
         template_id: -73,
         model: "icepick",
@@ -404,6 +434,21 @@ impl DebugSceneHooks for InteractionHooks {
             asset_cache,
             audio_context,
         );
+        // Toxin-A requests Antimony twice. Provide both doses without
+        // requiring a scene reset (which also clears research progress).
+        let antimony: Vec<_> = core
+            .world
+            .borrow::<View<dark::properties::PropTemplateId>>()
+            .unwrap()
+            .iter()
+            .with_id()
+            .filter(|(_, template)| template.template_id == -145)
+            .map(|(entity, _)| entity)
+            .collect();
+        for entity in antimony {
+            core.world
+                .add_component(entity, dark::properties::PropStackCount(2));
+        }
         let buttons = {
             let templates = core
                 .world

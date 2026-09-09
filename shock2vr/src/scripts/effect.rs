@@ -312,6 +312,11 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
+    /// Read the collected research journal without requiring a live specimen.
+    OpenResearchReports,
+    /// Explicit research MFD suspend control.
+    SuspendResearch,
+
     /// Offer one carried chemical to the active research project. The handler
     /// consumes it only when it matches the currently authored gate.
     UseResearchChemical {

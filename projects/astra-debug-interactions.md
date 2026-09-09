@@ -4,7 +4,7 @@ Start the scene with `cargo dbgr --mission debug_interactions --vr`, or select
 `debug_interactions` from the Developer scene launcher on desktop or Quest.
 The scene also loads in flat presentation for inspecting its layout.
 
-Forty-four fixtures stand on labeled pedestals along a clear aisle: coffee mug,
+Fifty fixtures stand on labeled pedestals along a clear aisle: coffee mug,
 printed magazine, basketball, wrench, pistol, shotgun, fusion cannon, worm
 launcher, standard ammo clip, psi amp, four hypos, maintenance tool,
 French-Epstein device, auto-repair unit, an inert card grip sample, and security
@@ -77,3 +77,13 @@ Underside provide close views of the contact seams even on oversized models.
 Use Explorer’s [VR Grips editor](astra-vr-grip-editor.md) to adjust position,
 rotation, finger amounts, and uniform item scale, then save the selected pickup
 or weapon resource directly. The gallery remains useful for sharing reviews.
+
+## Research fixtures
+
+The rack includes Monkey Brain (-148), Hybrid Organ (-1095), and Toxin-A
+(-1341), plus Fermium (-20), Antimony (-145), and Vanadium (-139). Use the
+specimen normally to begin research; use the requested chemical to advance it.
+Antimony has two doses for Toxin-A's two gates. Debug stats already include
+Research 6. The RES utility is a read-only journal: active projects show their
+chemical gate, and completed reports remain readable after the specimen is gone.
+DebugReloadLevel resets specimens, chemicals and research together.
