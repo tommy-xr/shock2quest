@@ -4276,6 +4276,37 @@ impl MissionCore {
         });
         self.flat_ui.set_name_strip(name_strip);
 
+        // A deployed mine may be displaced by a collision or moving support.
+        // Move its sensor before script damage/overlap checks, so sensing and
+        // the eventual Corpse explosion remain at the visible mine.
+        let proximity_poses: Vec<_> = {
+            let scripts = self.world.borrow::<View<PropScripts>>().unwrap();
+            let positions = self.world.borrow::<View<PropPosition>>().unwrap();
+            (&scripts)
+                .iter()
+                .with_id()
+                .filter_map(|(id, scripts)| {
+                    if !scripts
+                        .scripts
+                        .iter()
+                        .any(|s| s.eq_ignore_ascii_case("ProxGrenadeTrigger"))
+                    {
+                        return None;
+                    }
+                    let owner = crate::scripts::proximity_grenade::linked_peer(&self.world, id)?;
+                    let pose = positions.get(owner).ok()?;
+                    let current = positions.get(id).ok()?;
+                    (pose.position != current.position || pose.rotation != current.rotation)
+                        .then_some((id, pose.clone()))
+                })
+                .collect()
+        };
+        for (id, pose) in proximity_poses {
+            self.physics
+                .sync_sensor_position_rotation(id, pose.position, pose.rotation);
+            self.world.add_component(id, pose);
+        }
+
         // Update scripts
         let mut script_effects = profile!(
             scope: "game", level: DEBUG, "script_world.update",
@@ -6031,6 +6062,16 @@ impl MissionCore {
 
         let v_initial_velocity = world.borrow::<View<PropPhysInitialVelocity>>().unwrap();
         if let Some(rigid_body) = created_entity.rigid_body {
+            if crate::scripts::script_util::entity_has_script(
+                world,
+                created_entity.entity_id,
+                "ProxGrenade",
+            ) {
+                // Rapier has no rolling resistance: a spherical mine can roll
+                // forever after landing. Angular damping substitutes for that
+                // missing ground drag without damping its launch translation.
+                physics.set_body_damping(rigid_body, 0.0, 1.0);
+            }
             if let Some(velocity_frame) = authored_velocity_frame {
                 // The parser already converts Dark velocity to world units:
                 // (-forward, up, right). The launch frame uses +Z forward.
@@ -6115,6 +6156,24 @@ impl MissionCore {
         let mut visited: HashSet<EntityId> = HashSet::from([entity_id]);
         let mut frontier = vec![entity_id];
         while let Some(parent) = frontier.pop() {
+            // Mine and sensor are one deployed object, including when a mine
+            // is removed by a non-damage path. Reuse the visited set so their
+            // reciprocal, save-remapped ScriptParams links cannot cycle.
+            if ["ProxGrenade", "ContactProxGrenade", "ProxGrenadeTrigger"]
+                .iter()
+                .any(|script| {
+                    crate::scripts::script_util::entity_has_script(&self.world, parent, script)
+                })
+            {
+                if let Some(peer) =
+                    crate::scripts::proximity_grenade::linked_peer(&self.world, parent)
+                {
+                    if visited.insert(peer) {
+                        to_remove.push(peer);
+                        frontier.push(peer);
+                    }
+                }
+            }
             let children: Vec<(EntityId, bool)> = match self.world.borrow::<(
                 View<crate::runtime_props::RuntimePropAttachment>,
                 View<PropTweqDeleteConfig>,
@@ -7530,6 +7589,47 @@ impl MissionCore {
                     self.queue_flat_melee_swing(asset_cache, entity_id);
                 }
 
+                Effect::ArmProximityGrenade { entity_id } => {
+                    if crate::scripts::proximity_grenade::linked_peer(&self.world, entity_id)
+                        .is_none()
+                    {
+                        let pose = self
+                            .world
+                            .borrow::<View<PropPosition>>()
+                            .unwrap()
+                            .get(entity_id)
+                            .ok()
+                            .cloned();
+                        if let Some(pose) = pose {
+                            if let Some(trigger) = self.create_entity_by_template_name(
+                                asset_cache,
+                                "Prox Grenade Trigger",
+                                vec3_to_point3(pose.position),
+                                pose.rotation,
+                            ) {
+                                // Persist the deployed state in the authored property too:
+                                // physics reconstruction must not reapply launch velocity.
+                                self.world.add_component(
+                                    entity_id,
+                                    PropPhysInitialVelocity(vec3(0.0, 0.0, 0.0)),
+                                );
+                                let mut links = self.world.borrow::<ViewMut<Links>>().unwrap();
+                                for (from, to) in [
+                                    (entity_id, trigger.entity_id),
+                                    (trigger.entity_id, entity_id),
+                                ] {
+                                    if let Ok(from_links) = (&mut links).get(from) {
+                                        from_links.to_links.push(ToLink {
+                                            to_template_id: 0,
+                                            to_entity_id: Some(WrappedEntityId(to)),
+                                            link: Link::ScriptParams,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 Effect::CreateEntityByTemplateName {
                     source_entity_id,
                     template_name,

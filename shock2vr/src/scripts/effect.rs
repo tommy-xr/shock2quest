@@ -569,6 +569,11 @@ pub enum Effect {
         initial_velocity: Vector3<f32>,
     },
 
+    /// Deploy the authored proximity sensor and link its lifetime to the mine.
+    ArmProximityGrenade {
+        entity_id: EntityId,
+    },
+
     CreateEntity {
         template_id: i32,
         position: Point3<f32>,
