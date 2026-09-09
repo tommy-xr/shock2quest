@@ -27,17 +27,36 @@ pub fn create_wrist_hud_panels(
         .into_iter()
         .enumerate()
     {
-        if !poses[i].is_tracked()
-            || !crate::virtual_hand::shows_hand_visual(
-                world,
-                crate::wielded_weapon::held_by_hand(world, hand),
-            )
-        {
+        if !poses[i].is_tracked() {
             continue;
         }
         let root = Matrix4::from_translation(poses[i].position)
             * Matrix4::from(poses[i].rotation)
             * wrist_frames[i];
+        if let Some(notice) = crate::wielded_weapon::held_by_hand(world, hand).and_then(|weapon| {
+            crate::weapon_requirements::active_weapon_skill_notice(world, weapon)
+        }) {
+            let canvas = crate::hud::message_line::build_message_canvas(&[notice.message()]);
+            // Same pixel layout as the flat status line. Only the panel's
+            // world placement differs: above this glove.
+            let width = 0.32;
+            let transform = root
+                * Matrix4::from_translation(vec3(0.0, 0.06, 0.10))
+                * Matrix4::from_nonuniform_scale(
+                    width,
+                    width * canvas.size().y / canvas.size().x,
+                    1.0,
+                );
+            objects.extend(canvas.render_world_space(asset_cache, transform, None, None, 0.001));
+        }
+        // The refusal is available even when a weapon carries its own hand
+        // mesh. Only the physical wrist plates require a visible glove.
+        if !crate::virtual_hand::shows_hand_visual(
+            world,
+            crate::wielded_weapon::held_by_hand(world, hand),
+        ) {
+            continue;
+        }
         for (under, canvas) in [
             (false, readouts::build_watch_canvas(&bio)),
             (

@@ -320,7 +320,9 @@ impl Script for WeaponScript {
         };
         // A burst belongs to the pull that started it: a reload, or the gun
         // leaving the player's hands, ends it.
-        if is_reloading(world, entity_id) || !crate::wielded_weapon::held_in_hand(world, entity_id)
+        if is_reloading(world, entity_id)
+            || !crate::wielded_weapon::held_in_hand(world, entity_id)
+            || crate::weapon_requirements::unmet_weapon_skill(world, entity_id).is_some()
         {
             self.burst = None;
             return Effect::NoEffect;
@@ -361,6 +363,15 @@ impl Script for WeaponScript {
     ) -> Effect {
         match msg {
             MessagePayload::TriggerPull => {
+                if let Some(requirement) =
+                    crate::weapon_requirements::unmet_weapon_skill(world, entity_id)
+                {
+                    self.burst = None;
+                    return Effect::ShowWeaponSkillRequirement {
+                        entity_id,
+                        requirement,
+                    };
+                }
                 // Firing is blocked while a reload is in progress.
                 if is_reloading(world, entity_id) {
                     return Effect::NoEffect;
@@ -835,6 +846,24 @@ pub(super) fn create_projectile(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_untrained_trigger_returns_only_the_authored_requirement() {
+        let (mut world, physics, weapon, _) = flat_melee_fixture();
+        world.add_component(weapon, dark::properties::PropBaseWeaponDesc([6, 0, 0, 0]));
+        let effect = WeaponScript::new().handle_message(
+            weapon,
+            &world,
+            &physics,
+            &MessagePayload::TriggerPull,
+        );
+        assert!(matches!(effect, Effect::ShowWeaponSkillRequirement {
+            entity_id,
+            requirement: crate::weapon_requirements::WeaponSkillRequirement {
+                required: 6, current: 0, ..
+            },
+        } if entity_id == weapon));
+    }
+
     use cgmath::{Quaternion, point3, vec3};
     use dark::{motion::MotionFlags, properties::Links};
 

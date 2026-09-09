@@ -27,6 +27,8 @@ test(
     await using game = await GameServer.launch({
       mission: "medsci1.mis",
     });
+    // Exercise pistol behavior with its authored Standard 1 requirement met.
+    await game.player.setStats({ skills: { standard_weapons: 1 } });
 
     const bulletHoles = async () =>
       (await game.entities.list({ filter: "Bullet Hit", limit: 50 })).entities.filter(

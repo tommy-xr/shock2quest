@@ -2708,6 +2708,27 @@ impl MissionCore {
             &template_to_entity_id,
         );
 
+        // Dark clones the PlayerFactory marker onto its new player. Earth
+        // authors Standard 1 / Energy 2 there for training. Keep this allowance
+        // on the nonserialized runtime player, not the persistent career sheet;
+        // reconstruct it even when a saved position overrides the spawn pose.
+        // MapDefault uses the last instantiated factory for its spawn, too.
+        let factory_weapon_skills = abstract_mission
+            .entity_info
+            .link_playerfactories
+            .iter()
+            .rev()
+            .find_map(|link| template_to_entity_id.get(&link.src))
+            .and_then(|factory| {
+                world
+                    .borrow::<View<dark::properties::PropBaseWeaponDesc>>()
+                    .ok()
+                    .and_then(|skills| skills.get(factory.0).ok().copied())
+            });
+        if let Some(skills) = factory_weapon_skills {
+            world.add_component(player_entity, skills);
+        }
+
         let player_handle = physics.create_player(start_pos, player_entity);
 
         world.add_unique(PlayerInfo {
@@ -8588,6 +8609,33 @@ impl MissionCore {
                         .push(text, now);
                 }
 
+                Effect::ShowWeaponSkillRequirement {
+                    entity_id,
+                    requirement,
+                } => {
+                    use crate::weapon_requirements::WeaponSkillNotice;
+                    let now = self.world.borrow::<UniqueView<Time>>().unwrap().total;
+                    let repeated = self
+                        .world
+                        .borrow::<View<WeaponSkillNotice>>()
+                        .ok()
+                        .and_then(|notices| {
+                            notices.get(entity_id).ok().map(|notice| {
+                                notice.expires > now && notice.requirement == requirement
+                            })
+                        })
+                        .unwrap_or(false);
+                    if !repeated {
+                        self.world.add_component(
+                            entity_id,
+                            WeaponSkillNotice {
+                                requirement,
+                                expires: now + std::time::Duration::from_secs(3),
+                            },
+                        );
+                    }
+                }
+
                 Effect::SetQuestBit {
                     quest_bit_name,
                     quest_bit_value,
@@ -10065,10 +10113,31 @@ impl MissionCore {
             .borrow::<UniqueView<Time>>()
             .map(|time| time.total)
             .unwrap_or_default();
-        self.world
+        let mut messages = self
+            .world
             .borrow::<UniqueViewMut<crate::hud::HudMessages>>()
             .map(|mut messages| messages.active(now))
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // The flat status line and glove share the same weapon-bound notice,
+        // including expiry and immediate removal after training/equipping.
+        if let Some(requirement) =
+            crate::wielded_weapon::held_by_hand(&self.world, crate::vr_config::Handedness::Left)
+                .filter(|weapon| {
+                    self.world
+                        .borrow::<View<crate::runtime_props::RuntimePropFlatAim>>()
+                        .ok()
+                        .is_some_and(|aims| aims.get(*weapon).is_ok())
+                })
+                .and_then(|weapon| {
+                    crate::weapon_requirements::active_weapon_skill_notice(&self.world, weapon)
+                })
+        {
+            messages.push(requirement.message());
+            if messages.len() > crate::hud::message_line::MAX_LINES {
+                messages.remove(0);
+            }
+        }
+        messages
     }
 
     /// The status-message block in VR: the same canvas flat draws into its HUD,
@@ -12129,6 +12198,14 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 }
 
                 // Add weapon ammo (current clip) and wear when present
+                if let Some(requirement) =
+                    crate::weapon_requirements::active_weapon_skill_notice(&self.world, id)
+                {
+                    properties.push(DebugPropertyInfo {
+                        name: "WeaponSkillNotice".to_string(),
+                        value: requirement.message(),
+                    });
+                }
                 if let Ok(gun_state) = v_gun_state.get(id) {
                     properties.push(DebugPropertyInfo {
                         name: "Ammo".to_string(),
