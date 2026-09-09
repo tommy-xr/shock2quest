@@ -866,6 +866,10 @@ pub enum Effect {
         email: u32,
         force: bool,
     },
+    /// A gun fired a round; routed to its holding and support hands as haptics.
+    WeaponRecoil {
+        entity_id: EntityId,
+    },
     /// One-shot controller feedback. Gameplay describes it; only the runtime
     /// talks to hardware. Transient output is never serialized into saves.
     HandHaptic {
