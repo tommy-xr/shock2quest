@@ -4725,7 +4725,9 @@ impl MissionCore {
             .map(|inventory| super::shoulder_backpack::weapons(&self.world, inventory))
             .unwrap_or([None; 2]);
         self.flat_ui.set_shoulder_weapons(shoulder_weapons);
-        self.flat_ui.utilities.refresh(&self.world, asset_cache);
+        self.flat_ui
+            .utilities
+            .refresh(&self.world, asset_cache, &self.entity_info);
         // Resolve physical ownership through the interaction boundary: flat's
         // internal left slot represents the visibly right-handed viewmodel.
         let held = self.interaction.held_entities();

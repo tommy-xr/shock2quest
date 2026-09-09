@@ -12,6 +12,7 @@ pub mod pathfinding_debug;
 pub mod pathfinding_test;
 pub mod player_footsteps;
 pub(crate) mod reload;
+mod research_overview;
 mod shoulder_backpack;
 pub mod spatial_query;
 mod spawn_location;

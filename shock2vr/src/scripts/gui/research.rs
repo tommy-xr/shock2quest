@@ -248,7 +248,7 @@ pub(crate) fn localized_fallback(value: &str) -> String {
         .replace("\\n", "\n")
 }
 
-fn chemical_display_name(world: &World, sym_name: &str) -> String {
+pub(crate) fn chemical_display_name(world: &World, sym_name: &str) -> String {
     let key = sym_name.to_ascii_lowercase();
     world
         .borrow::<UniqueView<GlobalEntityMetadata>>()

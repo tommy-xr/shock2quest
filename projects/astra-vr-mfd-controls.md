@@ -39,6 +39,16 @@ Utility buttons occupy a dedicated row below the reserved right MFD slot and
 above the ammo readout. Their drawing, input and debug rectangles are shared
 in canvas pixels; these are new layout rectangles, not guessed BIN indices.
 
+### Research overview
+
+RES reads campaign research projects without starting or resuming them. Active
+work comes first, with progress and any required chemical; suspended projects
+and completed reports remain browsable with the reader's page controls.
+Completed descriptions resolve from archetype metadata, so destroying or using
+the original inventory item does not erase the report. Metadata is cached while
+the reader is open; progress remains live. The overview offers no research-use
+actions and makes no changes to campaign research state.
+
 Two different guns; gun plus psi amp; swapped hands; one support grip; no weapon; dropping/swapping a weapon between drawing and clicking its control. Research active, chemical-paused and completed after the item is gone. Inspect a hypo without consumption, a gun without firing, and an ordinary object without research data. Use the same rendered/hit-test rectangles in flat and VR, and retain press-edge protection when opening or switching panels.
 
 A weapon-pinned ammo display remains a separate optional grip-editor placement mode. The psi amp keeps its authored forearm and needs its own mount; glove-mounted wrist plates deliberately skip it.
