@@ -124,9 +124,17 @@ has not yet been established as an insufficient-skill rejection. Existing
 
 ### 2. Correct firing and physical handling
 
-- [ ] Fix shooter filtering for fast rays and physical projectiles. Near-chest
+- [x] Fix shooter filtering for fast rays and physical projectiles. Near-chest
   shots must not hit the firing player's capsule or held items accidentally.
   Preserve enemy hits, point-blank world obstruction and explosive self-damage.
+  Baseline #1050 already supplies the ray/physical filters. The next stacked
+  slice, `fix/projectile-owner-save`, fixes their save/load lifetime: a live
+  player-fired laser bolt was transparent to the player before saving and solid
+  after loading. Ownership now round-trips separately from launch provenance,
+  including entity remapping and held/world partitions. Enemy shots are not
+  inferred to be player-owned. It leaves blast damage and muzzle placement
+  unchanged; source-filter unit tests and the close-body VR psi scenario cover
+  the existing firing paths alongside the new real save/load regression.
 - [ ] Audit muzzle/vhot lookup and missing-vhot fallbacks for all held models.
   Ensure no fallback or clearance moves a shot through a wall.
 - [ ] Reproduce flash/casing regressions with matched world/held models. Inspect

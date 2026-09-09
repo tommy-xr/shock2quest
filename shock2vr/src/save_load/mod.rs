@@ -24,7 +24,7 @@ use crate::{
     mission::{GlobalTemplateIdMap, PlayerInfo},
     runtime_props::{
         RuntimePropCanonicalTemplateId, RuntimePropDeathPose, RuntimePropDoNotSerialize,
-        RuntimePropLaunchedProjectile, RuntimePropSelectedAmmo,
+        RuntimePropLaunchedProjectile, RuntimePropPlayerFiredProjectile, RuntimePropSelectedAmmo,
     },
     scripts::{ScriptWorld, script_util},
     util::partition_map,
@@ -225,6 +225,14 @@ pub fn to_save_data_with_scripts(
             world_launched_projectiles.push(entity_id.inner());
         }
     }
+    let (held_player_fired_projectiles, world_player_fired_projectiles): (Vec<_>, Vec<_>) = world
+        .borrow::<View<RuntimePropPlayerFiredProjectile>>()
+        .unwrap()
+        .iter()
+        .with_id()
+        .map(|(entity_id, _)| entity_id.inner())
+        .filter(|entity_id| !entities_to_filter.contains(entity_id))
+        .partition(|entity_id| held_entities.contains(entity_id));
     let world_entity_data = EntitySaveData {
         properties: world_serialized_properties,
         template_id_to_entity_id: template_id_to_entity_id.0.clone(),
@@ -234,6 +242,7 @@ pub fn to_save_data_with_scripts(
         selected_ammo: world_selected_ammo,
         canonical_template_ids: world_canonical_templates,
         launched_projectiles: world_launched_projectiles,
+        player_fired_projectiles: world_player_fired_projectiles,
         script_states: world_script_states,
     };
 
@@ -246,6 +255,7 @@ pub fn to_save_data_with_scripts(
         selected_ammo: held_selected_ammo,
         canonical_template_ids: held_canonical_templates,
         launched_projectiles: held_launched_projectiles,
+        player_fired_projectiles: held_player_fired_projectiles,
         script_states: held_script_states,
     };
 
