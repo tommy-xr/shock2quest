@@ -421,3 +421,47 @@ be captured. The existing simulated-VR gallery demonstrates the enabled shared
 render path, but does not verify the corrected APK on a headset. Keep this layer
 in draft until it is installed, projectile orbs are visibly checked and device
 captures are embedded. No device performance claim is made.
+
+
+## Authored projectile contact damage
+
+`fix/projectile-contact-stims` replaces ray damage 6 and physical impact damage
+1 with the existing contact-stimulus resolver used by melee. Projectile sources
+select the stimulus/intensity; the receiving object's inherited receptrons select
+damage, amplification or immunity. Launch modifiers scale source intensity
+before response evaluation, matching `shkproj.cpp::ShockMakeProjectile`'s source
+scale property, so flat damage responses remain flat. The existing resolver's
+reaction ordering and supported-effect set are retained; this is not full
+act/react parity.
+
+Hitbox contacts read the parent creature's receptrons, then send the result
+through the original hitbox to preserve limb scaling and ragdoll impact data.
+Terminal physical impacts now latch once for damage, spang and sound, avoiding
+duplicate application when capsule/limb or adjacent faces queue contacts before
+destruction. Non-damage and immune contacts emit no Damage message.
+
+Matched single-shot captures and SDK regressions against OG-Pipe show:
+
+| Weapon | Previous HP | Authored HP |
+| --- | --- | --- |
+| Pistol | 12 -> 7 | 12 -> 9 |
+| Laser pistol | 12 -> 11 | 12 -> 10 |
+| Stasis | 12 -> 11 | 12 -> 12 |
+
+Standard Bullet authors Standard Impact at 4; the fixture hit crosses a limb
+with the existing 0.75 multiplier. Laser Shot authors Energy Stim at 2, received
+at x1 by the hybrid. Stasis Shot authors Stasis at 8; its receiver authors
+`Freeze` and `add_metaprop`, not damage. **Stasis freezing is still unimplemented:**
+this layer removes its erroneous HP loss. Implement those reactions, their
+expiry/reapplication behavior and current-build saves in the next increment.
+
+All three new firing tests fail against the parent and pass after the fix;
+1,622 gameplay library tests pass (2 ignored), as do warning-denied runtime
+checks. Thirteen additional projectile/owner/homing/proximity/ranged scenarios
+pass. `ranged-hitbox.e2e.test.ts` still fails to land its centred shot on both the
+parent and this layer; the new pistol scenario independently confirms a real hit
+retains its limb identity. Do not count that existing failed scenario as green.
+
+[Matched PNG](https://gist.githubusercontent.com/tommy-xr/0f0374285dddac7fab90c2b24983e8d3/raw/comparison.png)
+and [capture gallery](https://gist.github.com/tommy-xr/0f0374285dddac7fab90c2b24983e8d3)
+provide flat-runtime evidence. Quest particle validation remains with the user.

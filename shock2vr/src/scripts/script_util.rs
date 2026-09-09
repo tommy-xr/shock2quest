@@ -39,6 +39,36 @@ pub(crate) fn entity_class_template_id(world: &World, entity: EntityId) -> Optio
         })
 }
 
+/// Resolve a projectile's contact damage against the owning receiver, then
+/// send through the struck hitbox so limb scaling and ragdoll metadata survive.
+/// Non-damage stims and immune receivers do not emit a zero-damage AI alert.
+pub(crate) fn projectile_contact_damage(
+    world: &World,
+    projectile: EntityId,
+    struck: EntityId,
+    impact: Option<super::DamageImpact>,
+) -> Effect {
+    let Some(template) = entity_class_template_id(world, projectile) else {
+        return Effect::NoEffect;
+    };
+    let receiver = resolve_proxy_entity(world, struck);
+    let amount = crate::mission::stim_response::contact_stim_damage_scaled(
+        world,
+        template,
+        receiver,
+        crate::runtime_props::RuntimePropShotModifiers::of(world, projectile).stim,
+    );
+    if amount <= 0.0 {
+        return Effect::NoEffect;
+    }
+    Effect::Send {
+        msg: Message {
+            to: struck,
+            payload: MessagePayload::Damage { amount, impact },
+        },
+    }
+}
+
 /// Base gamesys templates for the three nanite pile sizes (Small/Medium/Big
 /// Nanite Pile). Deliberately narrower than their shared ultimate ancestor
 /// `Nanites` (-85): that ancestor also roots `FakeNanites` (-1271), a
@@ -1755,5 +1785,95 @@ mod tests {
             inherits: true,
         });
         assert!(!is_always_collected(&world, disc));
+    }
+}
+
+#[cfg(test)]
+mod projectile_contact_tests {
+    use super::*;
+    use crate::{
+        mission::stim_response::GlobalContactStims,
+        runtime_props::{RuntimePropProxyEntity, RuntimePropShotModifiers},
+        scripts::DamageImpact,
+    };
+    use cgmath::vec3;
+    use dark::properties::{ReceptronEffect, ReceptronOptions};
+
+    #[test]
+    fn contact_damage_resolves_parent_receptrons_then_forwards_through_the_limb() {
+        let mut world = World::new();
+        world.add_unique(GlobalContactStims(HashMap::from([(-362, vec![(-3, 2.0)])])));
+        let victim = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: -3,
+                to_entity_id: None,
+                link: Link::Receptron(ReceptronOptions {
+                    order: 1,
+                    effect: ReceptronEffect::Damage {
+                        multiplier: 3.0,
+                        use_intensity: true,
+                    },
+                }),
+            }],
+        });
+        let limb = world.add_entity(RuntimePropProxyEntity(victim));
+        let projectile = world.add_entity((
+            PropTemplateId { template_id: -362 },
+            RuntimePropShotModifiers {
+                stim: 1.5,
+                ..Default::default()
+            },
+        ));
+        let impact = DamageImpact {
+            direction: vec3(1.0, 0.0, 0.0),
+            point: vec3(2.0, 3.0, 4.0),
+            bone: None,
+        };
+        let Effect::Send { msg } =
+            projectile_contact_damage(&world, projectile, limb, Some(impact))
+        else {
+            panic!("authored contact damage must reach the struck limb");
+        };
+        assert_eq!(msg.to, limb);
+        let MessagePayload::Damage {
+            amount,
+            impact: Some(result),
+        } = msg.payload
+        else {
+            panic!("missing impact")
+        };
+        assert_eq!(amount, 9.0); // 2 * 1.5 * 3; the hitbox applies limb scaling later.
+        assert_eq!(result.bone, None);
+        assert_eq!(result.point, impact.point);
+        assert_eq!(result.direction, impact.direction);
+    }
+
+    #[test]
+    fn non_damage_and_immune_contacts_do_not_send_damage_messages() {
+        let mut world = World::new();
+        world.add_unique(GlobalContactStims(HashMap::from([(
+            -1352,
+            vec![(-1486, 8.0)],
+        )])));
+        let projectile = world.add_entity(PropTemplateId { template_id: -1352 });
+        let immune = world.add_entity(());
+        assert!(matches!(
+            projectile_contact_damage(&world, projectile, immune, None),
+            Effect::NoEffect
+        ));
+        let victim = world.add_entity(Links {
+            to_links: vec![ToLink {
+                to_template_id: -1486,
+                to_entity_id: None,
+                link: Link::Receptron(ReceptronOptions {
+                    order: 82,
+                    effect: ReceptronEffect::Unhandled("Freeze".to_owned()),
+                }),
+            }],
+        });
+        assert!(matches!(
+            projectile_contact_damage(&world, projectile, victim, None),
+            Effect::NoEffect
+        ));
     }
 }

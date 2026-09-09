@@ -12,13 +12,9 @@ use crate::{
     mission::entity_creator::CreateEntityOptions,
     physics::{InternalCollisionGroups, PhysicsWorld, RayCastResult},
     runtime_props::{
-        RuntimePropPlayerFiredProjectile, RuntimePropProjectileRayOrigin, RuntimePropShotModifiers,
-        RuntimePropTransform,
+        RuntimePropPlayerFiredProjectile, RuntimePropProjectileRayOrigin, RuntimePropTransform,
     },
-    scripts::{
-        Message,
-        script_util::{choose_impact_spang, play_impact_sound},
-    },
+    scripts::script_util::{choose_impact_spang, play_impact_sound, projectile_contact_damage},
     time::Time,
     util::{get_position_from_transform, get_rotation_from_forward_vector},
 };
@@ -105,30 +101,14 @@ impl Script for InternalFastProjectileScript {
             };
 
             let mut effects = vec![
-                Effect::Send {
-                    msg: Message {
-                        to: hit_entity_id,
-                        // TODO: Properly calculate damage
-                        payload: MessagePayload::Damage {
-                            amount: 6.0 * RuntimePropShotModifiers::of(world, entity_id).stim,
-                            // The shot's travel direction + hit point seed the
-                            // victim's death-ragdoll reaction. Bone is filled
-                            // in by the hitbox script when a hitbox was struck.
-                            impact: {
-                                let travel = hit_point - start_point;
-                                if travel.magnitude2() > 1.0e-12 {
-                                    Some(crate::scripts::DamageImpact {
-                                        direction: travel.normalize(),
-                                        point: hit_point.to_vec(),
-                                        bone: None,
-                                    })
-                                } else {
-                                    None
-                                }
-                            },
-                        },
-                    },
-                },
+                projectile_contact_damage(world, entity_id, hit_entity_id, {
+                    let travel = hit_point - start_point;
+                    (travel.magnitude2() > 1.0e-12).then(|| crate::scripts::DamageImpact {
+                        direction: travel.normalize(),
+                        point: hit_point.to_vec(),
+                        bone: None,
+                    })
+                }),
                 Effect::DrawDebugLines {
                     lines: vec![(start_point, hit_point, color)],
                 },
