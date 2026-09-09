@@ -704,7 +704,8 @@ pub(super) fn create_muzzle_flash(
         .unwrap_or_default();
 
     let vhot_offset = vhots
-        .get(options.vhot as usize)
+        .iter()
+        .find(|vhot| vhot.id == options.vhot)
         .map(|v| v.point)
         .unwrap_or(point3(0.0, 0.0, 0.0));
 
@@ -789,7 +790,9 @@ pub(super) fn create_projectile(
         .get(entity_id)
         .map(|vhots| vhots.0.clone())
         .unwrap_or_default();
-    // The fire point is the model's first vhot, which the 25AE view models that
+    // Preserve the existing lowest-ID muzzle choice while removing the
+    // loader's implicit sort. Muzzle geometry/fallbacks are a separate layer.
+    // The fire point is the model's lowest-ID vhot, which the 25AE view models that
     // carry one author at the -X tip of the barrel (atek_h, ar15_h, sg_h,
     // lasehand, sfg_h, viro_h, amp_h).
     //
@@ -802,7 +805,8 @@ pub(super) fn create_projectile(
     // dying on the shooter, because a player-fired projectile's ray skips the
     // player's capsule (`player_fired_projectile` below).
     let muzzle = vhots
-        .first()
+        .iter()
+        .min_by_key(|vhot| vhot.id)
         .map(|v| v.point)
         .unwrap_or(point3(0.0, 0.0, 0.0));
 
@@ -846,6 +850,35 @@ pub(super) fn create_projectile(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gun_flash_resolves_a_sparse_authored_vhot_id() {
+        let mut world = World::new();
+        let point = point3(-1.5, 0.2, 0.3);
+        let weapon = world.add_entity((
+            dark::properties::PropModelName("test_weapon".to_owned()),
+            RuntimePropTransform(Matrix4::from_scale(1.0)),
+            RuntimePropVhots(vec![
+                dark::ss2_bin_obj_loader::Vhot { id: 8, point },
+                muzzle_vhot(point3(-0.1, 0.0, 0.0)),
+            ]),
+        ));
+        for (id, expected) in [
+            (8, point),
+            (0, point3(-0.1, 0.0, 0.0)),
+            (1, point3(0.0, 0.0, 0.0)),
+        ] {
+            let Effect::CreateEntity { position, .. } =
+                create_muzzle_flash(&world, weapon, -1, &GunFlashOptions { vhot: id, flags: 0 })
+            else {
+                panic!("a GunFlash link must create an effect");
+            };
+            assert_eq!(
+                position, expected,
+                "GunFlash names an ID, not a vector index"
+            );
+        }
+    }
+
     #[test]
     fn an_untrained_trigger_returns_only_the_authored_requirement() {
         let (mut world, physics, weapon, _) = flat_melee_fixture();
@@ -1011,10 +1044,7 @@ mod tests {
     }
 
     fn muzzle_vhot(point: cgmath::Point3<f32>) -> dark::ss2_bin_obj_loader::Vhot {
-        dark::ss2_bin_obj_loader::Vhot {
-            vhot_type: dark::ss2_bin_obj_loader::VhotType::Unknown,
-            point,
-        }
+        dark::ss2_bin_obj_loader::Vhot { id: 0, point }
     }
 
     /// A VR shot leaves the model's muzzle vhot travelling down the barrel
@@ -1028,7 +1058,16 @@ mod tests {
         let transform = Matrix4::from_translation(translation) * Matrix4::from(rotation);
         let vhot = point3(-0.77, -0.03, 0.06);
 
-        let (origin, forward) = vr_fire_geometry(transform, vec![muzzle_vhot(vhot)]);
+        let (origin, forward) = vr_fire_geometry(
+            transform,
+            vec![
+                dark::ss2_bin_obj_loader::Vhot {
+                    id: 8,
+                    point: point3(0.0, 0.0, 0.0),
+                },
+                muzzle_vhot(vhot),
+            ],
+        );
 
         let expected_origin = translation + rotation * vhot.to_vec();
         let expected_forward = rotation * vec3(-1.0, 0.0, 0.0);
