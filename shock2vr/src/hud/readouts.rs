@@ -15,7 +15,7 @@
 //! exactly as [`super::ammo_panel`]'s are for the ammo panel.
 
 use cgmath::{Vector2, vec2};
-use shipyard::World;
+use shipyard::{UniqueView, World};
 
 use super::ammo_panel::{self, AmmoReadout, ReadoutButton, ReadoutButtonSpec};
 use crate::ui::{HAlign, Rect, UiCanvas, VAlign};
@@ -55,6 +55,8 @@ pub(crate) const AMMO_FULL_RECT: Rect = Rect::new(
     ammo_panel::PANEL_W,
     ammo_panel::PANEL_H,
 );
+
+const LOG_BUTTON: Rect = Rect::new(383.0, 432.0, 38.0, 36.0);
 
 /// The system-menu affordance: the pause menu's only *discoverable* control in
 /// VR, since the Menu button's long press advertises nothing until it is held.
@@ -161,6 +163,8 @@ pub(crate) fn build_watch_canvas(readout: &BioReadout) -> UiCanvas {
 pub(crate) struct UseModeReadouts {
     pub bio: BioReadout,
     pub ammo: AmmoReadout,
+    /// Spendable nanites and cyber modules, in the order of the native wells.
+    pub resources: [i32; 2],
 }
 
 impl UseModeReadouts {
@@ -171,6 +175,13 @@ impl UseModeReadouts {
         Self {
             bio: BioReadout::from_world(world),
             ammo: AmmoReadout::from_world(world, true),
+            resources: [
+                crate::scripts::script_util::player_nanite_total(world),
+                world
+                    .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+                    .map(|quests| quests.player_stats().cyber_modules)
+                    .unwrap_or(0),
+            ],
         }
     }
 }
@@ -192,6 +203,20 @@ pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
     // Always: the way out of the game does not depend on what is wielded.
     let system = system_button();
     ammo_panel::draw_button(canvas, &system, system.rect);
+    // shkiface.cpp button 0 and shkinv.cpp fake equipment icon wells.
+    canvas.image(LOG_BUTTON, "iface/ifbtn00.pcx");
+    canvas.fitted_object_icon(Rect::new(385.0, 434.0, 34.0, 32.0), "disc.pcx");
+    for (index, texture) in ["nan_ic.pcx", "upgrade.pcx"].into_iter().enumerate() {
+        let rect = Rect::new(185.0 + index as f32 * 39.0, 435.0, 32.0, 32.0);
+        canvas.fitted_object_icon(rect, texture);
+        canvas.text_native_fit(
+            Rect::new(rect.x, 434.0, 36.0, 12.0),
+            &readouts.resources[index].to_string(),
+            crate::ui::MFD_FONT,
+            HAlign::Left,
+            VAlign::Top,
+        );
+    }
 }
 
 /// The readout's clickable controls on the 640x480 canvas.
@@ -203,17 +228,19 @@ pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
 pub(crate) fn buttons(readouts: &UseModeReadouts) -> Vec<ReadoutButtonSpec> {
     // Drawn unconditionally above, so it is clickable unconditionally.
     let system = system_button();
-    if readouts.ammo.is_empty() {
-        // The empty frame has no weapon controls.
-        return vec![system];
-    }
+    let logs = ReadoutButtonSpec {
+        button: ReadoutButton::Logs,
+        rect: LOG_BUTTON,
+        texture: Some("iface/ifbtn00.pcx"),
+        text: None,
+    };
     ammo_panel::buttons(&readouts.ammo)
         .into_iter()
         .map(|spec| ReadoutButtonSpec {
             rect: ammo_panel::at(AMMO_ORIGIN, spec.rect),
             ..spec
         })
-        .chain([system])
+        .chain([system, logs])
         .collect()
 }
 
@@ -223,6 +250,7 @@ mod tests {
 
     fn readouts(ammo: Option<i32>, cycle: bool) -> UseModeReadouts {
         UseModeReadouts {
+            resources: [0; 2],
             bio: BioReadout {
                 health_fraction: 1.0,
                 psi_fraction: 0.75,
@@ -244,7 +272,7 @@ mod tests {
         // Both backdrops + 2 bars + 2 numbers, with no weapon wielded.
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
         emit_use_mode(&mut canvas, &readouts(None, false));
-        assert_eq!(canvas.element_count(), 6 + SYSTEM_ELEMENTS);
+        assert_eq!(canvas.element_count(), 12 + SYSTEM_ELEMENTS);
     }
 
     #[test]
@@ -252,7 +280,7 @@ mod tests {
         // ...plus the AMMOFULL backdrop + the round count.
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
         emit_use_mode(&mut canvas, &readouts(Some(12), false));
-        assert_eq!(canvas.element_count(), 7 + SYSTEM_ELEMENTS);
+        assert_eq!(canvas.element_count(), 13 + SYSTEM_ELEMENTS);
     }
 
     /// The interface's way to the pause menu is on the canvas whatever is
@@ -380,7 +408,9 @@ mod tests {
         let gauge = |r| {
             buttons(&r)
                 .into_iter()
-                .filter(|spec| spec.button != ReadoutButton::SystemMenu)
+                .filter(|spec| {
+                    !matches!(spec.button, ReadoutButton::SystemMenu | ReadoutButton::Logs)
+                })
                 .count()
         };
         assert_eq!(gauge(readouts(None, true)), 0);

@@ -6180,6 +6180,35 @@ impl MissionCore {
                 use crate::psi::PsiSelectionAxis;
                 let step = |axis, forward| vec![Effect::StepPsiSelection { axis, forward }];
                 match button {
+                    ReadoutButton::Logs => {
+                        if self.flat_ui.utilities.is_empty_logs() {
+                            self.flat_ui.utilities = Default::default();
+                            return Vec::new();
+                        }
+                        let has_logs = self
+                            .world
+                            .borrow::<UniqueView<QuestInfo>>()
+                            .is_ok_and(|quests| quests.logs_for_reader().next().is_some());
+                        if !has_logs {
+                            self.flat_ui.close();
+                            self.flat_ui.utilities.show_empty_logs();
+                            return Vec::new();
+                        }
+                        let panel = self
+                            .world
+                            .borrow::<UniqueView<MediaPanelEntity>>()
+                            .ok()
+                            .map(|panel| panel.0);
+                        if panel.is_some() && self.flat_ui.active_panel() == panel {
+                            // This button lives inside the interface: dismiss only
+                            // its reader, even if a controller shortcut opened it.
+                            self.flat_ui.close();
+                            Vec::new()
+                        } else {
+                            self.flat_ui.utilities = Default::default();
+                            vec![Effect::ReadLastUnreadLog]
+                        }
+                    }
                     ReadoutButton::CycleAmmo => vec![Effect::CycleAmmo],
                     // The exception: SETTING opens the weapon settings MFD
                     // (the original's own behavior for this button), where the
@@ -7410,7 +7439,7 @@ impl MissionCore {
                     }
                 }
                 Effect::OpenPanel { entity } => {
-                    if self.flat_ui.utilities.is_research() {
+                    if self.flat_ui.utilities.has_left_panel() {
                         self.flat_ui.utilities = Default::default();
                     }
                     // Bind the presentation's single object-panel slot to the
@@ -7593,7 +7622,9 @@ impl MissionCore {
                         })
                         .unwrap_or_default();
                     if candidates.is_empty() {
-                        game_log!(INFO, "no collected audio log is available");
+                        effects.push_back(Effect::ShowMessage {
+                            text: "No collected audio logs.".into(),
+                        });
                         continue;
                     }
                     let resolved = candidates.into_iter().find(|(deck, log)| {
