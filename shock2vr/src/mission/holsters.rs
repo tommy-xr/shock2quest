@@ -334,6 +334,7 @@ mod tests {
 pub(super) struct Holsters {
     pub body_pose: Option<super::body_inventory::BodyPose>,
     pub freeze_heading: bool,
+    pub pouch_priority: [bool; 2],
     yaw: Option<f32>,
     pub centers: Option<[Vector3<f32>; 2]>,
     pub near: [Option<usize>; 2],
@@ -347,6 +348,7 @@ impl Default for Holsters {
         Self {
             body_pose: None,
             freeze_heading: false,
+            pouch_priority: [false; 2],
             yaw: None,
             centers: None,
             near: [None; 2],
@@ -441,7 +443,7 @@ impl Holsters {
         let base = head.position
             - Vector3::unit_y()
                 * (crate::dev_params::get(crate::dev_params::VR_HOLSTER_DROP) / SCALE)
-            + forward * (0.04 / SCALE);
+            + forward * (crate::dev_params::get(crate::dev_params::VR_HOLSTER_FORWARD) / SCALE);
         let side = crate::dev_params::get(crate::dev_params::VR_HOLSTER_SIDE) / SCALE;
         let centers = [base + right * side, base - right * side];
         self.centers = Some(centers);
@@ -465,7 +467,14 @@ impl Holsters {
                 && hand.squeeze_value.is_finite()
                 && input.pose_tracking.is_none_or(|p| p.hands[i]);
             let pressed = hand.squeeze_value >= 0.5;
-            self.near[i] = (tracked && (held[i].is_none() || weapons[i])).then(|| (0..2).find(|s|
+            // Calibration can put a thigh target over the ammo pouch. An empty
+            // hand with an opposite gun uses the pouch there, never both slots.
+            let at_pouch = self.pouch_priority[i]
+                && held[i].is_none()
+                && (hand.position - super::ammo_pouch::center_for(self.body_pose.unwrap()))
+                    .magnitude2()
+                    <= super::ammo_pouch::RADIUS.powi(2);
+            self.near[i] = (tracked && !at_pouch && (held[i].is_none() || weapons[i])).then(|| (0..2).find(|s|
                 // A stored item remains retrievable if its perk is removed.
                 (*s < count || slots[*s].is_some()) && (hand.position - centers[*s]).magnitude2() <= RADIUS * RADIUS
             )).flatten();

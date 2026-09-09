@@ -6,7 +6,14 @@ use shipyard::EntityId;
 
 pub(super) const RADIUS: f32 = 0.10 / crate::METERS_PER_WORLD_UNIT;
 const BELOW: f32 = 0.55;
-const FORWARD: f32 = 0.35;
+const POUCH_OFFSET: f32 = 0.05;
+
+pub(super) fn center_for(body: BodyPose) -> Vector3<f32> {
+    body.front(
+        BELOW,
+        crate::dev_params::get(crate::dev_params::VR_BELT_DISTANCE) + POUCH_OFFSET,
+    )
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Action {
@@ -56,7 +63,7 @@ impl AmmoPouch {
         enabled: bool,
     ) -> [Option<Action>; 2] {
         self.enabled = enabled && body.is_some();
-        self.center = body.map(|body| body.front(BELOW, FORWARD));
+        self.center = body.map(center_for);
         self.offers = offers;
         self.near = [false; 2];
         self.blocks_grab = [false; 2];
@@ -187,7 +194,7 @@ mod tests {
             head: input.head.position,
             yaw: 0.0,
         };
-        input.left_hand.position = body.front(BELOW, FORWARD);
+        input.left_hand.position = center_for(body);
         let mut pouch = AmmoPouch::default();
         let update = |pouch: &mut AmmoPouch, input: &InputContext, available: bool, enabled| {
             pouch.update(
@@ -232,7 +239,7 @@ mod tests {
             head: input.head.position,
             yaw: 0.0,
         };
-        input.left_hand.position = body.front(BELOW, FORWARD);
+        input.left_hand.position = center_for(body);
         let mut pouch = AmmoPouch::default();
         for squeeze in [1.0, 0.5] {
             input.left_hand.squeeze_value = squeeze;
@@ -322,18 +329,16 @@ mod tests {
     }
 
     #[test]
-    fn pouch_is_separate_from_thighs_across_all_calibration_extremes() {
+    fn default_pouch_is_separate_from_thighs_and_shoulders() {
         let body = BodyPose {
             head: cgmath::vec3(0.0, 2.0, 0.0),
             yaw: 0.0,
         };
-        let center = body.front(BELOW, FORWARD);
-        for drop in [0.55, 1.10] {
-            for side in [-0.40, -0.16, 0.16, 0.40] {
-                let thigh = body.front(drop, 0.04)
-                    + cgmath::vec3(side / crate::METERS_PER_WORLD_UNIT, 0.0, 0.0);
-                assert!((thigh - center).magnitude() > RADIUS + super::super::holsters::RADIUS);
-            }
+        let center = center_for(body);
+        for side in [-0.23, 0.23] {
+            let thigh = body.front(0.78, 0.04)
+                + cgmath::vec3(side / crate::METERS_PER_WORLD_UNIT, 0.0, 0.0);
+            assert!((thigh - center).magnitude() > RADIUS + super::super::holsters::RADIUS);
         }
         assert!(
             (BELOW - 0.20) / crate::METERS_PER_WORLD_UNIT
