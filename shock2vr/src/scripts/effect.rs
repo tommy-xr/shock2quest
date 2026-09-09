@@ -608,6 +608,10 @@ pub enum Effect {
         parent_entity_id: EntityId,
         dropped_entity_id: EntityId,
     },
+    WithdrawPouchAmmo {
+        weapon: EntityId,
+        hand: Handedness,
+    },
     GrabEntity {
         entity_id: EntityId,
         hand: Handedness,

@@ -662,6 +662,13 @@ export interface PlayerSnapshot {
     light: "Off" | "Green" | "Amber" | "Red";
   }> & {
     /** Thigh slots are right then left; hand arrays remain left/right. */
+    ammo_pouch?: {
+      center: Vec3 | null;
+      radius: number;
+      near: [boolean, boolean];
+      refused: [boolean, boolean];
+      offers: [{reserve: number; template: number; rounds: number; stock: number} | null, {reserve: number; template: number; rounds: number; stock: number} | null];
+    };
     holsters?: {
       centers: [Vec3, Vec3] | null;
       radius: number;
