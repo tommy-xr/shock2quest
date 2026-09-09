@@ -10969,34 +10969,37 @@ impl MissionCore {
                         scene.extend(objects);
                     }
                 }
-                // A preview of the actual reserve stack makes the selected
-                // ammo type visible without creating another inventory entity.
-                if let (Some(center), Some(offer)) =
-                    (pouch_center, self.ammo_pouch.offers.iter().flatten().next())
-                {
-                    if let Some(model) = self.id_to_model.get(&offer.reserve) {
-                        if let Some(bounds) = model.bounding_box() {
-                            let extent = bounds.max - bounds.min;
-                            let longest = extent.x.max(extent.y).max(extent.z);
-                            if longest > 0.0001 {
-                                let scale = 0.09 / crate::METERS_PER_WORLD_UNIT / longest;
-                                let midpoint = (bounds.min.to_vec() + bounds.max.to_vec()) * 0.5;
-                                let root = Matrix4::from_translation(
-                                    center + vec3(0.0, 0.04 / crate::METERS_PER_WORLD_UNIT, 0.0),
-                                ) * root_rotation
-                                    * Matrix4::from_scale(scale)
-                                    * Matrix4::from_translation(-midpoint);
-                                let mut objects = model.to_scene_objects().clone();
-                                for object in &mut objects {
-                                    object.set_transform(root);
-                                }
-                                crate::util::tag_render_source(
-                                    &mut objects,
-                                    crate::util::render_source::PLAYER_HANDS,
-                                );
-                                scene.extend(objects);
-                            }
-                        }
+                if let Some(center) = pouch_center {
+                    let root = Matrix4::from_translation(center)
+                        * root_rotation
+                        * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT);
+                    let mut objects = super::body_gear_feedback::pouch(
+                        &self.body_pouch_readout(),
+                        root,
+                        asset_cache,
+                    );
+                    crate::util::tag_render_source(
+                        &mut objects,
+                        crate::util::render_source::PLAYER_HANDS,
+                    );
+                    scene.extend(objects);
+                }
+                if let Some(centers) = self.holsters.world_centers(player.pos, player.rotation) {
+                    for (slot, item) in super::holsters::occupants(&self.world)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let readout =
+                            super::body_gear_feedback::HolsterReadout::resolve(&self.world, item);
+                        let root = Matrix4::from_translation(centers[slot])
+                            * root_rotation
+                            * Matrix4::from_scale(1.0 / crate::METERS_PER_WORLD_UNIT);
+                        let mut objects = super::body_gear_feedback::holster(&readout, root);
+                        crate::util::tag_render_source(
+                            &mut objects,
+                            crate::util::render_source::PLAYER_HANDS,
+                        );
+                        scene.extend(objects);
                     }
                 }
             }
@@ -11418,6 +11421,19 @@ impl MissionCore {
     pub fn restore_saved_crouch(&mut self) {
         self.physics
             .set_player_crouch(true, &mut self.player_handle);
+    }
+
+    fn body_pouch_readout(&self) -> super::body_gear_feedback::PouchReadout {
+        let (left, right) = self.interaction.held_entities();
+        super::body_gear_feedback::PouchReadout::resolve(
+            &self.world,
+            [left, right],
+            [crate::Handedness::Left, crate::Handedness::Right]
+                .map(|hand| self.interaction.hand_available_for_body_slot(hand)),
+            self.ammo_pouch.near,
+            self.ammo_pouch.refused.iter().any(|refused| *refused),
+            self.ammo_pouch.enabled,
+        )
     }
 
     fn grab_entity_into_hand(
@@ -13115,6 +13131,12 @@ impl crate::game_scene::DebuggableScene for MissionCore {
 
     fn hand_feedback(&self) -> serde_json::Value {
         let mut feedback = self.interaction.hand_feedback_diagnostics();
+        if let Some(object) = feedback.as_object_mut() {
+            object.insert("body_gear".to_owned(), serde_json::json!({
+                "pouch": self.body_pouch_readout(),
+                "holsters": super::holsters::occupants(&self.world).map(|item| super::body_gear_feedback::HolsterReadout::resolve(&self.world, item)),
+            }));
+        }
         if let (Some(object), Ok(player)) = (
             feedback.as_object_mut(),
             self.world.borrow::<UniqueView<PlayerInfo>>(),
