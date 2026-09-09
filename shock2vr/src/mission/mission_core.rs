@@ -902,6 +902,14 @@ fn move_live_entity_into_container_at_slot(
         }
     }
     if was_able_to_drop {
+        // A shoulder assignment can follow a held weapon back into the pack,
+        // but must not survive transfer into a world container in another level.
+        let in_backpack = world
+            .borrow::<UniqueView<PlayerInfo>>()
+            .is_ok_and(|player| player.inventory_entity_id == container_entity_id);
+        if !in_backpack {
+            world.remove::<crate::runtime_props::RuntimePropShoulderWeapon>(dropped_entity_id);
+        }
         world.remove::<crate::runtime_props::RuntimePropHolstered>(dropped_entity_id);
         world.add_component(dropped_entity_id, PropHasRefs(false));
     }
@@ -1036,6 +1044,7 @@ fn restore_live_entity_world_refs(world: &mut World, entity_id: EntityId) -> boo
         }
     }
     world.remove::<crate::runtime_props::RuntimePropHolstered>(entity_id);
+    world.remove::<crate::runtime_props::RuntimePropShoulderWeapon>(entity_id);
     world.add_component(entity_id, PropHasRefs(true));
     true
 }
@@ -1054,7 +1063,10 @@ mod released_item_world_refs_tests {
     #[test]
     fn hand_release_restores_refs_and_clears_residual_containment() {
         let mut world = World::new();
-        let item = world.add_entity(PropHasRefs(false));
+        let item = world.add_entity((
+            PropHasRefs(false),
+            crate::runtime_props::RuntimePropShoulderWeapon(1),
+        ));
         let container = world.add_entity(Links {
             to_links: vec![ToLink {
                 link: Link::Contains(4),
@@ -1064,6 +1076,13 @@ mod released_item_world_refs_tests {
         });
 
         assert!(restore_live_entity_world_refs(&mut world, item));
+        assert!(
+            world
+                .borrow::<View<crate::runtime_props::RuntimePropShoulderWeapon>>()
+                .unwrap()
+                .get(item)
+                .is_err()
+        );
         assert!(
             world
                 .borrow::<View<PropHasRefs>>()
@@ -1085,10 +1104,20 @@ mod released_item_world_refs_tests {
     #[test]
     fn ordinary_container_transfer_still_removes_world_refs() {
         let mut world = World::new();
-        let item = world.add_entity(PropHasRefs(true));
+        let item = world.add_entity((
+            PropHasRefs(true),
+            crate::runtime_props::RuntimePropShoulderWeapon(1),
+        ));
         let container = world.add_entity(Links::empty());
 
         assert!(move_live_entity_into_container(&mut world, container, item));
+        assert!(
+            world
+                .borrow::<View<crate::runtime_props::RuntimePropShoulderWeapon>>()
+                .unwrap()
+                .get(item)
+                .is_err()
+        );
         assert!(
             !world
                 .borrow::<View<PropHasRefs>>()

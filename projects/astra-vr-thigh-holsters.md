@@ -64,7 +64,8 @@ Weapons still occupy normal backpack cells. A full backpack refuses the deposit
 and preserves the previous shortcut. A newer weapon replaces that shoulder's
 shortcut but leaves the previous weapon in the normal inventory. Ordinary items
 do not replace weapon shortcuts. Taking a remembered weapon out makes its
-shortcut unavailable until it returns to the backpack; depositing it at the
+shortcut unavailable until it returns to the backpack; dropping it into the
+world or another container clears the assignment. Depositing it at the
 other shoulder reassigns it there. Empty shoulder draws
 play a refusal cue, and a consumed squeeze cannot grab a stray world object when
 the hand moves away. Support hands and untracked/disabled input cannot draw.
