@@ -636,3 +636,34 @@ Audio validation: 1,638 gameplay tests pass (2 diagnostic ignores), all 23
 missions load, and 27 SDK cases pass. Warning-denied desktop/debug checks pass.
 The near-boundary impact regression verifies that pre-stop speed keeps a fast
 tap audible even when the body can travel less than a millimetre.
+
+
+## Authored VR spring recoil baseline
+
+Physical-held VR guns now apply one kick per successful shell, including each
+round in a burst. The current fire setting selects `GunKick`; original
+`CalcKickAngle` supplies direction flags, randomized angular magnitude, Agility,
+Still Hand, and the aiming-implant multiplier. Back displacement and pitch/back
+ceilings retain the authored values. Camera/body jolt is excluded from VR.
+
+The response is an intentional VR adaptation of Dark's instantaneous kick and
+linear return: use Citadel's mass 1, stiffness 40, damping 14 spring, integrated
+analytically. Normalize an isolated impulse's peak to the authored magnitude.
+Map authored return/limit onto the spring time scale, clamped to 0.25–4 so zero
+return settings still recover. Heading shares this angular spring time scale;
+Dark instead returns heading with `GunAnimParams.m_swingReturn`. This is VR
+response tuning, not exact return-motion parity. Apply the offset before the held-body
+translation sweep; rendered gun, gloves and muzzle follow the resulting body.
+The original source's disabled pre-shot fraction is not revived. The first
+projectile leaves the current muzzle; subsequent shots inherit accumulated kick.
+
+The `P$ImplantDe` property honors aiming type 6 only in equipped Contains slots
+1003/1004. The shipped gamesys has no type-6 implant, and the port does not yet
+provide equipment-slot UI; carrying an implant in an ordinary cell grants no
+bonus. Still Hand uses its shipped template -1107. Recoil spring state is
+transient: dropping/recreating a held body or loading starts it at rest.
+
+This baseline does not yet distinguish support or Strength. Those are the next
+VR augmentation. Flat firing and nonexperimental VR do not draw recoil RNG or
+receive impulses. Translation-only wall clearance remains the foundation's
+limit; Quest feel still needs device validation.

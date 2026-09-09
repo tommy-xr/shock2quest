@@ -9166,6 +9166,9 @@ impl MissionCore {
                         );
                     }
                 }
+                Effect::KickHeldGun { entity_id, impulse } => {
+                    self.physics.kick_held_gun(entity_id, impulse);
+                }
                 Effect::PlayEnvironmentalSoundWithFallback {
                     query,
                     fallback,

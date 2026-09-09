@@ -639,6 +639,11 @@ fn fire_one_shot(world: &World, entity_id: EntityId, setting: &GunSettingDesc) -
             });
         }
     }
+    if is_gunshot {
+        if let Some(impulse) = crate::weapon_recoil::shot_impulse(world, entity_id) {
+            effects.push(Effect::KickHeldGun { entity_id, impulse });
+        }
+    }
     ShotOutcome::Fired(Effect::Multiple(effects))
 }
 

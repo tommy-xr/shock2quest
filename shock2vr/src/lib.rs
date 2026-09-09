@@ -52,6 +52,7 @@ mod util;
 mod virtual_hand;
 mod vr_config;
 mod weapon_muzzle;
+pub mod weapon_recoil;
 mod weapon_requirements;
 pub use hand_glove::{GloveRenderer, HandLight};
 /// Re-exported (the module itself stays private) so the `melee_grip` example

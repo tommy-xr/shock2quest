@@ -721,6 +721,10 @@ pub enum Effect {
         concept: String,
         tags: Vec<(String, String)>,
     },
+    KickHeldGun {
+        entity_id: EntityId,
+        impulse: crate::weapon_recoil::RecoilImpulse,
+    },
     PlayEnvironmentalSound {
         audio_handle: AudioHandle,
         query: EnvSoundQuery,
