@@ -5811,6 +5811,11 @@ impl MissionCore {
         root_transform: Matrix4<f32>,
         additional_options: CreateEntityOptions,
     ) -> EntityCreationInfo {
+        let mut additional_options = additional_options;
+        additional_options.projectile_launch_origin = additional_options
+            .projectile_weapon
+            .and_then(|weapon| self.interaction.held_launch_origin(weapon))
+            .or(additional_options.projectile_launch_origin);
         self.create_entity_with_position_and_rider_depth(
             asset_cache,
             template_id,
@@ -5841,6 +5846,7 @@ impl MissionCore {
         exclude_template: Option<i32>,
     ) -> EntityCreationInfo {
         let transient_fx = additional_options.transient_fx;
+        let has_spawn_clearance = additional_options.projectile_launch_origin.is_some();
         let created_entity = {
             entity_creator::create_entity_with_position(
                 template_id,
@@ -5869,6 +5875,17 @@ impl MissionCore {
             created_entity,
             root_transform,
         );
+
+        // Spawn clearance may move the projectile before physics is built.
+        // Apply that same translation to trails instantiated below.
+        let root_transform = if has_spawn_clearance {
+            let positions = self.world.borrow::<View<PropPosition>>().unwrap();
+            let actual = positions.get(info.entity_id).unwrap().position;
+            Matrix4::from_translation(actual - root_transform.transform_point(position).to_vec())
+                * root_transform
+        } else {
+            root_transform
+        };
 
         // Instantiate the particle groups authored to ride this archetype
         // (`ParticleAttachement` links from particle archetypes to this
@@ -7967,6 +7984,8 @@ impl MissionCore {
                             );
                         }
                         let mut vhots = new_model.vhots();
+                        let mut muzzle =
+                            crate::weapon_muzzle::load_fallback(asset_cache, &model_name);
                         // Which hand a VR wield renders for. The `_h` models
                         // are all authored right-handed, so a left-hand wield
                         // draws the mirror image. A model applied while
@@ -7989,6 +8008,10 @@ impl MissionCore {
                             new_model.apply_local_transform(mirror);
                             for vhot in vhots.iter_mut() {
                                 vhot.point = mirror.transform_point(vhot.point);
+                            }
+                            if let Some(muzzle) = muzzle.as_mut() {
+                                muzzle.point = mirror.transform_point(muzzle.point);
+                                muzzle.axis = mirror.transform_vector(muzzle.axis);
                             }
                         }
                         // An articulated VR-wielded first-person model (hand +
@@ -8144,6 +8167,11 @@ impl MissionCore {
                             .add_component(entity_id, PropModelName(model_name));
 
                         self.world.add_component(entity_id, RuntimePropVhots(vhots));
+                        self.world
+                            .remove::<crate::weapon_muzzle::MuzzleFallback>(entity_id);
+                        if let Some(muzzle) = muzzle {
+                            self.world.add_component(entity_id, muzzle);
+                        }
                     }
                 }
                 Effect::ClearModel { entity_id } => {
@@ -8153,29 +8181,10 @@ impl MissionCore {
                     self.world.remove::<(
                         PropModelName,
                         RuntimePropVhots,
+                        crate::weapon_muzzle::MuzzleFallback,
                         crate::runtime_props::RuntimePropGloveWeapon,
                     )>(entity_id);
                     self.world.remove::<RuntimePropVrGripOffset>(entity_id);
-                }
-                Effect::SetVhotsFromModel {
-                    entity_id,
-                    model_name,
-                } => {
-                    if let Some(model) = self.id_to_model.get(&entity_id) {
-                        let xform = model.get_transform();
-                        // Same hazard as ChangeModel above: a missing donor
-                        // model must not panic the frame.
-                        let Some(donor_model) =
-                            asset_cache.get_opt(&MODELS_IMPORTER, &format!("{model_name}.BIN"))
-                        else {
-                            tracing::error!(
-                                "SetVhotsFromModel: model '{model_name}.BIN' could not be loaded for entity {entity_id:?} - keeping current vhots"
-                            );
-                            continue;
-                        };
-                        let vhots = Model::transform(donor_model.as_ref(), xform).vhots();
-                        self.world.add_component(entity_id, RuntimePropVhots(vhots));
-                    }
                 }
                 Effect::PlayEmail { deck, email, force } => {
                     let email_file = get_email_sound_file(deck, email);

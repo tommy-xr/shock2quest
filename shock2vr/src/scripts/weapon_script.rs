@@ -40,23 +40,6 @@ const MELEE_DAMAGE: f32 = 6.0;
 /// guns for now; per-weapon loudness is a follow-up.
 const GUNSHOT_NOISE_RADIUS: f32 = 50.0 / SCALE_FACTOR;
 
-/// Rotation taking the projectile's +Z travel axis onto the barrel of a 25AE
-/// first-person gun model, which is authored along the model's **-X** - that is
-/// where each of those meshes puts its muzzle vhot, and pointing that axis out
-/// of the hand is the whole job of every gun's -90 degree yaw in the
-/// `vr_config` grip table (pinned by its
-/// `gun_grips_aim_the_barrel_out_of_the_hand` test). So this one rotation aims
-/// every VR weapon - ballistic, energy and psi alike - down its own rendered
-/// barrel, with no per-weapon correction.
-///
-/// Caveat, pre-existing and unchanged by this: several *classic-install* world
-/// models (`atek_w`, `ar15_w`, `sg_w`, `gren_w`, `viro_w`, `al_w`) are authored
-/// barrel-along-Z instead, so VR mis-aims them by 90 degrees when the 25AE view
-/// models are unavailable. Tracked in #1034.
-fn barrel_axis_from_forward() -> Quaternion<f32> {
-    Quaternion::from_angle_y(Deg(-90.0))
-}
-
 /// The weapon entity's current world position (from its live transform).
 fn weapon_world_position(world: &World, entity_id: EntityId) -> Option<cgmath::Vector3<f32>> {
     let v_transform = world.borrow::<View<RuntimePropTransform>>().ok()?;
@@ -707,7 +690,7 @@ pub(super) fn create_muzzle_flash(
         .iter()
         .find(|vhot| vhot.id == options.vhot)
         .map(|v| v.point)
-        .unwrap_or(point3(0.0, 0.0, 0.0));
+        .unwrap_or_else(|| crate::weapon_muzzle::resolve(world, entity_id).point);
 
     let transform = v_transform.get(entity_id).unwrap();
 
@@ -771,6 +754,7 @@ pub(super) fn create_projectile(
                 options: CreateEntityOptions {
                     force_visible: true,
                     projectile_raycast_origin: Some(aim.origin),
+                    projectile_launch_origin: Some(aim.origin),
                     shot_modifiers: Some(modifiers),
                     player_fired_projectile: true,
                     ..CreateEntityOptions::default()
@@ -784,40 +768,13 @@ pub(super) fn create_projectile(
     // travelling down the model's barrel. Both are read from the weapon's own
     // live transform, so no per-weapon aim correction is involved.
     let v_transform = world.borrow::<View<RuntimePropTransform>>().unwrap();
-    let v_vhots = world.borrow::<View<RuntimePropVhots>>().unwrap();
-
-    let vhots = v_vhots
-        .get(entity_id)
-        .map(|vhots| vhots.0.clone())
-        .unwrap_or_default();
-    // Preserve the existing lowest-ID muzzle choice while removing the
-    // loader's implicit sort. Muzzle geometry/fallbacks are a separate layer.
-    // The fire point is the model's lowest-ID vhot, which the 25AE view models that
-    // carry one author at the -X tip of the barrel (atek_h, ar15_h, sg_h,
-    // lasehand, sfg_h, viro_h, amp_h).
-    //
-    // Documented fallback for a model with no vhot at all: the model origin,
-    // i.e. the grip. The shot still leaves along the barrel, just from the
-    // hand. This is not rare - `empgun_h`, `gren_h`, `fsn_h` and `al_h` ship
-    // with zero vhots, as do most classic-install world models. Where the shot
-    // *starts* is still only as good as the model, and #1034 tracks giving the
-    // vhotless ones a better fire point; what is no longer at stake is the shot
-    // dying on the shooter, because a player-fired projectile's ray skips the
-    // player's capsule (`player_fired_projectile` below).
-    let muzzle = vhots
-        .iter()
-        .min_by_key(|vhot| vhot.id)
-        .map(|v| v.point)
-        .unwrap_or(point3(0.0, 0.0, 0.0));
+    let muzzle = crate::weapon_muzzle::resolve(world, entity_id);
 
     let transform = v_transform.get(entity_id).unwrap();
 
     // Item size changes muzzle placement, never projectile size or speed.
-    let origin = transform.0.transform_point(muzzle);
-    let forward = transform
-        .0
-        .transform_vector(barrel_axis_from_forward() * cgmath::Vector3::unit_z())
-        .normalize();
+    let origin = transform.0.transform_point(muzzle.point);
+    let forward = transform.0.transform_vector(muzzle.axis).normalize();
     let up = transform
         .0
         .transform_vector(cgmath::vec3(0.0, 1.0, 0.0))
@@ -843,6 +800,8 @@ pub(super) fn create_projectile(
             force_visible: true,
             shot_modifiers: Some(modifiers),
             player_fired_projectile: true,
+            projectile_launch_origin: Some(transform.0.transform_point(point3(0.0, 0.0, 0.0))),
+            projectile_weapon: Some(entity_id),
             ..CreateEntityOptions::default()
         },
     }
@@ -865,7 +824,7 @@ mod tests {
         for (id, expected) in [
             (8, point),
             (0, point3(-0.1, 0.0, 0.0)),
-            (1, point3(0.0, 0.0, 0.0)),
+            (1, point3(-0.1, 0.0, 0.0)),
         ] {
             let Effect::CreateEntity { position, .. } =
                 create_muzzle_flash(&world, weapon, -1, &GunFlashOptions { vhot: id, flags: 0 })

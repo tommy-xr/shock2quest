@@ -6317,6 +6317,50 @@ impl PhysicsWorld {
     /// Ownerless world geometry is always retained. This is intentionally the
     /// same all-membership query as [`Self::ray_cast2`]; callers use it only
     /// when a semantic relationship makes one entity transparent to the ray.
+    /// Sweep a projectile's enclosing sphere through its forward spawn offset.
+    pub(crate) fn projectile_spawn_distance(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        distance: f32,
+        radius: f32,
+        can_hit: &dyn Fn(EntityId) -> bool,
+    ) -> f32 {
+        let predicate = |_: ColliderHandle, collider: &Collider| {
+            EntityId::from_inner(collider.user_data as u64).is_none_or(can_hit)
+        };
+        let groups = InternalCollisionGroups::ALL_COLLIDABLE & !InternalCollisionGroups::PLAYER;
+        let filter = QueryFilter::default()
+            .exclude_sensors()
+            .predicate(&predicate)
+            .groups(InteractionGroups::new(
+                InternalCollisionGroups::ALL.bits.into(),
+                groups.bits.into(),
+                Default::default(),
+            ));
+        let queries = self.broad_phase.as_query_pipeline(
+            self.narrow_phase.query_dispatcher(),
+            &self.rigid_body_set,
+            &self.collider_set,
+            filter,
+        );
+        queries
+            .cast_shape(
+                &Isometry::translation(origin.x, origin.y, origin.z),
+                &vector![direction.x, direction.y, direction.z],
+                &Ball::new(radius),
+                rapier3d::parry::query::ShapeCastOptions {
+                    max_time_of_impact: distance,
+                    target_distance: 0.01,
+                    // A palm close to a wall may start the enclosing sphere
+                    // overlapping it; permit a shot moving back into clear space.
+                    stop_at_penetration: false,
+                    compute_impact_geometry_on_penetration: true,
+                },
+            )
+            .map_or(distance, |(_, hit)| hit.time_of_impact)
+    }
+
     pub fn ray_cast2_with_entity_filter(
         &self,
         start_point: Point3<f32>,

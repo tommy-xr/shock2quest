@@ -63,15 +63,8 @@ impl Script for InternalSwitchHeldModelScript {
                         }
                     }
 
-                    // The world model stays rendered, but its mesh has no
-                    // vhots - take the fire points (muzzle) from the hand
-                    // model so projectiles/flash don't spawn at the grip.
-                    if let Some(view_model) = get_view_model(world, entity_id) {
-                        effects.push(Effect::SetVhotsFromModel {
-                            entity_id,
-                            model_name: view_model,
-                        });
-                    }
+                    // Keep the world model's own attachment IDs and barrel
+                    // geometry. A hand-model donor can have different axes.
 
                     return Effect::Multiple(effects);
                 }
