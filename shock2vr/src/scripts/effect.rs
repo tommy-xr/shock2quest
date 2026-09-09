@@ -241,10 +241,13 @@ pub enum Effect {
         capacity: i32,
     },
 
-    /// Cycle the player's wielded weapon to its next ammo type (the next
+    /// Cycle the explicit held weapon (or the preferred gun when None) to its
+    /// next ammo type (the next
     /// `Projectile` link). No-op when no weapon is wielded or it has fewer than
     /// two projectile links, or while its magazine still has loaded rounds.
-    CycleAmmo,
+    CycleAmmo {
+        weapon: Option<EntityId>,
+    },
 
     /// Switch `entity_id`'s gun to fire setting `setting`, remapping its
     /// selected ammo type by `ProjectileOptions.order` so the same ammo stays
@@ -267,9 +270,11 @@ pub enum Effect {
         hand: Option<Handedness>,
     },
 
-    /// Open the weapon settings MFD for the wielded gun in the presentation's
-    /// panel slot. No-op when nothing is wielded.
-    OpenWeaponSettings,
+    /// Open settings for the explicit held weapon, or the preferred gun when
+    /// None. An explicit target that was put away never falls back.
+    OpenWeaponSettings {
+        weapon: Option<EntityId>,
+    },
 
     /// Eject `entity_id`'s magazine back to the backpack, as clips of the ammo
     /// type the rounds already are. No-op for an empty gun, or one whose
@@ -510,11 +515,13 @@ pub enum Effect {
         entity_id: EntityId,
     },
 
-    /// Reload the player's wielded weapon from compatible backpack reserve,
+    /// Reload the explicit held weapon (or preferred gun when None) from compatible backpack reserve,
     /// up to the magazine capacity of its selected fire setting. No-op when no
     /// weapon is wielded, it has no gun state / clip, or no matching reserve is
     /// carried.
-    ReloadWeapon,
+    ReloadWeapon {
+        weapon: Option<EntityId>,
+    },
 
     ApplyForce {
         entity_id: EntityId,

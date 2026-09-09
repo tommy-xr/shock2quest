@@ -88,6 +88,21 @@ const UNLOAD_ART_HOVER: &str = "iface/unload1.pcx";
 const ROW_LABELS: [&str; 2] = ["setting_0", "setting_1"];
 const UNLOAD_LABEL: &str = "unload";
 
+#[derive(shipyard::Unique, Clone, Copy, Default)]
+pub(crate) struct WeaponSettingsTarget(pub Option<EntityId>);
+
+impl WeaponSettingsTarget {
+    pub(crate) fn select(world: &World, weapon: EntityId) {
+        world.add_unique(Self::default());
+        world.borrow::<shipyard::UniqueViewMut<Self>>().unwrap().0 = Some(weapon);
+    }
+
+    fn resolve(world: &World) -> Option<EntityId> {
+        let target = world.borrow::<shipyard::UniqueView<Self>>().ok()?.0?;
+        crate::wielded_weapon::resolve_weapon_target(world, Some(target))
+    }
+}
+
 pub struct WeaponSettingsGui;
 
 #[derive(Clone, Debug, Default)]
@@ -164,9 +179,9 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
                 .with_size(vec2(PANEL_W, PANEL_H)),
         ];
 
-        // The panel always shows the wielded gun; the host closes it when that
-        // changes (`should_close_settings_panel`), so this cannot draw a stale weapon.
-        let Some(weapon) = crate::wielded_weapon::wielded_weapon(world) else {
+        // The panel owns an explicit gun target. Losing it makes the panel
+        // inert immediately; a second held gun is never a fallback.
+        let Some(weapon) = WeaponSettingsTarget::resolve(world) else {
             return components;
         };
 
@@ -267,7 +282,7 @@ impl Gui<WeaponSettingsGuiState, WeaponSettingsGuiMsg> for WeaponSettingsGui {
         state: &WeaponSettingsGuiState,
         msg: &WeaponSettingsGuiMsg,
     ) -> (WeaponSettingsGuiState, Effect) {
-        let Some(weapon) = crate::wielded_weapon::wielded_weapon(world) else {
+        let Some(weapon) = WeaponSettingsTarget::resolve(world) else {
             return (state.clone(), Effect::NoEffect);
         };
         let effect = match msg {
@@ -310,6 +325,7 @@ mod tests {
             right_hand_entity_id: Some(weapon),
             inventory_entity_id: inventory,
         });
+        WeaponSettingsTarget::select(world, weapon);
         world.add_unique(GlobalGunSettingHeaders([HashMap::new(), HashMap::new()]));
         world.add_unique(GlobalGunSettingTexts([HashMap::new(), HashMap::new()]));
     }
@@ -377,6 +393,46 @@ mod tests {
     /// The pistol as the bench hands it out: loaded.
     fn pistol_world(setting: i32) -> (World, EntityId) {
         pistol_world_with_ammo(setting, 6)
+    }
+
+    #[test]
+    fn settings_stay_bound_to_the_selected_left_gun_and_go_inert_when_dropped() {
+        let (mut world, left) = pistol_world(0);
+        let right = world.add_entity((gun_state(0, 0),));
+        {
+            let mut player = world
+                .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+                .unwrap();
+            player.left_hand_entity_id = Some(left);
+            player.right_hand_entity_id = Some(right);
+        }
+        let click = || {
+            WeaponSettingsGui
+                .handle_msg(
+                    EntityId::dead(),
+                    &world,
+                    &WeaponSettingsGuiState,
+                    &WeaponSettingsGuiMsg::SelectSetting(1),
+                )
+                .1
+        };
+        assert!(
+            matches!(click(), Effect::SetGunSetting { entity_id, setting: 1 } if entity_id == left)
+        );
+        WeaponSettingsTarget::select(&world, right);
+        assert!(
+            matches!(click(), Effect::SetGunSetting { entity_id, setting: 1 } if entity_id == right)
+        );
+        WeaponSettingsTarget::select(&world, left);
+        assert!(
+            matches!(click(), Effect::SetGunSetting { entity_id, setting: 1 } if entity_id == left)
+        );
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .left_hand_entity_id = None;
+        assert!(matches!(click(), Effect::NoEffect));
+        assert!(labels(&components(&world)).is_empty());
     }
 
     fn components(world: &World) -> Vec<GuiComponent<WeaponSettingsGuiMsg>> {

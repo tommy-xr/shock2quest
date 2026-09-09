@@ -163,6 +163,7 @@ pub(crate) fn build_watch_canvas(readout: &BioReadout) -> UiCanvas {
 pub(crate) struct UseModeReadouts {
     pub bio: BioReadout,
     pub ammo: AmmoReadout,
+    pub weapon: Option<shipyard::EntityId>,
     /// Spendable nanites and cyber modules, in the order of the native wells.
     pub resources: [i32; 2],
 }
@@ -171,10 +172,11 @@ impl UseModeReadouts {
     /// Read both readouts from the world. The ammo panel's controls are always
     /// shown here: this composition is drawn only in use mode, which is exactly
     /// when a pointer can reach them.
-    pub(crate) fn from_world(world: &World) -> Self {
+    pub(crate) fn from_world(world: &World, weapon: Option<shipyard::EntityId>) -> Self {
         Self {
+            weapon,
             bio: BioReadout::from_world(world),
-            ammo: AmmoReadout::from_world(world, true),
+            ammo: AmmoReadout::for_weapon(world, weapon, true),
             resources: [
                 crate::scripts::script_util::player_nanite_total(world),
                 world
@@ -250,6 +252,7 @@ mod tests {
 
     fn readouts(ammo: Option<i32>, cycle: bool) -> UseModeReadouts {
         UseModeReadouts {
+            weapon: None,
             resources: [0; 2],
             bio: BioReadout {
                 health_fraction: 1.0,

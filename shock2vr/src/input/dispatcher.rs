@@ -123,7 +123,7 @@ impl ActionDispatcher {
             }
         }
         if state.just_triggered(InputAction::CycleAmmo) {
-            effects.push(Effect::CycleAmmo);
+            effects.push(Effect::CycleAmmo { weapon: None });
         }
         if state.just_triggered(InputAction::CycleGunSetting) {
             // Hand-agnostic: the flat key and HTTP mean "the wielded weapon".
@@ -131,7 +131,7 @@ impl ActionDispatcher {
             effects.push(Effect::CycleGunSetting { hand: None });
         }
         if state.just_triggered(InputAction::Reload) {
-            effects.push(Effect::ReloadWeapon);
+            effects.push(Effect::ReloadWeapon { weapon: None });
         }
         if state.just_triggered(InputAction::CyclePsiPower) {
             effects.push(Effect::StepPsiSelection {

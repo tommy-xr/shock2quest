@@ -4634,7 +4634,7 @@ impl MissionCore {
             let ours_is_docked = panel.is_some() && self.flat_ui.active_panel() == panel;
             let put_away = crate::scripts::gui::should_close_settings_panel(
                 opened_for,
-                crate::wielded_weapon::wielded_weapon(&self.world),
+                crate::wielded_weapon::held_in_hand(&self.world, opened_for).then_some(opened_for),
             );
             if put_away {
                 if ours_is_docked {
@@ -4669,7 +4669,8 @@ impl MissionCore {
         // and drive it through the same GUIHover contract the VR hand ray
         // uses. Dispatched before the script update so hovers/clicks are
         // processed this frame.
-        self.refresh_readouts();
+        // Keep the last drawn readout snapshot until input is consumed. A
+        // pickup/drop this frame must not retarget a click on the previously drawn gun.
         // Double-click windows are counted in simulation frames, so the debug
         // runtime's zero-time administrative updates do not consume them.
         if !time.elapsed.is_zero() {
@@ -4733,6 +4734,21 @@ impl MissionCore {
         }
         self.flat_ui
             .set_hand_items(&self.world, asset_cache, hand_items);
+        self.refresh_readouts();
+        if self
+            .weapon_settings_gun
+            .is_some_and(|gun| Some(gun) != self.flat_ui.ammo_selection().0)
+        {
+            let panel = self
+                .world
+                .borrow::<UniqueView<WeaponSettingsPanelEntity>>()
+                .ok()
+                .map(|panel| panel.0);
+            if panel.is_some() && self.flat_ui.active_panel() == panel {
+                self.flat_ui.close();
+            }
+            self.weapon_settings_gun = None;
+        }
         let name_strip = self.flat_ui.strip_entity().and_then(|_| {
             self.flat_ui.pointed_hand_name().or_else(|| {
                 self.flat_ui
@@ -6175,10 +6191,19 @@ impl MissionCore {
             // The AMMOFULL readout's controls emit the same effects as their
             // keyboard/action counterparts, so the button and the key are one
             // behavior.
-            FlatUiDragAction::Readout(button) => {
+            FlatUiDragAction::Readout(button, weapon) => {
                 use crate::hud::ammo_panel::ReadoutButton;
                 use crate::psi::PsiSelectionAxis;
                 let step = |axis, forward| vec![Effect::StepPsiSelection { axis, forward }];
+                if !matches!(button, ReadoutButton::Logs | ReadoutButton::SystemMenu)
+                    && weapon
+                        .and_then(|entity| {
+                            crate::wielded_weapon::resolve_weapon_target(&self.world, Some(entity))
+                        })
+                        .is_none()
+                {
+                    return Vec::new();
+                }
                 match button {
                     ReadoutButton::Logs => {
                         if self.flat_ui.utilities.is_empty_logs() {
@@ -6209,13 +6234,13 @@ impl MissionCore {
                             vec![Effect::ReadLastUnreadLog]
                         }
                     }
-                    ReadoutButton::CycleAmmo => vec![Effect::CycleAmmo],
+                    ReadoutButton::CycleAmmo => vec![Effect::CycleAmmo { weapon }],
                     // The exception: SETTING opens the weapon settings MFD
                     // (the original's own behavior for this button), where the
                     // mode is *chosen* from a described list. The
                     // `CycleGunSetting` action (F) still toggles directly.
-                    ReadoutButton::GunSetting => vec![Effect::OpenWeaponSettings],
-                    ReadoutButton::Reload => vec![Effect::ReloadWeapon],
+                    ReadoutButton::GunSetting => vec![Effect::OpenWeaponSettings { weapon }],
+                    ReadoutButton::Reload => vec![Effect::ReloadWeapon { weapon }],
                     ReadoutButton::PsiTierPrev => step(PsiSelectionAxis::Tier, false),
                     ReadoutButton::PsiTierNext => step(PsiSelectionAxis::Tier, true),
                     ReadoutButton::PsiPowerPrev => step(PsiSelectionAxis::Power, false),
@@ -6893,9 +6918,10 @@ impl MissionCore {
     /// reads this and `use_mode` independently (the flat HUD skips what the
     /// interface draws), so the two must never disagree on a frame.
     fn refresh_readouts(&mut self) {
+        let (weapon, _) = self.flat_ui.ammo_selection();
         self.flat_ui.set_readouts(
             self.use_mode
-                .then(|| crate::hud::readouts::UseModeReadouts::from_world(&self.world)),
+                .then(|| crate::hud::readouts::UseModeReadouts::from_world(&self.world, weapon)),
         );
     }
 
@@ -7217,17 +7243,21 @@ impl MissionCore {
                     self.raise_noise(origin, radius);
                 }
 
-                Effect::ReloadWeapon => {
+                Effect::ReloadWeapon { weapon } => {
                     // Whichever hand holds the gun - the input action is not
                     // hand-specific (see `crate::wielded_weapon`).
-                    if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world) {
+                    if let Some(weapon) =
+                        crate::wielded_weapon::resolve_weapon_target(&self.world, weapon)
+                    {
                         let cue = self.begin_reload(weapon);
                         effects.push_back(cue);
                     }
                 }
 
-                Effect::CycleAmmo => {
-                    if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world) {
+                Effect::CycleAmmo { weapon } => {
+                    if let Some(weapon) =
+                        crate::wielded_weapon::resolve_weapon_target(&self.world, weapon)
+                    {
                         self.cycle_ammo(asset_cache, weapon);
                     }
                 }
@@ -7262,7 +7292,7 @@ impl MissionCore {
                     }
                 }
 
-                Effect::OpenWeaponSettings => {
+                Effect::OpenWeaponSettings { weapon } => {
                     // The MFD presents the *wielded* gun, so it opens only with
                     // one in hand and is remembered so it can be dismissed when
                     // that gun is put away. Unbound: the host is synthetic, so
@@ -7276,8 +7306,9 @@ impl MissionCore {
                     let slot_is_presented = game_options.presentation_mode
                         == crate::PresentationMode::Flat
                         || self.use_mode;
-                    if let Some(weapon) = crate::wielded_weapon::wielded_weapon(&self.world)
-                        .filter(|_| slot_is_presented)
+                    if let Some(weapon) =
+                        crate::wielded_weapon::resolve_weapon_target(&self.world, weapon)
+                            .filter(|_| slot_is_presented)
                     {
                         let panel = self
                             .world
@@ -7289,6 +7320,7 @@ impl MissionCore {
                                 payload: MessagePayload::PanelOpened,
                             });
                             self.flat_ui.open_unbound(panel);
+                            crate::scripts::gui::WeaponSettingsTarget::select(&self.world, weapon);
                             self.weapon_settings_gun = Some(weapon);
                         }
                     }
