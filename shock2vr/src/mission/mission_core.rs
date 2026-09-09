@@ -2672,6 +2672,7 @@ impl MissionCore {
                 &mut script_world,
                 created_entity,
                 Matrix4::identity(),
+                None,
             );
         }
         engine::platform::service_events();
@@ -5845,6 +5846,7 @@ impl MissionCore {
         // brought along by a spang must not host a second spang).
         exclude_template: Option<i32>,
     ) -> EntityCreationInfo {
+        let authored_velocity_frame = additional_options.authored_velocity_frame;
         let transient_fx = additional_options.transient_fx;
         let has_spawn_clearance = additional_options.projectile_launch_origin.is_some();
         let created_entity = {
@@ -5874,6 +5876,7 @@ impl MissionCore {
             &mut self.script_world,
             created_entity,
             root_transform,
+            authored_velocity_frame,
         );
 
         // Spawn clearance may move the projectile before physics is built.
@@ -5997,6 +6000,7 @@ impl MissionCore {
         script_world: &mut ScriptWorld,
         created_entity: EntityCreationInfo,
         root_transform: Matrix4<f32>,
+        authored_velocity_frame: Option<Matrix4<f32>>,
     ) -> EntityCreationInfo {
         let ret = created_entity.clone();
 
@@ -6014,6 +6018,17 @@ impl MissionCore {
 
         let v_initial_velocity = world.borrow::<View<PropPhysInitialVelocity>>().unwrap();
         if let Some(rigid_body) = created_entity.rigid_body {
+            if let Some(velocity_frame) = authored_velocity_frame {
+                // The parser already converts Dark velocity to world units:
+                // (-forward, up, right). The launch frame uses +Z forward.
+                let velocity = v_initial_velocity
+                    .get(created_entity.entity_id)
+                    .map(|v| velocity_frame.transform_vector(vec3(v.0.z, v.0.y, -v.0.x)))
+                    .unwrap_or_else(|_| vec3(0.0, 0.0, 0.0));
+                id_to_physics.insert(created_entity.entity_id, rigid_body);
+                physics.set_velocity(created_entity.entity_id, velocity);
+                return ret;
+            }
             let initial_velocity = v_initial_velocity
                 .get(created_entity.entity_id)
                 // Not sure why the coordinate system is different for projectile launch?

@@ -700,6 +700,38 @@ pub(super) fn create_muzzle_flash(
 
     let transform = v_transform.get(entity_id).unwrap();
 
+    // GunFlash flag 1 means launch a physical object (e.g. an ejected casing),
+    // not an effect that remains attached to the gun. Dark CreateGunFlashes.
+    if options.flags & 1 != 0 {
+        let mut attachment = crate::weapon_muzzle::resolve(world, entity_id);
+        attachment.point = vhot_offset;
+        let frame = attachment.shot_frame(transform.0);
+        // Flat stores its right-handed viewmodel in the logical left slot.
+        let left = !world
+            .borrow::<View<RuntimePropFlatAim>>()
+            .unwrap()
+            .contains(entity_id)
+            && crate::wielded_weapon::weapon_in_hand(world, vr_config::Handedness::Left)
+                == Some(entity_id);
+        let velocity_frame =
+            frame * Matrix4::from_nonuniform_scale(if left { -1.0 } else { 1.0 }, 1.0, 1.0);
+        return Effect::CreateEntity {
+            template_id: muzzle_flash_template_id,
+            position: point3(0.0, 0.0, 0.0),
+            orientation: Quaternion::from_angle_y(Deg(90.0)),
+            root_transform: frame,
+            options: CreateEntityOptions {
+                launch_projectile: true,
+                authored_velocity_frame: Some(velocity_frame),
+                transient_fx: true,
+                player_fired_projectile: true,
+                projectile_weapon: Some(entity_id),
+                projectile_launch_origin: Some(transform.0.transform_point(point3(0.0, 0.0, 0.0))),
+                ..CreateEntityOptions::default()
+            },
+        };
+    }
+
     let adjustments = vr_config::get_vr_hand_model_adjustments_from_entity(
         entity_id,
         world,
@@ -778,20 +810,7 @@ pub(super) fn create_projectile(
 
     let transform = v_transform.get(entity_id).unwrap();
 
-    // Item size changes muzzle placement, never projectile size or speed.
-    let origin = transform.0.transform_point(muzzle.point);
-    let forward = transform.0.transform_vector(muzzle.axis).normalize();
-    let up = transform
-        .0
-        .transform_vector(cgmath::vec3(0.0, 1.0, 0.0))
-        .normalize();
-    let right = up.cross(forward).normalize();
-    let shot_frame = Matrix4::from_cols(
-        right.extend(0.0),
-        forward.cross(right).extend(0.0),
-        forward.extend(0.0),
-        origin.to_homogeneous(),
-    );
+    let shot_frame = muzzle.shot_frame(transform.0);
 
     Effect::CreateEntity {
         template_id: projectile_template_id,
