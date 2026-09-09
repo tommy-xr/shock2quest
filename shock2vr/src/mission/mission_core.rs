@@ -2523,16 +2523,10 @@ impl MissionCore {
         );
         world.add_component(inventory, PlayerInventoryEntity {});
 
-        // The synthetic automap panel entity (projects/flat-ui-panels.md §5):
-        // carries `MapGui` (script `internal_map`) plus the level's page data.
-        // No world object opens the map - `Effect::ToggleMap` binds it to the
-        // flat host as an unbound (sticky) panel. Never serialized: rebuilt
-        // here on every load. Flat-only: in VR the panel cannot be opened
-        // (ToggleMap is flat-gated), and under `--experimental gui` its
-        // per-frame SetUI would otherwise materialize an undismissable world
-        // quad at the origin.
+        // Synthetic automap host for the shared flat/VR cyber canvas.
+        // Rebuilt on load and excluded from legacy free-floating GUI emission.
         world.add_unique(PlayerMapLocation::default());
-        if game_options.presentation_mode == crate::PresentationMode::Flat {
+        {
             let level_stem = mission.split('.').next().unwrap_or(&mission).to_uppercase();
             let (revealed_rects, explored_rects) =
                 dark::map::MapChunkData::load_from_mission(asset_cache, &level_stem)
@@ -6173,6 +6167,7 @@ impl MissionCore {
     ) -> Vec<Effect> {
         use crate::mission::flat_ui_host::FlatUiDragAction;
         match action {
+            FlatUiDragAction::ToggleMap => vec![Effect::ToggleMap],
             FlatUiDragAction::Throw(entity_id) => {
                 self.throw_entity_into_world(entity_id);
                 Vec::new()
@@ -7673,9 +7668,10 @@ impl MissionCore {
                 }
 
                 Effect::ToggleMap => {
-                    // Flat-presentation only, like OpenPanel: the automap is a
-                    // flat MFD; VR panels are world quads (out of scope here).
-                    if game_options.presentation_mode == crate::PresentationMode::Flat {
+                    // VR uses this host while the cyber interface is active.
+                    if game_options.presentation_mode == crate::PresentationMode::Flat
+                        || self.use_mode
+                    {
                         if let Ok(map) = self.world.borrow::<UniqueView<MapPanelEntity>>() {
                             let entity = map.0;
                             drop(map);
@@ -7683,6 +7679,7 @@ impl MissionCore {
                                 self.flat_ui.close();
                             } else {
                                 // Unbound: no world object -> no walk-away close.
+                                self.flat_ui.utilities = Default::default();
                                 self.flat_ui.open_unbound(entity);
                             }
                         }
@@ -8398,9 +8395,14 @@ impl MissionCore {
                     // behavior.
                     self.flat_ui
                         .on_set_ui(&self.world, parent_entity, world_size, &components);
-                    let update_world_panel = game_options.experimental_features.contains("gui")
-                        || (game_options.presentation_mode == crate::PresentationMode::Vr
-                            && self.gui.active_panel() == Some(parent_entity));
+                    let is_map = self
+                        .world
+                        .borrow::<UniqueView<MapPanelEntity>>()
+                        .is_ok_and(|map| map.0 == parent_entity);
+                    let update_world_panel = !is_map
+                        && (game_options.experimental_features.contains("gui")
+                            || (game_options.presentation_mode == crate::PresentationMode::Vr
+                                && self.gui.active_panel() == Some(parent_entity)));
                     if update_world_panel {
                         // `internal_inventory` is a 15-column strip: keep its
                         // shared canvas/layout identical, but map that resolved

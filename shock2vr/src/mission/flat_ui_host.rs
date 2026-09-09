@@ -86,6 +86,7 @@ const NAME_STRIP_FONT: &str = "mainfont.fon";
 /// click, acting on the still-contained item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlatUiDragAction {
+    ToggleMap,
     Throw(EntityId),
     Wield(EntityId),
     /// One of the AMMOFULL readout's controls was clicked (fire-mode setting,
@@ -913,7 +914,21 @@ impl FlatUiHost {
                     self.close();
                 }
                 self.hover_close = false;
-                return (Vec::new(), Vec::new());
+                if self.utilities.is_open()
+                    && self
+                        .panel_rect()
+                        .is_some_and(|rect| rect.x + rect.w > 450.0)
+                {
+                    // A wide map and the right utility reader share space.
+                    // Switching utilities must not leave an opaque map over it.
+                    self.close();
+                }
+                let actions = if self.utilities.take_map_request() {
+                    vec![FlatUiDragAction::ToggleMap]
+                } else {
+                    Vec::new()
+                };
+                return (Vec::new(), actions);
             }
         }
         if strip_rect.is_some_and(|r| hand_readout_rects(r).iter().any(|r| r.contains(canvas_pos)))
@@ -1465,6 +1480,18 @@ impl Default for FlatUiHost {
 /// The active panel's rect on the canvas: panel-local pixels anchored at the
 /// original left-MFD slot.
 fn panel_canvas_rect(panel_size_px: Vector2<f32>) -> Rect {
+    if panel_size_px.x > 614.0 {
+        // Wide maps clear the utility row/HUD and leave room for CLOSE.
+        let scale = (614.0 / panel_size_px.x)
+            .min(248.0 / panel_size_px.y)
+            .min(1.0);
+        return Rect::new(
+            LEFT_MFD_ANCHOR.x,
+            LEFT_MFD_ANCHOR.y,
+            panel_size_px.x * scale,
+            panel_size_px.y * scale,
+        );
+    }
     Rect::new(
         LEFT_MFD_ANCHOR.x,
         LEFT_MFD_ANCHOR.y,
@@ -2478,6 +2505,42 @@ mod tests {
             None,
             "the decorative arm is not another backpack cell"
         );
+    }
+
+    #[test]
+    fn wide_map_clears_utility_row_and_keeps_close_inside_canvas() {
+        let map = panel_canvas_rect(vec2(636.0, 296.0));
+        let close = close_button_canvas_rect(map);
+        assert!(map.y + map.h <= 372.001);
+        assert!(close.x + close.w <= CANVAS_SIZE.x);
+        assert!((map.w / map.h - 636.0 / 296.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn replicator_with_hack_sidecar_keeps_native_size() {
+        let rect = panel_canvas_rect(vec2(261.0, 296.0));
+        assert_eq!((rect.w, rect.h), (261.0, 296.0));
+    }
+
+    #[test]
+    fn opening_research_closes_a_wide_map_panel() {
+        let (world, mut host, item, _) = drag_world();
+        host.open_unbound(item);
+        host.panel_size_px = Some(vec2(636.0, 296.0));
+        assert!(press_edge(&mut host, &world, (506.0, 395.0)).is_empty());
+        assert!(host.utilities.is_open());
+        assert!(host.panel_size_px.is_none());
+    }
+
+    #[test]
+    fn map_button_emits_only_map_toggle_and_keeps_cursor_item() {
+        let (world, mut host, item, _) = drag_world();
+        host.cursor_item = Some(make_cursor_item(&world, item));
+        assert_eq!(
+            press_edge(&mut host, &world, (544.0, 395.0)),
+            vec![FlatUiDragAction::ToggleMap]
+        );
+        assert_eq!(host.held_entity(), Some(item));
     }
 
     #[test]

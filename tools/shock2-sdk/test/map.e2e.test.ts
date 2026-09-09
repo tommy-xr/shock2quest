@@ -29,7 +29,10 @@ test(
       atStart.length >= 1,
       `spawning inside a mapped room should reveal its location (got ${atStart})`,
     );
-    assert.ok(!(await game.ui.state()).active_panel, "no panel before ToggleMap");
+    assert.ok(
+      !(await game.ui.state()).active_panel,
+      "no panel before ToggleMap",
+    );
 
     // --- ToggleMap opens the wide map panel ---
     await game.input.trigger("ToggleMap");
@@ -37,16 +40,19 @@ test(
     const opened = await game.ui.state();
     assert.ok(opened.active_panel, "ToggleMap should open the map panel");
     const textures = () =>
-      opened.active_panel!.elements
-        .filter((e) => e.kind === "image")
+      opened
+        .active_panel!.elements.filter((e) => e.kind === "image")
         .map((e) => (e.texture ?? "").toLowerCase());
     const backdrop = opened.active_panel.elements.find(
       (e) => (e.texture ?? "").toLowerCase() === "mapback.pcx",
     );
     assert.ok(backdrop, `panel should draw MAPBACK (got ${textures()})`);
-    // The wide panel: 636x296 anchored at the left-MFD slot, filling the
-    // canvas width (the original's {2,2}-{638,302} both-slot rect).
-    assert.deepEqual(backdrop.rect, [2, 124, 636, 296]);
+    // The wide panel preserves its aspect ratio above the utility row
+    // (the original's {2,2}-{638,302} both-slot rect).
+    const mapScale = backdrop.rect[2] / 636;
+    assert.deepEqual(backdrop.rect.slice(0, 2), [2, 124]);
+    assert.ok(Math.abs(backdrop.rect[3] - 248) < 0.01);
+    assert.ok(Math.abs(backdrop.rect[3] / 296 - mapScale) < 0.001);
     assert.ok(
       textures().some((t) => t.endsWith("page001.pcx")),
       "panel should draw the level's PAGE001 art",
@@ -60,12 +66,14 @@ test(
 
     // --- Player marker present, and it tracks movement ---
     const marker = () =>
-      game.ui.state().then(
-        (s) =>
-          s.active_panel?.elements.find(
-            (e) => (e.texture ?? "").toLowerCase() === "plrpip.pcx",
-          ) ?? null,
-      );
+      game.ui
+        .state()
+        .then(
+          (s) =>
+            s.active_panel?.elements.find(
+              (e) => (e.texture ?? "").toLowerCase() === "plrpip.pcx",
+            ) ?? null,
+        );
     const markerBefore = await marker();
     assert.ok(markerBefore, "panel should draw the player marker (plrpip)");
 
@@ -75,7 +83,10 @@ test(
     await game.step({ frames: 90 });
     await game.input.set("right_hand.thumbstick", [0.0, 0.0]);
     const markerAfter = await marker();
-    assert.ok(markerAfter, "map panel must survive walking (no distance close)");
+    assert.ok(
+      markerAfter,
+      "map panel must survive walking (no distance close)",
+    );
     const moved = Math.hypot(
       markerAfter.rect[0] - markerBefore.rect[0],
       markerAfter.rect[1] - markerBefore.rect[1],
@@ -100,8 +111,8 @@ test(
     const bx = 536 - sx * 32.874435;
     const sy = (10 - 239) / (44.685417 - -40.31117);
     const by = 239 - sy * -40.31117;
-    const expectX = 2 + 10 + (sx * pos.z + bx) - 8; // canvas = anchor + page offset + page px - half marker
-    const expectY = 124 + 8 + (sy * pos.x + by) - 8;
+    const expectX = 2 + (10 + (sx * pos.z + bx) - 8) * mapScale; // canvas = anchor + page offset + page px - half marker
+    const expectY = 124 + (8 + (sy * pos.x + by) - 8) * mapScale;
     assert.ok(
       Math.abs(markerAfter.rect[0] - expectX) < 4 &&
         Math.abs(markerAfter.rect[1] - expectY) < 4,
@@ -157,14 +168,17 @@ test(
       (e) => (e.texture ?? "").toLowerCase() === "plrpip.pcx",
     );
     assert.ok(insetPip, "pip should be drawn on the lower level");
-    const pipCenter = [insetPip.rect[0] + 8, insetPip.rect[1] + 8];
+    const pipCenter = [
+      insetPip.rect[0] + insetPip.rect[2] / 2,
+      insetPip.rect[1] + insetPip.rect[3] / 2,
+    ];
     // Canvas bounds of inset rect 2: anchor (2, 124) + page offset (10, 8) +
     // rect LTRB (25, 100, 144, 169).
     assert.ok(
-      pipCenter[0] >= 2 + 10 + 25 &&
-        pipCenter[0] <= 2 + 10 + 144 &&
-        pipCenter[1] >= 124 + 8 + 100 &&
-        pipCenter[1] <= 124 + 8 + 169,
+      pipCenter[0] >= 2 + (10 + 25) * mapScale &&
+        pipCenter[0] <= 2 + (10 + 144) * mapScale &&
+        pipCenter[1] >= 124 + (8 + 100) * mapScale &&
+        pipCenter[1] <= 124 + (8 + 169) * mapScale,
       `pip should land inside the lower-level inset box (center [${pipCenter}])`,
     );
     // And the bright decal follows the player to the inset location.
