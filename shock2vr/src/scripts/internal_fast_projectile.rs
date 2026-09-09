@@ -14,7 +14,7 @@ use crate::{
     runtime_props::{
         RuntimePropPlayerFiredProjectile, RuntimePropProjectileRayOrigin, RuntimePropTransform,
     },
-    scripts::script_util::{choose_impact_spang, play_impact_sound, projectile_contact_damage},
+    scripts::script_util::{choose_impact_spang, play_impact_sound, projectile_contact_effects},
     time::Time,
     util::{get_position_from_transform, get_rotation_from_forward_vector},
 };
@@ -101,7 +101,7 @@ impl Script for InternalFastProjectileScript {
             };
 
             let mut effects = vec![
-                projectile_contact_damage(world, entity_id, hit_entity_id, {
+                projectile_contact_effects(world, entity_id, hit_entity_id, {
                     let travel = hit_point - start_point;
                     (travel.magnitude2() > 1.0e-12).then(|| crate::scripts::DamageImpact {
                         direction: travel.normalize(),

@@ -151,8 +151,11 @@ impl AnimatedModel {
     }
 
     fn to_animated_scene_objects(&self, player: &AnimationPlayer) -> Vec<SceneObject> {
-        let pose = player.get_transforms(&self.skeleton);
-        let palette = build_palette(&pose, &self.skeleton, self.bind.as_deref());
+        self.to_posed_scene_objects(&player.get_transforms(&self.skeleton))
+    }
+
+    fn to_posed_scene_objects(&self, pose: &[Matrix4<f32>; 40]) -> Vec<SceneObject> {
+        let palette = build_palette(pose, &self.skeleton, self.bind.as_deref());
 
         self.scene_objects
             .iter()
@@ -475,6 +478,15 @@ impl Model {
                 animated_model.to_animated_scene_objects(player)
             }
             InnerModel::Static(static_model) => static_model.to_scene_objects().clone(),
+        }
+    }
+
+    /// Render a saved model-space pose using the same palette construction as
+    /// live animation (including inverse bind transforms for remaster models).
+    pub fn to_posed_scene_objects(&self, pose: &[Matrix4<f32>; 40]) -> Vec<SceneObject> {
+        match &self.inner {
+            InnerModel::Animated(model) => model.to_posed_scene_objects(pose),
+            InnerModel::Static(model) => model.to_scene_objects().clone(),
         }
     }
 

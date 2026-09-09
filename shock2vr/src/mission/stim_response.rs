@@ -97,6 +97,59 @@ pub fn contact_stim_damage_scaled(
         .sum()
 }
 
+/// Resolve the last applicable freeze response. As in AISetFrozen, a new
+/// stimulus replaces the previous timer rather than adding to it.
+pub fn contact_stim_freeze(
+    world: &World,
+    emitter_template: i32,
+    victim: EntityId,
+    intensity_scale: f32,
+) -> Option<f32> {
+    let sources = world.borrow::<UniqueView<GlobalContactStims>>().ok()?;
+    let stims = sources.0.get(&emitter_template)?;
+    let receptrons = victim_receptrons(world, victim);
+    stims
+        .iter()
+        .filter_map(|(stim, intensity)| {
+            resolve_stim_freeze(&receptrons, *stim, *intensity * intensity_scale)
+        })
+        .last()
+}
+
+pub fn resolve_stim_freeze(
+    receptrons: &[(i32, ReceptronOptions)],
+    stim_template_id: i32,
+    intensity: f32,
+) -> Option<f32> {
+    // No delivered stimulus (for example a fully occluded blast) must not
+    // replace an existing timer. An authored zero duration with a positive
+    // stimulus still resolves to Some(0), allowing an explicit thaw.
+    if intensity <= 0.0 {
+        return None;
+    }
+    let mut amplify = 1.0;
+    let mut duration = None;
+    for (_, options) in receptrons
+        .iter()
+        .filter(|(stim, _)| *stim == stim_template_id)
+    {
+        match options.effect {
+            ReceptronEffect::Abort => return None,
+            ReceptronEffect::Amplify { factor } => amplify *= factor,
+            ReceptronEffect::Freeze {
+                duration_multiplier,
+            } => {
+                if duration.is_none_or(|(order, _)| options.order >= order) {
+                    duration = Some((options.order, duration_multiplier));
+                }
+            }
+            _ => {}
+        }
+    }
+    let seconds = duration?.1 as f32 * intensity * amplify;
+    seconds.is_finite().then_some(seconds.trunc())
+}
+
 fn victim_receptrons(world: &World, victim: EntityId) -> Vec<(i32, ReceptronOptions)> {
     let Ok(v_links) = world.borrow::<View<Links>>() else {
         return Vec::new();
@@ -162,7 +215,7 @@ pub fn resolve_stim_damage(
                     flat_damage += multiplier;
                 }
             }
-            ReceptronEffect::Radiate { .. } => {}
+            ReceptronEffect::Radiate { .. } | ReceptronEffect::Freeze { .. } => {}
             ReceptronEffect::Unhandled(_) => {}
         }
     }
@@ -194,7 +247,9 @@ pub fn resolve_stim_radiation(
                 has_radiate = true;
                 multiplier += factor;
             }
-            ReceptronEffect::Damage { .. } | ReceptronEffect::Unhandled(_) => {}
+            ReceptronEffect::Damage { .. }
+            | ReceptronEffect::Freeze { .. }
+            | ReceptronEffect::Unhandled(_) => {}
         }
     }
 
@@ -221,6 +276,30 @@ mod tests {
                 use_intensity: true,
             },
         )
+    }
+
+    #[test]
+    fn freeze_response_uses_amplification_immunity_and_whole_seconds() {
+        let freeze = |order, duration_multiplier| {
+            receptron(
+                order,
+                ReceptronEffect::Freeze {
+                    duration_multiplier,
+                },
+            )
+        };
+        let mut responses = vec![(EMP, freeze(82, 1))];
+        assert_eq!(resolve_stim_freeze(&responses, EMP, 8.0), Some(8.0));
+        assert_eq!(resolve_stim_freeze(&responses, EMP, 0.0), None);
+        assert_eq!(
+            resolve_stim_freeze(&[(EMP, freeze(82, 0))], EMP, 8.0),
+            Some(0.0)
+        );
+        assert_eq!(resolve_stim_freeze(&responses, HIGH_EXPLOSIVE, 8.0), None);
+        responses.push((EMP, receptron(90, ReceptronEffect::Amplify { factor: 0.7 })));
+        assert_eq!(resolve_stim_freeze(&responses, EMP, 8.0), Some(5.0));
+        responses.push((EMP, receptron(99, ReceptronEffect::Abort)));
+        assert_eq!(resolve_stim_freeze(&responses, EMP, 8.0), None);
     }
 
     #[test]

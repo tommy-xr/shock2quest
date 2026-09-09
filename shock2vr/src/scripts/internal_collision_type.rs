@@ -5,7 +5,7 @@ use shipyard::{EntityId, Get, View, World};
 use crate::{
     mission::entity_creator::CreateEntityOptions,
     physics::PhysicsWorld,
-    scripts::script_util::{choose_impact_spang, projectile_contact_damage},
+    scripts::script_util::{choose_impact_spang, projectile_contact_effects},
     util::{get_position_from_transform, get_rotation_from_forward_vector},
 };
 
@@ -70,7 +70,7 @@ impl Script for InternalCollisionType {
                 } else {
                     Effect::DestroyEntity { entity_id }
                 };
-                let damage_effect = projectile_contact_damage(
+                let damage_effect = projectile_contact_effects(
                     world,
                     entity_id,
                     *with,

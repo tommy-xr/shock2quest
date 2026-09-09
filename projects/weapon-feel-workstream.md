@@ -451,9 +451,8 @@ Matched single-shot captures and SDK regressions against OG-Pipe show:
 Standard Bullet authors Standard Impact at 4; the fixture hit crosses a limb
 with the existing 0.75 multiplier. Laser Shot authors Energy Stim at 2, received
 at x1 by the hybrid. Stasis Shot authors Stasis at 8; its receiver authors
-`Freeze` and `add_metaprop`, not damage. **Stasis freezing is still unimplemented:**
-this layer removes its erroneous HP loss. Implement those reactions, their
-expiry/reapplication behavior and current-build saves in the next increment.
+`Freeze` and `add_metaprop`, not damage. This layer removes its erroneous HP loss. The next layer below implements
+native timed freezing; the companion `FreezeFX` reaction remains a follow-up.
 
 All three new firing tests fail against the parent and pass after the fix;
 1,622 gameplay library tests pass (2 ignored), as do warning-denied runtime
@@ -465,3 +464,54 @@ retains its limb identity. Do not count that existing failed scenario as green.
 [Matched PNG](https://gist.githubusercontent.com/tommy-xr/0f0374285dddac7fab90c2b24983e8d3/raw/comparison.png)
 and [capture gallery](https://gist.github.com/tommy-xr/0f0374285dddac7fab90c2b24983e8d3)
 provide flat-runtime evidence. Quest particle validation remains with the user.
+
+
+### Timed stasis: freeze, expiry and current-build saves
+
+Stacked above #1463, native `Freeze` now stops AI updates, animation advancement
+and horizontal root motion. Normal Stasis Shot (-1352) delivers intensity 8
+through Stasis (-1486); the hybrid's Stasis Vulnerability (-3446) multiplies by
+1, giving **eight seconds**. Big Stasis Shot (-3868) creates Stasis Explosion
+(-3869), whose radius source reaches the same reaction through the existing
+falloff/terrain-exposure path. Fully blocked blasts do not refresh or clear a
+previous freeze. Stasis itself still causes no HP loss.
+
+Duration units were checked against the shipped 25th Anniversary executable,
+not inferred from the older source. `SystemShock2Remastered.exe` registers the
+Freeze callback at VA `0x1403755ee`; callback `0x140472b40` multiplies the integer
+reaction parameter by intensity and truncates to whole seconds. AI::Freeze
+(`0x1403465d0`, multiplication at `0x1403465ed`) converts those seconds to
+milliseconds. The older `darkengine/src/frezreac.cpp` describes milliseconds at
+the callback boundary and therefore cannot supply the shipped unit convention.
+`darkengine/src/ai/aifreeze.cpp` establishes replacement semantics: a new hit
+replaces the remaining interval, even when shorter, rather than adding time or
+taking the maximum. Negative authored durations remain indefinite.
+
+`BaseMonster` owns the remaining simulation-time interval and captured
+model-space pose under script-state key `shock2vr.ai_stasis`. Saving and loading
+preserves both; the shared palette builder uses that pose for rendering and
+hitboxes while frozen. Gravity and external contact resolution remain active.
+Death releases the freeze immediately. Animation bookkeeping already queued at
+impact is delivered in order, while attack flags are suppressed; this avoids
+stranding a one-shot animation or replaying an old completion into a new
+behavior after thaw. Existing native AI behavior initialization on load remains
+unchanged; this is not a general AI behavior-state serialization feature.
+
+Verification lives in `tools/shock2-sdk/test/timed-stasis.e2e.test.ts`: actual
+normal/area shots, reapplication, timed expiry, death, and a real `earth.mis`
+save/load preserving remaining duration and joint pose. Parser/resolver tests
+cover integer parameters, amplification and immunity, and the script unit test
+covers shorter replacement and expiry. Matched runtime captures show a hybrid
+continuing to attack before this layer, frozen for eight seconds after it, then
+resuming movement:
+
+![Timed stasis before/after](https://gist.githubusercontent.com/tommy-xr/322f260c0635fb88b579e61937c87e71/raw/stasis-comparison.gif)
+
+![Frozen pose](https://gist.githubusercontent.com/tommy-xr/322f260c0635fb88b579e61937c87e71/raw/stasis-frozen.png)
+
+Remaining companion gap: the authored `add_metaprop` reaction adds Frozen
+(-4183), which carries `FreezeFX` and `AI_BcstSe`. Its visual/broadcast behavior
+is not implemented by this native freeze layer; a queued AI bookkeeping message
+can still emit a vocalization while frozen. Radius falloff and physical blast
+impulses also retain the existing engine behavior pending broader parity work.
+Quest particle validation for #1460 remains with the user.

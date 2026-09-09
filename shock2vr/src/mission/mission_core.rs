@@ -3648,6 +3648,17 @@ impl MissionCore {
             })
             .unwrap_or_default();
 
+        // A frozen AI keeps its physical body and gravity, but cannot coast
+        // on the previous animation's horizontal root-motion velocity.
+        for entity in self.id_to_physics.keys() {
+            if self.script_world.stasis(*entity, &self.world).is_some() {
+                if let Some(velocity) = self.physics.get_velocity(*entity) {
+                    self.physics
+                        .set_velocity(*entity, vec3(0.0, velocity.y, 0.0));
+                }
+            }
+        }
+
         // Skip physics while time is frozen (the debug runtime's paused state
         // calls update with zero dt): the Rapier pipeline advances by a fixed
         // internal dt per call regardless of elapsed time, so stepping it here
@@ -5370,6 +5381,13 @@ impl MissionCore {
         }
 
         for (id, player) in self.id_to_animation_player.iter_mut() {
+            if let Some(stasis) = self.script_world.stasis(*id, &self.world) {
+                if let Some(pose) = stasis.pose() {
+                    self.world
+                        .add_component(*id, RuntimePropJointTransforms(*pose));
+                }
+                continue;
+            }
             // self.id_to_animation_player.entry(*id).and_modify(|player| {
             //     *player = AnimationPlayer::update(player, time.elapsed);
             // });
@@ -5675,7 +5693,17 @@ impl MissionCore {
                 stim_template_id,
                 felt_intensity,
             );
-            // Explosions only ever deal damage: dispatch a Damage message only
+            if let Some(duration_seconds) = crate::mission::stim_response::resolve_stim_freeze(
+                &receptrons,
+                stim_template_id,
+                felt_intensity,
+            ) {
+                self.script_world.dispatch(Message {
+                    to: entity_id,
+                    payload: MessagePayload::Freeze { duration_seconds },
+                });
+            }
+            // Dispatch a Damage message only
             // for a positive result. A zero amount (fully shielded) would still
             // read as "took damage" and aggro AI; a negative one (a heal
             // receptron) has no meaning through the damage path.
@@ -11147,7 +11175,13 @@ impl MissionCore {
             rendered_model_count += 1;
 
             let scene_objs = {
-                if let Some(player) = self.id_to_animation_player.get(entity_id) {
+                if let Some(pose) = self
+                    .script_world
+                    .stasis(*entity_id, &self.world)
+                    .and_then(|s| s.pose())
+                {
+                    objs.to_posed_scene_objects(pose)
+                } else if let Some(player) = self.id_to_animation_player.get(entity_id) {
                     objs.to_animated_scene_objects(player)
                 } else {
                     objs.to_scene_objects().clone()
@@ -13422,6 +13456,13 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                             awareness.last_known_pos.y,
                             awareness.last_known_pos.z
                         ),
+                    });
+                }
+
+                if let Some(stasis) = self.script_world.stasis(id, &self.world) {
+                    properties.push(DebugPropertyInfo {
+                        name: "StasisRemaining".to_owned(),
+                        value: format!("{:.6}", stasis.remaining_seconds),
                     });
                 }
 

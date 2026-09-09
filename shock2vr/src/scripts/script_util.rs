@@ -39,10 +39,10 @@ pub(crate) fn entity_class_template_id(world: &World, entity: EntityId) -> Optio
         })
 }
 
-/// Resolve a projectile's contact damage against the owning receiver, then
-/// send through the struck hitbox so limb scaling and ragdoll metadata survive.
+/// Resolve contact damage and freeze against the owning receiver. Damage goes
+/// through the struck hitbox so limb scaling and ragdoll metadata survive.
 /// Non-damage stims and immune receivers do not emit a zero-damage AI alert.
-pub(crate) fn projectile_contact_damage(
+pub(crate) fn projectile_contact_effects(
     world: &World,
     projectile: EntityId,
     struck: EntityId,
@@ -58,14 +58,33 @@ pub(crate) fn projectile_contact_damage(
         receiver,
         crate::runtime_props::RuntimePropShotModifiers::of(world, projectile).stim,
     );
-    if amount <= 0.0 {
-        return Effect::NoEffect;
-    }
-    Effect::Send {
-        msg: Message {
-            to: struck,
-            payload: MessagePayload::Damage { amount, impact },
-        },
+    let damage = if amount > 0.0 {
+        Effect::Send {
+            msg: Message {
+                to: struck,
+                payload: MessagePayload::Damage { amount, impact },
+            },
+        }
+    } else {
+        Effect::NoEffect
+    };
+    if let Some(duration_seconds) = crate::mission::stim_response::contact_stim_freeze(
+        world,
+        template,
+        receiver,
+        crate::runtime_props::RuntimePropShotModifiers::of(world, projectile).stim,
+    ) {
+        Effect::combine(vec![
+            damage,
+            Effect::Send {
+                msg: Message {
+                    to: receiver,
+                    payload: MessagePayload::Freeze { duration_seconds },
+                },
+            },
+        ])
+    } else {
+        damage
     }
 }
 
@@ -1830,7 +1849,7 @@ mod projectile_contact_tests {
             bone: None,
         };
         let Effect::Send { msg } =
-            projectile_contact_damage(&world, projectile, limb, Some(impact))
+            projectile_contact_effects(&world, projectile, limb, Some(impact))
         else {
             panic!("authored contact damage must reach the struck limb");
         };
@@ -1858,7 +1877,7 @@ mod projectile_contact_tests {
         let projectile = world.add_entity(PropTemplateId { template_id: -1352 });
         let immune = world.add_entity(());
         assert!(matches!(
-            projectile_contact_damage(&world, projectile, immune, None),
+            projectile_contact_effects(&world, projectile, immune, None),
             Effect::NoEffect
         ));
         let victim = world.add_entity(Links {
@@ -1867,13 +1886,16 @@ mod projectile_contact_tests {
                 to_entity_id: None,
                 link: Link::Receptron(ReceptronOptions {
                     order: 82,
-                    effect: ReceptronEffect::Unhandled("Freeze".to_owned()),
+                    effect: ReceptronEffect::Freeze {
+                        duration_multiplier: 1,
+                    },
                 }),
             }],
         });
         assert!(matches!(
-            projectile_contact_damage(&world, projectile, victim, None),
-            Effect::NoEffect
+            Effect::flatten(vec![projectile_contact_effects(&world, projectile, victim, None)]).as_slice(),
+            [Effect::Send { msg: Message { to, payload: MessagePayload::Freeze { duration_seconds } } }]
+                if *to == victim && *duration_seconds == 8.0
         ));
     }
 }
