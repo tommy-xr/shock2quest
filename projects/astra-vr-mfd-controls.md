@@ -35,13 +35,19 @@ Ordinary items use their object-name key in OBJLOOKS; an authored look-string
 override takes priority. Missing entries show an explicit fallback, never the
 short item name masquerading as a description.
 
-Utility buttons occupy a dedicated row below the reserved right MFD slot and
-above the ammo readout. Their drawing, input and debug rectangles are shared
-in canvas pixels; these are new layout rectangles, not guessed BIN indices.
+The vial, `?`, and MAP buttons use the native BIOFULL wells and IFBTN40,
+IFBTN30, and IFBTN50 artwork. Their drawing, input and debug rectangles share
+`shkiface.cpp`'s authored canvas coordinates. AMMOFULL stays visible on the
+right with empty hands; its weapon controls appear only with relevant content.
+Clicking either strip while carrying a cursor item preserves the item.
+
+The current ammo controls still target the hand-agnostic wielded weapon (right
+hand first in VR). Dual readouts and explicit per-weapon action routing are a
+separate increment; the restored frame does not resolve that ownership yet.
 
 ### Research overview
 
-RES opens the retail PDA-style research list in the left MFD. Active projects
+The vial opens the retail PDA-style research list in the left MFD. Active projects
 open the RESEARCH status layout; completed entries open RESREP with the
 portrait, flask icon and report text from RESEARCH.STR, not OBJLOOKS. Reports
 are selected from collected report bits and survive the original specimen.
@@ -59,7 +65,7 @@ a rotating 3D specimen is still a separate rendering increment.
 
 MAP toggles the existing automap in the cyber interface through `ToggleMap`.
 Both presentations use its mission map art, explored regions and player pip.
-The wide panel scales uniformly to clear the utility row/HUD and keep CLOSE
+The wide panel scales uniformly to clear the bottom HUD and keep CLOSE
 inside the canvas. VR's map is a synthetic cyber-panel host, never an extra
 world quad even with the legacy experimental GUI enabled. Opening MAP closes
 the utility reader; clicking it again or using the map's close button dismisses

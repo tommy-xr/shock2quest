@@ -55,16 +55,18 @@ impl MfdUtilities {
     pub(crate) fn is_inspecting(&self) -> bool {
         self.inspecting
     }
-    fn controls(&self) -> Vec<(Control, Rect, &'static str)> {
-        // Dedicated utility row below the reserved right MFD slot, clear of
-        // the bottom ammo readout. New utilities fill the row incrementally.
-        let mut controls = vec![(Control::Inspect, Rect::new(450.0, 382.0, 36.0, 26.0), "?")];
-        controls.push((
-            Control::Research,
-            Rect::new(488.0, 382.0, 36.0, 26.0),
-            "RES",
-        ));
-        controls.push((Control::Map, Rect::new(526.0, 382.0, 36.0, 26.0), "MAP"));
+    fn controls(&self) -> Vec<(Control, Rect, &'static str, &'static str)> {
+        // Retail shkiface.cpp iface_rects[3..6], on BIOFULL at (2, 414).
+        // Keep art, hit testing, and debug discovery on these same canvas rects.
+        let mut controls = vec![
+            (Control::Inspect, Rect::new(150.0, 431.0, 32.0, 18.0), "?"),
+            (
+                Control::Research,
+                Rect::new(117.0, 431.0, 32.0, 40.0),
+                "RES",
+            ),
+            (Control::Map, Rect::new(150.0, 451.0, 32.0, 18.0), "MAP"),
+        ];
         if self.inspecting || self.selected.is_some() {
             controls.push((Control::Close, Rect::new(570.0, 346.0, 60.0, 20.0), "CLOSE"));
             if self.page > 0 {
@@ -75,6 +77,19 @@ impl MfdUtilities {
             }
         }
         controls
+            .into_iter()
+            .map(|(control, rect, label)| {
+                let texture = match control {
+                    Control::Inspect if self.inspecting => "iface/ifbtn31.pcx",
+                    Control::Inspect => "iface/ifbtn30.pcx",
+                    Control::Research if self.research => "iface/ifbtn41.pcx",
+                    Control::Research => "iface/ifbtn40.pcx",
+                    Control::Map => "iface/ifbtn50.pcx",
+                    _ => "IFBTN00.PCX",
+                };
+                (control, rect, label, texture)
+            })
+            .collect()
     }
 
     /// Returns whether this pointer belongs to utilities. Inspect mode owns
@@ -85,10 +100,10 @@ impl MfdUtilities {
         pressed: bool,
         candidate: Option<EntityId>,
     ) -> bool {
-        if let Some((control, _, _)) = self
+        if let Some((control, _, _, _)) = self
             .controls()
             .into_iter()
-            .find(|(_, rect, _)| rect.contains(point))
+            .find(|(_, rect, _, _)| rect.contains(point))
         {
             if pressed {
                 match control {
@@ -193,9 +208,12 @@ impl MfdUtilities {
                 canvas.text_native_fit(rect, line, FONT, HAlign::Left, VAlign::Middle);
             }
         }
-        for (_, rect, label) in self.controls() {
-            canvas.image(rect, "IFBTN00.PCX");
-            canvas.text_native_fit(rect, label, FONT, HAlign::Center, VAlign::Middle);
+        for (control, rect, label, texture) in self.controls() {
+            canvas.image(rect, texture);
+            // Native navigation art contains its own glyphs (including the vial).
+            if matches!(control, Control::Close | Control::Previous | Control::Next) {
+                canvas.text_native_fit(rect, label, FONT, HAlign::Center, VAlign::Middle);
+            }
         }
     }
 
@@ -211,25 +229,27 @@ impl MfdUtilities {
     pub(crate) fn debug_elements(&self) -> Vec<crate::game_scene::DebugUiElement> {
         self.controls()
             .into_iter()
-            .map(|(control, r, label)| crate::game_scene::DebugUiElement {
-                kind: "button".into(),
-                texture: Some("IFBTN00.PCX".into()),
-                text: Some(label.into()),
-                label: Some(
-                    match control {
-                        Control::Inspect => "inspect",
-                        Control::Research => "research_overview",
-                        Control::Map => "map",
-                        Control::Close => "utility_close",
-                        Control::Previous => "utility_previous",
-                        Control::Next => "utility_next",
-                    }
-                    .into(),
-                ),
-                entity_id: None,
-                rect: [r.x, r.y, r.w, r.h],
-                screen_rect: [r.x, r.y, r.w, r.h],
-            })
+            .map(
+                |(control, r, label, texture)| crate::game_scene::DebugUiElement {
+                    kind: "button".into(),
+                    texture: Some(texture.into()),
+                    text: Some(label.into()),
+                    label: Some(
+                        match control {
+                            Control::Inspect => "inspect",
+                            Control::Research => "research_overview",
+                            Control::Map => "map",
+                            Control::Close => "utility_close",
+                            Control::Previous => "utility_previous",
+                            Control::Next => "utility_next",
+                        }
+                        .into(),
+                    ),
+                    entity_id: None,
+                    rect: [r.x, r.y, r.w, r.h],
+                    screen_rect: [r.x, r.y, r.w, r.h],
+                },
+            )
             .chain(if self.research {
                 self.research_catalog.elements()
             } else {
@@ -293,7 +313,7 @@ mod tests {
     #[test]
     fn pages_cover_every_line_and_clamp_when_content_shrinks() {
         let mut ui = MfdUtilities::default();
-        ui.update(vec2(468.0, 395.0), true, None);
+        ui.update(vec2(166.0, 440.0), true, None);
         ui.set_content(
             "Long description".into(),
             (0..40).map(|i| format!("Line {i}\n")).collect(),
@@ -302,10 +322,10 @@ mod tests {
         let mut seen = Vec::new();
         loop {
             seen.extend(ui.visible_lines().map(|(_, line)| line.clone()));
-            let Some((_, rect, _)) = ui
+            let Some((_, rect, _, _)) = ui
                 .controls()
                 .into_iter()
-                .find(|(control, _, _)| *control == Control::Next)
+                .find(|(control, _, _, _)| *control == Control::Next)
             else {
                 break;
             };
@@ -325,7 +345,7 @@ mod tests {
             "hypo: \"Restores health.\"".into(),
         ));
         let mut ui = MfdUtilities::default();
-        assert!(ui.update(vec2(468.0, 395.0), true, None));
+        assert!(ui.update(vec2(166.0, 440.0), true, None));
         assert!(ui.inspecting);
         assert!(ui.update(vec2(10.0, 40.0), false, Some(hypo)));
         assert_eq!(ui.selected, None);

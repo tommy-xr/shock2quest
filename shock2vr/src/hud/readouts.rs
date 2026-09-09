@@ -47,6 +47,14 @@ pub(crate) const PSI_TEXT: Rect = Rect::new(92.0, 40.0, TEXT_W, BAR_H);
 /// AMMOFULL 260).
 pub(crate) const BIO_ORIGIN: Vector2<f32> = vec2(2.0, 414.0);
 pub(crate) const AMMO_ORIGIN: Vector2<f32> = vec2(378.0, 414.0);
+pub(crate) const BIO_FULL_RECT: Rect =
+    Rect::new(BIO_ORIGIN.x, BIO_ORIGIN.y, BIO_FULL_SIZE.x, BIO_FULL_SIZE.y);
+pub(crate) const AMMO_FULL_RECT: Rect = Rect::new(
+    AMMO_ORIGIN.x,
+    AMMO_ORIGIN.y,
+    ammo_panel::PANEL_W,
+    ammo_panel::PANEL_H,
+);
 
 /// The system-menu affordance: the pause menu's only *discoverable* control in
 /// VR, since the Menu button's long press advertises nothing until it is held.
@@ -177,20 +185,10 @@ pub(crate) fn emit_use_mode(canvas: &mut UiCanvas, readouts: &UseModeReadouts) {
         BIO_FULL_SIZE,
         &readouts.bio,
     );
-    // No weapon with a clip and no psi power wielded: the gauge is not drawn
-    // at all, exactly as in shooter mode.
-    if !readouts.ammo.is_empty() {
-        canvas.image(
-            Rect::new(
-                AMMO_ORIGIN.x,
-                AMMO_ORIGIN.y,
-                ammo_panel::PANEL_W,
-                ammo_panel::PANEL_H,
-            ),
-            "AMMOFULL.PCX",
-        );
-        ammo_panel::emit(canvas, AMMO_ORIGIN, &readouts.ammo);
-    }
+    // The expanded strip also houses MFD navigation: keep its frame visible
+    // with empty hands, while weapon controls remain conditional.
+    canvas.image(AMMO_FULL_RECT, "AMMOFULL.PCX");
+    ammo_panel::emit(canvas, AMMO_ORIGIN, &readouts.ammo);
     // Always: the way out of the game does not depend on what is wielded.
     let system = system_button();
     ammo_panel::draw_button(canvas, &system, system.rect);
@@ -206,7 +204,7 @@ pub(crate) fn buttons(readouts: &UseModeReadouts) -> Vec<ReadoutButtonSpec> {
     // Drawn unconditionally above, so it is clickable unconditionally.
     let system = system_button();
     if readouts.ammo.is_empty() {
-        // The gauge is not drawn, so nothing on it is clickable.
+        // The empty frame has no weapon controls.
         return vec![system];
     }
     ammo_panel::buttons(&readouts.ammo)
@@ -243,10 +241,10 @@ mod tests {
 
     #[test]
     fn the_bio_monitor_is_always_drawn() {
-        // Backdrop + 2 bars + 2 numbers, with no weapon wielded.
+        // Both backdrops + 2 bars + 2 numbers, with no weapon wielded.
         let mut canvas = UiCanvas::new(vec2(640.0, 480.0));
         emit_use_mode(&mut canvas, &readouts(None, false));
-        assert_eq!(canvas.element_count(), 5 + SYSTEM_ELEMENTS);
+        assert_eq!(canvas.element_count(), 6 + SYSTEM_ELEMENTS);
     }
 
     #[test]
