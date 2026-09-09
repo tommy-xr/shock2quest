@@ -4391,7 +4391,10 @@ impl MissionCore {
                             // so the palette tint is left white.
                             const PRT_SCALED_BITMAP: u32 = 5;
                             if pg.render_type == PRT_SCALED_BITMAP && !pg.model_name.is_empty() {
-                                let bitmap_name = format!("{}.PCX", pg.model_name);
+                                // A bare name can resolve an object texture first:
+                                // blood.pcx is a blue particle glow in bitmap/,
+                                // but red splatter in obj/txt16/.
+                                let bitmap_name = format!("bitmap/{}.PCX", pg.model_name);
                                 if let Some(texture) = asset_cache.get_ext_opt(
                                     &TEXTURE_IMPORTER,
                                     &bitmap_name,
