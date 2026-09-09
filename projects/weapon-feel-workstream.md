@@ -829,13 +829,13 @@ units. Both modes author zero heading kick. The pitch return/limit ratio is
 at 60 Hz to verify recovery. The three-shell mode uses its authored larger
 impulse once per firing event, rather than multiplying recoil by pellet count.
 
-The shotgun currently uses the generic extra one-handed spring: at Strength 1,
+At the #1482 baseline, the shotgun used the generic extra one-handed spring: at Strength 1,
 one hand doubles its authored impulse, while two hands retain the baseline.
 Its normal-mode backward kick is already about 1.7 times the pistol's and
 2.4 times the AR's. The dedicated pistol/AR angular profiles do not apply to
-the shotgun: horizontal kick remains zero, and Agility 6 suppresses its angular
-kick even one-handed. A dedicated shotgun handling profile remains a separate
-tuning gap; this evaluation records the existing behavior without inventing one.
+the shotgun in that baseline: horizontal kick is zero, and Agility 6 suppresses
+its angular kick even one-handed. The dedicated profile below closes this gap;
+the baseline measurements remain here for comparison.
 
 The runtime matrix checks correct one/three-shell consumption, reloads through
 the normal ammo path, verifies support and fixed head pose, and samples the
@@ -888,3 +888,21 @@ Transient spring state is recreated with the held body, including after load.
 Validation covers Strength 1/3/6, both AR hands, pistol, disabled flag, primary
 palm placement, smooth support/stat transitions, and shots returning to the
 weighted resting aim. Headset comfort and final angles remain device tuning.
+
+
+## Dedicated shotgun one-handed handling
+
+The measured shotgun evaluation above is the baseline. Add a dedicated extra
+angular profile while preserving its authored backward kick and supported
+recoil. Normal mode adds up to 12 degrees of pitch and ±3 degrees of yaw;
+three-shell mode adds up to 24 degrees and ±4.5 degrees. Each samples 50–100%
+of its peak before modifiers, with the shotgun's slower angular spring rate
+of 0.5. Extra pitch/yaw caps are twice those profile magnitudes.
+
+Strength reduces both extra axes through the established one-handed curve.
+Agility reduces horizontal recoil, while the extra vertical response remains
+at Agility 6. Still Hand suppresses angular recoil and the aiming implant
+reduces it. Support removes new extra impulses while existing recoil settles.
+The original kickback, pitch baseline, ammo consumption and pellet behavior
+remain unchanged. These are initial VR handling values requiring headset tuning.
+The optional shotgun weight profile follows as a separate increment.
