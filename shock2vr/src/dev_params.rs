@@ -193,6 +193,10 @@ dev_params! {
     MELEE_VOLUMES = float("melee_volumes", "Show hurtbox", 0.0, 0.0, 1.0, 1.0),
     /// Visualize shoulder backpack stow zones (cyan; green while reached).
     VR_BACKPACK_ZONES = bool("vr_backpack_zones", "Backpack zones", false),
+    VR_BACKPACK_RADIUS = float("vr_backpack_radius", "Backpack reach radius (m)", 0.28, 0.18, 0.35, 0.01),
+    VR_HOLSTER_RADIUS = float("vr_holster_radius", "Holster reach radius (m)", 0.35, 0.14, 0.45, 0.01),
+    VR_GLOVE_SPHERES = bool("vr_glove_spheres", "Glove contact spheres", false),
+    VR_GLOVE_RADIUS = float("vr_glove_radius", "Glove contact radius (m)", 0.05, 0.02, 0.09, 0.005),
     VR_AMMO_POUCH_ZONES = bool("vr_ammo_pouch_zones", "Ammo pouch zone", false),
     VR_HOLSTER_ZONES = bool("vr_holster_zones", "Holster zones", false),
     /// Actual front of the curved belt, including the asset's authored offset.

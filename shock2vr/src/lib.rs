@@ -3,6 +3,7 @@ pub mod game_scene;
 pub mod hand_buttons;
 pub mod hand_pose;
 pub mod hand_pose_library;
+pub mod haptics;
 pub mod hit_feedback;
 pub mod input;
 pub mod input_context;
@@ -1404,6 +1405,9 @@ impl Game {
         let span = span!(Level::INFO, "update");
         let _enter = span.enter();
         let delta_time = time.elapsed.as_secs_f32();
+        // Discard unconsumed output before every early return (pause/loading).
+        // A short feedback pulse belongs only to the frame that requested it.
+        haptics::take(self.world());
         trace!("delta_time: {}", delta_time);
 
         // Publish the simulation clock for the diagnostics ring buffers
@@ -2712,6 +2716,13 @@ pub enum App {
 }
 
 impl App {
+    pub fn take_haptics(&self) -> [Option<haptics::HapticPulse>; 2] {
+        match self {
+            App::Ready(game) => haptics::take(game.world()),
+            App::MissingAssets(_) => [None; 2],
+        }
+    }
+
     /// Probe the data root, then build whichever of the two is appropriate.
     pub fn init(options: GameOptions, bundle_storage: Arc<dyn Storage>) -> App {
         let install = install::probe_data_root();

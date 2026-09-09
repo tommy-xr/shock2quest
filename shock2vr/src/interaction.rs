@@ -183,6 +183,12 @@ pub trait PlayerInteraction {
         false
     }
 
+    /// Current tracked palms in pawn space, using the same calibrated glove
+    /// kinematics as fitted items and support grips. Missing rigs are disarmed.
+    fn body_palm_positions(&self, _input: &InputContext) -> [Option<Vector3<f32>>; 2] {
+        [None; 2]
+    }
+
     /// Wield `entity_id` as the first-person weapon (flat); no-op for VR.
     fn wield(&mut self, _entity_id: EntityId) -> Vec<VirtualHandEffect> {
         Vec::new()
@@ -644,6 +650,21 @@ impl VrInteraction {
 }
 
 impl PlayerInteraction for VrInteraction {
+    fn body_palm_positions(&self, input: &InputContext) -> [Option<Vector3<f32>>; 2] {
+        let Some(rig) = &self.grip_kinematics else {
+            return [None; 2];
+        };
+        let hands = [&input.left_hand, &input.right_hand];
+        std::array::from_fn(|i| {
+            let pose = GripPose {
+                position: hands[i].position,
+                rotation: hands[i].rotation,
+            };
+            (pose.is_tracked() && input.pose_tracking.is_none_or(|p| p.head && p.hands[i]))
+                .then(|| pose.point(rig[i].palm))
+        })
+    }
+
     fn hand_available_for_body_slot(&self, hand: Handedness) -> bool {
         let i = crate::vr_config::hand_slot(hand);
         let held = if i == 0 {
@@ -1521,6 +1542,32 @@ mod tests {
     use dark::properties::{FrobFlag, PropFrobInfo, PropModelName};
 
     use super::*;
+    #[test]
+    fn body_contacts_rotate_the_calibrated_palm_and_reject_missing_tracking() {
+        use cgmath::{Deg, Rotation3};
+        let mut interaction = VrInteraction::new();
+        let mut input = InputContext::default();
+        assert_eq!(interaction.body_palm_positions(&input), [None; 2]);
+        interaction.grip_kinematics =
+            Some(std::array::from_fn(|_| crate::vr_grip::GripKinematics {
+                fingers: std::array::from_fn(|_| Vec::new()),
+                palm: vec3(0.0, 0.0, -0.08),
+                normal: Vector3::unit_x(),
+            }));
+        input.right_hand.position = vec3(1.0, 2.0, 3.0);
+        input.right_hand.rotation = Quaternion::from_angle_y(Deg(90.0));
+        let palm = interaction.body_palm_positions(&input)[1].unwrap();
+        assert!((palm - vec3(0.92, 2.0, 3.0)).magnitude() < 0.0001);
+        input.pose_tracking = Some(crate::input_context::PoseTracking {
+            head: true,
+            hands: [true, false],
+        });
+        assert!(interaction.body_palm_positions(&input)[1].is_none());
+        input.pose_tracking = None;
+        input.right_hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+        assert!(interaction.body_palm_positions(&input)[1].is_none());
+    }
+
     use crate::{
         input_context::InputContext,
         physics::{CollisionGroup, DynamicPhysicsOptions, PhysicsShape},

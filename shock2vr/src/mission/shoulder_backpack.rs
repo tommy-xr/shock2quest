@@ -6,10 +6,13 @@ use shipyard::{EntityId, Get, IntoIter, IntoWithId, View, World};
 use crate::{input_context::InputContext, vr_support::GripPose};
 
 const SCALE: f32 = crate::METERS_PER_WORLD_UNIT;
-const SIDE: f32 = 0.18 / SCALE;
-const DROP: f32 = 0.20 / SCALE;
-const BEHIND: f32 = 0.18 / SCALE;
-pub(super) const RADIUS: f32 = 0.18 / SCALE;
+const SIDE: f32 = 0.24 / SCALE;
+const DROP: f32 = 0.10 / SCALE;
+const BEHIND: f32 = 0.06 / SCALE;
+
+fn radius() -> f32 {
+    crate::dev_params::get(crate::dev_params::VR_BACKPACK_RADIUS) / SCALE
+}
 
 pub(super) struct ShoulderBackpack {
     yaw: Option<f32>,
@@ -22,6 +25,9 @@ pub(super) struct ShoulderBackpack {
     pub blocks_grab: [bool; 2],
     draw_pressed: [bool; 2],
     consumed: [bool; 2],
+    pub entered: [bool; 2],
+    feedback_slot: [Option<usize>; 2],
+    outside_time: [f32; 2],
 }
 
 impl Default for ShoulderBackpack {
@@ -37,6 +43,9 @@ impl Default for ShoulderBackpack {
             blocks_grab: [false; 2],
             draw_pressed: [true; 2],
             consumed: [false; 2],
+            entered: [false; 2],
+            feedback_slot: [None; 2],
+            outside_time: [0.0; 2],
         }
     }
 }
@@ -94,6 +103,7 @@ impl ShoulderBackpack {
         let hands = [&input.left_hand, &input.right_hand];
         self.retained.update(held, hands.map(|h| h.squeeze_value));
         self.draws = [None; 2];
+        self.entered = [false; 2];
         self.near_slot = [None; 2];
         let tracked = std::array::from_fn::<_, 2, _>(|i| {
             let hand = hands[i];
@@ -141,14 +151,20 @@ impl ShoulderBackpack {
         for i in 0..2 {
             let hand = hands[i];
             let tracked = tracked[i];
-            // Require the hand genuinely behind the head, not beside the face.
+            // Reach beside/over the shoulder while optical tracking still sees
+            // the controller. Exclude the face and ordinary forward gestures.
+            let offset = hand.position - head.position;
             self.near_slot[i] = (tracked
-                && (hand.position - head.position).dot(forward) < -0.03 / SCALE)
+                && offset.dot(forward) < 0.08 / SCALE
+                && offset.dot(right).abs() > 0.10 / SCALE)
                 .then(|| {
                     centers
                         .iter()
                         .enumerate()
-                        .filter(|(_, c)| (hand.position - **c).magnitude2() <= RADIUS * RADIUS)
+                        .filter(|(_, c)| {
+                            (hand.position - **c).magnitude2()
+                                <= (radius() + super::body_inventory::hand_radius()).powi(2)
+                        })
                         .min_by(|(_, a), (_, b)| {
                             (hand.position - **a)
                                 .magnitude2()
@@ -158,6 +174,17 @@ impl ShoulderBackpack {
                 })
                 .flatten();
             self.near[i] = self.near_slot[i].is_some();
+            if let Some(slot) = self.near_slot[i] {
+                self.outside_time[i] = 0.0;
+                self.entered[i] = self.feedback_slot[i] != Some(slot);
+                self.feedback_slot[i] = Some(slot);
+            } else if tracked {
+                // A brief boundary jitter or tracking loss must not buzz again.
+                self.outside_time[i] += dt.clamp(0.0, 0.1);
+                if self.outside_time[i] >= 0.15 {
+                    self.feedback_slot[i] = None;
+                }
+            }
             let pressed = hand.squeeze_value >= 0.5;
             if held[i].is_none() && self.near[i] {
                 self.blocks_grab[i] = true;
@@ -203,7 +230,7 @@ impl ShoulderBackpack {
         let root = Matrix4::from_translation(position) * Matrix4::from(rotation);
         let mut vertices = Vec::new();
         for center in centers {
-            dark::hit_box::append_capsule_lines(&mut vertices, &root, center, center, RADIUS);
+            dark::hit_box::append_capsule_lines(&mut vertices, &root, center, center, radius());
         }
         let color = if self.retained.0.iter().any(Option::is_some) {
             vec3(1.0, 0.3, 0.1)
@@ -227,7 +254,8 @@ impl ShoulderBackpack {
     ) -> serde_json::Value {
         serde_json::json!({
             "centers": self.centers.map(|cs| cs.map(|c| { let p = position + rotation.rotate_vector(c); [p.x,p.y,p.z] })),
-            "radius": RADIUS, "near": self.near, "near_slot": self.near_slot,
+            "radius": radius(), "near": self.near, "near_slot": self.near_slot,
+            "entered": self.entered,
             "retained": self.retained.0.map(|e| e.is_some()),
         })
     }
@@ -278,6 +306,55 @@ mod tests {
         input.left_hand.position = vec3(-0.3, 1.0, -0.4);
         input.right_hand.position = vec3(0.3, 1.0, -0.4);
         (ShoulderBackpack::default(), input, item)
+    }
+
+    #[test]
+    fn beside_head_reach_cues_once_and_rearms_only_after_a_tracked_exit() {
+        let (mut tracker, mut input, item) = fixture();
+        let held = [Some(item), None];
+        input.left_hand.position = input.head.position + vec3(-0.26, 0.05, -0.03) / SCALE;
+        input.left_hand.squeeze_value = 1.0;
+        tracker.update(&input, held, true, 0.016);
+        assert_eq!(tracker.near_slot[0], Some(0));
+        assert!(tracker.entered[0]);
+        for _ in 0..60 {
+            tracker.update(&input, held, true, 0.016);
+            assert!(!tracker.entered[0]);
+        }
+        let target = input.left_hand.position;
+        input.left_hand.position = input.head.position;
+        tracker.update(&input, held, true, 0.016);
+        input.left_hand.position = target;
+        tracker.update(&input, held, true, 0.016);
+        assert!(
+            !tracker.entered[0],
+            "short boundary jitter does not repeat the cue"
+        );
+        input.pose_tracking = Some(crate::input_context::PoseTracking {
+            head: true,
+            hands: [false, true],
+        });
+        for _ in 0..20 {
+            tracker.update(&input, held, true, 0.016);
+            assert!(!tracker.entered[0]);
+        }
+        input.pose_tracking = None;
+        tracker.update(&input, held, true, 0.016);
+        assert!(
+            !tracker.entered[0],
+            "tracking recovery is not a fresh entry"
+        );
+        input.left_hand.position = input.head.position;
+        for _ in 0..10 {
+            tracker.update(&input, held, true, 0.016);
+        }
+        input.left_hand.position = target;
+        tracker.update(&input, held, true, 0.016);
+        assert!(tracker.entered[0]);
+        input.left_hand.squeeze_value = 0.0;
+        assert!(tracker.update(&input, held, true, 0.016)[0]);
+        tracker.update(&input, held, false, 0.016);
+        assert!(!tracker.entered[0]);
     }
 
     #[test]

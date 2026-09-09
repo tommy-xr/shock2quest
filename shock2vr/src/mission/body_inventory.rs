@@ -1,6 +1,10 @@
 //! Shared body-inventory heading and refused-release latch.
 use shipyard::EntityId;
 
+pub(super) fn hand_radius() -> f32 {
+    crate::dev_params::get(crate::dev_params::VR_GLOVE_RADIUS) / crate::METERS_PER_WORLD_UNIT
+}
+
 pub(super) fn followed_yaw(previous: Option<f32>, observed: f32, frozen: bool, dt: f32) -> f32 {
     match previous {
         Some(yaw) if frozen => yaw,

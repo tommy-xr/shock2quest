@@ -684,11 +684,16 @@ export interface PlayerSnapshot {
       items: [number | null, number | null];
       retained: [boolean, boolean];
     };
+    /** Per-hand transient haptic requests and monotonic diagnostic counters. */
+    haptics?: { pending: [{ amplitude: number; duration_ms: number } | null, { amplitude: number; duration_ms: number } | null]; sequence: [number, number] };
+    glove_contacts?: { centers: [Vec3 | null, Vec3 | null]; radius: number };
     /** Shoulder stow targets in world space; absent on older runtimes. */
     shoulder_backpack?: {
       centers: [Vec3, Vec3] | null;
       radius: number;
       near: [boolean, boolean];
+      near_slot?: [number | null, number | null];
+      entered?: [boolean, boolean];
       retained: [boolean, boolean];
     };
   } | null;

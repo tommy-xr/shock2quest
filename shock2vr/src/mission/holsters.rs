@@ -7,7 +7,9 @@ use cgmath::{InnerSpace, Matrix4, Quaternion, Rotation, Vector3, vec3};
 use shipyard::{EntityId, Get, IntoIter, IntoWithId, UniqueView, View, World};
 
 const SCALE: f32 = crate::METERS_PER_WORLD_UNIT;
-pub(super) const RADIUS: f32 = 0.14 / SCALE;
+fn radius() -> f32 {
+    crate::dev_params::get(crate::dev_params::VR_HOLSTER_RADIUS) / SCALE
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Action {
@@ -28,6 +30,62 @@ mod tests {
             &input, [None; 2], [true; 2], [None; 2], 1, [false; 2], [false; 2], true, 0.016,
         );
         (h, input, ids)
+    }
+
+    #[test]
+    fn enlarged_overlapping_slots_choose_nearest_and_yield_to_shoulders() {
+        let (mut tracker, mut input, ids) = setup();
+        let centers = tracker.centers.unwrap();
+        // Both 35 cm volumes include this point; the left slot is closer.
+        input.left_hand.position = (centers[0] + centers[1]) * 0.5 - vec3(0.02 / SCALE, 0.0, 0.0);
+        let update = |tracker: &mut Holsters, input: &InputContext| {
+            tracker.update(
+                input,
+                [None; 2],
+                [true; 2],
+                [Some(ids[0]), Some(ids[1])],
+                2,
+                [false; 2],
+                [false; 2],
+                true,
+                0.016,
+            )
+        };
+        input.left_hand.squeeze_value = 0.0;
+        update(&mut tracker, &input);
+        assert_eq!(tracker.near[0], Some(1));
+        input.left_hand.squeeze_value = 1.0;
+        assert_eq!(
+            update(&mut tracker, &input)[0],
+            Some(Action::Retrieve {
+                entity: ids[1],
+                slot: 1
+            })
+        );
+        tracker.shoulder_priority[0] = true;
+        input.left_hand.squeeze_value = 0.0;
+        update(&mut tracker, &input);
+        input.left_hand.squeeze_value = 1.0;
+        assert_eq!(update(&mut tracker, &input)[0], None);
+        assert_eq!(tracker.near[0], None);
+        tracker.shoulder_priority[0] = false;
+        input.left_hand.position = centers[0] + vec3(0.0, -0.30 / SCALE, 0.0);
+        update(&mut tracker, &input);
+        assert_eq!(
+            tracker.near[0],
+            Some(0),
+            "30 cm below the slot is reachable"
+        );
+        input.left_hand.position = centers[0] + vec3(0.0, -0.38 / SCALE, 0.0);
+        update(&mut tracker, &input);
+        assert_eq!(
+            tracker.near[0],
+            Some(0),
+            "palm center stays outside while the glove sphere touches"
+        );
+        input.left_hand.position = centers[0] + vec3(0.0, -0.41 / SCALE, 0.0);
+        update(&mut tracker, &input);
+        assert_eq!(tracker.near[0], None, "separated spheres do not touch");
     }
 
     #[test]
@@ -335,6 +393,7 @@ pub(super) struct Holsters {
     pub body_pose: Option<super::body_inventory::BodyPose>,
     pub freeze_heading: bool,
     pub pouch_priority: [bool; 2],
+    pub shoulder_priority: [bool; 2],
     yaw: Option<f32>,
     pub centers: Option<[Vector3<f32>; 2]>,
     pub near: [Option<usize>; 2],
@@ -349,6 +408,7 @@ impl Default for Holsters {
             body_pose: None,
             freeze_heading: false,
             pouch_priority: [false; 2],
+            shoulder_priority: [false; 2],
             yaw: None,
             centers: None,
             near: [None; 2],
@@ -473,11 +533,26 @@ impl Holsters {
                 && held[i].is_none()
                 && (hand.position - super::ammo_pouch::center_for(self.body_pose.unwrap()))
                     .magnitude2()
-                    <= super::ammo_pouch::RADIUS.powi(2);
-            self.near[i] = (tracked && !at_pouch && (held[i].is_none() || weapons[i])).then(|| (0..2).find(|s|
-                // A stored item remains retrievable if its perk is removed.
-                (*s < count || slots[*s].is_some()) && (hand.position - centers[*s]).magnitude2() <= RADIUS * RADIUS
-            )).flatten();
+                    <= (super::ammo_pouch::RADIUS + super::body_inventory::hand_radius()).powi(2);
+            self.near[i] = (tracked
+                && !at_pouch
+                && !self.shoulder_priority[i]
+                && (held[i].is_none() || weapons[i]))
+                .then(|| {
+                    (0..2)
+                        // Stored items remain retrievable if their perk is removed.
+                        .filter(|s| {
+                            (*s < count || slots[*s].is_some())
+                                && (hand.position - centers[*s]).magnitude2()
+                                    <= (radius() + super::body_inventory::hand_radius()).powi(2)
+                        })
+                        .min_by(|a, b| {
+                            (hand.position - centers[*a])
+                                .magnitude2()
+                                .total_cmp(&(hand.position - centers[*b]).magnitude2())
+                        })
+                })
+                .flatten();
             if let Some(slot) = self.near[i] {
                 if let Some(entity) = held[i] {
                     if !pressed && self.pressed_item[i] == Some(entity) {
@@ -524,7 +599,7 @@ impl Holsters {
         rotation: Quaternion<f32>,
     ) -> serde_json::Value {
         serde_json::json!({"centers": self.world_centers(position, rotation).map(|cs| cs.map(|c| [c.x,c.y,c.z])),
-            "radius":RADIUS, "enabled_slots":slot_count(world), "near":self.near,
+            "radius":radius(), "enabled_slots":slot_count(world), "near":self.near,
             "items":occupants(world).map(|e| e.map(|id| id.inner() as i32)),
             "retained":self.retained.0.map(|e| e.is_some())})
     }
@@ -556,7 +631,7 @@ impl Holsters {
             } else {
                 vec3(0.1, 0.55, 0.7)
             };
-            let radius = if debug { RADIUS } else { 0.04 / SCALE };
+            let radius = if debug { radius() } else { 0.04 / SCALE };
             let mut points = Vec::new();
             dark::hit_box::append_capsule_lines(
                 &mut points,

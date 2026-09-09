@@ -29,6 +29,7 @@ pub(super) struct AmmoPouch {
     pub blocks_grab: [bool; 2],
     pub offers: [Option<PouchClip>; 2],
     pub refused: [bool; 2],
+    pub shoulder_priority: [bool; 2],
     consumed: [bool; 2],
     pressed: [bool; 2],
     pressed_item: [Option<EntityId>; 2],
@@ -43,6 +44,7 @@ impl Default for AmmoPouch {
             blocks_grab: [false; 2],
             offers: [None; 2],
             refused: [false; 2],
+            shoulder_priority: [false; 2],
             consumed: [false; 2],
             pressed: [true; 2],
             pressed_item: [None; 2],
@@ -82,8 +84,11 @@ impl AmmoPouch {
                 && input.pose_tracking.is_none_or(|p| p.hands[i]);
             let pressed = hand.squeeze_value >= 0.5;
             self.near[i] = tracked
-                && active_center
-                    .is_some_and(|center| (hand.position - center).magnitude2() <= RADIUS * RADIUS);
+                && !self.shoulder_priority[i]
+                && active_center.is_some_and(|center| {
+                    (hand.position - center).magnitude2()
+                        <= (RADIUS + super::body_inventory::hand_radius()).powi(2)
+                });
             if tracked && !pressed {
                 self.consumed[i] = false;
             }
@@ -326,23 +331,5 @@ mod tests {
             true,
         );
         assert!(!pouch.blocks_grab[0]);
-    }
-
-    #[test]
-    fn default_pouch_is_separate_from_thighs_and_shoulders() {
-        let body = BodyPose {
-            head: cgmath::vec3(0.0, 2.0, 0.0),
-            yaw: 0.0,
-        };
-        let center = center_for(body);
-        for side in [-0.23, 0.23] {
-            let thigh = body.front(0.78, 0.04)
-                + cgmath::vec3(side / crate::METERS_PER_WORLD_UNIT, 0.0, 0.0);
-            assert!((thigh - center).magnitude() > RADIUS + super::super::holsters::RADIUS);
-        }
-        assert!(
-            (BELOW - 0.20) / crate::METERS_PER_WORLD_UNIT
-                > RADIUS + super::super::shoulder_backpack::RADIUS
-        );
     }
 }
