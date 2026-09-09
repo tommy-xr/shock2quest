@@ -769,6 +769,24 @@ pub(super) fn create_projectile(
     _options: &ProjectileOptions,
     modifiers: RuntimePropShotModifiers,
 ) -> Effect {
+    let spray = world
+        .borrow::<UniqueView<crate::mission::projectile_spray::GlobalProjectileSprays>>()
+        .ok()
+        .and_then(|sprays| sprays.0.get(&projectile_template_id).copied())
+        .unwrap_or_default();
+    crate::mission::projectile_spray::expand(
+        spray,
+        create_projectile_launch(world, entity_id, projectile_template_id, modifiers),
+        &mut rand::thread_rng(),
+    )
+}
+
+fn create_projectile_launch(
+    world: &World,
+    entity_id: EntityId,
+    projectile_template_id: i32,
+    modifiers: RuntimePropShotModifiers,
+) -> Effect {
     // Flatscreen camera-origin aim: if the weapon carries a flat fire ray, spawn
     // the projectile just ahead of the camera travelling straight along the
     // crosshair, ignoring the offset/rotated barrel transform. This makes both

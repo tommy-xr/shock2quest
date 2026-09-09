@@ -515,3 +515,14 @@ is not implemented by this native freeze layer; a queued AI bookkeeping message
 can still emit a vocalization while frozen. Radius falloff and physical blast
 impulses also retain the existing engine behavior pending broader parity work.
 Quest particle validation for #1460 remains with the user.
+
+
+### Shotgun pellet generation
+
+The next layer above #1465 parses `P$Projectil` and emits the authored six
+pellets for both shotgun modes, each with independent ±5.625° heading/pitch
+spread. Slugs remain single projectiles; ammo costs and shot presentation remain
+per shell. See the [pellet audit](weapon-projectile-audit.md#shotgun-pellet-count-and-spread-follow-up)
+for source records, mode differences, flat/VR tests and matched near/far media.
+Gun accuracy/stat hooks and Strength-based VR spring recoil remain subsequent
+increments, separate from this projectile-authored spread.

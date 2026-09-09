@@ -33,6 +33,7 @@ mod prop_phys_attr;
 mod prop_phys_initial_velocity;
 mod prop_phys_type;
 mod prop_player_gun;
+mod prop_projectile;
 mod prop_psi;
 mod prop_quest_bit;
 mod prop_render_type;
@@ -81,6 +82,7 @@ pub use prop_phys_attr::*;
 pub use prop_phys_initial_velocity::*;
 pub use prop_phys_type::*;
 pub use prop_player_gun::*;
+pub use prop_projectile::*;
 pub use prop_psi::*;
 pub use prop_quest_bit::*;
 pub use prop_render_type::*;
@@ -1532,6 +1534,12 @@ pub fn get<R: io::Read + io::Seek + 'static>() -> (
         ),
         define_prop("P$KeyDst", KeyCard::read, PropKeyDst, accumulator::latest),
         define_prop("P$KeySrc", KeyCard::read, PropKeySrc, accumulator::latest),
+        define_prop(
+            "P$Projectil",
+            PropProjectile::read,
+            identity,
+            accumulator::latest,
+        ),
         define_prop(
             "P$BaseGunDe",
             PropBaseGunDesc::read,

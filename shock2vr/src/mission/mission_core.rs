@@ -2347,6 +2347,11 @@ impl MissionCore {
         let template_class_tags = create_template_class_tag_map(&entity_info_rc);
         world.add_unique(GlobalTemplateClassTags(template_class_tags));
         world.add_unique(
+            crate::mission::projectile_spray::GlobalProjectileSprays::from_entity_info(
+                &entity_info_rc,
+            ),
+        );
+        world.add_unique(
             crate::mission::reload::GlobalProjectileClips::from_entity_info(&entity_info_rc),
         );
         world.add_unique(
