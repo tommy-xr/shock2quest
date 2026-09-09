@@ -547,7 +547,6 @@ fn main() {
     let mission = quest_config::configured_mission();
     let game_init_started = Instant::now();
     let options: GameOptions = GameOptions {
-        render_particles: false,
         mission: mission.clone(),
         experimental_features,
         debug_skeletons: false,
