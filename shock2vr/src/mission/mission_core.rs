@@ -2146,6 +2146,7 @@ pub struct MissionCore {
     shoulder_backpack: super::shoulder_backpack::ShoulderBackpack,
     holsters: super::holsters::Holsters,
     ammo_pouch: super::ammo_pouch::AmmoPouch,
+    body_hand_contacts: [Option<Vector3<f32>>; 2],
 
     /// Flat-mode MFD panel host: the object-bound panel opened on frob, its
     /// canvas rendering, and the pointer -> GUIHover input mapping. VR uses
@@ -2788,6 +2789,7 @@ impl MissionCore {
         world.add_unique(PlayerLifeState::Alive);
 
         world.add_unique(quest_info);
+        world.add_unique(crate::haptics::HapticFeedback::default());
 
         // Current saves record the width that encoded their backpack link
         // ordinals. Pre-#948 saves omit it and used the former fixed width 15;
@@ -3073,6 +3075,7 @@ impl MissionCore {
             vr_trigger_safe_latch: [None; 2],
             vr_clip_insert_engaged: [false; 2],
             shoulder_backpack: Default::default(),
+            body_hand_contacts: [None; 2],
             holsters: Default::default(),
             ammo_pouch: Default::default(),
             flat_ui: crate::mission::flat_ui_host::FlatUiHost::new(),
@@ -4137,13 +4140,38 @@ impl MissionCore {
         }
 
         let held = [left_hand_held, right_hand_held];
+        // Body contacts use a calibrated palm sphere, not the aim origin at
+        // the back of the glove. Keep the original input for weapon controls.
+        let mut body_input = hands_input.clone();
+        self.body_hand_contacts = self.interaction.body_palm_positions(hands_input);
+        for (i, hand) in [&mut body_input.left_hand, &mut body_input.right_hand]
+            .into_iter()
+            .enumerate()
+        {
+            if let Some(palm) = self.body_hand_contacts[i] {
+                hand.position = palm;
+            } else {
+                hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
+            }
+        }
+        let mut shoulder_releases = self.shoulder_backpack.update(
+            &body_input,
+            held,
+            game_options.presentation_mode == crate::PresentationMode::Vr
+                && !self.use_mode
+                && self.player_is_alive()
+                && self.player_controls_enabled,
+            time.elapsed.as_secs_f32(),
+        );
+        self.holsters.shoulder_priority = self.shoulder_backpack.near;
+        self.ammo_pouch.shoulder_priority = self.shoulder_backpack.near;
         let pouch_weapons = std::array::from_fn(|i| {
             held[1 - i].filter(|gun| self.magazine_capacity(*gun).is_some())
         });
         self.holsters.pouch_priority = pouch_weapons.map(|weapon| weapon.is_some());
         self.holsters.freeze_heading = self.ammo_pouch.near.iter().any(|near| *near);
         let holster_actions = self.holsters.update(
-            hands_input,
+            &body_input,
             held,
             [
                 crate::vr_config::Handedness::Left,
@@ -4175,7 +4203,7 @@ impl MissionCore {
                 .and_then(|gun| super::reload::reserve_clip_for_pouch(&self.world, gun))
         });
         let pouch_actions = self.ammo_pouch.update(
-            hands_input,
+            &body_input,
             self.holsters.body_pose,
             held,
             pouch_available,
@@ -4189,26 +4217,35 @@ impl MissionCore {
                 && self.player_is_alive()
                 && self.player_controls_enabled,
         );
-        let mut shoulder_releases = self.shoulder_backpack.update(
-            hands_input,
-            held,
-            game_options.presentation_mode == crate::PresentationMode::Vr
-                && !self.use_mode
-                && self.player_is_alive()
-                && self.player_controls_enabled,
-            time.elapsed.as_secs_f32(),
-        );
         let shoulder_slots = self.shoulder_backpack.near_slot;
         let inventory = self
             .world
             .borrow::<UniqueView<PlayerInfo>>()
             .unwrap()
             .inventory_entity_id;
-        let mut recalls = if self.shoulder_backpack.draws.iter().any(Option::is_some) {
+        let needs_recall = self.shoulder_backpack.draws.iter().any(Option::is_some)
+            || (0..2).any(|i| self.shoulder_backpack.entered[i] && held[i].is_none());
+        let mut recalls = if needs_recall {
             super::shoulder_backpack::weapons(&self.world, inventory)
         } else {
             [None; 2]
         };
+        for i in 0..2 {
+            if self.shoulder_backpack.entered[i]
+                && (held[i].is_some()
+                    || (pouch_available[i]
+                        && shoulder_slots[i].is_some_and(|slot| recalls[slot].is_some())))
+            {
+                effects.push(Effect::HandHaptic {
+                    hand: if i == 0 {
+                        crate::Handedness::Left
+                    } else {
+                        crate::Handedness::Right
+                    },
+                    pulse: crate::haptics::SHOULDER_READY,
+                });
+            }
+        }
         for i in 0..2 {
             if !pouch_available[i] {
                 continue;
@@ -8723,6 +8760,12 @@ impl MissionCore {
                     }
                     drop(quests);
                 }
+                Effect::HandHaptic { hand, pulse } => {
+                    self.world
+                        .borrow::<UniqueViewMut<crate::haptics::HapticFeedback>>()
+                        .unwrap()
+                        .request(hand, pulse);
+                }
                 Effect::PlaySound {
                     handle,
                     name,
@@ -11180,6 +11223,33 @@ impl MissionCore {
             scene.extend(self.shoulder_backpack.render(player.pos, player.rotation));
         }
 
+        if options.presentation_mode == crate::PresentationMode::Vr
+            && crate::dev_params::get_bool(crate::dev_params::VR_GLOVE_SPHERES)
+        {
+            for (i, center) in self.body_hand_contacts.into_iter().enumerate() {
+                let Some(center) = center else {
+                    continue;
+                };
+                let touching = self.shoulder_backpack.near[i]
+                    || self.holsters.near[i].is_some()
+                    || self.ammo_pouch.near[i];
+                let mut objects = vec![dark::hit_box::draw_debug_wire_sphere(
+                    player.pos + player.rotation.rotate_vector(center),
+                    super::body_inventory::hand_radius(),
+                    if touching {
+                        vec3(0.1, 1.0, 0.2)
+                    } else {
+                        vec3(1.0, 0.65, 0.1)
+                    },
+                )];
+                crate::util::tag_render_source(
+                    &mut objects,
+                    crate::util::render_source::PLAYER_HANDS,
+                );
+                scene.extend(objects);
+            }
+        }
+
         // The old synthetic blue inventory cube remains a desktop diagnostic.
         // VR presents the authored INVBACK canvas through GuiManager instead.
         if options.presentation_mode == crate::PresentationMode::Flat {
@@ -13257,6 +13327,26 @@ impl crate::game_scene::DebuggableScene for MissionCore {
                 "holsters".to_owned(),
                 self.holsters
                     .diagnostics(&self.world, player.pos, player.rotation),
+            );
+            object.insert(
+                "haptics".to_owned(),
+                serde_json::to_value(
+                    &*self
+                        .world
+                        .borrow::<UniqueView<crate::haptics::HapticFeedback>>()
+                        .unwrap(),
+                )
+                .unwrap(),
+            );
+            object.insert(
+                "glove_contacts".to_owned(),
+                serde_json::json!({
+                    "centers": self.body_hand_contacts.map(|c| c.map(|c| {
+                        let p = player.pos + player.rotation.rotate_vector(c);
+                        [p.x, p.y, p.z]
+                    })),
+                    "radius": super::body_inventory::hand_radius(),
+                }),
             );
             object.insert(
                 "shoulder_backpack".to_owned(),

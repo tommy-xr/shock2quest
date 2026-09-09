@@ -304,6 +304,12 @@ fn main() {
     let left_grip = action_set
         .create_action::<xr::Posef>("left_grip", "Left Hand Grip", &[])
         .unwrap();
+    let left_haptic = action_set
+        .create_action::<xr::Haptic>("left_haptic", "Left Hand Haptic", &[])
+        .unwrap();
+    let right_haptic = action_set
+        .create_action::<xr::Haptic>("right_haptic", "Right Hand Haptic", &[])
+        .unwrap();
 
     let right_grip = action_set
         .create_action::<xr::Posef>("right_grip", "Right Hand Grip", &[])
@@ -396,6 +402,18 @@ fn main() {
                     &left_aim,
                     xr_instance
                         .string_to_path("/user/hand/left/input/aim/pose")
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &left_haptic,
+                    xr_instance
+                        .string_to_path("/user/hand/left/output/haptic")
+                        .unwrap(),
+                ),
+                xr::Binding::new(
+                    &right_haptic,
+                    xr_instance
+                        .string_to_path("/user/hand/right/output/haptic")
                         .unwrap(),
                 ),
                 xr::Binding::new(
@@ -1033,6 +1051,28 @@ fn main() {
         }
         let update_started = Instant::now();
         game.update(&time_context, &input_context, &mut action_state);
+        let pulses = game.take_haptics();
+        if session_focused {
+            for (hand, action) in [&left_haptic, &right_haptic].into_iter().enumerate() {
+                if let Some(request) = pulses[hand] {
+                    let pulse = xr::HapticVibration::new()
+                        .amplitude(request.amplitude)
+                        .frequency(xr::FREQUENCY_UNSPECIFIED)
+                        .duration(xr::Duration::from_nanos(
+                            i64::from(request.duration_ms) * 1_000_000,
+                        ));
+                    match action.apply_feedback(&session, xr::Path::NULL, &pulse) {
+                        Ok(()) => println!(
+                            "SHOCK2QUEST_HAPTIC hand={} amplitude={} duration_ms={} status=submitted",
+                            hand, request.amplitude, request.duration_ms
+                        ),
+                        Err(error) => {
+                            println!("SHOCK2QUEST_HAPTIC hand={} error={:?}", hand, error)
+                        }
+                    }
+                }
+            }
+        }
         let update_elapsed = update_started.elapsed();
 
         // Must be called before any rendering is done!

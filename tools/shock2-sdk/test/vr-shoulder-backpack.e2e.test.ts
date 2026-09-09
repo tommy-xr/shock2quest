@@ -7,12 +7,31 @@ import {
   quatConjugate,
   quatRotate,
   sub,
+  add,
+  scale,
+  normalize,
+  cross,
 } from "./helpers/vr-hand.js";
 import { ammoOf } from "./helpers/weapon.js";
 
 const enabled = process.env.SHOCK2_E2E === "1";
 const owner = (hand: "left" | "right") =>
   hand === "left" ? "wielded_entity_id" : "right_hand_entity_id";
+
+async function reachInFront(game: GameServer) {
+  const player = (await game.info()).player;
+  const centers = player.hand_feedback?.shoulder_backpack?.centers;
+  assert.ok(centers);
+  // aimVrHandAt turns the head toward the rack. Pawn-local -Z is therefore
+  // not necessarily in front of the body; derive its actual horizontal frame.
+  const right = normalize(sub(centers[1], centers[0]));
+  const forward = cross([0, 1, 0], right);
+  const target = add(scale(add(centers[0], centers[1]), 0.5), scale(forward, 0.8));
+  await game.input.set("right_hand.position", quatRotate(quatConjugate(player.rotation), sub(target, player.position)));
+  await game.step({ frames: 5 });
+  assert.equal((await game.info()).player.hand_feedback!.shoulder_backpack!.near[1], false);
+}
+
 async function reach(
   game: GameServer,
   hand: "left" | "right",
@@ -129,8 +148,7 @@ test(
       (await game.info()).player.hand_feedback?.shoulder_backpack?.retained[1],
       true,
     );
-    await game.input.set("right_hand.position", [0.25, 1, -0.4]);
-    await game.step({ frames: 5 });
+    await reachInFront(game);
     assert.equal(
       (await game.info()).player.right_hand_entity_id,
       mug.id,
@@ -162,8 +180,7 @@ test(
     )!;
     await aimVrHandAt(game, mug.position, 0.2, 1);
     await game.step({ frames: 5 });
-    await game.input.set("right_hand.position", [0.2, 1, -0.4]);
-    await game.step({ frames: 5 });
+    await reachInFront(game);
     await game.input.set("right_hand.squeeze", 0);
     await game.step({ frames: 5 });
     assert.equal((await game.info()).player.right_hand_entity_id, null);

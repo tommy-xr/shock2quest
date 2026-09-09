@@ -683,6 +683,12 @@ pub enum Effect {
         email: u32,
         force: bool,
     },
+    /// One-shot controller feedback. Gameplay describes it; only the runtime
+    /// talks to hardware. Transient output is never serialized into saves.
+    HandHaptic {
+        hand: crate::Handedness,
+        pulse: crate::haptics::HapticPulse,
+    },
     PlaySound {
         handle: AudioHandle,
         name: String,
