@@ -46,13 +46,17 @@ Layout is emitted once in the shared interface canvas for flat and VR. This
 increment makes existing assignments visible; editing assignments from the MFD
 is a follow-up interaction, alongside the retail utility controls above.
 
-### Next: replace the single-arm equipment column
+### Mirrored arm layout prototype
 
-`invback.png` bakes one arm into the narrow equipment column. A proposed next
-increment overlays that column with two stacked, explicitly named LEFT HAND /
-RIGHT HAND panels and each held item icon. A support hand reads SUPPORTING
-rather than duplicating ownership. Keep armor and implant areas intact. This
-separates what is held from the shoulder recall marks on backpack items, and
-can reuse shared canvas overlays without changing the retail texture. Read the
-equipment layout and current slot behavior before adding controls; the first
-pass should prioritize readable state over new actions.
+The inventory now crops the existing arm from `invback.pcx` at runtime and
+mirrors it horizontally on the opposite side of the torso. No extracted game
+texture is shipped. The original strip scales uniformly by about 0.945 to fit
+both arms within the existing canvas width; inventory drop coordinates map
+back into the original grid. Flat and VR use the same layout.
+
+The new arm is decorative for this increment: clicking it does not equip or
+throw a cursor-held item. Armor, implant and inventory controls retain their
+existing behavior. A follow-up can place explicitly named LEFT HAND / RIGHT
+HAND item readouts over the two arms, with SUPPORTING for a support grip rather
+than duplicate ownership. Those readouts describe held items independently of
+the shoulder recall marks on backpack items.
