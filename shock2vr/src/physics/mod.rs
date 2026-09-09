@@ -4037,6 +4037,80 @@ impl PhysicsWorld {
         maybe_rigid_body.map(|rigid_body| nvec_to_cgmath(*rigid_body.translation()))
     }
 
+    /// Move a kinematic sensor immediately without inventing a swept velocity.
+    /// The ordinary pose setter schedules a kinematic target for the next
+    /// step, which is too late for same-frame overlap and explosion queries.
+    pub fn sync_sensor_position_rotation(
+        &mut self,
+        entity_id: EntityId,
+        position: Vector3<f32>,
+        rotation: Quaternion<f32>,
+    ) {
+        let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
+            return;
+        };
+        let is_sensor = self.rigid_body_set.get(handle).is_some_and(|body| {
+            body.is_kinematic()
+                && body
+                    .colliders()
+                    .iter()
+                    .all(|c| self.collider_set[*c].is_sensor())
+        });
+        if !is_sensor {
+            return;
+        }
+        self.set_position_rotation(handle, position, rotation);
+        if let Some(body) = self.rigid_body_set.get_mut(handle) {
+            let pose = *body.next_position();
+            body.set_position(pose, false);
+        }
+    }
+
+    /// A missing body is not a settled projectile.
+    pub fn is_entity_sleeping(&self, entity_id: EntityId) -> bool {
+        self.entity_id_to_body
+            .get(&entity_id)
+            .and_then(|handle| self.rigid_body_set.get(*handle))
+            .is_some_and(|body| body.is_sleeping())
+    }
+
+    /// Exact overlap of two entities' authored colliders, including sensors.
+    pub fn entities_overlap(&self, first: EntityId, second: EntityId) -> bool {
+        let bodies = self
+            .entity_id_to_body
+            .get(&first)
+            .and_then(|handle| self.rigid_body_set.get(*handle))
+            .zip(
+                self.entity_id_to_body
+                    .get(&second)
+                    .and_then(|handle| self.rigid_body_set.get(*handle)),
+            );
+        bodies.is_some_and(|(first, second)| {
+            first.colliders().iter().any(|a| {
+                let a = &self.collider_set[*a];
+                // Body poses may have been synchronized since the last physics
+                // step. Compose the local collider offset rather than reading its
+                // cached world pose (which updates in the next broad-phase pass).
+                let a_pose =
+                    first.position() * a.position_wrt_parent().copied().unwrap_or_default();
+                second.colliders().iter().any(|b| {
+                    let b = &self.collider_set[*b];
+                    let b_pose =
+                        second.position() * b.position_wrt_parent().copied().unwrap_or_default();
+                    a.is_enabled()
+                        && b.is_enabled()
+                        && rapier3d::parry::query::intersection_test(
+                            &a_pose,
+                            a.shape(),
+                            &b_pose,
+                            b.shape(),
+                        )
+                        .unwrap_or(false)
+                })
+            })
+        })
+    }
+
     pub fn get_velocity(&self, entity_id: EntityId) -> Option<Vector3<f32>> {
         if let Some(handle) = self.entity_id_to_body.get(&entity_id) {
             let maybe_rigid_body = self.rigid_body_set.get(*handle);

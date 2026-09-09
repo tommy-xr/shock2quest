@@ -57,6 +57,11 @@ fn needs_internal_simple_health(
     authored_scripts: &[String],
 ) -> bool {
     !is_creature
+        // Proximity scripts own the mine/sensor detonation as one transition.
+        && !authored_scripts.iter().any(|script| {
+            script.eq_ignore_ascii_case("ProxGrenade")
+                || script.eq_ignore_ascii_case("ContactProxGrenade")
+        })
         && (has_hit_points
             || authored_scripts
                 .iter()
@@ -207,7 +212,11 @@ pub fn create_entity_with_position(
         }
     }
 
-    if additional_options.transient_fx {
+    // A MissSpang can be a deployed gameplay object, not just disposable FX.
+    // Contact proximity mines must remain present in saves.
+    if additional_options.transient_fx
+        && !crate::scripts::script_util::entity_has_script(world, entity_id, "ContactProxGrenade")
+    {
         world.add_component(entity_id, crate::runtime_props::RuntimePropTransientFx);
         world.add_component(entity_id, crate::runtime_props::RuntimePropDoNotSerialize);
     }
@@ -1113,7 +1122,20 @@ fn create_physics_representation_with_options(
     let dynamics_options = if let Ok(phys_attr) = v_phys_attr.get(entity_id) {
         DynamicPhysicsOptions {
             gravity_scale: phys_attr.gravity_scale,
-            restitution: dark_elasticity_to_restitution(phys_attr.elasticity),
+            // Dark phcore::BounceObject multiplies object elasticity by
+            // phconst::kTerrainBounce (0.1). The legacy 0.7 calibration makes
+            // ProxGrenade's elasticity=3 perfectly elastic, preventing sleep
+            // and therefore arming. Keep this correction scoped to the mine;
+            // general material/contact parity is a separate physics change.
+            restitution: if crate::scripts::script_util::entity_has_script(
+                world,
+                entity_id,
+                "ProxGrenade",
+            ) {
+                (phys_attr.elasticity * 0.1).clamp(0.0, 1.0)
+            } else {
+                dark_elasticity_to_restitution(phys_attr.elasticity)
+            },
             friction: dark_friction(phys_attr.friction),
         }
     } else {
@@ -1435,7 +1457,12 @@ fn create_physics_representation_with_options(
         if let (Ok(pos), Ok(phys_type)) = (v_pos.get(entity_id), v_phys_type.get(entity_id)) {
             let qrotation = pos.rotation;
 
-            let mut is_sensor = false;
+            // Proximity triggers author PhysDims/PhysAttr without TripFlags.
+            let mut is_sensor = crate::scripts::script_util::entity_has_script(
+                world,
+                entity_id,
+                "ProxGrenadeTrigger",
+            );
             // Model scale belongs to the rendered model. An explicit
             // P$PhysDims is already the independently authored collision
             // volume and must not be scaled again (Shodan's window strips

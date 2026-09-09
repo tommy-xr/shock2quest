@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod effect;
+pub(crate) mod proximity_grenade;
 pub mod speech_registry;
 pub mod speech_util;
 
@@ -917,6 +918,9 @@ impl ScriptWorld {
         match script_name.to_ascii_lowercase().as_str() {
             // PROJECTILE stuff
             "lasershot" => Box::new(NoopScript::new()),
+            "proxgrenade" => Box::new(proximity_grenade::ProximityGrenade::new(false)),
+            "contactproxgrenade" => Box::new(proximity_grenade::ProximityGrenade::new(true)),
+            "proxgrenadetrigger" => Box::new(proximity_grenade::ProximityTrigger::default()),
             "timedgrenade" => Box::new(NoopScript::new()),
             "transluceinoutprop" => Box::new(NoopScript::new()),
 

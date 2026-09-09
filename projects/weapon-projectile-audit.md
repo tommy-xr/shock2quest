@@ -91,8 +91,9 @@ They are not skipped or counted as passing weapon behavior.
 
 ### Follow-up order
 
-1. Implement proximity-grenade arming, detection, detonation and cleanup,
-   including the contact-mode payload and save/load of deployed mines.
+1. **Implemented in the proximity-grenade stack layer below:** arming,
+   detection, detonation and cleanup, including the contact-mode payload and
+   save/load of deployed mines.
 2. Implement authored annelid homing and verify both target modes and secondary
    effects; remove the worm-launcher TODOs once firing and flight work.
 3. Route projectile contact stimuli through target receptrons, replacing fixed
@@ -116,3 +117,43 @@ From `tools/shock2-sdk`, run `npm run build`, then
 Set `WEAPON_AUDIT_PRESENTATION=flat` or `vr` to run one presentation.
 TODO cases execute and retain their crash output in the test report. No physical
 headset verification is claimed by this deterministic debug-runtime matrix.
+
+
+## Proximity-grenade implementation
+
+The next stack layer implements `ProxGrenade`, `ContactProxGrenade` and
+`ProxGrenadeTrigger`. Bounce mode arms at physics sleep and changes to its
+last authored model; contact mode arms the deployed `MissSpang` mine. An
+actual `Prox Grenade Trigger` owns the authored sensor dimensions and
+`Corpse -> HE Explosion`. Live AI collider overlap or damage to the armed
+mine detonates that trigger once. Player and scenery overlap do not trip it.
+The mine and sensor are removed together, including non-damage removal.
+
+The sensor follows any displacement of its mine before script damage and
+overlap checks. Kinematic sensor poses are updated immediately so sensing and
+the explosion cannot lag a moving mine by a physics step.
+
+The mine/sensor pair uses saved, remapped `ScriptParams` links. Arming zeros
+the mine's persisted initial-velocity property, preventing load reconstruction
+from launching it again. Contact mines are gameplay objects even though they
+arrive through an impact-spang link, so they are excluded from transient-FX
+save suppression.
+
+Source boundaries: the [allobjs script inventory](https://thiefmissions.com/telliamed/allscripts.html)
+identifies sleep-based bounce arming, contact activation and AI-triggered
+sensors. Local Dark sources `physics/phcore.cpp:4211` and
+`physics/phconst.h:73` define terrain reflection using object elasticity times
+`kTerrainBounce = 0.1`. This correction is scoped to proximity grenades here;
+other objects still use the existing port calibration. Rapier additionally
+uses angular damping 1.0 (linear damping 0) on bouncing mines to compensate
+for missing rolling resistance. That damping is a port approximation, not an
+assertion of exact Dark material or settling parity. The original script
+inventory does not provide the complete script implementation.
+
+Validation includes actual firing, deployment, live AI-triggered detonation,
+sensor physics and single-HE blast checks in flat and VR; both modes save/load in `earth.mis` without
+relaunching or duplicating sensors. Four proximity audit rows now pass and
+have no TODO. The original baseline above remains historical: its remaining
+known launch failures are the four worm-launcher presentation/mode cases.
+General projectile damage, pellet spread, homing and other effect lifecycles
+remain the follow-ups listed above.
