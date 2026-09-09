@@ -239,3 +239,14 @@ evidence; shared UI renders are checked in flat and VR. Run the repository's
 required build and SDK checks before landing. Headless geometry evidence does
 not establish headset comfort or recoil feel: record a Quest validation pass
 and human feel assessment separately from automated checks.
+
+## Refused-shot sound parity
+
+Empty pulls now request authored `Event OutofAmmo`, replacing the unmatched
+`dryfire` tag. Broken/destroyed guns request `Event Broken` separately, matching
+`cPlayerGun::PullTrigger` in Dark `shkplgun.cpp` (original lines 1263/1269).
+The shipped environment schema resolves pistol empty clicks to `out_pist`,
+grenade-family clicks to `out_gren`, heavy/shotgun clicks to `out_sg`, and
+broken-gun feedback to `gunbrok1`. Existing skill, reload and cooldown gates
+retain their priority. A partial magazine below a mode's shot cost also uses
+OutofAmmo; no projectile, flash, wear or ammo debit accompanies that refusal.

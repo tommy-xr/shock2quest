@@ -377,8 +377,14 @@ impl Script for WeaponScript {
 
                 match fire_one_shot(world, entity_id, &setting) {
                     ShotOutcome::FlatMeleeSwing => Effect::FlatMeleeSwing { entity_id },
-                    // A broken gun clicks like an empty one: nothing leaves it.
-                    ShotOutcome::Empty | ShotOutcome::NotWorking => dry_fire(world, entity_id),
+                    ShotOutcome::Empty => dry_fire(world, entity_id),
+                    ShotOutcome::NotWorking => play_environmental_sound(
+                        world,
+                        entity_id,
+                        "broken",
+                        vec![],
+                        AudioHandle::new(),
+                    ),
                     ShotOutcome::Broke(effect) => effect,
                     ShotOutcome::Fired(effect) => {
                         // A burst setting owes more rounds than the one just
@@ -666,10 +672,10 @@ fn flat_melee_hit(physics: &PhysicsWorld, aim: RuntimePropFlatAim, world: &World
 }
 
 /// An empty-clip dry fire: no projectile or muzzle flash, just the weapon's
-/// "dryfire" click (best-effort - resolves via the gun's sound schema, like the
-/// "shoot" event). Reached when a `PropGunState` weapon has 0 rounds.
+/// authored "OutofAmmo" event (Dark cPlayerGun::PullTrigger). This also covers
+/// a mode whose per-shot cost exceeds the remaining ammo.
 fn dry_fire(world: &World, entity_id: EntityId) -> Effect {
-    play_environmental_sound(world, entity_id, "dryfire", vec![], AudioHandle::new())
+    play_environmental_sound(world, entity_id, "outofammo", vec![], AudioHandle::new())
 }
 
 pub(super) fn create_muzzle_flash(
