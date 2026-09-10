@@ -2302,6 +2302,23 @@ impl CollisionGroup {
         })
     }
 
+    /// An inert held gun: the drive queries world geometry, but the body
+    /// neither blocks projectiles nor generates physical contacts.
+    pub fn held_inert() -> CollisionGroup {
+        Self::solid(InteractionGroups {
+            memberships: Group::empty(),
+            filter: Group::empty(),
+            test_mode: Default::default(),
+        })
+    }
+
+    /// Whether this group takes part in no collision at all.
+    pub fn is_inert(&self) -> bool {
+        [self.collision, self.solver]
+            .iter()
+            .all(|groups| groups.memberships.is_empty() && groups.filter.is_empty())
+    }
+
     /// Collision behavior for a living creature capsule. It collides exactly
     /// like an ordinary physical entity, but its distinct membership lets
     /// interaction-only fixtures and unsimulated movable debris opt out of
@@ -2726,7 +2743,7 @@ pub struct PlayerHandle {
 /// target out of `entity_id_to_body` makes the weapon remain the entity's one
 /// authoritative rendered/contact body.
 #[derive(Clone, Copy)]
-struct HeldMeleeDrive {
+struct HeldItemDrive {
     target: RigidBodyHandle,
     /// The weapon's own entity, so a swept blow can be reported without
     /// digging it back out of the body's user data every frame.
@@ -2816,7 +2833,7 @@ impl PlayerHandle {
 
 /// Clearance the held-melee sweep stops short of a surface by, so a weapon
 /// resting against one does not re-report a zero-distance hit every frame.
-const HELD_MELEE_SKIN: f32 = 0.01;
+const HELD_ITEM_SKIN: f32 = 0.01;
 
 pub struct PhysicsWorld {
     gravity: Vector<Real>,
@@ -2867,7 +2884,7 @@ pub struct PhysicsWorld {
     // Dynamic held-melee bodies driven toward invisible controller targets by
     // Rapier joint motors. Keyed by the weapon body handle so the normal
     // set_position_rotation path can redirect hand poses to the target.
-    held_melee_drives: HashMap<RigidBodyHandle, HeldMeleeDrive>,
+    held_item_drives: HashMap<RigidBodyHandle, HeldItemDrive>,
 
     // The player's travel over the previous frame, in world units per second,
     // and where they were when it was sampled. A held weapon rides the player,
@@ -3054,7 +3071,7 @@ impl PhysicsWorld {
             vector: vec_to_nvec(position),
         };
 
-        if let Some(drive) = self.held_melee_drives.get(&handle).copied() {
+        if let Some(drive) = self.held_item_drives.get(&handle).copied() {
             let mut just_seated = false;
             if !drive.seated {
                 if let Some(weapon) = self.rigid_body_set.get_mut(handle) {
@@ -3062,7 +3079,7 @@ impl PhysicsWorld {
                     weapon.set_linvel(Vector::zeros(), true);
                     weapon.set_angvel(Vector::zeros(), true);
                 }
-                if let Some(drive) = self.held_melee_drives.get_mut(&handle) {
+                if let Some(drive) = self.held_item_drives.get_mut(&handle) {
                     drive.seated = true;
                 }
                 just_seated = true;
@@ -3207,19 +3224,24 @@ impl PhysicsWorld {
         }
     }
 
-    /// Turn an existing loose-prop body into a swept kinematic contact shape
-    /// while a melee weapon is held in VR.
+    /// Turn an existing loose-prop body into a swept kinematic shape while the
+    /// item is held in VR, so it cannot travel through the level.
+    ///
+    /// `group` decides what the held body is to everything else: a melee
+    /// weapon takes [`CollisionGroup::held_melee`] (contacts, so the
+    /// trigger-gated damage script sees them), a merely physical held item
+    /// takes [`CollisionGroup::held_inert`].
     ///
     /// The hand pose drives an invisible kinematic target; each step the
     /// visible weapon is *shape-cast* from where it is toward that target and
     /// stopped at the first world surface in the way (see
-    /// [`Self::drive_held_melee`]). Kinematic, not dynamic: a dynamic weapon
+    /// [`Self::drive_held_items`]). Kinematic, not dynamic: a dynamic weapon
     /// is subject to contact impulses, and a contact against a body whose
     /// origin sits out on the weapon head torques it - which in a headset
     /// read as the weapon spinning out of the player's hand the moment it
     /// touched anything. A swept kinematic body cannot be spun by the solver,
     /// cannot tunnel, and still reports every contact.
-    pub fn set_held_melee(&mut self, entity_id: EntityId) {
+    pub fn set_held_item_physical(&mut self, entity_id: EntityId, group: CollisionGroup) {
         let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
             return;
         };
@@ -3234,15 +3256,15 @@ impl PhysicsWorld {
             (*body.position(), body.colliders().to_vec())
         };
 
-        if !self.held_melee_drives.contains_key(&handle) {
+        if !self.held_item_drives.contains_key(&handle) {
             let target = self.rigid_body_set.insert(
                 RigidBodyBuilder::kinematic_position_based()
                     .pose(pose)
                     .build(),
             );
-            self.held_melee_drives.insert(
+            self.held_item_drives.insert(
                 handle,
-                HeldMeleeDrive {
+                HeldItemDrive {
                     target,
                     weapon_entity: EntityId::from_inner(
                         self.rigid_body_set
@@ -3268,7 +3290,14 @@ impl PhysicsWorld {
                 );
             }
         }
-        self.set_collision_group(entity_id, CollisionGroup::held_melee());
+        self.set_collision_group(entity_id, group);
+    }
+
+    /// Whether this body is currently driven by a held-item target.
+    pub fn is_held_item(&self, entity_id: EntityId) -> bool {
+        self.entity_id_to_body
+            .get(&entity_id)
+            .is_some_and(|handle| self.held_item_drives.contains_key(handle))
     }
 
     /// Replace a held melee body's inherited loose-pickup box with the local
@@ -3277,20 +3306,20 @@ impl PhysicsWorld {
     /// The rigid-body target stays controller-driven at the authored weapon
     /// joint; the collider's parent-relative center covers the rest of the
     /// handle/blade without moving the rendered model or the motor target.
-    pub fn fit_held_melee_cuboid(
+    pub fn fit_held_item_cuboid(
         &mut self,
         entity_id: EntityId,
         size: Vector3<f32>,
         center: Vector3<f32>,
     ) {
-        let size = sanitize_collider_size(entity_id, "fit_held_melee_cuboid", size);
+        let size = sanitize_collider_size(entity_id, "fit_held_item_cuboid", size);
         let Some(handle) = self.entity_id_to_body.get(&entity_id).copied() else {
             return;
         };
         let Some(body) = self.rigid_body_set.get(handle) else {
             return;
         };
-        if !self.held_melee_drives.contains_key(&handle) {
+        if !self.held_item_drives.contains_key(&handle) {
             return;
         }
 
@@ -3442,7 +3471,7 @@ impl PhysicsWorld {
     ) {
         let previous =
             nvec_to_cgmath(*self.rigid_body_set[player_handle.character_handle].translation());
-        self.translate_held_melee_for_player_relocation(position - previous);
+        self.translate_held_items_for_player_relocation(position - previous);
         player_handle.top_out = None;
         // Relocated, so they are no longer hanging off anything: the stance
         // they are in is now an ordinary crouch, undone feet-planted.
@@ -3485,13 +3514,13 @@ impl PhysicsWorld {
     /// tries to motor across the entire level through every wall in between.
     /// Ordinary hand motion remains motor-driven because it never calls the
     /// player relocation seam.
-    fn translate_held_melee_for_player_relocation(&mut self, delta: Vector3<f32>) {
+    fn translate_held_items_for_player_relocation(&mut self, delta: Vector3<f32>) {
         if delta.magnitude2() <= f32::EPSILON {
             return;
         }
         let delta = vec_to_nvec(delta);
         let pairs = self
-            .held_melee_drives
+            .held_item_drives
             .iter()
             .map(|(weapon, drive)| (*weapon, drive.target))
             .collect::<Vec<_>>();
@@ -4145,7 +4174,7 @@ impl PhysicsWorld {
         point: Vector3<f32>,
     ) -> Option<Vector3<f32>> {
         let handle = self.entity_id_to_body.get(&entity_id)?;
-        let target = self.held_melee_drives.get(handle)?.target;
+        let target = self.held_item_drives.get(handle)?.target;
         self.body_velocity_at_point(target, point)
     }
 
@@ -4551,7 +4580,10 @@ impl PhysicsWorld {
     /// Rotational sweeps are expensive and ill-defined against thin geometry,
     /// and the failure they would prevent (turning the blade into a wall) is
     /// far milder than the one taking the hand's rotation prevents (a weapon
-    /// whose angle is not the angle of the hand holding it).
+    /// whose angle is not the angle of the hand holding it). A held gun makes
+    /// that more visible than a wrench does - a long barrel can be *turned*
+    /// into a wall it cannot be *pushed* into - but the tradeoff is the same
+    /// one, and the same choice.
     ///
     /// World geometry blocks, and so do a creature's hitboxes - the limbs a
     /// swing can see. Its actor capsule deliberately does not: that is a
@@ -4575,11 +4607,11 @@ impl PhysicsWorld {
         self.last_player_translation = Some(translation);
     }
 
-    fn drive_held_melee(&mut self) {
+    fn drive_held_items(&mut self) {
         let max_step = crate::dev_params::get(crate::dev_params::MELEE_MAX_SPEED)
             * self.integration_parameters.dt;
         let pairs = self
-            .held_melee_drives
+            .held_item_drives
             .iter()
             .map(|(weapon, drive)| (*weapon, drive.target))
             .collect::<Vec<_>>();
@@ -4608,7 +4640,7 @@ impl PhysicsWorld {
             // how a fast hand walks the weapon through a wall, and "fast" is
             // not a rare case in a test or a hitched frame. A genuine
             // teleport does not need the bypass either: it carries both motor
-            // endpoints together (`translate_held_melee_for_player_relocation`),
+            // endpoints together (`translate_held_items_for_player_relocation`),
             // so the error the drive sees is already near zero.
             let step = distance.min(max_step);
             let allowed = if distance <= 1.0e-6 {
@@ -4616,7 +4648,7 @@ impl PhysicsWorld {
             } else {
                 let direction = delta / distance;
                 let (fraction, stop) =
-                    self.held_melee_sweep_fraction(weapon, &current, direction, step);
+                    self.held_item_sweep_fraction(weapon, &current, direction, step);
                 sweep_stop = stop;
                 step * fraction
             };
@@ -4635,7 +4667,7 @@ impl PhysicsWorld {
             // frame the weapon leans on it, and a swing is a swing, not a
             // per-frame billing.
             let (weapon_entity, previous) = self
-                .held_melee_drives
+                .held_item_drives
                 .get(&weapon)
                 .map(|drive| (drive.weapon_entity, drive.stopped_on))
                 .unwrap_or((None, None));
@@ -4679,7 +4711,7 @@ impl PhysicsWorld {
                         }),
                     });
             }
-            if let Some(drive) = self.held_melee_drives.get_mut(&weapon) {
+            if let Some(drive) = self.held_item_drives.get_mut(&weapon) {
                 drive.stopped_on = sweep_stop.map(|stop| stop.limb);
             }
         }
@@ -4687,7 +4719,7 @@ impl PhysicsWorld {
 
     /// How far along `direction * distance` this weapon's colliders may travel
     /// before one of them meets world geometry, as a fraction in `0..=1`.
-    fn held_melee_sweep_fraction(
+    fn held_item_sweep_fraction(
         &self,
         weapon: RigidBodyHandle,
         current: &Isometry<Real>,
@@ -4709,7 +4741,19 @@ impl PhysicsWorld {
                 // by its actor capsule, which is a movement volume wider than
                 // the creature: stopping on that would halt the weapon in the
                 // air beside it.
-                (InternalCollisionGroups::WORLD.bits | InternalCollisionGroups::HITBOX.bits).into(),
+                (InternalCollisionGroups::WORLD.bits
+                    | if body.colliders().iter().any(|handle| {
+                        self.collider_set.get(*handle).is_some_and(|collider| {
+                            collider.collision_groups().memberships.bits()
+                                & InternalCollisionGroups::HELD_MELEE.bits
+                                != 0
+                        })
+                    }) {
+                        InternalCollisionGroups::HITBOX.bits
+                    } else {
+                        0
+                    })
+                .into(),
                 Default::default(),
             ))
             .exclude_rigid_body(weapon)
@@ -4740,7 +4784,7 @@ impl PhysicsWorld {
                     max_time_of_impact: distance,
                     // Leave a hair of clearance so a weapon resting on a
                     // surface does not re-report a zero-distance hit forever.
-                    target_distance: HELD_MELEE_SKIN,
+                    target_distance: HELD_ITEM_SKIN,
                     // An already-penetrating start must not pin the weapon in
                     // place; let it keep sweeping out.
                     stop_at_penetration: false,
@@ -4798,7 +4842,7 @@ impl PhysicsWorld {
         });
         let drives_to_remove = bodies_to_remove
             .iter()
-            .filter_map(|handle| self.held_melee_drives.remove(handle))
+            .filter_map(|handle| self.held_item_drives.remove(handle))
             .collect::<Vec<_>>();
         for drive in drives_to_remove {
             self.rigid_body_set.remove(
@@ -5063,7 +5107,7 @@ impl PhysicsWorld {
             live_creature_sweep_recovery: HashMap::new(),
             pending_player_push_velocity: HashMap::new(),
             kinematic_attachments: HashMap::new(),
-            held_melee_drives: HashMap::new(),
+            held_item_drives: HashMap::new(),
             player_velocity: Vector3::new(0.0, 0.0, 0.0),
             last_player_translation: None,
 
@@ -5450,7 +5494,7 @@ impl PhysicsWorld {
         // matching Dark's source->destination attachment flow.
         self.update_kinematic_attachments();
         self.sample_player_velocity(player_handle);
-        self.drive_held_melee();
+        self.drive_held_items();
 
         // Attribute any non-finite body state to its entity before the step
         // consumes it (see report_nonfinite_rigid_body_state) - by the time
@@ -7556,7 +7600,7 @@ fn collision_group_names(bits: u32) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod held_melee_drive;
+mod held_item_drive;
 
 #[cfg(test)]
 mod tests {
@@ -7642,7 +7686,7 @@ mod tests {
             DynamicPhysicsOptions::default(),
         );
 
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         let body = world
             .debug_list_bodies()
@@ -7694,7 +7738,7 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
         world.set_position_rotation2(weapon, vec3(-2.0, 1.0, 0.0), identity_quat());
         step(&mut world, &mut player, 1);
         world.set_position_rotation2(weapon, vec3(0.0, 1.0, 0.0), identity_quat());
@@ -7706,7 +7750,7 @@ mod tests {
             (weapon_x - 0.0).abs() < 0.02,
             "the weapon should arrive on the tracked hand: x={weapon_x}"
         );
-        let target = world.held_melee_drives[&handle].target;
+        let target = world.held_item_drives[&handle].target;
         assert!((world.get_position(target).unwrap().x - 0.0).abs() < 1.0e-4);
     }
 
@@ -7727,22 +7771,22 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         let tracked_pose = vec3(3.0, 1.0, -4.0);
         world.set_position_rotation2(weapon, tracked_pose, identity_quat());
 
-        let drive = world.held_melee_drives[&handle];
+        let drive = world.held_item_drives[&handle];
         assert!(drive.seated);
         assert!((world.get_position(handle).unwrap() - tracked_pose).magnitude() < 1.0e-4);
         assert!((world.get_position(drive.target).unwrap() - tracked_pose).magnitude() < 1.0e-4);
         assert!(world.get_velocity(weapon).unwrap().magnitude() < 1.0e-4);
     }
 
-    /// World solver contact must win over the hand motor, then releasing that
-    /// obstruction must let the weapon return to the tracked pose.
-    #[test]
-    fn held_melee_weapon_stops_at_world_geometry_then_springs_back() {
+    /// Drive a held body of `group` from x=-1 at a fixed wall at x=0, then let
+    /// the hand retreat. Shared by the melee and inert cases: what the level
+    /// does to a held body must not depend on which group it is held with.
+    fn held_item_pushed_into_a_wall_then_withdrawn(group: CollisionGroup) {
         let (mut world, mut player) = world_with_floor();
         world.add_collider(
             EntityId::from_inner(2).unwrap(),
@@ -7761,7 +7805,7 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, group);
         world.set_position_rotation2(weapon, vec3(-1.0, 1.0, 0.0), identity_quat());
         step(&mut world, &mut player, 1);
         world.set_position_rotation2(weapon, vec3(1.0, 1.0, 0.0), identity_quat());
@@ -7771,7 +7815,7 @@ mod tests {
         let blocked_x = world.get_position(handle).unwrap().x;
         assert!(
             blocked_x < -0.20,
-            "the dynamic weapon crossed the fixed wall instead of stopping: x={blocked_x}"
+            "the held body crossed the fixed wall instead of stopping: x={blocked_x}"
         );
 
         world.set_position_rotation2(weapon, vec3(-1.0, 1.0, 0.0), identity_quat());
@@ -7779,7 +7823,92 @@ mod tests {
         let returned_x = world.get_position(handle).unwrap().x;
         assert!(
             returned_x < -0.8,
-            "the weapon did not spring back after the target cleared the wall: x={returned_x}"
+            "the held body did not spring back after the target cleared the wall: x={returned_x}"
+        );
+    }
+
+    /// World solver contact must win over the hand motor, then releasing that
+    /// obstruction must let the weapon return to the tracked pose.
+    #[test]
+    fn held_melee_weapon_stops_at_world_geometry_then_springs_back() {
+        held_item_pushed_into_a_wall_then_withdrawn(CollisionGroup::held_melee());
+    }
+
+    /// The `physical_held_items` case: a held gun only has to stop travelling
+    /// into the level, so it is held with no collision membership and no
+    /// filter at all. The sweep that stops it runs its own query, which does
+    /// not consult the body's groups - this is the test that says so, because
+    /// the whole design rests on it.
+    #[test]
+    fn an_inert_held_item_is_still_stopped_by_world_geometry() {
+        held_item_pushed_into_a_wall_then_withdrawn(CollisionGroup::held_inert());
+    }
+
+    /// ...and it touches nothing while it does. A held gun swept through a
+    /// creature must report no contact: contact is what bills melee damage
+    /// (`TriggeredMeleeWeapon`), and a gun that bludgeons by touch would be a
+    /// nasty surprise from a change that is only about walls. The same sweep
+    /// with `held_melee` reports the contact (see
+    /// `held_melee_contacts_live_actor_without_solver_launch`).
+    #[test]
+    fn an_inert_held_item_touches_nothing_it_sweeps_through() {
+        let (mut world, mut player) = world_with_floor();
+        let gun = EntityId::from_inner(2).unwrap();
+        let actor = EntityId::from_inner(3).unwrap();
+
+        world.add_dynamic(
+            actor,
+            vec3(0.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Capsule {
+                height: 0.8,
+                radius: 0.4,
+            },
+            CollisionGroup::actor(),
+            false,
+            DynamicPhysicsOptions {
+                gravity_scale: 0.0,
+                restitution: 0.0,
+                friction: 0.0,
+            },
+        );
+        world.set_enabled_rotations(actor, false, false, false);
+        world.add_dynamic(
+            gun,
+            vec3(-2.0, 1.0, 0.0),
+            identity_quat(),
+            vec3(0.0, 0.0, 0.0),
+            PhysicsShape::Cuboid(vec3(0.3, 0.1, 0.1)),
+            CollisionGroup::entity(),
+            false,
+            DynamicPhysicsOptions {
+                gravity_scale: 0.0,
+                restitution: 0.0,
+                friction: 0.0,
+            },
+        );
+        world.set_held_item_physical(gun, CollisionGroup::held_inert());
+
+        world.set_position_rotation2(gun, vec3(-2.0, 1.0, 0.0), identity_quat());
+        step(&mut world, &mut player, 1);
+        world.set_position_rotation2(gun, vec3(0.0, 1.0, 0.0), identity_quat());
+        let mut events = Vec::new();
+        for _ in 0..30 {
+            let (_, mut frame_events) = world.update(vec3(0.0, 0.0, 0.0), &mut player);
+            events.append(&mut frame_events);
+        }
+
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                CollisionEvent::CollisionStarted {
+                    entity1_id,
+                    entity2_id,
+                    ..
+                } if *entity1_id == gun || *entity2_id == gun
+            )),
+            "an inert held item reported a contact"
         );
     }
 
@@ -7800,8 +7929,8 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
-        let target_handle = world.held_melee_drives[&weapon_handle].target;
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
+        let target_handle = world.held_item_drives[&weapon_handle].target;
         let weapon_before = world.get_position(weapon_handle).unwrap();
         let target_before = world.get_position(target_handle).unwrap();
         let player_before = world.get_player_translation(&player);
@@ -7836,11 +7965,11 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         let rendered_size = vec3(0.24, 1.02, 0.18);
         let rendered_center = vec3(0.0, -0.51, 0.01);
-        world.fit_held_melee_cuboid(weapon, rendered_size, rendered_center);
+        world.fit_held_item_cuboid(weapon, rendered_size, rendered_center);
 
         assert_eq!(world.cuboid_full_size(handle), Some(rendered_size));
         let collider = &world.collider_set[world.rigid_body_set[handle].colliders()[0]];
@@ -7899,7 +8028,7 @@ mod tests {
                 friction: 0.0,
             },
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
 
         // Seat the just-held body at its first tracked pose, establish the
         // broad phase, then put only the hand target beyond the actor. The
@@ -7982,9 +8111,9 @@ mod tests {
             false,
             DynamicPhysicsOptions::default(),
         );
-        world.set_held_melee(weapon);
+        world.set_held_item_physical(weapon, CollisionGroup::held_melee());
         let held_handle = world.entity_id_to_body[&weapon];
-        let target_handle = world.held_melee_drives[&held_handle].target;
+        let target_handle = world.held_item_drives[&held_handle].target;
         let held_collider = &world.collider_set[world.rigid_body_set[held_handle].colliders()[0]];
         assert!(!held_collider.solver_groups().test(actor.solver));
 

@@ -59,6 +59,13 @@ headset comfort.
   not a claim about original System Shock 2. Preserve the original Agility,
   Still Hand and aiming-implant behavior when establishing parity; tune how
   Strength combines with it after that baseline is measurable.
+- **Two hands use the authored recoil baseline; one hand adds a spring recoil
+  penalty.** Preserve Agility, Still Hand and aiming-implant modifiers in the
+  baseline. Strength is a separate VR control multiplier on that baseline and
+  reduces the additional one-handed penalty. Both components can use springs.
+  Support-grip changes alter future impulses; they never reset accumulated
+  recoil or snap the weapon back. Evaluate pistol and AR at Strength 1/3/6
+  with one and two hands, recording muzzle motion separately from bullet spread.
 - Weapon skill governs authored inaccuracy, but shipped `SKILLPARAM` sets that
   inaccuracy to zero. Strength does not enter this calculation. Preserve Sharpshooter's original
   ranged-damage benefit; an accuracy bonus is not part of the accepted baseline.
@@ -590,3 +597,23 @@ not recordings of gameplay timing. Coincident impacts are not visually jittered.
 [AR eligibility/results](https://gist.githubusercontent.com/tommy-xr/8adecab028e128f1e6490a24fd241c0b/raw/ar-results.png) and
 [matched runtime screenshots](https://gist.githubusercontent.com/tommy-xr/8adecab028e128f1e6490a24fd241c0b/raw/runtime-comparison.png)
 complete the evaluation.
+
+
+## Physical-held foundation (current recoil stack)
+
+Adapt #1142 behind `--experimental physical_held_items` in VR. Held guns
+use inert bodies: translation sweeps stop at world geometry, while projectile
+rays and physics projectiles cannot hit the held gun. Melee retains its hitbox
+contacts. Calibrated glove colliders use the fitted weapon-only triangles and
+item scale; legacy held models use their posed geometry, including left-hand
+reflection. Drop and refused backpack storage restore ordinary loose physics.
+
+This increment constrains **translation only**. Orientation follows the tracked
+pose, so rotating a stationary long barrel can intersect a wall. It does not
+claim rotational collision clearance or implement recoil yet. The subsequent
+spring layer must use the constrained body for the rendered gun and muzzle;
+headset feel and rotational clearance remain explicit validation boundaries.
+
+Validation: 1,634 gameplay tests, 172 Dark tests, warning-denied desktop/debug
+checks, and three SDK cases (left/right wall contact and firing, withdrawal,
+drop, and full-backpack release). [Before/after evidence](https://gist.github.com/tommy-xr/7e0d0b99cfebcb5cae09724ee16e5376).

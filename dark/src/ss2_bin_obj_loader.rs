@@ -124,10 +124,8 @@ pub fn to_scene_objects(
         .into_iter()
         .collect::<Vec<(u16, Vec<VertexPositionTextureSkinnedNormal>)>>();
 
-    let mut bones = Vec::new();
-    build_skeleton_for_obj_mesh(&mesh, 0, None, &mut bones);
-    let is_skinned = bones.len() > 1;
-    let skeleton = Skeleton::create_from_bones(bones);
+    let skeleton = obj_skeleton(mesh);
+    let is_skinned = skeleton.bone_count() > 1;
 
     let mut mesh_objects = vertices
         .into_iter()
@@ -659,6 +657,31 @@ pub fn sub_object_bounds(
                 });
             }
             (name, bounds)
+        })
+        .collect()
+}
+
+/// [`to_vertices`] keyed by material name rather than by slot, so a caller can
+/// select geometry the way the 25AE authors it - by material - without
+/// re-deriving the slot table. Ordered by slot, and slots with no material
+/// entry are dropped (nothing can draw them either).
+pub fn to_vertices_by_material(
+    mesh: &SystemShock2ObjectMesh,
+) -> Vec<(String, Vec<VertexPositionTextureSkinnedNormal>)> {
+    let mut by_slot = to_vertices(mesh).into_iter().collect::<Vec<_>>();
+    by_slot.sort_by_key(|(slot, _)| *slot);
+    by_slot
+        .into_iter()
+        .filter_map(|(slot, vertices)| {
+            // Last entry wins on a duplicated slot, matching the map
+            // `to_scene_objects` builds - so a caller selecting geometry by
+            // material selects what the renderer draws with.
+            let material = mesh
+                .materials
+                .iter()
+                .filter(|material| material.slot_num as u16 == slot)
+                .next_back()?;
+            Some((material.name.clone(), vertices))
         })
         .collect()
 }
@@ -1301,6 +1324,34 @@ mod tests {
         assert_eq!(transforms[0].1.w.truncate(), vec3(1.0, 0.0, 0.0));
         assert_eq!(transforms[1].0, "child");
         assert_eq!(transforms[1].1.w.truncate(), vec3(1.0, 1.0, 0.0));
+    }
+
+    /// Fitting a collider to a first-person model's *weapon* means selecting
+    /// geometry by material (the arm is `ND-arm*`), so the vertex runs have to
+    /// come back labelled with the material that draws them.
+    #[test]
+    fn vertices_come_back_grouped_by_their_material() {
+        let mut mesh = mesh_with(
+            vec![
+                material_in_slot("ND-ar15.psd", 0),
+                material_in_slot("ND-arm.psd", 1),
+            ],
+            vec![polygon_in_slot(0), polygon_in_slot(1)],
+        );
+        mesh.vertices = vec![
+            vec3(0.0, 0.0, 0.0),
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 1.0, 0.0),
+        ];
+
+        let runs = to_vertices_by_material(&mesh);
+
+        let names = runs
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["ND-ar15.psd", "ND-arm.psd"]);
+        assert!(runs.iter().all(|(_, vertices)| vertices.len() == 3));
     }
 
     #[test]
