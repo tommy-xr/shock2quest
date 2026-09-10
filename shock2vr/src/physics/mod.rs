@@ -2923,7 +2923,7 @@ pub struct PhysicsWorld {
     /// Blows reported by the held-melee sweep: a swing stopped by a limb is a
     /// hit on that limb, and the stop is what prevents the narrow phase from
     /// ever seeing it.
-    pending_melee_sweep_events: Vec<CollisionEvent>,
+    pending_held_sweep_events: Vec<CollisionEvent>,
 
     // Entities already reported by report_nonfinite_rigid_body_state, so a
     // body fed bad state every frame (e.g. NaN animation joints driving a
@@ -3298,6 +3298,22 @@ impl PhysicsWorld {
         self.entity_id_to_body
             .get(&entity_id)
             .is_some_and(|handle| self.held_item_drives.contains_key(handle))
+    }
+
+    /// A held gun uses empty groups so its sweep is its only collision source.
+    pub fn is_held_inert(&self, entity_id: EntityId) -> bool {
+        if !self.is_held_item(entity_id) {
+            return false;
+        }
+        let body = &self.rigid_body_set[self.entity_id_to_body[&entity_id]];
+        !body.colliders().is_empty()
+            && body.colliders().iter().all(|handle| {
+                let collider = &self.collider_set[*handle];
+                collider.collision_groups().memberships.is_empty()
+                    && collider.collision_groups().filter.is_empty()
+                    && collider.solver_groups().memberships.is_empty()
+                    && collider.solver_groups().filter.is_empty()
+            })
     }
 
     /// Replace a held melee body's inherited loose-pickup box with the local
@@ -4694,13 +4710,19 @@ impl PhysicsWorld {
                 // drive's - it carries whatever error the weapon had accrued
                 // behind the hand - which is why the script path reads the
                 // hand target instead of a body that has been obstructed.
-                let speed = relative_swing_speed(
-                    nvec_to_cgmath(heading * travel),
-                    self.player_velocity,
-                    Vector3::new(0.0, 0.0, 0.0),
-                    Some(stop.normal),
-                );
-                self.pending_melee_sweep_events
+                let speed = if self.is_held_inert(weapon_entity) {
+                    // Gun audio measures arrival before the sweep truncates
+                    // motion, including locomotion into the surface.
+                    nvec_to_cgmath(heading * travel).dot(stop.normal).max(0.0)
+                } else {
+                    relative_swing_speed(
+                        nvec_to_cgmath(heading * travel),
+                        self.player_velocity,
+                        Vector3::new(0.0, 0.0, 0.0),
+                        Some(stop.normal),
+                    )
+                };
+                self.pending_held_sweep_events
                     .push(CollisionEvent::CollisionStarted {
                         entity1_id: weapon_entity,
                         entity2_id: stop.limb,
@@ -4729,6 +4751,8 @@ impl PhysicsWorld {
         let Some(body) = self.rigid_body_set.get(weapon) else {
             return (1.0, None);
         };
+        let inert = EntityId::from_inner(body.user_data as u64)
+            .is_some_and(|entity| self.is_held_inert(entity));
         let filter = QueryFilter::new()
             .groups(InteractionGroups::new(
                 // The weapon carries its melee membership here, not just
@@ -4803,9 +4827,10 @@ impl PhysicsWorld {
                     .collider_set
                     .get(hit_collider)
                     .filter(|collider| {
-                        collider.collision_groups().memberships.bits()
-                            & InternalCollisionGroups::HITBOX.bits
-                            != 0
+                        inert
+                            || collider.collision_groups().memberships.bits()
+                                & InternalCollisionGroups::HITBOX.bits
+                                != 0
                     })
                     .and_then(|collider| EntityId::from_inner(collider.user_data as u64))
                     .map(|limb| SweepStop {
@@ -5115,7 +5140,7 @@ impl PhysicsWorld {
 
             player_sensor_intersections: HashSet::new(),
             pending_player_sensor_events: Vec::new(),
-            pending_melee_sweep_events: Vec::new(),
+            pending_held_sweep_events: Vec::new(),
 
             reported_nonfinite_entities: HashSet::new(),
 
@@ -6299,7 +6324,7 @@ impl PhysicsWorld {
         // `player_sensor_intersections` at the hop's final occupancy, so the
         // diff below sees no change for anything they already reported.
         let mut collision_events = std::mem::take(&mut self.pending_player_sensor_events);
-        collision_events.append(&mut std::mem::take(&mut self.pending_melee_sweep_events));
+        collision_events.append(&mut std::mem::take(&mut self.pending_held_sweep_events));
         let current_sensor_intersections = profile!(scope: "physics", level: TRACE, "physics.intersections_with_shape", {
             // Only consider sensor colliders for player/sensor intersections.
             let sensor_filter = QueryFilter::new().predicate(&is_sensor_collider);

@@ -32,6 +32,7 @@ mod frob_qb;
 pub mod gui;
 pub mod healing_item;
 mod homing;
+mod impact_sound;
 mod internal_collision_type;
 mod internal_explosion;
 pub mod internal_fast_projectile;
@@ -166,6 +167,7 @@ use self::{
     energy_weapon::EnergyWeapon,
     exp_cookie::ExpCookie,
     frob_qb::FrobQB,
+    impact_sound::HeldItemImpactSound,
     internal_collision_type::InternalCollisionType,
     internal_explosion::InternalExplosion,
     internal_keycard_script::KeyCardScript,
@@ -975,6 +977,12 @@ impl ScriptWorld {
                 Box::new(HeldMeleeWeapon::new()),
                 Box::new(InternalSwitchHeldModelScript::new()),
             ])),
+            // Attached by entity_creator to every PropPlayerGun. Under
+            // `physical_held_items` a wielded gun is held as an inert body
+            // stopped by a shape cast, and this turns that block into the
+            // noise of a gun meeting a bulkhead - the one thing a gun's
+            // collision should produce. Inert in every other state.
+            "internal_held_item_impact_sound" => Box::new(HeldItemImpactSound::new()),
             "pistolmodify" => Box::new(NoopScript::new()),
 
             // TODO: Necessary
