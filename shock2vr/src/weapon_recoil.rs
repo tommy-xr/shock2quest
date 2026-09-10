@@ -154,8 +154,8 @@ fn handling_profile(model: &str, setting: i32) -> Option<HandlingProfile> {
         ("ar15_h", _) => (8.0, 2.0, 1.0, 8.0),
         // Shotgun modes preserve their heavy backward kick, but add explicit
         // angular handling independent of Agility's vertical suppression.
-        ("sg_h", 1) => (24.0, 4.5, 0.5, 0.0),
-        ("sg_h", _) => (12.0, 3.0, 0.5, 0.0),
+        ("sg_h", 1) => (24.0, 4.5, 0.5, 8.0),
+        ("sg_h", _) => (12.0, 3.0, 0.5, 8.0),
         _ => return None,
     };
     Some(HandlingProfile {
@@ -301,6 +301,7 @@ pub fn gun_weight_target(
 ) -> Option<GunWeightTarget> {
     crate::mission::mission_core::held_item_collision_group(world, gun)?;
     let models = world.borrow::<View<PropModelName>>().ok()?;
+    // Weight belongs to the model, independent of the selected fire mode.
     let profile = handling_profile(&models.get(gun).ok()?.0, 0)?;
     Some(GunWeightTarget {
         anchor,
