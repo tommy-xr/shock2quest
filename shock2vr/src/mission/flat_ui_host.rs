@@ -2547,6 +2547,19 @@ mod tests {
     }
 
     #[test]
+    fn character_panel_preserves_carried_items_and_toggles_without_actions() {
+        let (world, mut host, item, _) = drag_world();
+        host.cursor_item = Some(make_cursor_item(&world, item));
+        assert!(press_edge(&mut host, &world, (476.0, 450.0)).is_empty());
+        assert!(host.utilities.is_open());
+        assert!(press_edge(&mut host, &world, (530.0, 200.0)).is_empty());
+        assert_eq!(host.held_entity(), Some(item));
+        assert!(press_edge(&mut host, &world, (476.0, 450.0)).is_empty());
+        assert!(!host.utilities.is_open());
+        assert_eq!(host.held_entity(), Some(item));
+    }
+
+    #[test]
     fn inspect_click_does_not_lift_wield_or_frob_an_inventory_item() {
         let (world, mut host, item, _) = drag_world();
         assert!(press_edge(&mut host, &world, (166.0, 440.0)).is_empty());

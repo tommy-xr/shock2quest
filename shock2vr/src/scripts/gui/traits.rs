@@ -211,7 +211,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
 /// The trait icon art (`TRAIT01.PCX`..`TRAIT16.PCX`; `TRAIT00.PCX` is the
 /// empty-slot art).
-fn trait_icon(trait_id: u8) -> String {
+pub(crate) fn trait_icon(trait_id: u8) -> String {
     format!("trait{:02}.pcx", trait_id)
 }
 

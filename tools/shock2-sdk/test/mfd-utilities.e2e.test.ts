@@ -283,3 +283,28 @@ for (const vr of [false,true]) {
     await capture("awarded");assert.deepEqual(await game.player.inventory(),inventory,"resource awards do not become inventory items");
   });
 }
+
+for (const vr of [false,true]) {
+  test(`Native character stats display five live levels without mutation (${vr ? "VR" : "flat"})`,{skip:process.env.SHOCK2_E2E!=="1",timeout:180_000},async()=>{
+    await using game=await GameServer.launch({mission:"medsci1.mis",debugFlags:vr?["--vr"]:[]});
+    await game.step({frames:30});await game.player.spawnItem(-52);await game.input.trigger("ToggleUseMode");await game.step({frames:5});
+    const click=async(e:UiElement)=>{if(vr)await clickCanvasWithRay(game,requirePanelPose(await game.ui.state()),canvasCenter(e));else await clickUiElement(game,e);};
+    const button=async()=>{const e=(await game.ui.state()).strip!.elements.find(e=>e.label==="character_stats");assert.ok(e);return e;};
+    const capture=async(name:string)=>{const out=process.env.ASTRA_STATS_CAPTURE;if(!out)return;await mkdir(out,{recursive:true});const path=`${out}/${vr?"vr":"flat"}-${name}`;await game.screenshot(path+".png",1600);await writeFile(path+".json",JSON.stringify({ui:await game.ui.state(),info:await game.info()},null,2));};
+    await capture("idle");
+    const inventory=await game.player.inventory();const original=(await game.info()).player.stats;
+    await click(await button());assert.equal((await button()).texture?.toLowerCase(),"iface/ifbtn21.pcx");
+    await capture("base");await click(await button());assert.ok(!(await game.ui.state()).strip!.elements.some(e=>e.label==="character_stat"));
+    assert.deepEqual((await game.info()).player.stats,original);assert.deepEqual(await game.player.inventory(),inventory);
+    // Explicit debug fixture to expose every bar length; panel reads remain inert.
+    await game.player.setStats({strength:6,endurance:4,psionic_ability:2,agility:5,cyber_affinity:3});
+    const stats=(await game.info()).player.stats!;
+    await click(await button());
+    const labels=(await game.ui.state()).strip!.elements.filter(e=>e.label==="character_stat").map(e=>e.text);
+    assert.deepEqual(labels,[`STRENGTH ${stats.strength}`,`ENDURANCE ${stats.endurance}`,`PSIONICS ${stats.psionic_ability}`,`AGILITY ${stats.agility}`,`CYBER ${stats.cyber_affinity}`]);
+    await capture("varied");
+    const close=(await game.ui.state()).strip!.elements.find(e=>e.label==="utility_close");assert.ok(close);await click(close);
+    assert.ok(!(await game.ui.state()).strip!.elements.some(e=>e.label==="character_stat"));assert.equal((await game.ui.state()).mode,"use");
+    assert.deepEqual((await game.info()).player.stats,stats);assert.deepEqual(await game.player.inventory(),inventory);
+  });
+}
