@@ -248,6 +248,7 @@ movement, or your saved character sheet. They remain active across scene/load
 changes in the running process and reset on app restart. Hand-motion inertia
 is not implemented yet.
 
+Quest enables physical held guns, downward gun weight, and particles by default.
 Desktop/debug VR testing needs
 `--vr --experimental physical_held_items,physical_gun_weight`. Automated tests
 can set the same knobs through `game.devParams.set("gun_strength_override", 3)`
