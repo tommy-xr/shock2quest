@@ -48,7 +48,7 @@ Separate paths: Wrench (-928), Crystal Shard (-28), Electro Shock (-24), PsiSwor
 ## Confirmed source discrepancies
 
 - Fast rays use fixed 6 damage; physical collisions use fixed 1 damage. Authored pistol contact intensity is 4, assault rifle 10, slug 8/16, laser 2/12; target receptrons and ammo type must determine resulting damage.
-- Shotgun pellets carry unparsed `P$Projectil`. Dark `shkproj.cpp:495–514` gets pellet count/spread from the projectile archetype, not BaseGunDesc.spray (shotgun setting spray is zero). Do not implement shotgun spread from the misleading gun field.
+- Shotgun pellet count/spread comes from `P$Projectil`, now parsed and applied in the pellet follow-up below. Dark `shkproj.cpp:495–514` reads the projectile archetype, not BaseGunDesc.spray (shotgun setting spray is zero).
 - Stasis is an authored non-damage contact stimulus, requiring separate behavior; fixed collision damage is not an acceptable substitute.
 - Annelid homing remains unparsed; exotic secondary spawns need effect/lifecycle verification.
 
@@ -181,10 +181,52 @@ scaling. Immune or non-damage contacts emit no Damage message. Physical terminal
 contacts are handled once even when multiple collision messages are queued.
 
 Pistol, laser and stasis actual-shot regressions fail on the parent and pass on
-this layer. Stasis no longer removes an erroneous hit point; **Freeze and
-add_metaprop reactions remain pending**, including duration, reapplication and
-save/load. This is the next item before pellet spread. Full act/react ordering,
+this layer. Stasis no longer removes an erroneous hit point. #1465 implements
+native Freeze, duration/reapplication, expiry and save/load; the companion
+add_metaprop/FreezeFX behavior remains pending. Full act/react ordering,
 remaining non-damage reactions, special-effect entity cleanup and complete
 weapon/target damage-matrix verification remain open. See the workstream's
 [contact damage section](weapon-feel-workstream.md#authored-projectile-contact-damage)
 for observed values, source evidence and the known baseline test failure.
+
+
+## Shotgun pellet count and spread follow-up
+
+Both pellet archetypes carry the same packed six-byte `P$Projectil` record:
+`06 00 00 00 00 04` (`i32 count = 6`, `u16 spread = 1024`). Dark angle units
+encode one turn in 65536 units, so each pellet receives independently sampled
+heading and pitch offsets in **[-5.625°, +5.625°]**. This is a square angular
+distribution, not a uniform circular cone. The global heading/pitch axes match
+`darkengine/src/shock/shkproj.cpp:303–314,495–514`; gun roll does not rotate that
+distribution. `engfeat/projbase.h` defines the two packed fields.
+
+| Setting | Projectile | Pellets | Spread per axis | Ammo cost | Contact source |
+| --- | --- | ---: | ---: | ---: | --- |
+| Normal | Pellet Projectile (-524) | 6 | ±5.625° | 1 | High Explosive (-376), intensity 1 each |
+| Triple | Double Pellet (-3423) | 6 | ±5.625° | 3 | High Explosive (-376), intensity 2 each |
+| Normal | Rifled Slug (-516) | 1 | 0° | 1 | Existing authored source |
+| Triple | Double Slug (-3422) | 1 | 0° | 3 | Existing authored source |
+
+The player weapon path expands only the launch effect. Each pellet retains its
+owner filtering, shot modifiers and flat eye/VR muzzle origin, and independently
+resolves contact damage and impact effects. Ammo, sound, muzzle flash, casing and
+wear remain once per shell. The launch descriptor cache uses the existing
+property hydrator for inherited values and mission overrides.
+
+`tools/shock2-sdk/test/shotgun-pellets.e2e.test.ts` fires both settings and both
+ammo types in flat and VR, verifies six pellet impacts versus one slug impact,
+checks bounded two-axis spread, and checks unchanged cost and firing-sound
+count. Two close-range cases verify six separate creature hitbox contacts and
+lethal aggregate damage against a 12HP hybrid (Human Vulnerability receives
+High Explosive at x4 before the existing limb multiplier). Matched captures at
+4m and 11.5m show one impact before the fix and six after it. Exact random
+patterns vary between shots; deterministic stepping does not seed gameplay RNG.
+
+![Shotgun pellet comparison](https://gist.githubusercontent.com/tommy-xr/47770507a648941ea8a6f2a5736b5e8a/raw/near-0-comparison.gif)
+
+![Near/far, both settings](https://gist.githubusercontent.com/tommy-xr/47770507a648941ea8a6f2a5736b5e8a/raw/all-comparisons.png)
+
+This layer does not implement gun-wide accuracy, Sharpshooter/stat modifiers,
+recoil, or change the separate AI projectile launch path. Remaining impact and
+explosion lifecycles, burst cadence and accuracy/stat parity precede the planned
+Strength-based VR spring recoil augmentation.

@@ -11,6 +11,7 @@ pub mod mission_core;
 pub mod pathfinding_debug;
 pub mod pathfinding_test;
 pub mod player_footsteps;
+pub(crate) mod projectile_spray;
 pub(crate) mod reload;
 mod research_overview;
 mod shoulder_backpack;
