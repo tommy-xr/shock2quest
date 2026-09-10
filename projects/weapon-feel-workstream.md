@@ -403,3 +403,21 @@ The next separate layer addresses Quest's explicit `render_particles: false`
 override. It explains the missing particle orbs despite smaller mesh effects
 (the user's four-dot EMP observation); headset before/after verification remains
 required before calling that presentation gap fixed.
+
+
+## Quest particle rendering
+
+Since the initial runtime commit, Quest's `GameOptions` explicitly disabled all
+particle rendering while the
+shared default and debug runtime enabled it. The Quest layer removes that
+override and uses the shared default. This affects particle effects throughout
+the level, including EMP, stasis and fusion projectile riders; it is not a
+replacement orb or a weapon-specific approximation. The user's four-dot EMP
+observation is consistent with mesh effects remaining visible while particles
+are suppressed; identifying those exact dots still needs a matched device capture.
+
+The attached Quest disconnected before a usable before/after comparison could
+be captured. The existing simulated-VR gallery demonstrates the enabled shared
+render path, but does not verify the corrected APK on a headset. Keep this layer
+in draft until it is installed, projectile orbs are visibly checked and device
+captures are embedded. No device performance claim is made.
