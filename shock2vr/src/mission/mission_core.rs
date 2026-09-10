@@ -4719,23 +4719,36 @@ impl MissionCore {
             .map(|inventory| super::shoulder_backpack::weapons(&self.world, inventory))
             .unwrap_or([None; 2]);
         self.flat_ui.set_shoulder_weapons(shoulder_weapons);
+        // Resolve physical ownership through the interaction boundary: flat's
+        // internal left slot represents the visibly right-handed viewmodel.
+        let held = self.interaction.held_entities();
+        let mut hand_items = [None; 2];
+        for entity in [held.0, held.1].into_iter().flatten() {
+            if let Some(hand) = self.interaction.holding_hand(entity) {
+                hand_items[crate::vr_config::hand_slot(hand)] = Some(entity);
+            }
+        }
+        self.flat_ui
+            .set_hand_items(&self.world, asset_cache, hand_items);
         let name_strip = self.flat_ui.strip_entity().and_then(|_| {
-            self.flat_ui
-                .pointed_item()
-                .or_else(|| self.name_strip_world_pick(game_options))
-                .and_then(|entity| {
-                    let name = crate::hud::resolve_item_name(asset_cache, &self.world, entity)?;
-                    Some(
-                        match shoulder_weapons
-                            .iter()
-                            .position(|item| *item == Some(entity))
-                        {
-                            Some(0) => format!("Left shoulder: {name}"),
-                            Some(1) => format!("Right shoulder: {name}"),
-                            _ => name,
-                        },
-                    )
-                })
+            self.flat_ui.pointed_hand_name().or_else(|| {
+                self.flat_ui
+                    .pointed_item()
+                    .or_else(|| self.name_strip_world_pick(game_options))
+                    .and_then(|entity| {
+                        let name = crate::hud::resolve_item_name(asset_cache, &self.world, entity)?;
+                        Some(
+                            match shoulder_weapons
+                                .iter()
+                                .position(|item| *item == Some(entity))
+                            {
+                                Some(0) => format!("Left shoulder: {name}"),
+                                Some(1) => format!("Right shoulder: {name}"),
+                                _ => name,
+                            },
+                        )
+                    })
+            })
         });
         self.flat_ui.set_name_strip(name_strip);
 

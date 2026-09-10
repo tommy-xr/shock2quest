@@ -940,19 +940,42 @@ where
     ) -> Vec<SceneObject> {
         let placed = self.layout_with_pointer(asset_cache, pointer);
         let mut objects = Vec::with_capacity(placed.len());
-        for (index, element) in placed.iter().enumerate() {
+        let layers = overlap_layers(placed.iter().map(|element| element.rect));
+        for (element, layer) in placed.iter().zip(layers) {
             let alpha = force_alpha.unwrap_or(element.alpha);
             let mut object = present_world(asset_cache, element, alpha, self.size);
-            // Panel-local +Z faces the viewer, so later (higher-layer)
-            // elements step toward them to sort in front of the backdrop.
+            // Only overlapping art needs separation. Stepping every element
+            // forward gave adjacent backdrop crops different perspective
+            // scales in VR, breaking borders that join exactly on screen.
             object.set_transform(
                 root_transform
-                    * Matrix4::from_translation(vec3(0.0, 0.0, component_z_step * index as f32)),
+                    * Matrix4::from_translation(vec3(0.0, 0.0, component_z_step * layer as f32)),
             );
             objects.push(object);
         }
         objects
     }
+}
+
+/// Preserve painter order where rectangles overlap, keeping adjoining pieces
+/// on the same plane. Input rectangles are the shared, fully resolved layout.
+fn overlap_layers(rects: impl IntoIterator<Item = Rect>) -> Vec<usize> {
+    let mut previous: Vec<(Rect, usize)> = Vec::new();
+    for rect in rects {
+        let layer = previous
+            .iter()
+            .filter(|(other, _)| {
+                rect.x < other.x + other.w
+                    && other.x < rect.x + rect.w
+                    && rect.y < other.y + other.h
+                    && other.y < rect.y + rect.h
+            })
+            .map(|(_, layer)| layer + 1)
+            .max()
+            .unwrap_or(0);
+        previous.push((rect, layer));
+    }
+    previous.into_iter().map(|(_, layer)| layer).collect()
 }
 
 impl UiCanvas<()> {
@@ -1243,6 +1266,19 @@ fn world_element_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adjacent_background_pieces_share_depth_but_overlays_keep_painter_order() {
+        let layers = overlap_layers([
+            Rect::new(0.0, 0.0, 100.0, 20.0),
+            Rect::new(100.0, 0.0, 20.0, 5.0),
+            Rect::new(100.0, 5.0, 20.0, 15.0),
+            Rect::new(10.0, 5.0, 20.0, 10.0),
+            Rect::new(12.0, 6.0, 5.0, 5.0),
+            Rect::new(105.0, 6.0, 5.0, 5.0),
+        ]);
+        assert_eq!(layers, [0, 0, 0, 1, 2, 1]);
+    }
 
     #[test]
     fn cropped_art_keeps_its_destination_rect_and_authored_texel_bounds() {
