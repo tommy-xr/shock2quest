@@ -3,6 +3,7 @@ pub mod effect;
 pub(crate) mod proximity_grenade;
 pub mod speech_registry;
 pub mod speech_util;
+pub mod stasis;
 
 mod apparition;
 mod auto_install_soft;
@@ -243,6 +244,10 @@ pub enum MessagePayload {
     },
     SensorEndIntersect {
         with: EntityId,
+    },
+    /// Native AI freeze reaction; negative duration is indefinite.
+    Freeze {
+        duration_seconds: f32,
     },
     Collided {
         with: EntityId,
@@ -582,6 +587,11 @@ pub trait Script {
         _msg: &MessagePayload,
     ) -> Effect {
         Effect::NoEffect
+    }
+
+    /// Read-only view of native AI stasis, shared by animation/physics gates.
+    fn stasis(&self) -> Option<&stasis::StasisState> {
+        None
     }
 
     /// Stable opt-in identity for private runtime state. Entity properties and
@@ -1382,6 +1392,15 @@ impl ScriptWorld {
         }
 
         Ok(())
+    }
+
+    pub fn stasis(&self, entity: EntityId, world: &World) -> Option<&stasis::StasisState> {
+        let stasis = self
+            .entity_to_scripts
+            .get(&entity)?
+            .iter()
+            .find_map(|s| s.script.stasis())?;
+        (!crate::scripts::ai::ai_util::is_killed(entity, world)).then_some(stasis)
     }
 
     pub fn update(&mut self, world: &World, physics: &PhysicsWorld, time: &Time) -> Vec<Effect> {

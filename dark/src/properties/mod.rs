@@ -868,8 +868,10 @@ pub enum ReceptronEffect {
     /// Add radiation exposure scaled by `multiplier`. The player authors this
     /// response to the Radiation stimulus with a multiplier of 1.
     Radiate { multiplier: f32 },
+    /// Freeze an AI for the incoming intensity times this duration multiplier.
+    Freeze { duration_multiplier: i32 },
     /// An effect the game does not implement yet (EnvSound, add_metaprop,
-    /// Freeze, Stun, toxin, ...).
+    /// Stun, toxin, ...).
     Unhandled(String),
 }
 
@@ -906,7 +908,8 @@ impl ReceptronOptions {
         let name = String::from_utf8_lossy(&name_bytes[..name_end]).into_owned();
         let _target = read_i32(reader);
         let _agent = read_i32(reader);
-        let param_56 = read_single(reader);
+        let param_56_bits = read_u32(reader);
+        let param_56 = f32::from_bits(param_56_bits);
         let _param_60 = read_i32(reader);
         let param_64 = read_single(reader);
         let param_68 = read_i32(reader);
@@ -918,6 +921,9 @@ impl ReceptronOptions {
             },
             "Amplify" => ReceptronEffect::Amplify { factor: param_56 },
             "Abort" => ReceptronEffect::Abort,
+            "Freeze" => ReceptronEffect::Freeze {
+                duration_multiplier: param_56_bits as i32,
+            },
             "radiate" => ReceptronEffect::Radiate {
                 multiplier: param_56,
             },
@@ -2703,6 +2709,19 @@ mod tests {
         bytes.extend_from_slice(&p68.to_le_bytes());
         bytes.resize(88, 0);
         bytes
+    }
+
+    #[test]
+    fn freeze_reaction_reads_integer_duration_multiplier() {
+        let mut payload = vec![0u8; 88];
+        payload[16..22].copy_from_slice(b"Freeze");
+        payload[56..60].copy_from_slice(&1i32.to_le_bytes());
+        assert_eq!(
+            read_receptron(payload).effect,
+            ReceptronEffect::Freeze {
+                duration_multiplier: 1
+            }
+        );
     }
 
     fn read_receptron(payload: Vec<u8>) -> ReceptronOptions {
