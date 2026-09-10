@@ -56,6 +56,30 @@ pub fn resolve_texture_name(asset_cache: &AssetCache, requested: &str) -> Option
     Some(resolved)
 }
 
+/// Resolve icon art without the model-texture `txt16/` search. Object icons
+/// prefer their family before considering legacy bare names (also used for
+/// report portraits). An explicitly qualified request stays in that family.
+/// Within a family, preserve mod precedence and prefer DDS/PNG over PCX.
+pub fn resolve_object_icon_name(asset_cache: &AssetCache, requested: &str) -> Option<String> {
+    let stem = Path::new(requested).with_extension("");
+    let stem = stem.to_str()?.to_ascii_lowercase();
+    let resolve = |stem: &str| {
+        let candidates = engine::texture_format::DECODABLE_EXTENSIONS
+            .iter()
+            .map(|ext| format!("{stem}.{ext}"))
+            .collect::<Vec<_>>();
+        asset_cache
+            .asset_paths()
+            .resolve_first(asset_cache.base_path().to_owned(), &candidates)
+    };
+    if !stem.contains('/') {
+        if let Some(name) = resolve(&format!("objicon/{stem}")) {
+            return Some(name);
+        }
+    }
+    resolve(&stem)
+}
+
 /// Resolve the diffuse texture used by a Dark LGMD object material.
 ///
 /// 25th Anniversary replacement models can attach a `.mtl` render-material
@@ -415,6 +439,40 @@ mod tests {
             .map(|(name, bytes)| ((*name).to_owned(), bytes.to_vec()))
             .collect();
         AssetCache::new(String::new(), Box::new(FakeAssetPath(assets)))
+    }
+
+    #[test]
+    fn ui_icons_prefer_their_family_and_high_resolution_encoding() {
+        let assets = cache(&[
+            ("disc.dds", b"model texture"),
+            ("disc.pcx", b"model texture"),
+            ("objicon/disc.pcx", b"classic icon"),
+            ("objicon/disc.png", b"remastered icon"),
+            ("iface/frame.pcx", b"classic frame"),
+            ("iface/frame.dds", b"remastered frame"),
+            ("mport.pcx", b"legacy portrait"),
+        ]);
+        assert_eq!(
+            super::resolve_object_icon_name(&assets, "DISC.PCX").as_deref(),
+            Some("objicon/disc.png")
+        );
+        assert_eq!(
+            super::resolve_object_icon_name(&assets, "iface/frame.pcx").as_deref(),
+            Some("iface/frame.dds")
+        );
+        assert_eq!(
+            super::resolve_object_icon_name(&assets, "mport.pcx").as_deref(),
+            Some("mport.pcx")
+        );
+        assert_eq!(
+            super::resolve_object_icon_name(&assets, "iface/disc.pcx"),
+            None
+        );
+        let classic = cache(&[("objicon/disc.pcx", b"classic icon")]);
+        assert_eq!(
+            super::resolve_object_icon_name(&classic, "disc.png").as_deref(),
+            Some("objicon/disc.pcx")
+        );
     }
 
     #[test]
