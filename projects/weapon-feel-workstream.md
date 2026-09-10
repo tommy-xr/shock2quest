@@ -716,3 +716,33 @@ Runtime checks also acquire support at the live moving socket, then release it
 mid-kick: the existing backward recoil curve continues within 0.005 world
 units of an uninterrupted shot. Every matrix shot recovers within 0.005 world
 units and 0.1 degrees of its starting pose, with unchanged head orientation.
+
+
+## AR support grip and complete handedness matrix
+
+The AR had a calibrated primary grip but no support profile or support
+eligibility. Add a fore-end support socket in the existing shared system;
+left/right reflection, squeeze ownership and two-anchor steering use the same
+path as the other supported weapons. Calibrate placement against the active
+25AE AR mesh and rendered gloves on both sides, rather than accepting a socket
+merely because the controller can latch to it.
+
+AR support scenarios run with physical-held guns enabled and verify acquisition,
+barrel direction, steering, primary-only firing, latch retention through recoil,
+release and recovery. Extend the Strength matrix to genuine AR support at
+Strength 1/3/6, alongside its existing one-handed cases.
+
+
+Measured AR peak backward travel in the physical-held runtime (Agility 1,
+Standard 6):
+
+| Strength | One hand | Two hands |
+| --- | ---: | ---: |
+| 1 | 0.198354 | 0.099178 |
+| 3 | 0.144634 | 0.082649 |
+| 6 | 0.105789 | 0.066114 |
+
+Both hands preserve the primary barrel direction when support attaches. The
+six-shot AR matrix verifies ammo use, fixed head pose, expected scaling and
+recovery after every shot. These are headless checks; headset fit and feel
+remain a device-validation task.

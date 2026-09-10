@@ -16,7 +16,7 @@ for (const [name, template] of [
   ["AR", -18],
 ] as const) {
   test(
-    `${name} recoil decreases with Strength${name === "pistol" ? " and genuine support removes the extra spring" : ""}`,
+    `${name} recoil decreases with Strength and genuine support removes the extra spring`,
     { skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000 },
     async (context) => {
       await using game = await GameServer.launch({
@@ -48,7 +48,7 @@ for (const [name, template] of [
         const socket = player.hand_grips.find(
           (g) => g.hand === "right",
         )!.support;
-        assert.ok(socket, "the pistol must expose its authored support socket");
+        assert.ok(socket, `${name} must expose its authored support socket`);
         const inverse = quatConjugate(player.rotation);
         const p = socket.controller_position;
         const q = socket.controller_rotation;
@@ -83,7 +83,7 @@ for (const [name, template] of [
       }[] = [];
       for (const strength of [1, 3, 6]) {
         await game.player.setStats({ strength });
-        for (const supported of name === "pistol" ? [false, true] : [false]) {
+        for (const supported of [false, true]) {
           await support(supported);
           await game.step({ frames: 180 });
           const initial = await body();
@@ -131,7 +131,7 @@ for (const [name, template] of [
       const value = (s: number, supported: boolean) =>
         measurements.find((m) => m.strength === s && m.supported === supported)!
           .back;
-      const baseline = name === "pistol" ? value(1, true) : value(1, false) / 2;
+      const baseline = value(1, true);
       assert.ok(
         baseline > 0.03,
         "actual firing must produce measurable backward recoil",
