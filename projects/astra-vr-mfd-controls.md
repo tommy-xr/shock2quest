@@ -49,9 +49,18 @@ falling back to the latest readable log. Pressing it again closes just that
 reader and leaves the cyber interface open. With no collected logs it shows
 an empty native PDA panel. This is a shortcut, not yet a full PDA log browser.
 
-The current ammo controls still target the hand-agnostic wielded weapon (right
-hand first in VR). Dual readouts and explicit per-weapon action routing are a
-separate increment; the restored frame does not resolve that ownership yet.
+Both inventory arms show their own ammo count (or PSI for an amp). Selecting
+an armed slot with an empty cursor selects that weapon for AMMOFULL; its arm
+gets a green underline. Selection
+follows the same weapon across a hand swap. Putting it away selects another
+available gun, preferring the physical right hand when no prior selection remains.
+A support hand owns no item and adds no duplicate counter.
+
+Reload, ammo cycling and settings carry the entity from the last drawn panel.
+A dropped/stale target does nothing; it cannot redirect a queued click to the
+other gun. Keyboard actions retain their existing right-first preference.
+Weapon settings bind to an explicit gun and close when selection changes.
+Selecting arms never equips, consumes, drops or moves inventory items.
 
 ### Research overview
 

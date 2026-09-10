@@ -91,8 +91,8 @@ pub enum FlatUiDragAction {
     Wield(EntityId),
     /// One of the AMMOFULL readout's controls was clicked (fire-mode setting,
     /// reload, ammo cycle, psi selector). Not tied to a cursor item - the
-    /// caller maps it to the effect that acts on the wielded weapon.
-    Readout(ReadoutButton),
+    /// target is the entity in the last drawn readout, never a hand lookup.
+    Readout(ReadoutButton, Option<EntityId>),
 }
 
 /// Double-click window (frames at 60Hz) and radius (canvas px) for the
@@ -261,6 +261,8 @@ pub struct FlatUiHost {
     /// Read-only snapshots in physical left/right order. A support hand owns
     /// no item; flat wielding is mapped to its visible right hand by the caller.
     hand_items: [Option<CursorItem>; 2],
+    hand_ammo: [crate::hud::ammo_panel::AmmoReadout; 2],
+    selected_ammo: Option<EntityId>,
     pub(crate) utilities: super::mfd_utilities::MfdUtilities,
     /// Pointer position on the 640x480 canvas (None: no pointer / letterbox).
     cursor_canvas: Option<Vector2<f32>>,
@@ -305,6 +307,8 @@ impl FlatUiHost {
             name_strip: None,
             shoulder_weapons: [None; 2],
             hand_items: [None, None],
+            hand_ammo: Default::default(),
+            selected_ammo: None,
             utilities: Default::default(),
             cursor_canvas: None,
             hover_close: false,
@@ -418,6 +422,8 @@ impl FlatUiHost {
         asset_cache: &mut AssetCache,
         items: [Option<EntityId>; 2],
     ) {
+        self.hand_ammo = items
+            .map(|entity| crate::hud::ammo_panel::AmmoReadout::for_weapon(world, entity, true));
         self.hand_items = items.map(|entity| {
             let entity = entity.filter(|entity| {
                 world
@@ -428,6 +434,40 @@ impl FlatUiHost {
             item.label = crate::hud::resolve_item_name(asset_cache, world, entity).or(item.label);
             Some(item)
         });
+        self.reconcile_ammo_selection();
+    }
+
+    fn reconcile_ammo_selection(&mut self) {
+        if !self.hand_items.iter().enumerate().any(|(slot, item)| {
+            item.as_ref()
+                .is_some_and(|item| Some(item.entity) == self.selected_ammo)
+                && !self.hand_ammo[slot].is_empty()
+        }) {
+            self.selected_ammo = [1, 0].into_iter().find_map(|slot| {
+                (!self.hand_ammo[slot].is_empty())
+                    .then(|| self.hand_items[slot].as_ref().map(|item| item.entity))
+                    .flatten()
+            });
+        }
+    }
+
+    pub(crate) fn ammo_selection(
+        &self,
+    ) -> (Option<EntityId>, Option<crate::vr_config::Handedness>) {
+        let hand = self
+            .selected_ammo
+            .and_then(|entity| {
+                self.hand_items
+                    .iter()
+                    .position(|item| item.as_ref().is_some_and(|item| item.entity == entity))
+            })
+            .map(|slot| {
+                [
+                    crate::vr_config::Handedness::Left,
+                    crate::vr_config::Handedness::Right,
+                ][slot]
+            });
+        (self.selected_ammo, hand)
     }
 
     pub(crate) fn pointed_hand_name(&self) -> Option<String> {
@@ -516,7 +556,15 @@ impl FlatUiHost {
                 texture: spec.texture.map(str::to_string),
                 text: spec.text.clone(),
                 label: Some(spec.button.label().to_string()),
-                entity_id: None,
+                entity_id: if matches!(spec.button, ReadoutButton::SystemMenu | ReadoutButton::Logs)
+                {
+                    None
+                } else {
+                    self.readouts
+                        .as_ref()
+                        .and_then(|r| r.weapon)
+                        .map(|entity| entity.inner() as i32)
+                },
                 rect: [spec.rect.x, spec.rect.y, spec.rect.w, spec.rect.h],
                 screen_rect: self.to_screen_rect(spec.rect),
             })
@@ -931,9 +979,15 @@ impl FlatUiHost {
                 return (Vec::new(), actions);
             }
         }
-        if strip_rect.is_some_and(|r| hand_readout_rects(r).iter().any(|r| r.contains(canvas_pos)))
-        {
-            // Hand readouts never equip, use or throw an item.
+        if let Some(slot) = strip_rect.and_then(|r| {
+            hand_readout_rects(r)
+                .iter()
+                .position(|r| r.contains(canvas_pos))
+        }) {
+            // Select only with an empty cursor; the arm never equips or drops.
+            if pressed_edge && self.cursor_item.is_none() && !self.hand_ammo[slot].is_empty() {
+                self.selected_ammo = self.hand_items[slot].as_ref().map(|item| item.entity);
+            }
             self.hover_close = false;
             return (Vec::new(), Vec::new());
         }
@@ -1024,7 +1078,13 @@ impl FlatUiHost {
         // since the controls are disjoint from both. ---
         if pressed_edge {
             if let Some(button) = readout_hit {
-                return (Vec::new(), vec![FlatUiDragAction::Readout(button)]);
+                return (
+                    Vec::new(),
+                    vec![FlatUiDragAction::Readout(
+                        button,
+                        self.readouts.as_ref().and_then(|r| r.weapon),
+                    )],
+                );
             }
         }
 
@@ -1199,7 +1259,16 @@ impl FlatUiHost {
             }
             for (slot, arm) in hand_readout_rects(rect).into_iter().enumerate() {
                 let title = Rect::new(arm.x + 1.0, arm.y + 16.0, arm.w - 2.0, 12.0);
+                let selected = self.hand_items[slot]
+                    .as_ref()
+                    .is_some_and(|item| Some(item.entity) == self.selected_ammo);
                 canvas.image(title, "frame.pcx");
+                if selected {
+                    canvas.image(
+                        Rect::new(title.x, title.y + title.h - 1.0, title.w, 1.0),
+                        "iface/resprog.pcx",
+                    );
+                }
                 canvas.text_native_fit(
                     title,
                     ["LEFT", "RIGHT"][slot],
@@ -1207,7 +1276,34 @@ impl FlatUiHost {
                     HAlign::Center,
                     VAlign::Middle,
                 );
-                let content = Rect::new(arm.x + 3.0, arm.y + 30.0, arm.w - 6.0, arm.h - 34.0);
+                let content = Rect::new(
+                    arm.x + 3.0,
+                    arm.y + 30.0,
+                    arm.w - 6.0,
+                    arm.h
+                        - if self.hand_ammo[slot].is_empty() {
+                            34.0
+                        } else {
+                            48.0
+                        },
+                );
+                if let Some(ammo) = self.hand_ammo[slot].ammo {
+                    canvas.text_native_fit(
+                        Rect::new(arm.x + 1.0, arm.y + arm.h - 16.0, arm.w - 2.0, 12.0),
+                        &ammo.to_string(),
+                        crate::ui::MFD_FONT,
+                        HAlign::Center,
+                        VAlign::Top,
+                    );
+                } else if self.hand_ammo[slot].psi_power.is_some() {
+                    canvas.text_native_fit(
+                        Rect::new(arm.x + 1.0, arm.y + arm.h - 16.0, arm.w - 2.0, 12.0),
+                        "PSI",
+                        crate::ui::MFD_FONT,
+                        HAlign::Center,
+                        VAlign::Top,
+                    );
+                }
                 match self.hand_items[slot].as_ref() {
                     Some(item) => match item.icon.as_deref() {
                         Some(icon) => {
@@ -1378,11 +1474,19 @@ impl FlatUiHost {
                         crate::game_scene::DebugUiElement {
                             kind: "readout".to_owned(),
                             texture: item.and_then(|item| item.icon.clone()),
-                            text: Some(
-                                item.map(|item| item.label.as_deref().unwrap_or("Held item"))
-                                    .unwrap_or("Empty")
-                                    .to_owned(),
-                            ),
+                            text: Some({
+                                let name = item
+                                    .map(|item| item.label.as_deref().unwrap_or("Held item"))
+                                    .unwrap_or("Empty");
+                                if self.hand_ammo[slot].psi_power.is_some() {
+                                    format!("{name}: PSI")
+                                } else {
+                                    match self.hand_ammo[slot].ammo {
+                                        Some(ammo) => format!("{name}: {ammo}"),
+                                        None => name.to_owned(),
+                                    }
+                                }
+                            }),
                             label: Some(["Left hand", "Right hand"][slot].to_owned()),
                             entity_id: item.map(|item| item.entity.inner() as i32),
                             rect: [r.x, r.y, r.w, r.h],
@@ -2956,6 +3060,7 @@ mod tests {
     /// ((496,429) and (564,429)).
     fn readout_fixture() -> UseModeReadouts {
         UseModeReadouts {
+            weapon: None,
             resources: [0; 2],
             bio: Default::default(),
             ammo: crate::hud::ammo_panel::AmmoReadout {
@@ -2969,6 +3074,62 @@ mod tests {
     }
 
     #[test]
+    fn arm_selection_preserves_weapon_identity_and_carries_the_drawn_target() {
+        let (mut world, mut host, left, _) = drag_world();
+        let right = world.add_entity(());
+        host.hand_items = [
+            Some(make_cursor_item(&world, left)),
+            Some(make_cursor_item(&world, right)),
+        ];
+        host.hand_ammo = [
+            crate::hud::ammo_panel::AmmoReadout {
+                ammo: Some(6),
+                ..Default::default()
+            },
+            crate::hud::ammo_panel::AmmoReadout {
+                ammo: Some(12),
+                ..Default::default()
+            },
+        ];
+        host.reconcile_ammo_selection();
+        assert_eq!(host.ammo_selection().0, Some(right));
+        let arm = hand_readout_rects(host.strip_rect().unwrap())[0].center();
+        assert!(press_edge(&mut host, &world, (arm.x, arm.y)).is_empty());
+        assert_eq!(host.ammo_selection().0, Some(left));
+        let mut readouts = readout_fixture();
+        readouts.weapon = Some(left);
+        host.set_readouts(Some(readouts));
+        assert_eq!(
+            press_edge(&mut host, &world, (570.0, 449.0)),
+            vec![FlatUiDragAction::Readout(
+                ReadoutButton::CycleAmmo,
+                Some(left)
+            )]
+        );
+        // Swapping physical hands preserves the chosen weapon, not its old slot.
+        host.hand_items.swap(0, 1);
+        host.hand_ammo.swap(0, 1);
+        host.reconcile_ammo_selection();
+        assert_eq!(
+            host.ammo_selection(),
+            (Some(left), Some(crate::vr_config::Handedness::Right))
+        );
+        // Losing that weapon picks the other gun for the NEXT frame, while the
+        // cached readout action still names the gun the player actually saw.
+        host.hand_items[1] = None;
+        host.hand_ammo[1] = Default::default();
+        host.reconcile_ammo_selection();
+        assert_eq!(host.ammo_selection().0, Some(right));
+        assert_eq!(
+            press_edge(&mut host, &world, (570.0, 449.0)),
+            vec![FlatUiDragAction::Readout(
+                ReadoutButton::CycleAmmo,
+                Some(left)
+            )]
+        );
+    }
+
+    #[test]
     fn clicking_a_readout_button_emits_its_action() {
         let (world, mut host, _wrench, _inv) = drag_world();
         host.set_readouts(Some(readout_fixture()));
@@ -2976,13 +3137,13 @@ mod tests {
         let actions = press_edge(&mut host, &world, (570.0, 449.0));
         assert_eq!(
             actions,
-            vec![FlatUiDragAction::Readout(ReadoutButton::CycleAmmo)]
+            vec![FlatUiDragAction::Readout(ReadoutButton::CycleAmmo, None)]
         );
         // ...and one on the SETTING button switches the fire mode.
         let actions = press_edge(&mut host, &world, (529.0, 439.0));
         assert_eq!(
             actions,
-            vec![FlatUiDragAction::Readout(ReadoutButton::GunSetting)]
+            vec![FlatUiDragAction::Readout(ReadoutButton::GunSetting, None)]
         );
         // The /v1/ui elements are exposed with clickable labels, and the
         // setting button carries the mode header it is drawn with.
@@ -3003,7 +3164,7 @@ mod tests {
         let actions = press_edge(&mut host, &world, (320.0, 390.0));
         assert_eq!(
             actions,
-            vec![FlatUiDragAction::Readout(ReadoutButton::SystemMenu)]
+            vec![FlatUiDragAction::Readout(ReadoutButton::SystemMenu, None)]
         );
         // A click elsewhere in the bare view does not cycle.
         let actions = press_edge(&mut host, &world, (300.0, 300.0));
@@ -3032,6 +3193,7 @@ mod tests {
     fn empty_bottom_strips_preserve_a_carried_item() {
         let (world, mut host, wrench, _) = drag_world();
         host.set_readouts(Some(UseModeReadouts {
+            weapon: None,
             resources: [0; 2],
             bio: Default::default(),
             ammo: Default::default(),
@@ -3268,7 +3430,7 @@ mod tests {
         );
         assert_eq!(
             actions,
-            vec![FlatUiDragAction::Readout(ReadoutButton::GunSetting)]
+            vec![FlatUiDragAction::Readout(ReadoutButton::GunSetting, None)]
         );
     }
 

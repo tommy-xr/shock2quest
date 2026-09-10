@@ -59,10 +59,22 @@ pub fn wielded_weapon(world: &World) -> Option<EntityId> {
     weapon_in_hand(world, Handedness::Right).or_else(|| weapon_in_hand(world, Handedness::Left))
 }
 
+/// Explicit UI targets never fall back to a different gun after being put away.
+/// An absent target keeps the hand-agnostic keyboard action's precedence.
+pub fn resolve_weapon_target(world: &World, target: Option<EntityId>) -> Option<EntityId> {
+    match target {
+        Some(entity) => (held_in_hand(world, entity) && is_weapon(world, entity)).then_some(entity),
+        None => wielded_weapon(world),
+    }
+}
+
 /// The wielded psi amp, in either hand - what the psi HUD readout reports and
 /// what the power selection MFD presents.
 pub fn wielded_psi_amp(world: &World) -> Option<EntityId> {
-    wielded_weapon(world).filter(|weapon| is_psi_amp(world, *weapon))
+    [Handedness::Right, Handedness::Left]
+        .into_iter()
+        .filter_map(|hand| weapon_in_hand(world, hand))
+        .find(|weapon| is_psi_amp(world, *weapon))
 }
 
 /// The weapon a per-hand gun action (eject, fire-mode toggle) applies to.
@@ -158,6 +170,19 @@ mod tests {
         );
         assert_eq!(hand_weapon_target(&world, Some(Handedness::Left)), left_gun);
         assert_ne!(left_gun, right_gun);
+    }
+
+    #[test]
+    fn an_explicit_dropped_target_never_falls_back_to_the_other_gun() {
+        let (world, left, right) = player_holding(true, true);
+        assert_eq!(resolve_weapon_target(&world, left), left);
+        assert_eq!(resolve_weapon_target(&world, None), right);
+        world
+            .borrow::<shipyard::UniqueViewMut<PlayerInfo>>()
+            .unwrap()
+            .left_hand_entity_id = None;
+        assert_eq!(resolve_weapon_target(&world, left), None);
+        assert_eq!(resolve_weapon_target(&world, None), right);
     }
 
     /// An empty hand ejects nothing, even with a gun in the other one.
