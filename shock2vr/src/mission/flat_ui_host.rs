@@ -51,6 +51,12 @@ const LEFT_MFD_ANCHOR: Vector2<f32> = Vector2::new(2.0, 124.0);
 /// canvas, flush with the top edge.
 const STRIP_ANCHOR: Vector2<f32> = Vector2::new(2.0, 0.0);
 
+// INVBACK's arm column occupies texels x1054..1128 in the 1272x242
+// remaster art (x527..564 at the original 636x121 resolution). Append
+// its mirror beyond the torso, fitting both arms without losing grid cells.
+const EXTRA_ARM_WIDTH: f32 = 37.0;
+const STRIP_SCALE: f32 = 635.0 / (635.0 + EXTRA_ARM_WIDTH);
+
 /// Walk-away auto-close distance (world units; dark units / SCALE_FACTOR).
 /// ~10 feet - past normal frob range, so a panel opened up close survives
 /// small repositioning but closes when the player leaves the object.
@@ -327,9 +333,8 @@ impl FlatUiHost {
     /// The backpack grid cell `canvas_pos` lands in, or `None` when it is off
     /// the strip (including a blocked/strength-capped column) - the deposit
     /// target for a VR release aimed at the strip (see
-    /// `MissionCore::strip_deposit_entities`). The strip is drawn at 1:1
-    /// scale onto the canvas (`strip_canvas_rect` reuses `size_px` directly),
-    /// so the canvas offset alone recovers the panel-local pixel position
+    /// `MissionCore::strip_deposit_entities`). Invert the strip's scale to
+    /// recover the panel-local pixel position
     /// [`crate::scripts::gui::backpack_cell_at`] lays items out in - the same
     /// inverse the strip's own rendering uses, so the resolved cell can never
     /// drift from what is drawn.
@@ -339,7 +344,11 @@ impl FlatUiHost {
         if !rect.contains(canvas_pos) {
             return None;
         }
-        let panel_pos = canvas_pos - Vector2::new(rect.x, rect.y);
+        let panel_size = strip.size_px?;
+        let panel_pos = Vector2::new(
+            (canvas_pos.x - rect.x) * panel_size.x / rect.w,
+            (canvas_pos.y - rect.y) * panel_size.y / rect.h,
+        );
         let grid = crate::inventory::grid_for(world, strip.entity);
         crate::scripts::gui::backpack_cell_at(panel_pos, grid)
     }
@@ -836,6 +845,12 @@ impl FlatUiHost {
             .and_then(|s| s.size_px)
             .map(strip_canvas_rect);
         let over_strip = strip_rect.map(|r| r.contains(canvas_pos)).unwrap_or(false);
+        if strip_rect.is_some_and(|r| mirrored_arm_rect(r).contains(canvas_pos)) {
+            // Decorative equipment chrome is not bare world. Until it has
+            // equipment controls, a click must not throw a cursor-held item.
+            self.hover_close = false;
+            return (Vec::new(), Vec::new());
+        }
         let panel_rect = self.panel_rect();
         // The close button hugs the panel's corner but sits just outside the
         // panel rect; treat both as "over the panel" so a held item is never
@@ -1057,9 +1072,31 @@ impl FlatUiHost {
             readouts::emit_use_mode(&mut canvas, readouts);
         }
         if let (Some(strip), Some(rect)) = (self.strip.as_ref(), strip_rect) {
+            // Reverse only the source U interval: the mirrored paperdoll is
+            // background art, never mirrored text, item icons, or input.
+            let arm = mirrored_arm_rect(rect);
+            let header_height = arm.h * 16.0 / 121.0;
+            canvas.cropped_image(
+                Rect::new(arm.x, arm.y, arm.w, header_height),
+                "invback.pcx",
+                Rect::new(460.0, 0.0, EXTRA_ARM_WIDTH, 16.0),
+                Vector2::new(636.0, 121.0),
+            );
+            canvas.cropped_image(
+                Rect::new(arm.x, arm.y + header_height, arm.w, arm.h - header_height),
+                "invback.pcx",
+                Rect::new(564.0, 16.0, -EXTRA_ARM_WIDTH, 105.0),
+                Vector2::new(636.0, 121.0),
+            );
             // Hide the item riding the cursor from the strip grid (it is drawn
             // as the cursor instead).
-            draw_components(&mut canvas, &strip.components, rect, self.held_entity());
+            draw_components(
+                &mut canvas,
+                &strip.components,
+                rect,
+                self.held_entity(),
+                true,
+            );
             for (_, badge, letter, _) in self.shoulder_badges() {
                 canvas.image(badge, "frame.pcx");
                 canvas.text_native(
@@ -1088,7 +1125,7 @@ impl FlatUiHost {
             }
         }
         if let Some(rect) = panel_rect {
-            draw_components(&mut canvas, &self.components, rect, None);
+            draw_components(&mut canvas, &self.components, rect, None, false);
             canvas.image(
                 close_button_canvas_rect(rect),
                 if self.hover_close {
@@ -1304,8 +1341,17 @@ fn strip_canvas_rect(strip_size_px: Vector2<f32>) -> Rect {
     Rect::new(
         STRIP_ANCHOR.x,
         STRIP_ANCHOR.y,
-        strip_size_px.x,
-        strip_size_px.y,
+        strip_size_px.x * STRIP_SCALE,
+        strip_size_px.y * STRIP_SCALE,
+    )
+}
+
+fn mirrored_arm_rect(strip: Rect) -> Rect {
+    Rect::new(
+        strip.x + strip.w,
+        strip.y,
+        EXTRA_ARM_WIDTH * STRIP_SCALE,
+        strip.h,
     )
 }
 
@@ -1322,11 +1368,22 @@ fn strip_canvas_rect(strip_size_px: Vector2<f32>) -> Rect {
 /// Derived from the bar's own rect rather than written out absolutely, so the
 /// frame cannot drift off the slot if the bar's anchor moves.
 fn name_strip_rects(strip: Rect) -> (Rect, Rect) {
-    let frame = Rect::new(strip.x + 190.0, strip.y, 256.0, 16.0);
+    let scale = strip.w / 635.0;
+    let frame = Rect::new(
+        strip.x + 190.0 * scale,
+        strip.y,
+        256.0 * scale,
+        16.0 * scale,
+    );
     // Inside the plate: clear of the frame's left bevel and the cyan arrow
     // glyph baked into it, and only as tall as the plate, so the line centres
     // on that arrow rather than on the bevel below it.
-    let text = Rect::new(frame.x + 11.0, frame.y, frame.w - 16.0, 12.0);
+    let text = Rect::new(
+        frame.x + 11.0 * scale,
+        frame.y,
+        frame.w - 16.0 * scale,
+        12.0 * scale,
+    );
     (frame, text)
 }
 
@@ -1361,6 +1418,7 @@ fn draw_components(
     components: &[GuiComponentRenderInfo],
     rect: Rect,
     hide: Option<EntityId>,
+    fit_icons: bool,
 ) {
     for component in components {
         if is_gui_cursor(component) {
@@ -1392,7 +1450,17 @@ fn draw_components(
         // Only the opacity differs: the original MFD art is opaque on screen,
         // while the component alphas (the elevator's 0.7 floor labels, say) are
         // a VR world-quad translucency, deliberately not applied here.
-        canvas.push(component.to_ui_element(rect)).opacity(1.0);
+        let mut element = component.to_ui_element(rect);
+        if fit_icons {
+            if let UiElement::Image { kind, .. } = &mut element {
+                if *kind == crate::ui::ImageKind::ObjectIcon {
+                    // The compact inventory has smaller cells than the native
+                    // icon art; keep the visible item inside its hit target.
+                    *kind = crate::ui::ImageKind::ObjectIconFit;
+                }
+            }
+        }
+        canvas.push(element).opacity(1.0);
     }
 }
 
@@ -1724,7 +1792,10 @@ mod tests {
         // The inventory strip: 635x120 (invback) at the original game's
         // inv_rect anchor (2, 0) - flush with the canvas top.
         let rect = strip_canvas_rect(vec2(635.0, 120.0));
-        assert_eq!(rect, Rect::new(2.0, 0.0, 635.0, 120.0));
+        assert_eq!(
+            rect,
+            Rect::new(2.0, 0.0, 635.0 * STRIP_SCALE, 120.0 * STRIP_SCALE)
+        );
         // It fits on the canvas and clears the left-MFD slot below (y 124+).
         assert!(rect.x + rect.w <= CANVAS_SIZE.x);
         assert!(rect.y + rect.h < LEFT_MFD_ANCHOR.y);
@@ -1759,10 +1830,18 @@ mod tests {
             .iter()
             .find(|e| matches!(e, crate::ui::UiElement::Image { texture, .. } if texture == "frame.pcx"))
             .expect("the inventory bar should draw the mini-frame");
-        assert_eq!(frame.rect(), Rect::new(192.0, 0.0, 256.0, 16.0));
+        assert_eq!(
+            frame.rect(),
+            Rect::new(
+                2.0 + 190.0 * STRIP_SCALE,
+                0.0,
+                256.0 * STRIP_SCALE,
+                16.0 * STRIP_SCALE
+            )
+        );
         // The blank slot in canvas pixels (invback pixel 192..442 at anchor x=2).
-        let slot_left = STRIP_ANCHOR.x + 192.0;
-        let slot_right = STRIP_ANCHOR.x + 442.0;
+        let slot_left = STRIP_ANCHOR.x + 192.0 * STRIP_SCALE;
+        let slot_right = STRIP_ANCHOR.x + 442.0 * STRIP_SCALE;
         assert!(frame.rect().x <= slot_left && frame.rect().x + frame.rect().w >= slot_right);
         // ...and it follows the bar rather than sitting at a hardcoded spot:
         // move the bar and the frame moves with it, by the same offset.
@@ -2184,6 +2263,103 @@ mod tests {
         assert_eq!(host.shoulder_badges()[0].0, right);
         host.set_strip(None);
         assert!(host.shoulder_badges().is_empty());
+    }
+
+    #[test]
+    fn mirrored_arm_fits_beside_torso_and_scaled_grid_keeps_every_drop_cell() {
+        let mut world = World::new();
+        let inventory = world.add_entity(crate::inventory::PlayerInventoryEntity {});
+        let mut host = FlatUiHost::new();
+        host.set_strip(Some(inventory));
+        host.on_set_ui(
+            &world,
+            inventory,
+            vec2(635.0, 120.0) * crate::gui::GUI_PIXEL_TO_WORLD_SIZE,
+            &[],
+        );
+        for x in 0..15 {
+            for y in 0..3 {
+                let point = vec2(
+                    2.0 + (4.0 + 35.0 * x as f32 + 17.0) * STRIP_SCALE,
+                    (17.0 + 34.0 * y as f32 + 16.0) * STRIP_SCALE,
+                );
+                assert_eq!(host.strip_cell_at(point, &world), Some((x, y)));
+            }
+        }
+        let canvas = host.build_canvas().unwrap();
+        let arm = canvas
+            .elements()
+            .iter()
+            .find(|e| {
+                matches!(
+                    e,
+                    UiElement::Image {
+                        kind: crate::ui::ImageKind::Crop { u0, u1, .. },
+                        ..
+                    } if u0 > u1
+                )
+            })
+            .unwrap();
+        let UiElement::Image {
+            kind: crate::ui::ImageKind::Crop { u0, u1, v0, v1 },
+            ..
+        } = arm
+        else {
+            unreachable!()
+        };
+        assert!(
+            u0 > u1 && v0 < v1,
+            "only the arm art is mirrored horizontally"
+        );
+        assert!((arm.rect().x - (2.0 + 635.0 * STRIP_SCALE)).abs() < 1e-4);
+        assert!(arm.rect().x + arm.rect().w <= 637.001);
+        assert_eq!(
+            host.strip_cell_at(arm.rect().center(), &world),
+            None,
+            "the decorative arm is not another backpack cell"
+        );
+    }
+
+    #[test]
+    fn compact_inventory_fits_item_icons_inside_their_cells() {
+        let (_world, mut host, _, _) = drag_world();
+        if let GuiComponentRenderInfo::Image { kind, .. } =
+            &mut host.strip.as_mut().unwrap().components[0]
+        {
+            *kind = crate::ui::ImageKind::ObjectIcon;
+        }
+        let canvas = host.build_canvas().unwrap();
+        let kinds: Vec<_> = canvas
+            .elements()
+            .iter()
+            .filter_map(|element| match element {
+                UiElement::Image { kind, .. }
+                    if matches!(
+                        kind,
+                        crate::ui::ImageKind::ObjectIcon | crate::ui::ImageKind::ObjectIconFit
+                    ) =>
+                {
+                    Some(*kind)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!kinds.is_empty());
+        assert!(
+            kinds
+                .iter()
+                .all(|kind| *kind == crate::ui::ImageKind::ObjectIconFit)
+        );
+    }
+
+    #[test]
+    fn mirrored_arm_chrome_does_not_throw_or_equip_a_cursor_item() {
+        let (world, mut host, item, _) = drag_world();
+        host.cursor_item = Some(make_cursor_item(&world, item));
+        let point = mirrored_arm_rect(host.strip_rect().unwrap()).center();
+        let actions = press_edge(&mut host, &world, (point.x, point.y));
+        assert!(actions.is_empty());
+        assert_eq!(host.held_entity(), Some(item));
     }
 
     #[test]
