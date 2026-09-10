@@ -212,6 +212,12 @@ for (const vr of [false,true]) {
       const path=`${out}/${vr?"vr":"flat"}-${name}`;await game.screenshot(path+".png",1600);
       await writeFile(path+".json",JSON.stringify({ui:await game.ui.state(),info:await game.info(),inventory:await game.player.inventory()},null,2));
     };
+    const idleUi=await game.ui.state();
+    assert.ok(idleUi.readout_elements.some(e=>e.texture?.toUpperCase()==="AMMOFULL.PCX"),"empty-handed use mode retains expanded ammo frame");
+    for (const [label,texture] of [["inspect","iface/ifbtn30.pcx"],["research_overview","iface/ifbtn40.pcx"],["map","iface/ifbtn50.pcx"]]) {
+      const button=idleUi.strip!.elements.find(e=>e.label===label);assert.ok(button,label);
+      assert.equal(button.texture?.toLowerCase(),texture,"native navigation artwork");
+    }
     await capture("idle");
     await click(await mapControl());
     const panel=(await game.ui.state()).active_panel;assert.ok(panel);
@@ -227,5 +233,14 @@ for (const vr of [false,true]) {
     await click(close);
     assert.equal((await game.ui.state()).active_panel,null,"map close control works");
     assert.deepEqual(await game.player.inventory(),inventory);
+    const item=(await game.ui.state()).strip!.elements.find(e=>e.kind==="button"&&e.entity_id===inventory.items[0]!.entity_id);assert.ok(item);
+    await click(item);
+    const carried=(await game.ui.state()).cursor;assert.ok(carried,"inventory click carries the hypo on the UI cursor");
+    const emptyFrame=(await game.ui.state()).readout_elements.find(e=>e.texture?.toUpperCase()==="AMMOFULL.PCX");assert.ok(emptyFrame);
+    await click(emptyFrame);
+    assert.deepEqual((await game.ui.state()).cursor,carried,"blank ammo strip chrome must not throw the cursor item");
+    await click(item);
+    assert.equal((await game.ui.state()).cursor,null);
+    assert.deepEqual(await game.player.inventory(),inventory,"returning cursor item preserves inventory");
   });
 }

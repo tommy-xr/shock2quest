@@ -949,7 +949,11 @@ impl FlatUiHost {
             .into_iter()
             .find(|spec| spec.rect.contains(canvas_pos))
             .map(|spec| spec.button);
-        let over_ammo = readout_hit.is_some();
+        let over_readout = readout_hit.is_some()
+            || (self.readouts.is_some()
+                && [readouts::BIO_FULL_RECT, readouts::AMMO_FULL_RECT]
+                    .iter()
+                    .any(|rect| rect.contains(canvas_pos)));
 
         // --- Cursor-is-the-item drag: while an item rides the cursor, LMB
         // places/swaps/throws it and never routes to a GuiScript (protecting
@@ -1002,11 +1006,10 @@ impl FlatUiHost {
                 }
                 return (Vec::new(), Vec::new());
             }
-            if over_panel || over_ammo || pointer.bare_view == BareViewPress::Ignore {
-                // Escape hatch: a click on an open MFD or an AMMOFULL readout
-                // control keeps the held item (a visible button must not throw
-                // the item you're carrying) - and so does empty panel space in
-                // VR, where there is no 3D view behind the canvas to throw at.
+            if over_panel || over_readout || pointer.bare_view == BareViewPress::Ignore {
+                // A click on an open MFD or either bottom strip keeps the held
+                // item, including empty chrome between buttons. So does empty
+                // panel space in VR, which has no 3D view behind it to throw at.
                 return (Vec::new(), Vec::new());
             }
             // Bare 3D view: throw the held item along the view ray.
@@ -1016,9 +1019,9 @@ impl FlatUiHost {
         }
 
         // --- AMMOFULL readout controls (use mode): a click acts on the
-        // wielded weapon. Checked with an empty cursor only (mid-drag, a
-        // bottom-right click is a throw), before strip/panel routing since the
-        // controls are disjoint from both. ---
+        // wielded weapon. Checked with an empty cursor only (mid-drag,
+        // readout clicks preserve the carried item), before strip/panel routing
+        // since the controls are disjoint from both. ---
         if pressed_edge {
             if let Some(button) = readout_hit {
                 return (Vec::new(), vec![FlatUiDragAction::Readout(button)]);
@@ -2527,7 +2530,7 @@ mod tests {
         let (world, mut host, item, _) = drag_world();
         host.open_unbound(item);
         host.panel_size_px = Some(vec2(636.0, 296.0));
-        assert!(press_edge(&mut host, &world, (506.0, 395.0)).is_empty());
+        assert!(press_edge(&mut host, &world, (133.0, 451.0)).is_empty());
         assert!(host.utilities.is_open());
         assert!(host.panel_size_px.is_none());
     }
@@ -2537,7 +2540,7 @@ mod tests {
         let (world, mut host, item, _) = drag_world();
         host.cursor_item = Some(make_cursor_item(&world, item));
         assert_eq!(
-            press_edge(&mut host, &world, (544.0, 395.0)),
+            press_edge(&mut host, &world, (166.0, 460.0)),
             vec![FlatUiDragAction::ToggleMap]
         );
         assert_eq!(host.held_entity(), Some(item));
@@ -2546,7 +2549,7 @@ mod tests {
     #[test]
     fn inspect_click_does_not_lift_wield_or_frob_an_inventory_item() {
         let (world, mut host, item, _) = drag_world();
-        assert!(press_edge(&mut host, &world, (468.0, 395.0)).is_empty());
+        assert!(press_edge(&mut host, &world, (166.0, 440.0)).is_empty());
         assert!(host.utilities.is_inspecting());
         let point = host
             .strip_debug_elements(&world)
@@ -3009,6 +3012,25 @@ mod tests {
         let actions = press_edge(&mut host, &world, (570.0, 449.0)); // click the ammo button
         assert!(actions.is_empty(), "the click neither throws nor cycles");
         assert!(host.cursor_debug().is_some(), "the held item is protected");
+    }
+
+    #[test]
+    fn empty_bottom_strips_preserve_a_carried_item() {
+        let (world, mut host, wrench, _) = drag_world();
+        host.set_readouts(Some(UseModeReadouts {
+            bio: Default::default(),
+            ammo: Default::default(),
+        }));
+        press_edge(&mut host, &world, (23.5, 34.0));
+        for point in [(400.0, 460.0), (600.0, 460.0), (240.0, 460.0)] {
+            assert!(press_edge(&mut host, &world, point).is_empty());
+            assert_eq!(host.held_entity(), Some(wrench));
+        }
+        // Only the visible chrome is protected; the world still accepts drops.
+        assert_eq!(
+            press_edge(&mut host, &world, (300.0, 300.0)),
+            vec![FlatUiDragAction::Throw(wrench)]
+        );
     }
 
     #[test]
