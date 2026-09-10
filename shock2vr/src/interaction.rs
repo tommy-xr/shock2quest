@@ -111,6 +111,11 @@ pub trait PlayerInteraction {
     /// wielded weapon as the "left".
     fn held_entities(&self) -> (Option<EntityId>, Option<EntityId>);
 
+    /// A latched support grip, rather than proximity or the visual blend-out.
+    fn is_supported(&self, _entity: EntityId) -> bool {
+        false
+    }
+
     /// Entities under the reticle/hands, for the hover-highlight overlay.
     fn highlighted_entities(&self) -> Vec<EntityId>;
 
@@ -1164,6 +1169,12 @@ impl PlayerInteraction for VrInteraction {
         left_msgs
     }
 
+    fn is_supported(&self, entity: EntityId) -> bool {
+        self.support
+            .as_ref()
+            .is_some_and(|s| s.active && s.entity == entity)
+    }
+
     fn held_entities(&self) -> (Option<EntityId>, Option<EntityId>) {
         (
             self.left_hand.get_held_entity(),
@@ -1707,6 +1718,7 @@ mod tests {
         ctx.step_dt = 0.0;
         interaction.update_support(&ctx);
         assert!(interaction.support.as_ref().unwrap().active);
+        assert!(interaction.is_supported(entity));
         // Supporting hand input is swallowed even on render-only frames.
         let effects = interaction.update(&ctx);
         assert!(
@@ -1759,28 +1771,35 @@ mod tests {
         input.left_hand.squeeze_value = 1.0;
         interaction.update_support(&context(&world, &physics, &input));
         assert!(interaction.support.as_ref().unwrap().active);
+        assert!(interaction.is_supported(entity));
         input.left_hand.position.y = 2.0;
         interaction.update_support(&context(&world, &physics, &input));
         assert!(!interaction.support.as_ref().unwrap().active);
+        assert!(!interaction.is_supported(entity));
         input.left_hand.position.y = 1.2;
         interaction.update_support(&context(&world, &physics, &input));
         assert!(!interaction.support.as_ref().unwrap().active);
+        assert!(!interaction.is_supported(entity));
         input.left_hand.squeeze_value = 0.0;
         interaction.update_support(&context(&world, &physics, &input));
         input.left_hand.squeeze_value = 1.0;
         interaction.update_support(&context(&world, &physics, &input));
         assert!(interaction.support.as_ref().unwrap().active);
+        assert!(interaction.is_supported(entity));
         input.left_hand.rotation = Quaternion::new(0.0, 0.0, 0.0, 0.0);
         interaction.update_support(&context(&world, &physics, &input));
         assert!(!interaction.support.as_ref().unwrap().active);
+        assert!(!interaction.is_supported(entity));
         input.left_hand.rotation = identity();
         interaction.update_support(&context(&world, &physics, &input));
         assert!(!interaction.support.as_ref().unwrap().active);
+        assert!(!interaction.is_supported(entity));
         input.left_hand.squeeze_value = 0.0;
         interaction.update_support(&context(&world, &physics, &input));
         input.left_hand.squeeze_value = 1.0;
         interaction.update_support(&context(&world, &physics, &input));
         assert!(interaction.support.as_ref().unwrap().active);
+        assert!(interaction.is_supported(entity));
         // A broad region chooses a fresh nearest point only on a new squeeze.
         interaction.support = None;
         interaction
@@ -1811,6 +1830,7 @@ mod tests {
         input.left_hand.position.y = 1.28;
         interaction.update_support(&context(&world, &physics, &input));
         assert!(interaction.support.as_ref().unwrap().active);
+        assert!(interaction.is_supported(entity));
         assert_eq!(interaction.support.as_ref().unwrap().anchor, locked);
         input.left_hand.squeeze_value = 0.0;
         interaction.update_support(&context(&world, &physics, &input));
@@ -1822,6 +1842,7 @@ mod tests {
         ctx.support_enabled = false;
         interaction.update_support(&ctx);
         assert!(!interaction.support.as_ref().unwrap().active);
+        assert!(!interaction.is_supported(entity));
         let other_item = grabbable(&mut world);
         interaction.grab(&world, other_item, Handedness::Left);
         interaction.apply_support(&world, &mut Vec::new());
