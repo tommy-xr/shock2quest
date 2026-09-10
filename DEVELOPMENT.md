@@ -230,6 +230,29 @@ free-camera switches. Values are read every frame, so a change is live on the
 next one, and the same registry is exposed over HTTP by the debug runtime
 (`GET`/`POST /v1/dev-params`) for headless runs.
 
+#### Testing VR weapon handling at different stats
+
+Open `debug_weapons` from the Developer scene list and pick up a gun from the
+bench. Hold the left Menu button to pause, then open **Developer**. The
+**Gun STR ovrd** and **Gun AGI ovrd** rows override Strength and Agility for
+physical gun handling: `0` follows your character, and `1`–`6` selects a test
+level. Use the row arrows, return to the game, and repeat while holding the
+same weapon. Decrease both back to `0` to restore character-driven handling.
+
+The pen starts with maxed character stats, so try STR `1`, `3`, `6` with AGI
+`1` first; compare one hand with the fore-end supported. Then hold STR at `3`
+and vary AGI `1`, `3`, `6`. Strength reduces recoil and downward muzzle weight;
+Agility reduces angular recoil (the extra one-handed pitch remains at AGI 6).
+These knobs do not change weapon skill, shot spread, inventory capacity,
+movement, or your saved character sheet. They remain active across scene/load
+changes in the running process and reset on app restart. Hand-motion inertia
+is not implemented yet.
+
+Desktop/debug VR testing needs
+`--vr --experimental physical_held_items,physical_gun_weight`. Automated tests
+can set the same knobs through `game.devParams.set("gun_strength_override", 3)`
+and `game.devParams.set("gun_agility_override", 1)`; `reset(key)` restores `0`.
+
 **Free camera** detaches the view from the player: the camera stays where it
 was while the pawn stands still, so you can watch the simulation from outside
 without perturbing it. Nothing in the simulation follows it - AI keeps reading

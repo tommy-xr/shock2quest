@@ -4612,11 +4612,7 @@ impl MissionCore {
         // Weight is an independent VR experiment. Configure the existing held
         // drive after acquisition/fitting so all physics substeps share it.
         let (left, right) = self.interaction.held_entities();
-        let strength = self
-            .world
-            .borrow::<UniqueView<QuestInfo>>()
-            .map(|q| q.player_stats().strength)
-            .unwrap_or(1);
+        let strength = crate::weapon_recoil::handling_strength(&self.world);
         for gun in [left, right].into_iter().flatten() {
             let target = game_options
                 .experimental_features
@@ -9197,11 +9193,7 @@ impl MissionCore {
                     impulse,
                     one_hand,
                 } => {
-                    let strength = self
-                        .world
-                        .borrow::<UniqueView<QuestInfo>>()
-                        .map(|q| q.player_stats().strength)
-                        .unwrap_or(1);
+                    let strength = crate::weapon_recoil::handling_strength(&self.world);
                     self.physics.kick_held_gun(
                         entity_id,
                         impulse,

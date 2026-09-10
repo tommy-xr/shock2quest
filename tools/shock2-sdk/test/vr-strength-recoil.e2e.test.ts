@@ -13,22 +13,29 @@ import {
 } from "./helpers/vr-hand.js";
 import { ammoOf, cycleToWeapon, muzzleFrameOf } from "./helpers/weapon.js";
 
-for (const [name, template, profiled, setting] of [
-  ["pistol", -17, true, 0],
-  ["AR", -18, true, 0],
-  ["shotgun", -19, true, 0],
-  ["shotgun-triple", -19, true, 1],
+for (const [name, template, profiled, setting, overrides] of [
+  ["pistol", -17, true, 0, false],
+  ["AR", -18, true, 0, false],
+  ["shotgun", -19, true, 0, false],
+  ["shotgun-triple", -19, true, 1, false],
+  ["pistol overrides", -17, true, 0, true],
 ] as const) {
   test(
     `${name} recoil decreases with Strength and genuine support removes the extra spring`,
     { skip: process.env.SHOCK2_E2E !== "1", timeout: 600_000 },
     async (context) => {
       await using game = await GameServer.launch({
-        mission: "medsci1.mis",
+        mission: overrides ? "debug_weapons" : "medsci1.mis",
         debugFlags: ["--vr", "--experimental", "physical_held_items"],
       });
       await game.step({ frames: 10 });
       await game.player.setStats({ skills: { standard_weapons: 6 } });
+      const character = (await game.info()).player.stats;
+      if (overrides) {
+        assert.equal(character?.strength, 6);
+        assert.equal(character?.agility, 6);
+        await game.devParams.set("gun_agility_override", 1);
+      }
       const gun = await cycleToWeapon(game, (e) => e.template_id === template, {
         settleFrames: 90,
       });
@@ -102,7 +109,9 @@ for (const [name, template, profiled, setting] of [
         muzzle: (ReturnType<typeof muzzleFrameOf> & { frame: number })[];
       }[] = [];
       for (const strength of [1, 3, 6]) {
-        await game.player.setStats({ strength });
+        if (overrides)
+          await game.devParams.set("gun_strength_override", strength);
+        else await game.player.setStats({ strength });
         for (const supported of [false, true]) {
           await support(supported);
           await game.step({ frames: 180 });
@@ -284,7 +293,12 @@ for (const [name, template, profiled, setting] of [
         assert.deepEqual((await game.info()).player.camera_rotation, head);
       }
       await game.step({ frames: 300 });
-      await game.player.setStats({ agility: 6 });
+      if (overrides) {
+        // Reset follows the real Agility 6 again; neither override trained the player.
+        await game.devParams.reset("gun_agility_override");
+        await game.devParams.reset("gun_strength_override");
+        assert.deepEqual((await game.info()).player.stats, character);
+      } else await game.player.setStats({ agility: 6 });
       for (const supported of [false, true]) {
         await support(supported);
         await game.step({ frames: 180 });

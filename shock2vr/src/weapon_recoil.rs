@@ -99,6 +99,19 @@ fn aiming_implant(world: &World) -> bool {
         })
 }
 
+/// Live Strength for physical gun recoil and weight only. The developer knob
+/// never writes the character sheet (inventory capacity/movement stay real).
+pub fn handling_strength(world: &World) -> i32 {
+    let override_level = crate::dev_params::get(crate::dev_params::GUN_STRENGTH_OVERRIDE) as i32;
+    if override_level > 0 {
+        return override_level;
+    }
+    world
+        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+        .map(|q| q.player_stats().strength)
+        .unwrap_or(1)
+}
+
 /// Called only after the shared firing gate succeeds, once per shell (not pellet).
 pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, RecoilImpulse)> {
     // Keep the flat/nonphysical firing path free of recoil RNG draws.
@@ -109,10 +122,15 @@ pub fn shot_impulse(world: &World, gun: EntityId) -> Option<(RecoilImpulse, Reco
     let setting = states.get(gun).map(|s| s.setting).unwrap_or(0);
     let kick = kicks.get(gun).ok()?.setting(setting);
     let flags = guns.get(gun).ok()?.flags;
-    let agility = world
-        .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
-        .map(|q| q.player_stats().agility)
-        .unwrap_or(1);
+    let override_agility = crate::dev_params::get(crate::dev_params::GUN_AGILITY_OVERRIDE) as i32;
+    let agility = if override_agility > 0 {
+        override_agility
+    } else {
+        world
+            .borrow::<UniqueView<crate::quest_info::QuestInfo>>()
+            .map(|q| q.player_stats().agility)
+            .unwrap_or(1)
+    };
     // Shipped Still Hand template, verified against gamesys (power id 2).
     let still_hand = world
         .borrow::<UniqueView<crate::psi::ActivePsiPowers>>()

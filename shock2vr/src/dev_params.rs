@@ -146,6 +146,11 @@ dev_params! {
     /// shares its single flat projection between flat and `--vr` mode, so this
     /// override reaches both there.)
     FOV_OVERRIDE_DEG = float("fov_override_deg", "FOV override", 0.0, 0.0, 120.0, 1.0),
+    /// Weapon-handling test overrides only: 0 follows the character sheet,
+    /// 1–6 selects a live test level without changing stats or saves. Strength
+    /// affects physical gun recoil and optional weight; Agility affects recoil.
+    GUN_STRENGTH_OVERRIDE = float("gun_strength_override", "Gun STR ovrd", 0.0, 0.0, 6.0, 1.0),
+    GUN_AGILITY_OVERRIDE = float("gun_agility_override", "Gun AGI ovrd", 0.0, 0.0, 6.0, 1.0),
     /// Ceiling on how fast a physically simulated held melee weapon may be
     /// driven onto its tracked-hand target, in world units per second.
     ///
